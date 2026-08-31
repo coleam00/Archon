@@ -484,6 +484,131 @@ describe('executeWorkflow', () => {
     });
   });
 
+  // --- Supersession is metadata-only (#3064): no estate, no output_root gate ---
+
+  describe('supersession does not gate on output_root', () => {
+    it('starts normally when the superseded run has no output_root (preflight-failed)', async () => {
+      const supersededId = 'superseded-run';
+      const store = makeStore({
+        getWorkflowRun: mock(async (id: string) =>
+          id === supersededId
+            ? makeRun({ id: supersededId, status: 'failed', output_root: null })
+            : { ...makeRun(), status: 'completed' as const }
+        ),
+      });
+      const result = await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp/ops',
+        makeWorkflow(),
+        'msg',
+        'db-conv-1',
+        {
+          adoptedFromRunId: supersededId,
+          continuationMode: 'supersede',
+        }
+      );
+      expect(result.success).toBe(true);
+      // Must NOT attempt to resolve output_root for supersession.
+      expect(store.getWorkflowRun).not.toHaveBeenCalledWith(supersededId);
+    });
+
+    it('starts normally on resume when the superseded run has no output_root', async () => {
+      const supersededId = 'superseded-run';
+      const store = makeStore({
+        getWorkflowRun: mock(async () => makeRun({ status: 'completed' as const })),
+      });
+      const result = await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp/ops',
+        makeWorkflow(),
+        'msg',
+        'db-conv-1',
+        {
+          preCreatedRun: makeRun({
+            status: 'running',
+            adopted_from_run_id: supersededId,
+            metadata: { continuation: { mode: 'supersede' } },
+          }),
+          priorCompletedNodes: new Map([['node1', { output: 'out' }]]),
+        }
+      );
+      expect(result.success).toBe(true);
+      // The resumed supersession must not fetch the superseded run at all.
+      expect(store.getWorkflowRun).not.toHaveBeenCalledWith(supersededId);
+    });
+
+    it('adoption with output_root still works (unchanged)', async () => {
+      const adoptedId = 'prior-run';
+      let capturedVar: string | undefined;
+      mockExecuteDagWorkflow.mockImplementationOnce(async () => {
+        capturedVar = substituteWorkflowVariables(
+          'Read $ADOPTED_RUN_DIR/report.md',
+          'run-123',
+          'msg',
+          '/artifacts',
+          'main',
+          'docs'
+        ).prompt;
+        return undefined;
+      });
+      const store = makeStore({
+        getWorkflowRun: mock(async (id: string) =>
+          id === adoptedId
+            ? makeRun({ id: adoptedId, status: 'completed', output_root: '/tmp/roots/prior' })
+            : id === 'run-123'
+              ? makeRun({ id: 'run-123', status: 'completed' as const })
+              : { ...makeRun(), status: 'completed' as const }
+        ),
+      });
+      const result = await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp/ops',
+        makeWorkflow(),
+        'msg',
+        'db-conv-1',
+        {
+          adoptedFromRunId: adoptedId,
+          continuationMode: 'adopt',
+        }
+      );
+      expect(result.success).toBe(true);
+      expect(capturedVar!).toBe(
+        `Read ${join('/tmp/roots/prior', 'artifacts', 'runs', adoptedId)}/report.md`
+      );
+    });
+
+    it('emits the run_adopted event with mode in data', async () => {
+      const supersededId = 'superseded-run';
+      const store = makeStore();
+      await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp/ops',
+        makeWorkflow(),
+        'msg',
+        'db-conv-1',
+        {
+          adoptedFromRunId: supersededId,
+          continuationMode: 'supersede',
+        }
+      );
+      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.filter(
+        c => (c[0] as { event_type: string }).event_type === 'workflow.run_adopted'
+      );
+      expect(eventCalls).toHaveLength(1);
+      const eventData = (eventCalls[0]![0] as { data: Record<string, unknown> }).data;
+      expect(eventData.adopted_from_run_id).toBe(supersededId);
+      expect(eventData.mode).toBe('supersede');
+    });
+  });
+
   // -------------------------------------------------------------------------
   // Concurrent-run guard
   // -------------------------------------------------------------------------
