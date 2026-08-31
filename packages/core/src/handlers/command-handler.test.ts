@@ -351,6 +351,9 @@ describe('CommandHandler', () => {
     restoreSpies();
     setupSpies();
     delete process.env.WORKSPACE_PATH;
+    delete process.env.ARCHON_WEB_AUTH_HEADER;
+    delete process.env.DATABASE_URL;
+    delete process.env.BETTER_AUTH_SECRET;
   });
 
   // Clean up spies after all tests in this file to prevent contamination
@@ -566,6 +569,102 @@ describe('CommandHandler', () => {
         expect(result.success).toBe(true);
         expect(result.message).toContain('telegram');
         expect(result.message).toContain('claude');
+      });
+
+      // CodeRabbit review (PR #2962): a missing userId must return an empty
+      // project list whenever any authentication mode is configured, not just
+      // ARCHON_WEB_AUTH_HEADER — Better Auth (DATABASE_URL + BETTER_AUTH_SECRET)
+      // must fail closed the same way instead of leaking every user's projects.
+      test('solo unauthenticated mode lists all registered projects', async () => {
+        mockListCodebases.mockResolvedValue([
+          {
+            id: 'cb-1',
+            name: 'solo-project',
+            repository_url: null,
+            default_cwd: '/workspace/solo-project',
+            ai_assistant_type: 'claude',
+            commands: {},
+            created_at: new Date(),
+            updated_at: new Date(),
+          },
+        ]);
+
+        const result = await handleCommand(baseConversation, '/status');
+
+        expect(result.success).toBe(true);
+        expect(mockListCodebases).toHaveBeenCalled();
+        expect(result.message).toContain('solo-project');
+      });
+
+      test('fails closed to an empty project list when ARCHON_WEB_AUTH_HEADER is configured and userId is absent', async () => {
+        process.env.ARCHON_WEB_AUTH_HEADER = 'X-Auth-User';
+        mockListCodebases.mockResolvedValue([
+          {
+            id: 'cb-1',
+            name: 'other-user-project',
+            repository_url: null,
+            default_cwd: '/workspace/other-user-project',
+            ai_assistant_type: 'claude',
+            commands: {},
+            created_at: new Date(),
+            updated_at: new Date(),
+          },
+        ]);
+
+        const result = await handleCommand(baseConversation, '/status');
+
+        expect(result.success).toBe(true);
+        expect(mockListCodebases).not.toHaveBeenCalled();
+        expect(result.message).not.toContain('other-user-project');
+        expect(result.message).toContain('Registered Projects\nNone');
+      });
+
+      test('fails closed to an empty project list when Better Auth is configured and userId is absent', async () => {
+        process.env.DATABASE_URL = 'postgresql://localhost/test';
+        process.env.BETTER_AUTH_SECRET = 'x'.repeat(32);
+        mockListCodebases.mockResolvedValue([
+          {
+            id: 'cb-1',
+            name: 'other-user-project',
+            repository_url: null,
+            default_cwd: '/workspace/other-user-project',
+            ai_assistant_type: 'claude',
+            commands: {},
+            created_at: new Date(),
+            updated_at: new Date(),
+          },
+        ]);
+
+        const result = await handleCommand(baseConversation, '/status');
+
+        expect(result.success).toBe(true);
+        expect(mockListCodebases).not.toHaveBeenCalled();
+        expect(result.message).not.toContain('other-user-project');
+        expect(result.message).toContain('Registered Projects\nNone');
+      });
+
+      test('stays in solo mode when only one Better Auth variable is set', async () => {
+        // Better Auth requires BOTH DATABASE_URL and BETTER_AUTH_SECRET — a
+        // partially configured environment must not fail closed.
+        process.env.DATABASE_URL = 'postgresql://localhost/test';
+        mockListCodebases.mockResolvedValue([
+          {
+            id: 'cb-1',
+            name: 'solo-project',
+            repository_url: null,
+            default_cwd: '/workspace/solo-project',
+            ai_assistant_type: 'claude',
+            commands: {},
+            created_at: new Date(),
+            updated_at: new Date(),
+          },
+        ]);
+
+        const result = await handleCommand(baseConversation, '/status');
+
+        expect(result.success).toBe(true);
+        expect(mockListCodebases).toHaveBeenCalled();
+        expect(result.message).toContain('solo-project');
       });
 
       test('should show codebase info when set', async () => {

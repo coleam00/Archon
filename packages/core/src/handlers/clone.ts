@@ -4,6 +4,7 @@
  */
 import { access, rm, stat } from 'fs/promises';
 import { join, basename, resolve } from 'path';
+import type { Codebase } from '../types';
 import * as codebaseDb from '../db/codebases';
 import { sanitizeError } from '../utils/credential-sanitizer';
 import { execFileAsync } from '@archon/git';
@@ -153,6 +154,12 @@ async function detectCurrentGitBranch(targetPath: string): Promise<string | null
 
 /**
  * Shared logic: register a repo at a given path in the DB and load commands.
+ *
+ * @param targetPath - Filesystem path to the repository directory
+ * @param name - Registered name of the codebase
+ * @param repositoryUrl - Optional repository URL
+ * @param userId - Optional authenticated user ID to grant access
+ * @returns Result object with codebaseId, name, paths, and registration status
  */
 async function registerRepoAtPath(
   targetPath: string,
@@ -163,8 +170,29 @@ async function registerRepoAtPath(
   const suggestedAssistant = await resolveDefaultAssistant(targetPath);
   const detectedBranch = await detectCurrentGitBranch(targetPath);
 
-  // Check if a codebase with this name already exists (dedup by project identity)
-  const existing = await codebaseDb.findCodebaseByName(name);
+  // Check if a codebase already exists by canonical repository identity (URL or exact cwd).
+  // Do NOT grant access from a name-only match unless canonical identity matches.
+  let existing: Codebase | null = null;
+  if (repositoryUrl) {
+    existing =
+      (await codebaseDb.findCodebaseByRepoUrl(repositoryUrl)) ??
+      (await codebaseDb.findCodebaseByRepoUrl(repositoryUrl.replace(/\.git$/, ''))) ??
+      (await codebaseDb.findCodebaseByDefaultCwd(targetPath));
+  } else {
+    existing = await codebaseDb.findCodebaseByDefaultCwd(targetPath);
+  }
+
+  if (!existing) {
+    const existingByName = await codebaseDb.findCodebaseByName(name);
+    if (
+      existingByName &&
+      (existingByName.default_cwd === targetPath ||
+        (repositoryUrl && existingByName.repository_url === repositoryUrl))
+    ) {
+      existing = existingByName;
+    }
+  }
+
   if (existing) {
     // Determine if the new path is "better" (local > archon-managed clone)
     const isNewPathLocal = !targetPath.includes('/.archon/workspaces/');

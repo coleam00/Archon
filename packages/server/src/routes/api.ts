@@ -3219,6 +3219,10 @@ export function registerApiRoutes(
 
     try {
       const auth = await resolveAuthContext(c);
+      if (!auth && isAuthConfigured()) {
+        getLog().warn({ route: 'POST /api/codebases' }, 'api.auth_context_unresolved');
+        return apiError(c, 401, 'Authentication required');
+      }
       // .refine() guarantees exactly one of url/path is present.
       // For a local path, detect git-ness: a non-git directory registers as a
       // folder project (kind: 'folder') instead of being rejected. Folder-ness

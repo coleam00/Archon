@@ -56,6 +56,8 @@ const mockListCodebasesForUser = mock(() => Promise.resolve([]));
 const mockGrantAccess = mock(() => Promise.resolve());
 const mockCreateCodebase = mock(() => Promise.resolve({ id: 'new-codebase-id' }));
 const mockUpdateCodebase = mock(() => Promise.resolve());
+const mockFindCodebaseByDefaultCwd = mock(() => Promise.resolve(null));
+const mockFindCodebaseByName = mock(() => Promise.resolve(null));
 
 mock.module('../db/codebases', () => ({
   getCodebase: mockGetCodebase,
@@ -64,6 +66,8 @@ mock.module('../db/codebases', () => ({
   createCodebase: mockCreateCodebase,
   updateCodebase: mockUpdateCodebase,
   grantAccess: mockGrantAccess,
+  findCodebaseByDefaultCwd: mockFindCodebaseByDefaultCwd,
+  findCodebaseByName: mockFindCodebaseByName,
 }));
 
 const mockGetActiveSession = mock(() => Promise.resolve(null));
@@ -1725,6 +1729,7 @@ describe('orchestrator-agent handleMessage', () => {
 
     test('/register-project detects duplicate project name', async () => {
       mockExistsSync.mockReturnValue(true);
+      mockListCodebases.mockResolvedValue([mockCodebase]);
       mockListCodebasesForUser.mockResolvedValue([mockCodebase]);
 
       await handleMessage(platform, 'chat-456', '/register-project test-project /some/path', {

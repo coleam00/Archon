@@ -110,6 +110,8 @@ const mockListCodebases = mock(() => Promise.resolve([] as unknown[]));
 const mockListCodebasesForUser = mock((_userId?: string) => Promise.resolve([] as unknown[]));
 const mockCreateCodebase = mock(() => Promise.resolve({ id: 'new-codebase-id' }));
 const mockUpdateCodebase = mock(() => Promise.resolve());
+const mockFindCodebaseByDefaultCwd = mock(() => Promise.resolve(null));
+const mockFindCodebaseByName = mock(() => Promise.resolve(null));
 class MockCodebaseNotFoundError extends Error {
   constructor(public codebaseId: string) {
     super(`Codebase ${codebaseId} not found`);
@@ -124,6 +126,8 @@ mock.module('../db/codebases', () => ({
   grantAccess: mockGrantAccess,
   createCodebase: mockCreateCodebase,
   updateCodebase: mockUpdateCodebase,
+  findCodebaseByDefaultCwd: mockFindCodebaseByDefaultCwd,
+  findCodebaseByName: mockFindCodebaseByName,
   CodebaseNotFoundError: MockCodebaseNotFoundError,
 }));
 
@@ -471,6 +475,8 @@ function makeCodebase(name: string, id = `id-${name}`): Codebase {
 // mechanism is the argument.
 beforeEach(() => {
   delete process.env.ARCHON_WEB_AUTH_HEADER;
+  delete process.env.DATABASE_URL;
+  delete process.env.BETTER_AUTH_SECRET;
   mockExistsSync.mockImplementation(() => true);
   mockListCodebases.mockImplementation(() => Promise.resolve([]));
   mockListCodebasesForUser.mockImplementation(() => Promise.resolve([]));
@@ -4690,6 +4696,35 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
     expect(allCalls.some(([, msg]) => msg.includes(expectedCwd))).toBe(true);
   });
 
+  // CodeRabbit review (PR #2962): handleRegisterProject must fail closed for
+  // Better Auth (DATABASE_URL + BETTER_AUTH_SECRET), not just ARCHON_WEB_AUTH_HEADER.
+  test('register-project fails closed when Better Auth is configured but userId is unresolved', async () => {
+    process.env.DATABASE_URL = 'postgresql://localhost/test';
+    process.env.BETTER_AUTH_SECRET = 'x'.repeat(32);
+    mockParseCommand.mockReturnValueOnce({
+      command: 'register-project',
+      args: ['ExampleProject', '/.archon/workspaces/owner/repo/source'],
+    });
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield {
+        type: 'assistant',
+        content: '/register-project ExampleProject "/.archon/workspaces/owner/repo/source"',
+      };
+      yield { type: 'result', sessionId: 'sess-1' };
+    });
+
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('batch');
+    await handleMessage(platform, 'conv-1', 'register my project');
+
+    expect(mockCreateCodebase).not.toHaveBeenCalled();
+    const allCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as [
+      string,
+      string,
+    ][];
+    expect(allCalls.some(([, msg]) => msg.includes('Authentication required'))).toBe(true);
+  });
+
   test('stream mode — invoke-workflow split across 2 chunks', async () => {
     mockListCodebasesForUser.mockReturnValueOnce(Promise.resolve([makeCodebase('my-project')]));
     mockDiscoverWorkflowsWithConfig.mockReturnValueOnce(
@@ -5355,6 +5390,24 @@ describe('handleMessage — /setproject dispatch', () => {
 
     expect(mockUpdateConversation).not.toHaveBeenCalled();
     expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', expect.stringContaining('Usage'));
+  });
+
+  // CodeRabbit review (PR #2962): isWebAuthEnabled() (DATABASE_URL +
+  // BETTER_AUTH_SECRET) must fail closed exactly like ARCHON_WEB_AUTH_HEADER —
+  // an unresolved userId must never fall back to the unscoped global list.
+  test('fails closed to an empty codebase list when Better Auth is configured but userId is unresolved', async () => {
+    process.env.DATABASE_URL = 'postgresql://localhost/test';
+    process.env.BETTER_AUTH_SECRET = 'x'.repeat(32);
+    mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/setproject my-app');
+
+    expect(mockListCodebasesForUser).not.toHaveBeenCalled();
+    expect(mockListCodebases).not.toHaveBeenCalled();
+    expect(mockUpdateConversation).not.toHaveBeenCalled();
+    const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
+    expect(msg).toContain('No projects registered');
   });
 });
 

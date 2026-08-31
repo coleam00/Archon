@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, spyOn } from 'bun:test';
+import { describe, test, expect, mock, spyOn, beforeEach, afterEach } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
@@ -124,6 +124,32 @@ mock.module('@archon/core/db/codebases', () => ({
 }));
 
 import { registerApiRoutes } from './api';
+
+// api.ts reads these directly off process.env (see ../auth/config.ts and the
+// web-auth gate in api.ts), and ../auth is NOT mocked in this file — so an
+// ambient host value (e.g. a developer's local Postgres DATABASE_URL) would
+// silently flip auth/gate behavior mid-suite. Isolate every test in this file
+// from the host environment, matching the pattern in api.auth.test.ts.
+const ISOLATED_ENV_KEYS = ['DATABASE_URL', 'BETTER_AUTH_SECRET', 'ARCHON_WEB_AUTH_HEADER'] as const;
+const savedEnv: Partial<Record<(typeof ISOLATED_ENV_KEYS)[number], string>> = {};
+
+beforeEach(() => {
+  for (const key of ISOLATED_ENV_KEYS) {
+    savedEnv[key] = process.env[key];
+    delete process.env[key];
+  }
+});
+
+afterEach(() => {
+  for (const key of ISOLATED_ENV_KEYS) {
+    const value = savedEnv[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+});
 
 describe('GET /api/workflows', () => {
   test('returns a flat workflows array from discoverWorkflows result', async () => {

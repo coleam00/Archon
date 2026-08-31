@@ -1289,11 +1289,18 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
     case 'status': {
       let msg = `## Orchestrator Status\n\n**Platform**: ${conversation.platform_type}\n**AI Assistant**: ${conversation.ai_assistant_type}`;
 
-      // Show all registered projects
+      // Show all registered projects. A missing userId falls back to the
+      // unscoped global list only in solo/unauthenticated mode — when either
+      // the reverse-proxy header or Better Auth (DATABASE_URL +
+      // BETTER_AUTH_SECRET) is configured, fail closed with an empty list
+      // instead of leaking every user's codebases.
       let allCodebases: readonly Codebase[];
       if (userId) {
         allCodebases = await codebaseDb.listCodebasesForUser(userId);
-      } else if (process.env.ARCHON_WEB_AUTH_HEADER) {
+      } else if (
+        process.env.ARCHON_WEB_AUTH_HEADER ||
+        (process.env.DATABASE_URL && process.env.BETTER_AUTH_SECRET)
+      ) {
         allCodebases = [];
       } else {
         allCodebases = await codebaseDb.listCodebases();

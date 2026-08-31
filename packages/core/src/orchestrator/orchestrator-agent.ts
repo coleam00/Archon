@@ -2123,12 +2123,12 @@ export async function handleMessage(
     // needed the hoist). Keep it here: moved back down, the guard would have to
     // refuse AFTER the user row is written, which is exactly the orphaned-row bug
     // this ordering exists to prevent.
-    if (!userId && process.env.ARCHON_WEB_AUTH_HEADER) {
+    if (!userId && isAuthConfigured()) {
       warnAuthContextUnresolved('handleMessage', 'chat');
     }
     const codebases = userId
       ? await codebaseDb.listCodebasesForUser(userId)
-      : process.env.ARCHON_WEB_AUTH_HEADER
+      : isAuthConfigured()
         ? []
         : await codebaseDb.listCodebases();
 
@@ -3342,13 +3342,29 @@ async function handleProjectRegistrationResult(
 // ─── Internal Helpers ───────────────────────────────────────────────────────
 
 /**
+ * True when a web-facing authentication mode is configured: either a trusted
+ * reverse-proxy header (ARCHON_WEB_AUTH_HEADER) or Better Auth (DATABASE_URL +
+ * BETTER_AUTH_SECRET, mirroring packages/server/src/auth/config.ts's
+ * `isWebAuthEnabled`). Core has no dependency on @archon/server, so this reads
+ * the same env vars directly rather than importing that check. When either
+ * mode is active, an unresolved userId must fail closed instead of falling
+ * back to unscoped global codebase listings.
+ */
+function isAuthConfigured(): boolean {
+  return (
+    Boolean(process.env.ARCHON_WEB_AUTH_HEADER) ||
+    Boolean(process.env.DATABASE_URL && process.env.BETTER_AUTH_SECRET)
+  );
+}
+
+/**
  * Emit a warn log when the orchestrator lacks a resolved userId on a request
  * path that should be user-scoped. Mirrors patch 003's api.auth_context_unresolved.
- * Gated on ARCHON_WEB_AUTH_HEADER so solo installs (no web auth configured) stay
+ * Gated on isAuthConfigured() so solo installs (no auth configured) stay
  * silent; on auth-enabled installs this surfaces identity resolution bugs.
  */
 function warnAuthContextUnresolved(handler: string, messageType: string): void {
-  if (process.env.ARCHON_WEB_AUTH_HEADER) {
+  if (isAuthConfigured()) {
     getLog().warn({ handler, messageType }, 'orchestrator.auth_context_unresolved');
   }
 }
@@ -3384,17 +3400,31 @@ async function handleRegisterProject(
     return `Path does not exist: ${canonicalPath}`;
   }
 
-  // Check if codebase already exists with this name
-  if (!userId && process.env.ARCHON_WEB_AUTH_HEADER) {
+  // Check if codebase already exists with this name or canonical path
+  if (!userId && isAuthConfigured()) {
     warnAuthContextUnresolved('handleRegisterProject', 'command');
     return 'Authentication required: could not resolve user identity for project registration.';
   }
-  const existing = userId
-    ? await codebaseDb.listCodebasesForUser(userId)
-    : await codebaseDb.listCodebases();
+
+  // Check if a global codebase already exists for this canonical path (dedup across users)
+  const existingByPath = await codebaseDb.findCodebaseByDefaultCwd(canonicalPath);
+  if (existingByPath) {
+    if (userId) {
+      await codebaseDb.grantAccess(userId, existingByPath.id);
+    }
+    return `Project "${existingByPath.name}" is already registered (path: ${existingByPath.default_cwd}).`;
+  }
+
+  const existing = await codebaseDb.listCodebases();
   const alreadyExists = existing.find(c => c.name.toLowerCase() === projectName.toLowerCase());
 
   if (alreadyExists) {
+    if (alreadyExists.default_cwd === canonicalPath) {
+      if (userId) {
+        await codebaseDb.grantAccess(userId, alreadyExists.id);
+      }
+      return `Project "${projectName}" is already registered (path: ${alreadyExists.default_cwd}).`;
+    }
     return `Project "${projectName}" is already registered (path: ${alreadyExists.default_cwd}).`;
   }
 
@@ -3496,12 +3526,12 @@ async function handleUpdateProject(message: string, userId?: string): Promise<st
   }
 
   // Find existing codebase by name
-  if (!userId && process.env.ARCHON_WEB_AUTH_HEADER) {
+  if (!userId && isAuthConfigured()) {
     warnAuthContextUnresolved('handleUpdateProject', 'command');
   }
   const existing = userId
     ? await codebaseDb.listCodebasesForUser(userId)
-    : process.env.ARCHON_WEB_AUTH_HEADER
+    : isAuthConfigured()
       ? []
       : await codebaseDb.listCodebases();
   const codebase = existing.find(c => c.name.toLowerCase() === projectName.toLowerCase());
@@ -3542,12 +3572,12 @@ async function handleRemoveProject(message: string, userId?: string): Promise<st
   const projectName = args[0];
 
   // Find existing codebase by name
-  if (!userId && process.env.ARCHON_WEB_AUTH_HEADER) {
+  if (!userId && isAuthConfigured()) {
     warnAuthContextUnresolved('handleRemoveProject', 'command');
   }
   const existing = userId
     ? await codebaseDb.listCodebasesForUser(userId)
-    : process.env.ARCHON_WEB_AUTH_HEADER
+    : isAuthConfigured()
       ? []
       : await codebaseDb.listCodebases();
   const codebase = existing.find(c => c.name.toLowerCase() === projectName.toLowerCase());
@@ -3584,12 +3614,12 @@ async function handleSetProject(
   }
 
   const projectName = args.join(' ');
-  if (!userId && process.env.ARCHON_WEB_AUTH_HEADER) {
+  if (!userId && isAuthConfigured()) {
     warnAuthContextUnresolved('handleSetProject', 'command');
   }
   const codebases = userId
     ? await codebaseDb.listCodebasesForUser(userId)
-    : process.env.ARCHON_WEB_AUTH_HEADER
+    : isAuthConfigured()
       ? []
       : await codebaseDb.listCodebases();
 
@@ -3693,12 +3723,12 @@ async function handleWorkflowRunCommand(
   }
 
   // No project attached — apply E2 logic
-  if (!userId && process.env.ARCHON_WEB_AUTH_HEADER) {
+  if (!userId && isAuthConfigured()) {
     warnAuthContextUnresolved('handleWorkflowRunCommand', 'command');
   }
   const codebases = userId
     ? await codebaseDb.listCodebasesForUser(userId)
-    : process.env.ARCHON_WEB_AUTH_HEADER
+    : isAuthConfigured()
       ? []
       : await codebaseDb.listCodebases();
 
