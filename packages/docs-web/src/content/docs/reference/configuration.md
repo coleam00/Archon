@@ -485,23 +485,26 @@ The Copilot provider also reads `assistants.copilot.{model, modelReasoningEffort
 
 ### Platform Adapters -- GitHub
 
-| Variable | Description | Default |
-| --- | --- | --- |
-| `GITHUB_TOKEN` | GitHub personal access token (also used by `gh` CLI) | -- |
-| `GH_TOKEN` | Alias for `GITHUB_TOKEN` (used by GitHub CLI) | -- |
-| `WEBHOOK_SECRET` | HMAC SHA-256 secret for GitHub webhook signature verification | -- |
-| `GITHUB_ALLOWED_USERS` | Comma-separated GitHub usernames for whitelist (case-insensitive) | Open access |
-| `GITHUB_BOT_MENTION` | @mention name the bot responds to in issues/PRs | Falls back to `BOT_DISPLAY_NAME` |
-
-### Per-user GitHub identity (App mode, optional)
-
-An opt-in layer on top of [GitHub App mode](/adapters/github-app-setup/) that lets each teammate connect their own GitHub identity so commits, PR comments, and pushes attribute to the human rather than the bot. The feature gate turns on when `GITHUB_APP_ID` **and** `TOKEN_ENCRYPTION_KEY` are both set; `GITHUB_APP_CLIENT_ID` is additionally required for the connect (device) flow — set all three. Solo `GITHUB_TOKEN` installs and App-for-bot-only installs are unaffected.
+GitHub adapter operates in OAuth App mode with per-user vault tokens. All GitHub actions (PR comments, issues, pushes) are authenticated via connected user credentials.
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `GITHUB_APP_CLIENT_ID` | The App's **Client ID** (starts with `Iv1.`/`Iv23…`, distinct from the numeric `GITHUB_APP_ID`). Required for the device flow that connects per-user identities. | -- |
-| `TOKEN_ENCRYPTION_KEY` | 64-char hex (32 bytes; `openssl rand -hex 32`) used to encrypt stored per-user tokens at rest (AES-256-GCM). **Per-user GitHub identity** requires this + `GITHUB_APP_ID`. **AI credential vault** auto-provisions its own key at `~/.archon/credential-key` — this env var overrides that file on managed/multi-user deploys. **Rotating it invalidates all stored user credentials** — everyone must reconnect. | -- |
-| `ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK` | When `false` (default), a workflow run by an **unconnected** user has `GH_TOKEN`/`GITHUB_TOKEN` scrubbed (so `gh`/`git` fail) rather than silently using the shared org/bot token. Set `true` to opt back into the shared token. | `false` |
+| `GITHUB_CLIENT_ID` | GitHub OAuth App Client ID. Required to enable GitHub adapter and device authorization flow. | -- |
+| `TOKEN_ENCRYPTION_KEY` | 64-char hex (32 bytes; `openssl rand -hex 32`) used to encrypt stored per-user GitHub tokens at rest (AES-256-GCM). | -- |
+| `WEBHOOK_SECRET` | HMAC SHA-256 secret for GitHub webhook signature verification. | -- |
+| `GITHUB_ALLOWED_USERS` | Comma-separated GitHub usernames for whitelist (case-insensitive). | Open access |
+| `GITHUB_BOT_MENTION` | @mention name the bot responds to in issues/PRs. | `Archon` |
+
+### Agent Subprocess Security & Secret Scrubbing
+
+Archon automatically scrubs sensitive server secrets from environment variables passed to agent and tool subprocesses (`AGENT_ENV_DENYLIST`). Agents authenticate via injected short-lived tokens and credential helpers.
+
+The following secrets are automatically denylisted from agent environments:
+- `TOKEN_ENCRYPTION_KEY` (prevents agents from decrypting vault tokens)
+- `DATABASE_URL` (prevents agents from accessing database directly)
+- `WEBHOOK_SECRET` (prevents agents from forging webhook signatures)
+| `TOKEN_ENCRYPTION_KEY` | 64-char hex (32 bytes; `openssl rand -hex 32`) used to encrypt stored per-user tokens at rest (AES-256-GCM). **GitHub OAuth adapter & AI credential vault** require this for encrypting credentials. **Rotating it invalidates all stored user credentials** — everyone must reconnect. | -- |
+| `ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK` | When `false` (default), a workflow run by an **unconnected** user has `GH_TOKEN`/`GITHUB_TOKEN` scrubbed (so `gh`/`git` fail). | `false` |
 | `ARCHON_WEB_AUTH_HEADER` | Name of the reverse-proxy-set header Archon trusts to identify the web user (reverse-proxy fallback; still honored alongside Better Auth web login below). Only safe when Archon is reachable **solely** through the proxy on a loopback bind — on a public bind the header is forgeable. Absent header → unattributed (never elevated). | `X-Archon-User` |
 
 To connect once the vars are set: `archon auth github` (CLI), `/archon connect github` (Slack), or the Web UI **Settings → Connect GitHub** card.

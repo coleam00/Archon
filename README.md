@@ -269,7 +269,7 @@ The Web UI and CLI work out of the box. Optionally connect a chat platform for r
 |----------|-----------|-------|
 | **Telegram** | 5 min | [Telegram Guide](https://archon.diy/adapters/telegram/) |
 | **Slack** | 15 min | [Slack Guide](https://archon.diy/adapters/slack/) |
-| **GitHub Webhooks** | 15 min | [GitHub Guide](https://archon.diy/adapters/github/) |
+| **GitHub** | 10 min | [GitHub Guide](https://archon.diy/adapters/github-app-setup/) |
 | **Discord** | 5 min | [Discord Guide](https://archon.diy/adapters/community/discord/) |
 
 ## Architecture

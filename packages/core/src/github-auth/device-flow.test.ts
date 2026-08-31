@@ -53,6 +53,19 @@ describe('device-flow', () => {
       expect(calls[0]?.body).toContain('client_id=Iv1.client');
     });
 
+    test('passes custom scope when provided', async () => {
+      enqueue({
+        device_code: 'dc',
+        user_code: 'ABCD-1234',
+        verification_uri: 'https://github.com/login/device',
+        expires_in: 900,
+        interval: 5,
+      });
+      const res = await startDeviceFlow('Iv1.client', 'repo,user');
+      expect(res.user_code).toBe('ABCD-1234');
+      expect(calls[0]?.body).toContain('scope=repo%2Cuser');
+    });
+
     test('throws DeviceFlowError when the body carries an error', async () => {
       enqueue({ error: 'device_flow_disabled' });
       await expect(startDeviceFlow('Iv1.client')).rejects.toBeInstanceOf(DeviceFlowError);
