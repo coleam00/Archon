@@ -272,6 +272,23 @@ describe('checkCodexBinary', () => {
     expect(execSpy).not.toHaveBeenCalled();
   });
 
+  it('surfaces a stale-pin candidate hint verbatim', async () => {
+    const diagnostic =
+      'assistants.codex.codexBinaryPath is set to "/stale/codex" but the file does not exist.\n\n' +
+      'A Codex binary was found at /opt/codex.\n' +
+      'Update assistants.codex.codexBinaryPath to that path, or remove codexBinaryPath to let Archon detect it.';
+    const result = await checkCodexBinary(
+      { DEFAULT_AI_ASSISTANT: 'codex' },
+      loadDeps(notConfigured),
+      async () => {
+        throw new Error(diagnostic);
+      }
+    );
+
+    expect(result).toEqual({ label: 'Codex binary', status: 'fail', message: diagnostic });
+    expect(execSpy).not.toHaveBeenCalled();
+  });
+
   it('fails when the resolved binary does not spawn', async () => {
     execSpy.mockRejectedValue(new Error('ENOENT'));
     const result = await checkCodexBinary(

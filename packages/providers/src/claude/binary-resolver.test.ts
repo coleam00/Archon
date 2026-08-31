@@ -20,6 +20,15 @@ mock.module('@archon/paths', () => ({
 import * as resolver from './binary-resolver';
 import { CLAUDE_BINARY_NAME } from './binary-resolver';
 
+async function rejectionMessage(promise: Promise<unknown>): Promise<string> {
+  try {
+    await promise;
+  } catch (error) {
+    return (error as Error).message;
+  }
+  throw new Error('Expected promise to reject');
+}
+
 describe('resolveClaudeBinaryPath (binary mode)', () => {
   const originalEnv = process.env.CLAUDE_BIN_PATH;
   let pathKindSpy: ReturnType<typeof spyOn> | undefined;
@@ -52,8 +61,32 @@ describe('resolveClaudeBinaryPath (binary mode)', () => {
     process.env.CLAUDE_BIN_PATH = '/nonexistent/cli.js';
     pathKindSpy = spyOn(resolver, 'pathKind').mockReturnValue('missing');
 
-    await expect(resolver.resolveClaudeBinaryPath()).rejects.toThrow(
-      'CLAUDE_BIN_PATH is set to "/nonexistent/cli.js" but the file does not exist'
+    expect(await rejectionMessage(resolver.resolveClaudeBinaryPath())).toBe(
+      'CLAUDE_BIN_PATH is set to "/nonexistent/cli.js" but the file does not exist.\n' +
+        'Please verify the path points to the Claude Code executable (native binary\n' +
+        'from the curl/PowerShell installer, or cli.js from an npm global install).'
+    );
+  });
+
+  test('names the autodetected binary when CLAUDE_BIN_PATH is stale without using it', async () => {
+    const candidate = join(homedir(), '.local', 'bin', CLAUDE_BINARY_NAME);
+    process.env.CLAUDE_BIN_PATH = '/stale/claude';
+    pathKindSpy = spyOn(resolver, 'pathKind').mockImplementation((path: string) =>
+      path === candidate ? 'file' : 'missing'
+    );
+
+    expect(await rejectionMessage(resolver.resolveClaudeBinaryPath())).toBe(
+      'CLAUDE_BIN_PATH is set to "/stale/claude" but the file does not exist.\n' +
+        'Please verify the path points to the Claude Code executable (native binary\n' +
+        'from the curl/PowerShell installer, or cli.js from an npm global install).\n\n' +
+        'A Claude Code binary was found at ' +
+        candidate +
+        '.\n' +
+        'Update CLAUDE_BIN_PATH to that path, or remove CLAUDE_BIN_PATH to let Archon detect it.'
+    );
+    expect(mockLogger.info).not.toHaveBeenCalledWith(
+      expect.objectContaining({ binaryPath: candidate }),
+      'claude.binary_resolved'
     );
   });
 
@@ -73,8 +106,31 @@ describe('resolveClaudeBinaryPath (binary mode)', () => {
   test('throws when config claudeBinaryPath file does not exist', async () => {
     pathKindSpy = spyOn(resolver, 'pathKind').mockReturnValue('missing');
 
-    await expect(resolver.resolveClaudeBinaryPath('/nonexistent/cli.js')).rejects.toThrow(
-      'assistants.claude.claudeBinaryPath is set to "/nonexistent/cli.js" but the file does not exist'
+    expect(await rejectionMessage(resolver.resolveClaudeBinaryPath('/nonexistent/cli.js'))).toBe(
+      'assistants.claude.claudeBinaryPath is set to "/nonexistent/cli.js" but the file does not exist.\n' +
+        'Please verify the path points to the Claude Code executable (native binary\n' +
+        'from the curl/PowerShell installer, or cli.js from an npm global install).'
+    );
+  });
+
+  test('names the autodetected binary when claudeBinaryPath is stale without using it', async () => {
+    const candidate = join(homedir(), '.local', 'bin', CLAUDE_BINARY_NAME);
+    pathKindSpy = spyOn(resolver, 'pathKind').mockImplementation((path: string) =>
+      path === candidate ? 'file' : 'missing'
+    );
+
+    expect(await rejectionMessage(resolver.resolveClaudeBinaryPath('/stale/config/claude'))).toBe(
+      'assistants.claude.claudeBinaryPath is set to "/stale/config/claude" but the file does not exist.\n' +
+        'Please verify the path points to the Claude Code executable (native binary\n' +
+        'from the curl/PowerShell installer, or cli.js from an npm global install).\n\n' +
+        'A Claude Code binary was found at ' +
+        candidate +
+        '.\n' +
+        'Update assistants.claude.claudeBinaryPath to that path, or remove claudeBinaryPath to let Archon detect it.'
+    );
+    expect(mockLogger.info).not.toHaveBeenCalledWith(
+      expect.objectContaining({ binaryPath: candidate }),
+      'claude.binary_resolved'
     );
   });
 
@@ -201,6 +257,30 @@ describe('resolveClaudeBinaryPath (binary mode)', () => {
     await expect(promise).rejects.toThrow('assistants.claude.claudeBinaryPath');
     await expect(promise).rejects.toThrow('which is a directory');
     await expect(promise).rejects.toThrow(`does not contain ${CLAUDE_BINARY_NAME}`);
+  });
+
+  test('adds the autodetected binary to a configured-directory error without using it', async () => {
+    const dir = '/some/empty/dir';
+    const candidate = join(homedir(), '.local', 'bin', CLAUDE_BINARY_NAME);
+    pathKindSpy = spyOn(resolver, 'pathKind').mockImplementation((path: string) => {
+      if (path === dir) return 'directory';
+      if (path === candidate) return 'file';
+      return 'missing';
+    });
+
+    expect(await rejectionMessage(resolver.resolveClaudeBinaryPath(dir))).toBe(
+      `assistants.claude.claudeBinaryPath is set to "${dir}", which is a directory, but it does not contain ${CLAUDE_BINARY_NAME}.\n` +
+        'Please point this setting at the Claude Code executable itself (native binary\n' +
+        'from the curl/PowerShell installer, or cli.js from an npm global install).\n\n' +
+        'A Claude Code binary was found at ' +
+        candidate +
+        '.\n' +
+        'Update assistants.claude.claudeBinaryPath to that path, or remove claudeBinaryPath to let Archon detect it.'
+    );
+    expect(mockLogger.info).not.toHaveBeenCalledWith(
+      expect.objectContaining({ binaryPath: candidate }),
+      'claude.binary_resolved'
+    );
   });
 
   test('throws a directory-specific error when CLAUDE_BIN_PATH is a directory missing the expected executable', async () => {
