@@ -2452,6 +2452,172 @@ branch refs/heads/feature/auth
         git.syncWorkspace(repo('/workspace/repo'), branch('does-not-exist'), { remote: 'mar' })
       ).rejects.toThrow("Configured base branch 'does-not-exist' not found on remote 'mar'");
     });
+
+    test('syncs workspace with authToken credential helper configuration and env', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('status')) return { stdout: '', stderr: '' };
+        if (args.includes('rev-parse') && args.includes('--short=8')) {
+          return { stdout: 'abc12345\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('HEAD')) {
+          return { stdout: 'abc12345abcdef\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('origin/main')) {
+          return { stdout: 'abc12345abcdef\n', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const result = await git.syncWorkspace(repo('/workspace/repo'), branch('main'), {
+        authToken: 'ghu_test_secret_token_123',
+      });
+
+      expect(result.synced).toBe(true);
+
+      const fetchCall = execSpy.mock.calls.find((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('fetch');
+      });
+
+      expect(fetchCall).toBeDefined();
+      expect(fetchCall![1]).toEqual([
+        '-c',
+        'credential.helper=',
+        '-c',
+        'credential.https://github.com.helper=!f() { test "$1" = get && printf "username=%s\\npassword=%s\\n" "$ARCHON_GIT_USER" "$ARCHON_GIT_PASS"; }; f',
+        '-c',
+        'credential.https://github.com.useHttpPath=true',
+        '-C',
+        '/workspace/repo',
+        'fetch',
+        'origin',
+        'main',
+      ]);
+      expect(fetchCall![2]).toMatchObject({
+        env: expect.objectContaining({
+          ARCHON_GIT_USER: 'x-access-token',
+          ARCHON_GIT_PASS: 'ghu_test_secret_token_123',
+        }),
+        timeout: 60000,
+      });
+    });
+  });
+
+  describe('healWorkspaceAuth', () => {
+    let execSpy: Mock<typeof git.execFileAsync>;
+
+    beforeEach(() => {
+      execSpy = spyOn(git, 'execFileAsync');
+    });
+
+    afterEach(() => {
+      execSpy.mockRestore();
+    });
+
+    test('strips embedded credentials from origin url and registers credential helper', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('remote') && args.includes('get-url')) {
+          return { stdout: 'https://ghu_12345@github.com/owner/repo.git\n', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      await git.healWorkspaceAuth(repo('/workspace/repo'));
+
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        [
+          '-C',
+          '/workspace/repo',
+          'remote',
+          'set-url',
+          'origin',
+          'https://github.com/owner/repo.git',
+        ],
+        { timeout: 5000 }
+      );
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        [
+          '-C',
+          '/workspace/repo',
+          'config',
+          'credential.https://github.com.helper',
+          resolve(getArchonHome(), 'bin', 'git-credential-archon'),
+        ],
+        { timeout: 5000 }
+      );
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        ['-C', '/workspace/repo', 'config', 'credential.https://github.com.useHttpPath', 'true'],
+        { timeout: 5000 }
+      );
+    });
+
+    test('skips remote set-url when origin url has no embedded credentials', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('remote') && args.includes('get-url')) {
+          return { stdout: 'https://github.com/owner/repo.git\n', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      await git.healWorkspaceAuth(repo('/workspace/repo'));
+
+      const setUrlCalls = execSpy.mock.calls.filter((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('set-url');
+      });
+      expect(setUrlCalls).toHaveLength(0);
+
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        [
+          '-C',
+          '/workspace/repo',
+          'config',
+          'credential.https://github.com.helper',
+          resolve(getArchonHome(), 'bin', 'git-credential-archon'),
+        ],
+        { timeout: 5000 }
+      );
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        ['-C', '/workspace/repo', 'config', 'credential.https://github.com.useHttpPath', 'true'],
+        { timeout: 5000 }
+      );
+    });
+
+    test('ignores non-github.com remotes', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('remote') && args.includes('get-url')) {
+          return { stdout: 'https://gitlab.com/owner/repo.git\n', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      await git.healWorkspaceAuth(repo('/workspace/repo'));
+
+      // Only the get-url call should have occurred
+      expect(execSpy).toHaveBeenCalledTimes(1);
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        ['-C', '/workspace/repo', 'remote', 'get-url', 'origin'],
+        { timeout: 5000 }
+      );
+    });
+
+    test('handles errors non-fatally and logs warning', async () => {
+      const authErr = new Error('fatal: not a git repo');
+      execSpy.mockRejectedValue(authErr);
+
+      await expect(git.healWorkspaceAuth(repo('/workspace/repo'))).resolves.toBeUndefined();
+
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        { err: authErr, workspacePath: '/workspace/repo' },
+        'workspace.auth_heal_failed'
+      );
+    });
   });
 
   describe('getDefaultRemote', () => {

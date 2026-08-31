@@ -525,7 +525,7 @@ export async function addSafeDirectory(path: RepoPath): Promise<void> {
  * Non-fatal: if any step fails the fetch will still attempt (and likely fail
  * with a clear auth error rather than silently using stale credentials).
  */
-async function healWorkspaceAuth(workspacePath: RepoPath): Promise<void> {
+export async function healWorkspaceAuth(workspacePath: RepoPath): Promise<void> {
   try {
     const { stdout: rawUrl } = await execFileAsync(
       'git',

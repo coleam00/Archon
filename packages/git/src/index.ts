@@ -59,6 +59,7 @@ export {
   getRemoteUrl,
   listChildRepos,
   syncWorkspace,
+  healWorkspaceAuth,
   cloneRepository,
   syncRepository,
   addSafeDirectory,

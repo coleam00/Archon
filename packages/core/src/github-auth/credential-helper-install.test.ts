@@ -67,10 +67,15 @@ describe('installCredentialHelper', () => {
     expect(contents).toContain('git-credential');
     expect(contents.length).toBeGreaterThan(0);
 
-    // Registered under the exact git config key the credential protocol reads.
+    // Registered under the exact git config keys the credential protocol reads.
     expect(execSpy).toHaveBeenCalledWith(
       'git',
       ['-C', '/tmp/some-worktree', 'config', 'credential.https://github.com.helper', helperPath],
+      { timeout: 5000 }
+    );
+    expect(execSpy).toHaveBeenCalledWith(
+      'git',
+      ['-C', '/tmp/some-worktree', 'config', 'credential.https://github.com.useHttpPath', 'true'],
       { timeout: 5000 }
     );
   });
@@ -114,6 +119,17 @@ describe('installCredentialHelper', () => {
     expect(execSpy).toHaveBeenCalledWith(
       'git',
       ['-C', '/tmp/another-worktree', 'config', 'credential.https://github.com.helper', helperPath],
+      { timeout: 5000 }
+    );
+    expect(execSpy).toHaveBeenCalledWith(
+      'git',
+      [
+        '-C',
+        '/tmp/another-worktree',
+        'config',
+        'credential.https://github.com.useHttpPath',
+        'true',
+      ],
       { timeout: 5000 }
     );
   });
