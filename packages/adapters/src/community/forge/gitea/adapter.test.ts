@@ -113,6 +113,7 @@ mock.module('@archon/core', () => ({
 }));
 
 import { GiteaAdapter } from './adapter';
+import type { WebhookEvent } from './types';
 import { ConversationLockManager } from '@archon/core';
 
 // Create a mock lock manager that immediately executes handlers
@@ -655,7 +656,7 @@ describe('GiteaAdapter', () => {
               repo: { full_name: headRepoFullName },
             };
 
-      return JSON.stringify({
+      const event = {
         action: 'created',
         issue: {
           number: 42,
@@ -684,7 +685,9 @@ describe('GiteaAdapter', () => {
           default_branch: 'main',
         },
         sender: { login: 'user123' },
-      });
+      } satisfies WebhookEvent;
+
+      return JSON.stringify(event);
     }
 
     async function expectForkVerdict(

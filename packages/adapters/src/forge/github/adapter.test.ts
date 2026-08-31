@@ -160,6 +160,7 @@ mock.module('@archon/git', () => ({
 }));
 
 import { GitHubAdapter } from './adapter';
+import type { WebhookEvent } from './types';
 import { ConversationLockManager } from '@archon/core';
 // Namespace import so the dedup tests can spyOn(core, 'handleMessage') — the
 // orchestrator entry point the adapter calls after webhook setup succeeds.
@@ -1116,7 +1117,7 @@ describe('GitHubAdapter', () => {
 
   describe('fork detection logic', () => {
     function createPullRequestCommentPayload(): string {
-      return JSON.stringify({
+      const event = {
         action: 'created',
         issue: {
           number: 42,
@@ -1136,7 +1137,9 @@ describe('GitHubAdapter', () => {
           default_branch: 'main',
         },
         sender: { login: 'user123' },
-      });
+      } satisfies WebhookEvent;
+
+      return JSON.stringify(event);
     }
 
     async function expectForkVerdict(
