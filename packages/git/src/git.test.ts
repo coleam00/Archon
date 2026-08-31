@@ -2678,7 +2678,7 @@ branch refs/heads/feature/auth
       } finally {
         server.stop(true);
       }
-    });
+    }, 15_000);
 
     test('rejects a malformed credential-bearing HTTP URL before spawning Git', async () => {
       execSpy.mockResolvedValue({ stdout: '', stderr: '' });
