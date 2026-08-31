@@ -10210,6 +10210,302 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
   });
 });
 
+describe('workflowRunCommand — supersedes run-id prefix resolution (#2990)', () => {
+  let consoleSpy: ReturnType<typeof spyOn>;
+
+  // The suites above leave queued mockOnce values and call history behind on the shared
+  // module mocks. Re-install the module-mock defaults so this describe starts from a
+  // clean queue and leaves one behind for the suites after it.
+  function resetSharedMocks(): void {
+    const discoverMock = require('@archon/workflows/workflow-discovery')
+      .discoverWorkflowsWithConfig as ReturnType<typeof mock>;
+    discoverMock.mockReset();
+    discoverMock.mockImplementation(() => Promise.resolve({ workflows: [], errors: [] }));
+    const codebaseDb = require('@archon/core/db/codebases');
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockReset();
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockImplementation(() =>
+      Promise.resolve(null)
+    );
+    (codebaseDb.findCodebaseByPathPrefix as ReturnType<typeof mock>).mockReset();
+    (codebaseDb.findCodebaseByPathPrefix as ReturnType<typeof mock>).mockImplementation(() =>
+      Promise.resolve(null)
+    );
+    const conversationDb = require('@archon/core/db/conversations');
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockReset();
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockImplementation(() =>
+      Promise.resolve({
+        id: 'conv-123',
+        platform_type: 'cli',
+        platform_conversation_id: 'cli-123',
+      })
+    );
+    (conversationDb.updateConversation as ReturnType<typeof mock>).mockReset();
+    (conversationDb.updateConversation as ReturnType<typeof mock>).mockImplementation(() =>
+      Promise.resolve(undefined)
+    );
+    const workflowDb = require('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockReset();
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockImplementation(() =>
+      Promise.resolve(null)
+    );
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockReset();
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockImplementation(() =>
+      Promise.resolve([])
+    );
+    mockCreateWorkflowRun.mockReset();
+    mockCreateWorkflowRun.mockImplementation(
+      (data: { workflow_name: string; conversation_id: string }) =>
+        Promise.resolve({
+          id: 'run-detached-created',
+          workflow_name: data.workflow_name,
+          conversation_id: data.conversation_id,
+          status: 'pending',
+          working_path: null,
+          started_at: new Date(),
+          metadata: {},
+        })
+    );
+    const adoption = require('@archon/core/operations/workflow-adoption');
+    (adoption.resolveWorkflowAdoption as ReturnType<typeof mock>).mockReset();
+    (adoption.resolveWorkflowAdoption as ReturnType<typeof mock>).mockImplementation(() =>
+      Promise.reject(new Error('adoption not expected'))
+    );
+  }
+
+  beforeEach(() => {
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    resetSharedMocks();
+  });
+
+  afterEach(() => {
+    consoleSpy.mockRestore();
+    resetSharedMocks();
+  });
+
+  function setupSupersedesMocks(): void {
+    const discoverMock = require('@archon/workflows/workflow-discovery')
+      .discoverWorkflowsWithConfig as ReturnType<typeof mock>;
+    discoverMock.mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    const codebaseDb = require('@archon/core/db/codebases');
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-sup',
+      name: 'test-repo',
+      default_cwd: '/test/path',
+      kind: 'repo',
+    });
+  }
+
+  it('supersedes a run from a unique short run-id prefix', async () => {
+    const supersededRunId = '0b1ee8da-1111-2222-3333-444455556666';
+    const workflowDb = await import('@archon/core/db/workflows');
+    setupSupersedesMocks();
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
+      { id: supersededRunId },
+    ]);
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: supersededRunId,
+      status: 'completed',
+    });
+
+    await workflowRunCommand('/test/path', 'assist', 'hello', {
+      supersedesRunId: '0b1ee8da',
+      noWorktree: true,
+    });
+
+    expect(workflowDb.findWorkflowRunsByIdPrefix).toHaveBeenCalledWith('0b1ee8da', 'cb-sup');
+    // The terminality check sees the resolved full id, not the typed prefix.
+    expect(workflowDb.getWorkflowRun).toHaveBeenCalledWith(supersededRunId);
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining(`Superseding run ${supersededRunId}`)
+    );
+  });
+
+  it('rejects an ambiguous supersedes run prefix with its candidates', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const adoption = await import('@archon/core/operations/workflow-adoption');
+    setupSupersedesMocks();
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
+      { id: '0b1ee8da-1111-2222-3333-444455556666' },
+      { id: '0b1ee8da-9999-8888-7777-666655554444' },
+    ]);
+
+    await expect(
+      workflowRunCommand('/test/path', 'assist', 'hello', {
+        supersedesRunId: '0b1ee8da',
+        noWorktree: true,
+      })
+    ).rejects.toThrow(
+      '0b1ee8da-1111-2222-3333-444455556666\n  0b1ee8da-9999-8888-7777-666655554444'
+    );
+    expect(workflowDb.getWorkflowRun).not.toHaveBeenCalled();
+    expect(adoption.resolveWorkflowAdoption).not.toHaveBeenCalled();
+  });
+
+  it('passes a full supersedes run id through unchanged', async () => {
+    const supersededRunId = '0b1ee8da-1111-2222-3333-444455556666';
+    const workflowDb = await import('@archon/core/db/workflows');
+    setupSupersedesMocks();
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: supersededRunId,
+      status: 'completed',
+    });
+
+    await workflowRunCommand('/test/path', 'assist', 'hello', {
+      supersedesRunId: supersededRunId,
+      noWorktree: true,
+    });
+
+    expect(workflowDb.findWorkflowRunsByIdPrefix).not.toHaveBeenCalled();
+    expect(workflowDb.getWorkflowRun).toHaveBeenCalledWith(supersededRunId);
+  });
+
+  it('keeps the unknown-id refusal for a prefix that matches nothing', async () => {
+    setupSupersedesMocks();
+
+    await expect(
+      workflowRunCommand('/test/path', 'assist', 'hello', {
+        supersedesRunId: 'deadbeef',
+        noWorktree: true,
+      })
+    ).rejects.toThrow("Cannot supersede: no workflow run 'deadbeef' exists.");
+  });
+
+  it('still refuses a supersedes run that is not terminal', async () => {
+    const supersededRunId = '0b1ee8da-1111-2222-3333-444455556666';
+    const workflowDb = await import('@archon/core/db/workflows');
+    setupSupersedesMocks();
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
+      { id: supersededRunId },
+    ]);
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: supersededRunId,
+      status: 'running',
+    });
+
+    await expect(
+      workflowRunCommand('/test/path', 'assist', 'hello', {
+        supersedesRunId: '0b1ee8da',
+        noWorktree: true,
+      })
+    ).rejects.toThrow(`Cannot supersede run '${supersededRunId}': it is still running.`);
+  });
+
+  it('resolves a supersedes run prefix before passing it to the detached child', async () => {
+    const supersededRunId = '0b1ee8da-1111-2222-3333-444455556666';
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const workflowDb = await import('@archon/core/db/workflows');
+    const paths = await import('@archon/paths');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (paths.getArchonHome as ReturnType<typeof mock>).mockImplementationOnce(() => {
+      throw new Error('no home in test');
+    });
+    // The detach pre-flight resolves the project the same way the adopt pre-flight
+    // does: a subdir cwd misses the exact default-cwd lookup, then the path-prefix
+    // lookup resolves the covering folder project.
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    (codebaseDb.findCodebaseByPathPrefix as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-1',
+      name: 'test/folder',
+      default_cwd: '/test/path',
+      kind: 'folder',
+    });
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
+      { id: supersededRunId },
+    ]);
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: supersededRunId,
+      status: 'completed',
+    });
+
+    const child = createDetachedChildFixture();
+    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
+    const savedArgv = process.argv;
+    process.argv = ['bun', '/abs/cli.ts', 'workflow', 'run', 'assist', 'hello', '--detach'];
+
+    let spawnCmd: string[] = [];
+    // finishStartupWindow advances the 500 ms startup window on fake timers.
+    jest.useFakeTimers();
+    try {
+      const commandPromise = workflowRunCommand('/test/path/subdir', 'assist', 'hello', {
+        detach: true,
+        supersedesRunId: '0b1ee8da',
+      });
+      await finishStartupWindow(commandPromise, spawnSpy);
+      spawnCmd = (
+        (spawnSpy.mock.calls[0]?.[0] as { cmd: string[] } | undefined)?.cmd ?? []
+      ).slice();
+    } finally {
+      jest.useRealTimers();
+      process.argv = savedArgv;
+      spawnSpy.mockRestore();
+    }
+
+    const supIndex = spawnCmd.indexOf('--supersedes');
+    expect(supIndex).toBeGreaterThan(-1);
+    expect(spawnCmd[supIndex + 1]).toBe(supersededRunId);
+    expect(workflowDb.findWorkflowRunsByIdPrefix).toHaveBeenCalledWith('0b1ee8da', 'cb-1');
+    expect(mockCreateWorkflowRun).toHaveBeenCalledWith(
+      expect.objectContaining({ adopted_from_run_id: supersededRunId })
+    );
+  });
+
+  it('refuses a non-terminal supersedes run in the detach pre-flight before forking', async () => {
+    const supersededRunId = '0b1ee8da-1111-2222-3333-444455556666';
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const workflowDb = await import('@archon/core/db/workflows');
+    const paths = await import('@archon/paths');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (paths.getArchonHome as ReturnType<typeof mock>).mockImplementationOnce(() => {
+      throw new Error('no home in test');
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    (codebaseDb.findCodebaseByPathPrefix as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-1',
+      name: 'test/folder',
+      default_cwd: '/test/path',
+      kind: 'folder',
+    });
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
+      { id: supersededRunId },
+    ]);
+    // Argument-aware on purpose: the queued-value mocks are argument-blind, which
+    // would let terminality pass here even if it ran on the raw prefix.
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockImplementation(async (id: string) =>
+      id === supersededRunId ? { id: supersededRunId, status: 'running' } : null
+    );
+
+    const spawnSpy = spyOn(Bun, 'spawn');
+    try {
+      // The refusal names the resolved full id, so terminality is checked on the
+      // resolution, not on the raw prefix.
+      await expect(
+        workflowRunCommand('/test/path/subdir', 'assist', 'hello', {
+          detach: true,
+          supersedesRunId: '0b1ee8da',
+        })
+      ).rejects.toThrow(`Cannot supersede run '${supersededRunId}': it is still running.`);
+    } finally {
+      spawnSpy.mockRestore();
+    }
+
+    // The refusal reached the parent: no child was forked and no pending run row
+    // was left behind for a launch that cannot proceed (#2872).
+    expect(spawnSpy).not.toHaveBeenCalled();
+    expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
+  });
+});
+
 describe('workflowWaitCommand', () => {
   const FULL_ID = '0b1ee8da-1111-2222-3333-444455556666';
   let consoleSpy: ReturnType<typeof spyOn>;

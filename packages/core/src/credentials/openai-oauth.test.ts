@@ -23,14 +23,22 @@ const ACCESS_WITHOUT_ACCOUNT = fakeJwt({ sub: 'nobody' });
 // fetch stub — restored after each test (no mock.module; global only).
 const realFetch = globalThis.fetch;
 let lastRequest: { url: string; body: URLSearchParams } | undefined;
+function installFetch(
+  implementation: (
+    ...args: Parameters<typeof globalThis.fetch>
+  ) => ReturnType<typeof globalThis.fetch>
+): void {
+  globalThis.fetch = Object.assign(implementation, { preconnect: realFetch.preconnect });
+}
+
 function stubTokenEndpoint(status: number, json: unknown): void {
-  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+  installFetch(async (input, init) => {
     lastRequest = {
       url: String(input),
       body: new URLSearchParams(String(init?.body)),
     };
     return new Response(JSON.stringify(json), { status });
-  }) as typeof fetch;
+  });
 }
 
 afterEach(() => {
@@ -157,8 +165,7 @@ describe('exchangeOpenAiAuthorizationCode', () => {
   });
 
   test('HTTP 200 with a non-JSON body → labeled error, not a raw SyntaxError (I2)', async () => {
-    globalThis.fetch = (async () =>
-      new Response('<html>maintenance</html>', { status: 200 })) as typeof fetch;
+    installFetch(async () => new Response('<html>maintenance</html>', { status: 200 }));
     await expect(exchangeOpenAiAuthorizationCode('C', 'V')).rejects.toThrow(
       /non-JSON response \(HTTP 200\)/
     );
@@ -217,10 +224,10 @@ describe('refreshOpenAiOAuthCredentials', () => {
 describe('mintOpenAiOAuthApiKey', () => {
   test('unexpired blob → returned as-is, no network call', async () => {
     let fetched = 0;
-    globalThis.fetch = (async () => {
+    installFetch(async () => {
       fetched++;
       return new Response('{}');
-    }) as typeof fetch;
+    });
     const creds = {
       access: 'a1',
       refresh: 'r1',

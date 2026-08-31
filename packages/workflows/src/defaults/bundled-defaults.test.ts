@@ -633,7 +633,7 @@ describe('bundled-defaults', () => {
       });
       // Composition once dropped that binding while materializing the command body
       // and then reported both names as missing caller inputs, so archon-deliver
-      // declared them with empty defaults purely to load inside ship/stabilize/upkeep
+      // declared them with empty defaults purely to load inside ship/upkeep
       // (#2968 item 4). Composition keeps the binding now (#2964), so the decoys are
       // gone — and the empty default that used to be spliced in where the real value
       // belongs cannot come back with them.

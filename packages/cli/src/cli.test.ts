@@ -4,14 +4,14 @@
  * Note: These tests focus on argument parsing logic.
  * Full integration tests would require mocking the database and commands.
  */
-import { describe, it, expect, beforeAll } from 'bun:test';
+import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { parseArgs } from 'util';
 import { cliArgOptions } from './args';
 import * as git from '@archon/git';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -26,6 +26,112 @@ const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
 // The enclosing git worktree — a valid repo for the git gate, with a real
 // .archon/workflows/ directory so an unknown workflow name fails deterministically.
 const repoRoot = join(import.meta.dir, '..', '..', '..');
+
+type BuildMetafile = NonNullable<Bun.BuildOutput['metafile']>;
+
+function staticallyReachableInputs(metafile: BuildMetafile, start: string): string[] {
+  const pending = [start];
+  const visited = new Set<string>();
+  const inputs = new Set<string>();
+
+  while (pending.length > 0) {
+    const outputPath = pending.pop();
+    if (outputPath === undefined || visited.has(outputPath)) continue;
+    visited.add(outputPath);
+
+    const output = metafile.outputs[outputPath];
+    if (!output) throw new Error(`Build metafile references missing output '${outputPath}'.`);
+    for (const input of Object.keys(output.inputs)) inputs.add(input);
+    for (const imported of output.imports) {
+      if (imported.kind !== 'dynamic-import') pending.push(imported.path);
+    }
+  }
+
+  return [...inputs].sort();
+}
+
+function repositoryInput(path: string): string | undefined {
+  const normalized = path.replaceAll('\\', '/');
+  const packagesIndex = normalized.indexOf('packages/');
+  return packagesIndex === -1 ? undefined : normalized.slice(packagesIndex);
+}
+
+describe('CLI startup import boundary', () => {
+  let buildDir: string;
+  let metafile: BuildMetafile;
+
+  beforeAll(async () => {
+    buildDir = mkdtempSync(join(tmpdir(), 'archon-cli-import-graph-'));
+    const metafilePath = join(buildDir, 'metafile.json');
+    const result = spawnSync(
+      process.execPath,
+      [
+        'build',
+        CLI_ENTRY,
+        '--target=bun',
+        '--format=esm',
+        '--splitting',
+        `--outdir=${buildDir}`,
+        `--metafile=${metafilePath}`,
+      ],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+      }
+    );
+    if (result.status !== 0) {
+      throw new Error(`CLI graph build failed:\n${result.stdout}\n${result.stderr}`);
+    }
+    metafile = JSON.parse(readFileSync(metafilePath, 'utf8')) as BuildMetafile;
+  });
+
+  afterAll(async () => {
+    if (buildDir) await removeTempTree(buildDir);
+  });
+
+  it('keeps help and argument failures outside command, provider, core, workflow, and Git graphs', () => {
+    const entry = Object.entries(metafile.outputs).find(([, output]) =>
+      output.entryPoint?.replaceAll('\\', '/').endsWith('packages/cli/src/cli.ts')
+    )?.[0];
+    expect(entry).toBeDefined();
+
+    const forbidden = staticallyReachableInputs(metafile, entry ?? '')
+      .map(repositoryInput)
+      .filter(
+        (input): input is string =>
+          input !== undefined &&
+          (input.startsWith('packages/cli/src/commands/') ||
+            input.startsWith('packages/core/src/') ||
+            input.startsWith('packages/git/src/') ||
+            input.startsWith('packages/providers/src/') ||
+            input.startsWith('packages/workflows/src/'))
+      );
+    expect(forbidden).toEqual([]);
+  });
+
+  it('keeps detached handoff decoding on its audited schema, crypto, and path leaves', () => {
+    const decoderChunk = Object.entries(metafile.outputs).find(([, output]) =>
+      Object.keys(output.inputs).some(input =>
+        input.replaceAll('\\', '/').endsWith('packages/core/src/config/run-config-handoff.ts')
+      )
+    )?.[0];
+    expect(decoderChunk).toBeDefined();
+
+    const internalInputs = staticallyReachableInputs(metafile, decoderChunk ?? '')
+      .map(repositoryInput)
+      .filter((input): input is string => input !== undefined);
+    expect(internalInputs).toEqual([
+      'packages/core/src/config/run-config-handoff.ts',
+      'packages/core/src/utils/token-crypto.ts',
+      'packages/paths/src/archon-paths.ts',
+      'packages/paths/src/logger.ts',
+      'packages/workflows/src/schemas/durable-wait.ts',
+      'packages/workflows/src/schemas/model-binding.ts',
+      'packages/workflows/src/schemas/run-config.ts',
+      'packages/workflows/src/schemas/thinking-config.ts',
+    ]);
+  });
+});
 
 describe('CLI help output', () => {
   // The five tests assert disjoint fragments of one static usage string, so a
@@ -991,13 +1097,54 @@ describe('CLI git repo check', () => {
 // One helper owns the spawn env and envelope access so every case pays setup
 // once instead of repeating it; each test still drives its own invocation so
 // the subprocess stdout/exit-code contract stays covered.
+//
+// The helper owns an ARCHON_HOME because these spawns are real CLI processes:
+// the no-git folder-project gate opens the Archon registry to decide whether an
+// unregistered directory is a folder project, before it refuses the command.
+// Inheriting the ambient home aimed that at the operator's ~/.archon, so the
+// tests both mutated real state and queued behind whoever else held it. The
+// registry sets `PRAGMA busy_timeout = 5000` — the same number as Bun's
+// implicit per-test budget — so a contended open can spend the whole budget
+// waiting: holding a write lock for 3 s made this command take 3.41 s, and an
+// 8 s lock took it to the 5.54 s ceiling. A private registry removes the
+// contention, and seeding it once below keeps schema creation out of every
+// timed body (#2982).
+let jsonEnvelopeHome: string;
+
 function spawnJsonError(argv: string[], extraEnv: Record<string, string> = {}) {
   const result = spawnSync(process.execPath, [CLI_ENTRY, ...argv], {
     encoding: 'utf8',
-    env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1', ...extraEnv },
+    env: {
+      ...process.env,
+      ARCHON_TELEMETRY_DISABLED: '1',
+      ARCHON_HOME: jsonEnvelopeHome,
+      ...extraEnv,
+    },
   });
   return { status: result.status, envelope: () => JSON.parse(result.stdout ?? '') };
 }
+
+beforeAll(() => {
+  jsonEnvelopeHome = mkdtempSync(join(tmpdir(), 'archon-json-envelope-home-'));
+
+  // Build the registry once, here, so no timed body below pays for creating it.
+  // Seeding through `spawnJsonError` rather than a bespoke spawn is deliberate:
+  // it makes this also the check that the helper hands its ARCHON_HOME to the
+  // child. If that wiring is ever dropped, no registry appears in the scratch
+  // home and this throws, instead of every case below quietly falling back to
+  // the operator's registry again.
+  const seed = spawnJsonError(['workflow', 'list', '--json', '--cwd', tmpdir()]);
+  if (!existsSync(join(jsonEnvelopeHome, 'archon.db'))) {
+    throw new Error(
+      `--json envelope tests could not seed a scratch registry in ${jsonEnvelopeHome}.\n` +
+        `status=${String(seed.status)}\n${JSON.stringify(seed.envelope())}`
+    );
+  }
+});
+
+afterAll(async () => {
+  if (jsonEnvelopeHome) await removeTempTree(jsonEnvelopeHome);
+});
 
 describe('workflow search --json error envelope', () => {
   it('emits { ok: false } on stdout when the command throws under --json', () => {
@@ -1067,6 +1214,27 @@ describe('pre-dispatch gates --json error envelope', () => {
     expect(status).toBe(1);
     expect(envelope).not.toThrow();
     expect(envelope()).toMatchObject({ ok: false });
+  });
+
+  it('leaves the default home untouched when the gate opens the registry', async () => {
+    // Same command as the case above — the one route here that opens the
+    // registry — but with the child's home directory pointed at a scratch tree,
+    // so `<sentinel>/.archon` is what `getArchonHome()` would resolve to if the
+    // helper's ARCHON_HOME stopped reaching the child. It must stay absent: the
+    // registry belongs in the test-owned home, never the ambient one.
+    const sentinel = mkdtempSync(join(tmpdir(), 'archon-json-envelope-sentinel-'));
+    try {
+      const { status } = spawnJsonError(['workflow', 'list', '--json', '--cwd', tmpdir()], {
+        HOME: sentinel,
+        USERPROFILE: sentinel,
+      });
+
+      expect(status).toBe(1);
+      expect(existsSync(join(sentinel, '.archon'))).toBe(false);
+      expect(existsSync(join(jsonEnvelopeHome, 'archon.db'))).toBe(true);
+    } finally {
+      await removeTempTree(sentinel);
+    }
   });
 
   it('emits { ok: false } on stdout for an unknown command instead of usage text', () => {

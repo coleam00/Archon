@@ -69,6 +69,15 @@ That retention is also why a node does not need its own log. The ready flip once
 wrote one by hand — every command it ran, echoed into an artifact — which is what
 the transcript now holds for free.
 
+## The engineering-conventions sidecar
+
+A repository may declare its engineering conventions in an `engineering.md`
+(root, or a config directory such as `.archon/`). Prompts that write code read
+it before coding — `implement` carries the line today — the same way any
+workflow may read a repository's direction sidecar. The check is conditional on
+the file existing, so the pack stays portable: a repository without one loses
+nothing. A new pack workflow that writes code carries the same line.
+
 ## A node's streams are the operator's channel
 
 Retention is not the only reader. Anything a node writes to stderr is sent to the

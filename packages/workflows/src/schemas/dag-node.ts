@@ -13,6 +13,10 @@
 import { z } from '@hono/zod-openapi';
 import { EFFORT_LADDER } from '@archon/providers/effort';
 import { stepRetryConfigSchema } from './retry';
+import { MAX_DURABLE_WAIT_MS } from './durable-wait';
+import { thinkingConfigSchema } from './thinking-config';
+export { MAX_DURABLE_WAIT_MS } from './durable-wait';
+export { thinkingConfigSchema, type ThinkingConfig } from './thinking-config';
 // Runtime import, but cycle-free: output-ref's only edge back into schemas is a
 // type-only `NodeOutput`, which is erased. Reused rather than reimplemented so
 // `loop.until_field` and the strict `$node.output.field` access agree on what
@@ -82,28 +86,6 @@ export const EFFORT_LEVELS: readonly EffortLevel[] = effortLevelSchema.options;
  * TypeScript type to a non-empty tuple (the type stays `string[]`).
  */
 export const betasSchema = z.array(z.string().min(1)).nonempty("'betas' must be a non-empty array");
-
-/**
- * Claude Agent SDK ThinkingConfig — string shorthand or full object form.
- * Shorthand: 'adaptive' → { type: 'adaptive' }, 'enabled' → { type: 'enabled' }, 'disabled' → { type: 'disabled' }.
- */
-export const thinkingConfigSchema = z.preprocess(
-  val => {
-    if (typeof val === 'string') {
-      if (val === 'adaptive') return { type: 'adaptive' };
-      if (val === 'enabled') return { type: 'enabled' };
-      if (val === 'disabled') return { type: 'disabled' };
-    }
-    return val;
-  },
-  z.discriminatedUnion('type', [
-    z.object({ type: z.literal('adaptive') }),
-    z.object({ type: z.literal('enabled'), budgetTokens: z.number().int().positive().optional() }),
-    z.object({ type: z.literal('disabled') }),
-  ])
-);
-
-export type ThinkingConfig = z.infer<typeof thinkingConfigSchema>;
 
 /**
  * Claude Agent SDK SandboxSettings — OS-level filesystem/network restrictions.
@@ -624,9 +606,6 @@ export const haltNodeSchema = dagNodeBaseSchema.extend({
 
 /** DAG node that cancels the workflow run with a reason string */
 export type HaltNode = z.infer<typeof haltNodeSchema>;
-
-/** Engine-visible condition that may suspend a run without occupying a worker slot. */
-export const MAX_DURABLE_WAIT_MS = 1_000 * 365 * 24 * 60 * 60 * 1_000;
 
 export const waitConfigFlatSchema = z.object({
   duration_ms: z.number().int().positive().max(MAX_DURABLE_WAIT_MS).optional(),

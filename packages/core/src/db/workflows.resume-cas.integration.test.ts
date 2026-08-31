@@ -13,6 +13,7 @@
 import { describe, test, expect, mock } from 'bun:test';
 import type { TokenUsage } from '@archon/providers/types';
 import { isWorkflowWaitContext } from '@archon/workflows/schemas/workflow-run';
+import type { GateResolutionEvent } from './workflows';
 
 mock.module('@archon/paths', () => ({
   createLogger: () => ({
@@ -613,11 +614,7 @@ describe('gate reject staging — real SQLite end-to-end (#2075)', () => {
 // ---------------------------------------------------------------------------
 
 /** A minimal audit event for the gate CAS calls (content is not asserted here). */
-function approvalEvent(decision: 'approved' | 'rejected'): {
-  event_type: string;
-  step_name: string;
-  data: Record<string, unknown>;
-} {
+function approvalEvent(decision: 'approved' | 'rejected'): GateResolutionEvent {
   return { event_type: 'approval_received', step_name: 'review', data: { decision } };
 }
 
@@ -1048,11 +1045,13 @@ describe('resolveApprovalGate — CAS at the DB layer (#2113)', () => {
       resolved: null,
     });
 
-    const badEvent = {
-      // Simulates an event-write failure inside the transaction.
-      event_type: null as unknown as string,
+    const circularData: Record<string, unknown> = {};
+    circularData.self = circularData;
+    const badEvent: GateResolutionEvent = {
+      // JSON serialization fails inside the event write transaction.
+      event_type: 'approval_received',
       step_name: 'review',
-      data: { decision: 'approved' },
+      data: circularData,
     };
     await expect(
       resolveApprovalGate(

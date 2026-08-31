@@ -3,9 +3,10 @@
  * state is process-global and irreversible. That makes each package manifest the
  * test inventory, so a new file can otherwise remain invisible forever.
  *
- * Keep the batches explicit. This repository-level guard only verifies that every
- * TypeScript test is selected by a file or directory argument, and that selected
- * paths still exist. `bun run test` discovers this file through its final
+ * Keep the batches explicit. The package-script guard below verifies that every
+ * TypeScript test is selected by a file or directory argument and that selected
+ * paths still exist. The compiler guard separately protects core's normal project
+ * from excluding its tests again. `bun run test` discovers both through its final
  * `bun test ./scripts/` invocation.
  */
 import { describe, test } from 'bun:test';
@@ -178,5 +179,33 @@ describe('package test inventory', () => {
       .filter((mismatch): mismatch is InventoryMismatch => mismatch !== undefined);
 
     if (mismatches.length > 0) throw new Error(formatMismatches(mismatches));
+  });
+});
+
+describe('compiler test inventory', () => {
+  test("core's normal TypeScript project includes test files", async () => {
+    const projectPath = join(REPO_ROOT, 'packages', 'core', 'tsconfig.json');
+    const process = Bun.spawn(
+      ['bun', 'x', 'tsc', '--noEmit', '--listFilesOnly', '--project', projectPath],
+      { cwd: REPO_ROOT, stdout: 'pipe', stderr: 'pipe' }
+    );
+    const [exitCode, stdout, stderr] = await Promise.all([
+      process.exited,
+      new Response(process.stdout).text(),
+      new Response(process.stderr).text(),
+    ]);
+
+    if (exitCode !== 0) {
+      throw new Error(`Could not list the core TypeScript program:\n${stderr}`);
+    }
+
+    const programFiles = stdout.split(/\r?\n/).map(normalizePath);
+    const representativeTest = normalizePath(
+      join(REPO_ROOT, 'packages', 'core', 'src', 'utils', 'conversation-lock.test.ts')
+    );
+
+    if (!programFiles.includes(representativeTest)) {
+      throw new Error(`Core's normal TypeScript project did not include ${representativeTest}`);
+    }
   });
 });

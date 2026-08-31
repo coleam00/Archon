@@ -12,6 +12,8 @@ import { resolve } from 'path';
 import * as fsPromises from 'fs/promises';
 import * as gitUtils from '@archon/git';
 import type { Codebase } from '../types';
+import type * as CodebaseDb from '../db/codebases';
+import type * as Commands from '../utils/commands';
 import {
   findCodebaseForCheckoutPath,
   type CodebaseCheckoutResolverDeps,
@@ -19,25 +21,37 @@ import {
 import { createMockLogger } from '../test/mocks/logger';
 
 // ── DB mocks ────────────────────────────────────────────────────────────────
-const mockCreateCodebase = mock(() =>
+const mockCreateCodebase = mock<typeof CodebaseDb.createCodebase>(() =>
   Promise.resolve({
     id: 'codebase-uuid-1',
     name: 'owner/repo',
     repository_url: 'https://github.com/owner/repo',
     default_cwd: '/home/test/.archon/workspaces/owner/repo/source',
+    default_branch: null,
     ai_assistant_type: 'claude',
+    kind: 'repo',
     commands: {},
     created_at: new Date(),
     updated_at: new Date(),
   })
 );
-const mockGetCodebaseCommands = mock(() => Promise.resolve({}));
-const mockUpdateCodebaseCommands = mock(() => Promise.resolve());
-const mockFindCodebaseByRepoUrl = mock(() => Promise.resolve(null));
-const mockFindCodebaseByDefaultCwd = mock(() => Promise.resolve(null));
-const mockListCodebases = mock(() => Promise.resolve([]));
-const mockFindCodebaseByName = mock(() => Promise.resolve(null));
-const mockUpdateCodebase = mock(() => Promise.resolve());
+const mockGetCodebaseCommands = mock<typeof CodebaseDb.getCodebaseCommands>(() =>
+  Promise.resolve({})
+);
+const mockUpdateCodebaseCommands = mock<typeof CodebaseDb.updateCodebaseCommands>(() =>
+  Promise.resolve()
+);
+const mockFindCodebaseByRepoUrl = mock<typeof CodebaseDb.findCodebaseByRepoUrl>(() =>
+  Promise.resolve(null)
+);
+const mockFindCodebaseByDefaultCwd = mock<typeof CodebaseDb.findCodebaseByDefaultCwd>(() =>
+  Promise.resolve(null)
+);
+const mockListCodebases = mock<typeof CodebaseDb.listCodebases>(() => Promise.resolve([]));
+const mockFindCodebaseByName = mock<typeof CodebaseDb.findCodebaseByName>(() =>
+  Promise.resolve(null)
+);
+const mockUpdateCodebase = mock<typeof CodebaseDb.updateCodebase>(() => Promise.resolve());
 const mockCreateProjectSourceSymlink = mock((): Promise<void> => Promise.resolve());
 
 mock.module('../db/codebases', () => ({
@@ -99,7 +113,9 @@ mock.module('../config/config-loader', () => ({
 }));
 
 // ── utils/commands mock ─────────────────────────────────────────────────────
-const mockFindMarkdownFilesRecursive = mock(() => Promise.resolve([]));
+const mockFindMarkdownFilesRecursive = mock<typeof Commands.findMarkdownFilesRecursive>(() =>
+  Promise.resolve([])
+);
 mock.module('../utils/commands', () => ({
   findMarkdownFilesRecursive: mockFindMarkdownFilesRecursive,
 }));
@@ -190,16 +206,7 @@ afterAll(() => {
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /** Build a minimal codebase row for the mock to return */
-function makeCodebase(
-  overrides: Partial<{
-    id: string;
-    name: string;
-    repository_url: string | null;
-    default_cwd: string;
-    default_branch: string | null;
-    ai_assistant_type: string;
-  }> = {}
-): object {
+function makeCodebase(overrides: Partial<Codebase> = {}): Codebase {
   return {
     id: 'codebase-uuid-1',
     name: 'owner/repo',
@@ -463,7 +470,7 @@ describe('cloneRepository', () => {
 
       expect(getGitCloneCall()).toEqual([
         'https://github.com/owner/private-repo',
-        '/home/test/.archon/workspaces/owner/private-repo/source',
+        gitUtils.toRepoPath('/home/test/.archon/workspaces/owner/private-repo/source'),
         { credentials: { username: 'ghp_github_token_456', password: '' } },
       ]);
     });
@@ -597,7 +604,7 @@ describe('cloneRepository', () => {
 
       expect(getGitCloneCall()).toEqual([
         'https://bitbucket.org/owner/repo',
-        '/home/test/.archon/workspaces/owner/repo/source',
+        gitUtils.toRepoPath('/home/test/.archon/workspaces/owner/repo/source'),
         undefined,
       ]);
     });
@@ -991,7 +998,7 @@ describe('registerRepository', () => {
 
   // ── Happy path ─────────────────────────────────────────────────────────
   test('registers a valid local git repo not yet in DB', async () => {
-    spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+    spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
       if (args.includes('--git-dir')) return Promise.resolve({ stdout: '.git', stderr: '' });
       if (args.includes('--abbrev-ref'))
         return Promise.resolve({ stdout: 'develop\n', stderr: '' });
@@ -1016,7 +1023,7 @@ describe('registerRepository', () => {
   });
 
   test('stores null default_branch when checkout is detached', async () => {
-    spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+    spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
       if (args.includes('--git-dir')) return Promise.resolve({ stdout: '.git', stderr: '' });
       if (args.includes('--abbrev-ref')) return Promise.resolve({ stdout: 'HEAD\n', stderr: '' });
       if (args.includes('get-url'))
@@ -1091,7 +1098,7 @@ describe('registerRepository', () => {
 
   // ── Remote URL handling ────────────────────────────────────────────────
   test('uses directory name as repo name when no remote URL exists', async () => {
-    spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+    spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
       if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
       if (args.includes('get-url')) return Promise.reject(new Error('No such remote: origin'));
       return Promise.resolve({ stdout: '', stderr: '' });
@@ -1112,7 +1119,7 @@ describe('registerRepository', () => {
   });
 
   test('does not warn for expected "No such remote" error', async () => {
-    spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+    spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
       if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
       if (args.includes('get-url')) return Promise.reject(new Error('No such remote: origin'));
       return Promise.resolve({ stdout: '', stderr: '' });
@@ -1127,7 +1134,7 @@ describe('registerRepository', () => {
   });
 
   test('logs warn for unexpected git remote-url errors', async () => {
-    spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+    spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
       if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
       if (args.includes('get-url'))
         return Promise.reject(new Error('permission denied: remote access'));
@@ -1142,7 +1149,7 @@ describe('registerRepository', () => {
   });
 
   test('builds owner/repo name from HTTPS remote URL', async () => {
-    spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+    spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
       if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
       if (args.includes('get-url'))
         return Promise.resolve({ stdout: 'https://github.com/acme/frontend', stderr: '' });
@@ -1162,7 +1169,7 @@ describe('registerRepository', () => {
   });
 
   test('builds owner/repo name from SSH remote URL', async () => {
-    spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+    spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
       if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
       if (args.includes('get-url'))
         return Promise.resolve({ stdout: 'git@github.com:acme/backend.git', stderr: '' });
@@ -1182,7 +1189,7 @@ describe('registerRepository', () => {
 
   // ── Command auto-loading ───────────────────────────────────────────────
   test('auto-loads markdown commands found in .archon/commands', async () => {
-    spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+    spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
       if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
       if (args.includes('get-url'))
         return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
@@ -1397,7 +1404,7 @@ describe('name-based deduplication', () => {
       default_cwd: '/home/test/.archon/workspaces/owner/repo/source',
     });
     // registerRepository: rev-parse succeeds, path not in DB, remote URL returns owner/repo
-    spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+    spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
       if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
       if (args.includes('get-url'))
         return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
@@ -1422,7 +1429,7 @@ describe('name-based deduplication', () => {
       repository_url: 'https://github.com/owner/repo',
       default_cwd: '/home/test/.archon/workspaces/owner/repo/source',
     });
-    spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+    spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
       if (args.includes('--git-dir')) return Promise.resolve({ stdout: '.git', stderr: '' });
       if (args.includes('--abbrev-ref'))
         return Promise.resolve({ stdout: 'develop\n', stderr: '' });
@@ -1456,7 +1463,7 @@ describe('name-based deduplication', () => {
       default_cwd: '/home/user/repo',
       default_branch: null,
     });
-    spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+    spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
       if (args.includes('--git-dir')) return Promise.resolve({ stdout: '.git', stderr: '' });
       if (args.includes('--abbrev-ref')) return Promise.resolve({ stdout: 'trunk\n', stderr: '' });
       if (args.includes('get-url'))
@@ -1504,7 +1511,7 @@ describe('name-based deduplication', () => {
       repository_url: null,
       default_cwd: '/home/user/repo',
     });
-    spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+    spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
       if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
       if (args.includes('get-url'))
         return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });

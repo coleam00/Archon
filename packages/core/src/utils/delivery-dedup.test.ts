@@ -1,3 +1,4 @@
+import { describe, expect, test } from 'bun:test';
 import { DeliveryDeduplicator } from './delivery-dedup';
 
 interface TestClock {

@@ -12,11 +12,16 @@ States, on stdout as JSON so `when:`/`until_bash` can branch without prose:
                                          contribution) — a gate only a
                                          maintainer can open, named, never
                                          blocked on and never called green
-Red exits 1 with the failing names and the recovery: `pass` counts, `skipping` is
-accepted as non-blocking (and named), everything else — `fail`, `cancel`, or any
-bucket this script does not recognize — fails the node. A cancelled check is not a
-green check (R4). Nothing here retries: a concluded check does not re-run itself,
-so the operator re-runs it and resumes, and the resumed probe reads the state again.
+  {"state": "red", "detail": ...}        concluded with non-green checks, named.
+                                         `pass` counts, `skipping` is accepted as
+                                         non-blocking, everything else — `fail`,
+                                         `cancel`, or any bucket this script does
+                                         not recognize — is red. A cancelled
+                                         check is not a green check (R4).
+Red is a report, never a verdict: this probe declares the state and the
+deliver tail's convergence pass decides what it means — introduced red is
+correction work, any other red terminates at the flip preflight with the
+recovery named. Nothing here retries: a concluded check does not re-run itself.
 
 The one in-process wait left: when CI is configured but nothing has started
 yet, registration gets a single 60 s grace before the maintainer-gated skip is
@@ -102,14 +107,8 @@ def main() -> int:
     ]
 
     if not_green:
-        print(f"checks not green: {', '.join(not_green)}", file=sys.stderr)
-        print(
-            "If that red is transient or unrelated to this change, re-run the failing check "
-            "on the pull request and resume this run — the probe reads the check state again "
-            "on resume.",
-            file=sys.stderr,
-        )
-        return 1
+        print(json.dumps({"state": "red", "detail": ", ".join(not_green)}))
+        return 0
 
     note = f"; skipped (non-blocking): {', '.join(skipped)}" if skipped else ""
     return conclude(f"all {len(passed)} required check(s) green{note}")

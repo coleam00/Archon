@@ -9,6 +9,7 @@ import {
   sealWorkflowRunConfig,
   unsealWorkflowRunConfig,
 } from './run-config';
+import { decodeWorkflowRunConfigHandoff } from './run-config-handoff';
 
 const TEST_KEY = 'ab'.repeat(32);
 let previousKey: string | undefined;
@@ -285,6 +286,18 @@ describe('workflow run config', () => {
     expect(() =>
       unsealWorkflowRunConfig({ ...metadata, ciphertext: `${metadata.ciphertext.slice(0, -2)}xx` })
     ).toThrow('could not be decrypted');
+  });
+
+  it('decodes a detached handoff before provider-dependent normalization', () => {
+    const metadata = sealWorkflowRunConfig(
+      { assistant: 'not-registered' },
+      { kind: 'cli', label: 'config.yaml' }
+    );
+
+    expect(decodeWorkflowRunConfigHandoff(JSON.stringify(metadata))).toEqual({
+      source: { kind: 'cli', label: 'config.yaml' },
+      layer: { assistant: 'not-registered' },
+    });
   });
 
   it('loads a CLI YAML file through the strict parser', async () => {

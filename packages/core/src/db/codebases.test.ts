@@ -1,9 +1,9 @@
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { join } from 'path';
-import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
+import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import { Codebase } from '../types';
 
-const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
+const mockQuery = createMockQuery();
 
 // Mock the connection module before importing the module under test
 mock.module('./connection', () => ({

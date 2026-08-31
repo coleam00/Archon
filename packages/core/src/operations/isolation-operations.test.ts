@@ -1,4 +1,6 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import type * as IsolationDb from '../db/isolation-environments';
+import type * as CleanupService from '../services/cleanup-service';
 
 // ---------------------------------------------------------------------------
 // Mock modules before importing the module under test
@@ -11,11 +13,15 @@ mock.module('@archon/git', () => ({
   toWorktreePath: mockToWorktreePath,
 }));
 
-const mockListAllActiveWithCodebase = mock(() => Promise.resolve([]));
-const mockListByCodebaseWithAge = mock(() => Promise.resolve([]));
-const mockUpdateStatus = mock(() => Promise.resolve());
-const mockGetLiveRunOwningEnv = mock(
-  (): Promise<{ id: string; status: string } | null> => Promise.resolve(null)
+const mockListAllActiveWithCodebase = mock<typeof IsolationDb.listAllActiveWithCodebase>(() =>
+  Promise.resolve([])
+);
+const mockListByCodebaseWithAge = mock<typeof IsolationDb.listByCodebaseWithAge>(() =>
+  Promise.resolve([])
+);
+const mockUpdateStatus = mock<typeof IsolationDb.updateStatus>(() => Promise.resolve());
+const mockGetLiveRunOwningEnv = mock<typeof IsolationDb.getLiveRunOwningEnv>(() =>
+  Promise.resolve(null)
 );
 mock.module('../db/isolation-environments', () => ({
   listAllActiveWithCodebase: mockListAllActiveWithCodebase,
@@ -24,8 +30,12 @@ mock.module('../db/isolation-environments', () => ({
   getLiveRunOwningEnv: mockGetLiveRunOwningEnv,
 }));
 
-const mockCleanupStale = mock(() => Promise.resolve({ removed: 0, errors: [] }));
-const mockCleanupMerged = mock(() => Promise.resolve({ removed: 0, errors: [] }));
+const mockCleanupStale = mock<typeof CleanupService.cleanupStaleWorktrees>(() =>
+  Promise.resolve({ removed: [], skipped: [] })
+);
+const mockCleanupMerged = mock<typeof CleanupService.cleanupMergedWorktrees>(() =>
+  Promise.resolve({ removed: [], skipped: [] })
+);
 mock.module('../services/cleanup-service', () => ({
   cleanupStaleWorktrees: mockCleanupStale,
   cleanupMergedWorktrees: mockCleanupMerged,
@@ -51,21 +61,32 @@ const { listEnvironments, cleanupStaleEnvironments, cleanupMergedEnvironments } 
 // Fixtures
 // ---------------------------------------------------------------------------
 
-function makeActiveEnv(overrides: Record<string, unknown> = {}) {
+type ActiveEnv = Awaited<ReturnType<typeof IsolationDb.listAllActiveWithCodebase>>[number];
+type EnvWithAge = Awaited<ReturnType<typeof IsolationDb.listByCodebaseWithAge>>[number];
+
+function makeActiveEnv(overrides: Partial<ActiveEnv> = {}): ActiveEnv {
   return {
+    id: 'env-1',
     codebase_id: 'cb-1',
+    workflow_type: 'issue',
+    workflow_id: 'wf-1',
+    provider: 'worktree',
+    working_path: '/worktrees/feat',
+    branch_name: 'feat',
+    status: 'active',
+    created_at: new Date(),
+    created_by_platform: 'web',
+    created_by_user_id: null,
+    metadata: {},
     codebase_repository_url: 'https://github.com/owner/repo',
     codebase_default_cwd: '/repo',
     ...overrides,
   };
 }
 
-function makeEnvWithAge(overrides: Record<string, unknown> = {}) {
+function makeEnvWithAge(overrides: Partial<EnvWithAge> = {}): EnvWithAge {
   return {
-    id: 'env-1',
-    working_path: '/worktrees/feat',
-    branch_name: 'feat',
-    workflow_id: 'wf-1',
+    ...makeActiveEnv(),
     days_since_activity: 1,
     ...overrides,
   };
@@ -202,12 +223,12 @@ describe('cleanupStaleEnvironments', () => {
       },
     ]);
     mockWorktreeExists.mockResolvedValueOnce(true); // not a ghost
-    mockCleanupStale.mockResolvedValueOnce({ removed: 1, errors: [] });
+    mockCleanupStale.mockResolvedValueOnce({ removed: ['feat'], skipped: [] });
 
     const result = await cleanupStaleEnvironments('cb-1', '/main');
 
     expect(mockCleanupStale).toHaveBeenCalledWith('cb-1', '/main');
-    expect(result.removed).toBe(1);
+    expect(result.removed).toEqual(['feat']);
   });
 });
 
@@ -217,24 +238,27 @@ describe('cleanupMergedEnvironments', () => {
   });
 
   test('delegates to cleanupMergedWorktrees', async () => {
-    mockCleanupMerged.mockResolvedValueOnce({ removed: 2, errors: [] });
+    mockCleanupMerged.mockResolvedValueOnce({ removed: ['feat-a', 'feat-b'], skipped: [] });
 
     const result = await cleanupMergedEnvironments('cb-1', '/main');
 
     expect(mockCleanupMerged).toHaveBeenCalledWith('cb-1', '/main', {});
-    expect(result.removed).toBe(2);
+    expect(result.removed).toEqual(['feat-a', 'feat-b']);
   });
 
-  test('passes through errors from cleanupMergedWorktrees', async () => {
-    mockCleanupMerged.mockResolvedValueOnce({ removed: 0, errors: ['branch-a: git error'] });
+  test('passes through skipped branches from cleanupMergedWorktrees', async () => {
+    mockCleanupMerged.mockResolvedValueOnce({
+      removed: [],
+      skipped: [{ branchName: 'branch-a', reason: 'git error' }],
+    });
 
     const result = await cleanupMergedEnvironments('cb-1', '/main');
 
-    expect(result.errors).toEqual(['branch-a: git error']);
+    expect(result.skipped).toEqual([{ branchName: 'branch-a', reason: 'git error' }]);
   });
 
   test('forwards includeClosed option to cleanupMergedWorktrees', async () => {
-    mockCleanupMerged.mockResolvedValueOnce({ removed: 1, errors: [] });
+    mockCleanupMerged.mockResolvedValueOnce({ removed: ['feat'], skipped: [] });
 
     await cleanupMergedEnvironments('cb-1', '/main', { includeClosed: true });
 

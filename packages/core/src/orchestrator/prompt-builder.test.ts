@@ -6,6 +6,8 @@ import {
   buildRunManagementSection,
   formatPausedGateSection,
 } from './prompt-builder';
+import type { Codebase, Conversation } from '../types';
+import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 
 describe('buildRoutingRulesWithProject', () => {
   test('routing rules include --prompt in invocation format', () => {
@@ -78,41 +80,52 @@ describe('formatWorkflowContextSection', () => {
 });
 
 describe('buildOrchestratorSystemAppend', () => {
-  const makeConversation = (codebaseId: string | null) =>
-    ({
-      id: 'conv-1',
-      platform_type: 'web',
-      platform_conversation_id: 'web-1',
-      codebase_id: codebaseId,
-      cwd: null,
-      isolation_env_id: null,
-      ai_assistant_type: 'claude',
-      title: null,
-      hidden: false,
-      deleted_at: null,
-      last_activity_at: null,
-      created_at: new Date(),
-      updated_at: new Date(),
-    }) as const;
+  const makeConversation = (codebaseId: string | null): Conversation => ({
+    id: 'conv-1',
+    platform_type: 'web',
+    platform_conversation_id: 'web-1',
+    codebase_id: codebaseId,
+    cwd: null,
+    isolation_env_id: null,
+    ai_assistant_type: 'claude',
+    title: null,
+    hidden: false,
+    deleted_at: null,
+    user_id: null,
+    last_activity_at: null,
+    created_at: new Date(),
+    updated_at: new Date(),
+  });
 
-  const codebases = [
+  const codebases: Codebase[] = [
     {
       id: 'cb-1',
       name: 'my-project',
       default_cwd: '/path/to/project',
       ai_assistant_type: 'claude',
       repository_url: null,
-      commands: null,
+      default_branch: 'main',
+      kind: 'repo',
+      commands: {},
+      created_at: new Date(),
+      updated_at: new Date(),
     },
   ];
 
-  const workflows = [
+  const workflows: WorkflowDefinition[] = [
     {
       name: 'assist',
       description: 'General assistance',
-      nodes: [{ id: 'step1', command: 'archon-assist', depends_on: [] }],
+      nodes: [
+        {
+          id: 'step1',
+          kind: 'agent',
+          source: { kind: 'command', name: 'archon-assist' },
+          depends_on: [],
+        },
+      ],
     },
-  ] as unknown as import('@archon/workflows/schemas/workflow').WorkflowDefinition[];
+  ];
 
   test('returns orchestrator prompt when no codebase is scoped', () => {
     const result = buildOrchestratorSystemAppend(makeConversation(null), codebases, workflows);

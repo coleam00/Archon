@@ -1,6 +1,6 @@
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
-import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
+import { createMockQuery, mockPostgresDialect } from '../test/mocks/database';
 
 process.env.TOKEN_ENCRYPTION_KEY = 'a'.repeat(64);
 
@@ -11,7 +11,7 @@ registerCommunityProviders();
 
 // Mirror the store test harness: mock the DB connection so saveUserProviderKey
 // runs for real (encrypting the key) against an inspectable query mock.
-const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
+const mockQuery = createMockQuery();
 mock.module('../db/connection', () => ({
   pool: { query: mockQuery },
   getDialect: () => mockPostgresDialect,

@@ -23,7 +23,7 @@ const log = createLogger('orchestrator.post_message_reminder');
 export async function reportUnpushedWorkInSource(
   conversationId: string,
   codebase: Codebase,
-  platform: IPlatformAdapter
+  platform: Pick<IPlatformAdapter, 'sendStructuredEvent'>
 ): Promise<void> {
   if (!platform.sendStructuredEvent) return;
 

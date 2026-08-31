@@ -15,6 +15,7 @@
  * ./connection with a real adapter.
  */
 import { describe, test, expect, mock } from 'bun:test';
+import { toBranchName } from '@archon/git';
 
 // The adapter's logger is lazy but `@archon/git` (pulled in by
 // workflow-adoption) statically imports path helpers from '@archon/paths' too,
@@ -125,7 +126,7 @@ describe('workflow-run adoption timestamp — real SQLite composition (#2845)', 
     expect(resolved.adoptedRun.id).toBe('run-1');
     expect(resolved.lane.kind).toBe('checkout-branch');
     if (resolved.lane.kind === 'checkout-branch') {
-      expect(resolved.lane.taskBranch.branch).toBe('impl-env-before');
+      expect(resolved.lane.taskBranch.branch).toBe(toBranchName('impl-env-before'));
     }
   });
 

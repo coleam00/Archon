@@ -7,8 +7,8 @@
 # record must not rescue an unusable flip. If a future change quietly reads the
 # record again, this fixture goes green-to-red the other way and catches it.
 #
-# This is the shared delivered read that ship, stabilize, and upkeep all use, so
-# one red fixture covers the refusal for the pack. What differs between the three
+# This is the shared delivered read that ship and upkeep both use, so one red
+# fixture covers the refusal for the pack. What differs between the two
 # tails is which verdict reaches the node, and their delivered fixtures cover that.
 triage__triage:
   route: deliver
@@ -49,6 +49,7 @@ deliver__validate__validate:
 deliver__gate-validated: '{"gate":"green"}'
 ci-probe: '{"state":"concluded","detail":"all checks green"}'
 # The mutation: the flip printed something that is not a URL.
+deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
 deliver__flip-ready: "flip printed something that is not a pull request URL"
 deliver__outcome: "https://github.com/example/repo/pull/5"
 fixture:

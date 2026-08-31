@@ -1,8 +1,8 @@
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
-import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
+import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 
-const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
+const mockQuery = createMockQuery();
 
 // Mock the connection module before importing the module under test.
 // `getDatabase().withTransaction` runs its callback against the SAME mockQuery,
@@ -64,12 +64,17 @@ describe('workflows database', () => {
     parent_conversation_id: null,
     codebase_id: 'codebase-789',
     status: 'running',
+    outcome: null,
     user_message: 'Add dark mode support',
     metadata: {},
     started_at: new Date('2025-01-01T00:00:00Z'),
     completed_at: null,
     last_activity_at: new Date('2025-01-01T00:00:00Z'),
     working_path: null,
+    user_id: null,
+    parent_run_id: null,
+    adopted_from_run_id: null,
+    output_root: null,
   };
 
   describe('createWorkflowRun', () => {
@@ -986,7 +991,7 @@ describe('workflows database', () => {
     });
 
     test('returns a stale running run (no activity for >1 day)', async () => {
-      const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+      const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
       const staleRun = {
         ...mockWorkflowRun,
         status: 'running' as const,
@@ -1842,10 +1847,12 @@ describe('workflows database', () => {
   describe('open-work inbox', () => {
     test('findOpenWorkRuns filters to failed runs with no adopter', async () => {
       let capturedSql = '';
-      mockQuery.mockImplementationOnce(((sql: string) => {
+      mockQuery.mockImplementationOnce((...args: unknown[]) => {
+        const sql = args[0];
+        if (typeof sql !== 'string') throw new Error('Expected a SQL string');
         capturedSql = sql;
         return Promise.resolve(createQueryResult([]));
-      }) as typeof mockQuery);
+      });
 
       await findOpenWorkRuns({ codebaseId: 'cb-1', limit: 10 });
       expect(capturedSql).toContain("r.status = 'failed'");
@@ -1857,10 +1864,12 @@ describe('workflows database', () => {
 
     test('findAdoptingRuns reads the same column in reverse', async () => {
       let capturedSql = '';
-      mockQuery.mockImplementationOnce(((sql: string) => {
+      mockQuery.mockImplementationOnce((...args: unknown[]) => {
+        const sql = args[0];
+        if (typeof sql !== 'string') throw new Error('Expected a SQL string');
         capturedSql = sql;
         return Promise.resolve(createQueryResult([]));
-      }) as typeof mockQuery);
+      });
 
       await findAdoptingRuns('run-1');
       expect(capturedSql).toContain('adopted_from_run_id = $1');

@@ -1099,21 +1099,19 @@ describe('SqliteAdapter native-resource finalization (#2875)', () => {
     const originalPrepare = Database.prototype.prepare;
     let prepared = 0;
     let finalized = 0;
-    Database.prototype.prepare = function (
-      this: Database,
-      ...args: Parameters<typeof originalPrepare>
-    ) {
-      const stmt = originalPrepare.apply(this, args) as Statement & {
-        finalize: () => unknown;
-      };
-      prepared++;
-      const nativeFinalize = stmt.finalize.bind(stmt);
-      stmt.finalize = () => {
-        finalized++;
-        return nativeFinalize();
-      };
-      return stmt;
-    };
+    Object.defineProperty(Database.prototype, 'prepare', {
+      configurable: true,
+      value(this: Database, ...args: Parameters<typeof originalPrepare>) {
+        const stmt: Statement = originalPrepare.apply(this, args);
+        prepared++;
+        const nativeFinalize = stmt.finalize.bind(stmt);
+        stmt.finalize = () => {
+          finalized++;
+          return nativeFinalize();
+        };
+        return stmt;
+      },
+    });
 
     try {
       adapter = createTestDb();
@@ -1130,7 +1128,10 @@ describe('SqliteAdapter native-resource finalization (#2875)', () => {
       expect(prepared).toBeGreaterThan(0);
       expect(finalized).toBe(prepared);
     } finally {
-      Database.prototype.prepare = originalPrepare;
+      Object.defineProperty(Database.prototype, 'prepare', {
+        configurable: true,
+        value: originalPrepare,
+      });
     }
   });
 

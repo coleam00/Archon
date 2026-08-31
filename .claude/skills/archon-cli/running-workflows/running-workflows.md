@@ -12,7 +12,7 @@ archon workflow search "pr review"  # search the marketplace (installable packs)
 
 The live list is authoritative. Bundled workflows ship under the `archon-` prefix
 (e.g. `archon-ship`, `archon-review`, `archon-deliver`, `archon-investigate`,
-`archon-triage`, `archon-upkeep`, `archon-stabilize`); user-authored workflows may
+`archon-triage`, `archon-upkeep`); user-authored workflows may
 claim any name and override a bundled one in that repo.
 
 Map intent to workflow by reading the listed descriptions — never from memory of
@@ -110,19 +110,39 @@ Rules:
 ## Monitoring
 
 ```bash
+archon workflow wait <run-id> --json        # block until the run ends or needs a human decision
 archon workflow runs --json                 # recent runs for this project
 archon workflow status --json               # active only (running/paused)
 archon workflow get <run-id> --json         # one run: status, error, metadata
 archon workflow get <run-id> --verbose --json  # + per-node detail
 ```
 
-Terminal statuses: `completed`, `failed`, `cancelled`. Poll `get` between other
-work rather than sleeping in a tight loop.
+Terminal statuses: `completed`, `failed`, `cancelled`.
+
+**Prefer `wait` over polling.** Immediately after a detached launch, arm
+`archon workflow wait <run-id> --json` as a *background task of your harness*:
+it blocks until the run reaches a terminal state or pauses needing a human
+decision, so you are woken exactly when there is something to act on instead of
+polling or forgetting the run. The wait is indefinite by default; `--timeout
+<seconds>` makes the *wait* give up — it never affects the run itself, and an
+indefinite wait is usually right because a killed wait silently orphans your
+attention, not the run. Fall back to polling `get` only when you cannot hold a
+background task open.
+
+**Batches: one wait per run.** `wait` takes a single run id. When you launch
+several runs in parallel, arm one background wait per run id — each completes
+independently, so you are woken per run, in whatever order they need attention.
+Never chain waits in one shell (`wait A && wait B` sleeps on A while B pauses
+unattended), and never funnel a batch through a single polling loop.
 
 **Status is not verdict.** A `completed` run can carry a normalized negative
 `outcome`. Read it with `get --json`, locate the report under
 `leave_behind.artifactFiles`, and use a separate `get --verbose --json` call for
 node summaries. Read the report before telling the user what the run concluded.
+For the bundled sdlc workflows, the report may end with a discoveries section
+addressed to you — route it per `../manage-run/manage-runs.md` ("Discoveries"):
+surface each finding to the user and ask where to log it. The run deliberately
+files nothing itself, so a discovery dropped here is lost.
 
 ## Continuing finished work
 

@@ -8,7 +8,7 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 
 const REPO_ROOT = join(import.meta.dir, '..', '..', '..', '..');
 /** Every SDLC tail whose terminal report can carry the discovery section (#2884). */
-const TAILS = ['deliver', 'ship', 'stabilize', 'upkeep'] as const;
+const TAILS = ['deliver', 'ship', 'upkeep'] as const;
 const PYTHON_COMMAND = globalThis.process.platform === 'win32' ? 'python' : 'python3';
 
 const RELAY =
@@ -98,11 +98,11 @@ async function preConsolidationDir(raw?: string, redCauses?: string): Promise<st
 
 describe('SDLC discovery terminal reports (#2884)', () => {
   it('every tail carries the same helper, reports through it, and pins its streams', () => {
-    // Only deliver's script is spawned below — the other three reach their report
+    // Only deliver's script is spawned below — the other two reach their report
     // branches through `gh` and `git`, so their call sites can only be checked
     // statically. Three invariants, each one a bug this file has already seen:
     //
-    //   identical  — four standalone copies of one helper, no import channel to share it
+    //   identical  — three standalone copies of one helper, no import channel to share it
     //   reported   — every print in main() appends the caveats, so no branch can be
     //                missed the way the delivery-failed branch was. main() calls the one
     //                composition point, never a single section: a branch that reached

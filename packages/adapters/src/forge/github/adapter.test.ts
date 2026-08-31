@@ -31,7 +31,7 @@ import {
   beforeEach,
   afterEach,
 } from 'bun:test';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -160,6 +160,7 @@ mock.module('@archon/git', () => ({
 }));
 
 import { GitHubAdapter } from './adapter';
+import type { WebhookEvent } from './types';
 import { ConversationLockManager } from '@archon/core';
 // Namespace import so the dedup tests can spyOn(core, 'handleMessage') — the
 // orchestrator entry point the adapter calls after webhook setup succeeds.
@@ -1115,50 +1116,83 @@ describe('GitHubAdapter', () => {
   });
 
   describe('fork detection logic', () => {
-    /**
-     * Tests for the fork detection comparison logic used in handleWebhook.
-     * The actual logic: isForkPR = headRepoFullName !== baseRepoFullName
-     * This logic determines whether a PR uses the actual branch (same-repo)
-     * or a synthetic pr-N-review branch (fork).
-     */
+    function createPullRequestCommentPayload(): string {
+      const event = {
+        action: 'created',
+        issue: {
+          number: 42,
+          title: 'Test PR',
+          body: 'Description',
+          user: { login: 'user123' },
+          labels: [],
+          state: 'open',
+          pull_request: { url: 'https://api.github.com/repos/testuser/testrepo/pulls/42' },
+        },
+        comment: { body: '@archon review this', user: { login: 'user123' } },
+        repository: {
+          owner: { login: 'testuser' },
+          name: 'testrepo',
+          full_name: 'testuser/testrepo',
+          html_url: 'https://github.com/testuser/testrepo',
+          default_branch: 'main',
+        },
+        sender: { login: 'user123' },
+      } satisfies WebhookEvent;
 
-    test('should detect same-repo PR when head and base repos match', () => {
-      // Simulates same-repo PR where contributor has push access
-      const headRepoFullName = 'owner/repo';
-      const baseRepoFullName = 'owner/repo';
-      const isForkPR = headRepoFullName !== baseRepoFullName;
+      return JSON.stringify(event);
+    }
 
-      expect(isForkPR).toBe(false);
+    async function expectForkVerdict(
+      headRepoFullName: string | undefined,
+      expected: boolean
+    ): Promise<void> {
+      handleMessageSpy.mockClear();
+      const { pullsGet } = installOctokitStubs(adapter);
+      pullsGet.mockResolvedValueOnce({
+        data: {
+          head: {
+            ref: 'feature-branch',
+            sha: 'abc123def456',
+            repo: headRepoFullName === undefined ? null : { full_name: headRepoFullName },
+          },
+          base: { repo: { full_name: 'testuser/testrepo' } },
+        },
+      });
+      const payload = createPullRequestCommentPayload();
+      const signature =
+        'sha256=' + createHmac('sha256', 'fake-webhook-secret').update(payload).digest('hex');
+
+      await adapter.handleWebhook(payload, signature);
+
+      expect(pullsGet).toHaveBeenCalledWith({
+        owner: 'testuser',
+        repo: 'testrepo',
+        pull_number: 42,
+      });
+      expect(handleMessageSpy).toHaveBeenCalledWith(
+        expect.anything(),
+        'testuser/testrepo#42',
+        expect.anything(),
+        expect.objectContaining({
+          isolationHints: expect.objectContaining({ isForkPR: expected }),
+        })
+      );
+    }
+
+    test('should detect same-repo PR when head and base repos match', async () => {
+      await expectForkVerdict('testuser/testrepo', false);
     });
 
-    test('should detect fork PR when head and base repos differ', () => {
-      // Simulates fork PR where head is from a different repo
-      const headRepoFullName = 'contributor/repo';
-      const baseRepoFullName = 'owner/repo';
-      const isForkPR = headRepoFullName !== baseRepoFullName;
-
-      expect(isForkPR).toBe(true);
+    test('should detect fork PR when head and base repos differ', async () => {
+      await expectForkVerdict('contributor/testrepo', true);
     });
 
-    test('should detect fork PR when head.repo is null (deleted fork)', () => {
-      // When a fork is deleted after a PR was opened, head.repo becomes null
-      // The optional chaining (?.) returns undefined, and undefined !== 'owner/repo' is true
-      const headRepoFullName: string | undefined = undefined; // Simulates prData.head.repo?.full_name
-      const baseRepoFullName = 'owner/repo';
-      const isForkPR = headRepoFullName !== baseRepoFullName;
-
-      // Correctly treated as fork - can't push to deleted repo anyway
-      expect(isForkPR).toBe(true);
+    test('should detect fork PR when head.repo is null (deleted fork)', async () => {
+      await expectForkVerdict(undefined, true);
     });
 
-    test('should handle case sensitivity correctly', () => {
-      // GitHub full_names are case-sensitive in the API response
-      const headRepoFullName = 'Owner/Repo';
-      const baseRepoFullName = 'owner/repo';
-      const isForkPR = headRepoFullName !== baseRepoFullName;
-
-      // Different casing = different repos (fork detection)
-      expect(isForkPR).toBe(true);
+    test('should handle case sensitivity correctly', async () => {
+      await expectForkVerdict('TestUser/TestRepo', true);
     });
   });
 

@@ -1,5 +1,5 @@
 import { z } from '@hono/zod-openapi';
-import { thinkingConfigSchema } from './dag-node';
+import { thinkingConfigSchema } from './thinking-config';
 
 export const TIER_NAMES = ['small', 'medium', 'large'] as const;
 export const tierNameSchema = z.enum(TIER_NAMES);

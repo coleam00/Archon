@@ -1,7 +1,8 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
 import { readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { getCredentialKeyPath, createLogger } from '@archon/paths';
+import { getCredentialKeyPath } from '@archon/paths/archon-paths';
+import { createLogger } from '@archon/paths/logger';
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_BYTES = 12;

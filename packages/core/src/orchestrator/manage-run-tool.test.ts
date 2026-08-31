@@ -1,5 +1,11 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type {
+  ApprovalOperationResult,
+  RejectionOperationResult,
+} from '../operations/workflow-operations';
+
+const CODEBASE_ID = 'proj-1';
 
 // ---------------------------------------------------------------------------
 // Mock DB + operations before importing the module under test. This file runs
@@ -24,19 +30,51 @@ const mockAbandon = mock((_id: string) =>
     blockedParentRunId: null,
   })
 );
-const mockApprove = mock((_id: string, _c?: string) =>
-  Promise.resolve({ workflowName: 'wf', type: 'approval_gate' as const })
+function approvalResult(type: ApprovalOperationResult['type']): ApprovalOperationResult {
+  return {
+    workflowName: 'wf',
+    workingPath: null,
+    userMessage: null,
+    codebaseId: CODEBASE_ID,
+    conversationId: 'conv-1',
+    type,
+  };
+}
+
+function rejectionResult(
+  overrides: Partial<RejectionOperationResult> = {}
+): RejectionOperationResult {
+  return {
+    workflowName: 'wf',
+    workingPath: null,
+    userMessage: null,
+    codebaseId: CODEBASE_ID,
+    conversationId: 'conv-1',
+    cancelled: true,
+    maxAttemptsReached: false,
+    writeBack: false,
+    newMode: false,
+    ...overrides,
+  };
+}
+
+const mockApprove = mock<(_id: string, _comment?: string) => Promise<ApprovalOperationResult>>(() =>
+  Promise.resolve(approvalResult('approval_gate'))
 );
-const mockReject = mock((_id: string, _r?: string) =>
-  Promise.resolve({ workflowName: 'wf', cancelled: true, maxAttemptsReached: false })
+const mockReject = mock<(_id: string, _reason?: string) => Promise<RejectionOperationResult>>(() =>
+  Promise.resolve(rejectionResult())
 );
 const mockResume = mock((_id: string) => Promise.resolve({ id: 'r1abcdef', workflow_name: 'wf' }));
 // #2707 step 2 — respondToWorkflow can return either result shape depending on
 // `decision`; each test sets its own resolved/rejected value explicitly (mockReset()
 // in beforeEach clears any per-test override, same as every other mock here).
-const mockRespond = mock((_id: string, _decision: string, _text?: string) =>
-  Promise.resolve({ workflowName: 'wf', type: 'approval_gate' as const })
-);
+const mockRespond = mock<
+  (
+    _id: string,
+    _decision: string,
+    _text?: string
+  ) => Promise<ApprovalOperationResult | RejectionOperationResult>
+>(() => Promise.resolve(approvalResult('approval_gate')));
 
 mock.module('../operations/workflow-operations', () => ({
   abandonWorkflow: mockAbandon,
@@ -61,8 +99,6 @@ mock.module('@archon/paths', () => ({
 
 const { buildManageRunTool } = await import('./manage-run-tool');
 
-const CODEBASE_ID = 'proj-1';
-
 function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   return {
     id: 'r1abcdef-1234',
@@ -72,8 +108,33 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     completed_at: null,
     metadata: {},
     codebase_id: CODEBASE_ID,
+    conversation_id: 'conv-1',
+    parent_conversation_id: null,
+    outcome: null,
+    user_message: 'Run the workflow',
+    last_activity_at: new Date('2026-06-01T00:00:00.000Z'),
+    working_path: null,
+    user_id: null,
+    parent_run_id: null,
+    adopted_from_run_id: null,
+    output_root: null,
     ...overrides,
-  } as WorkflowRun;
+  };
+}
+
+// A run paused on an interactive_loop gate. The node and prompt are fixed so each
+// test varies only the signalling state the tool is meant to report on.
+function makeLoopGateRun(gate: {
+  iteration: number;
+  completionSignaled: boolean;
+  signaledOutput: string | null;
+}): WorkflowRun {
+  return makeRun({
+    status: 'paused',
+    metadata: {
+      approval: { nodeId: 'refine', message: 'gate', type: 'interactive_loop', ...gate },
+    },
+  });
 }
 
 beforeEach(() => {
@@ -197,18 +258,10 @@ describe('manage_run — reads', () => {
 
   test('get surfaces the structured gate state on a paused interactive_loop run (#2074 E)', async () => {
     mockFindByPrefix.mockResolvedValue([
-      makeRun({
-        status: 'paused',
-        metadata: {
-          approval: {
-            nodeId: 'refine',
-            message: 'gate',
-            type: 'interactive_loop',
-            iteration: 3,
-            completionSignaled: true,
-            signaledOutput: 'validation PASS — all 42 checks green',
-          },
-        },
+      makeLoopGateRun({
+        iteration: 3,
+        completionSignaled: true,
+        signaledOutput: 'validation PASS — all 42 checks green',
       }),
     ]);
     const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
@@ -222,19 +275,7 @@ describe('manage_run — reads', () => {
 
   test('get shows completionSignaled: false with no finalize hint on a non-signaled gate (#2074 E)', async () => {
     mockFindByPrefix.mockResolvedValue([
-      makeRun({
-        status: 'paused',
-        metadata: {
-          approval: {
-            nodeId: 'refine',
-            message: 'gate',
-            type: 'interactive_loop',
-            iteration: 1,
-            completionSignaled: false,
-            signaledOutput: null,
-          },
-        },
-      }),
+      makeLoopGateRun({ iteration: 1, completionSignaled: false, signaledOutput: null }),
     ]);
     const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
     const out = await tool.handler({ action: 'get', runId: 'r1abcdef' });
@@ -319,7 +360,7 @@ describe('manage_run — destructive confirmation gate', () => {
 
   test('approve with confirm passes the comment through (approval gate)', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
-    mockApprove.mockResolvedValue({ workflowName: 'wf', type: 'approval_gate' });
+    mockApprove.mockResolvedValue(approvalResult('approval_gate'));
     const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
     const out = await tool.handler({
       action: 'approve',
@@ -333,7 +374,7 @@ describe('manage_run — destructive confirmation gate', () => {
 
   test('approve with confirm and no message on an interactive loop reports the finalize semantics (#2074)', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
-    mockApprove.mockResolvedValue({ workflowName: 'wf', type: 'interactive_loop' });
+    mockApprove.mockResolvedValue(approvalResult('interactive_loop'));
     const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
     const out = await tool.handler({ action: 'approve', runId: 'r1abcdef', confirm: true });
     expect(mockApprove).toHaveBeenCalledWith('r1abcdef-1234', undefined);
@@ -344,7 +385,7 @@ describe('manage_run — destructive confirmation gate', () => {
 
   test('approve with accept:true finalizes even when a message is present (#2074 E)', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
-    mockApprove.mockResolvedValue({ workflowName: 'wf', type: 'interactive_loop' });
+    mockApprove.mockResolvedValue(approvalResult('interactive_loop'));
     const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
     const out = await tool.handler({
       action: 'approve',
@@ -360,7 +401,7 @@ describe('manage_run — destructive confirmation gate', () => {
 
   test('approve with a message on an interactive loop records feedback (iterate) (#2074 E)', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
-    mockApprove.mockResolvedValue({ workflowName: 'wf', type: 'interactive_loop' });
+    mockApprove.mockResolvedValue(approvalResult('interactive_loop'));
     const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
     const out = await tool.handler({
       action: 'approve',
@@ -374,19 +415,7 @@ describe('manage_run — destructive confirmation gate', () => {
 
   test('approve preview on a completed-condition gate states the finalize/iterate effect (#2074 E)', async () => {
     mockFindByPrefix.mockResolvedValue([
-      makeRun({
-        status: 'paused',
-        metadata: {
-          approval: {
-            nodeId: 'refine',
-            message: 'gate',
-            type: 'interactive_loop',
-            iteration: 1,
-            completionSignaled: true,
-            signaledOutput: 'REPORT',
-          },
-        },
-      }),
+      makeLoopGateRun({ iteration: 1, completionSignaled: true, signaledOutput: 'REPORT' }),
     ]);
     const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
     // No confirm → preview. Bare args would finalize.
@@ -404,11 +433,7 @@ describe('manage_run — destructive confirmation gate', () => {
 
   test('reject with confirm and no on-reject prompt reports cancellation', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
-    mockReject.mockResolvedValue({
-      workflowName: 'wf',
-      cancelled: true,
-      maxAttemptsReached: false,
-    });
+    mockReject.mockResolvedValue(rejectionResult());
     const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
     const out = await tool.handler({
       action: 'reject',
@@ -422,11 +447,7 @@ describe('manage_run — destructive confirmation gate', () => {
 
   test('reject with no message defaults the rejection text to "Rejected"', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
-    mockReject.mockResolvedValue({
-      workflowName: 'wf',
-      cancelled: true,
-      maxAttemptsReached: false,
-    });
+    mockReject.mockResolvedValue(rejectionResult());
     const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
     await tool.handler({ action: 'reject', runId: 'r1abcdef', confirm: true });
     expect(mockReject).toHaveBeenCalledWith('r1abcdef-1234', 'Rejected');
@@ -434,11 +455,7 @@ describe('manage_run — destructive confirmation gate', () => {
 
   test('reject with confirm and an on-reject prompt reports rework, not cancellation', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
-    mockReject.mockResolvedValue({
-      workflowName: 'wf',
-      cancelled: false,
-      maxAttemptsReached: false,
-    });
+    mockReject.mockResolvedValue(rejectionResult({ cancelled: false }));
     const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
     const out = await tool.handler({
       action: 'reject',
@@ -472,7 +489,7 @@ describe('manage_run — destructive confirmation gate', () => {
 
   test('respond with a non-default decision resolves through respondToWorkflow, not a cancel', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
-    mockRespond.mockResolvedValue({ workflowName: 'wf', type: 'approval_gate' });
+    mockRespond.mockResolvedValue(approvalResult('approval_gate'));
     const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
     const out = await tool.handler({
       action: 'respond',
@@ -491,11 +508,7 @@ describe('manage_run — destructive confirmation gate', () => {
     // the tool's perspective this is just the RejectionOperationResult shape coming
     // back through respondToWorkflow instead of rejectWorkflow directly.
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
-    mockRespond.mockResolvedValue({
-      workflowName: 'wf',
-      cancelled: true,
-      maxAttemptsReached: false,
-    });
+    mockRespond.mockResolvedValue(rejectionResult());
     const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
     const out = await tool.handler({
       action: 'respond',
@@ -550,7 +563,7 @@ describe('manage_run — gate continuation', () => {
   test('approve hands the run to the continuation and says the run moves on', async () => {
     const run = makeRun({ status: 'paused' });
     mockFindByPrefix.mockResolvedValue([run]);
-    mockApprove.mockResolvedValue({ workflowName: 'wf', type: 'approval_gate' });
+    mockApprove.mockResolvedValue(approvalResult('approval_gate'));
     const { resolved, ctx } = makeCtx();
 
     const out = await buildManageRunTool(ctx).handler({
@@ -568,11 +581,7 @@ describe('manage_run — gate continuation', () => {
     mockFindByPrefix.mockResolvedValue([run]);
     const { resolved, ctx } = makeCtx();
 
-    mockReject.mockResolvedValue({
-      workflowName: 'wf',
-      cancelled: false,
-      maxAttemptsReached: false,
-    });
+    mockReject.mockResolvedValue(rejectionResult({ cancelled: false }));
     const rework = await buildManageRunTool(ctx).handler({
       action: 'reject',
       runId: 'r1abcdef',
@@ -583,11 +592,7 @@ describe('manage_run — gate continuation', () => {
     expect(rework).toContain('continues from here');
 
     // A cancelled run is already in its terminal state — nothing to continue.
-    mockReject.mockResolvedValue({
-      workflowName: 'wf',
-      cancelled: true,
-      maxAttemptsReached: false,
-    });
+    mockReject.mockResolvedValue(rejectionResult());
     const cancelled = await buildManageRunTool(ctx).handler({
       action: 'reject',
       runId: 'r1abcdef',
@@ -614,7 +619,7 @@ describe('manage_run — gate continuation', () => {
     mockFindByPrefix.mockResolvedValue([
       makeRun({ status: 'paused', metadata: { isolation: 'container' } }),
     ]);
-    mockApprove.mockResolvedValue({ workflowName: 'wf', type: 'approval_gate' });
+    mockApprove.mockResolvedValue(approvalResult('approval_gate'));
     const { resolved, ctx } = makeCtx();
 
     const out = await buildManageRunTool(ctx).handler({
@@ -634,7 +639,7 @@ describe('manage_run — gate continuation', () => {
     // The orchestrator continues ONE run per turn. A gate it declines must reach
     // the agent as words, or the run is resolved and stranded with no signal.
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
-    mockApprove.mockResolvedValue({ workflowName: 'wf', type: 'approval_gate' });
+    mockApprove.mockResolvedValue(approvalResult('approval_gate'));
     const { ctx } = makeCtx(false);
 
     const out = await buildManageRunTool(ctx).handler({
@@ -650,7 +655,7 @@ describe('manage_run — gate continuation', () => {
   test('without a continuation the tool names the manual resume instead of implying one', async () => {
     // Silence here would read as "handled" and strand the run invisibly.
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
-    mockApprove.mockResolvedValue({ workflowName: 'wf', type: 'approval_gate' });
+    mockApprove.mockResolvedValue(approvalResult('approval_gate'));
 
     const out = await buildManageRunTool({ codebaseId: CODEBASE_ID }).handler({
       action: 'approve',

@@ -37,8 +37,10 @@ import {
   RUN_METADATA_KEYS,
   readIdentityUnresolved,
   CONTINUATION_METADATA_KEY,
+  readContinuationMode,
   WORKFLOW_SOURCE_METADATA_KEY,
   readWorkflowSourceState,
+  type ContinuationMode,
 } from './schemas';
 import {
   WorkflowSourceIntegrityError,
@@ -685,7 +687,7 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    */
   adoptedFromRunId?: string;
   /** How `adoptedFromRunId` continues: estate adoption or fresh-lane supersession. */
-  continuationMode?: 'adopt' | 'supersede';
+  continuationMode?: ContinuationMode;
   /** One model-binding phase: raw at invocation boundaries, resolved for child runs. */
   modelOverrideLayer?:
     | { kind: 'raw'; overrides: RunModelOverrides }
@@ -1804,7 +1806,7 @@ export async function executeWorkflow(
     runConfig: callerRunConfig,
     preparedSource,
     adoptedFromRunId,
-    continuationMode = 'adopt',
+    continuationMode,
   } = opts;
 
   const executionUserId = preCreatedRun ? (preCreatedRun.user_id ?? undefined) : userId;
@@ -2187,7 +2189,9 @@ export async function executeWorkflow(
             : {}),
           // Between-run continuation (#2747): the mode stamp rides the same
           // creation write as `adopted_from_run_id` so both are write-once.
-          ...(adoptedFromRunId ? { [CONTINUATION_METADATA_KEY]: { mode: continuationMode } } : {}),
+          ...(adoptedFromRunId
+            ? { [CONTINUATION_METADATA_KEY]: { mode: continuationMode ?? 'adopt' } }
+            : {}),
           [RUN_MODEL_BINDINGS_METADATA_KEY]: modelBindingsMetadata,
           ...(runConfigMetadata ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: runConfigMetadata } : {}),
         },
@@ -2535,33 +2539,45 @@ export async function executeWorkflow(
 
   // Between-run continuation (#2747): resolve $ADOPTED_RUN_DIR through the
   // adopted run's persisted `output_root` (rename-safe per #2200) and announce
-  // the adoption on THIS run's own event log so the chain renders without a
+  // the continuation on THIS run's own event log so the chain renders without a
   // column join. Read-only by contract — this run writes to its own artifacts;
   // stores are never merged, so evidence stays attributable per run.
   // Resolution also runs on resume: a resumed run carries no caller-supplied id,
-  // but its row still records the adoption, and every remaining node may reference
-  // $ADOPTED_RUN_DIR. Only the announcement event stays creation-only — it was
-  // written once when the adoption was made.
+  // but its row still records the continuation, and every remaining node may
+  // reference $ADOPTED_RUN_DIR (only for adoption; supersession has no estate).
+  // Only the announcement event stays creation-only — it was written once when
+  // the continuation was made.
   const effectiveAdoptedFromRunId = adoptedFromRunId ?? workflowRun.adopted_from_run_id;
+  // On a fresh invocation the caller supplies the mode alongside the id. On
+  // resume neither is in opts — the executor reads the row's metadata stamp.
+  const effectiveContinuationMode =
+    continuationMode ?? readContinuationMode(workflowRun.metadata) ?? 'adopt';
   let adoptedRunDir: string | undefined;
   if (effectiveAdoptedFromRunId) {
-    const adopted = await deps.store.getWorkflowRun(effectiveAdoptedFromRunId);
-    if (!adopted?.output_root) {
-      throw new Error(
-        `Cannot adopt run '${effectiveAdoptedFromRunId}': it has no persisted output root, so its ` +
-          'artifact directory cannot be addressed.'
+    // Supersession is metadata-only (#3064): no estate, so skip the output_root
+    // gate and the $ADOPTED_RUN_DIR resolution that only adoption needs.
+    if (effectiveContinuationMode !== 'supersede') {
+      const adopted = await deps.store.getWorkflowRun(effectiveAdoptedFromRunId);
+      if (!adopted?.output_root) {
+        throw new Error(
+          `Cannot adopt run '${effectiveAdoptedFromRunId}': it has no persisted output root, so its ` +
+            'artifact directory cannot be addressed.'
+        );
+      }
+      adoptedRunDir = archonPaths.getRunArtifactsDirForRoot(
+        adopted.output_root,
+        effectiveAdoptedFromRunId
       );
     }
-    adoptedRunDir = archonPaths.getRunArtifactsDirForRoot(
-      adopted.output_root,
-      effectiveAdoptedFromRunId
-    );
     if (!isContinuation) {
       try {
         await deps.store.createWorkflowEvent({
           workflow_run_id: workflowRun.id,
           event_type: 'workflow.run_adopted',
-          data: { adopted_from_run_id: effectiveAdoptedFromRunId },
+          data: {
+            adopted_from_run_id: effectiveAdoptedFromRunId,
+            mode: effectiveContinuationMode,
+          },
         });
       } catch (err) {
         getLog().warn(

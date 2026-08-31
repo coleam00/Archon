@@ -29972,9 +29972,8 @@ describe('childOutcomeFromRun cache reporting', () => {
 //
 // SCOPE: the workflow engine's seams. `getDagResumeSnapshot` is one of them but
 // lives in @archon/core, which this package cannot import; it is guarded there,
-// under the same block name, with its anchor in `src/test/token-usage-axes.ts`
-// rather than a test file because core's tsconfig excludes `**/*.test.ts` from
-// type-check. Anchors here can sit inline; this package type-checks its tests.
+// under the same block name. Both packages compile their anchors through their
+// normal TypeScript projects.
 //
 // Two hand-mapped hops are deliberately OUTSIDE the guard, both in telemetry:
 //   - `captureChatTurn` (@archon/core orchestrator-agent) maps usage for the

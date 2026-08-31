@@ -1,4 +1,5 @@
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import type { SaveUserGithubTokenParams } from '../db/user-github-token-store';
 
 // Device-flow + DB collaborators are mocked so the test exercises the
 // orchestration (ordering, persistence, profile cache) without network or DB.
@@ -29,7 +30,7 @@ mock.module('./device-flow', () => ({
 }));
 mock.module('./config', () => ({ loadDeviceFlowConfig: () => ({ clientId: 'Iv1.test' }) }));
 
-const mockSave = mock(async () => {});
+const mockSave = mock<(params: SaveUserGithubTokenParams) => Promise<void>>(async () => {});
 mock.module('../db/user-github-token-store', () => ({ saveUserGithubToken: mockSave }));
 
 const mockLink = mock(async () => {});

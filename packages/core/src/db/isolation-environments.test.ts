@@ -1,8 +1,9 @@
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
-import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
+import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
+import { toBranchName } from '@archon/git';
 
-const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
+const mockQuery = createMockQuery();
 
 mock.module('./connection', () => ({
   pool: {
@@ -207,7 +208,7 @@ describe('isolation-environments', () => {
         workflow_type: 'issue',
         workflow_id: '42',
         working_path: '/workspace/worktrees/project/issue-42',
-        branch_name: 'issue-42',
+        branch_name: toBranchName('issue-42'),
       });
 
       expect(result).toEqual(sampleEnv);
@@ -227,7 +228,7 @@ describe('isolation-environments', () => {
         workflow_id: '42',
         provider: 'container',
         working_path: '/workspace/worktrees/project/issue-42',
-        branch_name: 'issue-42',
+        branch_name: toBranchName('issue-42'),
         created_by_platform: 'slack',
         metadata: { custom: true },
       });
@@ -258,7 +259,7 @@ describe('isolation-environments', () => {
         workflow_type: 'issue',
         workflow_id: '42',
         working_path: '/workspace/worktrees/project/issue-42',
-        branch_name: 'issue-42',
+        branch_name: toBranchName('issue-42'),
       });
 
       const [query] = mockQuery.mock.calls[0] as [string, unknown[]];
@@ -275,7 +276,7 @@ describe('isolation-environments', () => {
         workflow_type: 'issue',
         workflow_id: '42',
         working_path: '/workspace/worktrees/project/issue-42-v2',
-        branch_name: 'issue-42-v2',
+        branch_name: toBranchName('issue-42-v2'),
       });
 
       const [query] = mockQuery.mock.calls[0] as [string, unknown[]];
@@ -296,7 +297,7 @@ describe('isolation-environments', () => {
         workflow_type: 'issue',
         workflow_id: '42',
         working_path: '/workspace/worktrees/project/issue-42',
-        branch_name: 'issue-42',
+        branch_name: toBranchName('issue-42'),
         created_by_user_id: 'user-bob',
       });
 

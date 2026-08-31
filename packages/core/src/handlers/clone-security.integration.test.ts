@@ -191,13 +191,16 @@ describe('core clone child security boundary', () => {
         workspaceRoot = join(root, 'workspaces');
         const fixture = await createRecordingGitFixture(root);
 
-        const error = await fixture
-          .run(() => cloneRepository(url))
-          .catch(reason => reason as Error);
+        let error: Error | undefined;
+        try {
+          await fixture.run(() => cloneRepository(url));
+        } catch (reason) {
+          error = reason as Error;
+        }
 
         expect(error).toBeInstanceOf(Error);
-        expect(error.message).toBe('Failed to clone repository: Invalid HTTP(S) repository URL');
-        expect(error.message).not.toContain(credential);
+        expect(error?.message).toBe('Failed to clone repository: Invalid HTTP(S) repository URL');
+        expect(error?.message).not.toContain(credential);
         await expect(access(workspaceRoot)).rejects.toMatchObject({ code: 'ENOENT' });
         expect(await fixture.readInvocations()).toEqual([]);
         expect(mockCreateCodebase).not.toHaveBeenCalled();

@@ -17,9 +17,11 @@ mock.module('@archon/paths', () => ({
 
 // Mock fs/promises so that readConfigFile/writeConfigFile (which call fsReadFile/writeFile
 // internally) are intercepted regardless of Bun version mock.module semantics.
-const mockFsReadFile = mock(() => Promise.resolve(''));
-const mockFsWriteFile = mock(() => Promise.resolve());
-const mockFsMkdir = mock(() => Promise.resolve(undefined));
+const mockFsReadFile = mock<(path: string) => Promise<string>>(() => Promise.resolve(''));
+const mockFsWriteFile = mock<(path: string, content: string) => Promise<void>>(() =>
+  Promise.resolve()
+);
+const mockFsMkdir = mock<(path: string) => Promise<void>>(() => Promise.resolve());
 
 mock.module('fs/promises', () => ({
   readFile: mockFsReadFile,

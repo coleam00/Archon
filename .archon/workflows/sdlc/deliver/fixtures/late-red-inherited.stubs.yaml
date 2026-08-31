@@ -1,0 +1,65 @@
+# Dry-run fixture: CI concludes red after the
+# review converged, but the red is inherited — the branch did not cause it. The
+# convergence pass must classify it through one honest no-change round, pass
+# the gate with the caveat recorded, and carry the still-red state
+# toward the flip preflight, whose live refusal names the rerun-and-resume
+# recovery. The refusal itself is live-only: exec-code runs bash
+# for real against a real origin, so flip-ready stays stubbed and this fixture
+# pins the ROUTE — classification instead of a probe death, the gate accepting
+# the inherited cause, the re-wait exiting on the concluded state.
+impl__record-start: '{"start":"recorded"}'
+impl__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: implemented and green"
+impl__assert-changed: "3 files changed"
+# gate-green, gate-validated, gate-ci-fix and gate-ci-converged are deliberately
+# unstubbed: the real gates must accept the inherited classification.
+pr__pr: { number: 10, url: "https://github.com/example/repo/pull/10", head: "fixture-branch", base: "dev", is_draft: true }
+classify:
+  errors: false
+  docs: false
+  reasons:
+    errors: "stub: no failure paths"
+    docs: "stub: no doc-facing changes"
+resolve-scope: '{"errors":"false"}'
+review__mode: '{"continuation":false}'
+review__scope: "PR diff in scope; head sha stubbed"
+review__code: "0 findings"
+review__seams: "0 findings"
+review__simplify: "0 findings"
+review__tests: "0 findings"
+review__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: clean on initial review; CI still running"
+validate__validate:
+  green: true
+  red_cause: ""
+  summary: "stub: full gate green"
+ci-probe: '{"state":"red","detail":"e2e-smoke (fail)"}'
+ci-verdict: '{"state":"red","detail":"e2e-smoke (fail)"}'
+# ci-fix__record-start and ci-fix__assert-changed run for real against the
+# clean scratch worktree: no commit and no working-tree change is exactly the
+# honest-decline state, and the real guard must pass it via the inherited
+# cause plus summary — the same proof correction-honest-decline pins
+# for the corrections loop.
+ci-fix__implement:
+  done: true
+  green: false
+  red_cause: inherited
+  summary: "stub: e2e-smoke is red at the run's starting commit on a surface this diff never touches; no edit to make"
+ci-recheck__mode: '{"continuation":true}'
+ci-recheck__scope: "light mode; zero delta"
+ci-recheck__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: no delta; prior report stands"
+fix-ci-probe: '{"state":"red","detail":"e2e-smoke (fail)"}'
+flip-ready: "https://github.com/example/repo/pull/10"
+outcome: "https://github.com/example/repo/pull/10"
+fixture:
+  expect: completed
+  reached: [review__synthesize, gate-validated, ci-verdict, ci-fix__assert-changed, gate-ci-fix, ci-recheck__synthesize, ci-recheck-action, fix-ci-probe, flip-ready]
+exec-code: true

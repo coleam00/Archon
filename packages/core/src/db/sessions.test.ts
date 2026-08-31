@@ -1,9 +1,9 @@
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { ZodError } from 'zod';
-import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
+import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import { Session, SessionMetadata, sessionMetadataSchema } from '../types';
 
-const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
+const mockQuery = createMockQuery();
 const mockWithTransaction = mock(
   async <T>(fn: (query: typeof mockQuery) => Promise<T>): Promise<T> => {
     return fn(mockQuery);
@@ -203,11 +203,11 @@ describe('sessions', () => {
     test('stores the provided reason in ended_reason', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
 
-      await deactivateSession('session-123', 'cwd-changed');
+      await deactivateSession('session-123', 'isolation-changed');
 
       expect(mockQuery).toHaveBeenCalledWith(
         'UPDATE remote_agent_sessions SET active = false, ended_at = NOW(), ended_reason = $2 WHERE id = $1',
-        ['session-123', 'cwd-changed']
+        ['session-123', 'isolation-changed']
       );
     });
 

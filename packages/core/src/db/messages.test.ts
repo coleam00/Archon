@@ -1,9 +1,9 @@
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
-import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
+import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import type { MessageRow } from './messages';
 
-const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
-const mockGetDatabaseType = mock(() => 'postgresql' as const);
+const mockQuery = createMockQuery();
+const mockGetDatabaseType = mock<() => 'postgresql' | 'sqlite'>(() => 'postgresql');
 
 // Mock the connection module before importing the module under test
 mock.module('./connection', () => ({
@@ -39,6 +39,7 @@ describe('messages', () => {
     role: 'user',
     content: 'Hello, world!',
     metadata: '{}',
+    user_id: null,
     created_at: '2025-01-01T00:00:00.000Z',
   };
 
@@ -213,6 +214,7 @@ describe('messages', () => {
         role: 'assistant',
         content: 'Workflow summary here.',
         metadata: '{"workflowResult":{"workflowName":"plan","runId":"run-1"}}',
+        user_id: null,
         created_at: '2026-01-01T00:00:00Z',
       };
       mockGetDatabaseType.mockReturnValueOnce('postgresql');

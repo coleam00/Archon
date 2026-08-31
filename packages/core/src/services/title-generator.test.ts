@@ -1,7 +1,6 @@
 import { mock, describe, test, expect, beforeEach, type Mock } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
-import type { MessageChunk } from '../types';
-import type { SendQueryOptions } from '@archon/providers/types';
+import type { MessageChunk, SendQueryOptions } from '@archon/providers/types';
 
 // ─── Mock setup (BEFORE importing module under test) ─────────────────────────
 

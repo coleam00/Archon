@@ -16,8 +16,8 @@ import {
 } from '@archon/core';
 import {
   loadWorkflowRunConfigFile,
+  normalizeRunConfigSemantics,
   sealWorkflowRunConfig,
-  unsealWorkflowRunConfig,
 } from '@archon/core/config';
 import { WORKFLOW_EVENT_TYPES, type WorkflowEventType } from '@archon/workflows/store';
 import {
@@ -105,10 +105,7 @@ import type {
   WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
 import type { DagNode } from '@archon/workflows/schemas/dag-node';
-import {
-  workflowRunConfigMetadataSchema,
-  type WorkflowRunConfigInput,
-} from '@archon/workflows/schemas/run-config';
+import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import {
   workflowRunStatusSchema,
   isApprovalContext,
@@ -117,7 +114,11 @@ import {
   SUBRUN_METADATA_KEYS,
   CONTINUATION_METADATA_KEY,
 } from '@archon/workflows/schemas/workflow-run';
-import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
+import type {
+  WorkflowRun,
+  WorkflowRunStatus,
+  ContinuationMode,
+} from '@archon/workflows/schemas/workflow-run';
 import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
 import {
   approveWorkflow,
@@ -144,6 +145,12 @@ import * as git from '@archon/git';
 import { CLIAdapter } from '../adapters/cli-adapter';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
 import { exitWithDrain } from '../utils/exit-with-drain';
+import { DETACHED_RUN_FAILED_EXIT_CODE, WorkflowRunFailedError } from '../utils/workflow-exit-code';
+export {
+  DETACHED_RUN_FAILED_EXIT_CODE,
+  WorkflowRunFailedError,
+  resolveCliExitCode,
+} from '../utils/workflow-exit-code';
 import {
   assertDetachedRunProcessOwner,
   DETACHED_RUN_OWNER_ENV,
@@ -151,6 +158,7 @@ import {
   startDetachedRunControlServer,
 } from '../utils/detached-run-control';
 import { resolveCliUserId } from './auth';
+import { RESUME_RUN_CONFIG_CONFLICT } from '../dispatch-guards';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -162,78 +170,6 @@ function getLog(): ReturnType<typeof createLogger> {
 const DETACHED_STARTUP_WINDOW_MS = 500;
 const DETACHED_LOG_TAIL_MAX_CHARS = 4_000;
 const DETACHED_LOG_TAIL_MAX_LINES = 40;
-
-/**
- * Exit status a detached child uses to tell its launcher that the workflow RAN and
- * reported failure, rather than dying before it started (#2914's startup window).
- *
- * The window observes the only thing a launcher can see — that the child's process is
- * gone — and a bare non-zero exit cannot separate "never started" from "ran and failed".
- * A one-node workflow that legitimately fails finishes well inside the window on a fast
- * machine, so classifying on the window alone reports a completed run as a launch
- * failure at some machine speed. This code is the child stating which one it was.
- *
- * Private to the launcher/child protocol: only a process that started under
- * `DETACHED_RUN_OWNER_ENV` issues it, so `archon workflow run` on a terminal still exits
- * 1 for a failed run.
- */
-export const DETACHED_RUN_FAILED_EXIT_CODE = 90;
-
-/**
- * The workflow ran and did not succeed — the run owns that outcome and recorded it.
- *
- * Distinct from every other error out of a run command, all of which mean the run never
- * got started. Only that distinction can tell a detached launcher whether to ack the run
- * it created or refuse the launch.
- */
-export class WorkflowRunFailedError extends Error {
-  /**
-   * Status the process should exit with. The reserved code is issued only by a detached
-   * child, whose exit status nothing but its launcher reads; a run failing on someone's
-   * terminal still exits 1.
-   */
-  readonly exitCode: number;
-
-  constructor(reason: string | undefined, detachedChild: boolean) {
-    super(`Workflow failed: ${String(reason)}`);
-    this.name = 'WorkflowRunFailedError';
-    this.exitCode = detachedChild ? DETACHED_RUN_FAILED_EXIT_CODE : 1;
-  }
-}
-
-/**
- * Exit status for a CLI failure: whatever a run reported about its own outcome, 1 for
- * everything else.
- *
- * The commands that continue a run (`resume`, `approve`, `reject`, `respond`) re-throw
- * with their own explanation, so the outcome is read off the `cause` chain rather than
- * the outermost error.
- */
-export function resolveCliExitCode(error: unknown): number {
-  for (let current: unknown = error; current instanceof Error; current = current.cause) {
-    if (current instanceof WorkflowRunFailedError) return current.exitCode;
-  }
-  return 1;
-}
-
-function parseDetachedRunConfig(payload: string | undefined): WorkflowRunConfigInput | undefined {
-  if (payload === undefined) return undefined;
-
-  let value: unknown;
-  try {
-    value = JSON.parse(payload) as unknown;
-  } catch {
-    throw new Error('Detached workflow run config payload is not valid JSON.');
-  }
-  const metadata = workflowRunConfigMetadataSchema.safeParse(value);
-  if (!metadata.success) {
-    throw new Error('Detached workflow run config payload is invalid.');
-  }
-  return {
-    layer: unsealWorkflowRunConfig(metadata.data),
-    source: metadata.data.source,
-  };
-}
 
 function readDetachedLogTail(path: string): string | null {
   try {
@@ -404,10 +340,8 @@ export interface WorkflowRunOptions {
   modelAssignments?: string[];
   /** Local YAML file supplying a sparse configuration layer for this run. */
   configPath?: string;
-  /** @internal Validated immutable layer transferred from a detached parent. */
+  /** @internal Structurally validated immutable layer transferred from a detached parent. */
   detachedRunConfig?: WorkflowRunConfigInput;
-  /** @internal AES-GCM-sealed detached parent payload carried outside config env layers. */
-  detachedRunConfigPayload?: string;
   /**
    * @internal The run row the detached parent created before forking (#2872). Present
    * only on a FRESH detached launch: the child executes this row instead of creating
@@ -1515,13 +1449,16 @@ async function runWorkflowWithOwnedSource(
       : join(cwd, options.configPath)
     : undefined;
   if (isContinuation && (resolvedRunConfigPath || options.detachedRunConfig)) {
-    throw new Error(
-      '--resume and --config are mutually exclusive. A resumed run keeps its original run config.'
-    );
+    throw new Error(RESUME_RUN_CONFIG_CONFLICT);
   }
-  const runConfig =
-    options.detachedRunConfig ??
-    (resolvedRunConfigPath ? await loadWorkflowRunConfigFile(resolvedRunConfigPath) : undefined);
+  const runConfig = options.detachedRunConfig
+    ? {
+        ...options.detachedRunConfig,
+        layer: normalizeRunConfigSemantics(options.detachedRunConfig.layer),
+      }
+    : resolvedRunConfigPath
+      ? await loadWorkflowRunConfigFile(resolvedRunConfigPath)
+      : undefined;
 
   // The row a detached parent created before forking (#2872). Loaded up front because
   // it decides the run's identity: the capture is filed under its id, the signal
@@ -2105,6 +2042,7 @@ async function runWorkflowWithOwnedSource(
     // pre-flight costs nothing and the child still re-resolves it against the live
     // checkout when it starts (its lane binds a worktree this process never touches).
     let adoptedRunId: string | undefined;
+    let supersededRunId: string | undefined;
     if (options.adoptRunId !== undefined || options.supersedesRunId !== undefined) {
       if (!detachCodebase) {
         throw new Error(
@@ -2121,7 +2059,13 @@ async function runWorkflowWithOwnedSource(
           containerRequested: options.container === true,
         });
       } else if (options.supersedesRunId !== undefined) {
-        await resolveSupersededRun(options.supersedesRunId);
+        supersededRunId = await resolveRunIdArg(
+          options.supersedesRunId,
+          cwd,
+          false,
+          detachCodebase.id
+        );
+        await resolveSupersededRun(supersededRunId);
       }
     }
 
@@ -2158,8 +2102,8 @@ async function runWorkflowWithOwnedSource(
       const continuationDeclaration =
         adoptedRunId !== undefined
           ? { mode: 'adopt' as const, runId: adoptedRunId }
-          : options.supersedesRunId !== undefined
-            ? { mode: 'supersede' as const, runId: options.supersedesRunId }
+          : supersededRunId !== undefined
+            ? { mode: 'supersede' as const, runId: supersededRunId }
             : undefined;
       try {
         // No reserved id: this process's own capture is discarded on the way out, and
@@ -2213,8 +2157,7 @@ async function runWorkflowWithOwnedSource(
     // Between-run continuation (#2747) — the child re-resolves the adoption
     // against the live filesystem/database, so pass the declaration through.
     if (adoptedRunId !== undefined) extraArgs.push('--adopt', adoptedRunId);
-    if (options.supersedesRunId !== undefined)
-      extraArgs.push('--supersedes', options.supersedesRunId);
+    if (supersededRunId !== undefined) extraArgs.push('--supersedes', supersededRunId);
     // Re-pin the source as an ABSOLUTE path (parseArgs is last-wins, same as --cwd).
     // The original argv may hold a relative `--workflow-source`, and the child is
     // spawned with a different working directory, so passing it through unresolved
@@ -2351,7 +2294,7 @@ async function runWorkflowWithOwnedSource(
   // inherits nothing.
   let adoptedFromRunId: string | undefined;
   let adoptedTaskBranch: Extract<TaskBranchSelection, { kind: 'existing' }> | undefined;
-  let continuationMode: 'adopt' | 'supersede' | undefined;
+  let continuationMode: ContinuationMode | undefined;
   // Set when the adopt lane executes inside a checkout whose `.archon` may differ from
   // this process's cwd — the trigger for recaptureForLane once the path is final.
   let adoptLaneRunsIsolatedCheckout = false;
@@ -2368,7 +2311,7 @@ async function runWorkflowWithOwnedSource(
       adoptedFromRunId = await resolveRunIdArg(options.adoptRunId, cwd, false, codebase.id);
     } else if (options.supersedesRunId !== undefined) {
       continuationMode = 'supersede';
-      adoptedFromRunId = options.supersedesRunId;
+      adoptedFromRunId = await resolveRunIdArg(options.supersedesRunId, cwd, false, codebase.id);
     } else {
       throw new Error('--adopt/--supersedes requires a run id.');
     }
@@ -3285,13 +3228,9 @@ export async function workflowRunCommand(
   userMessage: string,
   options: WorkflowRunOptions = {}
 ): Promise<void> {
-  const detachedRunConfig = parseDetachedRunConfig(options.detachedRunConfigPayload);
   try {
     await withCapturedSource(owner =>
-      runWorkflowWithOwnedSource(owner, cwd, workflowName, userMessage, {
-        ...options,
-        ...(detachedRunConfig ? { detachedRunConfig } : {}),
-      })
+      runWorkflowWithOwnedSource(owner, cwd, workflowName, userMessage, options)
     );
   } catch (error) {
     await recordDetachedChildStartupFailure(options.detachedRunId, error as Error);

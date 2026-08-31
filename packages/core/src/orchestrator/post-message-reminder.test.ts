@@ -33,6 +33,7 @@ function makeManagedCodebase(overrides: Partial<Codebase> = {}): Codebase {
     repository_url: null,
     default_branch: 'main',
     ai_assistant_type: 'claude',
+    kind: 'repo',
     commands: {},
     created_at: new Date(),
     updated_at: new Date(),
@@ -40,9 +41,11 @@ function makeManagedCodebase(overrides: Partial<Codebase> = {}): Codebase {
   };
 }
 
-function makePlatform(hasSendStructuredEvent = true): IPlatformAdapter {
+function makePlatform(
+  hasSendStructuredEvent = true
+): Pick<IPlatformAdapter, 'sendStructuredEvent'> {
   const sendStructuredEvent = hasSendStructuredEvent ? mock(() => Promise.resolve()) : undefined;
-  return { sendStructuredEvent } as unknown as IPlatformAdapter;
+  return { sendStructuredEvent };
 }
 
 describe('reportUnpushedWorkInSource', () => {

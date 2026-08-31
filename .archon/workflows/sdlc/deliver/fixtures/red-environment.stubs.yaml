@@ -52,6 +52,7 @@ validate__validate:
   summary: "stub: the contention cleared; full gate green"
 gate-validated: '{"gate":"green"}'
 ci-probe: '{"state":"concluded","detail":"all checks green"}'
+ci-verdict: '{"state":"concluded","detail":"all checks green"}'
 flip-ready: "https://github.com/example/repo/pull/7"
 outcome: "https://github.com/example/repo/pull/7"
 fixture:

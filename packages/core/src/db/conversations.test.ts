@@ -1,11 +1,11 @@
 import { mock, describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
-import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
+import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 // spyOn (NOT mock.module) for config-loader: this file shares a `bun test`
 // invocation with the real config-loader.test.ts, and `mock.module` is
 // process-global and irreversible — mocking the loader here would poison it.
 import * as configLoader from '../config/config-loader';
 
-const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
+const mockQuery = createMockQuery();
 
 // Mock the connection module before importing the module under test
 mock.module('./connection', () => ({
@@ -49,6 +49,10 @@ describe('conversations', () => {
       codebase_id: null,
       cwd: null,
       isolation_env_id: null,
+      title: null,
+      hidden: false,
+      deleted_at: null,
+      user_id: null,
       last_activity_at: null,
       created_at: new Date(),
       updated_at: new Date(),
@@ -289,6 +293,10 @@ describe('conversations', () => {
       codebase_id: null,
       cwd: null,
       isolation_env_id: null,
+      title: null,
+      hidden: false,
+      deleted_at: null,
+      user_id: null,
       last_activity_at: null,
       created_at: new Date(),
       updated_at: new Date(),

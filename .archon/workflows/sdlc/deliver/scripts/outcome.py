@@ -43,7 +43,7 @@ def format_discoveries(artifacts: str, failed: bool = False) -> str:
     EMPTY consolidated file is review's adjudication rather than a gap, so it stays
     silent, and a completed run's report keeps the same shape on every branch.
 
-    Kept byte-identical across the four SDLC tails. A packaged script is
+    Kept byte-identical across the three SDLC tails. A packaged script is
     materialized standalone, so there is no import channel to share it through.
     """
     disc_file = os.path.join(artifacts, "discoveries.json")
@@ -80,7 +80,7 @@ def format_raw_discoveries(artifacts: str) -> str:
     The contract is one section that exists only when discoveries do, and a failed
     run is not a reason to print an empty one.
 
-    Kept byte-identical across the four SDLC tails.
+    Kept byte-identical across the three SDLC tails.
     """
     disc_dir = os.path.join(artifacts, "discoveries")
     try:
@@ -131,7 +131,7 @@ def format_red_causes(artifacts: str) -> str:
     Presentation, like the discoveries sections: an unreadable record degrades to a
     pointer rather than failing a tail that has already done its irreversible work.
 
-    Kept byte-identical across the four SDLC tails.
+    Kept byte-identical across the three SDLC tails.
     """
     path = os.path.join(artifacts, "red-causes.json")
     if not os.path.isfile(path):
@@ -166,7 +166,7 @@ def format_caveats(artifacts: str, failed: bool = False) -> str:
     Composed in one place so a new branch in main() cannot print a report that
     quietly drops one.
 
-    Kept byte-identical across the four SDLC tails.
+    Kept byte-identical across the three SDLC tails.
     """
     return format_red_causes(artifacts) + format_discoveries(artifacts, failed)
 

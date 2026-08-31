@@ -5,6 +5,8 @@
  * database modules to avoid test pollution issues with Bun's mock.module.
  */
 import { describe, test, expect, mock, spyOn, beforeEach, afterEach } from 'bun:test';
+import { createHmac } from 'node:crypto';
+import type { Codebase, Conversation } from '@archon/core';
 
 // Mock @archon/paths to suppress noisy logger output during tests
 const mockLogger = {
@@ -46,9 +48,13 @@ const mockFindOrCreateUserByPlatformIdentity = mock(
 mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: mockFindOrCreateUserByPlatformIdentity,
 }));
-const mockGetOrCreateConversation = mock(async () => {
-  throw new Error('DB not mocked in tests');
-});
+const mockGetOrCreateConversation = mock(
+  async (): Promise<
+    Pick<Conversation, 'id' | 'codebase_id' | 'platform_type' | 'platform_conversation_id'>
+  > => {
+    throw new Error('DB not mocked in tests');
+  }
+);
 const mockUpdateConversation = mock(async () => {
   throw new Error('DB not mocked in tests');
 });
@@ -59,7 +65,9 @@ mock.module('@archon/core/db/conversations', () => ({
   getConversation: mockGetConversation,
 }));
 
-const mockFindCodebaseByRepoUrl = mock(async () => null);
+const mockFindCodebaseByRepoUrl = mock(
+  async (): Promise<Pick<Codebase, 'id' | 'repository_url' | 'default_cwd' | 'name'> | null> => null
+);
 const mockCreateCodebase = mock(async () => {
   throw new Error('DB not mocked in tests');
 });
@@ -105,6 +113,7 @@ mock.module('@archon/core', () => ({
 }));
 
 import { GiteaAdapter } from './adapter';
+import type { WebhookEvent } from './types';
 import { ConversationLockManager } from '@archon/core';
 
 // Create a mock lock manager that immediately executes handlers
@@ -709,25 +718,99 @@ describe('GiteaAdapter', () => {
   });
 
   describe('fork detection logic', () => {
-    test('should detect same-repo PR when head and base repos match', () => {
-      const headRepoFullName = 'owner/repo';
-      const baseRepoFullName = 'owner/repo';
-      const isForkPR = headRepoFullName !== baseRepoFullName;
-      expect(isForkPR).toBe(false);
+    function createPullRequestCommentPayload(headRepoFullName?: string): string {
+      const head =
+        headRepoFullName === undefined
+          ? { ref: 'feature-branch', sha: 'abc123def456' }
+          : {
+              ref: 'feature-branch',
+              sha: 'abc123def456',
+              repo: { full_name: headRepoFullName },
+            };
+
+      const event = {
+        action: 'created',
+        issue: {
+          number: 42,
+          title: 'Test PR',
+          body: 'Description',
+          user: { login: 'user123' },
+          labels: [],
+          state: 'open',
+          pull_request: {},
+        },
+        pull_request: {
+          number: 42,
+          title: 'Test PR',
+          body: 'Description',
+          user: { login: 'user123' },
+          state: 'open',
+          head,
+          base: { repo: { full_name: 'testuser/testrepo' } },
+        },
+        comment: { body: '@archon review this', user: { login: 'user123' } },
+        repository: {
+          owner: { login: 'testuser' },
+          name: 'testrepo',
+          full_name: 'testuser/testrepo',
+          html_url: 'https://gitea.example.com/testuser/testrepo',
+          default_branch: 'main',
+        },
+        sender: { login: 'user123' },
+      } satisfies WebhookEvent;
+
+      return JSON.stringify(event);
+    }
+
+    async function expectForkVerdict(
+      headRepoFullName: string | undefined,
+      expected: boolean
+    ): Promise<void> {
+      mockGetOrCreateConversation.mockResolvedValueOnce({
+        id: 'conv-test-uuid',
+        codebase_id: 'codebase-test-uuid',
+        platform_type: 'gitea',
+        platform_conversation_id: 'testuser/testrepo!42',
+      });
+      mockFindCodebaseByRepoUrl.mockResolvedValueOnce({
+        id: 'codebase-test-uuid',
+        repository_url: 'https://gitea.example.com/testuser/testrepo',
+        default_cwd: '/tmp/test-workspaces/testuser/testrepo/source',
+        name: 'testrepo',
+      });
+      mockHandleMessage.mockClear();
+      const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
+        new Response('[]', { status: 200 })
+      );
+      const payload = createPullRequestCommentPayload(headRepoFullName);
+      const signature = createHmac('sha256', 'fake-webhook-secret').update(payload).digest('hex');
+
+      try {
+        await adapter.handleWebhook(payload, signature);
+      } finally {
+        fetchSpy.mockRestore();
+      }
+
+      expect(mockHandleMessage).toHaveBeenCalledWith(
+        expect.anything(),
+        'testuser/testrepo!42',
+        expect.anything(),
+        expect.objectContaining({
+          isolationHints: expect.objectContaining({ isForkPR: expected }),
+        })
+      );
+    }
+
+    test('should detect same-repo PR when head and base repos match', async () => {
+      await expectForkVerdict('testuser/testrepo', false);
     });
 
-    test('should detect fork PR when head and base repos differ', () => {
-      const headRepoFullName = 'contributor/repo';
-      const baseRepoFullName = 'owner/repo';
-      const isForkPR = headRepoFullName !== baseRepoFullName;
-      expect(isForkPR).toBe(true);
+    test('should detect fork PR when head and base repos differ', async () => {
+      await expectForkVerdict('contributor/testrepo', true);
     });
 
-    test('should detect fork PR when head.repo is undefined (deleted fork)', () => {
-      const headRepoFullName: string | undefined = undefined;
-      const baseRepoFullName = 'owner/repo';
-      const isForkPR = headRepoFullName !== baseRepoFullName;
-      expect(isForkPR).toBe(true);
+    test('should detect fork PR when head.repo is undefined (deleted fork)', async () => {
+      await expectForkVerdict(undefined, true);
     });
   });
 

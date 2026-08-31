@@ -1,5 +1,5 @@
 import { z } from '@hono/zod-openapi';
-import { MAX_DURABLE_WAIT_MS } from './dag-node';
+import { MAX_DURABLE_WAIT_MS } from './durable-wait';
 import { runAliasesConfigSchema, runTiersConfigSchema } from './model-binding';
 
 const providerDefaultsSchema = z.record(z.string(), z.unknown());
