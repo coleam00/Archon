@@ -60,5 +60,5 @@ flip-ready: "https://github.com/example/repo/pull/9"
 outcome: "https://github.com/example/repo/pull/9"
 fixture:
   expect: completed
-  reached: [review__synthesize, gate-validated, ci-verdict, ci-fix__assert-changed, gate-ci-fix, ci-recheck__synthesize, gate-ci-converged, fix-ci-probe, flip-ready]
+  reached: [review__synthesize, gate-validated, ci-verdict, ci-fix__assert-changed, gate-ci-fix, ci-recheck__synthesize, ci-recheck-action, fix-ci-probe, flip-ready]
 exec-code: true

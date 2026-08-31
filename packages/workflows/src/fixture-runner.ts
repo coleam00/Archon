@@ -7,7 +7,9 @@
  *
  *   fixture:
  *     expect: completed          # or failed / paused / cancelled
- *     fail-node: gate-ready      # required iff expect: failed
+ *     fail-node: gate-ready      # required iff expect: failed; a list names the
+ *                                # exact failed set (a loop body failure is two
+ *                                # entries: the node and its group)
  *     reached: [review__docs]    # nodes that must complete or be stubbed, under any expect
  *     inputs:                    # caller-supplied declared-input values
  *       branch: "task-123"
@@ -61,7 +63,10 @@ function getLog(): ReturnType<typeof createLogger> {
 export const fixtureDeclarationSchema = z
   .object({
     expect: z.enum(['completed', 'failed', 'paused', 'cancelled']).default('completed'),
-    'fail-node': z.string().optional(),
+    // A single node id, or the exact set of failed entries when one failure
+    // implies another — a node failing inside a loop_group fails the group
+    // too, so that shape is always two entries and was inexpressible before.
+    'fail-node': z.union([z.string(), z.array(z.string()).nonempty()]).optional(),
     reached: z.array(z.string()).optional(),
     inputs: z.record(z.string(), z.string()).optional(),
     'resolved-text-contains': z.record(z.string(), z.string()).optional(),
@@ -584,10 +589,13 @@ async function checkFixture(
       failureReason = `expected ${parsed.declaration.expect}, dry-run reported ${result.outcome}`;
     } else if (parsed.declaration.expect === 'failed') {
       const failures = result.trace.filter(entry => entry.state === 'failed');
-      if (failures.length !== 1 || failures[0].nodeId !== parsed.declaration['fail-node']) {
+      const declared = parsed.declaration['fail-node'];
+      const expected = (typeof declared === 'string' ? [declared] : [...(declared ?? [])]).sort();
+      const actual = failures.map(f => f.nodeId).sort();
+      if (expected.length !== actual.length || expected.some((id, i) => id !== actual[i])) {
         failureReason =
-          `expected exactly one failed trace entry on '${parsed.declaration['fail-node']}', got ` +
-          failures.map(f => f.nodeId).join(', ');
+          `expected exactly the failed trace entries [${expected.join(', ')}], got ` +
+          (actual.join(', ') || '(none)');
       }
     }
     // Checked whenever declared, never chained after the outcome branches above: a

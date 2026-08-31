@@ -1,0 +1,64 @@
+# Dry-run fixture: the late-red pass must BLOCK the flip when it fails. CI
+# concludes red after the review was ready, and the correction round ends
+# with red it cannot explain — the real gate refuses, the convergence loop
+# fails with it, and flip-ready must never run. This exercises the guard the
+# pack README demands: the flip's join sees the pass fail as a DIRECT
+# dependency, not a skip two hops downstream (--exec-code, so the real gate
+# decides).
+#
+# flip-ready and outcome are stubbed like every fixture's public nodes; here
+# their stubs double as tripwires — if the join's wiring ever lets the flip
+# run past the failed pass, the run completes and this fixture's expected
+# failure breaks. The other non-convergence shape, a recheck that still
+# demands correction exhausting the loop's single round, cannot be pinned
+# here: the dry-run simulator proceeds past an exhausted bound, so that path
+# is asserted by the engine in real runs, like the corrections loop's own
+# bound.
+impl__record-start: '{"start":"recorded"}'
+impl__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: implemented and green"
+impl__assert-changed: "3 files changed"
+pr__pr: { number: 11, url: "https://github.com/example/repo/pull/11", head: "fixture-branch", base: "dev", is_draft: true }
+classify:
+  errors: false
+  docs: false
+  reasons:
+    errors: "stub: no failure paths"
+    docs: "stub: no doc-facing changes"
+resolve-scope: '{"errors":"false"}'
+review__mode: '{"continuation":false}'
+review__scope: "PR diff in scope; head sha stubbed"
+review__code: "0 findings"
+review__seams: "0 findings"
+review__simplify: "0 findings"
+review__tests: "0 findings"
+review__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: clean on initial review; CI still running"
+validate__validate:
+  green: true
+  red_cause: ""
+  summary: "stub: full gate green"
+ci-probe: '{"state":"red","detail":"test (windows-latest) (fail)"}'
+ci-verdict: '{"state":"red","detail":"test (windows-latest) (fail)"}'
+ci-fix__record-start: '{"start":"recorded"}'
+ci-fix__implement:
+  done: true
+  green: false
+  red_cause: ""
+  summary: "stub: still red and no explanation recorded"
+ci-fix__assert-changed: "1 file changed"
+flip-ready: "https://github.com/example/repo/pull/11"
+outcome: "https://github.com/example/repo/pull/11"
+fixture:
+  expect: failed
+  # The gate fails inside the loop, so the failed set is the node AND its
+  # group — which is exactly the property under test: the group's failure is
+  # what the flip's join must see directly.
+  fail-node: [gate-ci-fix, ci-corrections]
+  reached: [ci-verdict, ci-fix__implement]
+exec-code: true

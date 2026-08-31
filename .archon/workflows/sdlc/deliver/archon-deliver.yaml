@@ -388,87 +388,86 @@ nodes:
   # Late-red convergence. Review convergence and CI conclusion race: a
   # branch-introduced failure can conclude after the last recheck, the wait
   # exits on any non-pending state, and flip-ready's only moves are flip or
-  # terminal failure. This pass is the bounded route between them: classify,
-  # correct, re-review, re-await — sequenced after the wait
-  # because loop completion is computed externally (see await-checks) and a DAG
-  # has no back-edges. ONE pass is the bound: a second late red after a
-  # CI-evidence-driven correction terminates at the flip preflight with the
-  # rerun-and-resume recovery named, which is also where red this branch did
-  # not cause honestly ends, its cause classified on the record.
+  # terminal failure. The pass below is the bounded route between them:
+  # classify, correct, re-review, re-await. It sits after the wait because
+  # loop completion is computed externally (see await-checks) and a DAG has
+  # no back-edges.
   - id: ci-verdict
     script: check-ci
     runtime: uv
     timeout: 180000
     depends_on: [await-checks]
 
-  # Entered only on concluded red; every node below inherits the skip on any
-  # other state through default dependency propagation.
-  - id: ci-fix
-    include: archon-implement
+  # One round, expressed natively: max_iterations bounds the pass, and the
+  # loop converges only on a `none` verdict — a failed gate fails the body,
+  # and a `correct` or `replan` verdict exhausts the bound, so either way the
+  # loop itself fails and blocks the flip as its direct dependency. A second
+  # late red after this round, or red this branch did not cause, terminates
+  # at the flip preflight with the rerun-and-resume recovery named, its cause
+  # classified on the record. Entered only on concluded red; every other
+  # state skips the pass whole.
+  - id: ci-corrections
     depends_on: [ci-verdict]
     when: "$ci-verdict.output.state == 'red'"
-    with:
-      work: >-
-        CI concluded non-green after the review converged. The failing checks:
+    loop_group:
+      until_bash: test $ci-recheck-action.output.action = "none"
+      max_iterations: 1
+      nodes:
+        - id: ci-fix
+          include: archon-implement
+          with:
+            work: >-
+              CI concluded non-green after the review converged. The failing
+              checks:
 
-        $ci-verdict.output.detail
+              $ci-verdict.output.detail
 
-        The same red-cause discipline as every round applies. A concluded CI
-        failure this branch's changes introduced is this pass's work: fix it at
-        the cause and push the correction to the branch this run is on,
-        explicitly by name. Red on a check this branch cannot have caused is
-        classified with evidence — red_cause inherited or environment, with the
-        summary naming the proof — never chased and never "fixed" by weakening
-        a test. Do not change the PR's draft state or edit the canonical review
-        comment; the following review owns that public verdict.
+              The same red-cause discipline as every round applies. A concluded
+              CI failure this branch's changes introduced is this pass's work:
+              fix it at the cause and push the correction to the branch this
+              run is on, explicitly by name. Red on a check this branch cannot
+              have caused is classified with evidence — red_cause inherited or
+              environment, with the summary naming the proof — never chased and
+              never "fixed" by weakening a test. Do not change the PR's draft
+              state or edit the canonical review comment; the following review
+              owns that public verdict.
 
-        Accepted work order, for scope only — do not reopen it:
-        $INPUTS.work
+              Accepted work order, for scope only — do not reopen it:
+              $INPUTS.work
 
-  # The same gate, same script, fourth consumer: introduced-and-unfixed or
-  # unexplained red refuses loudly; inherited or environment red passes with
-  # its caveat recorded and ends honestly at the flip preflight below.
-  - id: gate-ci-fix
-    script: gate-green
-    runtime: uv
-    depends_on: [ci-fix]
-    with:
-      green: "$ci-fix.output.green"
-      red_cause: "$ci-fix.output.red_cause"
-      summary: "$ci-fix.output.summary"
-      stage: "The CI correction"
+        # The same gate, same script, fourth consumer: introduced-and-unfixed
+        # or unexplained red refuses loudly; inherited or environment red
+        # passes with its caveat recorded and ends honestly at the flip
+        # preflight below.
+        - id: gate-ci-fix
+          script: gate-green
+          runtime: uv
+          depends_on: [ci-fix]
+          with:
+            green: "$ci-fix.output.green"
+            red_cause: "$ci-fix.output.red_cause"
+            summary: "$ci-fix.output.summary"
+            stage: "The CI correction"
 
-  # Never an unreviewed final fix — the corrections loop's rule holds for this
-  # pass too.
-  - id: ci-recheck
-    include: archon-review
-    with:
-      scope: "$pr.output.number"
-      prior_report: "$ARTIFACTS_DIR/review/report.md"
-      work_order: "$INPUTS.work"
-      errors: "$resolve-scope.output.errors"
-      docs: "$classify.output.docs"
-    depends_on: [gate-ci-fix]
+        # Never an unreviewed final fix — the corrections loop's rule holds
+        # for this pass too.
+        - id: ci-recheck
+          include: archon-review
+          with:
+            scope: "$pr.output.number"
+            prior_report: "$ARTIFACTS_DIR/review/report.md"
+            work_order: "$INPUTS.work"
+            errors: "$resolve-scope.output.errors"
+            docs: "$classify.output.docs"
+          depends_on: [gate-ci-fix]
 
-  - id: ci-recheck-action
-    script: validate-review-action
-    runtime: uv
-    with:
-      ready: "$ci-recheck.output.ready"
-      action: "$ci-recheck.output.action"
-    depends_on: [ci-recheck]
-
-  # The single pass has no further round to spend: anything but a converged
-  # `none` is a truthful terminal — the PR stays draft and the canonical report
-  # carries the open findings.
-  - id: gate-ci-converged
-    bash: |
-      ACTION=$ci-recheck-action.output.action
-      if [ "$ACTION" != "none" ]; then
-        printf '%s\n' "gate-ci-converged: the CI correction review returned '$ACTION'; the single late-red pass is spent. The PR remains draft and the canonical report carries the open findings." >&2
-        exit 1
-      fi
-    depends_on: [ci-recheck-action]
+        - id: ci-recheck-action
+          script: validate-review-action
+          runtime: uv
+          with:
+            ready: "$ci-recheck.output.ready"
+            action: "$ci-recheck.output.action"
+          depends_on: [ci-recheck]
 
   # The re-wait after a pushed correction: same probe, same durable pause, same
   # ceiling as await-checks. On an inherited or environment classification
@@ -488,7 +487,7 @@ nodes:
             duration_ms: 300000
           when: $fix-ci-probe.output.state == 'pending'
           depends_on: [fix-ci-probe]
-    depends_on: [gate-ci-converged]
+    depends_on: [ci-corrections]
 
   - id: flip-ready
     bash: |
@@ -561,13 +560,19 @@ nodes:
         printf '%s\n' "flip-ready: PR was flipped but its URL could not be read back." >&2
         exit 1
       fi
-    # Waits on sync-pr-body explicitly: on a repo with no CI, the waits return
-    # immediately and the flip could otherwise beat the resync. The trigger
-    # rule lets the green path's SKIPPED nodes pass — the convergence chain
-    # behind await-fix-checks, and a resync skipped because the initial review
-    # was ready — while a FAILED one still blocks the flip. ci-verdict always
-    # runs, anchoring the rule's one required success.
-    depends_on: [ci-verdict, await-fix-checks, sync-pr-body]
+    # Every failable ancestor is a DIRECT dependency, deliberately: the
+    # engine's default rule turns a failed ancestor into a skipped dependent
+    # at the very next hop, so a join that only names the tail of a chain
+    # never sees the chain's gates fail. Naming await-checks, the convergence
+    # loop, and the re-wait here is what makes their failures block the flip
+    # instead of skipping past it. The trigger rule lets the green path's
+    # SKIPPED nodes pass — the convergence pass and its re-wait, and a resync
+    # skipped because the initial review was ready — while a FAILED one still
+    # blocks. ci-verdict always runs, anchoring the rule's one required
+    # success. sync-pr-body stays named for the no-CI repo, where the waits
+    # return immediately and the flip could otherwise beat the resync.
+    depends_on:
+      [await-checks, ci-verdict, ci-corrections, await-fix-checks, sync-pr-body]
     trigger_rule: none_failed_min_one_success
 
   # This tail's terminal report, like every other SDLC tail's (scripts/outcome.py).

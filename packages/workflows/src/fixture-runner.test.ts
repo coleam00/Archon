@@ -222,6 +222,49 @@ describe('runFixtures', () => {
     expect(report.results[0].failureReason).toBe('required nodes did not complete: node-c');
   });
 
+  it('matches a loop-body failure with a fail-node list naming the exact failed set', async () => {
+    const { cwd } = writeTempProject({
+      workflowYaml:
+        'name: test-wf\ndescription: test\nnodes:\n' +
+        '  - id: grp\n' +
+        '    loop_group:\n' +
+        '      until_bash: "true"\n' +
+        '      max_iterations: 2\n' +
+        '      nodes:\n' +
+        '        - id: inner\n          prompt: $NODE_OUTPUT.nope.missing\n',
+      body: ['fixture:', '  expect: failed', '  fail-node: [inner, grp]'].join('\n'),
+    });
+    const report = await runFixtures({
+      workflows: [workflowsOnDisk(cwd, ['test-wf'])[0]],
+      cwd,
+    });
+
+    expect(report.passed).toBe(1);
+  });
+
+  it('reports the full failed set when a single fail-node cannot cover it', async () => {
+    const { cwd } = writeTempProject({
+      workflowYaml:
+        'name: test-wf\ndescription: test\nnodes:\n' +
+        '  - id: grp\n' +
+        '    loop_group:\n' +
+        '      until_bash: "true"\n' +
+        '      max_iterations: 2\n' +
+        '      nodes:\n' +
+        '        - id: inner\n          prompt: $NODE_OUTPUT.nope.missing\n',
+      body: ['fixture:', '  expect: failed', '  fail-node: inner'].join('\n'),
+    });
+    const report = await runFixtures({
+      workflows: [workflowsOnDisk(cwd, ['test-wf'])[0]],
+      cwd,
+    });
+
+    expect(report.failed).toBe(1);
+    expect(report.results[0].failureReason).toBe(
+      'expected exactly the failed trace entries [inner], got grp, inner'
+    );
+  });
+
   it('passes an expected failure whose reached nodes all ran before it', async () => {
     const { cwd } = writeTempProject({
       workflowYaml:
