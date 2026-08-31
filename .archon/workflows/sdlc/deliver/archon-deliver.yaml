@@ -357,8 +357,7 @@ nodes:
   # the clock fires, surviving restarts. This replaced a 60-minute in-process
   # polling script the moment the engine could hold the time itself. Red is a
   # reported state here, never a body failure: the probe declares it, the loop
-  # exits as concluded, and the convergence pass below owns what red means
-  # (#3069). A concluded probe skips the pause and `until_bash` ends the loop
+  # exits as concluded, and the convergence pass below owns what red means. A concluded probe skips the pause and `until_bash` ends the loop
   # with zero wasted wait. 13 iterations bound the watch at ~60 minutes of CI
   # time, the same ceiling the poller had — exhausting it fails the run rather
   # than flipping a PR whose CI never ended.
@@ -386,16 +385,16 @@ nodes:
           depends_on: [ci-probe]
     depends_on: [gate-validated]
 
-  # Late-red convergence (#3069). Review convergence and CI conclusion race:
-  # a branch-introduced failure that concludes after the last recheck used to
-  # have no route back to correction — the wait exits on any non-pending state,
-  # and flip-ready's only moves are flip or terminal failure. This pass is that
-  # route: classify, correct, re-review, re-await — sequenced after the wait
+  # Late-red convergence. Review convergence and CI conclusion race: a
+  # branch-introduced failure can conclude after the last recheck, the wait
+  # exits on any non-pending state, and flip-ready's only moves are flip or
+  # terminal failure. This pass is the bounded route between them: classify,
+  # correct, re-review, re-await — sequenced after the wait
   # because loop completion is computed externally (see await-checks) and a DAG
   # has no back-edges. ONE pass is the bound: a second late red after a
   # CI-evidence-driven correction terminates at the flip preflight with the
   # rerun-and-resume recovery named, which is also where red this branch did
-  # not cause honestly ends (#2976's lane, now with its cause classified).
+  # not cause honestly ends, its cause classified on the record.
   - id: ci-verdict
     script: check-ci
     runtime: uv

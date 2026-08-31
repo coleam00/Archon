@@ -1,4 +1,4 @@
-# Dry-run fixture for the #3069 race: the review becomes ready while CI is
+# Dry-run fixture: the review becomes ready while CI is
 # still pending, then a branch-introduced check concludes red. The run must
 # route the red back into correction — never discover it first at flip-ready —
 # and the single convergence pass must carry it to a flipped PR (--exec-code,

@@ -1,9 +1,9 @@
-# Dry-run fixture for the #3069 race's other class: CI concludes red after the
+# Dry-run fixture: CI concludes red after the
 # review converged, but the red is inherited — the branch did not cause it. The
-# convergence pass must classify it (one honest no-change round under the #2960
-# rule), pass the gate with the caveat recorded, and carry the still-red state
+# convergence pass must classify it through one honest no-change round, pass
+# the gate with the caveat recorded, and carry the still-red state
 # toward the flip preflight, whose live refusal names the rerun-and-resume
-# recovery (#2976's lane). The refusal itself is live-only: exec-code runs bash
+# recovery. The refusal itself is live-only: exec-code runs bash
 # for real against a real origin, so flip-ready stays stubbed and this fixture
 # pins the ROUTE — classification instead of a probe death, the gate accepting
 # the inherited cause, the re-wait exiting on the concluded state.
@@ -43,7 +43,7 @@ ci-verdict: '{"state":"red","detail":"e2e-smoke (fail)"}'
 # ci-fix__record-start and ci-fix__assert-changed run for real against the
 # clean scratch worktree: no commit and no working-tree change is exactly the
 # honest-decline state, and the real guard must pass it via the inherited
-# cause plus summary (#2960), the same proof correction-honest-decline pins
+# cause plus summary — the same proof correction-honest-decline pins
 # for the corrections loop.
 ci-fix__implement:
   done: true
