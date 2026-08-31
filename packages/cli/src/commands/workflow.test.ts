@@ -10455,6 +10455,55 @@ describe('workflowRunCommand — supersedes run-id prefix resolution (#2990)', (
       expect.objectContaining({ adopted_from_run_id: supersededRunId })
     );
   });
+
+  it('refuses a non-terminal supersedes run in the detach pre-flight before forking', async () => {
+    const supersededRunId = '0b1ee8da-1111-2222-3333-444455556666';
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const workflowDb = await import('@archon/core/db/workflows');
+    const paths = await import('@archon/paths');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (paths.getArchonHome as ReturnType<typeof mock>).mockImplementationOnce(() => {
+      throw new Error('no home in test');
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    (codebaseDb.findCodebaseByPathPrefix as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-1',
+      name: 'test/folder',
+      default_cwd: '/test/path',
+      kind: 'folder',
+    });
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
+      { id: supersededRunId },
+    ]);
+    // Argument-aware on purpose: the queued-value mocks are argument-blind, which
+    // would let terminality pass here even if it ran on the raw prefix.
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockImplementation(async (id: string) =>
+      id === supersededRunId ? { id: supersededRunId, status: 'running' } : null
+    );
+
+    const spawnSpy = spyOn(Bun, 'spawn');
+    try {
+      // The refusal names the resolved full id, so terminality is checked on the
+      // resolution, not on the raw prefix.
+      await expect(
+        workflowRunCommand('/test/path/subdir', 'assist', 'hello', {
+          detach: true,
+          supersedesRunId: '0b1ee8da',
+        })
+      ).rejects.toThrow(`Cannot supersede run '${supersededRunId}': it is still running.`);
+    } finally {
+      spawnSpy.mockRestore();
+    }
+
+    // The refusal reached the parent: no child was forked and no pending run row
+    // was left behind for a launch that cannot proceed (#2872).
+    expect(spawnSpy).not.toHaveBeenCalled();
+    expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
+  });
 });
 
 describe('workflowWaitCommand', () => {
