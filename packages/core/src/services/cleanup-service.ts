@@ -37,6 +37,8 @@ function getLog(): ReturnType<typeof createLogger> {
 /** Git context for a repo's cleanup operations, resolved from repo config. */
 interface RepoGitContext {
   mainBranch: BranchName;
+  /** Remote-qualified base ref (e.g. "origin/main"), kept current via `git fetch`. */
+  remoteMainRef: BranchName;
   /** Configured remote name (worktree.remote); undefined means 'origin' downstream. */
   remote?: string;
 }
@@ -49,12 +51,14 @@ interface RepoGitContext {
 // problem degrades to git detection instead of failing cleanup.
 async function resolveRepoGitContext(repoPath: RepoPath, cwd: string): Promise<RepoGitContext> {
   const repoConfig = await loadRepoConfig(cwd);
-  const remote = repoConfig.worktree?.remote?.trim() || undefined;
+  const remote = repoConfig.worktree?.remote?.trim() || 'origin';
   const configured = repoConfig.worktree?.baseBranch?.trim();
   if (configured) {
-    return { mainBranch: toBranchName(configured), remote };
+    const branch = toBranchName(configured);
+    return { mainBranch: branch, remoteMainRef: toBranchName(`${remote}/${configured}`), remote };
   }
-  return { mainBranch: await getDefaultBranch(repoPath, remote), remote };
+  const branch = await getDefaultBranch(repoPath, remote);
+  return { mainBranch: branch, remoteMainRef: toBranchName(`${remote}/${branch}`), remote };
 }
 
 // Configuration constants (configurable via env vars)
@@ -518,11 +522,14 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
 
         // Check if branch is merged
         const mainRepoPath = toRepoPath(env.codebase_default_cwd);
-        const { mainBranch } = await resolveRepoGitContext(mainRepoPath, env.codebase_default_cwd);
+        const { remoteMainRef } = await resolveRepoGitContext(
+          mainRepoPath,
+          env.codebase_default_cwd
+        );
         const merged = await isBranchMerged(
           mainRepoPath,
           toBranchName(env.branch_name),
-          mainBranch
+          remoteMainRef
         );
 
         if (merged) {
@@ -672,7 +679,7 @@ export async function getWorktreeStatusBreakdown(
     activeEnvs: [],
   };
 
-  const { mainBranch } = await resolveRepoGitContext(repoPath, mainRepoPath);
+  const { remoteMainRef } = await resolveRepoGitContext(repoPath, mainRepoPath);
 
   for (const env of environments) {
     // Skip Telegram (never shown as stale)
@@ -681,7 +688,7 @@ export async function getWorktreeStatusBreakdown(
     // Check if merged (treat as not-merged on unexpected errors)
     let merged = false;
     try {
-      merged = await isBranchMerged(repoPath, toBranchName(env.branch_name), mainBranch);
+      merged = await isBranchMerged(repoPath, toBranchName(env.branch_name), remoteMainRef);
     } catch (error) {
       getLog().warn(
         { err: error, envId: env.id, branchName: env.branch_name },
@@ -801,7 +808,7 @@ export async function cleanupMergedWorktrees(
   const result: CleanupOperationResult = { removed: [], skipped: [] };
   const environments = await isolationEnvDb.listByCodebase(codebaseId);
   const repoPath = toRepoPath(mainRepoPath);
-  const { mainBranch, remote } = await resolveRepoGitContext(repoPath, mainRepoPath);
+  const { remoteMainRef, remote } = await resolveRepoGitContext(repoPath, mainRepoPath);
   const includeClosed = options.includeClosed ?? false;
   const prStateCache = new Map<string, PrState>();
 
@@ -814,7 +821,7 @@ export async function cleanupMergedWorktrees(
       const decision = await isSafeToRemove(
         repoPath,
         branchName,
-        mainBranch,
+        remoteMainRef,
         prStateCache,
         includeClosed,
         remote
