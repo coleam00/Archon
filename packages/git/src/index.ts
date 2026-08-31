@@ -60,6 +60,7 @@ export {
   listChildRepos,
   syncWorkspace,
   cloneRepository,
+  validateCloneUrl,
   syncRepository,
   addSafeDirectory,
 } from './repo';

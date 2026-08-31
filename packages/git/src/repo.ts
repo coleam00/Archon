@@ -382,27 +382,29 @@ export interface CloneRepositoryOptions {
 const ENV_CREDENTIAL_HELPER =
   '!f() { test "$1" = get || exit 0; printf \'%s\\n\' "username=$ARCHON_GIT_USERNAME" "password=$ARCHON_GIT_PASSWORD"; }; f';
 
-function parseHttpCloneUrl(url: string): URL | null | { error: string } {
-  if (!/^\s*https?:/i.test(url)) return null;
-  if (url.includes('\\')) return { error: 'Invalid HTTP(S) repository URL' };
+export function validateCloneUrl(
+  url: string
+): { ok: true; url: string; httpUrl: URL | null } | { ok: false; error: string } {
+  if (!/^\s*https?:/i.test(url)) return { ok: true, url, httpUrl: null };
+  if (url.includes('\\')) return { ok: false, error: 'Invalid HTTP(S) repository URL' };
 
   let parsed: URL;
   try {
     parsed = new URL(url);
   } catch {
-    return { error: 'Invalid HTTP(S) repository URL' };
+    return { ok: false, error: 'Invalid HTTP(S) repository URL' };
   }
 
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    return { error: 'Invalid HTTP(S) repository URL' };
+    return { ok: false, error: 'Invalid HTTP(S) repository URL' };
   }
   if (parsed.username || parsed.password) {
-    return { error: 'Repository URL must not include credentials' };
+    return { ok: false, error: 'Repository URL must not include credentials' };
   }
   if (parsed.search || parsed.hash) {
-    return { error: 'Invalid HTTP(S) repository URL' };
+    return { ok: false, error: 'Invalid HTTP(S) repository URL' };
   }
-  return parsed;
+  return { ok: true, url: parsed.href, httpUrl: parsed };
 }
 
 function sanitizeCloneError(error: unknown, credentials?: CloneCredentials): string {
@@ -422,17 +424,18 @@ export async function cloneRepository(
   targetPath: RepoPath,
   options?: CloneRepositoryOptions
 ): Promise<GitResult<void>> {
-  const parsedUrl = parseHttpCloneUrl(url);
-  if (parsedUrl && 'error' in parsedUrl) {
-    return { ok: false, error: { code: 'unknown', message: parsedUrl.error } };
+  const validatedUrl = validateCloneUrl(url);
+  if (!validatedUrl.ok) {
+    return { ok: false, error: { code: 'unknown', message: validatedUrl.error } };
   }
+  const parsedUrl = validatedUrl.httpUrl;
   if (options?.credentials && !parsedUrl) {
     return {
       ok: false,
       error: { code: 'unknown', message: 'Authenticated clones require an HTTP(S) repository URL' },
     };
   }
-  const cloneUrl = parsedUrl?.href ?? url;
+  const cloneUrl = validatedUrl.url;
 
   try {
     const args = ['clone', cloneUrl, targetPath];

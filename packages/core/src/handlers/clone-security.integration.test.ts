@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
-import { mkdir, mkdtemp, readFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -98,6 +98,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  mockCreateCodebase.mockClear();
   for (const method of ['fatal', 'error', 'warn', 'info', 'debug', 'trace'] as const) {
     mockLogger[method].mockClear();
   }
@@ -165,4 +166,53 @@ describe('core clone child security boundary', () => {
       expect(JSON.stringify(retainedLogs)).not.toContain(credential);
     }
   );
+
+  for (const { name, url, credential } of [
+    {
+      name: 'query credentials',
+      url: 'https://example.test/owner/repo.git?access_token=query-core-secret-789',
+      credential: 'query-core-secret-789',
+    },
+    {
+      name: 'fragment credentials',
+      url: 'https://example.test/owner/repo.git#access_token=fragment-core-secret-789',
+      credential: 'fragment-core-secret-789',
+    },
+    {
+      name: 'backslash userinfo',
+      url: 'https://backslash-core-secret-789\\@example.test/owner/repo.git',
+      credential: 'backslash-core-secret-789',
+    },
+  ]) {
+    test.skipIf(process.platform === 'win32')(
+      `rejects ${name} before the core clone route has any side effect`,
+      async () => {
+        const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-core-clone-reject-')));
+        workspaceRoot = join(root, 'workspaces');
+        const fixture = await createRecordingGitFixture(root);
+
+        const error = await fixture
+          .run(() => cloneRepository(url))
+          .catch(reason => reason as Error);
+
+        expect(error).toBeInstanceOf(Error);
+        expect(error.message).toBe('Failed to clone repository: Invalid HTTP(S) repository URL');
+        expect(error.message).not.toContain(credential);
+        await expect(access(workspaceRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+        expect(await fixture.readInvocations()).toEqual([]);
+        expect(mockCreateCodebase).not.toHaveBeenCalled();
+
+        const retainedLogs = [
+          mockLogger.fatal,
+          mockLogger.error,
+          mockLogger.warn,
+          mockLogger.info,
+          mockLogger.debug,
+          mockLogger.trace,
+        ].flatMap(method => method.mock.calls);
+        expect(retainedLogs).toEqual([]);
+        expect(JSON.stringify(retainedLogs)).not.toContain(credential);
+      }
+    );
+  }
 });

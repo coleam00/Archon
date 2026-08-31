@@ -9,6 +9,7 @@ import {
   cloneRepository as cloneGitRepository,
   execFileAsync,
   toRepoPath,
+  validateCloneUrl,
   type CloneCredentials,
 } from '@archon/git';
 import { findCodebaseForCheckoutPath } from '../services/codebase-checkout-resolver';
@@ -346,6 +347,12 @@ function normalizeRepoUrl(rawUrl: string): {
  * to avoid wrong owner/repo naming. See #383 for broader rethink.
  */
 export async function cloneRepository(repoUrl: string): Promise<RegisterResult> {
+  const validatedUrl = validateCloneUrl(repoUrl);
+  if (!validatedUrl.ok) {
+    throw new Error(`Failed to clone repository: ${validatedUrl.error}`);
+  }
+  repoUrl = validatedUrl.url;
+
   // Local paths should be registered (symlink), not cloned (copied)
   if (repoUrl.startsWith('/') || repoUrl.startsWith('~') || repoUrl.startsWith('.')) {
     const resolvedPath = repoUrl.startsWith('~') ? expandTilde(repoUrl) : resolve(repoUrl);
