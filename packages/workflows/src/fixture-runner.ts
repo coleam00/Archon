@@ -11,6 +11,8 @@
  *     reached: [review__docs]    # nodes that must complete or be stubbed, under any expect
  *     inputs:                    # caller-supplied declared-input values
  *       branch: "task-123"
+ *     resolved-text-contains:    # fragments that must appear in a reached node's resolved text
+ *       implement: "task-123"
  *   exec-code: false             # execute script/bash nodes instead of stubbing
  *
  * Every remaining key is a node-id → stub-output entry, exactly what
@@ -40,6 +42,7 @@ import {
 import type { WorkflowWithSource } from './schemas/workflow';
 import type { WorkflowConfig } from './deps';
 import type { ResolvedAiProfile } from './model-validation';
+import { resolveTopLevelInputs } from './utils/workflow-requirements';
 import {
   captureWorkflowSource,
   capturedSourceRoots,
@@ -61,6 +64,7 @@ export const fixtureDeclarationSchema = z
     'fail-node': z.string().optional(),
     reached: z.array(z.string()).optional(),
     inputs: z.record(z.string(), z.string()).optional(),
+    'resolved-text-contains': z.record(z.string(), z.string()).optional(),
   })
   .refine(decl => decl.expect !== 'failed' || decl['fail-node'] !== undefined, {
     message: "fail-node is required when expect is 'failed'",
@@ -559,13 +563,14 @@ async function checkFixture(
   };
   try {
     const execCode = parsed.execCode;
+    const inputs = resolveTopLevelInputs(ws.workflow, parsed.declaration.inputs);
     const run = (workspace: string): Promise<DryRunResult> =>
       dryRunWorkflow({
         workflow: ws.workflow,
         userMessage: '',
         cwd: options.cwd,
         stubs: parsed.stubs,
-        ...(parsed.declaration.inputs ? { inputs: parsed.declaration.inputs } : {}),
+        ...(inputs ? { inputs } : {}),
         execCode,
         execWorkspace: workspace,
         sourceRoots: captured,
@@ -598,6 +603,24 @@ async function checkFixture(
       );
       if (missingReached.length > 0) {
         failureReason = `required nodes did not complete: ${missingReached.join(', ')}`;
+      }
+    }
+    if (failureReason === undefined && parsed.declaration['resolved-text-contains'] !== undefined) {
+      for (const [nodeId, expectedText] of Object.entries(
+        parsed.declaration['resolved-text-contains']
+      )) {
+        const traceEntries = result.trace.filter(
+          entry =>
+            entry.nodeId === nodeId && (entry.state === 'completed' || entry.state === 'stubbed')
+        );
+        if (traceEntries.length === 0) {
+          failureReason = `expected resolved text for node '${nodeId}', but it did not complete`;
+          break;
+        }
+        if (!traceEntries.some(entry => entry.resolvedText?.includes(expectedText) === true)) {
+          failureReason = `expected node '${nodeId}' resolved text to contain ${JSON.stringify(expectedText)}`;
+          break;
+        }
       }
     }
     // A `trigger_rule: all_done` join tolerates its own missing stub (#2869) — it never

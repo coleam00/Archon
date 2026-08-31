@@ -34,6 +34,8 @@ deliver__classify:
 deliver__resolve-scope: '{"errors":"false"}'
 fixture:
   expect: completed
+  resolved-text-contains:
+    triage__triage: "target):\n\n\n\nThe operator's request"
 exec-code: true
 triage__assert-intact: '{"intact":"true"}'
 deliver__gate-ready: '{"gate":"ready"}'

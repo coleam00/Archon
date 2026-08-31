@@ -427,6 +427,63 @@ describe('runFixtures', () => {
     expect(report.passed).toBe(1);
   });
 
+  it("rejects fixture inputs that the workflow doesn't declare", async () => {
+    const { cwd } = writeTempProject({
+      workflowYaml:
+        'name: test-wf\ndescription: test\ninputs:\n  branch:\n    default: main\nnodes:\n' +
+        '  - id: node-a\n    prompt: branch=$INPUTS.branch\n',
+      body: ['fixture:', '  inputs:', '    typo: task-42', 'node-a: "stub"'].join('\n'),
+    });
+    const report = await runFixtures({
+      workflows: [workflowsOnDisk(cwd, ['test-wf'])[0]],
+      cwd,
+    });
+
+    expect(report.failed).toBe(1);
+    expect(report.results[0].failureReason).toContain("does not declare input 'typo'");
+  });
+
+  it('rejects a fixture that omits a required workflow input', async () => {
+    const { cwd } = writeTempProject({
+      workflowYaml:
+        'name: test-wf\ndescription: test\ninputs:\n  branch:\n    required: true\nnodes:\n' +
+        '  - id: node-a\n    prompt: branch=$INPUTS.branch\n',
+      body: 'node-a: "stub"',
+    });
+    const report = await runFixtures({
+      workflows: [workflowsOnDisk(cwd, ['test-wf'])[0]],
+      cwd,
+    });
+
+    expect(report.failed).toBe(1);
+    expect(report.results[0].failureReason).toContain("requires input 'branch'");
+  });
+
+  it('fails when a node prompt omits the declared resolved-text fragment', async () => {
+    const { cwd } = writeTempProject({
+      workflowYaml:
+        'name: test-wf\ndescription: test\ninputs:\n  target:\n    default: ""\nnodes:\n' +
+        '  - id: node-a\n    command: bind-test\n    with:\n      target: "$INPUTS.target"\n',
+      body: [
+        'fixture:',
+        '  resolved-text-contains:',
+        '    node-a: "target=issue #3031"',
+        'node-a: "stub"',
+      ].join('\n'),
+    });
+    mkdirSync(join(cwd, '.archon', 'commands'), { recursive: true });
+    writeFileSync(join(cwd, '.archon', 'commands', 'bind-test.md'), 'target=$INPUTS.target');
+    const report = await runFixtures({
+      workflows: [workflowsOnDisk(cwd, ['test-wf'])[0]],
+      cwd,
+    });
+
+    expect(report.failed).toBe(1);
+    expect(report.results[0].failureReason).toBe(
+      'expected node \'node-a\' resolved text to contain "target=issue #3031"'
+    );
+  });
+
   it('reports a malformed fixture as a failure, not a crash', async () => {
     const { cwd } = writeTempProject({ body: ['fixture:', '  expect: bogus'].join('\n') });
     const report = await runFixtures({

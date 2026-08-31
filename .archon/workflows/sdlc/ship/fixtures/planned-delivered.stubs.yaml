@@ -37,6 +37,8 @@ fixture:
   expect: completed
   inputs:
     target: "issue #3031"
+  resolved-text-contains:
+    triage__triage: "target):\n\nissue #3031\n\nThe operator's request"
 exec-code: true
 triage__assert-intact: '{"intact":"true"}'
 planned__assert-intact: '{"intact":"true"}'
