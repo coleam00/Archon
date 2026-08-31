@@ -4,14 +4,15 @@
  * Note: These tests focus on argument parsing logic.
  * Full integration tests would require mocking the database and commands.
  */
-import { describe, it, expect, beforeAll } from 'bun:test';
+import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { parseArgs } from 'util';
 import { cliArgOptions } from './args';
 import * as git from '@archon/git';
+import { SqliteAdapter } from '@archon/core/db/adapters/sqlite';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -1046,6 +1047,27 @@ describe('main catch --json error envelope', () => {
 });
 
 describe('pre-dispatch gates --json error envelope', () => {
+  let outsideGitRoot = '';
+  let outsideGitCwd: string;
+  let outsideGitDefaultHome: string;
+  let outsideGitArchonHome: string;
+
+  afterAll(async () => {
+    if (outsideGitRoot) await removeTempTree(outsideGitRoot);
+  });
+
+  beforeAll(async () => {
+    outsideGitRoot = mkdtempSync(join(tmpdir(), 'archon-cli-no-git-'));
+    outsideGitCwd = join(outsideGitRoot, 'project');
+    outsideGitDefaultHome = join(outsideGitRoot, 'default-home');
+    outsideGitArchonHome = join(outsideGitRoot, 'archon-home');
+    mkdirSync(outsideGitCwd);
+    mkdirSync(outsideGitDefaultHome);
+
+    const registry = new SqliteAdapter(join(outsideGitArchonHome, 'archon.db'));
+    await registry.close();
+  });
+
   it('emits { ok: false } on stdout when --cwd does not exist', () => {
     const { status, envelope } = spawnJsonError([
       'workflow',
@@ -1062,11 +1084,22 @@ describe('pre-dispatch gates --json error envelope', () => {
   });
 
   it('emits { ok: false } on stdout when outside a git repository', () => {
-    const { status, envelope } = spawnJsonError(['workflow', 'list', '--json', '--cwd', tmpdir()]);
+    const { status, envelope } = spawnJsonError(
+      ['workflow', 'list', '--json', '--cwd', outsideGitCwd],
+      {
+        ARCHON_HOME: outsideGitArchonHome,
+        DATABASE_URL: '',
+        ARCHON_DOCKER: '',
+        WORKSPACE_PATH: '',
+        HOME: outsideGitDefaultHome,
+        USERPROFILE: outsideGitDefaultHome,
+      }
+    );
 
     expect(status).toBe(1);
     expect(envelope).not.toThrow();
     expect(envelope()).toMatchObject({ ok: false });
+    expect(existsSync(join(outsideGitDefaultHome, '.archon', 'archon.db'))).toBe(false);
   });
 
   it('emits { ok: false } on stdout for an unknown command instead of usage text', () => {
