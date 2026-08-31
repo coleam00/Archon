@@ -51,8 +51,11 @@ Most requests land here. The short version; details in the running reference:
    archon workflow run <workflow> --branch <branch-name> "<the work, as a clear message>" --detach
    ```
 
-4. Find the run id and monitor: `archon workflow runs --json`, then
-   `archon workflow get <run-id> --json`.
+4. Find the run id (`archon workflow runs --json`), then arm
+   `archon workflow wait <run-id> --json` as a background task of your harness —
+   it blocks until the run ends or needs a human decision, waking you at exactly
+   the right moment. `archon workflow get <run-id> --json` is for on-demand state,
+   not a polling loop.
 5. When a run pauses at a gate, resolve it deliberately:
    see `manage-run/manage-runs.md`.
 

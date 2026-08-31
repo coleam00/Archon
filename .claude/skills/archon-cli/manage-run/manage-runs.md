@@ -51,6 +51,7 @@ For reusable alternate setups, prefer a config layer instead of long flag lists
 | One run with per-node detail | `archon workflow get <run-id> --verbose --json` |
 | One run with raw event rows | `archon workflow get <run-id> --verbose --events --json` |
 | Active runs only | `archon workflow status --json` |
+| Block until the run ends or needs a human decision | `archon workflow wait <run-id> --json` |
 | Resolve a gate with any declared decision | `archon workflow respond <run-id> <decision> [text]` |
 | Approve (default vocabulary) | `archon workflow approve <run-id> [text]` |
 | Reject (default vocabulary) | `archon workflow reject <run-id> "<reason>"` |
