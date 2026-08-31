@@ -22,6 +22,13 @@ mock.module('@archon/paths', () => ({
 import * as resolver from './binary-resolver';
 
 const CODEX_BINARY_NAME = process.platform === 'win32' ? 'codex.exe' : 'codex';
+const VENDOR_BINARY_PATH = join('/tmp/test-archon-home', 'vendor', 'codex', CODEX_BINARY_NAME);
+const FIRST_AUTODETECT_PATH =
+  process.platform === 'win32'
+    ? process.env.APPDATA
+      ? join(process.env.APPDATA, 'npm', 'codex.cmd')
+      : join(homedir(), '.npm-global', 'codex.cmd')
+    : join(homedir(), '.npm-global', 'bin', 'codex');
 
 async function rejectionMessage(promise: Promise<unknown>): Promise<string> {
   try {
@@ -34,14 +41,11 @@ async function rejectionMessage(promise: Promise<unknown>): Promise<string> {
 
 describe('resolveCodexBinaryPath (binary mode)', () => {
   const originalEnv = process.env.CODEX_BIN_PATH;
-  let fileExistsSpy: ReturnType<typeof spyOn> | undefined;
   let pathKindSpy: ReturnType<typeof spyOn> | undefined;
 
   beforeEach(() => {
     delete process.env.CODEX_BIN_PATH;
-    fileExistsSpy?.mockRestore();
     pathKindSpy?.mockRestore();
-    fileExistsSpy = undefined;
     pathKindSpy = undefined;
     mockLogger.info.mockClear();
   });
@@ -52,7 +56,6 @@ describe('resolveCodexBinaryPath (binary mode)', () => {
     } else {
       delete process.env.CODEX_BIN_PATH;
     }
-    fileExistsSpy?.mockRestore();
     pathKindSpy?.mockRestore();
   });
 
@@ -67,7 +70,6 @@ describe('resolveCodexBinaryPath (binary mode)', () => {
   test('throws when CODEX_BIN_PATH is set but file does not exist', async () => {
     process.env.CODEX_BIN_PATH = '/nonexistent/codex';
     pathKindSpy = spyOn(resolver, 'pathKind').mockReturnValue('missing');
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockReturnValue(false);
 
     expect(await rejectionMessage(resolver.resolveCodexBinaryPath())).toBe(
       'CODEX_BIN_PATH is set to "/nonexistent/codex" but the file does not exist.\n' +
@@ -75,27 +77,42 @@ describe('resolveCodexBinaryPath (binary mode)', () => {
     );
   });
 
-  test('names the vendor binary when CODEX_BIN_PATH is stale without using it', async () => {
-    process.env.CODEX_BIN_PATH = '/stale/codex';
-    const candidate = join('/tmp/test-archon-home', 'vendor', 'codex', CODEX_BINARY_NAME);
-    pathKindSpy = spyOn(resolver, 'pathKind').mockReturnValue('missing');
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockImplementation(
-      (path: string) => path === candidate
-    );
+  test.each([
+    [
+      'CODEX_BIN_PATH',
+      'CODEX_BIN_PATH',
+      'Please verify the path points to the Codex CLI binary.',
+      true,
+    ],
+    [
+      'assistants.codex.codexBinaryPath',
+      'codexBinaryPath',
+      'Please verify the path in .archon/config.yaml points to the Codex CLI binary.',
+      false,
+    ],
+  ] as const)(
+    'names the vendor binary before autodetect when %s is stale without using it',
+    async (sourceLabel, removableSetting, instruction, usesEnv) => {
+      const stalePath = '/stale/codex';
+      if (usesEnv) process.env.CODEX_BIN_PATH = stalePath;
+      pathKindSpy = spyOn(resolver, 'pathKind').mockImplementation((path: string) =>
+        path === VENDOR_BINARY_PATH || path === FIRST_AUTODETECT_PATH ? 'file' : 'missing'
+      );
 
-    expect(await rejectionMessage(resolver.resolveCodexBinaryPath())).toBe(
-      'CODEX_BIN_PATH is set to "/stale/codex" but the file does not exist.\n' +
-        'Please verify the path points to the Codex CLI binary.\n\n' +
-        'A Codex binary was found at ' +
-        candidate +
-        '.\n' +
-        'Update CODEX_BIN_PATH to that path, or remove CODEX_BIN_PATH to let Archon detect it.'
-    );
-    expect(mockLogger.info).not.toHaveBeenCalledWith(
-      expect.objectContaining({ binaryPath: candidate }),
-      'codex.binary_resolved'
-    );
-  });
+      const configuredPath = usesEnv ? undefined : stalePath;
+      expect(await rejectionMessage(resolver.resolveCodexBinaryPath(configuredPath))).toBe(
+        `${sourceLabel} is set to "${stalePath}" but the file does not exist.\n` +
+          `${instruction}\n\n` +
+          `A Codex binary was found at ${VENDOR_BINARY_PATH}.\n` +
+          `Update ${sourceLabel} to that path, or remove ${removableSetting} to let Archon detect it.`
+      );
+      expect(pathKindSpy).toHaveBeenCalledWith(VENDOR_BINARY_PATH);
+      expect(mockLogger.info).not.toHaveBeenCalledWith(
+        expect.objectContaining({ binaryPath: VENDOR_BINARY_PATH }),
+        'codex.binary_resolved'
+      );
+    }
+  );
 
   test('uses config codexBinaryPath when file exists', async () => {
     pathKindSpy = spyOn(resolver, 'pathKind').mockReturnValue('file');
@@ -106,7 +123,6 @@ describe('resolveCodexBinaryPath (binary mode)', () => {
 
   test('throws when config codexBinaryPath file does not exist', async () => {
     pathKindSpy = spyOn(resolver, 'pathKind').mockReturnValue('missing');
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockReturnValue(false);
 
     expect(await rejectionMessage(resolver.resolveCodexBinaryPath('/nonexistent/codex'))).toBe(
       'assistants.codex.codexBinaryPath is set to "/nonexistent/codex" but the file does not exist.\n' +
@@ -114,27 +130,16 @@ describe('resolveCodexBinaryPath (binary mode)', () => {
     );
   });
 
-  test('names an autodetected binary when codexBinaryPath is stale without using it', async () => {
-    const candidate =
-      process.platform === 'win32'
-        ? join(homedir(), '.npm-global', 'codex.cmd')
-        : join(homedir(), '.npm-global', 'bin', 'codex');
-    pathKindSpy = spyOn(resolver, 'pathKind').mockReturnValue('missing');
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockImplementation(
-      (path: string) => path === candidate
-    );
+  test('skips directory candidates when diagnosing a stale pin', async () => {
+    const stalePath = '/stale/config/codex';
+    pathKindSpy = spyOn(resolver, 'pathKind').mockImplementation((path: string) => {
+      if (path === VENDOR_BINARY_PATH) return 'directory';
+      if (path === FIRST_AUTODETECT_PATH) return 'file';
+      return 'missing';
+    });
 
-    expect(await rejectionMessage(resolver.resolveCodexBinaryPath('/stale/config/codex'))).toBe(
-      'assistants.codex.codexBinaryPath is set to "/stale/config/codex" but the file does not exist.\n' +
-        'Please verify the path in .archon/config.yaml points to the Codex CLI binary.\n\n' +
-        'A Codex binary was found at ' +
-        candidate +
-        '.\n' +
-        'Update assistants.codex.codexBinaryPath to that path, or remove codexBinaryPath to let Archon detect it.'
-    );
-    expect(mockLogger.info).not.toHaveBeenCalledWith(
-      expect.objectContaining({ binaryPath: candidate }),
-      'codex.binary_resolved'
+    expect(await rejectionMessage(resolver.resolveCodexBinaryPath(stalePath))).toContain(
+      `A Codex binary was found at ${FIRST_AUTODETECT_PATH}.`
     );
   });
 
@@ -171,7 +176,6 @@ describe('resolveCodexBinaryPath (binary mode)', () => {
     pathKindSpy = spyOn(resolver, 'pathKind').mockImplementation((path: string) =>
       path === directory ? 'directory' : 'missing'
     );
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockReturnValue(false);
 
     expect(await rejectionMessage(resolver.resolveCodexBinaryPath())).toBe(
       `CODEX_BIN_PATH is set to "${directory}", which is a directory, but it does not contain ${CODEX_BINARY_NAME}.\n` +
@@ -184,7 +188,6 @@ describe('resolveCodexBinaryPath (binary mode)', () => {
     pathKindSpy = spyOn(resolver, 'pathKind').mockImplementation((path: string) =>
       path === directory ? 'directory' : 'missing'
     );
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockReturnValue(false);
 
     expect(await rejectionMessage(resolver.resolveCodexBinaryPath(directory))).toBe(
       `assistants.codex.codexBinaryPath is set to "${directory}", which is a directory, but it does not contain ${CODEX_BINARY_NAME}.\n` +
@@ -201,9 +204,9 @@ describe('resolveCodexBinaryPath (binary mode)', () => {
   });
 
   test('checks vendor directory when no env or config path', async () => {
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockImplementation((path: string) => {
+    pathKindSpy = spyOn(resolver, 'pathKind').mockImplementation((path: string) => {
       const normalized = path.replace(/\\/g, '/');
-      return normalized.includes('vendor/codex');
+      return normalized.includes('vendor/codex') ? 'file' : 'missing';
     });
 
     const result = await resolver.resolveCodexBinaryPath();
@@ -215,8 +218,8 @@ describe('resolveCodexBinaryPath (binary mode)', () => {
   test('autodetects npm global install at ~/.npm-global/bin/codex (POSIX)', async () => {
     if (process.platform === 'win32') return; // POSIX-only probe
     const expected = `${homedir()}/.npm-global/bin/codex`;
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockImplementation(
-      (path: string) => path === expected
+    pathKindSpy = spyOn(resolver, 'pathKind').mockImplementation((path: string) =>
+      path === expected ? 'file' : 'missing'
     );
 
     const result = await resolver.resolveCodexBinaryPath();
@@ -231,8 +234,8 @@ describe('resolveCodexBinaryPath (binary mode)', () => {
     if (process.platform !== 'win32') return; // Windows-only probe
     const appData = process.env.APPDATA ?? 'C:\\Users\\test\\AppData\\Roaming';
     const expected = `${appData}\\npm\\codex.cmd`;
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockImplementation(
-      (path: string) => path === expected
+    pathKindSpy = spyOn(resolver, 'pathKind').mockImplementation((path: string) =>
+      path === expected ? 'file' : 'missing'
     );
 
     const result = await resolver.resolveCodexBinaryPath();
@@ -249,7 +252,6 @@ describe('resolveCodexBinaryPath (binary mode)', () => {
     // env-over-autodetect tests above so the four-tier precedence
     // (env → config → vendor → autodetect) is fully covered.
     pathKindSpy = spyOn(resolver, 'pathKind').mockReturnValue('file');
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockReturnValue(true);
 
     const result = await resolver.resolveCodexBinaryPath('/explicit/config/codex');
     expect(result).toBe('/explicit/config/codex');
@@ -261,8 +263,8 @@ describe('resolveCodexBinaryPath (binary mode)', () => {
       // hosts this test has nothing to assert (the probe list excludes it).
       return;
     }
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockImplementation(
-      (path: string) => path === '/opt/homebrew/bin/codex'
+    pathKindSpy = spyOn(resolver, 'pathKind').mockImplementation((path: string) =>
+      path === '/opt/homebrew/bin/codex' ? 'file' : 'missing'
     );
 
     const result = await resolver.resolveCodexBinaryPath();
@@ -278,8 +280,8 @@ describe('resolveCodexBinaryPath (binary mode)', () => {
       // /usr/local/bin is not probed on Windows.
       return;
     }
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockImplementation(
-      (path: string) => path === '/usr/local/bin/codex'
+    pathKindSpy = spyOn(resolver, 'pathKind').mockImplementation((path: string) =>
+      path === '/usr/local/bin/codex' ? 'file' : 'missing'
     );
 
     const result = await resolver.resolveCodexBinaryPath();
@@ -288,9 +290,11 @@ describe('resolveCodexBinaryPath (binary mode)', () => {
 
   test('vendor directory takes precedence over autodetect', async () => {
     // Both vendor and npm-global would match; vendor must win (lower tier #).
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockImplementation((path: string) => {
+    pathKindSpy = spyOn(resolver, 'pathKind').mockImplementation((path: string) => {
       const normalized = path.replace(/\\/g, '/');
-      return normalized.includes('vendor/codex') || normalized.includes('.npm-global');
+      return normalized.includes('vendor/codex') || normalized.includes('.npm-global')
+        ? 'file'
+        : 'missing';
     });
 
     const result = await resolver.resolveCodexBinaryPath();
@@ -303,7 +307,13 @@ describe('resolveCodexBinaryPath (binary mode)', () => {
 
   test('throws with install instructions when binary not found anywhere', async () => {
     // Env unset, config unset, vendor dir empty, every autodetect path missing.
-    fileExistsSpy = spyOn(resolver, 'fileExists').mockReturnValue(false);
+    pathKindSpy = spyOn(resolver, 'pathKind').mockReturnValue('missing');
+
+    await expect(resolver.resolveCodexBinaryPath()).rejects.toThrow('Codex CLI binary not found');
+  });
+
+  test('does not resolve lower-tier directories as binaries', async () => {
+    pathKindSpy = spyOn(resolver, 'pathKind').mockReturnValue('directory');
 
     await expect(resolver.resolveCodexBinaryPath()).rejects.toThrow('Codex CLI binary not found');
   });

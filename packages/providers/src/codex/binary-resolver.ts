@@ -87,13 +87,13 @@ function findLowerTierBinary(): CodexBinaryResolution | undefined {
   const binaryName = getVendorBinaryName();
   if (binaryName) {
     const vendorBinaryPath = join(getArchonHome(), CODEX_VENDOR_DIR, binaryName);
-    if (fileExists(vendorBinaryPath)) {
+    if (pathKind(vendorBinaryPath) === 'file') {
       return { path: vendorBinaryPath, source: 'vendor' };
     }
   }
 
   for (const probePath of getAutodetectPaths()) {
-    if (fileExists(probePath)) {
+    if (pathKind(probePath) === 'file') {
       return { path: probePath, source: 'autodetect' };
     }
   }
