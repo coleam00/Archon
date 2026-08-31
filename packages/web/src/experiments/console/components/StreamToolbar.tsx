@@ -1,26 +1,47 @@
 import type { ReactElement, ReactNode } from 'react';
 
-export type DetailView = 'log' | 'graph' | 'artifacts';
+/**
+ * View modes supported by the run details and chat toolbar.
+ */
+export type DetailView = 'log' | 'chat' | 'graph' | 'artifacts';
 
+/**
+ * Filter option representing a distinct DAG node execution step.
+ */
 export interface NodeFilterOption {
+  /** Unique ID of the node. */
   id: string;
+  /** Human-readable node name. */
   name: string;
 }
 
+/**
+ * Properties for the StreamToolbar component.
+ */
 interface StreamToolbarProps {
+  /** Active view mode. */
   view: DetailView;
+  /** Callback fired when switching view modes. */
   onChangeView: (next: DetailView) => void;
+  /** Whether tool calls are currently visible. */
   showToolCalls: boolean;
+  /** Callback to toggle tool calls visibility. */
   onToggleToolCalls: (next: boolean) => void;
+  /** Whether system messages are currently visible. */
   showSystem: boolean;
+  /** Callback to toggle system messages visibility. */
   onToggleSystem: (next: boolean) => void;
+  /** Count of tool calls in the active run/chat. */
   toolCallCount: number;
+  /** Count of messages in the active run/chat. */
   messageCount: number;
+  /** Optional count of generated artifact files. */
   artifactCount: number | null;
   /** Distinct nodes in the run; empty hides the node filter. */
   nodeOptions: NodeFilterOption[];
-  /** `'all'` or a nodeId. */
+  /** Filter selection: `'all'` or a specific nodeId. */
   selectedNodeId: string;
+  /** Callback fired when selecting a node filter option. */
   onSelectNode: (next: string) => void;
 }
 
@@ -133,6 +154,13 @@ export function StreamToolbar({
           }}
         />
         <Tab
+          label="Chat"
+          active={view === 'chat'}
+          onClick={() => {
+            onChangeView('chat');
+          }}
+        />
+        <Tab
           label="Graph"
           active={view === 'graph'}
           onClick={() => {
@@ -149,15 +177,16 @@ export function StreamToolbar({
         />
       </div>
 
-      {isLog ? (
+      {isLog || view === 'chat' ? (
         <span className="ml-3 font-mono text-[12px] text-text-tertiary">
-          {messageCount.toString()} messages · {toolCallCount.toString()} tool calls
+          {messageCount.toString()} messages
+          {isLog ? ` · ${toolCallCount.toString()} tool calls` : ''}
         </span>
       ) : null}
 
-      {isLog ? (
+      {isLog || view === 'chat' ? (
         <div className="ml-auto flex items-center gap-[18px] font-mono text-[12px]">
-          {nodeOptions.length > 0 ? (
+          {isLog && nodeOptions.length > 0 ? (
             <label className="flex items-center gap-1.5 text-text-secondary">
               <span className="text-text-tertiary">Node</span>
               <SelectShell>

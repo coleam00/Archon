@@ -10,6 +10,13 @@ import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
 import type { WebAdapter } from '../adapters/web';
 import { validationErrorHook } from './openapi-defaults';
+mock.module('../auth', () => ({
+  getAuth: () => null,
+  isWebAuthEnabled: () => false,
+  getSignupMode: () => 'disabled',
+  isApiGateEnabled: () => false,
+}));
+
 import {
   dashboardWorkflowRunSchema as apiDashboardWorkflowRunSchema,
   workflowRunSchema as apiWorkflowRunSchema,
@@ -299,22 +306,25 @@ mock.module('@archon/git', () => ({
   toWorktreePath: (p: string) => p,
 }));
 
+const mockGetOrCreateConversation = mock(async () => ({
+  id: 'internal-uuid-123',
+  platform_conversation_id: 'web-test-abc',
+  title: null,
+  created_at: new Date().toISOString(),
+  updated_at: new Date().toISOString(),
+  platform_type: 'web',
+  deleted_at: null,
+  codebase_id: null,
+  ai_assistant_type: 'claude',
+}));
+
 mock.module('@archon/core/db/conversations', () => ({
   findConversationByPlatformId: mockFindConversationByPlatformId,
   listConversations: mock(async () => []),
-  getOrCreateConversation: mock(async () => ({
-    id: 'internal-uuid-123',
-    platform_conversation_id: 'web-test-abc',
-    title: null,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-    platform_type: 'web',
-    deleted_at: null,
-    codebase_id: null,
-    ai_assistant_type: 'claude',
-  })),
+  getOrCreateConversation: mockGetOrCreateConversation,
   softDeleteConversation: mock(async () => {}),
   updateConversationTitle: mock(async () => {}),
+  updateConversation: mock(async () => ({})),
   getConversationById: mockGetConversationById,
 }));
 
@@ -579,6 +589,24 @@ describe('POST /api/workflows/:name/run', () => {
     const body = (await response.json()) as { accepted: boolean; status: string };
     expect(body.accepted).toBe(true);
     expect(body.status).toBe('started');
+  });
+
+  test('fails closed with 500 when conversation lookup and creation both fail', async () => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => null);
+    mockGetOrCreateConversation.mockImplementationOnce(async () => {
+      throw new Error('DB outage');
+    });
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/deploy/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationId: 'web-test-abc', message: 'Deploy to staging' }),
+    });
+    expect(response.status).toBe(500);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('Failed to initialize conversation');
+    expect(mockHandleMessage).not.toHaveBeenCalled();
   });
 
   test('sends /workflow run <name> <message> to orchestrator', async () => {

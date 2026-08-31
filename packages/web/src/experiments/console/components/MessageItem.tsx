@@ -7,11 +7,16 @@ import { AgentAvatar } from './AgentAvatar';
 import { formatClock } from '../lib/format';
 import type { Message } from '../primitives/message';
 
+/**
+ * Properties for the MessageItem component.
+ */
 interface MessageItemProps {
+  /** Message payload to render. */
   message: Message;
   /**
-   * `chat` (default) — Direction-B chat card. `log` — run-log styling
-   * (design v3 .log-agent-card): violet left accent + mono body, no avatar.
+   * Layout styling variant:
+   * `chat` (default) — Direction-B chat card.
+   * `log` — run-log styling (design v3 .log-agent-card): violet left accent + mono body, no avatar.
    */
   variant?: 'chat' | 'log';
 }
@@ -114,7 +119,7 @@ export function MessageItem({ message, variant = 'chat' }: MessageItemProps): Re
           </time>
         </header>
         <div
-          className="max-w-[76%] self-end rounded-[14px_14px_4px_14px] px-[17px] py-[13px] text-[14.5px] leading-[1.5] break-words"
+          className="max-w-[76%] self-end rounded-[14px_14px_4px_14px] px-[17px] py-[13px] text-[14.5px] leading-[1.5] break-words whitespace-pre-wrap"
           style={{
             background: 'color-mix(in oklch, var(--brand-magenta), transparent 94%)',
             border: '1px solid color-mix(in oklch, var(--brand-magenta), transparent 50%)',

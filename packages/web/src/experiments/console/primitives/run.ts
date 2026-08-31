@@ -1,6 +1,9 @@
 import type { RunStatus } from '../lib/run-status';
 import type { components } from '@/lib/api.generated';
 
+/**
+ * Origin platform where a workflow run was triggered.
+ */
 export type RunOrigin = 'web' | 'cli' | 'slack' | 'telegram' | 'discord' | 'github' | 'unknown';
 export type RunOutcome = components['schemas']['WorkflowRunOutcome'];
 type WorkflowRunMetadata = components['schemas']['WorkflowRunMetadata'];
@@ -38,6 +41,8 @@ export interface Run {
    * runMessageConversationId() for how CLI vs. web runs are picked (#2048).
    */
   workerPlatformId: string | null;
+  /** Platform id of the parent orchestrator conversation that spawned this run. */
+  parentPlatformId?: string | null;
   workflow: string;
   origin: RunOrigin;
   status: RunStatus;
@@ -99,6 +104,8 @@ interface RawWorkflowRun {
   conversation_platform_id?: string | null;
   /** Worker conversation platform id — getRun response only, web runs only. */
   worker_platform_id?: string | null;
+  /** Parent orchestrator conversation platform id — getRun response only. */
+  parent_platform_id?: string | null;
   status: string;
   outcome?: RunOutcome;
   started_at: string;
@@ -236,6 +243,7 @@ export function toRun(raw: RawWorkflowRun): Run {
     conversationId: raw.conversation_id ?? null,
     conversationPlatformId: raw.conversation_platform_id ?? null,
     workerPlatformId: raw.worker_platform_id ?? null,
+    parentPlatformId: raw.parent_platform_id ?? null,
     workflow: raw.workflow_name,
     origin: normalizeOrigin(raw.platform_type),
     status: normalizeStatus(raw.status),

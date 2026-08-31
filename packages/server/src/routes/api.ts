@@ -627,6 +627,7 @@ const updateConversationRoute = createRoute({
       description: 'Updated',
     },
     400: jsonError('Bad request'),
+    403: jsonError('Forbidden'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -643,6 +644,7 @@ const deleteConversationRoute = createRoute({
       content: { 'application/json': { schema: successResponseSchema } },
       description: 'Deleted',
     },
+    403: jsonError('Forbidden'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -1591,7 +1593,7 @@ export function registerApiRoutes(
 ): void {
   function apiError(
     c: Context,
-    status: 400 | 401 | 404 | 422 | 500 | 503,
+    status: 400 | 401 | 403 | 404 | 422 | 500 | 503,
     message: string,
     detail?: string
   ): Response {
@@ -2791,10 +2793,14 @@ export function registerApiRoutes(
   registerOpenApiRoute(updateConversationRoute, async c => {
     const platformId = c.req.param('id') ?? '';
     const { title } = getValidatedBody(c, updateConversationBodySchema);
+    const userId = await resolveWebUserId(c);
     try {
       const conv = await conversationDb.findConversationByPlatformId(platformId);
       if (!conv) {
         return apiError(c, 404, 'Conversation not found');
+      }
+      if (conv.user_id && userId && conv.user_id !== userId) {
+        return apiError(c, 403, 'Forbidden');
       }
       if (title !== undefined) {
         await conversationDb.updateConversationTitle(conv.id, title.slice(0, 255));
@@ -2812,10 +2818,14 @@ export function registerApiRoutes(
   // DELETE /api/conversations/:id - Soft delete
   registerOpenApiRoute(deleteConversationRoute, async c => {
     const platformId = c.req.param('id') ?? '';
+    const userId = await resolveWebUserId(c);
     try {
       const conv = await conversationDb.findConversationByPlatformId(platformId);
       if (!conv) {
         return apiError(c, 404, 'Conversation not found');
+      }
+      if (conv.user_id && userId && conv.user_id !== userId) {
+        return apiError(c, 403, 'Forbidden');
       }
       await conversationDb.softDeleteConversation(conv.id);
       return c.json({ success: true });
@@ -3553,7 +3563,32 @@ export function registerApiRoutes(
       } catch (e: unknown) {
         getLog().error({ err: e, conversationId }, 'conversation_lookup_failed');
       }
+      if (!conv) {
+        try {
+          conv = await conversationDb.getOrCreateConversation(
+            'web',
+            conversationId,
+            undefined,
+            undefined,
+            userId
+          );
+        } catch (e: unknown) {
+          getLog().error({ err: e, conversationId }, 'conversation_creation_failed');
+        }
+      }
+      if (!conv) {
+        return apiError(c, 500, 'Failed to initialize conversation for workflow execution');
+      }
       if (conv) {
+        if (!conv.hidden) {
+          try {
+            await conversationDb.updateConversation(conv.id, { hidden: true });
+            conv.hidden = true;
+          } catch (e: unknown) {
+            getLog().error({ err: e, conversationId: conv.id }, 'conversation_hide_failed');
+            throw e;
+          }
+        }
         try {
           const meta =
             savedFiles.length > 0

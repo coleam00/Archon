@@ -173,6 +173,7 @@ Click a workflow run in the console to open its execution detail page at
 - The full DAG graph with per-node status
 - Execution status and authored outcome as separate labels when an outcome exists
 - Step-by-step logs for each node
+- Interactive run chat tab linked to the orchestrator conversation
 - Artifacts produced by the workflow
 - Actions to resume, cancel, or abandon the run
 

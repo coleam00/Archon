@@ -7,10 +7,13 @@ import {
   useState,
   type ReactElement,
 } from 'react';
-import { useNavigate, useParams } from 'react-router';
+import { Link, useNavigate, useParams } from 'react-router';
 import { useKeymap, type Binding } from '../lib/keymap';
 import { RunDetailHeader } from '../components/RunDetailHeader';
 import { RunStream } from '../components/RunStream';
+import { ChatStream } from '../components/ChatStream';
+import { ChatComposer } from '../components/ChatComposer';
+import { WorkingIndicator } from '../components/WorkingIndicator';
 import { RunActionBar } from '../components/RunActionBar';
 import { StreamToolbar, type DetailView } from '../components/StreamToolbar';
 import { ApprovalContext } from '../components/ApprovalContext';
@@ -19,7 +22,7 @@ import { RunGraphPanel } from '../components/RunGraphPanel';
 import { ArtifactPanel } from '../components/ArtifactPanel';
 import { RunStartedLine, RunFinishedLine } from '../components/RunLifecycle';
 import { StreamContextProvider } from '../lib/stream-context';
-import { useRunStreamSSE } from '../lib/sse';
+import { useConversationSSE, useRunStreamSSE } from '../lib/sse';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
@@ -79,7 +82,10 @@ function writeToggle(key: string, value: boolean): void {
 function readView(): DetailView {
   try {
     const stored = localStorage.getItem(TOGGLE_KEYS.view);
-    return stored === 'graph' ? 'graph' : 'log';
+    if (stored === 'chat' || stored === 'graph' || stored === 'artifacts') {
+      return stored;
+    }
+    return 'log';
   } catch {
     return 'log';
   }
@@ -109,6 +115,51 @@ function writeNodeFilter(v: string): void {
   }
 }
 
+/**
+ * Resolves the parent orchestrator conversation platform ID for a workflow run
+ * using a priority chain (web dispatch parent platform IDs -> metadata platform IDs -> CLI fallback).
+ *
+ * @param run - Workflow run object or undefined
+ * @returns Resolved platform conversation ID, or null if no orchestrator conversation is linked
+ */
+export function resolveRunOrchestratorConversationId(
+  run:
+    | (Run & {
+        parentPlatformId?: string | null;
+        parent_platform_id?: string | null;
+        conversationPlatformId?: string | null;
+        conversation_platform_id?: string | null;
+        workerPlatformId?: string | null;
+        worker_platform_id?: string | null;
+        metadata?: Record<string, unknown> | null;
+      })
+    | undefined
+    | null
+): string | null {
+  if (!run) return null;
+  const meta = run.metadata;
+  const metaParent =
+    (meta?.parent_platform_id as string | undefined) ??
+    (meta?.parentPlatformId as string | undefined) ??
+    (meta?.dispatch_platform_id as string | undefined) ??
+    (meta?.dispatchPlatformId as string | undefined);
+
+  return (
+    run.parentPlatformId ??
+    run.parent_platform_id ??
+    metaParent ??
+    run.conversationPlatformId ??
+    run.conversation_platform_id ??
+    run.workerPlatformId ??
+    run.worker_platform_id ??
+    null
+  );
+}
+
+/**
+ * Run detail page presenting multi-tab inspectability across log timeline,
+ * scoped orchestrator chat, interactive DAG execution graph, and generated artifacts.
+ */
 export function RunDetailPage(): ReactElement {
   const { projectId, runId } = useParams<{ projectId: string; runId: string }>();
   const navigate = useNavigate();
@@ -116,9 +167,7 @@ export function RunDetailPage(): ReactElement {
   const [showToolCalls, setShowToolCalls] = useState<boolean>(() =>
     readToggle(TOGGLE_KEYS.toolCalls, true)
   );
-  const [showSystem, setShowSystem] = useState<boolean>(() =>
-    readToggle(TOGGLE_KEYS.system, false)
-  );
+  const [showSystem, setShowSystem] = useState<boolean>(() => readToggle(TOGGLE_KEYS.system, true));
   const [view, setView] = useState<DetailView>(() => readView());
   const [selectedNodeId, setSelectedNodeId] = useState<string>(() => readNodeFilter());
 
@@ -174,6 +223,84 @@ export function RunDetailPage(): ReactElement {
       conversationPlatformId !== null
         ? skill.listMessages(conversationPlatformId)
         : Promise.resolve([])
+  );
+
+  const resolvedOrchestratorConvId = useMemo(
+    () => resolveRunOrchestratorConversationId(detail?.run),
+    [detail?.run]
+  );
+  const [activeChatConvId, setActiveChatConvId] = useState<string | null>(null);
+  const [chatBusy, setChatBusy] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setActiveChatConvId(null);
+    setChatBusy(false);
+    setChatError(null);
+  }, [runId]);
+
+  const chatConvId = activeChatConvId ?? resolvedOrchestratorConvId;
+
+  useConversationSSE(
+    view === 'chat' ? chatConvId : null,
+    useCallback(
+      (locked?: boolean) => {
+        if (typeof locked === 'boolean') {
+          setChatBusy(locked);
+        }
+        if (chatConvId !== null) {
+          invalidate(K.messages(chatConvId));
+        }
+      },
+      [chatConvId]
+    )
+  );
+
+  const { data: chatMessages } = useEntity<Message[]>(
+    chatConvId !== null && view === 'chat' ? K.messages(chatConvId) : 'noop:no-chat-conv',
+    () => (chatConvId !== null ? skill.listMessages(chatConvId) : Promise.resolve([]))
+  );
+
+  const chatMessageList = useMemo(() => {
+    if (!chatMessages) return [];
+    return chatMessages;
+  }, [chatMessages]);
+
+  const handleStopChat = useCallback(async () => {
+    if (chatConvId === null) return;
+    setChatError(null);
+    try {
+      await skill.stopConversationRun(chatConvId);
+      setChatBusy(false);
+    } catch (err) {
+      console.error('Failed to stop orchestrator chat run:', err);
+      setChatError(err instanceof Error ? err.message : 'Failed to stop run. Please try again.');
+    }
+  }, [chatConvId]);
+
+  const onSendChat = useCallback(
+    async (text: string, files?: File[]): Promise<void> => {
+      if (chatBusy || projectId === undefined) return;
+      setChatBusy(true);
+      setChatError(null);
+      try {
+        let targetConvId = chatConvId;
+        if (targetConvId === null) {
+          const newConv = await skill.createConversation(projectId, text);
+          targetConvId = newConv.conversationId;
+          setActiveChatConvId(targetConvId);
+          invalidate(K.conversations(projectId));
+        } else {
+          await skill.sendMessage(targetConvId, text, files);
+        }
+        invalidate(K.messages(targetConvId));
+      } catch (err) {
+        console.error('Failed to send orchestrator chat message:', err);
+        setChatError(err instanceof Error ? err.message : 'Failed to send message');
+        setChatBusy(false);
+      }
+    },
+    [chatBusy, chatConvId, projectId]
   );
 
   // Live updates: subscribe to the conversation SSE stream. Events here
@@ -348,13 +475,20 @@ export function RunDetailPage(): ReactElement {
       },
       {
         keys: ['2'],
+        label: 'Chat tab',
+        run: (): void => {
+          setViewPersist('chat');
+        },
+      },
+      {
+        keys: ['3'],
         label: 'Graph tab',
         run: (): void => {
           setViewPersist('graph');
         },
       },
       {
-        keys: ['3'],
+        keys: ['4'],
         label: 'Artifacts tab',
         run: (): void => {
           setViewPersist('artifacts');
@@ -435,7 +569,7 @@ export function RunDetailPage(): ReactElement {
         writeToggle(TOGGLE_KEYS.system, next);
       }}
       toolCallCount={toolCallCount}
-      messageCount={messageList.length}
+      messageCount={view === 'chat' ? chatMessageList.length : messageList.length}
       artifactCount={artifactFiles?.length ?? null}
       nodeOptions={nodeOptions}
       selectedNodeId={selectedNodeId}
@@ -511,6 +645,71 @@ export function RunDetailPage(): ReactElement {
                   Jump to bottom
                 </button>
               ) : null}
+            </div>
+          ) : view === 'chat' ? (
+            <div className="flex min-h-0 flex-1 flex-col">
+              <div className="flex items-center justify-between border-b border-border bg-surface-elevated/50 px-6 py-2">
+                <div className="flex items-center gap-2 font-mono text-[11px] text-text-secondary">
+                  <span className="inline-block h-2 w-2 rounded-full bg-accent" />
+                  <span>Orchestrator Chat · Scoped to Run #{runId ? runId.slice(0, 8) : ''}</span>
+                </div>
+                {chatConvId ? (
+                  <Link
+                    to={`/console/p/${projectId}/chat/${chatConvId}`}
+                    className="font-mono text-[11px] text-accent hover:underline"
+                  >
+                    Open in full Chat &rarr;
+                  </Link>
+                ) : null}
+              </div>
+              <div
+                ref={scrollRef}
+                onScroll={handleScroll}
+                className="min-h-0 flex-1 overflow-y-auto"
+              >
+                <div ref={contentRef} className="w-full px-6">
+                  <div className="sticky top-0 z-10 -mx-6 bg-surface px-6">{toolbar}</div>
+                  <div className="mx-auto max-w-[940px] py-4">
+                    {chatMessageList.length === 0 && !chatBusy ? (
+                      <div className="flex h-48 flex-col items-center justify-center gap-2 text-center text-sm text-text-tertiary">
+                        <p>No orchestrator conversation connected yet.</p>
+                        <p className="text-xs">
+                          Send a message below to start an interactive orchestrator session scoped
+                          to this run.
+                        </p>
+                      </div>
+                    ) : (
+                      <StreamContextProvider value={{ runStartedAt: run?.startedAt ?? null }}>
+                        <ChatStream
+                          messages={chatMessageList}
+                          showTools={showToolCalls}
+                          showSystem={showSystem}
+                        />
+                        {chatBusy ? (
+                          <WorkingIndicator
+                            activity={undefined}
+                            expanded={showToolCalls}
+                            onToggle={() => {
+                              setShowToolCalls(v => !v);
+                            }}
+                          />
+                        ) : null}
+                      </StreamContextProvider>
+                    )}
+                  </div>
+                </div>
+              </div>
+              {chatError !== null ? (
+                <div className="shrink-0 border-t border-error/30 bg-error/[0.06] px-6 py-2 font-mono text-[11px] text-error">
+                  {chatError}
+                </div>
+              ) : null}
+              <ChatComposer
+                onSend={onSendChat}
+                disabled={chatBusy}
+                isRunning={chatBusy}
+                onStop={handleStopChat}
+              />
             </div>
           ) : view === 'graph' ? (
             <>

@@ -3,6 +3,25 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
 import { validationErrorHook } from './openapi-defaults';
+
+mock.module('../auth', () => ({
+  getAuth: () => null,
+  isWebAuthEnabled: () => false,
+  getSignupMode: () => 'disabled',
+  isApiGateEnabled: () => false,
+}));
+
+mock.module('@archon/core/db/users', () => ({
+  findOrCreateUserByPlatformIdentity: mock(async (_platform: string, platformUserId: string) => ({
+    id: `user-${platformUserId}`,
+    display_name: null,
+    email: null,
+    role: 'admin' as const,
+    created_at: new Date(),
+    updated_at: new Date(),
+  })),
+}));
+
 import { mockAllWorkflowModules } from '../test/workflow-mock-factories';
 
 const mockFindConversationByPlatformId = mock(
@@ -285,6 +304,51 @@ describe('PATCH /api/conversations/:id', () => {
     expect(response.status).toBe(200);
     const lastCall = mockUpdateConversationTitle.mock.calls.at(-1) as [string, string];
     expect(lastCall[1].length).toBe(255);
+  });
+
+  test('returns 403 when user does not own conversation', async () => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => ({
+      ...MOCK_CONV,
+      user_id: 'user-bob',
+    }));
+
+    const app = new OpenAPIHono();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    const authHeader = process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User';
+    const response = await app.request('/api/conversations/web-test-abc', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        [authHeader]: 'alice',
+      },
+      body: JSON.stringify({ title: 'New Title' }),
+    });
+    expect(response.status).toBe(403);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('Forbidden');
+  });
+
+  test('allows rename when user owns conversation', async () => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => ({
+      ...MOCK_CONV,
+      user_id: 'user-alice',
+    }));
+    mockUpdateConversationTitle.mockImplementationOnce(async () => {});
+
+    const app = new OpenAPIHono();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    const authHeader = process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User';
+    const response = await app.request('/api/conversations/web-test-abc', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        [authHeader]: 'alice',
+      },
+      body: JSON.stringify({ title: 'Alice Title' }),
+    });
+    expect(response.status).toBe(200);
   });
 });
 
@@ -658,5 +722,48 @@ describe('PATCH /api/conversations/:id — forge platform IDs with encoded slash
       body: JSON.stringify({ title: 'New Title' }),
     });
     expect(response.status).toBe(404);
+  });
+
+  test('returns 403 on delete when user does not own conversation', async () => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => ({
+      ...FORGE_CONV,
+      user_id: 'user-bob',
+    }));
+
+    const app = new OpenAPIHono();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    const authHeader = process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User';
+    const response = await app.request('/api/conversations/Solvation-BV%2FArchon%2342', {
+      method: 'DELETE',
+      headers: {
+        [authHeader]: 'alice',
+      },
+    });
+    expect(response.status).toBe(403);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('Forbidden');
+  });
+
+  test('allows delete when user owns conversation', async () => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => ({
+      ...FORGE_CONV,
+      user_id: 'user-alice',
+    }));
+    mockSoftDeleteConversation.mockImplementationOnce(async () => {});
+
+    const app = new OpenAPIHono();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    const authHeader = process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User';
+    const response = await app.request('/api/conversations/Solvation-BV%2FArchon%2342', {
+      method: 'DELETE',
+      headers: {
+        [authHeader]: 'alice',
+      },
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { success: boolean };
+    expect(body).toEqual({ success: true });
   });
 });

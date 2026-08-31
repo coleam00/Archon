@@ -1,4 +1,4 @@
-import { Paperclip } from 'lucide-react';
+import { Paperclip, Square } from 'lucide-react';
 import { useRef, useState, type KeyboardEvent, type ReactElement } from 'react';
 import {
   ACCEPTED_EXTENSIONS,
@@ -9,14 +9,27 @@ import {
   isAcceptedFileType,
 } from '../primitives/file';
 
+/**
+ * Properties for the ChatComposer component.
+ */
 interface ChatComposerProps {
+  /** Callback fired when user sends a message or attached files. */
   onSend: (message: string, files?: File[]) => void;
+  /** Whether the composer inputs are disabled. */
   disabled: boolean;
+  /** Optional explanation tooltip displayed when composer is disabled. */
   disabledReason?: string;
+  /** Whether an active orchestrator turn is running. */
+  isRunning?: boolean;
+  /** Optional callback to abort the running turn. */
+  onStop?: () => void;
 }
 
 const MAX_HEIGHT = 200;
 
+/**
+ * Metadata for an attached file pending send.
+ */
 interface PickedFile {
   file: File;
   id: string;
@@ -39,6 +52,8 @@ export function ChatComposer({
   onSend,
   disabled,
   disabledReason,
+  isRunning = false,
+  onStop,
 }: ChatComposerProps): ReactElement {
   const [value, setValue] = useState('');
   const [files, setFiles] = useState<PickedFile[]>([]);
@@ -88,9 +103,9 @@ export function ChatComposer({
   };
 
   const submit = (): void => {
-    const trimmed = value.trim();
-    if (trimmed.length === 0 || disabled) return;
-    onSend(trimmed, files.length > 0 ? files.map(f => f.file) : undefined);
+    if (disabled || isRunning) return;
+    if (value.trim().length === 0 && files.length === 0) return;
+    onSend(value, files.length > 0 ? files.map(f => f.file) : undefined);
     setValue('');
     setFiles([]);
     setFileError(null);
@@ -203,18 +218,31 @@ export function ChatComposer({
             className="min-h-0 flex-1 resize-none bg-transparent py-[7px] text-[14.5px] leading-[1.5] text-text-primary placeholder:text-text-tertiary focus:outline-none disabled:opacity-50"
             style={{ maxHeight: `${MAX_HEIGHT.toString()}px` }}
           />
-          <button
-            type="button"
-            onClick={submit}
-            disabled={disabled || value.trim().length === 0}
-            title="Send · Enter"
-            className="brand-bar flex h-[36px] shrink-0 items-center gap-[7px] rounded-[10px] px-[15px] text-[13px] font-bold text-white shadow-[0_6px_18px_-8px_color-mix(in_oklch,var(--brand-magenta),transparent_30%)] transition-[filter,transform] hover:brightness-110 active:translate-y-[1px] disabled:opacity-45 disabled:shadow-none disabled:hover:brightness-100"
-          >
-            Send
-            <span aria-hidden className="font-mono text-[10px] opacity-70">
-              ↵
-            </span>
-          </button>
+          {isRunning ? (
+            <button
+              type="button"
+              onClick={onStop}
+              aria-label="Stop run"
+              title="Stop run"
+              className="flex h-[36px] shrink-0 items-center gap-[7px] rounded-[10px] bg-error px-[15px] text-[13px] font-bold text-white shadow-[0_6px_18px_-8px_color-mix(in_oklch,var(--error),transparent_30%)] transition-[filter,transform] hover:brightness-110 active:translate-y-[1px]"
+            >
+              <Square className="h-3.5 w-3.5 fill-current" />
+              Stop
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={submit}
+              disabled={disabled || (value.trim().length === 0 && files.length === 0)}
+              title="Send · Enter"
+              className="brand-bar flex h-[36px] shrink-0 items-center gap-[7px] rounded-[10px] px-[15px] text-[13px] font-bold text-white shadow-[0_6px_18px_-8px_color-mix(in_oklch,var(--brand-magenta),transparent_30%)] transition-[filter,transform] hover:brightness-110 active:translate-y-[1px] disabled:opacity-45 disabled:shadow-none disabled:hover:brightness-100"
+            >
+              Send
+              <span aria-hidden className="font-mono text-[10px] opacity-70">
+                ↵
+              </span>
+            </button>
+          )}
         </div>
         <div className="mt-[9px] flex items-center justify-between px-[2px] font-mono text-[11px] text-text-tertiary">
           <span />

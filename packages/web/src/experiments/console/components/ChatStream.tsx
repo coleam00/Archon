@@ -1,10 +1,15 @@
 import { Fragment, type ReactElement } from 'react';
 import { MessageItem } from './MessageItem';
 import { ToolCallItem } from './ToolCallItem';
-import { ConsoleWorkflowResultCard } from './ConsoleWorkflowResultCard';
+import { WorkflowProgressCard } from './WorkflowProgressCard';
+import { WorkflowResultCard } from './WorkflowResultCard';
 import { isSystemCategory, type Message } from '../primitives/message';
 
+/**
+ * Properties for the ChatStream component.
+ */
 interface ChatStreamProps {
+  /** Ordered list of chat messages to display. */
   messages: Message[];
   /**
    * When false (default) the chat reads like a conversation: only user/assistant
@@ -13,6 +18,8 @@ interface ChatStreamProps {
    * indicator) the full trace is revealed inline.
    */
   showTools?: boolean;
+  /** Whether system category messages should be rendered. */
+  showSystem?: boolean;
 }
 
 /**
@@ -23,32 +30,42 @@ interface ChatStreamProps {
  * Wrap in <StreamContextProvider> upstream (ChatPage) so StreamCard timestamps
  * resolve — pass runStartedAt: null for wall-clock display.
  */
-export function ChatStream({ messages, showTools = false }: ChatStreamProps): ReactElement {
+export function ChatStream({
+  messages,
+  showTools = true,
+  showSystem = true,
+}: ChatStreamProps): ReactElement {
   // `workflow_result` messages are normally swept up by `isSystemCategory` (the
   // `workflow_` prefix), but they carry the run summary + a completion card — let
   // them through explicitly. Other `workflow_*` narration stays suppressed.
-  const visible = showTools
-    ? messages
-    : messages.filter(
-        m =>
-          m.category === 'workflow_result' ||
-          (!isSystemCategory(m.category) && m.content.trim().length > 0)
-      );
+  const visible = messages.filter(m => {
+    if (m.category === 'workflow_result') return true;
+    if (m.dispatch !== null && m.dispatch !== undefined) return true;
+    if (isSystemCategory(m.category) || m.role === 'system') return showSystem;
+    if (!showTools && m.content.trim().length === 0) return false;
+    return true;
+  });
 
   return (
     <div className="flex flex-col gap-[14px]">
       {visible.map(message => (
         <Fragment key={message.id}>
           {message.category === 'workflow_result' && message.workflowResult !== null ? (
-            <ConsoleWorkflowResultCard
+            <WorkflowResultCard
               runId={message.workflowResult.runId}
               workflowName={message.workflowResult.workflowName}
-              summary={message.content}
+              content={message.content}
             />
           ) : (
             <MessageItem message={message} />
           )}
-          {showTools
+          {message.dispatch?.workerConversationId ? (
+            <WorkflowProgressCard
+              workflowName={message.dispatch.workflowName}
+              workerConversationId={message.dispatch.workerConversationId}
+            />
+          ) : null}
+          {showTools && message.toolCalls && message.toolCalls.length > 0
             ? message.toolCalls.map((call, i) => (
                 <ToolCallItem
                   key={`${message.id}:tool:${i.toString()}`}

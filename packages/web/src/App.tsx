@@ -1,6 +1,6 @@
 import { Component } from 'react';
 import type { ReactNode, ErrorInfo } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router';
+import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { Layout } from '@/components/layout/Layout';
 import { ProjectProvider } from '@/contexts/ProjectContext';
@@ -63,6 +63,12 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
   }
 }
 
+export function ProjectRedirect(): React.ReactElement {
+  const { projectId, '*': rest } = useParams();
+  const target = rest ? `/console/p/${projectId}/${rest}` : `/console/p/${projectId}`;
+  return <Navigate to={target} replace />;
+}
+
 export function App(): React.ReactElement {
   return (
     <ErrorBoundary>
@@ -74,6 +80,8 @@ export function App(): React.ReactElement {
               <Route path="/login" element={<LoginPage />} />
               {/* The console is now the default UI. */}
               <Route path="/" element={<Navigate to="/console" replace />} />
+              <Route path="/p/:projectId/*" element={<ProjectRedirect />} />
+              <Route path="/p/:projectId" element={<ProjectRedirect />} />
               {/*
                 Console mounts OUTSIDE Layout (so it does not inherit TopNav) but
                 still INSIDE SessionGate — otherwise /console would bypass web auth

@@ -21,11 +21,23 @@ import { toConversationSummary, type ConversationSummary } from '../primitives/c
  *     multipart when files are attached (mirrors startRun's multipart path).
  */
 
+/**
+ * Response payload from createConversation.
+ */
 interface CreateConversationResponse {
+  /** Generated platform conversation ID. */
   conversationId: string;
+  /** Internal database UUID. */
   id: string;
 }
 
+/**
+ * Creates a new project conversation, optionally with an atomic first message.
+ *
+ * @param projectId - Codebase ID / project identifier
+ * @param message - Optional initial message to send atomically
+ * @returns Object with created conversationId and database UUID
+ */
 export async function createConversation(
   projectId: string,
   message?: string
@@ -38,6 +50,12 @@ export async function createConversation(
   });
 }
 
+/**
+ * Lists conversations associated with a project.
+ *
+ * @param projectId - Codebase ID / project identifier
+ * @returns Array of conversation summary objects
+ */
 export async function listConversations(projectId: string): Promise<ConversationSummary[]> {
   const raw = await requestJson<Parameters<typeof toConversationSummary>[0][]>(
     `/api/conversations?codebaseId=${encodeURIComponent(projectId)}&mine=true`
@@ -45,6 +63,13 @@ export async function listConversations(projectId: string): Promise<Conversation
   return raw.map(toConversationSummary);
 }
 
+/**
+ * Sends a text message and optional file attachments to an existing conversation.
+ *
+ * @param conversationPlatformId - Target platform conversation ID
+ * @param message - Message text
+ * @param files - Optional array of file attachments
+ */
 export async function sendMessage(
   conversationPlatformId: string,
   message: string,
@@ -80,4 +105,58 @@ export async function sendMessage(
     const path = new URL(url, window.location.origin).pathname;
     throw new HttpError(res.status, path, msg);
   }
+}
+
+/**
+ * Updates the title of an existing conversation.
+ *
+ * @param conversationPlatformId - Platform ID of the conversation
+ * @param title - New title string
+ * @returns Success response indicator
+ */
+export async function updateConversationTitle(
+  conversationPlatformId: string,
+  title: string
+): Promise<{ success: boolean }> {
+  return requestJson<{ success: boolean }>(
+    `/api/conversations/${encodeURIComponent(conversationPlatformId)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    }
+  );
+}
+
+/**
+ * Permanently deletes a conversation by platform ID.
+ *
+ * @param conversationPlatformId - Platform ID of the conversation to delete
+ * @returns Success response indicator
+ */
+export async function deleteConversation(
+  conversationPlatformId: string
+): Promise<{ success: boolean }> {
+  return requestJson<{ success: boolean }>(
+    `/api/conversations/${encodeURIComponent(conversationPlatformId)}`,
+    {
+      method: 'DELETE',
+    }
+  );
+}
+
+/**
+ * Halts an in-flight conversation turn or active workflow run.
+ *
+ * @param conversationPlatformId - Platform ID of the conversation to stop
+ * @returns Success response indicator
+ */
+export async function stopConversationRun(
+  conversationPlatformId: string
+): Promise<{ success: boolean }> {
+  return requestJson<{ success: boolean }>(
+    `/api/conversations/${encodeURIComponent(conversationPlatformId)}/stop`,
+    {
+      method: 'POST',
+    }
+  );
 }
