@@ -1,5 +1,6 @@
-# Dry-run fixture: the full chain — rooted investigation flows through the
-# spend gate into the delivery tail, initial review ready, PR flips. SPARSE:
+# Dry-run fixture: a bound target takes the full investigation chain — rooted
+# investigation flows through the spend gate into the delivery tail, initial
+# review ready, PR flips. SPARSE:
 # the dry-run engine auto-defaults every node it can and names the ones it
 # cannot; this file stubs exactly those plus the verdict fields that steer
 # branches. Structured stubs are YAML mappings (they hydrate structuredOutput).
@@ -56,4 +57,6 @@ deliver__classify:
 deliver__resolve-scope: '{"errors":"false"}'
 fixture:
   expect: completed
+  inputs:
+    target: "issue #3031"
 exec-code: true

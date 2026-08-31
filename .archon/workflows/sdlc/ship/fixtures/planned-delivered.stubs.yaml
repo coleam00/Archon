@@ -1,6 +1,6 @@
-# Sparse dry-run fixture: triage finds a design decision, the resulting plan is
-# ready, and the shared delivery tail completes. Run with --default-stubs
-# --exec-code.
+# Sparse dry-run fixture: a bound target reaches triage, planning, and the shared
+# delivery tail. The plan is ready and delivery completes. Run with
+# --default-stubs --exec-code.
 #
 # `outcome` is deliberately unstubbed: the real script runs and must report pull
 # request 3 from the delivered flip value alone. The exec workspace is a DETACHED
@@ -35,6 +35,8 @@ deliver__classify:
 deliver__resolve-scope: '{"errors":"false"}'
 fixture:
   expect: completed
+  inputs:
+    target: "issue #3031"
 exec-code: true
 triage__assert-intact: '{"intact":"true"}'
 planned__assert-intact: '{"intact":"true"}'

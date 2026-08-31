@@ -1,6 +1,7 @@
-# Sparse dry-run fixture: the current-truth check proves the work item is already
-# implementation-ready, so planning and investigation stay skipped. Run with
-# --default-stubs --exec-code.
+# Sparse dry-run fixture: the default launch leaves `fixture.inputs` absent, so
+# `target` takes its empty default. The current-truth check proves the work item
+# is already implementation-ready, so planning and investigation stay skipped.
+# Run with --default-stubs --exec-code.
 #
 # `outcome` is deliberately unstubbed: the real script runs and must report pull
 # request 4 from the delivered flip value alone. The exec workspace is a DETACHED

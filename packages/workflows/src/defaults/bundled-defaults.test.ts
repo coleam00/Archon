@@ -299,6 +299,41 @@ describe('bundled-defaults', () => {
       expect(content).not.toContain('sed -i "s/SPRINT_COUNT_PLACEHOLDER/$SPRINT_COUNT/"');
     });
 
+    it('archon-ship carries its target through triage.md without downstream target prose', () => {
+      const content = BUNDLED_WORKFLOWS['archon-ship'];
+      const parsed = parseWorkflow(content, 'archon-ship.yaml');
+      if (parsed.workflow === null) throw new Error(parsed.error.error);
+
+      expect(parsed.workflow.inputs?.target?.default).toBe('');
+
+      const triage = parsed.workflow.nodes.find(node => node.id === 'triage');
+      expect(triage?.kind).toBe('include');
+      if (triage?.kind !== 'include') throw new Error('triage is not an include');
+      expect(triage.with).toEqual({ target: '$INPUTS.target' });
+
+      const triageCommand = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:triage::triage'];
+      expect(triageCommand).toContain('Write `$ARTIFACTS_DIR/triage.md`');
+      expect(triageCommand).toContain('**Source and outcome** — what was requested');
+
+      const downstreamBindings = [
+        { id: 'inv', input: 'target' },
+        { id: 'planned', input: 'work' },
+        { id: 'deliver', input: 'work' },
+      ] as const;
+      for (const { id, input } of downstreamBindings) {
+        const node = parsed.workflow.nodes.find(node => node.id === id);
+        expect(node?.kind).toBe('include');
+        if (node?.kind !== 'include') throw new Error(`${id} is not an include`);
+        const binding = node.with?.[input];
+        expect(binding).toBeString();
+        expect(binding).toContain('$ARTIFACTS_DIR/triage.md');
+        expect(binding).not.toContain('$INPUTS.target');
+        expect(binding).not.toContain('Original work item:');
+      }
+
+      expect(content).not.toContain('Original work item:');
+    });
+
     it('archon-deliver preserves the conditional-lens bindings', () => {
       const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
       if (parsed.workflow === null) throw new Error(parsed.error.error);

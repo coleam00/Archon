@@ -40,8 +40,7 @@ nodes:
       target: >-
         Investigate the unresolved causal question recorded in
         $ARTIFACTS_DIR/triage.md. Read that assessment first; its confirmed facts
-        are context, while its unknowns are the investigation target. Original
-        work item: $INPUTS.target
+        are context, while its unknowns are the investigation target.
     depends_on: [triage]
     when: "$triage.output.route == 'investigate'"
 
@@ -65,8 +64,7 @@ nodes:
       work: >-
         Plan the current work item from $ARTIFACTS_DIR/triage.md. Read that
         assessment first, preserve its verified outcome and constraints, and
-        decide the implementation questions it identified. Original work item:
-        $INPUTS.target
+        decide the implementation questions it identified.
     depends_on: [triage]
     when: "$triage.output.route == 'plan'"
 
@@ -84,8 +82,7 @@ nodes:
         first. When present, plan.md or investigation.md is the detailed work
         order and must be read in full; triage.md records which path produced it
         and which source assumptions were corrected. On the direct route,
-        triage.md itself is the verified work order. Original work item:
-        $INPUTS.target
+        triage.md itself is the verified work order.
     depends_on: [gate-direct, gate-rooted, gate-planned]
     trigger_rule: none_failed_min_one_success
 
