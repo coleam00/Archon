@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
@@ -247,6 +247,19 @@ function makeApp(): OpenAPIHono {
   registerApiRoutes(app, mockWebAdapter, mockLockManager);
   return app;
 }
+
+let origWebAuthHeader: string | undefined;
+beforeEach(() => {
+  origWebAuthHeader = process.env.ARCHON_WEB_AUTH_HEADER;
+  delete process.env.ARCHON_WEB_AUTH_HEADER;
+});
+afterEach(() => {
+  if (origWebAuthHeader !== undefined) {
+    process.env.ARCHON_WEB_AUTH_HEADER = origWebAuthHeader;
+  } else {
+    delete process.env.ARCHON_WEB_AUTH_HEADER;
+  }
+});
 
 const ALICE = { 'X-Archon-User': 'alice' };
 

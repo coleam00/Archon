@@ -167,7 +167,7 @@ Workflows that span >1h need a fresh token to push from the cloned worktree. Arc
 
 ### Internal endpoint security — REQUIRED
 
-The credential-helper backend is exposed at `POST /internal/git-credential` and hands out live installation access tokens. **It MUST NOT be reachable from outside the Archon host.**
+The credential-helper backend is exposed at `POST /internal/git-credential` and vends credentials to git subprocesses. Requests must present a signed HMAC run token (`ARCHON_RUN_ID` + `ARCHON_RUN_TOKEN`) from an active workflow run or a signed session token (`ARCHON_SESSION_ID` + `ARCHON_SESSION_TOKEN`) from a chat session. Unauthenticated requests are rejected with HTTP 403. **It MUST NOT be reachable from outside the Archon host.**
 
 Archon enforces this at startup: with App mode active and the server bound to a non-loopback interface (e.g. `0.0.0.0`), the process **refuses to start** and exits with `github_app.internal_endpoint_public_bind_rejected`. Two correct configurations:
 

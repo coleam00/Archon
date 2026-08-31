@@ -7,19 +7,32 @@ import { createLogger } from '@archon/paths';
 import { parseGitCredentialPath } from '../github-auth-bootstrap';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
+/**
+ * Lazy getter for the server logger.
+ * @returns The logger instance
+ */
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('server');
   return cachedLog;
 }
 
+/**
+ * Dependencies injected into the git credential route handler.
+ */
 export interface GitCredentialRouteDeps {
+  /** GitHub App auth provider for vending installation tokens */
   githubAppAuthProvider?: {
     getInstallationToken: (owner: string, repo: string) => Promise<string>;
   } | null;
+  /** Function to verify HMAC run tokens */
   verifyRunToken?: typeof verifyRunToken;
+  /** Function to verify HMAC session tokens */
   verifySessionToken?: typeof verifySessionToken;
+  /** Function to look up workflow runs */
   getWorkflowRun?: typeof getWorkflowRun;
+  /** Function to look up conversations */
   getConversationById?: typeof getConversationById;
+  /** Function to retrieve decrypted personal access tokens */
   getDecryptedAccessToken?: typeof getDecryptedAccessToken;
 }
 
@@ -36,6 +49,12 @@ const gitCredentialRequestSchema = z.object({
   sessionToken: z.string().optional(),
 });
 
+/**
+ * Registers the internal /internal/git-credential endpoint on the Hono application.
+ *
+ * @param app - The OpenAPIHono application instance
+ * @param deps - Optional dependency overrides for testing
+ */
 export function registerGitCredentialRoute(
   app: OpenAPIHono,
   deps: GitCredentialRouteDeps = {}
@@ -60,6 +79,7 @@ export function registerGitCredentialRoute(
       }
 
       const { runId, runToken, sessionId, sessionToken } = parseResult.data;
+      let authenticated = false;
 
       // Path 1: run-scoped credential (workflow context).
       if (runId && runToken) {
@@ -83,10 +103,9 @@ export function registerGitCredentialRoute(
           }
           return c.json({ token: runUserToken });
         }
-      }
-
-      // Path 2: session-scoped credential (orchestrator / direct-chat context — issue #223).
-      if (sessionId && sessionToken) {
+        authenticated = true;
+      } else if (sessionId && sessionToken) {
+        // Path 2: session-scoped credential (orchestrator / direct-chat context — issue #223).
         if (!verifySession(sessionId, sessionToken)) {
           getLog().warn({ sessionId }, 'internal.git_credential_invalid_session_token');
           return c.json({ error: 'invalid session credential' }, 403);
@@ -103,9 +122,16 @@ export function registerGitCredentialRoute(
           }
           return c.json({ token: sessionUserToken });
         }
+        authenticated = true;
       }
 
-      // App installation token fallback (when GitHub App provider is registered)
+      // Unauthenticated callers must not receive GitHub App tokens
+      if (!authenticated) {
+        getLog().warn('internal.git_credential_unauthenticated');
+        return c.json({ error: 'no valid credential presented' }, 403);
+      }
+
+      // App installation token fallback (when GitHub App provider is registered and caller is authenticated)
       if (githubAppAuthProvider) {
         const token = await githubAppAuthProvider.getInstallationToken(parsed.owner, parsed.repo);
         return c.json({ token });

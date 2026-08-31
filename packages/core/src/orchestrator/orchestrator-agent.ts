@@ -2459,7 +2459,6 @@ export async function handleMessage(
       isPerUserProviderKeysEnabled() && executionUserId
         ? await resolveUserProviderEnvForChat(executionUserId)
         : {};
-    const protectedEnvKeys = Object.keys(userProviderEnv);
     // Session-scoped git credential env (issue #223): give the credential helper
     // a session token so git operations in the orchestrator / direct-chat context
     // authenticate as the session user via the /internal/git-credential endpoint.
@@ -2476,6 +2475,21 @@ export async function handleMessage(
       ...userProviderEnv,
       ...sessionCredentialEnv,
     };
+    const protectedEnvKeys = new Set([
+      ...Object.keys(userProviderEnv),
+      ...Object.keys(sessionCredentialEnv),
+    ]);
+    for (const key of [
+      'ARCHON_RUN_ID',
+      'ARCHON_RUN_TOKEN',
+      'ARCHON_SESSION_ID',
+      'ARCHON_SESSION_TOKEN',
+    ]) {
+      if (effectiveEnv[key] !== undefined) {
+        protectedEnvKeys.add(key);
+      }
+    }
+    const protectedEnvKeysList = protectedEnvKeys.size > 0 ? [...protectedEnvKeys] : undefined;
 
     // Warn if provider doesn't support env injection but env vars are configured
     if (Object.keys(effectiveEnv).length > 0) {
@@ -2514,7 +2528,7 @@ export async function handleMessage(
     const requestOptions: SendQueryOptions = {
       assistantConfig: { ...(config.assistants[providerKey] ?? {}) },
       env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
-      protectedEnvKeys: protectedEnvKeys.length > 0 ? protectedEnvKeys : undefined,
+      protectedEnvKeys: protectedEnvKeysList,
       model: chatRequest.model,
       systemPrompt,
     };
@@ -2532,7 +2546,7 @@ export async function handleMessage(
         // subscription/key and fails on per-user-only installs (#1984; same family
         // as #1794/#1855). Same env-only bag as the main chat request above.
         env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
-        protectedEnvKeys: protectedEnvKeys.length > 0 ? protectedEnvKeys : undefined,
+        protectedEnvKeys: protectedEnvKeysList,
       };
       if (titleRequest.preset) {
         applyPresetToRequestOptions(titleRequest.provider, titleRequest.preset, titleOptions);

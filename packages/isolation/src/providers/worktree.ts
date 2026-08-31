@@ -1060,6 +1060,10 @@ export class WorktreeProvider implements IIsolationProvider {
    *
    * When prSha is provided, the worktree is initially created at the specific
    * commit (detached HEAD), then a local tracking branch is created.
+   *
+   * @param request - PR isolation request details
+   * @param worktreePath - Path where the worktree should be created
+   * @param remote - Git remote name (default 'origin')
    */
   private async createFromPR(
     request: PRIsolationRequest,
@@ -1075,10 +1079,23 @@ export class WorktreeProvider implements IIsolationProvider {
     try {
       if (!request.isForkPR) {
         // Same-repo PR: Use the actual branch so changes push directly to PR
-        await this.createFromSameRepoPR(repoPath, worktreePath, request.prBranch, remote);
+        await this.createFromSameRepoPR(
+          repoPath,
+          worktreePath,
+          request.prBranch,
+          remote,
+          request.authToken
+        );
       } else {
         // Fork PR: Use synthetic review branch
-        await this.createFromForkPR(repoPath, worktreePath, prNumber, remote, request.prSha);
+        await this.createFromForkPR(
+          repoPath,
+          worktreePath,
+          prNumber,
+          remote,
+          request.prSha,
+          request.authToken
+        );
       }
     } catch (error) {
       // Clean up orphaned git-registered worktree from partial failure
@@ -1090,17 +1107,29 @@ export class WorktreeProvider implements IIsolationProvider {
   }
 
   /**
-   * Create worktree for same-repo PR using the actual branch
+   * Create worktree for same-repo PR using the actual branch.
+   *
+   * @param repoPath - Path to the canonical repository
+   * @param worktreePath - Path where the worktree will be created
+   * @param prBranch - Branch name for the PR
+   * @param remote - Git remote name (default 'origin')
+   * @param authToken - Optional personal access token for authenticated fetch
    */
   private async createFromSameRepoPR(
     repoPath: string,
     worktreePath: string,
     prBranch: string,
-    remote = 'origin'
+    remote = 'origin',
+    authToken?: string
   ): Promise<void> {
+    const fetchEnv = authToken
+      ? { ...process.env, GH_TOKEN: authToken, GITHUB_TOKEN: authToken }
+      : undefined;
+
     // Fetch the PR's actual branch
     await execFileAsync('git', ['-C', repoPath, 'fetch', remote, prBranch], {
       timeout: GIT_OPERATION_TIMEOUT_MS,
+      env: fetchEnv,
     });
 
     // Try to create worktree with the branch
@@ -1137,24 +1166,36 @@ export class WorktreeProvider implements IIsolationProvider {
   }
 
   /**
-   * Create worktree for fork PR using synthetic review branch
+   * Create worktree for fork PR using synthetic review branch.
    *
    * Handles stale branches: If a branch already exists from a previous worktree
    * that was deleted, we delete the stale branch and retry.
+   *
+   * @param repoPath - Path to the canonical repository
+   * @param worktreePath - Path where the worktree will be created
+   * @param prNumber - Pull request number
+   * @param remote - Git remote name (default 'origin')
+   * @param prSha - Optional specific commit SHA to review
+   * @param authToken - Optional personal access token for authenticated fetch
    */
   private async createFromForkPR(
     repoPath: string,
     worktreePath: string,
     prNumber: string,
     remote = 'origin',
-    prSha?: string
+    prSha?: string,
+    authToken?: string
   ): Promise<void> {
     const reviewBranch = `pr-${prNumber}-review`;
+    const fetchEnv = authToken
+      ? { ...process.env, GH_TOKEN: authToken, GITHUB_TOKEN: authToken }
+      : undefined;
 
     if (prSha) {
       // SHA provided: create at specific commit for reproducible reviews
       await execFileAsync('git', ['-C', repoPath, 'fetch', remote, `pull/${prNumber}/head`], {
         timeout: GIT_OPERATION_TIMEOUT_MS,
+        env: fetchEnv,
       });
 
       await execFileAsync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, prSha], {
@@ -1178,7 +1219,7 @@ export class WorktreeProvider implements IIsolationProvider {
           execFileAsync(
             'git',
             ['-C', repoPath, 'fetch', remote, `pull/${prNumber}/head:${reviewBranch}`],
-            { timeout: GIT_OPERATION_TIMEOUT_MS }
+            { timeout: GIT_OPERATION_TIMEOUT_MS, env: fetchEnv }
           ),
         reviewBranch
       );

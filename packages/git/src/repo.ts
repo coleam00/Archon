@@ -157,12 +157,18 @@ export async function syncWorkspace(
 ): Promise<WorkspaceSyncResult> {
   const mode = options?.mode ?? 'fast-forward';
   const remote = options?.remote ?? 'origin';
+  const authToken = options?.authToken;
   const branchToSync = baseBranch ?? (await getDefaultBranch(workspacePath, remote));
+
+  const fetchEnv = authToken
+    ? { ...process.env, GH_TOKEN: authToken, GITHUB_TOKEN: authToken }
+    : undefined;
 
   // Fetch from the remote to ensure <remote>/<branchToSync> is up-to-date
   try {
     await execFileAsync('git', ['-C', workspacePath, 'fetch', remote, branchToSync], {
       timeout: 60000,
+      env: fetchEnv,
     });
   } catch (error) {
     const err = error as Error;
@@ -249,6 +255,15 @@ export async function syncWorkspace(
   };
 }
 
+/**
+ * Construct a WorkspaceSyncResult for a state where no modifications were made.
+ *
+ * @param branch - The branch that was checked
+ * @param mode - The sync mode executed
+ * @param state - The classified workspace state
+ * @param head - The commit SHA at HEAD
+ * @returns An unchanged WorkspaceSyncResult
+ */
 function unchangedSyncResult(
   branch: BranchName,
   mode: WorkspaceSyncMode,
@@ -266,6 +281,13 @@ function unchangedSyncResult(
   };
 }
 
+/**
+ * Read the short (8-char) commit SHA for a ref.
+ *
+ * @param workspacePath - Path to the git workspace
+ * @param ref - Ref name to resolve
+ * @returns Short SHA or empty string on error
+ */
 async function readShortSha(workspacePath: RepoPath, ref: string): Promise<string> {
   try {
     const { stdout } = await execFileAsync(
@@ -280,6 +302,13 @@ async function readShortSha(workspacePath: RepoPath, ref: string): Promise<strin
   }
 }
 
+/**
+ * Read the full commit SHA for a ref.
+ *
+ * @param workspacePath - Path to the git workspace
+ * @param ref - Ref name to resolve
+ * @returns Full commit SHA string
+ */
 async function readSha(workspacePath: RepoPath, ref: string): Promise<string> {
   const { stdout } = await execFileAsync('git', ['-C', workspacePath, 'rev-parse', ref], {
     timeout: 10000,
@@ -287,6 +316,12 @@ async function readSha(workspacePath: RepoPath, ref: string): Promise<string> {
   return stdout.trim();
 }
 
+/**
+ * Get the currently checked out branch name.
+ *
+ * @param workspacePath - Path to the git workspace
+ * @returns Branch name or null if detached HEAD
+ */
 async function getCurrentBranch(workspacePath: RepoPath): Promise<BranchName | null> {
   try {
     const { stdout } = await execFileAsync(
@@ -301,6 +336,12 @@ async function getCurrentBranch(workspacePath: RepoPath): Promise<BranchName | n
   }
 }
 
+/**
+ * Check if the workspace has tracked uncommitted changes.
+ *
+ * @param workspacePath - Path to the git workspace
+ * @returns True if tracked files are modified/staged
+ */
 async function hasTrackedModifications(workspacePath: RepoPath): Promise<boolean> {
   const { stdout } = await execFileAsync(
     'git',
@@ -310,6 +351,14 @@ async function hasTrackedModifications(workspacePath: RepoPath): Promise<boolean
   return stdout.trim().length > 0;
 }
 
+/**
+ * Check if an ancestor commit is in the history of descendant.
+ *
+ * @param workspacePath - Path to the git workspace
+ * @param ancestor - Ancestor ref/SHA
+ * @param descendant - Descendant ref/SHA
+ * @returns True if ancestor is reachable from descendant
+ */
 async function isAncestor(
   workspacePath: RepoPath,
   ancestor: string,
@@ -336,6 +385,14 @@ async function isAncestor(
   }
 }
 
+/**
+ * Classify the synchronization state of a workspace relative to a remote branch.
+ *
+ * @param workspacePath - Path to the git workspace
+ * @param branchToSync - Target branch name
+ * @param remote - Remote name (default 'origin')
+ * @returns WorkspaceSyncState ('dirty', 'in_sync', 'behind', 'ahead', or 'diverged')
+ */
 async function classifyWorkspaceState(
   workspacePath: RepoPath,
   branchToSync: BranchName,
@@ -425,15 +482,24 @@ export async function cloneRepository(
  * @param repoPath - Path to the local repository
  * @param branch - Branch to sync to (e.g., 'main')
  * @param remote - Remote name to fetch from (default: 'origin')
+ * @param options - Optional configuration including authToken
  * @returns GitResult<void>
  */
 export async function syncRepository(
   repoPath: RepoPath,
   branch: BranchName,
-  remote = 'origin'
+  remote = 'origin',
+  options?: { authToken?: string }
 ): Promise<GitResult<void>> {
+  const fetchEnv = options?.authToken
+    ? { ...process.env, GH_TOKEN: options.authToken, GITHUB_TOKEN: options.authToken }
+    : undefined;
   try {
-    await execFileAsync('git', ['fetch', remote], { cwd: repoPath, timeout: 60000 });
+    await execFileAsync('git', ['fetch', remote], {
+      cwd: repoPath,
+      timeout: 60000,
+      env: fetchEnv,
+    });
   } catch (error) {
     const err = error as Error & { stderr?: string };
     const errorText = `${err.message} ${err.stderr ?? ''}`.toLowerCase();

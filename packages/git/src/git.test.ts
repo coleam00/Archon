@@ -2430,6 +2430,27 @@ branch refs/heads/feature/auth
       ).rejects.toThrow('Sync fetch from mar/main failed');
     });
 
+    test('passes authToken in environment during sync fetch when provided', async () => {
+      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+
+      await git.syncWorkspace(repo('/workspace/repo'), branch('main'), {
+        authToken: 'ghp_secret_token_123',
+      });
+
+      const fetchCall = execSpy.mock.calls.find((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('fetch');
+      });
+      expect(fetchCall?.[2]).toEqual(
+        expect.objectContaining({
+          env: expect.objectContaining({
+            GH_TOKEN: 'ghp_secret_token_123',
+            GITHUB_TOKEN: 'ghp_secret_token_123',
+          }),
+        })
+      );
+    });
+
     test('names the custom remote in the configured-branch-missing error', async () => {
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
         if (args.includes('fetch')) {
@@ -2734,6 +2755,28 @@ branch refs/heads/feature/auth
       if (!result.ok) {
         expect(result.error.code).toBe('branch_not_found');
       }
+    });
+
+    test('passes authToken in environment during fetch when provided', async () => {
+      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+
+      const result = await git.syncRepository(repo('/workspace/repo'), branch('main'), 'origin', {
+        authToken: 'ghp_secret_repo_token',
+      });
+
+      expect(result.ok).toBe(true);
+      const fetchCall = execSpy.mock.calls.find((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('fetch');
+      });
+      expect(fetchCall?.[2]).toEqual(
+        expect.objectContaining({
+          env: expect.objectContaining({
+            GH_TOKEN: 'ghp_secret_repo_token',
+            GITHUB_TOKEN: 'ghp_secret_repo_token',
+          }),
+        })
+      );
     });
 
     test('returns unknown error for unexpected reset failure', async () => {

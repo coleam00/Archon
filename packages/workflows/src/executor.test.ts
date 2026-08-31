@@ -1434,7 +1434,7 @@ describe('executeWorkflow', () => {
           SHARED: 'run',
           PROTECTED_TOKEN: 'credential-wins',
         },
-        protectedEnvKeys: ['PROTECTED_TOKEN'],
+        protectedEnvKeys: ['PROTECTED_TOKEN', 'ARCHON_RUN_ID', 'ARCHON_RUN_TOKEN'],
       });
       expect(createRun.mock.calls[0]?.[0].metadata).toMatchObject({
         run_config: sealedMetadata,
@@ -2518,8 +2518,15 @@ describe('executeWorkflow', () => {
         BASE_BRANCH: 'reserved-db-secret',
         SHARED_KEY: 'user_wins',
         USER_KEY: 'u_val',
+        ARCHON_RUN_ID: expect.any(String),
+        ARCHON_RUN_TOKEN: expect.stringMatching(/^art_/),
       });
-      expect(configArg?.protectedEnvKeys).toEqual(['SHARED_KEY', 'USER_KEY']);
+      expect(configArg?.protectedEnvKeys).toEqual([
+        'SHARED_KEY',
+        'USER_KEY',
+        'ARCHON_RUN_ID',
+        'ARCHON_RUN_TOKEN',
+      ]);
       expect(configArg?.protectedCredentialValues).toEqual([
         'db_val',
         'reserved-db-secret',
@@ -2568,14 +2575,45 @@ describe('executeWorkflow', () => {
         GITHUB_TOKEN: 'user-token',
         COPILOT_GITHUB_TOKEN: '',
         ANTHROPIC_API_KEY: 'provider-token',
+        ARCHON_RUN_ID: expect.any(String),
+        ARCHON_RUN_TOKEN: expect.stringMatching(/^art_/),
       });
       expect(configArg?.protectedEnvKeys).toEqual([
         'GH_TOKEN',
         'GITHUB_TOKEN',
         'COPILOT_GITHUB_TOKEN',
         'ANTHROPIC_API_KEY',
+        'ARCHON_RUN_ID',
+        'ARCHON_RUN_TOKEN',
       ]);
       expect(configArg?.protectedCredentialValues).toEqual(['provider-token']);
+    });
+
+    it('injects ARCHON_RUN_ID and ARCHON_RUN_TOKEN into envVars and marks them protected', async () => {
+      const store = makeStore();
+      const deps: WorkflowDeps = {
+        ...makeDeps(store),
+      };
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'msg',
+        'db-c1',
+        { codebaseId: 'codebase-1', userId: 'u-1' }
+      );
+
+      const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[13] as WorkflowConfig | undefined;
+      expect(configArg?.envVars).toMatchObject({
+        ARCHON_RUN_ID: 'run-123',
+        ARCHON_RUN_TOKEN: expect.stringMatching(/^art_/),
+      });
+      expect(configArg?.protectedEnvKeys).toEqual(
+        expect.arrayContaining(['ARCHON_RUN_ID', 'ARCHON_RUN_TOKEN'])
+      );
     });
 
     it('removes stale credential files before a credential refresh failure', async () => {

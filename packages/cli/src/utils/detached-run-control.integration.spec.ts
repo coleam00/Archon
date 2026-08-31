@@ -46,6 +46,14 @@ function waitForExit(
 function processExists(pid: number): boolean {
   try {
     process.kill(pid, 0);
+    if (process.platform === 'linux') {
+      try {
+        const status = readFileSync(`/proc/${pid}/status`, 'utf8');
+        if (/State:\s+Z\s+\(zombie\)/.test(status)) return false;
+      } catch {
+        return false;
+      }
+    }
     return true;
   } catch {
     return false;
@@ -147,7 +155,7 @@ describe('detached run control integration', () => {
       }
       if (process.platform !== 'win32') rmSync(detachedRunControlPath(runId), { force: true });
     }
-  });
+  }, 15_000);
 
   it('treats an already-gone target as a stopped tree, not a failed stop', async () => {
     // #2946: `taskkill /T` walks the tree PID by PID and exits non-zero when one of

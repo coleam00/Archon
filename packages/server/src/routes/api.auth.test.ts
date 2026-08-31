@@ -147,6 +147,19 @@ mock.module('@archon/core/utils/commands', () => ({
 
 import { registerApiRoutes } from './api';
 
+let origWebAuthHeader: string | undefined;
+beforeEach(() => {
+  origWebAuthHeader = process.env.ARCHON_WEB_AUTH_HEADER;
+  delete process.env.ARCHON_WEB_AUTH_HEADER;
+});
+afterEach(() => {
+  if (origWebAuthHeader !== undefined) {
+    process.env.ARCHON_WEB_AUTH_HEADER = origWebAuthHeader;
+  } else {
+    delete process.env.ARCHON_WEB_AUTH_HEADER;
+  }
+});
+
 function makeApp(): OpenAPIHono {
   const app = new OpenAPIHono({ defaultHook: validationErrorHook });
   const mockWebAdapter = {

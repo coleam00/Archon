@@ -601,6 +601,58 @@ describe('WorktreeProvider', () => {
       );
     });
 
+    test('passes authToken in environment during same-repo PR fetch', async () => {
+      const request: IsolationRequest = {
+        ...baseRequest,
+        workflowType: 'pr',
+        identifier: '42',
+        prBranch: git.toBranchName('feature/auth'),
+        isForkPR: false,
+        authToken: 'ghp_pr_secret_token',
+      };
+
+      await provider.create(request);
+
+      const fetchCall = execSpy.mock.calls.find((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('fetch') && args.includes('feature/auth');
+      });
+      expect(fetchCall?.[2]).toEqual(
+        expect.objectContaining({
+          env: expect.objectContaining({
+            GH_TOKEN: 'ghp_pr_secret_token',
+            GITHUB_TOKEN: 'ghp_pr_secret_token',
+          }),
+        })
+      );
+    });
+
+    test('passes authToken in environment during fork PR fetch', async () => {
+      const request: IsolationRequest = {
+        ...baseRequest,
+        workflowType: 'pr',
+        identifier: '42',
+        prBranch: git.toBranchName('feature/auth'),
+        isForkPR: true,
+        authToken: 'ghp_fork_pr_secret_token',
+      };
+
+      await provider.create(request);
+
+      const fetchCall = execSpy.mock.calls.find((call: unknown[]) => {
+        const args = call[1] as string[];
+        return args.includes('fetch') && args.some(a => a.includes('pull/42/head'));
+      });
+      expect(fetchCall?.[2]).toEqual(
+        expect.objectContaining({
+          env: expect.objectContaining({
+            GH_TOKEN: 'ghp_fork_pr_secret_token',
+            GITHUB_TOKEN: 'ghp_fork_pr_secret_token',
+          }),
+        })
+      );
+    });
+
     test('creates worktree for fork PR with SHA (reproducible reviews)', async () => {
       const request: IsolationRequest = {
         ...baseRequest,

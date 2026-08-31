@@ -5031,11 +5031,11 @@ export function registerApiRoutes(
 
     // Merge lock-based and DB-based active tracking.
     // Background workflows bypass the lock manager, so we combine both sources.
-    const lockActiveSet = new Set(stats.activeConversationIds);
+    const lockActiveSet = new Set(stats.activeConversationIds ?? []);
     const backgroundConversationIds = runningWorkflowRows
       .map(r => r.conversation_id)
       .filter(id => !lockActiveSet.has(id));
-    const allActiveIds = [...stats.activeConversationIds, ...backgroundConversationIds];
+    const allActiveIds = [...(stats.activeConversationIds ?? []), ...backgroundConversationIds];
     const wslDistro = getWSLDistroName();
 
     // Health is public (PUBLIC_API_GATE_PREFIXES) and must stay answerable when the

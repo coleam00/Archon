@@ -277,6 +277,21 @@ describe('POST /internal/git-credential', () => {
     expect(await res.json()).toEqual({ token: 'ghs_app_token_owner_repo' });
   });
 
+  test('rejects request with 403 when no token/credentials provided even when app provider exists', async () => {
+    const app = createApp();
+    const res = await app.request('/internal/git-credential', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        host: 'github.com',
+        path: 'owner/repo',
+      }),
+    });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'no valid credential presented' });
+    expect(mockGetInstallationToken).not.toHaveBeenCalled();
+  });
+
   test('returns 403 when no token/credentials provided and no app provider', async () => {
     const app = createApp({ githubAppAuthProvider: null });
     const res = await app.request('/internal/git-credential', {

@@ -461,6 +461,7 @@ describe('CLI workflow event dispatch', () => {
         ARCHON_HOME: archonHome,
         ARCHON_TELEMETRY_DISABLED: '1',
       };
+      delete (env as Record<string, string | undefined>).DATABASE_URL;
       const initialize = spawnSync(
         process.execPath,
         [CLI_ENTRY, 'workflow', 'status', '--cwd', repoDir],

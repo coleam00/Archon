@@ -1,8 +1,13 @@
 import { getWorkflowRun } from '../db/workflows';
 import { getConversationById } from '../db/conversations';
 
+/**
+ * Dependencies injected into resolveActingUserId.
+ */
 export interface ResolveActingUserIdDeps {
+  /** Function to look up workflow runs */
   getWorkflowRun?: typeof getWorkflowRun;
+  /** Function to look up conversations */
   getConversationById?: typeof getConversationById;
 }
 

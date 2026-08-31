@@ -1,6 +1,15 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { closeSync, fstatSync, lstatSync, mkdirSync, openSync, rmSync, statSync } from 'node:fs';
+import {
+  closeSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import { createConnection, createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -463,6 +472,14 @@ function processExists(pid: number): boolean {
 function processGroupExists(pid: number): boolean {
   try {
     process.kill(-pid, 0);
+    if (process.platform === 'linux') {
+      try {
+        const status = readFileSync(`/proc/${pid}/status`, 'utf8');
+        if (/State:\s+Z\s+\(zombie\)/.test(status)) return false;
+      } catch {
+        return false;
+      }
+    }
     return true;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'EPERM';
@@ -567,6 +584,7 @@ async function terminateDetachedProcessTree(
     return;
   }
   if (!(await waitUntilGone(() => processGroupExists(pid), TERMINATION_CONFIRM_MS))) {
+    if (!processExists(pid)) return;
     throw new Error(`Detached workflow process group ${String(pid)} is still running`);
   }
 }

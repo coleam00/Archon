@@ -1939,6 +1939,16 @@ export async function executeWorkflow(
     ...userGitHubEnv,
   };
   const protectedEnvKeys = new Set([...Object.keys(botGitHubEnv), ...Object.keys(userGitHubEnv)]);
+  for (const key of [
+    'ARCHON_RUN_ID',
+    'ARCHON_RUN_TOKEN',
+    'ARCHON_SESSION_ID',
+    'ARCHON_SESSION_TOKEN',
+  ]) {
+    if (config.envVars?.[key] !== undefined) {
+      protectedEnvKeys.add(key);
+    }
+  }
   if (protectedEnvKeys.size > 0) {
     config.protectedEnvKeys = [...protectedEnvKeys];
   }
@@ -2764,6 +2774,19 @@ export async function executeWorkflow(
   config.envVars = { ...config.envVars, ...userProviderEnv, ...runCredentialEnv };
   for (const key of Object.keys(userProviderEnv)) {
     protectedEnvKeys.add(key);
+  }
+  for (const key of Object.keys(runCredentialEnv)) {
+    protectedEnvKeys.add(key);
+  }
+  for (const key of [
+    'ARCHON_RUN_ID',
+    'ARCHON_RUN_TOKEN',
+    'ARCHON_SESSION_ID',
+    'ARCHON_SESSION_TOKEN',
+  ]) {
+    if (config.envVars?.[key] !== undefined || key in runCredentialEnv) {
+      protectedEnvKeys.add(key);
+    }
   }
   if (protectedEnvKeys.size > 0) {
     config.protectedEnvKeys = [...protectedEnvKeys];
