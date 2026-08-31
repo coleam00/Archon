@@ -134,7 +134,7 @@ Report outcomes with their evidence: "completed, review verdict ready:false —
 ## Discoveries: the sdlc pack's out-of-scope findings
 
 A convention of the bundled sdlc workflows (`archon-ship`, `archon-deliver`,
-`archon-review`, `archon-stabilize`, `archon-upkeep`), not of workflows in
+`archon-review`, `archon-upkeep`), not of workflows in
 general. Their review lenses record *proven* findings that fall outside the
 run's accepted scope as discovery sidecars instead of blocking findings: raw
 per-producer files at `<artifacts>/discoveries/*.json` (records of `title`,
