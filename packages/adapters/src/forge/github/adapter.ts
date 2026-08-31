@@ -19,6 +19,7 @@ import {
   DeliveryDeduplicator,
   AppNotInstalledError,
   installCredentialHelper,
+  resolveGitHubTokenFromEnv,
 } from '@archon/core';
 import {
   ensureProjectStructure,
@@ -692,7 +693,7 @@ export class GitHubAdapter implements IPlatformAdapter {
         throw err;
       }
     } else {
-      ghToken = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
+      ghToken = resolveGitHubTokenFromEnv();
     }
     const repoUrl = `https://github.com/${owner}/${repo}.git`;
 

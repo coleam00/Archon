@@ -1693,25 +1693,27 @@ describe('GitHubAdapter', () => {
 
     test('clone path resolves installation token (not env GITHUB_TOKEN)', async () => {
       const savedEnv = process.env.GITHUB_TOKEN;
-      delete process.env.GITHUB_TOKEN;
-      const { adapter, provider } = createAppModeAdapter();
       try {
+        delete process.env.GITHUB_TOKEN;
+        const { adapter, provider } = createAppModeAdapter();
         // @ts-expect-error - calling private method
         await adapter.ensureRepoReady('owner', 'repo', 'main', '/tmp/nonexistent-test', false);
-      } catch {
-        // ensureRepoReady's downstream addSafeDirectory etc may fail on the
-        // bogus path; we only care that the token was resolved through the
-        // provider before clone.
+        expect(provider.getToken).toHaveBeenCalledWith('owner', 'repo');
+        expect(mockCloneRepository).toHaveBeenCalledTimes(1);
+        expect(mockCloneRepository).toHaveBeenCalledWith(
+          'https://github.com/owner/repo.git',
+          '/tmp/nonexistent-test',
+          { credentials: { username: 'ghs_owner_token', password: '' } }
+        );
+        const [cloneUrl, clonePath] = mockCloneRepository.mock.calls[0] ?? [];
+        expect(JSON.stringify([cloneUrl, clonePath])).not.toContain('ghs_owner_token');
+      } finally {
+        if (savedEnv === undefined) {
+          delete process.env.GITHUB_TOKEN;
+        } else {
+          process.env.GITHUB_TOKEN = savedEnv;
+        }
       }
-      expect(provider.getToken).toHaveBeenCalledWith('owner', 'repo');
-      expect(mockCloneRepository).toHaveBeenCalled();
-      const cloneArgs = mockCloneRepository.mock.calls[0];
-      // Third arg carries request-scoped credentials resolved from the App provider.
-      const tokenArg = (
-        cloneArgs?.[2] as { credentials?: { username: string; password: string } } | undefined
-      )?.credentials?.username;
-      expect(tokenArg).toBe('ghs_owner_token');
-      if (savedEnv !== undefined) process.env.GITHUB_TOKEN = savedEnv;
     });
 
     test('AppNotInstalledError on clone surfaces a clean message', async () => {

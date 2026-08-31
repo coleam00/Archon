@@ -190,6 +190,7 @@ export {
   isPerUserGitHubEnabled,
   loadDeviceFlowConfig,
   assertEncryptionKeyAtBoot,
+  resolveGitHubTokenFromEnv,
   connectGithubForUser,
   persistGithubConnection,
   startDeviceFlow,

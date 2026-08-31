@@ -1,6 +1,7 @@
 /**
- * Boot-time configuration helpers for per-user GitHub auth (device flow +
- * token encryption at rest).
+ * Environment-backed GitHub authentication configuration. Clone callers share
+ * token-source precedence here; the remaining helpers configure per-user
+ * GitHub auth (device flow + token encryption at rest).
  *
  * Per-user attribution is an opt-in layer on top of the GitHub App. The feature
  * gate (`isPerUserGitHubEnabled`) is active only when BOTH the App is configured
@@ -16,6 +17,12 @@ import { getEncryptionKey } from '../utils/token-crypto';
 export interface DeviceFlowConfig {
   /** GitHub App client id (the `Iv1.`/`Iv23…` value, distinct from GITHUB_APP_ID). */
   clientId: string;
+}
+
+export function resolveGitHubTokenFromEnv(
+  env: NodeJS.ProcessEnv = process.env
+): string | undefined {
+  return env.GITHUB_TOKEN ?? env.GH_TOKEN;
 }
 
 /**

@@ -27,6 +27,7 @@ import {
 import { findMarkdownFilesRecursive } from '../utils/commands';
 import { createLogger } from '@archon/paths';
 import { resolveDefaultAssistant } from '../config/resolve-assistant';
+import { resolveGitHubTokenFromEnv } from '../github-auth/config';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -46,20 +47,24 @@ function safeParseUrl(url: string): URL | null {
   }
 }
 
-/** Forge auth config: which env var to check and what auth URL scheme to use. */
+/** Forge auth config: how to resolve a token and which clone username form to use. */
 interface ForgeAuthEntry {
   hostPattern: string;
-  envVar: string;
+  resolveToken: () => string | undefined;
   scheme: ForgeAuthScheme;
 }
 
 type ForgeAuthScheme = '' | 'oauth2:';
 
-/** Known exact-hostname → env-var + scheme mappings. */
+/** Known exact-hostname → credential source + scheme mappings. */
 const FORGE_AUTH: ForgeAuthEntry[] = [
-  { hostPattern: 'github.com', envVar: 'GH_TOKEN', scheme: '' },
-  { hostPattern: 'gitlab.com', envVar: 'GITLAB_TOKEN', scheme: 'oauth2:' },
-  { hostPattern: 'gitea.com', envVar: 'GITEA_TOKEN', scheme: '' },
+  { hostPattern: 'github.com', resolveToken: resolveGitHubTokenFromEnv, scheme: '' },
+  {
+    hostPattern: 'gitlab.com',
+    resolveToken: () => process.env.GITLAB_TOKEN,
+    scheme: 'oauth2:',
+  },
+  { hostPattern: 'gitea.com', resolveToken: () => process.env.GITEA_TOKEN, scheme: '' },
 ];
 
 /** Well-known self-hosted hostname label patterns → env var + scheme. */
@@ -88,7 +93,7 @@ export function resolveForgeAuth(url: string): {
   // 1. Exact known-host match
   for (const entry of FORGE_AUTH) {
     if (hostname === entry.hostPattern) {
-      const token = process.env[entry.envVar];
+      const token = entry.resolveToken();
       if (token) {
         return { token, scheme: entry.scheme };
       }

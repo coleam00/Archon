@@ -311,6 +311,7 @@ describe('cloneRepository', () => {
     clearMocks();
     restoreSpies();
     setupSpies();
+    delete process.env.GITHUB_TOKEN;
     delete process.env.GH_TOKEN;
     delete process.env.GITLAB_TOKEN;
     delete process.env.GITEA_TOKEN;
@@ -430,13 +431,14 @@ describe('cloneRepository', () => {
     });
   });
 
-  // ── GH_TOKEN authentication ────────────────────────────────────────────
-  describe('GH_TOKEN authentication', () => {
+  // ── GitHub token authentication ────────────────────────────────────────
+  describe('GitHub token authentication', () => {
     beforeEach(() => {
       process.env.GH_TOKEN = 'ghp_testtoken123';
     });
 
     afterAll(() => {
+      delete process.env.GITHUB_TOKEN;
       delete process.env.GH_TOKEN;
     });
 
@@ -450,6 +452,20 @@ describe('cloneRepository', () => {
       expect(cloneCall?.[2]).toEqual({
         credentials: { username: 'ghp_testtoken123', password: '' },
       });
+    });
+
+    test('passes GITHUB_TOKEN as request-scoped clone credentials', async () => {
+      process.env.GITHUB_TOKEN = 'ghp_github_token_456';
+      delete process.env.GH_TOKEN;
+      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
+
+      await cloneRepository('https://github.com/owner/private-repo');
+
+      expect(getGitCloneCall()).toEqual([
+        'https://github.com/owner/private-repo',
+        '/home/test/.archon/workspaces/owner/private-repo/source',
+        { credentials: { username: 'ghp_github_token_456', password: '' } },
+      ]);
     });
 
     test('does NOT inject GH_TOKEN into non-github URLs when no forge token set', async () => {
@@ -1334,6 +1350,7 @@ describe('normalizeRepoUrl (via cloneRepository)', () => {
     clearMocks();
     restoreSpies();
     setupSpies();
+    delete process.env.GITHUB_TOKEN;
     delete process.env.GH_TOKEN;
   });
 
@@ -1370,6 +1387,7 @@ describe('name-based deduplication', () => {
     clearMocks();
     restoreSpies();
     setupSpies();
+    delete process.env.GITHUB_TOKEN;
     delete process.env.GH_TOKEN;
   });
 
@@ -1516,6 +1534,7 @@ describe('RegisterResult shape', () => {
     clearMocks();
     restoreSpies();
     setupSpies();
+    delete process.env.GITHUB_TOKEN;
     delete process.env.GH_TOKEN;
   });
 
