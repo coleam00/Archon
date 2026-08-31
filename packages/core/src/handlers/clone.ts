@@ -361,11 +361,11 @@ export async function cloneRepository(
 
   getLog().info({ url: workingUrl, targetPath }, 'clone_started');
 
-  // Build clone command with authentication — GitHub uses env-based credential
-  // helper to avoid leaking tokens into git logs and /proc/*/cmdline; other
-  // forges use http.extraHeader so they receive Bearer tokens over HTTPS.
-  const { token: envToken } = resolveForgeAuth(workingUrl);
-  const isGitHub = workingUrl.includes('github.com');
+  // Use a request-scoped credential helper so no clone credential reaches git
+  // argv or is persisted in the cloned repository's remote URL.
+  const { token: envToken, scheme } = resolveForgeAuth(workingUrl);
+  const hostname = safeParseUrl(workingUrl)?.hostname;
+  const isGitHub = hostname === 'github.com';
 
   let cloneConfigArgs: string[] = [];
   let cloneEnv: NodeJS.ProcessEnv | undefined;
@@ -391,10 +391,23 @@ export async function cloneRepository(
       };
       getLog().debug('clone_github_credential_helper');
     }
-  } else if (envToken) {
-    // Non-GitHub forges authenticate via Bearer header in git config args.
-    cloneConfigArgs = ['-c', `http.extraHeader=Authorization: Bearer ${envToken}`];
-    getLog().debug('clone_forge_bearer_auth');
+  } else if (envToken && hostname) {
+    cloneConfigArgs = [
+      '-c',
+      'credential.helper=',
+      '-c',
+      `credential.https://${hostname}.helper=` +
+        '!f() { test "$1" = get && printf "username=%s\\npassword=%s\\n" ' +
+        '"$ARCHON_GIT_USER" "$ARCHON_GIT_PASS"; }; f',
+      '-c',
+      `credential.https://${hostname}.useHttpPath=true`,
+    ];
+    cloneEnv = {
+      ...process.env,
+      ARCHON_GIT_USER: scheme === 'oauth2:' ? 'oauth2' : 'x-access-token',
+      ARCHON_GIT_PASS: envToken,
+    };
+    getLog().debug('clone_forge_credential_helper');
   }
 
   // Remove the empty source/ directory before cloning (git clone requires non-existent target)

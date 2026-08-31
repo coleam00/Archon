@@ -177,9 +177,8 @@ export async function syncWorkspace(
       'credential.https://github.com.useHttpPath=true',
     ];
     fetchEnv = {
-      PATH: process.env.PATH,
-      HOME: process.env.HOME,
-      LANG: process.env.LANG,
+      ...process.env,
+      GIT_TERMINAL_PROMPT: '0',
       ARCHON_GIT_USER: 'x-access-token',
       ARCHON_GIT_PASS: pat,
     };
@@ -404,19 +403,35 @@ export async function cloneRepository(
   options?: { token?: string }
 ): Promise<GitResult<void>> {
   try {
-    let cloneUrl = url;
-    if (options?.token) {
-      // Construct authenticated URL: https://<token>@github.com/owner/repo.git
-      const parsed = new URL(url);
-      parsed.username = options.token;
-      cloneUrl = parsed.toString();
-    }
+    const hostname = options?.token ? new URL(url).hostname : undefined;
+    const cloneArgs = options?.token
+      ? [
+          '-c',
+          'credential.helper=',
+          '-c',
+          `credential.https://${hostname}.helper=` +
+            '!f() { test "$1" = get && printf "username=%s\\npassword=%s\\n" ' +
+            '"$ARCHON_GIT_USER" "$ARCHON_GIT_PASS"; }; f',
+          '-c',
+          `credential.https://${hostname}.useHttpPath=true`,
+          'clone',
+          url,
+          targetPath,
+        ]
+      : ['clone', url, targetPath];
 
     // GIT_TERMINAL_PROMPT=0 turns any missing-creds scenario into an
     // immediate, readable error instead of a hung stdin credential prompt.
-    await execFileAsync('git', ['clone', cloneUrl, targetPath], {
+    await execFileAsync('git', cloneArgs, {
       timeout: 120000,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: '0',
+        ...(options?.token && {
+          ARCHON_GIT_USER: 'x-access-token',
+          ARCHON_GIT_PASS: options.token,
+        }),
+      },
     });
     return { ok: true, value: undefined };
   } catch (error) {
@@ -522,44 +537,49 @@ export async function addSafeDirectory(path: RepoPath): Promise<void> {
  * 2. Register the archon credential helper
  * 3. Enable useHttpPath so git sends path= to the helper
  *
- * Non-fatal: if any step fails the fetch will still attempt (and likely fail
- * with a clear auth error rather than silently using stale credentials).
+ * A failed credential removal is fatal: fetching with a remote that still
+ * embeds a token would preserve the credential exposure this repair prevents.
  */
 export async function healWorkspaceAuth(workspacePath: RepoPath): Promise<void> {
-  try {
-    const { stdout: rawUrl } = await execFileAsync(
-      'git',
-      ['-C', workspacePath, 'remote', 'get-url', 'origin'],
-      { timeout: 5000 }
-    );
-    const currentUrl = rawUrl.trim();
+  const { stdout: rawUrl } = await execFileAsync(
+    'git',
+    ['-C', workspacePath, 'remote', 'get-url', 'origin'],
+    { timeout: 5000 }
+  );
+  const currentUrl = rawUrl.trim();
 
-    // Only heal github.com remotes
-    if (!currentUrl.includes('github.com')) return;
+  // Only heal github.com remotes.
+  if (!currentUrl.includes('github.com')) return;
 
-    // 1. Strip embedded credentials (e.g. https://ghu_XXXX@github.com/...)
-    const cleanUrl = currentUrl.replace(/^https:\/\/[^/@]+@github\.com/, 'https://github.com');
-    if (cleanUrl !== currentUrl) {
+  const cleanUrl = currentUrl.replace(/^https:\/\/[^/@]+@github\.com/, 'https://github.com');
+  if (cleanUrl !== currentUrl) {
+    try {
       await execFileAsync('git', ['-C', workspacePath, 'remote', 'set-url', 'origin', cleanUrl], {
         timeout: 5000,
       });
+    } catch (error) {
+      const message = redactGitCredentials((error as Error).message);
+      getLog().error(
+        { workspacePath, errorMessage: message },
+        'workspace.auth_url_sanitize_failed'
+      );
+      throw new Error(`Could not remove credentials from the remote: ${message}`);
     }
-
-    // 2. Register the archon credential helper
-    const helperPath = resolve(getArchonHome(), 'bin', 'git-credential-archon');
-    await execFileAsync(
-      'git',
-      ['-C', workspacePath, 'config', 'credential.https://github.com.helper', helperPath],
-      { timeout: 5000 }
-    );
-
-    // 3. Enable useHttpPath so git sends path=owner/repo to the helper
-    await execFileAsync(
-      'git',
-      ['-C', workspacePath, 'config', 'credential.https://github.com.useHttpPath', 'true'],
-      { timeout: 5000 }
-    );
-  } catch (err) {
-    getLog().warn({ err: err as Error, workspacePath }, 'workspace.auth_heal_failed');
   }
+
+  const helperPath = resolve(getArchonHome(), 'bin', 'git-credential-archon');
+  await execFileAsync(
+    'git',
+    ['-C', workspacePath, 'config', 'credential.https://github.com.helper', helperPath],
+    { timeout: 5000 }
+  );
+  await execFileAsync(
+    'git',
+    ['-C', workspacePath, 'config', 'credential.https://github.com.useHttpPath', 'true'],
+    { timeout: 5000 }
+  );
+}
+
+function redactGitCredentials(message: string): string {
+  return message.replace(/https:\/\/[^/@\s]+@/g, 'https://[REDACTED]@');
 }

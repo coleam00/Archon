@@ -539,7 +539,7 @@ describe('cloneRepository', () => {
       delete process.env.GITEA_TOKEN;
     });
 
-    test('injects GITLAB_TOKEN via Bearer header for gitlab.com URLs', async () => {
+    test('uses a credential helper for gitlab.com URLs without exposing its token in argv', async () => {
       process.env.GITLAB_TOKEN = 'glpat-testtoken456';
       delete process.env.GH_TOKEN;
       mockCreateCodebase.mockResolvedValueOnce(
@@ -556,13 +556,17 @@ describe('cloneRepository', () => {
           cmd === 'git' && Array.isArray(args) && (args as string[]).includes('clone')
       );
       const gitArgs = cloneCall?.[1] as string[] | undefined;
-      expect(
-        gitArgs?.some((a: string) => a.includes('Authorization: Bearer glpat-testtoken456'))
-      ).toBe(true);
+      const cloneOpts = cloneCall?.[2] as { env?: Record<string, string> } | undefined;
+      expect(gitArgs).toContain('credential.https://gitlab.com.useHttpPath=true');
+      expect(gitArgs?.join('\0')).not.toContain('glpat-testtoken456');
+      expect(cloneOpts?.env).toMatchObject({
+        ARCHON_GIT_USER: 'oauth2',
+        ARCHON_GIT_PASS: 'glpat-testtoken456',
+      });
       delete process.env.GITLAB_TOKEN;
     });
 
-    test('injects GITLAB_TOKEN via Bearer header for self-hosted GitLab URLs', async () => {
+    test('uses a credential helper for self-hosted GitLab URLs', async () => {
       process.env.GITLAB_TOKEN = 'glpat-selfhosted';
       delete process.env.GH_TOKEN;
       mockCreateCodebase.mockResolvedValueOnce(
@@ -579,13 +583,17 @@ describe('cloneRepository', () => {
           cmd === 'git' && Array.isArray(args) && (args as string[]).includes('clone')
       );
       const gitArgs = cloneCall?.[1] as string[] | undefined;
-      expect(
-        gitArgs?.some((a: string) => a.includes('Authorization: Bearer glpat-selfhosted'))
-      ).toBe(true);
+      const cloneOpts = cloneCall?.[2] as { env?: Record<string, string> } | undefined;
+      expect(gitArgs).toContain('credential.https://gitlab.mycompany.com.useHttpPath=true');
+      expect(gitArgs?.join('\0')).not.toContain('glpat-selfhosted');
+      expect(cloneOpts?.env).toMatchObject({
+        ARCHON_GIT_USER: 'oauth2',
+        ARCHON_GIT_PASS: 'glpat-selfhosted',
+      });
       delete process.env.GITLAB_TOKEN;
     });
 
-    test('injects GITEA_TOKEN via Bearer header for Gitea URLs', async () => {
+    test('uses a credential helper for Gitea URLs', async () => {
       process.env.GITEA_TOKEN = 'gitea-token-789';
       delete process.env.GH_TOKEN;
       mockCreateCodebase.mockResolvedValueOnce(
@@ -602,13 +610,17 @@ describe('cloneRepository', () => {
           cmd === 'git' && Array.isArray(args) && (args as string[]).includes('clone')
       );
       const gitArgs = cloneCall?.[1] as string[] | undefined;
-      expect(
-        gitArgs?.some((a: string) => a.includes('Authorization: Bearer gitea-token-789'))
-      ).toBe(true);
+      const cloneOpts = cloneCall?.[2] as { env?: Record<string, string> } | undefined;
+      expect(gitArgs).toContain('credential.https://gitea.myorg.com.useHttpPath=true');
+      expect(gitArgs?.join('\0')).not.toContain('gitea-token-789');
+      expect(cloneOpts?.env).toMatchObject({
+        ARCHON_GIT_USER: 'x-access-token',
+        ARCHON_GIT_PASS: 'gitea-token-789',
+      });
       delete process.env.GITEA_TOKEN;
     });
 
-    test('injects GITEA_TOKEN via Bearer header for Forgejo URLs', async () => {
+    test('uses a credential helper for Forgejo URLs', async () => {
       process.env.GITEA_TOKEN = 'forgejo-token';
       delete process.env.GH_TOKEN;
       mockCreateCodebase.mockResolvedValueOnce(
@@ -625,9 +637,13 @@ describe('cloneRepository', () => {
           cmd === 'git' && Array.isArray(args) && (args as string[]).includes('clone')
       );
       const gitArgs = cloneCall?.[1] as string[] | undefined;
-      expect(gitArgs?.some((a: string) => a.includes('Authorization: Bearer forgejo-token'))).toBe(
-        true
-      );
+      const cloneOpts = cloneCall?.[2] as { env?: Record<string, string> } | undefined;
+      expect(gitArgs).toContain('credential.https://forgejo.example.org.useHttpPath=true');
+      expect(gitArgs?.join('\0')).not.toContain('forgejo-token');
+      expect(cloneOpts?.env).toMatchObject({
+        ARCHON_GIT_USER: 'x-access-token',
+        ARCHON_GIT_PASS: 'forgejo-token',
+      });
       delete process.env.GITEA_TOKEN;
     });
 

@@ -102,13 +102,16 @@ if [ -f "$HELPER_SRC" ]; then
     # Strip embedded credentials from remote URL
     clean_url=$(printf '%s' "$remote_url" | sed 's|https://[^/@]*@github\.com|https://github.com|')
     if [ "$clean_url" != "$remote_url" ]; then
-      $RUNNER git -C "$repo_dir" remote set-url origin "$clean_url" || true
+      if ! $RUNNER git -C "$repo_dir" remote set-url origin "$clean_url"; then
+        echo "[archon] failed to remove embedded credentials from $repo_dir" >&2
+        exit 1
+      fi
     fi
 
     # Drop stale helper registrations before re-setting (idempotent)
-    $RUNNER git -C "$repo_dir" config --unset-all credential."https://github.com".helper 2>/dev/null || true
-    $RUNNER git -C "$repo_dir" config credential."https://github.com".helper "$HELPER_DST" || true
-    $RUNNER git -C "$repo_dir" config credential."https://github.com".useHttpPath true || true
+    $RUNNER git -C "$repo_dir" config --unset-all credential."https://github.com".helper 2>/dev/null || :
+    $RUNNER git -C "$repo_dir" config credential."https://github.com".helper "$HELPER_DST"
+    $RUNNER git -C "$repo_dir" config credential."https://github.com".useHttpPath true
   done
   echo "[archon] workspace auth heal complete"
 fi

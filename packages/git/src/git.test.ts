@@ -1,7 +1,8 @@
 import { describe, test, expect, beforeEach, afterEach, mock, spyOn, type Mock } from 'bun:test';
-import { writeFile, mkdir as realMkdir, rm } from 'fs/promises';
+import { writeFile, readFile, mkdir as realMkdir, mkdtemp, chmod, rm } from 'fs/promises';
 import { join, resolve } from 'path';
 import { tmpdir, homedir } from 'os';
+import { removeTempTree } from '@archon/paths/test-utils';
 // Loaded BEFORE mock.module replaces the module in the registry, so these are
 // the REAL identity validators — the mock re-exports them (no drift possible).
 import { parseOwnerRepo, resolveRepoProjectIdentity } from '@archon/paths';
@@ -2497,6 +2498,7 @@ branch refs/heads/feature/auth
         env: expect.objectContaining({
           ARCHON_GIT_USER: 'x-access-token',
           ARCHON_GIT_PASS: 'ghu_test_secret_token_123',
+          GIT_TERMINAL_PROMPT: '0',
         }),
         timeout: 60000,
       });
@@ -2607,15 +2609,29 @@ branch refs/heads/feature/auth
       );
     });
 
-    test('handles errors non-fatally and logs warning', async () => {
-      const authErr = new Error('fatal: not a git repo');
-      execSpy.mockRejectedValue(authErr);
+    test('fails without logging an embedded credential when origin cleanup fails', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('get-url')) {
+          return { stdout: 'https://ghp_test_secret@github.com/owner/repo.git\n', stderr: '' };
+        }
+        if (args.includes('set-url')) {
+          throw new Error(
+            'fatal: failed to update https://ghp_test_secret@github.com/owner/repo.git'
+          );
+        }
+        return { stdout: '', stderr: '' };
+      });
+      mockLogger.error.mockClear();
 
-      await expect(git.healWorkspaceAuth(repo('/workspace/repo'))).resolves.toBeUndefined();
-
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        { err: authErr, workspacePath: '/workspace/repo' },
-        'workspace.auth_heal_failed'
+      await expect(git.healWorkspaceAuth(repo('/workspace/repo'))).rejects.toThrow(
+        'https://[REDACTED]@github.com'
+      );
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        {
+          workspacePath: '/workspace/repo',
+          errorMessage: expect.not.stringContaining('ghp_test_secret'),
+        },
+        'workspace.auth_url_sanitize_failed'
       );
     });
   });
@@ -2720,7 +2736,7 @@ branch refs/heads/feature/auth
       expect(env[pathKey!]).toBe(process.env[pathKey!]);
     });
 
-    test('constructs authenticated URL with token', async () => {
+    test('uses a credential helper without putting the token in git arguments', async () => {
       execSpy.mockResolvedValue({ stdout: '', stderr: '' });
 
       const result = await git.cloneRepository(
@@ -2732,10 +2748,64 @@ branch refs/heads/feature/auth
       );
 
       expect(result).toEqual({ ok: true, value: undefined });
-      // Verify the token is in the URL
-      const cloneUrl = execSpy.mock.calls[0]![1][1] as string;
-      expect(cloneUrl).toContain('ghp_abc123');
-      expect(cloneUrl).toContain('github.com');
+      const [args, options] = execSpy.mock.calls[0]!.slice(1) as [
+        string[],
+        { env?: NodeJS.ProcessEnv },
+      ];
+      expect(args).toContain('https://github.com/owner/repo.git');
+      expect(args.join('\0')).not.toContain('ghp_abc123');
+      expect(options.env).toMatchObject({
+        ARCHON_GIT_USER: 'x-access-token',
+        ARCHON_GIT_PASS: 'ghp_abc123',
+        GIT_TERMINAL_PROMPT: '0',
+      });
+    });
+
+    test('keeps a token out of the spawned git argv and origin config', async () => {
+      execSpy.mockRestore();
+      const fixtureRoot = await mkdtemp(join(tmpdir(), 'archon-git-clone-'));
+      const binDir = join(fixtureRoot, 'bin');
+      const invocationPath = join(fixtureRoot, 'invocation');
+      const targetPath = join(fixtureRoot, 'target');
+      const previousPath = process.env.PATH;
+      try {
+        await realMkdir(binDir);
+        await writeFile(
+          join(binDir, 'git'),
+          `#!/bin/sh
+printf '%s\\0' "$@" > "$ARCHON_TEST_GIT_ARGS"
+target=""
+url=""
+for arg in "$@"; do
+  case "$arg" in
+    https://*) url="$arg" ;;
+  esac
+  target="$arg"
+done
+mkdir -p "$target/.git"
+printf '[remote "origin"]\\n\\turl = %s\\n' "$url" > "$target/.git/config"
+`
+        );
+        await chmod(join(binDir, 'git'), 0o755);
+        process.env.PATH = `${binDir}:${previousPath ?? ''}`;
+        process.env.ARCHON_TEST_GIT_ARGS = invocationPath;
+
+        const token = 'ghp_real_process_secret';
+        const result = await git.cloneRepository(
+          'https://github.com/owner/repo.git',
+          repo(targetPath),
+          { token }
+        );
+
+        expect(result).toEqual({ ok: true, value: undefined });
+        expect(await readFile(invocationPath, 'utf8')).not.toContain(token);
+        expect(await readFile(join(targetPath, '.git', 'config'), 'utf8')).not.toContain(token);
+      } finally {
+        if (previousPath === undefined) delete process.env.PATH;
+        else process.env.PATH = previousPath;
+        delete process.env.ARCHON_TEST_GIT_ARGS;
+        await removeTempTree(fixtureRoot);
+      }
     });
 
     test('returns not_a_repo error for 404', async () => {
