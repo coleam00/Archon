@@ -28,13 +28,15 @@ interface CreateConversationResponse {
 
 export async function createConversation(
   projectId: string,
-  message?: string
+  message?: string,
+  messageId?: string
 ): Promise<CreateConversationResponse> {
+  const body: Record<string, string> = { codebaseId: projectId };
+  if (message !== undefined) body.message = message;
+  if (messageId !== undefined) body.messageId = messageId;
   return requestJson<CreateConversationResponse>('/api/conversations', {
     method: 'POST',
-    body: JSON.stringify(
-      message !== undefined ? { codebaseId: projectId, message } : { codebaseId: projectId }
-    ),
+    body: JSON.stringify(body),
   });
 }
 
@@ -48,14 +50,15 @@ export async function listConversations(projectId: string): Promise<Conversation
 export async function sendMessage(
   conversationPlatformId: string,
   message: string,
-  files?: File[]
+  files?: File[],
+  messageId?: string
 ): Promise<void> {
   const url = `/api/conversations/${encodeURIComponent(conversationPlatformId)}/message`;
 
   if (files === undefined || files.length === 0) {
     await requestJson<{ accepted: boolean; status: string }>(url, {
       method: 'POST',
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, id: messageId }),
     });
     return;
   }
@@ -63,6 +66,9 @@ export async function sendMessage(
   // Multipart path: don't set Content-Type — the browser adds the boundary.
   const form = new FormData();
   form.append('message', message);
+  if (messageId) {
+    form.append('id', messageId);
+  }
   for (const file of files) {
     form.append('files', file, file.name);
   }

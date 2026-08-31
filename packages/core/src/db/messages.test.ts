@@ -91,6 +91,19 @@ describe('messages', () => {
       ]);
     });
 
+    test('persists custom message id when provided', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([mockMessage]));
+
+      await addMessage('conv-456', 'user', 'Hello', undefined, undefined, 'custom-uuid-123');
+
+      expect(mockQuery).toHaveBeenCalledWith(
+        `INSERT INTO remote_agent_messages (id, conversation_id, role, content, metadata, user_id, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, NOW())
+     RETURNING *`,
+        ['custom-uuid-123', 'conv-456', 'user', 'Hello', '{}', null]
+      );
+    });
+
     test('defaults metadata to empty object when not provided', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([mockMessage]));
 

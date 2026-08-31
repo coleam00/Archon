@@ -265,6 +265,7 @@ import * as isolationEnvDb from '@archon/core/db/isolation-environments';
 import * as workflowDb from '@archon/core/db/workflows';
 import * as workflowEventDb from '@archon/core/db/workflow-events';
 import * as messageDb from '@archon/core/db/messages';
+import { pool } from '@archon/core/db/connection';
 import * as userDb from '@archon/core/db/users';
 import {
   abandonWorkflow,
@@ -708,6 +709,24 @@ const sendMessageRoute = createRoute({
       description: 'Accepted',
     },
     400: jsonError('Bad request'),
+    500: jsonError('Server error'),
+  },
+});
+
+const stopConversationRoute = createRoute({
+  method: 'post',
+  path: '/api/conversations/{id}/stop',
+  tags: ['Conversations'],
+  summary: 'Stop an in-progress conversation orchestrator run',
+  request: {
+    params: conversationIdParamsSchema,
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: successResponseSchema } },
+      description: 'Stopped',
+    },
+    404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
 });
@@ -2393,12 +2412,17 @@ export function registerApiRoutes(
     return { ok: true, savedFiles, uploadDir };
   }
 
+  const conversationAbortControllers = new Map<string, AbortController>();
+
   async function dispatchToOrchestrator(
     conversationId: string,
     message: string,
     extraContext?: Omit<HandleMessageContext, 'isolationHints'>,
     filesToCleanup?: { files: AttachedFile[]; uploadDir: string }
   ): Promise<{ accepted: boolean; status: string }> {
+    const abortController = new AbortController();
+    conversationAbortControllers.set(conversationId, abortController);
+
     const result = await lockManager.acquireLock(conversationId, async () => {
       // Emit lock:true at handler start so the UI knows processing has begun.
       // Fire-and-forget — if no SSE stream is connected yet, the event is buffered.
@@ -2406,9 +2430,14 @@ export function registerApiRoutes(
       try {
         await handleMessage(webAdapter, conversationId, message, {
           isolationHints: { workflowType: 'thread', workflowId: conversationId },
+          abortSignal: abortController.signal,
           ...extraContext,
         });
       } catch (error) {
+        if (abortController.signal.aborted) {
+          getLog().info({ conversationId }, 'dispatch_to_orchestrator_aborted');
+          return;
+        }
         getLog().error({ err: error, conversationId }, 'handle_message_failed');
         try {
           await webAdapter.emitSSE(
@@ -2424,6 +2453,9 @@ export function registerApiRoutes(
           getLog().error({ err: sseError, conversationId }, 'sse_error_emit_failed');
         }
       } finally {
+        if (conversationAbortControllers.get(conversationId) === abortController) {
+          conversationAbortControllers.delete(conversationId);
+        }
         await webAdapter.emitLockEvent(conversationId, false);
         // Clean up uploaded files AFTER handleMessage completes so the AI subprocess
         // has had a chance to read them. Doing this in the HTTP handler's finally block
@@ -2733,7 +2765,7 @@ export function registerApiRoutes(
   // Accepts optional `message` field for atomic create+send (avoids ghost "Untitled" entries)
   registerOpenApiRoute(createConversationRoute, async c => {
     try {
-      const { codebaseId, message } = getValidatedBody(c, createConversationBodySchema);
+      const { codebaseId, message, messageId } = getValidatedBody(c, createConversationBodySchema);
       const userId = await resolveWebUserId(c);
 
       // Validate codebase exists if provided
@@ -2742,6 +2774,38 @@ export function registerApiRoutes(
         if (!codebase) {
           return apiError(c, 400, 'Codebase not found', `No codebase with id "${codebaseId}"`);
         }
+      }
+
+      let providedMessageId: string | undefined;
+      if (messageId) {
+        // Validate uuid shape
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (!uuidRegex.test(messageId)) {
+          return apiError(
+            c,
+            400,
+            'Invalid message ID format',
+            'Provided message ID must be a valid UUID'
+          );
+        }
+        // Validate uniqueness
+        try {
+          const existing = await pool.query('SELECT 1 FROM remote_agent_messages WHERE id = $1', [
+            messageId,
+          ]);
+          if (existing.rows.length > 0) {
+            return apiError(
+              c,
+              400,
+              'Message ID already exists',
+              'Provided message ID must be unique'
+            );
+          }
+        } catch (dbErr: unknown) {
+          getLog().error({ err: dbErr, messageId }, 'message_id_uniqueness_check_failed');
+          return apiError(c, 500, 'Database check failed');
+        }
+        providedMessageId = messageId;
       }
 
       const conversationId = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -2758,7 +2822,14 @@ export function registerApiRoutes(
       // If message provided, dispatch it atomically (avoids ghost "Untitled" conversations)
       if (message) {
         try {
-          await messageDb.addMessage(conversation.id, 'user', message, undefined, userId);
+          await messageDb.addMessage(
+            conversation.id,
+            'user',
+            message,
+            undefined,
+            userId,
+            providedMessageId
+          );
         } catch (e: unknown) {
           // Log only (no SSE warning) — the SSE stream isn't connected yet for new conversations.
           // The existing /message endpoint emits a warning because the stream is guaranteed to be active.
@@ -2881,6 +2952,7 @@ export function registerApiRoutes(
     let message: string;
     let savedFiles: AttachedFile[] = [];
     let uploadDir = '';
+    let providedMessageId: string | undefined;
 
     const contentType = c.req.header('content-type') ?? '';
 
@@ -2898,6 +2970,11 @@ export function registerApiRoutes(
         return c.json({ error: 'message must be a non-empty string' }, 400);
       }
       message = rawMessage;
+
+      const rawId = body.id;
+      if (typeof rawId === 'string' && rawId) {
+        providedMessageId = rawId;
+      }
 
       const rawFiles = body.files;
       let fileList: (string | File)[];
@@ -2920,7 +2997,7 @@ export function registerApiRoutes(
         getLog().info({ conversationId, fileCount: savedFiles.length }, 'message.files_uploaded');
       }
     } else {
-      let body: { message?: unknown };
+      let body: { message?: unknown; id?: unknown };
       try {
         body = await c.req.json();
       } catch (parseErr: unknown) {
@@ -2932,6 +3009,33 @@ export function registerApiRoutes(
         return c.json({ error: 'message must be a non-empty string' }, 400);
       }
       message = body.message;
+
+      if (typeof body.id === 'string' && body.id) {
+        providedMessageId = body.id;
+      }
+    }
+
+    if (providedMessageId) {
+      // Validate uuid shape
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(providedMessageId)) {
+        return c.json({ error: 'Invalid message ID format' }, 400);
+      }
+      // Validate uniqueness
+      try {
+        const existing = await pool.query('SELECT 1 FROM remote_agent_messages WHERE id = $1', [
+          providedMessageId,
+        ]);
+        if (existing.rows.length > 0) {
+          return c.json({ error: 'Message ID already exists' }, 400);
+        }
+      } catch (dbErr: unknown) {
+        getLog().error(
+          { err: dbErr, messageId: providedMessageId },
+          'message_id_uniqueness_check_failed'
+        );
+        return c.json({ error: 'Database check failed' }, 500);
+      }
     }
 
     // Look up conversation for message persistence
@@ -2951,7 +3055,7 @@ export function registerApiRoutes(
           ? { files: savedFiles.map(f => ({ name: f.name, mimeType: f.mimeType, size: f.size })) }
           : undefined;
       try {
-        await messageDb.addMessage(conv.id, 'user', message, meta, userId);
+        await messageDb.addMessage(conv.id, 'user', message, meta, userId, providedMessageId);
       } catch (e: unknown) {
         getLog().error({ err: e, conversationId: conv.id }, 'message_persistence_failed');
         try {
@@ -2986,6 +3090,27 @@ export function registerApiRoutes(
       filesToCleanup
     );
     return c.json(result);
+  });
+
+  // POST /api/conversations/:id/stop - Interrupt active orchestrator run
+  registerOpenApiRoute(stopConversationRoute, async c => {
+    const platformConversationId = c.req.param('id') ?? '';
+    try {
+      const conv = await conversationDb.findConversationByPlatformId(platformConversationId);
+      if (!conv) {
+        return apiError(c, 404, 'Conversation not found');
+      }
+      const controller = conversationAbortControllers.get(platformConversationId);
+      if (controller) {
+        controller.abort();
+        conversationAbortControllers.delete(platformConversationId);
+      }
+      webAdapter.emitLockEvent(platformConversationId, false);
+      return c.json({ success: true });
+    } catch (error) {
+      getLog().error({ err: error }, 'stop_conversation_failed');
+      return apiError(c, 500, 'Failed to stop conversation run');
+    }
   });
 
   // GET /api/stream/__dashboard__ — multiplexed dashboard SSE (all workflow events)

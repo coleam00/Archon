@@ -141,11 +141,13 @@ export async function listConversations(codebaseId?: string): Promise<Conversati
 
 export async function createConversation(
   codebaseId?: string,
-  message?: string
+  message?: string,
+  messageId?: string
 ): Promise<{ conversationId: string; id: string; dispatched?: boolean }> {
   const body: Record<string, string> = {};
   if (codebaseId) body.codebaseId = codebaseId;
   if (message) body.message = message;
+  if (messageId) body.messageId = messageId;
 
   return fetchJSON('/api/conversations', {
     method: 'POST',
@@ -169,10 +171,18 @@ export async function deleteConversation(id: string): Promise<{ success: boolean
   return fetchJSON(`/api/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
+export async function stopConversationRun(conversationId: string): Promise<{ success: boolean }> {
+  const url = `/api/conversations/${encodeURIComponent(conversationId)}/stop`;
+  return fetchJSON(url, {
+    method: 'POST',
+  });
+}
+
 export async function sendMessage(
   conversationId: string,
   message: string,
-  files?: File[]
+  files?: File[],
+  messageId?: string
 ): Promise<{ accepted: boolean; status: string }> {
   const url = `/api/conversations/${encodeURIComponent(conversationId)}/message`;
 
@@ -180,12 +190,15 @@ export async function sendMessage(
     return fetchJSON(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, id: messageId }),
     });
   }
 
   const form = new FormData();
   form.append('message', message);
+  if (messageId) {
+    form.append('id', messageId);
+  }
   for (const file of files) {
     form.append('files', file, file.name);
   }

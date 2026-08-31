@@ -50,6 +50,10 @@ export interface HandleMessageContext {
   readonly isolationHints?: IsolationHints;
   readonly attachedFiles?: AttachedFile[];
   /**
+   * Optional AbortSignal to cancel/interrupt an in-flight orchestrator query.
+   */
+  readonly abortSignal?: AbortSignal;
+  /**
    * Archon user UUID resolved from the inbound platform user identifier.
    * Chat/forge adapters resolve this via findOrCreateUserByPlatformIdentity
    * before calling handleMessage. Undefined for web/CLI surfaces until their

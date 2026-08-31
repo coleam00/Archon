@@ -150,6 +150,18 @@ export function classifyAndFormatError(error: Error): string {
     return '⚠️ AI service authentication error. Please check your API key or credentials.';
   }
 
+  // AI Service Provider Outage / 503 Service Unavailable
+  if (
+    lower.includes('503') ||
+    lower.includes('service unavailable') ||
+    lower.includes('service_unavailable') ||
+    lower.includes('temporarily unavailable') ||
+    lower.includes('provider unavailable') ||
+    (lower.includes('overloaded') && !message.startsWith('Codex query failed:'))
+  ) {
+    return '⚠️ 503: Archon is fine, the AI service provider is currently DOWN.';
+  }
+
   // Network errors - timeout
   if (message.includes('timeout') || message.includes('ETIMEDOUT')) {
     return '⚠️ Request timed out. The AI service may be slow. Try again or use /reset.';

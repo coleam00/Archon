@@ -38,6 +38,7 @@ export const createConversationBodySchema = z
   .object({
     codebaseId: z.string().optional(),
     message: z.string().optional(),
+    messageId: z.string().optional(),
   })
   .strict()
   .openapi('CreateConversationBody');
@@ -76,13 +77,17 @@ export const messageListResponseSchema = z.array(messageSchema).openapi('Message
 
 /** POST /api/conversations/:id/message JSON request body. */
 export const sendMessageBodySchema = z
-  .object({ message: z.string().min(1) })
+  .object({
+    message: z.string().min(1),
+    id: z.string().optional(),
+  })
   .openapi('SendMessageBody');
 
 /** POST /api/conversations/:id/message multipart request body (file uploads). */
 export const sendMessageMultipartSchema = z
   .object({
     message: z.string().min(1),
+    id: z.string().optional(),
     files: z
       .array(z.string().openapi({ format: 'binary' }))
       .max(5)

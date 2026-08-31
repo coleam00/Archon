@@ -19,6 +19,7 @@ import {
   createConversation,
   getWorkflowRunByWorker,
   getHealth,
+  stopConversationRun,
 } from '@/lib/api';
 import type { ConversationResponse, CodebaseResponse, MessageResponse } from '@/lib/api';
 import type {
@@ -97,6 +98,21 @@ function mapMessageRow(row: MessageResponse): ChatMessage {
     timestamp: new Date(ensureUtc(row.created_at)).getTime(),
     isStreaming: false,
   };
+}
+
+function safeRandomUUID(): string {
+  if (typeof window !== 'undefined' && window.crypto?.randomUUID) {
+    try {
+      return window.crypto.randomUUID();
+    } catch {
+      // fall through to the manual UUID fallback below
+    }
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
 }
 
 interface ChatInterfaceProps {
@@ -181,19 +197,39 @@ export function ChatInterface({
           // survive hydration regardless of isStreaming state.
           // Note: dedup below relies on SSE messages using 'msg-{timestamp}' IDs that
           // never match DB-assigned IDs. Keep SSE IDs synthetic to preserve this invariant.
-          const activeSSE = prev.filter(
-            m =>
-              m.role === 'system' ||
-              (m.isStreaming && (m.content || sendActive)) ||
-              (m.toolCalls && m.toolCalls.length > 0)
-          );
-          if (activeSSE.length === 0) return hydrated;
-          // Merge: DB is canonical, append SSE-only messages that aren't yet in DB.
-          // Identify which SSE messages are already covered by hydrated DB data to avoid dupes.
           const hydratedIds = new Set(hydrated.map(m => m.id));
-          const sseOnly = activeSSE.filter(m => !hydratedIds.has(m.id));
-          if (sseOnly.length === 0) return hydrated;
-          const merged = [...hydrated, ...sseOnly];
+          const systemMessages = prev.filter(m => m.role === 'system' && !hydratedIds.has(m.id));
+          const errorMessages = prev.filter(
+            m => Boolean(m.error) && !hydratedIds.has(m.id) && !m.content && !m.toolCalls?.length
+          );
+          const unpersistedUserMessages = prev.filter(
+            m => m.role === 'user' && !hydratedIds.has(m.id)
+          );
+          const lastHydrated = hydrated[hydrated.length - 1];
+          const hasCompletedAssistantTurn = lastHydrated?.role === 'assistant';
+          const streamingMessages = prev.filter(m => {
+            if (!m.isStreaming) return false;
+            if (hydratedIds.has(m.id)) return false;
+            if (!m.content && (!m.toolCalls || m.toolCalls.length === 0)) {
+              return sendActive && !hasCompletedAssistantTurn;
+            }
+            return !hasCompletedAssistantTurn;
+          });
+          if (
+            systemMessages.length === 0 &&
+            errorMessages.length === 0 &&
+            unpersistedUserMessages.length === 0 &&
+            streamingMessages.length === 0
+          ) {
+            return hydrated;
+          }
+          const merged = [
+            ...hydrated,
+            ...systemMessages,
+            ...errorMessages,
+            ...unpersistedUserMessages,
+            ...streamingMessages,
+          ];
           merged.sort((a, b) => a.timestamp - b.timestamp);
           return merged;
         });
@@ -457,18 +493,14 @@ export function ChatInterface({
             setMessages(prev => {
               const hydratedIds = new Set(hydrated.map(m => m.id));
               // Keep only meaningful client-only messages not present in hydrated set.
-              // Exclude optimistic user rows and empty thinking placeholders.
+              // Keep only client system messages and transient error cards not in DB.
+              // Persisted DB messages (hydrated) are canonical for assistant responses.
               const clientOnly = prev.filter(m => {
                 if (hydratedIds.has(m.id)) return false;
                 if (m.role === 'system') return true;
-                if (m.role !== 'assistant') return false;
-                return (
-                  Boolean(m.content) ||
-                  Boolean(m.error) ||
-                  Boolean(m.workflowDispatch) ||
-                  Boolean(m.workflowResult) ||
-                  Boolean(m.toolCalls?.length)
-                );
+                if (m.error && !m.content && (!m.toolCalls || m.toolCalls.length === 0))
+                  return true;
+                return false;
               });
               if (clientOnly.length === 0) return hydrated;
               // Interleave client-only messages at their original positions by timestamp
@@ -586,22 +618,34 @@ export function ChatInterface({
     ...workflowSSEHandlers,
   });
 
+  const handleStop = useCallback(async () => {
+    try {
+      await stopConversationRun(conversationId);
+      setSending(false);
+      setLocked(false);
+    } catch (err) {
+      console.error('Failed to stop run:', err);
+    }
+  }, [conversationId]);
+
   const handleSend = useCallback(
     async (message: string, uploadedFiles?: File[]): Promise<void> => {
       // Build lightweight attachment metadata for optimistic UI display
       const fileAttachments: FileAttachment[] | undefined =
         uploadedFiles && uploadedFiles.length > 0
           ? uploadedFiles.map(f => ({
-              id: crypto.randomUUID(),
+              id: safeRandomUUID(),
               name: f.name,
               mimeType: f.type,
               size: f.size,
             }))
           : undefined;
 
+      const messageId = safeRandomUUID();
+
       // Add user message + thinking indicator to UI immediately
       const userMsg: ChatMessage = {
-        id: nextId(),
+        id: messageId,
         role: 'user',
         content: message,
         timestamp: Date.now(),
@@ -627,7 +671,8 @@ export function ChatInterface({
         try {
           const { conversationId: newId } = await createConversation(
             selectedProjectId ?? undefined,
-            message
+            message,
+            messageId
           );
           targetConversationId = newId;
           // Cache messages under the new ID so the remounted ChatInterface picks them up
@@ -659,7 +704,7 @@ export function ChatInterface({
       }
 
       try {
-        await apiSendMessage(targetConversationId, message, uploadedFiles);
+        await apiSendMessage(targetConversationId, message, uploadedFiles, messageId);
         // Invalidate conversations cache once after first non-command message
         // so the auto-generated title appears in the sidebar immediately
         if (!hasTriggeredTitleRefresh.current && !message.startsWith('/')) {
@@ -742,6 +787,8 @@ export function ChatInterface({
           isStreaming ||
           (currentConv != null && currentConv.platform_type !== 'web')
         }
+        isRunning={sending || locked || isStreaming}
+        onStop={handleStop}
         disabledReason={
           currentConv != null && currentConv.platform_type !== 'web'
             ? 'Continuing chats from other platforms in the Web UI is coming soon'

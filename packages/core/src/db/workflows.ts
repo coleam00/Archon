@@ -497,8 +497,9 @@ export async function findWorkflowRunsByIdPrefix(
 ): Promise<WorkflowRun[]> {
   if (idPrefix.length === 0 || !/^[0-9a-fA-F-]+$/.test(idPrefix)) return [];
   try {
+    const idCondition = getDatabaseType() === 'postgresql' ? 'id::text LIKE $2' : 'id LIKE $2';
     const result = await pool.query<WorkflowRun>(
-      'SELECT * FROM remote_agent_workflow_runs WHERE codebase_id = $1 AND id LIKE $2 LIMIT 2',
+      `SELECT * FROM remote_agent_workflow_runs WHERE codebase_id = $1 AND ${idCondition} LIMIT 2`,
       [codebaseId, `${idPrefix}%`]
     );
     return result.rows.map(normalizeWorkflowRun);

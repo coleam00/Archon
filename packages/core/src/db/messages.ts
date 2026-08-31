@@ -25,15 +25,23 @@ export async function addMessage(
   role: 'user' | 'assistant',
   content: string,
   metadata?: Record<string, unknown>,
-  userId?: string
+  userId?: string,
+  id?: string
 ): Promise<MessageRow> {
   const dialect = getDialect();
-  const result = await pool.query<MessageRow>(
-    `INSERT INTO remote_agent_messages (conversation_id, role, content, metadata, user_id, created_at)
+  const result = id
+    ? await pool.query<MessageRow>(
+        `INSERT INTO remote_agent_messages (id, conversation_id, role, content, metadata, user_id, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, ${dialect.now()})
+     RETURNING *`,
+        [id, conversationId, role, content, JSON.stringify(metadata ?? {}), userId ?? null]
+      )
+    : await pool.query<MessageRow>(
+        `INSERT INTO remote_agent_messages (conversation_id, role, content, metadata, user_id, created_at)
      VALUES ($1, $2, $3, $4, $5, ${dialect.now()})
      RETURNING *`,
-    [conversationId, role, content, JSON.stringify(metadata ?? {}), userId ?? null]
-  );
+        [conversationId, role, content, JSON.stringify(metadata ?? {}), userId ?? null]
+      );
   const row = result.rows[0];
   if (!row) {
     throw new Error(

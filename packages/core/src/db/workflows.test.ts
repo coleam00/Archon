@@ -22,6 +22,7 @@ mock.module('./connection', () => ({
 import {
   createWorkflowRun,
   getWorkflowRun,
+  findWorkflowRunsByIdPrefix,
   getWorkflowRunStatus,
   getActiveWorkflowRun,
   getActiveWorkflowRunByPath,
@@ -182,6 +183,42 @@ describe('workflows database', () => {
       const result = await getWorkflowRun('non-existent');
 
       expect(result).toBeNull();
+    });
+  });
+
+  describe('findWorkflowRunsByIdPrefix', () => {
+    test('finds workflow runs by id prefix with uuid text cast', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([mockWorkflowRun]));
+
+      const results = await findWorkflowRunsByIdPrefix('791ea29d', 'codebase-789');
+
+      expect(results).toEqual([mockWorkflowRun]);
+      expect(mockQuery).toHaveBeenCalledWith(
+        'SELECT * FROM remote_agent_workflow_runs WHERE codebase_id = $1 AND id::text LIKE $2 LIMIT 2',
+        ['codebase-789', '791ea29d%']
+      );
+    });
+
+    test('returns empty array for invalid prefix charset', async () => {
+      const results = await findWorkflowRunsByIdPrefix('invalid;drop', 'codebase-789');
+
+      expect(results).toEqual([]);
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    test('returns empty array for empty prefix', async () => {
+      const results = await findWorkflowRunsByIdPrefix('', 'codebase-789');
+
+      expect(results).toEqual([]);
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    test('throws on database error', async () => {
+      mockQuery.mockRejectedValueOnce(new Error('Connection refused'));
+
+      await expect(findWorkflowRunsByIdPrefix('791ea29d', 'codebase-789')).rejects.toThrow(
+        'Failed to find workflow runs by id prefix: Connection refused'
+      );
     });
   });
 

@@ -1944,6 +1944,7 @@ export async function handleMessage(
     parentConversationId,
     isolationHints,
     attachedFiles,
+    abortSignal,
     userId,
   } = context ?? {};
   // Anchor "is this a slash command" at the true start of the message —
@@ -2501,6 +2502,7 @@ export async function handleMessage(
       protectedEnvKeys: protectedEnvKeys.length > 0 ? protectedEnvKeys : undefined,
       model: chatRequest.model,
       systemPrompt,
+      abortSignal,
     };
     if (chatRequest.preset) {
       applyPresetToRequestOptions(providerKey, chatRequest.preset, requestOptions);
@@ -2683,6 +2685,14 @@ export async function handleMessage(
     getLog().debug({ conversationId }, 'orchestrator_message_completed');
   } catch (error) {
     const err = toError(error);
+    if (
+      abortSignal?.aborted ||
+      err.name === 'AbortError' ||
+      err.message.toLowerCase().includes('abort')
+    ) {
+      getLog().info({ conversationId }, 'orchestrator_message_aborted');
+      return;
+    }
     getLog().error({ err, conversationId }, 'orchestrator_message_failed');
     const userMessage = classifyAndFormatError(err);
     try {
@@ -2801,6 +2811,10 @@ async function handleStreamMode(
       // pair raw — without it, direct chat would surface a spurious error to
       // the user and drop the actual conversation output.
       if (msg.isError && msg.errorSubtype !== 'success') {
+        if (requestOptions?.abortSignal?.aborted) {
+          getLog().info({ conversationId }, 'orchestrator_stream_turn_aborted');
+          return;
+        }
         getLog().warn(
           {
             conversationId,
@@ -3035,6 +3049,10 @@ async function handleBatchMode(
       // pair raw — without it, direct chat would surface a spurious error to
       // the user and drop the actual conversation output.
       if (msg.isError && msg.errorSubtype !== 'success') {
+        if (requestOptions?.abortSignal?.aborted) {
+          getLog().info({ conversationId }, 'orchestrator_batch_turn_aborted');
+          return;
+        }
         getLog().warn(
           {
             conversationId,

@@ -38,6 +38,14 @@ const mockAddMessage = mock(
 const mockListMessages = mock(async (_conversationId: string, _limit?: number) => []);
 const mockHandleMessage = mock(async () => {});
 
+const mockPoolQuery = mock(() => Promise.resolve({ rows: [] }));
+
+mock.module('@archon/core/db/connection', () => ({
+  pool: {
+    query: mockPoolQuery,
+  },
+}));
+
 mock.module('@archon/core', () => ({
   handleMessage: mockHandleMessage,
   getDatabaseType: () => 'sqlite',
@@ -218,6 +226,8 @@ describe('POST /api/conversations/:id/message', () => {
     mockFindConversationByPlatformId.mockReset();
     mockHandleMessage.mockReset();
     mockAddMessage.mockReset();
+    mockPoolQuery.mockReset();
+    mockPoolQuery.mockResolvedValue({ rows: [] });
   });
 
   test('accepts a valid message and dispatches to orchestrator', async () => {
@@ -269,8 +279,58 @@ describe('POST /api/conversations/:id/message', () => {
       'user',
       'Test message',
       undefined,
+      undefined,
       undefined
     );
+  });
+
+  test('persists user message to DB with client-provided message id when valid', async () => {
+    const validUuid = '123e4567-e89b-12d3-a456-426614174000';
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+    mockPoolQuery.mockResolvedValueOnce({ rows: [] }); // unique check
+    mockAddMessage.mockImplementationOnce(async () => ({
+      id: validUuid,
+      conversation_id: MOCK_CONV.id,
+      role: 'user' as const,
+      content: 'Hello UUID',
+      metadata: '{}',
+      created_at: new Date().toISOString(),
+    }));
+    mockHandleMessage.mockImplementationOnce(async () => {});
+
+    const { app } = makeApp();
+    const response = await app.request('/api/conversations/web-test-abc/message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'Hello UUID', id: validUuid }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(mockAddMessage).toHaveBeenCalledWith(
+      MOCK_CONV.id,
+      'user',
+      'Hello UUID',
+      undefined,
+      undefined,
+      validUuid
+    );
+  });
+
+  test('rejects an invalid message ID format', async () => {
+    const invalidUuid = 'not-a-uuid';
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+
+    const { app } = makeApp();
+    const response = await app.request('/api/conversations/web-test-abc/message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'Hello UUID', id: invalidUuid }),
+    });
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toBe('Invalid message ID format');
+    expect(mockAddMessage).not.toHaveBeenCalled();
   });
 
   test('still dispatches when conversation lookup fails (no message persistence)', async () => {
