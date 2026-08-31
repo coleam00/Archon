@@ -36,11 +36,10 @@ function getLog(): ReturnType<typeof createLogger> {
 
 /** Git context for a repo's cleanup operations, resolved from repo config. */
 interface RepoGitContext {
-  mainBranch: BranchName;
   /** Remote-qualified base ref (e.g. "origin/main"), kept current via `git fetch`. */
   remoteMainRef: BranchName;
-  /** Configured remote name (worktree.remote); undefined means 'origin' downstream. */
-  remote?: string;
+  /** Configured remote name (worktree.remote). Always resolved to a string (defaults to 'origin'). */
+  remote: string;
 }
 
 // Resolve the base branch and remote for a repo, preferring worktree.baseBranch /
@@ -54,11 +53,10 @@ async function resolveRepoGitContext(repoPath: RepoPath, cwd: string): Promise<R
   const remote = repoConfig.worktree?.remote?.trim() || 'origin';
   const configured = repoConfig.worktree?.baseBranch?.trim();
   if (configured) {
-    const branch = toBranchName(configured);
-    return { mainBranch: branch, remoteMainRef: toBranchName(`${remote}/${configured}`), remote };
+    return { remoteMainRef: toBranchName(`${remote}/${configured}`), remote };
   }
   const branch = await getDefaultBranch(repoPath, remote);
-  return { mainBranch: branch, remoteMainRef: toBranchName(`${remote}/${branch}`), remote };
+  return { remoteMainRef: toBranchName(`${remote}/${branch}`), remote };
 }
 
 // Configuration constants (configurable via env vars)
@@ -362,7 +360,7 @@ export async function removeEnvironment(
     // that's the one destroy path that pushes to a remote.
     if (options?.deleteRemoteBranch && codebase?.default_cwd) {
       const repoConfig = await loadRepoConfig(codebase.default_cwd);
-      configuredRemote = repoConfig.worktree?.remote?.trim() || undefined;
+      configuredRemote = repoConfig.worktree?.remote?.trim() || 'origin';
     }
   }
 
@@ -526,11 +524,27 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
           mainRepoPath,
           env.codebase_default_cwd
         );
-        const merged = await isBranchMerged(
+        let merged = await isBranchMerged(
           mainRepoPath,
           toBranchName(env.branch_name),
           remoteMainRef
         );
+
+        // Fallback to patch-equivalence for squash-merge detection.
+        // git cherry via isPatchEquivalent detects single-commit squash-merges.
+        // Multi-commit squash-merges need the PR-state (gh) fallback, which this
+        // scheduled-cleanup loop lacks — that is a known limitation.
+        if (!merged) {
+          try {
+            merged = await isPatchEquivalent(
+              mainRepoPath,
+              toBranchName(env.branch_name),
+              remoteMainRef
+            );
+          } catch {
+            // Patch-equivalence is best-effort; a failure doesn't change the result.
+          }
+        }
 
         if (merged) {
           const blocker = await getRemovalBlocker(env);
@@ -694,6 +708,14 @@ export async function getWorktreeStatusBreakdown(
         { err: error, envId: env.id, branchName: env.branch_name },
         'merge_check_error_in_breakdown'
       );
+    }
+    // Fallback to patch-equivalence for squash-merge detection.
+    if (!merged) {
+      try {
+        merged = await isPatchEquivalent(repoPath, toBranchName(env.branch_name), remoteMainRef);
+      } catch {
+        // Patch-equivalence is best-effort; a failure doesn't change the result.
+      }
     }
     if (merged) {
       breakdown.merged++;
