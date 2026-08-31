@@ -623,42 +623,42 @@ describe('cloneRepository', () => {
   describe('resolveForgeAuth', () => {
     const { resolveForgeAuth } = require('./clone');
 
-    test('returns GH_TOKEN for github.com', () => {
+    test('returns GH_TOKEN as username credentials for github.com', () => {
       process.env.GH_TOKEN = 'ghp_abc';
       const result = resolveForgeAuth('https://github.com/owner/repo');
-      expect(result).toEqual({ token: 'ghp_abc', scheme: '' });
+      expect(result).toEqual({ username: 'ghp_abc', password: '' });
       delete process.env.GH_TOKEN;
     });
 
-    test('returns GITLAB_TOKEN with oauth2: scheme for gitlab.com', () => {
+    test('returns GITLAB_TOKEN as oauth2 password credentials for gitlab.com', () => {
       process.env.GITLAB_TOKEN = 'glpat-xyz';
       const result = resolveForgeAuth('https://gitlab.com/owner/repo');
-      expect(result).toEqual({ token: 'glpat-xyz', scheme: 'oauth2:' });
+      expect(result).toEqual({ username: 'oauth2', password: 'glpat-xyz' });
       delete process.env.GITLAB_TOKEN;
     });
 
-    test('returns undefined token when env var is not set', () => {
+    test('returns undefined when the credential env var is not set', () => {
       delete process.env.GH_TOKEN;
       const result = resolveForgeAuth('https://github.com/owner/repo');
-      expect(result).toEqual({ token: undefined, scheme: '' });
+      expect(result).toBeUndefined();
     });
 
-    test('returns empty for unknown forge', () => {
+    test('returns undefined for unknown forge', () => {
       const result = resolveForgeAuth('https://bitbucket.org/owner/repo');
-      expect(result).toEqual({ token: undefined, scheme: '' });
+      expect(result).toBeUndefined();
     });
 
     test('resolves GH_TOKEN for bare host/path form without protocol', () => {
       process.env.GH_TOKEN = 'ghp_bare';
       const result = resolveForgeAuth('github.com/owner/repo');
-      expect(result).toEqual({ token: 'ghp_bare', scheme: '' });
+      expect(result).toEqual({ username: 'ghp_bare', password: '' });
       delete process.env.GH_TOKEN;
     });
 
     test('does not match forge name in URL path (security)', () => {
       process.env.GITLAB_TOKEN = 'glpat-leaked';
       const result = resolveForgeAuth('https://evil.example.com/gitlab/mirror');
-      expect(result).toEqual({ token: undefined, scheme: '' });
+      expect(result).toBeUndefined();
       delete process.env.GITLAB_TOKEN;
     });
 
@@ -666,16 +666,16 @@ describe('cloneRepository', () => {
       process.env.GITEA_URL = 'https://git.example.com';
       process.env.GITEA_TOKEN = 'gitea_tok_123';
       const result = resolveForgeAuth('https://git.example.com/group/app.git');
-      expect(result).toEqual({ token: 'gitea_tok_123', scheme: '' });
+      expect(result).toEqual({ username: 'gitea_tok_123', password: '' });
       delete process.env.GITEA_URL;
       delete process.env.GITEA_TOKEN;
     });
 
-    test('returns GITLAB_TOKEN with oauth2: scheme when GITLAB_URL hostname matches', () => {
+    test('returns GITLAB_TOKEN as oauth2 password credentials when GITLAB_URL matches', () => {
       process.env.GITLAB_URL = 'https://code.mycompany.com';
       process.env.GITLAB_TOKEN = 'glpat-corp';
       const result = resolveForgeAuth('https://code.mycompany.com/team/project');
-      expect(result).toEqual({ token: 'glpat-corp', scheme: 'oauth2:' });
+      expect(result).toEqual({ username: 'oauth2', password: 'glpat-corp' });
       delete process.env.GITLAB_URL;
       delete process.env.GITLAB_TOKEN;
     });
@@ -685,13 +685,10 @@ describe('cloneRepository', () => {
       process.env.GITLAB_TOKEN = 'glpat-port';
 
       expect(resolveForgeAuth('https://code.mycompany.com:8443/team/project')).toEqual({
-        token: 'glpat-port',
-        scheme: 'oauth2:',
+        username: 'oauth2',
+        password: 'glpat-port',
       });
-      expect(resolveForgeAuth('https://code.mycompany.com:9443/team/project')).toEqual({
-        token: undefined,
-        scheme: '',
-      });
+      expect(resolveForgeAuth('https://code.mycompany.com:9443/team/project')).toBeUndefined();
 
       delete process.env.GITLAB_URL;
       delete process.env.GITLAB_TOKEN;
@@ -701,7 +698,7 @@ describe('cloneRepository', () => {
       process.env.GITEA_URL = 'https://git.example.com';
       process.env.GITEA_TOKEN = 'gitea_tok_secret';
       const result = resolveForgeAuth('https://evil.example.com/repo');
-      expect(result).toEqual({ token: undefined, scheme: '' });
+      expect(result).toBeUndefined();
       delete process.env.GITEA_URL;
       delete process.env.GITEA_TOKEN;
     });
@@ -710,7 +707,7 @@ describe('cloneRepository', () => {
       process.env.GITEA_URL = 'https://git.example.com';
       delete process.env.GITEA_TOKEN;
       const result = resolveForgeAuth('https://git.example.com/group/app');
-      expect(result).toEqual({ token: undefined, scheme: '' });
+      expect(result).toBeUndefined();
       delete process.env.GITEA_URL;
     });
   });

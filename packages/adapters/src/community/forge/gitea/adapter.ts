@@ -545,18 +545,28 @@ export class GiteaAdapter implements IPlatformAdapter {
     if (!cloneResult.ok) {
       getLog().error({ owner, repo, repoPath, error: cloneResult.error }, 'repo_clone_failed');
 
-      if (cloneResult.error.code === 'not_a_repo') {
-        throw new Error(
-          `Repository ${owner}/${repo} not found or is private. Check repository access.`
-        );
+      switch (cloneResult.error.code) {
+        case 'not_a_repo':
+          throw new Error(
+            `Repository ${owner}/${repo} not found or is private. Check repository access.`
+          );
+        case 'permission_denied':
+          throw new Error(
+            `Authentication failed for ${owner}/${repo}. Check GITEA_TOKEN permissions.`
+          );
+        case 'no_space':
+          throw new Error(
+            `No space left while cloning ${owner}/${repo} to ${cloneResult.error.path}.`
+          );
+        case 'branch_not_found':
+          throw new Error(
+            `Failed to clone ${owner}/${repo}: branch ${cloneResult.error.branch} not found.`
+          );
+        case 'unknown':
+          throw new Error(`Failed to clone ${owner}/${repo}: ${cloneResult.error.message}`);
       }
-      if (cloneResult.error.code === 'permission_denied') {
-        throw new Error(
-          `Authentication failed for ${owner}/${repo}. Check GITEA_TOKEN permissions.`
-        );
-      }
-      const unknownMsg = (cloneResult.error as { message?: string }).message ?? 'unknown error';
-      throw new Error(`Failed to clone ${owner}/${repo}: ${unknownMsg}`);
+      const unhandled: never = cloneResult.error;
+      throw new Error(`Unhandled clone error: ${JSON.stringify(unhandled)}`);
     }
 
     await addSafeDirectory(toRepoPath(repoPath));

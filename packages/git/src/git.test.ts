@@ -2714,6 +2714,46 @@ branch refs/heads/feature/auth
       expect(JSON.stringify(result)).not.toContain(credential);
     });
 
+    for (const { name, url, credential } of [
+      {
+        name: 'backslash userinfo',
+        url: 'https://backslash-secret-789\\@127.0.0.1:9/owner/repo.git',
+        credential: 'backslash-secret-789',
+      },
+      {
+        name: 'query credentials',
+        url: 'https://example.test/owner/repo.git?access_token=query-secret-789',
+        credential: 'query-secret-789',
+      },
+      {
+        name: 'fragment credentials',
+        url: 'https://example.test/owner/repo.git#access_token=fragment-secret-789',
+        credential: 'fragment-secret-789',
+      },
+    ]) {
+      test.skipIf(process.platform === 'win32')(
+        `rejects ${name} before spawning a real child`,
+        async () => {
+          execSpy.mockRestore();
+          const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-clone-url-reject-')));
+          const fixture = await createRecordingGitFixture(root);
+          mockLogger.error.mockClear();
+
+          const result = await fixture.run(() =>
+            git.cloneRepository(url, repo(join(root, 'clone')))
+          );
+
+          expect(result).toEqual({
+            ok: false,
+            error: { code: 'unknown', message: 'Invalid HTTP(S) repository URL' },
+          });
+          expect(await fixture.readInvocations()).toEqual([]);
+          expect(JSON.stringify(result)).not.toContain(credential);
+          expect(mockLogger.error).not.toHaveBeenCalled();
+        }
+      );
+    }
+
     test('sanitizes authenticated clone failures before returning or logging them', async () => {
       const token = 'unexpected-error-token-654';
       execSpy.mockRejectedValue(

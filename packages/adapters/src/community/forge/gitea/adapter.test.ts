@@ -202,6 +202,44 @@ describe('GiteaAdapter', () => {
     }
   });
 
+  describe('clone errors', () => {
+    function ensureRepoReady(): Promise<void> {
+      return (
+        adapter as unknown as {
+          ensureRepoReady(
+            owner: string,
+            repo: string,
+            defaultBranch: string,
+            repoPath: string,
+            shouldSync: boolean
+          ): Promise<void>;
+        }
+      ).ensureRepoReady('owner', 'repo', 'main', '/definitely/missing/gitea-repo', false);
+    }
+
+    test('preserves the clone destination when disk space is exhausted', async () => {
+      mockCloneRepository.mockResolvedValueOnce({
+        ok: false,
+        error: { code: 'no_space', path: '/clone/destination' },
+      });
+
+      await expect(ensureRepoReady()).rejects.toThrow(
+        'No space left while cloning owner/repo to /clone/destination.'
+      );
+    });
+
+    test('surfaces the message from an unknown clone failure', async () => {
+      mockCloneRepository.mockResolvedValueOnce({
+        ok: false,
+        error: { code: 'unknown', message: 'transport helper crashed' },
+      });
+
+      await expect(ensureRepoReady()).rejects.toThrow(
+        'Failed to clone owner/repo: transport helper crashed'
+      );
+    });
+  });
+
   describe('bot mention detection', () => {
     test('should detect mention case-insensitively', () => {
       const adapterWithMention = new GiteaAdapter(

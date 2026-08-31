@@ -384,6 +384,7 @@ const ENV_CREDENTIAL_HELPER =
 
 function parseHttpCloneUrl(url: string): URL | null | { error: string } {
   if (!/^\s*https?:/i.test(url)) return null;
+  if (url.includes('\\')) return { error: 'Invalid HTTP(S) repository URL' };
 
   let parsed: URL;
   try {
@@ -397,6 +398,9 @@ function parseHttpCloneUrl(url: string): URL | null | { error: string } {
   }
   if (parsed.username || parsed.password) {
     return { error: 'Repository URL must not include credentials' };
+  }
+  if (parsed.search || parsed.hash) {
+    return { error: 'Invalid HTTP(S) repository URL' };
   }
   return parsed;
 }
@@ -428,9 +432,10 @@ export async function cloneRepository(
       error: { code: 'unknown', message: 'Authenticated clones require an HTTP(S) repository URL' },
     };
   }
+  const cloneUrl = parsedUrl?.href ?? url;
 
   try {
-    const args = ['clone', url, targetPath];
+    const args = ['clone', cloneUrl, targetPath];
     const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
     delete env.ARCHON_GIT_USERNAME;
     delete env.ARCHON_GIT_PASSWORD;
@@ -457,7 +462,7 @@ export async function cloneRepository(
     const message = sanitizedMessage.toLowerCase();
 
     if (message.includes('not found') || message.includes('404')) {
-      return { ok: false, error: { code: 'not_a_repo', path: url } };
+      return { ok: false, error: { code: 'not_a_repo', path: cloneUrl } };
     }
     if (
       message.includes('authentication failed') ||
@@ -465,13 +470,16 @@ export async function cloneRepository(
       message.includes('access denied') ||
       message.includes('403')
     ) {
-      return { ok: false, error: { code: 'permission_denied', path: url } };
+      return { ok: false, error: { code: 'permission_denied', path: cloneUrl } };
     }
     if (message.includes('no space')) {
       return { ok: false, error: { code: 'no_space', path: targetPath } };
     }
 
-    getLog().error({ url, targetPath, errorMessage: sanitizedMessage }, 'clone_repository_failed');
+    getLog().error(
+      { url: cloneUrl, targetPath, errorMessage: sanitizedMessage },
+      'clone_repository_failed'
+    );
     return { ok: false, error: { code: 'unknown', message: sanitizedMessage } };
   }
 }

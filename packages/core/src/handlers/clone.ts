@@ -47,38 +47,57 @@ function safeParseUrl(url: string): URL | null {
   }
 }
 
-/** Forge auth config: how to resolve a token and which clone username form to use. */
+type BuildForgeCredentials = (token: string) => CloneCredentials;
+
+const tokenAsUsername: BuildForgeCredentials = token => ({ username: token, password: '' });
+const tokenAsOAuth2Password: BuildForgeCredentials = token => ({
+  username: 'oauth2',
+  password: token,
+});
+
+/** Forge auth config: how to resolve a token and turn it into clone credentials. */
 interface ForgeAuthEntry {
   hostPattern: string;
   resolveToken: () => string | undefined;
-  scheme: ForgeAuthScheme;
+  buildCredentials: BuildForgeCredentials;
 }
 
-type ForgeAuthScheme = '' | 'oauth2:';
-
-/** Known exact-hostname → credential source + scheme mappings. */
+/** Known exact-hostname → credential source + clone credential mappings. */
 const FORGE_AUTH: ForgeAuthEntry[] = [
-  { hostPattern: 'github.com', resolveToken: resolveGitHubTokenFromEnv, scheme: '' },
+  {
+    hostPattern: 'github.com',
+    resolveToken: resolveGitHubTokenFromEnv,
+    buildCredentials: tokenAsUsername,
+  },
   {
     hostPattern: 'gitlab.com',
     resolveToken: () => process.env.GITLAB_TOKEN,
-    scheme: 'oauth2:',
+    buildCredentials: tokenAsOAuth2Password,
   },
-  { hostPattern: 'gitea.com', resolveToken: () => process.env.GITEA_TOKEN, scheme: '' },
+  {
+    hostPattern: 'gitea.com',
+    resolveToken: () => process.env.GITEA_TOKEN,
+    buildCredentials: tokenAsUsername,
+  },
 ];
 
-/** Well-known self-hosted hostname label patterns → env var + scheme. */
-const SELF_HOSTED_FORGE: { label: string; envVar: string; scheme: ForgeAuthScheme }[] = [
-  { label: 'gitlab', envVar: 'GITLAB_TOKEN', scheme: 'oauth2:' },
-  { label: 'gitea', envVar: 'GITEA_TOKEN', scheme: '' },
-  { label: 'forgejo', envVar: 'GITEA_TOKEN', scheme: '' },
+/** Well-known self-hosted hostname label patterns → env var + clone credentials. */
+const SELF_HOSTED_FORGE: {
+  label: string;
+  envVar: string;
+  buildCredentials: BuildForgeCredentials;
+}[] = [
+  {
+    label: 'gitlab',
+    envVar: 'GITLAB_TOKEN',
+    buildCredentials: tokenAsOAuth2Password,
+  },
+  { label: 'gitea', envVar: 'GITEA_TOKEN', buildCredentials: tokenAsUsername },
+  { label: 'forgejo', envVar: 'GITEA_TOKEN', buildCredentials: tokenAsUsername },
 ];
 
 /** Resolve forge-specific credentials without adding them to the repository URL. */
-export function resolveForgeAuth(url: string): {
-  token: string | undefined;
-  scheme: ForgeAuthScheme;
-} {
+export function resolveForgeAuth(url: string): CloneCredentials | undefined {
   // Extract hostname from URL (or from bare host/path like "github.com/owner/repo")
   let hostname: string;
   const parsed = safeParseUrl(url);
@@ -94,10 +113,7 @@ export function resolveForgeAuth(url: string): {
   for (const entry of FORGE_AUTH) {
     if (hostname === entry.hostPattern) {
       const token = entry.resolveToken();
-      if (token) {
-        return { token, scheme: entry.scheme };
-      }
-      return { token: undefined, scheme: '' };
+      return token ? entry.buildCredentials(token) : undefined;
     }
   }
 
@@ -107,10 +123,7 @@ export function resolveForgeAuth(url: string): {
   for (const entry of SELF_HOSTED_FORGE) {
     if (labels.includes(entry.label)) {
       const token = process.env[entry.envVar];
-      if (token) {
-        return { token, scheme: entry.scheme };
-      }
-      return { token: undefined, scheme: '' };
+      return token ? entry.buildCredentials(token) : undefined;
     }
   }
 
@@ -120,11 +133,23 @@ export function resolveForgeAuth(url: string): {
   const URL_FORGE: {
     urlEnvVar: string;
     tokenEnvVar: string;
-    scheme: ForgeAuthScheme;
+    buildCredentials: BuildForgeCredentials;
   }[] = [
-    { urlEnvVar: 'GITEA_URL', tokenEnvVar: 'GITEA_TOKEN', scheme: '' },
-    { urlEnvVar: 'GITLAB_URL', tokenEnvVar: 'GITLAB_TOKEN', scheme: 'oauth2:' },
-    { urlEnvVar: 'FORGEJO_URL', tokenEnvVar: 'GITEA_TOKEN', scheme: '' },
+    {
+      urlEnvVar: 'GITEA_URL',
+      tokenEnvVar: 'GITEA_TOKEN',
+      buildCredentials: tokenAsUsername,
+    },
+    {
+      urlEnvVar: 'GITLAB_URL',
+      tokenEnvVar: 'GITLAB_TOKEN',
+      buildCredentials: tokenAsOAuth2Password,
+    },
+    {
+      urlEnvVar: 'FORGEJO_URL',
+      tokenEnvVar: 'GITEA_TOKEN',
+      buildCredentials: tokenAsUsername,
+    },
   ];
   for (const entry of URL_FORGE) {
     const forgeUrl = process.env[entry.urlEnvVar];
@@ -132,14 +157,12 @@ export function resolveForgeAuth(url: string): {
       const forgeParsed = safeParseUrl(forgeUrl);
       if (forgeParsed?.host.toLowerCase() === authority) {
         const token = process.env[entry.tokenEnvVar];
-        if (token) {
-          return { token, scheme: entry.scheme };
-        }
+        if (token) return entry.buildCredentials(token);
       }
     }
   }
 
-  return { token: undefined, scheme: '' };
+  return undefined;
 }
 
 export interface RegisterResult {
@@ -372,19 +395,14 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
 
   // Resolve authentication without putting it into the repository URL.
   let cloneUrl = workingUrl;
-  const { token: forgeToken, scheme: authScheme } = resolveForgeAuth(workingUrl);
-  let credentials: CloneCredentials | undefined;
+  const credentials = resolveForgeAuth(workingUrl);
 
-  if (forgeToken) {
+  if (credentials) {
     const parsed = safeParseUrl(workingUrl);
     if (!parsed && !/^https?:/i.test(workingUrl)) {
       // Bare host/path form (e.g. github.com/owner/repo)
       cloneUrl = `https://${workingUrl}`;
     }
-    credentials =
-      authScheme === 'oauth2:'
-        ? { username: 'oauth2', password: forgeToken }
-        : { username: forgeToken, password: '' };
   }
 
   // Remove the empty source/ directory before cloning (git clone requires non-existent target)
