@@ -1,6 +1,16 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { closeSync, fstatSync, lstatSync, mkdirSync, openSync, rmSync, statSync } from 'node:fs';
+import {
+  closeSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import { createConnection, createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -454,19 +464,57 @@ export function requestDetachedRunStop(runId: string): Promise<DetachedRunStopTa
 function processExists(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return true;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'EPERM';
   }
+  if (process.platform === 'linux') {
+    try {
+      const stat = readFileSync(`/proc/${String(pid)}/stat`, 'utf8');
+      const rparen = stat.lastIndexOf(')');
+      if (rparen !== -1) {
+        const state = stat.slice(rparen + 2).split(' ')[0];
+        return state !== 'Z';
+      }
+    } catch {
+      return false;
+    }
+  }
+  return true;
 }
 
 function processGroupExists(pid: number): boolean {
   try {
     process.kill(-pid, 0);
-    return true;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'EPERM';
   }
+  if (process.platform === 'linux') {
+    try {
+      const entries = readdirSync('/proc');
+      let foundAlive = false;
+      for (const entry of entries) {
+        if (!/^[0-9]+$/.test(entry)) continue;
+        try {
+          const stat = readFileSync(`/proc/${entry}/stat`, 'utf8');
+          const rparen = stat.lastIndexOf(')');
+          if (rparen === -1) continue;
+          const rest = stat.slice(rparen + 2).split(' ');
+          const state = rest[0];
+          const pgrp = parseInt(rest[2] ?? '0', 10);
+          if (pgrp === pid && state !== 'Z') {
+            foundAlive = true;
+            break;
+          }
+        } catch {
+          // Process exited during iteration
+        }
+      }
+      return foundAlive;
+    } catch {
+      return true;
+    }
+  }
+  return true;
 }
 
 async function waitUntilGone(exists: () => boolean, timeoutMs: number): Promise<boolean> {

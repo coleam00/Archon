@@ -767,6 +767,7 @@ const addCodebaseRoute = createRoute({
       description: 'Codebase created',
     },
     400: jsonError('Bad request'),
+    403: jsonError('Forbidden'),
     500: jsonError('Server error'),
   },
 });
@@ -1611,7 +1612,7 @@ export function registerApiRoutes(
 ): void {
   function apiError(
     c: Context,
-    status: 400 | 401 | 404 | 422 | 500 | 503,
+    status: 400 | 401 | 403 | 404 | 422 | 500 | 503,
     message: string,
     detail?: string
   ): Response {
@@ -1725,7 +1726,7 @@ export function registerApiRoutes(
   // STRIPS it from inbound requests (or the app binds 127.0.0.1). If you retire
   // the proxy auth sidecar, the proxy MUST still strip that header — otherwise a
   // client can forge it and walk straight through this gate.
-  const PUBLIC_API_GATE_PREFIXES = ['/api/auth/', '/api/health'];
+  const PUBLIC_API_GATE_PREFIXES = ['/api/auth/', '/api/health', '/api/openapi.json'];
   app.use('/api/*', async (c, next) => {
     if (!isApiGateEnabled()) return next();
     const path = c.req.path;
@@ -3123,6 +3124,24 @@ export function registerApiRoutes(
       // needs no new field.
       let result;
       if (body.url) {
+        const isGithub = body.url.includes('github.com') || body.url.startsWith('git@github.com:');
+        if (isGithub) {
+          const hasEnvToken = Boolean(process.env.GH_TOKEN || process.env.GITHUB_TOKEN);
+          const authCtx = await resolveAuthContext(c);
+          const perUser =
+            typeof isPerUserGitHubEnabled === 'function' ? isPerUserGitHubEnabled() : false;
+          const userToken =
+            authCtx?.userId && perUser && typeof getUserGithubTokenRecord === 'function'
+              ? await getUserGithubTokenRecord(authCtx.userId)
+              : null;
+          if (!hasEnvToken && !userToken) {
+            return apiError(
+              c,
+              403,
+              'GitHub clone requires a connected GitHub account or GH_TOKEN / GITHUB_TOKEN environment variable'
+            );
+          }
+        }
         result = await cloneRepository(body.url);
       } else {
         const localPath = body.path ?? '';
@@ -5031,11 +5050,12 @@ export function registerApiRoutes(
 
     // Merge lock-based and DB-based active tracking.
     // Background workflows bypass the lock manager, so we combine both sources.
-    const lockActiveSet = new Set(stats.activeConversationIds);
+    const lockActiveIds = stats.activeConversationIds ?? [];
+    const lockActiveSet = new Set(lockActiveIds);
     const backgroundConversationIds = runningWorkflowRows
       .map(r => r.conversation_id)
       .filter(id => !lockActiveSet.has(id));
-    const allActiveIds = [...stats.activeConversationIds, ...backgroundConversationIds];
+    const allActiveIds = [...lockActiveIds, ...backgroundConversationIds];
     const wslDistro = getWSLDistroName();
 
     // Health is public (PUBLIC_API_GATE_PREFIXES) and must stay answerable when the

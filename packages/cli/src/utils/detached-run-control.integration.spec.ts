@@ -46,10 +46,22 @@ function waitForExit(
 function processExists(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return true;
   } catch {
     return false;
   }
+  if (process.platform === 'linux') {
+    try {
+      const stat = readFileSync(`/proc/${String(pid)}/stat`, 'utf8');
+      const rparen = stat.lastIndexOf(')');
+      if (rparen !== -1) {
+        const state = stat.slice(rparen + 2).split(' ')[0];
+        return state !== 'Z';
+      }
+    } catch {
+      return false;
+    }
+  }
+  return true;
 }
 
 async function listen(server: Server, path: string): Promise<void> {

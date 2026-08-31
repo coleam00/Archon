@@ -57,6 +57,8 @@ mock.module('@archon/core', () => ({
     }
   },
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
+  isPerUserGitHubEnabled: mock(() => false),
+  getUserGithubTokenRecord: mock(async () => null),
   generateAndSetTitle: mock(async () => {}),
   resolveTitleRequest: mock(async () => ({ provider: 'claude', options: {} })),
   createLogger: () => ({

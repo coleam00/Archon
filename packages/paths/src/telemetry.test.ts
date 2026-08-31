@@ -674,7 +674,7 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     expect(props.surface).toBe('server');
     expect(props.db_kind).toBe('postgresql');
     expect(props.web_auth_enabled).toBe(true);
-    expect(props.github_auth_mode).toBe('app');
+    expect(props.github_auth_mode).toBe('oauth');
     expect(props.adapter_slack).toBe(true);
     // Omitted fields must not appear on the wire at all
     expect('multi_user' in props).toBe(false);

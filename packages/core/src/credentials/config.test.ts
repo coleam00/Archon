@@ -65,13 +65,13 @@ describe('credentials/config', () => {
   });
 
   describe('per-user GitHub independence', () => {
-    test('auto-key does NOT enable per-user GitHub (needs GITHUB_APP_ID + TOKEN_ENCRYPTION_KEY)', () => {
+    test('auto-key does NOT enable per-user GitHub (needs GITHUB_CLIENT_ID + TOKEN_ENCRYPTION_KEY)', () => {
       expect(isPerUserGitHubEnabled({})).toBe(false);
-      expect(isPerUserGitHubEnabled({ GITHUB_APP_ID: '1' })).toBe(false);
+      expect(isPerUserGitHubEnabled({ GITHUB_CLIENT_ID: '1' })).toBe(false);
       expect(isPerUserGitHubEnabled({ TOKEN_ENCRYPTION_KEY: VALID_KEY })).toBe(false);
-      expect(isPerUserGitHubEnabled({ GITHUB_APP_ID: '1', TOKEN_ENCRYPTION_KEY: VALID_KEY })).toBe(
-        true
-      );
+      expect(
+        isPerUserGitHubEnabled({ GITHUB_CLIENT_ID: '1', TOKEN_ENCRYPTION_KEY: VALID_KEY })
+      ).toBe(true);
     });
   });
 });

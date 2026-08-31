@@ -3571,7 +3571,7 @@ async function runSubprocess(
   // once here rather than separately per path — a success path that redacted less than
   // the failure path would be the security hole, not a style difference.
   const credentialValues = collectSubprocessCredentialValues(
-    subprocessEnv,
+    execContext.kind === 'container' ? subprocessEnv : { ...process.env, ...subprocessEnv },
     options.protectedEnvKeys,
     options.protectedCredentialValues
   );
