@@ -131,6 +131,35 @@ the user.
 Report outcomes with their evidence: "completed, review verdict ready:false —
 2 findings remain, report at <path>" beats "done".
 
+## Discoveries: the sdlc pack's out-of-scope findings
+
+A convention of the bundled sdlc workflows (`archon-ship`, `archon-deliver`,
+`archon-review`, `archon-stabilize`, `archon-upkeep`), not of workflows in
+general. Their review lenses record *proven* findings that fall outside the
+run's accepted scope as discovery sidecars instead of blocking findings: raw
+per-producer files at `<artifacts>/discoveries/*.json` (records of `title`,
+`claim`, `evidence`, `relation: adjacent | scope_conflict`, `source_node`),
+consolidated by the review into `discoveries.json` plus a human-readable
+`discoveries.md`. The terminal report ends with a discoveries section addressed
+to you, the relaying agent — deliberately, because the run itself never files
+issues from them. **If you drop a discovery at this hop, nobody ever sees it.**
+
+When such a run reaches terminal:
+
+1. Read the report's Discoveries section; when it names any, open
+   `discoveries.md` (locate it through `leave_behind.artifactFiles`).
+2. On a **failed** run, also check the raw `discoveries/*.json` sidecars —
+   consolidation runs late, so a run that died mid-flight can hold raw records
+   no report mentions.
+3. Surface each worthwhile discovery to the user with its evidence, and ask
+   where it goes: an evidence comment on the existing issue it belongs to, a
+   new issue when it is a novel defect, or an explicit drop. File nothing
+   without the user's go unless they have given standing authorization.
+
+Discoveries arrive validated (`evidence` carries concrete `file:line` facts or
+command results), and `adjacent` ones never affected the run's readiness — do
+not re-litigate the verdict from them; route them.
+
 ## When a run looks wrong
 
 - Paused unexpectedly → `get --verbose`; look at the failing node's error and the

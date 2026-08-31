@@ -139,6 +139,10 @@ unattended), and never funnel a batch through a single polling loop.
 `outcome`. Read it with `get --json`, locate the report under
 `leave_behind.artifactFiles`, and use a separate `get --verbose --json` call for
 node summaries. Read the report before telling the user what the run concluded.
+For the bundled sdlc workflows, the report may end with a discoveries section
+addressed to you — route it per `../manage-run/manage-runs.md` ("Discoveries"):
+surface each finding to the user and ask where to log it. The run deliberately
+files nothing itself, so a discovery dropped here is lost.
 
 ## Continuing finished work
 
