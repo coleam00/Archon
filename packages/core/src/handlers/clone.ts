@@ -5,8 +5,12 @@
 import { access, rm, stat } from 'fs/promises';
 import { join, basename, resolve } from 'path';
 import * as codebaseDb from '../db/codebases';
-import { sanitizeError } from '../utils/credential-sanitizer';
-import { execFileAsync } from '@archon/git';
+import {
+  assertCredentialFreeRemoteUrl,
+  cloneRepository as cloneGitRepository,
+  execFileAsync,
+  toRepoPath,
+} from '@archon/git';
 import { findCodebaseForCheckoutPath } from '../services/codebase-checkout-resolver';
 import {
   expandTilde,
@@ -23,7 +27,6 @@ import {
 import { findMarkdownFilesRecursive } from '../utils/commands';
 import { createLogger } from '@archon/paths';
 import { resolveDefaultAssistant } from '../config/resolve-assistant';
-import { installCredentialHelper } from '../github-auth/credential-helper-install';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -319,6 +322,7 @@ export async function cloneRepository(
   }
 
   const { workingUrl, ownerName, repoName, targetPath } = normalizeRepoUrl(repoUrl);
+  assertCredentialFreeRemoteUrl(workingUrl);
 
   // Check if source directory already has a git repo
   let directoryExists = false;
@@ -361,54 +365,11 @@ export async function cloneRepository(
 
   getLog().info({ url: workingUrl, targetPath }, 'clone_started');
 
-  // Use a request-scoped credential helper so no clone credential reaches git
-  // argv or is persisted in the cloned repository's remote URL.
+  // Pass credentials separately to the shared clone boundary so they never
+  // reach argv or the persisted remote URL.
   const { token: envToken, scheme } = resolveForgeAuth(workingUrl);
-  const hostname = safeParseUrl(workingUrl)?.hostname;
-  const isGitHub = hostname === 'github.com';
-
-  let cloneConfigArgs: string[] = [];
-  let cloneEnv: NodeJS.ProcessEnv | undefined;
-
-  if (isGitHub) {
-    // authToken (per-user PAT) wins over envToken (ambient GH_TOKEN).
-    const ghToken = authToken ?? envToken;
-    if (ghToken) {
-      cloneConfigArgs = [
-        '-c',
-        'credential.helper=',
-        '-c',
-        'credential.https://github.com.helper=' +
-          '!f() { test "$1" = get && printf "username=%s\\npassword=%s\\n" ' +
-          '"$ARCHON_GIT_USER" "$ARCHON_GIT_PASS"; }; f',
-        '-c',
-        'credential.https://github.com.useHttpPath=true',
-      ];
-      cloneEnv = {
-        ...process.env,
-        ARCHON_GIT_USER: 'x-access-token',
-        ARCHON_GIT_PASS: ghToken,
-      };
-      getLog().debug('clone_github_credential_helper');
-    }
-  } else if (envToken && hostname) {
-    cloneConfigArgs = [
-      '-c',
-      'credential.helper=',
-      '-c',
-      `credential.https://${hostname}.helper=` +
-        '!f() { test "$1" = get && printf "username=%s\\npassword=%s\\n" ' +
-        '"$ARCHON_GIT_USER" "$ARCHON_GIT_PASS"; }; f',
-      '-c',
-      `credential.https://${hostname}.useHttpPath=true`,
-    ];
-    cloneEnv = {
-      ...process.env,
-      ARCHON_GIT_USER: scheme === 'oauth2:' ? 'oauth2' : 'x-access-token',
-      ARCHON_GIT_PASS: envToken,
-    };
-    getLog().debug('clone_forge_credential_helper');
-  }
+  const isGitHub = safeParseUrl(workingUrl)?.hostname === 'github.com';
+  const token = isGitHub ? (authToken ?? envToken) : envToken;
 
   // Remove the empty source/ directory before cloning (git clone requires non-existent target)
   try {
@@ -420,33 +381,25 @@ export async function cloneRepository(
     }
   }
 
-  const executionEnv: NodeJS.ProcessEnv = {
-    ...process.env,
-    ...(cloneEnv ?? {}),
-    GIT_TERMINAL_PROMPT: '0',
-  };
-
-  try {
-    // GIT_TERMINAL_PROMPT=0 turns any missing-creds scenario into an
-    // immediate, readable error instead of a hung stdin credential prompt.
-    await execFileAsync('git', [...cloneConfigArgs, 'clone', workingUrl, targetPath], {
-      env: executionEnv,
-    });
-  } catch (error) {
-    const safeErr = sanitizeError(error as Error);
-    throw new Error(`Failed to clone repository: ${safeErr.message}`);
+  const cloneResult = await cloneGitRepository(
+    workingUrl,
+    toRepoPath(targetPath),
+    token
+      ? {
+          token,
+          username: scheme === 'oauth2:' ? 'oauth2' : 'x-access-token',
+        }
+      : undefined
+  );
+  if (!cloneResult.ok) {
+    const detail =
+      'message' in cloneResult.error ? cloneResult.error.message : cloneResult.error.code;
+    throw new Error(`Failed to clone repository: ${detail}`);
   }
 
   // Add to git safe.directory
   await execFileAsync('git', ['config', '--global', '--add', 'safe.directory', targetPath]);
   getLog().debug({ path: targetPath }, 'safe_directory_added');
-
-  // Install credential helper for subsequent authenticated git operations.
-  // Non-fatal: syncWorkspace self-heal will retry on next conversation start.
-  const helperResult = await installCredentialHelper(targetPath);
-  if (helperResult.kind !== 'installed') {
-    getLog().warn({ targetPath, result: helperResult }, 'clone_credential_helper_not_installed');
-  }
 
   const result = await registerRepoAtPath(targetPath, `${ownerName}/${repoName}`, workingUrl);
   getLog().info({ url: workingUrl, targetPath }, 'clone_completed');

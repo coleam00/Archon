@@ -60,6 +60,7 @@ export {
   listChildRepos,
   syncWorkspace,
   healWorkspaceAuth,
+  assertCredentialFreeRemoteUrl,
   cloneRepository,
   syncRepository,
   addSafeDirectory,

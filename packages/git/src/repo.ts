@@ -1,8 +1,7 @@
 import { existsSync } from 'fs';
 import { readdir } from 'fs/promises';
 import { join } from 'path';
-import { createLogger, getArchonHome } from '@archon/paths';
-import { resolve } from 'node:path';
+import { createLogger } from '@archon/paths';
 import { execFileAsync } from './exec';
 import { getDefaultBranch } from './branch';
 import type {
@@ -160,8 +159,8 @@ export async function syncWorkspace(
   const remote = options?.remote ?? 'origin';
   const branchToSync = baseBranch ?? (await getDefaultBranch(workspacePath, remote));
 
-  // Self-heal auth before fetching
-  await healWorkspaceAuth(workspacePath);
+  // Remove credentials left in persisted remotes by older Archon versions.
+  await healWorkspaceAuth(workspacePath, remote);
 
   // Build per-user credential injection when a pre-resolved PAT is provided.
   const pat = options?.authToken;
@@ -189,7 +188,10 @@ export async function syncWorkspace(
     await execFileAsync(
       'git',
       [...fetchConfigArgs, '-C', workspacePath, 'fetch', remote, branchToSync],
-      fetchEnv ? { env: fetchEnv, timeout: 60000 } : { timeout: 60000 }
+      {
+        env: fetchEnv ?? { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+        timeout: 60000,
+      }
     );
   } catch (error) {
     const err = error as Error;
@@ -397,13 +399,48 @@ async function classifyWorkspaceState(
  * @param options - Optional: { token } for authenticated clones
  * @returns GitResult<void>
  */
+const CREDENTIAL_BEARING_URL_ERROR =
+  'Repository URL must not include credentials; pass credentials separately.';
+
+/** Reject URL userinfo before a remote can be logged, spawned, or persisted. */
+export function assertCredentialFreeRemoteUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return;
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error(CREDENTIAL_BEARING_URL_ERROR);
+  }
+}
+
 export async function cloneRepository(
   url: string,
   targetPath: RepoPath,
-  options?: { token?: string }
+  options?: { token?: string; username?: string }
 ): Promise<GitResult<void>> {
   try {
-    const hostname = options?.token ? new URL(url).hostname : undefined;
+    assertCredentialFreeRemoteUrl(url);
+  } catch {
+    return {
+      ok: false,
+      error: { code: 'unknown', message: CREDENTIAL_BEARING_URL_ERROR },
+    };
+  }
+
+  try {
+    const parsedUrl = options?.token ? new URL(url) : undefined;
+    if (parsedUrl && parsedUrl.protocol !== 'https:') {
+      return {
+        ok: false,
+        error: {
+          code: 'unknown',
+          message: 'Authenticated repository clones require an HTTPS URL.',
+        },
+      };
+    }
+    const hostname = parsedUrl?.hostname;
     const cloneArgs = options?.token
       ? [
           '-c',
@@ -428,7 +465,7 @@ export async function cloneRepository(
         ...process.env,
         GIT_TERMINAL_PROMPT: '0',
         ...(options?.token && {
-          ARCHON_GIT_USER: 'x-access-token',
+          ARCHON_GIT_USER: options.username ?? 'x-access-token',
           ARCHON_GIT_PASS: options.token,
         }),
       },
@@ -476,7 +513,12 @@ export async function syncRepository(
   remote = 'origin'
 ): Promise<GitResult<void>> {
   try {
-    await execFileAsync('git', ['fetch', remote], { cwd: repoPath, timeout: 60000 });
+    await healWorkspaceAuth(repoPath, remote);
+    await execFileAsync('git', ['fetch', remote], {
+      cwd: repoPath,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      timeout: 60000,
+    });
   } catch (error) {
     const err = error as Error & { stderr?: string };
     const errorText = `${err.message} ${err.stderr ?? ''}`.toLowerCase();
@@ -531,30 +573,36 @@ export async function addSafeDirectory(path: RepoPath): Promise<void> {
 }
 
 /**
- * Idempotent auth self-heal for github.com workspaces.
- *
- * 1. Strip embedded credentials from remote.origin.url
- * 2. Register the archon credential helper
- * 3. Enable useHttpPath so git sends path= to the helper
+ * Remove credentials persisted in a workspace remote by older Archon versions.
  *
  * A failed credential removal is fatal: fetching with a remote that still
  * embeds a token would preserve the credential exposure this repair prevents.
  */
-export async function healWorkspaceAuth(workspacePath: RepoPath): Promise<void> {
+export async function healWorkspaceAuth(workspacePath: RepoPath, remote = 'origin'): Promise<void> {
   const { stdout: rawUrl } = await execFileAsync(
     'git',
-    ['-C', workspacePath, 'remote', 'get-url', 'origin'],
+    ['-C', workspacePath, 'remote', 'get-url', remote],
     { timeout: 5000 }
   );
   const currentUrl = rawUrl.trim();
 
-  // Only heal github.com remotes.
-  if (!currentUrl.includes('github.com')) return;
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(currentUrl);
+  } catch {
+    return;
+  }
+  if (
+    (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') ||
+    (!parsedUrl.username && !parsedUrl.password)
+  ) {
+    return;
+  }
 
-  const cleanUrl = currentUrl.replace(/^https:\/\/[^/@]+@github\.com/, 'https://github.com');
+  const cleanUrl = currentUrl.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, '$1');
   if (cleanUrl !== currentUrl) {
     try {
-      await execFileAsync('git', ['-C', workspacePath, 'remote', 'set-url', 'origin', cleanUrl], {
+      await execFileAsync('git', ['-C', workspacePath, 'remote', 'set-url', remote, cleanUrl], {
         timeout: 5000,
       });
     } catch (error) {
@@ -566,20 +614,11 @@ export async function healWorkspaceAuth(workspacePath: RepoPath): Promise<void> 
       throw new Error(`Could not remove credentials from the remote: ${message}`);
     }
   }
-
-  const helperPath = resolve(getArchonHome(), 'bin', 'git-credential-archon');
-  await execFileAsync(
-    'git',
-    ['-C', workspacePath, 'config', 'credential.https://github.com.helper', helperPath],
-    { timeout: 5000 }
-  );
-  await execFileAsync(
-    'git',
-    ['-C', workspacePath, 'config', 'credential.https://github.com.useHttpPath', 'true'],
-    { timeout: 5000 }
-  );
 }
 
 function redactGitCredentials(message: string): string {
-  return message.replace(/https:\/\/[^/@\s]+@/g, 'https://[REDACTED]@');
+  return message.replace(/https?:\/\/[^/@\s]+@/gi, match => {
+    const scheme = match.slice(0, match.indexOf('://') + 3);
+    return `${scheme}[REDACTED]@`;
+  });
 }

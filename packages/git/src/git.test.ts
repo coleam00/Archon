@@ -2062,7 +2062,10 @@ branch refs/heads/feature/auth
         const args = call[1] as string[];
         return args.includes('fetch');
       });
-      expect(fetchCall?.[2]).toEqual({ timeout: 60000 });
+      expect(fetchCall?.[2]).toMatchObject({
+        timeout: 60000,
+        env: expect.objectContaining({ GIT_TERMINAL_PROMPT: '0' }),
+      });
     });
 
     test('includes operation context in fetch error message', async () => {
@@ -2516,10 +2519,10 @@ branch refs/heads/feature/auth
       execSpy.mockRestore();
     });
 
-    test('strips embedded credentials from origin url and registers credential helper', async () => {
+    test('strips embedded credentials from a non-GitHub remote without installing a helper', async () => {
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
         if (args.includes('remote') && args.includes('get-url')) {
-          return { stdout: 'https://ghu_12345@github.com/owner/repo.git\n', stderr: '' };
+          return { stdout: 'https://oauth2:glpat_12345@gitlab.com/owner/repo.git\n', stderr: '' };
         }
         return { stdout: '', stderr: '' };
       });
@@ -2534,63 +2537,38 @@ branch refs/heads/feature/auth
           'remote',
           'set-url',
           'origin',
-          'https://github.com/owner/repo.git',
+          'https://gitlab.com/owner/repo.git',
         ],
         { timeout: 5000 }
       );
-      expect(execSpy).toHaveBeenCalledWith(
-        'git',
-        [
-          '-C',
-          '/workspace/repo',
-          'config',
-          'credential.https://github.com.helper',
-          resolve(getArchonHome(), 'bin', 'git-credential-archon'),
-        ],
-        { timeout: 5000 }
-      );
-      expect(execSpy).toHaveBeenCalledWith(
-        'git',
-        ['-C', '/workspace/repo', 'config', 'credential.https://github.com.useHttpPath', 'true'],
-        { timeout: 5000 }
-      );
+      expect(execSpy.mock.calls.some(call => (call[1] as string[]).includes('config'))).toBe(false);
     });
 
-    test('skips remote set-url when origin url has no embedded credentials', async () => {
+    test('uses the selected remote instead of assuming origin', async () => {
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
         if (args.includes('remote') && args.includes('get-url')) {
-          return { stdout: 'https://github.com/owner/repo.git\n', stderr: '' };
+          return { stdout: 'https://user:secret@example.com/owner/repo.git\n', stderr: '' };
         }
         return { stdout: '', stderr: '' };
       });
 
-      await git.healWorkspaceAuth(repo('/workspace/repo'));
-
-      const setUrlCalls = execSpy.mock.calls.filter((call: unknown[]) => {
-        const args = call[1] as string[];
-        return args.includes('set-url');
-      });
-      expect(setUrlCalls).toHaveLength(0);
+      await git.healWorkspaceAuth(repo('/workspace/repo'), 'upstream');
 
       expect(execSpy).toHaveBeenCalledWith(
         'git',
         [
           '-C',
           '/workspace/repo',
-          'config',
-          'credential.https://github.com.helper',
-          resolve(getArchonHome(), 'bin', 'git-credential-archon'),
+          'remote',
+          'set-url',
+          'upstream',
+          'https://example.com/owner/repo.git',
         ],
-        { timeout: 5000 }
-      );
-      expect(execSpy).toHaveBeenCalledWith(
-        'git',
-        ['-C', '/workspace/repo', 'config', 'credential.https://github.com.useHttpPath', 'true'],
         { timeout: 5000 }
       );
     });
 
-    test('ignores non-github.com remotes', async () => {
+    test('skips remote set-url when the URL has no embedded credentials', async () => {
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
         if (args.includes('remote') && args.includes('get-url')) {
           return { stdout: 'https://gitlab.com/owner/repo.git\n', stderr: '' };
@@ -2600,7 +2578,6 @@ branch refs/heads/feature/auth
 
       await git.healWorkspaceAuth(repo('/workspace/repo'));
 
-      // Only the get-url call should have occurred
       expect(execSpy).toHaveBeenCalledTimes(1);
       expect(execSpy).toHaveBeenCalledWith(
         'git',
@@ -2609,7 +2586,7 @@ branch refs/heads/feature/auth
       );
     });
 
-    test('fails without logging an embedded credential when origin cleanup fails', async () => {
+    test('fails without logging an embedded credential when remote cleanup fails', async () => {
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
         if (args.includes('get-url')) {
           return { stdout: 'https://ghp_test_secret@github.com/owner/repo.git\n', stderr: '' };
@@ -2761,6 +2738,44 @@ branch refs/heads/feature/auth
       });
     });
 
+    test('rejects credential-bearing URLs before spawning or logging them', async () => {
+      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+      mockLogger.error.mockClear();
+
+      const result = await git.cloneRepository(
+        'https://alice:url_secret@github.com/owner/repo.git',
+        repo('/tmp/target')
+      );
+
+      expect(result).toEqual({
+        ok: false,
+        error: {
+          code: 'unknown',
+          message: 'Repository URL must not include credentials; pass credentials separately.',
+        },
+      });
+      expect(execSpy).not.toHaveBeenCalled();
+      expect(JSON.stringify(mockLogger.error.mock.calls)).not.toContain('url_secret');
+    });
+
+    test('keeps a credential out of unknown errors and retained logger arguments', async () => {
+      const token = 'ghp_retained_log_secret';
+      execSpy.mockRejectedValue(new Error(`unexpected transport failure: ${token}`));
+      mockLogger.error.mockClear();
+
+      const result = await git.cloneRepository(
+        'https://github.com/owner/repo.git',
+        repo('/tmp/target'),
+        { token }
+      );
+
+      expect(result).toEqual({
+        ok: false,
+        error: { code: 'unknown', message: 'unexpected transport failure: ***' },
+      });
+      expect(JSON.stringify(mockLogger.error.mock.calls)).not.toContain(token);
+    });
+
     test('keeps a token out of the spawned git argv and origin config', async () => {
       execSpy.mockRestore();
       const fixtureRoot = await mkdtemp(join(tmpdir(), 'archon-git-clone-'));
@@ -2882,10 +2897,15 @@ printf '[remote "origin"]\\n\\turl = %s\\n' "$url" > "$target/.git/config"
       const result = await git.syncRepository(repo('/workspace/repo'), branch('main'));
 
       expect(result).toEqual({ ok: true, value: undefined });
-      expect(execSpy).toHaveBeenCalledWith('git', ['fetch', 'origin'], {
-        cwd: '/workspace/repo',
-        timeout: 60000,
-      });
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        ['fetch', 'origin'],
+        expect.objectContaining({
+          cwd: '/workspace/repo',
+          env: expect.objectContaining({ GIT_TERMINAL_PROMPT: '0' }),
+          timeout: 60000,
+        })
+      );
       expect(execSpy).toHaveBeenCalledWith('git', ['reset', '--hard', 'origin/main'], {
         cwd: '/workspace/repo',
         timeout: 30000,
@@ -2898,14 +2918,54 @@ printf '[remote "origin"]\\n\\turl = %s\\n' "$url" > "$target/.git/config"
       const result = await git.syncRepository(repo('/workspace/repo'), branch('main'), 'upstream');
 
       expect(result).toEqual({ ok: true, value: undefined });
-      expect(execSpy).toHaveBeenCalledWith('git', ['fetch', 'upstream'], {
-        cwd: '/workspace/repo',
-        timeout: 60000,
-      });
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        ['fetch', 'upstream'],
+        expect.objectContaining({
+          cwd: '/workspace/repo',
+          env: expect.objectContaining({ GIT_TERMINAL_PROMPT: '0' }),
+          timeout: 60000,
+        })
+      );
       expect(execSpy).toHaveBeenCalledWith('git', ['reset', '--hard', 'upstream/main'], {
         cwd: '/workspace/repo',
         timeout: 30000,
       });
+    });
+
+    test('removes persisted credentials before fetching an existing workspace', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('get-url')) {
+          return {
+            stdout: 'https://oauth2:glpat_existing_secret@gitlab.com/group/repo.git\n',
+            stderr: '',
+          };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const result = await git.syncRepository(repo('/workspace/repo'), branch('main'), 'upstream');
+
+      expect(result).toEqual({ ok: true, value: undefined });
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        [
+          '-C',
+          '/workspace/repo',
+          'remote',
+          'set-url',
+          'upstream',
+          'https://gitlab.com/group/repo.git',
+        ],
+        { timeout: 5000 }
+      );
+      const fetchCallIndex = execSpy.mock.calls.findIndex(call =>
+        (call[1] as string[]).includes('fetch')
+      );
+      const cleanupCallIndex = execSpy.mock.calls.findIndex(call =>
+        (call[1] as string[]).includes('set-url')
+      );
+      expect(cleanupCallIndex).toBeLessThan(fetchCallIndex);
     });
 
     test('skips reset if fetch fails', async () => {

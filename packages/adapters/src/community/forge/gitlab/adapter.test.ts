@@ -90,8 +90,9 @@ mock.module('@archon/core', () => ({
 }));
 
 // Mock @archon/git
+const mockCloneRepository = mock(async () => ({ ok: true as const, value: undefined }));
 mock.module('@archon/git', () => ({
-  cloneRepository: mock(async () => ({ ok: true })),
+  cloneRepository: mockCloneRepository,
   syncRepository: mock(async () => ({ ok: true })),
   addSafeDirectory: mock(async () => undefined),
   toRepoPath: mock((p: string) => p),
@@ -188,6 +189,8 @@ describe('GitLabAdapter', () => {
     mockHandleMessage.mockClear();
     mockOnConversationClosed.mockClear();
     mockFetch.mockClear();
+    mockCloneRepository.mockReset();
+    mockCloneRepository.mockResolvedValue({ ok: true, value: undefined });
     // Reset env
     delete process.env.GITLAB_ALLOWED_USERS;
   });
@@ -213,6 +216,33 @@ describe('GitLabAdapter', () => {
       const adapter = createAdapter();
       const id = await adapter.ensureThread('mygroup/myproject#1');
       expect(id).toBe('mygroup/myproject#1');
+    });
+  });
+
+  describe('repository clone', () => {
+    test('passes a clean GitLab URL and structured credentials to the shared clone boundary', async () => {
+      const adapter = createAdapter({ token: 'glpat_adapter_secret' });
+      const repoPath = `/tmp/archon-gitlab-adapter-missing-${crypto.randomUUID()}`;
+
+      await (
+        adapter as unknown as {
+          ensureRepoReady(
+            projectPath: string,
+            defaultBranch: string,
+            repoPath: string,
+            shouldSync: boolean
+          ): Promise<void>;
+        }
+      ).ensureRepoReady('group/project', 'main', repoPath, false);
+
+      expect(mockCloneRepository).toHaveBeenCalledWith(
+        'https://gitlab.example.com/group/project.git',
+        repoPath,
+        { token: 'glpat_adapter_secret', username: 'oauth2' }
+      );
+      expect(JSON.stringify(mockCloneRepository.mock.calls)).not.toContain(
+        'oauth2:glpat_adapter_secret@'
+      );
     });
   });
 

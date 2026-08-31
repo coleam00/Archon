@@ -82,40 +82,6 @@ find /.archon -name ".git" -prune -print 2>/dev/null | while IFS= read -r git_di
   fi
 done
 
-# ---------------------------------------------------------------------------
-# Heal auth on existing worktrees: strip stale embedded tokens, register
-# the archon credential helper, and enable useHttpPath. Idempotent — safe
-# to run on every boot.
-# ---------------------------------------------------------------------------
-HELPER_SRC="/app/scripts/git-credential-archon.sh"
-HELPER_DST="/.archon/bin/git-credential-archon"
-if [ -f "$HELPER_SRC" ]; then
-  mkdir -p "/.archon/bin"
-  cp -f "$HELPER_SRC" "$HELPER_DST"
-  chmod 755 "$HELPER_DST"
-
-  find /.archon/workspaces -maxdepth 5 -name ".git" -prune -print 2>/dev/null | while IFS= read -r git_dir; do
-    repo_dir="$(dirname "$git_dir")"
-    remote_url=$($RUNNER git -C "$repo_dir" remote get-url origin 2>/dev/null) || continue
-    case "$remote_url" in *github.com*) ;; *) continue ;; esac
-
-    # Strip embedded credentials from remote URL
-    clean_url=$(printf '%s' "$remote_url" | sed 's|https://[^/@]*@github\.com|https://github.com|')
-    if [ "$clean_url" != "$remote_url" ]; then
-      if ! $RUNNER git -C "$repo_dir" remote set-url origin "$clean_url"; then
-        echo "[archon] failed to remove embedded credentials from $repo_dir" >&2
-        exit 1
-      fi
-    fi
-
-    # Drop stale helper registrations before re-setting (idempotent)
-    $RUNNER git -C "$repo_dir" config --unset-all credential."https://github.com".helper 2>/dev/null || :
-    $RUNNER git -C "$repo_dir" config credential."https://github.com".helper "$HELPER_DST"
-    $RUNNER git -C "$repo_dir" config credential."https://github.com".useHttpPath true
-  done
-  echo "[archon] workspace auth heal complete"
-fi
-
 # Configure git to use GH_TOKEN for HTTPS clones via credential helper
 # Uses a helper function so the token stays in the environment, not in ~/.gitconfig
 if [ -n "$GH_TOKEN" ]; then

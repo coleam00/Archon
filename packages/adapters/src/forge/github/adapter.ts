@@ -728,11 +728,9 @@ export class GitHubAdapter implements IPlatformAdapter {
 
     // App mode: install the git credential helper on the newly cloned worktree
     // so workflows that outlive the 1h installation-token expiry can refresh
-    // credentials in-place. Non-fatal — workflows that complete in <1h still
-    // succeed via the URL-embedded token from the clone above. The result
-    // discriminator tells us whether the install actually happened so we
-    // don't log a false "installed" line in builds where the helper script
-    // isn't on disk.
+    // credentials in-place. The result discriminator tells us whether the
+    // install actually happened so we don't log a false "installed" line in
+    // builds where the helper script isn't on disk.
     if (this.auth.kind === 'app') {
       const result = await installCredentialHelper(repoPath);
       switch (result.kind) {

@@ -28,7 +28,7 @@ import {
   toRepoPath,
   toBranchName,
   isWorktreePath,
-  execFileAsync,
+  cloneRepository,
 } from '@archon/git';
 import * as db from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
@@ -460,8 +460,6 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
     }
 
     // Clone the repository
-    // GitLab self-hosted instances need oauth2:token auth and credential helper disabled
-    // to prevent macOS Keychain from intercepting and blocking the clone
     getLog().info({ projectPath, repoPath }, 'gitlab.repo_cloning');
 
     // Create project structure (source/, worktrees/, artifacts/, logs/) before
@@ -474,45 +472,30 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
     await ensureProjectStructure(cloneOwner, cloneRepo);
 
     const urlObj = new URL(this.gitlabUrl);
-    const repoUrl = `${urlObj.protocol}//oauth2:${this.token}@${urlObj.host}/${projectPath}.git`;
+    const repoUrl = `${urlObj.protocol}//${urlObj.host}/${projectPath}.git`;
+    const cloneResult = await cloneRepository(repoUrl, toRepoPath(repoPath), {
+      token: this.token,
+      username: 'oauth2',
+    });
 
-    try {
-      await execFileAsync('git', ['-c', 'credential.helper=', 'clone', repoUrl, repoPath], {
-        timeout: 120000,
-      });
-    } catch (error) {
-      const err = error as Error;
-      // Sanitize token from all error properties (message, stack, cause)
-      const sanitize = (s: string): string => s.replaceAll(this.token, '***');
-      const sanitized = sanitize(err.message);
-      const msg = sanitized.toLowerCase();
-
-      const sanitizedError: Record<string, unknown> = { message: sanitized };
-      if (err.stack) sanitizedError.stack = sanitize(err.stack);
-      if (err.cause && typeof (err.cause as Error).message === 'string') {
-        sanitizedError.cause = sanitize((err.cause as Error).message);
-      }
-      const errRecord = err as unknown as Record<string, unknown>;
-      if (typeof errRecord.stdout === 'string') sanitizedError.stdout = sanitize(errRecord.stdout);
-      if (typeof errRecord.stderr === 'string') sanitizedError.stderr = sanitize(errRecord.stderr);
-
-      getLog().error({ projectPath, repoPath, error: sanitizedError }, 'gitlab.repo_clone_failed');
-
-      if (msg.includes('not found') || msg.includes('404')) {
+    if (!cloneResult.ok) {
+      getLog().error(
+        { projectPath, repoPath, error: cloneResult.error },
+        'gitlab.repo_clone_failed'
+      );
+      if (cloneResult.error.code === 'not_a_repo') {
         throw new Error(
           `Repository ${projectPath} not found or is private. Check repository access.`
         );
       }
-      if (
-        msg.includes('authentication failed') ||
-        msg.includes('could not read') ||
-        msg.includes('403')
-      ) {
+      if (cloneResult.error.code === 'permission_denied') {
         throw new Error(
           `Authentication failed for ${projectPath}. Check GITLAB_TOKEN permissions.`
         );
       }
-      throw new Error(`Failed to clone ${projectPath}: ${sanitized}`);
+      const detail =
+        'message' in cloneResult.error ? cloneResult.error.message : cloneResult.error.code;
+      throw new Error(`Failed to clone ${projectPath}: ${detail}`);
     }
 
     await addSafeDirectory(toRepoPath(repoPath));

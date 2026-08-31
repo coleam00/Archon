@@ -368,6 +368,20 @@ describe('cloneRepository', () => {
 
       expect(spyFsRm.mock.calls.length).toBeGreaterThan(0);
     });
+
+    test('rejects URL credentials before logging or spawning them', async () => {
+      const secret = 'url_input_secret';
+
+      await expect(
+        cloneRepository(`https://alice:${secret}@github.com/owner/repo`)
+      ).rejects.toThrow(
+        'Repository URL must not include credentials; pass credentials separately.'
+      );
+
+      expect(spyExecFileAsync).not.toHaveBeenCalled();
+      expect(JSON.stringify(mockLogger.info.mock.calls)).not.toContain(secret);
+      expect(JSON.stringify(mockLogger.error.mock.calls)).not.toContain(secret);
+    });
   });
 
   // ── SSH URL conversion ─────────────────────────────────────────────────
@@ -899,22 +913,19 @@ describe('cloneRepository', () => {
 
   // ── Error handling ─────────────────────────────────────────────────────
   describe('error handling', () => {
-    test('wraps git clone failure with sanitized message', async () => {
+    test('omits clone credentials from the surfaced error and retained logs', async () => {
       process.env.GH_TOKEN = 'super_secret_token';
       spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
         if (Array.isArray(args) && args.includes('clone')) {
-          return Promise.reject(
-            new Error(
-              'fatal: repository https://super_secret_token@github.com/owner/repo not found'
-            )
-          );
+          return Promise.reject(new Error('unexpected clone failure: super_secret_token'));
         }
         return Promise.resolve({ stdout: '', stderr: '' });
       });
 
       await expect(cloneRepository('https://github.com/owner/repo')).rejects.toThrow(
-        'Failed to clone repository'
+        'Failed to clone repository: unexpected clone failure: ***'
       );
+      expect(JSON.stringify(mockLogger.error.mock.calls)).not.toContain('super_secret_token');
       delete process.env.GH_TOKEN;
     });
 
