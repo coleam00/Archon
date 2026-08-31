@@ -1755,6 +1755,7 @@ nodes:
       // Check that known bundled workflows are loaded
       const archonAssist = workflows.find(w => w.name === 'archon-assist');
       expect(archonAssist).toBeDefined();
+      expect(workflows.some(w => w.name === 'archon-stabilize')).toBe(false);
     });
 
     it('should skip bundled workflows when loadDefaults is false', async () => {
