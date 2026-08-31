@@ -168,6 +168,40 @@ describe('GiteaAdapter', () => {
     });
   });
 
+  test('passes Gitea and Forgejo clone credentials outside the repository URL', async () => {
+    const savedToken = process.env.GITEA_TOKEN;
+    const token = 'gitea-clone-token-123';
+    process.env.GITEA_TOKEN = token;
+    const forgejoAdapter = new GiteaAdapter(
+      'https://forgejo.example.test:8443',
+      'api-token',
+      'webhook-secret',
+      mockLockManager
+    );
+
+    try {
+      await (
+        forgejoAdapter as unknown as {
+          ensureRepoReady(
+            owner: string,
+            repo: string,
+            defaultBranch: string,
+            repoPath: string,
+            shouldSync: boolean
+          ): Promise<void>;
+        }
+      ).ensureRepoReady('owner', 'repo', 'main', '/definitely/missing/forgejo-repo', false);
+
+      const [url, , options] = mockCloneRepository.mock.calls.at(-1)!;
+      expect(url).toBe('https://forgejo.example.test:8443/owner/repo.git');
+      expect(options).toEqual({ credentials: { username: token, password: '' } });
+      expect(JSON.stringify(mockCloneRepository.mock.calls)).not.toContain(`${token}@`);
+    } finally {
+      if (savedToken === undefined) delete process.env.GITEA_TOKEN;
+      else process.env.GITEA_TOKEN = savedToken;
+    }
+  });
+
   describe('bot mention detection', () => {
     test('should detect mention case-insensitively', () => {
       const adapterWithMention = new GiteaAdapter(

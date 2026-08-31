@@ -63,3 +63,4 @@ export {
   syncRepository,
   addSafeDirectory,
 } from './repo';
+export type { CloneCredentials, CloneRepositoryOptions } from './repo';

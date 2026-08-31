@@ -5,8 +5,12 @@
 import { access, rm, stat } from 'fs/promises';
 import { join, basename, resolve } from 'path';
 import * as codebaseDb from '../db/codebases';
-import { sanitizeError } from '../utils/credential-sanitizer';
-import { execFileAsync } from '@archon/git';
+import {
+  cloneRepository as cloneGitRepository,
+  execFileAsync,
+  toRepoPath,
+  type CloneCredentials,
+} from '@archon/git';
 import { findCodebaseForCheckoutPath } from '../services/codebase-checkout-resolver';
 import {
   expandTilde,
@@ -46,9 +50,10 @@ function safeParseUrl(url: string): URL | null {
 interface ForgeAuthEntry {
   hostPattern: string;
   envVar: string;
-  /** URL user-info prefix (e.g. 'oauth2:' for GitLab, empty for GitHub). */
-  scheme: string;
+  scheme: ForgeAuthScheme;
 }
+
+type ForgeAuthScheme = '' | 'oauth2:';
 
 /** Known exact-hostname → env-var + scheme mappings. */
 const FORGE_AUTH: ForgeAuthEntry[] = [
@@ -57,18 +62,18 @@ const FORGE_AUTH: ForgeAuthEntry[] = [
   { hostPattern: 'gitea.com', envVar: 'GITEA_TOKEN', scheme: '' },
 ];
 
-/**
- * Resolve forge-specific authentication token and URL scheme for a repository URL.
- * Returns the token and auth scheme prefix, or empty values if no token is available.
- */
 /** Well-known self-hosted hostname label patterns → env var + scheme. */
-const SELF_HOSTED_FORGE: { label: string; envVar: string; scheme: string }[] = [
+const SELF_HOSTED_FORGE: { label: string; envVar: string; scheme: ForgeAuthScheme }[] = [
   { label: 'gitlab', envVar: 'GITLAB_TOKEN', scheme: 'oauth2:' },
   { label: 'gitea', envVar: 'GITEA_TOKEN', scheme: '' },
   { label: 'forgejo', envVar: 'GITEA_TOKEN', scheme: '' },
 ];
 
-export function resolveForgeAuth(url: string): { token: string | undefined; scheme: string } {
+/** Resolve forge-specific credentials without adding them to the repository URL. */
+export function resolveForgeAuth(url: string): {
+  token: string | undefined;
+  scheme: ForgeAuthScheme;
+} {
   // Extract hostname from URL (or from bare host/path like "github.com/owner/repo")
   let hostname: string;
   const parsed = safeParseUrl(url);
@@ -78,6 +83,7 @@ export function resolveForgeAuth(url: string): { token: string | undefined; sche
     // Bare host/path form: take everything before the first slash
     hostname = url.split('/')[0].toLowerCase();
   }
+  const authority = parsed?.host.toLowerCase() ?? hostname;
 
   // 1. Exact known-host match
   for (const entry of FORGE_AUTH) {
@@ -103,10 +109,14 @@ export function resolveForgeAuth(url: string): { token: string | undefined; sche
     }
   }
 
-  // 3. Explicit URL match: compare clone hostname against configured *_URL env vars.
+  // 3. Explicit URL match: compare clone authority against configured *_URL env vars.
   //    Handles self-hosted instances where the hostname doesn't contain a forge name
   //    (e.g. git.example.com with GITEA_URL=https://git.example.com).
-  const URL_FORGE: { urlEnvVar: string; tokenEnvVar: string; scheme: string }[] = [
+  const URL_FORGE: {
+    urlEnvVar: string;
+    tokenEnvVar: string;
+    scheme: ForgeAuthScheme;
+  }[] = [
     { urlEnvVar: 'GITEA_URL', tokenEnvVar: 'GITEA_TOKEN', scheme: '' },
     { urlEnvVar: 'GITLAB_URL', tokenEnvVar: 'GITLAB_TOKEN', scheme: 'oauth2:' },
     { urlEnvVar: 'FORGEJO_URL', tokenEnvVar: 'GITEA_TOKEN', scheme: '' },
@@ -115,7 +125,7 @@ export function resolveForgeAuth(url: string): { token: string | undefined; sche
     const forgeUrl = process.env[entry.urlEnvVar];
     if (forgeUrl) {
       const forgeParsed = safeParseUrl(forgeUrl);
-      if (forgeParsed?.hostname.toLowerCase() === hostname) {
+      if (forgeParsed?.host.toLowerCase() === authority) {
         const token = process.env[entry.tokenEnvVar];
         if (token) {
           return { token, scheme: entry.scheme };
@@ -355,21 +365,21 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
   // Create project structure (source/, worktrees/, artifacts/, logs/)
   await ensureProjectStructure(ownerName, repoName);
 
-  getLog().info({ url: workingUrl, targetPath }, 'clone_started');
-
-  // Build clone command with authentication using forge-specific tokens
+  // Resolve authentication without putting it into the repository URL.
   let cloneUrl = workingUrl;
   const { token: forgeToken, scheme: authScheme } = resolveForgeAuth(workingUrl);
+  let credentials: CloneCredentials | undefined;
 
   if (forgeToken) {
     const parsed = safeParseUrl(workingUrl);
-    if (parsed) {
-      cloneUrl = `https://${authScheme}${forgeToken}@${parsed.hostname}${parsed.pathname}`;
-    } else if (!workingUrl.startsWith('http')) {
+    if (!parsed && !/^https?:/i.test(workingUrl)) {
       // Bare host/path form (e.g. github.com/owner/repo)
-      cloneUrl = `https://${authScheme}${forgeToken}@${workingUrl}`;
+      cloneUrl = `https://${workingUrl}`;
     }
-    getLog().debug('clone_authenticated');
+    credentials =
+      authScheme === 'oauth2:'
+        ? { username: 'oauth2', password: forgeToken }
+        : { username: forgeToken, password: '' };
   }
 
   // Remove the empty source/ directory before cloning (git clone requires non-existent target)
@@ -382,15 +392,31 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
     }
   }
 
-  try {
-    // GIT_TERMINAL_PROMPT=0 turns any missing-creds scenario into an
-    // immediate, readable error instead of a hung stdin credential prompt.
-    await execFileAsync('git', ['clone', cloneUrl, targetPath], {
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
-    });
-  } catch (error) {
-    const safeErr = sanitizeError(error as Error);
-    throw new Error(`Failed to clone repository: ${safeErr.message}`);
+  const cloneResult = await cloneGitRepository(
+    cloneUrl,
+    toRepoPath(targetPath),
+    credentials ? { credentials } : undefined
+  );
+  if (!cloneResult.ok) {
+    let detail: string;
+    switch (cloneResult.error.code) {
+      case 'not_a_repo':
+        detail = 'Repository not found or unavailable. Check the URL and repository access.';
+        break;
+      case 'permission_denied':
+        detail = 'Authentication failed. Check the configured forge token and repository access.';
+        break;
+      case 'no_space':
+        detail = 'No space left at the clone destination.';
+        break;
+      case 'unknown':
+        detail = cloneResult.error.message;
+        break;
+      default:
+        detail = 'Git clone failed.';
+        break;
+    }
+    throw new Error(`Failed to clone repository: ${detail}`);
   }
 
   // Add to git safe.directory

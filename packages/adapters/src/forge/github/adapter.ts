@@ -699,7 +699,7 @@ export class GitHubAdapter implements IPlatformAdapter {
     const cloneResult = await cloneRepository(
       repoUrl,
       toRepoPath(repoPath),
-      ghToken ? { token: ghToken } : undefined
+      ghToken ? { credentials: { username: ghToken, password: '' } } : undefined
     );
 
     if (!cloneResult.ok) {

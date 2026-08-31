@@ -535,9 +535,12 @@ export class GiteaAdapter implements IPlatformAdapter {
     const urlObj = new URL(this.baseUrl);
     const repoUrl = `${urlObj.protocol}//${urlObj.host}/${owner}/${repo}.git`;
 
-    const cloneResult = await cloneRepository(repoUrl, toRepoPath(repoPath), {
-      token: process.env.GITEA_TOKEN,
-    });
+    const token = process.env.GITEA_TOKEN;
+    const cloneResult = await cloneRepository(
+      repoUrl,
+      toRepoPath(repoPath),
+      token ? { credentials: { username: token, password: '' } } : undefined
+    );
 
     if (!cloneResult.ok) {
       getLog().error({ owner, repo, repoPath, error: cloneResult.error }, 'repo_clone_failed');

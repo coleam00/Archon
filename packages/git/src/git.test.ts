@@ -1,7 +1,9 @@
 import { describe, test, expect, beforeEach, afterEach, mock, spyOn, type Mock } from 'bun:test';
-import { writeFile, mkdir as realMkdir, rm } from 'fs/promises';
+import { writeFile, mkdir as realMkdir, mkdtemp, readFile, rm } from 'fs/promises';
 import { join, resolve } from 'path';
 import { tmpdir, homedir } from 'os';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import { createRecordingGitFixture } from './test-utils';
 // Loaded BEFORE mock.module replaces the module in the registry, so these are
 // the REAL identity validators — the mock re-exports them (no drift possible).
 import { parseOwnerRepo, resolveRepoProjectIdentity } from '@archon/paths';
@@ -71,6 +73,7 @@ import * as git from './index';
 const repo = git.toRepoPath;
 const branch = git.toBranchName;
 const worktree = git.toWorktreePath;
+const trackTempRoot = trackTempRoots();
 
 // ============================================================================
 // Tests
@@ -2554,22 +2557,184 @@ branch refs/heads/feature/auth
       expect(env[pathKey!]).toBe(process.env[pathKey!]);
     });
 
-    test('constructs authenticated URL with token', async () => {
+    test('passes authenticated clone credentials through a scoped helper environment', async () => {
       execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+      const token = 'ghp_abc123';
 
       const result = await git.cloneRepository(
         'https://github.com/owner/repo.git',
         repo('/tmp/target'),
         {
-          token: 'ghp_abc123',
+          credentials: { username: token, password: '' },
         }
       );
 
       expect(result).toEqual({ ok: true, value: undefined });
-      // Verify the token is in the URL
-      const cloneUrl = execSpy.mock.calls[0]![1][1] as string;
-      expect(cloneUrl).toContain('ghp_abc123');
-      expect(cloneUrl).toContain('github.com');
+      const [, args, options] = execSpy.mock.calls[0]!;
+      expect(args).toContain('https://github.com/owner/repo.git');
+      expect(args.join('\0')).not.toContain(token);
+      expect(args).toContain('credential.helper=');
+      expect(args.some(arg => arg.startsWith('credential.https://github.com.helper='))).toBe(true);
+      expect(options?.env?.ARCHON_GIT_USERNAME).toBe(token);
+      expect(options?.env?.ARCHON_GIT_PASSWORD).toBe('');
+    });
+
+    test.skipIf(process.platform === 'win32')(
+      'keeps authenticated clone credentials out of real child argv and origin config',
+      async () => {
+        execSpy.mockRestore();
+        const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-clone-security-')));
+        const targetPath = repo(join(root, 'clone'));
+        const fixture = await createRecordingGitFixture(root);
+        const token = 'real-child-token-123';
+
+        const result = await fixture.run(() =>
+          git.cloneRepository('https://github.com/owner/repo.git', targetPath, {
+            credentials: { username: token, password: '' },
+          })
+        );
+
+        expect(result).toEqual({ ok: true, value: undefined });
+        const [clone] = await fixture.readInvocations();
+        expect(clone).toBeDefined();
+        expect(clone.argv.join('\0')).not.toContain(token);
+        expect(clone.env.ARCHON_GIT_USERNAME).toBe(token);
+        expect(clone.env.ARCHON_GIT_PASSWORD).toBe('');
+        expect(clone.env.GIT_TERMINAL_PROMPT).toBe('0');
+        const originConfig = await readFile(join(targetPath, '.git', 'config'), 'utf8');
+        expect(originConfig).toContain('url = https://github.com/owner/repo.git');
+        expect(originConfig).not.toContain(token);
+      }
+    );
+
+    test('authenticates a real Git clone against an explicit HTTP port', async () => {
+      execSpy.mockRestore();
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-clone-http-auth-')));
+      const sourcePath = join(root, 'source');
+      const servedPath = join(root, 'served');
+      const barePath = join(servedPath, 'repo.git');
+      const targetPath = repo(join(root, 'clone'));
+      const token = 'explicit-port-token-456';
+      const expectedAuthorization = `Basic ${Buffer.from(`oauth2:${token}`).toString('base64')}`;
+      const authorizations: Array<string | null> = [];
+
+      await git.execFileAsync('git', ['init', sourcePath]);
+      await git.execFileAsync('git', ['-C', sourcePath, 'config', 'user.name', 'Archon Test']);
+      await git.execFileAsync('git', [
+        '-C',
+        sourcePath,
+        'config',
+        'user.email',
+        'archon@example.test',
+      ]);
+      await writeFile(join(sourcePath, 'README.md'), 'fixture\n');
+      await git.execFileAsync('git', ['-C', sourcePath, 'add', 'README.md']);
+      await git.execFileAsync('git', ['-C', sourcePath, 'commit', '-m', 'fixture']);
+      await realMkdir(servedPath, { recursive: true });
+      await git.execFileAsync('git', ['clone', '--bare', sourcePath, barePath]);
+      await git.execFileAsync('git', ['--git-dir', barePath, 'update-server-info']);
+
+      const server = Bun.serve({
+        port: 0,
+        async fetch(request) {
+          const authorization = request.headers.get('authorization');
+          authorizations.push(authorization);
+          if (authorization !== expectedAuthorization) {
+            return new Response('authentication required', {
+              status: 401,
+              headers: { 'WWW-Authenticate': 'Basic realm="archon-test"' },
+            });
+          }
+
+          const relativePath = decodeURIComponent(new URL(request.url).pathname).replace(
+            /^\/+/,
+            ''
+          );
+          if (!relativePath.startsWith('repo.git/'))
+            return new Response('not found', { status: 404 });
+          const file = Bun.file(join(servedPath, relativePath));
+          if (!(await file.exists())) return new Response('not found', { status: 404 });
+          return new Response(file);
+        },
+      });
+
+      try {
+        const url = `http://127.0.0.1:${String(server.port)}/repo.git`;
+        const result = await git.cloneRepository(url, targetPath, {
+          credentials: { username: 'oauth2', password: token },
+        });
+
+        expect(result).toEqual({ ok: true, value: undefined });
+        expect(authorizations).toContain(expectedAuthorization);
+        const { stdout: originUrl } = await git.execFileAsync('git', [
+          '-C',
+          targetPath,
+          'remote',
+          'get-url',
+          'origin',
+        ]);
+        expect(originUrl.trim()).toBe(url);
+        expect(originUrl).not.toContain(token);
+      } finally {
+        server.stop(true);
+      }
+    });
+
+    test('rejects a malformed credential-bearing HTTP URL before spawning Git', async () => {
+      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+      const credential = 'malformed-secret-123';
+
+      const result = await git.cloneRepository(
+        `https://${credential}@example.test:bad/owner/repo.git`,
+        repo('/tmp/target')
+      );
+
+      expect(result).toEqual({
+        ok: false,
+        error: { code: 'unknown', message: 'Invalid HTTP(S) repository URL' },
+      });
+      expect(execSpy).not.toHaveBeenCalled();
+      expect(JSON.stringify(result)).not.toContain(credential);
+    });
+
+    test('rejects a valid HTTP URL that already contains credentials', async () => {
+      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+      const credential = 'embedded-secret-456';
+
+      const result = await git.cloneRepository(
+        `  https://${credential}@example.test/owner/repo.git`,
+        repo('/tmp/target')
+      );
+
+      expect(result).toEqual({
+        ok: false,
+        error: { code: 'unknown', message: 'Repository URL must not include credentials' },
+      });
+      expect(execSpy).not.toHaveBeenCalled();
+      expect(JSON.stringify(result)).not.toContain(credential);
+    });
+
+    test('sanitizes authenticated clone failures before returning or logging them', async () => {
+      const token = 'unexpected-error-token-654';
+      execSpy.mockRejectedValue(
+        Object.assign(new Error(`helper failed with ${token}`), {
+          stderr: `credential rejected: ${token}`,
+        })
+      );
+      mockLogger.error.mockClear();
+
+      const result = await git.cloneRepository(
+        'https://github.com/owner/repo.git',
+        repo('/tmp/target'),
+        { credentials: { username: token, password: '' } }
+      );
+
+      expect(result.ok).toBe(false);
+      expect(JSON.stringify(result)).not.toContain(token);
+      expect(JSON.stringify(mockLogger.error.mock.calls)).not.toContain(token);
+      if (!result.ok && result.error.code === 'unknown') {
+        expect(result.error.message).toContain('***');
+      }
     });
 
     test('returns not_a_repo error for 404', async () => {

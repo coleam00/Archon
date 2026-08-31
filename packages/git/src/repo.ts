@@ -367,42 +367,104 @@ async function classifyWorkspaceState(
  *
  * @param url - Repository URL (e.g., https://github.com/owner/repo.git)
  * @param targetPath - Local path to clone into
- * @param options - Optional: { token } for authenticated clones
+ * @param options - Optional request-scoped HTTP credentials
  * @returns GitResult<void>
  */
+export interface CloneCredentials {
+  username: string;
+  password: string;
+}
+
+export interface CloneRepositoryOptions {
+  credentials?: CloneCredentials;
+}
+
+const ENV_CREDENTIAL_HELPER =
+  '!f() { test "$1" = get || exit 0; printf \'%s\\n\' "username=$ARCHON_GIT_USERNAME" "password=$ARCHON_GIT_PASSWORD"; }; f';
+
+function parseHttpCloneUrl(url: string): URL | null | { error: string } {
+  if (!/^\s*https?:/i.test(url)) return null;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { error: 'Invalid HTTP(S) repository URL' };
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { error: 'Invalid HTTP(S) repository URL' };
+  }
+  if (parsed.username || parsed.password) {
+    return { error: 'Repository URL must not include credentials' };
+  }
+  return parsed;
+}
+
+function sanitizeCloneError(error: unknown, credentials?: CloneCredentials): string {
+  const err = error as Error & { stdout?: string; stderr?: string };
+  let message = [err.message, err.stderr, err.stdout].filter(Boolean).join('\n');
+  const credentialValues = credentials
+    ? [credentials.username, credentials.password]
+        .filter(value => value.length > 0)
+        .sort((left, right) => right.length - left.length)
+    : [];
+  for (const value of credentialValues) message = message.replaceAll(value, '***');
+  return message;
+}
+
 export async function cloneRepository(
   url: string,
   targetPath: RepoPath,
-  options?: { token?: string }
+  options?: CloneRepositoryOptions
 ): Promise<GitResult<void>> {
+  const parsedUrl = parseHttpCloneUrl(url);
+  if (parsedUrl && 'error' in parsedUrl) {
+    return { ok: false, error: { code: 'unknown', message: parsedUrl.error } };
+  }
+  if (options?.credentials && !parsedUrl) {
+    return {
+      ok: false,
+      error: { code: 'unknown', message: 'Authenticated clones require an HTTP(S) repository URL' },
+    };
+  }
+
   try {
-    let cloneUrl = url;
-    if (options?.token) {
-      // Construct authenticated URL: https://<token>@github.com/owner/repo.git
-      const parsed = new URL(url);
-      parsed.username = options.token;
-      cloneUrl = parsed.toString();
+    const args = ['clone', url, targetPath];
+    const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
+    delete env.ARCHON_GIT_USERNAME;
+    delete env.ARCHON_GIT_PASSWORD;
+    if (options?.credentials && parsedUrl) {
+      args.unshift(
+        '-c',
+        'credential.helper=',
+        '-c',
+        `credential.${parsedUrl.origin}.helper=${ENV_CREDENTIAL_HELPER}`
+      );
+      env.ARCHON_GIT_USERNAME = options.credentials.username;
+      env.ARCHON_GIT_PASSWORD = options.credentials.password;
     }
 
     // GIT_TERMINAL_PROMPT=0 turns any missing-creds scenario into an
     // immediate, readable error instead of a hung stdin credential prompt.
-    await execFileAsync('git', ['clone', cloneUrl, targetPath], {
+    await execFileAsync('git', args, {
       timeout: 120000,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      env,
     });
     return { ok: true, value: undefined };
   } catch (error) {
-    const err = error as Error;
-    // Sanitize any token from error messages to prevent credential leakage
-    const sanitizedMessage = options?.token
-      ? err.message.replaceAll(options.token, '***')
-      : err.message;
+    const sanitizedMessage = sanitizeCloneError(error, options?.credentials);
     const message = sanitizedMessage.toLowerCase();
 
     if (message.includes('not found') || message.includes('404')) {
       return { ok: false, error: { code: 'not_a_repo', path: url } };
     }
-    if (message.includes('authentication failed') || message.includes('could not read')) {
+    if (
+      message.includes('authentication failed') ||
+      message.includes('could not read') ||
+      message.includes('access denied') ||
+      message.includes('403')
+    ) {
       return { ok: false, error: { code: 'permission_denied', path: url } };
     }
     if (message.includes('no space')) {

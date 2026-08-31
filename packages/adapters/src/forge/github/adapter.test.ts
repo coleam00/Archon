@@ -1307,7 +1307,6 @@ describe('GitHubAdapter', () => {
       const [url, path] = mockCloneRepository.mock.calls[0];
       expect(url).toBe('https://github.com/owner/repo.git');
       expect(path).toBe('/nonexistent/path');
-      // 3rd arg is { token } when GITHUB_TOKEN is set, undefined otherwise
       expect(mockAddSafeDirectory).toHaveBeenCalledWith('/nonexistent/path');
     });
 
@@ -1707,8 +1706,10 @@ describe('GitHubAdapter', () => {
       expect(provider.getToken).toHaveBeenCalledWith('owner', 'repo');
       expect(mockCloneRepository).toHaveBeenCalled();
       const cloneArgs = mockCloneRepository.mock.calls[0];
-      // Third arg to cloneRepository carries the token; assert it came from the provider.
-      const tokenArg = (cloneArgs?.[2] as { token?: string } | undefined)?.token;
+      // Third arg carries request-scoped credentials resolved from the App provider.
+      const tokenArg = (
+        cloneArgs?.[2] as { credentials?: { username: string; password: string } } | undefined
+      )?.credentials?.username;
       expect(tokenArg).toBe('ghs_owner_token');
       if (savedEnv !== undefined) process.env.GITHUB_TOKEN = savedEnv;
     });

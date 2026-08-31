@@ -113,6 +113,7 @@ let spyFsRm: ReturnType<typeof spyOn>;
 let spyFsStat: ReturnType<typeof spyOn>;
 let spyFsRealpath: ReturnType<typeof spyOn>;
 let spyExecFileAsync: ReturnType<typeof spyOn>;
+let spyCloneGitRepository: ReturnType<typeof spyOn>;
 let spyGetCanonicalRepoPath: ReturnType<typeof spyOn>;
 
 function setupSpies(): void {
@@ -133,6 +134,10 @@ function setupSpies(): void {
     stdout: '',
     stderr: '',
   });
+  spyCloneGitRepository = spyOn(gitUtils, 'cloneRepository').mockResolvedValue({
+    ok: true,
+    value: undefined,
+  });
   spyGetCanonicalRepoPath = spyOn(gitUtils, 'getCanonicalRepoPath').mockImplementation(
     (path: string): ReturnType<typeof gitUtils.getCanonicalRepoPath> =>
       Promise.resolve(gitUtils.toRepoPath(path))
@@ -145,6 +150,7 @@ function restoreSpies(): void {
   spyFsRealpath?.mockRestore();
   spyFsStat?.mockRestore();
   spyExecFileAsync?.mockRestore();
+  spyCloneGitRepository?.mockRestore();
   spyGetCanonicalRepoPath?.mockRestore();
 }
 
@@ -223,6 +229,12 @@ function makeResolverDeps(
     }),
     ...overrides,
   };
+}
+
+function getGitCloneCall(): Parameters<typeof gitUtils.cloneRepository> | undefined {
+  return spyCloneGitRepository.mock.calls.at(-1) as
+    | Parameters<typeof gitUtils.cloneRepository>
+    | undefined;
 }
 
 describe('findCodebaseForCheckoutPath', () => {
@@ -318,12 +330,9 @@ describe('cloneRepository', () => {
       expect(result.repositoryUrl).toBe('https://github.com/owner/repo');
       expect(result.commandCount).toBe(0);
 
-      // git clone was called
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
-      );
+      const cloneCall = getGitCloneCall();
       expect(cloneCall).toBeDefined();
-      expect(cloneCall?.[1]).toContain('https://github.com/owner/repo');
+      expect(cloneCall?.[0]).toBe('https://github.com/owner/repo');
     });
 
     test('strips trailing slash from URL before cloning', async () => {
@@ -333,11 +342,7 @@ describe('cloneRepository', () => {
 
       await cloneRepository('https://github.com/owner/repo/');
 
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
-      );
-      // URL passed to git clone must not have trailing slash
-      expect(cloneCall?.[1]?.[1]).toBe('https://github.com/owner/repo');
+      expect(getGitCloneCall()?.[0]).toBe('https://github.com/owner/repo');
     });
 
     test('strips .git suffix when extracting owner/repo but keeps it in clone URL', async () => {
@@ -379,13 +384,9 @@ describe('cloneRepository', () => {
 
       await cloneRepository('git@github.com:owner/repo.git');
 
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
-      );
-      // SSH converted to HTTPS
-      expect(cloneCall?.[1]?.[1]).toContain('https://github.com/owner/repo');
-      // No SSH format in the clone URL
-      expect(cloneCall?.[1]?.[1]).not.toContain('git@');
+      const cloneUrl = getGitCloneCall()?.[0] ?? '';
+      expect(cloneUrl).toContain('https://github.com/owner/repo');
+      expect(cloneUrl).not.toContain('git@');
     });
 
     test('extracts correct owner/repo from SSH URL', async () => {
@@ -408,11 +409,9 @@ describe('cloneRepository', () => {
 
       await cloneRepository('git@gh-work:owner/repo.git');
 
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
-      );
-      expect(cloneCall?.[1]?.[1]).toContain('https://gh-work/owner/repo');
-      expect(cloneCall?.[1]?.[1]).not.toContain('git@');
+      const cloneUrl = getGitCloneCall()?.[0] ?? '';
+      expect(cloneUrl).toContain('https://gh-work/owner/repo');
+      expect(cloneUrl).not.toContain('git@');
     });
 
     test('converts SSH URL with non-github host to HTTPS', async () => {
@@ -425,11 +424,9 @@ describe('cloneRepository', () => {
 
       await cloneRepository('git@gitlab.example.com:team/project.git');
 
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
-      );
-      expect(cloneCall?.[1]?.[1]).toContain('https://gitlab.example.com/team/project');
-      expect(cloneCall?.[1]?.[1]).not.toContain('git@');
+      const cloneUrl = getGitCloneCall()?.[0] ?? '';
+      expect(cloneUrl).toContain('https://gitlab.example.com/team/project');
+      expect(cloneUrl).not.toContain('git@');
     });
   });
 
@@ -443,15 +440,16 @@ describe('cloneRepository', () => {
       delete process.env.GH_TOKEN;
     });
 
-    test('injects GH_TOKEN into HTTPS clone URL', async () => {
+    test('passes GH_TOKEN as request-scoped clone credentials', async () => {
       mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
 
       await cloneRepository('https://github.com/owner/private-repo');
 
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
-      );
-      expect(cloneCall?.[1]?.[1]).toContain('ghp_testtoken123@github.com');
+      const cloneCall = getGitCloneCall();
+      expect(cloneCall?.[0]).toBe('https://github.com/owner/private-repo');
+      expect(cloneCall?.[2]).toEqual({
+        credentials: { username: 'ghp_testtoken123', password: '' },
+      });
     });
 
     test('does NOT inject GH_TOKEN into non-github URLs when no forge token set', async () => {
@@ -465,21 +463,19 @@ describe('cloneRepository', () => {
 
       await cloneRepository('https://gitlab.com/owner/repo');
 
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
-      );
-      expect(cloneCall?.[1]?.[1]).not.toContain('ghp_testtoken123');
+      expect(JSON.stringify(getGitCloneCall())).not.toContain('ghp_testtoken123');
     });
 
-    test('converts SSH to HTTPS and injects GH_TOKEN', async () => {
+    test('converts SSH to HTTPS and passes GH_TOKEN as credentials', async () => {
       mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
 
       await cloneRepository('git@github.com:owner/repo.git');
 
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
-      );
-      expect(cloneCall?.[1]?.[1]).toContain('ghp_testtoken123@github.com');
+      const cloneCall = getGitCloneCall();
+      expect(cloneCall?.[0]).toBe('https://github.com/owner/repo.git');
+      expect(cloneCall?.[2]).toEqual({
+        credentials: { username: 'ghp_testtoken123', password: '' },
+      });
     });
   });
 
@@ -490,7 +486,7 @@ describe('cloneRepository', () => {
       delete process.env.GITEA_TOKEN;
     });
 
-    test('injects GITLAB_TOKEN with oauth2: scheme for gitlab.com URLs', async () => {
+    test('passes GITLAB_TOKEN with oauth2 credentials for gitlab.com URLs', async () => {
       process.env.GITLAB_TOKEN = 'glpat-testtoken456';
       delete process.env.GH_TOKEN;
       mockCreateCodebase.mockResolvedValueOnce(
@@ -502,14 +498,15 @@ describe('cloneRepository', () => {
 
       await cloneRepository('https://gitlab.com/owner/repo');
 
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
-      );
-      expect(cloneCall?.[1]?.[1]).toBe('https://oauth2:glpat-testtoken456@gitlab.com/owner/repo');
+      const cloneCall = getGitCloneCall();
+      expect(cloneCall?.[0]).toBe('https://gitlab.com/owner/repo');
+      expect(cloneCall?.[2]).toEqual({
+        credentials: { username: 'oauth2', password: 'glpat-testtoken456' },
+      });
       delete process.env.GITLAB_TOKEN;
     });
 
-    test('injects GITLAB_TOKEN for self-hosted GitLab URLs', async () => {
+    test('passes GITLAB_TOKEN for self-hosted GitLab URLs', async () => {
       process.env.GITLAB_TOKEN = 'glpat-selfhosted';
       delete process.env.GH_TOKEN;
       mockCreateCodebase.mockResolvedValueOnce(
@@ -521,16 +518,15 @@ describe('cloneRepository', () => {
 
       await cloneRepository('https://gitlab.mycompany.com/owner/repo');
 
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
-      );
-      expect(cloneCall?.[1]?.[1]).toBe(
-        'https://oauth2:glpat-selfhosted@gitlab.mycompany.com/owner/repo'
-      );
+      const cloneCall = getGitCloneCall();
+      expect(cloneCall?.[0]).toBe('https://gitlab.mycompany.com/owner/repo');
+      expect(cloneCall?.[2]).toEqual({
+        credentials: { username: 'oauth2', password: 'glpat-selfhosted' },
+      });
       delete process.env.GITLAB_TOKEN;
     });
 
-    test('injects GITEA_TOKEN for Gitea URLs', async () => {
+    test('passes GITEA_TOKEN for Gitea URLs', async () => {
       process.env.GITEA_TOKEN = 'gitea-token-789';
       delete process.env.GH_TOKEN;
       mockCreateCodebase.mockResolvedValueOnce(
@@ -542,14 +538,15 @@ describe('cloneRepository', () => {
 
       await cloneRepository('https://gitea.myorg.com/owner/repo');
 
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
-      );
-      expect(cloneCall?.[1]?.[1]).toBe('https://gitea-token-789@gitea.myorg.com/owner/repo');
+      const cloneCall = getGitCloneCall();
+      expect(cloneCall?.[0]).toBe('https://gitea.myorg.com/owner/repo');
+      expect(cloneCall?.[2]).toEqual({
+        credentials: { username: 'gitea-token-789', password: '' },
+      });
       delete process.env.GITEA_TOKEN;
     });
 
-    test('injects GITEA_TOKEN for Forgejo URLs', async () => {
+    test('passes GITEA_TOKEN for Forgejo URLs', async () => {
       process.env.GITEA_TOKEN = 'forgejo-token';
       delete process.env.GH_TOKEN;
       mockCreateCodebase.mockResolvedValueOnce(
@@ -561,10 +558,11 @@ describe('cloneRepository', () => {
 
       await cloneRepository('https://forgejo.example.org/owner/repo');
 
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
-      );
-      expect(cloneCall?.[1]?.[1]).toBe('https://forgejo-token@forgejo.example.org/owner/repo');
+      const cloneCall = getGitCloneCall();
+      expect(cloneCall?.[0]).toBe('https://forgejo.example.org/owner/repo');
+      expect(cloneCall?.[2]).toEqual({
+        credentials: { username: 'forgejo-token', password: '' },
+      });
       delete process.env.GITEA_TOKEN;
     });
 
@@ -581,10 +579,11 @@ describe('cloneRepository', () => {
 
       await cloneRepository('https://bitbucket.org/owner/repo');
 
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
-      );
-      expect(cloneCall?.[1]?.[1]).toBe('https://bitbucket.org/owner/repo');
+      expect(getGitCloneCall()).toEqual([
+        'https://bitbucket.org/owner/repo',
+        '/home/test/.archon/workspaces/owner/repo/source',
+        undefined,
+      ]);
     });
 
     test('does not leak token when forge name appears only in URL path', async () => {
@@ -599,33 +598,8 @@ describe('cloneRepository', () => {
 
       await cloneRepository('https://evil.example.com/gitlab/mirror');
 
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
-      );
-      expect(cloneCall?.[1]?.[1]).not.toContain('glpat-shouldnotleak');
+      expect(JSON.stringify(getGitCloneCall())).not.toContain('glpat-shouldnotleak');
       delete process.env.GITLAB_TOKEN;
-    });
-  });
-
-  // ── GIT_TERMINAL_PROMPT fail-fast (salvaged from PR #1404, credit @mlnchk) ─
-  describe('fail-fast env', () => {
-    test('passes GIT_TERMINAL_PROMPT=0 to the git clone subprocess', async () => {
-      mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
-
-      await cloneRepository('https://github.com/owner/repo');
-
-      const cloneCall = (
-        spyExecFileAsync.mock.calls as [string, string[], { env?: NodeJS.ProcessEnv }][]
-      ).find(args => args[0] === 'git' && args[1]?.[0] === 'clone');
-      expect(cloneCall).toBeDefined();
-      const env = cloneCall?.[2]?.env ?? {};
-      expect(env.GIT_TERMINAL_PROMPT).toBe('0');
-      // The rest of the environment must be inherited, not stripped. On
-      // Windows the key can be 'Path' — spreading process.env keeps the
-      // original casing — so locate the path key case-insensitively.
-      const pathKey = Object.keys(env).find(k => k.toLowerCase() === 'path');
-      expect(pathKey).toBeDefined();
-      expect(env[pathKey!]).toBe(process.env[pathKey!]);
     });
   });
 
@@ -690,6 +664,23 @@ describe('cloneRepository', () => {
       delete process.env.GITLAB_TOKEN;
     });
 
+    test('matches configured forge authentication by explicit authority', () => {
+      process.env.GITLAB_URL = 'https://code.mycompany.com:8443';
+      process.env.GITLAB_TOKEN = 'glpat-port';
+
+      expect(resolveForgeAuth('https://code.mycompany.com:8443/team/project')).toEqual({
+        token: 'glpat-port',
+        scheme: 'oauth2:',
+      });
+      expect(resolveForgeAuth('https://code.mycompany.com:9443/team/project')).toEqual({
+        token: undefined,
+        scheme: '',
+      });
+
+      delete process.env.GITLAB_URL;
+      delete process.env.GITLAB_TOKEN;
+    });
+
     test('does not leak GITEA_TOKEN when GITEA_URL is set but hostname differs', () => {
       process.env.GITEA_URL = 'https://git.example.com';
       process.env.GITEA_TOKEN = 'gitea_tok_secret';
@@ -728,11 +719,7 @@ describe('cloneRepository', () => {
 
       expect(result.alreadyExisted).toBe(true);
       expect(result.codebaseId).toBe('existing-id');
-      // git clone must NOT have been called
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
-      );
-      expect(cloneCall).toBeUndefined();
+      expect(spyCloneGitRepository).not.toHaveBeenCalled();
     });
 
     test('finds existing codebase by URL with .git suffix fallback', async () => {
@@ -770,11 +757,7 @@ describe('cloneRepository', () => {
 
       const result = await cloneRepository('/home/user/myrepo');
 
-      // git clone must NOT be called (local path → register)
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
-      );
-      expect(cloneCall).toBeUndefined();
+      expect(spyCloneGitRepository).not.toHaveBeenCalled();
       expect(result).toBeDefined();
     });
 
@@ -805,30 +788,21 @@ describe('cloneRepository', () => {
       const result = await cloneRepository('./my-local-repo');
 
       expect(result).toBeDefined();
-      const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-        args => args[0] === 'git' && args[1]?.[0] === 'clone'
-      );
-      expect(cloneCall).toBeUndefined();
+      expect(spyCloneGitRepository).not.toHaveBeenCalled();
     });
   });
 
   // ── Error handling ─────────────────────────────────────────────────────
   describe('error handling', () => {
-    test('wraps git clone failure with sanitized message', async () => {
+    test('wraps a sanitized clone failure', async () => {
       process.env.GH_TOKEN = 'super_secret_token';
-      spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
-        if (args[0] === 'clone') {
-          return Promise.reject(
-            new Error(
-              'fatal: repository https://super_secret_token@github.com/owner/repo not found'
-            )
-          );
-        }
-        return Promise.resolve({ stdout: '', stderr: '' });
+      spyCloneGitRepository.mockResolvedValue({
+        ok: false,
+        error: { code: 'unknown', message: 'fatal: repository unavailable' },
       });
 
       await expect(cloneRepository('https://github.com/owner/repo')).rejects.toThrow(
-        'Failed to clone repository'
+        'Failed to clone repository: fatal: repository unavailable'
       );
       delete process.env.GH_TOKEN;
     });
@@ -1366,11 +1340,7 @@ describe('normalizeRepoUrl (via cloneRepository)', () => {
   const expectCloneTargetPath = async (url: string): Promise<string> => {
     mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
     await cloneRepository(url);
-    // The target path is the second positional arg to `git clone <url> <path>`
-    const cloneCall = (spyExecFileAsync.mock.calls as string[][]).find(
-      args => args[0] === 'git' && args[1]?.[0] === 'clone'
-    );
-    return cloneCall?.[1]?.[2] ?? '';
+    return getGitCloneCall()?.[1] ?? '';
   };
 
   test('HTTPS URL produces expected project source path', async () => {
