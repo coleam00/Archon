@@ -510,6 +510,14 @@ describe('executeWorkflow', () => {
         }
       );
       expect(result.success).toBe(true);
+      // Metadata stamp must record the continuation mode so resume reads it.
+      expect(store.createWorkflowRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            continuation: { mode: 'supersede' },
+          }),
+        })
+      );
       // Must NOT attempt to resolve output_root for supersession.
       expect(store.getWorkflowRun).not.toHaveBeenCalledWith(supersededId);
     });

@@ -117,7 +117,11 @@ import {
   SUBRUN_METADATA_KEYS,
   CONTINUATION_METADATA_KEY,
 } from '@archon/workflows/schemas/workflow-run';
-import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
+import type {
+  WorkflowRun,
+  WorkflowRunStatus,
+  ContinuationMode,
+} from '@archon/workflows/schemas/workflow-run';
 import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
 import {
   approveWorkflow,
@@ -2357,7 +2361,7 @@ async function runWorkflowWithOwnedSource(
   // inherits nothing.
   let adoptedFromRunId: string | undefined;
   let adoptedTaskBranch: Extract<TaskBranchSelection, { kind: 'existing' }> | undefined;
-  let continuationMode: 'adopt' | 'supersede' | undefined;
+  let continuationMode: ContinuationMode | undefined;
   // Set when the adopt lane executes inside a checkout whose `.archon` may differ from
   // this process's cwd — the trigger for recaptureForLane once the path is final.
   let adoptLaneRunsIsolatedCheckout = false;

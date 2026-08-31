@@ -40,6 +40,7 @@ import {
   readContinuationMode,
   WORKFLOW_SOURCE_METADATA_KEY,
   readWorkflowSourceState,
+  type ContinuationMode,
 } from './schemas';
 import {
   WorkflowSourceIntegrityError,
@@ -686,7 +687,7 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    */
   adoptedFromRunId?: string;
   /** How `adoptedFromRunId` continues: estate adoption or fresh-lane supersession. */
-  continuationMode?: 'adopt' | 'supersede';
+  continuationMode?: ContinuationMode;
   /** One model-binding phase: raw at invocation boundaries, resolved for child runs. */
   modelOverrideLayer?:
     | { kind: 'raw'; overrides: RunModelOverrides }
@@ -2188,7 +2189,9 @@ export async function executeWorkflow(
             : {}),
           // Between-run continuation (#2747): the mode stamp rides the same
           // creation write as `adopted_from_run_id` so both are write-once.
-          ...(adoptedFromRunId ? { [CONTINUATION_METADATA_KEY]: { mode: continuationMode } } : {}),
+          ...(adoptedFromRunId
+            ? { [CONTINUATION_METADATA_KEY]: { mode: continuationMode ?? 'adopt' } }
+            : {}),
           [RUN_MODEL_BINDINGS_METADATA_KEY]: modelBindingsMetadata,
           ...(runConfigMetadata ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: runConfigMetadata } : {}),
         },
