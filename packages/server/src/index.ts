@@ -60,7 +60,7 @@ registerCommunityProviders();
 // that must block startup, not surface as a runtime 500 (#1955).
 getVendorCatalog();
 
-import { OpenAPIHono, z } from '@hono/zod-openapi';
+import { OpenAPIHono } from '@hono/zod-openapi';
 import { validationErrorHook } from './routes/openapi-defaults';
 import {
   TelegramAdapter,
@@ -79,6 +79,7 @@ import { DashboardEventPoller } from './adapters/web/dashboard-event-poller';
 import { PgNotifyListener } from './adapters/web/pg-notify-listener';
 import { registerApiRoutes } from './routes/api';
 import { registerGithubWebhookRoute } from './routes/webhooks';
+import { registerGitCredentialRoute } from './routes/git-credentials';
 import {
   startWorkflowContinuationScheduler,
   stopWorkflowContinuationScheduler,
@@ -111,9 +112,6 @@ import {
 import type { IPlatformAdapter } from '@archon/core';
 import type { IdentityPlatform } from '@archon/core';
 import * as userDb from '@archon/core/db/users';
-import { getWorkflowRun } from '@archon/core/db/workflows';
-import { verifyRunToken, verifySessionToken } from '@archon/core';
-import { getConversationById } from '@archon/core/db/conversations';
 import * as conversationDb from '@archon/core/db/conversations';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import {
@@ -124,7 +122,7 @@ import {
   captureArchonStarted,
   captureArchonActive,
 } from '@archon/paths';
-import { selectGitHubAuthMode, parseGitCredentialPath } from './github-auth-bootstrap';
+import { selectGitHubAuthMode } from './github-auth-bootstrap';
 import { isDiscordMentionRequired } from './discord-mention';
 import {
   getAuth,
@@ -750,80 +748,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // to start the server (fatal error) when the operator binds to a non-loopback
   // host with App mode active, unless ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND=1.
   if (github?.getAuthMode() === 'app') {
-    // Request schema for /internal/git-credential. Validates the small
-    // host/path payload the credential helper sends. Inline declaration
-    // because the endpoint is a one-off internal surface (not part of the
-    // OpenAPI-published API), so it doesn't belong in routes/schemas/.
-    const gitCredentialRequestSchema = z.object({
-      host: z.string().optional(),
-      path: z.string().optional(),
-      runId: z.string().optional(),
-      runToken: z.string().optional(),
-      sessionId: z.string().optional(),
-      sessionToken: z.string().optional(),
-    });
-
-    app.post('/internal/git-credential', async c => {
-      try {
-        const raw = await c.req.json().catch(() => null);
-        const parseResult = gitCredentialRequestSchema.safeParse(raw);
-        if (!parseResult.success || parseResult.data.host !== 'github.com') {
-          return c.json({ error: 'unsupported host' }, 400);
-        }
-        const parsed = parseGitCredentialPath(parseResult.data.path ?? '');
-        if (!parsed) {
-          return c.json({ error: 'unparseable path' }, 400);
-        }
-
-        const { runId, runToken, sessionId, sessionToken } = parseResult.data;
-
-        // Path 1: run-scoped credential (workflow context).
-        if (runId && runToken) {
-          if (!verifyRunToken(runId, runToken)) {
-            getLog().warn({ runId }, 'internal.git_credential_invalid_run_token');
-            return c.json({ error: 'invalid run credential' }, 403);
-          }
-          const run = await getWorkflowRun(runId);
-          if (!run || !['pending', 'running'].includes(run.status)) {
-            getLog().warn({ runId, status: run?.status }, 'internal.git_credential_run_not_active');
-            return c.json({ error: 'run not active' }, 403);
-          }
-          if (run.user_id) {
-            const runUserToken = await getDecryptedAccessToken(run.user_id);
-            if (runUserToken) {
-              return c.json({ token: runUserToken });
-            }
-          }
-        }
-
-        // Path 2: session-scoped credential (orchestrator / direct-chat context — issue #223).
-        if (sessionId && sessionToken) {
-          if (!verifySessionToken(sessionId, sessionToken)) {
-            getLog().warn({ sessionId }, 'internal.git_credential_invalid_session_token');
-            return c.json({ error: 'invalid session credential' }, 403);
-          }
-          const conversation = await getConversationById(sessionId);
-          if (conversation?.user_id) {
-            const sessionUserToken = await getDecryptedAccessToken(conversation.user_id);
-            if (sessionUserToken) {
-              return c.json({ token: sessionUserToken });
-            }
-          }
-        }
-
-        // App installation token fallback (when GitHub App provider is registered)
-        if (githubAppAuthProvider) {
-          const token = await githubAppAuthProvider.getInstallationToken(parsed.owner, parsed.repo);
-          return c.json({ token });
-        }
-
-        return c.json({ error: 'no valid credential presented' }, 403);
-      } catch (err) {
-        // ERROR (not WARN): this is a live credential-vending failure.
-        getLog().error({ err }, 'internal.git_credential_resolve_failed');
-        return c.json({ error: 'resolution failed' }, 500);
-      }
-    });
+    registerGitCredentialRoute(app, { githubAppAuthProvider });
     getLog().info('internal_git_credential_endpoint_registered');
   }
 

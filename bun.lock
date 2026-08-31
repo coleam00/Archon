@@ -238,6 +238,7 @@
       "name": "@archon/workflows",
       "version": "0.9.0",
       "dependencies": {
+        "@archon/core": "workspace:*",
         "@archon/git": "workspace:*",
         "@archon/paths": "workspace:*",
         "@archon/providers": "workspace:*",
