@@ -2063,32 +2063,34 @@ export function buildTopologicalLayers(nodes: readonly DagNode[]): DagNode[][] {
  * Parallel nodes and context: 'fresh' nodes always receive fresh sessions (caller ensures resumeSessionId is undefined).
  */
 async function executeNodeInternal(
-  deps: WorkflowDeps,
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  cwd: string,
-  workflowRun: WorkflowRun,
+  ctx: RunLayersContext,
   node: AgentNode,
   provider: string,
   nodeOptions: SendQueryOptions | undefined,
-  artifactsDir: string,
-  stateDir: string,
-  logDir: string,
-  baseBranch: string,
-  docsDir: string,
-  nodeOutputs: Map<string, NodeOutput>,
   resumeSessionId: string | undefined,
-  configuredCommandFolder?: string,
-  issueContext?: string,
   resolvedModel?: string,
   resolvedTier?: TierName,
   resolvedEffort?: string,
   stepNamePrefix = '',
   iteration?: number,
-  checkpointSession?: SessionCheckpoint,
-  /** Roots command files resolve under; always supplied from RunLayersContext. */
-  workflowSourceRoots?: WorkflowSourceRoots
+  checkpointSession?: SessionCheckpoint
 ): Promise<NodeExecutionResult> {
+  const {
+    deps,
+    platform,
+    conversationId,
+    cwd,
+    workflowRun,
+    artifactsDir,
+    stateDir,
+    logDir,
+    baseBranch,
+    docsDir,
+    nodeOutputs,
+    configuredCommandFolder,
+    issueContext,
+    workflowSourceRoots,
+  } = ctx;
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
   // Command file name when this agent node is command-sourced, undefined for an
@@ -3731,19 +3733,8 @@ function persistedOutputEventFields(
  * No AI session is created — bash nodes are free/deterministic.
  */
 async function executeBashNode(
-  deps: WorkflowDeps,
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  cwd: string,
-  workflowRun: WorkflowRun,
+  ctx: RunLayersContext,
   node: ExecNode,
-  artifactsDir: string,
-  stateDir: string,
-  logDir: string,
-  baseBranch: string,
-  docsDir: string,
-  nodeOutputs: Map<string, NodeOutput>,
-  issueContext?: string,
   envVars?: Record<string, string>,
   protectedEnvKeys?: readonly string[],
   protectedCredentialValues?: readonly string[],
@@ -3755,9 +3746,23 @@ async function executeBashNode(
   // applyLoopPrevToBodyNode before this function runs; this env var is what a script that
   // reads the variable indirectly (${LOOP_USER_INPUT}, printenv, env) actually sees. ''
   // for top-level bash nodes and non-first iterations.
-  loopUserInput = '',
-  execContext: ExecutionContext = { kind: 'host' }
+  loopUserInput = ''
 ): Promise<NodeOutput> {
+  const {
+    deps,
+    platform,
+    conversationId,
+    cwd,
+    workflowRun,
+    artifactsDir,
+    stateDir,
+    logDir,
+    baseBranch,
+    docsDir,
+    nodeOutputs,
+    issueContext,
+    execContext,
+  } = ctx;
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
   // Namespaced persisted step_name for loop_group bodies ('' → node.id at top level, #2090).
@@ -4015,19 +4020,8 @@ async function warnOnLiteralUserVars(
  * stdout is captured and trimmed as the node output; stderr is logged as a warning.
  */
 async function executeScriptNode(
-  deps: WorkflowDeps,
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  cwd: string,
-  workflowRun: WorkflowRun,
+  ctx: RunLayersContext,
   node: ExecNode,
-  artifactsDir: string,
-  stateDir: string,
-  logDir: string,
-  baseBranch: string,
-  docsDir: string,
-  nodeOutputs: Map<string, NodeOutput>,
-  issueContext?: string,
   envVars?: Record<string, string>,
   protectedEnvKeys?: readonly string[],
   protectedCredentialValues?: readonly string[],
@@ -4039,11 +4033,24 @@ async function executeScriptNode(
   // same env-var parameter (#2725), but additionally has the literal "$LOOP_USER_INPUT"
   // token pre-spliced (shell-quoted) into its script source by applyLoopPrevToBodyNode
   // before it runs — a channel script deliberately has no equivalent of.
-  loopUserInput = '',
-  execContext: ExecutionContext = { kind: 'host' },
-  /** Roots named scripts resolve under; always supplied from RunLayersContext. */
-  workflowSourceRoots?: WorkflowSourceRoots
+  loopUserInput = ''
 ): Promise<NodeOutput> {
+  const {
+    deps,
+    platform,
+    conversationId,
+    cwd,
+    workflowRun,
+    artifactsDir,
+    stateDir,
+    logDir,
+    baseBranch,
+    docsDir,
+    nodeOutputs,
+    issueContext,
+    execContext,
+    workflowSourceRoots,
+  } = ctx;
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
   // Namespaced persisted step_name for loop_group bodies ('' → node.id at top level, #2090).
@@ -4593,41 +4600,27 @@ function findLoopGroupTerminalSuspendNode(
  *   so the outer `runLayers` aggregates the group as one node's worth of usage
  */
 async function executeLoopGroupNode(
-  deps: WorkflowDeps,
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  cwd: string,
-  workflowRun: WorkflowRun,
+  ctx: RunLayersContext,
   node: LoopGroupNode,
   workflowProvider: string,
-  workflowModel: string | undefined,
-  workflowLevelOptions: WorkflowLevelOptions,
-  aiProfile: ResolvedAiProfile | undefined,
-  workflowPreset: ModelAliasPreset | undefined,
-  artifactsDir: string,
-  stateDir: string,
-  logDir: string,
-  baseBranch: string,
-  docsDir: string,
-  outerNodeOutputs: Map<string, NodeOutput>,
-  config: WorkflowConfig,
-  /** Shared by reference with the enclosing run so a body cannot re-report a conflict.
-   *  Positioned among the REQUIRED parameters deliberately: as a trailing optional it
-   *  could be omitted, silently handing the body an isolated Set and quietly undoing the
-   *  de-duplication, with no compiler signal. */
-  warnedProviderConflicts: Set<string>,
-  /** Ordered enclosing loop_group frames. Required so nested artifact identity cannot
-   *  silently fall back to only the immediate group. */
-  enclosingLoopGroupPath: NodeArtifactLoopFrame[],
-  /** Inherited only from a composed instance that already owns its durable start. */
-  claimedWorkPausePolicy: ClaimedWorkPausePolicy | undefined,
-  issueContext?: string,
-  stepNamePrefix = '',
-  execContext: ExecutionContext = { kind: 'host' },
-  runChildWorkflow?: RunChildWorkflowFn,
-  /** Roots body nodes read command files and named scripts from; see RunLayersContext. */
-  workflowSourceRoots?: WorkflowSourceRoots
+  stepNamePrefix = ''
 ): Promise<NodeExecutionResult> {
+  const {
+    deps,
+    platform,
+    conversationId,
+    cwd,
+    workflowRun,
+    artifactsDir,
+    stateDir,
+    logDir,
+    baseBranch,
+    docsDir,
+    nodeOutputs: outerNodeOutputs,
+    config,
+    issueContext,
+    execContext,
+  } = ctx;
   const group = node.loop_group;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
   // This group's OWN persisted step_name — namespaced by any enclosing group so nested
@@ -5043,39 +5036,38 @@ async function executeLoopGroupNode(
     const scopedNodeOutputs = new Map<string, NodeOutput>(outerNodeOutputs);
 
     const iterCtx: RunLayersContext = {
-      deps,
-      platform,
-      conversationId,
-      cwd,
+      deps: ctx.deps,
+      platform: ctx.platform,
+      conversationId: ctx.conversationId,
+      cwd: ctx.cwd,
       // Forwarded for completeness — a `workflow:` node inside a loop_group body is
       // rejected at load time, so this closure is never actually invoked here.
-      runChildWorkflow,
-      workflowRun,
+      runChildWorkflow: ctx.runChildWorkflow,
+      workflowRun: ctx.workflowRun,
       workflowName: node.id,
       // A body node's commands and scripts come from the same frozen source as the
       // enclosing run's — the group is part of one workflow, not a separate one. The
-      // enclosing context already normalized these, so the fallback is unreachable; it
-      // exists because the positional parameter cannot be made required after optionals.
-      workflowSourceRoots: workflowSourceRoots ?? liveSourceRoots(cwd),
-      config,
+      // enclosing context already normalized these at the DAG boundary.
+      workflowSourceRoots: ctx.workflowSourceRoots,
+      config: ctx.config,
       workflowProvider,
       // Forward inherited workflow-level model/tier/options/profile so body AI nodes
       // resolve model aliases and workflow defaults the same way top-level nodes do.
-      workflowModel,
-      workflowLevelOptions,
-      aiProfile,
-      workflowPreset,
-      artifactsDir,
-      stateDir,
-      logDir,
-      baseBranch,
-      docsDir,
+      workflowModel: ctx.workflowModel,
+      workflowLevelOptions: ctx.workflowLevelOptions,
+      aiProfile: ctx.aiProfile,
+      workflowPreset: ctx.workflowPreset,
+      artifactsDir: ctx.artifactsDir,
+      stateDir: ctx.stateDir,
+      logDir: ctx.logDir,
+      baseBranch: ctx.baseBranch,
+      docsDir: ctx.docsDir,
       configuredCommandFolder: undefined,
-      issueContext,
+      issueContext: ctx.issueContext,
       // Body nodes inherit the group's execution context so bash/script/AI inside
       // a loop_group body exec in the same place (host, or the container in Phase B)
       // — without this a loop_group body would be a host-escape hole.
-      execContext,
+      execContext: ctx.execContext,
       // persist_session across iterations is out of v1 scope (body sessions reset per
       // iteration, governed by fresh_context). Pass undefined/false so body nodes don't
       // participate in cross-run session persistence inside the loop — and therefore
@@ -5086,19 +5078,19 @@ async function executeLoopGroupNode(
       layers: iterBodyLayers,
       nodeOutputs: scopedNodeOutputs,
       priorCompletedNodes: undefined, // body re-runs in full each iteration (v1)
-      claimedWorkPausePolicy,
+      claimedWorkPausePolicy: ctx.claimedWorkPausePolicy,
       // Thread the loop-level session cursor: fresh_context (or the loop's true first
       // iteration) starts fresh; otherwise carry the prior iteration's last sequential
       // session forward so a body AI node resumes the prior iteration's conversation.
       // Gate on the literal i === 1 (not startIteration): on interactive resume the
       // first processed iteration must continue the restored pre-pause session.
       lastSequentialSession: group.fresh_context || i === 1 ? undefined : loopLastSequentialSession,
-      warnedProviderConflicts,
+      warnedProviderConflicts: ctx.warnedProviderConflicts,
       totalCostUsd: 0,
       totalTokens: undefined,
       totalLoopIterations: 0,
       stepNamePrefix: bodyStepNamePrefix,
-      loopGroupPath: [...enclosingLoopGroupPath, { groupId: node.id, iteration: i }],
+      loopGroupPath: [...ctx.loopGroupPath, { groupId: node.id, iteration: i }],
       // Deliver this iteration's approval-gate free-text to body exec: nodes via env
       // (#2115, #2725). Script bodies use this as their ONLY channel (applyLoopPrevToBodyNode
       // skips their literal token, unsafe to splice into TS/Python source). Bash bodies get
@@ -5660,32 +5652,34 @@ export function applyLoopPrevToBodyNode(
  * - Does not write current_step_index (DAG tracks per-node completion)
  */
 async function executeLoopNode(
-  deps: WorkflowDeps,
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  cwd: string,
-  workflowRun: WorkflowRun,
+  ctx: RunLayersContext,
   node: LoopNode,
   workflowProvider: string,
   resolvedOptions: SendQueryOptions | undefined,
-  artifactsDir: string,
-  stateDir: string,
-  logDir: string,
-  baseBranch: string,
-  docsDir: string,
-  nodeOutputs: Map<string, NodeOutput>,
-  config: WorkflowConfig,
-  issueContext?: string,
-  configuredCommandFolder?: string,
   stepNamePrefix = '',
-  execContext: ExecutionContext = { kind: 'host' },
   resolvedModel?: string,
   resolvedTier?: TierName,
   resolvedEffort?: string,
-  checkpointSession?: SessionCheckpoint,
-  /** Roots a `loop.command` file resolves under; always supplied from RunLayersContext. */
-  workflowSourceRoots?: WorkflowSourceRoots
+  checkpointSession?: SessionCheckpoint
 ): Promise<NodeExecutionResult> {
+  const {
+    deps,
+    platform,
+    conversationId,
+    cwd,
+    workflowRun,
+    artifactsDir,
+    stateDir,
+    logDir,
+    baseBranch,
+    docsDir,
+    nodeOutputs,
+    config,
+    issueContext,
+    configuredCommandFolder,
+    execContext,
+    workflowSourceRoots,
+  } = ctx;
   const loop = node.loop;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
   // Namespaced persisted step_name when this loop node runs inside a loop_group body
@@ -7405,32 +7399,31 @@ async function executeWaitNode(
  * then re-pauses at the approval gate. After max_attempts rejections, cancels normally.
  */
 async function executeApprovalNode(
+  ctx: RunLayersContext,
   node: GateNode,
-  workflowRun: WorkflowRun,
-  deps: WorkflowDeps,
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  workflowProvider: string,
-  workflowModel: string | undefined,
-  cwd: string,
-  artifactsDir: string,
-  stateDir: string,
-  logDir: string,
-  baseBranch: string,
-  docsDir: string,
-  nodeOutputs: Map<string, NodeOutput>,
-  config: WorkflowConfig,
-  workflowLevelOptions: WorkflowLevelOptions,
-  configuredCommandFolder?: string,
-  issueContext?: string,
-  aiProfile?: ResolvedAiProfile,
-  workflowPreset?: ModelAliasPreset,
   stepNamePrefix = '',
-  iteration?: number,
-  execContext: ExecutionContext = { kind: 'host' },
-  /** Forwarded to the synthetic `on_reject` node; see RunLayersContext. */
-  workflowSourceRoots?: WorkflowSourceRoots
+  iteration?: number
 ): Promise<NodeOutput> {
+  const {
+    workflowRun,
+    deps,
+    platform,
+    conversationId,
+    workflowProvider,
+    workflowModel,
+    cwd,
+    artifactsDir,
+    stateDir,
+    baseBranch,
+    docsDir,
+    nodeOutputs,
+    config,
+    workflowLevelOptions,
+    issueContext,
+    aiProfile,
+    workflowPreset,
+    execContext,
+  } = ctx;
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
   // Namespaced persisted step_name for loop_group bodies ('' → node.id at top level, #2090).
   const stepName = stepNamePrefix + node.id;
@@ -7539,30 +7532,17 @@ async function executeApprovalNode(
     );
 
     const output = await executeNodeInternal(
-      deps,
-      platform,
-      conversationId,
-      cwd,
-      workflowRun,
+      ctx,
       syntheticNode,
       provider,
       nodeOptions,
-      artifactsDir,
-      stateDir,
-      logDir,
-      baseBranch,
-      docsDir,
-      nodeOutputs,
       undefined, // fresh session
-      configuredCommandFolder,
-      issueContext,
       resolvedNodeModel,
       resolvedTier,
       resolvedEffort,
       stepNamePrefix,
       iteration,
-      undefined, // synthetic on_reject node never carries a session checkpoint
-      workflowSourceRoots
+      undefined // synthetic on_reject node never carries a session checkpoint
     );
 
     if (output.state === 'failed') {
@@ -9936,42 +9916,13 @@ async function settleSequentially(
  * Shared by the top-level DAG and `executeLoopGroupNode`'s per-iteration body execution.
  */
 async function runLayers(ctx: RunLayersContext): Promise<void> {
-  const {
-    deps,
-    platform,
-    conversationId,
-    cwd,
-    execContext,
-    workflowRun,
-    workflowName,
-    config,
-    workflowProvider,
-    workflowModel,
-    workflowLevelOptions,
-    aiProfile,
-    workflowPreset,
-    artifactsDir,
-    stateDir,
-    logDir,
-    baseBranch,
-    docsDir,
-    configuredCommandFolder,
-    issueContext,
-    persistScopeKey,
-    workflowPersistSessions,
-    scopeArtifactsDir,
-    layers,
-    priorCompletedNodes,
-    stepNamePrefix,
-    loopGroupPath,
-  } = ctx;
   // Lifecycle events expose only the immediate enclosing iteration; artifact
   // identity retains the complete outermost-to-innermost lineage.
-  const iteration = loopGroupPath.at(-1)?.iteration;
+  const iteration = ctx.loopGroupPath.at(-1)?.iteration;
   // nodeOutputs + accumulators + lastSequentialSession are mutated in place on `ctx`.
 
-  for (let layerIdx = 0; layerIdx < layers.length; layerIdx++) {
-    const layer = layers[layerIdx];
+  for (let layerIdx = 0; layerIdx < ctx.layers.length; layerIdx++) {
+    const layer = ctx.layers[layerIdx];
     const isParallelLayer = layer.length > 1;
 
     if (isParallelLayer) {
@@ -10011,8 +9962,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 return undefined;
               }
               return async (sessionId: string): Promise<void> => {
-                await deps.store.upsertWorkflowRunNodeSession({
-                  workflow_run_id: workflowRun.id,
+                await ctx.deps.store.upsertWorkflowRunNodeSession({
+                  workflow_run_id: ctx.workflowRun.id,
                   node_id: node.id,
                   provider,
                   provider_session_id: sessionId,
@@ -10027,16 +9978,16 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               substituteNodeOutputRefs(
                 substituteWorkflowVariables(
                   text,
-                  workflowRun.id,
-                  workflowRun.user_message,
-                  artifactsDir,
-                  baseBranch,
-                  docsDir,
-                  issueContext,
+                  ctx.workflowRun.id,
+                  ctx.workflowRun.user_message,
+                  ctx.artifactsDir,
+                  ctx.baseBranch,
+                  ctx.docsDir,
+                  ctx.issueContext,
                   undefined,
                   undefined,
                   undefined,
-                  { stateDir, inputs: resolveRunInputs(workflowRun) }
+                  { stateDir: ctx.stateDir, inputs: resolveRunInputs(ctx.workflowRun) }
                 ).prompt,
                 ctx.nodeOutputs
               );
@@ -10044,12 +9995,13 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             // A prior success is reusable only while every enclosing include is still active.
             // Unlike ordinary node-local rules, a composed boundary governs the whole block,
             // so resume must not let a stale completed descendant cross a newly-false gate.
+            const priorCompletedNodes = ctx.priorCompletedNodes;
             const isCachedPriorSuccess =
               priorCompletedNodes?.has(node.id) === true && !node.always_run;
             const composedBoundaryDecision = checkComposedBlockBoundaries(
               node,
               ctx.nodeOutputs,
-              resolveRunInputs(workflowRun),
+              resolveRunInputs(ctx.workflowRun),
               isCachedPriorSuccess
             );
 
@@ -10066,27 +10018,31 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               ): ReturnType<typeof formatPersistedNodeOutput> =>
                 formatPersistedNodeOutput(
                   priorCompletedNodes.get(node.id)?.output ?? '',
-                  artifactsDir,
+                  ctx.artifactsDir,
                   stepName
                 );
               if (node.always_run) {
                 getLog().info({ nodeId: node.id }, 'dag.node_always_run_resume_forced');
-                const alwaysRunStepName = stepNamePrefix + node.id;
+                const alwaysRunStepName = ctx.stepNamePrefix + node.id;
                 // The prior value being reset can be arbitrarily large — getDagResumeSnapshot
                 // prefers the full spilled text over the bounded preview (#2726), so this
                 // audit row must go through the same bounded-preview+spill helper as the
                 // primary node_completed/node_skipped_prior_success writers, not the raw text.
                 const alwaysRunPriorOutput = formatThisNodesPriorOutput(alwaysRunStepName);
-                deps.store
+                ctx.deps.store
                   .createWorkflowEvent({
-                    workflow_run_id: workflowRun.id,
+                    workflow_run_id: ctx.workflowRun.id,
                     event_type: 'node_always_run_reset',
                     step_name: alwaysRunStepName,
                     data: persistedOutputEventFields(alwaysRunPriorOutput, 'prior_output'),
                   })
                   .catch((err: Error) => {
                     getLog().error(
-                      { err, workflowRunId: workflowRun.id, eventType: 'node_always_run_reset' },
+                      {
+                        err,
+                        workflowRunId: ctx.workflowRun.id,
+                        eventType: 'node_always_run_reset',
+                      },
                       'workflow_event_persist_failed'
                     );
                   });
@@ -10105,7 +10061,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   priorCompletedNodes
                 );
                 if (staleDeps.length > 0) {
-                  const invalidatedStepName = stepNamePrefix + node.id;
+                  const invalidatedStepName = ctx.stepNamePrefix + node.id;
                   // Same rationale as the always_run reset above: prior.output can now be
                   // the full spilled text, so this audit row needs the same bounding (#2726).
                   const invalidatedPriorOutput = formatThisNodesPriorOutput(invalidatedStepName);
@@ -10113,9 +10069,9 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                     { nodeId: node.id, invalidatingDeps: staleDeps },
                     'dag.node_prior_cache_invalidated'
                   );
-                  deps.store
+                  ctx.deps.store
                     .createWorkflowEvent({
-                      workflow_run_id: workflowRun.id,
+                      workflow_run_id: ctx.workflowRun.id,
                       event_type: 'node_prior_cache_invalidated',
                       step_name: invalidatedStepName,
                       data: {
@@ -10137,7 +10093,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                       getLog().error(
                         {
                           err,
-                          workflowRunId: workflowRun.id,
+                          workflowRunId: ctx.workflowRun.id,
                           eventType: 'node_prior_cache_invalidated',
                         },
                         'workflow_event_persist_failed'
@@ -10146,12 +10102,12 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   // falls through to re-execute the node with fresh dep output
                 } else {
                   getLog().info({ nodeId: node.id }, 'dag.node_skipped_prior_success');
-                  await logNodeSkip(logDir, workflowRun.id, node.id, 'prior_success').catch(
+                  await logNodeSkip(ctx.logDir, ctx.workflowRun.id, node.id, 'prior_success').catch(
                     (err: Error) => {
                       getLog().warn({ err, nodeId: node.id }, 'dag.node_skip_log_write_failed');
                     }
                   );
-                  const skipStepName = stepNamePrefix + node.id;
+                  const skipStepName = ctx.stepNamePrefix + node.id;
                   // Copy the logical value forward (#2637) so a SECOND resume's snapshot
                   // still sees it — this re-emit is that resume's source. `prior.output` is
                   // already the FULL value (getDagResumeSnapshot prefers the spill over the
@@ -10159,9 +10115,9 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   // same bounded-preview+spill helper here or this row would re-introduce an
                   // unbounded write on every subsequent resume pass.
                   const priorSkipOutput = formatThisNodesPriorOutput(skipStepName);
-                  deps.store
+                  ctx.deps.store
                     .createWorkflowEvent({
-                      workflow_run_id: workflowRun.id,
+                      workflow_run_id: ctx.workflowRun.id,
                       event_type: 'node_skipped_prior_success',
                       step_name: skipStepName,
                       data: {
@@ -10178,7 +10134,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                       getLog().error(
                         {
                           err,
-                          workflowRunId: workflowRun.id,
+                          workflowRunId: ctx.workflowRun.id,
                           eventType: 'node_skipped_prior_success',
                         },
                         'workflow_event_persist_failed'
@@ -10187,7 +10143,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   const emitterPrior = getWorkflowEventEmitter();
                   emitterPrior.emit({
                     type: 'node_skipped',
-                    runId: workflowRun.id,
+                    runId: ctx.workflowRun.id,
                     nodeId: node.id,
                     nodeName: nodeDisplayName(node),
                     reason: 'prior_success',
@@ -10211,28 +10167,28 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 : checkTriggerRule(node, ctx.nodeOutputs);
             if (triggerDecision === 'skip') {
               getLog().info({ nodeId: node.id, reason: 'trigger_rule' }, 'dag_node_skipped');
-              await logNodeSkip(logDir, workflowRun.id, node.id, 'trigger_rule').catch(
+              await logNodeSkip(ctx.logDir, ctx.workflowRun.id, node.id, 'trigger_rule').catch(
                 (err: Error) => {
                   getLog().warn({ err, nodeId: node.id }, 'dag.node_skip_log_write_failed');
                 }
               );
-              deps.store
+              ctx.deps.store
                 .createWorkflowEvent({
-                  workflow_run_id: workflowRun.id,
+                  workflow_run_id: ctx.workflowRun.id,
                   event_type: 'node_skipped',
-                  step_name: stepNamePrefix + node.id,
+                  step_name: ctx.stepNamePrefix + node.id,
                   data: { reason: 'trigger_rule' },
                 })
                 .catch((err: Error) => {
                   getLog().error(
-                    { err, workflowRunId: workflowRun.id, eventType: 'node_skipped' },
+                    { err, workflowRunId: ctx.workflowRun.id, eventType: 'node_skipped' },
                     'workflow_event_persist_failed'
                   );
                 });
               const emitter = getWorkflowEventEmitter();
               emitter.emit({
                 type: 'node_skipped',
-                runId: workflowRun.id,
+                runId: ctx.workflowRun.id,
                 nodeId: node.id,
                 nodeName: nodeDisplayName(node),
                 reason: 'trigger_rule',
@@ -10249,13 +10205,13 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               const { result: conditionPasses, parsed: conditionParsed } = evaluateCondition(
                 node.when,
                 ctx.nodeOutputs,
-                resolveRunInputs(workflowRun),
+                resolveRunInputs(ctx.workflowRun),
                 { loopPrevOutputs: ctx.loopPrevOutputs }
               );
               if (!conditionParsed) {
                 const parseErrMsg = `⚠️ Node '${node.id}': unparseable \`when:\` expression "${node.when}" — node skipped (fail-closed). Check syntax: \`$nodeId.output == 'VALUE'\`, \`$nodeId.output > '5'\`, or compound \`$a.output == 'X' && $b.output != 'Y'\`.`;
-                await safeSendMessage(platform, conversationId, parseErrMsg, {
-                  workflowId: workflowRun.id,
+                await safeSendMessage(ctx.platform, ctx.conversationId, parseErrMsg, {
+                  workflowId: ctx.workflowRun.id,
                   nodeName: node.id,
                 });
                 getLog().error(
@@ -10263,30 +10219,30 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   'dag_node_skipped_condition_parse_error'
                 );
                 await logNodeSkip(
-                  logDir,
-                  workflowRun.id,
+                  ctx.logDir,
+                  ctx.workflowRun.id,
                   node.id,
                   'when_condition_parse_error'
                 ).catch((err: Error) => {
                   getLog().warn({ err, nodeId: node.id }, 'dag.node_skip_log_write_failed');
                 });
-                deps.store
+                ctx.deps.store
                   .createWorkflowEvent({
-                    workflow_run_id: workflowRun.id,
+                    workflow_run_id: ctx.workflowRun.id,
                     event_type: 'node_skipped',
-                    step_name: stepNamePrefix + node.id,
+                    step_name: ctx.stepNamePrefix + node.id,
                     data: { reason: 'when_condition_parse_error', expr: node.when },
                   })
                   .catch((err: Error) => {
                     getLog().error(
-                      { err, workflowRunId: workflowRun.id, eventType: 'node_skipped' },
+                      { err, workflowRunId: ctx.workflowRun.id, eventType: 'node_skipped' },
                       'workflow_event_persist_failed'
                     );
                   });
                 const emitter = getWorkflowEventEmitter();
                 emitter.emit({
                   type: 'node_skipped',
-                  runId: workflowRun.id,
+                  runId: ctx.workflowRun.id,
                   nodeId: node.id,
                   nodeName: nodeDisplayName(node),
                   reason: 'when_condition_parse_error',
@@ -10295,28 +10251,28 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               }
               if (!conditionPasses) {
                 getLog().info({ nodeId: node.id, when: node.when }, 'dag_node_skipped_condition');
-                await logNodeSkip(logDir, workflowRun.id, node.id, 'when_condition').catch(
+                await logNodeSkip(ctx.logDir, ctx.workflowRun.id, node.id, 'when_condition').catch(
                   (err: Error) => {
                     getLog().warn({ err, nodeId: node.id }, 'dag.node_skip_log_write_failed');
                   }
                 );
-                deps.store
+                ctx.deps.store
                   .createWorkflowEvent({
-                    workflow_run_id: workflowRun.id,
+                    workflow_run_id: ctx.workflowRun.id,
                     event_type: 'node_skipped',
-                    step_name: stepNamePrefix + node.id,
+                    step_name: ctx.stepNamePrefix + node.id,
                     data: { reason: 'when_condition', expr: node.when },
                   })
                   .catch((err: Error) => {
                     getLog().error(
-                      { err, workflowRunId: workflowRun.id, eventType: 'node_skipped' },
+                      { err, workflowRunId: ctx.workflowRun.id, eventType: 'node_skipped' },
                       'workflow_event_persist_failed'
                     );
                   });
                 const emitter = getWorkflowEventEmitter();
                 emitter.emit({
                   type: 'node_skipped',
-                  runId: workflowRun.id,
+                  runId: ctx.workflowRun.id,
                   nodeId: node.id,
                   nodeName: nodeDisplayName(node),
                   reason: 'when_condition',
@@ -10346,102 +10302,85 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 // oversight (#2718). See the rationale on `execNodeSchema` in
                 // schemas/dag-node.ts.
                 if (node.runtime === 'sh') {
-                  const excludes = checkoutSnapshotExcludes(artifactsDir, stateDir, logDir);
+                  const excludes = checkoutSnapshotExcludes(
+                    ctx.artifactsDir,
+                    ctx.stateDir,
+                    ctx.logDir
+                  );
                   const treeBefore =
                     node.mutates_checkout === false
-                      ? await snapshotCheckout(cwd, excludes)
+                      ? await snapshotCheckout(ctx.cwd, excludes)
                       : undefined;
                   const output = await runDeterministicNodeWithRetry(
                     node,
-                    platform,
-                    conversationId,
-                    workflowRun,
+                    ctx.platform,
+                    ctx.conversationId,
+                    ctx.workflowRun,
                     () =>
                       executeBashNode(
-                        deps,
-                        platform,
-                        conversationId,
-                        cwd,
-                        workflowRun,
+                        ctx,
                         node,
-                        artifactsDir,
-                        stateDir,
-                        logDir,
-                        baseBranch,
-                        docsDir,
-                        ctx.nodeOutputs,
-                        issueContext,
-                        config.envVars,
-                        config.protectedEnvKeys,
-                        config.protectedCredentialValues,
-                        stepNamePrefix,
+                        ctx.config.envVars,
+                        ctx.config.protectedEnvKeys,
+                        ctx.config.protectedCredentialValues,
+                        ctx.stepNamePrefix,
                         iteration,
-                        ctx.bodyLoopUserInput ?? '',
-                        execContext
+                        ctx.bodyLoopUserInput ?? ''
                       )
                   );
                   return {
                     nodeId: node.id,
                     output: await assertCheckoutUntouched(
                       node,
-                      cwd,
+                      ctx.cwd,
                       excludes,
                       treeBefore,
                       output,
-                      deps,
-                      workflowRun.id,
-                      stepNamePrefix + node.id
+                      ctx.deps,
+                      ctx.workflowRun.id,
+                      ctx.stepNamePrefix + node.id
                     ),
                   };
                 }
                 // Script dispatch — runs via bun or uv. Same opt-in retry rule as bash
                 // (#2088): retries solely when an explicit `retry:` block is declared.
-                const excludes = checkoutSnapshotExcludes(artifactsDir, stateDir, logDir);
+                const excludes = checkoutSnapshotExcludes(
+                  ctx.artifactsDir,
+                  ctx.stateDir,
+                  ctx.logDir
+                );
                 const treeBefore =
                   node.mutates_checkout === false
-                    ? await snapshotCheckout(cwd, excludes)
+                    ? await snapshotCheckout(ctx.cwd, excludes)
                     : undefined;
                 const output = await runDeterministicNodeWithRetry(
                   node,
-                  platform,
-                  conversationId,
-                  workflowRun,
+                  ctx.platform,
+                  ctx.conversationId,
+                  ctx.workflowRun,
                   () =>
                     executeScriptNode(
-                      deps,
-                      platform,
-                      conversationId,
-                      cwd,
-                      workflowRun,
+                      ctx,
                       node,
-                      artifactsDir,
-                      stateDir,
-                      logDir,
-                      baseBranch,
-                      docsDir,
-                      ctx.nodeOutputs,
-                      issueContext,
-                      config.envVars,
-                      config.protectedEnvKeys,
-                      config.protectedCredentialValues,
-                      stepNamePrefix,
+                      ctx.config.envVars,
+                      ctx.config.protectedEnvKeys,
+                      ctx.config.protectedCredentialValues,
+                      ctx.stepNamePrefix,
                       iteration,
-                      ctx.bodyLoopUserInput ?? '',
-                      execContext,
-                      ctx.workflowSourceRoots
+                      ctx.bodyLoopUserInput ?? ''
                     )
                 );
                 return {
                   nodeId: node.id,
                   output: await assertCheckoutUntouched(
                     node,
-                    cwd,
+                    ctx.cwd,
                     excludes,
                     treeBefore,
                     output,
-                    deps,
-                    workflowRun.id,
-                    stepNamePrefix + node.id
+                    ctx.deps,
+                    ctx.workflowRun.id,
+                    ctx.stepNamePrefix + node.id
                   ),
                 };
               }
@@ -10456,46 +10395,31 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   effort: resolvedLoopEffort,
                 } = await resolveNodeProviderAndModel(
                   node,
-                  workflowProvider,
-                  workflowModel,
-                  config,
-                  platform,
-                  conversationId,
-                  workflowRun.id,
-                  cwd,
-                  workflowLevelOptions,
-                  aiProfile,
-                  workflowPreset,
+                  ctx.workflowProvider,
+                  ctx.workflowModel,
+                  ctx.config,
+                  ctx.platform,
+                  ctx.conversationId,
+                  ctx.workflowRun.id,
+                  ctx.cwd,
+                  ctx.workflowLevelOptions,
+                  ctx.aiProfile,
+                  ctx.workflowPreset,
                   resolveAiConfigText,
                   ctx.warnedProviderConflicts,
-                  execContext
+                  ctx.execContext
                 );
 
                 const output = await executeLoopNode(
-                  deps,
-                  platform,
-                  conversationId,
-                  cwd,
-                  workflowRun,
+                  ctx,
                   node,
                   loopProvider,
                   loopOptions,
-                  artifactsDir,
-                  stateDir,
-                  logDir,
-                  baseBranch,
-                  docsDir,
-                  ctx.nodeOutputs,
-                  config,
-                  issueContext,
-                  configuredCommandFolder,
-                  stepNamePrefix,
-                  execContext,
+                  ctx.stepNamePrefix,
                   resolvedLoopModel,
                   resolvedLoopTier,
                   resolvedLoopEffort,
-                  checkpointSessionForProvider(loopProvider),
-                  ctx.workflowSourceRoots
+                  checkpointSessionForProvider(loopProvider)
                 );
                 // Loop nodes run every iteration on the same resolved provider, so the
                 // result session (if any) is attributable to loopProvider — tag it so a
@@ -10512,91 +10436,44 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 // the resolved SendQueryOptions are not needed here).
                 const { provider: loopGroupProvider } = await resolveNodeProviderAndModel(
                   node,
-                  workflowProvider,
-                  workflowModel,
-                  config,
-                  platform,
-                  conversationId,
-                  workflowRun.id,
-                  cwd,
-                  workflowLevelOptions,
-                  aiProfile,
-                  workflowPreset,
+                  ctx.workflowProvider,
+                  ctx.workflowModel,
+                  ctx.config,
+                  ctx.platform,
+                  ctx.conversationId,
+                  ctx.workflowRun.id,
+                  ctx.cwd,
+                  ctx.workflowLevelOptions,
+                  ctx.aiProfile,
+                  ctx.workflowPreset,
                   resolveAiConfigText,
                   ctx.warnedProviderConflicts,
-                  execContext
+                  ctx.execContext
                 );
 
                 const output = await executeLoopGroupNode(
-                  deps,
-                  platform,
-                  conversationId,
-                  cwd,
-                  workflowRun,
+                  ctx,
                   node,
                   loopGroupProvider,
-                  workflowModel,
-                  workflowLevelOptions,
-                  aiProfile,
-                  workflowPreset,
-                  artifactsDir,
-                  stateDir,
-                  logDir,
-                  baseBranch,
-                  docsDir,
-                  ctx.nodeOutputs,
-                  config,
-                  ctx.warnedProviderConflicts,
-                  ctx.loopGroupPath,
-                  ctx.claimedWorkPausePolicy,
-                  issueContext,
-                  stepNamePrefix,
-                  execContext,
-                  ctx.runChildWorkflow,
-                  ctx.workflowSourceRoots
+                  ctx.stepNamePrefix
                 );
                 return { nodeId: node.id, output };
               }
 
               case 'gate': {
                 // Approval node dispatch — pauses workflow for human review
-                const output = await executeApprovalNode(
-                  node,
-                  workflowRun,
-                  deps,
-                  platform,
-                  conversationId,
-                  workflowProvider,
-                  workflowModel,
-                  cwd,
-                  artifactsDir,
-                  stateDir,
-                  logDir,
-                  baseBranch,
-                  docsDir,
-                  ctx.nodeOutputs,
-                  config,
-                  workflowLevelOptions,
-                  configuredCommandFolder,
-                  issueContext,
-                  aiProfile,
-                  workflowPreset,
-                  stepNamePrefix,
-                  iteration,
-                  execContext,
-                  ctx.workflowSourceRoots
-                );
+                const output = await executeApprovalNode(ctx, node, ctx.stepNamePrefix, iteration);
                 return { nodeId: node.id, output };
               }
 
               case 'wait': {
-                const loopFrame = loopGroupPath.at(-1);
+                const loopFrame = ctx.loopGroupPath.at(-1);
                 const output = await executeWaitNode(
                   node,
-                  workflowRun,
-                  deps,
+                  ctx.workflowRun,
+                  ctx.deps,
                   ctx.nodeOutputs,
-                  stepNamePrefix,
+                  ctx.stepNamePrefix,
                   loopFrame === undefined
                     ? undefined
                     : {
@@ -10613,17 +10490,17 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 // Cancel node dispatch — terminates the workflow run
                 const reason = substituteNodeOutputRefs(node.reason, ctx.nodeOutputs);
                 const cancelMsg = `❌ **Workflow cancelled** (node \`${node.id}\`): ${reason}`;
-                await safeSendMessage(platform, conversationId, cancelMsg, {
-                  workflowId: workflowRun.id,
+                await safeSendMessage(ctx.platform, ctx.conversationId, cancelMsg, {
+                  workflowId: ctx.workflowRun.id,
                   nodeName: node.id,
                 });
-                await deps.store.cancelWorkflowRun(workflowRun.id, {
-                  step_name: stepNamePrefix + node.id,
+                await ctx.deps.store.cancelWorkflowRun(ctx.workflowRun.id, {
+                  step_name: ctx.stepNamePrefix + node.id,
                   reason,
                 });
                 getWorkflowEventEmitter().emit({
                   type: 'workflow_cancelled',
-                  runId: workflowRun.id,
+                  runId: ctx.workflowRun.id,
                   nodeId: node.id,
                   reason,
                 });
@@ -10670,19 +10547,19 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               effort: resolvedEffort,
             } = await resolveNodeProviderAndModel(
               node,
-              workflowProvider,
-              workflowModel,
-              config,
-              platform,
-              conversationId,
-              workflowRun.id,
-              cwd,
-              workflowLevelOptions,
-              aiProfile,
-              workflowPreset,
+              ctx.workflowProvider,
+              ctx.workflowModel,
+              ctx.config,
+              ctx.platform,
+              ctx.conversationId,
+              ctx.workflowRun.id,
+              ctx.cwd,
+              ctx.workflowLevelOptions,
+              ctx.aiProfile,
+              ctx.workflowPreset,
               resolveAiConfigText,
               ctx.warnedProviderConflicts,
-              execContext
+              ctx.execContext
             );
 
             // 5. Determine session. An explicit named ancestor has first priority and
@@ -10710,7 +10587,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   `Node '${node.id}' cannot resume '${sourceNodeId}': source provider '${sourceHandle.provider}' does not match resolved provider '${provider}'.`
                 );
               }
-              const caps = deps.getAgentProvider(provider).getCapabilities();
+              const caps = ctx.deps.getAgentProvider(provider).getCapabilities();
               if (!caps.sessionResume || caps.sessionFork !== true) {
                 throw new Error(
                   `Node '${node.id}' cannot resume '${sourceNodeId}': resolved provider '${provider}' does not support immutable session forks.`
@@ -10758,25 +10635,25 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             // workflow-level persist_sessions default) and doesn't opt out via context:'fresh'.
             // A parallel-layer node CAN still use persist_session — it just doesn't share
             // with siblings. Same predicate gates the scope-artifact mirror below.
-            const usesPersistedScope = nodeUsesPersistedScope(node, workflowPersistSessions);
+            const usesPersistedScope = nodeUsesPersistedScope(node, ctx.workflowPersistSessions);
 
             if (usesPersistedScope) {
               // Runtime capability guard via the resolved provider instance (catches the
               // case where provider was resolved from .archon/config.yaml defaults).
               // Uses the instance's getCapabilities() rather than the static registry so
               // tests can substitute mock providers with different caps without registering.
-              const caps = deps.getAgentProvider(provider).getCapabilities();
+              const caps = ctx.deps.getAgentProvider(provider).getCapabilities();
               if (!caps.sessionResume) {
                 throw new Error(
                   `Node '${node.id}' has persist_session: true but resolved provider '${provider}' does not support sessionResume. Remove persist_session, or use a provider with sessionResume capability.`
                 );
               }
-              if (persistScopeKey && !hasNamedSessionResume) {
+              if (ctx.persistScopeKey && !hasNamedSessionResume) {
                 try {
-                  const persisted = await deps.store.getWorkflowNodeSession({
-                    workflow_name: workflowName,
+                  const persisted = await ctx.deps.store.getWorkflowNodeSession({
+                    workflow_name: ctx.workflowName,
                     node_id: node.id,
-                    scope_key: persistScopeKey,
+                    scope_key: ctx.persistScopeKey,
                     provider,
                   });
                   if (persisted) {
@@ -10786,14 +10663,14 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                     // store only an 8-char prefix here — enough for observability without
                     // leaving a resumable artifact in the event log.
                     const sessionIdPreview = `${persisted.provider_session_id.slice(0, 8)}…`;
-                    deps.store
+                    ctx.deps.store
                       .createWorkflowEvent({
-                        workflow_run_id: workflowRun.id,
+                        workflow_run_id: ctx.workflowRun.id,
                         event_type: 'node_session_resumed',
-                        step_name: stepNamePrefix + node.id,
+                        step_name: ctx.stepNamePrefix + node.id,
                         data: {
                           provider,
-                          scope_key: persistScopeKey,
+                          scope_key: ctx.persistScopeKey,
                           provider_session_id_preview: sessionIdPreview,
                         },
                       })
@@ -10813,17 +10690,17 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                     {
                       err: err as Error,
                       nodeId: node.id,
-                      workflow: workflowName,
-                      scopeKey: persistScopeKey,
+                      workflow: ctx.workflowName,
+                      scopeKey: ctx.persistScopeKey,
                       provider,
                     },
                     'persist_session_lookup_failed'
                   );
                   await safeSendMessage(
-                    platform,
-                    conversationId,
-                    `⚠️ Could not load the persisted session for node \`${node.id}\` — it will run without prior context. Session continuity may be broken; if this recurs, check server logs or run \`/workflow reset-sessions ${workflowName}\`.`,
-                    { workflowId: workflowRun.id, nodeName: node.id }
+                    ctx.platform,
+                    ctx.conversationId,
+                    `⚠️ Could not load the persisted session for node \`${node.id}\` — it will run without prior context. Session continuity may be broken; if this recurs, check server logs or run \`/workflow reset-sessions ${ctx.workflowName}\`.`,
+                    { workflowId: ctx.workflowRun.id, nodeName: node.id }
                   );
                 }
               }
@@ -10835,58 +10712,49 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             // `mutates_checkout: false` (#2771) is asserted OUTSIDE the retry loop:
             // the snapshot covers every attempt, and a violation fails the node
             // without offering retry another chance to mutate.
-            const checkoutExcludes = checkoutSnapshotExcludes(artifactsDir, stateDir, logDir);
+            const checkoutExcludes = checkoutSnapshotExcludes(
+              ctx.artifactsDir,
+              ctx.stateDir,
+              ctx.logDir
+            );
             const treeBefore =
               node.mutates_checkout === false
-                ? await snapshotCheckout(cwd, checkoutExcludes)
+                ? await snapshotCheckout(ctx.cwd, checkoutExcludes)
                 : undefined;
             const retriedOutput = await runNodeRetryLoop(
               node,
-              platform,
-              conversationId,
-              workflowRun,
+              ctx.platform,
+              ctx.conversationId,
+              ctx.workflowRun,
               getEffectiveNodeRetryConfig(node),
               () =>
                 executeNodeInternal(
-                  deps,
-                  platform,
-                  conversationId,
-                  cwd,
-                  workflowRun,
+                  ctx,
                   node,
                   provider,
                   nodeOptions,
-                  artifactsDir,
-                  stateDir,
-                  logDir,
-                  baseBranch,
-                  docsDir,
-                  ctx.nodeOutputs,
                   // Always pass the prior session ID. executeNodeInternal requests a fork,
                   // but legacy resume-only providers may continue in place; named resume
                   // separately capability-gates and verifies an exact fork.
                   resumeSessionId,
-                  configuredCommandFolder,
-                  issueContext,
                   resolvedNodeModel,
                   resolvedTier,
                   resolvedEffort,
-                  stepNamePrefix,
+                  ctx.stepNamePrefix,
                   iteration,
-                  checkpointSessionForProvider(provider),
-                  ctx.workflowSourceRoots
+                  checkpointSessionForProvider(provider)
                 ),
               { state: 'failed', output: '', error: 'Node did not execute' } as NodeExecutionResult
             );
             const output = await assertCheckoutUntouched(
               node,
-              cwd,
+              ctx.cwd,
               checkoutExcludes,
               treeBefore,
               retriedOutput,
-              deps,
-              workflowRun.id,
-              stepNamePrefix + node.id
+              ctx.deps,
+              ctx.workflowRun.id,
+              ctx.stepNamePrefix + node.id
             );
 
             // Cold-resume surfacing: this node requested a session resume but the
@@ -10910,8 +10778,12 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               // THIS run are excluded — they were produced by the current (fresh)
               // invocation and recover nothing. Best-effort: a scope-dir read
               // failure degrades to the plain warning, never fails the node.
-              const recoveryPointer = scopeArtifactsDir
-                ? await buildColdResumeRecoveryPointer(scopeArtifactsDir, workflowRun.id, node.id)
+              const recoveryPointer = ctx.scopeArtifactsDir
+                ? await buildColdResumeRecoveryPointer(
+                    ctx.scopeArtifactsDir,
+                    ctx.workflowRun.id,
+                    node.id
+                  )
                 : '';
               // Mask the session id: it's a resumable artifact, so log only an
               // 8-char preview (same policy as the node_session_resumed event above).
@@ -10919,41 +10791,41 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 {
                   nodeId: node.id,
                   provider,
-                  workflowRunId: workflowRun.id,
+                  workflowRunId: ctx.workflowRun.id,
                   resumeSessionId: `${resumeSessionId.slice(0, 8)}…`,
                   priorArtifactsFound: recoveryPointer !== '',
                 },
                 'dag.session_resume_failed'
               );
               await safeSendMessage(
-                platform,
-                conversationId,
+                ctx.platform,
+                ctx.conversationId,
                 `⚠️ Node \`${node.id}\`: could not resume the prior session — continued with a fresh session, so the earlier context was not restored.${recoveryPointer}`,
-                { workflowId: workflowRun.id, nodeName: node.id }
+                { workflowId: ctx.workflowRun.id, nodeName: node.id }
               );
             }
 
             // Persist (or drop) the node's provider session ID for the next run in this scope.
             // context:'fresh' nodes are excluded (the author opted out of any cross-run memory).
-            if (usesPersistedScope && persistScopeKey && output.state === 'completed') {
+            if (usesPersistedScope && ctx.persistScopeKey && output.state === 'completed') {
               try {
                 if (output.sessionId !== undefined) {
-                  await deps.store.upsertWorkflowNodeSession({
-                    workflow_name: workflowName,
+                  await ctx.deps.store.upsertWorkflowNodeSession({
+                    workflow_name: ctx.workflowName,
                     node_id: node.id,
-                    scope_key: persistScopeKey,
+                    scope_key: ctx.persistScopeKey,
                     provider,
                     provider_session_id: output.sessionId,
-                    last_run_id: workflowRun.id,
+                    last_run_id: ctx.workflowRun.id,
                   });
                 } else {
                   // Provider returned no session ID (e.g. Codex with no thread ID).
                   // Drop the stale row for THIS provider only — leave other providers'
                   // rows intact so switching providers between runs doesn't clobber
                   // the other side's continuity.
-                  await deps.store.deleteWorkflowNodeSessions({
-                    workflow_name: workflowName,
-                    scope_key: persistScopeKey,
+                  await ctx.deps.store.deleteWorkflowNodeSessions({
+                    workflow_name: ctx.workflowName,
+                    scope_key: ctx.persistScopeKey,
                     node_id: node.id,
                     provider,
                   });
@@ -10966,17 +10838,17 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   {
                     err: err as Error,
                     nodeId: node.id,
-                    workflow: workflowName,
-                    scopeKey: persistScopeKey,
+                    workflow: ctx.workflowName,
+                    scopeKey: ctx.persistScopeKey,
                     provider,
                   },
                   'persist_session_upsert_failed'
                 );
                 await safeSendMessage(
-                  platform,
-                  conversationId,
+                  ctx.platform,
+                  ctx.conversationId,
                   `⚠️ Could not persist the session for node \`${node.id}\` (${provider}). The next run will start this node fresh.`,
-                  { workflowId: workflowRun.id, nodeName: node.id }
+                  { workflowId: ctx.workflowRun.id, nodeName: node.id }
                 );
               }
             }
@@ -10987,11 +10859,11 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
 
             const err = error as Error;
             getLog().error({ err, nodeId: node.id }, 'dag_node_pre_execution_failed');
-            deps.store
+            ctx.deps.store
               .createWorkflowEvent({
-                workflow_run_id: workflowRun.id,
+                workflow_run_id: ctx.workflowRun.id,
                 event_type: 'node_failed',
-                step_name: stepNamePrefix + node.id,
+                step_name: ctx.stepNamePrefix + node.id,
                 data: {
                   error: err.message,
                   ...(isNodeContextResume(node.context)
@@ -11004,16 +10876,16 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               });
             getWorkflowEventEmitter().emit({
               type: 'node_failed',
-              runId: workflowRun.id,
+              runId: ctx.workflowRun.id,
               nodeId: node.id,
               nodeName: nodeDisplayName(node),
               error: err.message,
             });
             await safeSendMessage(
-              platform,
-              conversationId,
+              ctx.platform,
+              ctx.conversationId,
               `Node '${node.id}' failed before execution: ${err.message}`,
-              { workflowId: workflowRun.id, nodeName: node.id }
+              { workflowId: ctx.workflowRun.id, nodeName: node.id }
             );
             return {
               nodeId: node.id,
@@ -11081,18 +10953,18 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
           const meta = {
             nodeId,
             outputType: completedNode.output_type,
-            runId: workflowRun.id,
+            runId: ctx.workflowRun.id,
             producedAt: new Date().toISOString(),
-            ...(loopGroupPath.length > 0 ? { loopGroupPath } : {}),
+            ...(ctx.loopGroupPath.length > 0 ? { loopGroupPath: ctx.loopGroupPath } : {}),
             // `sessionId` may be undefined (e.g. bash/script nodes have no
             // session); writeNodeArtifact omits it from the metadata when so.
             sessionId: output.sessionId,
           };
           try {
-            await writeNodeArtifact(artifactsDir, meta, output.output);
+            await writeNodeArtifact(ctx.artifactsDir, meta, output.output);
           } catch (err) {
             getLog().warn(
-              { err: err as Error, nodeId, workflowRunId: workflowRun.id },
+              { err: err as Error, nodeId, workflowRunId: ctx.workflowRun.id },
               'artifacts.write_failed'
             );
           }
@@ -11101,12 +10973,20 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
           // NEXT invocation can recover this output by reference if its persisted
           // session comes back cold. Per-node files; concurrent same-scope runs are
           // last-writer-wins for a given node. Best-effort, like the run-dir write.
-          if (scopeArtifactsDir && nodeUsesPersistedScope(completedNode, workflowPersistSessions)) {
+          if (
+            ctx.scopeArtifactsDir &&
+            nodeUsesPersistedScope(completedNode, ctx.workflowPersistSessions)
+          ) {
             try {
-              await writeNodeArtifact(scopeArtifactsDir, meta, output.output);
+              await writeNodeArtifact(ctx.scopeArtifactsDir, meta, output.output);
             } catch (err) {
               getLog().warn(
-                { err: err as Error, nodeId, workflowRunId: workflowRun.id, scopeArtifactsDir },
+                {
+                  err: err as Error,
+                  nodeId,
+                  workflowRunId: ctx.workflowRun.id,
+                  scopeArtifactsDir: ctx.scopeArtifactsDir,
+                },
                 'artifacts.scope_write_failed'
               );
             }
@@ -11130,10 +11010,10 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
         getLog().error({ err: result.reason as Error, layerIdx }, 'dag_node_unexpected_rejection');
         layerHadFailure = true;
         await safeSendMessage(
-          platform,
-          conversationId,
+          ctx.platform,
+          ctx.conversationId,
           `An unexpected error occurred executing a node in layer ${String(layerIdx)}. Check server logs.`,
-          { workflowId: workflowRun.id }
+          { workflowId: ctx.workflowRun.id }
         );
       }
     }
@@ -11146,7 +11026,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
 
     // Check for non-running status between DAG layers (cancellation, deletion, pause)
     try {
-      const dagStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
+      const dagStatus = await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
       if (dagStatus === null || dagStatus !== 'running') {
         const effectiveStatus = dagStatus ?? 'deleted';
         if (
@@ -11154,16 +11034,16 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
           ctx.claimedWorkPausePolicy === 'finish_through_parent_pause'
         ) {
           getLog().debug(
-            { workflowRunId: workflowRun.id, layerIdx, totalLayers: layers.length },
+            { workflowRunId: ctx.workflowRun.id, layerIdx, totalLayers: ctx.layers.length },
             'dag.claimed_work_continues_through_parent_pause'
           );
           continue;
         }
         getLog().info(
           {
-            workflowRunId: workflowRun.id,
+            workflowRunId: ctx.workflowRun.id,
             layerIdx,
-            totalLayers: layers.length,
+            totalLayers: ctx.layers.length,
             status: effectiveStatus,
           },
           'dag.stop_detected_between_layers'
@@ -11171,10 +11051,10 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
         // Paused is intentional (approval gate) — the approval message was already sent
         if (effectiveStatus !== 'paused') {
           await safeSendMessage(
-            platform,
-            conversationId,
-            `⚠️ **Workflow stopped** (${effectiveStatus}): DAG execution stopped after layer ${String(layerIdx + 1)}/${String(layers.length)}`,
-            { workflowId: workflowRun.id }
+            ctx.platform,
+            ctx.conversationId,
+            `⚠️ **Workflow stopped** (${effectiveStatus}): DAG execution stopped after layer ${String(layerIdx + 1)}/${String(ctx.layers.length)}`,
+            { workflowId: ctx.workflowRun.id }
           );
         }
         break;
@@ -11182,7 +11062,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
     } catch (statusErr) {
       // Non-fatal — status check failure should not crash the workflow
       getLog().warn(
-        { err: statusErr as Error, workflowRunId: workflowRun.id },
+        { err: statusErr as Error, workflowRunId: ctx.workflowRun.id },
         'dag.status_check_failed'
       );
     }
