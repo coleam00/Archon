@@ -479,6 +479,27 @@ function makeApp(): { app: OpenAPIHono; mockWebAdapter: WebAdapter } {
   return { app, mockWebAdapter };
 }
 
+const ISOLATED_ENV_KEYS = ['DATABASE_URL', 'BETTER_AUTH_SECRET', 'ARCHON_WEB_AUTH_HEADER'] as const;
+const savedEnv: Partial<Record<(typeof ISOLATED_ENV_KEYS)[number], string>> = {};
+
+beforeEach(() => {
+  for (const key of ISOLATED_ENV_KEYS) {
+    savedEnv[key] = process.env[key];
+    delete process.env[key];
+  }
+});
+
+afterEach(() => {
+  for (const key of ISOLATED_ENV_KEYS) {
+    const value = savedEnv[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Tests: POST /api/workflows/:name/run
 // ---------------------------------------------------------------------------

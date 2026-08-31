@@ -1223,6 +1223,62 @@ describe('registerRepository', () => {
     expect(result.commandCount).toBe(1);
     expect(mockUpdateCodebaseCommands.mock.calls.length).toBe(1);
   });
+
+  test('finds existing codebase when remote URL has no .git but DB record has .git suffix', async () => {
+    const existingCodebase = makeCodebase({
+      id: 'existing-git-suffix-id',
+      name: 'owner/repo',
+      repository_url: 'https://github.com/owner/repo.git',
+      default_cwd: '/home/user/other-path',
+    });
+    spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+      if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
+      if (args.includes('get-url'))
+        return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
+      return Promise.resolve({ stdout: '', stderr: '' });
+    });
+    mockFindCodebaseByDefaultCwd.mockResolvedValue(null);
+    mockFindCodebaseByRepoUrl.mockImplementation((url: string) => {
+      if (url === 'https://github.com/owner/repo.git') {
+        return Promise.resolve(existingCodebase);
+      }
+      return Promise.resolve(null);
+    });
+
+    const result = await registerRepository('/home/user/myrepo');
+
+    expect(result.alreadyExisted).toBe(true);
+    expect(result.codebaseId).toBe('existing-git-suffix-id');
+    expect(mockCreateCodebase).not.toHaveBeenCalled();
+  });
+
+  test('finds existing codebase when remote URL has .git suffix but DB record has no .git', async () => {
+    const existingCodebase = makeCodebase({
+      id: 'existing-no-git-id',
+      name: 'owner/repo',
+      repository_url: 'https://github.com/owner/repo',
+      default_cwd: '/home/user/other-path',
+    });
+    spyExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+      if (args.includes('rev-parse')) return Promise.resolve({ stdout: '.git', stderr: '' });
+      if (args.includes('get-url'))
+        return Promise.resolve({ stdout: 'https://github.com/owner/repo.git', stderr: '' });
+      return Promise.resolve({ stdout: '', stderr: '' });
+    });
+    mockFindCodebaseByDefaultCwd.mockResolvedValue(null);
+    mockFindCodebaseByRepoUrl.mockImplementation((url: string) => {
+      if (url === 'https://github.com/owner/repo') {
+        return Promise.resolve(existingCodebase);
+      }
+      return Promise.resolve(null);
+    });
+
+    const result = await registerRepository('/home/user/myrepo');
+
+    expect(result.alreadyExisted).toBe(true);
+    expect(result.codebaseId).toBe('existing-no-git-id');
+    expect(mockCreateCodebase).not.toHaveBeenCalled();
+  });
 });
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1540,6 +1596,67 @@ describe('name-based deduplication', () => {
       { repository_url?: string | null },
     ];
     expect(updateArgs[1].repository_url).toBe('https://github.com/owner/repo');
+  });
+
+  test('name fallback matches when DB record has .git suffix and incoming URL does not', async () => {
+    const existingCodebase = makeCodebase({
+      id: 'existing-name-git-id',
+      name: 'owner/repo',
+      repository_url: 'https://github.com/owner/repo.git',
+      default_cwd: '/home/test/.archon/workspaces/owner/repo/source',
+    });
+    mockFindCodebaseByRepoUrl.mockResolvedValue(null);
+    mockFindCodebaseByDefaultCwd.mockResolvedValue(null);
+    mockFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
+
+    const result = await cloneRepository('https://github.com/owner/repo');
+
+    expect(result.alreadyExisted).toBe(true);
+    expect(result.codebaseId).toBe('existing-name-git-id');
+    expect(mockCreateCodebase).not.toHaveBeenCalled();
+  });
+
+  test('name fallback matches when DB record has no .git suffix and incoming URL has .git', async () => {
+    const existingCodebase = makeCodebase({
+      id: 'existing-name-no-git-id',
+      name: 'owner/repo',
+      repository_url: 'https://github.com/owner/repo',
+      default_cwd: '/home/test/.archon/workspaces/owner/repo/source',
+    });
+    mockFindCodebaseByRepoUrl.mockResolvedValue(null);
+    mockFindCodebaseByDefaultCwd.mockResolvedValue(null);
+    mockFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
+
+    const result = await cloneRepository('https://github.com/owner/repo.git');
+
+    expect(result.alreadyExisted).toBe(true);
+    expect(result.codebaseId).toBe('existing-name-no-git-id');
+    expect(mockCreateCodebase).not.toHaveBeenCalled();
+  });
+
+  test('name fallback rejects match when repository URLs differ', async () => {
+    const existingCodebase = makeCodebase({
+      id: 'different-repo-id',
+      name: 'owner/repo',
+      repository_url: 'https://github.com/someone-else/repo',
+      default_cwd: '/home/test/.archon/workspaces/someone-else/repo/source',
+    });
+    mockFindCodebaseByRepoUrl.mockResolvedValue(null);
+    mockFindCodebaseByDefaultCwd.mockResolvedValue(null);
+    mockFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
+    mockCreateCodebase.mockResolvedValueOnce(
+      makeCodebase({
+        id: 'new-codebase-id',
+        name: 'owner/repo',
+        repository_url: 'https://github.com/owner/repo',
+      }) as ReturnType<typeof makeCodebase>
+    );
+
+    const result = await cloneRepository('https://github.com/owner/repo');
+
+    expect(result.codebaseId).toBe('new-codebase-id');
+    expect(result.alreadyExisted).toBe(false);
+    expect(mockCreateCodebase).toHaveBeenCalled();
   });
 });
 

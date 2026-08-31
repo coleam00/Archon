@@ -599,6 +599,7 @@ describe('orchestrator-agent handleMessage', () => {
 
   beforeEach(() => {
     delete process.env.ARCHON_WEB_AUTH_HEADER;
+    delete process.env.BETTER_AUTH_SECRET;
     clearAllMocks();
     platform = new MockPlatformAdapter();
 

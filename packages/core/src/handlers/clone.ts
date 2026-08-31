@@ -174,9 +174,11 @@ async function registerRepoAtPath(
   // Do NOT grant access from a name-only match unless canonical identity matches.
   let existing: Codebase | null = null;
   if (repositoryUrl) {
+    const urlNoGit = repositoryUrl.replace(/\.git$/, '');
+    const urlWithGit = `${urlNoGit}.git`;
     existing =
-      (await codebaseDb.findCodebaseByRepoUrl(repositoryUrl)) ??
-      (await codebaseDb.findCodebaseByRepoUrl(repositoryUrl.replace(/\.git$/, ''))) ??
+      (await codebaseDb.findCodebaseByRepoUrl(urlNoGit)) ??
+      (await codebaseDb.findCodebaseByRepoUrl(urlWithGit)) ??
       (await codebaseDb.findCodebaseByDefaultCwd(targetPath));
   } else {
     existing = await codebaseDb.findCodebaseByDefaultCwd(targetPath);
@@ -187,7 +189,9 @@ async function registerRepoAtPath(
     if (
       existingByName &&
       (existingByName.default_cwd === targetPath ||
-        (repositoryUrl && existingByName.repository_url === repositoryUrl))
+        (repositoryUrl &&
+          existingByName.repository_url?.replace(/\.git$/, '') ===
+            repositoryUrl.replace(/\.git$/, '')))
     ) {
       existing = existingByName;
     }

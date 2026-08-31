@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
@@ -202,6 +202,27 @@ function makeApp(): Hono {
   registerApiRoutes(app, mockWebAdapter, mockLockManager);
   return app;
 }
+
+const ISOLATED_ENV_KEYS = ['DATABASE_URL', 'BETTER_AUTH_SECRET', 'ARCHON_WEB_AUTH_HEADER'] as const;
+const savedEnv: Partial<Record<(typeof ISOLATED_ENV_KEYS)[number], string>> = {};
+
+beforeEach(() => {
+  for (const key of ISOLATED_ENV_KEYS) {
+    savedEnv[key] = process.env[key];
+    delete process.env[key];
+  }
+});
+
+afterEach(() => {
+  for (const key of ISOLATED_ENV_KEYS) {
+    const value = savedEnv[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Tests: GET /api/health

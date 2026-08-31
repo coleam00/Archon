@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
@@ -222,12 +222,30 @@ function makeApp(): OpenAPIHono {
 const ALICE = { 'X-Archon-User': 'alice' };
 const JSON_HEADERS = { ...ALICE, 'Content-Type': 'application/json' };
 
+const ISOLATED_ENV_KEYS = ['DATABASE_URL', 'BETTER_AUTH_SECRET', 'ARCHON_WEB_AUTH_HEADER'] as const;
+const savedEnv: Partial<Record<(typeof ISOLATED_ENV_KEYS)[number], string>> = {};
+
 beforeEach(() => {
+  for (const key of ISOLATED_ENV_KEYS) {
+    savedEnv[key] = process.env[key];
+    delete process.env[key];
+  }
   prefsByUser = {};
   mockGetPrefs.mockClear();
   mockSetTiers.mockClear();
   mockSetAliases.mockClear();
   mockSetDefault.mockClear();
+});
+
+afterEach(() => {
+  for (const key of ISOLATED_ENV_KEYS) {
+    const value = savedEnv[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
 });
 
 describe('GET /api/auth/me/ai-prefs', () => {
