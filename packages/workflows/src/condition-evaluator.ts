@@ -27,10 +27,11 @@
  *     no-silent-drop contract a referenced-but-missing value is a visible failure,
  *     not a silent skip. That covers `$node.output.field` (field not in the
  *     producer's declared schema, or a schemaless node whose output isn't JSON /
- *     lacks the key) via `OutputRefError`, and an undeclared `$INPUTS.<name>` via
- *     `InputRefError`. (A declared-optional-absent field still resolves to '' and
- *     never throws — but a FAILED producer always throws, fielded or whole-text,
- *     #2713 — see `resolveOutputRef` below.)
+ *     lacks the key) via `OutputRefError`, an undeclared `$INPUTS.<name>` via
+ *     `InputRefError`, and a present object/array compared as a scalar in either
+ *     `$node.output.field` or `$INPUTS.<name>`. (A declared-optional-absent field still
+ *     resolves to '' and never throws — but a FAILED producer always throws, fielded
+ *     or whole-text, #2713 — see `resolveOutputRef` below.)
  */
 import type { NodeOutput } from './schemas';
 import { createLogger } from '@archon/paths';
@@ -172,12 +173,30 @@ export class InputRefError extends Error {
  *
  * Inputs are supplied by a caller's `with:` on a `workflow:` node (or a direct run's
  * `--input`), reach the child as `metadata.inputs`, and are threaded here by the
- * executor. An undeclared name THROWS — see {@link InputRefError}.
+ * executor. An undeclared name THROWS — see {@link InputRefError}. A present object
+ * or array THROWS — under the no-silent-drop contract, comparing structured data
+ * as a scalar fails loudly with diagnostic evidence rather than silently stringify-comparing.
  */
-function resolveInputRef(name: string, inputs: Record<string, JsonValue> | undefined): string {
+function resolveInputRef(
+  name: string,
+  inputs: Record<string, JsonValue> | undefined,
+  exprSnippet: string
+): string {
   // Canonical text (#2637): a typed input compares as its deterministic text —
   // `$INPUTS.flag == true` matches a boolean `true` via the unquoted-RHS grammar.
-  if (inputs && Object.hasOwn(inputs, name)) return canonicalValueText(inputs[name]);
+  if (inputs && Object.hasOwn(inputs, name)) {
+    const value = inputs[name];
+    if (Array.isArray(value) || (value !== null && typeof value === 'object')) {
+      const actualType = Array.isArray(value) ? 'array' : 'object';
+      getLog().error({ input: name, actualType, exprSnippet }, 'dag.condition_field_not_primitive');
+      throw new Error(
+        `Condition reference '$INPUTS.${name}' resolved to an ${actualType}. ` +
+          "A 'when:' input must be a string, number, boolean, or null; emit a scalar routing field " +
+          'or inspect structured data in a script node.'
+      );
+    }
+    return canonicalValueText(value);
+  }
   throw new InputRefError(name, inputs ? Object.keys(inputs) : []);
 }
 
@@ -189,7 +208,7 @@ function resolveAtomRef(
   loopPrevOutputs: ReadonlyMap<string, NodeOutput> | undefined,
   exprSnippet: string
 ): string {
-  if (ref.kind === 'input') return resolveInputRef(ref.name, inputs);
+  if (ref.kind === 'input') return resolveInputRef(ref.name, inputs, exprSnippet);
   // No prior iteration is an ordinary first-iteration condition, not an unknown-node
   // authoring error. Once a prior body node exists, retain normal output-field checks.
   if (ref.kind === 'loop_prev' && !loopPrevOutputs?.has(ref.nodeId)) return '';

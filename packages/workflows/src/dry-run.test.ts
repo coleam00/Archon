@@ -583,6 +583,62 @@ describe('dryRunWorkflow', () => {
     });
   });
 
+  test('fails an object-valued condition input instead of recording a false skip (#2999)', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'structured-input-condition',
+      inputs: {
+        route: { default: { ready: true } },
+      },
+      nodes: [
+        {
+          id: 'gated',
+          prompt: 'gated',
+          when: "$INPUTS.route == 'true'",
+        },
+      ],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { gated: 'unused' },
+    });
+
+    expect(result.outcome).toBe('failed');
+    expect(result.trace.find(entry => entry.nodeId === 'gated')).toMatchObject({
+      state: 'failed',
+      reason: expect.stringContaining("Condition reference '$INPUTS.route' resolved to an object"),
+    });
+  });
+
+  test('fails an array-valued condition input instead of recording a false skip (#2999)', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'structured-array-input-condition',
+      inputs: {
+        tags: { default: ['a', 'b'] },
+      },
+      nodes: [
+        {
+          id: 'gated',
+          prompt: 'gated',
+          when: "$INPUTS.tags == 'true'",
+        },
+      ],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { gated: 'unused' },
+    });
+
+    expect(result.outcome).toBe('failed');
+    expect(result.trace.find(entry => entry.nodeId === 'gated')).toMatchObject({
+      state: 'failed',
+      reason: expect.stringContaining("Condition reference '$INPUTS.tags' resolved to an array"),
+    });
+  });
+
   test('applies all trigger rules after failed and skipped upstream nodes', async () => {
     const workflow = makeTestWorkflow({
       name: 'triggers',

@@ -918,3 +918,60 @@ describe('typed $INPUTS values in when: (#2637)', () => {
     });
   });
 });
+
+// #2999 — structured $INPUTS values (objects/arrays) in when: expressions must fail loudly
+// with diagnostic metadata rather than silently stringify-comparing.
+describe('structured $INPUTS values in when: (#2999)', () => {
+  const noOutputs = new Map<string, NodeOutput>();
+
+  it('rejects object-valued inputs, failing false-skips loudly with safe diagnostic log', () => {
+    mockLogFn.mockClear();
+    expect(() =>
+      evaluateCondition("$INPUTS.route == 'true'", noOutputs, { route: { ready: true } })
+    ).toThrow(
+      "Condition reference '$INPUTS.route' resolved to an object. " +
+        "A 'when:' input must be a string, number, boolean, or null; emit a scalar routing field " +
+        'or inspect structured data in a script node.'
+    );
+    expect(mockLogFn).toHaveBeenCalledWith(
+      {
+        input: 'route',
+        actualType: 'object',
+        exprSnippet: "$INPUTS.route == 'true'",
+      },
+      'dag.condition_field_not_primitive'
+    );
+  });
+
+  it('rejects array-valued inputs, failing false-skips loudly with safe diagnostic log', () => {
+    mockLogFn.mockClear();
+    expect(() =>
+      evaluateCondition("$INPUTS.items == 'true'", noOutputs, { items: ['a', 'b'] })
+    ).toThrow(
+      "Condition reference '$INPUTS.items' resolved to an array. " +
+        "A 'when:' input must be a string, number, boolean, or null; emit a scalar routing field " +
+        'or inspect structured data in a script node.'
+    );
+    expect(mockLogFn).toHaveBeenCalledWith(
+      {
+        input: 'items',
+        actualType: 'array',
+        exprSnippet: "$INPUTS.items == 'true'",
+      },
+      'dag.condition_field_not_primitive'
+    );
+  });
+
+  it('rejects stringify-coincidence comparisons against hand-typed JSON literals', () => {
+    mockLogFn.mockClear();
+    expect(() =>
+      evaluateCondition('$INPUTS.tags == \'["a","b"]\'', noOutputs, { tags: ['a', 'b'] })
+    ).toThrow("Condition reference '$INPUTS.tags' resolved to an array");
+
+    expect(() =>
+      evaluateCondition('$INPUTS.config == \'{"timeout":30}\'', noOutputs, {
+        config: { timeout: 30 },
+      })
+    ).toThrow("Condition reference '$INPUTS.config' resolved to an object");
+  });
+});

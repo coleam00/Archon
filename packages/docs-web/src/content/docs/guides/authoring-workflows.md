@@ -1546,7 +1546,8 @@ nodes:
 
 The condition resolves the name against the run's inputs at evaluation time; the value is
 never spliced into the expression, so an input containing a quote or an operator is
-compared as data and can never be re-read as syntax. An `$INPUTS.<name>` the run does not
+compared as data and can never be re-read as syntax. Present object and array inputs fail
+the node loudly rather than stringify-comparing. An `$INPUTS.<name>` the run does not
 carry **fails the node**, with the same message the prompt surface gives
 (`Unknown input '$INPUTS.mdoe'. Did you mean $INPUTS.mode?`) — it never resolves to an
 empty string, because a condition that quietly compares nothing is the silent-branch
