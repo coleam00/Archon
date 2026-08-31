@@ -49,6 +49,7 @@ deliver__validate__validate:
 deliver__gate-validated: '{"gate":"green"}'
 ci-probe: '{"state":"concluded","detail":"all checks green"}'
 # The mutation: the flip printed something that is not a URL.
+deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
 deliver__flip-ready: "flip printed something that is not a pull request URL"
 deliver__outcome: "https://github.com/example/repo/pull/5"
 fixture:

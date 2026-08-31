@@ -338,8 +338,9 @@ nodes:
   # refuses every red refuses red the change did not cause, and the base break
   # this branch inherited is exactly the red that survives to here. Introduced red
   # still stops the run. Inherited or environment red proceeds to await-checks,
-  # where the pull request's own CI decides — an inherited break is red there too
-  # and holds at the durable wait, which is the honest place to hold it.
+  # where the pull request's own CI decides — an inherited break is red there
+  # too, is classified once more by the convergence pass below, and terminates
+  # at the flip preflight with the recovery named.
   - id: gate-validated
     script: gate-green
     runtime: uv
@@ -354,20 +355,22 @@ nodes:
   # routes into the engine's `wait:` node, which suspends the run and
   # releases the worker slot — the server's continuation scan resumes it when
   # the clock fires, surviving restarts. This replaced a 60-minute in-process
-  # polling script the moment the engine could hold the time itself. Red fails
-  # the body (and so the group) immediately; a concluded probe skips the pause
-  # and `until_bash` ends the loop with zero wasted wait. 13 iterations bound
-  # the watch at ~60 minutes of CI time, the same ceiling the poller had —
-  # exhausting it fails the run rather than flipping a PR whose CI never ended.
+  # polling script the moment the engine could hold the time itself. Red is a
+  # reported state here, never a body failure: the probe declares it, the loop
+  # exits as concluded, and the convergence pass below owns what red means
+  # (#3069). A concluded probe skips the pause and `until_bash` ends the loop
+  # with zero wasted wait. 13 iterations bound the watch at ~60 minutes of CI
+  # time, the same ceiling the poller had — exhausting it fails the run rather
+  # than flipping a PR whose CI never ended.
   - id: await-checks
     loop_group:
       max_iterations: 13
       # Completion computed EXTERNALLY (gh state), never from body-node output
       # substitution: the resumed-wait completion recheck does not evaluate
       # until_bash against the iteration's outputs (seen flipping a PR
-      # with CI still running). Red counts as done here; the next iteration's
-      # probe is what turns red into a loud body failure, and flip-ready's
-      # preflight refuses any non-green state that slips through regardless.
+      # with CI still running). Red counts as done here; ci-verdict below is
+      # the node that classifies a concluded red — never flip-ready first —
+      # and flip-ready's preflight refuses any non-green state regardless.
       until_bash: '! gh pr checks --json bucket --jq ".[].bucket" 2>/dev/null | grep -q "^pending$"'
       nodes:
         - id: ci-probe
@@ -382,6 +385,111 @@ nodes:
           when: $ci-probe.output.state == 'pending'
           depends_on: [ci-probe]
     depends_on: [gate-validated]
+
+  # Late-red convergence (#3069). Review convergence and CI conclusion race:
+  # a branch-introduced failure that concludes after the last recheck used to
+  # have no route back to correction — the wait exits on any non-pending state,
+  # and flip-ready's only moves are flip or terminal failure. This pass is that
+  # route: classify, correct, re-review, re-await — sequenced after the wait
+  # because loop completion is computed externally (see await-checks) and a DAG
+  # has no back-edges. ONE pass is the bound: a second late red after a
+  # CI-evidence-driven correction terminates at the flip preflight with the
+  # rerun-and-resume recovery named, which is also where red this branch did
+  # not cause honestly ends (#2976's lane, now with its cause classified).
+  - id: ci-verdict
+    script: check-ci
+    runtime: uv
+    timeout: 180000
+    depends_on: [await-checks]
+
+  # Entered only on concluded red; every node below inherits the skip on any
+  # other state through default dependency propagation.
+  - id: ci-fix
+    include: archon-implement
+    depends_on: [ci-verdict]
+    when: "$ci-verdict.output.state == 'red'"
+    with:
+      work: >-
+        CI concluded non-green after the review converged. The failing checks:
+
+        $ci-verdict.output.detail
+
+        The same red-cause discipline as every round applies. A concluded CI
+        failure this branch's changes introduced is this pass's work: fix it at
+        the cause and push the correction to the branch this run is on,
+        explicitly by name. Red on a check this branch cannot have caused is
+        classified with evidence — red_cause inherited or environment, with the
+        summary naming the proof — never chased and never "fixed" by weakening
+        a test. Do not change the PR's draft state or edit the canonical review
+        comment; the following review owns that public verdict.
+
+        Accepted work order, for scope only — do not reopen it:
+        $INPUTS.work
+
+  # The same gate, same script, fourth consumer: introduced-and-unfixed or
+  # unexplained red refuses loudly; inherited or environment red passes with
+  # its caveat recorded and ends honestly at the flip preflight below.
+  - id: gate-ci-fix
+    script: gate-green
+    runtime: uv
+    depends_on: [ci-fix]
+    with:
+      green: "$ci-fix.output.green"
+      red_cause: "$ci-fix.output.red_cause"
+      summary: "$ci-fix.output.summary"
+      stage: "The CI correction"
+
+  # Never an unreviewed final fix — the corrections loop's rule holds for this
+  # pass too.
+  - id: ci-recheck
+    include: archon-review
+    with:
+      scope: "$pr.output.number"
+      prior_report: "$ARTIFACTS_DIR/review/report.md"
+      work_order: "$INPUTS.work"
+      errors: "$resolve-scope.output.errors"
+      docs: "$classify.output.docs"
+    depends_on: [gate-ci-fix]
+
+  - id: ci-recheck-action
+    script: validate-review-action
+    runtime: uv
+    with:
+      ready: "$ci-recheck.output.ready"
+      action: "$ci-recheck.output.action"
+    depends_on: [ci-recheck]
+
+  # The single pass has no further round to spend: anything but a converged
+  # `none` is a truthful terminal — the PR stays draft and the canonical report
+  # carries the open findings.
+  - id: gate-ci-converged
+    bash: |
+      ACTION=$ci-recheck-action.output.action
+      if [ "$ACTION" != "none" ]; then
+        printf '%s\n' "gate-ci-converged: the CI correction review returned '$ACTION'; the single late-red pass is spent. The PR remains draft and the canonical report carries the open findings." >&2
+        exit 1
+      fi
+    depends_on: [ci-recheck-action]
+
+  # The re-wait after a pushed correction: same probe, same durable pause, same
+  # ceiling as await-checks. On an inherited or environment classification
+  # nothing was pushed, the state is still concluded red, and this exits in one
+  # probe straight to the flip preflight's refusal.
+  - id: await-fix-checks
+    loop_group:
+      max_iterations: 13
+      until_bash: '! gh pr checks --json bucket --jq ".[].bucket" 2>/dev/null | grep -q "^pending$"'
+      nodes:
+        - id: fix-ci-probe
+          script: check-ci
+          runtime: uv
+          timeout: 180000
+        - id: fix-ci-pause
+          wait:
+            duration_ms: 300000
+          when: $fix-ci-probe.output.state == 'pending'
+          depends_on: [fix-ci-probe]
+    depends_on: [gate-ci-converged]
 
   - id: flip-ready
     bash: |
@@ -454,12 +562,13 @@ nodes:
         printf '%s\n' "flip-ready: PR was flipped but its URL could not be read back." >&2
         exit 1
       fi
-    # Waits on sync-pr-body explicitly: on a repo with no CI, await-checks
-    # returns immediately and the flip could otherwise beat the resync. The
-    # trigger rule lets a SKIPPED resync (initial review was ready) pass while
-    # a FAILED resync still blocks the flip — a public surface we could not
-    # correct is a reason not to go ready.
-    depends_on: [await-checks, sync-pr-body]
+    # Waits on sync-pr-body explicitly: on a repo with no CI, the waits return
+    # immediately and the flip could otherwise beat the resync. The trigger
+    # rule lets the green path's SKIPPED nodes pass — the convergence chain
+    # behind await-fix-checks, and a resync skipped because the initial review
+    # was ready — while a FAILED one still blocks the flip. ci-verdict always
+    # runs, anchoring the rule's one required success.
+    depends_on: [ci-verdict, await-fix-checks, sync-pr-body]
     trigger_rule: none_failed_min_one_success
 
   # This tail's terminal report, like every other SDLC tail's (scripts/outcome.py).

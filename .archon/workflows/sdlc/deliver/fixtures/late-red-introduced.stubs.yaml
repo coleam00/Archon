@@ -1,0 +1,64 @@
+# Dry-run fixture for the #3069 race: the review becomes ready while CI is
+# still pending, then a branch-introduced check concludes red. The run must
+# route the red back into correction — never discover it first at flip-ready —
+# and the single convergence pass must carry it to a flipped PR (--exec-code,
+# so the real gates and the real gate-ci-converged bash decide).
+#
+# ci-probe reports the late red as a STATE, ci-verdict classifies it, ci-fix
+# corrects and pushes, the continuation review certifies the delta, the re-wait
+# concludes green, and the flip proceeds. flip-ready stays stubbed as every
+# fixture must: exec-code runs bash for real and this worktree's origin is a
+# real repository — an unstubbed flip would be a live public action.
+impl__record-start: '{"start":"recorded"}'
+impl__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: implemented and green"
+impl__assert-changed: "3 files changed"
+# gate-green, gate-validated, gate-ci-fix and gate-ci-converged are deliberately
+# unstubbed: the real gates must accept this run at every gate it reaches.
+pr__pr: { number: 9, url: "https://github.com/example/repo/pull/9", head: "fixture-branch", base: "dev", is_draft: true }
+classify:
+  errors: false
+  docs: false
+  reasons:
+    errors: "stub: no failure paths"
+    docs: "stub: no doc-facing changes"
+resolve-scope: '{"errors":"false"}'
+review__mode: '{"continuation":false}'
+review__scope: "PR diff in scope; head sha stubbed"
+review__code: "0 findings"
+review__seams: "0 findings"
+review__simplify: "0 findings"
+review__tests: "0 findings"
+review__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: clean on initial review; CI still running"
+validate__validate:
+  green: true
+  red_cause: ""
+  summary: "stub: full gate green"
+ci-probe: '{"state":"red","detail":"test (windows-latest) (fail)"}'
+ci-verdict: '{"state":"red","detail":"test (windows-latest) (fail)"}'
+ci-fix__record-start: '{"start":"recorded"}'
+ci-fix__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: the branch's new test asserted an unsorted order; fixed at the cause and pushed"
+ci-fix__assert-changed: "1 file changed"
+ci-recheck__mode: '{"continuation":true}'
+ci-recheck__scope: "light mode; delta since cursor"
+ci-recheck__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: correction delta clean; no open Critical/Important"
+fix-ci-probe: '{"state":"concluded","detail":"all 9 required check(s) green"}'
+flip-ready: "https://github.com/example/repo/pull/9"
+outcome: "https://github.com/example/repo/pull/9"
+fixture:
+  expect: completed
+  reached: [review__synthesize, gate-validated, ci-verdict, ci-fix__assert-changed, gate-ci-fix, ci-recheck__synthesize, gate-ci-converged, fix-ci-probe, flip-ready]
+exec-code: true

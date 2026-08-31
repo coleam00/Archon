@@ -26,6 +26,7 @@ deliver__impl__assert-changed: "3 files changed"
 deliver__gate-green: '{"gate":"green"}'
 deliver__pr__pr: { number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true }
 ci-probe: '{"state":"concluded","detail":"all checks passed"}'
+deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
 deliver__flip-ready: "https://github.com/example/repo/pull/2"
 deliver__outcome: "https://github.com/example/repo/pull/2"
 deliver__validate__validate:

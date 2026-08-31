@@ -43,6 +43,7 @@ deliver__impl__record-start: '{"start":"recorded"}'
 deliver__gate-validated: '{"gate":"green"}'
 deliver__impl__assert-changed: "2 files changed"
 deliver__gate-green: '{"gate":"green"}'
+deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
 deliver__flip-ready: "https://github.com/example/repo/pull/4"
 deliver__outcome: "https://github.com/example/repo/pull/4"
 deliver__pr__pr: { number: 4, url: "https://github.com/example/repo/pull/4", head: "fixture-branch", base: "dev", is_draft: true }
