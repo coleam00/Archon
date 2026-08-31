@@ -11,7 +11,7 @@ description: |
   3. Assess technical feasibility → ask scope questions → wait for answers
   4. Generate PRD → validate technical claims against codebase → output
 
-provider: claude
+model: medium
 interactive: true
 
 nodes:

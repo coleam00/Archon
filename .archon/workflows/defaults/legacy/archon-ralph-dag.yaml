@@ -12,7 +12,7 @@ description: |
 
   Accepts: An idea description, a path to an existing prd.md, or a directory with prd.md + prd.json
 
-provider: claude
+model: medium
 
 nodes:
   # ═══════════════════════════════════════════════════════════════
@@ -97,6 +97,7 @@ nodes:
     depends_on: [detect-input]
     when: "$detect-input.output.input_type != 'ready'"
     command: archon-ralph-generate
+    model: medium
     context: fresh
 
   # ═══════════════════════════════════════════════════════════════
@@ -687,6 +688,7 @@ nodes:
 
   - id: report
     depends_on: [verify-pr-base]
+    model: small
     prompt: |
       # Completion Report
 

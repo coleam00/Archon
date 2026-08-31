@@ -9,6 +9,8 @@ description: |
   dependency (the node the review should run after); `$review.output` on the parent
   resolves to this block's terminal node (implement-fixes).
 
+model: medium
+
 nodes:
   - id: verify-pr-base
     bash: |
@@ -34,47 +36,56 @@ nodes:
     command: archon-pr-review-scope
     depends_on: [verify-pr-base]
     context: fresh
+    model: small
 
   - id: sync
     command: archon-sync-pr-with-main
     depends_on: [review-scope]
     context: fresh
+    model: medium
 
   - id: code-review
     command: archon-code-review-agent
     depends_on: [sync]
     context: fresh
+    model: medium
 
   - id: error-handling
     command: archon-error-handling-agent
     depends_on: [sync]
     context: fresh
+    model: medium
 
   - id: test-coverage
     command: archon-test-coverage-agent
     depends_on: [sync]
     context: fresh
+    model: medium
 
   - id: comment-quality
     command: archon-comment-quality-agent
     depends_on: [sync]
     context: fresh
+    model: medium
 
   - id: docs-impact
     command: archon-docs-impact-agent
     depends_on: [sync]
     context: fresh
+    model: medium
 
   - id: synthesize
     command: archon-synthesize-review
     depends_on: [code-review, error-handling, test-coverage, comment-quality, docs-impact]
     trigger_rule: one_success
     context: fresh
+    model: medium
 
   - id: implement-fixes
     command: archon-implement-review-fixes
     depends_on: [synthesize]
     context: fresh
+    model: large
 
 # Deprecated legacy default (#2781): announce removal in the run-start notice during this window.
 deprecated:

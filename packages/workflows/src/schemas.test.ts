@@ -765,8 +765,51 @@ describe('dagNodeSchema — per-node Pi posture (pi:)', () => {
     }
   });
 
+  test('preserves model, provider, effort, and AI fields on a loop node', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'implement',
+      model: 'large',
+      provider: 'claude',
+      effort: 'high',
+      loop: { prompt: 'do work', until: 'DONE', max_iterations: 5 },
+      pi: { interactive: false, extensionFlags: { plan: false } },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(isLoopNode(result.data as DagNode)).toBe(true);
+      const loop = result.data as DagNode & {
+        model?: string;
+        provider?: string;
+        effort?: string;
+        pi?: unknown;
+      };
+      expect(loop.model).toBe('large');
+      expect(loop.provider).toBe('claude');
+      expect(loop.effort).toBe('high');
+      expect(loop.pi).toEqual({
+        interactive: false,
+        extensionFlags: { plan: false },
+      });
+    }
+  });
+
+  test('strips agents from a loop node while preserving other AI fields', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'implement',
+      model: 'medium',
+      agents: { 'custom-agent': { description: 'custom agent', prompt: 'agent instructions' } },
+      loop: { prompt: 'do work', until: 'DONE', max_iterations: 5 },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(isLoopNode(result.data as DagNode)).toBe(true);
+      expect('agents' in result.data).toBe(false);
+      expect((result.data as { model?: string }).model).toBe('medium');
+    }
+  });
+
   test('preserves a pi: block on a loop node (the plannotator leak seam, #2073)', () => {
-    // Loops drop model/provider in the transform, but pi MUST survive — the loop
+    // Loop nodes support model/provider/effort in the transform, and pi MUST survive — the loop
     // is exactly where the implement node needs its posture scoped down.
     const result = dagNodeSchema.safeParse({
       id: 'implement',

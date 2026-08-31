@@ -11,6 +11,8 @@ description: |
   Reproduction gating: If the issue cannot be reproduced, the workflow does NOT create an issue.
   Instead, it reports what was tried and suggests next steps to the user.
 
+model: medium
+
 nodes:
   # ═══════════════════════════════════════════════════════════════
   # PHASE 1: CLASSIFY — Haiku classification of user's problem
@@ -145,6 +147,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: investigate
+    model: medium
     prompt: |
       You are a codebase investigator. Search for code related to the reported problem.
 
@@ -221,6 +224,7 @@ nodes:
     timeout: 45000
 
   - id: reproduce
+    model: medium
     prompt: |
       You are an issue reproduction specialist. Your job is to reproduce the reported
       problem and capture evidence (screenshots, command output, error messages).
@@ -434,6 +438,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: report-failure
+    model: small
     prompt: |
       The issue could not be reproduced. Report this to the user with actionable detail.
 
@@ -479,6 +484,7 @@ nodes:
     context: fresh
 
   - id: draft-issue
+    model: medium
     prompt: |
       You are a technical writer drafting a GitHub issue. Assemble all gathered
       context into a clear, well-structured issue body.
@@ -558,6 +564,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: create-issue
+    model: small
     prompt: |
       Create the GitHub issue using the drafted content.
 

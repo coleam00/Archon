@@ -10,7 +10,6 @@ description: |
   This workflow is designed for running in parallel — each instance finds its own free ports
   to avoid conflicts. Produces artifacts in $ARTIFACTS_DIR/ and posts a validation report.
 
-provider: claude
 model: large
 
 nodes:
@@ -86,11 +85,13 @@ nodes:
     command: archon-validate-pr-code-review-main
     depends_on: [fetch-pr, resolve-paths]
     context: fresh
+    model: medium
 
   - id: code-review-feature
     command: archon-validate-pr-code-review-feature
     depends_on: [fetch-pr, resolve-paths, code-review-main]
     context: fresh
+    model: medium
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 3: E2E TESTING — Sequential (after code reviews finish)
@@ -137,6 +138,7 @@ nodes:
     when: "$classify-testability.output.testable == 'e2e_testable'"
     context: fresh
     idle_timeout: 1800000
+    model: large
 
   - id: e2e-test-feature
     command: archon-validate-pr-e2e-feature
@@ -144,6 +146,7 @@ nodes:
     when: "$classify-testability.output.testable == 'e2e_testable'"
     context: fresh
     idle_timeout: 1800000
+    model: large
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 4: FINAL REPORT — Synthesize all findings
@@ -209,6 +212,7 @@ nodes:
     depends_on: [code-review-main, code-review-feature, e2e-test-main, e2e-test-feature, classify-testability, cleanup-processes]
     trigger_rule: all_done
     context: fresh
+    model: small
 
 # Deprecated legacy default (#2781): announce removal in the run-start notice during this window.
 deprecated:

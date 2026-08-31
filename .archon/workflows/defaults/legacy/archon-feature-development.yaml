@@ -5,16 +5,18 @@ description: |
   Does: Implements the plan with validation loops -> creates pull request.
   NOT for: Creating plans (plans should be created separately), bug fixes, code reviews.
 
+model: large
+
 nodes:
   - id: implement
     command: archon-implement
-    provider: claude
     model: large
 
   - id: create-pr
     command: archon-create-pr
     depends_on: [implement]
     context: fresh
+    model: medium
 
   - id: verify-pr-base
     bash: |

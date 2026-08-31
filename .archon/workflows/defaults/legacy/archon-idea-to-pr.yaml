@@ -17,6 +17,8 @@ description: |
 
   NOT for: Executing existing plans (use archon-plan-to-pr), quick fixes, standalone reviews.
 
+model: large
+
 nodes:
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 0: CREATE PLAN
@@ -25,6 +27,7 @@ nodes:
   - id: create-plan
     command: archon-create-plan
     context: fresh
+    model: large
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 1: SETUP
@@ -34,6 +37,7 @@ nodes:
     command: archon-plan-setup
     depends_on: [create-plan]
     context: fresh
+    model: medium
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 2: CONFIRM PLAN
@@ -43,6 +47,7 @@ nodes:
     command: archon-confirm-plan
     depends_on: [plan-setup]
     context: fresh
+    model: medium
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 3: IMPLEMENT
@@ -52,7 +57,6 @@ nodes:
     command: archon-implement-tasks
     depends_on: [confirm-plan]
     context: fresh
-    provider: claude
     model: large
 
   # ═══════════════════════════════════════════════════════════════════
@@ -63,6 +67,7 @@ nodes:
     command: archon-validate
     depends_on: [implement-tasks]
     context: fresh
+    model: medium
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 5: FINALIZE PR
@@ -72,6 +77,7 @@ nodes:
     command: archon-finalize-pr
     depends_on: [validate]
     context: fresh
+    model: medium
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 6-7: CODE REVIEW + FIX (shared building block)
@@ -91,6 +97,7 @@ nodes:
     command: archon-workflow-summary
     depends_on: [review]
     context: fresh
+    model: small
 
 # Deprecated legacy default (#2781): announce removal in the run-start notice during this window.
 deprecated:

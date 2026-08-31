@@ -1861,14 +1861,16 @@ export const dagNodeSchema = dagNodeFlatSchema
       } as LoopGroupNode;
     }
     // loop — guaranteed by superRefine to be defined at this point.
-    // Unlike the rest of aiOnly (dropped for loops — model/provider inherit from
-    // the workflow level), `pi` posture IS kept: the loop's per-iteration Pi
-    // sendQuery is exactly where plannotator planning mode leaks (#2073/#2133),
-    // so the portable `pi:` block must reach it. Excluded from LOOP_NODE_AI_FIELDS
-    // so the loader doesn't warn it's ignored.
+    // Unlike prompt nodes, loop nodes run their own loop harness while supporting
+    // model/provider/effort AI fields. Spreads aiOnly (excluding agents) so model,
+    // provider, and AI configuration survive the transform.
     if (!data.loop) throw new Error('unreachable: loop must be defined after superRefine');
+    const aiOnlyForLoop = { ...aiOnly };
+    delete (aiOnlyForLoop as { agents?: unknown }).agents;
     return {
       ...base,
+      ...shared,
+      ...aiOnlyForLoop,
       kind: 'loop',
       ...(data.pi !== undefined ? { pi: data.pi } : {}),
       // Kept for the same reason as `pi`: a loop: node runs its own sendQuery, so

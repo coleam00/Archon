@@ -12,6 +12,8 @@ description: |
   4. Fix review issues -> address CRITICAL/HIGH findings
   5. Final summary -> decision matrix, follow-up recommendations
 
+model: large
+
 nodes:
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 1: INVESTIGATE
@@ -19,6 +21,7 @@ nodes:
 
   - id: investigate
     command: archon-investigate-issue
+    model: large
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 2: IMPLEMENT
@@ -28,6 +31,7 @@ nodes:
     command: archon-implement-issue
     depends_on: [investigate]
     context: fresh
+    model: large
 
   # ═══════════════════════════════════════════════════════════════════
   # PHASE 3-4: CODE REVIEW + FIX (shared building block)
@@ -47,6 +51,7 @@ nodes:
     command: archon-workflow-summary
     depends_on: [review]
     context: fresh
+    model: small
 
 # Deprecated legacy default (#2781): announce removal in the run-start notice during this window.
 deprecated:

@@ -15,7 +15,7 @@ description: |
   - PostToolUse hooks force type-check after every file change
   - Behavior verification confirms no logic changes after refactoring
 
-provider: claude
+model: medium
 
 nodes:
   # ═══════════════════════════════════════════════════════════════
@@ -62,6 +62,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: analyze-impact
+    model: medium
     prompt: |
       You are a senior software engineer analyzing code for a safe refactoring.
 
@@ -125,6 +126,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: plan-refactor
+    model: large
     prompt: |
       You are planning a safe refactoring. You must produce a precise, ordered plan
       that another agent will follow literally.
@@ -333,6 +335,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: fix-failures
+    model: large
     prompt: |
       Review the validation output below.
 
@@ -381,6 +384,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: verify-behavior
+    model: medium
     prompt: |
       You are a code reviewer verifying that a refactoring preserved exact behavior.
       You can ONLY read files — you cannot make any changes.
@@ -436,6 +440,7 @@ nodes:
   # ═══════════════════════════════════════════════════════════════
 
   - id: create-pr
+    model: medium
     prompt: |
       Create a pull request for the refactoring.
 

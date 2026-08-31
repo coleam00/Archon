@@ -1,6 +1,16 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { closeSync, fstatSync, lstatSync, mkdirSync, openSync, rmSync, statSync } from 'node:fs';
+import {
+  closeSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import { createConnection, createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -454,6 +464,15 @@ export function requestDetachedRunStop(runId: string): Promise<DetachedRunStopTa
 function processExists(pid: number): boolean {
   try {
     process.kill(pid, 0);
+    if (process.platform === 'linux') {
+      try {
+        const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+        const state = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0];
+        if (state === 'Z') return false;
+      } catch {
+        return false;
+      }
+    }
     return true;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'EPERM';
@@ -463,6 +482,29 @@ function processExists(pid: number): boolean {
 function processGroupExists(pid: number): boolean {
   try {
     process.kill(-pid, 0);
+    if (process.platform === 'linux') {
+      try {
+        const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+        const state = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0];
+        if (state === 'Z') {
+          const pids = readdirSync('/proc').filter(f => /^\d+$/.test(f));
+          for (const p of pids) {
+            try {
+              const pstat = readFileSync(`/proc/${p}/stat`, 'utf8');
+              const fields = pstat.slice(pstat.lastIndexOf(')') + 2).split(' ');
+              const pstate = fields[0];
+              const pgrp = Number(fields[2]);
+              if (pgrp === pid && pstate !== 'Z') return true;
+            } catch {
+              // Process exited
+            }
+          }
+          return false;
+        }
+      } catch {
+        return false;
+      }
+    }
     return true;
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'EPERM';

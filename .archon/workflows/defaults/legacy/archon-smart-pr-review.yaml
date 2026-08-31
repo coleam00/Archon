@@ -10,13 +10,17 @@ description: |
   Unlike the comprehensive review, this workflow classifies the PR first and only runs
   the review agents that are relevant. A 3-line typo fix skips test-coverage and docs-impact.
 
+model: medium
+
 nodes:
   - id: scope
     command: archon-pr-review-scope
+    model: small
 
   - id: sync
     command: archon-sync-pr-with-main
     depends_on: [scope]
+    model: medium
 
   - id: classify
     prompt: |
@@ -83,35 +87,42 @@ nodes:
     command: archon-code-review-agent
     depends_on: [classify, sync]
     when: "$classify.output.run_code_review == 'true'"
+    model: medium
 
   - id: error-handling
     command: archon-error-handling-agent
     depends_on: [classify, sync]
     when: "$classify.output.run_error_handling == 'true'"
+    model: medium
 
   - id: test-coverage
     command: archon-test-coverage-agent
     depends_on: [classify, sync]
     when: "$classify.output.run_test_coverage == 'true'"
+    model: medium
 
   - id: comment-quality
     command: archon-comment-quality-agent
     depends_on: [classify, sync]
     when: "$classify.output.run_comment_quality == 'true'"
+    model: medium
 
   - id: docs-impact
     command: archon-docs-impact-agent
     depends_on: [classify, sync]
     when: "$classify.output.run_docs_impact == 'true'"
+    model: medium
 
   - id: synthesize
     command: archon-synthesize-review
     depends_on: [code-review, error-handling, test-coverage, comment-quality, docs-impact]
     trigger_rule: one_success
+    model: medium
 
   - id: implement-fixes
     command: archon-implement-review-fixes
     depends_on: [synthesize]
+    model: large
 
   # Optional: push notification when review completes.
   # To enable, create .archon/mcp/ntfy.json — see docs/mcp-servers.md
@@ -125,6 +136,7 @@ nodes:
     trigger_rule: all_success
     mcp: .archon/mcp/ntfy.json
     allowed_tools: []
+    model: small
     prompt: |
       Send a push notification summarizing the PR review results.
 

@@ -10,9 +10,12 @@ description: |
   This workflow helps resolve merge conflicts by analyzing the conflicting changes,
   automatically resolving where intent is clear, and presenting options for complex conflicts.
 
+model: large
+
 nodes:
   - id: resolve
     command: archon-resolve-merge-conflicts
+    model: large
 
 # Deprecated legacy default (#2781): announce removal in the run-start notice during this window.
 deprecated:

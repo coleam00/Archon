@@ -12,12 +12,12 @@ description: |
 
   Based on Anthropic's harness design article for long-running application development.
   Separates planning, building, and evaluation into distinct roles with adversarial tension.
-provider: claude
 model: medium
 
 nodes:
   # ─── Phase 1: Planning ───────────────────────────────────────────────
   - id: plan
+    model: large
     prompt: |
       You are a product planning expert. Your job is to take a short user prompt and expand it
       into a comprehensive product specification.

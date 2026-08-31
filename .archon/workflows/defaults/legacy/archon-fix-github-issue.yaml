@@ -17,7 +17,6 @@ description: |
   8. Simplifies changed code (implements fixes directly, not just reports)
   9. Reports results back to the GitHub issue with follow-up suggestions
 
-provider: claude
 model: medium
 
 nodes:
@@ -132,6 +131,7 @@ nodes:
     command: archon-web-research
     depends_on: [classify]
     context: fresh
+    model: medium
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 3: INVESTIGATE (bugs) / PLAN (features)
@@ -142,12 +142,14 @@ nodes:
     depends_on: [classify, web-research]
     when: "$classify.output.issue_type == 'bug'"
     context: fresh
+    model: medium
 
   - id: plan
     command: archon-create-plan
     depends_on: [classify, web-research]
     when: "$classify.output.issue_type != 'bug'"
     context: fresh
+    model: large
 
   # Bridge: ensure investigation.md exists for the implement step
   # archon-fix-issue reads from $ARTIFACTS_DIR/investigation.md
@@ -191,12 +193,14 @@ nodes:
     command: archon-validate
     depends_on: [implement]
     context: fresh
+    model: medium
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 6: CREATE DRAFT PR
   # ═══════════════════════════════════════════════════════════════
 
   - id: create-pr
+    model: medium
     prompt: |
       Create a draft pull request for the current branch.
 
@@ -277,6 +281,7 @@ nodes:
     command: archon-pr-review-scope
     depends_on: [verify-pr-base]
     context: fresh
+    model: small
 
   - id: review-classify
     prompt: |
@@ -337,30 +342,35 @@ nodes:
     command: archon-code-review-agent
     depends_on: [review-classify]
     context: fresh
+    model: medium
 
   - id: error-handling
     command: archon-error-handling-agent
     depends_on: [review-classify]
     when: "$review-classify.output.run_error_handling == 'true'"
     context: fresh
+    model: medium
 
   - id: test-coverage
     command: archon-test-coverage-agent
     depends_on: [review-classify]
     when: "$review-classify.output.run_test_coverage == 'true'"
     context: fresh
+    model: medium
 
   - id: comment-quality
     command: archon-comment-quality-agent
     depends_on: [review-classify]
     when: "$review-classify.output.run_comment_quality == 'true'"
     context: fresh
+    model: medium
 
   - id: docs-impact
     command: archon-docs-impact-agent
     depends_on: [review-classify]
     when: "$review-classify.output.run_docs_impact == 'true'"
     context: fresh
+    model: medium
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 8: SYNTHESIZE + SELF-FIX
@@ -371,6 +381,7 @@ nodes:
     depends_on: [code-review, error-handling, test-coverage, comment-quality, docs-impact]
     trigger_rule: one_success
     context: fresh
+    model: medium
 
   - id: self-fix
     command: archon-self-fix-all
@@ -385,6 +396,7 @@ nodes:
     command: archon-simplify-changes
     depends_on: [self-fix]
     context: fresh
+    model: medium
 
   # ═══════════════════════════════════════════════════════════════
   # PHASE 10: REPORT
@@ -394,6 +406,7 @@ nodes:
     command: archon-issue-completion-report
     depends_on: [simplify]
     context: fresh
+    model: small
 
 # Deprecated legacy default (#2781): announce removal in the run-start notice during this window.
 deprecated:

@@ -9,6 +9,8 @@ description: |
   Optional: Install the remotion-best-practices skill for higher quality output:
             npx skills add remotion-dev/skills
 
+model: medium
+
 nodes:
   # ── Layer 0: Check project structure ──────────────────────────────────
   - id: check-project
@@ -26,6 +28,7 @@ nodes:
 
   # ── Layer 1: Generate composition code ────────────────────────────────
   - id: generate
+    model: large
     prompt: |
       You are working in a Remotion video project. The project root is the current directory.
 

@@ -12,6 +12,8 @@ if (!runId || !readyPath || !leakPath || !goPath) {
 
 assertDetachedRunProcessOwner();
 
+process.on('SIGTERM', () => process.exit(0));
+
 // The descendant leaks work only when an external go signal appears. The spec
 // decides whether that signal can exist, so a correct process-group kill ends
 // the descendant before any signal is ever written; no wall-clock race remains.
