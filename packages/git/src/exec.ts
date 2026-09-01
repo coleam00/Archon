@@ -64,16 +64,47 @@ export function resolveBashPath(): string {
   return 'bash';
 }
 
-/** Wrapper around child_process.execFile for test mockability */
+/**
+ * Wrapper around child_process.execFile for test mockability.
+ *
+ * `windowsHide` DEFAULTS TO TRUE, and that default is the whole point of it living
+ * here rather than at the call sites.
+ *
+ * A detached workflow run (`--detach`) is spawned with `detached: true`, which on
+ * Windows means DETACHED_PROCESS: the run owner has NO console at all. Every console
+ * program it then launches -- git above all, but also `uv`, `bun` and bash nodes --
+ * is therefore given a BRAND NEW console by the OS. When Windows Terminal is the
+ * default console host, "a new console" is a real terminal window that opens on the
+ * user's desktop, takes focus, and closes a second later.
+ *
+ * Archon calls git several times per node (the `mutates_checkout` status snapshot,
+ * worktree plumbing), so an unattended factory loop flashed a window every few
+ * seconds for hours. CREATE_NO_WINDOW -- which is what `windowsHide` sets -- gives
+ * the child a console it can still write to, with no window attached.
+ *
+ * It is a DEFAULT rather than a hard-coded true so a caller that genuinely needs a
+ * visible console (an interactive prompt) can still opt out by passing false.
+ */
 export async function execFileAsync(
   cmd: string,
   args: string[],
-  options?: { timeout?: number; cwd?: string; maxBuffer?: number; env?: NodeJS.ProcessEnv }
+  options?: {
+    timeout?: number;
+    cwd?: string;
+    maxBuffer?: number;
+    env?: NodeJS.ProcessEnv;
+    windowsHide?: boolean;
+  }
 ): Promise<{ stdout: string; stderr: string }> {
-  const result = await promisifiedExecFile(cmd, args, options);
+  const result = await promisifiedExecFile(cmd, args, { windowsHide: true, ...options });
+  // The `.toString()` these two lines used to carry is gone deliberately. Passing an
+  // options OBJECT unconditionally (rather than possibly `undefined`) resolves
+  // execFile to its string-encoding overload, so both fields are already strings and
+  // the conversion became provably redundant -- which is what the type-aware lint rule
+  // reported. Node defaults execFile's encoding to utf8, so this is the same value.
   return {
-    stdout: (result.stdout ?? '').toString(),
-    stderr: (result.stderr ?? '').toString(),
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
   };
 }
 
