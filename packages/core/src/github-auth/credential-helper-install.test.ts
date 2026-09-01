@@ -17,11 +17,14 @@
  * registered helper can provide a fresh token to a later Git operation.
  */
 import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
-import { mkdtemp, rm, readFile, writeFile, mkdir, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, mkdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as git from '@archon/git';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { installCredentialHelper } from './credential-helper-install';
+
+const trackTempRoot = trackTempRoots();
 
 describe('installCredentialHelper', () => {
   let archonHome: string;
@@ -30,7 +33,7 @@ describe('installCredentialHelper', () => {
 
   beforeEach(async () => {
     originalArchonHome = process.env.ARCHON_HOME;
-    archonHome = await mkdtemp(join(tmpdir(), 'archon-credhelper-'));
+    archonHome = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-credhelper-')));
     process.env.ARCHON_HOME = archonHome;
     execSpy = spyOn(git, 'execFileAsync').mockImplementation(async () => ({
       stdout: '',
@@ -45,7 +48,6 @@ describe('installCredentialHelper', () => {
     } else {
       process.env.ARCHON_HOME = originalArchonHome;
     }
-    await rm(archonHome, { recursive: true, force: true });
   });
 
   test('copies the helper into $ARCHON_HOME/bin and registers it on the worktree', async () => {
@@ -56,7 +58,7 @@ describe('installCredentialHelper', () => {
     if (result.kind !== 'installed') throw new Error('unreachable');
     expect(result.helperPath).toBe(helperPath);
 
-    // The copy really happened, and it is the real script (not an empty file).
+    // The bundled script was written rather than an empty placeholder.
     const contents = await readFile(helperPath, 'utf8');
     expect(contents).toContain('git-credential');
     expect(contents.length).toBeGreaterThan(0);
@@ -77,9 +79,7 @@ describe('installCredentialHelper', () => {
    * the platform dependency visible in the run output rather than hidden inside
    * an `if` in a longer test.
    *
-   * Pins the OUTCOME, not the mechanism: it holds both because copyFileSync
-   * preserves the source script's 0755 and because of the explicit chmodSync,
-   * so removing the chmod alone would not fail this.
+   * Pins the outcome of the explicit chmod after the bundled text is written.
    */
   test.skipIf(process.platform === 'win32')(
     'installed helper is executable (POSIX only)',
@@ -126,26 +126,22 @@ describe('installCredentialHelper', () => {
     'embeds the credential helper in a compiled binary',
     async () => {
       execSpy.mockRestore();
-      const buildRoot = await mkdtemp(join(tmpdir(), 'archon-credhelper-compiled-'));
-      try {
-        const entryPath = join(buildRoot, 'entry.ts');
-        const binaryPath = join(buildRoot, 'credential-helper-asset');
-        const modulePath = join(import.meta.dir, 'credential-helper-script.ts');
-        await writeFile(
-          entryPath,
-          `import { credentialHelperScript } from ${JSON.stringify(modulePath)};\nprocess.stdout.write(credentialHelperScript);\n`
-        );
+      const buildRoot = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-credhelper-compiled-')));
+      const entryPath = join(buildRoot, 'entry.ts');
+      const binaryPath = join(buildRoot, 'credential-helper-asset');
+      const modulePath = join(import.meta.dir, 'credential-helper-script.ts');
+      await writeFile(
+        entryPath,
+        `import { credentialHelperScript } from ${JSON.stringify(modulePath)};\nprocess.stdout.write(credentialHelperScript);\n`
+      );
 
-        await git.execFileAsync('bun', ['build', '--compile', '--outfile', binaryPath, entryPath], {
-          timeout: 30_000,
-        });
-        const { stdout } = await git.execFileAsync(binaryPath, [], { timeout: 5_000 });
+      await git.execFileAsync('bun', ['build', '--compile', '--outfile', binaryPath, entryPath], {
+        timeout: 30_000,
+      });
+      const { stdout } = await git.execFileAsync(binaryPath, [], { timeout: 5_000 });
 
-        expect(stdout).toContain('Git credential helper for the Archon GitHub App');
-        expect(stdout).toContain('/internal/git-credential');
-      } finally {
-        await rm(buildRoot, { recursive: true, force: true });
-      }
+      expect(stdout).toContain('Git credential helper for the Archon GitHub App');
+      expect(stdout).toContain('/internal/git-credential');
     }
   );
 
