@@ -2,6 +2,7 @@ import type { ReactElement } from 'react';
 import type { Run } from '../primitives/run';
 import { statusTextClass } from '../lib/run-status';
 import { formatElapsed, elapsedSince, formatCost, formatClock } from '../lib/format';
+import { RunOutcomeBadge } from './RunOutcomeBadge';
 
 /**
  * Lifecycle bookends for the run log. The node transitions in between are
@@ -48,6 +49,7 @@ export function RunFinishedLine({ run }: { run: Run }): ReactElement | null {
         {GLYPH[run.status]}
       </span>
       <span className={`font-medium ${statusTextClass[run.status]}`}>{LABEL[run.status]}</span>
+      <RunOutcomeBadge outcome={run.outcome} />
       <span className="font-mono text-text-tertiary">
         in {duration}
         {cost}

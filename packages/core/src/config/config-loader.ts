@@ -48,6 +48,10 @@ import {
 } from '@archon/providers';
 import { buildAiProfile, TIER_NAMES } from '@archon/workflows/model-validation';
 import type { RawAliasEntry, TierName } from '@archon/workflows/model-validation';
+import {
+  rawAliasesConfigSchema,
+  rawTiersConfigSchema,
+} from '@archon/workflows/schemas/model-binding';
 
 /**
  * A per-key patch for the `tiers:` config. Unlike `RawTiersConfig`, a tier value
@@ -272,6 +276,25 @@ function validateWorkflowContinuationConfig(parsed: unknown, configPath: string)
   config.workflows = result.data;
 }
 
+function validateModelBindingConfig(parsed: unknown, configPath: string): void {
+  if (typeof parsed !== 'object' || parsed === null) return;
+  const config = parsed as Record<string, unknown>;
+  for (const [field, schema] of [
+    ['tiers', rawTiersConfigSchema],
+    ['aliases', rawAliasesConfigSchema],
+  ] as const) {
+    if (config[field] === undefined) continue;
+    const result = schema.safeParse(config[field]);
+    if (!result.success) {
+      const issues = result.error.issues
+        .map(issue => `${field}.${issue.path.join('.') || '<root>'}: ${issue.message}`)
+        .join('; ');
+      throw new Error(`Invalid model binding config in '${configPath}': ${issues}`);
+    }
+    config[field] = result.data;
+  }
+}
+
 /**
  * Load global config from ~/.archon/config.yaml
  * Creates default config if file doesn't exist
@@ -287,6 +310,7 @@ export async function loadGlobalConfig(forceReload = false): Promise<GlobalConfi
     const content = await readConfigFile(configPath);
     const parsed = parseYaml(content);
     validateWorkflowContinuationConfig(parsed, configPath);
+    validateModelBindingConfig(parsed, configPath);
     cachedGlobalConfig = parsed as GlobalConfig;
     return cachedGlobalConfig ?? {};
   } catch (error) {
@@ -339,6 +363,7 @@ export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
     const content = await readConfigFile(configPath);
     const raw = parseYaml(content);
     validateWorkflowContinuationConfig(raw, configPath);
+    validateModelBindingConfig(raw, configPath);
     const parsed = (raw as RepoConfig) ?? {};
     const recommendedWorkflows = sanitizeRecommendedWorkflows(
       (parsed as { recommendedWorkflows?: unknown }).recommendedWorkflows,
@@ -800,7 +825,6 @@ function tierDefaultsFor(provider: string): RawTiersConfig | undefined {
           provider: preset.provider,
           model: preset.model,
           ...(preset.effort !== undefined ? { effort: preset.effort } : {}),
-          ...(preset.thinking !== undefined ? { thinking: preset.thinking } : {}),
         };
       }
     }

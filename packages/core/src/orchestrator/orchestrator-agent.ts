@@ -64,6 +64,7 @@ import {
 import { WorkflowInputContractError } from '@archon/workflows/workflow-inputs';
 import { formatDeprecationNotice } from '@archon/workflows/deprecation';
 import type {
+  ResolvedWorkflow,
   WorkflowDefinition,
   WorkflowWithSource,
   WorkflowLoadError,
@@ -126,10 +127,6 @@ function applyPresetToRequestOptions(
   preset: ModelAliasPreset,
   options: SendQueryOptions
 ): void {
-  if (preset.thinking !== undefined) {
-    options.nodeConfig = { ...(options.nodeConfig ?? {}), thinking: preset.thinking };
-  }
-
   if (preset.effort === undefined) return;
 
   // One effort channel for every provider (#2556): the preset's rung goes on
@@ -531,7 +528,7 @@ function resolveCodebaseName(name: string, codebases: readonly Codebase[]): Code
 export function parseOrchestratorCommands(
   response: string,
   codebases: readonly Codebase[],
-  workflows: readonly WorkflowDefinition[]
+  workflows: readonly Pick<WorkflowDefinition, 'name'>[]
 ): OrchestratorCommands {
   const result: OrchestratorCommands = {
     workflowInvocation: null,
@@ -642,7 +639,7 @@ interface WorkflowDispatchOptions {
    * resume, approve and reject. A value rather than an "already done" flag, so it cannot
    * claim something it does not carry.
    */
-  resolvedContinuation?: WorkflowDefinition;
+  resolvedContinuation?: ResolvedWorkflow;
   /**
    * Keys the engine dropped from the workflow's YAML (#2213). Mirrored into the
    * conversation before the run starts — chat and the console are where most
@@ -756,7 +753,7 @@ async function dispatchOrchestratorWorkflowOwned(
   conversationId: string,
   conversation: Conversation,
   codebase: Codebase,
-  workflow: WorkflowDefinition,
+  workflow: ResolvedWorkflow,
   userMessage: string,
   isolationHints?: HandleMessageContext['isolationHints'],
   userId?: string,
@@ -892,7 +889,7 @@ async function dispatchOrchestratorWorkflowOwned(
   // `freshCaptured` directly, so the helper's narrowed return type survives.
   let preparedSource: PreparedWorkflowSource | undefined;
   let freshCaptured:
-    | { preparedSource: PreparedWorkflowSource; workflow: WorkflowDefinition }
+    | { preparedSource: PreparedWorkflowSource; workflow: ResolvedWorkflow }
     | undefined;
 
   if (willContinueExistingRun && resumableRun) {
@@ -954,7 +951,7 @@ async function dispatchOrchestratorWorkflowOwned(
   // branch's vintage only after isolation resolves its worktree, so these gates must
   // run AFTER that swap there — otherwise required inputs or `requires:` declared on
   // the branch would bypass them entirely.
-  const runSignatureGates = async (definition: WorkflowDefinition): Promise<boolean> => {
+  const runSignatureGates = async (definition: ResolvedWorkflow): Promise<boolean> => {
     // Resolve this invocation's declared inputs from the values its channel supplied —
     // the run route's `inputs` map today; chat platforms supply nothing and so still
     // refuse a required-input workflow here. The workflow still lists/loads normally.
@@ -1472,11 +1469,11 @@ async function dispatchOrchestratorWorkflowOwned(
 async function captureFreshSource(
   owner: CapturedSourceOwner,
   runCwd: string,
-  workflow: WorkflowDefinition,
+  workflow: ResolvedWorkflow,
   conversationId: string,
   platform: IPlatformAdapter,
   explicitSourceRoot?: string
-): Promise<{ preparedSource: PreparedWorkflowSource; workflow: WorkflowDefinition } | undefined> {
+): Promise<{ preparedSource: PreparedWorkflowSource; workflow: ResolvedWorkflow } | undefined> {
   try {
     const workflowSourceRoot = explicitSourceRoot ?? (await resolveWorkflowSourceRoot(runCwd));
     const preparedSource = await prepareWorkflowSource(createWorkflowDeps(), {
@@ -1536,7 +1533,7 @@ async function dispatchOrchestratorWorkflow(
   conversationId: string,
   conversation: Conversation,
   codebase: Codebase,
-  workflow: WorkflowDefinition,
+  workflow: ResolvedWorkflow,
   userMessage: string,
   isolationHints?: HandleMessageContext['isolationHints'],
   userId?: string,
@@ -1624,7 +1621,7 @@ export async function continueResolvedGateRun(
     // since the run started is missing from it, and this path would then refuse a run
     // whose own captured source still holds it. `/workflow resume` resolves it this way
     // too — the two gate surfaces must not disagree about what a run is.
-    let resolvedContinuation: WorkflowDefinition | undefined;
+    let resolvedContinuation: ResolvedWorkflow | undefined;
     try {
       resolvedContinuation = (
         await resolveContinuationWorkflow(
@@ -2216,7 +2213,7 @@ export async function handleMessage(
       codebase: discoveredCodebase,
       remote: syncRemote,
     } = await discoverAllWorkflows(conversation);
-    const workflows: readonly WorkflowDefinition[] = workflowsWithSource.map(ws => ws.workflow);
+    const workflows: readonly ResolvedWorkflow[] = workflowsWithSource.map(ws => ws.workflow);
     if (workflowErrors.length > 0) {
       getLog().warn(
         { errorCount: workflowErrors.length, errors: workflowErrors },
@@ -2566,7 +2563,7 @@ export async function handleMessage(
             return true;
           },
           startWorkflow: async (workflowName, msg): Promise<string> => {
-            let wf: WorkflowDefinition | undefined;
+            let wf: ResolvedWorkflow | undefined;
             try {
               wf = resolveWorkflowName(workflowName, workflows);
             } catch (e: unknown) {
@@ -3583,7 +3580,7 @@ async function handleWorkflowRunCommand(
   platform: IPlatformAdapter,
   conversationId: string,
   conversation: Conversation,
-  workflow: WorkflowDefinition,
+  workflow: ResolvedWorkflow,
   userMessage: string,
   isolationHints?: HandleMessageContext['isolationHints'],
   userId?: string,

@@ -14,10 +14,11 @@ import type { WorkflowRoutingContext } from './orchestrator';
 import type { PreparedWorkflowSource } from '@archon/workflows/executor';
 import type * as WorkflowExecutor from '@archon/workflows/executor';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
-import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import type { ResolvedWorkflow, WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import {
   makeTestComposedWorkflow,
+  makeTestResolvedWorkflow,
   makeTestWorkflow,
   withObservableCapturedSource,
 } from '@archon/workflows/test-utils';
@@ -425,13 +426,13 @@ describe('validateAndResolveIsolation', () => {
 describe('dispatchBackgroundWorkflow', () => {
   let platform: MockPlatformAdapter;
 
-  function makeWorkflow(overrides?: Partial<WorkflowDefinition>): WorkflowDefinition {
-    return {
+  function makeWorkflow(overrides?: Partial<WorkflowDefinition>): ResolvedWorkflow {
+    return makeTestResolvedWorkflow({
       name: 'bg-workflow',
       description: 'background dispatch test workflow',
       nodes: [],
       ...overrides,
-    } as WorkflowDefinition;
+    });
   }
 
   function makeRoutingCtx(overrides?: Partial<WorkflowRoutingContext>): WorkflowRoutingContext {

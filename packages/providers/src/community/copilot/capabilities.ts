@@ -6,10 +6,8 @@ import type { ProviderCapabilities } from '../../types';
  * (streaming). Flipping a flag to `true` suppresses the dag-executor's
  * per-capability warning, so keep each flag honest.
  *
- * `effortControl` + `thinkingControl` are both true because Copilot's
- * `reasoningEffort` gates both the model's reasoning budget and the
- * `assistant.reasoning_delta` event stream — one SDK axis that covers both
- * Archon concepts.
+ * `effortControl` is true because Copilot's `reasoningEffort` gates the
+ * model's reasoning budget.
  */
 export const COPILOT_CAPABILITIES: ProviderCapabilities = {
   sessionResume: true,
@@ -22,7 +20,6 @@ export const COPILOT_CAPABILITIES: ProviderCapabilities = {
   envInjection: true,
   costControl: false,
   effortControl: true,
-  thinkingControl: true,
   fallbackModel: false,
   sandbox: false,
   settingSources: false, // Claude Agent SDK-only knob (which setting sources the agent loads)

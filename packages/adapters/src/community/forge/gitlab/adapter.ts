@@ -14,7 +14,7 @@ import {
   classifyAndFormatError,
   toError,
   onConversationClosed,
-  ConversationLockManager,
+  type ConversationLockManager,
 } from '@archon/core';
 import {
   ensureProjectStructure,
@@ -50,18 +50,20 @@ const MAX_LENGTH = 65000; // Practical limit for GitLab notes
 /** Hidden marker added to bot comments to prevent self-triggering loops */
 const BOT_RESPONSE_MARKER = '<!-- archon-bot-response -->';
 
+type ConversationLocker = Pick<ConversationLockManager, 'acquireLock'>;
+
 export class GitLabAdapter implements IPlatformAdapter {
   private readonly gitlabUrl: string;
   private readonly token: string;
   private readonly webhookSecret: string;
   private readonly allowedUsers: string[];
   private readonly botMention: string;
-  private readonly lockManager: ConversationLockManager;
+  private readonly lockManager: ConversationLocker;
 
   constructor(
     token: string,
     webhookSecret: string,
-    lockManager: ConversationLockManager,
+    lockManager: ConversationLocker,
     gitlabUrl?: string,
     botMention?: string
   ) {

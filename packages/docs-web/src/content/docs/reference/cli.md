@@ -452,7 +452,7 @@ The listing shows short 8-character run ids. Every `<run-id>` command below (`ge
 
 ### `workflow get`
 
-Show detail for a single run by ID, regardless of status (unlike `status`, which is active-only). Use it to answer "did that run pass?" for a completed/failed run. Exits non-zero when the run is not found.
+Show detail for a single run by ID, regardless of status (unlike `status`, which is active-only). Use it to inspect both how execution progressed and, when declared, the workflow author's verdict. Exits non-zero when the run is not found.
 
 ```bash
 archon workflow get <run-id>
@@ -460,6 +460,22 @@ archon workflow get <run-id> --json
 archon workflow get <run-id> --verbose   # add the per-node summary
 archon workflow get <run-id> --json --verbose
 ```
+
+`workflow status`, `workflow runs`, and `workflow get` report two independent facts:
+
+- **Execution status** (`pending`, `running`, `paused`, `completed`, `failed`, or `cancelled`)
+  controls terminality, resume and cancellation, filters, and CLI exit behavior.
+- **Authored outcome** (`succeeded` or `failed`) is the workflow's declared verdict from
+  `outcome_field`. Human output labels it separately when present. JSON always carries it as the
+  nullable `outcome` field beside `status`.
+
+The axes may disagree without either being rewritten: `completed` with authored outcome `failed`
+means execution finished normally but the workflow judged the work unsuccessful; `failed` or
+`paused` with authored outcome `succeeded` records a successful verdict before execution later
+failed or paused. A null outcome means the workflow did not declare one, the selected node has not
+authored it yet, or the run predates the field. In that case human output keeps its status-only
+presentation. Foreground `workflow run` uses the same labels when an outcome exists, but its exit
+code remains driven by execution success or failure.
 
 For both commands, `--json --verbose` adds a `nodes` array. Nodes are ordered by the
 first appearance of each node in the deterministically ordered event stream. Every
@@ -778,7 +794,7 @@ archon validate workflows my-workflow     # Validate a single workflow
 archon validate workflows my-workflow --json  # Machine-readable JSON output
 ```
 
-Checks: YAML syntax, DAG structure (cycles, dependency refs), command file existence, MCP config files, skill directories, provider compatibility, and tier/alias model refs. For bundled and global workflows, validation rejects `@custom` model aliases because they are not portable across projects; use `small`, `medium`, `large`, or a literal provider model string instead. Returns actionable error messages with "did you mean?" suggestions for typos.
+Checks: YAML syntax, DAG structure (cycles, dependency refs), command file existence, MCP config files, skill directories, provider compatibility, tier/alias model refs, and supported static environment reads in inline or named exec sources. An unprovided `INPUTS_*` read is an error when the workflow declares an input contract; other unprovided Python or JavaScript/TypeScript environment reads warn. See [Variables](/reference/variables/#shell-quoting-in-bash-vs-script) for the supported forms and fixes. For bundled and global workflows, validation rejects `@custom` model aliases because they are not portable across projects; use `small`, `medium`, `large`, or a literal provider model string instead. Returns actionable error messages with "did you mean?" suggestions for typos.
 
 Exit code: 0 = all valid, 1 = errors found.
 

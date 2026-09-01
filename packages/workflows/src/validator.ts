@@ -381,7 +381,9 @@ function getBundledWorkflowDefs(): WorkflowDefinition[] {
  * Call this AFTER parseWorkflow() has passed (Levels 1-2 are prerequisites).
  */
 export async function validateWorkflowResources(
-  workflow: WorkflowDefinition,
+  workflow: Omit<WorkflowDefinition, 'nodes'> & {
+    readonly nodes: readonly (DagNode | IncludeDirective)[];
+  },
   cwd: string,
   config?: ValidationConfig,
   defaultProvider?: string

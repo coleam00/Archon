@@ -124,11 +124,12 @@ describe('CLI startup import boundary', () => {
       'packages/core/src/config/run-config-handoff.ts',
       'packages/core/src/utils/token-crypto.ts',
       'packages/paths/src/archon-paths.ts',
+      'packages/paths/src/effort.ts',
       'packages/paths/src/logger.ts',
       'packages/workflows/src/schemas/durable-wait.ts',
+      'packages/workflows/src/schemas/effort.ts',
       'packages/workflows/src/schemas/model-binding.ts',
       'packages/workflows/src/schemas/run-config.ts',
-      'packages/workflows/src/schemas/thinking-config.ts',
     ]);
   });
 });

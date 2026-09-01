@@ -4017,6 +4017,25 @@ describe('workflowStatusCommand', () => {
     expect(calls.some(c => c.includes('running'))).toBe(true);
   });
 
+  it('should label authored outcome separately from active execution status', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.listWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        id: 'run-paused',
+        workflow_name: 'review',
+        working_path: '/path/to/worktree',
+        status: 'paused',
+        outcome: 'succeeded',
+        started_at: new Date(),
+      },
+    ]);
+
+    await workflowStatusCommand();
+
+    expect(consoleSpy).toHaveBeenCalledWith('  Status: paused');
+    expect(consoleSpy).toHaveBeenCalledWith('  Authored outcome: succeeded');
+  });
+
   it('should output JSON when json=true', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.listWorkflowRuns as ReturnType<typeof mock>).mockResolvedValueOnce([]);
@@ -4400,6 +4419,24 @@ describe('workflowGetCommand', () => {
     expect(consoleSpy).toHaveBeenCalledWith('  Name:   implement');
     expect(consoleSpy).toHaveBeenCalledWith('  Status: failed');
     expect(consoleSpy).toHaveBeenCalledWith('  Error:  Step failed: build');
+  });
+
+  it('prints contradictory status and authored outcome as separate fields', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-contradictory',
+      workflow_name: 'review',
+      status: 'completed',
+      outcome: 'failed',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {},
+    });
+
+    await workflowGetCommand('run-contradictory');
+
+    expect(consoleSpy).toHaveBeenCalledWith('  Status: completed');
+    expect(consoleSpy).toHaveBeenCalledWith('  Authored outcome: failed');
   });
 
   it('emits the raw run as a single clean JSON object', async () => {
@@ -5137,6 +5174,7 @@ describe('workflowRunsCommand', () => {
           id: 'r1',
           workflow_name: 'assist',
           status: 'completed',
+          outcome: 'failed',
           current_step_name: null,
           total_steps: null,
           started_at: new Date(),
@@ -5150,14 +5188,46 @@ describe('workflowRunsCommand', () => {
 
     expect(stdoutSpy).toHaveBeenCalledTimes(1);
     const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
-      runs: unknown[];
+      runs: Array<{ status: string; outcome: string | null }>;
       total: number;
       scopeFallback: boolean;
     };
     expect(parsed.total).toBe(1);
     expect(parsed.runs).toHaveLength(1);
+    expect(parsed.runs[0]).toMatchObject({ status: 'completed', outcome: 'failed' });
     // codebase did not resolve → result is a global fallback, flagged for agents
     expect(parsed.scopeFallback).toBe(true);
+  });
+
+  it('shows authored outcome separately in the human run list', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-proj',
+      name: 'owner/repo',
+      default_cwd: '/test/path',
+    });
+    (workflowDb.listDashboardRuns as ReturnType<typeof mock>).mockResolvedValueOnce({
+      runs: [
+        {
+          id: 'r1-contradictory',
+          workflow_name: 'review',
+          status: 'completed',
+          outcome: 'failed',
+          current_step_name: null,
+          total_steps: null,
+          started_at: new Date(),
+        },
+      ],
+      total: 1,
+      counts: { ...EMPTY_COUNTS, all: 1, completed: 1 },
+    });
+
+    await workflowRunsCommand('/test/path');
+
+    const output = consoleSpy.mock.calls.map(call => String(call[0])).join('\n');
+    expect(output).toContain('completed');
+    expect(output).toContain('authored outcome: failed');
   });
 
   it('marks scopeFallback false in --json when the project scope resolves', async () => {
@@ -8760,12 +8830,35 @@ describe('workflowRunCommand — progress rendering', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
   let stderrSpy: ReturnType<typeof spyOn>;
 
-  function setupWorkflowMocks(): void {
+  type OutcomeExecutionResult =
+    | { success: true; workflowRunId: string; paused?: true }
+    | { success: false; workflowRunId: string; error: string };
+
+  function setupWorkflowMocks(withAuthoredOutcome = false): void {
     // These need to be set up for each test since workflowRunCommand has many dependencies
     const discoverMock = require('@archon/workflows/workflow-discovery')
       .discoverWorkflowsWithConfig as ReturnType<typeof mock>;
+    const workflow = withAuthoredOutcome
+      ? makeTestWorkflowWithSource({
+          name: 'plan',
+          description: 'Plan work',
+          returns: 'result',
+          outcome_field: 'ready',
+          nodes: [
+            {
+              id: 'result',
+              command: 'test-command',
+              output_format: {
+                type: 'object',
+                properties: { ready: { type: 'boolean' } },
+                required: ['ready'],
+              },
+            },
+          ],
+        })
+      : makeTestWorkflowWithSource({ name: 'plan', description: 'Plan work' });
     discoverMock.mockResolvedValueOnce({
-      workflows: [makeTestWorkflowWithSource({ name: 'plan', description: 'Plan work' })],
+      workflows: [workflow],
       errors: [],
     });
 
@@ -8787,6 +8880,29 @@ describe('workflowRunCommand — progress rendering', () => {
     });
   }
 
+  async function runOutcomeFixture(
+    execution: OutcomeExecutionResult,
+    status: 'completed' | 'failed' | 'paused',
+    outcome: 'succeeded' | 'failed' | null
+  ): Promise<unknown> {
+    setupWorkflowMocks(true);
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    const workflowDb = require('@archon/core/db/workflows');
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce(execution);
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: execution.workflowRunId,
+      status,
+      outcome,
+    });
+
+    try {
+      await workflowRunCommand('/test/path', 'plan', 'hello', {});
+      return undefined;
+    } catch (error) {
+      return error;
+    }
+  }
+
   beforeEach(() => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
     stderrSpy = spyOn(process.stderr, 'write').mockImplementation(() => true);
@@ -8803,6 +8919,72 @@ describe('workflowRunCommand — progress rendering', () => {
   afterEach(() => {
     consoleSpy.mockRestore();
     stderrSpy.mockRestore();
+  });
+
+  it('renders aligned completed execution and succeeded authored outcome', async () => {
+    await runOutcomeFixture({ success: true, workflowRunId: 'run-1' }, 'completed', 'succeeded');
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '\nWorkflow finished.\n  Status: completed\n  Authored outcome: succeeded'
+    );
+  });
+
+  it('renders completed execution separately from a failed authored outcome', async () => {
+    await runOutcomeFixture({ success: true, workflowRunId: 'run-1' }, 'completed', 'failed');
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '\nWorkflow finished.\n  Status: completed\n  Authored outcome: failed'
+    );
+  });
+
+  it('keeps a failed execution non-zero when the authored outcome succeeded', async () => {
+    const thrown = await runOutcomeFixture(
+      { success: false, workflowRunId: 'run-1', error: 'later node failed' },
+      'failed',
+      'succeeded'
+    );
+
+    expect(resolveCliExitCode(thrown)).toBe(1);
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '\nWorkflow finished.\n  Status: failed\n  Authored outcome: succeeded'
+    );
+  });
+
+  it('renders a persisted succeeded outcome while execution is paused', async () => {
+    await runOutcomeFixture(
+      { success: true, paused: true, workflowRunId: 'run-1' },
+      'paused',
+      'succeeded'
+    );
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '\nWorkflow paused — waiting for approval.\n  Status: paused\n  Authored outcome: succeeded'
+    );
+  });
+
+  it('preserves the existing completion text when authored outcome is null', async () => {
+    await runOutcomeFixture({ success: true, workflowRunId: 'run-1' }, 'completed', null);
+
+    expect(consoleSpy).toHaveBeenCalledWith('\nWorkflow completed successfully.');
+  });
+
+  it('distinguishes an unavailable outcome read from an undeclared outcome', async () => {
+    setupWorkflowMocks(true);
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    const workflowDb = require('@archon/core/db/workflows');
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-1',
+    });
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error('database unavailable')
+    );
+
+    await workflowRunCommand('/test/path', 'plan', 'hello', {});
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '\nWorkflow finished.\n  Status: completed\n  Authored outcome: unavailable — failed to read persisted run'
+    );
   });
 
   it('should subscribe to emitter when not quiet', async () => {

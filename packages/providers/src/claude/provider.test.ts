@@ -137,7 +137,6 @@ describe('ClaudeProvider', () => {
         envInjection: true,
         costControl: true,
         effortControl: true,
-        thinkingControl: true,
         fallbackModel: true,
         sandbox: true,
         settingSources: true,
@@ -1887,6 +1886,7 @@ describe('ClaudeProvider', () => {
         ['minimal', 'low'],
         ['max', 'max'],
         ['ultra', 'max'],
+        ['persistent', 'max'],
       ] as const) {
         mockQuery.mockClear();
         mockQuery.mockImplementation(async function* () {
@@ -1902,37 +1902,6 @@ describe('ClaudeProvider', () => {
         const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
         expect(callArgs.options.effort).toBe(applied);
       }
-    });
-
-    test('omits effort from SDK for a value that is not a rung', async () => {
-      mockQuery.mockImplementation(async function* () {
-        yield { type: 'result', session_id: 'sid' };
-      });
-
-      for await (const _ of client.sendQuery('test', '/tmp', undefined, {
-        nodeConfig: { effort: 'off' },
-      })) {
-        // consume
-      }
-
-      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
-      expect(callArgs.options).not.toHaveProperty('effort');
-    });
-
-    test('passes thinking object to SDK via nodeConfig', async () => {
-      mockQuery.mockImplementation(async function* () {
-        yield { type: 'result', session_id: 'sid' };
-      });
-
-      for await (const _ of client.sendQuery('test', '/tmp', undefined, {
-        nodeConfig: { thinking: { type: 'enabled', budgetTokens: 8000 } },
-      })) {
-        // consume
-      }
-
-      expect(mockQuery).toHaveBeenCalledTimes(1);
-      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
-      expect(callArgs.options.thinking).toEqual({ type: 'enabled', budgetTokens: 8000 });
     });
 
     test('passes maxBudgetUsd to SDK', async () => {

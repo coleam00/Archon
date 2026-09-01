@@ -1,6 +1,8 @@
 /**
  * Unit tests for Telegram authorization utilities
  */
+import { describe, expect, test } from 'bun:test';
+
 import { parseAllowedUserIds, isUserAuthorized } from './auth';
 
 describe('telegram-auth', () => {

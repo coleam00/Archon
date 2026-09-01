@@ -2,7 +2,7 @@ import type { ProviderCapabilities } from '../types';
 
 /**
  * Built-in Claude Code tool names, hand-audited against
- * @anthropic-ai/claude-agent-sdk 0.3.247. The SDK exposes tool restrictions as
+ * @anthropic-ai/claude-agent-sdk 0.3.251. The SDK exposes tool restrictions as
  * plain `string[]` options and exports NO runtime tool-name constant or
  * literal union, so this list is maintained by hand — refresh it when bumping
  * the SDK. Used for advisory (warning-level) validation only, so a tool added
@@ -61,7 +61,6 @@ export const CLAUDE_CAPABILITIES: ProviderCapabilities = {
   envInjection: true,
   costControl: true,
   effortControl: true,
-  thinkingControl: true,
   fallbackModel: true,
   sandbox: true,
   settingSources: true, // per-node override of the SDK's settingSources option

@@ -110,11 +110,18 @@ const SLOT_SPEC = {
 } satisfies Record<TemplateSlotName, SlotDefinition>;
 
 export interface TemplateSlot {
+  owner: DagNode;
   name: TemplateSlotName;
   path: string;
   surface: TemplateSurface;
   outputReference: boolean;
   value: string;
+}
+
+export interface TemplateBinding {
+  owner: DagNode;
+  name: string;
+  path: string;
 }
 
 export interface TemplateValueSlot {
@@ -125,11 +132,13 @@ export interface TemplateValueSlot {
 
 type SlotCallback = (slot: TemplateSlot, replace: (value: string) => void) => void;
 type ValueSlotCallback = (slot: TemplateValueSlot, replace: (value: JsonValue) => void) => void;
+type BindingCallback = (binding: TemplateBinding) => void;
 
 function walk(
   node: DagNode,
   callback: SlotCallback,
   valueCallback?: ValueSlotCallback,
+  bindingCallback?: BindingCallback,
   prefix = '',
   recursive = true
 ): void {
@@ -141,6 +150,7 @@ function walk(
   ): void => {
     callback(
       {
+        owner: node,
         name,
         path: `${prefix}${path}`,
         surface: SLOT_SPEC[name].surface,
@@ -165,6 +175,7 @@ function walk(
     write: (name: string, value: JsonValue) => void
   ): void => {
     for (const [name, binding] of Object.entries(bindings ?? {})) {
+      bindingCallback?.({ owner: node, name, path: `${prefix}with.${name}` });
       if (typeof binding === 'string') {
         slot('binding.value', `with.${name}`, binding, value => {
           write(name, value);
@@ -260,7 +271,14 @@ function walk(
     if (recursive)
       for (const [index, body] of node.loop_group.nodes.entries())
         if (!isIncludeDirective(body))
-          walk(body, callback, valueCallback, `${prefix}loop_group.nodes.${index}.`);
+          walk(
+            body,
+            callback,
+            valueCallback,
+            bindingCallback,
+            `${prefix}loop_group.nodes.${index}.`,
+            recursive
+          );
   } else if (isGateNode(node)) {
     slot('approval.message', 'approval.message', node.message, value => (node.message = value));
     for (const decision of node.decisions) {
@@ -324,7 +342,7 @@ function walk(
 export function visitNodeTemplateSlots(
   node: DagNode,
   visitor: (slot: TemplateSlot) => void,
-  options?: { recursive?: boolean }
+  options?: { recursive?: boolean; bindingVisitor?: (binding: TemplateBinding) => void }
 ): void {
   walk(
     node,
@@ -332,6 +350,7 @@ export function visitNodeTemplateSlots(
       visitor(slot);
     },
     undefined,
+    options?.bindingVisitor,
     '',
     options?.recursive ?? true
   );
@@ -360,7 +379,8 @@ export function mapNodeTemplateValueSlots(
     () => undefined,
     (slot, replace) => {
       replace(mapper(slot));
-    }
+    },
+    undefined
   );
   return clone;
 }

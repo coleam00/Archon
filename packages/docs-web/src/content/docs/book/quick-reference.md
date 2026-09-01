@@ -109,8 +109,8 @@ archon workflow run my-workflow "auth refresh-tokens"
 | `nodes` | Yes | array | DAG nodes (see Node Options below) |
 | `provider` | No | string | Registered provider identifier (e.g. `claude`, `codex`). Default: `claude` |
 | `model` | No | string | Model for all nodes (`sonnet`, `opus`, `haiku`, or full model ID) |
-| `effort` | No | string | Reasoning depth on any provider that has one; also a node field: `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max` \| `ultra` |
-| `modelReasoningEffort` | No | string | **Deprecated** — translated into `effort` at load (dropped if `effort` is also declared), with a warning: `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max` \| `ultra` |
+| `effort` | No | string | Reasoning depth on any provider that has one; also a node field: `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max` \| `ultra` \| `persistent` |
+| `modelReasoningEffort` | No | string | **Deprecated** — translated into `effort` at load (dropped if `effort` is also declared), with a warning: `minimal` \| `low` \| `medium` \| `high` \| `xhigh` \| `max` \| `ultra` \| `persistent` |
 | `webSearchMode` | No | string | Codex only, no per-node form. Gates Codex's built-in search tool, not network access: `disabled` \| `cached` \| `live` |
 
 ### Node Options (DAG)

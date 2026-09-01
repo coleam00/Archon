@@ -65,6 +65,7 @@ export interface ProviderInfo {
   // reads individual capability fields, only the API populates the full shape.
   capabilities: Partial<components['schemas']['ProviderCapabilities']>;
   builtIn: boolean;
+  effortLevels?: components['schemas']['ProviderInfo']['effortLevels'];
 }
 
 export type ProviderDefaults = Record<string, unknown>;

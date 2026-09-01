@@ -6,14 +6,17 @@
  */
 import type { types } from '@slack/bolt';
 import type { TokenUsage } from '@archon/providers/types';
+import {
+  isTerminalRunStatus,
+  type RunTerminalStatus,
+  type WorkflowRunOutcome,
+  type WorkflowRunStatus,
+} from '@archon/workflows/schemas/workflow-run';
 
 type KnownBlock = types.KnownBlock;
 
 /** State of a single DAG node as tracked by the workflow bridge. */
 export type NodeState = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
-
-/** Terminal state for an entire workflow run, used by status block + reactions. */
-export type RunTerminalState = 'completed' | 'failed' | 'cancelled';
 
 export interface NodeSnapshot {
   nodeId: string;
@@ -28,8 +31,9 @@ export interface RunSnapshot {
   workflowName: string;
   startedAt: number;
   nodes: NodeSnapshot[];
-  /** Set only after a terminal event arrives. */
-  terminal?: RunTerminalState;
+  status: WorkflowRunStatus;
+  /** Persisted workflow-authored verdict, or an explicit presentation read failure. */
+  authoredOutcome?: WorkflowRunOutcome | 'unavailable';
   /** Final cost in USD; only set once persisted on workflow_runs.metadata.total_cost_usd. */
   totalCostUsd?: number;
   /** Optional failure reason for failed/cancelled runs. */
@@ -44,7 +48,7 @@ const NODE_GLYPH: Record<NodeState, string> = {
   skipped: ':fast_forward:',
 };
 
-const TERMINAL_HEADER: Record<RunTerminalState, string> = {
+const TERMINAL_HEADER: Record<RunTerminalStatus, string> = {
   completed: ':white_check_mark: Workflow completed',
   failed: ':x: Workflow failed',
   cancelled: ':no_entry: Workflow cancelled',
@@ -171,6 +175,26 @@ export function buildApprovalResolutionBlocks(input: {
   };
 }
 
+export function buildClosedApprovalBlocks(input: {
+  runId: string;
+  terminalStatus: RunTerminalStatus;
+  originalMessage: string;
+}): { blocks: KnownBlock[]; fallbackText: string } {
+  const blocks: KnownBlock[] = [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `${TERMINAL_HEADER[input.terminalStatus]} — approval closed for run \`${shortRunId(input.runId)}\`\n\n${input.originalMessage}`,
+      },
+    },
+  ];
+  return {
+    blocks,
+    fallbackText: `Approval closed for ${input.terminalStatus} run ${shortRunId(input.runId)}`,
+  };
+}
+
 /**
  * Block Kit status message shown for the duration of a workflow run, edited
  * in place as nodes start and complete. Includes a Cancel button while the
@@ -181,15 +205,27 @@ export function buildStatusBlocks(
   now: number = Date.now()
 ): { blocks: KnownBlock[]; fallbackText: string } {
   const elapsed = formatElapsed(Math.max(0, now - snapshot.startedAt));
-  const header = snapshot.terminal
-    ? TERMINAL_HEADER[snapshot.terminal]
-    : ':arrows_counterclockwise: Workflow running';
+  const terminalStatus = isTerminalRunStatus(snapshot.status) ? snapshot.status : undefined;
+  const header = terminalStatus
+    ? TERMINAL_HEADER[terminalStatus]
+    : snapshot.status === 'paused'
+      ? ':pause_button: Workflow paused'
+      : ':arrows_counterclockwise: Workflow running';
 
+  const authoredOutcomeLabel =
+    snapshot.authoredOutcome === 'unavailable'
+      ? 'unavailable — failed to read persisted run'
+      : snapshot.authoredOutcome === undefined
+        ? undefined
+        : `\`${snapshot.authoredOutcome}\``;
+  const runFacts = authoredOutcomeLabel
+    ? `\n*Execution status:* \`${snapshot.status}\` · *Authored outcome:* ${authoredOutcomeLabel}`
+    : '';
   const headerSection: KnownBlock = {
     type: 'section',
     text: {
       type: 'mrkdwn',
-      text: `${header}\n*Workflow:* \`${snapshot.workflowName}\` · *Run:* \`${shortRunId(snapshot.runId)}\` · *Elapsed:* ${elapsed}`,
+      text: `${header}${runFacts}\n*Workflow:* \`${snapshot.workflowName}\` · *Run:* \`${shortRunId(snapshot.runId)}\` · *Elapsed:* ${elapsed}`,
     },
   };
 
@@ -212,13 +248,10 @@ export function buildStatusBlocks(
   }
 
   const footerParts: string[] = [];
-  if (snapshot.terminal && typeof snapshot.totalCostUsd === 'number') {
+  if (terminalStatus && typeof snapshot.totalCostUsd === 'number') {
     footerParts.push(`total cost: $${snapshot.totalCostUsd.toFixed(4)}`);
   }
-  if (
-    (snapshot.terminal === 'failed' || snapshot.terminal === 'cancelled') &&
-    snapshot.failureReason
-  ) {
+  if ((snapshot.status === 'failed' || snapshot.status === 'cancelled') && snapshot.failureReason) {
     footerParts.push(`reason: ${truncate(snapshot.failureReason, 200)}`);
   }
   if (footerParts.length > 0) {
@@ -228,7 +261,7 @@ export function buildStatusBlocks(
     });
   }
 
-  if (!snapshot.terminal) {
+  if (!terminalStatus) {
     blocks.push({
       type: 'actions',
       block_id: `run-controls:${snapshot.runId}`,
@@ -245,9 +278,17 @@ export function buildStatusBlocks(
 
   return {
     blocks,
-    fallbackText: snapshot.terminal
-      ? `${TERMINAL_HEADER[snapshot.terminal]} (${snapshot.workflowName})`
-      : `Workflow ${snapshot.workflowName} running`,
+    fallbackText: `${
+      terminalStatus
+        ? `${TERMINAL_HEADER[terminalStatus]} (${snapshot.workflowName})`
+        : snapshot.status === 'paused'
+          ? `Workflow ${snapshot.workflowName} paused`
+          : `Workflow ${snapshot.workflowName} running`
+    }${
+      snapshot.authoredOutcome
+        ? ` · authored outcome: ${snapshot.authoredOutcome === 'unavailable' ? 'unavailable — failed to read persisted run' : snapshot.authoredOutcome}`
+        : ''
+    }`,
   };
 }
 

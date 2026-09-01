@@ -3,10 +3,12 @@
 # Multi-stage build: deps → web build → production image
 # =============================================================================
 
+ARG BUN_VERSION=1.4.0
+
 # ---------------------------------------------------------------------------
 # Stage 1: Install dependencies
 # ---------------------------------------------------------------------------
-FROM oven/bun:1.3.11-slim AS deps
+FROM oven/bun:${BUN_VERSION}-slim AS deps
 
 WORKDIR /app
 
@@ -51,7 +53,8 @@ RUN bun run build:web && \
 # ---------------------------------------------------------------------------
 # Stage 3: Production image
 # ---------------------------------------------------------------------------
-FROM oven/bun:1.3.11-slim AS production
+ARG BUN_VERSION=1.4.0
+FROM oven/bun:${BUN_VERSION}-slim AS production
 
 # OCI Labels for GHCR
 LABEL org.opencontainers.image.source="https://github.com/coleam00/Archon"

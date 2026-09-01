@@ -22,14 +22,13 @@ import type { ThinkingLevel } from '@earendil-works/pi-ai';
 type PiTool = ReturnType<typeof createCodingTools>[number];
 
 import type { NodeConfig } from '../../types';
-import { clampEffort, type AssertNever } from '../../shared/effort';
+import { clampEffort, type AssertNever } from '@archon/paths/effort';
 
 // ─── Thinking level ────────────────────────────────────────────────────────
 
 /**
- * Pi's `ThinkingLevel` spans the shared ladder through `max`; the Codex-native
- * `ultra` rung clamps to `max`. The `off` sentinel is handled by the caller,
- * before this runs.
+ * Pi's `ThinkingLevel` spans the shared ladder through `max`; stronger rungs
+ * clamp to `max`.
  *
  * `satisfies` alone would not have caught the omission this list previously
  * carried: it proves every element IS a `ThinkingLevel` (containment), not that
@@ -65,44 +64,18 @@ export interface ResolvedThinkingLevel {
 }
 
 /**
- * Resolve Archon's `effort` / `thinking` node fields to Pi's `ThinkingLevel`.
- *
- * Precedence: `thinking` > `effort` (when both are set and valid).
- * 'off' on either → `level: undefined` (Pi runs without explicit thinking).
- * Claude-shape `thinking: { type: 'enabled', budget_tokens: N }` object form →
- * warning, not applied.
+ * Resolve Archon's `effort` field to Pi's SDK-native `ThinkingLevel`.
  */
 export function resolvePiThinkingLevel(nodeConfig?: NodeConfig): ResolvedThinkingLevel {
   if (!nodeConfig) return { level: undefined };
 
-  const { thinking, effort } = nodeConfig;
-
-  // Explicit off on either field disables thinking entirely.
-  if (thinking === 'off' || effort === 'off') return { level: undefined };
-
-  // thinking takes precedence over effort when both are valid strings.
-  const thinkingLevel = normalizeToThinkingLevel(thinking);
-  if (thinkingLevel) return { level: thinkingLevel };
-
-  const effortLevel = normalizeToThinkingLevel(effort);
+  const effortLevel = normalizeToThinkingLevel(nodeConfig.effort);
   if (effortLevel) return { level: effortLevel };
 
-  // Claude uses a structured `{ type: 'enabled', budget_tokens: N }` shape —
-  // Pi doesn't understand it. Surface the mismatch so users can fix their YAML.
-  if (thinking !== undefined && thinking !== null && typeof thinking === 'object') {
+  if (nodeConfig.effort !== undefined) {
     return {
       level: undefined,
-      warning:
-        'Pi ignored `thinking` (object form is Claude-specific). Use `effort: minimal|low|medium|high|xhigh|max|ultra` in YAML — Pi accepts through max natively and maps ultra to max.',
-    };
-  }
-
-  // String that isn't a known level — warn so users fix it.
-  if (typeof thinking === 'string' || typeof effort === 'string') {
-    const offender = typeof thinking === 'string' ? thinking : effort;
-    return {
-      level: undefined,
-      warning: `Pi ignored unknown thinking level '${String(offender)}'. Valid: minimal, low, medium, high, xhigh, max, ultra, off.`,
+      warning: `Pi ignored invalid effort '${nodeConfig.effort}'.`,
     };
   }
 

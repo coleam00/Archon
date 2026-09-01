@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { basename, isAbsolute, join as joinPath, resolve as resolvePath, sep } from 'path';
 import { execFileAsync, resolveBashPath } from '@archon/git';
+import { isEffortRung } from '@archon/paths/effort';
 import { discoverScriptsForCwd } from './script-discovery';
 import { discoverWorkflowsWithConfig, resolveWorkflowCommandContents } from './workflow-discovery';
 import {
@@ -29,6 +30,7 @@ import type {
   ProviderCapabilities,
   TokenUsage,
   ResolvedModel,
+  MessageChunk,
   ExecutionContext,
   OverlayChangeSummary,
 } from '@archon/providers/types';
@@ -57,14 +59,13 @@ import type {
   TriggerRule,
   WorkflowRun,
   EffortLevel,
-  ThinkingConfig,
   SandboxSettings,
   WebSearchMode,
   WorkflowSource,
-  WorkflowDefinition,
+  GraphPlan,
+  ResolvedWorkflow,
   LoopGateRunMetadata,
   ApprovalContext,
-  WorkflowEvidencePolicy,
   WorkflowRunOutcome,
   NodeArtifactLoopFrame,
   WorkflowRunNodeSession,
@@ -94,6 +95,8 @@ import {
 } from './schemas';
 import type { BindingDirective } from './schemas';
 import { mapNodeTemplateSlots } from './template-walker';
+import { buildExecNodeEnvironment } from './exec-environment';
+import { planGraph, resolvedBodyNodes } from './graph-plan';
 import { FAN_OUT_CANCEL_REASONS } from './store';
 import type { DagResumeSnapshot, FanOutCancelReason, PersistedNodeOutput } from './store';
 import { formatToolCall } from './utils/tool-formatter';
@@ -134,6 +137,7 @@ import {
   logTool,
   logWorkflowComplete,
   logWorkflowError,
+  logWatchdogReset,
   type WorkflowUsage,
 } from './logger';
 import { withIdleTimeout, STEP_IDLE_TIMEOUT_MS } from './utils/idle-timeout';
@@ -142,6 +146,7 @@ import { collectComposedSuspensionPaths, instantiateResolvedInclude } from './in
 import { buildInstanceSnapshots, composeFanOutScopeSegment } from './fan-out-identity';
 import {
   classifyError,
+  currentAdoptedRunDir,
   getRetryDelayMs,
   isRateLimitError,
   RATE_LIMIT_MAX_RETRIES,
@@ -596,6 +601,17 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+interface WatchdogReset {
+  type: MessageChunk['type'];
+  at: number;
+}
+
+function formatWatchdogResetDiagnostic(lastReset: WatchdogReset | undefined): string {
+  return lastReset
+    ? ` Last watchdog reset: ${new Date(lastReset.at).toISOString()} from chunk type '${lastReset.type}'.`
+    : ' No provider chunk reset the watchdog after the stream opened.';
+}
+
 const MCP_FAILURE_PREFIX = 'MCP server connection failed: ';
 
 /** A failed MCP server entry parsed from the SDK message. `segment` is the
@@ -610,19 +626,10 @@ function applyPresetOptions(
   provider: string,
   preset: ModelAliasPreset | undefined,
   node: DagNode,
-  workflowLevelOptions: WorkflowLevelOptions,
-  declaredEffort: string | undefined,
+  declaredEffort: EffortLevel | undefined,
   nodeConfig: NodeConfig
 ): void {
   if (!preset) return;
-
-  if (
-    preset.thinking !== undefined &&
-    node.thinking === undefined &&
-    workflowLevelOptions.thinking === undefined
-  ) {
-    nodeConfig.thinking = preset.thinking;
-  }
 
   // An effort declared on the node or workflow outranks the preset's. Passed in
   // rather than re-derived so this cannot disagree with the chain that builds
@@ -710,7 +717,6 @@ export async function loadConfiguredMcpServerNames(
  *  all — it carries the workflow's resolved tier keyword for annotation. */
 interface WorkflowLevelOptions {
   effort?: EffortLevel;
-  thinking?: ThinkingConfig;
   fallbackModel?: string;
   betas?: string[];
   sandbox?: SandboxSettings;
@@ -1678,7 +1684,7 @@ async function resolveNodeProviderAndModel(
   model: string | undefined;
   options: SendQueryOptions | undefined;
   tier?: TierName;
-  effort?: string;
+  effort?: EffortLevel;
 }> {
   // The chain itself lives in node-model-resolution.ts so `workflow dry-run` reports the
   // same answer this produces (#1764). Everything below is the part a dry run must NOT
@@ -1775,7 +1781,6 @@ async function resolveNodeProviderAndModel(
     ['skills', 'skills', node.skills !== undefined && node.skills.length > 0],
     ['agents', 'agents', node.agents !== undefined],
     ['effort', 'effortControl', declaredEffort !== undefined],
-    ['thinking', 'thinkingControl', (node.thinking ?? workflowLevelOptions.thinking) !== undefined],
     ['maxBudgetUsd', 'costControl', node.maxBudgetUsd !== undefined],
     [
       'fallbackModel',
@@ -1873,7 +1878,6 @@ async function resolveNodeProviderAndModel(
     // depth that was never applied, and would leave declared and preset effort
     // behaving oppositely on the same provider.
     effort: caps.effortControl ? declaredEffort : undefined,
-    thinking: node.thinking ?? workflowLevelOptions.thinking,
     sandbox: node.sandbox ?? workflowLevelOptions.sandbox,
     betas: node.betas ?? workflowLevelOptions.betas,
     output_format: node.output_format,
@@ -1885,14 +1889,7 @@ async function resolveNodeProviderAndModel(
 
   // Pass assistantConfig from config — provider parses internally
   const assistantConfig: Record<string, unknown> = { ...(config.assistants[provider] ?? {}) };
-  applyPresetOptions(
-    provider,
-    effectivePreset,
-    node,
-    workflowLevelOptions,
-    declaredEffort,
-    nodeConfig
-  );
+  applyPresetOptions(provider, effectivePreset, node, declaredEffort, nodeConfig);
   // `webSearchMode:` has no node-level form and no other consumer, so the
   // workflow-level value is the only value — written only where it is read.
   if (isCodex && workflowLevelOptions.webSearchMode !== undefined) {
@@ -1909,11 +1906,10 @@ async function resolveNodeProviderAndModel(
   // and this reports the declared rung rather than the clamped one — consistent
   // across providers, and no longer able to name a field the provider ignored,
   // which was the #2395 failure mode.
-  const assistantEffort =
-    typeof assistantConfig.modelReasoningEffort === 'string'
-      ? assistantConfig.modelReasoningEffort
-      : undefined;
-  const resolvedEffort: string | undefined = nodeConfig.effort ?? assistantEffort;
+  const assistantEffort = isEffortRung(assistantConfig.modelReasoningEffort)
+    ? assistantConfig.modelReasoningEffort
+    : undefined;
+  const resolvedEffort: EffortLevel | undefined = nodeConfig.effort ?? assistantEffort;
 
   const options: SendQueryOptions = {
     ...baseOptions,
@@ -2008,56 +2004,6 @@ export function checkComposedBlockBoundaries(
 }
 
 /**
- * Build topological layers from DAG nodes using Kahn's algorithm.
- * Layer 0: nodes with no dependencies.
- * Layer N: nodes whose dependencies are all in layers 0..N-1.
- *
- * Cycle detection: if the sum of all layer sizes < nodes.length, a cycle exists.
- * (Cycle detection at load time is the primary guard; this is a runtime safety check.)
- */
-export function buildTopologicalLayers(nodes: readonly DagNode[]): DagNode[][] {
-  const inDegree = new Map<string, number>();
-  const dependents = new Map<string, string[]>();
-
-  for (const node of nodes) {
-    inDegree.set(node.id, node.depends_on?.length ?? 0);
-    for (const dep of node.depends_on ?? []) {
-      const existing = dependents.get(dep) ?? [];
-      existing.push(node.id);
-      dependents.set(dep, existing);
-    }
-  }
-
-  const layers: DagNode[][] = [];
-  let ready = [...nodes].filter(n => (inDegree.get(n.id) ?? 0) === 0);
-
-  while (ready.length > 0) {
-    layers.push(ready);
-    const nextIds: string[] = [];
-    for (const node of ready) {
-      for (const depId of dependents.get(node.id) ?? []) {
-        const newDegree = (inDegree.get(depId) ?? 0) - 1;
-        inDegree.set(depId, newDegree);
-        if (newDegree === 0) nextIds.push(depId);
-      }
-    }
-    ready = nextIds
-      .map(id => nodes.find(n => n.id === id))
-      .filter((n): n is DagNode => n !== undefined);
-  }
-
-  const totalPlaced = layers.reduce((sum, l) => sum + l.length, 0);
-  if (totalPlaced < nodes.length) {
-    // Should never happen — cycle detection runs at load time
-    throw new Error(
-      '[DagExecutor] Cycle detected at runtime — was cycle detection skipped at load?'
-    );
-  }
-
-  return layers;
-}
-
-/**
  * Execute a single DAG node. Returns NodeExecutionResult regardless of success/failure.
  * Always accumulates assistant text output (for $node_id.output substitution).
  * Parallel nodes and context: 'fresh' nodes always receive fresh sessions (caller ensures resumeSessionId is undefined).
@@ -2070,7 +2016,7 @@ async function executeNodeInternal(
   resumeSessionId: string | undefined,
   resolvedModel?: string,
   resolvedTier?: TierName,
-  resolvedEffort?: string,
+  resolvedEffort?: EffortLevel,
   stepNamePrefix = '',
   iteration?: number,
   checkpointSession?: SessionCheckpoint
@@ -2157,6 +2103,65 @@ async function executeNodeInternal(
     ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
   });
 
+  let nodeTokens: TokenUsage | undefined;
+  let nodeCostUsd: number | undefined;
+
+  const nodeUsageEventData = (): WorkflowUsage => ({
+    ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
+    ...(nodeCostUsd !== undefined ? { cost_usd: nodeCostUsd } : {}),
+  });
+
+  const nodeKey = `${workflowRun.id}:${node.id}`;
+
+  // Every failed result after node_started passes through this finalizer so the
+  // transcript, persisted event, emitter, and throttle cleanup cannot drift.
+  const failAgentNode = async (
+    error: string,
+    extras: { output?: string; data?: Record<string, unknown> } = {}
+  ): Promise<NodeExecutionResult> => {
+    const usage = nodeUsageEventData();
+    await logNodeError(logDir, workflowRun.id, node.id, error, usage);
+
+    deps.store
+      .createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'node_failed',
+        step_name: stepName,
+        data: {
+          error,
+          duration_ms: Date.now() - nodeStartTime,
+          ...usage,
+          ...namedSessionAuditData,
+          ...(extras.data ?? {}),
+        },
+      })
+      .catch((err: Error) => {
+        getLog().error(
+          { err, workflowRunId: workflowRun.id, eventType: 'node_failed' },
+          'workflow_event_persist_failed'
+        );
+      });
+
+    emitter.emit({
+      type: 'node_failed',
+      runId: workflowRun.id,
+      nodeId: node.id,
+      nodeName: commandName ?? node.id,
+      error,
+    });
+
+    lastNodeCancelCheck.delete(nodeKey);
+    lastNodeActivityUpdate.delete(nodeKey);
+
+    return {
+      state: 'failed',
+      output: extras.output ?? '',
+      error,
+      costUsd: nodeCostUsd,
+      ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
+    };
+  };
+
   // Load prompt
   let rawPrompt: string;
   if (commandName !== undefined) {
@@ -2170,28 +2175,7 @@ async function executeNodeInternal(
     if (!promptResult.success) {
       const errMsg = promptResult.message;
       getLog().error({ nodeId: node.id, error: errMsg }, 'dag_node_command_load_failed');
-      await logNodeError(logDir, workflowRun.id, node.id, errMsg);
-      deps.store
-        .createWorkflowEvent({
-          workflow_run_id: workflowRun.id,
-          event_type: 'node_failed',
-          step_name: stepName,
-          data: { error: errMsg, ...namedSessionAuditData },
-        })
-        .catch((err: Error) => {
-          getLog().error(
-            { err, workflowRunId: workflowRun.id, eventType: 'node_failed' },
-            'workflow_event_persist_failed'
-          );
-        });
-      emitter.emit({
-        type: 'node_failed',
-        runId: workflowRun.id,
-        nodeId: node.id,
-        nodeName: commandName,
-        error: errMsg,
-      });
-      return { state: 'failed', output: '', error: errMsg };
+      return failAgentNode(errMsg);
     }
     rawPrompt = promptResult.content;
   } else {
@@ -2248,38 +2232,14 @@ async function executeNodeInternal(
   } catch (error) {
     const err = error as Error;
     getLog().error({ nodeId: node.id, error: err.message }, 'dag.node_prompt_substitution_failed');
-    await logNodeError(logDir, workflowRun.id, node.id, err.message);
-    // Emit the terminal event (mirrors the command-load failure path above).
-    // Without it the node emits node_started and then vanishes with no terminal
-    // event, so downstream all_success rules silently skip instead of the run
-    // surfacing the failure.
-    deps.store
-      .createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'node_failed',
-        step_name: stepName,
-        data: { error: err.message, ...namedSessionAuditData },
-      })
-      .catch((persistErr: Error) => {
-        getLog().error(
-          { err: persistErr, workflowRunId: workflowRun.id, eventType: 'node_failed' },
-          'workflow_event_persist_failed'
-        );
-      });
-    emitter.emit({
-      type: 'node_failed',
-      runId: workflowRun.id,
-      nodeId: node.id,
-      nodeName: commandName ?? node.id,
-      error: err.message,
-    });
+    const result = await failAgentNode(err.message);
     await safeSendMessage(
       platform,
       conversationId,
       `Node '${node.id}' failed: ${err.message}`,
       nodeContext
     );
-    return { state: 'failed', output: '', error: err.message };
+    return result;
   }
 
   // Substitute upstream node output references
@@ -2292,20 +2252,10 @@ async function executeNodeInternal(
   let structuredOutput: unknown;
   let newSessionId: string | undefined;
   let nodeResumed: boolean | undefined;
-  let nodeTokens: TokenUsage | undefined;
-  let nodeCostUsd: number | undefined;
   let nodeStopReason: string | undefined;
   let nodeNumTurns: number | undefined;
   let nodeResolvedModel: ResolvedModel | undefined;
   const batchMessages: string[] = [];
-
-  // What this node reported, built once and passed whole rather than re-listed per sink:
-  // the DB event and the JSONL transcript row, on every outcome that can hold spend —
-  // completion, failure, and user cancellation alike (#2693). See WorkflowUsage.
-  const nodeUsageEventData = (): WorkflowUsage => ({
-    ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
-    ...(nodeCostUsd !== undefined ? { cost_usd: nodeCostUsd } : {}),
-  });
 
   // Create per-node abort controller for idle timeout cleanup
   const nodeAbortController = new AbortController();
@@ -2318,6 +2268,8 @@ async function executeNodeInternal(
     ...(shouldForkSession ? { forkSession: true } : {}),
   };
   let nodeIdleTimedOut = false;
+  let lastWatchdogReset: WatchdogReset | undefined;
+  let watchdogResetLog = Promise.resolve();
   const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
   const runningTools = new Map<string, RunningTool>();
   let anonymousToolSequence = 0;
@@ -2355,6 +2307,8 @@ async function executeNodeInternal(
     nodeCostUsd = undefined;
     nodeTokens = undefined;
     nodeIdleTimedOut = false;
+    lastWatchdogReset = undefined;
+    watchdogResetLog = Promise.resolve();
     backgroundTasksIncomplete = [];
     const backgroundTasks = createBackgroundTaskTracker();
     for await (const msg of withIdleTimeout(
@@ -2363,14 +2317,30 @@ async function executeNodeInternal(
       () => {
         nodeIdleTimedOut = true;
         getLog().warn(
-          { nodeId: node.id, timeoutMs: effectiveIdleTimeout },
+          {
+            nodeId: node.id,
+            timeoutMs: effectiveIdleTimeout,
+            ...(lastWatchdogReset
+              ? {
+                  lastResetType: lastWatchdogReset.type,
+                  lastResetAt: new Date(lastWatchdogReset.at).toISOString(),
+                }
+              : {}),
+          },
           'dag_node_idle_timeout_reached'
         );
         nodeAbortController.abort();
+      },
+      undefined,
+      (msg, resetAt) => {
+        const type = msg.type;
+        lastWatchdogReset = { type, at: resetAt };
+        watchdogResetLog = watchdogResetLog.then(() =>
+          logWatchdogReset(logDir, workflowRun.id, node.id, type, resetAt)
+        );
       }
     )) {
       const tickNow = Date.now();
-      const nodeKey = `${workflowRun.id}:${node.id}`;
 
       // Cancel/pause check — read-only, no write contention in WAL mode (every 10s).
       //
@@ -2976,6 +2946,7 @@ async function executeNodeInternal(
       try {
         await runStreamPass(reaskPrompt, reaskResumeSessionId);
       } finally {
+        await watchdogResetLog;
         if (nodeCostUsd !== undefined) {
           accumulatedCostUsd = (accumulatedCostUsd ?? 0) + nodeCostUsd;
         }
@@ -3063,7 +3034,7 @@ async function executeNodeInternal(
       // and reporting it as "the model replied with prose" would mislead.
       if (nodeIdleTimedOut) {
         throw new Error(
-          `Node '${node.id}': timed out (no output for ${String(effectiveIdleTimeout / 60000)} min) before producing the required structured output.`
+          `Node '${node.id}': timed out (no output for ${String(effectiveIdleTimeout / 60000)} min) before producing the required structured output.${formatWatchdogResetDiagnostic(lastWatchdogReset)}`
         );
       }
       throw new Error(
@@ -3081,7 +3052,7 @@ async function executeNodeInternal(
       await safeSendMessage(
         platform,
         conversationId,
-        `⚠️ Node \`${node.id}\` completed via idle timeout (no output for ${String(effectiveIdleTimeout / 60000)} min). The AI likely finished but the subprocess didn't exit cleanly.`,
+        `⚠️ Node \`${node.id}\` completed via idle timeout (no output for ${String(effectiveIdleTimeout / 60000)} min).${formatWatchdogResetDiagnostic(lastWatchdogReset)} The AI likely finished but the subprocess didn't exit cleanly.`,
         nodeContext
       );
     }
@@ -3093,55 +3064,7 @@ async function executeNodeInternal(
         { nodeId: node.id, durationMs: duration },
         'dag_node_cancelled_during_streaming'
       );
-      // Cancellation is a terminal outcome like any other failure, and the work it
-      // interrupted was already paid for. This branch wrote no transcript row at all
-      // until #2693, so a cancelled node's spend reached the DB and nothing else.
-      await logNodeError(
-        logDir,
-        workflowRun.id,
-        node.id,
-        'Cancelled by user',
-        nodeUsageEventData()
-      );
-
-      deps.store
-        .createWorkflowEvent({
-          workflow_run_id: workflowRun.id,
-          event_type: 'node_failed',
-          step_name: stepName,
-          data: {
-            error: 'Cancelled by user',
-            duration_ms: duration,
-            ...nodeUsageEventData(),
-            ...namedSessionAuditData,
-          },
-        })
-        .catch((err: Error) => {
-          getLog().error(
-            { err, workflowRunId: workflowRun.id, eventType: 'node_failed' },
-            'workflow_event_persist_failed'
-          );
-        });
-
-      emitter.emit({
-        type: 'node_failed',
-        runId: workflowRun.id,
-        nodeId: node.id,
-        nodeName: commandName ?? node.id,
-        error: 'Cancelled by user',
-      });
-
-      // Clean up throttle entries
-      lastNodeCancelCheck.delete(`${workflowRun.id}:${node.id}`);
-      lastNodeActivityUpdate.delete(`${workflowRun.id}:${node.id}`);
-
-      return {
-        state: 'failed',
-        output: nodeOutputText,
-        error: 'Cancelled by user',
-        costUsd: nodeCostUsd,
-        ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
-      };
+      return await failAgentNode('Cancelled by user', { output: nodeOutputText });
     }
 
     if (streamingMode === 'batch' && batchMessages.length > 0) {
@@ -3158,88 +3081,17 @@ async function executeNodeInternal(
     if (creditError) {
       const duration = Date.now() - nodeStartTime;
       getLog().warn({ nodeId: node.id, durationMs: duration }, 'dag.node_credit_exhausted');
-      await logNodeError(logDir, workflowRun.id, node.id, creditError, nodeUsageEventData());
-
-      deps.store
-        .createWorkflowEvent({
-          workflow_run_id: workflowRun.id,
-          event_type: 'node_failed',
-          step_name: stepName,
-          data: { error: creditError, ...nodeUsageEventData(), ...namedSessionAuditData },
-        })
-        .catch((err: Error) => {
-          getLog().error(
-            { err, workflowRunId: workflowRun.id, eventType: 'node_failed' },
-            'workflow_event_persist_failed'
-          );
-        });
-
-      emitter.emit({
-        type: 'node_failed',
-        runId: workflowRun.id,
-        nodeId: node.id,
-        nodeName: commandName ?? node.id,
-        error: creditError,
-      });
-
-      lastNodeCancelCheck.delete(`${workflowRun.id}:${node.id}`);
-      lastNodeActivityUpdate.delete(`${workflowRun.id}:${node.id}`);
-
-      return {
-        state: 'failed',
-        output: nodeOutputText,
-        error: creditError,
-        costUsd: nodeCostUsd,
-        ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
-      };
+      return await failAgentNode(creditError, { output: nodeOutputText });
     }
 
     // Fail for zero output: covers both silent non-timeout exits AND idle-timeout before first token (time-to-first-token exceeded the window).
     if (nodeOutputText.trim() === '' && structuredOutput === undefined) {
       const duration = Date.now() - nodeStartTime;
       const emptyError = nodeIdleTimedOut
-        ? `Node '${node.id}' timed out with no output (idle for ${String(effectiveIdleTimeout / 60000)} min). The provider did not emit any content before the watchdog fired — likely time-to-first-token exceeded the timeout. Consider increasing idle_timeout or reducing prompt size.`
+        ? `Node '${node.id}' timed out with no output (idle for ${String(effectiveIdleTimeout / 60000)} min).${formatWatchdogResetDiagnostic(lastWatchdogReset)} Consider increasing idle_timeout or reducing prompt size.`
         : `Node '${node.id}' produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.`;
       getLog().error({ nodeId: node.id, durationMs: duration }, 'dag.node_empty_output');
-      await logNodeError(logDir, workflowRun.id, node.id, emptyError, nodeUsageEventData());
-
-      deps.store
-        .createWorkflowEvent({
-          workflow_run_id: workflowRun.id,
-          event_type: 'node_failed',
-          step_name: stepName,
-          data: {
-            error: emptyError,
-            duration_ms: duration,
-            ...nodeUsageEventData(),
-            ...namedSessionAuditData,
-          },
-        })
-        .catch((err: Error) => {
-          getLog().error(
-            { err, workflowRunId: workflowRun.id, eventType: 'node_failed' },
-            'workflow_event_persist_failed'
-          );
-        });
-
-      emitter.emit({
-        type: 'node_failed',
-        runId: workflowRun.id,
-        nodeId: node.id,
-        nodeName: commandName ?? node.id,
-        error: emptyError,
-      });
-
-      lastNodeCancelCheck.delete(`${workflowRun.id}:${node.id}`);
-      lastNodeActivityUpdate.delete(`${workflowRun.id}:${node.id}`);
-
-      return {
-        state: 'failed',
-        output: '',
-        error: emptyError,
-        costUsd: nodeCostUsd,
-        ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
-      };
+      return await failAgentNode(emptyError);
     }
 
     if (namedResumeSourceNodeId !== undefined) {
@@ -3343,10 +3195,6 @@ async function executeNodeInternal(
   } catch (error) {
     const err = error as Error;
 
-    // Clean up throttle entries on failure
-    lastNodeCancelCheck.delete(`${workflowRun.id}:${node.id}`);
-    lastNodeActivityUpdate.delete(`${workflowRun.id}:${node.id}`);
-
     const cancelled = nodeAbortController.signal.aborted && !nodeIdleTimedOut;
     const failureMessage = cancelled ? 'Cancelled by user' : err.message;
     if (cancelled) {
@@ -3354,44 +3202,7 @@ async function executeNodeInternal(
     } else {
       getLog().error({ err, nodeId: node.id }, 'dag_node_failed');
     }
-    // Transcript row on BOTH branches. The persisted event below is written either way,
-    // so the transcript must not disagree with it depending on how the cancel arrived.
-    // A cancel reaches this catch mainly through the engine's own structured-output
-    // gate: it runs before the streaming-cancel branch and cannot reask once the signal
-    // is aborted, so an aborted node declaring `output_format` throws here instead of
-    // returning there. A provider SDK that throws on abort also lands here. Neither is
-    // a reason for a node to be missing from the run's transcript (#2693).
-    await logNodeError(logDir, workflowRun.id, node.id, failureMessage, nodeUsageEventData());
-
-    deps.store
-      .createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'node_failed',
-        step_name: stepName,
-        data: { error: failureMessage, ...nodeUsageEventData(), ...namedSessionAuditData },
-      })
-      .catch((err: Error) => {
-        getLog().error(
-          { err, workflowRunId: workflowRun.id, eventType: 'node_failed' },
-          'workflow_event_persist_failed'
-        );
-      });
-
-    emitter.emit({
-      type: 'node_failed',
-      runId: workflowRun.id,
-      nodeId: node.id,
-      nodeName: commandName ?? node.id,
-      error: failureMessage,
-    });
-
-    return {
-      state: 'failed',
-      output: '',
-      error: failureMessage,
-      costUsd: nodeCostUsd,
-      ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
-    };
+    return failAgentNode(failureMessage);
   }
 }
 
@@ -3834,22 +3645,19 @@ async function executeBashNode(
       issueContext,
       nodeOutputs,
     }),
-    ARTIFACTS_DIR: artifactsDir,
-    STATE_DIR: stateDir,
-    LOG_DIR: logDir,
-    // $WORKFLOW_ID substitutes into the body, but a heredoc'd python/node block
-    // reads os.environ and found it missing while its siblings above were all
-    // present. Deliver it the same way.
-    WORKFLOW_ID: workflowRun.id,
-    BASE_BRANCH: baseBranch,
-    USER_MESSAGE: workflowRun.user_message,
-    ARGUMENTS: workflowRun.user_message,
-    LOOP_USER_INPUT: loopUserInput,
-    LOOP_PREV_OUTPUT: '',
-    REJECTION_REASON: '',
-    CONTEXT: issueContext ?? '',
-    EXTERNAL_CONTEXT: issueContext ?? '',
-    ISSUE_CONTEXT: issueContext ?? '',
+    ...buildExecNodeEnvironment({
+      artifactsDir,
+      stateDir,
+      logDir,
+      workflowId: workflowRun.id,
+      baseBranch,
+      userMessage: workflowRun.user_message,
+      loopUserInput,
+      loopPrevOutput: '',
+      rejectionReason: '',
+      issueContext,
+      adoptedRunDir: currentAdoptedRunDir(),
+    }),
   };
 
   const bashPath = resolveBashPath();
@@ -4132,22 +3940,19 @@ async function executeScriptNode(
       issueContext,
       nodeOutputs,
     }),
-    ARTIFACTS_DIR: artifactsDir,
-    STATE_DIR: stateDir,
-    LOG_DIR: logDir,
-    // $WORKFLOW_ID substitutes into the body, but a heredoc'd python/node block
-    // reads os.environ and found it missing while its siblings above were all
-    // present. Deliver it the same way.
-    WORKFLOW_ID: workflowRun.id,
-    BASE_BRANCH: baseBranch,
-    USER_MESSAGE: workflowRun.user_message,
-    ARGUMENTS: workflowRun.user_message,
-    LOOP_USER_INPUT: loopUserInput,
-    LOOP_PREV_OUTPUT: '',
-    REJECTION_REASON: '',
-    CONTEXT: issueContext ?? '',
-    EXTERNAL_CONTEXT: issueContext ?? '',
-    ISSUE_CONTEXT: issueContext ?? '',
+    ...buildExecNodeEnvironment({
+      artifactsDir,
+      stateDir,
+      logDir,
+      workflowId: workflowRun.id,
+      baseBranch,
+      userMessage: workflowRun.user_message,
+      loopUserInput,
+      loopPrevOutput: '',
+      rejectionReason: '',
+      issueContext,
+      adoptedRunDir: currentAdoptedRunDir(),
+    }),
   };
 
   // Build the command and args based on runtime and inline vs named
@@ -4622,6 +4427,7 @@ async function executeLoopGroupNode(
     execContext,
   } = ctx;
   const group = node.loop_group;
+  const bodyNodes = resolvedBodyNodes(group);
   const msgContext = { workflowId: workflowRun.id, nodeName: node.id };
   // This group's OWN persisted step_name — namespaced by any enclosing group so nested
   // loop_groups compose (e.g. `outer.inner`); '' → node.id at the top level (#2090).
@@ -4641,8 +4447,8 @@ async function executeLoopGroupNode(
   // THIS group's immediate ids — an id in knownBodyIds but not directBodyIds belongs to a
   // nested group and its token is preserved for that inner group's own pass. Computed once
   // (body shape is static) and threaded into every applyLoopPrevToBodyNode call.
-  const knownBodyIds = collectLoopBodyNodeIds(group.nodes);
-  const directBodyIds = new Set(group.nodes.map(n => n.id));
+  const knownBodyIds = collectLoopBodyNodeIds(bodyNodes);
+  const directBodyIds = new Set(bodyNodes.map(n => n.id));
 
   // Detect loop resume (mirrors executeLoopNode). Two shapes recognized:
   //  - the ORIGINAL interactive_loop gate (group.interactive + gate_message).
@@ -4713,7 +4519,7 @@ async function executeLoopGroupNode(
   }
 
   if (isEscalatedWaitResume) {
-    const terminalNode = findLoopGroupTerminalSuspendNode(group.nodes as DagNode[]);
+    const terminalNode = findLoopGroupTerminalSuspendNode(bodyNodes);
     if (terminalNode?.kind !== 'wait') {
       throw new Error(`Loop group '${node.id}' resumed with wait state but has no terminal wait`);
     }
@@ -4748,7 +4554,7 @@ async function executeLoopGroupNode(
   // substituteLoopPrevRefs finds them exactly as it would mid-loop.
   if (isLoopResume) {
     const restoredLoopPrevOutputs = new Map<string, NodeOutput>();
-    const bodyNodesById = new Map((group.nodes as DagNode[]).map(n => [n.id, n]));
+    const bodyNodesById = new Map(bodyNodes.map(n => [n.id, n]));
     for (const id of directBodyIds) {
       const prior = outerNodeOutputs.get(bodyStepNamePrefix + id);
       if (!prior) continue;
@@ -4788,7 +4594,7 @@ async function executeLoopGroupNode(
   // iteration boundary, so the pre-gate body nodes' already-produced outputs are
   // safe to reuse as-is; only the gate's own answer needed reconstructing.
   if ((isEscalatedGateResume || isEscalatedWaitResume) && loopPrevOutputs !== undefined) {
-    const terminalNode = findLoopGroupTerminalSuspendNode(group.nodes as DagNode[]);
+    const terminalNode = findLoopGroupTerminalSuspendNode(bodyNodes);
     const terminalSink = terminalNode ? loopPrevOutputs.get(terminalNode.id) : undefined;
     if (terminalSink !== undefined) {
       const resumedIteration = resumeIteration;
@@ -5014,9 +4820,7 @@ async function executeLoopGroupNode(
     // iteration of an interactive loop.
     const prevSnapshot = loopPrevOutputs;
     const userInputForIter = isLoopResume && i === startIteration ? loopUserInput : '';
-    // The executor only ever receives already-expanded nodes (see the justification at
-    // the other `applyLoopPrevToBodyNode` call site above), so the body is include-free.
-    const iterBodyNodes = (group.nodes as DagNode[]).map(n =>
+    const iterBodyNodes = bodyNodes.map(n =>
       applyLoopPrevToBodyNode(
         n,
         prevSnapshot,
@@ -5028,7 +4832,7 @@ async function executeLoopGroupNode(
     );
     // Re-layer from the (possibly substituted) body nodes — runLayers walks ctx.layers,
     // not ctx.nodes, so the layers must reference the substituted nodes to take effect.
-    const iterBodyLayers = buildTopologicalLayers(iterBodyNodes);
+    const iterBodyLayers = planGraph(iterBodyNodes).layers;
 
     // Fresh scoped output map per iteration. Seed it read-only with the outer DAG's
     // upstream outputs so body nodes can reference outer context via $nodeId.output if
@@ -5659,7 +5463,7 @@ async function executeLoopNode(
   stepNamePrefix = '',
   resolvedModel?: string,
   resolvedTier?: TierName,
-  resolvedEffort?: string,
+  resolvedEffort?: EffortLevel,
   checkpointSession?: SessionCheckpoint
 ): Promise<NodeExecutionResult> {
   const {
@@ -6029,6 +5833,7 @@ async function executeLoopNode(
     let fullOutput = ''; // raw, for signal detection
     let cleanOutput = ''; // stripped, for platform display
     let iterationIdleTimedOut = false;
+    let lastWatchdogReset: WatchdogReset | undefined;
     let iterationPayload: unknown;
 
     // Per-attempt transient retry for AI-loop iterations (#2706): a plain AI node's
@@ -6134,6 +5939,7 @@ async function executeLoopNode(
         fullOutput = '';
         cleanOutput = '';
         iterationIdleTimedOut = false;
+        lastWatchdogReset = undefined;
         streamStopStatus = undefined;
         attemptStructured = undefined;
         iterationAbortController = new AbortController();
@@ -6143,6 +5949,7 @@ async function executeLoopNode(
         iterationTokens = undefined;
         iterationNumTurns = undefined;
         iterationUsageFolded = false;
+        let watchdogResetLog = Promise.resolve();
 
         try {
           // Build prompt — substituteWorkflowVariables throws if $BASE_BRANCH referenced but empty
@@ -6192,14 +5999,42 @@ async function executeLoopNode(
 
           const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
 
-          for await (const msg of withIdleTimeout(generator, effectiveIdleTimeout, () => {
-            iterationIdleTimedOut = true;
-            getLog().warn(
-              { nodeId: node.id, iteration: i, timeoutMs: effectiveIdleTimeout },
-              'loop_node.idle_timeout_reached'
-            );
-            iterationAbortController.abort();
-          })) {
+          for await (const msg of withIdleTimeout(
+            generator,
+            effectiveIdleTimeout,
+            () => {
+              iterationIdleTimedOut = true;
+              getLog().warn(
+                {
+                  nodeId: node.id,
+                  iteration: i,
+                  timeoutMs: effectiveIdleTimeout,
+                  ...(lastWatchdogReset
+                    ? {
+                        lastResetType: lastWatchdogReset.type,
+                        lastResetAt: new Date(lastWatchdogReset.at).toISOString(),
+                      }
+                    : {}),
+                },
+                'loop_node.idle_timeout_reached'
+              );
+              iterationAbortController.abort();
+            },
+            undefined,
+            (msg, resetAt) => {
+              const type = msg.type;
+              lastWatchdogReset = { type, at: resetAt };
+              watchdogResetLog = watchdogResetLog.then(() =>
+                logWatchdogReset(
+                  logDir,
+                  workflowRun.id,
+                  `${node.id}-iteration-${String(i)}`,
+                  type,
+                  resetAt
+                )
+              );
+            }
+          )) {
             // Mid-stream cancel/pause check (every CANCEL_CHECK_INTERVAL_MS) —
             // lifted from the AI-node stream loop in executeNodeInternal. Same
             // posture: `paused` is tolerated (a sibling approval node may pause
@@ -6582,12 +6417,14 @@ async function executeLoopNode(
           if (await tryIterationTransientRetry(err.message, iterRetry)) {
             continue iterationAttempt;
           }
-          return failLoopNode(`Loop iteration ${String(i)} failed: ${err.message}`, {
+          return await failLoopNode(`Loop iteration ${String(i)} failed: ${err.message}`, {
             costUsd: loopTotalCostUsd,
             ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
             loopIterations: i,
             data: { iteration: i },
           });
+        } finally {
+          await watchdogResetLog;
         }
 
         // Empty assistant output is an iteration failure for AI loops — same
@@ -6615,7 +6452,7 @@ async function executeLoopNode(
         if (!structuredTimeout && fullOutput.trim() === '' && attemptStructured === undefined) {
           const iterationDuration = Date.now() - iterationStart;
           const emptyError = iterationIdleTimedOut
-            ? `Loop node '${node.id}' iteration ${String(i)} timed out with no output (idle for ${String((node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS) / 60000)} min). The provider did not emit any content before the watchdog fired — likely time-to-first-token exceeded the timeout. Consider increasing idle_timeout or reducing prompt size.`
+            ? `Loop node '${node.id}' iteration ${String(i)} timed out with no output (idle for ${String((node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS) / 60000)} min).${formatWatchdogResetDiagnostic(lastWatchdogReset)} Consider increasing idle_timeout or reducing prompt size.`
             : 'Loop iteration produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.';
           getLog().error(
             { nodeId: node.id, iteration: i, durationMs: iterationDuration },
@@ -6665,7 +6502,7 @@ async function executeLoopNode(
           await safeSendMessage(
             platform,
             conversationId,
-            `Loop node '${node.id}' iteration ${String(i)} completed via idle timeout (no output for ${String((node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS) / 60000)} min)`,
+            `Loop node '${node.id}' iteration ${String(i)} completed via idle timeout (no output for ${String((node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS) / 60000)} min).${formatWatchdogResetDiagnostic(lastWatchdogReset)}`,
             msgContext
           );
         }
@@ -6761,7 +6598,7 @@ async function executeLoopNode(
         // that "the model replied with prose" would send the author down the wrong path.
         return await failLoopNode(
           iterationIdleTimedOut
-            ? `Loop node '${node.id}' iteration ${String(i)}: timed out before producing the required structured output.`
+            ? `Loop node '${node.id}' iteration ${String(i)}: timed out before producing the required structured output.${formatWatchdogResetDiagnostic(lastWatchdogReset)}`
             : `Loop node '${node.id}' iteration ${String(i)}: output_format declared but the provider returned no schema-valid structured output. The model likely replied with prose, refused, or emitted unparseable JSON.`,
           {
             output: lastIterationOutput,
@@ -8157,8 +7994,8 @@ async function resolveFanOutChildDefinition(
   source?: WorkflowSourceRoots | string
 ): Promise<
   | {
-      definition: WorkflowDefinition;
-      definitions: WorkflowDefinition[];
+      definition: ResolvedWorkflow;
+      definitions: ResolvedWorkflow[];
       commandContents: ReadonlyMap<string, IncludeCommandContent>;
     }
   | { unresolved: string }
@@ -8932,7 +8769,7 @@ function expandComposeInstance(
   node: ComposeFanOutNode,
   identity: string,
   inputs: Record<string, JsonValue>,
-  definition: WorkflowDefinition,
+  definition: ResolvedWorkflow,
   commandContents: ReadonlyMap<string, IncludeCommandContent>
 ): { nodes: DagNode[]; primarySink: string } | { error: string } {
   const directiveId = `${node.id}__${identity}`;
@@ -9378,7 +9215,9 @@ async function executeComposeFanOutNode(
         persistScopeKey: ctx.persistScopeKey,
         workflowPersistSessions: ctx.workflowPersistSessions,
         scopeArtifactsDir: undefined,
-        layers: buildTopologicalLayers(expanded.nodes),
+        // Runtime cardinality changes only the deterministic instance prefix; the body
+        // was fully resolved and validated before any parent node ran.
+        layers: planGraph(expanded.nodes).layers,
         nodeOutputs: instanceNodeOutputs,
         priorCompletedNodes: instancePriorNodes,
         claimedWorkPausePolicy: 'finish_through_parent_pause',
@@ -9634,6 +9473,77 @@ async function buildColdResumeRecoveryPointer(
   }
 }
 
+type ClaimedWorkPausePolicy = 'finish_through_parent_pause';
+
+/** Run-level values the caller supplies verbatim to the DAG boundary. */
+interface RunInputs {
+  deps: WorkflowDeps;
+  platform: IWorkflowPlatform;
+  conversationId: string;
+  /** The workspace nodes ACT on: provider turns, subprocesses, git, output files. */
+  cwd: string;
+  /**
+   * Injected closure that starts a child sub-run for a `workflow:` node (#2121
+   * Phase 2). Undefined when the caller (e.g. a unit test) doesn't wire it — a
+   * `workflow:` node then fails fast rather than silently no-op'ing. Forwarded
+   * into loop_group body contexts too, though a `workflow:` node inside a
+   * loop_group body is rejected at load time.
+   */
+  runChildWorkflow?: RunChildWorkflowFn;
+  workflowRun: WorkflowRun;
+  config: WorkflowConfig;
+  workflowProvider: string;
+  workflowModel: string | undefined;
+  aiProfile?: ResolvedAiProfile;
+  workflowPreset?: ModelAliasPreset;
+  artifactsDir: string;
+  /**
+   * `$STATE_DIR` — the per-PROJECT cross-run state directory (#2200), shared by
+   * every workflow in the project and pre-created by the executor. A run-level
+   * invariant like `artifactsDir`; forwarded unchanged into loop_group bodies.
+   */
+  stateDir: string;
+  logDir: string;
+  baseBranch: string;
+  docsDir: string;
+  configuredCommandFolder?: string;
+  issueContext?: string;
+}
+
+/** Run-level values derived exactly once at the DAG boundary, never supplied by callers. */
+interface RunDerived {
+  /**
+   * The roots nodes READ executable source from — command files and named scripts.
+   *
+   * REQUIRED and concrete: normalized once at the DAG boundary so no leaf lookup can be
+   * reached without them. They were optional at first, and an omitted argument at any one
+   * of six call sites silently recreated the original source/target bug — the resolver
+   * would fall back to `cwd` and look for the workflow's own files inside the workspace it
+   * was executing against. Public discovery helpers keep their live-source defaults; this
+   * internal path does not.
+   */
+  workflowSourceRoots: WorkflowSourceRoots;
+  /** Where nodes in these layers execute (host, or the container in Phase B). Threaded
+   *  into every AI turn's SendQueryOptions and every deterministic subprocess. */
+  execContext: ExecutionContext;
+  /** Workflow name — used for persist_session keying + telemetry. */
+  workflowName: string;
+  workflowLevelOptions: WorkflowLevelOptions;
+  /** Cross-run session-persistence scope key (DB conversation UUID), or undefined to skip. */
+  persistScopeKey: string | undefined;
+  /** Workflow-level default for per-node `persist_session` (opt-in). */
+  workflowPersistSessions: boolean;
+  /**
+   * Stable cross-invocation artifact scope dir (`scopes/<workflow>/<scope>/`), or
+   * undefined when the workflow doesn't use session persistence. When set,
+   * persistence-participating nodes with `output_type` mirror their typed sidecars
+   * here, and a cold session resume points the user at the prior invocation's
+   * artifacts by reference (#1846). Always undefined for loop_group bodies
+   * (which also run with `persistScopeKey: undefined`).
+   */
+  scopeArtifactsDir: string | undefined;
+}
+
 /**
  * Shared context for {@link runLayers}. Bundles the run-level invariants (deps, platform,
  * run record, resolved provider/model/options, paths, config) together with the per-subgraph
@@ -9649,75 +9559,10 @@ async function buildColdResumeRecoveryPointer(
  * executeLoopNode / executeApprovalNode. Body lifecycle rows additionally carry `iteration`
  * in `data`. The in-process emitter payloads stay raw (unprefixed) — see #2090.
  */
-type ClaimedWorkPausePolicy = 'finish_through_parent_pause';
-
-interface RunLayersContext {
-  // --- run-level invariants (shared by top-level DAG and loop_group body) ---
-  deps: WorkflowDeps;
-  platform: IWorkflowPlatform;
-  conversationId: string;
-  /** The workspace nodes ACT on: provider turns, subprocesses, git, output files. */
-  cwd: string;
-  /**
-   * The roots nodes READ executable source from — command files and named scripts.
-   *
-   * REQUIRED and concrete: normalized once at the DAG boundary so no leaf lookup can be
-   * reached without them. They were optional at first, and an omitted argument at any one
-   * of six call sites silently recreated the original source/target bug — the resolver
-   * would fall back to `cwd` and look for the workflow's own files inside the workspace it
-   * was executing against. Public discovery helpers keep their live-source defaults; this
-   * internal path does not.
-   */
-  workflowSourceRoots: WorkflowSourceRoots;
-  /**
-   * Injected closure that starts a child sub-run for a `workflow:` node (#2121
-   * Phase 2). Undefined when the caller (e.g. a unit test) doesn't wire it — a
-   * `workflow:` node then fails fast rather than silently no-op'ing. Forwarded
-   * into loop_group body contexts too, though a `workflow:` node inside a
-   * loop_group body is rejected at load time.
-   */
-  runChildWorkflow?: RunChildWorkflowFn;
-  /** Where nodes in these layers execute (host, or the container in Phase B). Threaded
-   *  into every AI turn's SendQueryOptions and every deterministic subprocess. */
-  execContext: ExecutionContext;
-  workflowRun: WorkflowRun;
-  /** Workflow name — used for persist_session keying + telemetry. */
-  workflowName: string;
-  config: WorkflowConfig;
-  workflowProvider: string;
-  workflowModel: string | undefined;
-  workflowLevelOptions: WorkflowLevelOptions;
-  aiProfile?: ResolvedAiProfile;
-  workflowPreset?: ModelAliasPreset;
-  artifactsDir: string;
-  /**
-   * `$STATE_DIR` — the per-PROJECT cross-run state directory (#2200), shared by
-   * every workflow in the project and pre-created by the executor. A run-level
-   * invariant like `artifactsDir`; forwarded unchanged into loop_group bodies.
-   */
-  stateDir: string;
-  logDir: string;
-  baseBranch: string;
-  docsDir: string;
-  configuredCommandFolder?: string;
-  issueContext?: string;
-  /** Cross-run session-persistence scope key (DB conversation UUID), or undefined to skip. */
-  persistScopeKey: string | undefined;
-  /** Workflow-level default for per-node `persist_session` (opt-in). */
-  workflowPersistSessions: boolean;
-  /**
-   * Stable cross-invocation artifact scope dir (`scopes/<workflow>/<scope>/`), or
-   * undefined when the workflow doesn't use session persistence. When set,
-   * persistence-participating nodes with `output_type` mirror their typed sidecars
-   * here, and a cold session resume points the user at the prior invocation's
-   * artifacts by reference (#1846). Always undefined for loop_group bodies
-   * (which also run with `persistScopeKey: undefined`).
-   */
-  scopeArtifactsDir: string | undefined;
-
+interface RunLayersContext extends RunInputs, RunDerived {
   // --- per-subgraph mutable state (varies between top-level DAG and loop_group body) ---
   /** Pre-computed topological layers (caller builds once — body shape is static). runLayers walks ONLY these; there is deliberately no flat node list here. */
-  layers: DagNode[][];
+  layers: GraphPlan['layers'];
   /** Shared node-output map (caller owns; runLayers writes node results here). */
   nodeOutputs: Map<string, NodeOutput>;
   /** Prior body outputs available to a loop-group iteration's `when:` conditions. */
@@ -9940,20 +9785,6 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
       (node): (() => Promise<LayerNodeResult>) =>
         async (): Promise<LayerNodeResult> => {
           try {
-            // Include nodes are expanded away at discovery time (include-expander.ts): one
-            // must never reach the executor. This guard is FIRST in the per-node body — before
-            // resume-skip, `when:`, and trigger-rule handling — so an unexpanded include node
-            // cannot slip through by matching a prior-completed entry, a false `when:`, or a
-            // failing trigger rule. If one gets here, discovery was bypassed; fail loud rather
-            // than silently accepting an invalid runtime DAG.
-            if (isIncludeDirective(node as DagNode | IncludeDirective)) {
-              const includeNode = node as unknown as IncludeDirective;
-              throw new Error(
-                `Internal error: include node '${includeNode.id}' reached the executor unexpanded. ` +
-                  'Include nodes must be resolved by expandWorkflowIncludes() during discovery.'
-              );
-            }
-
             const checkpointSessionForProvider = (
               provider: string
             ): SessionCheckpoint | undefined => {
@@ -11508,81 +11339,78 @@ async function raiseWriteBackGate(
   await safeSendMessage(platform, conversationId, message, { workflowId: runId });
 }
 
-/**
- * Execute a complete DAG workflow.
- * Called from executeWorkflow() in executor.ts.
- */
-export async function executeDagWorkflow(
-  deps: WorkflowDeps,
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  cwd: string,
-  workflow: {
-    name: string;
-    nodes: readonly DagNode[];
-    /** Workflow-level default for per-node `persist_session` (read directly here). */
-    persist_sessions?: boolean;
-    /** Raw workflow-level `model` ref — used only to derive the workflow tier
-     *  keyword for node_started attribution (resolution uses `workflowModel`). */
-    model?: string;
-    /** Terminal-success evidence gate (#2230) — read at the completion path. */
-    evidence_policy?: WorkflowEvidencePolicy;
-    /** Declared `returns:` node id (#2470) — rebinds a CHILD run's terminal output. */
-    returns?: string;
-    /** Required boolean property on `returns:` that authors the durable run outcome. */
-    outcome_field?: string;
-  } & WorkflowLevelOptions,
-  workflowRun: WorkflowRun,
-  workflowProvider: string,
-  workflowModel: string | undefined,
-  artifactsDir: string,
-  stateDir: string,
-  logDir: string,
-  baseBranch: string,
-  docsDir: string,
-  config: WorkflowConfig,
-  configuredCommandFolder?: string,
-  issueContext?: string,
-  priorCompletedNodes?: Map<string, PersistedNodeOutput>,
+/** Inputs accepted by {@link executeDagWorkflow}. */
+export interface ExecuteDagWorkflowOptions extends RunInputs {
+  workflow: ResolvedWorkflow;
+  priorCompletedNodes?: Map<string, PersistedNodeOutput>;
   /** Discovery source — telemetry only (custom-vs-default + name redaction). */
-  source?: WorkflowSource,
-  aiProfile?: ResolvedAiProfile,
-  workflowPreset?: ModelAliasPreset,
+  source?: WorkflowSource;
   /**
    * Stable cross-invocation artifact scope dir (`scopes/<workflow>/<scope>/`),
    * resolved by executor.ts when the workflow uses session persistence (#1846).
    * Undefined otherwise — no mirroring, no cold-resume pointer.
    */
-  scopeArtifactsDir?: string,
+  scopeArtifactsDir?: string;
   /**
    * Execution context for this run (host by default; the container backend
    * threads a container context in Phase B). Threaded onto every node's
    * `RunLayersContext` so provider turns and subprocesses exec in the right place.
    */
-  execContext: ExecutionContext = { kind: 'host' },
+  execContext?: ExecutionContext;
   /**
    * Container run context (Phase C): the write-back backend port + env id + policy.
    * Present only for container runs. Drives suspend-on-pause and the engine-level
    * write-back gate that runs after the last node before the run completes.
    */
-  containerCtx?: ContainerRunContext,
-  /**
-   * Injected closure that starts a child sub-run for a `workflow:` node (#2121
-   * Phase 2). executor.ts is the sole caller and passes it; other callers (unit
-   * tests) may omit it, in which case a `workflow:` node fails fast.
-   */
-  runChildWorkflow?: RunChildWorkflowFn,
+  containerCtx?: ContainerRunContext;
   /** Cumulative usage restored on resume, from prior completion AND failure events. */
-  priorUsage?: PriorRunUsage,
+  priorUsage?: PriorRunUsage;
   /** Private run-scoped handles restored before a cold resume transitions to running. */
-  priorNodeSessions?: readonly WorkflowRunNodeSession[],
+  priorNodeSessions?: readonly WorkflowRunNodeSession[];
   /**
    * Roots this run's commands and scripts are read from. Undefined here means the caller
    * has no capture (an in-process caller with a hand-built definition); the boundary below
    * normalizes it to live roots ONCE so nothing downstream has to.
    */
-  workflowSourceRoots?: WorkflowSourceRoots
+  workflowSourceRoots?: WorkflowSourceRoots;
+}
+
+/**
+ * Execute a complete DAG workflow.
+ * Called from executeWorkflow() in executor.ts.
+ */
+export async function executeDagWorkflow(
+  options: ExecuteDagWorkflowOptions
 ): Promise<string | undefined> {
+  const {
+    deps,
+    platform,
+    conversationId,
+    cwd,
+    workflow,
+    workflowRun,
+    workflowProvider,
+    workflowModel,
+    artifactsDir,
+    stateDir,
+    logDir,
+    baseBranch,
+    docsDir,
+    config,
+    configuredCommandFolder,
+    issueContext,
+    priorCompletedNodes,
+    source,
+    aiProfile,
+    workflowPreset,
+    scopeArtifactsDir,
+    execContext = { kind: 'host' },
+    containerCtx,
+    runChildWorkflow,
+    priorUsage,
+    priorNodeSessions,
+    workflowSourceRoots,
+  } = options;
   const dagStartTime = Date.now();
 
   // Container capability fail-fast: before ANY node runs (and before any
@@ -11653,14 +11481,13 @@ export async function executeDagWorkflow(
   const workflowTier = workflow.model && isTierName(workflow.model) ? workflow.model : undefined;
   const workflowLevelOptions = {
     effort: workflow.effort,
-    thinking: workflow.thinking,
     fallbackModel: workflow.fallbackModel,
     betas: workflow.betas,
     sandbox: workflow.sandbox,
     webSearchMode: workflow.webSearchMode,
     workflowTier,
   };
-  const layers = buildTopologicalLayers(workflow.nodes);
+  const layers = workflow.plan.layers;
   const nodeOutputs = new Map<string, NodeOutput>();
 
   // Pre-populate nodeOutputs from prior run so already-completed nodes are
@@ -11770,7 +11597,9 @@ export async function executeDagWorkflow(
   // Run the topological layers. runLayers mutates the context's mutable fields in place
   // (nodeOutputs, lastSequentialSession, usage accumulators); we read them back below
   // for the terminal tally. stepNamePrefix is '' for the top-level DAG so node event
-  // step_names are the raw node ids (identical to pre-refactor behavior).
+  // step_names are the raw node ids (identical to pre-refactor behavior). Fields stay
+  // explicit because spreading options would also copy executor-only state into this
+  // context without an excess-property check.
   const runCtx: RunLayersContext = {
     deps,
     platform,
@@ -11780,7 +11609,6 @@ export async function executeDagWorkflow(
     runChildWorkflow,
     workflowRun,
     workflowName: workflow.name,
-    // Normalized once, here. Everything below takes concrete roots.
     workflowSourceRoots: workflowSourceRoots ?? liveSourceRoots(cwd),
     config,
     workflowProvider,
@@ -12305,10 +12133,8 @@ export async function executeDagWorkflow(
       terminalOutput = '';
     }
   } else {
-    const allDependencies = new Set(workflow.nodes.flatMap(n => n.depends_on ?? []));
-    const terminalSink = workflow.nodes
-      .filter(n => !allDependencies.has(n.id))
-      .map(n => nodeOutputs.get(n.id))
+    const terminalSink = workflow.plan.sinks
+      .map(nodeId => nodeOutputs.get(nodeId))
       .find(o => o?.state === 'completed' && o.output.trim().length > 0);
     terminalOutput = terminalSink?.output;
     terminalStructuredOutput =

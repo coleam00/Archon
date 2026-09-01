@@ -275,6 +275,13 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 | POST | `/api/workflows/runs/{runId}/reject` | Reject a paused workflow (400 if paused blocked on a `workflow:` child — reject the child) |
 | DELETE | `/api/workflows/runs/{runId}` | Delete a terminal run and its events |
 
+Run responses expose `status` and `outcome` as separate fields. `status` is the execution
+lifecycle. `outcome` is the workflow-authored verdict (`"succeeded"`, `"failed"`, or `null`) and
+is never derived by the API from status or output text. Contradictory combinations are valid: for
+example, `{"status":"completed","outcome":"failed"}` means execution finished but the workflow
+rejected its result. `null` means no verdict has been authored, including undeclared and historical
+runs. The list, detail, by-worker, and dashboard run endpoints preserve both fields.
+
 #### Run a Workflow
 
 ```bash

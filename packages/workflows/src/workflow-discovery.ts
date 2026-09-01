@@ -52,6 +52,14 @@ import {
   qualifyWorkflowResources,
 } from './packaged-workflow';
 import type { IncludeCommandContent } from './compiled-command';
+import { discoverScriptsForCwd } from './script-discovery';
+import {
+  collectExecInputValidationTargets,
+  inlineExecInputSource,
+  validateExecInputTargets,
+  type ExecInputSource,
+  type ExecInputValidationTarget,
+} from './exec-input-validation';
 
 export { isValidWorkflowFolderSegment } from './packaged-workflow';
 
@@ -562,7 +570,9 @@ async function resolveIncludeBlockCommandContents(
  */
 export async function resolveWorkflowCommandContents(
   roots: WorkflowSourceRoots,
-  workflows: readonly WorkflowDefinition[]
+  workflows: readonly {
+    readonly nodes: readonly (DagNode | IncludeDirective)[];
+  }[]
 ): Promise<Map<string, IncludeCommandContent>> {
   const contents = new Map<string, IncludeCommandContent>();
   for (const workflow of workflows) {
@@ -622,6 +632,87 @@ export async function discoverWorkflows(
   const workflowsByFile = new Map<string, ParsedWorkflowFile & { source: WorkflowSource }>();
   const allErrors: WorkflowLoadError[] = [];
 
+  const validateNamedExecInputs = async (): Promise<void> => {
+    const targetsByFile = new Map<
+      string,
+      { workflow: WorkflowDefinition; targets: readonly ExecInputValidationTarget[] }
+    >();
+    for (const [filename, { workflow }] of workflowsByFile) {
+      const targets = collectExecInputValidationTargets(workflow).filter(
+        target => inlineExecInputSource(target) === undefined
+      );
+      if (targets.length > 0) targetsByFile.set(filename, { workflow, targets });
+    }
+    if (targetsByFile.size === 0) return;
+
+    const discoveryRoot = projectRoot ?? cwd ?? archonPaths.getArchonHome();
+    const scripts = await discoverScriptsForCwd(discoveryRoot, roots);
+    const contents = new Map<string, string>();
+    const readErrors = new Map<string, Error>();
+    const readScript = async (path: string): Promise<string> => {
+      const cached = contents.get(path);
+      if (cached !== undefined || contents.has(path)) return cached ?? '';
+      const priorError = readErrors.get(path);
+      if (priorError !== undefined) throw priorError;
+      try {
+        const content = await readFile(path, 'utf-8');
+        contents.set(path, content);
+        return content;
+      } catch (error) {
+        const readError = error instanceof Error ? error : new Error(String(error));
+        readErrors.set(path, readError);
+        throw readError;
+      }
+    };
+
+    for (const [filename, { workflow, targets }] of targetsByFile) {
+      const sources = new Map<ExecInputValidationTarget, ExecInputSource>();
+      let unreadable = false;
+      for (const target of targets) {
+        const script = scripts.get(target.slot.value);
+        if (script === undefined) continue;
+        try {
+          sources.set(target, {
+            text: await readScript(script.path),
+            label: script.path,
+            runtime: script.runtime,
+          });
+        } catch (error) {
+          const err = error as NodeJS.ErrnoException;
+          allErrors.push({
+            filename,
+            error: `Script file read error at '${script.path}': ${err.message} (${err.code ?? 'unknown'})`,
+            errorType: 'read_error',
+          });
+          workflowsByFile.delete(filename);
+          unreadable = true;
+          break;
+        }
+      }
+      if (unreadable) continue;
+
+      const validation = validateExecInputTargets(workflow, targets, target => sources.get(target));
+      if (validation.errors.length > 0) {
+        allErrors.push({
+          filename,
+          error: validation.errors.join(' '),
+          errorType: 'validation_error',
+        });
+        workflowsByFile.delete(filename);
+        continue;
+      }
+      if (validation.warnings.length > 0) {
+        const parsed = workflowsByFile.get(filename);
+        if (parsed !== undefined) {
+          workflowsByFile.set(filename, {
+            ...parsed,
+            parseWarnings: [...parsed.parseWarnings, ...validation.warnings],
+          });
+        }
+      }
+    }
+  };
+
   /**
    * Final discovery step: inline every `include:` node (see include-expander.ts).
    * Resolves include targets against the full name map (bundled < global < project
@@ -630,6 +721,7 @@ export async function discoverWorkflows(
    * its error surfaced via `allErrors`. Only `.workflow` changes — `source` is kept.
    */
   const expandIncludes = async (): Promise<WorkflowWithSource[]> => {
+    await validateNamedExecInputs();
     // Overrides are by FILENAME, but include targets resolve by workflow NAME. Two
     // surviving files (after filename-precedence) declaring the same `name:` would
     // silently collapse in the name map — last-writer-wins, emitting the same expanded

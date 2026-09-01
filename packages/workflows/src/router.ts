@@ -203,10 +203,10 @@ export function parseWorkflowInvocation(
 /**
  * Find a workflow by name
  */
-export function findWorkflow(
+export function findWorkflow<T extends Pick<WorkflowDefinition, 'name'>>(
   name: string,
-  workflows: readonly WorkflowDefinition[]
-): WorkflowDefinition | undefined {
+  workflows: readonly T[]
+): T | undefined {
   return workflows.find(w => w.name === name);
 }
 
@@ -220,10 +220,10 @@ export function findWorkflow(
  * Returns the matched workflow, or undefined if no match found.
  * Throws an Error if multiple workflows match at the same tier (ambiguous).
  */
-export function resolveWorkflowName(
+export function resolveWorkflowName<T extends Pick<WorkflowDefinition, 'name'>>(
   name: string,
-  workflows: readonly WorkflowDefinition[]
-): WorkflowDefinition | undefined {
+  workflows: readonly T[]
+): T | undefined {
   // Tier 1: Exact match
   const exact = workflows.find(w => w.name === name);
   if (exact) return exact;
@@ -231,10 +231,7 @@ export function resolveWorkflowName(
   const lowerName = name.toLowerCase();
 
   // Returns the single match, throws on ambiguity, returns undefined for no match
-  function checkTier(
-    matches: WorkflowDefinition[],
-    logEvent: string
-  ): WorkflowDefinition | undefined {
+  function checkTier(matches: T[], logEvent: string): T | undefined {
     if (matches.length === 1) {
       getLog().info({ requested: name, matched: matches[0].name }, logEvent);
       return matches[0];

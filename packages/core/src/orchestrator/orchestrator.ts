@@ -70,8 +70,7 @@ import {
   SUBRUN_METADATA_KEYS,
   CONTINUATION_METADATA_KEY,
 } from '@archon/workflows/schemas/workflow-run';
-import type { WorkflowDefinition, WorkflowSource } from '@archon/workflows/schemas/workflow';
-import type { DagNode } from '@archon/workflows/schemas/dag-node';
+import type { ResolvedWorkflow, WorkflowSource } from '@archon/workflows/schemas/workflow';
 import type { RunModelOverrides } from '@archon/workflows/model-validation';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import { createWorkflowDeps } from '../workflows/store-adapter';
@@ -279,7 +278,7 @@ export interface WorkflowRoutingContext {
   readonly originalMessage: string;
   readonly conversationDbId: string;
   readonly codebaseId?: string;
-  readonly availableWorkflows: readonly WorkflowDefinition[];
+  readonly availableWorkflows: readonly ResolvedWorkflow[];
   /**
    * GitHub issue/PR context built from webhook events.
    * Contains formatted markdown with: issue title, author, labels, and body.
@@ -345,7 +344,7 @@ export interface WorkflowRoutingContext {
 async function dispatchBackgroundWorkflowOwned(
   owner: CapturedSourceOwner,
   ctx: WorkflowRoutingContext,
-  workflow: WorkflowDefinition,
+  workflow: ResolvedWorkflow,
   isolationContext?: {
     branchName?: string;
     isPrReview?: boolean;
@@ -365,9 +364,7 @@ async function dispatchBackgroundWorkflowOwned(
   // rule that fails open the moment a third appears. Throws before the worker conversation
   // exists, so a refusal leaves nothing behind.
   assertInteractiveClassNotBackgrounded(workflow);
-  // Already-expanded — discoverWorkflowsWithConfig's output never contains an
-  // IncludeDirective (#2486).
-  assertComposedGateDriveable(workflow.nodes as DagNode[]);
+  assertComposedGateDriveable(workflow.nodes);
 
   // 1. Generate worker conversation ID
   const workerPlatformId = `web-worker-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
@@ -778,7 +775,7 @@ async function dispatchBackgroundWorkflowOwned(
  */
 export async function dispatchBackgroundWorkflow(
   ctx: WorkflowRoutingContext,
-  workflow: WorkflowDefinition,
+  workflow: ResolvedWorkflow,
   isolationContext?: {
     branchName?: string;
     isPrReview?: boolean;

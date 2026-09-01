@@ -590,35 +590,13 @@ describe('dagNodeSchema — new Claude SDK options', () => {
     expect(result.success).toBe(false);
   });
 
-  test('parses thinking string shorthand: adaptive', () => {
+  test('rejects retired thinking config and names effort', () => {
     const result = dagNodeSchema.safeParse({ id: 'n', prompt: 'do it', thinking: 'adaptive' });
-    expect(result.success).toBe(true);
-    if (result.success) expect((result.data as AgentNode).thinking).toEqual({ type: 'adaptive' });
-  });
-
-  test('parses thinking string shorthand: disabled', () => {
-    const result = dagNodeSchema.safeParse({ id: 'n', prompt: 'do it', thinking: 'disabled' });
-    expect(result.success).toBe(true);
-    if (result.success) expect((result.data as AgentNode).thinking).toEqual({ type: 'disabled' });
-  });
-
-  test('parses thinking object form with budgetTokens', () => {
-    const result = dagNodeSchema.safeParse({
-      id: 'n',
-      prompt: 'do it',
-      thinking: { type: 'enabled', budgetTokens: 8000 },
-    });
-    expect(result.success).toBe(true);
-    if (result.success)
-      expect((result.data as AgentNode).thinking).toEqual({
-        type: 'enabled',
-        budgetTokens: 8000,
-      });
-  });
-
-  test('rejects invalid thinking value', () => {
-    const result = dagNodeSchema.safeParse({ id: 'n', prompt: 'do it', thinking: 'quantum' });
     expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.path).toEqual(['thinking']);
+      expect(result.error.issues[0]?.message).toContain('effort:');
+    }
   });
 
   test('parses maxBudgetUsd as positive number', () => {
@@ -734,13 +712,11 @@ describe('dagNodeSchema — new Claude SDK options', () => {
       id: 'b',
       bash: 'echo hi',
       effort: 'high',
-      thinking: 'adaptive',
     });
     expect(result.success).toBe(true);
     if (result.success) {
       // bash nodes don't get AI-only fields in the transform
       expect('effort' in result.data).toBe(false);
-      expect('thinking' in result.data).toBe(false);
     }
   });
 });
@@ -980,12 +956,10 @@ describe('dagNodeSchema — ExecNode', () => {
       script: 'console.log("hi")',
       runtime: 'bun',
       effort: 'high',
-      thinking: 'adaptive',
     });
     expect(result.success).toBe(true);
     if (result.success) {
       expect('effort' in result.data).toBe(false);
-      expect('thinking' in result.data).toBe(false);
     }
   });
 });
@@ -1012,7 +986,6 @@ describe('SCRIPT_NODE_AI_FIELDS', () => {
       'mcp',
       'skills',
       'effort',
-      'thinking',
       'maxBudgetUsd',
       'systemPrompt',
       'fallbackModel',
@@ -1046,7 +1019,6 @@ describe('LOOP_NODE_AI_FIELDS', () => {
       'mcp',
       'skills',
       'effort',
-      'thinking',
       'maxBudgetUsd',
       'systemPrompt',
       'fallbackModel',

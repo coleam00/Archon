@@ -41,7 +41,6 @@ import {
   KNOWN_DAG_NODE_KEYS,
   KNOWN_NODE_NESTED_KEYS,
   effortLevelSchema,
-  thinkingConfigSchema,
   sandboxSettingsSchema,
   betasSchema,
 } from './schemas/dag-node';
@@ -70,6 +69,7 @@ import { declaredFieldsFromSchema, OUTPUT_REF_SOURCE, parseWholeOutputRef } from
 import { isBindingDirective } from './schemas/dag-node';
 import { readComposedBindings } from './compiled-command';
 import { visitNodeTemplateSlots } from './template-walker';
+import { validateInlineExecInputs } from './exec-input-validation';
 import { z } from '@hono/zod-openapi';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -108,9 +108,8 @@ export function resetClassPlacementWarningForTests(): void {
  * valid enum options).
  *
  * The return type is inferred from the schema (`z.output<S>`), so
- * preprocess-based schemas (e.g. `thinkingConfigSchema`, whose input is
- * `unknown`) still resolve to their parsed output type rather than their
- * input type. zod v4 removed `ZodTypeDef` as the middle type parameter, so the
+ * preprocess-based schemas still resolve to their parsed output type rather
+ * than their input type. zod v4 removed `ZodTypeDef` as the middle type parameter, so the
  * old `z.ZodType<T, z.ZodTypeDef, unknown>` form no longer compiles.
  */
 function parseOptionalField<S extends z.ZodType>(
@@ -175,7 +174,9 @@ function nodeIdForMessages(raw: unknown, index: number): string {
  * on the final flat workflow, where every selected node is executable.
  */
 export function validateWorkflowOutcomeDeclaration(
-  workflow: Pick<WorkflowDefinition, 'returns' | 'outcome_field' | 'nodes'>
+  workflow: Pick<WorkflowDefinition, 'returns' | 'outcome_field'> & {
+    readonly nodes: readonly (DagNode | IncludeDirective)[];
+  }
 ): string | null {
   const field = workflow.outcome_field;
   if (field === undefined) return null;
@@ -781,7 +782,7 @@ const GATE_ON_A_SHELL_NODE =
  * the free-form-AI check needs that producer's type and `output_format`.
  */
 export function validateDagStructure(
-  nodes: (DagNode | IncludeDirective)[],
+  nodes: readonly (DagNode | IncludeDirective)[],
   enclosingNodes?: ReadonlyMap<string, DagNode | IncludeDirective>
 ): string | null {
   // Check ID uniqueness
@@ -1280,6 +1281,17 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
         error: {
           filename,
           error: 'YAML file is empty or does not contain an object',
+          errorType: 'validation_error',
+        },
+      };
+    }
+
+    if (Object.hasOwn(raw, 'thinking')) {
+      return {
+        workflow: null,
+        error: {
+          filename,
+          error: "'thinking:' has been removed; use 'effort:' instead",
           errorType: 'validation_error',
         },
       };
@@ -1872,12 +1884,6 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       // persists verbatim as a `workflow_parse_warnings` event (#2213).
       getLog().warn({ filename, warning: message }, 'workflow_model_reasoning_effort_deprecated');
     }
-    const thinking = parseOptionalField(
-      raw.thinking,
-      thinkingConfigSchema,
-      filename,
-      'invalid_workflow_thinking_value_ignored'
-    );
     const sandbox = parseOptionalField(
       raw.sandbox,
       sandboxSettingsSchema,
@@ -1962,7 +1968,6 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       interactive,
       ...(mutatesCheckout !== undefined ? { mutates_checkout: mutatesCheckout } : {}),
       ...(effort !== undefined ? { effort } : {}),
-      ...(thinking !== undefined ? { thinking } : {}),
       ...(fallbackModel !== undefined ? { fallbackModel } : {}),
       ...(betas !== undefined ? { betas } : {}),
       ...(sandbox !== undefined ? { sandbox } : {}),
@@ -1978,6 +1983,18 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       ...(outcomeField !== undefined ? { outcome_field: outcomeField } : {}),
       ...(deprecated !== undefined ? { deprecated } : {}),
     };
+    const execInputValidation = validateInlineExecInputs(workflow);
+    parseWarnings.push(...execInputValidation.warnings);
+    if (execInputValidation.errors.length > 0) {
+      return {
+        workflow: null,
+        error: {
+          filename,
+          error: execInputValidation.errors.join(' '),
+          errorType: 'validation_error',
+        },
+      };
+    }
     const outcomeDeclarationError = validateWorkflowOutcomeDeclaration(workflow);
     if (outcomeDeclarationError !== null) {
       return {

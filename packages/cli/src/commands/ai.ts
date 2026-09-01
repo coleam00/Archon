@@ -47,7 +47,9 @@ import {
   setUserTiers,
   setUserAliases,
   setUserDefault,
+  isEffortRung,
   type TiersPatch,
+  type EffortRung,
   type UserAiPrefs,
 } from '@archon/core';
 import { isRegisteredProvider, getProviderInfoList } from '@archon/providers';
@@ -343,9 +345,16 @@ function registeredProvidersList(): string {
 }
 
 /** Validate provider + effort for a tier/alias entry; prints and returns false on error. */
-function validateEntryInputs(provider: string, effort: string | undefined): boolean {
+function validateEntryInputs(
+  provider: string,
+  effort: string | undefined
+): effort is EffortRung | undefined {
   if (!isRegisteredProvider(provider)) {
     console.error(`Unknown provider '${provider}'. Available: ${registeredProvidersList()}.`);
+    return false;
+  }
+  if (effort !== undefined && !isEffortRung(effort)) {
+    console.error(`Invalid effort '${effort}'.`);
     return false;
   }
   if (effort !== undefined && !isEffortValidForProvider(provider, effort)) {

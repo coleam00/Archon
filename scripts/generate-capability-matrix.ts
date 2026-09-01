@@ -61,7 +61,6 @@ const AXES: readonly { key: keyof ProviderCapabilities; label: string }[] = [
   { key: 'envInjection', label: 'Env injection (`env:`)' },
   { key: 'costControl', label: 'Cost control (`maxBudgetUsd`)' },
   { key: 'effortControl', label: 'Effort control (`effort`)' },
-  { key: 'thinkingControl', label: 'Thinking control (`thinking`)' },
   { key: 'fallbackModel', label: 'Fallback model (`fallbackModel`)' },
   { key: 'sandbox', label: 'Sandbox (`sandbox`)' },
   { key: 'settingSources', label: 'Setting sources (`settingSources`)' },

@@ -132,7 +132,7 @@ const HELP_OVERVIEW = [
   'manage_run — inspect and operate this project’s workflow runs.',
   '',
   'Actions (call action=help subtool=<name> for details):',
-  '  list     — recent runs in this project (id, workflow, status, step). No params.',
+  '  list     — recent runs in this project (id, workflow, status, authored outcome, step). No params.',
   '  get      — one run’s detail. Params: runId.',
   '  start    — launch a workflow in the background. Params: workflow, message.',
   '  resume   — check a failed/paused run can resume from completed nodes. Params: runId.',
@@ -147,8 +147,8 @@ const HELP_OVERVIEW = [
 ].join('\n');
 
 const HELP_BY_ACTION: Record<Exclude<Action, 'help'>, string> = {
-  list: 'list — recent runs for this project, most recent first. No parameters. Returns id · workflow · status · current step.',
-  get: 'get — full detail for one run. Required: runId (short or full). Returns status, start/finish times, and error if any. Scoped to this project.',
+  list: 'list — recent runs for this project, most recent first. No parameters. Returns id · workflow · status · authored outcome when declared · current step.',
+  get: 'get — full detail for one run. Required: runId (short or full). Returns status, authored outcome when declared, start/finish times, and error if any. Scoped to this project.',
   start:
     'start — launch a workflow in the background. Required: workflow (name). Recommended: message (what it should do). It appears in the runs list and the workflow dock.',
   resume:
@@ -250,7 +250,8 @@ async function handleList(ctx: ManageRunContext): Promise<string> {
       r.current_step_name !== null
         ? ` · ${r.current_step_name}${r.total_steps !== null ? `/${r.total_steps.toString()}` : ''}`
         : '';
-    return `- ${r.id.slice(0, 8)} · ${r.workflow_name} · ${r.status}${step}`;
+    const outcome = r.outcome ? ` · authored outcome: ${r.outcome}` : '';
+    return `- ${r.id.slice(0, 8)} · ${r.workflow_name} · ${r.status}${outcome}${step}`;
   });
   return `${runs.length.toString()} run(s) (most recent first):\n${lines.join('\n')}`;
 }
@@ -268,11 +269,9 @@ function formatTimestamp(val: Date | string): string {
 }
 
 function formatRunDetail(run: WorkflowRun): string {
-  const parts = [
-    `Run ${run.id.slice(0, 8)} · ${run.workflow_name}`,
-    `status: ${run.status}`,
-    `started: ${formatTimestamp(run.started_at)}`,
-  ];
+  const parts = [`Run ${run.id.slice(0, 8)} · ${run.workflow_name}`, `status: ${run.status}`];
+  if (run.outcome !== null) parts.push(`authored outcome: ${run.outcome}`);
+  parts.push(`started: ${formatTimestamp(run.started_at)}`);
   if (run.completed_at !== null) parts.push(`finished: ${formatTimestamp(run.completed_at)}`);
   const error = run.metadata.error;
   if (typeof error === 'string' && error.length > 0) parts.push(`error: ${error.slice(0, 300)}`);

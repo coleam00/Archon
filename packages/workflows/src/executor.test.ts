@@ -166,10 +166,16 @@ import {
   resolveProjectPaths,
   resolveScopeArtifactsDir,
 } from './executor';
+import { resolveWorkflow } from './graph-plan';
 import { keepAwake } from './utils/keep-awake';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
-import type { WorkflowDefinition, WorkflowRun, WorkflowRunNodeSession } from './schemas';
+import type {
+  ResolvedWorkflow,
+  WorkflowDefinition,
+  WorkflowRun,
+  WorkflowRunNodeSession,
+} from './schemas';
 import { RUN_METADATA_KEYS, workflowDefinitionSchema } from './schemas';
 import type { WorkflowRunConfigMetadata } from './schemas/run-config';
 import { substituteWorkflowVariables } from './executor-shared';
@@ -248,13 +254,13 @@ function makeDeps(store?: IWorkflowStore): WorkflowDeps {
   } as unknown as WorkflowDeps;
 }
 
-function makeWorkflow(overrides: Partial<WorkflowDefinition> = {}): WorkflowDefinition {
-  return {
+function makeWorkflow(overrides: Partial<WorkflowDefinition> = {}): ResolvedWorkflow {
+  return resolveWorkflow({
     name: 'test-workflow',
     description: 'Test',
     nodes: [{ id: 'node1', kind: 'agent', source: { kind: 'inline', prompt: 'Do something' } }],
     ...overrides,
-  };
+  });
 }
 
 function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
@@ -293,12 +299,14 @@ describe('executeWorkflow', () => {
   });
 
   it('rejects a structurally valid but semantically invalid outcome declaration before side effects', async () => {
-    const workflow = workflowDefinitionSchema.parse({
-      name: 'invalid-authored-outcome',
-      description: 'missing selected return node',
-      outcome_field: 'green',
-      nodes: [{ id: 'node1', prompt: 'Do something' }],
-    });
+    const workflow = resolveWorkflow(
+      workflowDefinitionSchema.parse({
+        name: 'invalid-authored-outcome',
+        description: 'missing selected return node',
+        outcome_field: 'green',
+        nodes: [{ id: 'node1', prompt: 'Do something' }],
+      })
+    );
     const store = makeStore();
     const deps = makeDeps(store);
 
@@ -317,11 +325,13 @@ describe('executeWorkflow', () => {
 
   describe('container resume guard', () => {
     it('rejects a fresh container workflow with a durable wait before creating a run', async () => {
-      const workflow = workflowDefinitionSchema.parse({
-        name: 'container-wait',
-        description: 'unsupported durable wait in container isolation',
-        nodes: [{ id: 'delay', wait: { duration_ms: 1000 } }],
-      });
+      const workflow = resolveWorkflow(
+        workflowDefinitionSchema.parse({
+          name: 'container-wait',
+          description: 'unsupported durable wait in container isolation',
+          nodes: [{ id: 'delay', wait: { duration_ms: 1000 } }],
+        })
+      );
       const store = makeStore();
 
       await expect(
@@ -344,11 +354,13 @@ describe('executeWorkflow', () => {
     // The guard keys on "is this a fresh dispatch", not on who wrote the row. A row
     // pre-created by a launching process (#2872, `--detach`) is still a fresh dispatch.
     it('refuses the same durable wait when the fresh run row was pre-created', async () => {
-      const workflow = workflowDefinitionSchema.parse({
-        name: 'container-wait',
-        description: 'unsupported durable wait in container isolation',
-        nodes: [{ id: 'delay', wait: { duration_ms: 1000 } }],
-      });
+      const workflow = resolveWorkflow(
+        workflowDefinitionSchema.parse({
+          name: 'container-wait',
+          description: 'unsupported durable wait in container isolation',
+          nodes: [{ id: 'delay', wait: { duration_ms: 1000 } }],
+        })
+      );
 
       await expect(
         executeWorkflow(
@@ -421,7 +433,7 @@ describe('executeWorkflow', () => {
       );
       // Guard passed → DAG entered (mocked no-op) → run completes.
       expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[24]).toEqual({
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].priorUsage).toEqual({
         tokens: { input: 40, output: 4 },
         costUsd: 0.5,
       });
@@ -1008,9 +1020,9 @@ describe('executeWorkflow', () => {
         }
       );
 
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[6]).toBe('pi');
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[7]).toBe('openai/gpt-5.6');
-      const profile = mockExecuteDagWorkflow.mock.calls[0]?.[18];
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].workflowProvider).toBe('pi');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].workflowModel).toBe('openai/gpt-5.6');
+      const profile = mockExecuteDagWorkflow.mock.calls[0]?.[0].aiProfile;
       expect(profile?.aliases.large).toEqual({ provider: 'pi', model: 'openai/gpt-5.6' });
       expect(profile?.aliases.small?.provider).toBe('claude');
       expect(profile?.aliases.medium?.provider).toBe('claude');
@@ -1057,7 +1069,7 @@ describe('executeWorkflow', () => {
           metadata: expect.objectContaining({ model_bindings: expect.any(Object) }),
         })
       );
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[6]).toBe('codex');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].workflowProvider).toBe('codex');
     });
 
     // #2872 — `run --detach` writes the row before it forks, so `Started` names a
@@ -1209,8 +1221,8 @@ describe('executeWorkflow', () => {
         'db-conv-1',
         { preCreatedRun, priorCompletedNodes: new Map() }
       );
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[6]).toBe('pi');
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[7]).toBe('openai/gpt-5.6');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].workflowProvider).toBe('pi');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].workflowModel).toBe('openai/gpt-5.6');
 
       await expect(
         executeWorkflow(
@@ -1363,7 +1375,7 @@ describe('executeWorkflow', () => {
       expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
     });
 
-    it('terminalizes a resumed run before dispatch when persisted thinking is ineffective', async () => {
+    it('terminalizes a resumed run when persisted metadata uses retired thinking config', async () => {
       const failRun = mock<IWorkflowStore['failWorkflowRun']>(async () => {});
       const preset = {
         provider: 'copilot',
@@ -1395,11 +1407,11 @@ describe('executeWorkflow', () => {
           'db-conv-1',
           { preCreatedRun, priorCompletedNodes: new Map() }
         )
-      ).rejects.toThrow(/cannot apply Claude-shaped thinking options/);
+      ).rejects.toThrow(/thinking:.*effort:/);
 
       expect(failRun).toHaveBeenCalledWith(
         'resume-ignored-thinking-run',
-        expect.stringContaining('cannot apply Claude-shaped thinking options')
+        expect.stringMatching(/thinking:.*effort:/)
       );
       expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
     });
@@ -1469,8 +1481,8 @@ describe('executeWorkflow', () => {
       ]);
 
       const concurrent = mockExecuteDagWorkflow.mock.calls.slice(0, 2).map(call => ({
-        provider: call[6],
-        model: call[7],
+        provider: call[0].workflowProvider,
+        model: call[0].workflowModel,
       }));
       expect(concurrent).toContainEqual({ provider: 'pi', model: 'openai/gpt-5.6' });
       expect(concurrent).toContainEqual({ provider: 'codex', model: 'gpt-5.6-sol' });
@@ -1485,9 +1497,9 @@ describe('executeWorkflow', () => {
         'db-c'
       );
       const cleanCall = mockExecuteDagWorkflow.mock.calls[2];
-      expect(cleanCall?.[6]).toBe('claude');
-      expect(cleanCall?.[7]).not.toBe('openai/gpt-5.6');
-      expect(cleanCall?.[7]).not.toBe('gpt-5.6-sol');
+      expect(cleanCall?.[0].workflowProvider).toBe('claude');
+      expect(cleanCall?.[0].workflowModel).not.toBe('openai/gpt-5.6');
+      expect(cleanCall?.[0].workflowModel).not.toBe('gpt-5.6-sol');
     });
   });
 
@@ -1557,9 +1569,9 @@ describe('executeWorkflow', () => {
       );
 
       expect(sealRunConfig).toHaveBeenCalledTimes(1);
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[6]).toBe('pi');
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[7]).toBe('openai/gpt-5.6');
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[13]).toMatchObject({
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].workflowProvider).toBe('pi');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].workflowModel).toBe('openai/gpt-5.6');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].config).toMatchObject({
         assistant: 'pi',
         envVars: {
           REPO_ONLY: 'kept',
@@ -1604,8 +1616,8 @@ describe('executeWorkflow', () => {
       );
 
       expect(unsealRunConfig).toHaveBeenCalledWith(sealedMetadata);
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[12]).toBe('handbook');
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[13]).toMatchObject({
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].docsDir).toBe('handbook');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].config).toMatchObject({
         envVars: { RUN_ONLY: 'restored' },
       });
     });
@@ -1673,9 +1685,9 @@ describe('executeWorkflow', () => {
       ]);
 
       const concurrent = mockExecuteDagWorkflow.mock.calls.slice(0, 2).map(call => ({
-        provider: call[6],
-        model: call[7],
-        marker: (call[13] as WorkflowConfig | undefined)?.envVars?.RUN_MARKER,
+        provider: call[0].workflowProvider,
+        model: call[0].workflowModel,
+        marker: call[0].config.envVars?.RUN_MARKER,
       }));
       expect(concurrent).toContainEqual({
         provider: 'pi',
@@ -1699,9 +1711,9 @@ describe('executeWorkflow', () => {
         'clean',
         'db-clean'
       );
-      const cleanConfig = mockExecuteDagWorkflow.mock.calls[2]?.[13] as WorkflowConfig | undefined;
+      const cleanConfig = mockExecuteDagWorkflow.mock.calls[2]?.[0].config;
       expect(cleanConfig?.envVars?.RUN_MARKER).toBeUndefined();
-      expect(mockExecuteDagWorkflow.mock.calls[2]?.[6]).toBe('claude');
+      expect(mockExecuteDagWorkflow.mock.calls[2]?.[0].workflowProvider).toBe('claude');
     });
   });
 
@@ -2035,8 +2047,7 @@ describe('executeWorkflow', () => {
         'db-conv-1'
       );
       expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
-      // docsDir is arg index 11 (0-indexed) of executeDagWorkflow
-      const docsDir = mockExecuteDagWorkflow.mock.calls[0]?.[12];
+      const docsDir = mockExecuteDagWorkflow.mock.calls[0]?.[0].docsDir;
       expect(docsDir).toBe('docs/');
     });
 
@@ -2067,7 +2078,7 @@ describe('executeWorkflow', () => {
         'db-conv-1'
       );
       expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
-      const docsDir = mockExecuteDagWorkflow.mock.calls[0]?.[12];
+      const docsDir = mockExecuteDagWorkflow.mock.calls[0]?.[0].docsDir;
       expect(docsDir).toBe('packages/docs-web/src/content/docs');
     });
   });
@@ -2096,7 +2107,7 @@ describe('executeWorkflow', () => {
       );
 
       expect(mockGetDefaultBranch).not.toHaveBeenCalled();
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[11]).toBe('develop');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].baseBranch).toBe('develop');
     });
 
     it('prefers repo config baseBranch over caller-provided baseBranch', async () => {
@@ -2122,7 +2133,7 @@ describe('executeWorkflow', () => {
       );
 
       expect(mockGetDefaultBranch).not.toHaveBeenCalled();
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[11]).toBe('main');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].baseBranch).toBe('main');
     });
 
     it('prefers baseOverride over repo config baseBranch', async () => {
@@ -2153,7 +2164,7 @@ describe('executeWorkflow', () => {
       );
 
       expect(mockGetDefaultBranch).not.toHaveBeenCalled();
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[11]).toBe('epic/foo');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].baseBranch).toBe('epic/foo');
     });
 
     it('falls back to git auto-detection when config and caller branch are unset', async () => {
@@ -2170,7 +2181,7 @@ describe('executeWorkflow', () => {
       );
 
       expect(mockGetDefaultBranch).toHaveBeenCalledWith('/tmp/worktree');
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[11]).toBe('main');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].baseBranch).toBe('main');
     });
 
     it('skips git auto-detection for a folder-kind codebase, no ERROR/WARN spam (#2159)', async () => {
@@ -2200,7 +2211,7 @@ describe('executeWorkflow', () => {
       // benign auto-detect WARN is never emitted and $BASE_BRANCH resolves to
       // empty (unresolved-but-not-referenced).
       expect(mockGetDefaultBranch).not.toHaveBeenCalled();
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[11]).toBe('');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].baseBranch).toBe('');
       const warnedAutoDetect = (mockLogFn.mock.calls as unknown[][]).some(
         args => args[1] === 'workflow.base_branch_auto_detect_failed'
       );
@@ -2231,7 +2242,7 @@ describe('executeWorkflow', () => {
       );
 
       expect(mockGetDefaultBranch).toHaveBeenCalledWith('/tmp/worktree');
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[11]).toBe('main');
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].baseBranch).toBe('main');
     });
   });
 
@@ -2279,11 +2290,7 @@ describe('executeWorkflow', () => {
         'db-conv-1',
         { preCreatedRun: resumed, priorCompletedNodes }
       );
-      // dag-executor receives the priorCompletedNodes map at arg index 15.
-      // dag-executor signature: deps, platform, conversationId, cwd, workflow,
-      // workflowRun, provider, model, artifactsDir, logDir, baseBranch,
-      // docsDir, config, configuredCommandFolder, issueContext, priorCompletedNodes
-      const passedPriors = mockExecuteDagWorkflow.mock.calls[0]?.[16] as
+      const passedPriors = mockExecuteDagWorkflow.mock.calls[0]?.[0].priorCompletedNodes as
         | Map<string, { output: string }>
         | undefined;
       expect(passedPriors).toBe(priorCompletedNodes);
@@ -2370,11 +2377,11 @@ describe('executeWorkflow', () => {
       );
 
       const dagCall = mockExecuteDagWorkflow.mock.calls[0];
-      expect(dagCall?.[16]).toBe(completedNodeOutputs);
+      expect(dagCall?.[0].priorCompletedNodes).toBe(completedNodeOutputs);
       // Both usage axes travel as one `priorUsage` bundle (#2469) — cost is restored
       // across resume exactly like tokens, so a resumed run's total never regresses.
-      expect(dagCall?.[24]).toEqual({ tokens, costUsd });
-      expect(dagCall?.[25]).toEqual(hydrated.priorNodeSessions);
+      expect(dagCall?.[0].priorUsage).toEqual({ tokens, costUsd });
+      expect(dagCall?.[0].priorNodeSessions).toEqual(hydrated.priorNodeSessions);
       expect(store.createWorkflowRun).not.toHaveBeenCalled();
     });
   });
@@ -2455,7 +2462,7 @@ describe('executeWorkflow', () => {
       // unregistered-cwd project (`_cwd/tmp`, #2200); scope = workflow name +
       // conversation UUID ('conv-1' from the createWorkflowRun mock;
       // getScopeArtifactsPath is mocked to `${root}/scopes/${wf}/${scope}`).
-      const scopeArg = mockExecuteDagWorkflow.mock.calls[0]?.[20] as string | undefined;
+      const scopeArg = mockExecuteDagWorkflow.mock.calls[0]?.[0].scopeArtifactsDir;
       expect(scopeArg).toBe(
         wsPath('_cwd', 'tmp', 'artifacts', 'scopes', 'test-workflow', 'conv-1')
       );
@@ -2473,7 +2480,7 @@ describe('executeWorkflow', () => {
         'test message',
         'db-conv-1'
       );
-      const scopeArg = mockExecuteDagWorkflow.mock.calls[0]?.[20] as string | undefined;
+      const scopeArg = mockExecuteDagWorkflow.mock.calls[0]?.[0].scopeArtifactsDir;
       expect(scopeArg).toBeUndefined();
     });
   });
@@ -2538,8 +2545,7 @@ describe('executeWorkflow', () => {
       // DB env vars should have been fetched for the codebaseId
       expect(store.getCodebaseEnvVars).toHaveBeenCalledWith('codebase-1');
 
-      // The config passed to executeDagWorkflow (arg index 12) should have merged envVars
-      const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[13] as WorkflowConfig | undefined;
+      const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[0].config;
       expect(configArg?.envVars).toEqual({ FILE_KEY: 'file_val', DB_KEY: 'db_val' });
     });
 
@@ -2643,7 +2649,7 @@ describe('executeWorkflow', () => {
         'db-c1',
         { codebaseId: 'codebase-1', userId: 'u-1' }
       );
-      const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[13] as WorkflowConfig | undefined;
+      const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[0].config;
       expect(configArg?.envVars).toMatchObject({
         DATABASE_URL: 'db_val',
         BASE_BRANCH: 'reserved-db-secret',
@@ -2693,7 +2699,7 @@ describe('executeWorkflow', () => {
         { codebaseId: 'codebase-1', userId: 'u-1' }
       );
 
-      const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[13] as WorkflowConfig | undefined;
+      const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[0].config;
       expect(configArg?.envVars).toMatchObject({
         GH_TOKEN: 'user-token',
         GITHUB_TOKEN: 'user-token',
@@ -2763,7 +2769,7 @@ describe('executeWorkflow', () => {
           })
         ).resolves.toBeDefined();
 
-        const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[13] as WorkflowConfig | undefined;
+        const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[0].config;
         expect(await readFile(firstFile, 'utf8')).toBe(credentialValue);
         expect(configArg?.envVars).not.toHaveProperty('CODEX_HOME');
         expect(configArg?.protectedCredentialValues).toEqual([credentialValue]);
@@ -2799,7 +2805,7 @@ describe('executeWorkflow', () => {
       );
 
       expect(getUserProviderEnv).toHaveBeenCalledWith('persisted-user', expect.any(String));
-      const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[13] as WorkflowConfig | undefined;
+      const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[0].config;
       expect(configArg?.protectedCredentialValues).toEqual(['persisted-user-token']);
     });
   });
@@ -3483,7 +3489,7 @@ describe('telemetry wiring', () => {
     expect(mockCaptureWorkflowCompleted).not.toHaveBeenCalled();
   });
 
-  it('threads source through to executeDagWorkflow (arg index 16)', async () => {
+  it('threads source through to executeDagWorkflow', async () => {
     const store = makeStore();
     const deps = makeDeps(store);
 
@@ -3500,7 +3506,7 @@ describe('telemetry wiring', () => {
       }
     );
 
-    expect(mockExecuteDagWorkflow.mock.calls[0]?.[17]).toBe('bundled');
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].source).toBe('bundled');
   });
 
   it('resolves top-level workflow tier refs before calling the DAG executor', async () => {
@@ -3530,16 +3536,16 @@ describe('telemetry wiring', () => {
       'db-conv-1'
     );
 
-    expect(mockExecuteDagWorkflow.mock.calls[0]?.[6]).toBe('codex');
-    expect(mockExecuteDagWorkflow.mock.calls[0]?.[7]).toBe('gpt-5.5');
-    expect(mockExecuteDagWorkflow.mock.calls[0]?.[18]).toEqual(
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].workflowProvider).toBe('codex');
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].workflowModel).toBe('gpt-5.5');
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].aiProfile).toEqual(
       expect.objectContaining({
         aliases: expect.objectContaining({
           large: { provider: 'codex', model: 'gpt-5.5', effort: 'high' },
         }),
       })
     );
-    expect(mockExecuteDagWorkflow.mock.calls[0]?.[19]).toEqual({
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].workflowPreset).toEqual({
       provider: 'codex',
       model: 'gpt-5.5',
       effort: 'high',
@@ -3580,8 +3586,8 @@ describe('telemetry wiring', () => {
 
     expect(getUserAiPrefs).toHaveBeenCalledWith('user-1');
     // User tier wins over the config tier for the same key.
-    expect(mockExecuteDagWorkflow.mock.calls[0]?.[6]).toBe('codex');
-    expect(mockExecuteDagWorkflow.mock.calls[0]?.[7]).toBe('gpt-5.5');
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].workflowProvider).toBe('codex');
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].workflowModel).toBe('gpt-5.5');
   });
 
   it('does not consult per-user AI prefs without a userId (solo unchanged)', async () => {
@@ -3623,7 +3629,7 @@ describe('telemetry wiring', () => {
     );
 
     // Config default is claude → built-in tier defaults resolve 'large'.
-    expect(mockExecuteDagWorkflow.mock.calls[0]?.[6]).toBe('claude');
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].workflowProvider).toBe('claude');
   });
 
   it('structurally invalid stored prefs degrade to config-only (run still starts)', async () => {
@@ -3647,7 +3653,7 @@ describe('telemetry wiring', () => {
       { userId: 'user-1' }
     );
 
-    expect(mockExecuteDagWorkflow.mock.calls[0]?.[6]).toBe('claude');
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].workflowProvider).toBe('claude');
   });
 
   it("per-user default provider rebases tier defaults for the run's profile", async () => {
@@ -3670,7 +3676,7 @@ describe('telemetry wiring', () => {
 
     // No tiers configured anywhere → built-in tier defaults follow the
     // user's default provider, not the install config's.
-    expect(mockExecuteDagWorkflow.mock.calls[0]?.[6]).toBe('codex');
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].workflowProvider).toBe('codex');
   });
 
   it('passes undefined source when the caller does not supply one', async () => {
@@ -3687,7 +3693,7 @@ describe('telemetry wiring', () => {
       'db-conv-1'
     );
 
-    expect(mockExecuteDagWorkflow.mock.calls[0]?.[17]).toBeUndefined();
+    expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].source).toBeUndefined();
   });
 });
 

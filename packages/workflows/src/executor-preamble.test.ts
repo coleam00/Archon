@@ -9,7 +9,8 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
-import type { WorkflowDefinition, WorkflowRun } from './schemas';
+import type { ResolvedWorkflow, WorkflowDefinition, WorkflowRun } from './schemas';
+import { resolveWorkflow } from './graph-plan';
 
 // ---------------------------------------------------------------------------
 // Mock logger (must precede all module-under-test imports)
@@ -158,13 +159,13 @@ function makeDeps(store?: IWorkflowStore): WorkflowDeps {
 }
 
 /** Minimal DAG workflow fixture — the preamble doesn't care about node details */
-function makeWorkflow(overrides: Partial<WorkflowDefinition> = {}): WorkflowDefinition {
-  return {
+function makeWorkflow(overrides: Partial<WorkflowDefinition> = {}): ResolvedWorkflow {
+  return resolveWorkflow({
     name: 'test-workflow',
     description: 'Test',
     nodes: [{ id: 'test', kind: 'agent', source: { kind: 'command', name: 'test' } }],
     ...overrides,
-  };
+  });
 }
 
 function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {

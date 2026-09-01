@@ -66,7 +66,6 @@ export const YOUR_CAPABILITIES: ProviderCapabilities = {
   envInjection: false,
   costControl: false,
   effortControl: false,
-  thinkingControl: false,
   fallbackModel: false,
   sandbox: false,
 };
@@ -155,7 +154,7 @@ Co-locate tests next to your code. The Pi tests use this isolation pattern:
 
 When you're ready to wire additional capabilities, each translation gets its own small module. Pi uses:
 
-- `options-translator.ts` for thinking level, tool filters, skills resolution
+- `options-translator.ts` for effort, tool filters, skills resolution
 - `session-resolver.ts` for session create/open/list
 - `event-bridge.ts` for SDK-event → MessageChunk mapping
 
@@ -176,6 +175,6 @@ The Pi provider at `packages/providers/src/community/pi/` is the canonical examp
 - OAuth + API-key passthrough (reads `~/.pi/agent/auth.json`, overrides per-request)
 - Async-queue bridge from callback-based SDK events to `AsyncGenerator<MessageChunk>`
 - Session resume via `SessionManager.list(cwd)` + `SessionManager.open(path)`
-- Capability translations: `effort/thinking`, `allowed_tools/denied_tools`, `skills`, `systemPrompt`
+- Capability translations: `effort`, `allowed_tools/denied_tools`, `skills`, `systemPrompt`
 
 Read `packages/providers/src/community/pi/provider.ts` top-to-bottom — the comments call out every design decision and link to the upstream Pi SDK behavior.

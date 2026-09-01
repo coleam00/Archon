@@ -5,6 +5,7 @@ import type { Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { statusTextClass } from '../lib/run-status';
+import { RunOutcomeBadge } from './RunOutcomeBadge';
 
 interface RecentRunRowProps {
   run: Run;
@@ -60,8 +61,8 @@ export function RecentRunRow({
 
   // Design v2 row grid: status | body | (project) | id | duration | cost | CLI.
   const gridCols = showProject
-    ? 'grid-cols-[132px_minmax(0,1fr)_140px_84px_70px_64px_auto]'
-    : 'grid-cols-[132px_minmax(0,1fr)_84px_70px_64px_auto]';
+    ? 'grid-cols-[220px_minmax(0,1fr)_140px_84px_70px_64px_auto]'
+    : 'grid-cols-[220px_minmax(0,1fr)_84px_70px_64px_auto]';
 
   return (
     <div
@@ -93,6 +94,7 @@ export function RecentRunRow({
         >
           {run.status}
         </span>
+        <RunOutcomeBadge outcome={run.outcome} />
       </span>
 
       {/* body: mono workflow name + muted description */}

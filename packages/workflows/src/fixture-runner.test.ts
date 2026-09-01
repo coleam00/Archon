@@ -57,8 +57,12 @@ function workflowsOnDisk(cwd: string, names: string[], pack = 'pack'): WorkflowW
     if (!parsed.workflow) throw new Error(parsed.error.error);
     const raw = new Map([[parsed.workflow.name, parsed.workflow]]);
     const expanded = expandWorkflowIncludes(raw);
+    const workflow = expanded.workflows.get(name);
+    if (workflow === undefined) {
+      throw new Error(`workflow expansion failed: ${JSON.stringify(expanded.errors)}`);
+    }
     return {
-      workflow: expanded.workflows.get(name) ?? parsed.workflow,
+      workflow,
       source: 'project' as const,
     };
   });

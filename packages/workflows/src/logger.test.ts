@@ -31,6 +31,7 @@ import {
   logWorkflowComplete,
   logNodeComplete,
   logNodeError,
+  logWatchdogReset,
   type WorkflowEvent,
 } from './logger';
 
@@ -114,6 +115,26 @@ describe('Workflow Logger', () => {
 
       const events = await readLogFile('new-dir-test');
       expect(events).toHaveLength(1);
+    });
+  });
+
+  describe('logWatchdogReset', () => {
+    it('persists the reset timestamp and chunk type without chunk content', async () => {
+      const resetAt = Date.parse('2026-08-31T20:31:53.123Z');
+
+      await logWatchdogReset(testDir, 'watchdog-test', 'review', 'thinking', resetAt);
+
+      const events = await readLogFile('watchdog-test');
+      expect(events).toEqual([
+        expect.objectContaining({
+          type: 'watchdog_reset',
+          workflow_id: 'watchdog-test',
+          step: 'review',
+          chunk_type: 'thinking',
+          ts: '2026-08-31T20:31:53.123Z',
+        }),
+      ]);
+      expect(events[0].content).toBeUndefined();
     });
   });
 

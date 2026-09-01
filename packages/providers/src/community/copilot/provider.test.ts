@@ -148,7 +148,6 @@ describe('CopilotProvider.getType / getCapabilities', () => {
     const c = new CopilotProvider().getCapabilities();
     expect(c.sessionResume).toBe(true);
     expect(c.effortControl).toBe(true);
-    expect(c.thinkingControl).toBe(true);
     expect(c.mcp).toBe(true);
     expect(c.hooks).toBe(false);
   });
@@ -233,7 +232,7 @@ describe('CopilotProvider.sendQuery', () => {
     expect(opts.reasoningEffort).toBe('high');
   });
 
-  test.each(['max', 'ultra'] as const)(
+  test.each(['max', 'ultra', 'persistent'] as const)(
     'workflow `effort: %s` maps to SDK `xhigh`',
     async effort => {
       const session = makeFakeSession();
@@ -276,25 +275,6 @@ describe('CopilotProvider.sendQuery', () => {
 
     const opts = createSessionSpy.mock.calls[0]![0] as { reasoningEffort?: string };
     expect(opts.reasoningEffort).toBe('low');
-  });
-
-  test('invalid effort value is dropped (not passed to SDK)', async () => {
-    const session = makeFakeSession();
-    nextCreateSessionResult = session;
-
-    const p = new CopilotProvider();
-    const gen = p.sendQuery('hi', '/w', undefined, {
-      model: 'gpt-5',
-      nodeConfig: { effort: 'extreme' }, // not a rung on the ladder
-    });
-    const first = gen.next();
-    await new Promise(resolve => setTimeout(resolve, 5));
-    session.resolveSend(undefined);
-    await first;
-    await collect(gen);
-
-    const opts = createSessionSpy.mock.calls[0]![0] as { reasoningEffort?: string };
-    expect(opts.reasoningEffort).toBeUndefined();
   });
 
   test('systemPrompt wraps to systemMessage with append mode', async () => {

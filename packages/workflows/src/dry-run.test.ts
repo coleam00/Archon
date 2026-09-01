@@ -1,20 +1,44 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { makeTestComposedWorkflow, makeTestWorkflow } from './test-utils';
 import {
-  createDryRunStubScaffold,
-  dryRunWorkflow,
+  createDryRunStubScaffold as createResolvedDryRunStubScaffold,
+  dryRunWorkflow as dryRunResolvedWorkflow,
   formatDryRunTrace,
   loadDryRunStubs,
-  writeDryRunStubScaffold,
+  writeDryRunStubScaffold as writeResolvedDryRunStubScaffold,
 } from './dry-run';
 import type { DryRunResolution } from './dry-run';
+import { resolveWorkflow } from './graph-plan';
 import { buildAiProfile } from './model-validation';
 import { resolveWorkflowModelScope } from './node-model-resolution';
 import { expandWorkflowIncludes } from './include-expander';
-import type { WorkflowDefinition } from './schemas';
+import type { ResolvedWorkflow, WorkflowDefinition } from './schemas';
+
+function asResolvedWorkflow(workflow: WorkflowDefinition | ResolvedWorkflow): ResolvedWorkflow {
+  return 'plan' in workflow ? workflow : resolveWorkflow(workflow);
+}
+
+function createDryRunStubScaffold(workflow: WorkflowDefinition | ResolvedWorkflow) {
+  return createResolvedDryRunStubScaffold(asResolvedWorkflow(workflow));
+}
+
+function writeDryRunStubScaffold(workflow: WorkflowDefinition | ResolvedWorkflow, path: string) {
+  return writeResolvedDryRunStubScaffold(asResolvedWorkflow(workflow), path);
+}
+
+type TestDryRunOptions = Omit<Parameters<typeof dryRunResolvedWorkflow>[0], 'workflow'> & {
+  workflow: WorkflowDefinition | ResolvedWorkflow;
+};
+
+function dryRunWorkflow(options: TestDryRunOptions) {
+  return dryRunResolvedWorkflow({
+    ...options,
+    workflow: asResolvedWorkflow(options.workflow),
+  });
+}
 
 const temporaryDirectories: string[] = [];
 
@@ -32,7 +56,7 @@ function temporaryFile(content: string): string {
   return path;
 }
 
-function composedReviewWorkflow(gateNodes: unknown[], includeWhen?: string): WorkflowDefinition {
+function composedReviewWorkflow(gateNodes: unknown[], includeWhen?: string): ResolvedWorkflow {
   const block = makeTestWorkflow({
     name: 'review-block',
     nodes: [
@@ -481,6 +505,35 @@ describe('dry-run stub scaffolding and sparse defaults (#2624)', () => {
 });
 
 describe('dryRunWorkflow', () => {
+  test('uses the attached plan for trace order and summary selection', async () => {
+    const workflow = resolveWorkflow(
+      makeTestWorkflow({
+        name: 'authoritative-plan',
+        nodes: [
+          { id: 'first', prompt: 'first' },
+          { id: 'second', prompt: 'second' },
+        ],
+      })
+    );
+    const [first, second] = workflow.nodes;
+    if (first === undefined || second === undefined) throw new Error('invalid test workflow');
+
+    // Deliberately vary both decisions so either production read becoming a
+    // recomputation makes this regression fail.
+    Reflect.set(workflow.plan, 'layers', [[second], [first]]);
+    Reflect.set(workflow.plan, 'sinks', ['second']);
+
+    const result = await dryRunResolvedWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { first: 'first output', second: 'second output' },
+    });
+
+    expect(result.trace.map(entry => entry.nodeId)).toEqual(['second', 'first']);
+    expect(result.summary).toBe('second output');
+  });
+
   test('hydrates object stubs and resolves workflow and strict output variables', async () => {
     const workflow = makeTestWorkflow({
       name: 'structured',
@@ -1036,6 +1089,31 @@ describe('dryRunWorkflow', () => {
       if (previousHome === undefined) delete process.env.ARCHON_HOME;
       else process.env.ARCHON_HOME = previousHome;
     }
+  });
+
+  test('exec-code receives the fixed engine-owned environment', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'engine-env',
+      nodes: [
+        {
+          id: 'code',
+          bash: `printf '%s|%s|%s|%s|%s|%s' "$WORKFLOW_ID" "$BASE_BRANCH" "$ARGUMENTS" "$LOG_DIR" "$LOOP_PREV_OUTPUT" "$REJECTION_REASON"`,
+        },
+      ],
+    });
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: 'hello',
+      cwd: process.cwd(),
+      execCode: true,
+    });
+
+    expect(result.outcome).toBe('completed');
+    const fields = result.trace[0]?.output?.split('|') ?? [];
+    expect(fields.slice(0, 3)).toEqual(['dry-run', 'dry-run-base', 'hello']);
+    expect(fields[3]).toContain(`${sep}dry-run-`);
+    expect(fields[3]).toEndWith(`${sep}logs`);
+    expect(fields.slice(4)).toEqual(['', '']);
   });
 
   test('a dry run that executes nothing creates no temp directory', async () => {

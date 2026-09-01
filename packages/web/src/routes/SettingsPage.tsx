@@ -28,7 +28,7 @@ import type {
   ProviderDefaults,
   ProviderInfo,
 } from '@/lib/api';
-import { CODEX_CONFIG_EFFORT_OPTIONS } from '@/experiments/console/lib/model-options';
+import { effortOptionsForAgent } from '@/experiments/console/lib/model-options';
 
 const selectClass =
   'h-9 rounded-md border border-border bg-surface-elevated text-text-primary px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring [&>option]:bg-surface-elevated [&>option]:text-text-primary';
@@ -552,7 +552,7 @@ function AssistantConfigSection({ config }: { config: SafeConfigResponse }): Rea
                       }}
                       className={selectClass}
                     >
-                      {CODEX_CONFIG_EFFORT_OPTIONS.map(effort => (
+                      {effortOptionsForAgent('codex', providers ?? [])?.map(effort => (
                         <option key={effort} value={effort}>
                           {effort}
                         </option>

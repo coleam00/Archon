@@ -588,7 +588,7 @@ export class PiProvider implements IAgentProvider {
     //    trigger a dag-executor warning upstream.
     const nodeConfig = requestOptions?.nodeConfig;
 
-    //    4a. thinkingLevel: covers `thinking`/`effort` nodeConfig fields.
+    //    4a. thinkingLevel: Pi's native representation of Archon's `effort` field.
     const { level: thinkingLevel, warning: thinkingWarning } = resolvePiThinkingLevel(nodeConfig);
     if (thinkingWarning) {
       yield { type: 'system', content: `⚠️ ${thinkingWarning}` };

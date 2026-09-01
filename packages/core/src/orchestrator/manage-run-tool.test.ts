@@ -201,6 +201,25 @@ describe('manage_run — reads', () => {
     expect(mockListDashboardRuns).toHaveBeenCalledWith({ codebaseId: CODEBASE_ID, limit: 20 });
   });
 
+  test('list renders authored outcome beside contradictory execution status', async () => {
+    mockListDashboardRuns.mockResolvedValue({
+      runs: [
+        {
+          id: 'abcdef1234',
+          workflow_name: 'wf',
+          status: 'completed',
+          outcome: 'failed',
+          current_step_name: null,
+          total_steps: 3,
+        },
+      ],
+    });
+    const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
+    const out = await tool.handler({ action: 'list' });
+    expect(out).toContain('completed');
+    expect(out).toContain('authored outcome: failed');
+  });
+
   test('list with no runs is friendly', async () => {
     mockListDashboardRuns.mockResolvedValue({ runs: [] });
     const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
@@ -236,6 +255,21 @@ describe('manage_run — reads', () => {
     const out = await tool.handler({ action: 'get', runId: 'r1abcdef' });
     expect(out).toContain('status: completed');
     expect(out).toContain('finished:');
+  });
+
+  test('get renders a succeeded authored outcome beside paused status', async () => {
+    mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused', outcome: 'succeeded' })]);
+    const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
+    const out = await tool.handler({ action: 'get', runId: 'r1abcdef' });
+    expect(out).toContain('status: paused');
+    expect(out).toContain('authored outcome: succeeded');
+  });
+
+  test('get preserves the prior detail shape when outcome is undeclared', async () => {
+    mockFindByPrefix.mockResolvedValue([makeRun({ status: 'completed' })]);
+    const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
+    const out = await tool.handler({ action: 'get', runId: 'r1abcdef' });
+    expect(out).not.toContain('authored outcome:');
   });
 
   test('get does not crash on SQLite rows where timestamps are strings (#2078)', async () => {

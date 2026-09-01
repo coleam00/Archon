@@ -245,8 +245,7 @@ nodes:
 | `mcp` | string | — | Path to MCP server config JSON file. Claude/Codex/Copilot; Codex adds servers to ambient config rather than replacing it. See [MCP Servers](/guides/mcp-servers/) |
 | `skills` | string[] | — | Exact Claude-native skill selection (omission/`[]` selects none); skill declarations for Pi/Copilot. Codex workflow commands/prompts invoke installed skills explicitly with `$skill-name`; OpenCode does not implement this field. See [Skills](/guides/skills/) |
 | `agents` | object | — | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
-| `effort` | `'minimal'`\|`'low'`\|`'medium'`\|`'high'`\|`'xhigh'`\|`'max'`\|`'ultra'` | — | Reasoning depth. Every provider with a reasoning control — Claude/Codex/Pi/Copilot. Codex accepts all seven; the others clamp a rung their SDK lacks to the nearest one it has. OpenCode configures reasoning in `opencode.json`. Also settable at workflow level |
-| `thinking` | string \| object | — | Thinking mode: `'adaptive'`, `'disabled'`, or `{type:'enabled', budgetTokens:N}`. Claude/Pi/Copilot. Also settable at workflow level |
+| `effort` | `'minimal'`\|`'low'`\|`'medium'`\|`'high'`\|`'xhigh'`\|`'max'`\|`'ultra'`\|`'persistent'` | — | Reasoning depth. Every provider with a request-level reasoning control — Claude/Codex/Pi/Copilot. Codex accepts all eight; the others clamp unsupported rungs down to the nearest weaker value. OpenCode configures reasoning in `opencode.json`. Also settable at workflow level |
 | `maxBudgetUsd` | number | — | USD cost cap; node fails if exceeded. Claude only. Per-node only |
 | `systemPrompt` | string | — | Override the default `claude_code` system prompt for this node. Claude only. Per-node only |
 | `fallbackModel` | string | — | Model to use if primary model fails. Claude only. Also settable at workflow level |
@@ -297,30 +296,24 @@ This is separate from `persist_session`: `{ resume: source }` selects ancestry w
 
 ### Claude SDK Advanced Options
 
-Most of these fields map directly to Claude Agent SDK options. `maxBudgetUsd`, `systemPrompt`, `fallbackModel`, `betas`, `sandbox`, and `settingSources` are Claude-only — Codex and other providers emit a warning and ignore them. `effort` is the exception: it is the one reasoning-depth spelling and applies on **every** provider that has a reasoning control (Claude, Codex, Pi, Copilot), each translating it to its own SDK control. OpenCode has no request-level control — it configures reasoning in `opencode.json` — so `effort:` there warns and is ignored. `thinking` applies to Claude, Pi, and Copilot. They can be set **per-node** or at the **workflow level** as defaults (per-node takes precedence). `maxBudgetUsd`, `systemPrompt`, and `settingSources` are per-node only (`settingSources` also has an assistant-level default in `.archon/config.yaml`).
+Most of these fields map directly to Claude Agent SDK options. `maxBudgetUsd`, `systemPrompt`, `fallbackModel`, `betas`, `sandbox`, and `settingSources` are Claude-only — Codex and other providers emit a warning and ignore them. `effort` is the exception: it is the one reasoning-depth spelling and applies on **every** provider that has a request-level reasoning control (Claude, Codex, Pi, Copilot), each translating it to its own SDK control. OpenCode has no request-level control — it configures reasoning in `opencode.json` — so `effort:` there warns and is ignored. These settings can be set **per-node** or at the **workflow level** as defaults (per-node takes precedence). `maxBudgetUsd`, `systemPrompt`, and `settingSources` are per-node only (`settingSources` also has an assistant-level default in `.archon/config.yaml`).
 
 **effort** — reasoning depth:
 
 ```yaml
 - id: thorough-review
   command: review
-  effort: high   # 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
+  effort: high   # minimal | low | medium | high | xhigh | max | ultra | persistent
 ```
 
-The ladder is the union of every provider's vocabulary. Codex accepts all seven
-rungs. The others clamp a rung their SDK does not offer to the nearest one it
-does: `ultra` becomes `max` on Claude and Pi or `xhigh` on Copilot, while
-`minimal` becomes `low` on Claude and Copilot. So `effort: ultra` always means
-"as deep as this model goes", whichever provider the node resolves to.
+The ladder is the union of every provider's vocabulary. Codex accepts all eight
+rungs. Other providers clamp an unsupported rung to the nearest weaker value;
+only when no weaker value exists do they use the shallowest stronger value.
+For example, `persistent` and `ultra` become `max` on Claude and Pi or `xhigh`
+on Copilot, while `minimal` becomes `low` on Claude and Copilot.
 
-**thinking** — extended thinking mode (string shorthand or object form):
-
-```yaml
-- id: deep-analysis
-  command: analyze
-  thinking: adaptive              # 'adaptive' | 'disabled'
-  # thinking: { type: enabled, budgetTokens: 8000 }  # object form
-```
+`thinking:` has been removed. A workflow, node, tier, or alias that still uses
+it fails validation with an error directing the author to `effort:`.
 
 **maxBudgetUsd** — per-node USD cost cap (node fails with error if exceeded):
 
@@ -388,7 +381,6 @@ Omitting the field inherits the assistant-level `assistants.claude.settingSource
 ```yaml
 name: my-workflow
 effort: high         # All Claude nodes use high effort by default
-thinking: adaptive   # All Claude nodes use adaptive thinking
 fallbackModel: claude-haiku-4-5-20251001
 betas: ['context-1m-2025-08-07']
 sandbox:
@@ -397,7 +389,7 @@ sandbox:
 nodes:
   - id: step1
     command: step1
-    # Inherits workflow-level effort, thinking, fallbackModel, betas, sandbox
+    # Inherits workflow-level effort, fallbackModel, betas, sandbox
 
   - id: step2
     command: step2
@@ -1254,7 +1246,7 @@ and then removed from the definition, so nothing can fall back to an outer file'
 
 | Field | Composed behaviour |
 |---|---|
-| `provider`, `model`, `effort`, `thinking`, `fallbackModel`, `betas`, `sandbox`, `persist_sessions` | **Travel** with the workflow, onto its own nodes. A node's own value always wins. |
+| `provider`, `model`, `effort`, `fallbackModel`, `betas`, `sandbox`, `persist_sessions` | **Travel** with the workflow, onto its own nodes. A node's own value always wins. |
 | `requires` | **Unions** into the composing workflow, so a missing capability refuses the run at invocation instead of failing mid-block. |
 | `inputs`, `returns` | **Consumed** by composition — `inputs:` validates the caller's `with:`, `returns:` selects `$includeId.output`. |
 | `outcome_field` | **Owned by the workflow being run.** An included workflow's declaration does not propagate to its composer. A top-level composer may declare its own field relative to its own `returns:`; an include alias is rebound before that contract is validated. |
@@ -1490,9 +1482,10 @@ nodes:
 An included workflow's outcome declaration never becomes the composer's outcome, and a
 `workflow:` child owns its outcome on its own run row; neither propagates implicitly to a parent.
 The REST run list, detail, by-worker, and dashboard JSON expose nullable `outcome` beside `status`.
-Coherent presentation across CLI, web, console, and adapters is tracked in
-[#2651](https://github.com/coleam00/Archon/issues/2651); dry-run terminology and compatibility are
-tracked separately in [#2650](https://github.com/coleam00/Archon/issues/2650).
+CLI, console, chat, and adapter result surfaces show a non-null authored outcome separately from
+execution status. When `outcome` is null, they retain the normal status-only presentation. Dry-run
+terminology and compatibility are tracked separately in
+[#2650](https://github.com/coleam00/Archon/issues/2650).
 
 ### Binding time: includes resolve at load, runs at runtime
 
@@ -2263,7 +2256,7 @@ Model and options are resolved in this order:
 2. **Config defaults** - `assistants.*` in `.archon/config.yaml`
 3. **SDK defaults** - Built-in defaults from Claude/Codex SDKs
 
-For the Claude SDK advanced options (`effort`, `thinking`, `fallbackModel`, `betas`, `sandbox`) a per-node value sits above the workflow level: a node uses its own value if set, otherwise it inherits the workflow-level default. See [Claude SDK Advanced Options](#claude-sdk-advanced-options).
+For the Claude SDK advanced options (`effort`, `fallbackModel`, `betas`, `sandbox`) a per-node value sits above the workflow level: a node uses its own value if set, otherwise it inherits the workflow-level default. See [Claude SDK Advanced Options](#claude-sdk-advanced-options).
 
 ### Provider and Model
 
@@ -2281,7 +2274,7 @@ model: medium        # Tier, alias, or literal model override
 - `@name` - custom aliases from `aliases:`; use these for project workflows, not bundled or global workflows, because aliases are project-specific
 - Any other string - a literal model id passed through to the resolved provider's SDK
 
-Tier and alias refs resolve to a provider, model, and optional provider-specific options such as `effort` or `thinking`. If a workflow or node sets both `provider:` and a model ref that resolves to a different provider, Archon warns and uses the provider from the resolved preset. Literal model strings keep the normal provider chain (`node.provider ?? workflow.provider ?? config.assistant`).
+Tier and alias refs resolve to a provider, model, and optional `effort`. If a workflow or node sets both `provider:` and a model ref that resolves to a different provider, Archon warns and uses the provider from the resolved preset. Literal model strings keep the normal provider chain (`node.provider ?? workflow.provider ?? config.assistant`).
 
 Archon does not keep an internal allow-list for literal model ids because vendor SDKs ship new models faster than this doc can. The provider's API decides whether a literal string is valid at request time.
 
@@ -2411,7 +2404,6 @@ WARNING [unknown_key] Node 'plan': unknown key 'interactive' will be ignored.
 |---|---|
 | `output_format:` | Free-form JSON Schema; every key is accepted |
 | `sandbox:` | Passthrough — unknown keys are preserved, not stripped |
-| `thinking:` | A preprocessed union, not an object shape |
 | `hooks:` | Strict — an unknown key is already a hard **error**, not a warning |
 
 **Where the warnings appear.**
@@ -2955,7 +2947,7 @@ Before deploying a workflow:
 11. **`mcp:`** — attach per-node MCP servers via JSON config (Claude/Codex/Copilot; Codex configuration is additive)
 12. **`skills:`** — select exact active skills on Claude and declare skills for Pi/Copilot; Codex workflow bodies use explicit `$skill-name`
 13. **`agents:`** — inline Claude sub-agent definitions invokable via the `Task` tool
-14. **`effort`** — reasoning depth per node or workflow, on every provider that has one (Claude/Codex/Pi/Copilot); **`thinking`** — thinking mode (Claude/Pi/Copilot)
+14. **`effort`** — reasoning depth per node or workflow, on every provider that has request-level reasoning control (Claude/Codex/Pi/Copilot)
 15. **`maxBudgetUsd`** — set a USD cost cap per node; fails with error if exceeded (Claude only)
 16. **`systemPrompt`** — override the default system prompt per node (Claude only)
 17. **`sandbox`** — OS-level filesystem/network restrictions per node or workflow (Claude only)

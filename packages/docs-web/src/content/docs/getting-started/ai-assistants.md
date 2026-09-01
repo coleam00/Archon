@@ -233,7 +233,7 @@ You can configure Codex's behavior in `.archon/config.yaml`:
 assistants:
   codex:
     model: gpt-5.6-sol
-    modelReasoningEffort: medium  # 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
+    modelReasoningEffort: medium  # minimal | low | medium | high | xhigh | max | ultra | persistent
                                   # (install default; a workflow's `effort:` overrides it)
     webSearchMode: live           # 'disabled' | 'cached' | 'live'
     additionalDirectories:
@@ -315,8 +315,7 @@ assistants:
 | Tool restrictions | ✅ | `tools` / `disallowedTools` per agent; deny wins over allow |
 | Inline agents (`agents:`) | ✅ | File-materialized agents; single and parallel multi-agent fan-out |
 | Hooks | ❌ | Archon's per-node `hooks` field is Claude-SDK-shaped; the OpenCode provider has no translation site, so a node's `hooks:` is ignored (with a warning) |
-| Effort / reasoning control | ❌ | No per-request param; not configurable in agent file, opencode puts it in config. |
-| Thinking control | ❌ | No explicit `thinking` field in agent frontmatter; OpenCode auto-enables reasoning when `agents[].model` is a reasoning-capable model (e.g. `anthropic/claude-sonnet-4-5`) |
+| Effort / reasoning control | ❌ | No per-request parameter. OpenCode configures reasoning itself and automatically uses it for reasoning-capable models. |
 | Fallback model | ❌ | No native failover in the SDK |
 | Sandbox | ❌ | Not native in the SDK; Archon uses worktree isolation |
 | Cost limits (`maxBudgetUsd`) | ❌ | Cost tracked in result chunks, but no runtime budget enforcement |
@@ -660,7 +659,7 @@ nodes:
 | Extensions (community + local) | ✅ (default on) | `enableExtensions: false` to disable; `interactive: false` to load without UI bridge; `extensionFlags: { <name>: true }` per extension. Scope per node with a `pi:` block (`pi: { interactive, enableExtensions, extensionFlags }`) — see [Scoping extension posture per node](#scoping-extension-posture-per-node) |
 | Session resume | ✅ | automatic (Archon persists `sessionId`) |
 | Tool restrictions | ✅ | `allowed_tools` / `denied_tools` (read, bash, edit, write, grep, find, ls) |
-| Thinking level | ✅ | `effort: minimal\|low\|medium\|high\|xhigh\|max\|ultra` (`ultra` maps to Pi's native `max`; the other rungs pass through) |
+| Reasoning control | ✅ | `effort: minimal\|low\|medium\|high\|xhigh\|max\|ultra\|persistent` (`ultra` and `persistent` map to Pi's native `max`; the other rungs pass through) |
 | Skills | ✅ | `skills: [name]` (searches `.agents/skills`, `.claude/skills`, user-global) |
 | Inline sub-agents | ❌ | `agents:` is Claude-only; ignored with a warning on Pi |
 | System prompt override | ✅ | `systemPrompt:` |
@@ -745,7 +744,7 @@ Copilot accepts OpenAI models (`gpt-5`, `gpt-5-mini`), Anthropic via BYOK (`clau
 | Feature | Support | Notes |
 |---|---|---|
 | Session resume | ✅ | Returns `sessionId`; reused on resume |
-| Reasoning control | ✅ | `effort:` / string `thinking:` → Copilot `reasoningEffort`; `max` and `ultra` map to SDK `xhigh` |
+| Reasoning control | ✅ | `effort:` → Copilot `reasoningEffort`; `max`, `ultra`, and `persistent` map to SDK `xhigh`, while `minimal` maps to `low` |
 | System prompt override | ✅ | `systemPrompt:` |
 | Codebase env vars | ✅ | merged into the spawned Copilot CLI environment |
 | Tool restrictions | ✅ | `allowed_tools` → `availableTools`, `denied_tools` → `excludedTools` |

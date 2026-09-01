@@ -6,13 +6,14 @@ import { join, resolve } from 'path';
 import { MockPlatformAdapter } from '../test/mocks/platform';
 import { createMockLogger } from '../test/mocks/logger';
 import {
-  makeTestWorkflow,
+  makeTestResolvedWorkflow,
   makeTestWorkflowList,
   withObservableCapturedSource,
 } from '@archon/workflows/test-utils';
 import type { Conversation, Codebase, Session } from '../types';
 import { ConversationNotFoundError } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import { resolveWorkflow } from '@archon/workflows/graph-plan';
 import type { IAgentProvider, ProviderCapabilities } from '@archon/providers/types';
 import type * as Providers from '@archon/providers';
 import type * as CodebaseDb from '../db/codebases';
@@ -203,7 +204,6 @@ const providerCapabilities: ProviderCapabilities = {
   envInjection: true,
   costControl: true,
   effortControl: true,
-  thinkingControl: true,
   fallbackModel: true,
   sandbox: true,
   settingSources: true,
@@ -498,8 +498,8 @@ const mockSession: Session = {
 };
 
 const testWorkflowDefs = makeTestWorkflowList(['fix-bug', 'add-feature', 'archon-assist']);
-const testWorkflows = testWorkflowDefs.map(w => ({
-  workflow: w,
+const testWorkflows = testWorkflowDefs.map(workflow => ({
+  workflow: resolveWorkflow(workflow),
   source: 'bundled' as const,
 }));
 
@@ -781,7 +781,7 @@ describe('orchestrator-agent handleMessage', () => {
     });
 
     test('uses CommandResult workflow definition without rediscovery for /workflow run', async () => {
-      const workflowDefinition = makeTestWorkflow({
+      const workflowDefinition = makeTestResolvedWorkflow({
         name: 'test-workflow',
         description: 'A test workflow',
       });
@@ -804,7 +804,7 @@ describe('orchestrator-agent handleMessage', () => {
     });
 
     test('validates workflow exists in auto-selected project before dispatch', async () => {
-      const workflowDefinition = makeTestWorkflow({
+      const workflowDefinition = makeTestResolvedWorkflow({
         name: 'test-workflow',
         description: 'A test workflow',
       });
@@ -817,7 +817,7 @@ describe('orchestrator-agent handleMessage', () => {
       mockDiscoverWorkflows.mockResolvedValue({
         workflows: [
           {
-            workflow: { ...workflowDefinition, name: 'other-workflow' },
+            workflow: makeTestResolvedWorkflow({ name: 'other-workflow' }),
             source: 'bundled' as const,
           },
         ],
@@ -1152,8 +1152,8 @@ describe('orchestrator-agent handleMessage', () => {
       mockListCodebases.mockResolvedValue([mockCodebase]);
       mockDiscoverWorkflows.mockResolvedValue({ workflows: testWorkflows, errors: [] });
       mockFindWorkflow.mockImplementation(
-        (name: string, workflows: readonly WorkflowDefinition[]) =>
-          workflows.find(w => w.name === name)
+        <T extends Pick<WorkflowDefinition, 'name'>>(name: string, workflows: readonly T[]) =>
+          workflows.find(workflow => workflow.name === name)
       );
 
       mockClient.sendQuery.mockImplementation(async function* () {
@@ -1185,8 +1185,8 @@ describe('orchestrator-agent handleMessage', () => {
       mockListCodebases.mockResolvedValue([mockCodebase]);
       mockDiscoverWorkflows.mockResolvedValue({ workflows: testWorkflows, errors: [] });
       mockFindWorkflow.mockImplementation(
-        (name: string, workflows: readonly WorkflowDefinition[]) =>
-          workflows.find(w => w.name === name)
+        <T extends Pick<WorkflowDefinition, 'name'>>(name: string, workflows: readonly T[]) =>
+          workflows.find(workflow => workflow.name === name)
       );
 
       mockClient.sendQuery.mockImplementation(async function* () {
@@ -1247,8 +1247,8 @@ describe('orchestrator-agent handleMessage', () => {
       mockListCodebases.mockResolvedValue([mockCodebase]);
       mockDiscoverWorkflows.mockResolvedValue({ workflows: testWorkflows, errors: [] });
       mockFindWorkflow.mockImplementation(
-        (name: string, workflows: readonly WorkflowDefinition[]) =>
-          workflows.find(w => w.name === name)
+        <T extends Pick<WorkflowDefinition, 'name'>>(name: string, workflows: readonly T[]) =>
+          workflows.find(workflow => workflow.name === name)
       );
 
       mockClient.sendQuery.mockImplementation(async function* () {
@@ -1276,8 +1276,8 @@ describe('orchestrator-agent handleMessage', () => {
       mockListCodebases.mockResolvedValue([mockCodebase]);
       mockDiscoverWorkflows.mockResolvedValue({ workflows: testWorkflows, errors: [] });
       mockFindWorkflow.mockImplementation(
-        (name: string, workflows: readonly WorkflowDefinition[]) =>
-          workflows.find(w => w.name === name)
+        <T extends Pick<WorkflowDefinition, 'name'>>(name: string, workflows: readonly T[]) =>
+          workflows.find(workflow => workflow.name === name)
       );
 
       mockClient.sendQuery.mockImplementation(async function* () {
@@ -1353,8 +1353,8 @@ describe('orchestrator-agent handleMessage', () => {
       mockListCodebases.mockResolvedValue([mockCodebase]);
       mockDiscoverWorkflows.mockResolvedValue({ workflows: testWorkflows, errors: [] });
       mockFindWorkflow.mockImplementation(
-        (name: string, workflows: readonly WorkflowDefinition[]) =>
-          workflows.find(w => w.name === name)
+        <T extends Pick<WorkflowDefinition, 'name'>>(name: string, workflows: readonly T[]) =>
+          workflows.find(workflow => workflow.name === name)
       );
     });
 
@@ -1514,7 +1514,7 @@ describe('orchestrator-agent handleMessage', () => {
 
       let callCount = 0;
       mockFindWorkflow.mockImplementation(
-        (name: string, workflows: readonly WorkflowDefinition[]) => {
+        <T extends Pick<WorkflowDefinition, 'name'>>(name: string, workflows: readonly T[]) => {
           callCount++;
           // First call (parseOrchestratorCommands) finds the workflow
           // Second call (handleWorkflowInvocationResult) does not

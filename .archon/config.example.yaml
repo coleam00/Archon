@@ -37,8 +37,8 @@
 #
 # assistant:  <provider>                 default provider for nodes that name none
 # assistants: { <provider>: { ... } }    per-provider defaults for this run
-# tiers:      { small|medium|large: { provider, model, effort?, thinking? } }
-# aliases:    { '@name': { provider, model, effort?, thinking? } }
+# tiers:      { small|medium|large: { provider, model, effort? } }
+# aliases:    { '@name': { provider, model, effort? } }
 # docsPath:   <path>                     overrides the project docs path
 # envVars:    { KEY: value }             extra env for this run's nodes
 # workflows:  { autoResumeOnQuotaReset, quotaFallbackDelayMs,

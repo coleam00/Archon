@@ -2,6 +2,7 @@
  * Zod schemas for provider API endpoints.
  */
 import { z } from '@hono/zod-openapi';
+import { EFFORT_LADDER } from '@archon/paths/effort';
 
 /** Provider capability flags. */
 const providerCapabilitiesSchema = z
@@ -17,7 +18,6 @@ const providerCapabilitiesSchema = z
     envInjection: z.boolean(),
     costControl: z.boolean(),
     effortControl: z.boolean(),
-    thinkingControl: z.boolean(),
     fallbackModel: z.boolean(),
     sandbox: z.boolean(),
   })
@@ -30,6 +30,7 @@ export const providerInfoSchema = z
     displayName: z.string(),
     capabilities: providerCapabilitiesSchema,
     builtIn: z.boolean(),
+    effortLevels: z.array(z.enum(EFFORT_LADDER)).optional(),
   })
   .openapi('ProviderInfo');
 

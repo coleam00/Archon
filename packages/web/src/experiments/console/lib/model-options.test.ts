@@ -4,7 +4,6 @@ import {
   CODEX_MODEL_OPTIONS,
   COPILOT_MODEL_OPTIONS,
   curatedOptionsForAgent,
-  EFFORT_OPTIONS,
   effortOptionsForAgent,
   filterModelOptions,
   findPiModel,
@@ -22,6 +21,7 @@ import type {
   AgentCredentials,
   OpencodeCredentialProvider,
   PiModelInfo,
+  ProviderInfo,
 } from '../skills';
 
 function cred(over: Partial<AgentCredentialStatus> & { vendor: string }): AgentCredentialStatus {
@@ -79,27 +79,22 @@ describe('curatedOptionsForAgent', () => {
   });
 });
 
-/** `GET /api/providers` shape, trimmed to what the effort helpers read.
- *  `effortControl` mirrors each provider's capabilities.ts as of #2556. */
-const PROVIDERS = [
-  { id: 'claude', capabilities: { effortControl: true } },
-  { id: 'codex', capabilities: { effortControl: true } },
-  { id: 'pi', capabilities: { effortControl: true } },
-  { id: 'copilot', capabilities: { effortControl: true } },
-  { id: 'opencode', capabilities: { effortControl: false } },
-];
+const LADDER: NonNullable<ProviderInfo['effortLevels']> = ['minimal', 'high', 'persistent'];
 
-// The third hand-typed copy of the ladder used to live here. It now derives
-// from the constant under test, so this file cannot pass while disagreeing with
-// it; `scripts/effort-ladder-parity.test.ts` is what ties that constant to the
-// engine's.
-const LADDER = EFFORT_OPTIONS;
+/** `GET /api/providers` shape, trimmed to what the effort helpers read. */
+const PROVIDERS = [
+  { id: 'claude', effortLevels: LADDER },
+  { id: 'codex', effortLevels: LADDER },
+  { id: 'pi', effortLevels: LADDER },
+  { id: 'copilot', effortLevels: LADDER },
+  { id: 'opencode' },
+];
 
 describe('effortOptionsForAgent', () => {
   // #2556: one ladder, and the capability — not a hardcoded id list — decides
   // who shows the field. Pi and Copilot were previously hidden despite having
   // the control, so a tier's effort silently vanished on them.
-  test('every agent with a reasoning control offers the one ladder', () => {
+  test('returns the ladder supplied by the provider API', () => {
     for (const id of ['claude', 'codex', 'pi', 'copilot']) {
       expect(effortOptionsForAgent(id, PROVIDERS)).toEqual(LADDER);
     }
@@ -115,10 +110,8 @@ describe('effortOptionsForAgent', () => {
 describe('normalizeEffortForAgent', () => {
   test('carries any rung across a switch between effort-capable agents', () => {
     expect(normalizeEffortForAgent('claude', 'high', PROVIDERS)).toBe('high');
-    // Both of these used to be cleared, because each agent had its own enum.
-    expect(normalizeEffortForAgent('codex', 'max', PROVIDERS)).toBe('max');
-    expect(normalizeEffortForAgent('codex', 'ultra', PROVIDERS)).toBe('ultra');
     expect(normalizeEffortForAgent('claude', 'minimal', PROVIDERS)).toBe('minimal');
+    expect(normalizeEffortForAgent('codex', 'persistent', PROVIDERS)).toBe('persistent');
   });
 
   test('clears a value that is not a rung', () => {

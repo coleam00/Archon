@@ -25,7 +25,7 @@ import { createWorkflowDeps } from '../workflows/store-adapter';
 import type {
   WorkflowWithSource,
   WorkflowLoadError,
-  WorkflowDefinition,
+  ResolvedWorkflow,
 } from '@archon/workflows/schemas/workflow';
 import { isContainerRun } from '@archon/workflows/schemas/workflow-run';
 import * as workflowDb from '../db/workflows';
@@ -883,6 +883,7 @@ async function handleWorkflowCommand(
         let msg = `**Active Workflows (${String(activeRuns.length)})**\n\n`;
         for (const run of activeRuns) {
           msg += `**\`${run.workflow_name}\`** (${run.status})\n`;
+          if (run.outcome !== null) msg += `  Authored outcome: ${run.outcome}\n`;
           msg += `  ID: ${run.id}\n`;
           msg += `  Path: ${run.working_path ?? '(unknown)'}\n`;
           msg += `  Started: ${new Date(run.started_at).toISOString()}\n\n`;
@@ -1158,7 +1159,7 @@ async function handleWorkflowCommand(
         'cmd.workflows_discovered'
       );
 
-      let workflow: WorkflowDefinition | undefined;
+      let workflow: ResolvedWorkflow | undefined;
       try {
         workflow = resolveWorkflowName(workflowName, workflows);
       } catch (err) {

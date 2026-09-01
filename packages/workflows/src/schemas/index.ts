@@ -25,6 +25,9 @@ export {
 } from './hooks';
 export type { WorkflowHookEvent, WorkflowHookMatcher, WorkflowNodeHooks } from './hooks';
 
+export { effortLevelSchema, EFFORT_LEVELS } from './effort';
+export type { EffortLevel } from './effort';
+
 // Model binding profiles and durable run metadata
 export {
   TIER_NAMES,
@@ -121,8 +124,6 @@ export {
   KNOWN_NODE_NESTED_KEYS,
   approvalConfigSchema,
   dagNodeFlatSchema,
-  effortLevelSchema,
-  thinkingConfigSchema,
   sandboxSettingsSchema,
   agentDefinitionSchema,
   piNodeConfigSchema,
@@ -151,8 +152,6 @@ export type {
   ComposeFanOutNode,
   FanOutConfig,
   DagNode,
-  EffortLevel,
-  ThinkingConfig,
   SandboxSettings,
   AgentDefinition,
   PiNodeConfig,
@@ -258,6 +257,8 @@ export type {
   WorkflowExecutionResult,
   WorkflowLoadError,
   WorkflowLoadResult,
+  GraphPlan,
+  ResolvedWorkflow,
   WorkflowSource,
   WorkflowWithSource,
   DeclaredWorkflowConfig,

@@ -24,6 +24,7 @@ outcome_field: green
 nodes:
   - id: validate
     command: validate
+    always_run: true
     output_type: validation
     output_format:
       type: object

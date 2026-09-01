@@ -1,7 +1,7 @@
 /**
  * Core type definitions for the Remote Coding Agent platform
  */
-import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { RunModelOverrides } from '@archon/workflows/model-validation';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
@@ -86,7 +86,7 @@ export interface CommandResult {
   modified?: boolean; // Indicates if conversation state was modified
   workflow?: {
     // If set, orchestrator should execute this workflow
-    definition: WorkflowDefinition;
+    definition: ResolvedWorkflow;
     args: string;
     force?: boolean;
     resumeRunId?: string;
@@ -97,7 +97,7 @@ export interface CommandResult {
      * Carried so dispatch does not repeat the digest verification and discovery the
      * handler just paid for. A value, not a flag: it cannot claim work it did not do.
      */
-    resolvedContinuation?: WorkflowDefinition;
+    resolvedContinuation?: ResolvedWorkflow;
     /** Keys the engine dropped from this workflow's YAML (#2213). */
     parseWarnings?: readonly string[];
   };
@@ -202,9 +202,5 @@ export function isWebAdapter(adapter: IPlatformAdapter): adapter is IWebPlatform
 // Re-export workflow schema types for config-types.ts compatibility
 import type { ModelReasoningEffort, WebSearchMode } from '@archon/workflows/schemas/workflow';
 export type { ModelReasoningEffort, WebSearchMode };
-import type {
-  EffortLevel,
-  ThinkingConfig,
-  SandboxSettings,
-} from '@archon/workflows/schemas/dag-node';
-export type { EffortLevel, ThinkingConfig, SandboxSettings };
+import type { EffortLevel, SandboxSettings } from '@archon/workflows/schemas/dag-node';
+export type { EffortLevel, SandboxSettings };

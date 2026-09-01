@@ -31,6 +31,8 @@ import {
   beforeEach,
   afterEach,
 } from 'bun:test';
+import type { Mock } from 'bun:test';
+import type { Octokit } from '@octokit/rest';
 import { createHmac, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -135,8 +137,14 @@ mock.module('@archon/core/config/resolve-assistant', () => ({
 }));
 
 // Mock @archon/git for ensureRepoReady integration tests
-const mockCloneRepository = mock(async () => ({ ok: true, value: undefined }));
-const mockSyncRepository = mock(async () => ({ ok: true, value: undefined }));
+const mockCloneRepository = mock<(typeof import('@archon/git'))['cloneRepository']>(async () => ({
+  ok: true,
+  value: undefined,
+}));
+const mockSyncRepository = mock<(typeof import('@archon/git'))['syncRepository']>(async () => ({
+  ok: true,
+  value: undefined,
+}));
 const mockAddSafeDirectory = mock(async () => undefined);
 const mockIsWorktreePath = mock(async () => false);
 
@@ -161,24 +169,18 @@ mock.module('@archon/git', () => ({
 
 import { GitHubAdapter } from './adapter';
 import type { WebhookEvent } from './types';
-import { ConversationLockManager } from '@archon/core';
 // Namespace import so the dedup tests can spyOn(core, 'handleMessage') — the
 // orchestrator entry point the adapter calls after webhook setup succeeds.
 import * as core from '@archon/core';
 
 // Create a mock lock manager that immediately executes handlers
+const mockAcquireLock = mock(async (_id: string, handler: () => Promise<void>) => {
+  await handler();
+  return { status: 'started' as const };
+});
 const mockLockManager = {
-  acquireLock: mock(async (_id: string, handler: () => Promise<void>) => {
-    await handler();
-  }),
-  getStats: () => ({
-    active: 0,
-    queuedTotal: 0,
-    queuedByConversation: [],
-    maxConcurrent: 10,
-    activeConversationIds: [],
-  }),
-} as unknown as ConversationLockManager;
+  acquireLock: mockAcquireLock,
+};
 
 /**
  * File-wide stubs for the `@archon/core` functions `handleWebhook()` reaches in
@@ -236,22 +238,59 @@ function unclonedPath(): string {
  * steps 8-13 unmocked; the first payload or code change that gets past step 7
  * then silently falls into real I/O. Stub the whole surface instead.
  */
+type CreateCommentArgs = NonNullable<Parameters<Octokit['rest']['issues']['createComment']>[0]>;
+type ListCommentsArgs = NonNullable<Parameters<Octokit['rest']['issues']['listComments']>[0]>;
+type ListComment = Awaited<ReturnType<Octokit['rest']['issues']['listComments']>>['data'][number];
+type ListCommentUser = Pick<NonNullable<ListComment['user']>, 'login'>;
+type CreateComment = (args: CreateCommentArgs) => Promise<unknown>;
+type ListComments = (args: ListCommentsArgs) => Promise<{
+  data: { body?: ListComment['body'] | null; user?: ListCommentUser | null }[];
+}>;
+type RepositoryData = Awaited<ReturnType<Octokit['rest']['repos']['get']>>['data'];
+type PullRequestData = Awaited<ReturnType<Octokit['rest']['pulls']['get']>>['data'];
+
 interface OctokitStubs {
-  reposGet: ReturnType<typeof mock>;
-  listComments: ReturnType<typeof mock>;
-  createComment: ReturnType<typeof mock>;
-  pullsGet: ReturnType<typeof mock>;
+  reposGet: Mock<
+    (
+      args: NonNullable<Parameters<Octokit['rest']['repos']['get']>[0]>
+    ) => Promise<{ data: Pick<RepositoryData, 'default_branch'> }>
+  >;
+  listComments: Mock<ListComments>;
+  createComment: Mock<CreateComment>;
+  pullsGet: Mock<
+    (args: NonNullable<Parameters<Octokit['rest']['pulls']['get']>[0]>) => Promise<{
+      data: {
+        head: Pick<PullRequestData['head'], 'ref' | 'sha'> & {
+          repo: Pick<NonNullable<PullRequestData['head']['repo']>, 'full_name'> | null;
+        };
+        base: { repo: Pick<PullRequestData['base']['repo'], 'full_name'> };
+      };
+    }>
+  >;
+}
+
+function makeCreateCommentMock(): Mock<CreateComment> {
+  return mock(async () => ({ data: {} }));
+}
+
+function makeListCommentsMock(
+  data: Awaited<ReturnType<ListComments>>['data'] = []
+): Mock<ListComments> {
+  return mock(async () => ({ data }));
 }
 
 /**
  * Replaces an adapter's private Octokit client with that surface and returns
  * the stubs, for the callers that assert against them.
  */
-function installOctokitStubs(adapter: GitHubAdapter): OctokitStubs {
+function installOctokitStubs(
+  adapter: GitHubAdapter,
+  overrides: Partial<Pick<OctokitStubs, 'createComment' | 'listComments'>> = {}
+): OctokitStubs {
   const stubs: OctokitStubs = {
     reposGet: mock(async () => ({ data: { default_branch: 'main' } })),
-    listComments: mock(async () => ({ data: [] })),
-    createComment: mock(async () => ({ data: {} })),
+    listComments: overrides.listComments ?? makeListCommentsMock(),
+    createComment: overrides.createComment ?? makeCreateCommentMock(),
     pullsGet: mock(async () => ({
       data: {
         head: {
@@ -279,7 +318,7 @@ function installOctokitStubs(adapter: GitHubAdapter): OctokitStubs {
  * Reduces duplication across tests that need to verify comment posting behavior.
  */
 async function createTestAdapterWithMockedOctokit(
-  mockCreateComment: ReturnType<typeof mock>,
+  mockCreateComment: Mock<CreateComment>,
   options?: { retryDelayMs?: (attempt: number) => number }
 ): Promise<GitHubAdapter> {
   const testAdapter = new GitHubAdapter(
@@ -290,14 +329,7 @@ async function createTestAdapterWithMockedOctokit(
     options
   );
   await testAdapter.start();
-  // @ts-expect-error - accessing private property for testing
-  testAdapter.octokit = {
-    rest: {
-      issues: {
-        createComment: mockCreateComment,
-      },
-    },
-  };
+  installOctokitStubs(testAdapter, { createComment: mockCreateComment });
   return testAdapter;
 }
 
@@ -449,7 +481,7 @@ describe('GitHubAdapter', () => {
     beforeEach(() => {
       originalAllowedUsers = process.env.GITHUB_ALLOWED_USERS;
       delete process.env.GITHUB_ALLOWED_USERS;
-      mockLockManager.acquireLock.mockClear();
+      mockAcquireLock.mockClear();
       mockGetOrCreateConversation.mockClear();
       mockFindCodebaseByRepoUrl.mockClear();
       mockCreateCodebase.mockClear();
@@ -528,7 +560,7 @@ describe('GitHubAdapter', () => {
       await adapter.handleWebhook(payload, 'mock-signature');
 
       // Bot's own comments should be silently dropped - no lock acquired, no processing
-      expect(mockLockManager.acquireLock).not.toHaveBeenCalled();
+      expect(mockAcquireLock).not.toHaveBeenCalled();
     });
 
     test('should handle case-insensitive username matching', async () => {
@@ -538,7 +570,7 @@ describe('GitHubAdapter', () => {
       await adapter.handleWebhook(payload, 'mock-signature');
 
       // Bot's own comments should be silently dropped regardless of case
-      expect(mockLockManager.acquireLock).not.toHaveBeenCalled();
+      expect(mockAcquireLock).not.toHaveBeenCalled();
     });
 
     test('should NOT filter comments from real users', async () => {
@@ -563,7 +595,7 @@ describe('GitHubAdapter', () => {
       await adapter.handleWebhook(payload, 'mock-signature');
 
       // Marked comments should be silently dropped
-      expect(mockLockManager.acquireLock).not.toHaveBeenCalled();
+      expect(mockAcquireLock).not.toHaveBeenCalled();
     });
 
     test('should process comments without bot marker from same user', async () => {
@@ -655,7 +687,7 @@ describe('GitHubAdapter', () => {
     beforeEach(() => {
       originalAllowedUsers = process.env.GITHUB_ALLOWED_USERS;
       delete process.env.GITHUB_ALLOWED_USERS;
-      mockLockManager.acquireLock.mockClear();
+      mockAcquireLock.mockClear();
       mockGetOrCreateConversation.mockClear();
       mockLogger.info.mockClear();
       handleMessageSpy.mockClear();
@@ -783,7 +815,7 @@ describe('GitHubAdapter', () => {
 
   describe('conversationId format', () => {
     test('should parse valid owner/repo#number format', async () => {
-      const mockCreateComment = mock(() => Promise.resolve({ data: {} }));
+      const mockCreateComment = makeCreateCommentMock();
       const testAdapter = await createTestAdapterWithMockedOctokit(mockCreateComment);
 
       await testAdapter.sendMessage('owner/repo#123', 'test');
@@ -797,7 +829,7 @@ describe('GitHubAdapter', () => {
     });
 
     test('postComment appends bot marker to outgoing comments', async () => {
-      const mockCreateComment = mock(() => Promise.resolve({ data: {} }));
+      const mockCreateComment = makeCreateCommentMock();
       const testAdapter = await createTestAdapterWithMockedOctokit(mockCreateComment);
 
       await testAdapter.sendMessage('owner/repo#123', 'Hello world');
@@ -809,7 +841,7 @@ describe('GitHubAdapter', () => {
     });
 
     test('should reject invalid conversationId format', async () => {
-      const mockCreateComment = mock(() => Promise.resolve({ data: {} }));
+      const mockCreateComment = makeCreateCommentMock();
       const testAdapter = await createTestAdapterWithMockedOctokit(mockCreateComment);
 
       // Invalid format (pr-42 is not a number) should return early without calling API
@@ -963,7 +995,7 @@ describe('GitHubAdapter', () => {
 
   describe('message splitting', () => {
     test('should split long messages into multiple chunks', async () => {
-      const mockCreateComment = mock(() => Promise.resolve({ data: {} }));
+      const mockCreateComment = makeCreateCommentMock();
       const testAdapter = await createTestAdapterWithMockedOctokit(mockCreateComment);
 
       // Create message exceeding MAX_LENGTH (65000)
@@ -1000,7 +1032,7 @@ describe('GitHubAdapter', () => {
     });
 
     test('should not split message at exactly MAX_LENGTH', async () => {
-      const mockCreateComment = mock(() => Promise.resolve({ data: {} }));
+      const mockCreateComment = makeCreateCommentMock();
       const testAdapter = await createTestAdapterWithMockedOctokit(mockCreateComment);
 
       // Message exactly at MAX_LENGTH (65000) should not be split
@@ -1011,7 +1043,7 @@ describe('GitHubAdapter', () => {
     });
 
     test('should handle message without paragraph breaks', async () => {
-      const mockCreateComment = mock(() => Promise.resolve({ data: {} }));
+      const mockCreateComment = makeCreateCommentMock();
       const testAdapter = await createTestAdapterWithMockedOctokit(mockCreateComment);
 
       // Message under MAX_LENGTH with no paragraph breaks
@@ -1022,7 +1054,7 @@ describe('GitHubAdapter', () => {
     });
 
     test('should throw error when chunk posting fails', async () => {
-      const mockCreateComment = mock()
+      const mockCreateComment = makeCreateCommentMock()
         .mockResolvedValueOnce({ data: {} }) // First chunk succeeds
         .mockRejectedValueOnce(new Error('API rate limit exceeded')); // Second chunk fails
       const testAdapter = await createTestAdapterWithMockedOctokit(mockCreateComment);
@@ -1044,7 +1076,7 @@ describe('GitHubAdapter', () => {
 
   describe('retry logic', () => {
     test('should retry on transient network errors', async () => {
-      const mockCreateComment = mock()
+      const mockCreateComment = makeCreateCommentMock()
         .mockRejectedValueOnce(new Error('fetch failed')) // First attempt fails
         .mockResolvedValueOnce({ data: {} }); // Second attempt succeeds
       const testAdapter = await createTestAdapterWithMockedOctokit(mockCreateComment, {
@@ -1059,7 +1091,7 @@ describe('GitHubAdapter', () => {
 
     test('should retry on transient status errors', async () => {
       const transientError = Object.assign(new Error('Gateway failure'), { status: 502 });
-      const mockCreateComment = mock()
+      const mockCreateComment = makeCreateCommentMock()
         .mockRejectedValueOnce(transientError) // First attempt fails
         .mockResolvedValueOnce({ data: {} }); // Second attempt succeeds
       const testAdapter = await createTestAdapterWithMockedOctokit(mockCreateComment, {
@@ -1073,7 +1105,9 @@ describe('GitHubAdapter', () => {
     });
 
     test('should not retry on non-retryable errors', async () => {
-      const mockCreateComment = mock().mockRejectedValue(new Error('Bad credentials'));
+      const mockCreateComment = makeCreateCommentMock().mockRejectedValue(
+        new Error('Bad credentials')
+      );
       const testAdapter = await createTestAdapterWithMockedOctokit(mockCreateComment);
 
       // Should throw immediately without retry
@@ -1087,7 +1121,7 @@ describe('GitHubAdapter', () => {
 
     test('should not retry on auth status errors', async () => {
       const authError = Object.assign(new Error('Unauthorized'), { status: 401 });
-      const mockCreateComment = mock().mockRejectedValue(authError);
+      const mockCreateComment = makeCreateCommentMock().mockRejectedValue(authError);
       const testAdapter = await createTestAdapterWithMockedOctokit(mockCreateComment);
 
       // Should throw immediately without retry
@@ -1100,7 +1134,9 @@ describe('GitHubAdapter', () => {
     });
 
     test('should throw after exhausting retries', async () => {
-      const mockCreateComment = mock().mockRejectedValue(new Error('fetch failed'));
+      const mockCreateComment = makeCreateCommentMock().mockRejectedValue(
+        new Error('fetch failed')
+      );
       const testAdapter = await createTestAdapterWithMockedOctokit(mockCreateComment, {
         retryDelayMs: () => 1,
       });
@@ -1200,16 +1236,13 @@ describe('GitHubAdapter', () => {
     /**
      * Helper to create adapter with mocked listComments for fetchCommentHistory tests.
      */
-    function createAdapterWithListComments(
-      mockListComments: ReturnType<typeof mock>
-    ): GitHubAdapter {
+    function createAdapterWithListComments(mockListComments: Mock<ListComments>): GitHubAdapter {
       const testAdapter = new GitHubAdapter(
         { kind: 'pat', token: 'fake-token-for-testing' },
         'fake-webhook-secret',
         mockLockManager
       );
-      // @ts-expect-error - accessing private property for testing
-      testAdapter.octokit = { rest: { issues: { listComments: mockListComments } } };
+      installOctokitStubs(testAdapter, { listComments: mockListComments });
       return testAdapter;
     }
 
@@ -1222,16 +1255,12 @@ describe('GitHubAdapter', () => {
     }
 
     test('should fetch and format comment history', async () => {
-      const mockListComments = mock(() =>
-        Promise.resolve({
-          data: [
-            // API returns in desc order (newest first) because direction: 'desc'
-            { user: { login: 'user3' }, body: 'Third comment' },
-            { user: { login: 'user2' }, body: 'Second comment' },
-            { user: { login: 'user1' }, body: 'First comment' },
-          ],
-        })
-      );
+      const mockListComments = makeListCommentsMock([
+        // API returns in desc order (newest first) because direction: 'desc'
+        { user: { login: 'user3' }, body: 'Third comment' },
+        { user: { login: 'user2' }, body: 'Second comment' },
+        { user: { login: 'user1' }, body: 'First comment' },
+      ]);
 
       const testAdapter = createAdapterWithListComments(mockListComments);
       const history = await callFetchCommentHistory(testAdapter);
@@ -1255,9 +1284,7 @@ describe('GitHubAdapter', () => {
 
     test('should preserve full comment content without truncation', async () => {
       const longBody = 'a'.repeat(5000);
-      const mockListComments = mock(() =>
-        Promise.resolve({ data: [{ user: { login: 'user1' }, body: longBody }] })
-      );
+      const mockListComments = makeListCommentsMock([{ user: { login: 'user1' }, body: longBody }]);
 
       const testAdapter = createAdapterWithListComments(mockListComments);
       const history = await callFetchCommentHistory(testAdapter);
@@ -1268,15 +1295,11 @@ describe('GitHubAdapter', () => {
     });
 
     test('should handle comments without user or body (null and undefined)', async () => {
-      const mockListComments = mock(() =>
-        Promise.resolve({
-          data: [
-            { user: null, body: 'Comment without user' },
-            { user: { login: 'user1' }, body: null },
-            { user: { login: 'user2' } }, // body property not present (undefined)
-          ],
-        })
-      );
+      const mockListComments = makeListCommentsMock([
+        { user: null, body: 'Comment without user' },
+        { user: { login: 'user1' }, body: null },
+        { user: { login: 'user2' } }, // body property not present (undefined)
+      ]);
 
       const testAdapter = createAdapterWithListComments(mockListComments);
       const history = await callFetchCommentHistory(testAdapter);
@@ -1286,7 +1309,9 @@ describe('GitHubAdapter', () => {
     });
 
     test('should return empty array on API error', async () => {
-      const mockListComments = mock(() => Promise.reject(new Error('API rate limit exceeded')));
+      const mockListComments = makeListCommentsMock().mockRejectedValue(
+        new Error('API rate limit exceeded')
+      );
 
       const testAdapter = createAdapterWithListComments(mockListComments);
       const history = await callFetchCommentHistory(testAdapter);
@@ -1295,7 +1320,7 @@ describe('GitHubAdapter', () => {
     });
 
     test('should handle empty comment list', async () => {
-      const mockListComments = mock(() => Promise.resolve({ data: [] }));
+      const mockListComments = makeListCommentsMock();
 
       const testAdapter = createAdapterWithListComments(mockListComments);
       const history = await callFetchCommentHistory(testAdapter);
@@ -1340,7 +1365,7 @@ describe('GitHubAdapter', () => {
       expect(mockCloneRepository).toHaveBeenCalledTimes(1);
       const [url, path] = mockCloneRepository.mock.calls[0];
       expect(url).toBe('https://github.com/owner/repo.git');
-      expect(path).toBe('/nonexistent/path');
+      expect(String(path)).toBe('/nonexistent/path');
       expect(mockAddSafeDirectory).toHaveBeenCalledWith('/nonexistent/path');
     });
 
@@ -1458,13 +1483,26 @@ describe('GitHubAdapter', () => {
       getToken: ReturnType<typeof mock>;
       prime: ReturnType<typeof mock>;
       invalidate: ReturnType<typeof mock>;
+      invalidateRepo: ReturnType<typeof mock>;
       resolveId: ReturnType<typeof mock>;
       installationIdFor: (owner: string) => number;
     } {
       const installationIdFor = (owner: string): number =>
         Math.abs(owner.charCodeAt(0) * 37 + (owner.charCodeAt(1) ?? 0));
 
-      const octokitInstances = new Map<number, unknown>();
+      type AppOctokit = {
+        __installationId: number;
+        rest: {
+          issues: {
+            createComment: Mock<CreateComment>;
+            listComments: Mock<ListComments>;
+          };
+          repos: { get: OctokitStubs['reposGet'] };
+          pulls: { get: OctokitStubs['pullsGet'] };
+        };
+      };
+
+      const octokitInstances = new Map<number, AppOctokit>();
       const lookups = new Map<string, number>();
 
       const getToken = mock(async (owner: string, _repo: string) => {
@@ -1483,26 +1521,30 @@ describe('GitHubAdapter', () => {
       // Each per-installation Octokit mock starts with createComment/repos/pulls
       // mocked. Test bodies can call `.mockResolvedValueOnce(...)` /
       // `.mockRejectedValueOnce(...)` on those fields as needed.
-      function octokitFor(installationId: number): unknown {
+      function octokitFor(installationId: number): AppOctokit {
         let oct = octokitInstances.get(installationId);
         if (!oct) {
+          const reposGet: OctokitStubs['reposGet'] = mock(async () => ({
+            data: { default_branch: 'main' },
+          }));
+          const pullsGet: OctokitStubs['pullsGet'] = mock(async () => ({
+            data: {
+              head: { ref: 'feature', sha: 'abc123def', repo: { full_name: 'o/r' } },
+              base: { repo: { full_name: 'o/r' } },
+            },
+          }));
           oct = {
             __installationId: installationId,
             rest: {
               issues: {
-                createComment: mock(async () => ({ data: { id: 1 } })),
-                listComments: mock(async () => ({ data: [] })),
+                createComment: makeCreateCommentMock(),
+                listComments: makeListCommentsMock(),
               },
               repos: {
-                get: mock(async () => ({ data: { default_branch: 'main' } })),
+                get: reposGet,
               },
               pulls: {
-                get: mock(async () => ({
-                  data: {
-                    head: { ref: 'feature', sha: 'abc123def', repo: { full_name: 'o/r' } },
-                    base: { repo: { full_name: 'o/r' } },
-                  },
-                })),
+                get: pullsGet,
               },
             },
           };
@@ -1549,8 +1591,7 @@ describe('GitHubAdapter', () => {
     } {
       const provider = makeMockProvider(opts);
       const adapter = new GitHubAdapter(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mock provider isn't structurally identical to the real interface (suffices for these tests)
-        { kind: 'app', provider: provider.provider as any },
+        { kind: 'app', provider: provider.provider },
         'fake-webhook-secret',
         mockLockManager,
         'archon'
@@ -1633,11 +1674,7 @@ describe('GitHubAdapter', () => {
     test('401 from Octokit triggers invalidateRepo + retry once', async () => {
       const { adapter, provider } = createAppModeAdapter();
       // First call to Octokit.createComment throws 401; second succeeds.
-      const octokit = (await provider.getOctokit('owner', 'repo')) as {
-        rest: {
-          issues: { createComment: ReturnType<typeof mock> };
-        };
-      };
+      const octokit = await provider.getOctokit('owner', 'repo');
       const err401 = Object.assign(new Error('Unauthorized'), { status: 401 });
       octokit.rest.issues.createComment
         .mockRejectedValueOnce(err401)
@@ -1651,9 +1688,7 @@ describe('GitHubAdapter', () => {
 
     test('T3: second consecutive 401 propagates (no infinite retry)', async () => {
       const { adapter, provider } = createAppModeAdapter();
-      const octokit = (await provider.getOctokit('owner', 'repo')) as {
-        rest: { issues: { createComment: ReturnType<typeof mock> } };
-      };
+      const octokit = await provider.getOctokit('owner', 'repo');
       const err401a = Object.assign(new Error('Unauthorized A'), { status: 401 });
       const err401b = Object.assign(new Error('Unauthorized B'), { status: 401 });
       // Two consecutive 401s — retry path must surface the second error and
@@ -1680,9 +1715,7 @@ describe('GitHubAdapter', () => {
       // BOTH caches) and not invalidateToken (which used to leave lookupCache
       // populated with the stale id).
       const { adapter, provider } = createAppModeAdapter();
-      const octokit = (await provider.getOctokit('owner', 'repo')) as {
-        rest: { issues: { createComment: ReturnType<typeof mock> } };
-      };
+      const octokit = await provider.getOctokit('owner', 'repo');
       const err401 = Object.assign(new Error('Unauthorized'), { status: 401 });
       octokit.rest.issues.createComment
         .mockRejectedValueOnce(err401)

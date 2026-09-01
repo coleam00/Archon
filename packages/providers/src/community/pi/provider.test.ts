@@ -1624,7 +1624,7 @@ describe('PiProvider', () => {
     expect(mockDispose).toHaveBeenCalledTimes(1);
   });
 
-  // ─── v2 wiring: thinking, tools, systemPrompt ─────────────────────────
+  // ─── v2 wiring: effort, tools, systemPrompt ─────────────────────────
 
   function scriptedAgentEnd(): FakeEvent[] {
     return [
@@ -1654,22 +1654,7 @@ describe('PiProvider', () => {
     ];
   }
 
-  test('nodeConfig.thinking=high passes thinkingLevel to createAgentSession', async () => {
-    process.env.GEMINI_API_KEY = 'sk-test';
-    resetScript(scriptedAgentEnd());
-
-    await consume(
-      new PiProvider().sendQuery('hi', '/tmp', undefined, {
-        model: 'google/gemini-2.5-pro',
-        nodeConfig: { thinking: 'high' },
-      })
-    );
-
-    const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
-    expect(callArgs.thinkingLevel).toBe('high');
-  });
-
-  test('nodeConfig.effort=medium passes thinkingLevel when thinking absent', async () => {
+  test('nodeConfig.effort=medium passes thinkingLevel', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
 
@@ -1682,42 +1667,6 @@ describe('PiProvider', () => {
 
     const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
     expect(callArgs.thinkingLevel).toBe('medium');
-  });
-
-  test('nodeConfig.thinking=off omits thinkingLevel (Pi runs without explicit thinking)', async () => {
-    process.env.GEMINI_API_KEY = 'sk-test';
-    resetScript(scriptedAgentEnd());
-
-    await consume(
-      new PiProvider().sendQuery('hi', '/tmp', undefined, {
-        model: 'google/gemini-2.5-pro',
-        nodeConfig: { thinking: 'off' },
-      })
-    );
-
-    const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
-    expect(callArgs.thinkingLevel).toBeUndefined();
-  });
-
-  test('Claude-shape object thinking yields system warning and is not applied', async () => {
-    process.env.GEMINI_API_KEY = 'sk-test';
-    resetScript(scriptedAgentEnd());
-
-    const { chunks } = await consume(
-      new PiProvider().sendQuery('hi', '/tmp', undefined, {
-        model: 'google/gemini-2.5-pro',
-        nodeConfig: { thinking: { type: 'enabled', budget_tokens: 4000 } },
-      })
-    );
-
-    const systemChunks = chunks.filter(
-      (c): c is { type: 'system'; content: string } =>
-        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
-    );
-    expect(systemChunks.some(c => c.content.includes('object form is Claude-specific'))).toBe(true);
-
-    const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
-    expect(callArgs.thinkingLevel).toBeUndefined();
   });
 
   test('nodeConfig.allowed_tools filters Pi built-in tools', async () => {
@@ -2098,7 +2047,6 @@ describe('PiProvider', () => {
 
   test('capabilities reflect v2 wiring', () => {
     const caps = new PiProvider().getCapabilities();
-    expect(caps.thinkingControl).toBe(true);
     expect(caps.effortControl).toBe(true);
     expect(caps.toolRestrictions).toBe(true);
     expect(caps.skills).toBe(true);

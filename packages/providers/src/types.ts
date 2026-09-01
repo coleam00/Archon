@@ -1,6 +1,8 @@
-// CONTRACT LAYER — no SDK imports, no runtime deps.
+// CONTRACT LAYER — no SDK imports, no runtime deps beyond SDK-free foundations.
 // @archon/workflows and @archon/core import from this subpath (@archon/providers/types).
-// HARD RULE: This file must never import SDK packages or other @archon/* packages.
+// HARD RULE: This file must never import SDK packages.
+
+import type { EffortRung } from '@archon/paths/effort';
 
 // ─── Provider Config Defaults ──────────────────────────────────────────────
 // Canonical definitions — @archon/core/config/config-types.ts imports from here.
@@ -26,10 +28,7 @@ export interface ClaudeProviderDefaults {
 export interface CodexProviderDefaults {
   [key: string]: unknown;
   model?: string;
-  /** The Codex SDK's `ModelReasoningEffort`, restated by hand because this file
-   *  may not import an SDK. `CODEX_EFFORTS` in ./codex/config.ts pins the same
-   *  values to the SDK's own type, so upstream drift fails type-check there. */
-  modelReasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
+  modelReasoningEffort?: EffortRung;
   /** Structurally matches @archon/workflows WebSearchMode */
   webSearchMode?: 'disabled' | 'cached' | 'live';
   additionalDirectories?: string[];
@@ -49,7 +48,7 @@ export interface CopilotProviderDefaults {
    * mirrors `CodexProviderDefaults.modelReasoningEffort` so users get one
    * consistent key across cross-provider configs.
    */
-  modelReasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+  modelReasoningEffort?: EffortRung;
   /**
    * Absolute path to the Copilot CLI binary. Required in compiled Archon
    * builds when `COPILOT_BIN_PATH` env var is not set. Dev-mode builds let
@@ -589,8 +588,7 @@ export interface NodeConfig {
    * across the @archon/providers/types contract boundary.
    */
   pi?: Pick<PiProviderDefaults, 'enableExtensions' | 'interactive' | 'extensionFlags'>;
-  effort?: string;
-  thinking?: unknown;
+  effort?: EffortRung;
   sandbox?: unknown;
   betas?: string[];
   output_format?: Record<string, unknown>;
@@ -686,7 +684,6 @@ export interface ProviderCapabilities {
   envInjection: boolean;
   costControl: boolean;
   effortControl: boolean;
-  thinkingControl: boolean;
   fallbackModel: boolean;
   sandbox: boolean;
   /**
@@ -796,6 +793,8 @@ export interface ProviderInfo {
   displayName: string;
   capabilities: ProviderCapabilities;
   builtIn: boolean;
+  /** The shared ladder when this provider accepts `effort:`; absent otherwise. */
+  effortLevels?: readonly EffortRung[];
 }
 
 /**

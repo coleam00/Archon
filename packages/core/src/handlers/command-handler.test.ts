@@ -1880,6 +1880,23 @@ describe('CommandHandler', () => {
         expect(result.message).toContain('/workspace/worktrees/feat-auth');
       });
 
+      test('should show authored outcome independently for an active workflow', async () => {
+        mockListWorkflowRuns.mockResolvedValueOnce([
+          makeWorkflowRun({
+            id: 'run-paused',
+            workflow_name: 'review',
+            status: 'paused',
+            outcome: 'succeeded',
+          }),
+        ]);
+
+        const result = await handleCommand(baseConversation, '/workflow status');
+
+        expect(result.message).toContain('review');
+        expect(result.message).toContain('(paused)');
+        expect(result.message).toContain('Authored outcome: succeeded');
+      });
+
       test('should show no-active message when no workflows running', async () => {
         mockListWorkflowRuns.mockResolvedValueOnce([]);
 

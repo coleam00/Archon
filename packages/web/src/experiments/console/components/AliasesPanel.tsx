@@ -203,7 +203,9 @@ export function AliasesPanel(): ReactElement {
                     <select
                       value={row.effort}
                       onChange={e => {
-                        setRow(i, { effort: e.target.value });
+                        setRow(i, {
+                          effort: effortOptions.find(option => option === e.target.value) ?? '',
+                        });
                       }}
                       aria-label="Effort"
                       className={SELECT_CLASS}

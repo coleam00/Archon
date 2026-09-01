@@ -39,6 +39,7 @@ import type {
   IncludeDirective,
   WorkflowBase,
   WorkflowRequirement,
+  ResolvedWorkflow,
 } from './schemas';
 import {
   isIncludeDirective,
@@ -65,6 +66,7 @@ import { resolveDeclaredInputs } from './workflow-inputs';
 import { resolveWorkflowName } from './router';
 import { parseWhenAtom, whenAtoms } from './when-atom';
 import { mapNodeTemplateSlots, mapNodeTemplateValueSlots } from './template-walker';
+import { resolveWorkflow, resolvedBodyNodes } from './graph-plan';
 import {
   COMPILED_LOOP_COMMAND,
   COMPOSED_NODE,
@@ -104,6 +106,10 @@ export interface ComposedSuspensionPath {
   reason: string;
 }
 
+type SuspensionWorkflow = Pick<WorkflowDefinition, 'name' | 'interactive'> & {
+  readonly nodes: readonly (DagNode | IncludeDirective)[];
+};
+
 /**
  * Find every path in a static include/workflow closure that can pause an instance.
  * Composed fan-out currently owns one parent cursor, not one cursor per item, so both
@@ -111,14 +117,14 @@ export interface ComposedSuspensionPath {
  * Durable interactive instances are tracked separately in #2810.
  */
 export function collectComposedSuspensionPaths(
-  root: WorkflowDefinition,
-  definitions: readonly WorkflowDefinition[]
+  root: SuspensionWorkflow,
+  definitions: readonly SuspensionWorkflow[]
 ): ComposedSuspensionPath[] {
   const byName = new Map(definitions.map(definition => [definition.name, definition]));
   const visited = new Set<string>();
   const found: ComposedSuspensionPath[] = [];
 
-  const visitDefinition = (definition: WorkflowDefinition): void => {
+  const visitDefinition = (definition: SuspensionWorkflow): void => {
     if (visited.has(definition.name)) return;
     visited.add(definition.name);
     if (definition.interactive === true) {
@@ -128,7 +134,7 @@ export function collectComposedSuspensionPaths(
   };
 
   const visitTarget = (name: string, ownerId: string, kind: 'include' | 'workflow'): void => {
-    let target: WorkflowDefinition | undefined;
+    let target: SuspensionWorkflow | undefined;
     try {
       target = kind === 'workflow' ? resolveWorkflowName(name, definitions) : byName.get(name);
     } catch (_err) {
@@ -325,7 +331,6 @@ const NODE_AFFECTING_WORKFLOW_FIELDS: readonly (readonly [
   ['provider', 'provider'],
   ['model', 'model'],
   ['effort', 'effort'],
-  ['thinking', 'thinking'],
   ['fallbackModel', 'fallbackModel'],
   ['betas', 'betas'],
   ['sandbox', 'sandbox'],
@@ -628,7 +633,7 @@ export interface ExpandedInclude {
  */
 function resolveIncludeInputs(
   includeNode: IncludeDirective,
-  child: WorkflowDefinition
+  child: Pick<WorkflowDefinition, 'name' | 'inputs'>
 ): Record<string, JsonValue> {
   try {
     return resolveDeclaredInputs(
@@ -689,7 +694,7 @@ function cloneNodeForInclude<T extends DagNode | IncludeDirective>(node: T): T {
  */
 function inlineInclude(
   includeNode: IncludeDirective,
-  child: WorkflowDefinition,
+  child: ResolvedWorkflow,
   commandContents: ReadonlyMap<string, IncludeCommandContent>
 ): ExpandedInclude {
   // Prove the child's lexical boundary before its nodes share the parent's flat id/output
@@ -701,20 +706,12 @@ function inlineInclude(
       `Node '${includeNode.id}': included workflow '${child.name}' is not hermetic: ${childStructureError}`
     );
   }
-  // `child` is the result of `expandOne`, which fully expands its own includes before
-  // returning (the function's own documented invariant: "Output workflows contain
-  // ZERO include nodes") — so `child.nodes` never actually holds an `IncludeDirective`
-  // here, even though `WorkflowDefinition.nodes`'s type admits one for the general
-  // pre-expansion case (#2486; splitting an authored-vs-resolved `WorkflowDefinition`
-  // type is #2487's job, not this one's).
-  const childNodes = child.nodes as DagNode[];
+  const childNodes = child.nodes;
   const prefix = `${includeNode.id}__`;
   const childTopLevelIds = new Set(childNodes.map(n => n.id));
   const rename = (id: string): string => (childTopLevelIds.has(id) ? prefix + id : id);
 
-  // Sinks: child top-level nodes that nothing else in the child depends on (definition order).
-  const childDeps = new Set(childNodes.flatMap(n => n.depends_on ?? []));
-  const sinkOriginalIds = childNodes.filter(n => !childDeps.has(n.id)).map(n => n.id);
+  const sinkOriginalIds = child.plan.sinks;
 
   const parentDeps = includeNode.depends_on ?? [];
   const entryTriggerRules = childNodes
@@ -840,7 +837,7 @@ function inlineInclude(
  */
 export function instantiateResolvedInclude(
   includeNode: IncludeDirective,
-  child: WorkflowDefinition,
+  child: ResolvedWorkflow,
   commandContents: ReadonlyMap<string, IncludeCommandContent> = new Map()
 ): ExpandedInclude {
   return inlineInclude(includeNode, child, commandContents);
@@ -850,6 +847,7 @@ export function instantiateResolvedInclude(
  * Workflow-level keys that are NOT dropped-config and must be excluded from the warning.
  *   - name/description: the block's identity, never inheritable config.
  *   - nodes: not dropped — they ARE what gets inlined.
+ *   - plan: engine-owned metadata consumed while inlining, never authored config.
  *   - tags: cosmetic UI keyword-inference metadata with no runtime effect, so dropping it
  *     is behaviorally inert; reporting it would be noise.
  */
@@ -857,6 +855,7 @@ const NON_DROPPED_WORKFLOW_KEYS: ReadonlySet<string> = new Set([
   'name',
   'description',
   'nodes',
+  'plan',
   'tags',
   // #2470: both are CONSUMED by inlining, not dropped — `returns` drives the block's
   // primarySink and `inputs` validates the caller's `with:`. Warning "dropped" would be
@@ -899,17 +898,17 @@ const COMPOSE_FAN_OUT_CONSUMED_WORKFLOW_KEYS: ReadonlySet<string> = new Set(['mu
  */
 function warnDroppedWorkflowLevelFields(
   includeNode: IncludeDirective,
-  child: WorkflowDefinition,
+  child: ResolvedWorkflow,
   consumedFields?: ReadonlySet<string>
 ): void {
-  const childRecord = child as Record<string, unknown>;
-  const droppedFields = Object.keys(child)
+  const droppedFields = Object.entries(child)
     .filter(
-      key =>
+      ([key, value]) =>
         !NON_DROPPED_WORKFLOW_KEYS.has(key) &&
         consumedFields?.has(key) !== true &&
-        childRecord[key] !== undefined
+        value !== undefined
     )
+    .map(([key]) => key)
     .sort();
   if (droppedFields.length === 0) return;
 
@@ -951,7 +950,7 @@ function warnDroppedWorkflowLevelFields(
 function materializeBlockCommandPrompts(
   node: DagNode,
   includeNode: IncludeDirective,
-  child: WorkflowDefinition,
+  child: Pick<WorkflowDefinition, 'name'>,
   commandContents: ReadonlyMap<string, IncludeCommandContent>,
   currentIds: ReadonlySet<string>,
   enclosingIds: ReadonlySet<string>,
@@ -1022,9 +1021,7 @@ function materializeBlockCommandPrompts(
   }
 
   if (isLoopGroupNode(node)) {
-    // A loop_group body is expanded (include-free) by the same recursive invariant
-    // as the top-level `childNodes` this function is ultimately called against.
-    const bodyNodes = node.loop_group.nodes as DagNode[];
+    const bodyNodes = resolvedBodyNodes(node.loop_group);
     const bodyIds = new Set(bodyNodes.map(body => body.id));
     const bodyEnclosingIds = new Set([...enclosingIds, ...currentIds]);
     return {
@@ -1070,10 +1067,10 @@ export function expandWorkflowIncludes(
   rawByName: Map<string, WorkflowDefinition>,
   commandContents?: ReadonlyMap<string, IncludeCommandContent>
 ): {
-  workflows: Map<string, WorkflowDefinition>;
+  workflows: Map<string, ResolvedWorkflow>;
   errors: WorkflowLoadError[];
 } {
-  const memo = new Map<string, WorkflowDefinition>();
+  const memo = new Map<string, ResolvedWorkflow>();
   const failed = new Set<string>();
   const errors: WorkflowLoadError[] = [];
 
@@ -1103,7 +1100,7 @@ export function expandWorkflowIncludes(
         // Width is runtime data, but the body remains ordinary static composition.
         // Expanding it here validates its complete include closure and carries its
         // requirements onto the parent before any upstream node can spend.
-        let child: WorkflowDefinition;
+        let child: ResolvedWorkflow;
         try {
           child = expandOne(node.include, [...stack, workflowName]);
         } catch (e) {
@@ -1150,7 +1147,7 @@ export function expandWorkflowIncludes(
       }
 
       if (isIncludeDirective(node)) {
-        let child: WorkflowDefinition;
+        let child: ResolvedWorkflow;
         try {
           child = expandOne(node.include, [...stack, workflowName]);
         } catch (e) {
@@ -1215,7 +1212,7 @@ export function expandWorkflowIncludes(
     return { nodes: expandedNodes, includedRequirements, renameIncludeRef };
   }
 
-  function expandOne(name: string, stack: string[]): WorkflowDefinition {
+  function expandOne(name: string, stack: string[]): ResolvedWorkflow {
     // Cycle + depth are checked BEFORE the memo so a node memoized via a shallow path
     // can never mask a too-deep or cyclic reference reaching it via a longer path.
     if (stack.includes(name)) {
@@ -1276,7 +1273,7 @@ export function expandWorkflowIncludes(
     }
 
     const dedupedRequires = [...new Set(requires)];
-    const result: WorkflowDefinition = {
+    const authoredResult: WorkflowDefinition = {
       ...collapsed,
       nodes: expanded.nodes,
       // `returns:` may name an include directive that no longer exists after flattening.
@@ -1288,10 +1285,11 @@ export function expandWorkflowIncludes(
         : {}),
       ...(dedupedRequires.length > 0 ? { requires: dedupedRequires } : {}),
     };
-    const outcomeDeclarationError = validateWorkflowOutcomeDeclaration(result);
+    const outcomeDeclarationError = validateWorkflowOutcomeDeclaration(authoredResult);
     if (outcomeDeclarationError !== null) {
       throw new IncludeExpansionError(outcomeDeclarationError);
     }
+    const result = resolveWorkflow(authoredResult);
     memo.set(name, result);
     return result;
   }
@@ -1310,7 +1308,7 @@ export function expandWorkflowIncludes(
     }
   }
 
-  const workflows = new Map<string, WorkflowDefinition>();
+  const workflows = new Map<string, ResolvedWorkflow>();
   for (const name of rawByName.keys()) {
     if (failed.has(name)) continue;
     const expanded = memo.get(name);

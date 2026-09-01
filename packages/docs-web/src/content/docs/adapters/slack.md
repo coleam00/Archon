@@ -189,7 +189,8 @@ You can also DM the bot directly -- no @mention needed:
 When a workflow runs in a Slack thread, Archon now:
 
 - Adds 🔄 to your triggering message when the run starts, and swaps it for ✅
-  on completion or ❌ on failure / cancellation
+  on execution completion or ❌ on execution failure / cancellation. If a declared
+  authored outcome disagrees, it also adds the outcome reaction, so both facts remain visible
 - Posts a single status message in the thread that's edited in place as DAG
   nodes start, complete, fail, or get skipped
 - Renders approval gates as interactive **Approve** / **Reject** buttons
@@ -200,6 +201,8 @@ When a workflow runs in a Slack thread, Archon now:
 - Appends a small italic cost / token footer after direct-chat replies
   (e.g. `_cost: $0.0234 · 12.4k tokens · stop: end_turn_`) and on the
   final status message when a workflow completes
+- Labels execution status and a non-null authored outcome separately in the final status message;
+  workflows without an authored outcome retain the existing status-only message
 - Annotates long responses split across multiple Slack messages with
   `_part i/n_` footers so it's clear they belong together
 

@@ -14,6 +14,7 @@ import type { DagNode } from '../schemas/dag-node';
 import { isGateNode, isLoopGroupNode } from '../schemas/dag-node';
 import { readComposedMeta } from '../compiled-command';
 import { resolveDeclaredInputs, WorkflowInputContractError } from '../workflow-inputs';
+import { resolvedBodyNodes } from '../graph-plan';
 
 /** Minimal shape needed to evaluate requirements — avoids a full WorkflowDefinition dep. */
 export interface RequirementBearingWorkflow {
@@ -81,9 +82,7 @@ export function findComposedApprovalGate(nodes: readonly DagNode[]): ComposedApp
     const origin = readComposedMeta(node)?.origin;
     if (origin !== undefined && isGateNode(node)) return { nodeId: node.id, origin };
     if (isLoopGroupNode(node)) {
-      // Invoked at run dispatch, against an already-expanded workflow (#2486) — the
-      // body never actually holds an `IncludeDirective` here.
-      const nested = findComposedApprovalGate(node.loop_group.nodes as DagNode[]);
+      const nested = findComposedApprovalGate(resolvedBodyNodes(node.loop_group));
       if (nested !== null) return nested;
     }
   }

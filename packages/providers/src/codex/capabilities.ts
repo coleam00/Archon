@@ -19,7 +19,6 @@ export const CODEX_CAPABILITIES: ProviderCapabilities = {
   // (#2556). Before that it was `false` — which was read as "Codex cannot do
   // reasoning depth" rather than the truth, "Codex spells it differently".
   effortControl: true,
-  thinkingControl: false,
   fallbackModel: false,
   sandbox: false,
   settingSources: false, // Claude Agent SDK-only knob (which setting sources the agent loads)

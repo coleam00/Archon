@@ -19,7 +19,7 @@ import type {
   ProviderCapabilities,
   CodexProviderDefaults,
 } from '../types';
-import { clampEffort } from '../shared/effort';
+import { clampEffort } from '@archon/paths/effort';
 import { CODEX_EFFORTS, parseCodexConfig } from './config';
 import { CODEX_CAPABILITIES } from './capabilities';
 import { resolveCodexBinaryPath } from './binary-resolver';

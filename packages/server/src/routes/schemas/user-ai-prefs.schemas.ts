@@ -8,9 +8,7 @@ import { z } from '@hono/zod-openapi';
 import { tierEntrySchema } from './config.schemas';
 
 /**
- * An alias entry — same shape as a tier entry ({ provider, model, effort?,
- * thinking? }). `thinking` is accepted on read for parity but DROPPED on
- * write, mirroring PATCH /api/config/tiers.
+ * An alias entry — same shape as a tier entry ({ provider, model, effort? }).
  */
 export const aliasEntrySchema = tierEntrySchema;
 

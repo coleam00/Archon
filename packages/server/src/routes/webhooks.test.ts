@@ -40,12 +40,12 @@ const rawPayload = JSON.stringify({
   comment: { id: 1001, body: '@archon help', user: { login: 'user123' } },
 });
 
-function postWebhook(
+async function postWebhook(
   app: OpenAPIHono,
   headers: Record<string, string>,
   body: string = rawPayload
 ): Promise<Response> {
-  return app.request('/webhooks/github', { method: 'POST', headers, body });
+  return await app.request('/webhooks/github', { method: 'POST', headers, body });
 }
 
 describe('POST /webhooks/github', () => {

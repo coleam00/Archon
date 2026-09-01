@@ -22,13 +22,16 @@ const mockDiscoverWorkflows = mock(async (_cwd: string | null) => ({
 }));
 
 // Default: returns a valid workflow. Use mockReturnValueOnce in tests that need a parse failure.
-const mockParseWorkflow = mock((content: string, _filename: string) => {
-  const name = /^name:\s*['"]?([^'"\n]+)['"]?$/m.exec(content)?.[1] ?? 'test';
-  return {
-    workflow: makeTestWorkflow({ name, description: 'Test workflow' }),
-    error: null,
-  };
-});
+const mockParseWorkflow = mock<(typeof import('@archon/workflows/loader'))['parseWorkflow']>(
+  (content: string, _filename: string) => {
+    const name = /^name:\s*['"]?([^'"\n]+)['"]?$/m.exec(content)?.[1] ?? 'test';
+    return {
+      workflow: makeTestWorkflow({ name, description: 'Test workflow' }),
+      error: null,
+      warnings: [],
+    };
+  }
+);
 
 const mockLoadRepoConfig = mock(
   async (_repoPath: string) => ({}) as { recommendedWorkflows?: string[] }
@@ -877,6 +880,7 @@ describe('PUT /api/workflows/:name', () => {
       mockParseWorkflow.mockReturnValueOnce({
         workflow: makeTestWorkflow({ name: 'my-workflow', description: 'test' }),
         error: null,
+        warnings: [],
       });
 
       const response = await app.request('/api/workflows/my-workflow', {

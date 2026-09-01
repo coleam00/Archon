@@ -18,6 +18,9 @@ on:
         type: boolean
         default: false
 
+env:
+  BUN_VERSION: '1.4.0'
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -62,7 +65,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.11
+          bun-version: ${{ env.BUN_VERSION }}
 
       - name: Setup uv (for Python script nodes)
         uses: astral-sh/setup-uv@v4
@@ -93,11 +96,6 @@ jobs:
           fi
           echo "all_success correctly failed the node"
 
-      # Declared dry-run fixtures (#2772). Exits 0 with "no fixtures found" until a
-      # fixture-bearing workflow merges; fails once any declared fixture regresses.
-      - name: Dry-run fixture suite
-        run: bun run cli workflow test --json
-
   # ─── Tier 1b: Container isolation (Docker, no API keys needed) ──────────
   # Deterministic slice of the container-isolation e2e (folder project +
   # --container). Bash-node-only, so no AI credential is required. Gated on
@@ -115,7 +113,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.11
+          bun-version: ${{ env.BUN_VERSION }}
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -214,7 +212,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.11
+          bun-version: ${{ env.BUN_VERSION }}
 
       - name: Install Claude Code CLI
         run: |
@@ -246,7 +244,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.11
+          bun-version: ${{ env.BUN_VERSION }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -280,7 +278,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.11
+          bun-version: ${{ env.BUN_VERSION }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

@@ -16,6 +16,7 @@ import {
   getWorkflowEventEmitter,
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
+import type { RunTerminalStatus } from '@archon/workflows/schemas/workflow-run';
 import { workflowOperations, workflowDb } from '@archon/core';
 import {
   REACTION_FAILURE,
@@ -23,11 +24,11 @@ import {
   REACTION_SUCCESS,
   buildApprovalBlocks,
   buildApprovalResolutionBlocks,
+  buildClosedApprovalBlocks,
   buildStatusBlocks,
   type NodeSnapshot,
   type NodeState,
   type RunSnapshot,
-  type RunTerminalState,
 } from './blocks';
 import { isSlackUserAuthorized } from './auth';
 import type { SlackAdapter, SlackMessageRef } from './adapter';
@@ -40,10 +41,10 @@ function getLog(): ReturnType<typeof createLogger> {
 
 interface ApprovalMessage {
   channel: string;
-  ts: string;
   /** Original message text we showed alongside the buttons; reused in the resolution edit. */
   message: string;
   nodeId: string;
+  postResult: Promise<string | undefined>;
 }
 
 interface RunState {
@@ -241,81 +242,143 @@ export class SlackWorkflowBridge {
       getLog().warn({ runId: event.runId }, 'slack.bridge_approval_no_run');
       return;
     }
+    const { authoredOutcome } = await this.readRunPresentation(event.runId);
+    if (this.runs.get(event.runId) !== state) return;
+    await this.updateStatusMessage(state, { status: 'paused', authoredOutcome });
+    if (this.runs.get(event.runId) !== state) return;
+
     const { blocks, fallbackText } = buildApprovalBlocks({
       runId: event.runId,
       nodeId: event.nodeId,
       message: event.message,
     });
-    try {
-      const result = await this.adapter.getApp().client.chat.postMessage({
+    const postResult = this.adapter
+      .getApp()
+      .client.chat.postMessage({
         channel: state.channel,
         thread_ts: state.threadTs,
         text: fallbackText,
         blocks,
+      })
+      .then(result => result.ts ?? undefined)
+      .catch(error => {
+        getLog().warn(
+          { err: error as Error, runId: event.runId, nodeId: event.nodeId },
+          'slack.bridge_approval_post_failed'
+        );
+        return undefined;
       });
-      if (result.ts) {
-        state.approvals.set(event.nodeId, {
-          channel: state.channel,
-          ts: result.ts,
-          message: event.message,
-          nodeId: event.nodeId,
-        });
-      }
-    } catch (error) {
-      getLog().warn(
-        { err: error as Error, runId: event.runId, nodeId: event.nodeId },
-        'slack.bridge_approval_post_failed'
-      );
+    const approval: ApprovalMessage = {
+      channel: state.channel,
+      message: event.message,
+      nodeId: event.nodeId,
+      postResult,
+    };
+    state.approvals.set(event.nodeId, approval);
+
+    const ts = await postResult;
+    if (!ts && state.approvals.get(event.nodeId) === approval) {
+      state.approvals.delete(event.nodeId);
     }
   }
 
   private async onTerminal(
     runId: string,
-    terminal: RunTerminalState,
+    terminal: RunTerminalStatus,
     conversationId: string,
     reason?: string
   ): Promise<void> {
     const state = this.runs.get(runId);
-    const trigger = this.adapter.getTriggeringMessage(conversationId);
-
-    // Replace running reaction with the terminal one.
-    if (trigger) {
-      await this.removeReactionSafe(trigger, REACTION_RUNNING);
-      await this.addReactionSafe(
-        trigger,
-        terminal === 'completed' ? REACTION_SUCCESS : REACTION_FAILURE
-      );
-    }
-
     if (state) {
-      // Cancel any pending debounce.
+      this.runs.delete(runId);
       if (state.pendingEdit) {
         clearTimeout(state.pendingEdit);
         state.pendingEdit = undefined;
       }
+    }
+    const closingApprovals = state ? this.closeApprovals(state, terminal) : undefined;
+    const trigger = this.adapter.getTriggeringMessage(conversationId);
+    const { authoredOutcome, totalCostUsd } = await this.readRunPresentation(runId);
 
-      // Pull final cost from the workflow run record (best-effort).
-      let totalCostUsd: number | undefined;
-      try {
-        const run = await workflowDb.getWorkflowRun(runId);
-        const raw = run?.metadata?.total_cost_usd;
-        if (typeof raw === 'number' && Number.isFinite(raw)) totalCostUsd = raw;
-      } catch (error) {
-        getLog().debug({ err: error as Error, runId }, 'slack.bridge_cost_lookup_failed');
+    // Replace running reaction with the terminal one.
+    if (trigger) {
+      await this.removeReactionSafe(trigger, REACTION_RUNNING);
+      const executionReaction = terminal === 'completed' ? REACTION_SUCCESS : REACTION_FAILURE;
+      await this.addReactionSafe(trigger, executionReaction);
+      const outcomeReaction =
+        authoredOutcome === 'succeeded'
+          ? REACTION_SUCCESS
+          : authoredOutcome === 'failed'
+            ? REACTION_FAILURE
+            : undefined;
+      if (outcomeReaction !== undefined && outcomeReaction !== executionReaction) {
+        await this.addReactionSafe(trigger, outcomeReaction);
       }
+    }
 
+    if (state) {
       await this.updateStatusMessage(state, {
-        terminal,
+        status: terminal,
+        authoredOutcome,
         totalCostUsd,
         failureReason: terminal === 'completed' ? undefined : reason,
       });
-
-      this.runs.delete(runId);
     }
+    await closingApprovals;
 
     // Triggering message is no longer needed for this conversation once the
     // run has terminated. (Reactions stay — we only clear the map entry.)
     this.adapter.clearTriggeringMessage(conversationId);
+  }
+
+  private async closeApprovals(state: RunState, terminalStatus: RunTerminalStatus): Promise<void> {
+    const approvals = [...state.approvals.values()];
+    state.approvals.clear();
+    await Promise.all(
+      approvals.map(async approval => {
+        const ts = await approval.postResult;
+        if (!ts) return;
+        const { blocks, fallbackText } = buildClosedApprovalBlocks({
+          runId: state.runId,
+          terminalStatus,
+          originalMessage: approval.message,
+        });
+        try {
+          await this.adapter.getApp().client.chat.update({
+            channel: approval.channel,
+            ts,
+            text: fallbackText,
+            blocks,
+          });
+        } catch (error) {
+          getLog().warn(
+            { err: error as Error, runId: state.runId, nodeId: approval.nodeId, ts },
+            'slack.bridge_approval_close_failed'
+          );
+        }
+      })
+    );
+  }
+
+  private async readRunPresentation(runId: string): Promise<{
+    authoredOutcome: RunSnapshot['authoredOutcome'];
+    totalCostUsd?: number;
+  }> {
+    try {
+      const run = await workflowDb.getWorkflowRun(runId);
+      if (!run) {
+        getLog().warn({ runId }, 'slack.bridge_run_not_found');
+        return { authoredOutcome: 'unavailable' };
+      }
+      const raw = run.metadata?.total_cost_usd;
+      return {
+        authoredOutcome: run.outcome ?? undefined,
+        totalCostUsd: typeof raw === 'number' && Number.isFinite(raw) ? raw : undefined,
+      };
+    } catch (error) {
+      getLog().warn({ err: error as Error, runId }, 'slack.bridge_run_lookup_failed');
+      return { authoredOutcome: 'unavailable' };
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -357,7 +420,9 @@ export class SlackWorkflowBridge {
 
   private async updateStatusMessage(
     state: RunState,
-    overlay: Partial<Pick<RunSnapshot, 'terminal' | 'totalCostUsd' | 'failureReason'>> = {}
+    overlay: Partial<
+      Pick<RunSnapshot, 'status' | 'authoredOutcome' | 'totalCostUsd' | 'failureReason'>
+    > = {}
   ): Promise<void> {
     if (!state.statusMessageTs) return;
     const snapshot: RunSnapshot = { ...this.snapshot(state), ...overlay };
@@ -382,6 +447,7 @@ export class SlackWorkflowBridge {
       runId: state.runId,
       workflowName: state.workflowName,
       startedAt: state.startedAt,
+      status: 'running',
       nodes: state.nodeOrder.map(id => state.nodes.get(id)).filter(isDefined),
     };
   }
@@ -461,6 +527,7 @@ export class SlackWorkflowBridge {
     const parsed = parseActionId(action.action_id ?? '', decision);
     if (!parsed) return;
     const { runId, nodeId } = parsed;
+    if (!this.runs.get(runId)?.approvals.has(nodeId)) return;
 
     // Top-level try/catch: applyResolutionEdit must also be guarded because the
     // block builder or chat.update can throw. Bolt has no app.error registered,

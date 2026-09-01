@@ -41,8 +41,11 @@ const mockRejectWorkflow = mock<
 >(async () => ({ cancelled: false, maxAttemptsReached: false }));
 const mockAbandonWorkflow = mock<(runId: string) => Promise<unknown>>(async () => ({}));
 const mockGetWorkflowRun = mock<
-  (runId: string) => Promise<{ metadata: Record<string, unknown> } | null>
->(async () => ({ metadata: { total_cost_usd: 0.0234 } }));
+  (runId: string) => Promise<{
+    metadata: Record<string, unknown>;
+    outcome: 'succeeded' | 'failed' | null;
+  } | null>
+>(async () => ({ metadata: { total_cost_usd: 0.0234 }, outcome: null }));
 
 mock.module('@archon/core', () => ({
   workflowOperations: {
@@ -63,18 +66,23 @@ void isSlackUserAuthorized;
 
 // ─── Test doubles for the SlackAdapter ────────────────────────────────────
 
+interface SlackBlock {
+  type?: string;
+  elements?: Array<{ action_id?: string; text?: string }>;
+}
+
 interface PostedMessage {
   channel: string;
   thread_ts?: string;
   text?: string;
-  blocks?: unknown[];
+  blocks?: SlackBlock[];
 }
 
 interface UpdatedMessage {
   channel: string;
   ts: string;
   text?: string;
-  blocks?: unknown[];
+  blocks?: SlackBlock[];
 }
 
 interface ReactionCall {
@@ -161,6 +169,31 @@ async function dispatchEvent(event: WorkflowEmitterEvent): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, 0));
 }
 
+function makeTerminalEvent(status: 'completed' | 'failed' | 'cancelled'): WorkflowEmitterEvent {
+  if (status === 'completed') {
+    return {
+      type: 'workflow_completed',
+      runId: 'r1',
+      workflowName: 'assist',
+      duration: 1234,
+    };
+  }
+  if (status === 'failed') {
+    return {
+      type: 'workflow_failed',
+      runId: 'r1',
+      workflowName: 'assist',
+      error: 'later node failed',
+    };
+  }
+  return {
+    type: 'workflow_cancelled',
+    runId: 'r1',
+    nodeId: 'review',
+    reason: 'cancelled by operator',
+  };
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────
 
 describe('SlackWorkflowBridge', () => {
@@ -174,7 +207,10 @@ describe('SlackWorkflowBridge', () => {
     mockAbandonWorkflow.mockReset();
     mockAbandonWorkflow.mockResolvedValue({});
     mockGetWorkflowRun.mockReset();
-    mockGetWorkflowRun.mockResolvedValue({ metadata: { total_cost_usd: 0.0234 } });
+    mockGetWorkflowRun.mockResolvedValue({
+      metadata: { total_cost_usd: 0.0234 },
+      outcome: null,
+    });
     capturedListener = undefined;
   });
 
@@ -248,12 +284,141 @@ describe('SlackWorkflowBridge', () => {
     const approval = posted[posted.length - 1];
     expect(approval?.thread_ts).toBe('111.0');
     expect(approval?.text).toContain('Approval needed');
-    const actionsBlock = (approval?.blocks ?? []).find(
-      (b: { type?: string }) => b?.type === 'actions'
-    ) as { elements?: Array<{ action_id?: string }> } | undefined;
+    const actionsBlock = (approval?.blocks ?? []).find(block => block.type === 'actions');
     expect(actionsBlock?.elements?.[0]?.action_id).toBe('approve:r1:review');
     expect(actionsBlock?.elements?.[1]?.action_id).toBe('reject:r1:review');
   });
+
+  test('approval_pending updates the run status with a persisted authored outcome', async () => {
+    const { adapter, updated, triggerMap } = makeFakeAdapter();
+    triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
+    mockGetConversationId.mockReturnValue('C1:111.0');
+    mockGetWorkflowRun.mockResolvedValue({ metadata: {}, outcome: 'succeeded' });
+
+    new SlackWorkflowBridge(adapter as never).attach();
+    await dispatchEvent({
+      type: 'workflow_started',
+      runId: 'r1',
+      workflowName: 'assist',
+      conversationId: 'conv-db-uuid',
+    });
+    await dispatchEvent({
+      type: 'approval_pending',
+      runId: 'r1',
+      nodeId: 'review',
+      message: 'Approve the change?',
+    });
+
+    const header = updated[updated.length - 1]?.blocks?.[0] as
+      | { text?: { text?: string } }
+      | undefined;
+    expect(header?.text?.text).toContain('Workflow paused');
+    expect(header?.text?.text).toContain('*Execution status:* `paused`');
+    expect(header?.text?.text).toContain('*Authored outcome:* `succeeded`');
+  });
+
+  test.each(['completed', 'failed', 'cancelled'] as const)(
+    'does not let a delayed approval lookup overwrite a %s terminal status',
+    async terminal => {
+      const { adapter, posted, updated, triggerMap } = makeFakeAdapter();
+      triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
+      mockGetConversationId.mockReturnValue('C1:111.0');
+
+      let resolveApprovalLookup!: (run: {
+        metadata: Record<string, unknown>;
+        outcome: 'succeeded' | 'failed' | null;
+      }) => void;
+      const approvalLookup = new Promise<{
+        metadata: Record<string, unknown>;
+        outcome: 'succeeded' | 'failed' | null;
+      }>(resolve => {
+        resolveApprovalLookup = resolve;
+      });
+      mockGetWorkflowRun
+        .mockImplementationOnce(() => approvalLookup)
+        .mockResolvedValueOnce({ metadata: {}, outcome: 'succeeded' });
+
+      new SlackWorkflowBridge(adapter as never).attach();
+      await dispatchEvent({
+        type: 'workflow_started',
+        runId: 'r1',
+        workflowName: 'assist',
+        conversationId: 'conv-db-uuid',
+      });
+      await dispatchEvent({
+        type: 'approval_pending',
+        runId: 'r1',
+        nodeId: 'review',
+        message: 'Approve the change?',
+      });
+
+      await dispatchEvent(makeTerminalEvent(terminal));
+
+      resolveApprovalLookup({ metadata: {}, outcome: 'succeeded' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      expect(posted).toHaveLength(1);
+      expect(updated).toHaveLength(1);
+      const header = updated[0]?.blocks?.[0] as { text?: { text?: string } } | undefined;
+      expect(header?.text?.text).toContain(`*Execution status:* \`${terminal}\``);
+      expect(header?.text?.text).not.toContain('paused');
+    }
+  );
+
+  test.each(['completed', 'failed', 'cancelled'] as const)(
+    'closes an approval posted after the run becomes %s',
+    async terminal => {
+      const { adapter, fakeApp, posted, updated, triggerMap, dispatchAction } = makeFakeAdapter();
+      triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
+      mockGetConversationId.mockReturnValue('C1:111.0');
+
+      new SlackWorkflowBridge(adapter as never).attach();
+      await dispatchEvent({
+        type: 'workflow_started',
+        runId: 'r1',
+        workflowName: 'assist',
+        conversationId: 'conv-db-uuid',
+      });
+
+      let resolveApprovalPost!: (result: { ts: string }) => void;
+      const approvalPost = new Promise<{ ts: string }>(resolve => {
+        resolveApprovalPost = resolve;
+      });
+      fakeApp.client.chat.postMessage.mockImplementationOnce(async args => {
+        posted.push(args);
+        return approvalPost;
+      });
+
+      await dispatchEvent({
+        type: 'approval_pending',
+        runId: 'r1',
+        nodeId: 'review',
+        message: 'Approve the change?',
+      });
+
+      await dispatchEvent(makeTerminalEvent(terminal));
+
+      resolveApprovalPost({ ts: '2.000' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      const closedApproval = updated.find(message => message.ts === '2.000');
+      expect(closedApproval).toBeDefined();
+      expect(closedApproval?.text).toContain(terminal);
+      expect(
+        closedApproval?.blocks?.some(block => (block as { type?: string }).type === 'actions')
+      ).toBe(false);
+
+      const actionBody = {
+        user: { id: 'U123' },
+        channel: { id: 'C1' },
+        message: { ts: '2.000' },
+      };
+      await dispatchAction('approve:r1:review', actionBody);
+      await dispatchAction('reject:r1:review', actionBody);
+      expect(mockApproveWorkflow).not.toHaveBeenCalled();
+      expect(mockRejectWorkflow).not.toHaveBeenCalled();
+    }
+  );
 
   test('approve button calls approveWorkflow and edits the message', async () => {
     const { adapter, posted, updated, triggerMap, dispatchAction } = makeFakeAdapter();
@@ -285,10 +450,9 @@ describe('SlackWorkflowBridge', () => {
 
     expect(mockApproveWorkflow).toHaveBeenCalledTimes(1);
     expect(mockApproveWorkflow).toHaveBeenCalledWith('r1');
-    expect(updated).toHaveLength(1);
-    expect(updated[0]?.channel).toBe('C1');
-    expect(updated[0]?.ts).toBe('2.000');
-    const headerText = (updated[0]?.blocks?.[0] as { text?: { text?: string } } | undefined)?.text
+    const resolution = updated.find(message => message.ts === '2.000');
+    expect(resolution?.channel).toBe('C1');
+    const headerText = (resolution?.blocks?.[0] as { text?: { text?: string } } | undefined)?.text
       ?.text;
     expect(headerText).toContain('Approved');
     expect(headerText).toContain('<@U123>');
@@ -321,7 +485,8 @@ describe('SlackWorkflowBridge', () => {
       message: { ts: '2.000' },
     });
 
-    const headerText = (updated[0]?.blocks?.[0] as { text?: { text?: string } } | undefined)?.text
+    const resolution = updated.find(message => message.ts === '2.000');
+    const headerText = (resolution?.blocks?.[0] as { text?: { text?: string } } | undefined)?.text
       ?.text;
     expect(headerText).toContain('completion condition was met');
     expect(headerText).not.toContain('completion signal');
@@ -358,7 +523,8 @@ describe('SlackWorkflowBridge', () => {
     // reason — the bridge must default it to 'Rejected' itself (#2740),
     // otherwise a new-mode gate's structured output.text records ''.
     expect(mockRejectWorkflow).toHaveBeenCalledWith('r1', 'Rejected');
-    const text = (updated[0]?.blocks?.[0] as { text?: { text?: string } } | undefined)?.text?.text;
+    const resolution = updated.find(message => message.ts === '2.000');
+    const text = (resolution?.blocks?.[0] as { text?: { text?: string } } | undefined)?.text?.text;
     expect(text).toContain('Rejected');
     expect(text).toContain('will retry');
   });
@@ -390,7 +556,8 @@ describe('SlackWorkflowBridge', () => {
     });
 
     expect(mockRejectWorkflow).toHaveBeenCalledTimes(1);
-    const text = (updated[0]?.blocks?.[0] as { text?: { text?: string } } | undefined)?.text?.text;
+    const resolution = updated.find(message => message.ts === '2.000');
+    const text = (resolution?.blocks?.[0] as { text?: { text?: string } } | undefined)?.text?.text;
     expect(text).toContain('Rejected');
     expect(text).toContain('max reject attempts reached');
   });
@@ -450,6 +617,10 @@ describe('SlackWorkflowBridge', () => {
     const { adapter, updated, reactionsAdded, reactionsRemoved, triggerMap } = makeFakeAdapter();
     triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
     mockGetConversationId.mockReturnValue('C1:111.0');
+    mockGetWorkflowRun.mockResolvedValue({
+      metadata: { total_cost_usd: 0.0234 },
+      outcome: 'succeeded',
+    });
 
     new SlackWorkflowBridge(adapter as never).attach();
     await dispatchEvent({
@@ -476,17 +647,105 @@ describe('SlackWorkflowBridge', () => {
       name: 'white_check_mark',
     });
     expect(updated.length).toBeGreaterThan(0);
-    const ctx = (updated[updated.length - 1]?.blocks ?? []).find(
-      (b: { type?: string }) => b?.type === 'context'
-    ) as { elements?: Array<{ text?: string }> } | undefined;
+    const ctx = (updated[updated.length - 1]?.blocks ?? []).find(block => block.type === 'context');
     expect(ctx?.elements?.[0]?.text).toContain('total cost: $0.0234');
+    const header = updated[updated.length - 1]?.blocks?.[0] as
+      | { text?: { text?: string } }
+      | undefined;
+    expect(header?.text?.text).toContain('*Execution status:* `completed`');
+    expect(header?.text?.text).toContain('*Authored outcome:* `succeeded`');
+  });
+
+  test('completed run with failed authored outcome shows both reactions and both labels', async () => {
+    const { adapter, updated, reactionsAdded, triggerMap } = makeFakeAdapter();
+    triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
+    mockGetConversationId.mockReturnValue('C1:111.0');
+    mockGetWorkflowRun.mockResolvedValue({ metadata: {}, outcome: 'failed' });
+
+    new SlackWorkflowBridge(adapter as never).attach();
+    await dispatchEvent({
+      type: 'workflow_started',
+      runId: 'r1',
+      workflowName: 'assist',
+      conversationId: 'conv-db-uuid',
+    });
+    await dispatchEvent({
+      type: 'workflow_completed',
+      runId: 'r1',
+      workflowName: 'assist',
+      duration: 1234,
+    });
+
+    expect(reactionsAdded.map(call => call.name)).toEqual(
+      expect.arrayContaining(['white_check_mark', 'x'])
+    );
+    const header = updated[updated.length - 1]?.blocks?.[0] as
+      | { text?: { text?: string } }
+      | undefined;
+    expect(header?.text?.text).toContain('*Execution status:* `completed`');
+    expect(header?.text?.text).toContain('*Authored outcome:* `failed`');
+  });
+
+  test('failed run with succeeded authored outcome keeps failure reaction and adds success', async () => {
+    const { adapter, reactionsAdded, triggerMap } = makeFakeAdapter();
+    triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
+    mockGetConversationId.mockReturnValue('C1:111.0');
+    mockGetWorkflowRun.mockResolvedValue({ metadata: {}, outcome: 'succeeded' });
+
+    new SlackWorkflowBridge(adapter as never).attach();
+    await dispatchEvent({
+      type: 'workflow_started',
+      runId: 'r1',
+      workflowName: 'assist',
+      conversationId: 'conv-db-uuid',
+    });
+    await dispatchEvent({
+      type: 'workflow_failed',
+      runId: 'r1',
+      workflowName: 'assist',
+      error: 'later node failed',
+    });
+
+    expect(reactionsAdded.map(call => call.name)).toEqual(
+      expect.arrayContaining(['x', 'white_check_mark'])
+    );
+  });
+
+  test('terminal run lookup failure marks the authored outcome unavailable', async () => {
+    const { adapter, updated, triggerMap } = makeFakeAdapter();
+    triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
+    mockGetConversationId.mockReturnValue('C1:111.0');
+    mockGetWorkflowRun.mockRejectedValue(new Error('database unavailable'));
+
+    new SlackWorkflowBridge(adapter as never).attach();
+    await dispatchEvent({
+      type: 'workflow_started',
+      runId: 'r1',
+      workflowName: 'assist',
+      conversationId: 'conv-db-uuid',
+    });
+    await dispatchEvent({
+      type: 'workflow_completed',
+      runId: 'r1',
+      workflowName: 'assist',
+      duration: 1234,
+    });
+
+    const terminal = updated[updated.length - 1];
+    const header = terminal?.blocks?.[0] as { text?: { text?: string } } | undefined;
+    expect(header?.text?.text).toContain(
+      '*Authored outcome:* unavailable — failed to read persisted run'
+    );
+    expect(terminal?.text).toContain(
+      'authored outcome: unavailable — failed to read persisted run'
+    );
   });
 
   test('workflow_failed swaps reaction to x and includes failure reason', async () => {
     const { adapter, updated, reactionsAdded, triggerMap } = makeFakeAdapter();
     triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
     mockGetConversationId.mockReturnValue('C1:111.0');
-    mockGetWorkflowRun.mockResolvedValue({ metadata: {} });
+    mockGetWorkflowRun.mockResolvedValue({ metadata: {}, outcome: null });
 
     new SlackWorkflowBridge(adapter as never).attach();
     await dispatchEvent({
@@ -507,9 +766,7 @@ describe('SlackWorkflowBridge', () => {
       timestamp: '111.0',
       name: 'x',
     });
-    const ctx = (updated[updated.length - 1]?.blocks ?? []).find(
-      (b: { type?: string }) => b?.type === 'context'
-    ) as { elements?: Array<{ text?: string }> } | undefined;
+    const ctx = (updated[updated.length - 1]?.blocks ?? []).find(block => block.type === 'context');
     expect(ctx?.elements?.[0]?.text).toContain('plan node crashed');
   });
 });

@@ -13,7 +13,9 @@ mock.module('@archon/paths', () => ({
 }));
 
 // Mock @archon/core/db/messages
-const mockAddMessage = mock(() => Promise.resolve());
+const mockAddMessage = mock<
+  (...args: Parameters<(typeof import('@archon/core/db/messages'))['addMessage']>) => Promise<void>
+>(async () => {});
 mock.module('@archon/core/db/messages', () => ({
   addMessage: mockAddMessage,
 }));

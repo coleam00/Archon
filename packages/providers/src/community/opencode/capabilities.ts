@@ -33,7 +33,6 @@ export const OPENCODE_CAPABILITIES: ProviderCapabilities = {
   envInjection: true,
   costControl: false,
   effortControl: false,
-  thinkingControl: false, // OpenCode handles effort/thinking via opencode.json agent config, not prompt body
   fallbackModel: false,
   sandbox: false,
   settingSources: false, // Claude Agent SDK-only knob (which setting sources the agent loads)

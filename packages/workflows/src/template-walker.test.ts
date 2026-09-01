@@ -63,7 +63,10 @@ test('walks dynamic template slots without mutating the source node', () => {
   } as unknown as DagNode;
 
   const slots: string[] = [];
-  visitNodeTemplateSlots(node, slot => slots.push(`${slot.path}:${slot.surface}`));
+  const bindings: string[] = [];
+  visitNodeTemplateSlots(node, slot => slots.push(`${slot.path}:${slot.surface}`), {
+    bindingVisitor: binding => bindings.push(`${binding.owner.id}:${binding.path}:${binding.name}`),
+  });
   expect(slots).toEqual([
     'systemPrompt:prompt',
     'agents.reviewer.prompt:prompt',
@@ -73,6 +76,11 @@ test('walks dynamic template slots without mutating the source node', () => {
     'loop_group.nodes.0.with.value:value',
     'loop_group.nodes.0.with.required.from:binding_from',
     'loop_group.nodes.0.with.required.if_skipped:binding_default',
+  ]);
+  expect(bindings).toEqual([
+    'run:loop_group.nodes.0.with.value:value',
+    'run:loop_group.nodes.0.with.required:required',
+    'run:loop_group.nodes.0.with.literal:literal',
   ]);
 
   const mapped = mapNodeTemplateSlots(node, slot => slot.value.replace('$setup', '$renamed'));

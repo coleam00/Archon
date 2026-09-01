@@ -7,13 +7,13 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, open, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
-  buildTopologicalLayers,
   checkComposedBlockBoundaries,
   checkTriggerRule,
   resolveNodeBindings,
   substituteNodeOutputRefs,
   type ShellInputContext,
 } from './dag-executor';
+import { planGraph, resolvedBodyNodes } from './graph-plan';
 import { evaluateCondition } from './condition-evaluator';
 import {
   COMPILED_LOOP_COMMAND,
@@ -40,6 +40,7 @@ import type { ResolvedAiProfile } from './model-validation';
 import type { WorkflowConfig } from './deps';
 import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
 import { defaultRunInputs } from './workflow-inputs';
+import { buildExecNodeEnvironment } from './exec-environment';
 import {
   inputEnvKey,
   isGateNode,
@@ -51,9 +52,11 @@ import {
   isLoopNode,
   isWaitNode,
   isWorkflowNode,
+  effortLevelSchema,
   type DagNode,
   type NodeOutput,
-  type WorkflowDefinition,
+  type GraphPlan,
+  type ResolvedWorkflow,
 } from './schemas';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -223,7 +226,7 @@ function collectsStub(node: DagNode): boolean {
 }
 
 /** Build the complete static stub map for an already-expanded workflow definition. */
-export function createDryRunStubScaffold(workflow: WorkflowDefinition): DryRunStubs {
+export function createDryRunStubScaffold(workflow: ResolvedWorkflow): DryRunStubs {
   const stubs = new Map<string, { candidates: DryRunStubValue[]; consumers: DagNode[] }>();
   const visit = (nodes: readonly DagNode[]): void => {
     for (const node of nodes) {
@@ -237,14 +240,10 @@ export function createDryRunStubScaffold(workflow: WorkflowDefinition): DryRunSt
           existing.consumers.push(node);
         }
       }
-      if (isLoopGroupNode(node)) visit(node.loop_group.nodes as DagNode[]);
+      if (isLoopGroupNode(node)) visit(resolvedBodyNodes(node.loop_group));
     }
   };
-  // "Already-expanded" per this function's own docblock — dry-run always simulates a
-  // fully-expanded WorkflowDefinition, so `workflow.nodes` never actually holds an
-  // `IncludeDirective` here even though the type admits one for the general
-  // pre-expansion case (#2486).
-  visit(workflow.nodes as DagNode[]);
+  visit(workflow.nodes);
   return Object.fromEntries(
     [...stubs].map(([id, entry]) => {
       const value = entry.candidates.find(candidate =>
@@ -262,7 +261,7 @@ export function createDryRunStubScaffold(workflow: WorkflowDefinition): DryRunSt
 
 /** Write a scaffold without ever overwriting an existing fixture. */
 export async function writeDryRunStubScaffold(
-  workflow: WorkflowDefinition,
+  workflow: ResolvedWorkflow,
   path: string
 ): Promise<DryRunStubs> {
   const stubs = createDryRunStubScaffold(workflow);
@@ -309,7 +308,7 @@ const dryRunNodeTypeSchema = z.enum([
 const dryRunResolutionSchema = z.object({
   provider: z.string(),
   model: z.string().optional(),
-  effort: z.string().optional(),
+  effort: effortLevelSchema.optional(),
   /** Where each value came from — 'node', 'model ref', 'workflow', 'assistant config', … */
   providerFrom: z.string(),
   modelFrom: z.string(),
@@ -448,7 +447,7 @@ function completedOutput(node: DagNode, stub: DryRunStubValue): NodeOutput {
 }
 
 interface DryRunContext {
-  workflow: WorkflowDefinition;
+  workflow: ResolvedWorkflow;
   userMessage: string;
   cwd: string;
   /**
@@ -473,13 +472,14 @@ interface DryRunContext {
    */
   inputs?: Record<string, JsonValue>;
   /**
-   * Per-simulation `$ARTIFACTS_DIR` / `$STATE_DIR`, under a uniquely named root in
+   * Per-simulation `$ARTIFACTS_DIR` / `$STATE_DIR` / `$LOG_DIR`, under a uniquely named root in
    * `<archonHome>/temp/` — NEVER inside the simulated repository, which holds source
    * only (#2619). Created lazily before the first `--exec-code` execution (#2617) and
    * removed when the simulation ends; a pure-stub dry run creates nothing.
    */
   artifactsDir: string;
   stateDir: string;
+  logDir: string;
   execCode: boolean;
   defaultStubs: boolean;
   pauseAtGates: boolean;
@@ -705,10 +705,18 @@ async function executeCodeNode(
         PWD: ctx.execWorkspace,
         OLDPWD: ctx.execWorkspace,
         ...inputEnv,
-        USER_MESSAGE: ctx.userMessage,
-        ARGUMENTS: ctx.userMessage,
-        ARTIFACTS_DIR: ctx.artifactsDir,
-        STATE_DIR: ctx.stateDir,
+        ...buildExecNodeEnvironment({
+          artifactsDir: ctx.artifactsDir,
+          stateDir: ctx.stateDir,
+          logDir: ctx.logDir,
+          workflowId: 'dry-run',
+          baseBranch: 'dry-run-base',
+          userMessage: ctx.userMessage,
+          loopUserInput: '',
+          loopPrevOutput: '',
+          rejectionReason: '',
+          issueContext: '',
+        }),
       },
     });
     return { output: result.stdout.replace(/\n$/, '') };
@@ -934,20 +942,17 @@ async function simulateLoopGroup(
   iteration?: number
 ): Promise<void> {
   if (!isLoopGroupNode(node)) return;
-  // Already-expanded (see createDryRunStubScaffold's justification above) — never
-  // actually holds an `IncludeDirective` here.
-  const bodyNodes = node.loop_group.nodes as DagNode[];
+  const bodyNodes = resolvedBodyNodes(node.loop_group);
+  const bodyPlan = planGraph(bodyNodes);
   let lastOutput = '';
   for (let current = 1; current <= node.loop_group.max_iterations; current++) {
     const bodyOutputs = new Map(outputs);
-    await simulateNodes(bodyNodes, bodyOutputs, ctx, current);
-    const bodyDependencies = new Set(node.loop_group.nodes.flatMap(body => body.depends_on ?? []));
+    await simulateNodes(bodyPlan, bodyOutputs, ctx, current);
     lastOutput =
-      node.loop_group.nodes
-        .filter(body => !bodyDependencies.has(body.id))
-        .map(body => bodyOutputs.get(body.id))
+      bodyPlan.sinks
+        .map(bodyId => bodyOutputs.get(bodyId))
         .find(output => output?.state === 'completed' && output.output.trim())?.output ?? '';
-    const failed = node.loop_group.nodes.some(body => bodyOutputs.get(body.id)?.state === 'failed');
+    const failed = bodyNodes.some(body => bodyOutputs.get(body.id)?.state === 'failed');
     if (failed) {
       recordFailed(
         node,
@@ -1198,12 +1203,12 @@ async function simulateNode(
 }
 
 async function simulateNodes(
-  nodes: readonly DagNode[],
+  plan: GraphPlan,
   outputs: Map<string, NodeOutput>,
   ctx: DryRunContext,
   iteration?: number
 ): Promise<void> {
-  for (const layer of buildTopologicalLayers(nodes)) {
+  for (const layer of plan.layers) {
     for (const node of layer) {
       if (ctx.halted) return;
       await simulateNode(node, outputs, ctx, iteration);
@@ -1212,7 +1217,7 @@ async function simulateNodes(
 }
 
 export async function dryRunWorkflow(options: {
-  workflow: WorkflowDefinition;
+  workflow: ResolvedWorkflow;
   userMessage: string;
   cwd: string;
   stubs?: DryRunStubs;
@@ -1265,6 +1270,7 @@ export async function dryRunWorkflow(options: {
     ...(inputs ? { inputs } : {}),
     artifactsDir: join(tempRoot, 'artifacts'),
     stateDir: join(tempRoot, 'state'),
+    logDir: join(tempRoot, 'logs'),
     execCode: options.execCode ?? false,
     defaultStubs: options.defaultStubs ?? false,
     pauseAtGates: options.pauseAtGates ?? false,
@@ -1283,8 +1289,7 @@ export async function dryRunWorkflow(options: {
   };
   const outputs = new Map<string, NodeOutput>();
   try {
-    // Already-expanded (see createDryRunStubScaffold's justification above).
-    await simulateNodes(options.workflow.nodes as DagNode[], outputs, ctx);
+    await simulateNodes(options.workflow.plan, outputs, ctx);
   } finally {
     // Simulations are throwaway: whatever exec'd nodes wrote is discarded with the
     // per-run root (`force: true` makes the nothing-executed case a no-op). A cleanup
@@ -1297,10 +1302,8 @@ export async function dryRunWorkflow(options: {
     });
   }
 
-  const dependencies = new Set(options.workflow.nodes.flatMap(node => node.depends_on ?? []));
-  const summary = options.workflow.nodes
-    .filter(node => !dependencies.has(node.id))
-    .map(node => outputs.get(node.id))
+  const summary = options.workflow.plan.sinks
+    .map(nodeId => outputs.get(nodeId))
     .find(output => output?.state === 'completed' && output.output.trim())?.output;
   const anyFailed = [...outputs.values()].some(output => output.state === 'failed');
   const outcome =

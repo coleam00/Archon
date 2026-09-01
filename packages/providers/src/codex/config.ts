@@ -4,7 +4,7 @@
  */
 import type { ModelReasoningEffort } from '@openai/codex-sdk';
 import type { CodexProviderDefaults } from '../types';
-import type { AssertNever } from '../shared/effort';
+import { EFFORT_LADDER, type AssertNever } from '@archon/paths/effort';
 import {
   assertKnownRunConfigKeys,
   invalidRunConfigValue,
@@ -15,25 +15,9 @@ import {
 export type { CodexProviderDefaults } from '../types';
 
 /**
- * The reasoning-depth rungs the Codex SDK accepts, as a runtime list.
- *
- * `satisfies readonly ModelReasoningEffort[]` is the enforcement `types.ts`
- * cannot provide: that file is the contract layer and may never import an SDK,
- * so `CodexProviderDefaults.modelReasoningEffort` has to restate the union by
- * hand. Pinning the list to the SDK's own type here turns a rename or removal
- * upstream into a compile error instead of a value the SDK rejects at run time,
- * and `isCodexEffort` below narrows without a cast — which is what proves the
- * hand-written union still matches.
+ * Bind the shared ladder to the Codex SDK vocabulary in both directions.
  */
-export const CODEX_EFFORTS = [
-  'minimal',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-  'max',
-  'ultra',
-] as const satisfies readonly ModelReasoningEffort[];
+export const CODEX_EFFORTS = EFFORT_LADDER satisfies readonly ModelReasoningEffort[];
 
 /** Coverage, which `satisfies` above cannot express — a rung the SDK gains must
  *  be added here rather than silently clamped away. See `AssertNever`. */

@@ -13,7 +13,7 @@
  */
 import { isLiteralSpec, resolveModelSpec, isTierName } from './model-validation';
 import type { ModelAliasPreset, ResolvedAiProfile, TierName } from './model-validation';
-import type { DagNode } from './schemas';
+import type { DagNode, EffortLevel } from './schemas';
 import { readComposedMeta } from './compiled-command';
 
 /**
@@ -36,9 +36,9 @@ export interface NodeModelResolution {
   provider: string;
   model: string | undefined;
   /** Reasoning depth before any provider capability gate is applied. */
-  effort: string | undefined;
+  effort: EffortLevel | undefined;
   /** Reasoning depth the AUTHOR declared (node or workflow), before any preset fills in. */
-  declaredEffort: string | undefined;
+  declaredEffort: EffortLevel | undefined;
   /** Tier keyword when the effective model ref was one — drives `node_started` attribution. */
   tier: TierName | undefined;
   /** Set when the node's `model:` resolved through a tier or `@alias` preset. */
@@ -62,7 +62,7 @@ export interface WorkflowModelScope {
   preset: ModelAliasPreset | undefined;
   tier: TierName | undefined;
   /** Workflow-level `effort:`, still read as a per-node fallback. */
-  effort: string | undefined;
+  effort: EffortLevel | undefined;
   /** Where the scope's own provider came from, so a node inheriting it can say. */
   providerOrigin: ResolutionOrigin;
 }
@@ -178,7 +178,7 @@ export function resolveNodeModel(
  * over an unexpanded definition, and the fallbacks have to behave the same for it.
  */
 export function resolveWorkflowModelScope(
-  workflow: { provider?: string; model?: string; effort?: string },
+  workflow: { provider?: string; model?: string; effort?: EffortLevel },
   defaultAssistant: string,
   assistantModels: Readonly<Record<string, string | undefined>>,
   aiProfile?: ResolvedAiProfile

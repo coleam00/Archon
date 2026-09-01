@@ -47,7 +47,7 @@ import {
 } from './schemas';
 import { parseWorkflow, resetClassPlacementWarningForTests, type ParseResult } from './loader';
 import { COMPILED_LOOP_COMMAND, type LoopWithCompiledCommand } from './compiled-command';
-import { workflowDefinitionSchema } from './schemas/workflow';
+import { KNOWN_WORKFLOW_KEYS } from './schemas/workflow';
 import type { WorkflowDefinition } from './schemas/workflow';
 import type { DagNode, IncludeDirective, BindingDirective } from './schemas';
 import type { JsonValue } from './output-ref';
@@ -937,8 +937,8 @@ nodes:
       expect(result.workflows[0].parseWarnings ?? []).toEqual([]);
     });
 
-    it('should round-trip workflow-level effort/thinking/fallbackModel/betas/sandbox', () => {
-      // Regression: these 5 workflow-level fields are declared on
+    it('should round-trip workflow-level effort/fallbackModel/betas/sandbox', () => {
+      // Regression: these workflow-level fields are declared on
       // workflowBaseSchema and consumed by the DAG executor's workflowLevelOptions
       // (the object literal at the top of executeDagWorkflow), but the loader's
       // manual workflow constructor used to silently drop them. YAML → loader →
@@ -950,9 +950,6 @@ nodes:
 description: workflow-level fallback options
 provider: claude
 effort: high
-thinking:
-  type: enabled
-  budgetTokens: 4000
 fallbackModel: claude-haiku-4-5
 betas:
   - foo
@@ -964,7 +961,6 @@ nodes:
     prompt: p
 `).workflow;
       expect(wf.effort).toBe('high');
-      expect(wf.thinking).toEqual({ type: 'enabled', budgetTokens: 4000 });
       expect(wf.fallbackModel).toBe('claude-haiku-4-5');
       expect(wf.betas).toEqual(['foo', 'bar']);
       expect(wf.sandbox).toEqual({ enabled: true });
@@ -976,9 +972,8 @@ nodes:
       const yaml = `name: bare\ndescription: no fallbacks\nnodes:\n  - id: only\n    prompt: p\n`;
       await writeFile(join(workflowDir, 'bare.yaml'), yaml);
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      const wf = result.workflows[0].workflow as Record<string, unknown>;
+      const wf = result.workflows[0].workflow;
       expect(wf.effort).toBeUndefined();
-      expect(wf.thinking).toBeUndefined();
       expect(wf.fallbackModel).toBeUndefined();
       expect(wf.betas).toBeUndefined();
       expect(wf.sandbox).toBeUndefined();
@@ -993,8 +988,6 @@ nodes:
 description: invalid fallback fields are dropped
 provider: claude
 effort: nuclear
-thinking:
-  type: enhanced
 fallbackModel: ''
 betas: []
 sandbox: 'yes'
@@ -1007,9 +1000,8 @@ nodes:
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toEqual([]);
       expect(result.workflows).toHaveLength(1);
-      const wf = result.workflows[0].workflow as Record<string, unknown>;
+      const wf = result.workflows[0].workflow;
       expect(wf.effort).toBeUndefined();
-      expect(wf.thinking).toBeUndefined();
       expect(wf.fallbackModel).toBeUndefined();
       expect(wf.betas).toBeUndefined();
       expect(wf.sandbox).toBeUndefined();
@@ -1017,23 +1009,41 @@ nodes:
       // The structured warn events are the operator-facing surface — assert each fired.
       const events = mockLogger.warn.mock.calls.map(call => call[1]);
       expect(events).toContain('invalid_workflow_effort_value_ignored');
-      expect(events).toContain('invalid_workflow_thinking_value_ignored');
       expect(events).toContain('invalid_workflow_fallback_model_value_ignored');
       expect(events).toContain('invalid_workflow_betas_value_ignored');
       expect(events).toContain('invalid_workflow_sandbox_value_ignored');
     });
 
-    it('should accept the thinking string shorthand at the workflow level', () => {
-      // thinkingConfigSchema preprocesses 'enabled' → { type: 'enabled' }. The
-      // round-trip test covers the object form; this covers the shorthand path.
-      const wf = parseWorkflowYaml(`name: thinking-shorthand
-description: thinking as a bare string
+    it('should reject retired thinking config and name effort', () => {
+      const result = parseWorkflow(
+        `name: retired-thinking
+description: retired option
 thinking: enabled
 nodes:
   - id: only
     prompt: p
-`).workflow;
-      expect(wf.thinking).toEqual({ type: 'enabled' });
+`,
+        'retired.yaml'
+      );
+      expect(result.workflow).toBeNull();
+      expect(result.error?.errorType).toBe('validation_error');
+      expect(result.error?.error).toContain('effort:');
+    });
+
+    it('should reject retired thinking config on a node and name effort', () => {
+      const result = parseWorkflow(
+        `name: retired-node-thinking
+description: retired option
+nodes:
+  - id: only
+    prompt: p
+    thinking: adaptive
+`,
+        'retired-node.yaml'
+      );
+      expect(result.workflow).toBeNull();
+      expect(result.error?.errorType).toBe('validation_error');
+      expect(result.error?.error).toContain('effort:');
     });
 
     it('should trim surrounding whitespace from workflow-level fallbackModel', () => {
@@ -6592,7 +6602,6 @@ nodes:
           envInjection: false,
           costControl: false,
           effortControl: false,
-          thinkingControl: false,
           fallbackModel: false,
           sandbox: false,
           settingSources: false,
@@ -6612,7 +6621,6 @@ nodes:
             envInjection: false,
             costControl: false,
             effortControl: false,
-            thinkingControl: false,
             fallbackModel: false,
             sandbox: false,
             settingSources: false,
@@ -6662,7 +6670,6 @@ nodes:
           envInjection: false,
           costControl: false,
           effortControl: false,
-          thinkingControl: false,
           fallbackModel: false,
           sandbox: false,
           settingSources: false,
@@ -6682,7 +6689,6 @@ nodes:
             envInjection: false,
             costControl: false,
             effortControl: false,
-            thinkingControl: false,
             fallbackModel: false,
             sandbox: false,
             settingSources: false,
@@ -7053,23 +7059,6 @@ nodes:
         '      properties:',
         '        anything_at_all:',
         '          type: string',
-      ]);
-      expect(pw).toEqual([]);
-    });
-
-    it('should not treat a thinking: config as an unknown-key surface', async () => {
-      // `thinking` is a z.preprocess over a union, not an object shape — there
-      // is nothing to compare keys against, so it must stay exempt rather than
-      // warning on its own legitimate fields.
-      const pw = await warningsFor([
-        'name: test',
-        'description: test',
-        'nodes:',
-        '  - id: n',
-        '    prompt: hello',
-        '    thinking:',
-        '      type: enabled',
-        '      budgetTokens: 4096',
       ]);
       expect(pw).toEqual([]);
     });
@@ -8143,7 +8132,8 @@ nodes:
  * 2d7bf587 (2026-07-16) — six weeks in which the GitHub capability gate could never
  * fire for any discovered workflow, fixed incidentally inside an unrelated PR.
  *
- * This is the guard. The field list is DERIVED from `workflowDefinitionSchema.shape`,
+ * This is the guard. The field list is derived from `KNOWN_WORKFLOW_KEYS`, which
+ * itself derives from the workflow object schema,
  * so a new schema field fails the test until it is given a fixture here — the same
  * "the derived check fails until the new thing is registered" ratchet used by
  * `check:capability-matrix` and the schema-parity test in `sqlite.test.ts`.
@@ -8161,7 +8151,7 @@ describe('workflow-level field parity (#2457)', () => {
    * One fixture per workflow-level schema key: a YAML fragment setting the field, and a
    * predicate proving it survived `parseWorkflow`. `present` is deliberately a survival
    * check rather than deep equality — several fields are normalised on the way through
-   * (tags deduped, betas trimmed, thinking preprocessed), and this guard is about the
+   * (tags deduped, betas trimmed), and this guard is about the
    * field reaching the result at all, not about how it is parsed.
    */
   const FIELD_FIXTURES: Record<
@@ -8185,7 +8175,6 @@ describe('workflow-level field parity (#2457)', () => {
     webSearchMode: { yaml: 'webSearchMode: live', present: w => w.webSearchMode === 'live' },
     interactive: { yaml: 'interactive: true', present: w => w.interactive === true },
     effort: { yaml: 'effort: high', present: w => w.effort === 'high' },
-    thinking: { yaml: 'thinking: adaptive', present: w => w.thinking?.type === 'adaptive' },
     fallbackModel: {
       yaml: 'fallbackModel: haiku',
       present: w => w.fallbackModel === 'haiku',
@@ -8230,7 +8219,7 @@ describe('workflow-level field parity (#2457)', () => {
     },
   };
 
-  const schemaKeys = Object.keys(workflowDefinitionSchema.shape);
+  const schemaKeys = [...KNOWN_WORKFLOW_KEYS];
 
   it('has a fixture for every workflow-level schema key (the ratchet)', () => {
     const missing = schemaKeys.filter(k => !(k in FIELD_FIXTURES));

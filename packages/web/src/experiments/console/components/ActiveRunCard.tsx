@@ -9,6 +9,7 @@ import type { Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { statusTextClass, runStatusLabel } from '../lib/run-status';
+import { RunOutcomeBadge } from './RunOutcomeBadge';
 
 /** Present + non-empty — narrows `string | null | undefined` to `string`. */
 const hasValue = (v: string | null | undefined): v is string => v != null && v !== '';
@@ -108,6 +109,7 @@ export function ActiveRunCard({
           >
             {runStatusLabel(run)}
           </span>
+          <RunOutcomeBadge outcome={run.outcome} />
           <span className="mx-1 h-3 w-px shrink-0 bg-border" aria-hidden />
           <span className="text-sm font-medium text-text-primary">{run.workflow}</span>
           <span className="font-mono text-[11px] text-text-tertiary">{shortRunId(run.id)}</span>

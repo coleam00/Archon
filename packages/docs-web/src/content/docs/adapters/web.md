@@ -145,18 +145,33 @@ For paused workflows (approval gates), the progress card shows **Approve** and *
 When a workflow reaches a terminal state (completed, failed, or cancelled), the progress card is replaced by a result card in the conversation. The result card shows:
 
 - **Status icon** -- Visual indicator for completed, failed, or cancelled
-- **Header** -- "Workflow complete", "Workflow failed", or "Workflow cancelled" depending on outcome
+- **Header** -- "Workflow complete", "Workflow failed", or "Workflow cancelled" based on execution status
 - **Node count** -- How many nodes completed out of the total nodes that reached a terminal state (e.g., `3/4 nodes`)
 - **Duration** -- Total elapsed time for the run
 - **Artifacts** -- Any files or outputs produced by the workflow, with direct links
+
+These legacy conversation cards present execution status only.
+
+### Console Run Surfaces
+
+The maintained console at `/console` shows authored outcomes on active and recent run cards,
+approval cards, result cards, and run details. When a workflow authors an outcome, the console
+labels execution status and authored outcome (`succeeded` or `failed`) separately.
+
+Execution status and authored outcome can disagree. A completed run with a failed outcome finished
+execution normally but did not meet the workflow's own success condition; a paused or failed run
+with a succeeded outcome authored success before execution stopped. If no outcome was authored,
+the console keeps its status-only presentation.
 
 Click the arrow button in the result card header to open the full execution detail page.
 
 ### Execution Detail Page
 
-Click on a workflow run (from the dashboard or progress card) to open the execution detail page at `/legacy/workflows/runs/:runId`. This shows:
+Click a workflow run in the console to open its execution detail page at
+`/console/p/:projectId/r/:runId`. This shows:
 
 - The full DAG graph with per-node status
+- Execution status and authored outcome as separate labels when an outcome exists
 - Step-by-step logs for each node
 - Artifacts produced by the workflow
 - Actions to resume, cancel, or abandon the run

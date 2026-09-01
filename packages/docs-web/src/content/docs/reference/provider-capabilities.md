@@ -48,7 +48,6 @@ unsupported provider at load time and an implicitly resolved one at runtime.
 | Env injection (`env:`) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Cost control (`maxBudgetUsd`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Effort control (`effort`) | ✅ | ✅ | ❌ | ✅ | ✅ |
-| Thinking control (`thinking`) | ✅ | ❌ | ❌ | ✅ | ✅ |
 | Fallback model (`fallbackModel`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Sandbox (`sandbox`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Setting sources (`settingSources`) | ✅ | ❌ | ❌ | ❌ | ❌ |

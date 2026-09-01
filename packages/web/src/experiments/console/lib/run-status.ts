@@ -30,13 +30,14 @@ export function runStatusLabel(run: Run): string {
  *   running   → blue  (active; pulsing strip)
  *   paused    → amber (waiting for human; pulsing dot)
  *   failed    → red
- *   completed → green (positive close; muted strip, no pulse)
+ *   completed → green (execution reached completion; muted strip, no pulse)
  *   cancelled → grey  (muted, user-stopped)
  *
  * The running blue uses an ad-hoc arbitrary value because the spike's theme
  * introduces `--running` as a new token that isn't in the production
  * `@theme inline` map. Completed reuses the production `--success` (green)
- * at lower opacity so it signals "finished OK" without shouting.
+ * at lower opacity so it signals lifecycle completion without replacing the
+ * separate workflow-authored outcome.
  */
 export const statusStripClass: Record<RunStatus, string> = {
   running:

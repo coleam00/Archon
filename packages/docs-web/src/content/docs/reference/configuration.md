@@ -117,7 +117,7 @@ tiers:
 
 # Model aliases — optional custom refs for project workflows.
 aliases:
-  '@reasoning': { provider: claude, model: opus, thinking: { type: enabled, budgetTokens: 8000 } }
+  '@reasoning': { provider: claude, model: opus, effort: max }
 
 ```
 

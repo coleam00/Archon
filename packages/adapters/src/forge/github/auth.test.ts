@@ -1,6 +1,8 @@
 /**
  * Unit tests for GitHub authorization utilities
  */
+import { describe, expect, test } from 'bun:test';
+
 import { parseAllowedUsers, isGitHubUserAuthorized } from './auth';
 
 describe('github-auth', () => {

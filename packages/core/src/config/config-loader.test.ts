@@ -103,6 +103,30 @@ concurrency:
       expect(config.concurrency?.maxConversations).toBe(5);
     });
 
+    test.each([
+      ['tiers', 'medium'],
+      ['aliases', "'@deep'"],
+    ] as const)(
+      'rejects retired thinking in global %s config and names effort',
+      async (field, entry) => {
+        mockLogger.error.mockClear();
+        mockFsReadFile.mockResolvedValue(`
+${field}:
+  ${entry}: { provider: claude, model: opus, thinking: adaptive }
+`);
+
+        const config = await loadGlobalConfig();
+
+        expect(config).toEqual({});
+        const [{ err }, event] = mockLogger.error.mock.calls.at(-1) as unknown as [
+          { err: Error },
+          string,
+        ];
+        expect(event).toBe('config_load_error');
+        expect(err.message).toMatch(new RegExp(`${field}\\..*thinking.*effort:`));
+      }
+    );
+
     test('rejects malformed quota continuation policy at config ingress', async () => {
       mockFsReadFile.mockResolvedValue(`
 workflows:
@@ -233,6 +257,31 @@ workflows:
       const config = await loadRepoConfig('/test/repo');
       expect(config).toEqual({});
     });
+
+    test.each([
+      ['tiers', 'medium'],
+      ['aliases', "'@deep'"],
+    ] as const)(
+      'rejects retired thinking in repository %s config and names effort',
+      async (field, entry) => {
+        mockLogger.error.mockClear();
+        mockFsReadFile.mockResolvedValue(`
+assistant: codex
+${field}:
+  ${entry}: { provider: claude, model: opus, thinking: adaptive }
+`);
+
+        const config = await loadRepoConfig('/test/repo');
+
+        expect(config).toEqual({});
+        const [{ err }, event] = mockLogger.error.mock.calls.at(-1) as unknown as [
+          { err: Error },
+          string,
+        ];
+        expect(event).toBe('config_load_error');
+        expect(err.message).toMatch(new RegExp(`${field}\\..*thinking.*effort:`));
+      }
+    );
 
     test('logs error for invalid YAML syntax', async () => {
       mockLogger.error.mockClear();

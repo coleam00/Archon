@@ -12,6 +12,10 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 
+type PromptWorkflow = Pick<WorkflowDefinition, 'name' | 'description'> & {
+  readonly nodes: readonly unknown[];
+};
+
 /**
  * Format a single project for the orchestrator prompt.
  */
@@ -28,7 +32,7 @@ export function formatProjectSection(codebase: Codebase): string {
 /**
  * Format workflow list for the orchestrator prompt.
  */
-export function formatWorkflowSection(workflows: readonly WorkflowDefinition[]): string {
+export function formatWorkflowSection(workflows: readonly PromptWorkflow[]): string {
   if (workflows.length === 0) {
     return 'No workflows available. Users can create workflows in `.archon/workflows/` as YAML files.\n';
   }
@@ -286,7 +290,7 @@ IMPORTANT: Always clone into ~/.archon/workspaces/{owner}/{repo}/source unless t
  */
 export function buildOrchestratorPrompt(
   codebases: readonly Codebase[],
-  workflows: readonly WorkflowDefinition[]
+  workflows: readonly PromptWorkflow[]
 ): string {
   let prompt = `# Archon Orchestrator
 
@@ -324,7 +328,7 @@ You can answer questions directly or invoke workflows for structured development
 export function buildProjectScopedPrompt(
   scopedCodebase: Codebase,
   allCodebases: readonly Codebase[],
-  workflows: readonly WorkflowDefinition[]
+  workflows: readonly PromptWorkflow[]
 ): string {
   const otherCodebases = allCodebases.filter(c => c.id !== scopedCodebase.id);
 
@@ -400,7 +404,7 @@ When the user asks what's running, whether a run passed/failed, or to approve / 
 export function buildOrchestratorSystemAppend(
   conversation: Conversation,
   codebases: readonly Codebase[],
-  workflows: readonly WorkflowDefinition[]
+  workflows: readonly PromptWorkflow[]
 ): string {
   const scopedCodebase = conversation.codebase_id
     ? codebases.find(c => c.id === conversation.codebase_id)

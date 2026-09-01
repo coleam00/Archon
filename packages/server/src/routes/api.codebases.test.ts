@@ -3,7 +3,7 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
 import { validationErrorHook } from './openapi-defaults';
-import { mockAllWorkflowModules } from '../test/workflow-mock-factories';
+import { makeListDashboardRunsMock, mockAllWorkflowModules } from '../test/workflow-mock-factories';
 
 // ---------------------------------------------------------------------------
 // Mock setup — must be declared before any dynamic imports of mocked modules
@@ -22,7 +22,10 @@ const mockGetCodebase = mock(
       updated_at: string;
     }
 );
-const mockListCodebases = mock(async () => [] as (typeof MOCK_CODEBASE)[]);
+type MockCodebase = Omit<typeof MOCK_CODEBASE, 'repository_url'> & {
+  repository_url: string | null;
+};
+const mockListCodebases = mock(async () => [] as MockCodebase[]);
 const mockDeleteCodebase = mock(async (_id: string) => {});
 const mockCloneRepository = mock(async (_url: string) => ({
   codebaseId: 'clone-uuid-1',
@@ -137,11 +140,7 @@ mock.module('@archon/core/db/isolation-environments', () => ({
 
 mock.module('@archon/core/db/workflows', () => ({
   listWorkflowRuns: mock(async () => []),
-  listDashboardRuns: mock(async () => ({
-    runs: [],
-    total: 0,
-    counts: { all: 0, running: 0, completed: 0, failed: 0, cancelled: 0, pending: 0 },
-  })),
+  listDashboardRuns: makeListDashboardRunsMock(),
   getWorkflowRun: mock(async () => null),
   cancelWorkflowRun: mock(async () => {}),
   getWorkflowRunByWorkerPlatformId: mock(async () => null),

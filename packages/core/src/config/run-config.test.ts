@@ -166,7 +166,7 @@ describe('workflow run config', () => {
         },
         { kind: 'http', label: 'inline' }
       )
-    ).toThrow("Invalid run config at 'tiers.medium.thinking'");
+    ).toThrow(/tiers\.medium\.thinking.*effort:/);
   });
 
   it('rejects Pi defaults whose consumers own process-lifetime state', () => {
@@ -208,7 +208,7 @@ describe('workflow run config', () => {
     }
   });
 
-  it('rejects Claude-shaped thinking presets for providers that ignore that shape', () => {
+  it('rejects retired thinking presets for every provider and names effort', () => {
     for (const provider of ['pi', 'copilot']) {
       expect(() =>
         parseWorkflowRunConfig(
@@ -219,7 +219,7 @@ describe('workflow run config', () => {
           },
           { kind: 'http', label: 'inline' }
         )
-      ).toThrow("Invalid run config at 'tiers.large.thinking'");
+      ).toThrow(/tiers\.large\.thinking.*effort:/);
     }
   });
 

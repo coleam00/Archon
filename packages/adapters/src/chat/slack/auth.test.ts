@@ -1,6 +1,8 @@
 /**
  * Unit tests for Slack authorization utilities
  */
+import { describe, expect, test } from 'bun:test';
+
 import { parseAllowedUserIds, isSlackUserAuthorized } from './auth';
 
 describe('slack-auth', () => {

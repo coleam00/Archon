@@ -6,6 +6,9 @@ on:
       - "packages/docs-web/src/data/marketplace.ts"
     types: [opened, synchronize, reopened, ready_for_review]
 
+env:
+  BUN_VERSION: '1.4.0'
+
 jobs:
   auto-review:
     name: Run marketplace auto-review
@@ -18,7 +21,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: ${{ env.BUN_VERSION }}
 
       - name: Install dependencies
         run: bun install --frozen-lockfile

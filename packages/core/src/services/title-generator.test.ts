@@ -203,14 +203,14 @@ describe('title-generator', () => {
     await generateAndSetTitle('conv-13', 'Some message', 'claude', '/tmp', undefined, undefined, {
       model: 'haiku',
       assistantConfig: { settingSources: ['project'] },
-      nodeConfig: { thinking: { type: 'enabled', budgetTokens: 1000 } },
+      nodeConfig: { effort: 'high' },
     });
 
     const optionsArg = mockSendQuery.mock.calls[0][3] as SendQueryOptions;
     expect(optionsArg.model).toBe('haiku');
     expect(optionsArg.assistantConfig).toEqual({ settingSources: ['project'] });
     expect(optionsArg.nodeConfig).toEqual({
-      thinking: { type: 'enabled', budgetTokens: 1000 },
+      effort: 'high',
       allowed_tools: [],
     });
   });

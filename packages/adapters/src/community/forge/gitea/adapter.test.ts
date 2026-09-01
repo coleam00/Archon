@@ -5,6 +5,7 @@
  * database modules to avoid test pollution issues with Bun's mock.module.
  */
 import { describe, test, expect, mock, spyOn, beforeEach, afterEach } from 'bun:test';
+import type { Mock } from 'bun:test';
 import { createHmac } from 'node:crypto';
 import type { Codebase, Conversation } from '@archon/core';
 
@@ -114,21 +115,55 @@ mock.module('@archon/core', () => ({
 
 import { GiteaAdapter } from './adapter';
 import type { WebhookEvent } from './types';
-import { ConversationLockManager } from '@archon/core';
+
+type FetchCall = (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>;
+type FetchMock = Mock<FetchCall> & Pick<typeof fetch, 'preconnect'>;
+
+function jsonResponse(data: unknown, init?: ResponseInit): Response {
+  return new Response(JSON.stringify(data), init);
+}
+
+async function copyResponse(response: Response): Promise<Response> {
+  const body = await response.clone().arrayBuffer();
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: [...response.headers.entries()],
+  });
+}
+
+function makeFetchMock(response: Response = jsonResponse({}, { status: 200 })): FetchMock {
+  return Object.assign(
+    mock<FetchCall>(() => copyResponse(response)),
+    {
+      preconnect: mock<typeof fetch.preconnect>(() => undefined),
+    }
+  );
+}
+
+function postedBody(fetchMock: FetchMock, index: number): string {
+  const body = fetchMock.mock.calls[index]?.[1]?.body;
+  if (typeof body !== 'string') throw new Error(`fetch call ${String(index)} has no string body`);
+  const parsed: unknown = JSON.parse(body);
+  if (
+    typeof parsed !== 'object' ||
+    parsed === null ||
+    !('body' in parsed) ||
+    typeof parsed.body !== 'string'
+  ) {
+    throw new Error(`fetch call ${String(index)} has no JSON body field`);
+  }
+  return parsed.body;
+}
 
 // Create a mock lock manager that immediately executes handlers
+const mockAcquireLock = mock(async (_id: string, handler: () => Promise<void>) => {
+  await handler();
+  return { status: 'started' as const };
+});
 const mockLockManager = {
-  acquireLock: mock(async (_id: string, handler: () => Promise<void>) => {
-    await handler();
-  }),
-  getStats: () => ({
-    active: 0,
-    queuedTotal: 0,
-    queuedByConversation: [],
-    maxConcurrent: 10,
-    activeConversationIds: [],
-  }),
-} as unknown as ConversationLockManager;
+  acquireLock: mockAcquireLock,
+};
 
 describe('GiteaAdapter', () => {
   let adapter: GiteaAdapter;
@@ -352,7 +387,7 @@ describe('GiteaAdapter', () => {
     beforeEach(() => {
       originalAllowedUsers = process.env.GITEA_ALLOWED_USERS;
       delete process.env.GITEA_ALLOWED_USERS;
-      mockLockManager.acquireLock.mockClear();
+      mockAcquireLock.mockClear();
     });
 
     afterEach(() => {
@@ -368,7 +403,7 @@ describe('GiteaAdapter', () => {
       await adapter.handleWebhook(payload, 'mock-signature');
 
       // Bot's own comments should be silently dropped - no lock acquired, no processing
-      expect(mockLockManager.acquireLock).not.toHaveBeenCalled();
+      expect(mockAcquireLock).not.toHaveBeenCalled();
     });
 
     test('should handle case-insensitive username matching', async () => {
@@ -378,7 +413,7 @@ describe('GiteaAdapter', () => {
       await adapter.handleWebhook(payload, 'mock-signature');
 
       // Bot's own comments should be silently dropped regardless of case
-      expect(mockLockManager.acquireLock).not.toHaveBeenCalled();
+      expect(mockAcquireLock).not.toHaveBeenCalled();
     });
 
     test('should NOT filter comments from real users', async () => {
@@ -406,7 +441,7 @@ describe('GiteaAdapter', () => {
       await adapter.handleWebhook(payload, 'mock-signature');
 
       // Marked comments should be silently dropped
-      expect(mockLockManager.acquireLock).not.toHaveBeenCalled();
+      expect(mockAcquireLock).not.toHaveBeenCalled();
     });
 
     test('should process comments without bot marker from same user', async () => {
@@ -439,13 +474,8 @@ describe('GiteaAdapter', () => {
 
   describe('conversationId format', () => {
     test('should parse valid owner/repo#number format for issues', async () => {
-      const mockFetch = mock(() =>
-        Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({}),
-        })
-      );
-      globalThis.fetch = mockFetch as typeof fetch;
+      const mockFetch = makeFetchMock();
+      globalThis.fetch = mockFetch;
 
       await adapter.sendMessage('owner/repo#123', 'test');
 
@@ -454,18 +484,15 @@ describe('GiteaAdapter', () => {
       expect(callArgs[0]).toBe(
         'https://gitea.example.com/api/v1/repos/owner/repo/issues/123/comments'
       );
-      expect(callArgs[1].method).toBe('POST');
-      expect(callArgs[1].headers.Authorization).toBe('token fake-token-for-testing');
+      expect(callArgs[1]?.method).toBe('POST');
+      expect(new Headers(callArgs[1]?.headers).get('Authorization')).toBe(
+        'token fake-token-for-testing'
+      );
     });
 
     test('should parse valid owner/repo!number format for PRs', async () => {
-      const mockFetch = mock(() =>
-        Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({}),
-        })
-      );
-      globalThis.fetch = mockFetch as typeof fetch;
+      const mockFetch = makeFetchMock();
+      globalThis.fetch = mockFetch;
 
       await adapter.sendMessage('owner/repo!456', 'test');
 
@@ -478,30 +505,20 @@ describe('GiteaAdapter', () => {
     });
 
     test('postComment appends bot marker to outgoing comments', async () => {
-      const mockFetch = mock(() =>
-        Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({}),
-        })
-      );
-      globalThis.fetch = mockFetch as typeof fetch;
+      const mockFetch = makeFetchMock();
+      globalThis.fetch = mockFetch;
 
       await adapter.sendMessage('owner/repo#123', 'Hello world');
 
-      const body = JSON.parse(mockFetch.mock.calls[0][1].body as string).body as string;
+      const body = postedBody(mockFetch, 0);
       expect(body).toContain('Hello world');
       expect(body).toContain('<!-- archon-bot-response -->');
       expect(body).toBe('Hello world\n\n<!-- archon-bot-response -->');
     });
 
     test('should reject invalid conversationId format', async () => {
-      const mockFetch = mock(() =>
-        Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({}),
-        })
-      );
-      globalThis.fetch = mockFetch as typeof fetch;
+      const mockFetch = makeFetchMock();
+      globalThis.fetch = mockFetch;
 
       // Invalid format should return early without calling API
       await adapter.sendMessage('owner/repo#pr-42', 'test');
@@ -584,13 +601,8 @@ describe('GiteaAdapter', () => {
 
   describe('message splitting', () => {
     test('should split long messages into multiple chunks', async () => {
-      const mockFetch = mock(() =>
-        Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({}),
-        })
-      );
-      globalThis.fetch = mockFetch as typeof fetch;
+      const mockFetch = makeFetchMock();
+      globalThis.fetch = mockFetch;
 
       // Create message exceeding MAX_LENGTH (65000)
       const paragraph1 = 'a'.repeat(40000);
@@ -603,11 +615,11 @@ describe('GiteaAdapter', () => {
       expect(mockFetch).toHaveBeenCalledTimes(2);
 
       // First chunk should contain paragraph1
-      const firstBody = JSON.parse(mockFetch.mock.calls[0][1].body as string).body as string;
+      const firstBody = postedBody(mockFetch, 0);
       expect(firstBody).toContain('aaa');
 
       // Second chunk should contain paragraph2
-      const secondBody = JSON.parse(mockFetch.mock.calls[1][1].body as string).body as string;
+      const secondBody = postedBody(mockFetch, 1);
       expect(secondBody).toContain('bbb');
 
       // Verify chunk sizes are within limits
@@ -616,13 +628,8 @@ describe('GiteaAdapter', () => {
     });
 
     test('should not split message at exactly MAX_LENGTH', async () => {
-      const mockFetch = mock(() =>
-        Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({}),
-        })
-      );
-      globalThis.fetch = mockFetch as typeof fetch;
+      const mockFetch = makeFetchMock();
+      globalThis.fetch = mockFetch;
 
       // Message exactly at MAX_LENGTH (65000) should not be split
       const message = 'a'.repeat(65000);
@@ -632,13 +639,8 @@ describe('GiteaAdapter', () => {
     });
 
     test('should handle message without paragraph breaks', async () => {
-      const mockFetch = mock(() =>
-        Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({}),
-        })
-      );
-      globalThis.fetch = mockFetch as typeof fetch;
+      const mockFetch = makeFetchMock();
+      globalThis.fetch = mockFetch;
 
       // Message under MAX_LENGTH with no paragraph breaks
       const message = 'a'.repeat(50000);
@@ -648,15 +650,12 @@ describe('GiteaAdapter', () => {
     });
 
     test('should throw error when chunk posting fails', async () => {
-      const mockFetch = mock()
-        .mockResolvedValueOnce({ ok: true }) // First chunk succeeds
-        .mockResolvedValueOnce({
-          ok: false,
-          status: 429,
-          statusText: 'Too Many Requests',
-          text: () => Promise.resolve('Rate limit exceeded'),
-        }); // Second chunk fails
-      globalThis.fetch = mockFetch as typeof fetch;
+      const mockFetch = makeFetchMock()
+        .mockResolvedValueOnce(new Response(null, { status: 200 })) // First chunk succeeds
+        .mockResolvedValueOnce(
+          new Response('Rate limit exceeded', { status: 429, statusText: 'Too Many Requests' })
+        ); // Second chunk fails
+      globalThis.fetch = mockFetch;
 
       // Create message that will be split into 2 chunks
       const paragraph1 = 'a'.repeat(40000);
@@ -675,10 +674,10 @@ describe('GiteaAdapter', () => {
 
   describe('retry logic', () => {
     test('should retry on transient network errors', async () => {
-      const mockFetch = mock()
+      const mockFetch = makeFetchMock()
         .mockRejectedValueOnce(new Error('fetch failed')) // First attempt fails
-        .mockResolvedValueOnce({ ok: true }); // Second attempt succeeds
-      globalThis.fetch = mockFetch as typeof fetch;
+        .mockResolvedValueOnce(new Response(null, { status: 200 })); // Second attempt succeeds
+      globalThis.fetch = mockFetch;
 
       await adapter.sendMessage('owner/repo#123', 'test message');
 
@@ -687,13 +686,10 @@ describe('GiteaAdapter', () => {
     });
 
     test('should not retry on non-retryable errors', async () => {
-      const mockFetch = mock().mockResolvedValue({
-        ok: false,
-        status: 401,
-        statusText: 'Unauthorized',
-        text: () => Promise.resolve('Bad credentials'),
-      });
-      globalThis.fetch = mockFetch as typeof fetch;
+      const mockFetch = makeFetchMock(
+        new Response('Bad credentials', { status: 401, statusText: 'Unauthorized' })
+      );
+      globalThis.fetch = mockFetch;
 
       // Should throw immediately without retry
       await expect(adapter.sendMessage('owner/repo#123', 'test message')).rejects.toThrow(
@@ -705,8 +701,8 @@ describe('GiteaAdapter', () => {
     });
 
     test('should throw after exhausting retries', async () => {
-      const mockFetch = mock().mockRejectedValue(new Error('fetch failed'));
-      globalThis.fetch = mockFetch as typeof fetch;
+      const mockFetch = makeFetchMock().mockRejectedValue(new Error('fetch failed'));
+      globalThis.fetch = mockFetch;
 
       await expect(adapter.sendMessage('owner/repo#123', 'test message')).rejects.toThrow(
         'fetch failed'
@@ -816,18 +812,14 @@ describe('GiteaAdapter', () => {
 
   describe('fetchCommentHistory', () => {
     test('should fetch and format comment history', async () => {
-      const mockFetch = mock(() =>
-        Promise.resolve({
-          ok: true,
-          json: () =>
-            Promise.resolve([
-              { user: { login: 'user1' }, body: 'First comment' },
-              { user: { login: 'user2' }, body: 'Second comment' },
-              { user: { login: 'user3' }, body: 'Third comment' },
-            ]),
-        })
+      const mockFetch = makeFetchMock(
+        jsonResponse([
+          { user: { login: 'user1' }, body: 'First comment' },
+          { user: { login: 'user2' }, body: 'Second comment' },
+          { user: { login: 'user3' }, body: 'Third comment' },
+        ])
       );
-      globalThis.fetch = mockFetch as typeof fetch;
+      globalThis.fetch = mockFetch;
 
       // @ts-expect-error - calling private method for testing
       const history = await adapter.fetchCommentHistory('owner', 'repo', 123);
@@ -847,14 +839,10 @@ describe('GiteaAdapter', () => {
     });
 
     test('should return empty array on API error', async () => {
-      const mockFetch = mock(() =>
-        Promise.resolve({
-          ok: false,
-          status: 429,
-          statusText: 'Too Many Requests',
-        })
+      const mockFetch = makeFetchMock(
+        new Response(null, { status: 429, statusText: 'Too Many Requests' })
       );
-      globalThis.fetch = mockFetch as typeof fetch;
+      globalThis.fetch = mockFetch;
 
       // @ts-expect-error - calling private method for testing
       const history = await adapter.fetchCommentHistory('owner', 'repo', 123);
@@ -866,13 +854,8 @@ describe('GiteaAdapter', () => {
         user: { login: `user${String(i + 1)}` },
         body: `Comment ${String(i + 1)}`,
       }));
-      const mockFetch = mock(() =>
-        Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve(manyComments),
-        })
-      );
-      globalThis.fetch = mockFetch as typeof fetch;
+      const mockFetch = makeFetchMock(jsonResponse(manyComments));
+      globalThis.fetch = mockFetch;
 
       // @ts-expect-error - calling private method for testing
       const history = await adapter.fetchCommentHistory('owner', 'repo', 123);
@@ -1003,9 +986,7 @@ describe('GiteaAdapter', () => {
     let fetchSpy: ReturnType<typeof spyOn<typeof globalThis, 'fetch'>>;
 
     beforeEach(() => {
-      fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(
-        () => Promise.resolve(new Response('[]', { status: 200 })) as ReturnType<typeof fetch>
-      );
+      fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(new Response('[]', { status: 200 }));
       mockFindOrCreateUserByPlatformIdentity.mockClear();
       mockFindOrCreateUserByPlatformIdentity.mockImplementation(async () => ({
         id: 'user-test-uuid',

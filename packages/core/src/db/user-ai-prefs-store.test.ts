@@ -2,6 +2,7 @@ import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 
 const mockQuery = createMockQuery();
+const mockLogError = mock(() => {});
 
 mock.module('./connection', () => ({
   pool: { query: mockQuery },
@@ -12,7 +13,7 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => ({
     info: mock(() => {}),
     warn: mock(() => {}),
-    error: mock(() => {}),
+    error: mockLogError,
     debug: mock(() => {}),
     trace: mock(() => {}),
     fatal: mock(() => {}),
@@ -46,6 +47,7 @@ function prefsRow(overrides: Partial<Record<string, unknown>> = {}): Record<stri
 describe('user-ai-prefs-store', () => {
   beforeEach(() => {
     mockQuery.mockClear();
+    mockLogError.mockClear();
   });
 
   describe('getUserAiPrefs', () => {
@@ -93,6 +95,44 @@ describe('user-ai-prefs-store', () => {
       const result = await getUserAiPrefs(USER);
       expect(result.tiers).toBeUndefined();
     });
+
+    test.each(['tiers', 'aliases'] as const)(
+      'treats retired thinking in stored %s as unset without discarding other preferences',
+      async column => {
+        const otherColumn = column === 'tiers' ? 'aliases' : 'tiers';
+        const invalid =
+          column === 'tiers'
+            ? { medium: { provider: 'claude', model: 'sonnet', thinking: 'adaptive' } }
+            : { '@deep': { provider: 'claude', model: 'opus', thinking: 'adaptive' } };
+        const valid =
+          otherColumn === 'tiers'
+            ? { small: { provider: 'claude', model: 'haiku' } }
+            : { '@fast': { provider: 'codex', model: 'gpt-5.6-sol' } };
+        mockQuery.mockResolvedValueOnce(
+          createQueryResult([
+            prefsRow({
+              [column]: JSON.stringify(invalid),
+              [otherColumn]: JSON.stringify(valid),
+              default_provider: 'codex',
+              default_model: 'gpt-5.5',
+            }),
+          ])
+        );
+
+        const result = await getUserAiPrefs(USER);
+
+        expect(result[column]).toBeUndefined();
+        expect(result[otherColumn]).toEqual(valid);
+        expect(result.defaultProvider).toBe('codex');
+        expect(result.defaultModel).toBe('gpt-5.5');
+        const [{ err, column: loggedColumn }, event] = mockLogError.mock.calls.at(
+          -1
+        ) as unknown as [{ err: Error; column: string }, string];
+        expect(event).toBe('db.user_ai_prefs_validation_failed');
+        expect(loggedColumn).toBe(column);
+        expect(err.message).toMatch(/thinking.*effort:/);
+      }
+    );
   });
 
   describe('setUserTiers', () => {

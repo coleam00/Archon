@@ -159,27 +159,50 @@ export async function syncWorkspace(
   const remote = options?.remote ?? 'origin';
   const branchToSync = baseBranch ?? (await getDefaultBranch(workspacePath, remote));
 
-  // Fetch from the remote to ensure <remote>/<branchToSync> is up-to-date
-  try {
-    await execFileAsync('git', ['-C', workspacePath, 'fetch', remote, branchToSync], {
-      timeout: 60000,
-    });
-  } catch (error) {
-    const err = error as Error;
-    const errorMessage = err.message.toLowerCase();
+  // Fetch from the remote to ensure <remote>/<branchToSync> is up-to-date.
+  // Retry on transient ref-lock races — two concurrent fetches of the same
+  // remote-tracking ref collide on Git's shared lock file.
+  const MAX_FETCH_RETRIES = 3;
 
-    // If configured branch doesn't exist on remote, provide actionable error
-    if (
-      baseBranch &&
-      (errorMessage.includes("couldn't find remote ref") || errorMessage.includes('not found'))
-    ) {
-      throw new Error(
-        `Configured base branch '${baseBranch}' not found on remote '${remote}'. ` +
-          'Either create the branch, update worktree.baseBranch in .archon/config.yaml, ' +
-          'or remove the setting to use the auto-detected default branch.'
-      );
+  for (let attempt = 0; attempt <= MAX_FETCH_RETRIES; attempt++) {
+    try {
+      await execFileAsync('git', ['-C', workspacePath, 'fetch', remote, branchToSync], {
+        timeout: 60000,
+      });
+      break;
+    } catch (error) {
+      const err = error as Error;
+      const errorMessage = err.message.toLowerCase();
+
+      // If configured branch doesn't exist on remote, provide actionable error
+      if (
+        baseBranch &&
+        (errorMessage.includes("couldn't find remote ref") || errorMessage.includes('not found'))
+      ) {
+        throw new Error(
+          `Configured base branch '${baseBranch}' not found on remote '${remote}'. ` +
+            'Either create the branch, update worktree.baseBranch in .archon/config.yaml, ' +
+            'or remove the setting to use the auto-detected default branch.'
+        );
+      }
+
+      // Retry transient ref-lock races from concurrent fetch calls
+      if (
+        attempt < MAX_FETCH_RETRIES &&
+        errorMessage.includes('cannot lock ref') &&
+        errorMessage.includes('unable to update local ref')
+      ) {
+        const backoffMs = 50 * Math.pow(2, attempt);
+        getLog().debug(
+          { err, attempt: attempt + 1, backoffMs, remote, branch: branchToSync },
+          'workspace.fetch_ref_lock_retry'
+        );
+        await new Promise(resolve => setTimeout(resolve, backoffMs));
+        continue;
+      }
+
+      throw new Error(`Sync fetch from ${remote}/${branchToSync} failed: ${err.message}`);
     }
-    throw new Error(`Sync fetch from ${remote}/${branchToSync} failed: ${err.message}`);
   }
 
   const previousHead = await readShortSha(workspacePath, 'HEAD');

@@ -6,6 +6,7 @@ import type { Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { runStatusLabel, statusTextClass } from '../lib/run-status';
+import { RunOutcomeBadge } from './RunOutcomeBadge';
 
 interface RunDetailHeaderProps {
   run: Run;
@@ -105,6 +106,8 @@ export function RunDetailHeader({
           {runStatusLabel(run)}
         </span>
       </div>
+
+      <RunOutcomeBadge outcome={run.outcome} />
 
       {/* Workflow name */}
       <span className="text-sm font-medium text-text-primary">{run.workflow}</span>

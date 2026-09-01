@@ -219,7 +219,9 @@ export function ModelTiersPanel(): ReactElement {
                   <select
                     value={row.effort}
                     onChange={e => {
-                      setRow(tier, { effort: e.target.value });
+                      setRow(tier, {
+                        effort: effortOptions.find(option => option === e.target.value) ?? '',
+                      });
                     }}
                     // Currently unreachable while disabled (unset rows have no
                     // effort vocabulary), but every row control rides the

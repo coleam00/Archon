@@ -1,0 +1,51 @@
+# Exec-code fixture: validate stubbed green, gate-validated runs the real
+# gate-green script and passes. This covers the first-execution green path
+# through gate-validated — the same path a corrected resume delivers after the
+# `always_run: true` opt-out on the validate node. The dry-run
+# simulator has no resume support, so this fixture proves the gate script reads
+# the verdict correctly; the engine's `always_run` re-execution on resume is
+# covered by dag-executor.test.ts.
+#
+# The red paths through the same gate with exec-code are covered by the
+# validate-red*.stubs.yaml fixtures.
+impl__record-start: '{"start":"recorded"}'
+impl__implement:
+  done: true
+  green: true
+  summary: "stub: implemented and green"
+impl__assert-changed: "3 files changed"
+gate-green: '{"gate":"green"}'
+pr__pr: { number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true }
+review__mode: '{"continuation":false}'
+review__scope: "PR diff in scope; head sha stubbed"
+review__code: "0 findings"
+review__seams: "0 findings"
+review__simplify: "0 findings"
+review__tests: "0 findings"
+review__review-complete: "settled"
+review__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: clean on initial review"
+review-action: '{"ready":true,"action":"none"}'
+gate-ready: '{"ready":"true"}'
+validate__validate:
+  green: true
+  red_cause: ""
+  summary: "stub: full gate green — the tree was corrected"
+# gate-validated is deliberately unstubbed: the real gate-green script runs
+# (exec-code: true) and proves it passes on a green validate verdict.
+ci-probe: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
+ci-verdict: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
+flip-ready: "https://github.com/example/repo/pull/2"
+outcome: "https://github.com/example/repo/pull/2"
+classify:
+  errors: false
+  docs: false
+  reasons:
+    errors: "stub: no failure paths"
+    docs: "stub: no doc-facing changes"
+resolve-scope: '{"errors":"false"}'
+fixture:
+  expect: completed
+exec-code: true

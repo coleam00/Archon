@@ -4,6 +4,7 @@
 import { appendFile, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
 import type { WorkflowTokenUsage } from './deps';
+import type { MessageChunk } from '@archon/providers/types';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -34,6 +35,7 @@ export interface WorkflowEvent {
     | 'node_complete'
     | 'node_skipped'
     | 'node_error'
+    | 'watchdog_reset'
     | 'exec_output';
   workflow_id: string;
   workflow_name?: string;
@@ -47,6 +49,8 @@ export interface WorkflowEvent {
   check?: string;
   result?: 'pass' | 'fail' | 'warn' | 'unknown';
   error?: string;
+  /** `watchdog_reset` only. The chunk content is deliberately never retained. */
+  chunk_type?: MessageChunk['type'];
   /** `exec_output` only — see {@link logExecOutput}. Absent means the stream was empty. */
   stdout_tail?: string;
   /** `exec_output` only — see {@link logExecOutput}. Absent means the stream was empty. */
@@ -99,7 +103,8 @@ function getLogPath(logDir: string, workflowRunId: string): string {
 export async function logWorkflowEvent(
   logDir: string,
   workflowRunId: string,
-  event: Omit<WorkflowEvent, 'ts' | 'workflow_id'>
+  event: Omit<WorkflowEvent, 'ts' | 'workflow_id'>,
+  occurredAt = Date.now()
 ): Promise<void> {
   const logPath = getLogPath(logDir, workflowRunId);
 
@@ -110,7 +115,7 @@ export async function logWorkflowEvent(
     const fullEvent: WorkflowEvent = {
       ...event,
       workflow_id: workflowRunId,
-      ts: new Date().toISOString(),
+      ts: new Date(occurredAt).toISOString(),
     };
 
     await appendFile(logPath, JSON.stringify(fullEvent) + '\n');
@@ -125,6 +130,26 @@ export async function logWorkflowEvent(
     }
     // Don't throw - logging shouldn't break workflow execution
   }
+}
+
+/** Retain the privacy-safe evidence for one watchdog renewal. */
+export async function logWatchdogReset(
+  logDir: string,
+  workflowRunId: string,
+  nodeId: string,
+  chunkType: MessageChunk['type'],
+  resetAt: number
+): Promise<void> {
+  await logWorkflowEvent(
+    logDir,
+    workflowRunId,
+    {
+      type: 'watchdog_reset',
+      step: nodeId,
+      chunk_type: chunkType,
+    },
+    resetAt
+  );
 }
 
 /**

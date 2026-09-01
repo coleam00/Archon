@@ -1,5 +1,6 @@
+import type { SessionConfig } from '@github/copilot-sdk';
 import type { CopilotProviderDefaults } from '../../types';
-import { clampEffort, isEffortRung } from '../../shared/effort';
+import { clampEffort, isEffortRung, type AssertNever } from '@archon/paths/effort';
 import {
   assertKnownRunConfigKeys,
   invalidRunConfigValue,
@@ -11,19 +12,21 @@ export type { CopilotProviderDefaults };
 /**
  * The reasoning-depth rungs Copilot's SDK accepts, weakest → strongest.
  *
- * Copilot's SDK does not export its `ReasoningEffort` union, so the type is
- * hand-mirrored on `CopilotProviderDefaults` — which makes this the one provider
- * where a pin matters most and is easiest to lose. `satisfies` binds the list to
- * that type, and `provider.ts` imports this array rather than restating it
- * (same shape as `CODEX_EFFORTS` in ../../codex/config.ts), so the config key and
- * the node-level `effort:` path can never disagree about what Copilot accepts.
+ * The SDK does not export `ReasoningEffort` from its barrel, but its public
+ * `SessionConfig` retains the union.
  */
+type CopilotEffort = NonNullable<SessionConfig['reasoningEffort']>;
+
 export const COPILOT_EFFORTS = [
   'low',
   'medium',
   'high',
   'xhigh',
-] as const satisfies readonly NonNullable<CopilotProviderDefaults['modelReasoningEffort']>[];
+] as const satisfies readonly CopilotEffort[];
+
+export type CopilotEffortsAreComplete = AssertNever<
+  Exclude<CopilotEffort, (typeof COPILOT_EFFORTS)[number]>
+>;
 
 /**
  * Parse raw `assistants.copilot` config into a typed `CopilotProviderDefaults`.

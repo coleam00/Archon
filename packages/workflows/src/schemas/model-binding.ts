@@ -1,19 +1,23 @@
 import { z } from '@hono/zod-openapi';
-import { thinkingConfigSchema } from './thinking-config';
+import { effortLevelSchema, rejectRetiredThinking } from './effort';
 
 export const TIER_NAMES = ['small', 'medium', 'large'] as const;
 export const tierNameSchema = z.enum(TIER_NAMES);
 export type TierName = z.infer<typeof tierNameSchema>;
 
-export const modelAliasPresetSchema = z.object({
+const modelAliasPresetObjectSchema = z.object({
   provider: z.string().min(1),
   model: z.string().min(1),
-  effort: z.string().optional(),
-  thinking: thinkingConfigSchema.optional(),
+  effort: effortLevelSchema.optional(),
 });
-const runModelAliasPresetSchema = modelAliasPresetSchema
-  .extend({ model: z.string().trim().min(1) })
-  .strict();
+export const modelAliasPresetSchema = z.preprocess(
+  rejectRetiredThinking,
+  modelAliasPresetObjectSchema
+);
+const runModelAliasPresetSchema = z.preprocess(
+  rejectRetiredThinking,
+  modelAliasPresetObjectSchema.extend({ model: z.string().trim().min(1) }).strict()
+);
 
 export type ModelAliasPreset = z.infer<typeof modelAliasPresetSchema>;
 export type RawAliasEntry = z.infer<typeof modelAliasPresetSchema>;

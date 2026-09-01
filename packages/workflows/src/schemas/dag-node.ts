@@ -11,12 +11,12 @@
  * so a flat schema with superRefine is cleaner than a z.union() with implicit discriminants.
  */
 import { z } from '@hono/zod-openapi';
-import { EFFORT_LADDER } from '@archon/providers/effort';
 import { stepRetryConfigSchema } from './retry';
 import { MAX_DURABLE_WAIT_MS } from './durable-wait';
-import { thinkingConfigSchema } from './thinking-config';
+import { effortLevelSchema, rejectRetiredThinking } from './effort';
 export { MAX_DURABLE_WAIT_MS } from './durable-wait';
-export { thinkingConfigSchema, type ThinkingConfig } from './thinking-config';
+export { effortLevelSchema, EFFORT_LEVELS } from './effort';
+export type { EffortLevel } from './effort';
 // Runtime import, but cycle-free: output-ref's only edge back into schemas is a
 // type-only `NodeOutput`, which is erased. Reused rather than reimplemented so
 // `loop.until_field` and the strict `$node.output.field` access agree on what
@@ -67,18 +67,11 @@ export const TRIGGER_RULES: readonly TriggerRule[] = triggerRuleSchema.options;
  * Reasoning depth — the one spelling, on every provider that has the control
  * (#2556). The vocabulary is the union of the effort-capable SDKs' enums, and
  * a provider clamps a rung it doesn't offer to the nearest one it does
- * (`clampEffort` in @archon/providers): Codex takes every rung, while `ultra`
+ * (`clampEffort` in @archon/core/effort): Codex takes every rung, while `ultra`
  * clamps to `max` on Claude/Pi and `xhigh` on Copilot, and `minimal` clamps to
  * `low` on Claude/Copilot. Derived from `EFFORT_LADDER` rather than restated, so
  * the YAML enum and the clamp cannot disagree.
  */
-export const effortLevelSchema = z.enum(EFFORT_LADDER);
-
-export type EffortLevel = z.infer<typeof effortLevelSchema>;
-
-/** Canonical list of effort levels — derived from schema, do not duplicate. */
-export const EFFORT_LEVELS: readonly EffortLevel[] = effortLevelSchema.options;
-
 /**
  * Claude Agent SDK beta header list. Non-empty array of non-empty strings —
  * the SDK expects either a populated beta header or none at all. `.nonempty()`
@@ -155,8 +148,7 @@ export type AgentDefinition = z.infer<typeof agentDefinitionSchema>;
  * providers-side `PiNodeOverride` (@archon/providers/pi/config) — hand-mirrored
  * because that module is not reachable from here. The constraint is SDK-free,
  * not type-only: @archon/workflows may import runtime values from a leaf subpath
- * with no SDK dependencies (@archon/providers/types, @archon/providers/effort —
- * see EFFORT_LADDER at the top of this file), but `pi/config` pulls in the Pi
+ * with no SDK dependencies (@archon/providers/types), but `pi/config` pulls in the Pi
  * SDK, so this shape stays mirrored.
  *
  * Pi-only, like Claude's `hooks`/`mcp`/`skills`/`agents`. Other providers ignore
@@ -242,7 +234,6 @@ export const dagNodeBaseSchema = z.object({
   // (with a warning) on other providers and on non-AI node types.
   pi: piNodeConfigSchema.optional(),
   effort: effortLevelSchema.optional(),
-  thinking: thinkingConfigSchema.optional(),
   maxBudgetUsd: z.number().positive().optional(),
   // YAML workflows: string-only. The wider SystemPromptInput (preset object) is used
   // programmatically by the orchestrator for prompt caching; Zod intentionally stays narrow.
@@ -912,7 +903,6 @@ export const BASH_NODE_AI_FIELDS: readonly string[] = [
   'agents',
   'pi',
   'effort',
-  'thinking',
   'maxBudgetUsd',
   'systemPrompt',
   'fallbackModel',
@@ -1088,7 +1078,8 @@ export const KNOWN_DAG_NODE_KEYS: ReadonlySet<string> = new Set(
  * dag-executor.ts (node-level). Model strings are passed through to the SDK
  * unchanged — the SDK is the source of truth for what model names exist.
  */
-export const dagNodeSchema = dagNodeFlatSchema
+export const dagNodeSchema = z
+  .preprocess(rejectRetiredThinking, dagNodeFlatSchema)
   .superRefine((data, ctx) => {
     const id = data.id.trim();
 
@@ -1658,7 +1649,6 @@ export const dagNodeSchema = dagNodeFlatSchema
       ...(data.agents !== undefined ? { agents: data.agents } : {}),
       ...(data.pi !== undefined ? { pi: data.pi } : {}),
       ...(data.effort !== undefined ? { effort: data.effort } : {}),
-      ...(data.thinking !== undefined ? { thinking: data.thinking } : {}),
       ...(data.maxBudgetUsd !== undefined ? { maxBudgetUsd: data.maxBudgetUsd } : {}),
       ...(data.systemPrompt !== undefined ? { systemPrompt: data.systemPrompt } : {}),
       ...(data.fallbackModel !== undefined ? { fallbackModel: data.fallbackModel } : {}),
@@ -1997,8 +1987,6 @@ const loopGroupShape = (loopGroupNodeConfigSchema as unknown as z.ZodObject<z.Zo
  *   `output_format` — free-form JSON Schema (`z.record`); every key is accepted
  *   `sandbox`       — `.passthrough()`; unknown keys are preserved, not dropped
  *   `hooks`         — `.strict()`; unknown keys already hard-error at parse time
- *   `thinking`      — `z.preprocess` over a union; no object shape to compare
- *
  * `loop_group.nodes` is deliberately not modelled here: its entries are full DAG
  * nodes, so the loader recurses into them with KNOWN_DAG_NODE_KEYS instead.
  *

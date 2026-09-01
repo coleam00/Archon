@@ -51,7 +51,6 @@ export type WireBaseKey =
   | 'skills'
   | 'agents'
   | 'effort'
-  | 'thinking'
   | 'maxBudgetUsd'
   | 'systemPrompt'
   | 'fallbackModel'

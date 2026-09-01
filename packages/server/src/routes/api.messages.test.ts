@@ -3,7 +3,7 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
 import { validationErrorHook } from './openapi-defaults';
-import { mockAllWorkflowModules } from '../test/workflow-mock-factories';
+import { makeListDashboardRunsMock, mockAllWorkflowModules } from '../test/workflow-mock-factories';
 import { MAX_TOOL_OUTPUT_CHARS } from '../adapters/web/truncate';
 
 // ---------------------------------------------------------------------------
@@ -32,10 +32,13 @@ const mockAddMessage = mock(
     role: _role,
     content: _content,
     metadata: '{}',
+    user_id: null,
     created_at: new Date().toISOString(),
   })
 );
-const mockListMessages = mock(async (_conversationId: string, _limit?: number) => []);
+const mockListMessages = mock<(typeof import('@archon/core/db/messages'))['listMessages']>(
+  async () => []
+);
 const mockHandleMessage = mock(async () => {});
 
 mock.module('@archon/core', () => ({
@@ -131,11 +134,7 @@ mock.module('@archon/core/db/isolation-environments', () => ({
 
 mock.module('@archon/core/db/workflows', () => ({
   listWorkflowRuns: mock(async () => []),
-  listDashboardRuns: mock(async () => ({
-    runs: [],
-    total: 0,
-    counts: { all: 0, running: 0, completed: 0, failed: 0, cancelled: 0, pending: 0 },
-  })),
+  listDashboardRuns: makeListDashboardRunsMock(),
   getWorkflowRun: mock(async () => null),
   cancelWorkflowRun: mock(async () => {}),
   getWorkflowRunByWorkerPlatformId: mock(async () => null),
@@ -179,6 +178,7 @@ const MOCK_MESSAGES = [
     role: 'user' as const,
     content: 'Hello there',
     metadata: '{}',
+    user_id: null,
     created_at: new Date().toISOString(),
   },
   {
@@ -187,6 +187,7 @@ const MOCK_MESSAGES = [
     role: 'assistant' as const,
     content: 'Hi! How can I help?',
     metadata: '{"toolCalls":[]}',
+    user_id: null,
     created_at: new Date().toISOString(),
   },
 ];
@@ -228,6 +229,7 @@ describe('POST /api/conversations/:id/message', () => {
       role: 'user' as const,
       content: 'Hello',
       metadata: '{}',
+      user_id: null,
       created_at: new Date().toISOString(),
     }));
     mockHandleMessage.mockImplementationOnce(async () => {});
@@ -253,6 +255,7 @@ describe('POST /api/conversations/:id/message', () => {
       role: 'user' as const,
       content: 'Test message',
       metadata: '{}',
+      user_id: null,
       created_at: new Date().toISOString(),
     }));
     mockHandleMessage.mockImplementationOnce(async () => {});
@@ -384,6 +387,7 @@ describe('GET /api/conversations/:id/messages', () => {
         content: 'Response',
         // Simulate PostgreSQL returning JSONB as an object
         metadata: { toolCalls: [{ name: 'bash' }] } as unknown as string,
+        user_id: null,
         created_at: new Date().toISOString(),
       },
     ]);
@@ -412,6 +416,7 @@ describe('GET /api/conversations/:id/messages', () => {
         content: 'Response',
         // Simulate unserializable metadata from PostgreSQL JSONB
         metadata: circular as unknown as string,
+        user_id: null,
         created_at: new Date().toISOString(),
       },
     ]);
@@ -502,6 +507,7 @@ describe('GET /api/conversations/:id/messages — tool output bounding', () => {
         role: 'assistant' as const,
         content: '',
         metadata: storedMetadata,
+        user_id: null,
         created_at: new Date().toISOString(),
       },
     ]);
@@ -535,6 +541,7 @@ describe('GET /api/conversations/:id/messages — tool output bounding', () => {
         role: 'assistant' as const,
         content: '',
         metadata,
+        user_id: null,
         created_at: new Date().toISOString(),
       },
     ]);
@@ -556,6 +563,7 @@ describe('GET /api/conversations/:id/messages — tool output bounding', () => {
         role: 'assistant' as const,
         content: 'Done.',
         metadata,
+        user_id: null,
         created_at: new Date().toISOString(),
       },
     ]);

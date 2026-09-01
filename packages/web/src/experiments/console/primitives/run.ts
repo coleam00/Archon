@@ -1,6 +1,8 @@
 import type { RunStatus } from '../lib/run-status';
+import type { components } from '@/lib/api.generated';
 
 export type RunOrigin = 'web' | 'cli' | 'slack' | 'telegram' | 'discord' | 'github' | 'unknown';
+export type RunOutcome = components['schemas']['WorkflowRunOutcome'];
 
 export interface Run {
   id: string;
@@ -27,6 +29,7 @@ export interface Run {
   workflow: string;
   origin: RunOrigin;
   status: RunStatus;
+  outcome: RunOutcome;
   startedAt: string;
   finishedAt: string | null;
   /** workflow_runs.working_path — used to join against worktrees. */
@@ -89,6 +92,7 @@ interface RawWorkflowRun {
   /** Worker conversation platform id — getRun response only, web runs only. */
   worker_platform_id?: string | null;
   status: string;
+  outcome?: RunOutcome;
   started_at: string;
   completed_at?: string | null;
   working_path?: string | null;
@@ -226,6 +230,7 @@ export function toRun(raw: RawWorkflowRun): Run {
     workflow: raw.workflow_name,
     origin: normalizeOrigin(raw.platform_type),
     status: normalizeStatus(raw.status),
+    outcome: raw.outcome ?? null,
     startedAt: raw.started_at,
     finishedAt: raw.completed_at ?? null,
     workingPath: raw.working_path ?? null,

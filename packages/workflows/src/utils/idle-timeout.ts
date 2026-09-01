@@ -43,12 +43,14 @@ const IDLE_TIMEOUT_SENTINEL = Symbol('IDLE_TIMEOUT');
  * @param timeoutMs - Maximum idle time in milliseconds before terminating
  * @param onTimeout - Optional callback invoked when idle timeout fires (before return)
  * @param shouldResetTimer - Optional predicate; return false to NOT reset the timer for a value
+ * @param onTimerReset - Optional observer invoked with the value and exact reset timestamp
  */
 export async function* withIdleTimeout<T>(
   generator: AsyncGenerator<T>,
   timeoutMs: number,
   onTimeout?: () => void,
-  shouldResetTimer?: (value: T) => boolean
+  shouldResetTimer?: (value: T) => boolean,
+  onTimerReset?: (value: T, resetAt: number) => void
 ): AsyncGenerator<T> {
   let timedOut = false;
   let timerStartedAt = Date.now();
@@ -86,6 +88,7 @@ export async function* withIdleTimeout<T>(
       // Reset the timer unless the predicate says not to
       if (!shouldResetTimer || shouldResetTimer(result.value)) {
         timerStartedAt = Date.now();
+        onTimerReset?.(result.value, timerStartedAt);
       }
 
       yield result.value;

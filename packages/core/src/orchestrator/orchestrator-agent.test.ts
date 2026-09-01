@@ -15,6 +15,7 @@
 import { mock, describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 import {
+  makeTestResolvedWorkflow,
   makeTestWorkflow,
   makeTestWorkflowWithSource,
   withObservableCapturedSource,
@@ -303,7 +304,6 @@ const DEFAULT_PROVIDER_CAPS: ProviderCapabilities = {
   envInjection: true,
   costControl: false,
   effortControl: true,
-  thinkingControl: false,
   fallbackModel: false,
   sandbox: false,
   settingSources: false,
@@ -2142,7 +2142,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       success: true,
       message: 'ok',
       workflow: {
-        definition: makeTestWorkflow({
+        definition: makeTestResolvedWorkflow({
           name: 'test-workflow',
           interactive,
           ...(options.inputs ? { inputs: options.inputs } : {}),
@@ -2948,7 +2948,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     // `willContinueExistingRun` was true, leaving `preparedSource` undefined and the
     // executor in `source_unprepared_live` mode against the prior run's frozen graph.
     const { prepareWorkflowSource } = await import('@archon/workflows/executor');
-    const freshWorkflow = makeTestWorkflow({
+    const freshWorkflow = makeTestResolvedWorkflow({
       name: 'test-workflow',
       description: 'freshly captured from disk',
     });
@@ -3632,7 +3632,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 // ─── Natural-language approval routing ──────────────────────────────────────
 
 describe('paused approval gate routing', () => {
-  const approvalWorkflow = makeTestWorkflow({ name: 'prd', interactive: true });
+  const approvalWorkflow = makeTestResolvedWorkflow({ name: 'prd', interactive: true });
 
   type ManageRunHandler = (input: Record<string, unknown>) => Promise<string>;
 
@@ -4082,7 +4082,7 @@ describe('paused approval gate routing', () => {
 // ─── handleWorkflowRunCommand E2 path — single codebase auto-select ──────────
 
 describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
-  const assistWorkflow = makeTestWorkflow({ name: 'assist' });
+  const assistWorkflow = makeTestResolvedWorkflow({ name: 'assist' });
 
   beforeEach(() => {
     mockGetOrCreateConversation.mockReset();
@@ -4412,7 +4412,7 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
   });
 
   test('resolves workflow by case-insensitive name when exact match fails', async () => {
-    const upperWorkflow = makeTestWorkflow({ name: 'Assist' });
+    const upperWorkflow = makeTestResolvedWorkflow({ name: 'Assist' });
     const conversation = makeConversation({ codebase_id: null });
     const codebase = makeCodebaseForSync();
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
@@ -4449,7 +4449,7 @@ describe('handleWorkflowRunCommand — E2 single codebase auto-select', () => {
       Promise.resolve({
         success: true,
         message: 'Running workflow...',
-        workflow: { definition: makeTestWorkflow({ name: 'missing' }), args: 'test' },
+        workflow: { definition: makeTestResolvedWorkflow({ name: 'missing' }), args: 'test' },
       })
     );
     mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));

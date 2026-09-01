@@ -15,7 +15,7 @@ import {
   toError,
   getLinkedIssueNumbers,
   onConversationClosed,
-  ConversationLockManager,
+  type ConversationLockManager,
   DeliveryDeduplicator,
   AppNotInstalledError,
   installCredentialHelper,
@@ -55,6 +55,52 @@ const MAX_LENGTH = 65000; // GitHub comment limit (~65,536, leave buffer for saf
 /** Hidden marker added to bot comments to prevent self-triggering loops */
 const BOT_RESPONSE_MARKER = '<!-- archon-bot-response -->';
 
+type ConversationLocker = Pick<ConversationLockManager, 'acquireLock'>;
+
+type CreateCommentArgs = NonNullable<Parameters<Octokit['rest']['issues']['createComment']>[0]>;
+type ListCommentsArgs = NonNullable<Parameters<Octokit['rest']['issues']['listComments']>[0]>;
+type ListComment = Awaited<ReturnType<Octokit['rest']['issues']['listComments']>>['data'][number];
+type ListCommentUser = Pick<NonNullable<ListComment['user']>, 'login'>;
+type RepositoryData = Awaited<ReturnType<Octokit['rest']['repos']['get']>>['data'];
+type PullRequestData = Awaited<ReturnType<Octokit['rest']['pulls']['get']>>['data'];
+type PullRequestHead = Pick<PullRequestData['head'], 'ref' | 'sha'> & {
+  repo: Pick<NonNullable<PullRequestData['head']['repo']>, 'full_name'> | null;
+};
+
+interface GitHubApi {
+  rest: {
+    issues: {
+      createComment(args: CreateCommentArgs): Promise<unknown>;
+      listComments(args: ListCommentsArgs): Promise<{
+        data: { body?: ListComment['body'] | null; user?: ListCommentUser | null }[];
+      }>;
+    };
+    repos: {
+      get(
+        args: NonNullable<Parameters<Octokit['rest']['repos']['get']>[0]>
+      ): Promise<{ data: Pick<RepositoryData, 'default_branch'> }>;
+    };
+    pulls: {
+      get(args: NonNullable<Parameters<Octokit['rest']['pulls']['get']>[0]>): Promise<{
+        data: {
+          head: PullRequestHead;
+          base: { repo: Pick<PullRequestData['base']['repo'], 'full_name'> };
+        };
+      }>;
+    };
+  };
+}
+
+type GitHubAppAuth = Extract<GitHubAuth, { kind: 'app' }>;
+type GitHubAdapterAuth =
+  | Exclude<GitHubAuth, { kind: 'app' }>
+  | {
+      kind: 'app';
+      provider: Omit<GitHubAppAuth['provider'], 'getOctokitForInstallation'> & {
+        getOctokitForInstallation(owner: string, repo: string): Promise<GitHubApi>;
+      };
+    };
+
 export class GitHubAdapter implements IPlatformAdapter {
   /**
    * PAT-mode Octokit: a singleton constructed at startup. Null in App mode —
@@ -62,12 +108,12 @@ export class GitHubAdapter implements IPlatformAdapter {
    * Octokit from the auth provider. Tests reach in via `@ts-expect-error` and
    * assign a mock object to this field.
    */
-  private octokit: Octokit | null;
-  private readonly auth: GitHubAuth;
+  private octokit: GitHubApi | null;
+  private readonly auth: GitHubAdapterAuth;
   private webhookSecret: string;
   private allowedUsers: string[];
   private botMention: string;
-  private lockManager: ConversationLockManager;
+  private lockManager: ConversationLocker;
   /**
    * Ingest idempotency: drops repeat deliveries of one logical comment event
    * (dual repo+App subscriptions, LB double-forwards, redeliveries) before
@@ -92,9 +138,9 @@ export class GitHubAdapter implements IPlatformAdapter {
   private readonly userOctokitCache = new Map<string, { octokit: Octokit; expiresAt: number }>();
 
   constructor(
-    auth: GitHubAuth,
+    auth: GitHubAdapterAuth,
     webhookSecret: string,
-    lockManager: ConversationLockManager,
+    lockManager: ConversationLocker,
     botMention?: string,
     options?: {
       retryDelayMs?: (attempt: number) => number;
@@ -149,7 +195,7 @@ export class GitHubAdapter implements IPlatformAdapter {
    * the constructor-created singleton; in App mode it's a per-installation
    * Octokit fetched from the auth provider (which caches by installation id).
    */
-  private async resolveOctokit(owner: string, repo: string): Promise<Octokit> {
+  private async resolveOctokit(owner: string, repo: string): Promise<GitHubApi> {
     if (this.auth.kind === 'pat') {
       // Non-null in PAT mode by construction; tests overwrite this field directly.
       if (!this.octokit) {
@@ -179,7 +225,7 @@ export class GitHubAdapter implements IPlatformAdapter {
   private async withTokenRefresh<T>(
     owner: string,
     repo: string,
-    fn: (octokit: Octokit) => Promise<T>
+    fn: (octokit: GitHubApi) => Promise<T>
   ): Promise<T> {
     const octokit = await this.resolveOctokit(owner, repo);
     try {

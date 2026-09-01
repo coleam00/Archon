@@ -64,6 +64,7 @@ import {
 import type { UserTiersPatch, UserAliasesPatch, AliasesPatch } from '@archon/core';
 import { parseWorkflowRunConfig } from '@archon/core/config';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
+import type { EffortLevel } from '@archon/workflows/schemas/effort';
 import { findRepoRoot, removeWorktree, toRepoPath, toWorktreePath } from '@archon/git';
 import {
   createLogger,
@@ -2090,7 +2091,7 @@ export function registerApiRoutes(
   /** Validate a tier/alias entry's provider + effort. Returns an error message or null. */
   function validatePresetEntry(
     label: string,
-    entry: { provider: string; model: string; effort?: string }
+    entry: { provider: string; model: string; effort?: EffortLevel }
   ): string | null {
     if (!isRegisteredProvider(entry.provider)) {
       return `Unknown provider '${entry.provider}' for ${label}. Available: ${getProviderInfoList()
@@ -2117,11 +2118,10 @@ export function registerApiRoutes(
     return null;
   }
 
-  /** Clean a validated entry — drop `thinking` (no UI/CLI surface), keep effort. */
-  function toCleanEntry(entry: { provider: string; model: string; effort?: string }): {
+  function toCleanEntry(entry: { provider: string; model: string; effort?: EffortLevel }): {
     provider: string;
     model: string;
-    effort?: string;
+    effort?: EffortLevel;
   } {
     return {
       provider: entry.provider,
@@ -3340,7 +3340,7 @@ export function registerApiRoutes(
           // node config onto the nodes and removes it (#1764), so the declared values are
           // layered back over the definition for this listing only — the console reads
           // `workflow.provider` to label a card, and execution never reads this response.
-          workflow: { ...ws.workflow, ...ws.declared },
+          workflow: Object.assign({}, ws.workflow, ws.declared),
           source: ws.source,
           // Keys the engine dropped from this YAML (#2213) — the console is the
           // surface most authors edit workflows on, so it has to carry them.
@@ -4931,7 +4931,6 @@ export function registerApiRoutes(
         }
         const errMsg = validatePresetEntry(`tier '${tier}'`, entry);
         if (errMsg) return apiError(c, 400, errMsg);
-        // Clean RawAliasEntry — drops `thinking` (no UI/CLI surface yet).
         tiers[tier] = toCleanEntry(entry);
       }
 

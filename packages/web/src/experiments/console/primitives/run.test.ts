@@ -35,6 +35,45 @@ describe('normalizeOrigin', () => {
 });
 
 describe('toRun — provenance', () => {
+  test('keeps authored outcome independent from execution status', () => {
+    const completedWithSucceededOutcome = toRun(
+      raw({
+        id: 'r0',
+        workflow_name: 'review',
+        status: 'completed',
+        outcome: 'succeeded',
+      })
+    );
+    const completedWithFailedOutcome = toRun(
+      raw({
+        id: 'r1',
+        workflow_name: 'review',
+        status: 'completed',
+        outcome: 'failed',
+      })
+    );
+    const pausedWithSucceededOutcome = toRun(
+      raw({
+        id: 'r2',
+        workflow_name: 'review',
+        status: 'paused',
+        outcome: 'succeeded',
+      })
+    );
+
+    expect(completedWithSucceededOutcome.status).toBe('completed');
+    expect(completedWithSucceededOutcome.outcome).toBe('succeeded');
+    expect(completedWithFailedOutcome.status).toBe('completed');
+    expect(completedWithFailedOutcome.outcome).toBe('failed');
+    expect(pausedWithSucceededOutcome.status).toBe('paused');
+    expect(pausedWithSucceededOutcome.outcome).toBe('succeeded');
+  });
+
+  test('normalizes an absent authored outcome to null', () => {
+    const r = toRun(raw({ id: 'r1', workflow_name: 'plan', status: 'completed' }));
+    expect(r.outcome).toBeNull();
+  });
+
   test('userMessage defaults to empty string when absent', () => {
     const r = toRun(raw({ id: 'r1', workflow_name: 'plan', status: 'running' }));
     expect(r.userMessage).toBe('');

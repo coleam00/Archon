@@ -3,7 +3,7 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
 import { validationErrorHook } from './openapi-defaults';
-import { mockAllWorkflowModules } from '../test/workflow-mock-factories';
+import { makeListDashboardRunsMock, mockAllWorkflowModules } from '../test/workflow-mock-factories';
 
 // ---------------------------------------------------------------------------
 // Mock setup — must precede the dynamic import of ./api below. Exercises the
@@ -122,8 +122,8 @@ const mockStartOAuth = mock(async (_userId: string, provider: string) => ({
   url: `https://auth/${provider}`,
   expiresIn: 600,
 }));
-const mockPollOAuth = mock((_sessionId: string, _userId: string, _code?: string) => ({
-  status: 'pending' as const,
+const mockPollOAuth = mock<(typeof import('@archon/core'))['pollOAuth']>(() => ({
+  status: 'pending',
 }));
 
 mock.module('@archon/core', () => ({
@@ -203,11 +203,7 @@ mock.module('@archon/core/db/isolation-environments', () => ({
 
 mock.module('@archon/core/db/workflows', () => ({
   listWorkflowRuns: mock(async () => []),
-  listDashboardRuns: mock(async () => ({
-    runs: [],
-    total: 0,
-    counts: { all: 0, running: 0, completed: 0, failed: 0, cancelled: 0, pending: 0 },
-  })),
+  listDashboardRuns: makeListDashboardRunsMock(),
   getWorkflowRun: mock(async () => null),
   getWorkflowRunByWorkerPlatformId: mock(async () => null),
 }));
@@ -287,7 +283,13 @@ describe('GET /api/auth/providers', () => {
     const body = (await res.json()) as {
       enabled: boolean;
       available: string[];
-      agents: { id: string; catalog: string; ready: boolean }[];
+      agents: {
+        id: string;
+        displayName: string;
+        catalog: string;
+        ready: boolean;
+        credentials: unknown[];
+      }[];
     };
     expect(body.enabled).toBe(false);
     expect(body.available.length).toBeGreaterThan(0);

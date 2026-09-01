@@ -7,6 +7,7 @@ import { countTerminalNodes } from '../primitives/event';
 import type { RunStatus } from '../lib/run-status';
 import { statusLabel } from '../lib/run-status';
 import { formatElapsed, elapsedSince, formatCost } from '../lib/format';
+import { RunOutcomeBadge } from './RunOutcomeBadge';
 
 interface ConsoleWorkflowResultCardProps {
   runId: string;
@@ -152,6 +153,7 @@ export function ConsoleWorkflowResultCard({
           >
             {workflowName}
           </span>
+          <RunOutcomeBadge outcome={run.outcome} />
           {run.status === 'failed' ? (
             <span
               className="rounded-full border px-[7px] py-[2px] font-mono text-[10.5px] font-semibold uppercase tracking-[0.6px]"

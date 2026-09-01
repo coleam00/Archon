@@ -40,7 +40,7 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-const mockHandleMessage = mock(async () => {});
+const mockHandleMessage = mock<(typeof import('@archon/core'))['handleMessage']>(async () => {});
 
 const mockGetOrCreateConversation = mock(async () => ({
   id: 'conv-1',
@@ -73,8 +73,9 @@ mock.module('@archon/core', () => ({
   getArchonWorkspacesPath: () => '/workspace',
   getCommandFolderSearchPaths: () => [],
   ConversationLockManager: class {
-    async acquireLock(_id: string, handler: () => Promise<void>): Promise<void> {
+    async acquireLock(_id: string, handler: () => Promise<void>): Promise<{ status: 'started' }> {
       await handler();
+      return { status: 'started' };
     }
     getStats() {
       return {
@@ -229,15 +230,9 @@ function createTestAdapter(): GitHubAdapter {
   const adapter = new GitHubAdapter({ kind: 'pat', token: 'fake-token' }, WEBHOOK_SECRET, {
     acquireLock: mock(async (_id: string, handler: () => Promise<void>) => {
       await handler();
+      return { status: 'started' as const };
     }),
-    getStats: () => ({
-      active: 0,
-      queuedTotal: 0,
-      queuedByConversation: [],
-      maxConcurrent: 10,
-      activeConversationIds: [],
-    }),
-  } as unknown as InstanceType<typeof import('@archon/core').ConversationLockManager>);
+  });
 
   // @ts-expect-error - mock private method for testing
   adapter.verifySignature = mock(() => true);

@@ -15,7 +15,7 @@ import {
   classifyAndFormatError,
   toError,
   onConversationClosed,
-  ConversationLockManager,
+  type ConversationLockManager,
 } from '@archon/core';
 import * as userDb from '@archon/core/db/users';
 import {
@@ -51,20 +51,22 @@ const MAX_LENGTH = 65000; // Gitea comment limit (similar to GitHub)
 /** Hidden marker added to bot comments to prevent self-triggering loops */
 const BOT_RESPONSE_MARKER = '<!-- archon-bot-response -->';
 
+type ConversationLocker = Pick<ConversationLockManager, 'acquireLock'>;
+
 export class GiteaAdapter implements IPlatformAdapter {
   private baseUrl: string;
   private token: string;
   private webhookSecret: string;
   private allowedUsers: string[];
   private botMention: string;
-  private lockManager: ConversationLockManager;
+  private lockManager: ConversationLocker;
   private readonly retryDelayFn: (attempt: number) => number;
 
   constructor(
     baseUrl: string,
     token: string,
     webhookSecret: string,
-    lockManager: ConversationLockManager,
+    lockManager: ConversationLocker,
     botMention?: string,
     options?: { retryDelayMs?: (attempt: number) => number }
   ) {
