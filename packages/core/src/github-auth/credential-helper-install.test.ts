@@ -17,7 +17,7 @@
  * registered helper can provide a fresh token to a later Git operation.
  */
 import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
-import { mkdtemp, readFile, writeFile, mkdir, stat } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, writeFile, mkdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as git from '@archon/git';
@@ -123,13 +123,15 @@ describe('installCredentialHelper', () => {
   });
 
   test.skipIf(process.platform === 'win32')(
-    'embeds the credential helper in a compiled binary',
+    'loads from Docker source packaging and embeds in a compiled binary',
     async () => {
       execSpy.mockRestore();
       const buildRoot = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-credhelper-compiled-')));
       const entryPath = join(buildRoot, 'entry.ts');
       const binaryPath = join(buildRoot, 'credential-helper-asset');
-      const modulePath = join(import.meta.dir, 'credential-helper-script.ts');
+      const packagedAuthDir = join(buildRoot, 'app', 'packages', 'core', 'src', 'github-auth');
+      await cp(import.meta.dir, packagedAuthDir, { recursive: true });
+      const modulePath = join(packagedAuthDir, 'credential-helper-script.ts');
       await writeFile(
         entryPath,
         `import { credentialHelperScript } from ${JSON.stringify(modulePath)};\nprocess.stdout.write(credentialHelperScript);\n`

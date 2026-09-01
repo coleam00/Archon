@@ -13,7 +13,7 @@
  *   - `resolveDefaultAssistant` (step 6, via getOrCreateCodebaseForRepo)
  *     → loadGlobalConfig() CREATES ~/.archon/config.yaml when absent
  *   - `installCredentialHelper` (step 8, App-mode clone)
- *     → copies the helper script into ~/.archon/bin/
+ *     → writes the bundled helper script into ~/.archon/bin/
  *   - `handleMessage`           (step 13, orchestrator)
  *     → opens the real SQLite database and creates ~/.archon/workspaces/
  *
@@ -1810,7 +1810,7 @@ describe('GitHubAdapter', () => {
       expect(mockCloneRepository).toHaveBeenCalled();
       // Asserted on the function itself rather than through its `git config`
       // side effect. The old proxy assertion required running the REAL
-      // installCredentialHelper, which copies the helper script into
+      // installCredentialHelper, which writes the bundled helper script into
       // $ARCHON_HOME/bin/ — a genuine write into the developer's ~/.archon from
       // a unit test (#2305). What this test is actually about is the adapter's
       // wiring: App-mode clone → install helper on the cloned path. The helper's

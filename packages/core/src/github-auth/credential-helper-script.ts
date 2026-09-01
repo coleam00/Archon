@@ -1,3 +1,3 @@
-import credentialHelperScript from '../../../../scripts/git-credential-archon.sh' with { type: 'text' };
+import credentialHelperScript from './git-credential-archon.sh' with { type: 'text' };
 
 export { credentialHelperScript };
