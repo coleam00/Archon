@@ -313,23 +313,13 @@ async function registerRepoAtPath(
   };
 }
 
-/**
- * Normalize a repo URL: strip trailing slashes and convert SSH to HTTPS.
- */
-function normalizeRepoUrl(rawUrl: string): {
+function deriveRepoCloneTarget(validatedUrl: string): {
   workingUrl: string;
   ownerName: string;
   repoName: string;
   targetPath: string;
 } {
-  const normalizedUrl = rawUrl.replace(/\/+$/, '');
-
-  let workingUrl = normalizedUrl;
-  // Convert SSH URLs (git@host:owner/repo) to HTTPS for any host
-  const sshMatch = /^git@([^:]+):(.+)$/.exec(normalizedUrl);
-  if (sshMatch) {
-    workingUrl = `https://${sshMatch[1]}/${sshMatch[2]}`;
-  }
+  const workingUrl = validatedUrl.replace(/\/+$/, '');
 
   const urlParts = workingUrl.replace(/\.git$/, '').split('/');
   const repoName = urlParts.pop() ?? 'unknown';
@@ -359,7 +349,7 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
     return registerRepository(resolvedPath);
   }
 
-  const { workingUrl, ownerName, repoName, targetPath } = normalizeRepoUrl(repoUrl);
+  const { workingUrl, ownerName, repoName, targetPath } = deriveRepoCloneTarget(repoUrl);
 
   // Check if source directory already has a git repo
   let directoryExists = false;
@@ -401,16 +391,7 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
   await ensureProjectStructure(ownerName, repoName);
 
   // Resolve authentication without putting it into the repository URL.
-  let cloneUrl = workingUrl;
   const credentials = resolveForgeAuth(workingUrl);
-
-  if (credentials) {
-    const parsed = safeParseUrl(workingUrl);
-    if (!parsed && !/^https?:/i.test(workingUrl)) {
-      // Bare host/path form (e.g. github.com/owner/repo)
-      cloneUrl = `https://${workingUrl}`;
-    }
-  }
 
   // Remove the empty source/ directory before cloning (git clone requires non-existent target)
   try {
@@ -423,7 +404,7 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
   }
 
   const cloneResult = await cloneGitRepository(
-    cloneUrl,
+    workingUrl,
     toRepoPath(targetPath),
     credentials ? { credentials } : undefined
   );

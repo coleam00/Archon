@@ -1786,6 +1786,34 @@ describe('GitHubAdapter', () => {
       expect(installCredentialHelperSpy).toHaveBeenCalledWith(clonePath);
     });
 
+    test('App-mode setup fails when the credential helper cannot be registered', async () => {
+      installCredentialHelperSpy.mockImplementationOnce(async () => ({
+        kind: 'failed',
+        error: new Error('git config rejected the helper'),
+      }));
+      const { adapter } = createAppModeAdapter();
+
+      // @ts-expect-error - calling private method
+      const setup = adapter.ensureRepoReady('owner', 'repo', 'main', unclonedPath(), false);
+
+      await expect(setup).rejects.toThrow('git config rejected the helper');
+      expect(mockCloneRepository).toHaveBeenCalled();
+    });
+
+    test('App-mode setup fails when the bundled credential helper is unavailable', async () => {
+      installCredentialHelperSpy.mockImplementationOnce(async () => ({
+        kind: 'failed',
+        error: new Error('bundled credential helper unavailable'),
+      }));
+      const { adapter } = createAppModeAdapter();
+
+      // @ts-expect-error - calling private method
+      const setup = adapter.ensureRepoReady('owner', 'repo', 'main', unclonedPath(), false);
+
+      await expect(setup).rejects.toThrow('bundled credential helper unavailable');
+      expect(mockCloneRepository).toHaveBeenCalled();
+    });
+
     test('credential helper install is NOT attempted in PAT mode', async () => {
       const patAdapter = new GitHubAdapter(
         { kind: 'pat', token: 'fake-token' },

@@ -2542,6 +2542,18 @@ branch refs/heads/feature/auth
       );
     });
 
+    test.each([
+      ['bare host', 'github.com/owner/repo.git'],
+      ['SCP style', 'git@github.com:owner/repo.git'],
+    ])('normalizes a supported %s source before spawning Git', async (_name, source) => {
+      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+
+      const result = await git.cloneRepository(source, repo('/tmp/target'));
+
+      expect(result).toEqual({ ok: true, value: undefined });
+      expect(execSpy.mock.calls[0]?.[1]).toContain('https://github.com/owner/repo.git');
+    });
+
     test('passes GIT_TERMINAL_PROMPT=0 to the git clone subprocess', async () => {
       execSpy.mockResolvedValue({ stdout: '', stderr: '' });
 
@@ -2729,6 +2741,36 @@ branch refs/heads/feature/auth
         name: 'fragment credentials',
         url: 'https://example.test/owner/repo.git#access_token=fragment-secret-789',
         credential: 'fragment-secret-789',
+      },
+      {
+        name: 'bare-host query credentials',
+        url: 'example.test/owner/repo.git?access_token=bare-query-secret-789',
+        credential: 'bare-query-secret-789',
+      },
+      {
+        name: 'bare-host fragment credentials',
+        url: 'example.test/owner/repo.git#access_token=bare-fragment-secret-789',
+        credential: 'bare-fragment-secret-789',
+      },
+      {
+        name: 'bare-host backslash userinfo',
+        url: 'bare-backslash-secret-789\\@example.test/owner/repo.git',
+        credential: 'bare-backslash-secret-789',
+      },
+      {
+        name: 'SCP-style query credentials',
+        url: 'git@example.test:owner/repo.git?access_token=scp-query-secret-789',
+        credential: 'scp-query-secret-789',
+      },
+      {
+        name: 'SCP-style fragment credentials',
+        url: 'git@example.test:owner/repo.git#access_token=scp-fragment-secret-789',
+        credential: 'scp-fragment-secret-789',
+      },
+      {
+        name: 'SCP-style backslash userinfo',
+        url: 'git@scp-backslash-secret-789\\@example.test:owner/repo.git',
+        credential: 'scp-backslash-secret-789',
       },
     ]) {
       test.skipIf(process.platform === 'win32')(

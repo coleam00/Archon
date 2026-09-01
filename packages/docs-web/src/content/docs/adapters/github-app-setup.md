@@ -163,7 +163,7 @@ A 401 from any installation Octokit evicts the cached token and the call is retr
 
 Workflows that span >1h need a fresh token to push from the cloned worktree. Archon installs a git credential helper at clone time (App mode only): the worktree's `.git/config` points at `~/.archon/bin/git-credential-archon`, which talks back to Archon's internal endpoint for a fresh installation token on each operation.
 
-> **Compiled binary builds:** the credential helper is installed from `scripts/git-credential-archon.sh` in the source tree. Compiled binaries that don't ship `scripts/` on disk silently skip the install — workflows up to 1h still succeed via the URL-embedded installation token and the `GH_TOKEN` env injection, but longer workflows will see `git push` fail with "Authentication failed" past the 1h mark. Track this when running App mode in a binary deployment.
+The helper is embedded in compiled binaries. App-mode repository setup fails if Archon cannot install or register it, rather than leaving later fetches and pushes without a refreshable credential source.
 
 ### Internal endpoint security — REQUIRED
 

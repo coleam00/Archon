@@ -727,35 +727,24 @@ export class GitHubAdapter implements IPlatformAdapter {
 
     await addSafeDirectory(toRepoPath(repoPath));
 
-    // App mode: install the git credential helper on the newly cloned worktree
-    // so workflows that outlive the 1h installation-token expiry can refresh
-    // credentials in-place. Non-fatal — workflows that complete in <1h still
-    // succeed via the URL-embedded token from the clone above. The result
-    // discriminator tells us whether the install actually happened so we
-    // don't log a false "installed" line in builds where the helper script
-    // isn't on disk.
+    // App mode requires a refreshable credential source after the
+    // request-scoped clone token expires.
     if (this.auth.kind === 'app') {
       const result = await installCredentialHelper(repoPath);
-      switch (result.kind) {
-        case 'installed':
-          getLog().info(
-            { repoPath, owner, repo, helperPath: result.helperPath },
-            'github_auth.credential_helper_installed'
-          );
-          break;
-        case 'skipped':
-          getLog().warn(
-            { repoPath, owner, repo, reason: result.reason, sourcePath: result.sourcePath },
-            'github_auth.credential_helper_skipped'
-          );
-          break;
-        case 'failed':
-          getLog().warn(
-            { err: result.error, repoPath, owner, repo },
-            'github_auth.credential_helper_install_failed'
-          );
-          break;
+      if (result.kind === 'failed') {
+        getLog().error(
+          { err: result.error, repoPath, owner, repo },
+          'github_auth.credential_helper_install_failed'
+        );
+        throw new Error(
+          `GitHub App repository setup requires the credential helper: ${result.error.message}`,
+          { cause: result.error }
+        );
       }
+      getLog().info(
+        { repoPath, owner, repo, helperPath: result.helperPath },
+        'github_auth.credential_helper_installed'
+      );
     }
   }
 

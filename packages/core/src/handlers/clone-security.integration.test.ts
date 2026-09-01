@@ -183,6 +183,36 @@ describe('core clone child security boundary', () => {
       url: 'https://backslash-core-secret-789\\@example.test/owner/repo.git',
       credential: 'backslash-core-secret-789',
     },
+    {
+      name: 'bare-host query credentials',
+      url: 'example.test/owner/repo.git?access_token=bare-query-core-secret-789',
+      credential: 'bare-query-core-secret-789',
+    },
+    {
+      name: 'bare-host fragment credentials',
+      url: 'example.test/owner/repo.git#access_token=bare-fragment-core-secret-789',
+      credential: 'bare-fragment-core-secret-789',
+    },
+    {
+      name: 'bare-host backslash userinfo',
+      url: 'bare-backslash-core-secret-789\\@example.test/owner/repo.git',
+      credential: 'bare-backslash-core-secret-789',
+    },
+    {
+      name: 'SCP-style query credentials',
+      url: 'git@example.test:owner/repo.git?access_token=scp-query-core-secret-789',
+      credential: 'scp-query-core-secret-789',
+    },
+    {
+      name: 'SCP-style fragment credentials',
+      url: 'git@example.test:owner/repo.git#access_token=scp-fragment-core-secret-789',
+      credential: 'scp-fragment-core-secret-789',
+    },
+    {
+      name: 'SCP-style backslash userinfo',
+      url: 'git@scp-backslash-core-secret-789\\@example.test:owner/repo.git',
+      credential: 'scp-backslash-core-secret-789',
+    },
   ]) {
     test.skipIf(process.platform === 'win32')(
       `rejects ${name} before the core clone route has any side effect`,

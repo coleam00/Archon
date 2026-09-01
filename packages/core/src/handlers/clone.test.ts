@@ -343,6 +343,17 @@ describe('cloneRepository', () => {
       expect(cloneCall?.[0]).toBe('https://github.com/owner/repo');
     });
 
+    test('normalizes a bare host clone source before deriving the project path', async () => {
+      mockCreateCodebase.mockResolvedValueOnce(
+        makeCodebase({ name: 'owner/repo' }) as ReturnType<typeof makeCodebase>
+      );
+
+      const result = await cloneRepository('github.com/owner/repo');
+
+      expect(result.name).toBe('owner/repo');
+      expect(getGitCloneCall()?.[0]).toBe('https://github.com/owner/repo');
+    });
+
     test('strips trailing slash from URL before cloning', async () => {
       mockCreateCodebase.mockResolvedValueOnce(
         makeCodebase({ name: 'owner/repo' }) as ReturnType<typeof makeCodebase>

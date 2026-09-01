@@ -382,15 +382,38 @@ export interface CloneRepositoryOptions {
 const ENV_CREDENTIAL_HELPER =
   '!f() { test "$1" = get || exit 0; printf \'%s\\n\' "username=$ARCHON_GIT_USERNAME" "password=$ARCHON_GIT_PASSWORD"; }; f';
 
+function normalizeCloneSource(url: string): string {
+  if (url.startsWith('/') || url.startsWith('~') || url.startsWith('.')) return url;
+
+  const scpStyle = /^git@([^:]+):(.+)$/.exec(url);
+  if (scpStyle) return `https://${scpStyle[1]}/${scpStyle[2]}`;
+
+  const firstSlash = url.indexOf('/');
+  if (firstSlash <= 0 || url.includes('://')) return url;
+
+  const authority = url.slice(0, firstSlash);
+  const isBareHost =
+    authority === 'localhost' ||
+    authority.includes('.') ||
+    /^[^:]+:\d+$/.test(authority) ||
+    /^\[[^\]]+\](?::\d+)?$/.test(authority);
+  return isBareHost ? `https://${url}` : url;
+}
+
 export function validateCloneUrl(
   url: string
 ): { ok: true; url: string; httpUrl: URL | null } | { ok: false; error: string } {
-  if (!/^\s*https?:/i.test(url)) return { ok: true, url, httpUrl: null };
-  if (url.includes('\\')) return { ok: false, error: 'Invalid HTTP(S) repository URL' };
+  const cloneSource = normalizeCloneSource(url);
+  if (!/^\s*https?:/i.test(cloneSource)) {
+    return { ok: true, url: cloneSource, httpUrl: null };
+  }
+  if (cloneSource.includes('\\')) {
+    return { ok: false, error: 'Invalid HTTP(S) repository URL' };
+  }
 
   let parsed: URL;
   try {
-    parsed = new URL(url);
+    parsed = new URL(cloneSource);
   } catch {
     return { ok: false, error: 'Invalid HTTP(S) repository URL' };
   }
