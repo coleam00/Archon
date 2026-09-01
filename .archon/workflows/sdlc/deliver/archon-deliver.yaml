@@ -563,8 +563,9 @@ nodes:
     # Every failable ancestor is a DIRECT dependency, deliberately: the
     # engine's default rule turns a failed ancestor into a skipped dependent
     # at the very next hop, so a join that only names the tail of a chain
-    # never sees the chain's gates fail. Naming await-checks, the convergence
-    # loop, and the re-wait here is what makes their failures block the flip
+    # never sees the chain's gates fail. Naming every gate ancestor here —
+    # await-checks, the convergence loop, the re-wait, gate-validated,
+    # gate-ready, and validate — is what makes their failures block the flip
     # instead of skipping past it. The trigger rule lets the green path's
     # SKIPPED nodes pass — the convergence pass and its re-wait, and a resync
     # skipped because the initial review was ready — while a FAILED one still
@@ -572,7 +573,8 @@ nodes:
     # success. sync-pr-body stays named for the no-CI repo, where the waits
     # return immediately and the flip could otherwise beat the resync.
     depends_on:
-      [await-checks, ci-verdict, ci-corrections, await-fix-checks, sync-pr-body]
+      [await-checks, ci-verdict, ci-corrections, await-fix-checks, sync-pr-body,
+       gate-validated, gate-ready, validate]
     trigger_rule: none_failed_min_one_success
 
   # This tail's terminal report, like every other SDLC tail's (scripts/outcome.py).

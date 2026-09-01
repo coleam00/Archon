@@ -1,5 +1,5 @@
 # Dry-run fixture: the validate-RED path — initial review is clean but the project
-# gate fails, so the run fails at gate-validated (the new gate seen red).
+# gate fails, so the run fails at gate-validated (a direct dependency of flip-ready).
 # Run with --exec-code: gate-validated must EXECUTE to be seen red.
 #
 # The verdict below declares no `red_cause`, which makes this the guard for the

@@ -406,6 +406,15 @@ describe('bundled-defaults', () => {
       });
     });
 
+    it('flip-ready directly depends on every failable gate ancestor', () => {
+      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
+      if (parsed.workflow === null) throw new Error(parsed.error.error);
+      const flipReady = parsed.workflow.nodes.find(node => node.id === 'flip-ready');
+      expect(flipReady?.depends_on).toContain('gate-validated');
+      expect(flipReady?.depends_on).toContain('gate-ready');
+      expect(flipReady?.depends_on).toContain('validate');
+    });
+
     it('archon-review exposes the three-way action contract behind a successful preflight', () => {
       const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-review'], 'archon-review.yaml');
       if (parsed.workflow === null) throw new Error(parsed.error.error);
