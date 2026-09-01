@@ -1102,6 +1102,11 @@ Separately from the value channel above, the engine retains **what each subproce
 the run's own transcript (`~/.archon/workspaces/<project>/logs/<run-id>.jsonl`), as one
 `exec_output` row per subprocess:
 
+Use `archon workflow logs <run-id>` to print the current transcript or add `--follow` to
+stay attached while the run executes. The foreground run-start output and `archon workflow
+get <run-id>` both expose the resolved local path, so callers do not need to reconstruct the
+project storage layout.
+
 | Field | Meaning |
 | --- | --- |
 | `step` | The node id. An `until_bash` probe uses `<node>-iteration-<n>`. |
@@ -1733,11 +1738,14 @@ before this contract cannot be recovered.
 Read cost from `cost_usd`, not from the token counts. Because `input` is gross, pricing a
 node by hand means getting four axes and the cache rates right; `cost_usd` is the number the
 provider itself reported. JSONL `node_complete.cost_usd` and persisted
-`node_completed.data.cost_usd` carry it for a node, and JSONL `workflow_complete` carries the
-run totals as `cost_usd` and `tokens`, matching run metadata `total_cost_usd` and
-`total_tokens_*`. An absent `cost_usd` means the provider reported no cost — Codex reports
-none — while `0` means it reported zero. A run that spent nothing on AI, such as a bash-only
-workflow, carries no `cost_usd` rather than `0`.
+`node_completed.data.cost_usd` carry it for a node. JSONL `workflow_complete` carries the
+successful run's totals as `cost_usd` and `tokens`; a DAG-owned terminal `workflow_error`
+carries the same aggregate when work reported usage before failure. These match run metadata
+`total_cost_usd` and `total_tokens_*`. An absent `cost_usd` means the provider reported no
+cost — Codex reports none — while `0` means it reported zero. A run that spent nothing on AI,
+such as a bash-only workflow, carries no `cost_usd` rather than `0`. Successful loop nodes and
+governance nodes do not yet have complete terminal transcript-row coverage, so read usage from
+the rows that exist rather than treating an absent row as zero spend.
 
 ### Choosing the child's checkout with `isolation:`
 
@@ -2898,12 +2906,15 @@ After a workflow runs, check the artifacts in the `$ARTIFACTS_DIR` for that run 
 
 ### Check Logs
 
-Workflow execution logs to:
-```
-~/.archon/workspaces/owner/repo/logs/{workflow-id}.jsonl
+Print the current JSONL transcript, or follow it through completion:
+
+```bash
+archon workflow logs {workflow-id}
+archon workflow logs {workflow-id} --follow
 ```
 
-Each line is a JSON event (step start, AI response, tool call, etc.).
+Each line is a JSON event (step start, AI response, tool call, retained subprocess output,
+etc.). `archon workflow get {workflow-id}` also prints the resolved local transcript path.
 
 ---
 

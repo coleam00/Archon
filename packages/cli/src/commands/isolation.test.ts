@@ -2,6 +2,14 @@
  * Tests for isolation commands (complete, cleanup, cleanup-merged)
  */
 import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test';
+import type * as Core from '@archon/core';
+import type * as IsolationDb from '@archon/core/db/isolation-environments';
+import type * as WorkflowDb from '@archon/core/db/workflows';
+import type * as IsolationOperations from '@archon/core/operations/isolation-operations';
+import type * as CleanupService from '@archon/core/services/cleanup-service';
+import type * as Git from '@archon/git';
+import type * as Isolation from '@archon/isolation';
+import { toBranchName } from '@archon/git';
 import {
   isolationCompleteCommand,
   isolationCleanupCommand,
@@ -22,12 +30,16 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-const mockFindActiveByBranchName = mock(() => Promise.resolve(null));
-const mockFindStaleEnvironments = mock(() => Promise.resolve([]));
-const mockGetLiveRunOwningEnv = mock(
-  (): Promise<{ id: string; status: string } | null> => Promise.resolve(null)
+const mockFindActiveByBranchName = mock<typeof IsolationDb.findActiveByBranchName>(() =>
+  Promise.resolve(null)
 );
-const mockUpdateStatus = mock(() => Promise.resolve());
+const mockFindStaleEnvironments = mock<typeof IsolationDb.findStaleEnvironments>(() =>
+  Promise.resolve([])
+);
+const mockGetLiveRunOwningEnv = mock<typeof IsolationDb.getLiveRunOwningEnv>(() =>
+  Promise.resolve(null)
+);
+const mockUpdateStatus = mock<typeof IsolationDb.updateStatus>(() => Promise.resolve());
 
 mock.module('@archon/core/db/isolation-environments', () => ({
   findActiveByBranchName: mockFindActiveByBranchName,
@@ -40,24 +52,28 @@ mock.module('@archon/core/db/isolation-environments', () => ({
   updateStatus: mockUpdateStatus,
 }));
 
-const mockGetActiveWorkflowRunByPath = mock(() => Promise.resolve(null));
+const mockGetActiveWorkflowRunByPath = mock<typeof WorkflowDb.getActiveWorkflowRunByPath>(() =>
+  Promise.resolve(null)
+);
 
 mock.module('@archon/core/db/workflows', () => ({
   getActiveWorkflowRunByPath: mockGetActiveWorkflowRunByPath,
 }));
 
-const mockLoadRepoConfig = mock(() => Promise.resolve({}));
+const mockLoadRepoConfig = mock<typeof Core.loadRepoConfig>(() => Promise.resolve({}));
 
 mock.module('@archon/core', () => ({
   loadRepoConfig: mockLoadRepoConfig,
 }));
 
-const mockRemoveEnvironment = mock(() =>
+const mockRemoveEnvironment = mock<typeof CleanupService.removeEnvironment>(() =>
   Promise.resolve({ worktreeRemoved: true, branchDeleted: true, warnings: [] })
 );
-const mockCleanupMergedWorktrees = mock(() => Promise.resolve({ removed: [], skipped: [] }));
-const mockCleanupContainerEnvironments = mock(() =>
-  Promise.resolve({ removed: [], skipped: [], errors: [] })
+const mockCleanupMergedWorktrees = mock<typeof CleanupService.cleanupMergedWorktrees>(() =>
+  Promise.resolve({ removed: [], skipped: [] })
+);
+const mockCleanupContainerEnvironments = mock<typeof CleanupService.cleanupContainerEnvironments>(
+  () => Promise.resolve({ removed: [], skipped: [], errors: [] })
 );
 
 mock.module('@archon/core/services/cleanup-service', () => ({
@@ -66,7 +82,7 @@ mock.module('@archon/core/services/cleanup-service', () => ({
   cleanupContainerEnvironments: mockCleanupContainerEnvironments,
 }));
 
-const mockListEnvironments = mock(() =>
+const mockListEnvironments = mock<typeof IsolationOperations.listEnvironments>(() =>
   Promise.resolve({
     codebases: [
       {
@@ -80,22 +96,28 @@ const mockListEnvironments = mock(() =>
     ghostsReconciled: 0,
   })
 );
-const mockCleanupMergedEnvironments = mock(() => Promise.resolve({ removed: [], skipped: [] }));
+const mockCleanupMergedEnvironments = mock<typeof IsolationOperations.cleanupMergedEnvironments>(
+  () => Promise.resolve({ removed: [], skipped: [] })
+);
 
 mock.module('@archon/core/operations/isolation-operations', () => ({
   listEnvironments: mockListEnvironments,
   cleanupMergedEnvironments: mockCleanupMergedEnvironments,
 }));
 
-const mockHasUncommittedChanges = mock(() => Promise.resolve(false));
+const mockHasUncommittedChanges = mock<typeof Git.hasUncommittedChanges>(() =>
+  Promise.resolve(false)
+);
 // Default: gh returns empty PR array and git reports no unpushed commits.
-const mockExecFileAsync = mock((cmd: string) =>
+const mockExecFileAsync = mock<typeof Git.execFileAsync>((cmd: string) =>
   Promise.resolve({ stdout: cmd === 'gh' ? '[]' : '', stderr: '' })
 );
 
-const mockGetUniqueCommitCount = mock(() => Promise.resolve(0));
-const mockGetDefaultBranch = mock(() => Promise.resolve('dev'));
-const mockIsPatchEquivalent = mock(() => Promise.resolve(false));
+const mockGetUniqueCommitCount = mock<typeof Git.getUniqueCommitCount>(() => Promise.resolve(0));
+const mockGetDefaultBranch = mock<typeof Git.getDefaultBranch>(() =>
+  Promise.resolve(toBranchName('dev'))
+);
+const mockIsPatchEquivalent = mock<typeof Git.isPatchEquivalent>(() => Promise.resolve(false));
 
 mock.module('@archon/git', () => ({
   hasUncommittedChanges: mockHasUncommittedChanges,
@@ -109,7 +131,15 @@ mock.module('@archon/git', () => ({
   isPatchEquivalent: mockIsPatchEquivalent,
 }));
 
-const mockDestroyWorktree = mock(() => Promise.resolve({ warnings: [] }));
+const mockDestroyWorktree = mock<ReturnType<typeof Isolation.getIsolationProvider>['destroy']>(() =>
+  Promise.resolve({
+    worktreeRemoved: true,
+    branchDeleted: true,
+    remoteBranchDeleted: null,
+    directoryClean: true,
+    warnings: [],
+  })
+);
 
 mock.module('@archon/isolation', () => ({
   getIsolationProvider: mock(() => ({
@@ -117,20 +147,57 @@ mock.module('@archon/isolation', () => ({
   })),
 }));
 
-const mockEnv = {
-  id: 'env-123',
-  branch_name: 'feature-branch',
-  working_path: '/test/worktree',
-  codebase_id: 'cb-123',
-  codebase_default_cwd: '/test/repo',
-  workflow_id: 'wf-123',
-  workflow_type: 'branch',
-  status: 'active',
-  provider: 'worktree',
-  created_by_platform: 'cli',
-  metadata: {},
-  created_at: new Date().toISOString(),
-};
+type ActiveEnvironment = NonNullable<
+  Awaited<ReturnType<typeof IsolationDb.findActiveByBranchName>>
+>;
+
+function makeEnvironment(overrides: Partial<ActiveEnvironment> = {}): ActiveEnvironment {
+  return {
+    id: 'env-123',
+    branch_name: 'feature-branch',
+    working_path: '/test/worktree',
+    codebase_id: 'cb-123',
+    codebase_default_cwd: '/test/repo',
+    workflow_id: 'wf-123',
+    workflow_type: 'task',
+    status: 'active',
+    provider: 'worktree',
+    created_by_platform: 'cli',
+    created_by_user_id: null,
+    metadata: {},
+    created_at: new Date('2026-01-01T00:00:00.000Z'),
+    ...overrides,
+  };
+}
+
+const mockEnv = makeEnvironment();
+
+type ActiveWorkflowRun = NonNullable<
+  Awaited<ReturnType<typeof WorkflowDb.getActiveWorkflowRunByPath>>
+>;
+
+function makeActiveWorkflowRun(overrides: Partial<ActiveWorkflowRun> = {}): ActiveWorkflowRun {
+  return {
+    id: 'run-abc',
+    workflow_name: 'implement',
+    conversation_id: 'conv-123',
+    parent_conversation_id: null,
+    codebase_id: 'cb-123',
+    status: 'running',
+    outcome: null,
+    user_message: 'test request',
+    metadata: {},
+    started_at: new Date('2026-01-01T00:00:00.000Z'),
+    completed_at: null,
+    last_activity_at: null,
+    working_path: '/test/worktree',
+    user_id: null,
+    parent_run_id: null,
+    adopted_from_run_id: null,
+    output_root: null,
+    ...overrides,
+  };
+}
 
 describe('isolationCompleteCommand', () => {
   let consoleLogSpy: ReturnType<typeof spyOn>;
@@ -157,7 +224,7 @@ describe('isolationCompleteCommand', () => {
     mockGetUniqueCommitCount.mockReset();
     mockGetUniqueCommitCount.mockResolvedValue(0);
     mockGetDefaultBranch.mockReset();
-    mockGetDefaultBranch.mockResolvedValue('dev');
+    mockGetDefaultBranch.mockResolvedValue(toBranchName('dev'));
     mockIsPatchEquivalent.mockReset();
     mockIsPatchEquivalent.mockResolvedValue(false);
   });
@@ -213,10 +280,7 @@ describe('isolationCompleteCommand', () => {
 
   it('blocks when there is a running workflow on the branch', async () => {
     mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
-    mockGetActiveWorkflowRunByPath.mockResolvedValueOnce({
-      id: 'run-abc',
-      workflow_name: 'implement',
-    });
+    mockGetActiveWorkflowRunByPath.mockResolvedValueOnce(makeActiveWorkflowRun());
 
     await isolationCompleteCommand(['feature-branch'], { force: false, deleteRemote: true });
 
@@ -229,7 +293,7 @@ describe('isolationCompleteCommand', () => {
 
   it('blocks when there is an open PR on the branch', async () => {
     mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
-    mockExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+    mockExecFileAsync.mockImplementation((cmd: string) => {
       if (cmd === 'gh') {
         return Promise.resolve({
           stdout: JSON.stringify([{ number: 140, title: 'fix: add metrics session_id' }]),
@@ -516,11 +580,8 @@ describe('isolationCompleteCommand', () => {
   it('reports all blockers together when multiple checks fail', async () => {
     mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
     mockHasUncommittedChanges.mockResolvedValueOnce(true);
-    mockGetActiveWorkflowRunByPath.mockResolvedValueOnce({
-      id: 'run-abc',
-      workflow_name: 'implement',
-    });
-    mockExecFileAsync.mockImplementation((cmd: string, args: string[]) => {
+    mockGetActiveWorkflowRunByPath.mockResolvedValueOnce(makeActiveWorkflowRun());
+    mockExecFileAsync.mockImplementation((cmd: string) => {
       if (cmd === 'gh') {
         return Promise.resolve({
           stdout: JSON.stringify([{ number: 140, title: 'fix: metrics' }]),
@@ -569,10 +630,7 @@ describe('isolationCompleteCommand', () => {
   it('proceeds despite all checks when --force is set', async () => {
     mockFindActiveByBranchName.mockResolvedValueOnce(mockEnv);
     mockHasUncommittedChanges.mockResolvedValueOnce(true);
-    mockGetActiveWorkflowRunByPath.mockResolvedValueOnce({
-      id: 'run-abc',
-      workflow_name: 'implement',
-    });
+    mockGetActiveWorkflowRunByPath.mockResolvedValueOnce(makeActiveWorkflowRun());
     mockRemoveEnvironment.mockResolvedValueOnce({
       worktreeRemoved: true,
       branchDeleted: true,

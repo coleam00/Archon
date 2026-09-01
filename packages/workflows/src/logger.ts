@@ -204,11 +204,13 @@ export async function logTool(
 export async function logWorkflowError(
   logDir: string,
   workflowRunId: string,
-  error: string
+  error: string,
+  usage?: WorkflowUsage
 ): Promise<void> {
   await logWorkflowEvent(logDir, workflowRunId, {
     type: 'workflow_error',
     error,
+    ...usage,
   });
 }
 

@@ -11,12 +11,32 @@ import {
   spyOn,
   mock,
   jest,
+  type Mock,
 } from 'bun:test';
-import { appendFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  appendFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  truncateSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { getArchonHome, isDocker } from '@archon/paths';
+import { removeTempTree } from '@archon/paths/test-utils';
+import {
+  getProjectStoragePaths as getProjectStoragePathsReal,
+  getRunArtifactsDirForRoot as getRunArtifactsDirForRootReal,
+  getRunLogPathForRoot as getRunLogPathForRootReal,
+  isInsideArchonHome as isInsideArchonHomeReal,
+  resolveProjectStorageKey as resolveProjectStorageKeyReal,
+  resolveRunStorageRoot as resolveRunStorageRootReal,
+} from '@archon/paths/archon-paths';
 import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
+import type * as WorkflowDiscovery from '@archon/workflows/workflow-discovery';
+import type * as DetachedRunControl from '../utils/detached-run-control';
 import {
   makeTestComposedWorkflow,
   makeTestWorkflow,
@@ -29,6 +49,7 @@ import {
   workflowRunCommand,
   workflowStatusCommand,
   workflowGetCommand,
+  workflowLogsCommand,
   workflowWaitCommand,
   workflowRunsCommand,
   workflowResumeCommand,
@@ -72,11 +93,8 @@ const mockLogger = {
 const mockDetachedTargetStop = mock((): Promise<void> => Promise.resolve());
 const mockDetachedTargetRelease = mock((): undefined => undefined);
 const mockReclaimContainerEnv = mock((): Promise<void> => Promise.resolve());
-const mockRequestDetachedRunStop = mock(
-  (): Promise<{
-    stop: typeof mockDetachedTargetStop;
-    release: typeof mockDetachedTargetRelease;
-  }> => Promise.resolve({ stop: mockDetachedTargetStop, release: mockDetachedTargetRelease })
+const mockRequestDetachedRunStop = mock<typeof DetachedRunControl.requestDetachedRunStop>(() =>
+  Promise.resolve({ stop: mockDetachedTargetStop, release: mockDetachedTargetRelease })
 );
 const mockDetachedControlClose = mock((): Promise<void> => Promise.resolve());
 const mockAssertDetachedRunProcessOwner = mock((): undefined => undefined);
@@ -167,6 +185,12 @@ mock.module('@archon/paths', () => ({
         ? mockExpandTilde(env.ARCHON_HOME)
         : '/home/test/.archon'
   ),
+  getProjectStoragePaths: getProjectStoragePathsReal,
+  getRunArtifactsDirForRoot: getRunArtifactsDirForRootReal,
+  getRunLogPathForRoot: getRunLogPathForRootReal,
+  isInsideArchonHome: isInsideArchonHomeReal,
+  resolveProjectStorageKey: resolveProjectStorageKeyReal,
+  resolveRunStorageRoot: resolveRunStorageRootReal,
   BUNDLED_IS_BINARY: false,
   BUNDLED_VERSION: '0.0.0-test',
   readTierNoticeState: mock(() => null),
@@ -239,8 +263,11 @@ mock.module('@archon/core/operations/workflow-adoption', () => ({
   resolveWorkflowAdoption: mock(() => Promise.reject(new Error('adoption not expected'))),
 }));
 
+const mockDiscoverWorkflowsWithConfig = mock<typeof WorkflowDiscovery.discoverWorkflowsWithConfig>(
+  () => Promise.resolve({ workflows: [], errors: [] })
+);
 mock.module('@archon/workflows/workflow-discovery', () => ({
-  discoverWorkflowsWithConfig: mock(() => Promise.resolve({ workflows: [], errors: [] })),
+  discoverWorkflowsWithConfig: mockDiscoverWorkflowsWithConfig,
 }));
 mock.module('@archon/workflows/fixture-runner', () => ({
   runFixtures: mock(() => Promise.resolve({ results: [], passed: 0, failed: 0 })),
@@ -433,6 +460,7 @@ mock.module('@archon/core/db/workflows', () => ({
   findResumableRun: mock(() => Promise.resolve(null)),
   resumeWorkflowRun: mock(() => Promise.resolve(null)),
   getWorkflowRun: mock(() => Promise.resolve(null)),
+  findAdoptingRuns: mock(() => Promise.resolve([])),
   findWorkflowRunsByIdPrefix: mock(() => Promise.resolve([])),
   updateWorkflowRun: mock(() => Promise.resolve()),
   // CAS gate resolvers (#2113) — approve/reject stamp the resolution here;
@@ -498,6 +526,35 @@ function spyOnStderr(): ReturnType<typeof spyOn> {
 /** The first `--json` document a command wrote, trailing newline stripped. */
 function firstJsonPayload(spy: ReturnType<typeof spyOn>): string {
   return ((spy.mock.calls[0]?.[0] as string) ?? '').trimEnd();
+}
+
+async function captureError(promise: Promise<unknown>): Promise<Error> {
+  const error: unknown = await promise.then(
+    () => undefined,
+    cause => cause
+  );
+  if (!(error instanceof Error)) throw new Error('Expected command to reject with an Error');
+  return error;
+}
+
+type DetachedSpawnOptions = Bun.Spawn.SpawnOptions<'ignore', 'pipe', 'inherit'> & {
+  cmd: string[];
+};
+
+function firstDetachedSpawnOptions(spawnSpy: ReturnType<typeof spyOn>): DetachedSpawnOptions {
+  const value: unknown = spawnSpy.mock.calls[0]?.[0];
+  if (typeof value !== 'object' || value === null) {
+    throw new Error('Expected Bun.spawn to receive an options object');
+  }
+
+  if (
+    !('cmd' in value) ||
+    !Array.isArray(value.cmd) ||
+    !value.cmd.every((arg: unknown): arg is string => typeof arg === 'string')
+  ) {
+    throw new Error('Expected Bun.spawn options to include a string command array');
+  }
+  return value as DetachedSpawnOptions;
 }
 
 /**
@@ -986,8 +1043,8 @@ describe('workflowRunCommand — dry-run', () => {
     // `loadConfig` returns defaults when there is no config file, so a throw means a
     // MALFORMED one. Swallowing it would print a clean-looking trace claiming every node
     // resolves to the default assistant — a plausible report of a run that cannot happen.
-    const core = await import('@archon/core');
     const dryRun = await import('@archon/workflows/dry-run');
+    const core = await import('@archon/core');
     (dryRun.dryRunWorkflow as ReturnType<typeof mock>).mockClear();
     (core.loadConfig as ReturnType<typeof mock>).mockRejectedValueOnce(
       new Error('bad yaml at .archon/config.yaml:7')
@@ -2817,9 +2874,7 @@ describe('workflowRunCommand', () => {
       )
     );
 
-    const error = await workflowRunCommand('/test/path', 'assist', 'hello', {}).catch(
-      err => err as Error
-    );
+    const error = await captureError(workflowRunCommand('/test/path', 'assist', 'hello', {}));
 
     expect(error).toBeInstanceOf(Error);
     expect(error.message).toContain('Cannot create worktree: repository registration failed.');
@@ -2852,9 +2907,9 @@ describe('workflowRunCommand', () => {
       )
     );
 
-    const error = await workflowRunCommand('/test/path', 'assist', 'hello', {
-      resume: true,
-    }).catch(err => err as Error);
+    const error = await captureError(
+      workflowRunCommand('/test/path', 'assist', 'hello', { resume: true })
+    );
 
     expect(error).toBeInstanceOf(Error);
     expect(error.message).toContain('Cannot resume: repository registration failed.');
@@ -2884,9 +2939,7 @@ describe('workflowRunCommand', () => {
       new Error("EACCES: permission denied, mkdir '/home/test/.archon/workspaces/acme'")
     );
 
-    const error = await workflowRunCommand('/test/path', 'assist', 'hello', {}).catch(
-      err => err as Error
-    );
+    const error = await captureError(workflowRunCommand('/test/path', 'assist', 'hello', {}));
 
     expect(error).toBeInstanceOf(Error);
     expect(error.message).toContain('Cannot create worktree: repository registration failed.');
@@ -4010,7 +4063,7 @@ describe('workflowStatusCommand', () => {
 
     await workflowStatusCommand();
 
-    const calls = consoleSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    const calls: string[] = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
     expect(calls.some(c => c.includes('run-abc'))).toBe(true);
     expect(calls.some(c => c.includes('implement'))).toBe(true);
     expect(calls.some(c => c.includes('/path/to/worktree'))).toBe(true);
@@ -4087,7 +4140,7 @@ describe('workflowStatusCommand', () => {
 
     await workflowStatusCommand(false, true);
 
-    const calls = consoleSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    const calls: string[] = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
     expect(calls.some(c => c.includes('Nodes:'))).toBe(true);
     expect(calls.some(c => c.includes('✓') && c.includes('plan'))).toBe(true);
     expect(calls.some(c => c.includes('Plan output here'))).toBe(true);
@@ -4132,7 +4185,7 @@ describe('workflowStatusCommand', () => {
 
     await workflowStatusCommand(false, true);
 
-    const calls = consoleSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    const calls: string[] = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
     expect(calls.some(c => c.includes('✗') && c.includes('implement'))).toBe(true);
     expect(calls.some(c => c.includes('Compilation failed'))).toBe(true);
   });
@@ -4154,7 +4207,7 @@ describe('workflowStatusCommand', () => {
 
     await workflowStatusCommand(false, true);
 
-    const calls = consoleSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    const calls: string[] = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
     expect(calls.some(c => c.includes('Nodes:'))).toBe(false);
   });
 
@@ -4348,7 +4401,7 @@ describe('workflowGetCommand', () => {
 
     const code = await workflowGetCommand('run-pw', false, true);
 
-    const calls = consoleSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    const calls: string[] = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
     expect(calls.some(c => c.includes('Ignored keys (1)'))).toBe(true);
     expect(calls.some(c => c.includes("unknown key 'interactive'"))).toBe(true);
     expect(code).toBe(0);
@@ -4459,6 +4512,96 @@ describe('workflowGetCommand', () => {
     };
     expect(parsed.id).toBe('run-json');
     expect(parsed.status).toBe('completed');
+    expect(code).toBe(0);
+  });
+
+  it('exposes the transcript path from a trusted persisted output root', async () => {
+    const previousHome = process.env.ARCHON_HOME;
+    const archonHome = join(tmpdir(), 'archon-get-transcript-home');
+    process.env.ARCHON_HOME = archonHome;
+    try {
+      const workflowDb = await import('@archon/core/db/workflows');
+      const outputRoot = join(archonHome, 'workspaces', 'acme', 'widget');
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'run-transcript',
+        workflow_name: 'implement',
+        status: 'completed',
+        working_path: '/tmp/wt',
+        started_at: new Date(),
+        metadata: {},
+        output_root: outputRoot,
+        codebase_id: 'cb-1',
+      });
+
+      await workflowGetCommand('run-transcript', true);
+
+      expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
+        transcript_path: join(outputRoot, 'logs', 'run-transcript.jsonl'),
+      });
+    } finally {
+      if (previousHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = previousHome;
+    }
+  });
+
+  it('re-derives an out-of-tree historical path through the run codebase', async () => {
+    const previousHome = process.env.ARCHON_HOME;
+    const archonHome = join(tmpdir(), 'archon-get-relocated-home');
+    process.env.ARCHON_HOME = archonHome;
+    try {
+      const workflowDb = await import('@archon/core/db/workflows');
+      const codebaseDb = await import('@archon/core/db/codebases');
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'run-relocated',
+        workflow_name: 'implement',
+        status: 'completed',
+        working_path: '/tmp/wt',
+        started_at: new Date(),
+        metadata: {},
+        output_root: '/old-machine/.archon/workspaces/old/name',
+        codebase_id: 'cb-relocated',
+      });
+      (codebaseDb.getCodebase as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'cb-relocated',
+        kind: 'repo',
+        name: 'new/widget',
+        default_cwd: '/repos/widget',
+      });
+
+      await workflowGetCommand('run-relocated', true);
+
+      expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
+        transcript_path: join(
+          archonHome,
+          'workspaces',
+          'new',
+          'widget',
+          'logs',
+          'run-relocated.jsonl'
+        ),
+      });
+    } finally {
+      if (previousHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = previousHome;
+    }
+  });
+
+  it('reports an unavailable transcript without failing an otherwise readable legacy run', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-legacy',
+      workflow_name: 'implement',
+      status: 'completed',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {},
+      output_root: null,
+      codebase_id: null,
+    });
+
+    const code = await workflowGetCommand('run-legacy', true);
+
+    expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({ transcript_path: null });
     expect(code).toBe(0);
   });
 
@@ -4589,12 +4732,14 @@ describe('workflowGetCommand', () => {
     const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
       nodes: Array<Record<string, unknown>>;
       events?: unknown[];
+      transcript_path?: string | null;
     };
     expect(parsed.nodes).toEqual(EXPECTED_VERBOSE_NODES);
     expect(parsed.nodes.map(node => node.state)).toEqual(
       buildNodeSummaries(VERBOSE_EVENTS_FIXTURE).map(node => node.state)
     );
     expect(parsed.events).toBeUndefined();
+    expect(parsed.transcript_path).toBeNull();
   });
 
   it('emits raw events in verbose JSON when events=true', async () => {
@@ -4617,9 +4762,11 @@ describe('workflowGetCommand', () => {
     const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
       events: WorkflowEventRow[];
       nodes?: unknown[];
+      transcript_path?: string | null;
     };
     expect(parsed.events).toEqual(VERBOSE_EVENTS_FIXTURE);
     expect(parsed.nodes).toBeUndefined();
+    expect(parsed.transcript_path).toBeNull();
   });
 
   it('degrades a raw verbose JSON event-query failure to an empty events payload', async () => {
@@ -4641,6 +4788,197 @@ describe('workflowGetCommand', () => {
 
     const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as { events: unknown[] };
     expect(parsed.events).toEqual([]);
+  });
+});
+
+describe('workflowLogsCommand', () => {
+  let fixtureRoot: string;
+  let archonHome: string;
+  let projectRoot: string;
+  let transcriptPath: string;
+  let stdoutSpy: ReturnType<typeof spyOn>;
+  let stderrSpy: ReturnType<typeof spyOn>;
+  let previousHome: string | undefined;
+
+  const run = (status: 'pending' | 'running' | 'paused' | 'completed' | 'failed') => ({
+    id: '11111111-2222-3333-4444-555555555555',
+    workflow_name: 'transcript-test',
+    conversation_id: 'conv-1',
+    parent_conversation_id: null,
+    codebase_id: 'cb-1',
+    status,
+    outcome: null,
+    user_message: 'test',
+    metadata: {},
+    started_at: new Date(),
+    completed_at: null,
+    last_activity_at: null,
+    working_path: '/tmp/worktree',
+    user_id: null,
+    parent_run_id: null,
+    adopted_from_run_id: null,
+    output_root: projectRoot,
+  });
+
+  const stdoutText = (): string =>
+    stdoutSpy.mock.calls.map((call: unknown[]) => String(call[0] ?? '')).join('');
+  const stderrText = (): string =>
+    stderrSpy.mock.calls.map((call: unknown[]) => String(call[0] ?? '')).join('');
+
+  beforeEach(async () => {
+    fixtureRoot = mkdtempSync(join(tmpdir(), 'archon-workflow-logs-'));
+    archonHome = join(fixtureRoot, 'home');
+    projectRoot = join(archonHome, 'workspaces', 'acme', 'widget');
+    transcriptPath = join(projectRoot, 'logs', '11111111-2222-3333-4444-555555555555.jsonl');
+    mkdirSync(join(projectRoot, 'logs'), { recursive: true });
+    previousHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = archonHome;
+    stdoutSpy = spyOnJsonStdout();
+    stderrSpy = spyOnStderr();
+
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockReset();
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValue(null);
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockReset();
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValue([]);
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockReset();
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValue(null);
+    (codebaseDb.findCodebaseByPathPrefix as ReturnType<typeof mock>).mockReset();
+    (codebaseDb.findCodebaseByPathPrefix as ReturnType<typeof mock>).mockResolvedValue(null);
+    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockReset();
+    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockResolvedValue(null);
+  });
+
+  afterEach(async () => {
+    stdoutSpy.mockRestore();
+    stderrSpy.mockRestore();
+    if (previousHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = previousHome;
+    await removeTempTree(fixtureRoot);
+  });
+
+  it('prints the exact snapshot and resolves a unique project-scoped prefix', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const row = `${JSON.stringify({ type: 'workflow_start', content: 'hello' })}\n`;
+    writeFileSync(transcriptPath, row);
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-1',
+      kind: 'repo',
+      name: 'acme/widget',
+      default_cwd: '/repo',
+    });
+    (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
+      { id: run('completed').id },
+    ]);
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(run('completed'));
+
+    const code = await workflowLogsCommand('11111111', false, '/repo');
+
+    expect(code).toBe(0);
+    expect(stdoutText()).toBe(row);
+    expect(stderrText()).toBe('');
+    expect(workflowDb.findWorkflowRunsByIdPrefix).toHaveBeenCalledWith('11111111', 'cb-1');
+  });
+
+  it('re-derives a relocated transcript from the run codebase', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const row = `${JSON.stringify({ type: 'workflow_start', content: 'relocated' })}\n`;
+    writeFileSync(transcriptPath, row);
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      ...run('completed'),
+      output_root: '/previous/archon/home/workspaces/acme/widget',
+    });
+    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-1',
+      kind: 'repo',
+      name: 'acme/widget',
+      default_cwd: '/home/u/widget',
+    });
+
+    expect(await workflowLogsCommand(run('completed').id, false)).toBe(0);
+    expect(stdoutText()).toBe(row);
+    expect(stderrText()).toBe('');
+  });
+
+  it('preserves UTF-8 characters split across read chunks', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const content = `${'a'.repeat(64 * 1024 - 1)}🙂\n`;
+    writeFileSync(transcriptPath, content);
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(run('completed'));
+
+    expect(await workflowLogsCommand(run('completed').id, false)).toBe(0);
+    expect(stdoutText()).toBe(content);
+  });
+
+  it('guides an active snapshot reader to --follow when the file is absent', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(run('running'));
+
+    expect(await workflowLogsCommand(run('running').id, false)).toBe(1);
+    expect(stdoutText()).toBe('');
+    expect(stderrText()).toContain('Use --follow to wait for it');
+  });
+
+  it('fails explicitly for missing and empty terminal transcripts', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(run('failed'))
+      .mockResolvedValueOnce(run('completed'));
+
+    expect(await workflowLogsCommand(run('failed').id, false)).toBe(1);
+    writeFileSync(transcriptPath, '');
+    expect(await workflowLogsCommand(run('completed').id, false)).toBe(1);
+
+    expect(stdoutText()).toBe('');
+    expect(stderrText()).toContain('is failed, but its transcript is missing or empty');
+    expect(stderrText()).toContain('is completed, but its transcript is missing or empty');
+  });
+
+  it('follows paused, running, and completed states and drains after terminal status', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const startRow = `${JSON.stringify({ type: 'workflow_start' })}\n`;
+    const terminalRow = `${JSON.stringify({ type: 'workflow_complete' })}\n`;
+    writeFileSync(transcriptPath, startRow);
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(run('paused'))
+      .mockResolvedValueOnce(run('running'))
+      .mockImplementationOnce(() => {
+        appendFileSync(transcriptPath, terminalRow);
+        return Promise.resolve(run('completed'));
+      });
+    (workflowDb.updateWorkflowRun as ReturnType<typeof mock>).mockClear();
+    (workflowDb.failWorkflowRun as ReturnType<typeof mock>).mockClear();
+    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockClear();
+    (workflowDb.resumeWorkflowRun as ReturnType<typeof mock>).mockClear();
+
+    const code = await workflowLogsCommand(run('paused').id, true);
+
+    expect(code).toBe(0);
+    expect(stdoutText()).toBe(startRow + terminalRow);
+    expect(stderrText()).toContain(`Following transcript: ${transcriptPath}`);
+    expect(workflowDb.updateWorkflowRun).not.toHaveBeenCalled();
+    expect(workflowDb.failWorkflowRun).not.toHaveBeenCalled();
+    expect(workflowDb.cancelWorkflowRun).not.toHaveBeenCalled();
+    expect(workflowDb.resumeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('fails if the transcript shrinks behind the current offset', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    writeFileSync(transcriptPath, `${JSON.stringify({ type: 'workflow_start' })}\n`);
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(run('running'))
+      .mockImplementationOnce(() => {
+        truncateSync(transcriptPath, 0);
+        return Promise.resolve(run('running'));
+      });
+
+    const following = workflowLogsCommand(run('running').id, true);
+
+    expect(await following).toBe(1);
+    expect(stderrText()).toContain('Transcript was truncated');
   });
 });
 
@@ -5024,7 +5362,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
 });
 
 describe('workflowRunsCommand', () => {
-  let consoleSpy: ReturnType<typeof spyOn>;
+  let consoleSpy: Mock<(...args: unknown[]) => void>;
   let stdoutSpy: ReturnType<typeof spyOn>;
 
   beforeEach(() => {
@@ -5499,9 +5837,11 @@ describe('workflowRunCommand — detach', () => {
       errors: [],
     });
     // Force the log-file path to fall back to 'ignore' so the test writes no files
-    (paths.getArchonHome as ReturnType<typeof mock>).mockImplementationOnce(() => {
-      throw new Error('no home in test');
-    });
+    (paths.getArchonHome as ReturnType<typeof mock>)
+      .mockImplementationOnce(() => '/home/test/.archon')
+      .mockImplementationOnce(() => {
+        throw new Error('no home in test');
+      });
 
     const execBefore = (executeWorkflow as ReturnType<typeof mock>).mock.calls.length;
     const child = createDetachedChildFixture();
@@ -5512,28 +5852,12 @@ describe('workflowRunCommand — detach', () => {
     // Capture call data BEFORE mockRestore() — restoring a spy clears its recorded calls.
     let spawnCallCount = 0;
     let spawnCmd: string[] = [];
-    let spawnOptions:
-      | {
-          cwd: string;
-          cmd: string[];
-          detached?: boolean;
-          windowsHide?: boolean;
-          env?: Record<string, string | undefined>;
-        }
-      | undefined;
+    let spawnOptions: DetachedSpawnOptions | undefined;
     try {
       const commandPromise = workflowRunCommand('/test/path', 'assist', 'hello', { detach: true });
       await finishStartupWindow(commandPromise, spawnSpy);
       spawnCallCount = spawnSpy.mock.calls.length;
-      spawnOptions = spawnSpy.mock.calls[0]?.[0] as
-        | {
-            cwd: string;
-            cmd: string[];
-            detached?: boolean;
-            windowsHide?: boolean;
-            env?: Record<string, string | undefined>;
-          }
-        | undefined;
+      spawnOptions = firstDetachedSpawnOptions(spawnSpy);
       spawnCmd = (spawnOptions?.cmd ?? []).slice();
     } finally {
       process.argv = savedArgv;
@@ -5561,6 +5885,7 @@ describe('workflowRunCommand — detach', () => {
     expect(execAfter).toBe(execBefore);
     expect(child.unref).toHaveBeenCalledTimes(1);
     expect(consoleSpy).toHaveBeenCalledWith("Started 'assist' in the background.");
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringMatching(/^Transcript: .*\.jsonl$/));
   });
 
   it('resolves an adopted run prefix before passing it to the detached child', async () => {
@@ -5606,9 +5931,7 @@ describe('workflowRunCommand — detach', () => {
         adoptRunId: '0b1ee8da',
       });
       await finishStartupWindow(commandPromise, spawnSpy);
-      spawnCmd = (
-        (spawnSpy.mock.calls[0]?.[0] as { cmd: string[] } | undefined)?.cmd ?? []
-      ).slice();
+      spawnCmd = firstDetachedSpawnOptions(spawnSpy).cmd.slice();
     } finally {
       process.argv = savedArgv;
       spawnSpy.mockRestore();
@@ -5716,14 +6039,12 @@ describe('workflowRunCommand — detach', () => {
         },
       });
       await finishStartupWindow(commandPromise, spawnSpy);
-      const spawnOptions = spawnSpy.mock.calls[0]?.[0] as
-        | { cmd?: string[]; env?: Record<string, string | undefined> }
-        | undefined;
-      const payloadIndex = spawnOptions?.cmd?.indexOf('--internal-detached-run-config') ?? -1;
-      payload = payloadIndex >= 0 ? spawnOptions?.cmd?.[payloadIndex + 1] : undefined;
-      expect(spawnOptions?.env?.ARCHON_INTERNAL_DETACHED_RUN_CONFIG).toBeUndefined();
-      expect(spawnOptions?.env?.TOKEN_ENCRYPTION_KEY).toBe('ab'.repeat(32));
-      expect(spawnOptions?.env?.ARCHON_HOME).toBe('');
+      const spawnOptions = firstDetachedSpawnOptions(spawnSpy);
+      const payloadIndex = spawnOptions.cmd.indexOf('--internal-detached-run-config');
+      payload = payloadIndex >= 0 ? spawnOptions.cmd[payloadIndex + 1] : undefined;
+      expect(spawnOptions.env?.ARCHON_INTERNAL_DETACHED_RUN_CONFIG).toBeUndefined();
+      expect(spawnOptions.env?.TOKEN_ENCRYPTION_KEY).toBe('ab'.repeat(32));
+      expect(spawnOptions.env?.ARCHON_HOME).toBe('');
     } finally {
       process.argv = savedArgv;
       if (savedKey === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
@@ -5836,9 +6157,7 @@ describe('workflowRunCommand — detach', () => {
     try {
       const commandPromise = workflowRunCommand('/test/path', 'assist', 'hello', { detach: true });
       await finishStartupWindow(commandPromise, spawnSpy);
-      spawnCmd = (
-        (spawnSpy.mock.calls[0]?.[0] as { cmd: string[] } | undefined)?.cmd ?? []
-      ).slice();
+      spawnCmd = firstDetachedSpawnOptions(spawnSpy).cmd.slice();
     } finally {
       process.argv = savedArgv;
       spawnSpy.mockRestore();
@@ -5905,13 +6224,16 @@ describe('workflowRunCommand — detach', () => {
   it('--detach --json emits a structured ack', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const paths = await import('@archon/paths');
+    const tempHome = mkdtempSync(join(tmpdir(), 'archon-detached-paths-'));
+    const previousHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = tempHome;
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
       errors: [],
     });
-    (paths.getArchonHome as ReturnType<typeof mock>).mockImplementationOnce(() => {
-      throw new Error('no home in test');
-    });
+    (paths.getArchonHome as ReturnType<typeof mock>)
+      .mockImplementationOnce(() => tempHome)
+      .mockImplementationOnce(() => tempHome);
     const child = createDetachedChildFixture();
     const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
     const savedArgv = process.argv;
@@ -5933,12 +6255,13 @@ describe('workflowRunCommand — detach', () => {
         json: true,
       });
       await finishStartupWindow(commandPromise, spawnSpy);
-      spawnCmd = (
-        (spawnSpy.mock.calls[0]?.[0] as { cmd: string[] } | undefined)?.cmd ?? []
-      ).slice();
+      spawnCmd = firstDetachedSpawnOptions(spawnSpy).cmd.slice();
     } finally {
       process.argv = savedArgv;
       spawnSpy.mockRestore();
+      if (previousHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = previousHome;
+      await removeTempTree(tempHome);
     }
 
     const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as Record<string, unknown>;
@@ -5947,6 +6270,11 @@ describe('workflowRunCommand — detach', () => {
     // #2872: the ack hands back the row this launch created, and the child is told to
     // execute that row rather than creating a second one.
     expect(parsed.runId).toBe('run-detached-created');
+    expect(parsed.transcriptPath).toBe(
+      join(tempHome, 'workspaces', 'test', 'repo', 'logs', 'run-detached-created.jsonl')
+    );
+    expect(typeof parsed.logPath).toBe('string');
+    expect(parsed.logPath).not.toBe(parsed.transcriptPath);
     expect(mockCreateWorkflowRun).toHaveBeenCalled();
     const idIndex = spawnCmd.indexOf('--internal-detached-run-id');
     expect(idIndex).toBeGreaterThan(-1);
@@ -6068,17 +6396,8 @@ describe('workflowRunCommand — detach', () => {
         await Promise.resolve();
       }
       expect(spawnSpy).toHaveBeenCalledTimes(1);
-      const spawnOptions = spawnSpy.mock.calls[0]?.[0] as
-        | {
-            onExit?: (
-              subprocess: ReturnType<typeof Bun.spawn>,
-              exitCode: number | null,
-              signalCode: number | null,
-              error?: Error
-            ) => void;
-          }
-        | undefined;
-      spawnOptions?.onExit?.(child.child, DETACHED_RUN_FAILED_EXIT_CODE, null);
+      const spawnOptions = firstDetachedSpawnOptions(spawnSpy);
+      spawnOptions.onExit?.(child.child, DETACHED_RUN_FAILED_EXIT_CODE, null);
       await commandPromise;
     } finally {
       process.argv = savedArgv;
@@ -6116,17 +6435,8 @@ describe('workflowRunCommand — detach', () => {
         await Promise.resolve();
       }
       expect(spawnSpy).toHaveBeenCalledTimes(1);
-      const spawnOptions = spawnSpy.mock.calls[0]?.[0] as
-        | {
-            onExit?: (
-              subprocess: ReturnType<typeof Bun.spawn>,
-              exitCode: number | null,
-              signalCode: number | null,
-              error?: Error
-            ) => void;
-          }
-        | undefined;
-      spawnOptions?.onExit?.(child.child, 1, null);
+      const spawnOptions = firstDetachedSpawnOptions(spawnSpy);
+      spawnOptions.onExit?.(child.child, 1, null);
       await expect(commandPromise).rejects.toThrow(/exit code 1/);
     } finally {
       process.argv = savedArgv;
@@ -6150,7 +6460,9 @@ describe('workflowRunCommand — detach', () => {
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
       errors: [],
     });
-    (paths.getArchonHome as ReturnType<typeof mock>).mockImplementationOnce(() => tempHome);
+    (paths.getArchonHome as ReturnType<typeof mock>)
+      .mockImplementationOnce(() => tempHome)
+      .mockImplementationOnce(() => tempHome);
     const child = createDetachedChildFixture();
     const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
     const savedArgv = process.argv;
@@ -6167,17 +6479,8 @@ describe('workflowRunCommand — detach', () => {
       }
       expect(spawnSpy).toHaveBeenCalledTimes(1);
       appendFileSync(logPath, 'database unavailable during startup\n');
-      const spawnOptions = spawnSpy.mock.calls[0]?.[0] as
-        | {
-            onExit?: (
-              subprocess: ReturnType<typeof Bun.spawn>,
-              exitCode: number | null,
-              signalCode: number | null,
-              error?: Error
-            ) => void;
-          }
-        | undefined;
-      spawnOptions?.onExit?.(child.child, 1, null);
+      const spawnOptions = firstDetachedSpawnOptions(spawnSpy);
+      spawnOptions.onExit?.(child.child, 1, null);
 
       await expect(commandPromise).rejects.toThrow(
         /exit code 1[\s\S]*database unavailable during startup/
@@ -6209,6 +6512,8 @@ describe('workflowRunCommand — detach', () => {
         errors: [],
       });
     (paths.getArchonHome as ReturnType<typeof mock>)
+      .mockImplementationOnce(() => tempHome)
+      .mockImplementationOnce(() => tempHome)
       .mockImplementationOnce(() => tempHome)
       .mockImplementationOnce(() => tempHome);
     const spawnSpy = spyOn(Bun, 'spawn')
@@ -6270,7 +6575,7 @@ describe('workflowRunCommand — detach', () => {
       spawnSpy.mockRestore();
     }
     // The success ack must never have been printed.
-    const logged = consoleSpy.mock.calls.map(call => String(call[0]));
+    const logged: string[] = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
     expect(logged).not.toContain("Started 'assist' in the background.");
   });
 });
@@ -6495,7 +6800,7 @@ describe('workflowRunCommand — detach refuses an interactive-class workflow (#
 
     // Refused before the fork — no child process, no "started" ack.
     expect(spawnSpy).not.toHaveBeenCalled();
-    const logged = consoleSpy.mock.calls.map(call => String(call[0]));
+    const logged: string[] = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
     expect(logged).not.toContain("Started 'guided' in the background.");
   });
 
@@ -6617,7 +6922,7 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
     process.argv = ['bun', '/abs/cli.ts', 'workflow', 'approve', 'run-123', 'ship it', '--detach'];
 
     let spawnCmd: string[] = [];
-    let spawnOptions: { cwd: string; cmd: string[]; detached?: boolean } | undefined;
+    let spawnOptions: DetachedSpawnOptions | undefined;
     try {
       // Signature: (runId, comment, json, cwd, detach) — detach is the 5th arg,
       // layered after upstream's cwd.
@@ -6629,9 +6934,7 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
         true
       );
       await finishStartupWindow(commandPromise, spawnSpy);
-      spawnOptions = spawnSpy.mock.calls[0]?.[0] as
-        | { cwd: string; cmd: string[]; detached?: boolean }
-        | undefined;
+      spawnOptions = firstDetachedSpawnOptions(spawnSpy);
       spawnCmd = (spawnOptions?.cmd ?? []).slice();
     } finally {
       process.argv = savedArgv;
@@ -6703,9 +7006,7 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
     try {
       const commandPromise = workflowApproveCommand('run-123', undefined, true, undefined, true);
       await finishStartupWindow(commandPromise, spawnSpy);
-      spawnCmd = (
-        (spawnSpy.mock.calls[0]?.[0] as { cmd: string[] } | undefined)?.cmd ?? []
-      ).slice();
+      spawnCmd = firstDetachedSpawnOptions(spawnSpy).cmd.slice();
     } finally {
       process.argv = savedArgv;
       spawnSpy.mockRestore();
@@ -6739,7 +7040,7 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
     ];
 
     let spawnCmd: string[] = [];
-    let spawnOptions: { cwd: string; cmd: string[] } | undefined;
+    let spawnOptions: DetachedSpawnOptions | undefined;
     try {
       const commandPromise = workflowApproveCommand(
         'run-123',
@@ -6749,7 +7050,7 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
         true
       );
       await finishStartupWindow(commandPromise, spawnSpy);
-      spawnOptions = spawnSpy.mock.calls[0]?.[0] as { cwd: string; cmd: string[] } | undefined;
+      spawnOptions = firstDetachedSpawnOptions(spawnSpy);
       spawnCmd = (spawnOptions?.cmd ?? []).slice();
     } finally {
       process.argv = savedArgv;
@@ -6785,17 +7086,8 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
       }
       expect(spawnSpy).toHaveBeenCalledTimes(1);
       appendFileSync(logPath, 'database unavailable during startup\n');
-      const spawnOptions = spawnSpy.mock.calls[0]?.[0] as
-        | {
-            onExit?: (
-              subprocess: ReturnType<typeof Bun.spawn>,
-              exitCode: number | null,
-              signalCode: number | null,
-              error?: Error
-            ) => void;
-          }
-        | undefined;
-      spawnOptions?.onExit?.(child.child, 1, null);
+      const spawnOptions = firstDetachedSpawnOptions(spawnSpy);
+      spawnOptions.onExit?.(child.child, 1, null);
       await commandPromise;
     } finally {
       process.argv = savedArgv;
@@ -7017,9 +7309,7 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
         true
       );
       await finishStartupWindow(commandPromise, spawnSpy);
-      spawnCmd = (
-        (spawnSpy.mock.calls[0]?.[0] as { cmd: string[] } | undefined)?.cmd ?? []
-      ).slice();
+      spawnCmd = firstDetachedSpawnOptions(spawnSpy).cmd.slice();
     } finally {
       process.argv = savedArgv;
       spawnSpy.mockRestore();
@@ -7057,9 +7347,7 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
       // Signature: (runId, json, cwd, detach) — detach is the 4th arg.
       const commandPromise = workflowResumeCommand('run-123', undefined, undefined, true);
       await finishStartupWindow(commandPromise, spawnSpy);
-      spawnCmd = (
-        (spawnSpy.mock.calls[0]?.[0] as { cmd: string[] } | undefined)?.cmd ?? []
-      ).slice();
+      spawnCmd = firstDetachedSpawnOptions(spawnSpy).cmd.slice();
     } finally {
       process.argv = savedArgv;
       spawnSpy.mockRestore();
@@ -7670,7 +7958,6 @@ describe('workflowApproveCommand', () => {
     const codebaseDb = await import('@archon/core/db/codebases');
     const conversationsDb = await import('@archon/core/db/conversations');
     const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
-    const core = await import('@archon/core');
 
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-approve-conv',
@@ -8997,6 +9284,35 @@ describe('workflowRunCommand — progress rendering', () => {
     expect(mockUnsubscribe).toHaveBeenCalledTimes(1);
   });
 
+  it('renders the executor-owned transcript path at workflow start unless quiet', async () => {
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    const emitWorkflowStart = async (): Promise<{ success: true; workflowRunId: string }> => {
+      capturedSubscribeHandler?.({
+        type: 'workflow_started',
+        runId: 'run-1',
+        workflowName: 'plan',
+        conversationId: 'conv-1',
+        transcriptPath: '/archon/workspaces/acme/widget/logs/run-1.jsonl',
+      });
+      return { success: true, workflowRunId: 'run-1' };
+    };
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(emitWorkflowStart);
+
+    setupWorkflowMocks();
+    await workflowRunCommand('/test/path', 'plan', 'hello', {});
+    expect(stderrSpy).toHaveBeenCalledWith(
+      '[workflow] Transcript: /archon/workspaces/acme/widget/logs/run-1.jsonl\n'
+    );
+
+    stderrSpy.mockClear();
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(emitWorkflowStart);
+    setupWorkflowMocks();
+    await workflowRunCommand('/test/path', 'plan', 'hello', { quiet: true });
+    expect(stderrSpy).not.toHaveBeenCalledWith(
+      '[workflow] Transcript: /archon/workspaces/acme/widget/logs/run-1.jsonl\n'
+    );
+  });
+
   it('should subscribe (for run-id tracking) but not render when quiet', async () => {
     setupWorkflowMocks();
 
@@ -9467,6 +9783,7 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
         runId: 'run-1',
         workflowName: 'plan',
         conversationId: 'conv-1',
+        transcriptPath: '/logs/run-1.jsonl',
       });
       // …then the signal lands while the handler is still registered.
       const [handler] = addedSigtermListeners(sigtermBefore);
@@ -9496,6 +9813,7 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
         runId: 'run-1',
         workflowName: 'plan',
         conversationId: 'conv-1',
+        transcriptPath: '/logs/run-1.jsonl',
       });
       const [handler] = addedSigtermListeners(sigtermBefore);
       expect(handler).toBeDefined();
@@ -9675,7 +9993,7 @@ describe('workflowResetSessionsCommand', () => {
       scope_key: undefined,
       node_id: undefined,
     });
-    const calls = consoleSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    const calls: string[] = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
     expect(calls.some(c => c.includes('4') && c.includes('across all scopes'))).toBe(true);
   });
 
@@ -9893,8 +10211,7 @@ describe('workflowTestCommand', () => {
     const fixtureRunner = await import('@archon/workflows/fixture-runner');
     (fixtureRunner.runFixtures as ReturnType<typeof mock>).mockClear();
     (fixtureRunner.formatFixtureReport as ReturnType<typeof mock>).mockClear();
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    discoverWorkflowsWithConfigAsMock().mockResolvedValue({
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({
       workflows: [makeTestWorkflowWithSource({ name: 'plan' }, 'project')],
       errors: [],
     });
@@ -9904,10 +10221,6 @@ describe('workflowTestCommand', () => {
     stdoutSpy.mockRestore();
     consoleSpy.mockRestore();
   });
-
-  function discoverWorkflowsWithConfigAsMock(): ReturnType<typeof mock> {
-    return mock() as unknown as ReturnType<typeof mock>;
-  }
 
   it('emits one JSON document and exits 0 when every fixture passes', async () => {
     const fixtureRunner = await import('@archon/workflows/fixture-runner');
@@ -10620,9 +10933,7 @@ describe('workflowRunCommand — supersedes run-id prefix resolution (#2990)', (
         supersedesRunId: '0b1ee8da',
       });
       await finishStartupWindow(commandPromise, spawnSpy);
-      spawnCmd = (
-        (spawnSpy.mock.calls[0]?.[0] as { cmd: string[] } | undefined)?.cmd ?? []
-      ).slice();
+      spawnCmd = firstDetachedSpawnOptions(spawnSpy).cmd.slice();
     } finally {
       jest.useRealTimers();
       process.argv = savedArgv;

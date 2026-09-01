@@ -287,6 +287,25 @@ Line 3`;
       expect(events[0].type).toBe('workflow_error');
       expect(events[0].error).toBe('Step prompt not found: missing-step.md');
     });
+
+    it('records aggregate run usage when supplied', async () => {
+      await logWorkflowError(testDir, 'error-usage', 'Node failed', {
+        cost_usd: 0.08,
+        tokens: { input: 1200, output: 80, cacheRead: 900, cacheWrite: 0 },
+      });
+
+      const [event] = await readLogFile('error-usage');
+      expect(event.cost_usd).toBe(0.08);
+      expect(event.tokens).toEqual({ input: 1200, output: 80, cacheRead: 900, cacheWrite: 0 });
+    });
+
+    it('omits aggregate usage axes when they were not reported', async () => {
+      await logWorkflowError(testDir, 'error-no-usage', 'Node failed');
+
+      const [event] = await readLogFile('error-no-usage');
+      expect('cost_usd' in event).toBe(false);
+      expect('tokens' in event).toBe(false);
+    });
   });
 
   describe('logWorkflowComplete', () => {

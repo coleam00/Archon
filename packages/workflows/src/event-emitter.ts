@@ -29,6 +29,7 @@ interface WorkflowStartedEvent {
   runId: string;
   workflowName: string;
   conversationId: string;
+  transcriptPath: string;
 }
 
 interface WorkflowCompletedEvent {

@@ -151,6 +151,7 @@ Commands:
   workflow status            Show status of running/paused workflows
   workflow runs              List recent runs (all statuses) for this project
   workflow get <run-id>      Show detail for a single run (any status)
+  workflow logs <run-id>     Print or follow a run's JSONL transcript
   workflow wait <run-id>     Block until the run ends or needs a human decision
   workflow resume <run-id>   Resume a failed or paused run from completed nodes
   workflow cancel <run-id>   Stop a running workflow started with --detach
@@ -225,6 +226,7 @@ Options:
   --open                     For 'workflow runs': the open-work inbox — failed runs nothing has adopted or superseded
   --limit <n>                For 'workflow runs': max rows (default 20)
   --timeout <seconds>        For 'workflow wait': give up after N seconds (default: wait indefinitely)
+  --follow                   For 'workflow logs': stream appended rows until the run ends
   --conversation-id <id>     Reuse a stable conversation scope across runs (enables
                              persist_session resume between separate CLI invocations)
   --port <port>              Override server port for 'serve' (default: 3090)
@@ -243,6 +245,7 @@ Examples:
   archon workflow run assist --dry-run --stubs ./stubs.yaml --json
   archon workflow runs --json
   archon workflow get <run-id> --json
+  archon workflow logs <run-id> --follow
   archon workflow wait <run-id> --json
   archon workflow resume <run-id>
   archon workflow cancel <run-id>
@@ -385,9 +388,10 @@ async function main(): Promise<number> {
   const isInteractiveCommand =
     command === 'setup' || command === 'doctor' || command === 'telemetry';
   const suppressByDefault = isInteractiveCommand && !values.verbose && !isVerboseBoot();
+  const rawTranscriptCommand = command === 'workflow' && subcommand === 'logs';
   // Apply output policy before install discovery: its best-effort debug logs
   // must never prefix a machine-readable response.
-  if (jsonFlag) {
+  if (jsonFlag || rawTranscriptCommand) {
     setLogLevel('silent');
   } else if (values.quiet || suppressByDefault) {
     setLogLevel('warn');
@@ -651,6 +655,7 @@ async function main(): Promise<number> {
           workflowRunCommand,
           workflowStatusCommand,
           workflowGetCommand,
+          workflowLogsCommand,
           workflowWaitCommand,
           workflowRunsCommand,
           workflowResumeCommand,
@@ -831,6 +836,26 @@ async function main(): Promise<number> {
               effectiveCwd,
               values.events as boolean | undefined
             );
+          }
+
+          case 'logs': {
+            const logsRunId = positionals[2];
+            if (!logsRunId || positionals[3] !== undefined) {
+              return await fail(false, 'Usage: archon workflow logs <run-id> [--follow]');
+            }
+            if (jsonFlag) {
+              return await fail(
+                false,
+                'Error: workflow logs already emits JSONL; --json is not supported.'
+              );
+            }
+            if (values.events) {
+              return await fail(
+                false,
+                'Error: --events applies to workflow status/get, not workflow logs.'
+              );
+            }
+            return await workflowLogsCommand(logsRunId, Boolean(values.follow), effectiveCwd);
           }
 
           case 'wait': {

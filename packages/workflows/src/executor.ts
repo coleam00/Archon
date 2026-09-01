@@ -2824,6 +2824,7 @@ export async function executeWorkflow(
       runId: workflowRun.id,
       workflowName: workflow.name,
       conversationId: conversationDbId,
+      transcriptPath: archonPaths.getRunLogPathForRoot(outputRoot, workflowRun.id),
     });
 
     // Fire-and-forget anonymous usage telemetry. Categorical only: bundled

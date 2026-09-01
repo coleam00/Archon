@@ -55,6 +55,7 @@ import {
 import { isAbsolute, join, resolve } from 'node:path';
 import { applyWorkflowRunConfigLayer } from '@archon/workflows/run-config';
 import { mkdirSync, openSync, closeSync, readFileSync, rmSync, writeSync } from 'node:fs';
+import { open as openFile } from 'node:fs/promises';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import { createChildWorktreeResolver } from '@archon/core/workflows/child-isolation-resolver';
@@ -980,6 +981,9 @@ export async function maybePrintTierNotice(
 /** Render a workflow event to stderr as a progress line. Called only when --quiet is not set. */
 function renderWorkflowEvent(event: WorkflowEmitterEvent, verbose: boolean): void {
   switch (event.type) {
+    case 'workflow_started':
+      process.stderr.write(`[workflow] Transcript: ${event.transcriptPath}\n`);
+      break;
     case 'node_started': {
       let suffix = '';
       if (event.provider !== undefined && event.model !== undefined) {
@@ -2176,6 +2180,32 @@ async function runWorkflowWithOwnedSource(
     if (launchedRunId !== undefined) {
       extraArgs.push('--internal-detached-run-id', launchedRunId);
     }
+    let transcriptPath: string | null;
+    if (isContinuation) {
+      if (!continuationRun) throw buildNoResumableRunError(workflowName, cwd);
+      try {
+        transcriptPath = await resolveRunTranscriptPath(continuationRun);
+      } catch (error) {
+        transcriptPath = null;
+        getLog().warn(
+          { err: error as Error, workflowRunId: detachedRunId },
+          'cli.detached_transcript_path_resolve_failed'
+        );
+      }
+    } else {
+      try {
+        const storage = archonPaths.getProjectStoragePaths(
+          archonPaths.resolveProjectStorageKey(detachCodebase, cwd)
+        );
+        transcriptPath = archonPaths.getRunLogPathForRoot(storage.root, detachedRunId);
+      } catch (error) {
+        transcriptPath = null;
+        getLog().warn(
+          { err: error as Error, workflowRunId: detachedRunId },
+          'cli.detached_transcript_path_resolve_failed'
+        );
+      }
+    }
     const runConfigPayload = runConfig
       ? JSON.stringify(sealWorkflowRunConfig(runConfig.layer, runConfig.source))
       : undefined;
@@ -2215,12 +2245,14 @@ async function runWorkflowWithOwnedSource(
         workflow: workflow.name,
         branch: pinnedBranch ?? options.branchName ?? null,
         conversationId: childConversationId,
+        transcriptPath,
         logPath,
       });
     } else {
       console.log(`Started '${workflow.name}' in the background.`);
       console.log(`Run id: ${detachedRunId}`);
       console.log(`Track it with: archon workflow get ${detachedRunId}`);
+      console.log(`Transcript: ${transcriptPath ?? '(unavailable)'}`);
       if (logPath) {
         console.log(`Child output: ${logPath}`);
       } else {
@@ -3679,6 +3711,132 @@ export async function workflowWaitCommand(
   return result.kind === 'deadline' ? 3 : 0;
 }
 
+const TRANSCRIPT_POLL_INTERVAL_MS = 500;
+const TRANSCRIPT_READ_CHUNK_BYTES = 64 * 1024;
+
+interface TranscriptReadState {
+  offset: number;
+  decoder: TextDecoder;
+  hasContent: boolean;
+}
+
+async function drainTranscript(
+  transcriptPath: string,
+  state: TranscriptReadState
+): Promise<boolean> {
+  let file;
+  try {
+    file = await openFile(transcriptPath, 'r');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+
+  try {
+    const { size } = await file.stat();
+    if (size < state.offset) {
+      throw new Error(
+        `Transcript was truncated from ${String(state.offset)} to ${String(size)} bytes: ${transcriptPath}`
+      );
+    }
+
+    const buffer = new Uint8Array(TRANSCRIPT_READ_CHUNK_BYTES);
+    while (state.offset < size) {
+      const bytesToRead = Math.min(buffer.byteLength, size - state.offset);
+      const { bytesRead } = await file.read(buffer, 0, bytesToRead, state.offset);
+      if (bytesRead === 0) break;
+      state.offset += bytesRead;
+      state.hasContent = true;
+      const text = state.decoder.decode(buffer.subarray(0, bytesRead), { stream: true });
+      if (text.length > 0) await writeStdout(text);
+    }
+    return true;
+  } finally {
+    await file.close();
+  }
+}
+
+async function finishTranscriptDecode(state: TranscriptReadState): Promise<void> {
+  const text = state.decoder.decode();
+  if (text.length > 0) await writeStdout(text);
+}
+
+function transcriptUnavailableMessage(
+  run: WorkflowRun,
+  transcriptPath: string,
+  follow: boolean
+): string {
+  if (TERMINAL_WORKFLOW_STATUSES.includes(run.status)) {
+    return `Run ${run.id} is ${run.status}, but its transcript is missing or empty: ${transcriptPath}`;
+  }
+  return follow
+    ? `Run ${run.id} ended before producing transcript content: ${transcriptPath}`
+    : `Transcript is not available yet for ${run.id}. Use --follow to wait for it: ${transcriptPath}`;
+}
+
+/** Print or follow one run's append-only JSONL transcript without mutating the run. */
+export async function workflowLogsCommand(
+  runId: string,
+  follow: boolean,
+  cwd?: string
+): Promise<number> {
+  let resolvedId = runId;
+  try {
+    resolvedId = await resolveRunIdArg(runId, cwd);
+    let run = await workflowDb.getWorkflowRun(resolvedId);
+    if (!run) {
+      await writeStderr(`Workflow run not found: ${runId}\n`);
+      return 1;
+    }
+
+    const transcriptPath = await resolveRunTranscriptPath(run);
+    if (!transcriptPath) {
+      await writeStderr(`Transcript path is unavailable for workflow run ${run.id}.\n`);
+      return 1;
+    }
+
+    const state: TranscriptReadState = {
+      offset: 0,
+      decoder: new TextDecoder(),
+      hasContent: false,
+    };
+
+    if (!follow) {
+      const exists = await drainTranscript(transcriptPath, state);
+      if (!exists || !state.hasContent) {
+        await writeStderr(`${transcriptUnavailableMessage(run, transcriptPath, false)}\n`);
+        return 1;
+      }
+      await finishTranscriptDecode(state);
+      return 0;
+    }
+
+    await writeStderr(`Following transcript: ${transcriptPath}\n`);
+    while (true) {
+      await drainTranscript(transcriptPath, state);
+      run = await workflowDb.getWorkflowRun(resolvedId);
+      if (!run) throw new Error(`Workflow run disappeared while following it: ${resolvedId}`);
+
+      if (TERMINAL_WORKFLOW_STATUSES.includes(run.status)) {
+        await drainTranscript(transcriptPath, state);
+        if (!state.hasContent) {
+          await writeStderr(`${transcriptUnavailableMessage(run, transcriptPath, true)}\n`);
+          return 1;
+        }
+        await finishTranscriptDecode(state);
+        return 0;
+      }
+
+      await new Promise<void>(resolvePoll => setTimeout(resolvePoll, TRANSCRIPT_POLL_INTERVAL_MS));
+    }
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, runId: resolvedId }, 'cli.workflow_logs_failed');
+    await writeStderr(`Failed to read workflow transcript: ${err.message}\n`);
+    return 1;
+  }
+}
+
 /**
  * Show detail for a single workflow run by ID (any status).
  *
@@ -3743,18 +3901,30 @@ export async function workflowGetCommand(
     getLog().warn({ err: error as Error, runId: run.id }, 'cli.workflow_get_leave_behind_failed');
   }
 
+  let transcriptPath: string | null = null;
+  try {
+    transcriptPath = await resolveRunTranscriptPath(run);
+  } catch (error) {
+    getLog().warn({ err: error as Error, runId: run.id }, 'cli.workflow_get_transcript_failed');
+  }
+
   if (json) {
     if (!verbose) {
-      await writeJsonLine({ ...run, ...(leaveBehind ? { leave_behind: leaveBehind } : {}) });
+      await writeJsonLine({
+        ...run,
+        transcript_path: transcriptPath,
+        ...(leaveBehind ? { leave_behind: leaveBehind } : {}),
+      });
       return 0;
     }
 
     const verboseEvents = events ?? [];
     const parseWarnings = readParseWarningEvents(verboseEvents);
     const output = rawEvents
-      ? { ...run, events: verboseEvents }
+      ? { ...run, transcript_path: transcriptPath, events: verboseEvents }
       : {
           ...run,
+          transcript_path: transcriptPath,
           nodes: buildNodeSummaries(verboseEvents),
           // Keys the engine dropped from this run's YAML (#2213). Surfaced as a
           // named field rather than leaving the caller to scan raw events.
@@ -3767,6 +3937,7 @@ export async function workflowGetCommand(
   console.log(`  ID:     ${run.id}`);
   console.log(`  Name:   ${run.workflow_name}`);
   console.log(`  Path:   ${run.working_path ?? '(none)'}`);
+  console.log(`  Transcript: ${transcriptPath ?? '(unavailable)'}`);
   console.log(`  Status: ${run.status}`);
   if (run.outcome) console.log(`  Authored outcome: ${run.outcome}`);
   console.log(`  Age:    ${formatAge(run.started_at)}`);
@@ -3859,6 +4030,12 @@ interface LeaveBehind {
   adopted_from?: string;
   adopted_by: string[];
   artifactFiles: string[];
+}
+
+async function resolveRunTranscriptPath(run: WorkflowRun): Promise<string | null> {
+  const codebase = run.codebase_id ? await codebaseDb.getCodebase(run.codebase_id) : null;
+  const root = archonPaths.resolveRunStorageRoot(run, codebase);
+  return root ? archonPaths.getRunLogPathForRoot(root, run.id) : null;
 }
 
 async function buildLeaveBehind(run: WorkflowRun): Promise<LeaveBehind> {

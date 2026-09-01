@@ -230,6 +230,7 @@ describe('SlackWorkflowBridge', () => {
       runId: 'r1',
       workflowName: 'assist',
       conversationId: 'conv-db-uuid',
+      transcriptPath: '/logs/r1.jsonl',
     });
 
     expect(posted).toHaveLength(0);
@@ -247,6 +248,7 @@ describe('SlackWorkflowBridge', () => {
       runId: 'r1',
       workflowName: 'assist',
       conversationId: 'conv-db-uuid',
+      transcriptPath: '/logs/r1.jsonl',
     });
 
     expect(reactionsAdded).toContainEqual({
@@ -258,6 +260,7 @@ describe('SlackWorkflowBridge', () => {
     expect(posted[0]?.channel).toBe('C1');
     expect(posted[0]?.thread_ts).toBe('111.0');
     expect(posted[0]?.text).toContain('running');
+    expect(JSON.stringify(posted[0])).not.toContain('/logs/r1.jsonl');
   });
 
   test('approval_pending posts a Block Kit approve/reject prompt in-thread', async () => {
@@ -272,6 +275,7 @@ describe('SlackWorkflowBridge', () => {
       runId: 'r1',
       workflowName: 'assist',
       conversationId: 'conv-db-uuid',
+      transcriptPath: '/logs/r1.jsonl',
     });
     await dispatchEvent({
       type: 'approval_pending',
@@ -301,6 +305,7 @@ describe('SlackWorkflowBridge', () => {
       runId: 'r1',
       workflowName: 'assist',
       conversationId: 'conv-db-uuid',
+      transcriptPath: '/logs/r1.jsonl',
     });
     await dispatchEvent({
       type: 'approval_pending',
@@ -344,6 +349,7 @@ describe('SlackWorkflowBridge', () => {
         runId: 'r1',
         workflowName: 'assist',
         conversationId: 'conv-db-uuid',
+        transcriptPath: '/logs/r1.jsonl',
       });
       await dispatchEvent({
         type: 'approval_pending',
@@ -378,6 +384,7 @@ describe('SlackWorkflowBridge', () => {
         runId: 'r1',
         workflowName: 'assist',
         conversationId: 'conv-db-uuid',
+        transcriptPath: '/logs/r1.jsonl',
       });
 
       let resolveApprovalPost!: (result: { ts: string }) => void;
@@ -431,6 +438,7 @@ describe('SlackWorkflowBridge', () => {
       runId: 'r1',
       workflowName: 'assist',
       conversationId: 'conv-db-uuid',
+      transcriptPath: '/logs/r1.jsonl',
     });
     await dispatchEvent({
       type: 'approval_pending',
@@ -471,6 +479,7 @@ describe('SlackWorkflowBridge', () => {
       runId: 'r1',
       workflowName: 'assist',
       conversationId: 'conv-db-uuid',
+      transcriptPath: '/logs/r1.jsonl',
     });
     await dispatchEvent({
       type: 'approval_pending',
@@ -504,6 +513,7 @@ describe('SlackWorkflowBridge', () => {
       runId: 'r1',
       workflowName: 'assist',
       conversationId: 'conv-db-uuid',
+      transcriptPath: '/logs/r1.jsonl',
     });
     await dispatchEvent({
       type: 'approval_pending',
@@ -541,6 +551,7 @@ describe('SlackWorkflowBridge', () => {
       runId: 'r1',
       workflowName: 'assist',
       conversationId: 'conv-db-uuid',
+      transcriptPath: '/logs/r1.jsonl',
     });
     await dispatchEvent({
       type: 'approval_pending',
@@ -573,6 +584,7 @@ describe('SlackWorkflowBridge', () => {
       runId: 'r1',
       workflowName: 'assist',
       conversationId: 'conv-db-uuid',
+      transcriptPath: '/logs/r1.jsonl',
     });
 
     await dispatchAction('cancel:r1', {
@@ -596,6 +608,7 @@ describe('SlackWorkflowBridge', () => {
       runId: 'r1',
       workflowName: 'assist',
       conversationId: 'conv-db-uuid',
+      transcriptPath: '/logs/r1.jsonl',
     });
     await dispatchEvent({
       type: 'approval_pending',
@@ -628,6 +641,7 @@ describe('SlackWorkflowBridge', () => {
       runId: 'r1',
       workflowName: 'assist',
       conversationId: 'conv-db-uuid',
+      transcriptPath: '/logs/r1.jsonl',
     });
     await dispatchEvent({
       type: 'workflow_completed',
@@ -668,6 +682,7 @@ describe('SlackWorkflowBridge', () => {
       runId: 'r1',
       workflowName: 'assist',
       conversationId: 'conv-db-uuid',
+      transcriptPath: '/logs/r1.jsonl',
     });
     await dispatchEvent({
       type: 'workflow_completed',
@@ -698,6 +713,7 @@ describe('SlackWorkflowBridge', () => {
       runId: 'r1',
       workflowName: 'assist',
       conversationId: 'conv-db-uuid',
+      transcriptPath: '/logs/r1.jsonl',
     });
     await dispatchEvent({
       type: 'workflow_failed',
@@ -723,6 +739,7 @@ describe('SlackWorkflowBridge', () => {
       runId: 'r1',
       workflowName: 'assist',
       conversationId: 'conv-db-uuid',
+      transcriptPath: '/logs/r1.jsonl',
     });
     await dispatchEvent({
       type: 'workflow_completed',
@@ -753,6 +770,7 @@ describe('SlackWorkflowBridge', () => {
       runId: 'r1',
       workflowName: 'assist',
       conversationId: 'conv-db-uuid',
+      transcriptPath: '/logs/r1.jsonl',
     });
     await dispatchEvent({
       type: 'workflow_failed',

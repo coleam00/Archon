@@ -154,6 +154,14 @@ describe('CLI help output', () => {
     );
   });
 
+  it('lists the workflow transcript reader and follow flag', () => {
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain(
+      "workflow logs <run-id>     Print or follow a run's JSONL transcript"
+    );
+    expect(help.stdout).toContain('--follow');
+  });
+
   it('distinguishes active cancel from state-only abandon', () => {
     expect(help.status).toBe(0);
     expect(help.stdout).toContain(
@@ -547,6 +555,45 @@ describe('workflow get arguments', () => {
   });
 });
 
+describe('workflow logs arguments', () => {
+  it.each([
+    ['missing run id', ['workflow', 'logs']],
+    ['extra positional', ['workflow', 'logs', 'abc123', 'accidental-extra']],
+  ])('rejects %s', (_label, args) => {
+    const result = spawnSync(process.execPath, [join(import.meta.dir, 'cli.ts'), ...args], {
+      encoding: 'utf8',
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Usage: archon workflow logs <run-id> [--follow]');
+    expect(result.stdout).toBe('');
+  });
+
+  it('rejects --json because stdout is already raw JSONL', () => {
+    const result = spawnSync(
+      process.execPath,
+      [join(import.meta.dir, 'cli.ts'), 'workflow', 'logs', 'abc123', '--json'],
+      { encoding: 'utf8' }
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('workflow logs already emits JSONL');
+    expect(result.stdout).toBe('');
+  });
+
+  it('rejects the get-only --events mode', () => {
+    const result = spawnSync(
+      process.execPath,
+      [join(import.meta.dir, 'cli.ts'), 'workflow', 'logs', 'abc123', '--events'],
+      { encoding: 'utf8' }
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('--events applies to workflow status/get');
+    expect(result.stdout).toBe('');
+  });
+});
+
 describe('CLI workflow event dispatch', () => {
   it('resolves a run prefix using the registered effective cwd', async () => {
     const scratch = mkdtempSync(join(tmpdir(), 'archon-cli-event-'));
@@ -685,6 +732,13 @@ describe('CLI argument parsing', () => {
     it('should parse -h short flag', () => {
       const result = parseCliArgs(['-h']);
       expect(result.values.help).toBe(true);
+    });
+  });
+
+  describe('--follow flag', () => {
+    it('parses workflow transcript follow mode', () => {
+      const result = parseCliArgs(['workflow', 'logs', 'abc123', '--follow']);
+      expect(result.values.follow).toBe(true);
     });
   });
 

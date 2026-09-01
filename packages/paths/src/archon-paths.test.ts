@@ -45,7 +45,9 @@ import {
   getScopeArtifactsPath,
   resolveProjectStorageKey,
   getProjectStoragePaths,
+  resolveRunStorageRoot,
   getRunArtifactsDirForKey,
+  getRunLogPathForRoot,
   slugifyFolderName,
   getFolderProjectRoot,
   getFolderProjectArtifactsPath,
@@ -733,6 +735,37 @@ describe('archon-paths', () => {
     });
   });
 
+  describe('resolveRunStorageRoot', () => {
+    beforeEach(() => {
+      delete process.env.WORKSPACE_PATH;
+      delete process.env.ARCHON_DOCKER;
+      process.env.ARCHON_HOME = '/custom/archon';
+    });
+
+    test('keeps a trusted persisted root when the codebase was renamed', () => {
+      const root = join('/custom/archon', 'workspaces', 'acme', 'original');
+      expect(
+        resolveRunStorageRoot(
+          { output_root: root },
+          { kind: 'repo', name: 'acme/renamed', default_cwd: '/repos/renamed' }
+        )
+      ).toBe(root);
+    });
+
+    test('re-derives an out-of-tree persisted root under the current home', () => {
+      expect(
+        resolveRunStorageRoot(
+          { output_root: '/previous/archon/home/workspaces/_local/workspace' },
+          { kind: 'repo', name: 'workspace', default_cwd: '/home/u/workspace' }
+        )
+      ).toBe(join('/custom/archon', 'workspaces', '_local', 'workspace'));
+    });
+
+    test('rejects an untrusted root when no codebase can re-derive it', () => {
+      expect(resolveRunStorageRoot({ output_root: '/etc' }, null)).toBeNull();
+    });
+  });
+
   describe('getRunArtifactsDirForKey', () => {
     beforeEach(() => {
       delete process.env.WORKSPACE_PATH;
@@ -756,6 +789,24 @@ describe('archon-paths', () => {
       expect(getRunArtifactsDirForKey({ kind: 'cwd', cwd: '/home/u/scratch' }, 'run-1')).toBe(
         join('/custom/archon', 'workspaces', '_cwd', 'scratch', 'artifacts', 'runs', 'run-1')
       );
+    });
+  });
+
+  describe('getRunLogPathForRoot', () => {
+    beforeEach(() => {
+      delete process.env.WORKSPACE_PATH;
+      delete process.env.ARCHON_DOCKER;
+      process.env.ARCHON_HOME = '/custom/archon';
+    });
+
+    test('composes a transcript path from a persisted project root', () => {
+      const root = join('/custom/archon', 'workspaces', 'acme', 'widget');
+      expect(getRunLogPathForRoot(root, 'run-1')).toBe(join(root, 'logs', 'run-1.jsonl'));
+    });
+
+    test('agrees with the repo-specific helper', () => {
+      const root = join('/custom/archon', 'workspaces', 'acme', 'widget');
+      expect(getRunLogPath('acme', 'widget', 'run-1')).toBe(getRunLogPathForRoot(root, 'run-1'));
     });
   });
 

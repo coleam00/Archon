@@ -15687,25 +15687,21 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
   });
 
   it('records what a FAILED run burned before it died', async () => {
-    let call = 0;
     mockSendQueryDag.mockImplementation(async function* () {
-      call++;
-      if (call === 1) {
-        yield { type: 'assistant', content: 'first output' };
-        yield {
-          type: 'result',
-          sessionId: 'sid-1',
-          cost: 0.05,
-          tokens: { input: 900, output: 90, cacheRead: 700, cacheWrite: 0 },
-        };
-        return;
-      }
-      // No assistant output → the second node fails, failing the run.
-      yield { type: 'result', sessionId: 'sid-2' };
+      yield { type: 'assistant', content: 'partial output before failure' };
+      yield {
+        type: 'result',
+        sessionId: 'sid-1',
+        cost: 0.05,
+        tokens: { input: 900, output: 90, cacheRead: 700, cacheWrite: 0 },
+        isError: true,
+        errorSubtype: 'stream_error',
+      };
     });
 
     const store = createMockStore();
     const mockDeps = createMockDeps(store);
+    const workflowRun = makeWorkflowRun('usage-failure-run');
 
     await executeDagWorkflow(
       dagOptions({
@@ -15715,17 +15711,15 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
         workflow: {
           name: 'usage-on-failure',
           nodes: [
-            { id: 'spend', kind: 'agent', source: { kind: 'inline', prompt: 'Burn some tokens.' } },
             {
-              id: 'die',
+              id: 'spend-and-die',
               kind: 'agent',
-              source: { kind: 'inline', prompt: 'Fail here.' },
-              depends_on: ['spend'],
+              source: { kind: 'inline', prompt: 'Burn some tokens, then fail.' },
               retry: { max_attempts: 1, delay_ms: 1 },
             },
           ],
         },
-        workflowRun: makeWorkflowRun(),
+        workflowRun,
       })
     );
 
@@ -15740,6 +15734,16 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
         total_cache_write_tokens: 0,
       },
     ]);
+    const errorRow = (await readTranscript(join(testDir, 'logs'), workflowRun.id)).find(
+      row => row.type === 'workflow_error'
+    );
+    expect(errorRow?.cost_usd).toBe(0.05);
+    expect(errorRow?.tokens).toEqual({
+      input: 900,
+      output: 90,
+      cacheRead: 700,
+      cacheWrite: 0,
+    });
   });
 
   it('a node that fails mid-stream reports its spend in the transcript, not just the DB', async () => {
@@ -17675,6 +17679,7 @@ describe('executeDagWorkflow -- evidence gate (#2230)', () => {
     platform: IWorkflowPlatform;
     evidencePolicy?: { required: boolean };
     priorCompletedNodes?: Map<string, PersistedNodeOutput>;
+    priorUsage?: ExecuteDagWorkflowOptions['priorUsage'];
   }): Promise<void> {
     const mockDeps = createMockDeps(opts.store);
     const workflowRun = makeWorkflowRun('dag-evidence-run');
@@ -17696,6 +17701,7 @@ describe('executeDagWorkflow -- evidence gate (#2230)', () => {
         workflowRun,
         artifactsDir,
         priorCompletedNodes: opts.priorCompletedNodes,
+        priorUsage: opts.priorUsage,
       })
     );
   }
@@ -17771,6 +17777,29 @@ describe('executeDagWorkflow -- evidence gate (#2230)', () => {
     const lastTelemetry = telemetryCalls.at(-1)?.[0] as Record<string, unknown>;
     expect(lastTelemetry.outcome).toBe('failed');
     expect(lastTelemetry.exitReason).toBe('evidence_missing');
+  });
+
+  it('carries prior run usage onto the evidence-gate workflow_error row', async () => {
+    await runEvidenceWorkflow({
+      store: createMockStore(),
+      platform: createMockPlatform(),
+      evidencePolicy: { required: true },
+      priorUsage: {
+        costUsd: 0.03,
+        tokens: { input: 300, output: 30, cacheRead: 200, cacheWrite: 0 },
+      },
+    });
+
+    const errorRow = (await readTranscript(join(testDir, 'logs'), 'dag-evidence-run')).find(
+      row => row.type === 'workflow_error'
+    );
+    expect(errorRow?.cost_usd).toBe(0.03);
+    expect(errorRow?.tokens).toEqual({
+      input: 300,
+      output: 30,
+      cacheRead: 200,
+      cacheWrite: 0,
+    });
   });
 
   it('required: true + evidence.json present -> completeWorkflowRun', async () => {

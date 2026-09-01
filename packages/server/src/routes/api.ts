@@ -75,9 +75,8 @@ import {
   getArchonWorkspacesPath,
   getHomeCommandsPath,
   getHomeWorkflowsPath,
-  resolveProjectStorageKey,
-  getRunArtifactsDirForKey,
   getRunArtifactsDirForRoot,
+  resolveRunStorageRoot,
   isInsideArchonHome,
   getArchonHome,
   isDocker,
@@ -412,36 +411,16 @@ type WorkflowSource = 'project' | 'bundled' | 'global';
  * no-remote local repo (bare basename) — so artifact browsing was silently dead
  * for two of the three project kinds Archon can register.
  *
- * Order mirrors the executor: a persisted `output_root` wins outright (a
- * codebase renamed since the run must not orphan its artifacts, #1192);
- * otherwise the shared `resolveProjectStorageKey` derives the key. Returns null
- * only when there is no codebase row to derive from at all — callers surface
- * that as an explicit 404 rather than an empty success.
- *
- * The `cwd` argument is `codebase.default_cwd` here, while the executor passes
- * the RUN's cwd (which inside a worktree is the worktree path). That only
- * differs for the `{ kind: 'cwd' }` fallback, and every run since #2200
- * persists `output_root`, so this path never re-derives for a modern run.
+ * The shared root resolver owns trusted persisted-root precedence and
+ * relocation fallback; this route only composes the artifact directory.
  */
 function resolveRunArtifactDir(
   run: { output_root?: string | null },
   codebase: { kind?: string | null; name: string; default_cwd: string } | null,
   runId: string
 ): string | null {
-  // The containment check belongs INSIDE this branch, not after it. A persisted
-  // root is a cache of where the run wrote, not an authority: move ARCHON_HOME
-  // (machine migration, restored backup, the documented ARCHON_DATA split) and
-  // every stamped root is suddenly out-of-tree. Guarding after the fact would
-  // hard-400 every historical run even when its artifacts sit re-derivable and
-  // physically present under the new home — and `output_root` is write-once via
-  // COALESCE, so the app could never clear the column to recover. Falling
-  // through to re-derivation keeps the tree relocatable, which is how it behaved
-  // before the column existed. Matches `continue.ts`.
-  if (run.output_root && isInsideArchonHome(run.output_root)) {
-    return getRunArtifactsDirForRoot(run.output_root, runId);
-  }
-  if (!codebase?.name) return null;
-  return getRunArtifactsDirForKey(resolveProjectStorageKey(codebase, codebase.default_cwd), runId);
+  const root = resolveRunStorageRoot(run, codebase);
+  return root ? getRunArtifactsDirForRoot(root, runId) : null;
 }
 
 // =========================================================================

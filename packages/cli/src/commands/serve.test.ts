@@ -141,7 +141,7 @@ function tarHeader(name: string, size: number, typeflag: '0' | '5', mode: number
 }
 
 /** Concatenate blocks into one buffer. */
-function concatBytes(blocks: Uint8Array[]): Uint8Array {
+function concatBytes(blocks: Uint8Array[]): Uint8Array<ArrayBuffer> {
   const total = blocks.reduce((sum, block) => sum + block.length, 0);
   const out = new Uint8Array(total);
   let offset = 0;
@@ -163,17 +163,19 @@ function concatBytes(blocks: Uint8Array[]): Uint8Array {
 const FIXTURE_INDEX_HTML = '<html>ok</html>';
 
 /** `web/` + `web/index.html`, tarred and gzipped — the shape `archon serve` downloads. */
-function buildWebTarball(indexHtml: string): Uint8Array {
+function buildWebTarball(indexHtml: string): Uint8Array<ArrayBuffer> {
   const body = new TextEncoder().encode(indexHtml);
   const padding = new Uint8Array((512 - (body.length % 512)) % 512);
-  return Bun.gzipSync(
-    concatBytes([
-      tarHeader('web/', 0, '5', 0o755),
-      tarHeader('web/index.html', body.length, '0', 0o644),
-      body,
-      padding,
-      new Uint8Array(1024), // two zero blocks terminate the archive
-    ])
+  return new Uint8Array(
+    Bun.gzipSync(
+      concatBytes([
+        tarHeader('web/', 0, '5', 0o755),
+        tarHeader('web/index.html', body.length, '0', 0o644),
+        body,
+        padding,
+        new Uint8Array(1024), // two zero blocks terminate the archive
+      ])
+    )
   );
 }
 
@@ -289,8 +291,8 @@ describe('downloadWebDist', () => {
     expect(readFileSync(join(targetDir, 'index.html'), 'utf8')).toBe(FIXTURE_INDEX_HTML);
     // Remote path fetches both checksums.txt and the tarball.
     expect(fetchSpy).toHaveBeenCalledTimes(2);
-    const urls = fetchSpy.mock.calls.map(call => String(call[0]));
-    expect(urls.some(u => u.includes('checksums.txt'))).toBe(true);
+    const urls = fetchSpy.mock.calls.map((call: Parameters<typeof fetch>) => String(call[0]));
+    expect(urls.some((url: string) => url.includes('checksums.txt'))).toBe(true);
   });
 });
 

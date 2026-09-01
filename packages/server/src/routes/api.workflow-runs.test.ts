@@ -1,7 +1,7 @@
 import { describe, test, expect, mock, beforeAll, beforeEach, afterEach } from 'bun:test';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, sep } from 'path';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { DashboardWorkflowRun } from '@archon/core/db/workflows';
@@ -234,6 +234,20 @@ mock.module('@archon/paths', () => ({
   // Mirrors the real identity→paths resolver (#2200) so the routes are
   // exercised as delegation, with paths rooted at the mocked ARCHON_HOME.
   resolveProjectStorageKey: resolveProjectStorageKeyFake,
+  resolveRunStorageRoot: (
+    run: { output_root?: string | null },
+    codebase: { kind?: string | null; name: string; default_cwd: string } | null
+  ): string | null => {
+    if (
+      run.output_root &&
+      (run.output_root === mockArchonHome || run.output_root.startsWith(`${mockArchonHome}${sep}`))
+    ) {
+      return run.output_root;
+    }
+    return codebase
+      ? storageRootFake(resolveProjectStorageKeyFake(codebase, codebase.default_cwd))
+      : null;
+  },
   getStoragePathsForRoot: storagePathsForRootFake,
   getRunArtifactsDirForKey: (key: FakeStorageKey, runId: string): string =>
     join(storageRootFake(key), 'artifacts', 'runs', runId),

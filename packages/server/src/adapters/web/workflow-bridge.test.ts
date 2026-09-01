@@ -23,6 +23,20 @@ mock.module('@archon/paths', () => ({
 import { mapWorkflowEvent } from './workflow-bridge';
 import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
 
+test('workflow start projection does not expose the host transcript path', () => {
+  const event: WorkflowEmitterEvent = {
+    type: 'workflow_started',
+    runId: 'run-1',
+    workflowName: 'implement',
+    conversationId: 'conv-1',
+    transcriptPath: '/host/.archon/workspaces/acme/widget/logs/run-1.jsonl',
+  };
+
+  const payload = JSON.parse(mapWorkflowEvent(event) ?? '{}') as Record<string, unknown>;
+  expect(payload).toMatchObject({ type: 'workflow_status', runId: 'run-1', status: 'running' });
+  expect(payload).not.toHaveProperty('transcriptPath');
+});
+
 describe('mapWorkflowEvent — tool activity correlation', () => {
   test('forwards tool call IDs and completion metadata', () => {
     const started: WorkflowEmitterEvent = {

@@ -2,6 +2,7 @@
  * Tests for the CLI chat command
  */
 import { describe, test, expect, mock, beforeEach, spyOn } from 'bun:test';
+import type { handleMessage } from '@archon/core';
 
 // Mock logger before any imports
 const mockLogger = {
@@ -27,7 +28,7 @@ mock.module('@archon/core/db/messages', () => ({
 }));
 
 // Mock handleMessage from @archon/core
-const mockHandleMessage = mock(() => Promise.resolve());
+const mockHandleMessage = mock<typeof handleMessage>(() => Promise.resolve());
 
 mock.module('@archon/core', () => ({
   handleMessage: mockHandleMessage,
@@ -46,11 +47,7 @@ describe('chatCommand', () => {
 
     expect(mockHandleMessage).toHaveBeenCalledTimes(1);
 
-    const [adapter, conversationId, message] = mockHandleMessage.mock.calls[0] as [
-      CLIAdapter,
-      string,
-      string,
-    ];
+    const [adapter, conversationId, message] = mockHandleMessage.mock.calls[0];
 
     expect(adapter).toBeInstanceOf(CLIAdapter);
     expect(conversationId).toMatch(/^cli-chat-\d+-[a-z0-9]+$/);
@@ -60,7 +57,7 @@ describe('chatCommand', () => {
   test('should use batch streaming mode for the CLIAdapter', async () => {
     await chatCommand('test');
 
-    const [adapter] = mockHandleMessage.mock.calls[0] as [CLIAdapter, string, string];
+    const [adapter] = mockHandleMessage.mock.calls[0];
     expect(adapter.getStreamingMode()).toBe('batch');
   });
 
@@ -68,8 +65,8 @@ describe('chatCommand', () => {
     await chatCommand('first message');
     await chatCommand('second message');
 
-    const [, id1] = mockHandleMessage.mock.calls[0] as [unknown, string, string];
-    const [, id2] = mockHandleMessage.mock.calls[1] as [unknown, string, string];
+    const [, id1] = mockHandleMessage.mock.calls[0];
+    const [, id2] = mockHandleMessage.mock.calls[1];
 
     expect(id1).not.toBe(id2);
   });
@@ -78,7 +75,7 @@ describe('chatCommand', () => {
     const complexMessage = '/workflow run assist "build a feature"';
     await chatCommand(complexMessage);
 
-    const [, , message] = mockHandleMessage.mock.calls[0] as [unknown, string, string];
+    const [, , message] = mockHandleMessage.mock.calls[0];
     expect(message).toBe(complexMessage);
   });
 
@@ -91,14 +88,14 @@ describe('chatCommand', () => {
   test('should have conversationId prefixed with cli-chat-', async () => {
     await chatCommand('prefix check');
 
-    const [, conversationId] = mockHandleMessage.mock.calls[0] as [unknown, string, string];
+    const [, conversationId] = mockHandleMessage.mock.calls[0];
     expect(conversationId.startsWith('cli-chat-')).toBe(true);
   });
 
   test('CLIAdapter passed to handleMessage should have cli platform type', async () => {
     await chatCommand('platform type check');
 
-    const [adapter] = mockHandleMessage.mock.calls[0] as [CLIAdapter, string, string];
+    const [adapter] = mockHandleMessage.mock.calls[0];
     expect(adapter.getPlatformType()).toBe('cli');
   });
 

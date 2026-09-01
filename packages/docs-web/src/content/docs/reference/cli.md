@@ -215,7 +215,7 @@ archon workflow run archon-ship --cwd /path/to/repo \
   --adopt 6d5066ca-47b4-4ee8-8d1d-2f3db8039190 "finish the delivery"
 ```
 
-Progress events (node start/complete/fail/skip, approval gates) are written to stderr during execution.
+Progress events (node start/complete/fail/skip, approval gates) are written to stderr during execution. The workflow-start output also names the absolute local path of the run's JSONL transcript. Use [`workflow logs`](#workflow-logs) when you have a run ID and want the content rather than the path.
 
 If the workflow's YAML declares keys the engine ignores, a warning naming each one is written to **stderr before the run starts**. This matters to `--detach --json` callers: `--json` silences all logging, so stderr is the only channel left, and it keeps stdout to exactly the JSON payload.
 
@@ -241,7 +241,7 @@ Note that a real `run` emits a JSON payload **only** under `--detach`. Without i
 | `--supersedes <run-id>` | Start in a fresh estate while recording that this run replaces a terminal prior run. Unlike `--adopt`, it inherits no checkout. |
 | `--quiet`, `-q` | Suppress all progress output to stderr |
 | `--verbose`, `-v` | Also show tool-level events (tool name and duration) |
-| `--detach` | Run in a detached background child and return immediately. The child does all the work; find it later with `workflow runs`/`workflow get`. Child stdout/stderr is captured to `~/.archon/logs/detached-run-<id>.log`. Combine with `--json` for a machine-readable ack — it carries the new run's `runId`, so the natural next step is [`workflow wait <run-id>`](#workflow-wait) instead of a polling loop. Also available on `approve`/`reject`/`resume` — see [Detached control verbs](#detached-control-verbs). |
+| `--detach` | Run in a detached background child and return immediately. The child does all the work; find it later with `workflow runs`/`workflow get`. For `workflow run`, human output names both files and the `--json` acknowledgement carries `runId`, `transcriptPath` (the structured per-run JSONL), and `logPath` (the detached child process's stdout/stderr capture). These paths are intentionally distinct. Use [`workflow logs <run-id> --follow`](#workflow-logs) for execution events and [`workflow wait <run-id>`](#workflow-wait) when a host needs the next terminal or gate transition. Also available on `approve`/`reject`/`resume`; their acknowledgement differs — see [Detached control verbs](#detached-control-verbs). |
 | `--dry-run` | Simulate deterministic DAG control flow in memory. Creates no run, worktree, session, event, artifact, or provider request. |
 | `--stubs <path>` | YAML mapping of node ids to scalar or structured outputs for `--dry-run`. Relative paths resolve from `--cwd`. |
 | `--stubs-init <path>` | Write a complete stub scaffold for the expanded workflow and exit. Refuses to overwrite an existing file. Relative paths resolve from `--cwd`. |
@@ -448,7 +448,7 @@ archon workflow runs --all             # list across all projects (ignore cwd sc
 
 If `cwd` is not a registered project, the command falls back to a global list and says so — `--json` carries this as a `scopeFallback: true` field so a consuming agent never mistakes a global result for a project-scoped one.
 
-The listing shows short 8-character run ids. Every `<run-id>` command below (`get`, `resume`, `cancel`, `abandon`, `approve`, `reject`) accepts these short ids when run from the project directory: a unique prefix resolves to the full id, an ambiguous prefix errors, and full ids keep working from any directory. Short ids from `--all` rows belonging to *other* projects can't be resolved — use the full id from `--json` for those.
+The listing shows short 8-character run ids. Every `<run-id>` command below (`get`, `logs`, `wait`, `resume`, `cancel`, `abandon`, `approve`, `reject`) accepts these short ids when run from the project directory: a unique prefix resolves to the full id, an ambiguous prefix errors, and full ids keep working from any directory. Short ids from `--all` rows belonging to *other* projects can't be resolved — use the full id from `--json` for those.
 
 ### `workflow get`
 
@@ -477,6 +477,12 @@ authored it yet, or the run predates the field. In that case human output keeps 
 presentation. Foreground `workflow run` uses the same labels when an outcome exists, but its exit
 code remains driven by execution success or failure.
 
+Human output includes `Transcript: <path>`. Every successful JSON shape includes the
+same value as `transcript_path`, including verbose node summaries and raw events. A
+historical run whose storage location can no longer be resolved remains inspectable and
+reports `null` (human output says `(unavailable)`) instead of guessing a path from the
+current directory.
+
 For both commands, `--json --verbose` adds a `nodes` array. Nodes are ordered by the
 first appearance of each node in the deterministically ordered event stream. Every
 entry includes `nodeId` and `state`; nodes with a start event include the original ISO
@@ -487,6 +493,36 @@ recorded).
 
 Add `--events` to `--json --verbose` to return raw `events` rows instead of `nodes` for
 debugging. Raw events are not the recommended integration surface.
+
+### `workflow logs`
+
+Print the run's existing JSONL transcript, or follow it as rows are appended:
+
+```bash
+archon workflow logs <run-id>
+archon workflow logs <run-id> --follow
+```
+
+Without `--follow`, the command copies the snapshot that exists at invocation time to
+stdout and exits. With `--follow`, it announces the resolved local path on stderr, waits
+for a live run's file to appear, and streams appended bytes until the run becomes
+`completed`, `failed`, or `cancelled`. A paused run is still live: the follower stays
+attached across approval gates and resumes, reading the same file.
+
+Stdout is the transcript's exact JSONL, with no log messages or wrapper document. Each
+line is one persisted event and fields may be added over time, so consumers should parse
+the fields they need and tolerate others. `--json` is invalid because the output is
+already JSONL and a live stream cannot satisfy the CLI's one-document JSON contract;
+`--events` is also limited to `workflow status/get`.
+
+A missing or empty snapshot exits `1`; for a live run the diagnostic points to
+`--follow`. Follow mode waits while the run is live, performs a final read after a
+terminal status, and exits `1` if a terminal run never produced content or if the file
+shrinks. Stopping the follower only stops the reader. It never resumes, cancels, or
+otherwise changes the run.
+
+Transcripts can contain user prompts, tool inputs, and retained subprocess output. Treat
+access to the local file as access to the run's input and execution data.
 
 ### `workflow wait`
 
@@ -666,8 +702,10 @@ just outside your shell. The ack carries `continues: true` to say so:
 
 Read `continues` to decide whether your automation still owns continuation. `logPath`
 is `null` when the log file could not be opened — the child still runs, but its output
-is discarded, so do not assume a string. Precheck failures follow each verb's existing
-error contract: `{ ok: false }` under `--json`, a thrown error otherwise.
+is discarded, so do not assume a string. This acknowledgement has no `transcriptPath`;
+use its `runId` with `workflow logs <run-id>` or `workflow get <run-id>` to locate the
+transcript. Precheck failures follow each verb's existing error contract:
+`{ ok: false }` under `--json`, a thrown error otherwise.
 
 ### `workflow reject`
 
@@ -911,6 +949,7 @@ archon version
 | `--verbose`, `-v` | Show debug-level output |
 | `--json` | Output machine-readable JSON (workflow `list`, `status`, `runs`, `get`, `wait`, and the write commands `approve`/`reject`/`abandon`/`resume`). Implies log suppression so stdout is exactly the JSON payload. |
 | `--timeout <seconds>` | For `workflow wait`: give up after N seconds and exit `3`. Omitted means wait indefinitely. |
+| `--follow` | For `workflow logs`: wait for the transcript and stream appended rows until the run ends. |
 | `--events` | With verbose JSON workflow `status`/`get`, return raw event rows instead of ordered node summaries. |
 | `--help`, `-h` | Show help message |
 

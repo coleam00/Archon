@@ -11853,6 +11853,10 @@ export async function executeDagWorkflow(
     tokens: totalTokens,
     loopIterations: totalLoopIterations,
   });
+  const runTranscriptUsage: WorkflowUsage = {
+    ...(totalCostUsd > 0 ? { cost_usd: totalCostUsd } : {}),
+    ...(totalTokens !== undefined ? { tokens: totalTokens } : {}),
+  };
 
   getLog().info(
     { nodeCount: workflow.nodes.length, anyCompleted, anyFailed },
@@ -11894,12 +11898,14 @@ export async function executeDagWorkflow(
       getLog().error({ err: dbErr, workflowRunId: workflowRun.id }, 'dag.quota_resume_plan_failed');
       return undefined;
     });
-    await logWorkflowError(logDir, workflowRun.id, failMsg).catch((logErr: Error) => {
-      getLog().error(
-        { err: logErr, workflowRunId: workflowRun.id },
-        'dag.workflow_error_log_write_failed'
-      );
-    });
+    await logWorkflowError(logDir, workflowRun.id, failMsg, runTranscriptUsage).catch(
+      (logErr: Error) => {
+        getLog().error(
+          { err: logErr, workflowRunId: workflowRun.id },
+          'dag.workflow_error_log_write_failed'
+        );
+      }
+    );
     const emitterForFail = getWorkflowEventEmitter();
     emitterForFail.emit({
       type: 'workflow_failed',
@@ -11950,12 +11956,14 @@ export async function executeDagWorkflow(
       getLog().error({ err: dbErr, workflowRunId: workflowRun.id }, 'dag.quota_resume_plan_failed');
       return undefined;
     });
-    await logWorkflowError(logDir, workflowRun.id, failMsg).catch((logErr: Error) => {
-      getLog().error(
-        { err: logErr, workflowRunId: workflowRun.id },
-        'dag.workflow_error_log_write_failed'
-      );
-    });
+    await logWorkflowError(logDir, workflowRun.id, failMsg, runTranscriptUsage).catch(
+      (logErr: Error) => {
+        getLog().error(
+          { err: logErr, workflowRunId: workflowRun.id },
+          'dag.workflow_error_log_write_failed'
+        );
+      }
+    );
     const emitterForFail = getWorkflowEventEmitter();
     emitterForFail.emit({
       type: 'workflow_failed',
@@ -12044,12 +12052,14 @@ export async function executeDagWorkflow(
         event_type: 'evidence_validation_failed',
         data: { policy: 'evidence_policy.required', expected_path: evidencePath },
       });
-      await logWorkflowError(logDir, workflowRun.id, failMsg).catch((logErr: Error) => {
-        getLog().error(
-          { err: logErr, workflowRunId: workflowRun.id },
-          'dag.workflow_error_log_write_failed'
-        );
-      });
+      await logWorkflowError(logDir, workflowRun.id, failMsg, runTranscriptUsage).catch(
+        (logErr: Error) => {
+          getLog().error(
+            { err: logErr, workflowRunId: workflowRun.id },
+            'dag.workflow_error_log_write_failed'
+          );
+        }
+      );
       const emitterForEvidence = getWorkflowEventEmitter();
       emitterForEvidence.emit({
         type: 'workflow_failed',
@@ -12148,13 +12158,7 @@ export async function executeDagWorkflow(
   // Emit completion, then record it. The transcript, the live event, and the telemetry
   // do not depend on the status write and used to run whether or not it succeeded, so
   // the (now-throwing) write goes last.
-  await logWorkflowComplete(logDir, workflowRun.id, {
-    // `> 0` rather than `!== undefined`, mirroring persistRunUsage above: the accumulator
-    // is a plain number seeded at 0, so zero is the only way it can say "no AI usage" —
-    // and a bash-only run must not read as a free AI run on the transcript either.
-    ...(totalCostUsd > 0 ? { cost_usd: totalCostUsd } : {}),
-    ...(totalTokens !== undefined ? { tokens: totalTokens } : {}),
-  });
+  await logWorkflowComplete(logDir, workflowRun.id, runTranscriptUsage);
   const emitter = getWorkflowEventEmitter();
   emitter.emit({
     type: 'workflow_completed',

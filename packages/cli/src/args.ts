@@ -45,6 +45,7 @@ export const cliArgOptions: CliArgOptions = {
   status: { type: 'string' },
   limit: { type: 'string' },
   timeout: { type: 'string' },
+  follow: { type: 'boolean' },
   effort: { type: 'string' },
   full: { type: 'boolean' },
   'dry-run': { type: 'boolean' },
