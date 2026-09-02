@@ -47,7 +47,13 @@ const mockGetWorkflowRunByWorkerPlatformId = mock(
 const mockListWorkflowEvents = mock(async (_runId: string) => [] as MockWorkflowEvent[]);
 const mockGetConversationById = mock(
   async (_id: string) =>
-    null as null | { id: string; platform_conversation_id: string; platform_type: string }
+    null as null | {
+      id: string;
+      platform_conversation_id: string;
+      platform_type: string;
+      // Optional: only the run-ownership fallback (#3135) reads it.
+      user_id?: string | null;
+    }
 );
 const mockFindConversationByPlatformId = mock(
   async (_id: string) =>
@@ -301,6 +307,32 @@ mock.module('@archon/git', () => ({
   toWorktreePath: (p: string) => p,
 }));
 
+// Run-action ownership (#3135). Off by default, so every test in this file
+// that predates it exercises the solo-install path exactly as before; the
+// ownership describe at the bottom flips it per test.
+let ownershipEnforced = false;
+
+mock.module('../auth', () => ({
+  getAuth: () => null,
+  isWebAuthEnabled: () => false,
+  getSignupMode: () => 'disabled',
+  isApiGateEnabled: () => false,
+  isConversationOwnershipEnforced: () => ownershipEnforced,
+}));
+
+// `X-Archon-User: alice` resolves to `user-alice`, mirroring resolveAuthContext's
+// header door without needing a real users table.
+mock.module('@archon/core/db/users', () => ({
+  findOrCreateUserByPlatformIdentity: mock(async (_platform: string, platformUserId: string) => ({
+    id: `user-${platformUserId}`,
+    display_name: null,
+    email: null,
+    role: 'admin' as const,
+    created_at: new Date(),
+    updated_at: new Date(),
+  })),
+}));
+
 mock.module('@archon/core/db/conversations', () => ({
   findConversationByPlatformId: mockFindConversationByPlatformId,
   listConversations: mock(async () => []),
@@ -435,6 +467,7 @@ const MOCK_RUNNING_RUN = {
   codebase_id: 'cb-uuid-1',
   status: 'running',
   outcome: null,
+  user_id: null,
   user_message: 'Deploy to staging',
   started_at: NOW_DATE,
   completed_at: null,
@@ -3614,5 +3647,253 @@ describe('GET /api/artifacts/:runId/* storage-key resolution', () => {
 
     expect(response.status).toBe(200);
     expect(await response.text()).toBe('# the full report');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Run actions belong to the run's starter (#3135)
+//
+// Run reads stay open — the runs list, run detail, the dashboard, and artifacts
+// are an install-wide operations view. Every action is refused with 403 for
+// anyone but the run's owner. 403 rather than the 404 conversations use: a run
+// id is an opaque UUID and the caller can already see the run listed.
+// ---------------------------------------------------------------------------
+
+/** Fixtures shaped so each action's own preconditions pass for its owner. */
+const OWNED_RUNNING_RUN: MockWorkflowRun = { ...MOCK_RUNNING_RUN, user_id: 'user-alice' };
+const OWNED_PAUSED_RUN: MockWorkflowRun = { ...MOCK_PAUSED_RUN, user_id: 'user-alice' };
+const OWNED_FAILED_RUN: MockWorkflowRun = {
+  ...MOCK_FAILED_RUN,
+  user_id: 'user-alice',
+  parent_conversation_id: null,
+  working_path: '/tmp/worktrees/run-uuid-4',
+};
+const OWNED_COMPLETED_RUN: MockWorkflowRun = { ...MOCK_COMPLETED_RUN, user_id: 'user-alice' };
+const OWNED_WAITING_RUN: MockWorkflowRun = {
+  ...MOCK_RUNNING_RUN,
+  id: 'run-wait-owned',
+  status: 'paused',
+  user_id: 'user-alice',
+  metadata: {
+    wait: {
+      owner: 'node',
+      nodeId: 'checks',
+      kind: 'event',
+      event: 'checks.complete',
+      waitingSince: '2026-08-24T10:00:00.000Z',
+      resumeAt: '2026-08-25T10:00:00.000Z',
+    },
+  },
+};
+
+interface RunAction {
+  name: string;
+  /** The run the route loads. Owned by `user-alice` and in an actionable state. */
+  run: MockWorkflowRun;
+  /** The store write the action performs, which a denial must not reach. */
+  effect: () => unknown;
+  call: (app: OpenAPIHono, run: MockWorkflowRun, user?: string) => Promise<Response>;
+}
+
+function ownershipHeaders(user?: string): Record<string, string> {
+  return {
+    'Content-Type': 'application/json',
+    ...(user ? { 'X-Archon-User': user } : {}),
+  };
+}
+
+const RUN_ACTIONS: readonly RunAction[] = [
+  {
+    name: 'cancel',
+    run: OWNED_RUNNING_RUN,
+    effect: () => mockCancelWorkflowRun,
+    call: (app, run, user) =>
+      app.request(`/api/workflows/runs/${run.id}/cancel`, {
+        method: 'POST',
+        headers: ownershipHeaders(user),
+      }),
+  },
+  {
+    name: 'resume',
+    run: OWNED_FAILED_RUN,
+    effect: () => mockExecuteWorkflow,
+    call: (app, run, user) =>
+      app.request(`/api/workflows/runs/${run.id}/resume`, {
+        method: 'POST',
+        headers: ownershipHeaders(user),
+      }),
+  },
+  {
+    name: 'signal',
+    run: OWNED_WAITING_RUN,
+    effect: () => mockSignalWorkflowWait,
+    call: (app, run, user) =>
+      app.request(`/api/workflows/runs/${run.id}/signal`, {
+        method: 'POST',
+        headers: ownershipHeaders(user),
+        body: JSON.stringify({
+          event: 'checks.complete',
+          resumeAt: '2026-08-25T10:00:00.000Z',
+        }),
+      }),
+  },
+  {
+    name: 'abandon',
+    run: OWNED_RUNNING_RUN,
+    effect: () => mockCancelWorkflowRun,
+    call: (app, run, user) =>
+      app.request(`/api/workflows/runs/${run.id}/abandon`, {
+        method: 'POST',
+        headers: ownershipHeaders(user),
+      }),
+  },
+  {
+    name: 'approve',
+    run: OWNED_PAUSED_RUN,
+    effect: () => mockResolveApprovalGate,
+    call: (app, run, user) =>
+      app.request(`/api/workflows/runs/${run.id}/approve`, {
+        method: 'POST',
+        headers: ownershipHeaders(user),
+        body: JSON.stringify({ comment: 'LGTM' }),
+      }),
+  },
+  {
+    name: 'reject',
+    run: OWNED_PAUSED_RUN,
+    effect: () => mockResolveAndCancelApprovalGate,
+    call: (app, run, user) =>
+      app.request(`/api/workflows/runs/${run.id}/reject`, {
+        method: 'POST',
+        headers: ownershipHeaders(user),
+        body: JSON.stringify({ reason: 'no' }),
+      }),
+  },
+  {
+    name: 'respond',
+    run: OWNED_PAUSED_RUN,
+    effect: () => mockResolveApprovalGate,
+    call: (app, run, user) =>
+      app.request(`/api/workflows/runs/${run.id}/respond`, {
+        method: 'POST',
+        headers: ownershipHeaders(user),
+        body: JSON.stringify({ decision: 'approve' }),
+      }),
+  },
+  {
+    name: 'delete',
+    run: OWNED_COMPLETED_RUN,
+    effect: () => mockDeleteWorkflowRun,
+    call: (app, run, user) =>
+      app.request(`/api/workflows/runs/${run.id}`, {
+        method: 'DELETE',
+        headers: ownershipHeaders(user),
+      }),
+  },
+];
+
+describe('run actions belong to the run starter (#3135)', () => {
+  beforeEach(() => {
+    ownershipEnforced = true;
+    mockGetWorkflowRun.mockReset();
+    mockGetConversationById.mockReset();
+    mockCancelWorkflowRun.mockReset();
+    mockCancelWorkflowRun.mockImplementation(async (_id: string) => ({ cancelled: true }));
+    mockFindChildRuns.mockReset();
+    mockFindChildRuns.mockImplementation(async (_parentRunId: string): Promise<unknown[]> => []);
+    mockDeleteWorkflowRun.mockReset();
+    mockUpdateWorkflowRun.mockReset();
+    mockCreateWorkflowEvent.mockReset();
+    mockResolveApprovalGate.mockClear();
+    mockResolveAndCancelApprovalGate.mockClear();
+    mockSignalWorkflowWait.mockReset();
+    mockSignalWorkflowWait.mockResolvedValue({ signaled: true });
+    mockHandleMessage.mockClear();
+    mockExecuteWorkflow.mockClear();
+    mockHydrateResumableRun.mockClear();
+  });
+  afterEach(() => {
+    ownershipEnforced = false;
+  });
+
+  for (const action of RUN_ACTIONS) {
+    describe(action.name, () => {
+      test('the starter acts on their own run', async () => {
+        mockGetWorkflowRun.mockResolvedValue(action.run);
+        const { app } = makeApp();
+        const response = await action.call(app, action.run, 'alice');
+        expect(response.status).toBe(200);
+      });
+
+      test('another user gets 403 and the action never runs', async () => {
+        mockGetWorkflowRun.mockResolvedValue(action.run);
+        const { app } = makeApp();
+        const response = await action.call(app, action.run, 'bob');
+        expect(response.status).toBe(403);
+        expect(await response.json()).toEqual({ error: 'You did not start this workflow run' });
+        expect(action.effect()).not.toHaveBeenCalled();
+      });
+
+      // Fail-closed: an owner Archon cannot name is "unknown", not "everyone".
+      test('a run nobody owns is actionable by nobody', async () => {
+        mockGetWorkflowRun.mockResolvedValue({ ...action.run, user_id: null });
+        const { app } = makeApp();
+        const response = await action.call(app, action.run, 'alice');
+        expect(response.status).toBe(403);
+        expect(action.effect()).not.toHaveBeenCalled();
+      });
+
+      test('an unresolved identity is refused, never widened', async () => {
+        mockGetWorkflowRun.mockResolvedValue(action.run);
+        const { app } = makeApp();
+        const response = await action.call(app, action.run);
+        expect(response.status).toBe(403);
+        expect(action.effect()).not.toHaveBeenCalled();
+      });
+
+      test('enforcement off (solo install) → anyone acts, exactly as today', async () => {
+        ownershipEnforced = false;
+        mockGetWorkflowRun.mockResolvedValue({ ...action.run, user_id: null });
+        const { app } = makeApp();
+        const response = await action.call(app, action.run);
+        expect(response.status).toBe(200);
+      });
+
+      // The run row's own user_id is the key; the parent conversation's owner is
+      // the fallback for a run started before runs carried one.
+      test('a run with no user_id falls back to the parent conversation owner', async () => {
+        mockGetWorkflowRun.mockResolvedValue({
+          ...action.run,
+          user_id: null,
+          parent_conversation_id: 'parent-conv-uuid',
+        });
+        mockGetConversationById.mockResolvedValue({
+          id: 'parent-conv-uuid',
+          platform_conversation_id: 'web-parent',
+          platform_type: 'web',
+          user_id: 'user-alice',
+        });
+        const { app } = makeApp();
+        const denied = await action.call(app, action.run, 'bob');
+        expect(denied.status).toBe(403);
+        expect(action.effect()).not.toHaveBeenCalled();
+      });
+    });
+  }
+
+  test('run reads stay open under enforcement', async () => {
+    mockGetWorkflowRun.mockResolvedValue(OWNED_RUNNING_RUN);
+    mockListWorkflowRuns.mockImplementationOnce(async () => [OWNED_RUNNING_RUN]);
+    const { app } = makeApp();
+
+    const detail = await app.request(`/api/workflows/runs/${OWNED_RUNNING_RUN.id}`, {
+      headers: { 'X-Archon-User': 'bob' },
+    });
+    expect(detail.status).toBe(200);
+
+    const list = await app.request('/api/workflows/runs', {
+      headers: { 'X-Archon-User': 'bob' },
+    });
+    expect(list.status).toBe(200);
   });
 });

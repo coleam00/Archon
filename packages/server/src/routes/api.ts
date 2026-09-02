@@ -954,6 +954,7 @@ const cancelWorkflowRunRoute = createRoute({
       description: 'Cancelled',
     },
     400: jsonError('Bad request'),
+    403: jsonError('Not the run starter'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -971,6 +972,7 @@ const resumeWorkflowRunRoute = createRoute({
       description: 'Resumed',
     },
     400: jsonError('Bad request'),
+    403: jsonError('Not the run starter'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -1004,6 +1006,7 @@ const signalWorkflowWaitRoute = createRoute({
       description: 'Signal accepted; the scheduler will resume the workflow shortly',
     },
     400: jsonError('Run is not waiting on this event'),
+    403: jsonError('Not the run starter'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -1021,6 +1024,7 @@ const abandonWorkflowRunRoute = createRoute({
       description: 'Abandoned',
     },
     400: jsonError('Bad request'),
+    403: jsonError('Not the run starter'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -1041,6 +1045,7 @@ const approveWorkflowRunRoute = createRoute({
       description: 'Approved',
     },
     400: jsonError('Bad request'),
+    403: jsonError('Not the run starter'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -1061,6 +1066,7 @@ const rejectWorkflowRunRoute = createRoute({
       description: 'Rejected',
     },
     400: jsonError('Bad request'),
+    403: jsonError('Not the run starter'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -1081,6 +1087,7 @@ const respondWorkflowRunRoute = createRoute({
       description: 'Responded',
     },
     400: jsonError('Bad request'),
+    403: jsonError('Not the run starter'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -1098,6 +1105,7 @@ const deleteWorkflowRunRoute = createRoute({
       description: 'Deleted',
     },
     400: jsonError('Bad request'),
+    403: jsonError('Not the run starter'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -1605,7 +1613,7 @@ export function registerApiRoutes(
 ): void {
   function apiError(
     c: Context,
-    status: 400 | 401 | 404 | 422 | 500 | 503,
+    status: 400 | 401 | 403 | 404 | 422 | 500 | 503,
     message: string,
     detail?: string
   ): Response {
@@ -1910,6 +1918,51 @@ export function registerApiRoutes(
       getLog().error({ err, conversationId: platformId }, 'conversation_lookup_failed');
       return { ok: true, conversation: null };
     }
+  }
+
+  /**
+   * Decide whether this caller may act on a workflow run (#3135). The model is
+   * shared visibility, owned control: run *reads* stay open — the runs list, run
+   * detail, artifacts, and the `__dashboard__` stream are an install-wide
+   * operations view — while every run *action* belongs to the person who started
+   * it (cancel, resume, signal, abandon, approve, reject, respond, delete).
+   *
+   * Ownership key, in order: the run's own `user_id`; when that is null, the
+   * owner of the conversation the run was dispatched from. The two agree in the
+   * normal case and diverge only for a run started from an ownerless
+   * conversation. When neither resolves the action is refused — an owner Archon
+   * cannot name is "unknown", not "everyone", the same fail-closed rule
+   * `authorizeConversation` applies. Unlike conversations there is no
+   * platform-type carve-out: a run is Archon's own governed work whatever
+   * dispatched it.
+   *
+   * 403 rather than the 404 conversations use. A run id is an opaque UUID nobody
+   * guesses, and a caller reaching a run action already knows the run exists
+   * because run reads stay open, so a 404 would only turn "you did not start
+   * this run" into a confusing "no such run".
+   *
+   * Returns the response for the caller to return verbatim, or null when the
+   * action may proceed. Throws on a lookup failure; every call site is already
+   * inside a try that maps that to its own 500.
+   */
+  async function authorizeRunAction(c: Context, run: WorkflowRun): Promise<Response | null> {
+    if (!isConversationOwnershipEnforced()) return null;
+
+    let ownerId = run.user_id;
+    if (!ownerId && run.parent_conversation_id) {
+      const parent = await conversationDb.getConversationById(run.parent_conversation_id);
+      ownerId = parent?.user_id ?? null;
+    }
+
+    const userId = await resolveWebUserId(c);
+    if (userId && ownerId === userId) return null;
+
+    // Never log the owner's id: debuggability lives here, not in the status code.
+    getLog().warn(
+      { runId: run.id, ownerPresent: Boolean(ownerId), callerResolved: Boolean(userId) },
+      'api.run_action_denied'
+    );
+    return apiError(c, 403, 'You did not start this workflow run');
   }
 
   /**
@@ -3807,6 +3860,8 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
+      const denial = await authorizeRunAction(c, run);
+      if (denial) return denial;
       if (run.status !== 'running' && run.status !== 'pending' && run.status !== 'paused') {
         return apiError(c, 400, `Cannot cancel workflow in '${run.status}' status`);
       }
@@ -3831,6 +3886,8 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
+      const denial = await authorizeRunAction(c, run);
+      if (denial) return denial;
       if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
         return apiError(c, 400, `Cannot resume workflow in '${run.status}' status`);
       }
@@ -3898,6 +3955,10 @@ export function registerApiRoutes(
     try {
       const run = await workflowDb.getWorkflowRun(runId);
       if (!run) return apiError(c, 404, 'Workflow run not found');
+      // Signalling advances a durable wait on someone else's run — an action by
+      // any reading, so it belongs with the other seven.
+      const denial = await authorizeRunAction(c, run);
+      if (denial) return denial;
       const wait = isWorkflowWaitContext(run.metadata?.wait) ? run.metadata.wait : undefined;
       if (wait?.kind !== 'event' || wait.event !== event || wait.resumeAt !== resumeAt) {
         return apiError(c, 400, `Run is not waiting on event '${event}'`);
@@ -3924,6 +3985,8 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
+      const denial = await authorizeRunAction(c, run);
+      if (denial) return denial;
       // A `failed` run is terminal per TERMINAL_WORKFLOW_STATUSES but remains
       // resumable, so the user must be able to discard it — only the two
       // non-resumable terminal states are blocked (the 400 mapping lives here;
@@ -4022,6 +4085,8 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
+      const denial = await authorizeRunAction(c, run);
+      if (denial) return denial;
       if (run.status !== 'paused') {
         return apiError(c, 400, `Cannot approve workflow in '${run.status}' status`);
       }
@@ -4089,6 +4154,8 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
+      const denial = await authorizeRunAction(c, run);
+      if (denial) return denial;
       if (run.status !== 'paused') {
         return apiError(c, 400, `Cannot reject workflow in '${run.status}' status`);
       }
@@ -4166,6 +4233,8 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
+      const denial = await authorizeRunAction(c, run);
+      if (denial) return denial;
       if (run.status !== 'paused') {
         return apiError(c, 400, `Cannot respond to workflow in '${run.status}' status`);
       }
@@ -4252,6 +4321,8 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
+      const denial = await authorizeRunAction(c, run);
+      if (denial) return denial;
       if (!TERMINAL_WORKFLOW_STATUSES.includes(run.status)) {
         return apiError(
           c,
