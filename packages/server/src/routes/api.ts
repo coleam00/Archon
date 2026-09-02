@@ -3131,6 +3131,25 @@ export function registerApiRoutes(
   app.get('/api/stream/:conversationId', async c => {
     const conversationId = c.req.param('conversationId');
 
+    // Ownership is decided before streamSSE takes over the response (#3135), so a
+    // caller who may not reach this conversation gets a plain JSON 404 instead of
+    // an opened stream that emits nothing. Privacy that stopped at REST would be
+    // no privacy at all: an EventSource on a guessed id used to open a live feed
+    // of someone else's turn output.
+    //
+    // With enforcement off the lookup is skipped entirely rather than allowed
+    // after the fact: a solo install streams on any id, including one whose row
+    // has not been written yet, exactly as it does today.
+    if (isConversationOwnershipEnforced()) {
+      try {
+        const access = await authorizeConversation(c, conversationId);
+        if (!access.ok) return access.response;
+      } catch (err: unknown) {
+        getLog().error({ err, conversationId }, 'sse_stream_authorize_failed');
+        return apiError(c, 500, 'Failed to load conversation');
+      }
+    }
+
     return streamSSE(c, async stream => {
       // Send initial heartbeat immediately to flush HTTP headers.
       // Without this, EventSource stays in CONNECTING state until the first write.
