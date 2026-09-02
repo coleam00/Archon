@@ -91,7 +91,9 @@ mock.module('@archon/core/db/conversations', () => ({
   softDeleteConversation: mockSoftDeleteConversation,
   updateConversationTitle: mockUpdateConversationTitle,
   listConversations: mock(async () => []),
-  getConversationById: mock(async () => null),
+  getConversationById: mock(async (id: string) =>
+    storedConversation && storedConversation.id === id ? storedConversation : null
+  ),
   getOrCreateConversation: mock(async () => ({
     id: 'internal-new',
     platform_conversation_id: 'web-new',
@@ -99,6 +101,16 @@ mock.module('@archon/core/db/conversations', () => ({
   PRIVATE_PLATFORM_TYPES,
   isPrivatePlatformType: (platformType: string) =>
     (PRIVATE_PLATFORM_TYPES as readonly string[]).includes(platformType),
+}));
+
+const mockResetNodeSessions = mock(async (_filter: unknown) => ({ deleted: 1 }));
+mock.module('@archon/core/operations/workflow-operations', () => ({
+  abandonWorkflow: mock(async () => {}),
+  approveWorkflow: mock(async () => {}),
+  rejectWorkflow: mock(async () => {}),
+  respondToWorkflow: mock(async () => {}),
+  assertRespondable: mock(() => {}),
+  resetWorkflowNodeSessions: mockResetNodeSessions,
 }));
 
 const mockHandleMessage = mock(async () => {});
@@ -192,9 +204,11 @@ function makeApp(): OpenAPIHono {
 
 const CONVERSATION_ID = 'web-alice-1';
 
+const INTERNAL_ID = 'internal-uuid-1';
+
 function conversation(overrides: Partial<ConversationRow> = {}): ConversationRow {
   return {
-    id: 'internal-uuid-1',
+    id: INTERNAL_ID,
     platform_conversation_id: CONVERSATION_ID,
     platform_type: 'web',
     user_id: 'user-alice',
@@ -273,6 +287,20 @@ const INGRESSES: readonly Ingress[] = [
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...asUser(user).headers },
         body: JSON.stringify({ conversationId: id, message: 'go' }),
+      }),
+  },
+  {
+    // A node-session scope key is the conversation's INTERNAL id (the in-chat
+    // `/workflow reset-sessions` passes the authorized row's own id), so this
+    // route is a conversation ingress that the platform-id prefix inventory below
+    // would never see; it is listed by hand there.
+    name: 'reset node sessions',
+    path: '/api/workflows/{name}/node-sessions',
+    method: 'delete',
+    call: (app, _id, user) =>
+      app.request(`/api/workflows/demo/node-sessions?scope=${INTERNAL_ID}`, {
+        method: 'DELETE',
+        ...asUser(user),
       }),
   },
 ];
@@ -449,6 +477,41 @@ describe('dispatch to an unknown conversation id', () => {
     }
   });
 
+  test('node-sessions: the cross-scope wipe is refused while conversations are owned', async () => {
+    ownershipEnforced = true;
+    mockResetNodeSessions.mockClear();
+    const res = await makeApp().request('/api/workflows/demo/node-sessions?confirm=all-scopes', {
+      method: 'DELETE',
+      headers: { 'X-Archon-User': 'alice' },
+    });
+    expect(res.status).toBe(403);
+    expect(mockResetNodeSessions).not.toHaveBeenCalled();
+  });
+
+  test('node-sessions: a scope naming no conversation is unreachable under enforcement', async () => {
+    ownershipEnforced = true;
+    mockResetNodeSessions.mockClear();
+    const res = await makeApp().request('/api/workflows/demo/node-sessions?scope=not-a-row', {
+      method: 'DELETE',
+      headers: { 'X-Archon-User': 'alice' },
+    });
+    expect(res.status).toBe(404);
+    expect(mockResetNodeSessions).not.toHaveBeenCalled();
+  });
+
+  test('node-sessions: enforcement off → the cross-scope wipe still works as today', async () => {
+    mockResetNodeSessions.mockClear();
+    const res = await makeApp().request('/api/workflows/demo/node-sessions?confirm=all-scopes', {
+      method: 'DELETE',
+    });
+    expect(res.status).toBe(200);
+    expect(mockResetNodeSessions).toHaveBeenCalledWith({
+      workflow_name: 'demo',
+      scope_key: undefined,
+      node_id: undefined,
+    });
+  });
+
   test('workflow run: enforcement off → today create-on-dispatch is preserved', async () => {
     const res = await makeApp().request('/api/workflows/demo/run', {
       method: 'POST',
@@ -507,5 +570,15 @@ describe('route inventory', () => {
 
     expect(declared.length).toBeGreaterThan(0);
     expect(declared.filter(op => !covered.has(op))).toEqual([]);
+
+    // Conversation ingresses that live outside the prefix and so cannot be found
+    // by scanning it. Each names a conversation by another key and must sit in
+    // the matrix above; add here when another such route appears.
+    const outsidePrefix = ['delete /api/workflows/{name}/node-sessions'];
+    expect(outsidePrefix.filter(op => !covered.has(op))).toEqual([]);
+    for (const op of outsidePrefix) {
+      const [method, path] = op.split(' ');
+      expect(Object.keys(doc.paths[path] ?? {})).toContain(method);
+    }
   });
 });

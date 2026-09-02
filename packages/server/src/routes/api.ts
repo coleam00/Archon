@@ -1860,6 +1860,19 @@ export function registerApiRoutes(
   ): Promise<{ ok: true; conversation: LoadedConversation } | { ok: false; response: Response }> {
     const conversation = await conversationDb.findConversationByPlatformId(platformId);
     if (!conversation) return { ok: false, response: apiError(c, 404, 'Conversation not found') };
+    return authorizeLoadedConversation(c, conversation, { platformId });
+  }
+
+  /**
+   * The ownership rule itself, over a row that has already been loaded, so the two
+   * lookup keys a request can carry — the platform id on `/api/conversations/{id}`,
+   * the internal id a node-session scope names — cannot each grow their own copy.
+   */
+  async function authorizeLoadedConversation(
+    c: Context,
+    conversation: LoadedConversation,
+    logFields: Record<string, string>
+  ): Promise<{ ok: true; conversation: LoadedConversation } | { ok: false; response: Response }> {
     if (!isConversationOwnershipEnforced()) return { ok: true, conversation };
     if (!conversationDb.isPrivatePlatformType(conversation.platform_type)) {
       return { ok: true, conversation };
@@ -1872,7 +1885,7 @@ export function registerApiRoutes(
     // request already carries: debuggability lives here, not in the status code.
     getLog().warn(
       {
-        platformId,
+        ...logFields,
         platformType: conversation.platform_type,
         ownerPresent: Boolean(conversation.user_id),
         callerResolved: Boolean(userId),
@@ -4365,6 +4378,25 @@ export function registerApiRoutes(
         400,
         'Refusing to reset sessions across all scopes without confirmation. Pass ?scope=<key> to narrow, or ?confirm=all-scopes to confirm.'
       );
+    }
+    // A scope key is a conversation's internal id (the in-chat `/workflow reset-sessions`
+    // passes the authorized conversation's own id), so under ownership enforcement it is
+    // a conversation ingress like any other (#3135): the caller must own it, and a scope
+    // that names no conversation is unattributable and therefore unreachable. The
+    // cross-scope wipe touches every user's state at once and has no owner to check
+    // against, so it is not offered while conversations are owned.
+    if (isConversationOwnershipEnforced()) {
+      if (scope === undefined) {
+        return apiError(
+          c,
+          403,
+          'Resetting sessions across all scopes is not available while conversations are owned. Pass ?scope=<conversation id> for a conversation you own.'
+        );
+      }
+      const conversation = await conversationDb.getConversationById(scope);
+      if (!conversation) return apiError(c, 404, 'Conversation not found');
+      const access = await authorizeLoadedConversation(c, conversation, { scope });
+      if (!access.ok) return access.response;
     }
     try {
       const { deleted } = await resetWorkflowNodeSessions({
