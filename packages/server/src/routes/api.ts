@@ -274,7 +274,13 @@ import {
   assertRespondable,
   resetWorkflowNodeSessions,
 } from '@archon/core/operations/workflow-operations';
-import { getAuth, isWebAuthEnabled, getSignupMode, isApiGateEnabled } from '../auth';
+import {
+  getAuth,
+  isWebAuthEnabled,
+  getSignupMode,
+  isApiGateEnabled,
+  isConversationOwnershipEnforced,
+} from '../auth';
 import { errorSchema } from './schemas/common.schemas';
 import { updateCheckResponseSchema } from './schemas/system.schemas';
 import {
@@ -568,6 +574,7 @@ const getConversationsRoute = createRoute({
       content: { 'application/json': { schema: conversationListResponseSchema } },
       description: 'OK',
     },
+    401: jsonError('Authentication required'),
     500: jsonError('Server error'),
   },
 });
@@ -1783,6 +1790,34 @@ export function registerApiRoutes(
   }
 
   /**
+   * Which conversations this caller may see (#3135). Authorization, not
+   * attribution — and the difference is the whole point: `resolveWebUserId`
+   * degrading to `undefined` is correct when stamping a row, and a security
+   * hole when scoping a list, because "no identity" used to mean "no filter".
+   *
+   * Under enforcement an unresolved identity is refused (401), never widened.
+   * With the /api/* gate on that branch is unreachable; it is reachable when a
+   * proxy owns admission (`ARCHON_WEB_AUTH_REQUIRED=false`), where an empty
+   * list would be indistinguishable from "you have no conversations" and send
+   * the operator hunting for data that is still there.
+   */
+  async function requireVisibilityForCaller(
+    c: Context
+  ): Promise<conversationDb.ConversationVisibility | { error: Response }> {
+    if (!isConversationOwnershipEnforced()) return { kind: 'all' };
+    const userId = await resolveWebUserId(c);
+    if (!userId) {
+      getLog().warn({ path: c.req.path }, 'api.conversation_visibility_identity_unresolved');
+      return { error: apiError(c, 401, 'Authentication required') };
+    }
+    return {
+      kind: 'ownerScoped',
+      userId,
+      privatePlatforms: conversationDb.PRIVATE_PLATFORM_TYPES,
+    };
+  }
+
+  /**
    * Strict variant for endpoints that REQUIRE a web identity (connect/disconnect).
    * Session-first then header, mirroring resolveAuthContext, but distinguishing a
    * missing identity (401) from a backend failure resolving it (503) — a DB
@@ -2667,24 +2702,16 @@ export function registerApiRoutes(
     try {
       const platformType = c.req.query('platform') ?? undefined;
       const codebaseId = c.req.query('codebaseId') ?? undefined;
-      // Non-enforcing "mine" filter: only narrows when an identity resolves.
-      // Default visibility stays open (everyone sees everyone's conversations).
-      const mine = c.req.query('mine') === 'true';
-      const userId = mine ? (await resolveAuthContext(c))?.userId : undefined;
-      if (mine && !userId && getAuth()) {
-        // Narrowing was requested but no identity resolved on an install with
-        // web auth configured — the list silently degrades to ALL conversations
-        // (documented non-enforcing posture). Without web auth (solo installs,
-        // where the console always sends mine=true) this is the normal path
-        // and stays silent.
-        getLog().warn({ route: 'GET /api/conversations' }, 'api.mine_filter_identity_unresolved');
-      }
+      // Owner-scoped by default under enforcement; open on solo installs. The
+      // caller cannot opt out — scoping is the server's job, not a query param.
+      const visibility = await requireVisibilityForCaller(c);
+      if ('error' in visibility) return visibility.error;
       const conversations = await conversationDb.listConversations(
         50,
         platformType,
         codebaseId,
         true,
-        userId
+        visibility
       );
       return c.json(conversations.map(toApiConversation));
     } catch (error) {

@@ -213,18 +213,38 @@ export async function getConversationsByIsolationEnvId(
 }
 
 /**
- * List all conversations ordered by recent activity
+ * Conversation surfaces privacy applies to (#3135). Web and CLI are operator
+ * surfaces: one human at a keyboard driving their own Archon. Slack, Discord,
+ * Telegram, GitHub, GitLab, and Gitea are deliberately excluded — those
+ * platforms already own their access model, and a webhook author frequently
+ * does not resolve to an Archon user at all, so enforcing here would hide a
+ * team's forge conversations from everyone.
+ */
+export const PRIVATE_PLATFORM_TYPES = ['web', 'cli'] as const;
+
+/**
+ * Which conversations a lookup may return. Explicit union rather than an
+ * optional `userId`, because `undefined` meaning "no filter" is exactly what
+ * let a failed identity resolution silently widen a narrowed request back to
+ * every conversation on the install. "Everything" now has to be asked for by
+ * name.
+ */
+export type ConversationVisibility =
+  | { kind: 'all' }
+  | { kind: 'ownerScoped'; userId: string; privatePlatforms: readonly string[] };
+
+/**
+ * List all conversations ordered by recent activity.
+ *
+ * `visibility` is required and has no default: an omitted argument would
+ * reproduce the silent widening this parameter exists to remove.
  */
 export async function listConversations(
   limit = 50,
-  platformType?: string,
-  codebaseId?: string,
-  excludeEmpty = false,
-  /**
-   * Non-enforcing "mine" filter: when set, restrict to conversations attributed
-   * to this user (`user_id = $N`). Absent → all (default visibility stays open).
-   */
-  userId?: string
+  platformType: string | undefined,
+  codebaseId: string | undefined,
+  excludeEmpty: boolean,
+  visibility: ConversationVisibility
 ): Promise<readonly Conversation[]> {
   const params: unknown[] = [];
   let sql =
@@ -245,9 +265,21 @@ export async function listConversations(
     sql += ` AND codebase_id = $${String(params.length)}`;
   }
 
-  if (userId) {
-    params.push(userId);
-    sql += ` AND user_id = $${String(params.length)}`;
+  if (visibility.kind === 'ownerScoped') {
+    // The caller's own operator conversations, plus everything on a platform
+    // privacy does not cover. Fail-closed by construction: `user_id IS NULL`
+    // never equals a resolved id, so an unattributed row matches nobody.
+    // Each platform is its own placeholder — neither dialect binds arrays.
+    const exempt = visibility.privatePlatforms.map(platform => {
+      params.push(platform);
+      return `$${String(params.length)}`;
+    });
+    params.push(visibility.userId);
+    const userParam = `$${String(params.length)}`;
+    sql +=
+      exempt.length > 0
+        ? ` AND (platform_type NOT IN (${exempt.join(', ')}) OR user_id = ${userParam})`
+        : ` AND user_id = ${userParam}`;
   }
 
   sql += ' ORDER BY last_activity_at DESC NULLS LAST';

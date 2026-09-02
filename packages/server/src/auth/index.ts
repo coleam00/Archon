@@ -11,6 +11,7 @@ export {
   isEmailAllowed,
   getSignupMode,
   isApiGateEnabled,
+  isConversationOwnershipEnforced,
   isArchonOwnedAuthPath,
   MIN_BETTER_AUTH_SECRET_LENGTH,
 } from './config';

@@ -782,7 +782,6 @@ export interface paths {
         query?: {
           platform?: string;
           codebaseId?: string;
-          mine?: 'true' | 'false';
         };
         header?: never;
         path?: never;
@@ -797,6 +796,15 @@ export interface paths {
           };
           content: {
             'application/json': components['schemas']['ConversationListResponse'];
+          };
+        };
+        /** @description Authentication required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
           };
         };
         /** @description Server error */

@@ -6,6 +6,7 @@ import {
   isEmailAllowed,
   getSignupMode,
   isApiGateEnabled,
+  isConversationOwnershipEnforced,
   isArchonOwnedAuthPath,
 } from './config';
 
@@ -117,6 +118,43 @@ describe('auth/config', () => {
           ARCHON_WEB_AUTH_REQUIRED: 'false',
         })
       ).toBe(false);
+    });
+  });
+
+  describe('isConversationOwnershipEnforced', () => {
+    test('true when web auth is enabled', () => {
+      expect(
+        isConversationOwnershipEnforced({ DATABASE_URL: PG_URL, BETTER_AUTH_SECRET: VALID_SECRET })
+      ).toBe(true);
+    });
+
+    // The proxy-header install has real distinct users and no Better Auth.
+    test('true when only ARCHON_WEB_AUTH_HEADER is set (proxy-authenticated install)', () => {
+      expect(isConversationOwnershipEnforced({ ARCHON_WEB_AUTH_HEADER: 'X-Archon-User' })).toBe(
+        true
+      );
+    });
+
+    // Unlike the API gate, opting out of server-side admission does not opt out
+    // of privacy: a proxy owning admission still has distinct users.
+    test('true with web auth even when ARCHON_WEB_AUTH_REQUIRED=false', () => {
+      const env = {
+        DATABASE_URL: PG_URL,
+        BETTER_AUTH_SECRET: VALID_SECRET,
+        ARCHON_WEB_AUTH_REQUIRED: 'false',
+      };
+      expect(isApiGateEnabled(env)).toBe(false);
+      expect(isConversationOwnershipEnforced(env)).toBe(true);
+    });
+
+    test('false on a solo/SQLite install (no Postgres, no header)', () => {
+      expect(isConversationOwnershipEnforced({})).toBe(false);
+      expect(isConversationOwnershipEnforced({ DATABASE_URL: PG_URL })).toBe(false);
+    });
+
+    // Keys on the variable being SET, not on the default name being honored.
+    test('false when the header var is present but empty', () => {
+      expect(isConversationOwnershipEnforced({ ARCHON_WEB_AUTH_HEADER: '' })).toBe(false);
     });
   });
 

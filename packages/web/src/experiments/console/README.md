@@ -27,13 +27,14 @@ in #1913.
 
 ## Chat user scoping
 
-On multi-user installs (web auth enabled) each signed-in user gets their own
-per-project conversation: the list request passes the non-enforcing `mine=true`
-filter, and the first send lazily creates a conversation attributed to the
-sender. Chat turns execute with the **sender's** per-user credentials and AI
-prefs (the conversation creator is only a fallback when no sender identity
-resolves). Solo installs see no change — without an identity, `mine=true`
-narrows nothing.
+On multi-user installs (web auth enabled, or a proxy supplying
+`ARCHON_WEB_AUTH_HEADER`) each signed-in user gets their own per-project
+conversation, and the server enforces it: `GET /api/conversations` is already
+owner-scoped, so the console sends no filter of its own, and the first send
+lazily creates a conversation attributed to the sender. Chat turns execute with
+the **sender's** per-user credentials and AI prefs (the conversation creator is
+only a fallback when no sender identity resolves). Solo installs see no change —
+nothing is owned, so nothing is scoped.
 
 ## Constraints
 
