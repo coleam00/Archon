@@ -1,0 +1,234 @@
+# Outer loop: judge finished videos on CRAFT and evolve the house playbook.
+#
+# This reviews quality, not performance. There are no view counts here — the
+# question is whether the video is well made, which is answerable from the
+# artifact itself and doesn't require waiting on an algorithm.
+#
+# It deliberately edits a strategy DOCUMENT, never the workflow YAML. Keeping
+# the DAG static is what preserves reproducibility and a meaningful audit trail:
+# every video can be attributed to the playbook version that produced it.
+name: video-quality-review
+description: "Review stored shorts for craft quality and propose one change to the house playbook. Human-gated."
+
+worktree:
+  enabled: false
+
+# Approval gates need a foreground run on the web surface.
+interactive: true
+
+nodes:
+  # $ARGUMENTS may name a run id; otherwise review the most recent video.
+  - id: pick-video
+    bash: |
+      set -euo pipefail
+      lib="$STATE_DIR/content/videos"
+      arg=$ARGUMENTS
+      if [ -n "$arg" ] && [ -d "$lib/$arg" ]; then
+        target="$lib/$arg"
+      else
+        target="$(ls -1dt "$lib"/*/ 2>/dev/null | head -1)"
+      fi
+      if [ -z "${target:-}" ] || [ ! -d "$target" ]; then
+        echo "No stored videos found under $lib — run social-short, ugc-video or product-video first." >&2
+        exit 1
+      fi
+      target="${target%/}"
+      # Refuse a second review of the same artifact unless explicitly asked for
+      # it by run id: two reviews of one video stack two playbook changes.
+      if [ -z "$arg" ] && [ -f "$STATE_DIR/content/reviews.jsonl" ]; then
+        if grep -q "\"video_run_id\": \"$(basename "$target")\"" "$STATE_DIR/content/reviews.jsonl"; then
+          echo "Newest video $(basename "$target") is already reviewed. Make a new video, or pass a run id to re-review deliberately." >&2
+          exit 1
+        fi
+      fi
+      printf '%s' "$target"
+
+  - id: gather
+    depends_on: [pick-video]
+    bash: |
+      set -euo pipefail
+      # Assign bare: the engine already shell-quotes an output ref, so adding
+      # our own quotes around it puts literal quote characters in the value.
+      t=$pick-video.output
+      kind="$(python3 -c "import json,sys;print(json.load(open('$t/meta.json'))['kind'])" 2>/dev/null || echo unknown)"
+      echo "=== TARGET ==="; echo "$t"
+      echo "=== VIDEO KIND ==="; echo "$kind"
+      echo "=== BRIEF ==="; cat "$t/brief.json"
+      # copy.json is governed content with its own playbook rules, so it has to
+      # be reviewable — otherwise the copy rules are the one part of the strategy
+      # with no feedback path.
+      echo "=== POST COPY ==="; cat "$t/copy.json" 2>/dev/null || echo "(none — predates the write-copy node)"
+      echo "=== TECHNICAL QC ==="; cat "$t/quality.json"
+      echo "=== FRAMES ==="; ls -1 "$t/frames"/*.jpg
+      echo "=== UNIVERSAL PLAYBOOK (strategy-common.md) ==="
+      cat "$STATE_DIR/content/strategy-common.md" 2>/dev/null || echo "(none yet)"
+      echo "=== PLAYBOOK FOR THIS KIND (strategy-$kind.md) ==="
+      cat "$STATE_DIR/content/strategy-$kind.md" 2>/dev/null || echo "(none yet — you would be writing version 1)"
+      echo "=== LIBRARY SIZE ==="
+      wc -l < "$STATE_DIR/content/library.jsonl" 2>/dev/null || echo 0
+
+  # Vision review needs a provider that can actually open the frame stills.
+  #
+  # Do NOT set `model:` to a tier keyword here. A tier resolves its own
+  # provider and silently overrides the explicit `provider:` above — with
+  # `large` pinned to codex, this node ran on Codex and never opened a single
+  # frame, yet still returned a confident verdict. Leave the model unset so the
+  # configured Claude default applies.
+  - id: review
+    provider: claude
+    depends_on: [gather]
+    prompt: |
+      You are reviewing a finished vertical short for CRAFT QUALITY. Judge the
+      artifact in front of you. Do not speculate about views, engagement, or
+      the algorithm — no performance data exists and inventing it is worse
+      than saying nothing.
+
+      $gather.output
+
+      Read every frame image listed above with the Read tool before judging.
+      You are looking specifically for:
+      - Caption legibility: size, contrast against the footage behind it,
+        position, and whether any line is clipped or collides with the frame edge.
+      - Footage relevance: does each shot plausibly illustrate the line being
+        spoken over it, or is it generic filler?
+      - Footage repetition: does the same shot appear more than once?
+      - Visual coherence: do the clips look like they belong in one video, or
+        is it a grab bag of mismatched colour and grade?
+      - Script craft: is the hook a real open loop? Does the narration earn its
+        ending, or trail off?
+      - Copy honesty: does the description promise something the narration does
+        NOT deliver? A caption offering "5 ways" over a video with no five ways
+        buys a click and loses the viewer — the worst trade in short form. Also
+        check the copy claims nothing (numbers, features, results) absent from
+        the script.
+
+      You are also the only node in this system that can see the frames, so you
+      pick the thumbnail. Return `thumbnail_frame` as the 1-based index of the
+      frame that would best stop a scroll.
+
+      Note the VIDEO KIND above. There are three kinds in this system with
+      deliberately opposing rules — a social short is third-person and takes no
+      CTA, a UGC clip is first-person and keeps its caveats, a product video is
+      benefit-led and does take a CTA. A lesson from one is frequently WRONG for
+      another, so your change is scoped:
+
+      - `target: kind` — the default. The change lands only in this kind's
+        playbook and cannot affect the other two.
+      - `target: common` — ONLY for rules that are genuinely universal because
+        they are about craft mechanics, not voice: caption legibility, audio
+        levels, footage repetition, shot-to-line relevance. If a rule mentions
+        tone, person, CTA policy or what may be claimed, it is NOT common.
+
+      Then propose EXACTLY ONE change to that one playbook. One. Not a list.
+      Pick the single change with the largest expected effect on quality, and
+      say what you would look at in the next video to tell whether it worked.
+      If the video is already good and you have no high-confidence change,
+      say so and set `proposed_change` to "none" — "no change" is a respectable
+      answer and inventing churn to look useful is a failure.
+
+      Write `new_strategy_markdown` as the COMPLETE new content of the file you
+      targeted (it overwrites that file, and only that file), starting with a
+      `# vN` version heading that increments that file's current version. If
+      proposing no change, return that file unchanged with the same version.
+    output_format:
+      type: object
+      properties:
+        verdict:
+          type: string
+          enum: ["good", "acceptable", "needs_work"]
+        strengths:
+          type: array
+          items:
+            type: string
+        defects:
+          type: array
+          items:
+            type: string
+        proposed_change:
+          type: string
+        rationale:
+          type: string
+        what_to_watch_next:
+          type: string
+        new_strategy_markdown:
+          type: string
+        thumbnail_frame:
+          type: integer
+        target:
+          type: string
+          enum: ["kind", "common"]
+      required:
+        [verdict, strengths, defects, proposed_change, rationale,
+         what_to_watch_next, new_strategy_markdown, thumbnail_frame, target]
+
+  - id: approve-strategy
+    depends_on: [review]
+    approval:
+      message: |
+        Quality review of $pick-video.output
+
+        VERDICT: $review.output.verdict
+
+        Writing to: $review.output.target playbook
+
+        Proposed single change:
+        $review.output.proposed_change
+
+        Why: $review.output.rationale
+        Watch next: $review.output.what_to_watch_next
+
+        Approve to write this into the house playbook; reject to discard it.
+
+  - id: apply-strategy
+    depends_on: [approve-strategy]
+    bash: |
+      set -euo pipefail
+      mkdir -p "$STATE_DIR/content"
+      # Consumed as a shell word — see the note in social-short.yaml write-brief.
+      export RUN_ID="$WORKFLOW_ID"
+      video_dir=$pick-video.output
+      export VIDEO_DIR="$video_dir"
+      review=$review.output
+      printf '%s' "$review" > "$ARTIFACTS_DIR/review.json"
+      python3 - <<'__ARCHON_APPLY__'
+      import json, os, pathlib, datetime, shutil
+      state = pathlib.Path(os.environ["STATE_DIR"]) / "content"
+      review = json.loads((pathlib.Path(os.environ["ARTIFACTS_DIR"]) / "review.json").read_text())
+      vid = pathlib.Path(os.environ["VIDEO_DIR"])
+      meta_path = vid / "meta.json"
+      kind = json.loads(meta_path.read_text())["kind"] if meta_path.exists() else "unknown"
+      # Write back to exactly one playbook — the one the reviewer targeted.
+      target = review.get("target", "kind")
+      strategy = state / ("strategy-common.md" if target == "common" else f"strategy-{kind}.md")
+      if strategy.exists():
+          hist = state / "strategy-history"
+          hist.mkdir(exist_ok=True)
+          stamp = datetime.datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
+          # Stem-prefixed: strategy-history/ holds four playbooks now, and a bare
+          # strategy-<stamp>.md says nothing about which one it is a version of
+          # (and two archives in the same second overwrote each other).
+          shutil.copy2(strategy, hist / f"{strategy.stem}-{stamp}.md")
+      strategy.write_text(review["new_strategy_markdown"].rstrip() + "\n")
+      log = state / "reviews.jsonl"
+      with log.open("a") as fh:
+          fh.write(json.dumps({
+              "reviewed_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+              "review_run_id": os.environ["RUN_ID"],
+              "video_run_id": pathlib.Path(os.environ["VIDEO_DIR"]).name,
+              "kind": kind,
+              "playbook": strategy.name,
+              "verdict": review["verdict"],
+              "change": review["proposed_change"],
+              "watch": review["what_to_watch_next"],
+          }) + "\n")
+      # The reviewer is the only thing that sees the frames, so its thumbnail
+      # pick belongs beside the video it describes.
+      cp = vid / "copy.json"
+      if cp.exists() and isinstance(review.get("thumbnail_frame"), int):
+          data = json.loads(cp.read_text())
+          data["thumbnail_frame"] = review["thumbnail_frame"]
+          cp.write_text(json.dumps(data, indent=2))
+          print(f"thumbnail_frame={review['thumbnail_frame']} -> {cp}")
+      print(f"playbook updated -> {strategy}  (kind={kind}, target={target})")
+      print(f"change: {review['proposed_change']}")
+      __ARCHON_APPLY__
