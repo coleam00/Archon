@@ -364,6 +364,42 @@ describe('bundled-defaults', () => {
       expect(review.with).not.toHaveProperty('pr_head');
     });
 
+    it('archon-deliver delegates the optional CI read timeout to the engine', () => {
+      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
+      if (parsed.workflow === null) throw new Error(parsed.error.error);
+
+      const corrections = parsed.workflow.nodes.find(node => node.id === 'corrections');
+      expect(corrections?.kind).toBe('loop_group');
+      if (corrections?.kind !== 'loop_group') throw new Error('corrections is not a loop group');
+
+      const ciNote = corrections.loop_group.nodes.find(node => node.id === 'ci-note');
+      expect(ciNote?.kind).toBe('exec');
+      if (ciNote?.kind !== 'exec') throw new Error('ci-note is not executable');
+      expect(ciNote).toMatchObject({ runtime: 'sh', timeout: 45_000, on_timeout: 'skip' });
+      expect(ciNote.script).not.toContain('mktemp');
+      expect(ciNote.script).not.toContain('GH_PID');
+      expect(ciNote.script).not.toContain('WATCHDOG');
+
+      const ciEvidence = corrections.loop_group.nodes.find(node => node.id === 'ci-evidence');
+      expect(ciEvidence?.kind).toBe('exec');
+      if (ciEvidence?.kind !== 'exec') throw new Error('ci-evidence is not executable');
+      expect(ciEvidence).toMatchObject({
+        runtime: 'bun',
+        depends_on: ['ci-note'],
+        trigger_rule: 'all_done',
+        with: {
+          note: {
+            from: '$ci-note.output',
+            if_skipped:
+              'No CI evidence is available for this round (the check read timed out). Proceed on the review findings alone.',
+          },
+        },
+      });
+
+      const fix = corrections.loop_group.nodes.find(node => node.id === 'fix');
+      expect(fix?.depends_on).toEqual(['ci-evidence']);
+    });
+
     it('archon-deliver validates review action before correction and carries the work order into recheck', () => {
       const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
       if (parsed.workflow === null) throw new Error(parsed.error.error);

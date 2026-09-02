@@ -131,7 +131,8 @@ export function WorkflowExecution({ runId }: WorkflowExecutionProps): React.Reac
                   status: status as WorkflowStepStatus,
                   duration: e.data.duration_ms as number | undefined,
                   error: e.data.error as string | undefined,
-                  reason: e.data.reason as 'when_condition' | 'trigger_rule' | undefined,
+                  reason: e.data.reason as DagNodeState['reason'],
+                  cause: e.data.cause as DagNodeState['cause'],
                 });
               }
             }

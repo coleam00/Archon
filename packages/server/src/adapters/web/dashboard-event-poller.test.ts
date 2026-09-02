@@ -84,6 +84,60 @@ describe('mapWorkflowEventRow', () => {
     expect(e).toMatchObject({ type: 'dag_node', status: 'failed', error: 'boom' });
   });
 
+  test('node_skipped carries its persisted reason and validated cause', () => {
+    const e = JSON.parse(
+      mapWorkflowEventRow(
+        row({
+          event_type: 'node_skipped',
+          step_name: 'publish',
+          data: {
+            reason: 'trigger_rule',
+            cause: { kind: 'upstream_failed', origin: 'validate' },
+          },
+        })
+      ) as string
+    );
+    expect(e).toMatchObject({
+      type: 'dag_node',
+      status: 'skipped',
+      reason: 'trigger_rule',
+      cause: { kind: 'upstream_failed', origin: 'validate' },
+    });
+  });
+
+  test('node_skipped carries a timeout reason and cause', () => {
+    const e = JSON.parse(
+      mapWorkflowEventRow(
+        row({
+          event_type: 'node_skipped',
+          step_name: 'ci-note',
+          data: { reason: 'timeout', cause: { kind: 'timeout' } },
+        })
+      ) as string
+    );
+    expect(e).toMatchObject({
+      type: 'dag_node',
+      status: 'skipped',
+      reason: 'timeout',
+      cause: { kind: 'timeout' },
+    });
+  });
+
+  test('omits a cause for legacy, malformed, and prior-success skip rows', () => {
+    const rows = [
+      row({ event_type: 'node_skipped', data: { reason: 'trigger_rule' } }),
+      row({
+        event_type: 'node_skipped',
+        data: { reason: 'trigger_rule', cause: { kind: 'upstream_failed' } },
+      }),
+      row({ event_type: 'node_skipped_prior_success' }),
+    ];
+
+    for (const persisted of rows) {
+      expect(JSON.parse(mapWorkflowEventRow(persisted) as string)).not.toHaveProperty('cause');
+    }
+  });
+
   test('obsolete step transitions are not interpreted or polled', () => {
     for (const eventType of ['step_started', 'step_completed', 'step_failed']) {
       expect(mapWorkflowEventRow(row({ event_type: eventType, step_name: 'plan' }))).toBeNull();

@@ -128,7 +128,11 @@ describe('declaredFieldsFromSchema', () => {
 describe('resolveNodeOutputField — producer did not run', () => {
   it('throws producer-not-run for a skipped producer (clear message, not "unparseable")', () => {
     try {
-      resolveNodeOutputField({ state: 'skipped', output: '' }, 'n', 'field');
+      resolveNodeOutputField(
+        { state: 'skipped', output: '', cause: { kind: 'condition', expr: 'false' } },
+        'n',
+        'field'
+      );
       throw new Error('expected throw');
     } catch (e) {
       expect(e).toBeInstanceOf(OutputRefError);
@@ -183,7 +187,9 @@ describe('assertProducerNotFailed', () => {
       const nodeOutput: NodeOutput =
         state === 'completed' || state === 'running'
           ? { state, output: 'ok' }
-          : { state, output: '' };
+          : state === 'skipped'
+            ? { state, output: '', cause: { kind: 'condition', expr: 'false' } }
+            : { state, output: '' };
       expect(() => assertProducerNotFailed(nodeOutput, () => 'unreachable')).not.toThrow();
     }
   );

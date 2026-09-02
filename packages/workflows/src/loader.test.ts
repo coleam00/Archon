@@ -2049,6 +2049,59 @@ nodes:
       }
     });
 
+    it('should preserve on_timeout on bash and script nodes', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'exec-timeout-skip.yaml'),
+        `
+name: exec-timeout-skip
+description: Exec nodes can skip on timeout
+nodes:
+  - id: shell
+    bash: "sleep 30"
+    timeout: 100
+    on_timeout: skip
+  - id: program
+    script: "await Bun.sleep(30_000)"
+    runtime: bun
+    timeout: 100
+    on_timeout: skip
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows[0].workflow.nodes).toEqual([
+        expect.objectContaining({ id: 'shell', on_timeout: 'skip' }),
+        expect.objectContaining({ id: 'program', on_timeout: 'skip' }),
+      ]);
+    });
+
+    it('should warn when on_timeout is declared on a non-exec node', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+
+      await writeFile(
+        join(workflowDir, 'prompt-timeout-skip.yaml'),
+        `
+name: prompt-timeout-skip
+description: Unsupported timeout outcome
+nodes:
+  - id: prompt
+    prompt: "work"
+    on_timeout: skip
+`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows[0].parseWarnings).toContain(
+        "Node 'prompt': 'on_timeout' is only supported on bash and script nodes — it is ignored here"
+      );
+    });
+
     it('should reject bash + command combination', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(workflowDir, { recursive: true });

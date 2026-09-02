@@ -208,8 +208,8 @@ nodes:
 |-------|------|-------------|
 | `command` | string | Command name. Packaged workflows resolve it only from their own `commands/`; legacy workflows use shared repo → home → bundled lookup. Optional `with:` binds upstream values by name into the file's `$INPUTS.<name>` surface — see [Binding values into command and script nodes](#binding-values-into-command-and-script-nodes) |
 | `prompt` | string | Inline prompt string |
-| `bash` | string | Shell script (no AI). Stdout captured as `$nodeId.output`; successful stdout is also stored in `node_completed.data.node_output` as an audit preview capped at 32 KiB (UTF-8 bytes). Optional `timeout` (ms, default 120000) |
-| `script` | string | TypeScript/JavaScript (via `bun`) or Python (via `uv`) — inline code or named reference. Packaged workflows resolve named scripts only from their own `scripts/`; legacy workflows use shared script directories. Stdout captured as `$nodeId.output`. Requires `runtime: bun` or `runtime: uv`. Optional `deps` (uv only) and `timeout` (ms, default 120000); optional `with:` binds upstream values by name into `INPUTS_<UPPER_SNAKE>` env vars — see [Binding values into command and script nodes](#binding-values-into-command-and-script-nodes). See [Script Nodes](/guides/script-nodes/) |
+| `bash` | string | Shell script (no AI). Stdout captured as `$nodeId.output`; successful stdout is also stored in `node_completed.data.node_output` as an audit preview capped at 32 KiB (UTF-8 bytes). Optional `timeout` (ms, default 120000); `on_timeout: skip` makes a timeout skipped instead of failed |
+| `script` | string | TypeScript/JavaScript (via `bun`) or Python (via `uv`) — inline code or named reference. Packaged workflows resolve named scripts only from their own `scripts/`; legacy workflows use shared script directories. Stdout captured as `$nodeId.output`. Requires `runtime: bun` or `runtime: uv`. Optional `deps` (uv only) and `timeout` (ms, default 120000); `on_timeout: skip` makes a timeout skipped instead of failed; optional `with:` binds upstream values by name into `INPUTS_<UPPER_SNAKE>` env vars — see [Binding values into command and script nodes](#binding-values-into-command-and-script-nodes). See [Script Nodes](/guides/script-nodes/) |
 | `loop` | object | Iterative AI prompt until a declared completion condition is met. See [Loop Nodes](/guides/loop-nodes/) |
 | `loop_group` | object | Multi-node sub-DAG body repeated per iteration until a declared completion condition is met. See [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-loop_group) |
 | `approval` | object | Pauses workflow for human review. See [Approval Nodes](/guides/approval-nodes/) |
@@ -1024,8 +1024,9 @@ is the YAML-coordinates / code-computes split. A skipped producer with **no**
 `if_skipped` fails the node with the
 binding, producer, and fix named — a binding never silently resolves to `''`.
 
-`if_skipped` only ever covers a producer that **did not run**. A producer that ran and
-**failed** always fails the binding too, whether or not `if_skipped` is declared — a
+`if_skipped` covers a producer that completed as **skipped**, including an exec node that
+ran until an opted-in timeout. A producer that **failed** always fails the binding too,
+whether or not `if_skipped` is declared — a
 `loop_group`'s failure paths in particular can leave real, non-empty output behind (its last
 completed iteration's text), so this is an explicit check, not an accident of empty output.
 There is no way to opt a binding out of this: declaring `if_skipped` never papers over a real

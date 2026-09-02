@@ -174,35 +174,24 @@ nodes:
         # reports that fact and the round proceeds on the review findings
         # alone. One read, one captured document — deriving failures and counts
         # from separate reads could present a half-failed read as clean CI. The
-        # read is bounded by its own watchdog, well under the engine's
-        # subprocess timeout: an engine-killed node here would skip the fix and
-        # cascade the round into a loud failure, which is exactly backwards for
-        # optional evidence. The exit code is read together with the captured
-        # output, never alone — this gh form can encode check state in its exit
-        # code and can exit zero on failing checks, so non-zero with output is
-        # data, and only killed-or-empty means the read itself failed.
+        # engine owns the bounded read. A timeout skips this optional producer;
+        # ci-evidence below turns that absence into the declared fallback passed
+        # to the fix. The exit code is read together with the captured output,
+        # never alone — this gh form can encode check state in its exit code and
+        # can exit zero on failing checks, so non-zero with output is data, and
+        # only empty output from a failed read means the read itself failed.
         - id: ci-note
-          timeout: 90000
+          timeout: 45000
+          on_timeout: skip
           bash: |
             PR_NUMBER=$pr.output.number
             ORIGIN_REPO=$(git remote get-url origin 2>/dev/null | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##' || true)
-            TMP=$(mktemp)
-            gh pr checks "$PR_NUMBER" --repo "$ORIGIN_REPO" --json name,bucket \
+            LINES=$(gh pr checks "$PR_NUMBER" --repo "$ORIGIN_REPO" --json name,bucket \
               --jq '.[] | if .bucket == "pending" then "PENDING" elif .bucket == "pass" or .bucket == "skipping" then "GREEN" else "RED \(.name) (\(.bucket))" end' \
-              > "$TMP" 2>/dev/null &
-            GH_PID=$!
-            ( sleep 45; kill "$GH_PID" 2>/dev/null && : > "$TMP.killed" ) &
-            WATCHDOG=$!
-            wait "$GH_PID"
+              2>/dev/null)
             RC=$?
-            kill "$WATCHDOG" 2>/dev/null
-            wait "$WATCHDOG" 2>/dev/null || true
-            LINES=$(cat "$TMP" 2>/dev/null || true)
-            KILLED=""
-            [ -f "$TMP.killed" ] && KILLED=1
-            rm -f "$TMP" "$TMP.killed"
-            if [ -n "$KILLED" ] || { [ "$RC" -ne 0 ] && [ -z "$LINES" ]; }; then
-              echo "No CI evidence is available for this round (the check read failed or timed out). Proceed on the review findings alone."
+            if [ "$RC" -ne 0 ] && [ -z "$LINES" ]; then
+              echo "No CI evidence is available for this round (the check read failed). Proceed on the review findings alone."
               exit 0
             fi
             if [ -z "$LINES" ]; then
@@ -224,9 +213,21 @@ nodes:
             esac
             exit 0
 
+        - id: ci-evidence
+          script: console.log(process.env.INPUTS_NOTE ?? '')
+          runtime: bun
+          depends_on: [ci-note]
+          trigger_rule: all_done
+          with:
+            note:
+              from: "$ci-note.output"
+              if_skipped: >-
+                No CI evidence is available for this round (the check read timed out).
+                Proceed on the review findings alone.
+
         - id: fix
           include: archon-implement
-          depends_on: [ci-note]
+          depends_on: [ci-evidence]
           with:
             work: >-
               Fix every open Critical and Important finding recorded in
@@ -241,7 +242,7 @@ nodes:
               Concluded CI evidence observed before this round — evidence, not
               a verdict, and the same red-cause discipline applies to it:
 
-              $ci-note.output
+              $ci-evidence.output
 
               A concluded CI failure that this branch's changes introduced is
               part of this round's work, exactly like a review finding. Red on
