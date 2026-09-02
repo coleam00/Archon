@@ -37,11 +37,16 @@ import {
 import * as db from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
 import * as userDb from '@archon/core/db/users';
+import {
+  listWorkflowEventSignalCandidates,
+  signalWorkflowWait,
+  type WorkflowEventSignalCandidate,
+} from '@archon/core/db/workflows';
 import { resolveDefaultAssistant } from '@archon/core/config/resolve-assistant';
 import { createLogger } from '@archon/paths';
 import { parseAllowedUsers as parseGitHubAllowedUsers, isGitHubUserAuthorized } from './auth';
 import { splitIntoParagraphChunks } from '../../utils/message-splitting';
-import type { WebhookEvent } from './types';
+import { isCheckRunCompletedEvent, type CheckRunCompletedEvent, type WebhookEvent } from './types';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -56,6 +61,48 @@ const MAX_LENGTH = 65000; // GitHub comment limit (~65,536, leave buffer for saf
 const BOT_RESPONSE_MARKER = '<!-- archon-bot-response -->';
 
 type ConversationLocker = Pick<ConversationLockManager, 'acquireLock'>;
+
+interface PullRequestIdentity {
+  host: string;
+  path: string;
+  number: number;
+}
+
+function readPullRequestIdentity(value: unknown): PullRequestIdentity | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const repo = record.repo;
+  if (typeof repo !== 'object' || repo === null || Array.isArray(repo)) return null;
+  const repoRecord = repo as Record<string, unknown>;
+  if (
+    typeof repoRecord.host !== 'string' ||
+    repoRecord.host === '' ||
+    typeof repoRecord.path !== 'string' ||
+    repoRecord.path === '' ||
+    typeof record.number !== 'number' ||
+    !Number.isInteger(record.number) ||
+    record.number <= 0
+  ) {
+    return null;
+  }
+  return { host: repoRecord.host, path: repoRecord.path, number: record.number };
+}
+
+function candidateMatchesPullRequest(
+  candidate: WorkflowEventSignalCandidate,
+  pullRequest: PullRequestIdentity,
+  completedAt: number
+): boolean {
+  if (candidate.outputType !== 'pull-request') return false;
+  const identity = readPullRequestIdentity(candidate.structuredOutput);
+  return (
+    identity !== null &&
+    identity.host.toLowerCase() === pullRequest.host.toLowerCase() &&
+    identity.path.toLowerCase() === pullRequest.path.toLowerCase() &&
+    identity.number === pullRequest.number &&
+    Date.parse(candidate.wait.waitingSince) <= completedAt
+  );
+}
 
 type CreateCommentArgs = NonNullable<Parameters<Octokit['rest']['issues']['createComment']>[0]>;
 type ListCommentsArgs = NonNullable<Parameters<Octokit['rest']['issues']['listComments']>[0]>;
@@ -959,12 +1006,59 @@ Use 'gh pr diff ${String(pr.number)}' to see detailed changes.
 ${userComment}`;
   }
 
+  private async handleCompletedCheckRun(event: CheckRunCompletedEvent): Promise<void> {
+    const completedAt = Date.parse(event.check_run.completed_at);
+    const candidates = await listWorkflowEventSignalCandidates('checks.complete', new Date());
+    const runSignals = new Map<string, WorkflowEventSignalCandidate>();
+    const pullRequestNumbers = [...new Set(event.check_run.pull_requests.map(pr => pr.number))];
+
+    for (const number of pullRequestNumbers) {
+      const pullRequest = { host: 'github.com', path: event.repository.full_name, number };
+      const matches = new Map<string, WorkflowEventSignalCandidate>();
+      for (const candidate of candidates) {
+        if (candidateMatchesPullRequest(candidate, pullRequest, completedAt)) {
+          matches.set(candidate.runId, candidate);
+        }
+      }
+
+      if (matches.size > 1) {
+        getLog().warn(
+          { repo: pullRequest.path, number, runIds: [...matches.keys()] },
+          'github.check_run_ownership_ambiguous'
+        );
+        continue;
+      }
+      if (matches.size === 0) {
+        getLog().debug({ repo: pullRequest.path, number }, 'github.check_run_no_owned_wait');
+        continue;
+      }
+      const match = matches.values().next().value;
+      if (match) runSignals.set(match.runId, match);
+    }
+
+    for (const candidate of runSignals.values()) {
+      const result = await signalWorkflowWait(candidate.runId, candidate.wait, {
+        conclusion: event.check_run.conclusion,
+      });
+      getLog().info(
+        { workflowRunId: candidate.runId, signaled: result.signaled },
+        'github.check_run_workflow_signal'
+      );
+    }
+  }
+
   /**
    * Handle incoming webhook event
    * @param deliveryId - GitHub's X-GitHub-Delivery GUID; dedup fallback when
    *   the payload carries no comment identity
+   * @param githubEvent - GitHub's X-GitHub-Event delivery type
    */
-  async handleWebhook(payload: string, signature: string, deliveryId?: string): Promise<void> {
+  async handleWebhook(
+    payload: string,
+    signature: string,
+    deliveryId?: string,
+    githubEvent?: string
+  ): Promise<void> {
     // 1. Verify signature
     if (!this.verifySignature(payload, signature)) {
       getLog().error(
@@ -975,7 +1069,16 @@ ${userComment}`;
     }
 
     // 2. Parse event
-    const event = JSON.parse(payload) as WebhookEvent;
+    const decoded = JSON.parse(payload) as unknown;
+    if (githubEvent === 'check_run') {
+      if (isCheckRunCompletedEvent(decoded)) {
+        await this.handleCompletedCheckRun(decoded);
+      } else {
+        getLog().debug('github.check_run_ignored');
+      }
+      return;
+    }
+    const event = decoded as WebhookEvent;
 
     // 2b. Authorization check - verify sender is in whitelist
     const senderUsername = event.sender?.login;

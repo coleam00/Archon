@@ -22,7 +22,7 @@ deliver__impl__implement:
   summary: "stub: direct work implemented and green"
 deliver__impl__assert-changed: "2 files changed"
 deliver__gate-green: '{"gate":"green"}'
-deliver__pr__pr: { number: 5, url: "https://github.com/example/repo/pull/5", head: "fixture-branch", base: "dev", is_draft: true }
+deliver__pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 5, url: "https://github.com/example/repo/pull/5", head: "fixture-branch", base: "dev", is_draft: true }
 deliver__classify:
   errors: false
   docs: false

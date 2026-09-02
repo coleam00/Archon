@@ -610,13 +610,9 @@ describe('bundled-defaults', () => {
       const deliver = BUNDLED_WORKFLOWS['archon-deliver'];
       const sync = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:deliver::sync-pr-body'];
 
-      // The record is the bound `output_format` fields. The `pull-request` and
-      // `public-action` sidecar labels were declared beside them and nothing in the
-      // engine or the pack ever selected an artifact by either string, so they went
-      // (#2968 item 5): the explicit binding is the channel.
-      expect(pr).not.toContain('output_type:');
+      expect(pr).toContain('output_type: pull-request');
       expect(deliver).not.toContain('output_type: public-action');
-      expect(pr).toContain('required: [number, url, head, base, is_draft]');
+      expect(pr).toContain('required: [repo, number, url, head, base, is_draft]');
       expect(deliver).toContain('scope: "$pr.output.number"');
       expect(deliver).toContain('PR_NUMBER=$pr.output.number');
       // The flip selects by recorded number and does not re-derive the branch:
@@ -642,6 +638,23 @@ describe('bundled-defaults', () => {
       expect(sync).toContain('$INPUTS.pr_number');
       expect(sync).toContain('$INPUTS.pr_head');
       expect(sync).not.toContain('INPUTS_PR_NUMBER');
+      const prParsed = parseWorkflow(pr, 'archon-pr.yaml');
+      if (prParsed.workflow === null) throw new Error(prParsed.error.error);
+      const prNode = prParsed.workflow.nodes.find(node => node.id === 'pr');
+      expect(prNode?.kind).toBe('agent');
+      if (prNode?.kind !== 'agent') throw new Error('pr is not an agent node');
+      expect(prNode.output_type).toBe('pull-request');
+      expect(prNode.output_format).toMatchObject({
+        properties: {
+          repo: {
+            type: 'object',
+            properties: { host: { type: 'string' }, path: { type: 'string' } },
+            required: ['host', 'path'],
+          },
+          number: { type: 'integer' },
+        },
+        required: ['repo', 'number', 'url', 'head', 'base', 'is_draft'],
+      });
       const deliverParsed = parseWorkflow(deliver, 'archon-deliver.yaml');
       if (deliverParsed.workflow === null) throw new Error(deliverParsed.error.error);
       const syncNode = deliverParsed.workflow.nodes.find(node => node.id === 'sync-pr-body');
@@ -705,8 +718,16 @@ describe('bundled-defaults', () => {
             prompt: 'recorded PR',
             output_format: {
               type: 'object',
-              properties: { number: { type: 'integer' }, head: { type: 'string' } },
-              required: ['number', 'head'],
+              properties: {
+                repo: {
+                  type: 'object',
+                  properties: { host: { type: 'string' }, path: { type: 'string' } },
+                  required: ['host', 'path'],
+                },
+                number: { type: 'integer' },
+                head: { type: 'string' },
+              },
+              required: ['repo', 'number', 'head'],
             },
           },
         ],
@@ -737,7 +758,13 @@ describe('bundled-defaults', () => {
           workflow,
           userMessage: '',
           cwd: directory,
-          stubs: { pr: { number: 42, head: 'recorded-branch' } },
+          stubs: {
+            pr: {
+              repo: { host: 'github.com', path: 'owner/repo' },
+              number: 42,
+              head: 'recorded-branch',
+            },
+          },
           execCode: true,
         });
         return { result, ghLog: readFileSync(log, 'utf-8') };
@@ -749,6 +776,32 @@ describe('bundled-defaults', () => {
         await removeTempTree(directory);
       }
     };
+
+    it('uses check events as wake-ups while retaining bounded probes and deadlines', () => {
+      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
+      if (parsed.workflow === null) throw new Error(parsed.error.error);
+
+      for (const [groupId, probeId, pauseId] of [
+        ['await-checks', 'ci-probe', 'ci-pause'],
+        ['await-fix-checks', 'fix-ci-probe', 'fix-ci-pause'],
+      ] as const) {
+        const group = parsed.workflow.nodes.find(node => node.id === groupId);
+        if (group?.kind !== 'loop_group') throw new Error(`${groupId} is not a loop group`);
+        expect(group.loop_group.max_iterations).toBe(13);
+        expect(group.loop_group.until_bash).toContain('gh pr checks');
+
+        const probeIndex = group.loop_group.nodes.findIndex(node => node.id === probeId);
+        const pauseIndex = group.loop_group.nodes.findIndex(node => node.id === pauseId);
+        expect(probeIndex).toBeGreaterThanOrEqual(0);
+        expect(pauseIndex).toBeGreaterThan(probeIndex);
+        const pause = group.loop_group.nodes[pauseIndex];
+        if (pause?.kind !== 'wait') throw new Error(`${pauseId} is not a wait node`);
+        expect(pause.wait).toEqual({ event: 'checks.complete', deadline_ms: 300000 });
+        expect(pause.wait).not.toHaveProperty('duration_ms');
+        expect(pause.depends_on).toEqual([probeId]);
+        expect(pause.when).toBe(`$${probeId}.output.state == 'pending'`);
+      }
+    });
 
     it.skipIf(process.platform === 'win32')(
       'refuses an origin that does not resolve to an owner/repo before flipping ready',

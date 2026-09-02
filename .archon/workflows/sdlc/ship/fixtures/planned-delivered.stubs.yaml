@@ -51,7 +51,7 @@ deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
 deliver__flip-ready: "https://github.com/example/repo/pull/3"
 deliver__outcome: "https://github.com/example/repo/pull/3"
 gate-planned: '{"gate":"planned"}'
-deliver__pr__pr: { number: 3, url: "https://github.com/example/repo/pull/3", head: "fixture-branch", base: "dev", is_draft: true }
+deliver__pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 3, url: "https://github.com/example/repo/pull/3", head: "fixture-branch", base: "dev", is_draft: true }
 deliver__review__mode: '{"continuation":false}'
 deliver__review__scope: "PR diff in scope; head sha stubbed"
 deliver__review__code: "0 findings"

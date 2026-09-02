@@ -13,7 +13,7 @@ impl__implement:
 impl__assert-changed: "3 files changed"
 # gate-green, gate-validated, and gate-ci-fix are deliberately unstubbed: the
 # real gates must accept the inherited classification.
-pr__pr: { number: 10, url: "https://github.com/example/repo/pull/10", head: "fixture-branch", base: "dev", is_draft: true }
+pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 10, url: "https://github.com/example/repo/pull/10", head: "fixture-branch", base: "dev", is_draft: true }
 classify:
   errors: false
   docs: false

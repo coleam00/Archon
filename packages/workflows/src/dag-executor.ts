@@ -3166,6 +3166,7 @@ async function executeNodeInternal(
           // typed field access instead of degrading to a text re-parse. Additive:
           // rows without it resume exactly as before.
           ...(structuredOutput !== undefined ? { structured_output: structuredOutput } : {}),
+          ...(node.output_type !== undefined ? { output_type: node.output_type } : {}),
           ...nodeUsageEventData(),
           ...(nodeStopReason ? { stop_reason: nodeStopReason } : {}),
           ...(nodeNumTurns !== undefined ? { num_turns: nodeNumTurns } : {}),

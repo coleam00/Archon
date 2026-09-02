@@ -18783,6 +18783,73 @@ describe('executeDagWorkflow -- typed artifacts (output_type)', () => {
     expect(typeof meta.producedAt).toBe('string');
   });
 
+  it('persists the declared output type beside an agent structured output', async () => {
+    const structuredOutput = {
+      repo: { host: 'github.com', path: 'example/repo' },
+      number: 42,
+    };
+    const outputFormat = {
+      type: 'object' as const,
+      properties: {
+        repo: {
+          type: 'object' as const,
+          properties: {
+            host: { type: 'string' as const },
+            path: { type: 'string' as const },
+          },
+          required: ['host', 'path'],
+        },
+        number: { type: 'integer' as const },
+      },
+      required: ['repo', 'number'],
+    };
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'result', sessionId: 'typed-session', structuredOutput };
+    });
+    const store = createMockStore();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: {
+          name: 'typed-event-test',
+          nodes: [
+            {
+              id: 'typed-pr',
+              kind: 'agent',
+              source: { kind: 'command', name: 'my-cmd' },
+              output_type: 'pull-request',
+              output_format: outputFormat,
+            },
+            {
+              id: 'untyped-pr',
+              kind: 'agent',
+              source: { kind: 'command', name: 'my-cmd' },
+              output_format: outputFormat,
+              depends_on: ['typed-pr'],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+
+    const events = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls
+      .map(
+        call =>
+          call[0] as { event_type: string; step_name?: string; data?: Record<string, unknown> }
+      )
+      .filter(event => event.event_type === 'node_completed');
+    expect(events.find(event => event.step_name === 'typed-pr')?.data).toMatchObject({
+      output_type: 'pull-request',
+      structured_output: structuredOutput,
+    });
+    const untypedData = events.find(event => event.step_name === 'untyped-pr')?.data;
+    expect(untypedData).toMatchObject({ structured_output: structuredOutput });
+    expect(untypedData).not.toHaveProperty('output_type');
+  });
+
   it('bash node with output_type writes a sidecar with no sessionId', async () => {
     await executeDagWorkflow(
       dagOptions({
