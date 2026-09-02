@@ -462,6 +462,91 @@ describe('SlackAdapter', () => {
     });
   });
 
+  describe('dispatchThreadCommand', () => {
+    test('authorized user dispatches a threaded synthetic command', async () => {
+      const original = process.env.SLACK_ALLOWED_USER_IDS;
+      process.env.SLACK_ALLOWED_USER_IDS = 'U1ALICE';
+      try {
+        const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+        const received: SlackMessageEvent[] = [];
+        adapter.onMessage(async e => {
+          received.push(e);
+        });
+
+        const accepted = await adapter.dispatchThreadCommand(
+          '/workflow resume r1',
+          'C1',
+          '111.0',
+          'U1ALICE'
+        );
+
+        expect(accepted).toBe(true);
+        expect(received).toHaveLength(1);
+        expect(received[0]).toMatchObject({
+          text: '/workflow resume r1',
+          user: 'U1ALICE',
+          channel: 'C1',
+          ts: '111.0',
+          thread_ts: '111.0',
+        });
+      } finally {
+        if (original === undefined) delete process.env.SLACK_ALLOWED_USER_IDS;
+        else process.env.SLACK_ALLOWED_USER_IDS = original;
+      }
+    });
+
+    test('does not block on the resumed run finishing (fire-and-forget)', async () => {
+      const original = process.env.SLACK_ALLOWED_USER_IDS;
+      process.env.SLACK_ALLOWED_USER_IDS = 'U1ALICE';
+      try {
+        const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+        let handlerStarted = false;
+        // A handler whose promise never settles stands in for a long-running
+        // resumed run; before the fix, awaiting it would hang this call.
+        adapter.onMessage(() => {
+          handlerStarted = true;
+          return new Promise<void>(() => {});
+        });
+
+        const accepted = await adapter.dispatchThreadCommand(
+          '/workflow resume r1',
+          'C1',
+          '111.0',
+          'U1ALICE'
+        );
+
+        expect(accepted).toBe(true);
+        expect(handlerStarted).toBe(true);
+      } finally {
+        if (original === undefined) delete process.env.SLACK_ALLOWED_USER_IDS;
+        else process.env.SLACK_ALLOWED_USER_IDS = original;
+      }
+    });
+
+    test('unauthorized user is rejected — messageHandler not called', async () => {
+      const original = process.env.SLACK_ALLOWED_USER_IDS;
+      process.env.SLACK_ALLOWED_USER_IDS = 'U1ALICE';
+      try {
+        const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+        const onMessage = mock(async () => {});
+        adapter.onMessage(onMessage);
+
+        const accepted = await adapter.dispatchThreadCommand(
+          '/workflow resume r1',
+          'C1',
+          '111.0',
+          'U2BOB'
+        );
+
+        expect(accepted).toBe(false);
+        expect(onMessage).not.toHaveBeenCalled();
+      } finally {
+        if (original === undefined) delete process.env.SLACK_ALLOWED_USER_IDS;
+        else process.env.SLACK_ALLOWED_USER_IDS = original;
+      }
+    });
+  });
+
   describe('slash commands', () => {
     function findCommandHandler(name: string): (args: unknown) => Promise<void> {
       const calls = (mockCommand as unknown as Mock<(n: string, h: unknown) => void>).mock.calls;
