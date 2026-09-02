@@ -542,7 +542,7 @@ export class IsolationResolver {
     }
 
     // provider.create() succeeded — worktree exists on disk.
-    // If store.create() fails, we must clean up the orphaned worktree.
+    // If store.create() fails, clean up a worktree created by this call.
     let env: IsolationEnvironmentRow;
     try {
       env = await this.store.create({
@@ -570,28 +570,30 @@ export class IsolationResolver {
         'isolation_store_create_failed'
       );
 
-      // Clean up the orphaned worktree — best-effort, don't mask the original error
-      try {
-        await this.provider.destroy(isolatedEnv.workingPath, {
-          canonicalRepoPath: canonicalPath,
-          branchName: isolatedEnv.branchName,
-          force: true,
-        });
-        getLog().info(
-          { worktreePath: isolatedEnv.workingPath },
-          'isolation_orphan_cleanup_completed'
-        );
-      } catch (cleanupError) {
-        const cleanupErr =
-          cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError));
-        getLog().error(
-          {
-            err: cleanupErr,
-            errorType: cleanupErr.constructor.name,
-            worktreePath: isolatedEnv.workingPath,
-          },
-          'isolation_orphan_cleanup_failed'
-        );
+      if (!isolatedEnv.metadata.adopted) {
+        // Clean up the orphaned worktree — best-effort, don't mask the original error
+        try {
+          await this.provider.destroy(isolatedEnv.workingPath, {
+            canonicalRepoPath: canonicalPath,
+            branchName: isolatedEnv.branchName,
+            force: true,
+          });
+          getLog().info(
+            { worktreePath: isolatedEnv.workingPath },
+            'isolation_orphan_cleanup_completed'
+          );
+        } catch (cleanupError) {
+          const cleanupErr =
+            cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError));
+          getLog().error(
+            {
+              err: cleanupErr,
+              errorType: cleanupErr.constructor.name,
+              worktreePath: isolatedEnv.workingPath,
+            },
+            'isolation_orphan_cleanup_failed'
+          );
+        }
       }
 
       throw err; // Re-throw original store error — this is an unexpected failure
