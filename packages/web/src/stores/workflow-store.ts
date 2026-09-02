@@ -279,6 +279,7 @@ export const useWorkflowStore = create<WorkflowStoreState>()(
                 duration: event.duration,
                 error: event.error,
                 reason: event.reason,
+                cause: event.cause,
               };
 
               if (existingIdx >= 0) {

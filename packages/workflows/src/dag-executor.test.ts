@@ -25807,6 +25807,61 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
     ]);
   });
 
+  it('emits the executor skip causes to live subscribers', async () => {
+    const workflowRun = makeWorkflowRun('skip-cause-live');
+    const emitted: Array<{ nodeId: string; cause: SkipCause }> = [];
+    const unsubscribe = getWorkflowEventEmitter().subscribe(event => {
+      if (
+        event.type === 'node_skipped' &&
+        event.reason !== 'prior_success' &&
+        event.runId === workflowRun.id
+      ) {
+        emitted.push({ nodeId: event.nodeId, cause: event.cause });
+      }
+    });
+
+    try {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(),
+          cwd: testDir,
+          workflowRun,
+          workflow: {
+            name: 'skip-cause-live',
+            nodes: [
+              { id: 'source', kind: 'exec', runtime: 'sh', script: 'printf ready' },
+              {
+                id: 'branch',
+                kind: 'exec',
+                runtime: 'sh',
+                script: 'echo branch',
+                depends_on: ['source'],
+                when: "$source.output == 'never'",
+              },
+              {
+                id: 'join',
+                kind: 'exec',
+                runtime: 'sh',
+                script: 'echo join',
+                depends_on: ['branch'],
+              },
+            ],
+          },
+        })
+      );
+    } finally {
+      unsubscribe();
+    }
+
+    expect(emitted).toEqual([
+      {
+        nodeId: 'branch',
+        cause: { kind: 'condition', expr: "$source.output == 'never'" },
+      },
+      { nodeId: 'join', cause: { kind: 'upstream_skipped', origin: 'branch' } },
+    ]);
+  });
+
   it('keeps all_done active for intentionally skipped branches inside a running block', async () => {
     const { events, output } = await executeExpanded(
       expandedGatedParentNodes('active'),
