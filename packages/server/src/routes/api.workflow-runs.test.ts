@@ -1,5 +1,5 @@
 import { describe, test, expect, mock, beforeAll, beforeEach, afterEach } from 'bun:test';
-import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join, sep } from 'path';
 import { OpenAPIHono } from '@hono/zod-openapi';
@@ -3615,4 +3615,115 @@ describe('GET /api/artifacts/:runId/* storage-key resolution', () => {
     expect(response.status).toBe(200);
     expect(await response.text()).toBe('# the full report');
   });
+
+  // Symlinks can chain through readFile; the lexical containment check only
+  // rejects .. segments. Git-Bash on Windows can't create real symlinks and
+  // MSYS mangles absolute targets, so the symlink cases skip on win32 — the
+  // lexical containment tests above still run there.
+  const isWin = process.platform === 'win32';
+
+  test.skipIf(isWin)(
+    'an escape symlink is refused with 404 and never leaks its target (#3160)',
+    async () => {
+      // Plant a sentinel file under mockArchonHome but OUTSIDE this run's
+      // artifact dir, then a relative symlink inside the artifact dir that
+      // points back at it. The lexical check passes (no `..` segments in the
+      // request), so before the real-path check the route reads through the
+      // symlink and serves the sentinel. After the real-path check it must
+      // 404 with the same body as a missing file, and the response body must
+      // not contain the sentinel — refusing the request must not confirm what
+      // exists outside the artifacts directory.
+      const runId = 'run-serve-symlink-escape';
+      const dir = join(wsRoot(), '_local', 'workspace', 'artifacts', 'runs', runId);
+      await mkdir(dir, { recursive: true });
+      const sentinel = 'TOP_SECRET_SENTINEL_VALUE_DO_NOT_LEAK';
+      await writeFile(join(mockArchonHome, 'secret.txt'), sentinel);
+      // Six `..` to climb runs/<runId> -> runs -> artifacts -> workspace -> _local
+      // -> workspaces -> mockArchonHome.
+      await symlink(`../../../../../../secret.txt`, join(dir, 'escape.txt'));
+
+      mockGetWorkflowRun.mockImplementationOnce(async () => ({
+        ...MOCK_RUNNING_RUN,
+        id: runId,
+        codebase_id: 'cb-local',
+      }));
+      mockGetCodebase.mockImplementationOnce(async () => ({
+        name: 'workspace',
+        kind: 'repo',
+        default_cwd: '/home/u/workspace',
+      }));
+
+      const { app } = makeApp();
+      const response = await app.request(`/api/artifacts/${runId}/escape.txt`);
+
+      expect(response.status).toBe(404);
+      const bodyText = await response.text();
+      expect(bodyText).not.toContain(sentinel);
+      const body = JSON.parse(bodyText) as { error: string };
+      expect(body.error).toBe('Artifact file not found');
+    }
+  );
+
+  test.skipIf(isWin)(
+    'a sibling symlink inside the artifacts directory is still served (#3160)',
+    async () => {
+      // Real-path resolution must not break the supported case: a symlink to a
+      // sibling file inside the same artifacts directory resolves to a path
+      // that still lies under the real artifact directory, so the route
+      // serves the target's content normally.
+      const runId = 'run-serve-symlink-sibling';
+      const dir = join(wsRoot(), '_local', 'workspace', 'artifacts', 'runs', runId);
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, 'target.md'), '# sibling target');
+      await symlink('target.md', join(dir, 'link.md'));
+
+      mockGetWorkflowRun.mockImplementationOnce(async () => ({
+        ...MOCK_RUNNING_RUN,
+        id: runId,
+        codebase_id: 'cb-local',
+      }));
+      mockGetCodebase.mockImplementationOnce(async () => ({
+        name: 'workspace',
+        kind: 'repo',
+        default_cwd: '/home/u/workspace',
+      }));
+
+      const { app } = makeApp();
+      const response = await app.request(`/api/artifacts/${runId}/link.md`);
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe('# sibling target');
+    }
+  );
+
+  test.skipIf(isWin)(
+    'an absolute symlink target outside ARCHON_HOME is also refused (#3160)',
+    async () => {
+      // Guards against an accidental realpath that lands outside the trust
+      // boundary in the opposite direction from the lexical check. /etc/hosts
+      // exists on every Linux and macOS host and contains no private data.
+      const runId = 'run-serve-symlink-absolute';
+      const dir = join(wsRoot(), '_local', 'workspace', 'artifacts', 'runs', runId);
+      await mkdir(dir, { recursive: true });
+      await symlink('/etc/hosts', join(dir, 'hosts'));
+
+      mockGetWorkflowRun.mockImplementationOnce(async () => ({
+        ...MOCK_RUNNING_RUN,
+        id: runId,
+        codebase_id: 'cb-local',
+      }));
+      mockGetCodebase.mockImplementationOnce(async () => ({
+        name: 'workspace',
+        kind: 'repo',
+        default_cwd: '/home/u/workspace',
+      }));
+
+      const { app } = makeApp();
+      const response = await app.request(`/api/artifacts/${runId}/hosts`);
+
+      expect(response.status).toBe(404);
+      const body = (await response.json()) as { error: string };
+      expect(body.error).toBe('Artifact file not found');
+    }
+  );
 });
