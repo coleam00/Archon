@@ -377,6 +377,11 @@ Commands:
   skill install [path]       Install archon-cli into .claude/skills and .agents/skills
   doctor [--full]            Verify your Archon setup (Claude/Codex binaries, gh auth, DB, adapters; --full also probes the OpenCode runtime SDK)
   auth github                Connect your GitHub identity via device flow (multi-user installs)
+  conversations list --unowned [--platform web|cli] [--limit <n>] [--json]
+                             List conversations no Archon user owns (what a claim would take)
+  conversations claim --user <archon-user-id> [--platform web|cli] [--before <iso>] [--dry-run] [--yes]
+                             Attach unowned conversations and runs to one user after turning web auth on
+                             Shell-only on purpose: an unowned row has no owner to authenticate against
   ai key set <provider>      Connect an AI provider API key (multi-user installs; key read from prompt/stdin)
   ai login <provider>        Connect a Claude, ChatGPT/Codex, or Copilot subscription
   ai list                    List your connected AI provider keys

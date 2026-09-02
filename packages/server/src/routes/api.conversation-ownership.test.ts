@@ -211,7 +211,7 @@ interface Ingress {
   /** OpenAPI path + method, used by the route-inventory test. */
   path: string;
   method: string;
-  call: (app: OpenAPIHono, conversationId: string, user?: string) => Promise<Response>;
+  call: (app: OpenAPIHono, conversationId: string, user?: string) => Response | Promise<Response>;
 }
 
 const INGRESSES: readonly Ingress[] = [

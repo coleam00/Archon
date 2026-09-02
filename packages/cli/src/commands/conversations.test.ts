@@ -68,10 +68,10 @@ let logSpy: ReturnType<typeof spyOn>;
 let errorSpy: ReturnType<typeof spyOn>;
 
 function printed(): string {
-  return logSpy.mock.calls.map(args => String(args[0])).join('\n');
+  return logSpy.mock.calls.map((args: unknown[]) => String(args[0])).join('\n');
 }
 function errors(): string {
-  return errorSpy.mock.calls.map(args => String(args[0])).join('\n');
+  return errorSpy.mock.calls.map((args: unknown[]) => String(args[0])).join('\n');
 }
 /** Neither table was touched. */
 function expectNothingWritten(): void {

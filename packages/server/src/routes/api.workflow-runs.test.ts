@@ -474,7 +474,6 @@ const MOCK_RUNNING_RUN = {
   metadata: {},
   working_path: '/tmp/worktrees/feature',
   last_activity_at: NOW_DATE,
-  user_id: null,
   parent_run_id: null,
   adopted_from_run_id: null,
   output_root: null,
@@ -3692,7 +3691,7 @@ interface RunAction {
   run: MockWorkflowRun;
   /** The store write the action performs, which a denial must not reach. */
   effect: () => unknown;
-  call: (app: OpenAPIHono, run: MockWorkflowRun, user?: string) => Promise<Response>;
+  call: (app: OpenAPIHono, run: MockWorkflowRun, user?: string) => Response | Promise<Response>;
 }
 
 function ownershipHeaders(user?: string): Record<string, string> {
