@@ -731,6 +731,27 @@ export function getProjectStoragePaths(key: ProjectStorageKey): ProjectStoragePa
 }
 
 /**
+ * True when `candidate` is `parent` or lies under `parent`, compared after
+ * `normalize()`. Both arguments are normalised so a caller can pass raw
+ * `join()` output (which may carry `..` segments or trailing separators).
+ *
+ * This is the lexical containment predicate every read-side containment check
+ * must use — see `isInsideArchonHome` below and the artifact read route in
+ * `packages/server/src/routes/api.ts`. A single implementation keeps the two
+ * checks in agreement; a third copy lives at
+ * `packages/workflows/src/artifact-pointer.ts:141` and should migrate here
+ * when its producer-side contract is widened.
+ */
+export function isInside(parent: string, candidate: string): boolean {
+  const normalisedParent = normalize(parent);
+  const normalisedCandidate = normalize(candidate);
+  return (
+    normalisedCandidate === normalisedParent ||
+    normalisedCandidate.startsWith(normalisedParent + sep)
+  );
+}
+
+/**
  * True when `candidate` resolves inside `ARCHON_HOME`.
  *
  * Every storage key kind composes under `ARCHON_HOME` — including the `_cwd`
@@ -744,9 +765,7 @@ export function getProjectStoragePaths(key: ProjectStorageKey): ProjectStoragePa
  * Rejects relative paths implicitly — they cannot start with the absolute home.
  */
 export function isInsideArchonHome(candidate: string): boolean {
-  const home = normalize(getArchonHome());
-  const normalised = normalize(candidate);
-  return normalised === home || normalised.startsWith(home + sep);
+  return isInside(getArchonHome(), candidate);
 }
 
 /**
