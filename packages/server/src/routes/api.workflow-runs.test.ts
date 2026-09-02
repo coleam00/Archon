@@ -3726,4 +3726,44 @@ describe('GET /api/artifacts/:runId/* storage-key resolution', () => {
       expect(body.error).toBe('Artifact file not found');
     }
   );
+
+  // Guards the directory-side realpath: when `workspaces/` itself is a
+  // symlink (a real `~/.archon/workspaces -> /srv/data/workspaces` setup),
+  // `realpath(artifactDir)` differs from the lexical path the resolver
+  // returned. A regression that drops the directory realpath — or compares
+  // against the lexical `artifactDir` — would 404 every artifact request
+  // under such a deployment, and every other test in this describe block
+  // plants the workspace directly with `mkdir(..., { recursive: true })`,
+  // so none of them would catch it.
+  test.skipIf(isWin)(
+    'still serves when the workspace itself is a symlinked ancestor (#3160)',
+    async () => {
+      const runId = 'run-serve-symlinked-workspace';
+      const realWs = join(mockArchonHome, 'real-ws');
+      await mkdir(realWs, { recursive: true });
+      // The lexical `workspaces/` path lives inside mockArchonHome but
+      // points at real-ws; artifactDir is resolved through the symlink.
+      await symlink(realWs, wsRoot());
+      const dir = join(wsRoot(), '_local', 'workspace', 'artifacts', 'runs', runId);
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, 'plan.md'), '# under a symlinked workspace');
+
+      mockGetWorkflowRun.mockImplementationOnce(async () => ({
+        ...MOCK_RUNNING_RUN,
+        id: runId,
+        codebase_id: 'cb-local',
+      }));
+      mockGetCodebase.mockImplementationOnce(async () => ({
+        name: 'workspace',
+        kind: 'repo',
+        default_cwd: '/home/u/workspace',
+      }));
+
+      const { app } = makeApp();
+      const response = await app.request(`/api/artifacts/${runId}/plan.md`);
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe('# under a symlinked workspace');
+    }
+  );
 });
