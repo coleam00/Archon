@@ -58,6 +58,7 @@ import type {
   ComposeFanOutNode,
   FanOutConfig,
   NodeOutput,
+  SkipCause,
   TriggerRule,
   WorkflowRun,
   EffortLevel,
@@ -1945,11 +1946,44 @@ async function resolveNodeProviderAndModel(
   return { provider, model, options, tier: resolution.tier, effort: resolvedEffort };
 }
 
-/** Evaluate trigger rule for a node given its upstream states */
+export type TriggerRuleDecision = { decision: 'run' } | { decision: 'skip'; cause: SkipCause };
+
+interface TriggerRuleUpstream {
+  id: string;
+  output: NodeOutput;
+}
+
+function triggerSkipCause(upstreams: readonly TriggerRuleUpstream[]): SkipCause {
+  for (const upstream of upstreams) {
+    if (upstream.output.state === 'failed') {
+      return { kind: 'upstream_failed', origin: upstream.id };
+    }
+    if (upstream.output.state === 'skipped' && upstream.output.cause.kind === 'upstream_failed') {
+      return { kind: 'upstream_failed', origin: upstream.output.cause.origin };
+    }
+  }
+
+  const skipped = upstreams.find(upstream => upstream.output.state === 'skipped');
+  if (skipped?.output.state === 'skipped') {
+    return {
+      kind: 'upstream_skipped',
+      origin:
+        skipped.output.cause.kind === 'upstream_skipped' ? skipped.output.cause.origin : skipped.id,
+    };
+  }
+
+  const unsettled = upstreams[0];
+  if (unsettled === undefined) {
+    throw new Error('Cannot determine a skip cause without a blocking dependency');
+  }
+  return { kind: 'upstream_skipped', origin: unsettled.id };
+}
+
+/** Evaluate trigger rule for a node given its upstream states. */
 export function checkTriggerRule(
   node: DagNode,
   nodeOutputs: Map<string, NodeOutput>
-): 'run' | 'skip' {
+): TriggerRuleDecision {
   const nodeDeps = node.depends_on ?? [];
   return checkTriggerRuleForDependencies(nodeDeps, node.trigger_rule ?? 'all_success', nodeOutputs);
 }
@@ -1958,31 +1992,41 @@ function checkTriggerRuleForDependencies(
   nodeDeps: readonly string[],
   rule: TriggerRule,
   nodeOutputs: Map<string, NodeOutput>
-): 'run' | 'skip' {
-  if (nodeDeps.length === 0) return 'run';
+): TriggerRuleDecision {
+  if (nodeDeps.length === 0) return { decision: 'run' };
 
-  const upstreams = nodeDeps.map(
-    id =>
-      nodeOutputs.get(id) ??
-      ({
-        state: 'failed',
-        output: '',
-        error: `upstream '${id}' missing from outputs`,
-      } as NodeOutput)
-  );
+  const upstreams = nodeDeps.map(id => ({
+    id,
+    output: nodeOutputs.get(id) ?? {
+      state: 'failed',
+      output: '',
+      error: `upstream '${id}' missing from outputs`,
+    },
+  }));
+  let blocking: TriggerRuleUpstream[];
   switch (rule) {
     case 'all_success':
-      return upstreams.every(u => u.state === 'completed') ? 'run' : 'skip';
+      blocking = upstreams.filter(upstream => upstream.output.state !== 'completed');
+      break;
     case 'one_success':
-      return upstreams.some(u => u.state === 'completed') ? 'run' : 'skip';
+      blocking = upstreams.some(upstream => upstream.output.state === 'completed') ? [] : upstreams;
+      break;
     case 'none_failed_min_one_success': {
-      const anyFailed = upstreams.some(u => u.state === 'failed');
-      const anySucceeded = upstreams.some(u => u.state === 'completed');
-      return !anyFailed && anySucceeded ? 'run' : 'skip';
+      const failed = upstreams.filter(upstream => upstream.output.state === 'failed');
+      const anySucceeded = upstreams.some(upstream => upstream.output.state === 'completed');
+      blocking = failed.length > 0 ? failed : anySucceeded ? [] : upstreams;
+      break;
     }
     case 'all_done':
-      return upstreams.every(u => u.state !== 'pending' && u.state !== 'running') ? 'run' : 'skip';
+      blocking = upstreams.filter(
+        upstream => upstream.output.state === 'pending' || upstream.output.state === 'running'
+      );
+      break;
   }
+
+  return blocking.length === 0
+    ? { decision: 'run' }
+    : { decision: 'skip', cause: triggerSkipCause(blocking) };
 }
 
 /**
@@ -1996,7 +2040,7 @@ export function checkComposedBlockBoundaries(
   nodeOutputs: Map<string, NodeOutput>,
   inputs?: Record<string, JsonValue>,
   evaluateEntryBoundary = false
-): 'run' | 'skip' {
+): TriggerRuleDecision {
   for (const boundary of readComposedMeta(node)?.boundaries ?? []) {
     if (boundary.isEntry && !evaluateEntryBoundary) continue;
 
@@ -2004,24 +2048,37 @@ export function checkComposedBlockBoundaries(
       boundary.isEntry && evaluateEntryBoundary
         ? [boundary.entryTriggerRule]
         : boundary.entryTriggerRules;
-    const dependencyEligible = triggerRules.some(
-      rule => checkTriggerRuleForDependencies(boundary.dependsOn, rule, nodeOutputs) === 'run'
+    const triggerDecisions = triggerRules.map(rule =>
+      checkTriggerRuleForDependencies(boundary.dependsOn, rule, nodeOutputs)
     );
-    if (!dependencyEligible) return 'skip';
+    if (!triggerDecisions.some(decision => decision.decision === 'run')) {
+      return triggerDecisions[0];
+    }
 
     if (boundary.when !== undefined) {
       try {
         const condition = evaluateCondition(boundary.when, nodeOutputs, inputs);
-        if (!condition.parsed || !condition.result) return 'skip';
+        if (!condition.parsed) {
+          return {
+            decision: 'skip',
+            cause: { kind: 'condition_parse_error', expr: boundary.when },
+          };
+        }
+        if (!condition.result) {
+          return { decision: 'skip', cause: { kind: 'condition', expr: boundary.when } };
+        }
       } catch (error) {
         if (boundary.isEntry && evaluateEntryBoundary) throw error;
         // Entry nodes own the actionable missing-ref error. Descendants only need to stay
         // inside the failed boundary, without repeating the same failure for every node.
-        return 'skip';
+        return {
+          decision: 'skip',
+          cause: { kind: 'condition_parse_error', expr: boundary.when },
+        };
       }
     }
   }
-  return 'run';
+  return { decision: 'run' };
 }
 
 /**
@@ -10082,7 +10139,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                     );
                   });
                 // falls through to re-execute the node
-              } else if (composedBoundaryDecision === 'run') {
+              } else if (composedBoundaryDecision.decision === 'run') {
                 // #2402 — a cached prior-success skip is only safe when every
                 // dependency's current value still matches the prior snapshot.
                 // If any dep re-ran during this resume (e.g. an `always_run: true`
@@ -10194,12 +10251,13 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                     reason: 'prior_success',
                   });
                   // Return the pre-populated output (already in nodeOutputs)
+                  const cachedOutput = ctx.nodeOutputs.get(node.id);
+                  if (cachedOutput === undefined) {
+                    throw new Error(`Cached output for node '${node.id}' was not pre-populated`);
+                  }
                   return {
                     nodeId: node.id,
-                    output: ctx.nodeOutputs.get(node.id) ?? {
-                      state: 'skipped' as const,
-                      output: '',
-                    },
+                    output: cachedOutput,
                   };
                 }
               }
@@ -10207,10 +10265,11 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
 
             // 1. Enforce every enclosing include boundary before this node's local rule.
             const triggerDecision =
-              composedBoundaryDecision === 'skip'
-                ? 'skip'
+              composedBoundaryDecision.decision === 'skip'
+                ? composedBoundaryDecision
                 : checkTriggerRule(node, ctx.nodeOutputs);
-            if (triggerDecision === 'skip') {
+            if (triggerDecision.decision === 'skip') {
+              const { cause } = triggerDecision;
               getLog().info({ nodeId: node.id, reason: 'trigger_rule' }, 'dag_node_skipped');
               await logNodeSkip(ctx.logDir, ctx.workflowRun.id, node.id, 'trigger_rule').catch(
                 (err: Error) => {
@@ -10222,7 +10281,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   workflow_run_id: ctx.workflowRun.id,
                   event_type: 'node_skipped',
                   step_name: ctx.stepNamePrefix + node.id,
-                  data: { reason: 'trigger_rule' },
+                  data: { reason: 'trigger_rule', cause },
                 })
                 .catch((err: Error) => {
                   getLog().error(
@@ -10237,8 +10296,12 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 nodeId: node.id,
                 nodeName: nodeDisplayName(node),
                 reason: 'trigger_rule',
+                cause,
               });
-              return { nodeId: node.id, output: { state: 'skipped' as const, output: '' } };
+              return {
+                nodeId: node.id,
+                output: { state: 'skipped' as const, output: '', cause },
+              };
             }
 
             // 2. Evaluate when: condition
@@ -10254,6 +10317,10 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 { loopPrevOutputs: ctx.loopPrevOutputs }
               );
               if (!conditionParsed) {
+                const cause: SkipCause = {
+                  kind: 'condition_parse_error',
+                  expr: node.when,
+                };
                 const parseErrMsg = `⚠️ Node '${node.id}': unparseable \`when:\` expression "${node.when}" — node skipped (fail-closed). Check syntax: \`$nodeId.output == 'VALUE'\`, \`$nodeId.output > '5'\`, or compound \`$a.output == 'X' && $b.output != 'Y'\`.`;
                 await safeSendMessage(ctx.platform, ctx.conversationId, parseErrMsg, {
                   workflowId: ctx.workflowRun.id,
@@ -10276,7 +10343,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                     workflow_run_id: ctx.workflowRun.id,
                     event_type: 'node_skipped',
                     step_name: ctx.stepNamePrefix + node.id,
-                    data: { reason: 'when_condition_parse_error', expr: node.when },
+                    data: { reason: 'when_condition_parse_error', expr: node.when, cause },
                   })
                   .catch((err: Error) => {
                     getLog().error(
@@ -10291,10 +10358,15 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   nodeId: node.id,
                   nodeName: nodeDisplayName(node),
                   reason: 'when_condition_parse_error',
+                  cause,
                 });
-                return { nodeId: node.id, output: { state: 'skipped' as const, output: '' } };
+                return {
+                  nodeId: node.id,
+                  output: { state: 'skipped' as const, output: '', cause },
+                };
               }
               if (!conditionPasses) {
+                const cause: SkipCause = { kind: 'condition', expr: node.when };
                 getLog().info({ nodeId: node.id, when: node.when }, 'dag_node_skipped_condition');
                 await logNodeSkip(ctx.logDir, ctx.workflowRun.id, node.id, 'when_condition').catch(
                   (err: Error) => {
@@ -10306,7 +10378,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                     workflow_run_id: ctx.workflowRun.id,
                     event_type: 'node_skipped',
                     step_name: ctx.stepNamePrefix + node.id,
-                    data: { reason: 'when_condition', expr: node.when },
+                    data: { reason: 'when_condition', expr: node.when, cause },
                   })
                   .catch((err: Error) => {
                     getLog().error(
@@ -10321,10 +10393,11 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   nodeId: node.id,
                   nodeName: nodeDisplayName(node),
                   reason: 'when_condition',
+                  cause,
                 });
                 return {
                   nodeId: node.id,
-                  output: { state: 'skipped' as const, output: '' },
+                  output: { state: 'skipped' as const, output: '', cause },
                 };
               }
             }

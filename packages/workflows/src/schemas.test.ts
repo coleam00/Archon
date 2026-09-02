@@ -32,6 +32,7 @@ import {
   scheduledWorkflowResumeSchema,
   workflowWaitStepName,
   runAttention,
+  nodeOutputSchema,
 } from './schemas';
 import type { RunAttentionInput, SuspendReason, WorkflowRunStatus } from './schemas';
 import type {
@@ -61,6 +62,24 @@ const promptNode: AgentNode = {
 };
 const bashNode: ExecNode = { id: 'n3', kind: 'exec', runtime: 'sh', script: 'echo hello' };
 const cancelNode: HaltNode = { id: 'n5', kind: 'halt', reason: 'Precondition failed' };
+
+describe('nodeOutputSchema', () => {
+  test('requires provenance on skipped outputs while pending remains cause-free', () => {
+    expect(nodeOutputSchema.safeParse({ state: 'skipped', output: '' }).success).toBe(false);
+    expect(nodeOutputSchema.safeParse({ state: 'pending', output: '' }).success).toBe(true);
+
+    for (const cause of [
+      { kind: 'condition', expr: '$route.output == true' },
+      { kind: 'condition_parse_error', expr: '$route.output =' },
+      { kind: 'upstream_failed', origin: 'validate' },
+      { kind: 'upstream_skipped', origin: 'optional-review' },
+    ]) {
+      expect(nodeOutputSchema.safeParse({ state: 'skipped', output: '', cause }).success).toBe(
+        true
+      );
+    }
+  });
+});
 
 describe('persisted workflow continuation schemas', () => {
   const timeWait = {

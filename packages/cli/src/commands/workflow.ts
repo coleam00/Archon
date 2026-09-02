@@ -114,6 +114,7 @@ import {
   isApprovalContext,
   isWorkflowWaitContext,
   isScheduledWorkflowResume,
+  skipCauseSchema,
   SUBRUN_METADATA_KEYS,
   CONTINUATION_METADATA_KEY,
 } from '@archon/workflows/schemas/workflow-run';
@@ -121,6 +122,7 @@ import type {
   WorkflowRun,
   WorkflowRunStatus,
   ContinuationMode,
+  SkipCause,
 } from '@archon/workflows/schemas/workflow-run';
 import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
 import {
@@ -1002,9 +1004,11 @@ function renderWorkflowEvent(event: WorkflowEmitterEvent, verbose: boolean): voi
     case 'node_failed':
       process.stderr.write(`[${event.nodeName}] Failed: ${event.error}\n`);
       break;
-    case 'node_skipped':
-      process.stderr.write(`[${event.nodeName}] Skipped (${event.reason})\n`);
+    case 'node_skipped': {
+      const detail = 'cause' in event ? formatSkipCause(event.cause) : event.reason;
+      process.stderr.write(`[${event.nodeName}] Skipped (${detail})\n`);
       break;
+    }
     case 'approval_pending':
       process.stderr.write(`[${event.nodeId}] Waiting for approval: ${event.message}\n`);
       break;
@@ -3483,6 +3487,20 @@ export interface NodeSummary {
   durationMs?: number;
   outputPreview?: string;
   error?: string;
+  cause?: SkipCause;
+}
+
+function formatSkipCause(cause: SkipCause): string {
+  switch (cause.kind) {
+    case 'condition':
+      return `condition: ${cause.expr}`;
+    case 'condition_parse_error':
+      return `condition parse error: ${cause.expr}`;
+    case 'upstream_failed':
+      return `upstream failed: ${cause.origin}`;
+    case 'upstream_skipped':
+      return `upstream skipped: ${cause.origin}`;
+  }
 }
 
 /**
@@ -3541,7 +3559,12 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
         break;
       }
       case 'node_skipped': {
-        summaries.set(nodeId, { nodeId, state: 'skipped' });
+        const parsedCause = skipCauseSchema.safeParse(event.data.cause);
+        summaries.set(nodeId, {
+          nodeId,
+          state: 'skipped',
+          ...(parsedCause.success ? { cause: parsedCause.data } : {}),
+        });
         break;
       }
       case 'node_skipped_prior_success': {
@@ -3605,7 +3628,8 @@ function printVerboseNodes(events: WorkflowEventRow[]): void {
     const icon = iconMap[node.state] ?? '◌';
     const duration = node.durationMs !== undefined ? ` (${formatDuration(node.durationMs)})` : '';
     const stateLabel = node.state === 'running' ? ' (running)' : '';
-    console.log(`    ${icon} ${node.nodeId}${duration}${stateLabel}`);
+    const skipCause = node.cause ? ` (${formatSkipCause(node.cause)})` : '';
+    console.log(`    ${icon} ${node.nodeId}${duration}${stateLabel}${skipCause}`);
     if (node.outputPreview !== undefined) {
       console.log(`        Output: ${node.outputPreview}`);
     }

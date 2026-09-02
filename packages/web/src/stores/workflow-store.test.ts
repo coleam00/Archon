@@ -142,6 +142,26 @@ describe('handleDagNode', () => {
 
     expect(useWorkflowStore.getState().workflows.get('run-d3')?.activeNodeIds).toEqual([]);
   });
+
+  test('retains skip provenance from node events', () => {
+    useWorkflowStore
+      .getState()
+      .handleWorkflowStatus(statusEvent({ runId: 'run-d4', workflowName: 'dag-wf' }));
+    useWorkflowStore.getState().handleDagNode(
+      dagNodeEvent({
+        runId: 'run-d4',
+        nodeId: 'publish',
+        status: 'skipped',
+        reason: 'trigger_rule',
+        cause: { kind: 'upstream_failed', origin: 'validate' },
+      })
+    );
+
+    expect(useWorkflowStore.getState().workflows.get('run-d4')?.dagNodes[0]).toMatchObject({
+      reason: 'trigger_rule',
+      cause: { kind: 'upstream_failed', origin: 'validate' },
+    });
+  });
 });
 
 describe('handleWorkflowArtifact', () => {

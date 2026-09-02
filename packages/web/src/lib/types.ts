@@ -12,6 +12,16 @@ export type WorkflowRunStatus =
   | 'paused';
 export type WorkflowStepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
 export type ArtifactType = 'pr' | 'commit' | 'file_created' | 'file_modified' | 'branch';
+export type SkipCause =
+  | { kind: 'condition'; expr: string }
+  | { kind: 'condition_parse_error'; expr: string }
+  | { kind: 'upstream_failed'; origin: string }
+  | { kind: 'upstream_skipped'; origin: string };
+export type NodeSkipReason =
+  | 'prior_success'
+  | 'when_condition'
+  | 'when_condition_parse_error'
+  | 'trigger_rule';
 
 /**
  * Framework category the server attaches to a message it emitted itself (as
@@ -151,7 +161,8 @@ export interface DagNodeEvent extends BaseSSEEvent {
   status: WorkflowStepStatus;
   duration?: number;
   error?: string;
-  reason?: 'when_condition' | 'trigger_rule';
+  reason?: NodeSkipReason;
+  cause?: SkipCause;
 }
 
 // Workflow tool activity (tool_started / tool_completed from executor)
@@ -352,7 +363,8 @@ export interface DagNodeState {
   status: WorkflowStepStatus;
   duration?: number;
   error?: string;
-  reason?: 'when_condition' | 'trigger_rule';
+  reason?: DagNodeEvent['reason'];
+  cause?: DagNodeEvent['cause'];
   currentIteration?: number;
   maxIterations?: number;
   iterations?: LoopIterationInfo[];

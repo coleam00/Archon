@@ -37,6 +37,26 @@ test('workflow start projection does not expose the host transcript path', () =>
   expect(payload).not.toHaveProperty('transcriptPath');
 });
 
+test('node skip projection preserves the live skip cause', () => {
+  const event: WorkflowEmitterEvent = {
+    type: 'node_skipped',
+    runId: 'run-1',
+    nodeId: 'publish',
+    nodeName: 'Publish',
+    reason: 'trigger_rule',
+    cause: { kind: 'upstream_failed', origin: 'validate' },
+  };
+
+  expect(JSON.parse(mapWorkflowEvent(event) ?? '{}')).toMatchObject({
+    type: 'dag_node',
+    runId: 'run-1',
+    nodeId: 'publish',
+    status: 'skipped',
+    reason: 'trigger_rule',
+    cause: { kind: 'upstream_failed', origin: 'validate' },
+  });
+});
+
 describe('mapWorkflowEvent — tool activity correlation', () => {
   test('forwards tool call IDs and completion metadata', () => {
     const started: WorkflowEmitterEvent = {

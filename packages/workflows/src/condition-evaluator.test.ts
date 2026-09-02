@@ -44,7 +44,9 @@ function makeOutput(
       ...(structuredOutput !== undefined ? { structuredOutput } : {}),
       ...(declaredFields !== undefined ? { declaredFields } : {}),
     };
-  if (state === 'skipped') return { state, output };
+  if (state === 'skipped') {
+    return { state, output, cause: { kind: 'condition', expr: 'false' } };
+  }
   return {
     state,
     output,

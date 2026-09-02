@@ -10,7 +10,7 @@
  * - Conversation-scoped subscriptions via registerRun() mapping
  */
 import { EventEmitter } from 'events';
-import type { ArtifactType, EffortLevel } from './schemas';
+import type { ArtifactType, EffortLevel, SkipCause } from './schemas';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -110,13 +110,21 @@ interface NodeFailedEvent {
   error: string;
 }
 
-interface NodeSkippedEvent {
+interface NodeSkippedEventBase {
   type: 'node_skipped';
   runId: string;
   nodeId: string;
   nodeName: string;
-  reason: 'when_condition' | 'when_condition_parse_error' | 'trigger_rule' | 'prior_success';
 }
+
+type NodeSkippedEvent = NodeSkippedEventBase &
+  (
+    | { reason: 'prior_success' }
+    | {
+        reason: 'when_condition' | 'when_condition_parse_error' | 'trigger_rule';
+        cause: SkipCause;
+      }
+  );
 
 interface ToolStartedEvent {
   type: 'tool_started';
