@@ -164,6 +164,56 @@ archon telemetry reset
 
 Exit code 0 on success; 1 if the ID file cannot be written.
 
+### `conversations`
+
+The upgrade step for an install that **turns web auth on** and finds its history gone.
+
+Operator conversations are private to their owning user, and ownership is fail-closed: a row Archon cannot attribute is reachable by nobody (see [Security](/reference/security/)). Every `web` and `cli` conversation written before you enabled auth has no owner, so the console shows an empty list even though the rows are still there. These two commands attach them to a real user.
+
+```bash
+# What a claim would take, before taking it
+archon conversations list --unowned [--platform web|cli] [--limit <n>]
+
+# Take it
+archon conversations claim --user <archon-user-id> [--platform web|cli] [--before <iso>] [--dry-run] [--yes]
+```
+
+```text
+$ archon conversations list --unowned
+2 unowned web/cli conversations:
+
+PLATFORM  ID          LAST ACTIVITY        TITLE
+web       web-1-abc   2026-08-30 11:02:13  Fix the login bug
+cli       cli-1-xyz   2026-08-29 09:41:55  (no title)
+
+$ archon conversations claim --user 4f1c1f2e-… --dry-run
+Unowned on web/cli:
+  conversations: 2
+  workflow runs: 2
+
+--dry-run: nothing was written.
+```
+
+The target is a **`remote_agent_users` id** — what the console shows in Settings. It is not a login email and not a CLI identity. An id that does not exist is refused before anything is written, so a typo cannot strand rows on a user nobody can sign in as.
+
+The command lives in the shell, not the console, and that is deliberate: an unowned row has no owner to authenticate against, so claiming over HTTP would mean the first user to click takes everyone else's history on a shared install. Shell access is the strongest available assertion of "I run this install".
+
+**Claiming can never take a conversation away from someone who owns it.** The `WHERE` clause is `user_id IS NULL`, so a second operator running the same command claims only what is still unowned — the worst outcome of a mistake is rows landing on the wrong user and needing to be moved again. Nothing is written without `--yes`; `--dry-run` reports the same counts and exits 0.
+
+**Flags:**
+
+| Flag | Effect |
+|------|--------|
+| `--unowned` | Required on `list`. The only view: conversations no Archon user owns |
+| `--platform <web\|cli>` | Narrow to one operator surface (default: both). Chat and forge platforms are refused — privacy does not cover them, so an owner there would only decide who may act on their runs |
+| `--limit <n>` | `list` only: rows to print (default 20). The total is always reported |
+| `--user <id>` | Required on `claim`. The `remote_agent_users` id rows are claimed for |
+| `--before <iso>` | Only rows older than this date, compared against the database's own clock |
+| `--dry-run` | Report both counts and write nothing |
+| `--yes` | Apply. Without it the command reports the counts and refuses |
+
+Workflow runs are claimed alongside conversations, because run *actions* are owned too: a run with no `user_id` whose conversation has no owner either can be approved, resumed, or cancelled by nobody. A run is matched through the conversation it is answerable to — its dispatching parent, else its own — so `--platform` scopes runs the same way it scopes conversations. Hidden worker conversations of past workflow runs are included; they carry the same operator's work.
+
 ### `workflow list [name]`
 
 List workflows available in the target directory, or inspect one workflow by name.

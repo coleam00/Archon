@@ -3,7 +3,8 @@
  */
 import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
 import { insertWorkflowEvent, listActiveWorkflowNodeIds } from './workflow-events';
-import { toHydratedTimestamp } from './timestamps';
+import { toHydratedTimestamp, toDbTimestampParam } from './timestamps';
+import type { OwnerlessClaimFilter } from './conversations';
 import type { IDatabase, SqlDialect } from './adapters/types';
 import type {
   WorkflowRun,
@@ -2051,6 +2052,87 @@ export async function listWorkflowRuns(options?: {
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_list_failed');
     throw new Error(`Failed to list workflow runs: ${err.message}`);
+  }
+}
+
+/**
+ * The one WHERE fragment both ownerless-run queries are built from, so the
+ * preview count and the UPDATE cannot describe different sets. Appends to
+ * `params` and returns the SQL.
+ *
+ * A run is scoped by the conversation it is answerable to: its dispatching
+ * parent when it has one, else its own conversation (a CLI run has no parent —
+ * `conversation_id` is the only conversation it has). That mirrors how
+ * `authorizeRunAction` resolves an owner, so claiming makes exactly the runs
+ * actionable that the fallback would otherwise leave stranded.
+ *
+ * `user_id IS NULL` is the invariant: a run already attributed to a real user
+ * can never be moved to another one.
+ */
+function ownerlessRunWhere(filter: OwnerlessClaimFilter, params: unknown[]): string {
+  const platforms = filter.platformTypes.map(platform => {
+    params.push(platform);
+    return `$${String(params.length)}`;
+  });
+  let sql =
+    'user_id IS NULL AND COALESCE(parent_conversation_id, conversation_id) IN ' +
+    `(SELECT id FROM remote_agent_conversations WHERE platform_type IN (${platforms.join(', ')}))`;
+  if (filter.before) {
+    params.push(toDbTimestampParam(filter.before));
+    sql += ` AND started_at < $${String(params.length)}`;
+  }
+  return sql;
+}
+
+/**
+ * How many workflow runs an ownership claim with this filter would take.
+ * Drives the preview and `--dry-run`, which must not write.
+ */
+export async function countOwnerlessRuns(filter: OwnerlessClaimFilter): Promise<number> {
+  // Fail closed: no platform selected means no run selected.
+  if (filter.platformTypes.length === 0) return 0;
+
+  const params: unknown[] = [];
+  const where = ownerlessRunWhere(filter, params);
+  try {
+    const result = await pool.query<{ count: number | string }>(
+      `SELECT COUNT(*) AS count FROM remote_agent_workflow_runs WHERE ${where}`,
+      params
+    );
+    return Number(result.rows[0]?.count ?? 0);
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err }, 'db.ownerless_run_count_failed');
+    throw new Error(`Failed to count unowned workflow runs: ${err.message}`);
+  }
+}
+
+/**
+ * Attach every unattributed workflow run matching the filter to `userId`,
+ * returning how many rows moved.
+ *
+ * Runs are claimed alongside conversations because run *actions* are owned too
+ * (#3135 Phase 4): a run whose `user_id` is null and whose parent conversation
+ * has no owner can be approved, resumed, or cancelled by nobody.
+ */
+export async function claimOwnerlessRuns(
+  userId: string,
+  filter: OwnerlessClaimFilter
+): Promise<number> {
+  if (filter.platformTypes.length === 0) return 0;
+
+  const params: unknown[] = [userId];
+  const where = ownerlessRunWhere(filter, params);
+  try {
+    const result = await pool.query(
+      `UPDATE remote_agent_workflow_runs SET user_id = $1 WHERE ${where}`,
+      params
+    );
+    return result.rowCount ?? 0;
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err }, 'db.ownerless_run_claim_failed');
+    throw new Error(`Failed to claim unowned workflow runs: ${err.message}`);
   }
 }
 

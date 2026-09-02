@@ -2,6 +2,7 @@
  * Database operations for conversations
  */
 import { pool, getDialect } from './connection';
+import { toDbTimestampParam } from './timestamps';
 import type { Conversation } from '../types';
 import { ConversationNotFoundError } from '../types';
 import { createLogger } from '@archon/paths';
@@ -298,6 +299,91 @@ export async function listConversations(
 
   const result = await pool.query<Conversation>(sql, params);
   return result.rows;
+}
+
+/**
+ * Which rows an ownership claim may touch (#3135 Phase 7).
+ *
+ * Conversations and workflow runs are claimed with the same filter, so the
+ * `list --unowned` preview cannot describe a different set than the UPDATE
+ * writes.
+ */
+export interface OwnerlessClaimFilter {
+  /**
+   * Operator surfaces to include. The CLI defaults to PRIVATE_PLATFORM_TYPES;
+   * an empty list matches nothing rather than everything.
+   */
+  platformTypes: readonly string[];
+  /**
+   * Only rows older than this instant: `created_at` for conversations,
+   * `started_at` for runs. Optional (`--before`).
+   */
+  before?: Date;
+}
+
+/**
+ * The one WHERE fragment both ownerless-conversation queries are built from, so
+ * the preview and the UPDATE cannot drift apart. Appends to `params` and
+ * returns the SQL.
+ *
+ * `user_id IS NULL` is the invariant that makes claiming safe: a row already
+ * owned by a real user can never be moved to another one, so the worst outcome
+ * of a mistaken claim is rows landing on the wrong user and needing to be moved
+ * again by hand — never a conversation taken away from its owner.
+ */
+function ownerlessConversationWhere(filter: OwnerlessClaimFilter, params: unknown[]): string {
+  const platforms = filter.platformTypes.map(platform => {
+    params.push(platform);
+    return `$${String(params.length)}`;
+  });
+  let sql = `user_id IS NULL AND deleted_at IS NULL AND platform_type IN (${platforms.join(', ')})`;
+  if (filter.before) {
+    params.push(toDbTimestampParam(filter.before));
+    sql += ` AND created_at < $${String(params.length)}`;
+  }
+  return sql;
+}
+
+/**
+ * Every conversation an ownership claim with this filter would take.
+ *
+ * Includes hidden worker conversations: they carry the same operator's work and
+ * are exactly as unreachable as their visible parents once enforcement is on.
+ */
+export async function listOwnerlessConversations(
+  filter: OwnerlessClaimFilter
+): Promise<readonly Conversation[]> {
+  // Fail closed: no platform selected means no row selected.
+  if (filter.platformTypes.length === 0) return [];
+
+  const params: unknown[] = [];
+  const where = ownerlessConversationWhere(filter, params);
+  const result = await pool.query<Conversation>(
+    `SELECT * FROM remote_agent_conversations WHERE ${where} ORDER BY last_activity_at DESC NULLS LAST`,
+    params
+  );
+  return result.rows;
+}
+
+/**
+ * Attach every unowned conversation matching the filter to `userId`, returning
+ * how many rows moved. The escape hatch for an install that turns web auth on
+ * and finds its pre-enforcement history reachable by nobody.
+ */
+export async function claimOwnerlessConversations(
+  userId: string,
+  filter: OwnerlessClaimFilter
+): Promise<number> {
+  if (filter.platformTypes.length === 0) return 0;
+
+  const params: unknown[] = [userId];
+  const where = ownerlessConversationWhere(filter, params);
+  const dialect = getDialect();
+  const result = await pool.query(
+    `UPDATE remote_agent_conversations SET user_id = $1, updated_at = ${dialect.now()} WHERE ${where}`,
+    params
+  );
+  return result.rowCount ?? 0;
 }
 
 /**

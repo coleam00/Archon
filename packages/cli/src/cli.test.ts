@@ -219,6 +219,12 @@ describe('CLI help output', () => {
     );
   });
 
+  it('documents the ownership claim for an install turning web auth on', () => {
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain('conversations list --unowned');
+    expect(help.stdout).toContain('conversations claim --user <archon-user-id>');
+  });
+
   it('omits the removed branch-inferred continue command', () => {
     expect(help.status).toBe(0);
     expect(help.stdout).not.toMatch(/\bcontinue <branch>/);
@@ -1875,6 +1881,17 @@ describe('pre-dispatch gates --json error envelope', () => {
 
   it('emits { ok: false } on stdout for an unknown command instead of usage text', () => {
     const { status, envelope } = spawnJsonError(['boguscmd', '--json']);
+
+    expect(status).toBe(1);
+    expect(envelope).not.toThrow();
+    expect(envelope()).toMatchObject({ ok: false });
+  });
+
+  // The subcommand switch is the only gate on a command that runs outside a git
+  // repo and writes ownership, so an unknown one must fail with usage rather
+  // than fall through to a default.
+  it('emits { ok: false } on stdout for an unknown conversations subcommand', () => {
+    const { status, envelope } = spawnJsonError(['conversations', 'bogus', '--json']);
 
     expect(status).toBe(1);
     expect(envelope).not.toThrow();
