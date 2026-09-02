@@ -408,6 +408,11 @@ if (BUNDLED_IS_BINARY) {
 
 type WorkflowSource = 'project' | 'bundled' | 'global';
 
+/** A conversation row that was found — what `authorizeConversation` hands back. */
+type LoadedConversation = NonNullable<
+  Awaited<ReturnType<typeof conversationDb.findConversationByPlatformId>>
+>;
+
 /**
  * Resolve the on-disk artifact directory for a run, for EVERY project kind
  * (#2200).
@@ -695,6 +700,7 @@ const sendMessageRoute = createRoute({
       description: 'Accepted',
     },
     400: jsonError('Bad request'),
+    404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
 });
@@ -858,6 +864,7 @@ const runWorkflowRoute = createRoute({
       description: 'Accepted',
     },
     400: jsonError('Bad request'),
+    404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
 });
@@ -1818,6 +1825,94 @@ export function registerApiRoutes(
   }
 
   /**
+   * Load a conversation by platform id and decide whether this caller may reach
+   * it (#3135). Every by-id conversation ingress goes through here, so the rule
+   * cannot be spelled two different ways in two handlers — the failure mode of
+   * PR #3058, where a pasted comparison permitted access whenever either side
+   * was null.
+   *
+   * Order: row missing → 404; enforcement off → allow (solo install, nothing is
+   * owned); platform outside PRIVATE_PLATFORM_TYPES → allow (Slack, forges, and
+   * the other chat platforms own their own access model); caller equals the
+   * row's owner → allow; otherwise deny.
+   *
+   * Fail-closed falls out of the single comparison: `conv.user_id === null`
+   * never equals a resolved id, so an unattributed row is reachable by nobody.
+   * NULL is "unknown", not "public".
+   *
+   * 404 rather than 403 because `web-<timestamp>-<rand6>` ids are semi-guessable
+   * and a 403 would confirm that a conversation exists. Run actions use 403
+   * instead — a run id is an opaque UUID and run reads stay open.
+   *
+   * Throws on a lookup failure; each caller already maps that to its own 500.
+   */
+  async function authorizeConversation(
+    c: Context,
+    platformId: string
+  ): Promise<{ ok: true; conversation: LoadedConversation } | { ok: false; response: Response }> {
+    const conversation = await conversationDb.findConversationByPlatformId(platformId);
+    if (!conversation) return { ok: false, response: apiError(c, 404, 'Conversation not found') };
+    if (!isConversationOwnershipEnforced()) return { ok: true, conversation };
+    if (!conversationDb.isPrivatePlatformType(conversation.platform_type)) {
+      return { ok: true, conversation };
+    }
+
+    const userId = await resolveWebUserId(c);
+    if (userId && conversation.user_id === userId) return { ok: true, conversation };
+
+    // Never log the owner's id or anything about the caller beyond what the
+    // request already carries: debuggability lives here, not in the status code.
+    getLog().warn(
+      {
+        platformId,
+        platformType: conversation.platform_type,
+        ownerPresent: Boolean(conversation.user_id),
+        callerResolved: Boolean(userId),
+      },
+      'api.conversation_access_denied'
+    );
+    return { ok: false, response: apiError(c, 404, 'Conversation not found') };
+  }
+
+  /**
+   * Conversation lookup for the two routes that dispatch into the orchestrator
+   * (send-message and workflow-run). They differ from the read/mutate routes in
+   * one way: with enforcement off they historically dispatch even when the id
+   * names no row, and the conversation materializes along the way.
+   *
+   * Under enforcement that is a way to create rows at chosen identifiers, so the
+   * conversation must exist and be reachable. With enforcement off the old
+   * behavior is preserved exactly, including a lookup failure that degrades to
+   * "no row" rather than refusing the send.
+   */
+  async function resolveDispatchConversation(
+    c: Context,
+    platformId: string
+  ): Promise<
+    { ok: true; conversation: LoadedConversation | null } | { ok: false; response: Response }
+  > {
+    if (isConversationOwnershipEnforced()) {
+      try {
+        return await authorizeConversation(c, platformId);
+      } catch (err: unknown) {
+        // Fail closed: dispatching without having verified ownership would hand
+        // a DB outage the access the check exists to refuse.
+        getLog().error({ err, conversationId: platformId }, 'conversation_lookup_failed');
+        return { ok: false, response: apiError(c, 500, 'Failed to load conversation') };
+      }
+    }
+    try {
+      return {
+        ok: true,
+        conversation: await conversationDb.findConversationByPlatformId(platformId),
+      };
+    } catch (err: unknown) {
+      getLog().error({ err, conversationId: platformId }, 'conversation_lookup_failed');
+      return { ok: true, conversation: null };
+    }
+  }
+
+  /**
    * Strict variant for endpoints that REQUIRE a web identity (connect/disconnect).
    * Session-first then header, mirroring resolveAuthContext, but distinguishing a
    * missing identity (401) from a backend failure resolving it (503) — a DB
@@ -2407,6 +2502,31 @@ export function registerApiRoutes(
     return { ok: true, savedFiles, uploadDir };
   }
 
+  /**
+   * Delete attachments written by `persistUploadedFiles`. Called once the AI has
+   * read them, and on a refused request so nothing is left behind under a
+   * conversation id the caller was not allowed to reach.
+   */
+  async function discardUploads(
+    files: readonly AttachedFile[],
+    uploadDir: string,
+    conversationId: string
+  ): Promise<void> {
+    for (const f of files) {
+      await unlink(f.path).catch((err: NodeJS.ErrnoException) => {
+        if (err.code !== 'ENOENT') {
+          getLog().warn({ err, filePath: f.path, conversationId }, 'upload.cleanup_failed');
+        }
+      });
+    }
+    // Remove the now-empty upload directory for this conversation.
+    await rm(uploadDir, { recursive: true, force: true }).catch((err: NodeJS.ErrnoException) => {
+      if (err.code !== 'ENOENT') {
+        getLog().warn({ err, uploadDir, conversationId }, 'upload.dir_cleanup_failed');
+      }
+    });
+  }
+
   async function dispatchToOrchestrator(
     conversationId: string,
     message: string,
@@ -2443,24 +2563,7 @@ export function registerApiRoutes(
         // has had a chance to read them. Doing this in the HTTP handler's finally block
         // would delete files while the fire-and-forget lock handler is still running.
         if (filesToCleanup) {
-          for (const f of filesToCleanup.files) {
-            await unlink(f.path).catch((err: NodeJS.ErrnoException) => {
-              if (err.code !== 'ENOENT') {
-                getLog().warn({ err, filePath: f.path, conversationId }, 'upload.cleanup_failed');
-              }
-            });
-          }
-          // Remove the now-empty upload directory for this conversation.
-          await rm(filesToCleanup.uploadDir, { recursive: true, force: true }).catch(
-            (err: NodeJS.ErrnoException) => {
-              if (err.code !== 'ENOENT') {
-                getLog().warn(
-                  { err, uploadDir: filesToCleanup.uploadDir, conversationId },
-                  'upload.dir_cleanup_failed'
-                );
-              }
-            }
-          );
+          await discardUploads(filesToCleanup.files, filesToCleanup.uploadDir, conversationId);
         }
       }
     });
@@ -2724,11 +2827,9 @@ export function registerApiRoutes(
   registerOpenApiRoute(getConversationRoute, async c => {
     const platformId = c.req.param('id') ?? '';
     try {
-      const conv = await conversationDb.findConversationByPlatformId(platformId);
-      if (!conv) {
-        return apiError(c, 404, 'Conversation not found');
-      }
-      return c.json(toApiConversation(conv));
+      const access = await authorizeConversation(c, platformId);
+      if (!access.ok) return access.response;
+      return c.json(toApiConversation(access.conversation));
     } catch (error) {
       getLog().error({ err: error, platformId }, 'get_conversation_failed');
       return apiError(c, 500, 'Failed to get conversation');
@@ -2819,12 +2920,10 @@ export function registerApiRoutes(
     const platformId = c.req.param('id') ?? '';
     const { title } = getValidatedBody(c, updateConversationBodySchema);
     try {
-      const conv = await conversationDb.findConversationByPlatformId(platformId);
-      if (!conv) {
-        return apiError(c, 404, 'Conversation not found');
-      }
+      const access = await authorizeConversation(c, platformId);
+      if (!access.ok) return access.response;
       if (title !== undefined) {
-        await conversationDb.updateConversationTitle(conv.id, title.slice(0, 255));
+        await conversationDb.updateConversationTitle(access.conversation.id, title.slice(0, 255));
       }
       return c.json({ success: true });
     } catch (error) {
@@ -2840,11 +2939,9 @@ export function registerApiRoutes(
   registerOpenApiRoute(deleteConversationRoute, async c => {
     const platformId = c.req.param('id') ?? '';
     try {
-      const conv = await conversationDb.findConversationByPlatformId(platformId);
-      if (!conv) {
-        return apiError(c, 404, 'Conversation not found');
-      }
-      await conversationDb.softDeleteConversation(conv.id);
+      const access = await authorizeConversation(c, platformId);
+      if (!access.ok) return access.response;
+      await conversationDb.softDeleteConversation(access.conversation.id);
       return c.json({ success: true });
     } catch (error) {
       if (error instanceof ConversationNotFoundError) {
@@ -2860,11 +2957,9 @@ export function registerApiRoutes(
     const platformConversationId = c.req.param('id') ?? '';
     const limit = Math.min(Number(c.req.query('limit') ?? '200'), 500);
     try {
-      const conv = await conversationDb.findConversationByPlatformId(platformConversationId);
-      if (!conv) {
-        return apiError(c, 404, 'Conversation not found');
-      }
-      const messages = await messageDb.listMessages(conv.id, limit);
+      const access = await authorizeConversation(c, platformConversationId);
+      if (!access.ok) return access.response;
+      const messages = await messageDb.listMessages(access.conversation.id, limit);
       return c.json(messages.map(toApiMessage));
     } catch (error) {
       getLog().error({ err: error }, 'list_messages_failed');
@@ -2883,6 +2978,15 @@ export function registerApiRoutes(
     if (!/^[\w-]+$/.test(conversationId)) {
       return c.json({ error: 'Invalid conversation ID' }, 400);
     }
+
+    // Authorize + load the conversation the persistence path needs, before the
+    // body is parsed: under enforcement a caller who may not reach this id must
+    // not get attachments written into its upload directory on the way to a 404
+    // (#3135). An unknown id is refused here too, so dispatch can no longer
+    // materialize a conversation at a caller-chosen identifier.
+    const access = await resolveDispatchConversation(c, conversationId);
+    if (!access.ok) return access.response;
+    const conv = access.conversation;
 
     let message: string;
     let savedFiles: AttachedFile[] = [];
@@ -2938,14 +3042,6 @@ export function registerApiRoutes(
         return c.json({ error: 'message must be a non-empty string' }, 400);
       }
       message = body.message;
-    }
-
-    // Look up conversation for message persistence
-    let conv: Awaited<ReturnType<typeof conversationDb.findConversationByPlatformId>> = null;
-    try {
-      conv = await conversationDb.findConversationByPlatformId(conversationId);
-    } catch (e: unknown) {
-      getLog().error({ err: e, conversationId }, 'conversation_lookup_failed');
     }
 
     // Persist user message and pass DB ID to adapter for assistant message persistence
@@ -3574,12 +3670,16 @@ export function registerApiRoutes(
       // Persist user message and register DB ID (same as message endpoint).
       // File metadata (name/mime/size — no path, since the on-disk file is
       // ephemeral) goes into message metadata when present.
-      let conv: Awaited<ReturnType<typeof conversationDb.findConversationByPlatformId>> = null;
-      try {
-        conv = await conversationDb.findConversationByPlatformId(conversationId);
-      } catch (e: unknown) {
-        getLog().error({ err: e, conversationId }, 'conversation_lookup_failed');
+      // Unlike the message route, the conversation id arrives in the body, so
+      // attachments are already on disk by the time ownership can be checked
+      // (#3135). A refused run must not leave them under an id the caller was
+      // not allowed to reach.
+      const access = await resolveDispatchConversation(c, conversationId);
+      if (!access.ok) {
+        if (savedFiles.length > 0) await discardUploads(savedFiles, uploadDir, conversationId);
+        return access.response;
       }
+      const conv = access.conversation;
       if (conv) {
         try {
           const meta =

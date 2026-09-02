@@ -21,6 +21,7 @@ import {
   findConversationByPlatformId,
   listConversations,
   PRIVATE_PLATFORM_TYPES,
+  isPrivatePlatformType,
 } from './conversations';
 import type { Conversation } from '../types';
 import { ConversationNotFoundError } from '../types';
@@ -484,6 +485,26 @@ describe('conversations', () => {
       expect(sql).toContain('AND user_id = $1');
       expect(sql).not.toContain('NOT IN');
       expect(params).toEqual(['user-1', 50]);
+    });
+  });
+
+  // The per-row counterpart of the list's `platform_type NOT IN (…)` clause.
+  // The by-id authorization check in the server reads this so the two paths
+  // cannot disagree about which surfaces privacy covers.
+  describe('isPrivatePlatformType', () => {
+    test('covers the operator surfaces', () => {
+      expect(isPrivatePlatformType('web')).toBe(true);
+      expect(isPrivatePlatformType('cli')).toBe(true);
+    });
+
+    test('leaves chat and forge platforms to their own access model', () => {
+      for (const platform of ['slack', 'discord', 'telegram', 'github', 'gitlab', 'gitea']) {
+        expect(isPrivatePlatformType(platform)).toBe(false);
+      }
+    });
+
+    test('agrees with PRIVATE_PLATFORM_TYPES', () => {
+      expect(PRIVATE_PLATFORM_TYPES.every(isPrivatePlatformType)).toBe(true);
     });
   });
 });

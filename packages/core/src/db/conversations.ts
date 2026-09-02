@@ -223,6 +223,16 @@ export async function getConversationsByIsolationEnvId(
 export const PRIVATE_PLATFORM_TYPES = ['web', 'cli'] as const;
 
 /**
+ * Whether privacy applies to a single conversation. The per-row counterpart of
+ * the `platform_type NOT IN (…)` clause `listConversations` builds, so the list
+ * and the by-id authorization check share one rule instead of two hand-written
+ * ones that can drift.
+ */
+export function isPrivatePlatformType(platformType: string): boolean {
+  return (PRIVATE_PLATFORM_TYPES as readonly string[]).includes(platformType);
+}
+
+/**
  * Which conversations a lookup may return. Explicit union rather than an
  * optional `userId`, because `undefined` meaning "no filter" is exactly what
  * let a failed identity resolution silently widen a narrowed request back to

@@ -1117,6 +1117,15 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
           headers: {
@@ -1547,6 +1556,15 @@ export interface paths {
         };
         /** @description Bad request */
         400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
           headers: {
             [name: string]: unknown;
           };
