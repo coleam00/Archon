@@ -1387,6 +1387,34 @@ describe.skipIf(isWindows)('findMarkdownFilesRecursive - symlinks', () => {
     ]);
   });
 
+  test('returns entries in name order regardless of creation order', async () => {
+    // Created in reverse-alphabetical order at every level. On a filesystem
+    // that reports creation order (ext4 without dir_index, tmpfs), an unsorted
+    // walk returns this tree reversed.
+    for (const name of ['zeta', 'mid', 'alpha']) {
+      const dir = join(tempDir, name);
+      await mkdir(dir);
+      for (const leaf of ['z-leaf', 'a-leaf']) {
+        await writeFile(join(dir, `${leaf}.md`), `# ${leaf}`);
+      }
+    }
+    await writeFile(join(tempDir, 'z-root.md'), '# z-root');
+    await writeFile(join(tempDir, 'a-root.md'), '# a-root');
+
+    const files = await findMarkdownFilesRecursive(tempDir);
+
+    expect(files.map(file => file.relativePath)).toEqual([
+      'a-root.md',
+      join('alpha', 'a-leaf.md'),
+      join('alpha', 'z-leaf.md'),
+      join('mid', 'a-leaf.md'),
+      join('mid', 'z-leaf.md'),
+      'z-root.md',
+      join('zeta', 'a-leaf.md'),
+      join('zeta', 'z-leaf.md'),
+    ]);
+  });
+
   test('preserves sibling symlink aliases that point to the same directory', async () => {
     const localSourceDir = join(tempDir, 'source');
     await mkdir(localSourceDir);
@@ -1394,9 +1422,12 @@ describe.skipIf(isWindows)('findMarkdownFilesRecursive - symlinks', () => {
     await fsSymlink(localSourceDir, join(tempDir, 'alias'));
 
     const files = await findMarkdownFilesRecursive(tempDir);
-    const relativePaths = files.map(file => file.relativePath).sort();
 
-    expect(relativePaths).toEqual([join('alias', 'foo.md'), join('source', 'foo.md')]);
+    // No sort: 'alias' precedes 'source', and the walk defines that order.
+    expect(files.map(file => file.relativePath)).toEqual([
+      join('alias', 'foo.md'),
+      join('source', 'foo.md'),
+    ]);
   });
 
   test('skips broken symlinks silently', async () => {

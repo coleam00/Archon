@@ -134,6 +134,32 @@ describe('CLI startup import boundary', () => {
   });
 });
 
+/**
+ * The `Options:` block of a scoped `--help` render, spawned as a subprocess so
+ * the assertion sees the real rendered output.
+ *
+ * Scoped-flag assertions target this slice rather than the whole render. A flag
+ * name or wording that also appears in the entry's `spec` or Commands-block
+ * description would otherwise keep the test green with the entry's
+ * `scopedFlags` deleted, which is the fake guard #3153 recorded for
+ * `workflow reset-sessions` and `isolation cleanup --merged`. Deleting a
+ * `scopedFlags` entry drops its line from this slice; deleting the whole block
+ * suppresses the section and fails the marker assertion below.
+ */
+function scopedHelpOptions(argv: string[]): string {
+  const result = spawnSync(process.execPath, [CLI_ENTRY, ...argv, '--help'], {
+    encoding: 'utf8',
+    env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
+  });
+  expect(result.status).toBe(0);
+  const marker = '\nOptions:\n';
+  const start = result.stdout.indexOf(marker);
+  expect(start, `no Options block in 'archon ${argv.join(' ')} --help'`).toBeGreaterThanOrEqual(0);
+  const body = result.stdout.slice(start + marker.length);
+  const end = body.indexOf('\n\n');
+  return end === -1 ? body : body.slice(0, end);
+}
+
 describe('CLI help output', () => {
   // The five tests assert disjoint fragments of one static usage string, so a
   // single captured `--help` spawn replaces five identical interpreter
@@ -483,51 +509,24 @@ Examples:
   });
 
   it('renders --merged and --include-closed in isolation cleanup --help', () => {
-    const result = spawnSync(process.execPath, [CLI_ENTRY, 'isolation', 'cleanup', '--help'], {
-      encoding: 'utf8',
-      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
-    });
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain('--merged');
-    expect(result.stdout).toContain('--include-closed');
+    const options = scopedHelpOptions(['isolation', 'cleanup']);
+    expect(options).toContain('--merged');
+    expect(options).toContain('--include-closed');
   });
 
   it('renders --reason in workflow reject --help', () => {
-    const result = spawnSync(process.execPath, [CLI_ENTRY, 'workflow', 'reject', '--help'], {
-      encoding: 'utf8',
-      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
-    });
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain('--reason');
+    expect(scopedHelpOptions(['workflow', 'reject'])).toContain('--reason');
   });
 
   it('renders --scope, --node, and --yes in workflow reset-sessions --help', () => {
-    const result = spawnSync(
-      process.execPath,
-      [CLI_ENTRY, 'workflow', 'reset-sessions', '--help'],
-      {
-        encoding: 'utf8',
-        env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
-      }
-    );
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain('--scope');
-    expect(result.stdout).toContain('--node');
-    expect(result.stdout).toContain('--yes');
+    const options = scopedHelpOptions(['workflow', 'reset-sessions']);
+    expect(options).toContain('--scope');
+    expect(options).toContain('--node');
+    expect(options).toContain('--yes');
   });
 
   it('renders --full in workflow list --help', () => {
-    const result = spawnSync(process.execPath, [CLI_ENTRY, 'workflow', 'list', '--help'], {
-      encoding: 'utf8',
-      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
-    });
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain('--full');
-    // Unlike its siblings, `--full` is also mentioned in the Commands spec and
-    // description, so `toContain('--full')` alone would pass even without a
-    // scopedFlags entry. The scoped description is the unique contribution —
-    // guard it so deleting scopedFlags trips this test.
-    expect(result.stdout).toContain('exact description instead of the compact preview');
+    expect(scopedHelpOptions(['workflow', 'list'])).toContain('--full');
   });
 });
 

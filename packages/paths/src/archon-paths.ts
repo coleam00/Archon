@@ -321,6 +321,11 @@ export function getWorkflowFolderSearchPaths(): string[] {
  * (depth 1) are included, but `rootPath/group/sub/file.md` (depth 2) is not.
  * Default is `Infinity` (no cap) for backwards compatibility with callers that
  * want to copy arbitrary subtrees (e.g. clone handlers).
+ *
+ * Results are in a defined order: siblings are visited in code-unit order by
+ * name, and a directory's own results appear where that directory sorts among
+ * its siblings. Callers may rely on the order being the same on every machine
+ * and on every call; they must not sort again to obtain it.
  */
 export async function findMarkdownFilesRecursive(
   rootPath: string,
@@ -395,6 +400,14 @@ async function findMarkdownFilesRecursiveImpl(
     if (err.code === 'ENOENT') return results;
     throw err;
   }
+
+  // `readdir` returns entries in filesystem order, which differs between
+  // machines and can differ between calls on one machine. Every consumer of
+  // this walk inherits that order, and `GET /api/commands` renders it to an
+  // operator. Order is defined once here, at the only owner, rather than at
+  // each call site. The comparison is on code units, not `localeCompare`,
+  // so the result does not vary with the host locale.
+  entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 
   for (const entry of entries) {
     if (entry.name.startsWith('.') || entry.name === 'node_modules') {
