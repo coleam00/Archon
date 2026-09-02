@@ -34,6 +34,11 @@ export const cliArgOptions: CliArgOptions = {
   port: { type: 'string' },
   'download-only': { type: 'boolean' },
   scope: { type: 'string' },
+  // `conversations list --unowned` / `conversations claim --user … --before …`
+  unowned: { type: 'boolean' },
+  platform: { type: 'string' },
+  user: { type: 'string' },
+  before: { type: 'string' },
   node: { type: 'string' },
   yes: { type: 'boolean' },
   force: { type: 'boolean' },

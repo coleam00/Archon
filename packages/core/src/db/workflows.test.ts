@@ -50,6 +50,8 @@ import {
   findAdoptingRuns,
   deleteOldWorkflowRuns,
   deleteWorkflowRun,
+  countOwnerlessRuns,
+  claimOwnerlessRuns,
   WorkflowNotResumableError,
 } from './workflows';
 
@@ -1674,6 +1676,89 @@ describe('workflows database', () => {
       const result = await listWorkflowRuns();
 
       expect(result).toEqual([mockWorkflowRun]);
+    });
+  });
+
+  /**
+   * #3135 Phase 7: runs are claimed alongside conversations because run actions
+   * are owned too — a run with no `user_id` whose parent conversation has no
+   * owner either can be approved, resumed, or cancelled by nobody.
+   */
+  describe('ownerless run claim', () => {
+    function lastQuery(): { sql: string; params: unknown[] } {
+      const call = mockQuery.mock.calls[0] as unknown as [string, unknown[]];
+      return { sql: call[0], params: call[1] };
+    }
+
+    test('counts unowned runs without writing', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ count: '4' }]));
+
+      const count = await countOwnerlessRuns('user-1', { platformTypes: ['web', 'cli'] });
+
+      expect(count).toBe(4);
+      const { sql, params } = lastQuery();
+      expect(sql).toContain('SELECT COUNT(*) AS count');
+      expect(sql).toContain('user_id IS NULL');
+      expect(params).toEqual(['user-1', 'web', 'cli']);
+    });
+
+    test('the UPDATE never widens past `user_id IS NULL`', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 2));
+
+      const claimed = await claimOwnerlessRuns('user-1', { platformTypes: ['web', 'cli'] });
+
+      expect(claimed).toBe(2);
+      const { sql, params } = lastQuery();
+      expect(sql).toContain('UPDATE remote_agent_workflow_runs SET user_id = $1');
+      expect(sql).toContain('WHERE user_id IS NULL');
+      expect(params).toEqual(['user-1', 'web', 'cli']);
+    });
+
+    // The run is scoped by the conversation it is answerable to — its
+    // dispatching parent, else its own — which is how authorizeRunAction
+    // resolves an owner. A CLI run has no parent, so `conversation_id` is the
+    // only link it has.
+    test('scopes a run through its parent conversation, falling back to its own', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
+
+      await claimOwnerlessRuns('user-1', { platformTypes: ['cli'] });
+
+      const { sql } = lastQuery();
+      expect(sql).toContain(
+        'COALESCE(parent_conversation_id, conversation_id) IN (SELECT id FROM remote_agent_conversations WHERE platform_type IN ($2) AND (user_id IS NULL OR user_id = $1))'
+      );
+    });
+
+    // The conversation claim runs first and takes every unowned conversation for
+    // the claiming user. A run is then claimable only through a conversation that
+    // is still unowned or already that user's — never through one another operator
+    // claimed, or a second `claim --user` would attach runs to itself that answer
+    // to someone else's conversation.
+    test('the run claim never reaches through a conversation another user owns', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
+
+      await claimOwnerlessRuns('user-2', { platformTypes: ['web'] });
+
+      const { sql, params } = lastQuery();
+      expect(sql).toContain('AND (user_id IS NULL OR user_id = $1)');
+      expect(params[0]).toBe('user-2');
+    });
+
+    test('honors --before as a started_at cutoff', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      const before = new Date('2026-01-31T00:00:00.000Z');
+
+      await claimOwnerlessRuns('user-1', { platformTypes: ['web'], before });
+
+      const { sql, params } = lastQuery();
+      expect(sql).toContain('AND started_at < $3');
+      expect(params).toEqual(['user-1', 'web', before.toISOString()]);
+    });
+
+    test('an empty platform list touches nothing and issues no query', async () => {
+      expect(await countOwnerlessRuns('user-1', { platformTypes: [] })).toBe(0);
+      expect(await claimOwnerlessRuns('user-1', { platformTypes: [] })).toBe(0);
+      expect(mockQuery).not.toHaveBeenCalled();
     });
   });
 

@@ -274,7 +274,13 @@ import {
   assertRespondable,
   resetWorkflowNodeSessions,
 } from '@archon/core/operations/workflow-operations';
-import { getAuth, isWebAuthEnabled, getSignupMode, isApiGateEnabled } from '../auth';
+import {
+  getAuth,
+  isWebAuthEnabled,
+  getSignupMode,
+  isApiGateEnabled,
+  isConversationOwnershipEnforced,
+} from '../auth';
 import { errorSchema } from './schemas/common.schemas';
 import { updateCheckResponseSchema } from './schemas/system.schemas';
 import {
@@ -401,6 +407,11 @@ if (BUNDLED_IS_BINARY) {
 }
 
 type WorkflowSource = 'project' | 'bundled' | 'global';
+
+/** A conversation row that was found — what `authorizeConversation` hands back. */
+type LoadedConversation = NonNullable<
+  Awaited<ReturnType<typeof conversationDb.findConversationByPlatformId>>
+>;
 
 /**
  * Resolve the on-disk artifact directory for a run, for EVERY project kind
@@ -568,6 +579,7 @@ const getConversationsRoute = createRoute({
       content: { 'application/json': { schema: conversationListResponseSchema } },
       description: 'OK',
     },
+    401: jsonError('Authentication required'),
     500: jsonError('Server error'),
   },
 });
@@ -688,6 +700,7 @@ const sendMessageRoute = createRoute({
       description: 'Accepted',
     },
     400: jsonError('Bad request'),
+    404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
 });
@@ -851,6 +864,7 @@ const runWorkflowRoute = createRoute({
       description: 'Accepted',
     },
     400: jsonError('Bad request'),
+    404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
 });
@@ -940,6 +954,7 @@ const cancelWorkflowRunRoute = createRoute({
       description: 'Cancelled',
     },
     400: jsonError('Bad request'),
+    403: jsonError('Not the run starter'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -957,6 +972,7 @@ const resumeWorkflowRunRoute = createRoute({
       description: 'Resumed',
     },
     400: jsonError('Bad request'),
+    403: jsonError('Not the run starter'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -990,6 +1006,7 @@ const signalWorkflowWaitRoute = createRoute({
       description: 'Signal accepted; the scheduler will resume the workflow shortly',
     },
     400: jsonError('Run is not waiting on this event'),
+    403: jsonError('Not the run starter'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -1007,6 +1024,7 @@ const abandonWorkflowRunRoute = createRoute({
       description: 'Abandoned',
     },
     400: jsonError('Bad request'),
+    403: jsonError('Not the run starter'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -1027,6 +1045,7 @@ const approveWorkflowRunRoute = createRoute({
       description: 'Approved',
     },
     400: jsonError('Bad request'),
+    403: jsonError('Not the run starter'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -1047,6 +1066,7 @@ const rejectWorkflowRunRoute = createRoute({
       description: 'Rejected',
     },
     400: jsonError('Bad request'),
+    403: jsonError('Not the run starter'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -1067,6 +1087,7 @@ const respondWorkflowRunRoute = createRoute({
       description: 'Responded',
     },
     400: jsonError('Bad request'),
+    403: jsonError('Not the run starter'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -1084,6 +1105,7 @@ const deleteWorkflowRunRoute = createRoute({
       description: 'Deleted',
     },
     400: jsonError('Bad request'),
+    403: jsonError('Not the run starter'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -1105,6 +1127,8 @@ const resetWorkflowNodeSessionsRoute = createRoute({
       description: 'Sessions deleted (deleted count may be 0)',
     },
     400: jsonError('Bad request'),
+    403: jsonError('Cross-scope reset is not available while conversations are owned'),
+    404: jsonError('Conversation not found'),
     500: jsonError('Server error'),
   },
 });
@@ -1591,7 +1615,7 @@ export function registerApiRoutes(
 ): void {
   function apiError(
     c: Context,
-    status: 400 | 401 | 404 | 422 | 500 | 503,
+    status: 400 | 401 | 403 | 404 | 422 | 500 | 503,
     message: string,
     detail?: string
   ): Response {
@@ -1780,6 +1804,180 @@ export function registerApiRoutes(
   /** Soft attribution: call sites that only need the user id, not the role. */
   async function resolveWebUserId(c: Context): Promise<string | undefined> {
     return (await resolveAuthContext(c))?.userId;
+  }
+
+  /**
+   * Which conversations this caller may see (#3135). Authorization, not
+   * attribution — and the difference is the whole point: `resolveWebUserId`
+   * degrading to `undefined` is correct when stamping a row, and a security
+   * hole when scoping a list, because "no identity" used to mean "no filter".
+   *
+   * Under enforcement an unresolved identity is refused (401), never widened.
+   * With the /api/* gate on that branch is unreachable; it is reachable when a
+   * proxy owns admission (`ARCHON_WEB_AUTH_REQUIRED=false`), where an empty
+   * list would be indistinguishable from "you have no conversations" and send
+   * the operator hunting for data that is still there.
+   */
+  async function requireVisibilityForCaller(
+    c: Context
+  ): Promise<conversationDb.ConversationVisibility | { error: Response }> {
+    if (!isConversationOwnershipEnforced()) return { kind: 'all' };
+    const userId = await resolveWebUserId(c);
+    if (!userId) {
+      getLog().warn({ path: c.req.path }, 'api.conversation_visibility_identity_unresolved');
+      return { error: apiError(c, 401, 'Authentication required') };
+    }
+    return {
+      kind: 'ownerScoped',
+      userId,
+      privatePlatforms: conversationDb.PRIVATE_PLATFORM_TYPES,
+    };
+  }
+
+  /**
+   * Load a conversation by platform id and decide whether this caller may reach
+   * it (#3135). Every by-id conversation ingress goes through here, so the rule
+   * cannot be spelled two different ways in two handlers — the failure mode of
+   * PR #3058, where a pasted comparison permitted access whenever either side
+   * was null.
+   *
+   * Order: row missing → 404; enforcement off → allow (solo install, nothing is
+   * owned); platform outside PRIVATE_PLATFORM_TYPES → allow (Slack, forges, and
+   * the other chat platforms own their own access model); caller equals the
+   * row's owner → allow; otherwise deny.
+   *
+   * Fail-closed falls out of the single comparison: `conv.user_id === null`
+   * never equals a resolved id, so an unattributed row is reachable by nobody.
+   * NULL is "unknown", not "public".
+   *
+   * 404 rather than 403 because `web-<timestamp>-<rand6>` ids are semi-guessable
+   * and a 403 would confirm that a conversation exists. Run actions use 403
+   * instead — a run id is an opaque UUID and run reads stay open.
+   *
+   * Throws on a lookup failure; each caller already maps that to its own 500.
+   */
+  async function authorizeConversation(
+    c: Context,
+    platformId: string
+  ): Promise<{ ok: true; conversation: LoadedConversation } | { ok: false; response: Response }> {
+    const conversation = await conversationDb.findConversationByPlatformId(platformId);
+    if (!conversation) return { ok: false, response: apiError(c, 404, 'Conversation not found') };
+    return authorizeLoadedConversation(c, conversation, { platformId });
+  }
+
+  /**
+   * The ownership rule itself, over a row that has already been loaded, so the two
+   * lookup keys a request can carry — the platform id on `/api/conversations/{id}`,
+   * the internal id a node-session scope names — cannot each grow their own copy.
+   */
+  async function authorizeLoadedConversation(
+    c: Context,
+    conversation: LoadedConversation,
+    logFields: Record<string, string>
+  ): Promise<{ ok: true; conversation: LoadedConversation } | { ok: false; response: Response }> {
+    if (!isConversationOwnershipEnforced()) return { ok: true, conversation };
+    if (!conversationDb.isPrivatePlatformType(conversation.platform_type)) {
+      return { ok: true, conversation };
+    }
+
+    const userId = await resolveWebUserId(c);
+    if (userId && conversation.user_id === userId) return { ok: true, conversation };
+
+    // Never log the owner's id or anything about the caller beyond what the
+    // request already carries: debuggability lives here, not in the status code.
+    getLog().warn(
+      {
+        ...logFields,
+        platformType: conversation.platform_type,
+        ownerPresent: Boolean(conversation.user_id),
+        callerResolved: Boolean(userId),
+      },
+      'api.conversation_access_denied'
+    );
+    return { ok: false, response: apiError(c, 404, 'Conversation not found') };
+  }
+
+  /**
+   * Conversation lookup for the two routes that dispatch into the orchestrator
+   * (send-message and workflow-run). They differ from the read/mutate routes in
+   * one way: with enforcement off they historically dispatch even when the id
+   * names no row, and the conversation materializes along the way.
+   *
+   * Under enforcement that is a way to create rows at chosen identifiers, so the
+   * conversation must exist and be reachable. With enforcement off the old
+   * behavior is preserved exactly, including a lookup failure that degrades to
+   * "no row" rather than refusing the send.
+   */
+  async function resolveDispatchConversation(
+    c: Context,
+    platformId: string
+  ): Promise<
+    { ok: true; conversation: LoadedConversation | null } | { ok: false; response: Response }
+  > {
+    if (isConversationOwnershipEnforced()) {
+      try {
+        return await authorizeConversation(c, platformId);
+      } catch (err: unknown) {
+        // Fail closed: dispatching without having verified ownership would hand
+        // a DB outage the access the check exists to refuse.
+        getLog().error({ err, conversationId: platformId }, 'conversation_lookup_failed');
+        return { ok: false, response: apiError(c, 500, 'Failed to load conversation') };
+      }
+    }
+    try {
+      return {
+        ok: true,
+        conversation: await conversationDb.findConversationByPlatformId(platformId),
+      };
+    } catch (err: unknown) {
+      getLog().error({ err, conversationId: platformId }, 'conversation_lookup_failed');
+      return { ok: true, conversation: null };
+    }
+  }
+
+  /**
+   * Decide whether this caller may act on a workflow run (#3135). The model is
+   * shared visibility, owned control: run *reads* stay open — the runs list, run
+   * detail, artifacts, and the `__dashboard__` stream are an install-wide
+   * operations view — while every run *action* belongs to the person who started
+   * it (cancel, resume, signal, abandon, approve, reject, respond, delete).
+   *
+   * Ownership key, in order: the run's own `user_id`; when that is null, the
+   * owner of the conversation the run was dispatched from. The two agree in the
+   * normal case and diverge only for a run started from an ownerless
+   * conversation. When neither resolves the action is refused — an owner Archon
+   * cannot name is "unknown", not "everyone", the same fail-closed rule
+   * `authorizeConversation` applies. Unlike conversations there is no
+   * platform-type carve-out: a run is Archon's own governed work whatever
+   * dispatched it.
+   *
+   * 403 rather than the 404 conversations use. A run id is an opaque UUID nobody
+   * guesses, and a caller reaching a run action already knows the run exists
+   * because run reads stay open, so a 404 would only turn "you did not start
+   * this run" into a confusing "no such run".
+   *
+   * Returns the response for the caller to return verbatim, or null when the
+   * action may proceed. Throws on a lookup failure; every call site is already
+   * inside a try that maps that to its own 500.
+   */
+  async function authorizeRunAction(c: Context, run: WorkflowRun): Promise<Response | null> {
+    if (!isConversationOwnershipEnforced()) return null;
+
+    let ownerId = run.user_id;
+    if (!ownerId && run.parent_conversation_id) {
+      const parent = await conversationDb.getConversationById(run.parent_conversation_id);
+      ownerId = parent?.user_id ?? null;
+    }
+
+    const userId = await resolveWebUserId(c);
+    if (userId && ownerId === userId) return null;
+
+    // Never log the owner's id: debuggability lives here, not in the status code.
+    getLog().warn(
+      { runId: run.id, ownerPresent: Boolean(ownerId), callerResolved: Boolean(userId) },
+      'api.run_action_denied'
+    );
+    return apiError(c, 403, 'You did not start this workflow run');
   }
 
   /**
@@ -2372,6 +2570,38 @@ export function registerApiRoutes(
     return { ok: true, savedFiles, uploadDir };
   }
 
+  /**
+   * Delete attachments written by `persistUploadedFiles`. Called once the AI has
+   * read them, and on a refused request so nothing is left behind under a
+   * conversation id the caller was not allowed to reach.
+   *
+   * The upload directory is per conversation and shared by every request into it.
+   * The completion path may remove it (that request owned the whole dispatch), but a
+   * REFUSED request removes only the files it wrote: a recursive delete there would
+   * take a concurrent owner request's attachments before orchestration read them.
+   */
+  async function discardUploads(
+    files: readonly AttachedFile[],
+    uploadDir: string,
+    conversationId: string,
+    { removeDirectory = true }: { removeDirectory?: boolean } = {}
+  ): Promise<void> {
+    for (const f of files) {
+      await unlink(f.path).catch((err: NodeJS.ErrnoException) => {
+        if (err.code !== 'ENOENT') {
+          getLog().warn({ err, filePath: f.path, conversationId }, 'upload.cleanup_failed');
+        }
+      });
+    }
+    if (!removeDirectory) return;
+    // Remove the now-empty upload directory for this conversation.
+    await rm(uploadDir, { recursive: true, force: true }).catch((err: NodeJS.ErrnoException) => {
+      if (err.code !== 'ENOENT') {
+        getLog().warn({ err, uploadDir, conversationId }, 'upload.dir_cleanup_failed');
+      }
+    });
+  }
+
   async function dispatchToOrchestrator(
     conversationId: string,
     message: string,
@@ -2408,24 +2638,7 @@ export function registerApiRoutes(
         // has had a chance to read them. Doing this in the HTTP handler's finally block
         // would delete files while the fire-and-forget lock handler is still running.
         if (filesToCleanup) {
-          for (const f of filesToCleanup.files) {
-            await unlink(f.path).catch((err: NodeJS.ErrnoException) => {
-              if (err.code !== 'ENOENT') {
-                getLog().warn({ err, filePath: f.path, conversationId }, 'upload.cleanup_failed');
-              }
-            });
-          }
-          // Remove the now-empty upload directory for this conversation.
-          await rm(filesToCleanup.uploadDir, { recursive: true, force: true }).catch(
-            (err: NodeJS.ErrnoException) => {
-              if (err.code !== 'ENOENT') {
-                getLog().warn(
-                  { err, uploadDir: filesToCleanup.uploadDir, conversationId },
-                  'upload.dir_cleanup_failed'
-                );
-              }
-            }
-          );
+          await discardUploads(filesToCleanup.files, filesToCleanup.uploadDir, conversationId);
         }
       }
     });
@@ -2667,24 +2880,16 @@ export function registerApiRoutes(
     try {
       const platformType = c.req.query('platform') ?? undefined;
       const codebaseId = c.req.query('codebaseId') ?? undefined;
-      // Non-enforcing "mine" filter: only narrows when an identity resolves.
-      // Default visibility stays open (everyone sees everyone's conversations).
-      const mine = c.req.query('mine') === 'true';
-      const userId = mine ? (await resolveAuthContext(c))?.userId : undefined;
-      if (mine && !userId && getAuth()) {
-        // Narrowing was requested but no identity resolved on an install with
-        // web auth configured — the list silently degrades to ALL conversations
-        // (documented non-enforcing posture). Without web auth (solo installs,
-        // where the console always sends mine=true) this is the normal path
-        // and stays silent.
-        getLog().warn({ route: 'GET /api/conversations' }, 'api.mine_filter_identity_unresolved');
-      }
+      // Owner-scoped by default under enforcement; open on solo installs. The
+      // caller cannot opt out — scoping is the server's job, not a query param.
+      const visibility = await requireVisibilityForCaller(c);
+      if ('error' in visibility) return visibility.error;
       const conversations = await conversationDb.listConversations(
         50,
         platformType,
         codebaseId,
         true,
-        userId
+        visibility
       );
       return c.json(conversations.map(toApiConversation));
     } catch (error) {
@@ -2697,11 +2902,9 @@ export function registerApiRoutes(
   registerOpenApiRoute(getConversationRoute, async c => {
     const platformId = c.req.param('id') ?? '';
     try {
-      const conv = await conversationDb.findConversationByPlatformId(platformId);
-      if (!conv) {
-        return apiError(c, 404, 'Conversation not found');
-      }
-      return c.json(toApiConversation(conv));
+      const access = await authorizeConversation(c, platformId);
+      if (!access.ok) return access.response;
+      return c.json(toApiConversation(access.conversation));
     } catch (error) {
       getLog().error({ err: error, platformId }, 'get_conversation_failed');
       return apiError(c, 500, 'Failed to get conversation');
@@ -2792,12 +2995,10 @@ export function registerApiRoutes(
     const platformId = c.req.param('id') ?? '';
     const { title } = getValidatedBody(c, updateConversationBodySchema);
     try {
-      const conv = await conversationDb.findConversationByPlatformId(platformId);
-      if (!conv) {
-        return apiError(c, 404, 'Conversation not found');
-      }
+      const access = await authorizeConversation(c, platformId);
+      if (!access.ok) return access.response;
       if (title !== undefined) {
-        await conversationDb.updateConversationTitle(conv.id, title.slice(0, 255));
+        await conversationDb.updateConversationTitle(access.conversation.id, title.slice(0, 255));
       }
       return c.json({ success: true });
     } catch (error) {
@@ -2813,11 +3014,9 @@ export function registerApiRoutes(
   registerOpenApiRoute(deleteConversationRoute, async c => {
     const platformId = c.req.param('id') ?? '';
     try {
-      const conv = await conversationDb.findConversationByPlatformId(platformId);
-      if (!conv) {
-        return apiError(c, 404, 'Conversation not found');
-      }
-      await conversationDb.softDeleteConversation(conv.id);
+      const access = await authorizeConversation(c, platformId);
+      if (!access.ok) return access.response;
+      await conversationDb.softDeleteConversation(access.conversation.id);
       return c.json({ success: true });
     } catch (error) {
       if (error instanceof ConversationNotFoundError) {
@@ -2833,11 +3032,9 @@ export function registerApiRoutes(
     const platformConversationId = c.req.param('id') ?? '';
     const limit = Math.min(Number(c.req.query('limit') ?? '200'), 500);
     try {
-      const conv = await conversationDb.findConversationByPlatformId(platformConversationId);
-      if (!conv) {
-        return apiError(c, 404, 'Conversation not found');
-      }
-      const messages = await messageDb.listMessages(conv.id, limit);
+      const access = await authorizeConversation(c, platformConversationId);
+      if (!access.ok) return access.response;
+      const messages = await messageDb.listMessages(access.conversation.id, limit);
       return c.json(messages.map(toApiMessage));
     } catch (error) {
       getLog().error({ err: error }, 'list_messages_failed');
@@ -2856,6 +3053,15 @@ export function registerApiRoutes(
     if (!/^[\w-]+$/.test(conversationId)) {
       return c.json({ error: 'Invalid conversation ID' }, 400);
     }
+
+    // Authorize + load the conversation the persistence path needs, before the
+    // body is parsed: under enforcement a caller who may not reach this id must
+    // not get attachments written into its upload directory on the way to a 404
+    // (#3135). An unknown id is refused here too, so dispatch can no longer
+    // materialize a conversation at a caller-chosen identifier.
+    const access = await resolveDispatchConversation(c, conversationId);
+    if (!access.ok) return access.response;
+    const conv = access.conversation;
 
     let message: string;
     let savedFiles: AttachedFile[] = [];
@@ -2911,14 +3117,6 @@ export function registerApiRoutes(
         return c.json({ error: 'message must be a non-empty string' }, 400);
       }
       message = body.message;
-    }
-
-    // Look up conversation for message persistence
-    let conv: Awaited<ReturnType<typeof conversationDb.findConversationByPlatformId>> = null;
-    try {
-      conv = await conversationDb.findConversationByPlatformId(conversationId);
-    } catch (e: unknown) {
-      getLog().error({ err: e, conversationId }, 'conversation_lookup_failed');
     }
 
     // Persist user message and pass DB ID to adapter for assistant message persistence
@@ -3007,6 +3205,25 @@ export function registerApiRoutes(
   // GET /api/stream/:conversationId - SSE streaming
   app.get('/api/stream/:conversationId', async c => {
     const conversationId = c.req.param('conversationId');
+
+    // Ownership is decided before streamSSE takes over the response (#3135), so a
+    // caller who may not reach this conversation gets a plain JSON 404 instead of
+    // an opened stream that emits nothing. Privacy that stopped at REST would be
+    // no privacy at all: an EventSource on a guessed id used to open a live feed
+    // of someone else's turn output.
+    //
+    // With enforcement off the lookup is skipped entirely rather than allowed
+    // after the fact: a solo install streams on any id, including one whose row
+    // has not been written yet, exactly as it does today.
+    if (isConversationOwnershipEnforced()) {
+      try {
+        const access = await authorizeConversation(c, conversationId);
+        if (!access.ok) return access.response;
+      } catch (err: unknown) {
+        getLog().error({ err, conversationId }, 'sse_stream_authorize_failed');
+        return apiError(c, 500, 'Failed to load conversation');
+      }
+    }
 
     return streamSSE(c, async stream => {
       // Send initial heartbeat immediately to flush HTTP headers.
@@ -3547,12 +3764,18 @@ export function registerApiRoutes(
       // Persist user message and register DB ID (same as message endpoint).
       // File metadata (name/mime/size — no path, since the on-disk file is
       // ephemeral) goes into message metadata when present.
-      let conv: Awaited<ReturnType<typeof conversationDb.findConversationByPlatformId>> = null;
-      try {
-        conv = await conversationDb.findConversationByPlatformId(conversationId);
-      } catch (e: unknown) {
-        getLog().error({ err: e, conversationId }, 'conversation_lookup_failed');
+      // Unlike the message route, the conversation id arrives in the body, so
+      // attachments are already on disk by the time ownership can be checked
+      // (#3135). A refused run must not leave them under an id the caller was
+      // not allowed to reach.
+      const access = await resolveDispatchConversation(c, conversationId);
+      if (!access.ok) {
+        if (savedFiles.length > 0) {
+          await discardUploads(savedFiles, uploadDir, conversationId, { removeDirectory: false });
+        }
+        return access.response;
       }
+      const conv = access.conversation;
       if (conv) {
         try {
           const meta =
@@ -3661,6 +3884,8 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
+      const denial = await authorizeRunAction(c, run);
+      if (denial) return denial;
       if (run.status !== 'running' && run.status !== 'pending' && run.status !== 'paused') {
         return apiError(c, 400, `Cannot cancel workflow in '${run.status}' status`);
       }
@@ -3685,6 +3910,8 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
+      const denial = await authorizeRunAction(c, run);
+      if (denial) return denial;
       if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
         return apiError(c, 400, `Cannot resume workflow in '${run.status}' status`);
       }
@@ -3752,6 +3979,10 @@ export function registerApiRoutes(
     try {
       const run = await workflowDb.getWorkflowRun(runId);
       if (!run) return apiError(c, 404, 'Workflow run not found');
+      // Signalling advances a durable wait on someone else's run — an action by
+      // any reading, so it belongs with the other seven.
+      const denial = await authorizeRunAction(c, run);
+      if (denial) return denial;
       const wait = isWorkflowWaitContext(run.metadata?.wait) ? run.metadata.wait : undefined;
       if (wait?.kind !== 'event' || wait.event !== event || wait.resumeAt !== resumeAt) {
         return apiError(c, 400, `Run is not waiting on event '${event}'`);
@@ -3778,6 +4009,8 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
+      const denial = await authorizeRunAction(c, run);
+      if (denial) return denial;
       // A `failed` run is terminal per TERMINAL_WORKFLOW_STATUSES but remains
       // resumable, so the user must be able to discard it — only the two
       // non-resumable terminal states are blocked (the 400 mapping lives here;
@@ -3876,6 +4109,8 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
+      const denial = await authorizeRunAction(c, run);
+      if (denial) return denial;
       if (run.status !== 'paused') {
         return apiError(c, 400, `Cannot approve workflow in '${run.status}' status`);
       }
@@ -3943,6 +4178,8 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
+      const denial = await authorizeRunAction(c, run);
+      if (denial) return denial;
       if (run.status !== 'paused') {
         return apiError(c, 400, `Cannot reject workflow in '${run.status}' status`);
       }
@@ -4020,6 +4257,8 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
+      const denial = await authorizeRunAction(c, run);
+      if (denial) return denial;
       if (run.status !== 'paused') {
         return apiError(c, 400, `Cannot respond to workflow in '${run.status}' status`);
       }
@@ -4106,6 +4345,8 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
+      const denial = await authorizeRunAction(c, run);
+      if (denial) return denial;
       if (!TERMINAL_WORKFLOW_STATUSES.includes(run.status)) {
         return apiError(
           c,
@@ -4139,6 +4380,25 @@ export function registerApiRoutes(
         400,
         'Refusing to reset sessions across all scopes without confirmation. Pass ?scope=<key> to narrow, or ?confirm=all-scopes to confirm.'
       );
+    }
+    // A scope key is a conversation's internal id (the in-chat `/workflow reset-sessions`
+    // passes the authorized conversation's own id), so under ownership enforcement it is
+    // a conversation ingress like any other (#3135): the caller must own it, and a scope
+    // that names no conversation is unattributable and therefore unreachable. The
+    // cross-scope wipe touches every user's state at once and has no owner to check
+    // against, so it is not offered while conversations are owned.
+    if (isConversationOwnershipEnforced()) {
+      if (scope === undefined) {
+        return apiError(
+          c,
+          403,
+          'Resetting sessions across all scopes is not available while conversations are owned. Pass ?scope=<conversation id> for a conversation you own.'
+        );
+      }
+      const conversation = await conversationDb.getConversationById(scope);
+      if (!conversation) return apiError(c, 404, 'Conversation not found');
+      const access = await authorizeLoadedConversation(c, conversation, { scope });
+      if (!access.ok) return access.response;
     }
     try {
       const { deleted } = await resetWorkflowNodeSessions({
