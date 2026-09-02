@@ -2339,6 +2339,24 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Cross-scope reset is not available while conversations are owned */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Conversation not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
           headers: {

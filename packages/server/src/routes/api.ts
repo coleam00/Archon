@@ -1127,6 +1127,8 @@ const resetWorkflowNodeSessionsRoute = createRoute({
       description: 'Sessions deleted (deleted count may be 0)',
     },
     400: jsonError('Bad request'),
+    403: jsonError('Cross-scope reset is not available while conversations are owned'),
+    404: jsonError('Conversation not found'),
     500: jsonError('Server error'),
   },
 });
