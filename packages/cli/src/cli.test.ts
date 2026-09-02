@@ -83,7 +83,7 @@ describe('CLI startup import boundary', () => {
       throw new Error(`CLI graph build failed:\n${result.stdout}\n${result.stderr}`);
     }
     metafile = JSON.parse(readFileSync(metafilePath, 'utf8')) as BuildMetafile;
-  });
+  }, 30_000);
 
   afterAll(async () => {
     if (buildDir) await removeTempTree(buildDir);

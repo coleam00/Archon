@@ -63,6 +63,7 @@ import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-chec
 import { reclaimContainerEnv } from '@archon/core/services/cleanup-service';
 import { waitForRunAttention } from '@archon/core/services/run-attention-watch';
 import type { RunWaitResult } from '@archon/core/services/run-attention-watch';
+import { startRunLiveOwner } from '@archon/core/services/run-live-owner';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import {
@@ -159,7 +160,6 @@ import {
   assertDetachedRunProcessOwner,
   DETACHED_RUN_OWNER_ENV,
   requestDetachedRunStop,
-  startDetachedRunControlServer,
 } from '../utils/detached-run-control';
 import { resolveCliUserId } from './auth';
 import { RESUME_RUN_CONFIG_CONFLICT } from '../dispatch-guards';
@@ -2929,10 +2929,9 @@ async function runWorkflowWithOwnedSource(
   // Register cleanup handlers for graceful termination.
   //
   // Guard rails (#1123): a signal must only ever fail THE run this process is
-  // driving, and only while that run is still 'running'. The run id is learned
-  // from the resumable lookup (resume path), the row a detached parent handed
-  // this child (#2872), or the workflow_started emitter event (fresh runs, see
-  // the subscription below) — never from a
+  // driving, and only while that run is still 'running'. The run id is reserved
+  // by source capture before a fresh execution and already exists on resume or a
+  // detached handoff — never from a
   // conversation-wide "active run" query, which can match a run driven by
   // another process (children share parent_conversation_id). When the run has
   // already transitioned elsewhere — paused at a gate, completed, cancelled —
@@ -2941,14 +2940,15 @@ async function runWorkflowWithOwnedSource(
   // the finally below once executeWorkflow returns, so a late signal can never
   // touch a settled run (and repeated workflowRunCommand calls in one process
   // don't stack handlers).
-  let ownedRunId: string | undefined = resumable?.id ?? detachedPreCreatedRun?.id;
-  let detachedRunControl: Awaited<ReturnType<typeof startDetachedRunControlServer>> | undefined;
-  if (detachedProcessOwner) {
-    if (ownedRunId === undefined) {
-      throw new Error('Detached workflow owner has no resolved run ID');
-    }
-    detachedRunControl = await startDetachedRunControlServer(ownedRunId);
-  }
+  const ownedRunId = resumable?.id ?? detachedPreCreatedRun?.id ?? preparedSource?.runId;
+  if (ownedRunId === undefined) throw new Error('Workflow execution has no resolved run ID');
+  let runLiveOwner: Awaited<ReturnType<typeof startRunLiveOwner>> | undefined = undefined;
+  let runLiveOwnerClose: Promise<void> | undefined;
+  const closeRunLiveOwner = (): Promise<void> => {
+    if (!runLiveOwner) return Promise.resolve();
+    runLiveOwnerClose ??= runLiveOwner.close();
+    return runLiveOwnerClose;
+  };
   let terminating = false;
   const cleanup = (signal: string): void => {
     if (terminating) return;
@@ -2965,7 +2965,7 @@ async function runWorkflowWithOwnedSource(
         );
         return;
       }
-      if (detachedRunControl?.isStopRequested()) {
+      if (runLiveOwner?.isStopRequested()) {
         // The exact-run controller has proved ownership and is terminating this
         // process tree. It records `cancelled` only after termination succeeds;
         // do not race it by translating the operator's stop into generic failure.
@@ -3031,6 +3031,15 @@ async function runWorkflowWithOwnedSource(
         }
       })
       .catch(() => undefined)
+      .then(async () => {
+        // A detached cancel already rang the handoff frame and must keep its lease
+        // open while the controller terminates this process tree. Every other
+        // graceful signal rings ordinary attention before the forced exit.
+        if (!runLiveOwner?.isStopRequested()) await closeRunLiveOwner();
+      })
+      .catch((error: unknown) => {
+        getLog().error({ err: error as Error }, 'workflow.live_owner_close_failed');
+      })
       .finally(() => {
         // Route through the same drain helper cli.ts's top-level exit chain
         // uses so queued `console.log` output (this command streams progress
@@ -3053,18 +3062,12 @@ async function runWorkflowWithOwnedSource(
   // One-time-per-version notice when the workflow uses unconfigured tier keywords.
   await maybePrintTierNotice(workflow, workingCwd, cliUserId, options.quiet);
 
-  // Subscribe to workflow events: always registered (even with --quiet) because
-  // the handler also learns the run id this process owns — the signal cleanup
-  // guard above needs it for fresh runs, where the id only exists once
-  // executeWorkflow creates the run and emits workflow_started. --quiet only
-  // gates the progress rendering.
+  // Subscribe to workflow events for progress rendering. The owner identity was
+  // already reserved by source capture, before executeWorkflow can create its row.
   // subscribeForConversation is pure in-memory registration — cannot throw in practice.
   // If that changes, this should be moved inside the try block to prevent blocking executeWorkflow.
   const { quiet, verbose } = options;
   const unsubscribe = getWorkflowEventEmitter().subscribeForConversation(conversationId, event => {
-    if (event.type === 'workflow_started' && ownedRunId === undefined) {
-      ownedRunId = event.runId;
-    }
     if (!quiet) {
       renderWorkflowEvent(event, verbose ?? false);
     }
@@ -3093,62 +3096,62 @@ async function runWorkflowWithOwnedSource(
   // The lookup-by-(workflowName, cwd) was already done above for worktree-path
   // resolution; reuse that result rather than querying twice.
   const deps = createWorkflowDeps();
-  let prepared: Awaited<ReturnType<typeof hydrateResumableRun>> = null;
-  if (options.resume && resumable) {
-    try {
-      prepared = await hydrateResumableRun(deps, resumable);
-    } catch (error) {
-      const err = error as Error;
-      getLog().error(
-        { err, workflowName, runId: resumable.id },
-        'cli.workflow_hydrate_resume_failed'
-      );
-      throw new Error(
-        `Cannot resume workflow '${workflowName}': failed to load prior run state — ${err.message}`
-      );
-    }
-    if (!prepared) {
-      throw new Error(
-        `Cannot resume: the prior run for '${workflowName}' has no completed nodes and no interactive-loop state.`
-      );
-    }
-  }
-
-  // Execute workflow with workingCwd (may be worktree path). `undefined` until
-  // assigned so the finally-block teardown can tell "threw before a result" from
-  // a real terminal/paused result.
   let result: Awaited<ReturnType<typeof executeWorkflow>> | undefined;
   // A genuine container-teardown failure captured in the finally, rethrown AFTER
   // the finally when the run itself succeeded — so a leaked privileged container
   // fails the CLI instead of reporting success + exit 0.
   let containerTeardownError: Error | undefined;
-  // Container run context for the engine (Phase C): the write-back backend port +
-  // env id + policy. The executor drives suspend-on-pause and the write-back gate
-  // through this. Absent for host/in-place runs.
-  const containerRunCtx =
-    containerBackend && containerEnvId
-      ? {
-          envId: containerEnvId,
-          writeBack: workflow.container?.write_back ?? ('approve' as const),
-          backend: containerBackend,
-          ...(containerOverlayMode ? { overlayMode: containerOverlayMode } : {}),
-        }
-      : undefined;
-  // Per-child isolation resolver (#2121 slice 2, PR-A): built for git-repo codebases
-  // only — a folder project can't make worktrees, so a `workflow:` node requesting
-  // `isolation: 'worktree'` there fails fast in the engine (no resolver injected).
-  const resolveChildIsolation =
-    codebase && codebase.kind !== 'folder'
-      ? createChildWorktreeResolver({
-          codebaseId: codebase.id,
-          codebaseName: codebase.name,
-          canonicalRepoPath: codebase.default_cwd,
-          baseBranch: codebaseDefaultBranch,
-          createdByPlatform: 'cli',
-          createdByUserId: cliUserId,
-        })
-      : undefined;
   try {
+    runLiveOwner = await startRunLiveOwner(ownedRunId, {
+      ...(detachedProcessOwner ? { detachedProcessPid: process.pid } : {}),
+    });
+    let prepared: Awaited<ReturnType<typeof hydrateResumableRun>> = null;
+    if (options.resume && resumable) {
+      try {
+        prepared = await hydrateResumableRun(deps, resumable);
+      } catch (error) {
+        const err = error as Error;
+        getLog().error(
+          { err, workflowName, runId: resumable.id },
+          'cli.workflow_hydrate_resume_failed'
+        );
+        throw new Error(
+          `Cannot resume workflow '${workflowName}': failed to load prior run state — ${err.message}`
+        );
+      }
+      if (!prepared) {
+        throw new Error(
+          `Cannot resume: the prior run for '${workflowName}' has no completed nodes and no interactive-loop state.`
+        );
+      }
+    }
+
+    // Container run context for the engine (Phase C): the write-back backend port +
+    // env id + policy. The executor drives suspend-on-pause and the write-back gate
+    // through this. Absent for host/in-place runs.
+    const containerRunCtx =
+      containerBackend && containerEnvId
+        ? {
+            envId: containerEnvId,
+            writeBack: workflow.container?.write_back ?? ('approve' as const),
+            backend: containerBackend,
+            ...(containerOverlayMode ? { overlayMode: containerOverlayMode } : {}),
+          }
+        : undefined;
+    // Per-child isolation resolver (#2121 slice 2, PR-A): built for git-repo codebases
+    // only — a folder project can't make worktrees, so a `workflow:` node requesting
+    // `isolation: 'worktree'` there fails fast in the engine (no resolver injected).
+    const resolveChildIsolation =
+      codebase && codebase.kind !== 'folder'
+        ? createChildWorktreeResolver({
+            codebaseId: codebase.id,
+            codebaseName: codebase.name,
+            canonicalRepoPath: codebase.default_cwd,
+            baseBranch: codebaseDefaultBranch,
+            createdByPlatform: 'cli',
+            createdByUserId: cliUserId,
+          })
+        : undefined;
     const opts = prepared
       ? {
           codebaseId: codebase?.id,
@@ -3204,7 +3207,7 @@ async function runWorkflowWithOwnedSource(
       opts
     );
   } finally {
-    await detachedRunControl?.close();
+    await closeRunLiveOwner();
     unsubscribe();
 
     // Deregister the signal handlers now that the run's lifecycle is settled
@@ -3711,6 +3714,12 @@ function formatWaitOutcome(watchedRunId: string, result: RunWaitResult): string 
       return `Stopped waiting on run ${watchedRunId}.`;
     case 'not_found':
       return `Workflow run not found: ${watchedRunId}`;
+    case 'owner_lost':
+      return (
+        `Run ${watchedRunId} lost its execution owner while still ${result.observedStatus}. ` +
+        'The run was not changed. After verifying its work has stopped, run: ' +
+        `archon workflow abandon ${watchedRunId}`
+      );
     case 'attention':
       break;
   }
@@ -3772,7 +3781,7 @@ function announceWaitAttached(
 }
 
 /**
- * Block until a run finishes or parks on a gate awaiting a response, then say which.
+ * Block until a run needs attention, loses its owner, or reaches the caller's deadline.
  *
  * The point of the verb: a host that launched a run with `--detach` waits on one
  * command instead of polling `workflow get`. Exit codes describe the COMMAND, not the
@@ -3827,7 +3836,9 @@ export async function workflowWaitCommand(
       runId: resolvedId,
       result: result.kind,
       ...(result.kind === 'attention' ? { attention: result.attention } : {}),
-      ...(result.kind === 'deadline' ? { observedStatus: result.observedStatus } : {}),
+      ...(result.kind === 'deadline' || result.kind === 'owner_lost'
+        ? { observedStatus: result.observedStatus }
+        : {}),
     });
   } else {
     console.log(formatWaitOutcome(resolvedId, result));

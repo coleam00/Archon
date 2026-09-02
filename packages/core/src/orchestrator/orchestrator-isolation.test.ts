@@ -13,6 +13,7 @@ import { toBranchName } from '@archon/git';
 import type { WorkflowRoutingContext } from './orchestrator';
 import type { PreparedWorkflowSource } from '@archon/workflows/executor';
 import type * as WorkflowExecutor from '@archon/workflows/executor';
+import type * as RunLiveOwnerModule from '../services/run-live-owner';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
 import type { ResolvedWorkflow, WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import type { IWorkflowStore } from '@archon/workflows/store';
@@ -52,6 +53,22 @@ mock.module('@archon/paths', () => ({
 }));
 
 // DB mocks
+const runLiveOwnerCalls: string[] = [];
+const mockCloseRunLiveOwner = mock(() => {
+  runLiveOwnerCalls.push('close');
+  return Promise.resolve();
+});
+const mockStartRunLiveOwner = mock<typeof RunLiveOwnerModule.startRunLiveOwner>(runId => {
+  runLiveOwnerCalls.push(`start:${runId}`);
+  return Promise.resolve({
+    close: mockCloseRunLiveOwner,
+    isStopRequested: () => false,
+  });
+});
+mock.module('../services/run-live-owner', () => ({
+  startRunLiveOwner: mockStartRunLiveOwner,
+}));
+
 const mockUpdateConversation = mock(() => Promise.resolve());
 const mockGetOrCreateConversation = mock((): Promise<Conversation | null> => Promise.resolve(null));
 mock.module('../db/conversations', () => ({
@@ -105,8 +122,9 @@ mock.module('@archon/providers', () => ({
   PI_AMBIENT_VENDORS: ['amazon-bedrock', 'google-vertex'],
 }));
 
-const mockCreateWorkflowRun = mock<IWorkflowStore['createWorkflowRun']>(() =>
-  Promise.resolve({
+const mockCreateWorkflowRun = mock<IWorkflowStore['createWorkflowRun']>(() => {
+  runLiveOwnerCalls.push('create');
+  return Promise.resolve({
     id: 'run-1',
     workflow_name: 'bg-workflow',
     conversation_id: 'worker-conv-1',
@@ -124,8 +142,8 @@ const mockCreateWorkflowRun = mock<IWorkflowStore['createWorkflowRun']>(() =>
     parent_run_id: null,
     adopted_from_run_id: null,
     output_root: null,
-  })
-);
+  });
+});
 const mockFailWorkflowRun = mock<IWorkflowStore['failWorkflowRun']>(() => Promise.resolve());
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
@@ -470,6 +488,9 @@ describe('dispatchBackgroundWorkflow', () => {
     releaseExecuteWorkflowAdoption?.();
     releaseExecuteWorkflowAdoption = undefined;
     capturedSourceOwnerCalls.length = 0;
+    runLiveOwnerCalls.length = 0;
+    mockStartRunLiveOwner.mockClear();
+    mockCloseRunLiveOwner.mockClear();
     mockResolve.mockClear();
     mockUpdateConversation.mockClear();
     mockCreateWorkflowRun.mockClear();
@@ -529,12 +550,17 @@ describe('dispatchBackgroundWorkflow', () => {
   test('marks the run failed and says so when execution rejects with an ordinary error', async () => {
     const workflow = makeWorkflow({ worktree: { enabled: false } });
     mockExecuteWorkflow.mockRejectedValueOnce(new Error('exec boom'));
+    mockFailWorkflowRun.mockImplementationOnce(async () => {
+      runLiveOwnerCalls.push('fail');
+    });
 
     await dispatchBackgroundWorkflow(makeRoutingCtx(), workflow);
     await flushBackgroundExecution();
 
     expect(mockFailWorkflowRun).toHaveBeenCalledTimes(1);
     expect(mockFailWorkflowRun.mock.calls[0]?.[0]).toBe('run-1');
+    expect(mockCloseRunLiveOwner).toHaveBeenCalledTimes(1);
+    expect(runLiveOwnerCalls).toEqual(['start:prepared-run-id', 'create', 'fail', 'close']);
     const sent = platform.sendMessage.mock.calls.map(c => c[1]);
     expect(sent.some(m => m.includes('failed: exec boom'))).toBe(true);
   });
@@ -586,6 +612,8 @@ describe('dispatchBackgroundWorkflow', () => {
       // Outer dispatch owner holds, detached owner synchronously takes over, then the
       // outer owner adopts. The detached owner remains live across the unresolved await.
       expect(capturedSourceOwnerCalls).toEqual(['hold:/capture', 'hold:/capture', 'adopt']);
+      expect(runLiveOwnerCalls).toEqual(['start:prepared-run-id', 'create']);
+      expect(mockCloseRunLiveOwner).not.toHaveBeenCalled();
 
       releaseExecuteWorkflowAdoption?.();
       await flushBackgroundExecution();
@@ -595,6 +623,7 @@ describe('dispatchBackgroundWorkflow', () => {
         'adopt',
         'adopt',
       ]);
+      expect(runLiveOwnerCalls).toEqual(['start:prepared-run-id', 'create', 'close']);
     } finally {
       deferExecuteWorkflowAdoption = false;
       releaseExecuteWorkflowAdoption?.();
