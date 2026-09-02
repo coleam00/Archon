@@ -361,7 +361,7 @@ const commandHelp: HelpEntry[] = [
   {
     command: 'conversations',
     subcommand: 'list',
-    spec: 'conversations list --unowned [--platform web|cli] [--limit <n>] [--json]',
+    spec: 'conversations list --unowned [--platform web|cli] [--limit <n>]',
     description: 'List conversations no Archon user owns (what a claim would take)',
     scopedFlags: [
       { spec: '--unowned', description: 'Required: the rows no Archon user owns' },
@@ -1941,6 +1941,16 @@ async function main(): Promise<number> {
       }
 
       case 'conversations': {
+        // Both subcommands take flags only; a stray token is a typo that must not
+        // silently widen a list or ride along on an ownership-changing claim.
+        const extras = positionals.slice(2);
+        if (extras.length > 0) {
+          return await fail(
+            jsonFlag,
+            `Error: unexpected positional argument(s): ${extras.join(' ')}. ` +
+              "'conversations list' and 'conversations claim' take flags only."
+          );
+        }
         const { conversationsClaimCommand, conversationsListCommand } = await loadRoute(
           () => import('./commands/conversations'),
           { database: true }

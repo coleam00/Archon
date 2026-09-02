@@ -153,7 +153,7 @@ describe('conversations list', () => {
 describe('conversations claim', () => {
   test('requires --user and points at where to find the id', async () => {
     expect(await conversationsClaimCommand({})).toBe(1);
-    expect(errors()).toContain('archon auth whoami');
+    expect(errors()).toContain('console Settings');
     expect(mockGetUserById).not.toHaveBeenCalled();
     expectNothingWritten();
   });

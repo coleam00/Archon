@@ -2067,16 +2067,26 @@ export async function listWorkflowRuns(options?: {
  * actionable that the fallback would otherwise leave stranded.
  *
  * `user_id IS NULL` is the invariant: a run already attributed to a real user
- * can never be moved to another one.
+ * can never be moved to another one. The answerable conversation must be unowned
+ * or already owned by the claiming user: the conversation claim runs first and
+ * takes the unowned ones, so this is what stops a second operator's claim from
+ * attaching a run to themselves while its conversation belongs to someone else.
  */
-function ownerlessRunWhere(filter: OwnerlessClaimFilter, params: unknown[]): string {
+function ownerlessRunWhere(
+  ownerId: string,
+  filter: OwnerlessClaimFilter,
+  params: unknown[]
+): string {
+  params.push(ownerId);
+  const ownerParam = `$${String(params.length)}`;
   const platforms = filter.platformTypes.map(platform => {
     params.push(platform);
     return `$${String(params.length)}`;
   });
   let sql =
     'user_id IS NULL AND COALESCE(parent_conversation_id, conversation_id) IN ' +
-    `(SELECT id FROM remote_agent_conversations WHERE platform_type IN (${platforms.join(', ')}))`;
+    `(SELECT id FROM remote_agent_conversations WHERE platform_type IN (${platforms.join(', ')}) ` +
+    `AND (user_id IS NULL OR user_id = ${ownerParam}))`;
   if (filter.before) {
     params.push(toDbTimestampParam(filter.before));
     sql += ` AND started_at < $${String(params.length)}`;
@@ -2088,12 +2098,15 @@ function ownerlessRunWhere(filter: OwnerlessClaimFilter, params: unknown[]): str
  * How many workflow runs an ownership claim with this filter would take.
  * Drives the preview and `--dry-run`, which must not write.
  */
-export async function countOwnerlessRuns(filter: OwnerlessClaimFilter): Promise<number> {
+export async function countOwnerlessRuns(
+  userId: string,
+  filter: OwnerlessClaimFilter
+): Promise<number> {
   // Fail closed: no platform selected means no run selected.
   if (filter.platformTypes.length === 0) return 0;
 
   const params: unknown[] = [];
-  const where = ownerlessRunWhere(filter, params);
+  const where = ownerlessRunWhere(userId, filter, params);
   try {
     const result = await pool.query<{ count: number | string }>(
       `SELECT COUNT(*) AS count FROM remote_agent_workflow_runs WHERE ${where}`,
@@ -2121,8 +2134,8 @@ export async function claimOwnerlessRuns(
 ): Promise<number> {
   if (filter.platformTypes.length === 0) return 0;
 
-  const params: unknown[] = [userId];
-  const where = ownerlessRunWhere(filter, params);
+  const params: unknown[] = [];
+  const where = ownerlessRunWhere(userId, filter, params);
   try {
     const result = await pool.query(
       `UPDATE remote_agent_workflow_runs SET user_id = $1 WHERE ${where}`,

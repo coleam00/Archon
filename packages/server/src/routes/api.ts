@@ -2559,11 +2559,17 @@ export function registerApiRoutes(
    * Delete attachments written by `persistUploadedFiles`. Called once the AI has
    * read them, and on a refused request so nothing is left behind under a
    * conversation id the caller was not allowed to reach.
+   *
+   * The upload directory is per conversation and shared by every request into it.
+   * The completion path may remove it (that request owned the whole dispatch), but a
+   * REFUSED request removes only the files it wrote: a recursive delete there would
+   * take a concurrent owner request's attachments before orchestration read them.
    */
   async function discardUploads(
     files: readonly AttachedFile[],
     uploadDir: string,
-    conversationId: string
+    conversationId: string,
+    { removeDirectory = true }: { removeDirectory?: boolean } = {}
   ): Promise<void> {
     for (const f of files) {
       await unlink(f.path).catch((err: NodeJS.ErrnoException) => {
@@ -2572,6 +2578,7 @@ export function registerApiRoutes(
         }
       });
     }
+    if (!removeDirectory) return;
     // Remove the now-empty upload directory for this conversation.
     await rm(uploadDir, { recursive: true, force: true }).catch((err: NodeJS.ErrnoException) => {
       if (err.code !== 'ENOENT') {
@@ -3748,7 +3755,9 @@ export function registerApiRoutes(
       // not allowed to reach.
       const access = await resolveDispatchConversation(c, conversationId);
       if (!access.ok) {
-        if (savedFiles.length > 0) await discardUploads(savedFiles, uploadDir, conversationId);
+        if (savedFiles.length > 0) {
+          await discardUploads(savedFiles, uploadDir, conversationId, { removeDirectory: false });
+        }
         return access.response;
       }
       const conv = access.conversation;

@@ -152,7 +152,7 @@ export async function conversationsListCommand(options: ConversationsListOptions
   printConversationTable(shown);
   console.log('');
   console.log('Claim them with: archon conversations claim --user <archon-user-id>');
-  console.log("Your own id: run 'archon auth whoami', or copy it from console Settings.");
+  console.log('Your own id: copy it from console Settings (the remote_agent_users id).');
   return 0;
 }
 
@@ -169,7 +169,7 @@ export async function conversationsClaimCommand(
   if (!options.user) {
     console.error(
       'Usage: archon conversations claim --user <archon-user-id> [--platform web|cli] [--before <iso>] [--dry-run] [--yes]\n' +
-        "Find the id with 'archon auth whoami' or in console Settings."
+        'Find the id in console Settings (the remote_agent_users id).'
     );
     return 1;
   }
@@ -191,8 +191,8 @@ export async function conversationsClaimCommand(
   if (!user) {
     console.error(
       `No Archon user with id '${options.user}'.\n` +
-        "The target is a remote_agent_users id — run 'archon auth whoami' or copy it\n" +
-        'from console Settings. It is not your login email or your CLI identity.'
+        'The target is a remote_agent_users id — copy it from console Settings.\n' +
+        'It is not your login email or your CLI identity.'
     );
     return 1;
   }
@@ -200,7 +200,7 @@ export async function conversationsClaimCommand(
   const filter = { platformTypes: platforms.value, before: before.value };
   const [conversations, runs] = await Promise.all([
     conversationDb.listOwnerlessConversations(filter),
-    workflowDb.countOwnerlessRuns(filter),
+    workflowDb.countOwnerlessRuns(user.id, filter),
   ]);
 
   const who = user.display_name ? `${user.display_name} (${user.id})` : user.id;

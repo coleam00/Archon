@@ -1693,13 +1693,13 @@ describe('workflows database', () => {
     test('counts unowned runs without writing', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([{ count: '4' }]));
 
-      const count = await countOwnerlessRuns({ platformTypes: ['web', 'cli'] });
+      const count = await countOwnerlessRuns('user-1', { platformTypes: ['web', 'cli'] });
 
       expect(count).toBe(4);
       const { sql, params } = lastQuery();
       expect(sql).toContain('SELECT COUNT(*) AS count');
       expect(sql).toContain('user_id IS NULL');
-      expect(params).toEqual(['web', 'cli']);
+      expect(params).toEqual(['user-1', 'web', 'cli']);
     });
 
     test('the UPDATE never widens past `user_id IS NULL`', async () => {
@@ -1725,8 +1725,23 @@ describe('workflows database', () => {
 
       const { sql } = lastQuery();
       expect(sql).toContain(
-        'COALESCE(parent_conversation_id, conversation_id) IN (SELECT id FROM remote_agent_conversations WHERE platform_type IN ($2))'
+        'COALESCE(parent_conversation_id, conversation_id) IN (SELECT id FROM remote_agent_conversations WHERE platform_type IN ($2) AND (user_id IS NULL OR user_id = $1))'
       );
+    });
+
+    // The conversation claim runs first and takes every unowned conversation for
+    // the claiming user. A run is then claimable only through a conversation that
+    // is still unowned or already that user's — never through one another operator
+    // claimed, or a second `claim --user` would attach runs to itself that answer
+    // to someone else's conversation.
+    test('the run claim never reaches through a conversation another user owns', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
+
+      await claimOwnerlessRuns('user-2', { platformTypes: ['web'] });
+
+      const { sql, params } = lastQuery();
+      expect(sql).toContain('AND (user_id IS NULL OR user_id = $1)');
+      expect(params[0]).toBe('user-2');
     });
 
     test('honors --before as a started_at cutoff', async () => {
@@ -1741,7 +1756,7 @@ describe('workflows database', () => {
     });
 
     test('an empty platform list touches nothing and issues no query', async () => {
-      expect(await countOwnerlessRuns({ platformTypes: [] })).toBe(0);
+      expect(await countOwnerlessRuns('user-1', { platformTypes: [] })).toBe(0);
       expect(await claimOwnerlessRuns('user-1', { platformTypes: [] })).toBe(0);
       expect(mockQuery).not.toHaveBeenCalled();
     });

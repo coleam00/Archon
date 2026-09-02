@@ -1,3 +1,7 @@
+import { mkdir, mkdtemp, readdir, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
@@ -68,6 +72,8 @@ interface ConversationRow {
 
 /** The row `findConversationByPlatformId` returns; null means "no such row". */
 let storedConversation: ConversationRow | null = null;
+/** `@archon/paths` mock home; one test points it at a real temp dir to assert on disk. */
+let mockArchonHome = '/tmp/.archon';
 
 const mockFindConversationByPlatformId = mock(
   async (platformId: string): Promise<ConversationRow | null> =>
@@ -120,7 +126,7 @@ mock.module('@archon/paths', () => ({
   getDefaultCommandsPath: mock(() => '/tmp/.archon-test-nonexistent/commands/defaults'),
   getDefaultWorkflowsPath: mock(() => '/tmp/.archon-test-nonexistent/workflows/defaults'),
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
-  getArchonHome: () => '/tmp/.archon',
+  getArchonHome: () => mockArchonHome,
   getRunArtifactsPath: (owner: string, repo: string, runId: string): string =>
     `/tmp/.archon/workspaces/${owner}/${repo}/artifacts/runs/${runId}`,
 }));
@@ -405,6 +411,42 @@ describe('dispatch to an unknown conversation id', () => {
     });
     expect(res.status).toBe(404);
     expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+
+  // The upload directory is per conversation and shared by every request into it.
+  // A refused multipart run must delete only what it wrote: a recursive delete
+  // would take a concurrent owner request's attachments before orchestration read
+  // them, which turns a 404 for the intruder into lost input for the owner.
+  test("workflow run: a refused multipart request leaves the owner's uploads in place", async () => {
+    ownershipEnforced = true;
+    storedConversation = conversation({ user_id: 'user-bob' });
+    const home = await mkdtemp(join(tmpdir(), 'archon-ownership-uploads-'));
+    const previousHome = mockArchonHome;
+    mockArchonHome = home;
+    const uploadDir = join(home, 'artifacts', 'uploads', CONVERSATION_ID);
+    await mkdir(uploadDir, { recursive: true });
+    await writeFile(join(uploadDir, 'owner-attachment.txt'), 'bob was here first');
+    try {
+      const form = new FormData();
+      form.append('conversationId', CONVERSATION_ID);
+      form.append('message', 'go');
+      form.append('files', new File(['intruder'], 'intruder.txt', { type: 'text/plain' }));
+
+      const res = await makeApp().request('/api/workflows/demo/run', {
+        method: 'POST',
+        headers: { 'X-Archon-User': 'user-alice' },
+        body: form,
+      });
+
+      expect(res.status).toBe(404);
+      expect(mockHandleMessage).not.toHaveBeenCalled();
+      // Only the refused request's own file is gone; the directory and its
+      // sibling survive for the owner's in-flight request.
+      expect((await readdir(uploadDir)).sort()).toEqual(['owner-attachment.txt']);
+    } finally {
+      mockArchonHome = previousHome;
+      await removeTempTree(home);
+    }
   });
 
   test('workflow run: enforcement off → today create-on-dispatch is preserved', async () => {
