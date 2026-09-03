@@ -2746,3 +2746,112 @@ describe('expandWorkflowIncludes — typed with: values (#2637)', () => {
     expect(second.errors.find(e => e.filename === 'parent')?.error).toContain("binding 'mode'");
   });
 });
+
+// ---------------------------------------------------------------------------
+// `denied_tools` on an include directive (sandboxing a block you did not write)
+// ---------------------------------------------------------------------------
+
+describe('include denied_tools', () => {
+  const HOLDOUT = 'Read(.factory/holdout/**)';
+
+  test('unions onto every expanded node, not only the entry', () => {
+    const block = wf('blk', [
+      { id: 'first', prompt: 'a' },
+      { id: 'second', prompt: 'b', depends_on: ['first'] },
+    ]);
+    const parent = wf('parent', [{ id: 'use', include: 'blk', denied_tools: [HOLDOUT] }]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toHaveLength(0);
+    const expanded = workflows.get('parent')!;
+
+    // The entry AND the node behind it. A sandbox that covered only the first node
+    // would read as enforced while the builder ran unrestricted.
+    expect(nodeById(expanded, 'use__first')?.denied_tools).toEqual([HOLDOUT]);
+    expect(nodeById(expanded, 'use__second')?.denied_tools).toEqual([HOLDOUT]);
+  });
+
+  test('adds to the block own denials rather than replacing them', () => {
+    const block = wf('blk', [{ id: 'build', prompt: 'a', denied_tools: ['Bash(git:*)'] }]);
+    const parent = wf('parent', [{ id: 'use', include: 'blk', denied_tools: [HOLDOUT] }]);
+
+    const { workflows } = expandWorkflowIncludes(mapOf(block, parent));
+    const node = nodeById(workflows.get('parent')!, 'use__build');
+    // Both survive: replacing would silently GRANT back what the block denied itself,
+    // which is the one direction this composition must never move in.
+    expect(node?.denied_tools).toEqual(['Bash(git:*)', HOLDOUT]);
+  });
+
+  test('does not duplicate a denial the block already declared', () => {
+    const block = wf('blk', [{ id: 'build', prompt: 'a', denied_tools: [HOLDOUT] }]);
+    const parent = wf('parent', [{ id: 'use', include: 'blk', denied_tools: [HOLDOUT] }]);
+
+    const { workflows } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(nodeById(workflows.get('parent')!, 'use__build')?.denied_tools).toEqual([HOLDOUT]);
+  });
+
+  test('reaches a loop_group body node', () => {
+    const block = wf('blk', [
+      {
+        id: 'converge',
+        loop_group: { max_iterations: 2, until_bash: 'true', nodes: [{ id: 'fix', prompt: 'a' }] },
+      },
+    ]);
+    const parent = wf('parent', [{ id: 'use', include: 'blk', denied_tools: [HOLDOUT] }]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toHaveLength(0);
+    const group = nodeById(workflows.get('parent')!, 'use__converge');
+    expect(group?.denied_tools).toEqual([HOLDOUT]);
+    // The body is where a long-running agent loop actually runs, so a denial that
+    // stopped at the group boundary would leave the important node uncovered.
+    const body = loopGroupNodes(group);
+    expect(body?.map(n => n.denied_tools)).toEqual([[HOLDOUT]]);
+  });
+
+  test('skips exec nodes, where the field is inert and warned about', () => {
+    const block = wf('blk', [
+      { id: 'agent', prompt: 'a' },
+      { id: 'shell', bash: 'echo hi', depends_on: ['agent'] },
+    ]);
+    const parent = wf('parent', [{ id: 'use', include: 'blk', denied_tools: [HOLDOUT] }]);
+
+    const { workflows } = expandWorkflowIncludes(mapOf(block, parent));
+    const expanded = workflows.get('parent')!;
+    expect(nodeById(expanded, 'use__agent')?.denied_tools).toEqual([HOLDOUT]);
+    expect(nodeById(expanded, 'use__shell')?.denied_tools).toBeUndefined();
+  });
+
+  test('reaches nodes the block itself included, one level down', () => {
+    const inner = wf('inner', [{ id: 'build', prompt: 'a' }]);
+    const outer = wf('outer', [{ id: 'wrap', include: 'inner' }]);
+    const parent = wf('parent', [{ id: 'use', include: 'outer', denied_tools: [HOLDOUT] }]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(inner, outer, parent));
+    expect(errors).toHaveLength(0);
+    // Transitive by construction: the child is fully expanded before it is inlined,
+    // so a nested block cannot be the hole in the sandbox.
+    expect(nodeById(workflows.get('parent')!, 'use__wrap__build')?.denied_tools).toEqual([HOLDOUT]);
+  });
+
+  test('an include with no denied_tools leaves the block untouched', () => {
+    const block = wf('blk', [{ id: 'build', prompt: 'a', denied_tools: ['Bash(git:*)'] }]);
+    const parent = wf('parent', [{ id: 'use', include: 'blk' }]);
+
+    const { workflows } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(nodeById(workflows.get('parent')!, 'use__build')?.denied_tools).toEqual(['Bash(git:*)']);
+  });
+
+  test('two parents sandbox the same block independently', () => {
+    const block = wf('blk', [{ id: 'build', prompt: 'a' }]);
+    const strict = wf('strict', [{ id: 'use', include: 'blk', denied_tools: [HOLDOUT] }]);
+    const loose = wf('loose', [{ id: 'use', include: 'blk' }]);
+
+    const { workflows } = expandWorkflowIncludes(mapOf(block, strict, loose));
+    // The shared block is deep-cloned per parent; one caller's sandbox must not
+    // leak into another's expansion, nor back into the block itself.
+    expect(nodeById(workflows.get('strict')!, 'use__build')?.denied_tools).toEqual([HOLDOUT]);
+    expect(nodeById(workflows.get('loose')!, 'use__build')?.denied_tools).toBeUndefined();
+    expect(nodeById(workflows.get('blk')!, 'build')?.denied_tools).toBeUndefined();
+  });
+});

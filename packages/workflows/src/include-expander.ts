@@ -44,6 +44,7 @@ import type {
 import {
   isIncludeDirective,
   isAgentNode,
+  isExecNode,
   isLoopNode,
   isLoopGroupNode,
   isGateNode,
@@ -687,6 +688,32 @@ function cloneNodeForInclude<T extends DagNode | IncludeDirective>(node: T): T {
   return clone;
 }
 
+/** Union the include site's `denied_tools` onto every expanded node that can honour one,
+ * recursing into a `loop_group` body. Union rather than replace, and deny-only: no
+ * combination of the caller's list and the block's own can grant what the block did not
+ * already have, so a parent may sandbox a block it did not write. Exec nodes are skipped
+ * — the field is inert there, and stamping one would produce the shape the loader warns
+ * about. */
+function applyIncludeDeniedTools(node: DagNode, denied: readonly string[]): void {
+  if (denied.length === 0) return;
+
+  if (!isExecNode(node)) {
+    const merged = [...(node.denied_tools ?? [])];
+    for (const entry of denied) {
+      if (!merged.includes(entry)) merged.push(entry);
+    }
+    node.denied_tools = merged;
+  }
+
+  // A body node is dispatched by the same executor, so stopping at the group boundary
+  // would leave a long-running agent loop uncovered.
+  if (isLoopGroupNode(node)) {
+    for (const bodyNode of node.loop_group.nodes) {
+      if (!isIncludeDirective(bodyNode)) applyIncludeDeniedTools(bodyNode, denied);
+    }
+  }
+}
+
 /**
  * Inline one include node's fully-expanded child into namespaced parent nodes.
  * Never mutates the child's nodes (each node is deep-cloned first), so a building block
@@ -758,6 +785,7 @@ function inlineInclude(
     // when the included block also has a node named `gather`.
     rewriteNodeOutputRefs(clone, rename, id => [rename(id)], rename);
     applyInputsMacro(clone, resolvedInputs, missingInputs, includeNode);
+    applyIncludeDeniedTools(clone, includeNode.denied_tools ?? []);
     // Stamped AFTER both passes, for the same reason the caller's values are inserted
     // after the rename: these are the CALLER's strings, so they stay parent-scoped here
     // and are walked by the next level out, not by this one. Each node gets its own copy

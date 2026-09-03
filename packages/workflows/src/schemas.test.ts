@@ -2005,8 +2005,9 @@ describe('dagNodeSchema — launch-only options on an include node (#1764)', () 
 });
 
 describe('INCLUDE_NODE_IGNORED_FIELDS', () => {
-  test('is a superset of BASH_NODE_AI_FIELDS plus exec-only fields', () => {
+  test('is a superset of BASH_NODE_AI_FIELDS, except the one field an include honours', () => {
     for (const f of BASH_NODE_AI_FIELDS) {
+      if (f === 'denied_tools') continue;
       expect(INCLUDE_NODE_IGNORED_FIELDS).toContain(f);
     }
     for (const f of ['retry', 'output_type', 'always_run', 'idle_timeout', 'timeout']) {
@@ -2016,6 +2017,21 @@ describe('INCLUDE_NODE_IGNORED_FIELDS', () => {
     for (const f of ['id', 'depends_on', 'when', 'trigger_rule', 'include', 'description']) {
       expect(INCLUDE_NODE_IGNORED_FIELDS).not.toContain(f);
     }
+  });
+
+  test('does not claim denied_tools is ignored, because the expander applies it', () => {
+    // The carve-out is the point, not an exception to tidy away. An include unions its
+    // `denied_tools` onto every expanded non-exec node, so warning that the field was
+    // ignored would tell an author their sandbox does nothing while it is in force —
+    // and the likely response to that warning is to delete the restriction.
+    expect(INCLUDE_NODE_IGNORED_FIELDS).not.toContain('denied_tools');
+  });
+
+  test('still ignores allowed_tools, which an include cannot narrow honestly', () => {
+    // Grants are patterns rather than set members (`Bash(git:*)` vs `Bash`), so there is
+    // no intersection to compute that is not a guess. Warning is the honest outcome: the
+    // author is told it does nothing instead of assuming it mirrors the denial beside it.
+    expect(INCLUDE_NODE_IGNORED_FIELDS).toContain('allowed_tools');
   });
 });
 
