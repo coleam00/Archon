@@ -11,7 +11,13 @@
   --sl-color-bg-sidebar: #131825;
   --sl-color-bg-nav: #0f1219;
   --sl-color-hairline-light: #1e293b;
-  --sl-color-text-accent: rgba(168, 85, 247, 0.25); /* mobile sidebar active-link bg — re-test after Starlight upgrades */
+}
+
+/* Starlight uses --sl-color-text-accent for the site title, primary buttons, and
+   links as well as the mobile sidebar active-link background, so the override
+   stays scoped to the sidebar. Re-test after Starlight upgrades. */
+[data-theme='dark'] .sidebar-content {
+  --sl-color-text-accent: rgba(168, 85, 247, 0.25);
   --sl-color-text-invert: white;
 }
 
