@@ -725,6 +725,64 @@ export async function checkTelegram(env: NodeJS.ProcessEnv): Promise<CheckResult
   }
 }
 
+const RETIRED_SKILL_ROOTS = ['archon', 'manage-run'] as const;
+const CURRENT_SKILL_ROOT = 'archon-cli';
+
+/**
+ * Catch the v0.10.0 skill migration that `archon skill install` performs but
+ * upgrades never run: leftover `archon` / `manage-run` roots, or a missing
+ * `archon-cli` replacement. Skip when this project has never installed skills.
+ */
+export function checkArchonSkill(cwd: string = process.cwd()): CheckResult {
+  const label = 'Archon skill';
+  const skillsRoots = [join(cwd, '.claude', 'skills'), join(cwd, '.agents', 'skills')];
+
+  const retired: string[] = [];
+  let hasCurrent = false;
+  let sawSkillsTree = false;
+
+  for (const skillsRoot of skillsRoots) {
+    if (!existsSync(skillsRoot)) {
+      continue;
+    }
+    sawSkillsTree = true;
+    for (const name of RETIRED_SKILL_ROOTS) {
+      if (existsSync(join(skillsRoot, name))) {
+        retired.push(`${skillsRoot}/${name}`);
+      }
+    }
+    if (existsSync(join(skillsRoot, CURRENT_SKILL_ROOT))) {
+      hasCurrent = true;
+    }
+  }
+
+  if (retired.length > 0) {
+    return {
+      label,
+      status: 'fail',
+      message: `retired skill root(s) still present. Run \`archon skill install .\` to replace them with ${CURRENT_SKILL_ROOT}.`,
+    };
+  }
+
+  if (sawSkillsTree && !hasCurrent) {
+    return {
+      label,
+      status: 'fail',
+      message: `${CURRENT_SKILL_ROOT} is missing. Run \`archon skill install .\` to install the current skill.`,
+    };
+  }
+
+  if (!hasCurrent) {
+    return {
+      label,
+      status: 'skip',
+      message: `not installed (run \`archon skill install .\` if you use Claude Code or Codex skills)`,
+    };
+  }
+
+  return { label, status: 'pass', message: `${CURRENT_SKILL_ROOT} installed` };
+}
+
 function renderResult(r: CheckResult): string {
   const icon = r.status === 'pass' ? '✓' : r.status === 'fail' ? '✗' : '○';
   return `${icon} ${r.label}: ${r.message}`;
@@ -755,6 +813,7 @@ export async function doctorCommand(
         checkConnectedProviders(env),
         checkWorkspaceWritable(),
         checkBundledDefaults(),
+        checkArchonSkill(),
         checkTelemetry(),
         checkSlack(env),
         checkTelegram(env),
