@@ -2855,3 +2855,37 @@ describe('include denied_tools', () => {
     expect(nodeById(workflows.get('blk')!, 'build')?.denied_tools).toBeUndefined();
   });
 });
+
+describe('include denied_tools — the same block twice in one parent', () => {
+  const HOLDOUT = 'Read(.factory/holdout/**)';
+
+  test('each include site gets its own sandbox, and neither leaks into the other', () => {
+    const block = wf('blk', [{ id: 'build', prompt: 'a' }]);
+    const parent = wf('parent', [
+      { id: 'sandboxed', include: 'blk', denied_tools: [HOLDOUT] },
+      { id: 'open', include: 'blk', depends_on: ['sandboxed'] },
+    ]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    expect(errors).toHaveLength(0);
+    const expanded = workflows.get('parent')!;
+    // Each include deep-clones the block, so one site's denial must not reach the other.
+    // If it did, the leak would run in the SAFE direction here and the dangerous one
+    // whenever the order of the two sites happened to be reversed.
+    expect(nodeById(expanded, 'sandboxed__build')?.denied_tools).toEqual([HOLDOUT]);
+    expect(nodeById(expanded, 'open__build')?.denied_tools).toBeUndefined();
+  });
+
+  test('two sites with different denials do not merge into one list', () => {
+    const block = wf('blk', [{ id: 'build', prompt: 'a' }]);
+    const parent = wf('parent', [
+      { id: 'first', include: 'blk', denied_tools: [HOLDOUT] },
+      { id: 'second', include: 'blk', denied_tools: ['Bash(gh:*)'], depends_on: ['first'] },
+    ]);
+
+    const { workflows } = expandWorkflowIncludes(mapOf(block, parent));
+    const expanded = workflows.get('parent')!;
+    expect(nodeById(expanded, 'first__build')?.denied_tools).toEqual([HOLDOUT]);
+    expect(nodeById(expanded, 'second__build')?.denied_tools).toEqual(['Bash(gh:*)']);
+  });
+});
