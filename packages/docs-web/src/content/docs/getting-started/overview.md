@@ -90,8 +90,10 @@ You need two things: a GitHub token (for cloning repos) and Claude authenticatio
 
 1. Go to [github.com/settings/tokens](https://github.com/settings/tokens)
 2. Click **"Generate new token (classic)"**
-3. Select scope: **`repo`**
+3. Select scope: **`repo`**, plus **`workflow`** if your runs may change files under `.github/workflows/`
 4. Copy the token (starts with `ghp_...`)
+
+> **Why classic and not fine-grained?** GitHub exposes no Checks permission to fine-grained tokens, so they cannot read GitHub Actions check runs and a workflow that waits on CI fails at that gate. The `repo` scope is broad in exchange; [GitHub App mode](/adapters/github-app-setup/) grants access per repository and reads checks, if you would rather not hand over a repo-wide token.
 
 ### Claude Authentication
 

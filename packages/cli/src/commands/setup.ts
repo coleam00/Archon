@@ -1338,13 +1338,15 @@ async function collectGitHubConfig(): Promise<GitHubConfig> {
   note(
     'GitHub Personal Access Token Setup\n\n' +
       '1. Go to github.com/settings/tokens\n' +
-      '2. Click "Generate new token" -> "Fine-grained token"\n' +
-      '3. Set expiration and select your target repository\n' +
-      '4. Under Permissions, enable:\n' +
-      '   - Issues: Read and write\n' +
-      '   - Pull requests: Read and write\n' +
-      '   - Contents: Read\n' +
-      '5. Generate and copy the token',
+      '2. Click "Generate new token" -> "Generate new token (classic)"\n' +
+      '3. Set an expiration and select these scopes:\n' +
+      '   - repo (clone and push, issues, pull requests, and CI check state)\n' +
+      '   - workflow (only if runs may change .github/workflows/ files)\n' +
+      '4. Generate and copy the token\n\n' +
+      'A fine-grained token cannot read GitHub Actions check runs: GitHub exposes\n' +
+      'no Checks permission to them, so a workflow that waits on CI stops there.\n' +
+      'The repo scope is broad, so prefer GitHub App mode when you want access\n' +
+      'granted per repository (docs: adapters/github-app-setup).',
     'GitHub Setup'
   );
 
