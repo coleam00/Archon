@@ -508,6 +508,8 @@ describe('fresh gate usage is its own — real SQLite end-to-end (#2673)', () =>
 
     const run = await getWorkflowRun('usage-reset');
     expect(run?.metadata.approval).toEqual({
+      occurrenceId: expect.any(String),
+      evidenceDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
       nodeId: 'plain-gate',
       message: 'Approve?',
       type: 'approval',

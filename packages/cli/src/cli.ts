@@ -86,6 +86,8 @@ import {
   workflowApproveCommand,
   workflowRejectCommand,
   workflowRespondCommand,
+  workflowLaunchStatusCommand,
+  workflowGateEvidenceCommand,
   workflowCleanupCommand,
   workflowResetSessionsCommand,
   workflowEventEmitCommand,
@@ -94,6 +96,7 @@ import {
   workflowInstallCommand,
   isValidEventType,
   resolveCliExitCode,
+  WorkflowCommandRejectedError,
 } from './commands/workflow';
 import { WORKFLOW_EVENT_TYPES } from '@archon/workflows/store';
 import {
@@ -186,6 +189,9 @@ Commands:
   workflow status            Show status of running/paused workflows
   workflow runs              List recent runs (all statuses) for this project
   workflow get <run-id>      Show detail for a single run (any status)
+  workflow launch-intent <name> [message]  Compute engine launch payload digest
+  workflow launch-status <key>  Look up a durable launch reservation
+  workflow gate-evidence <run-id> <occurrence-id>  Read sealed gate evidence
   workflow wait <run-id>     Block until the run ends or needs a human decision
   workflow resume <run-id>   Resume a failed or paused run from completed nodes
   workflow cancel <run-id>   Stop a running workflow started with --detach
@@ -452,7 +458,27 @@ async function main(): Promise<number> {
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
 
   try {
-    const configOutsideRun = rejectConfigOutsideRun(command, subcommand, values.config);
+    if (
+      [
+        values['command-id'],
+        values['expected-occurrence'],
+        values['expected-evidence-digest'],
+      ].some(value => value !== undefined) &&
+      !(command === 'workflow' && subcommand === 'respond')
+    ) {
+      return await fail(jsonFlag, 'Conditional gate flags are only supported by workflow respond.');
+    }
+    if (
+      [values['launch-key'], values['launch-payload-digest']].some(value => value !== undefined) &&
+      !(command === 'workflow' && subcommand === 'run')
+    ) {
+      return await fail(jsonFlag, 'Launch identity flags are only supported by workflow run.');
+    }
+    const configOutsideRun = rejectConfigOutsideRun(
+      command,
+      subcommand === 'launch-intent' ? 'run' : subcommand,
+      values.config
+    );
     if (configOutsideRun) {
       console.error(configOutsideRun);
       return 1;
@@ -520,7 +546,13 @@ async function main(): Promise<number> {
       if (repoRoot) {
         // Use repo root as working directory (handles subdirectory case)
         effectiveCwd = repoRoot;
-      } else if (dryRunFlag && command === 'workflow' && subcommand === 'run') {
+      } else if (
+        command === 'workflow' &&
+        (subcommand === 'launch-intent' ||
+          subcommand === 'launch-status' ||
+          subcommand === 'gate-evidence' ||
+          (dryRunFlag && subcommand === 'run'))
+      ) {
         // Dry-run only discovers workflow files and simulates in memory. It does
         // not need project registration, a database lookup, or a git worktree.
         effectiveCwd = cwd;
@@ -646,6 +678,18 @@ async function main(): Promise<number> {
             await workflowListCommand(effectiveCwd, jsonFlag);
             break;
 
+          case 'launch-status':
+            if (!positionals[2])
+              return await fail(jsonFlag, 'Usage: workflow launch-status <launch-key> --json');
+            return await workflowLaunchStatusCommand(positionals[2]);
+          case 'gate-evidence':
+            if (!positionals[2] || !positionals[3])
+              return await fail(
+                jsonFlag,
+                'Usage: workflow gate-evidence <run-id> <occurrence-id> --json'
+              );
+            return await workflowGateEvidenceCommand(positionals[2], positionals[3]);
+          case 'launch-intent':
           case 'run': {
             const workflowName = positionals[2];
             if (!workflowName) {
@@ -724,6 +768,9 @@ async function main(): Promise<number> {
               }
             }
             const options = {
+              launchIntentOnly: subcommand === 'launch-intent',
+              launchKey: values['launch-key'] as string | undefined,
+              launchPayloadDigest: values['launch-payload-digest'] as string | undefined,
               branchName,
               fromBranch,
               baseBranch,
@@ -928,13 +975,34 @@ async function main(): Promise<number> {
             const rawRespondText =
               (values.text as string | undefined) || positionals.slice(4).join(' ');
             const respondText = rawRespondText.length > 0 ? rawRespondText : undefined;
+            const conditionalValues = [
+              values['command-id'],
+              values['expected-occurrence'],
+              values['expected-evidence-digest'],
+            ];
+            if (
+              conditionalValues.some(value => value !== undefined) &&
+              !conditionalValues.every(value => typeof value === 'string' && value.length > 0)
+            ) {
+              return await fail(
+                jsonFlag,
+                'Conditional respond requires --command-id, --expected-occurrence and --expected-evidence-digest together.'
+              );
+            }
             await workflowRespondCommand(
               respondRunId,
               decision,
               respondText,
               jsonFlag,
               effectiveCwd,
-              detachFlag
+              detachFlag,
+              conditionalValues[0] === undefined
+                ? undefined
+                : {
+                    commandId: values['command-id'] as string,
+                    expectedOccurrence: values['expected-occurrence'] as string,
+                    expectedEvidenceDigest: values['expected-evidence-digest'] as string,
+                  }
             );
             break;
           }
@@ -1264,6 +1332,7 @@ async function main(): Promise<number> {
     await printUpdateNotice(values.quiet as boolean | undefined);
     return 0;
   } catch (error) {
+    if (error instanceof WorkflowCommandRejectedError) return 1;
     const err = error as Error;
     // A detached child reports its run's own failure with a reserved status so its
     // launcher can tell that apart from a child that died before the run started.

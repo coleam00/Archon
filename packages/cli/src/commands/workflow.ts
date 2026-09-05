@@ -1,3 +1,10 @@
+import {
+  reserveWorkflowLaunch,
+  getWorkflowLaunch,
+  getGateEvidence,
+} from '@archon/core/db/workflow-commands';
+import { computeLaunchIntent } from '../utils/launch-intent';
+import type { GateCommandBinding } from '@archon/core/db/workflow-commands';
 /**
  * Workflow command - list and run workflows
  */
@@ -123,6 +130,7 @@ import {
   approveWorkflow,
   rejectWorkflow,
   respondToWorkflow,
+  respondToWorkflowConditionally,
   resumeWorkflow as resumeWorkflowOp,
   abandonWorkflow,
   getWorkflowStatus,
@@ -186,6 +194,9 @@ export const DETACHED_RUN_FAILED_EXIT_CODE = 90;
  * got started. Only that distinction can tell a detached launcher whether to ack the run
  * it created or refuse the launch.
  */
+/** Receipt was already emitted; main must exit unsuccessfully without a second JSON document. */
+export class WorkflowCommandRejectedError extends Error {}
+
 export class WorkflowRunFailedError extends Error {
   /**
    * Status the process should exit with. The reserved code is issued only by a detached
@@ -315,6 +326,9 @@ async function waitForDetachedStartup(
  * --base + --no-worktree.
  */
 export interface WorkflowRunOptions {
+  launchKey?: string;
+  launchPayloadDigest?: string;
+  launchIntentOnly?: boolean;
   branchName?: string;
   fromBranch?: string;
   /**
@@ -2025,6 +2039,57 @@ async function runWorkflowWithOwnedSource(
   // chat dispatch enforce `requires: [github]` identically.
   await assertCliWorkflowRequirementsMet(workflow);
 
+  if (
+    options.launchKey !== undefined ||
+    options.launchPayloadDigest !== undefined ||
+    options.launchIntentOnly
+  ) {
+    if (isContinuation || options.detach || options.adoptRunId || options.supersedesRunId) {
+      throw new Error(
+        'Keyed launches require a fresh foreground run; use exact run resume for continuation.'
+      );
+    }
+    if (!preparedSource) throw new Error('Keyed launch requires a frozen workflow source.');
+    if (!options.launchIntentOnly && !options.launchKey)
+      throw new Error('--launch-payload-digest requires --launch-key.');
+    const payloadDigest = await computeLaunchIntent(cwd, {
+      workflowName: workflow.name,
+      userMessage,
+      workflowSource: preparedSource.origin,
+      sourceDigest: preparedSource.manifest.digest,
+      engineVersion: preparedSource.manifest.engine_version,
+      inputs: resolvedInputs ?? {},
+      modelOverrides: modelOverrides ?? null,
+      runConfig: runConfig?.layer ?? null,
+      config: await loadConfig(cwd),
+      branch: options.branchName ?? null,
+      from: options.fromBranch ?? null,
+      base: options.baseBranch ?? null,
+      noWorktree: options.noWorktree ?? false,
+      folder: options.folder ?? false,
+      container: options.container ?? false,
+      conversationId: options.conversationId ?? null,
+      codebaseId: options.codebaseId ?? null,
+    });
+    if (options.launchIntentOnly) {
+      await writeJsonLine({ ok: true, payloadDigest });
+      return;
+    }
+    const reservation = await reserveWorkflowLaunch(
+      options.launchKey ?? '',
+      payloadDigest,
+      preparedSource.runId,
+      options.launchPayloadDigest
+    );
+    if (!reservation.launch) {
+      await writeJsonLine(reservation.receipt);
+      if (!reservation.receipt.ok) throw new WorkflowCommandRejectedError(reservation.receipt.code);
+      return;
+    }
+    // The reservation points to preparedSource.runId, which the executor uses at creation.
+    // A crash before creation stays uncertain; neither replay nor a timer starts it again.
+  }
+
   // --detach: hand the whole run to a detached background child and return now.
   // Done AFTER workflow resolution + flag validation above (so unknown-workflow /
   // bad-flag errors surface synchronously to the caller, not lost in the child)
@@ -3285,6 +3350,14 @@ export async function workflowRunCommand(
   userMessage: string,
   options: WorkflowRunOptions = {}
 ): Promise<void> {
+  if (
+    (options.launchKey !== undefined ||
+      options.launchPayloadDigest !== undefined ||
+      options.launchIntentOnly) &&
+    options.dryRun
+  ) {
+    throw new Error('Launch identity cannot be combined with --dry-run.');
+  }
   const detachedRunConfig = parseDetachedRunConfig(options.detachedRunConfigPayload);
   try {
     await withCapturedSource(owner =>
@@ -4821,8 +4894,18 @@ export async function workflowRespondCommand(
   text?: string,
   json?: boolean,
   cwd?: string,
-  detach?: boolean
+  detach?: boolean,
+  binding?: GateCommandBinding
 ): Promise<void> {
+  if (binding) {
+    if (!json || detach)
+      throw new Error('Conditional respond requires --json and does not auto-resume or detach.');
+    const receipt = await respondToWorkflowConditionally(runId, decision, text, binding);
+    await writeJsonLine(receipt);
+    if (!receipt.ok) throw new WorkflowCommandRejectedError(receipt.code);
+    return;
+  }
+
   if (decision === 'approve') return workflowApproveCommand(runId, text, json, cwd, detach);
   if (decision === 'reject') return workflowRejectCommand(runId, text, json, cwd, detach);
 
@@ -5360,4 +5443,20 @@ async function installDirectory(
   }
 
   console.log(`Installed '${entry.name}' (${String(installedCount)} files)`);
+}
+
+/** Durable launch lookup has no execution or lease-stealing side effect. */
+export async function workflowLaunchStatusCommand(key: string): Promise<number> {
+  const state = await getWorkflowLaunch(key);
+  await writeJsonLine(state ?? { ok: false, code: 'launch_not_found' });
+  return state ? 0 : 1;
+}
+
+export async function workflowGateEvidenceCommand(
+  runId: string,
+  occurrenceId: string
+): Promise<number> {
+  const evidence = await getGateEvidence(runId, occurrenceId);
+  await writeJsonLine(evidence ?? { ok: false, code: 'gate_evidence_not_found' });
+  return evidence ? 0 : 1;
 }

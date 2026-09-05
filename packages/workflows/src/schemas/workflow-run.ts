@@ -529,6 +529,9 @@ export function isRecognizedSuspendReason(type: string | undefined): boolean {
 
 /** Approval context stored in workflow run metadata when paused for human review. */
 export interface ApprovalContext {
+  /** Engine-owned identity and digest, newly minted for every persisted pause. */
+  occurrenceId?: string;
+  evidenceDigest?: string;
   nodeId: string;
   message: string;
   /**

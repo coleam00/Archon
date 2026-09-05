@@ -211,7 +211,9 @@ jobs:
       - name: Run Postgres parity test
         env:
           ARCHON_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
-        run: bun test packages/core/src/db/isolation-environments.live-run.postgres.integration.test.ts
+        run: |
+          bun test packages/core/src/db/isolation-environments.live-run.postgres.integration.test.ts
+          bun test packages/core/src/db/workflow-commands.integration.test.ts
 
   docker-build:
     needs: changes

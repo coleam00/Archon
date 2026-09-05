@@ -52,6 +52,63 @@ archon workflow run assist --cwd /path/to/repo --no-worktree "Quick question"
 
 **Note:** Workflow and isolation commands normally require running from within a git repository (running from subdirectories automatically resolves to the repo root). A non-git directory also works if it's a registered [folder project](/getting-started/concepts/#folder-projects-non-git-workspaces) — or on first use by passing `--folder`, which registers it and runs in place. The `version`, `help`, `chat`, `setup`, `serve`, and `doctor` commands work anywhere.
 
+## Durable automation commands
+
+Automation clients can reserve a fresh foreground launch by caller key. The engine
+computes the payload digest from the captured workflow source, resolved inputs and
+configuration, workspace identity and Git state, invocation flags, and runtime source
+or binary fingerprint. An expected digest is a check against that computation.
+
+```bash
+archon workflow launch-intent my-workflow "Task brief" --cwd /project --json
+archon workflow run my-workflow "Task brief" --cwd /project \
+  --launch-key job-attempt-1 --launch-payload-digest <payloadDigest>
+archon workflow launch-status job-attempt-1 --json
+```
+
+Supply the same effectful flags to `launch-intent` and `run`. Intent discovery captures
+source in temporary staging and does not create a workflow run. A keyed launch commits
+its exact run identity before execution. Repeating the same key and payload returns
+the original receipt without executing again; a changed payload is durably rejected.
+`launch-status` returns `{receipt, status}`. A reservation whose run row is absent is
+`uncertain`; it is never automatically retried. Inspect that reservation explicitly,
+and use a new key only after establishing that no execution owns it. This protocol
+deduplicates workflow launch, not arbitrary external effects performed by a node.
+
+Keyed launches currently support fresh foreground runs. They cannot be combined with
+`--detach`, `--resume`, `--adopt`, `--supersedes`, or `--dry-run`. An external process
+supervisor can own the foreground command. Existing fresh detached interactive-workflow
+refusals remain in force.
+
+Every new human/system gate pause has `metadata.approval.occurrenceId` and
+`metadata.approval.evidenceDigest`. Before exposing the pause, the engine seals its
+original context, runtime metadata, persisted events, and artifact bytes in the local
+database. A later pause always receives a different occurrence identity.
+
+```bash
+archon workflow get <exact-run-id> --json
+archon workflow gate-evidence <exact-run-id> <occurrence-id> --json
+archon workflow respond <exact-run-id> approve \
+  --command-id review-decision-1 \
+  --expected-occurrence <occurrence-id> \
+  --expected-evidence-digest <evidenceDigest> --json
+archon workflow resume <exact-run-id>
+```
+
+Conditional response requires all three binding flags and `--json`; it never resumes
+or detaches automatically. The engine compares the current run, gate occurrence,
+sealed evidence, and source context inside the same transaction that writes the
+resolution, audit events, and receipt. Identical command replay returns the original
+receipt even after execution moves on; different payloads and stale gates are rejected.
+These binding flags are accepted only by `workflow respond`, so other commands cannot
+silently ignore them. Older unbound approval clients retain their existing behavior,
+including legacy `on_reject` rework.
+
+`gate-evidence` returns the sealed snapshot; artifact values use base64 to preserve the
+original bytes. Those bytes remain the reviewed evidence if the working artifact file
+later changes. A changed source/gate context requires a fresh occurrence. Ordinary
+`resume --json` only reports resumability; omit `--json` to execute the exact run.
+
 ## Commands
 
 ### `chat <message>`

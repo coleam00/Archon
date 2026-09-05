@@ -1,3 +1,5 @@
+import { resolveWithCommand, type GateCommand } from './workflow-commands';
+import { sealGateEvidence } from './gate-evidence';
 /**
  * Database operations for workflow runs
  */
@@ -245,11 +247,14 @@ export interface GateResolutionEvent {
 export async function resolveApprovalGate(
   id: string,
   metadata: Record<string, unknown>,
-  events: GateResolutionEvent[]
+  events: GateResolutionEvent[],
+  command?: GateCommand
 ): Promise<{ resolved: boolean }> {
+  if (command !== undefined && command.runId !== id)
+    throw new Error('Command run id does not match mutation target');
   const dialect = getDialect();
   try {
-    return await getDatabase().withTransaction(async query => {
+    return await resolveWithCommand(command, false, async query => {
       const result = await query(
         `UPDATE remote_agent_workflow_runs
          SET metadata = ${dialect.jsonMerge('metadata', 2)}
@@ -300,11 +305,14 @@ export async function resolveApprovalGate(
 export async function resolveAndCancelApprovalGate(
   id: string,
   events: GateResolutionEvent[],
-  cancellation: WorkflowCancellationEventDetails
+  cancellation: WorkflowCancellationEventDetails,
+  command?: GateCommand
 ): Promise<{ resolved: boolean }> {
+  if (command !== undefined && command.runId !== id)
+    throw new Error('Command run id does not match mutation target');
   const dialect = getDialect();
   try {
-    return await getDatabase().withTransaction(async query => {
+    return await resolveWithCommand(command, true, async query => {
       const result = await query(
         `UPDATE remote_agent_workflow_runs
          SET status = 'cancelled',
@@ -1407,25 +1415,33 @@ export async function pauseWorkflowRun(
   extraMetadata?: Record<string, unknown>
 ): Promise<void> {
   try {
-    const result = await pool.query(
-      `UPDATE remote_agent_workflow_runs
-       SET status = 'paused', metadata = ${writeApprovalMetadata(2, 3)}
-       WHERE id = $1 AND status = 'running'`,
-      [
-        id,
-        // Caller-supplied run-level metadata (e.g. `pending_writeback`) rides the SAME
-        // atomic write so there is no window where the run is paused without it (M3).
-        JSON.stringify(extraMetadata ?? {}),
-        // The complete gate context. JSON.stringify drops undefined, and the write
-        // replaces rather than merges, so an optional field the caller left unset is
-        // simply absent — no explicit-null reset list to keep in sync.
-        JSON.stringify(approvalContext),
-      ]
-    );
-    if (result.rowCount === 0) {
-      getLog().warn({ workflowRunId: id }, 'db.workflow_run_pause_no_match');
-      throw new Error(`Workflow run not found or not in running state (id: ${id})`);
-    }
+    await getDatabase().withTransaction(async query => {
+      const row = (
+        await query<WorkflowRun>(
+          `SELECT * FROM remote_agent_workflow_runs WHERE id = $1${rowLockClause()}`,
+          [id]
+        )
+      ).rows[0];
+      if (row?.status !== 'running') {
+        throw new Error(`Workflow run not found or not in running state (id: ${id})`);
+      }
+      const sealed = await sealGateEvidence(
+        query,
+        {
+          ...normalizeWorkflowRun(row),
+          metadata: { ...normalizeWorkflowRun(row).metadata, ...extraMetadata },
+        },
+        approvalContext
+      );
+      const result = await query(
+        `UPDATE remote_agent_workflow_runs
+         SET status = 'paused', metadata = ${writeApprovalMetadata(2, 3)}
+         WHERE id = $1 AND status = 'running'`,
+        [id, JSON.stringify(extraMetadata ?? {}), JSON.stringify(sealed)]
+      );
+      if (result.rowCount === 0)
+        throw new Error(`Workflow run not found or not in running state (id: ${id})`);
+    });
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('Workflow run not found')) throw error;
     const err = error as Error;

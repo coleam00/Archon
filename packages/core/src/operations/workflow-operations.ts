@@ -1,3 +1,4 @@
+import type { GateCommand, GateCommandBinding, CommandReceipt } from '../db/workflow-commands';
 /**
  * Shared workflow business logic — approve, reject, status, resume, abandon.
  *
@@ -540,7 +541,8 @@ export async function abandonResumableRunsForConversation(
  */
 export async function approveWorkflow(
   runId: string,
-  comment?: string
+  comment?: string,
+  command?: GateCommand
 ): Promise<ApprovalOperationResult> {
   const run = await getRunOrThrow(runId, 'operations.workflow_approve_lookup_failed');
   const approval = assertApprovable(run);
@@ -675,7 +677,12 @@ export async function approveWorkflow(
   // transaction means a failed event write rolls the resolution back so a retry
   // can win the still-open gate (#2146). The run stays 'paused'; resume is
   // guarded independently by resumeWorkflowRun's CAS.
-  const { resolved: won } = await workflowDb.resolveApprovalGate(runId, metadataPayload, events);
+  const { resolved: won } = await workflowDb.resolveApprovalGate(
+    runId,
+    metadataPayload,
+    events,
+    ...(command === undefined ? [] : [command])
+  );
   if (!won) {
     throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
   }
@@ -703,7 +710,8 @@ export async function approveWorkflow(
  */
 export async function rejectWorkflow(
   runId: string,
-  reason?: string
+  reason?: string,
+  command?: GateCommand
 ): Promise<RejectionOperationResult> {
   const run = await getRunOrThrow(runId, 'operations.workflow_reject_lookup_failed');
   const approval = assertRejectable(run);
@@ -731,7 +739,8 @@ export async function rejectWorkflow(
         const { resolved: won } = await workflowDb.resolveApprovalGate(
           runId,
           { approval: { ...approval, resolved: 'rejected' }, approval_response: 'rejected' },
-          [rejectionEvent]
+          [rejectionEvent],
+          ...(command === undefined ? [] : [command])
         );
         if (!won) {
           throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
@@ -834,7 +843,8 @@ export async function rejectWorkflow(
     ({ resolved: won } = await workflowDb.resolveApprovalGate(
       runId,
       { approval: { ...approval, resolved: 'rejected' } },
-      [nodeCompletedEvent, rejectionEvent]
+      [nodeCompletedEvent, rejectionEvent],
+      ...(command === undefined ? [] : [command])
     ));
   } else if (willStageRework) {
     ({ resolved: won } = await workflowDb.resolveApprovalGate(
@@ -844,17 +854,23 @@ export async function rejectWorkflow(
         rejection_reason: rejectReason,
         rejection_count: currentCount + 1,
       },
-      [rejectionEvent]
+      [rejectionEvent],
+      ...(command === undefined ? [] : [command])
     ));
   } else {
     // The CAS writes `workflow_cancelled` itself; this only names the gate that
     // ended the run. A stable token, not the user's rejection prose — that is
     // already on the approval_received event above and does not belong on two
     // rows (#2906).
-    ({ resolved: won } = await workflowDb.resolveAndCancelApprovalGate(runId, [rejectionEvent], {
-      step_name: approval?.nodeId ?? 'unknown',
-      reason: 'approval_rejected',
-    }));
+    ({ resolved: won } = await workflowDb.resolveAndCancelApprovalGate(
+      runId,
+      [rejectionEvent],
+      {
+        step_name: approval?.nodeId ?? 'unknown',
+        reason: 'approval_rejected',
+      },
+      ...(command === undefined ? [] : [command])
+    ));
   }
   if (!won) {
     throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
@@ -929,7 +945,8 @@ export function assertRespondable(run: WorkflowRun, decision: string): ApprovalC
 async function respondToWorkflowWithDeclaredDecision(
   runId: string,
   decision: string,
-  text?: string
+  text?: string,
+  command?: GateCommand
 ): Promise<ApprovalOperationResult> {
   const run = await getRunOrThrow(runId, 'operations.workflow_respond_lookup_failed');
   const approval = assertRespondable(run, decision);
@@ -954,7 +971,8 @@ async function respondToWorkflowWithDeclaredDecision(
   const { resolved: won } = await workflowDb.resolveApprovalGate(
     runId,
     { approval: { ...approval, resolved: 'approved' }, approval_response: decision },
-    events
+    events,
+    ...(command === undefined ? [] : [command])
   );
   if (!won) {
     throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
@@ -994,6 +1012,47 @@ export async function respondToWorkflow(
   if (decision === 'approve') return approveWorkflow(runId, text);
   if (decision === 'reject') return rejectWorkflow(runId, text);
   return respondToWorkflowWithDeclaredDecision(runId, decision, text);
+}
+
+/** Exact binding is checked again inside the resolution/audit/receipt transaction. */
+export async function respondToWorkflowConditionally(
+  runId: string,
+  decision: string,
+  text: string | undefined,
+  binding: GateCommandBinding
+): Promise<CommandReceipt> {
+  const { gateCommandReceipt } = await import('../db/workflow-commands');
+  const command: GateCommand = {
+    ...binding,
+    runId,
+    decision,
+    ...(text === undefined ? {} : { text }),
+  };
+  const prior = await gateCommandReceipt(command);
+  if (prior) return prior;
+  try {
+    if (
+      !binding.commandId ||
+      !binding.expectedOccurrence ||
+      !/^[a-f0-9]{64}$/.test(binding.expectedEvidenceDigest)
+    ) {
+      throw new Error('A command id, gate occurrence and SHA-256 evidence digest are required.');
+    }
+    if (decision === 'approve') await approveWorkflow(runId, text, command);
+    else if (decision === 'reject') await rejectWorkflow(runId, text, command);
+    else await respondToWorkflowWithDeclaredDecision(runId, decision, text, command);
+  } catch (error) {
+    if ((error as Error).message.startsWith('Failed to resolve')) throw error;
+    const receipt = await gateCommandReceipt(command, {
+      code: 'invalid_gate_command',
+      message: (error as Error).message,
+    });
+    if (receipt) return receipt;
+    throw error;
+  }
+  const receipt = await gateCommandReceipt(command);
+  if (!receipt) throw new Error('Gate resolution did not persist its command receipt.');
+  return receipt;
 }
 
 /**

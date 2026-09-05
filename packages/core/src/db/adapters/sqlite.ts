@@ -774,6 +774,29 @@ export class SqliteAdapter implements IDatabase {
       );
 
       -- Workflow events table
+
+CREATE TABLE IF NOT EXISTS remote_agent_workflow_commands (
+  kind TEXT NOT NULL,
+  command_id TEXT NOT NULL,
+  payload_digest TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  receipt TEXT,
+  PRIMARY KEY (kind, command_id)
+);
+CREATE TABLE IF NOT EXISTS remote_agent_workflow_command_rejections (
+  kind TEXT NOT NULL,
+  command_id TEXT NOT NULL,
+  payload_digest TEXT NOT NULL,
+  receipt TEXT NOT NULL,
+  PRIMARY KEY (kind, command_id, payload_digest)
+);
+CREATE TABLE IF NOT EXISTS remote_agent_gate_occurrences (
+  occurrence_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  evidence_digest TEXT NOT NULL,
+  evidence TEXT NOT NULL
+);
+
       CREATE TABLE IF NOT EXISTS remote_agent_workflow_events (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
         workflow_run_id TEXT NOT NULL REFERENCES remote_agent_workflow_runs(id) ON DELETE CASCADE,
