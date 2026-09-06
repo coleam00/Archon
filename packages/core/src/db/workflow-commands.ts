@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { getDatabase, getDatabaseType } from './connection';
 import type { IDatabase } from './adapters/types';
 
+export const GATE_EVIDENCE_POLICY = 'approval-evidence.v1';
+
 export type TransactionQuery = Parameters<Parameters<IDatabase['withTransaction']>[0]>[0];
 export interface GateCommandBinding {
   commandId: string;
@@ -169,6 +171,7 @@ export async function resolveWithCommand(
       ? (JSON.parse(seal.evidence) as {
           approval: Record<string, unknown>;
           metadata: Record<string, unknown>;
+          artifactPolicy?: unknown;
         })
       : undefined;
     const currentApproval = { ...approval };
@@ -192,7 +195,7 @@ export async function resolveWithCommand(
       Object.entries(original?.metadata ?? {}).filter(([key]) => !bookkeeping.has(key))
     );
     const matches =
-      original !== undefined &&
+      original?.artifactPolicy === GATE_EVIDENCE_POLICY &&
       evidenceDigest(original) === seal?.evidence_digest &&
       canonicalJson(original.approval) === canonicalJson(currentApproval) &&
       canonicalJson(originalMetadata) === canonicalJson(currentMetadata) &&
@@ -291,12 +294,15 @@ export async function getGateEvidence(
       [runId, occurrenceId]
     )
   ).rows[0];
-  return row
-    ? {
-        runId,
-        occurrenceId,
-        evidenceDigest: row.evidence_digest,
-        evidence: JSON.parse(row.evidence) as unknown,
-      }
-    : null;
+  if (!row) return null;
+  const evidence = JSON.parse(row.evidence) as { artifactPolicy?: unknown };
+  if (evidence.artifactPolicy !== GATE_EVIDENCE_POLICY) {
+    throw new Error(
+      'Legacy gate evidence cannot be exposed; reopen the gate with the current engine'
+    );
+  }
+  if (evidenceDigest(evidence) !== row.evidence_digest) {
+    throw new Error('Gate evidence integrity check failed');
+  }
+  return { runId, occurrenceId, evidenceDigest: row.evidence_digest, evidence };
 }

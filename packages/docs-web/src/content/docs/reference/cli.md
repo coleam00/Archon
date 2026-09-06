@@ -82,8 +82,29 @@ refusals remain in force.
 
 Every new human/system gate pause has `metadata.approval.occurrenceId` and
 `metadata.approval.evidenceDigest`. Before exposing the pause, the engine seals its
-original context, runtime metadata, persisted events, and artifact bytes in the local
-database. A later pause always receives a different occurrence identity.
+original context, runtime metadata, persisted events, and explicitly prepared review
+artifacts in the local database. A later pause always receives a different occurrence
+identity. General run artifacts, including managed provider credential homes, are
+never traversed by the evidence collector.
+
+A deterministic workflow producer copies its fixed review inputs into
+`$ARTIFACTS_DIR/approval-evidence/` and writes `manifest.json` last:
+
+```json
+{"version": 1, "files": ["plan.json", "context.json", "knowledge/README.md"]}
+```
+
+Only manifest-listed files inside that dedicated directory can be sealed. The
+manifest cannot select the general artifacts tree. Managed credential directories,
+provider homes, auth/credential filenames, hidden paths, traversal, symlinks and
+hardlinks are refused even when listed. Supported review formats are `.json`, `.md`,
+`.txt`, `.diff` and `.patch`; limits are 256 files, 4 MiB per file and 16 MiB total.
+Without the dedicated directory, a gate has no filesystem review artifacts.
+A directory with a missing or invalid manifest fails closed.
+
+The producer must derive its allowlist from trusted workflow/configuration data,
+not from model-selected filesystem paths. The dedicated namespace does not replace
+that producer responsibility or provide general secret-content redaction.
 
 ```bash
 archon workflow get <exact-run-id> --json
@@ -105,8 +126,11 @@ silently ignore them. Older unbound approval clients retain their existing behav
 including legacy `on_reject` rework.
 
 `gate-evidence` returns the sealed snapshot; artifact values use base64 to preserve the
-original bytes. Those bytes remain the reviewed evidence if the working artifact file
-later changes. A changed source/gate context requires a fresh occurrence. Ordinary
+original bytes. Readback verifies the stored digest and requires the safe evidence
+policy marker. Legacy unfiltered snapshots are refused on readback and conditional
+decision; reopen the gate with the current engine rather than silently rewriting
+already-bound evidence. Those original bytes remain the reviewed evidence if the
+working artifact file later changes. A changed source/gate context requires a fresh occurrence. Ordinary
 `resume --json` only reports resumability; omit `--json` to execute the exact run.
 
 ## Commands

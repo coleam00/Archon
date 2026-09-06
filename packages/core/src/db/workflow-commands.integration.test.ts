@@ -1,7 +1,7 @@
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { afterAll, describe, expect, mock, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, link, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getRunArtifactsDirForRoot } from '@archon/paths';
@@ -73,6 +73,137 @@ async function paused(): Promise<{ run: WorkflowRun; gate: SealedGate }> {
 }
 
 describe(`engine-bound command receipts (${postgresUrl ? 'PostgreSQL' : 'SQLite'})`, () => {
+  test('gate readback excludes managed credentials and every undeclared artifact', async () => {
+    const { run } = await paused();
+    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-safe-gate-')));
+    const artifacts = getRunArtifactsDirForRoot(root, run.id);
+    for (const directory of ['codex-home', 'pi-home', 'approval-evidence']) {
+      await mkdir(join(artifacts, directory), { recursive: true });
+    }
+    const sentinel = 'TEST_ONLY_SUBSCRIPTION_CREDENTIAL_SENTINEL';
+    await writeFile(
+      join(artifacts, 'codex-home/auth.json'),
+      JSON.stringify({ access_token: sentinel, refresh_token: sentinel })
+    );
+    await writeFile(join(artifacts, 'pi-home/auth.json'), JSON.stringify({ key: sentinel }));
+    await writeFile(join(artifacts, 'undeclared.txt'), sentinel);
+    await writeFile(join(artifacts, 'approval-evidence/plan.json'), '{"goal":"Review this plan"}');
+    await writeFile(join(artifacts, 'approval-evidence/context.json'), '{"project":"fixture"}');
+    await writeFile(
+      join(artifacts, 'approval-evidence/manifest.json'),
+      JSON.stringify({ version: 1, files: ['plan.json', 'context.json'] })
+    );
+    await db.query(
+      `UPDATE remote_agent_workflow_runs SET output_root = $2, status = 'running' WHERE id = $1`,
+      [run.id, root]
+    );
+    await workflows.pauseWorkflowRun(run.id, {
+      nodeId: 'review',
+      message: 'Review the declared evidence',
+    });
+    const gate = (await getRun(run.id)).metadata.approval as SealedGate;
+    const readback = await commands.getGateEvidence(run.id, gate.occurrenceId);
+    const serialized = JSON.stringify(readback);
+    expect(serialized).not.toContain('codex-home');
+    expect(serialized).not.toContain('pi-home');
+    expect(serialized).not.toContain('undeclared.txt');
+    const evidence = readback?.evidence as { artifacts: Record<string, string> };
+    expect(Object.keys(evidence.artifacts).sort()).toEqual(['context.json', 'plan.json']);
+    expect(
+      Object.values(evidence.artifacts)
+        .map(value => Buffer.from(value, 'base64').toString())
+        .join('\n')
+    ).not.toContain(sentinel);
+    expect(Buffer.from(evidence.artifacts['plan.json'] ?? '', 'base64').toString()).toBe(
+      '{"goal":"Review this plan"}'
+    );
+  });
+
+  test('credential names, traversal, symlinks and hardlinks cannot enter declared evidence', async () => {
+    for (const attack of ['credential', 'traversal', 'symlink', 'hardlink']) {
+      const { run } = await paused();
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-gate-path-')));
+      const artifacts = getRunArtifactsDirForRoot(root, run.id);
+      await mkdir(join(artifacts, 'codex-home'), { recursive: true });
+      await mkdir(join(artifacts, 'approval-evidence/codex-home'), { recursive: true });
+      const credential = join(artifacts, 'codex-home/auth.json');
+      await writeFile(credential, 'TEST_ONLY_SECRET');
+      let selected = 'plan.json';
+      if (attack === 'credential') {
+        selected = 'codex-home/auth.json';
+        await writeFile(join(artifacts, 'approval-evidence', selected), 'TEST_ONLY_SECRET');
+      } else if (attack === 'traversal') selected = '../codex-home/auth.json';
+      else if (attack === 'symlink')
+        await symlink(credential, join(artifacts, 'approval-evidence/plan.json'));
+      else await link(credential, join(artifacts, 'approval-evidence/plan.json'));
+      await writeFile(
+        join(artifacts, 'approval-evidence/manifest.json'),
+        JSON.stringify({ version: 1, files: [selected] })
+      );
+      await db.query(
+        `UPDATE remote_agent_workflow_runs SET output_root = $2, status = 'running' WHERE id = $1`,
+        [run.id, root]
+      );
+      await expect(
+        workflows.pauseWorkflowRun(run.id, { nodeId: 'review', message: 'Review' })
+      ).rejects.toThrow();
+      expect((await getRun(run.id)).status).toBe('running');
+    }
+  });
+
+  test('legacy unfiltered evidence cannot be exposed after upgrading the reader', async () => {
+    const id = randomUUID();
+    await db.query(
+      `INSERT INTO remote_agent_gate_occurrences (occurrence_id, run_id, evidence_digest, evidence)
+      VALUES ($1, $2, $3, $4)`,
+      [
+        id,
+        id,
+        '0'.repeat(64),
+        JSON.stringify({
+          version: 1,
+          artifacts: { 'codex-home/auth.json': Buffer.from('TEST_ONLY_SECRET').toString('base64') },
+        }),
+      ]
+    );
+    await expect(commands.getGateEvidence(id, id)).rejects.toThrow('Legacy gate evidence');
+  });
+
+  test('safe-policy readback verifies the stored content digest', async () => {
+    const { run, gate } = await paused();
+    const snapshot = await commands.getGateEvidence(run.id, gate.occurrenceId);
+    const changed = { ...(snapshot?.evidence as Record<string, unknown>), changed: true };
+    await db.query(
+      'UPDATE remote_agent_gate_occurrences SET evidence = $2 WHERE occurrence_id = $1',
+      [gate.occurrenceId, JSON.stringify(changed)]
+    );
+    await expect(commands.getGateEvidence(run.id, gate.occurrenceId)).rejects.toThrow(
+      'integrity check failed'
+    );
+  });
+
+  test('a correctly hashed legacy snapshot cannot authorize a new conditional decision', async () => {
+    const { run, gate } = await paused();
+    const snapshot = await commands.getGateEvidence(run.id, gate.occurrenceId);
+    const legacy = { ...(snapshot?.evidence as Record<string, unknown>), version: 1 };
+    Reflect.deleteProperty(legacy, 'artifactPolicy');
+    const legacyDigest = commands.evidenceDigest(legacy);
+    await db.query(
+      'UPDATE remote_agent_gate_occurrences SET evidence = $2, evidence_digest = $3 WHERE occurrence_id = $1',
+      [gate.occurrenceId, JSON.stringify(legacy), legacyDigest]
+    );
+    await workflows.updateWorkflowRun(run.id, {
+      metadata: { approval: { ...gate, evidenceDigest: legacyDigest } },
+    });
+    expect(
+      await operations.respondToWorkflowConditionally(run.id, 'approve', undefined, {
+        commandId: randomUUID(),
+        expectedOccurrence: gate.occurrenceId,
+        expectedEvidenceDigest: legacyDigest,
+      })
+    ).toMatchObject({ ok: false, code: 'stale_gate' });
+  });
+
   test('the database cannot validate one run and resolve another', async () => {
     const first = await paused();
     const second = await paused();
@@ -177,8 +308,12 @@ describe(`engine-bound command receipts (${postgresUrl ? 'PostgreSQL' : 'SQLite'
     const { run } = await paused();
     const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-gate-evidence-')));
     const artifacts = getRunArtifactsDirForRoot(root, run.id);
-    await mkdir(artifacts, { recursive: true });
-    await writeFile(join(artifacts, 'review.txt'), 'original');
+    await mkdir(join(artifacts, 'approval-evidence'), { recursive: true });
+    await writeFile(join(artifacts, 'approval-evidence/review.txt'), 'original');
+    await writeFile(
+      join(artifacts, 'approval-evidence/manifest.json'),
+      JSON.stringify({ version: 1, files: ['review.txt'] })
+    );
     await db.query(
       `UPDATE remote_agent_workflow_runs SET output_root = $2, status = 'running' WHERE id = $1`,
       [run.id, root]
@@ -190,7 +325,7 @@ describe(`engine-bound command receipts (${postgresUrl ? 'PostgreSQL' : 'SQLite'
       evidenceDigest: 'client',
     });
     const gate = (await getRun(run.id)).metadata.approval as SealedGate;
-    await writeFile(join(artifacts, 'review.txt'), 'replacement');
+    await writeFile(join(artifacts, 'approval-evidence/review.txt'), 'replacement');
     const seal = (await commands.getGateEvidence(run.id, gate.occurrenceId)) as {
       evidence: { artifacts: SealedGate };
       evidenceDigest: string;
