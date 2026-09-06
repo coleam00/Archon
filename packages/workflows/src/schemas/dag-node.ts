@@ -1683,16 +1683,6 @@ export const dagNodeSchema = z
       });
     }
 
-    // Loop / loop_group node validations
-    if (hasLoop || hasLoopGroup) {
-      if (data.timeout !== undefined && (data.timeout <= 0 || !isFinite(data.timeout))) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "'timeout' must be a positive number (ms)",
-          path: ['timeout'],
-        });
-      }
-    }
     if (hasWait && data.output_format !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
