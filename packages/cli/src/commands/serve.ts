@@ -1,4 +1,4 @@
-import { dirname } from 'path';
+import { dirname, join } from 'path';
 import { existsSync, mkdirSync, renameSync, rmSync } from 'fs';
 import {
   createLogger,
@@ -206,7 +206,7 @@ export async function downloadWebDist(
   // Only read after a clean `tar` exit, so the throw paths never see the seed.
   let extractionEndedAt = extractionStartedAt;
   try {
-    const proc = Bun.spawn(['tar', 'xzf', '-', '-C', tmpDir, '--strip-components=1'], {
+    const proc = Bun.spawn([resolveTarBin(), 'xzf', '-', '-C', tmpDir, '--strip-components=1'], {
       stdin: Bun.file(tarballPath),
       stderr: 'pipe',
       timeout: EXTRACTION_TIMEOUT_MS,
@@ -281,6 +281,29 @@ export async function downloadWebDist(
     'web_dist.installed'
   );
   console.log(`Extracted to ${targetDir}`);
+}
+
+/**
+ * Resolve the `tar` binary for extraction.
+ *
+ * Windows must pin it rather than leave it to PATH. Windows ships bsdtar at
+ * `System32\tar.exe`, which accepts a drive-letter operand, but Git for Windows
+ * puts GNU tar on PATH at `Git\usr\bin`, and GNU tar cannot open one — it mangles
+ * `-C C:\Users\...` and exits 2. Which one wins depends on the PATH of whichever
+ * shell launched Archon, so extraction succeeded from cmd and failed from Git Bash.
+ *
+ * `platform` and `exists` are injected so both Windows branches stay covered on a
+ * non-Windows CI runner.
+ */
+export function resolveTarBin(
+  platform: NodeJS.Platform = process.platform,
+  exists: (path: string) => boolean = existsSync
+): string {
+  if (platform !== 'win32') return 'tar';
+  const systemTar = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe');
+  // Pre-1803 Windows bundles no tar; fall back to PATH rather than spawning a
+  // path we already know is absent.
+  return exists(systemTar) ? systemTar : 'tar';
 }
 
 function cleanupAndThrow(tmpDir: string, message: string): never {
