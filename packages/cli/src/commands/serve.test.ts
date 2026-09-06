@@ -46,7 +46,13 @@ mock.module('@archon/server', () => ({
 }));
 
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { serveCommand, parseChecksum, parseEmbeddedChecksum, downloadWebDist } from './serve';
+import {
+  serveCommand,
+  parseChecksum,
+  parseEmbeddedChecksum,
+  downloadWebDist,
+  resolveTarBin,
+} from './serve';
 
 describe('parseChecksum', () => {
   const validHash = 'a'.repeat(64);
@@ -194,6 +200,48 @@ function buildWebTarball(indexHtml: string): Uint8Array<ArrayBuffer> {
   );
 }
 
+describe('resolveTarBin', () => {
+  // Windows ships bsdtar at System32\tar.exe, but Git for Windows puts GNU tar
+  // on PATH ahead of it, and GNU tar cannot open a drive-letter operand: it
+  // mangles the `-C C:\Users\...` operand into a colon-escaped path and exits 2.
+  // Leaving the binary to PATH makes extraction depend on which shell launched
+  // Archon, so these cases pin the choice on every host — CI runs them off Windows.
+  const SYSTEM32_TAR = /[/\\]System32[/\\]tar\.exe$/;
+
+  it('pins the Windows system tar when it is present', () => {
+    const probed: string[] = [];
+
+    const bin = resolveTarBin('win32', path => {
+      probed.push(path);
+      return true;
+    });
+
+    expect(bin).not.toBe('tar');
+    expect(bin).toMatch(SYSTEM32_TAR);
+    // The probe must ask about the path it returns, not some other file.
+    expect(probed).toEqual([bin]);
+  });
+
+  it('falls back to PATH when Windows has no bundled tar', () => {
+    // Pre-1803 Windows ships no tar. Returning the absolute path anyway would
+    // spawn a file that does not exist, which is a worse failure than a PATH miss.
+    expect(resolveTarBin('win32', () => false)).toBe('tar');
+  });
+
+  it('leaves the binary to PATH off Windows', () => {
+    const probed: string[] = [];
+
+    const bin = resolveTarBin('linux', path => {
+      probed.push(path);
+      return true;
+    });
+
+    expect(bin).toBe('tar');
+    // No filesystem probe at all — the POSIX `tar` on PATH is the right one.
+    expect(probed).toEqual([]);
+  });
+});
+
 describe('downloadWebDist', () => {
   let tmpRoot: string;
   let tarballBytes: Uint8Array;
@@ -235,11 +283,13 @@ describe('downloadWebDist', () => {
     const targetDir = join(tmpRoot, 'target-embedded-ok');
     const spawnSpy = spyOn(Bun, 'spawn');
     let extractorStdin: unknown;
+    let extractorBin: string | undefined;
 
     try {
       await downloadWebDist('9.9.9', targetDir, tarballHash);
       // Read before restoring — mockRestore() clears the recorded calls.
       extractorStdin = (spawnSpy.mock.calls[0]?.[1] as { stdin?: unknown } | undefined)?.stdin;
+      extractorBin = (spawnSpy.mock.calls[0]?.[0] as string[] | undefined)?.[0];
     } finally {
       spawnSpy.mockRestore();
     }
@@ -255,6 +305,13 @@ describe('downloadWebDist', () => {
     // pump blocks `tar` forever — the windows hang in #2924. A BunFile is a Blob;
     // a Uint8Array is not, which is exactly the regression this catches.
     expect(extractorStdin).toBeInstanceOf(Blob);
+    // Wiring: extraction must spawn the resolved binary, not the bare name. An
+    // exported-but-uncalled resolver leaves Windows on PATH, which is the bug.
+    if (process.platform === 'win32') {
+      expect(extractorBin).toMatch(/[/\\]System32[/\\]tar\.exe$/);
+    } else {
+      expect(extractorBin).toBe('tar');
+    }
     // The staged archive is ~2 MB in production — it must not survive extraction.
     expect(existsSync(`${targetDir}.tmp.tar.gz`)).toBe(false);
   });
