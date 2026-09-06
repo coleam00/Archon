@@ -2347,3 +2347,32 @@ describe('runAttention', () => {
     expect(attention).toMatchObject({ kind: 'unreadable', reason: 'malformed_gate' });
   });
 });
+
+// No existing 'dagNodeSchema — loop' describe block exists (only '— loop_group' above), so
+// both node kinds' timeout validation live together here, next to the loop_group block whose
+// superRefine guard they share (`if (hasLoop || hasLoopGroup)`, dag-node.ts).
+describe('dagNodeSchema — loop/loop_group timeout validation', () => {
+  test('rejects zero timeout on loop node', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'l',
+      timeout: 0,
+      loop: { prompt: 'p', until: 'DONE', max_iterations: 3 },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toBe("'timeout' must be a positive number (ms)");
+    }
+  });
+
+  test('rejects negative timeout on loop_group node', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'grp',
+      timeout: -1,
+      loop_group: { until: 'DONE', max_iterations: 3, nodes: [{ id: 'x', prompt: 'x' }] },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].message).toBe("'timeout' must be a positive number (ms)");
+    }
+  });
+});

@@ -255,6 +255,20 @@ loop:
 `until_bash` runs only on iterations that no other completion channel already
 ended, so a loop declaring more than one never pays for a redundant check.
 
+The check is a subprocess and takes the node's `timeout` (milliseconds, default
+120000), like `bash:` and `script:` nodes. A predicate that runs a real gate can
+exceed that, so declare a budget on the node when it does — otherwise the check is
+killed and the run reports a failure the script never produced:
+
+```yaml
+- id: fix-tests
+  timeout: 900000             # The suite takes ~4 min; 120 s would kill the check.
+  loop:
+    prompt: "Fix the failing tests"
+    max_iterations: 5
+    until_bash: "bun run test"
+```
+
 :::caution[If your `until_bash` accumulates state]
 The skip means the script does not run on an iteration another channel already
 completed, so a check that *mutates* state each time it runs — a counter, an append,

@@ -477,6 +477,7 @@ function resolveScriptExecAuthoring({
 export const loopNodeSchema = dagNodeBaseSchema.extend({
   kind: z.literal('loop'),
   loop: loopNodeConfigSchema,
+  timeout: z.number().optional(),
 });
 
 /** DAG node that runs an AI prompt in a loop until a completion condition is met */
@@ -534,6 +535,7 @@ export const loopGroupNodeConfigSchema: z.ZodType<LoopGroupNodeConfig> = loopCon
 export const loopGroupNodeSchema = dagNodeBaseSchema.extend({
   kind: z.literal('loop_group'),
   loop_group: loopGroupNodeConfigSchema,
+  timeout: z.number().optional(),
 });
 
 /** DAG node that runs a multi-node sub-DAG in a loop until a completion condition is met */
@@ -1681,6 +1683,16 @@ export const dagNodeSchema = z
       });
     }
 
+    // Loop / loop_group node validations
+    if (hasLoop || hasLoopGroup) {
+      if (data.timeout !== undefined && (data.timeout <= 0 || !isFinite(data.timeout))) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "'timeout' must be a positive number (ms)",
+          path: ['timeout'],
+        });
+      }
+    }
     if (hasWait && data.output_format !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -1939,6 +1951,7 @@ export const dagNodeSchema = z
         ...aiOnly,
         kind: 'loop_group',
         loop_group: data.loop_group,
+        ...(data.timeout !== undefined ? { timeout: data.timeout } : {}),
       } as LoopGroupNode;
     }
     // loop — guaranteed by superRefine to be defined at this point.
@@ -1958,6 +1971,7 @@ export const dagNodeSchema = z
       // boolean, and the node's output becomes the validated JSON.
       ...(data.output_format !== undefined ? { output_format: data.output_format } : {}),
       loop: data.loop,
+      ...(data.timeout !== undefined ? { timeout: data.timeout } : {}),
     } as LoopNode;
   })
   .openapi('DagNode');
