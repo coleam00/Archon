@@ -208,7 +208,16 @@ describe(`engine-bound command receipts (${postgresUrl ? 'PostgreSQL' : 'SQLite'
       { workflow_source: { digest: 'changed' } },
     ]) {
       const { run, gate } = await paused();
-      await workflows.updateWorkflowRun(run.id, { metadata: change });
+      const metadata =
+        'approval' in change
+          ? {
+              approval: {
+                ...((await getRun(run.id)).metadata.approval as Record<string, unknown>),
+                ...change.approval,
+              },
+            }
+          : change;
+      await workflows.updateWorkflowRun(run.id, { metadata });
       expect(
         await operations.respondToWorkflowConditionally(run.id, 'approve', undefined, {
           commandId: randomUUID(),
