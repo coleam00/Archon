@@ -49,8 +49,9 @@ export function deliveryResult(value: unknown): DeliveryResult {
 
 export function decide(env: NodeJS.ProcessEnv): DeliveryResult {
   const artifacts = text(env.ARTIFACTS_DIR);
-  const reports = ['implementation.md', 'review/report.md', 'pr-identity.json'].map(p => join(artifacts, p));
   const mode = env.INPUTS_MODE;
+  const reports = (mode === 'revise' ? ['implementation.md', 'pr-identity.json'] :
+    ['implementation.md', 'review/report.md', 'pr-identity.json']).map(p => join(artifacts, p));
   if (mode === 'deliver' || mode === 'revise') {
     const value: unknown = JSON.parse(env.INPUTS_PR ?? 'null');
     if (value === null) return { outcome: 'blocked', summary: 'Delivery did not complete. See the earliest failed node and implementation report.', pr: null, reports };

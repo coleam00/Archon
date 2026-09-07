@@ -1,5 +1,5 @@
 import { realpath, readFile, mkdir, writeFile } from 'node:fs/promises';
-import { isAbsolute, relative, join } from 'node:path';
+import { isAbsolute, relative, join, sep } from 'node:path';
 
 export interface PrIdentity {
   number: number;
@@ -83,7 +83,7 @@ export function repositoryFromRemote(remote: string): string {
 
 function inside(root: string, path: string): boolean {
   const rel = relative(root, path);
-  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
 export async function loadPolicy(path: string, cwd: string): Promise<Policy | null> {
@@ -100,14 +100,14 @@ function parsePolicy(value: unknown): Policy {
       !policy.command.every(v => typeof v === 'string' && v.length > 0) ||
       !Array.isArray(policy.protected_paths) || !policy.protected_paths.every(v =>
         typeof v === 'string' && v.length > 0 && !v.startsWith('/') &&
-        !v.includes('\\') && !v.split('/').includes('..') && !v.includes(':'))) {
+        !v.includes('\\') && !v.replace(/\/$/, '').split('/').some(part => ['', '.', '..'].includes(part)) && !v.includes(':'))) {
     throw new Error('Policy requires command argv and repository-relative protected_paths');
   }
   return { command: policy.command, protected_paths: policy.protected_paths };
 }
 
 export class Publication {
-  constructor(private readonly run: Run) {}
+  constructor(private readonly run: Run, private readonly artifacts: string) {}
 
   private git(...args: string[]): Promise<string> { return this.run(['git', ...args]); }
 
@@ -242,11 +242,22 @@ export class Publication {
       if (await this.git('rev-parse', 'HEAD') !== candidate.head_sha ||
           await this.repository() !== candidate.repository ||
           await this.git('branch', '--show-current') !== candidate.head ||
+          await this.remote(candidate.head) !== candidate.head_sha ||
           await this.remote(base) !== base_sha) throw new Error('Identity changed before PR creation');
+      const bodyPath = join(this.artifacts, 'pr-body.md');
+      await mkdir(this.artifacts, { recursive: true });
+      await writeFile(bodyPath, string(preparation.body));
       await this.run(['gh', 'pr', 'create', '--repo', candidate.repository, '--head', candidate.head,
-        '--base', base, '--title', string(preparation.title), '--body', string(preparation.body),
+        '--base', base, '--title', string(preparation.title), '--body-file', bodyPath,
         ...(draft ? ['--draft'] : [])]);
       pr = await this.existing(candidate.repository, candidate.head);
+      if (pr) {
+        const description = object(JSON.parse(await this.run(['gh', 'pr', 'view', String(pr.number),
+          '--repo', candidate.repository, '--json', 'title,body'])));
+        if (description.title !== preparation.title || description.body !== preparation.body) {
+          throw new Error('Created PR title or body does not match preparation');
+        }
+      }
     }
     if (!pr) throw new Error('Created PR could not be read back');
     pr = await this.read(candidate.repository, pr.number);
@@ -274,7 +285,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<PrIden
     if (code !== 0) throw new Error(`${argv[0]} command failed (exit ${String(code)})`);
     return stdout.replace(/\r?\n$/, '');
   };
-  const publication = new Publication(run);
+  const publication = new Publication(run, env.ARTIFACTS_DIR ?? '');
   const operation = env.INPUTS_OPERATION ?? 'publish';
   const expected: unknown = JSON.parse(env.INPUTS_EXPECTED_PR ?? 'null');
   let result: Candidate | PrIdentity;
@@ -292,6 +303,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<PrIden
         expected === null ? null : identity(expected));
     } else throw new Error('Unsupported publication operation');
   } else {
+    const artifacts = string(env.ARTIFACTS_DIR);
     const resolved: unknown = JSON.parse(env.INPUTS_RESOLVED ?? 'null');
     if (operation !== 'publish') result = identity(resolved);
     else {
@@ -300,7 +312,6 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<PrIden
         title: string(prepared.title), body: string(prepared.body), base: string(prepared.base),
       }, env.INPUTS_DRAFT === 'true');
     }
-    const artifacts = string(env.ARTIFACTS_DIR);
     await mkdir(artifacts, { recursive: true });
     await writeFile(join(artifacts, 'pr-identity.json'), JSON.stringify(result, null, 2));
   }

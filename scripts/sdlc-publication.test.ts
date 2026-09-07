@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtemp, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, writeFile, mkdir, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
@@ -102,13 +103,18 @@ function fixture(existing = false) {
       });
     }
     if (args[2] === 'list') return JSON.stringify(state.pr ? [{ number: 42 }] : []);
+    if (args[2] === 'view') return JSON.stringify(preparation);
     if (args[2] === 'create') {
       state.pr = { ...record, head_sha: head };
       return 'prose deliberately ignored';
     }
     throw new Error(`Unexpected test command: ${command}`);
   };
-  return { publication: new Publication(run), calls, state };
+  return {
+    publication: new Publication(run, track(join(tmpdir(), `publication-body-${randomUUID()}`))),
+    calls,
+    state,
+  };
 }
 
 describe('deterministic PR publication', () => {
@@ -176,7 +182,7 @@ describe('deterministic PR publication', () => {
       if (args[2] === 'list') return '[{"number":42}]';
       throw new Error(`Unexpected public action: ${args.join(' ')}`);
     };
-    const publication = new Publication(run);
+    const publication = new Publication(run, join(root, 'artifacts'));
     const original = await publication.checkout(42);
     await writeFile(join(checkout, 'work.txt'), 'repaired\n');
     await expect(publication.snapshot(null, original)).rejects.toThrow('dirty');
@@ -316,8 +322,21 @@ describe('deterministic PR publication', () => {
     });
     await writeFile(join(checkout, 'policy.json'), content);
     await expect(loadPolicy(join(checkout, 'policy.json'), checkout)).rejects.toThrow('outside');
+    await writeFile(join(checkout, '..policy.json'), content);
+    await expect(loadPolicy(join(checkout, '..policy.json'), checkout)).rejects.toThrow('outside');
+    await symlink(checkout, join(root, 'alias'), 'junction');
+    await expect(loadPolicy(join(root, 'alias', 'policy.json'), checkout)).rejects.toThrow(
+      'outside'
+    );
     await writeFile(join(root, 'policy.json'), content);
     expect(await loadPolicy(join(root, 'policy.json'), checkout)).toEqual(JSON.parse(content));
+    await writeFile(
+      join(root, 'policy.json'),
+      JSON.stringify({ command: ['fixed-gate'], protected_paths: ['./policy'] })
+    );
+    await expect(loadPolicy(join(root, 'policy.json'), checkout)).rejects.toThrow(
+      'repository-relative'
+    );
   });
 
   test('forge and structured identity reject mismatches', () => {
