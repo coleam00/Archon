@@ -272,7 +272,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<PrIden
       new Response(child.stderr).text(), child.exited]);
     // Tool output may contain credential-bearing remotes or private gate output.
     if (code !== 0) throw new Error(`${argv[0]} command failed (exit ${String(code)})`);
-    return stdout.trim();
+    return stdout.replace(/\r?\n$/, '');
   };
   const publication = new Publication(run);
   const operation = env.INPUTS_OPERATION ?? 'publish';
@@ -283,6 +283,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<PrIden
       if (!env.INPUTS_WORK_ORDER?.trim() || !env.INPUTS_FINDINGS?.trim()) throw new Error('Repair requires original work_order and public findings');
       const target = env.INPUTS_TARGET_PR ?? '';
       if (!/^[1-9][0-9]*$/.test(target)) throw new Error('target_pr must be an explicit positive PR number');
+      await loadPolicy(env.INPUTS_PUBLICATION_POLICY ?? '', process.cwd());
       result = await publication.checkout(Number(target));
     } else if (operation === 'readback') {
       result = await publication.readback(identity(expected));

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { decide, deliveryResult } from '../.archon/workflows/sdlc/deliver/scripts/outcome';
+import { requireRepairGreen } from '../.archon/workflows/sdlc/revise/scripts/gate';
 import {
   BUNDLED_COMMANDS,
   BUNDLED_WORKFLOWS,
@@ -69,14 +70,17 @@ describe('SDLC delivery result', () => {
   });
 
   test('every consumer declares the same result schema and PR shape', () => {
-    const schemas = ['archon-deliver', 'archon-ship', 'archon-upkeep'].map(name => {
-      const workflow = parseWorkflow(BUNDLED_WORKFLOWS[name]!, `${name}.yaml`).workflow!;
-      const node = workflow.nodes.find(n => n.id === workflow.returns)!;
-      if (!('output_format' in node)) throw new Error('Result must declare its schema');
-      return node.output_format;
-    });
+    const schemas = ['archon-deliver', 'archon-ship', 'archon-upkeep', 'archon-revise-pr'].map(
+      name => {
+        const workflow = parseWorkflow(BUNDLED_WORKFLOWS[name]!, `${name}.yaml`).workflow!;
+        const node = workflow.nodes.find(n => n.id === workflow.returns)!;
+        if (!('output_format' in node)) throw new Error('Result must declare its schema');
+        return node.output_format;
+      }
+    );
     expect(schemas[1]).toEqual(schemas[0]);
     expect(schemas[2]).toEqual(schemas[0]);
+    expect(schemas[3]).toEqual(schemas[0]);
     const prWorkflow = parseWorkflow(BUNDLED_WORKFLOWS['archon-pr']!, 'archon-pr.yaml').workflow!;
     const prNode = prWorkflow.nodes.find(n => n.id === 'pr')!;
     if (!('output_format' in prNode) || !prNode.output_format)
@@ -88,6 +92,62 @@ describe('SDLC delivery result', () => {
     expect(resultSchema.properties.pr.properties).toEqual(prSchema.properties);
     expect(resultSchema.properties.pr.required).toEqual(prSchema.required);
   });
+});
+
+describe('standalone PR repair', () => {
+  test('green means complete and green, with no red-cause waiver', () => {
+    for (const env of [
+      {},
+      { INPUTS_DONE: 'true', INPUTS_GREEN: 'false', INPUTS_RED_CAUSE: 'inherited' },
+      { INPUTS_DONE: 'false', INPUTS_GREEN: 'true' },
+    ]) {
+      expect(() => requireRepairGreen(env)).toThrow('complete and green');
+    }
+    expect(() => requireRepairGreen({ INPUTS_DONE: 'true', INPUTS_GREEN: 'true' })).not.toThrow();
+  });
+
+  for (const green of [true, false]) {
+    test(`cold invocation with green=${String(green)} gates the same PR publication`, async () => {
+      const workflow = expanded.workflows.get('archon-revise-pr');
+      if (!workflow) throw new Error(JSON.stringify(expanded.errors));
+      const updated = { ...pr, head_sha: 'd'.repeat(40) };
+      const result = await dryRunWorkflow({
+        workflow,
+        cwd: root,
+        userMessage: '',
+        execCode: true,
+        defaultStubs: true,
+        inputs: {
+          target_pr: '3',
+          work_order: 'Original accepted work order',
+          findings: 'Public finding to repair',
+        },
+        stubs: {
+          checkout__resolve: { publish: false, candidate: pr },
+          checkout__pr: pr,
+          'repair__record-start': '{}',
+          repair__implement: { done: true, green, red_cause: '', summary: 'Repaired finding' },
+          'repair__assert-changed': 'one new commit',
+          publish__resolve: { publish: false, candidate: updated },
+          publish__pr: updated,
+        },
+      });
+      expect(result.outcome).toBe(green ? 'completed' : 'failed');
+      if (green) {
+        const output = deliveryResult(
+          JSON.parse(result.trace.find(n => n.nodeId === 'outcome')!.output!)
+        );
+        expect(output.pr).toEqual(updated);
+        expect(output.summary).toContain('independent acceptance');
+      } else {
+        expect(result.trace.find(n => n.nodeId === 'gate')?.state).toBe('failed');
+        expect(result.trace.find(n => n.nodeId === 'publish__pr')?.state).toBe('skipped');
+      }
+      const repair = result.trace.find(n => n.nodeId === 'repair__implement');
+      expect(repair?.resolvedText).toContain('Original accepted work order');
+      expect(repair?.resolvedText).toContain('Public finding to repair');
+    }, 20000);
+  }
 });
 
 const definitions = new Map(

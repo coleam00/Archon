@@ -49,8 +49,6 @@ nodes:
     command: pr
     depends_on: [resolve]
     when: "$resolve.output.publish == true"
-    with:
-      candidate: "$resolve.output.candidate"
     output_format:
       type: object
       properties:

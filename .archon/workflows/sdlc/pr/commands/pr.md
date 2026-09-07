@@ -2,7 +2,7 @@
 
 Prepare a clear, reviewer-friendly title and body for the committed work on the current branch. Never modify source, commit, push, create, or edit a PR here. Deterministic publication owns those actions. Describe the pinned candidate below and return title, body, and base through structured output.
 
-$INPUTS.candidate
+$resolve.output.candidate
 
 Draft mode: **$INPUTS.draft** - `true` means open as a draft; anything else, ready for review.
 

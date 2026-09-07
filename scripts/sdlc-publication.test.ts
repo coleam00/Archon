@@ -112,6 +112,93 @@ function fixture(existing = false) {
 }
 
 describe('deterministic PR publication', () => {
+  test('real git cold repair gates and advances the same remote branch', async () => {
+    const root = track(await mkdtemp(join(tmpdir(), 'publication-git-')));
+    const seed = join(root, 'seed');
+    const remote = join(root, 'remote.git');
+    const clone = join(root, 'clone');
+    const checkout = join(root, 'repair');
+    const git = async (cwd: string, ...args: string[]): Promise<string> => {
+      const child = Bun.spawn(['git', ...args], { cwd, stdout: 'pipe', stderr: 'pipe' });
+      const [out, err, code] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      if (code !== 0) throw new Error(`Test git failed: ${err}`);
+      return out.trim();
+    };
+    await git(root, 'init', '--bare', '--initial-branch=develop', remote);
+    await git(root, 'init', '--initial-branch=develop', seed);
+    await git(seed, 'config', 'user.name', 'Publication test');
+    await git(seed, 'config', 'user.email', 'publication@example.invalid');
+    await writeFile(join(seed, 'work.txt'), 'base\n');
+    await git(seed, 'add', 'work.txt');
+    await git(seed, 'commit', '-m', 'Create base');
+    await git(seed, 'remote', 'add', 'origin', remote);
+    await git(seed, 'push', 'origin', 'develop');
+    await git(seed, 'switch', '-c', 'feature');
+    await writeFile(join(seed, 'work.txt'), 'candidate\n');
+    await git(seed, 'commit', '-am', 'Create candidate');
+    await git(seed, 'push', 'origin', 'feature');
+    await git(root, 'clone', remote, clone);
+    await git(clone, 'config', 'user.name', 'Publication test');
+    await git(clone, 'config', 'user.email', 'publication@example.invalid');
+    await git(clone, 'worktree', 'add', '-b', 'repair-run', checkout, 'develop');
+    let gateFails = true;
+    const calls: string[][] = [];
+    const run: Run = async args => {
+      calls.push(args);
+      if (args.join(' ') === 'git remote get-url origin')
+        return 'https://github.com/owner/repo.git';
+      if (args[0] === 'git') return git(checkout, ...args.slice(1));
+      if (args[0] === 'fixed-gate') {
+        if (gateFails) throw new Error('Mandatory gate failed');
+        return '';
+      }
+      if (args[1] === 'api')
+        return JSON.stringify({
+          number: 42,
+          html_url: record.url,
+          state: 'open',
+          draft: true,
+          head: {
+            ref: 'feature',
+            sha: await git(remote, 'rev-parse', 'refs/heads/feature'),
+            repo: { full_name: record.repository },
+          },
+          base: {
+            ref: 'develop',
+            sha: await git(remote, 'rev-parse', 'refs/heads/develop'),
+            repo: { full_name: record.repository },
+          },
+        });
+      if (args[2] === 'list') return '[{"number":42}]';
+      throw new Error(`Unexpected public action: ${args.join(' ')}`);
+    };
+    const publication = new Publication(run);
+    const original = await publication.checkout(42);
+    await writeFile(join(checkout, 'work.txt'), 'repaired\n');
+    await expect(publication.snapshot(null, original)).rejects.toThrow('dirty');
+    await git(checkout, 'commit', '-am', 'Repair finding');
+    const candidate = await publication.snapshot(
+      { command: ['fixed-gate'], protected_paths: [] },
+      original
+    );
+    await expect(publication.publish(candidate, preparation, true)).rejects.toThrow(
+      'Mandatory gate'
+    );
+    expect(await git(remote, 'rev-parse', 'refs/heads/feature')).toBe(original.head_sha);
+    gateFails = false;
+    const repaired = await publication.publish(candidate, preparation, true);
+    expect(repaired.number).toBe(original.number);
+    expect(repaired.base_sha).toBe(original.base_sha);
+    expect(repaired.head_sha).not.toBe(original.head_sha);
+    expect(repaired.head_sha).toBe(await git(checkout, 'rev-parse', 'HEAD'));
+    expect(await git(remote, 'rev-parse', 'refs/heads/feature')).toBe(repaired.head_sha);
+    expect(calls.flat()).not.toContain('--force');
+  }, 20000);
+
   test('new PR pins commits, uses non-main base, and reads typed identity', async () => {
     const f = fixture();
     const candidate = await f.publication.snapshot(null);
