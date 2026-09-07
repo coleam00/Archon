@@ -4,6 +4,11 @@ Conventions for this pack specifically. Project-wide judgment lives in
 [`AGENTS.md`](../../../AGENTS.md); the YAML surface is governed by
 [`.archon/workflow-language-constitution.md`](../../workflow-language-constitution.md).
 
+The [regress workflow](regress/README.md) composes validation and investigation
+into regression diagnosis, with opt-in GitHub publication from trusted public
+evidence. Its external check profile, result contract, and publication limits are
+documented alongside the workflow.
+
 ## Guards
 
 A guard here must protect an action the node it lives in takes.

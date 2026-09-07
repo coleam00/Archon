@@ -30,7 +30,9 @@ export default tseslint.config(
       '.claude/skills/**',
       '.archon/commands/**',
       '.archon/maintainer-standup/**',
-      '.archon/workflows/**',
+      '.archon/workflows/**/*',
+      '!.archon/workflows/**/',
+      '!.archon/workflows/sdlc/regress/scripts/*.ts',
       '**/*.generated.ts', // Auto-generated source files (content inlined via JSON.stringify)
       '**/*.js',
       '*.mjs',
@@ -57,7 +59,12 @@ export default tseslint.config(
 
   // Project-specific settings
   {
-    files: ['packages/*/src/**/*.{ts,tsx}', 'scripts/**/*.ts', ...archonScriptFiles],
+    files: [
+      'packages/*/src/**/*.{ts,tsx}',
+      'scripts/**/*.ts',
+      ...archonScriptFiles,
+      '.archon/workflows/sdlc/regress/scripts/*.ts',
+    ],
     languageOptions: {
       parserOptions: {
         projectService: true,

@@ -1,0 +1,8 @@
+prepare: { ready: true, mode: configured }
+fixed: { status: inconclusive }
+collect: { status: inconclusive }
+diagnose:
+  { status: inconclusive, summary: 'Required browser runtime is unavailable.', findings: [] }
+finish: { status: inconclusive, publication: not-applicable, issues: [] }
+fixture:
+  expect: completed

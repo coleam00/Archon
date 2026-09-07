@@ -1,0 +1,7 @@
+diagnose:
+  status: inconclusive
+  summary: 'The dry-run base cannot resolve to a checked revision.'
+  findings: []
+fixture:
+  expect: completed
+exec-code: true
