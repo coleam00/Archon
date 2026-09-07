@@ -4,6 +4,9 @@ Conventions for this pack specifically. Project-wide judgment lives in
 [`AGENTS.md`](../../../AGENTS.md); the YAML surface is governed by
 [`.archon/workflow-language-constitution.md`](../../workflow-language-constitution.md).
 
+The independently callable [governed merge](merge/README.md) consumes trusted
+external acceptance and operator policy. It owns no tracker or deployment lifecycle.
+
 ## Guards
 
 A guard here must protect an action the node it lives in takes.

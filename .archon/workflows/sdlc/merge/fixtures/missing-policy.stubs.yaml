@@ -1,0 +1,8 @@
+fixture:
+  expect: completed
+  reached: [merge]
+  inputs:
+    target: "42"
+    receipt: ""
+    policy: ""
+exec-code: true

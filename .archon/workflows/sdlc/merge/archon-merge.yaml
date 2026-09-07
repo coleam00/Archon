@@ -1,0 +1,42 @@
+name: archon-merge
+description: >-
+  Merge an accepted GitHub PR under trusted external operator policy. Refuses
+  stale acceptance, holds, and uncertain checks. Requires Bun and authenticated
+  gh. Read the merge README's trust and race contract before authorizing.
+requires: [github]
+
+inputs:
+  target:
+    description: GitHub PR URL or positive PR number in the policy repository.
+  receipt:
+    description: Absolute trusted external acceptance.json path.
+  policy:
+    description: Absolute trusted external operator policy JSON path. No default authorization.
+
+returns: merge
+
+nodes:
+  - id: merge
+    script: merge
+    runtime: bun
+    mutates_checkout: false
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          enum: [merged, held, revalidation_required, failed]
+        repository:
+          type: string
+        pr:
+          type: integer
+        head_sha:
+          type: string
+        base_sha:
+          type: string
+        summary:
+          type: string
+        merge_commit:
+          type: string
+      required: [status, repository, pr, head_sha, base_sha, summary, merge_commit]
