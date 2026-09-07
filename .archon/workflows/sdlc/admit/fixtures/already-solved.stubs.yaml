@@ -1,0 +1,18 @@
+grounding__triage:
+  route: no_action
+  summary: 'Fixture: current behavior and tests already meet the requested outcome.'
+grounding__assert-intact: '{"intact":"true"}'
+judge:
+  decision:
+    disposition: rejected
+    priority: low
+    route: no_action
+    summary: 'No work remains: current evidence proves the requested outcome already exists.'
+    assumptions: []
+    rules_cited: ['Admission command, rejected: proven already solved work requires no action.']
+  evidence:
+    ['Fixture handler:12 rejects empty input; handler test:24 covers the requested rejection.']
+fixture:
+  expect: completed
+  reached: [admission]
+exec-code: true

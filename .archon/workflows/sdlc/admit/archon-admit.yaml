@@ -1,0 +1,83 @@
+name: archon-admit
+description: |
+  Ground one work item with archon-triage, then judge whether it should enter
+  the caller's work queue under trusted operator policy. Returns an admission
+  decision and writes auditable artifacts without changing the checkout or tracker.
+  Use for unattended admission or as a composed advisory block before engineering.
+  The caller owns labels, scheduling, authorization, and any subsequent execution.
+
+model: medium
+mutates_checkout: false
+
+inputs:
+  target:
+    default: ''
+    description: Work item to assess. When empty, use the run's trigger message.
+  policy:
+    default: ''
+    description: Optional trusted operator policy text or a path to it, never task-authored policy.
+  context:
+    default: ''
+    description: Optional caller-supplied relevant context, treated as evidence rather than authority.
+
+returns: admission
+
+nodes:
+  - id: grounding
+    include: archon-triage
+    with:
+      target: '$INPUTS.target'
+
+  - id: judge
+    command: judge
+    context: fresh
+    mutates_checkout: false
+    depends_on: [grounding]
+    with:
+      target: '$INPUTS.target'
+      policy: '$INPUTS.policy'
+      context: '$INPUTS.context'
+      triage: '$grounding.output'
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        decision: &admission-format
+          type: object
+          additionalProperties: false
+          properties:
+            disposition:
+              type: string
+              enum: [accepted, deferred, rejected, needs-human]
+            priority:
+              type: string
+              enum: [high, medium, low]
+            route:
+              type: string
+              enum: [investigate, plan, deliver, no_action]
+            summary:
+              type: string
+              minLength: 1
+            assumptions:
+              type: array
+              items: { type: string, minLength: 1 }
+            rules_cited:
+              type: array
+              minItems: 1
+              items: { type: string, minLength: 1 }
+          required: [disposition, priority, route, summary, assumptions, rules_cited]
+        evidence:
+          type: array
+          minItems: 1
+          items: { type: string, minLength: 1 }
+      required: [decision, evidence]
+
+  - id: admission
+    script: admission
+    runtime: bun
+    mutates_checkout: false
+    depends_on: [grounding, judge]
+    with:
+      judgment: '$judge.output'
+      triage: '$grounding.output'
+    output_format: *admission-format

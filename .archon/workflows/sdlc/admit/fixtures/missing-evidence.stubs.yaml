@@ -1,0 +1,16 @@
+grounding__triage:
+  route: deliver
+  summary: 'Fixture: grounded work.'
+grounding__assert-intact: '{"intact":"true"}'
+judge:
+  decision:
+    disposition: accepted
+    priority: medium
+    route: deliver
+    summary: 'Fixture: decision omits its required evidence.'
+    assumptions: []
+    rules_cited: ['Admission command: accepted work must have evidence.']
+fixture:
+  expect: failed
+  fail-node: admission
+exec-code: true

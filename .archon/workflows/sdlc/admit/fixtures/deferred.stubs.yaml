@@ -1,0 +1,17 @@
+grounding__triage:
+  route: plan
+  summary: 'Fixture: the enhancement remains relevant and needs a design.'
+grounding__assert-intact: '{"intact":"true"}'
+judge:
+  decision:
+    disposition: deferred
+    priority: low
+    route: no_action
+    summary: 'Legitimate enhancement; reconsider after the current reliability milestone.'
+    assumptions: []
+    rules_cited: ['Operator policy input: enhancements follow the reliability milestone.']
+  evidence: ['Fixture roadmap:4 places enhancements after the unfinished reliability milestone.']
+fixture:
+  expect: completed
+  reached: [admission]
+exec-code: true

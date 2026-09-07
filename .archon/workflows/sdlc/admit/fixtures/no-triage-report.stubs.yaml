@@ -1,0 +1,7 @@
+grounding__triage:
+  route: no_action
+  summary: 'Fixture: triage returned without writing its report.'
+fixture:
+  expect: failed
+  fail-node: grounding__assert-intact
+exec-code: true
