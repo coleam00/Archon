@@ -48,9 +48,9 @@ nodes:
   - id: prepare
     command: pr
     depends_on: [resolve]
-    when: "$INPUTS.operation == 'publish'"
+    when: "$resolve.output.publish == true"
     with:
-      candidate: "$resolve.output"
+      candidate: "$resolve.output.candidate"
     output_format:
       type: object
       properties:
@@ -68,7 +68,7 @@ nodes:
       stage: finish
       operation: "$INPUTS.operation"
       draft: "$INPUTS.draft"
-      resolved: "$resolve.output"
+      resolved: "$resolve.output.candidate"
       preparation: { from: "$prepare.output", if_skipped: null }
     output_format:
       type: object

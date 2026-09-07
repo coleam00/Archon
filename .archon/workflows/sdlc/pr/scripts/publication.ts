@@ -265,7 +265,7 @@ function parseCandidate(value: unknown): Candidate {
     pr: p.pr === null ? null : identity(p.pr), policy: p.policy === null ? null : parsePolicy(p.policy) };
 }
 
-export async function main(env: NodeJS.ProcessEnv = process.env): Promise<PrIdentity | Candidate> {
+export async function main(env: NodeJS.ProcessEnv = process.env): Promise<PrIdentity | Candidate | { publish: boolean; candidate: Candidate | PrIdentity }> {
   const run: Run = async argv => {
     const child = Bun.spawn(argv, { stdout: 'pipe', stderr: 'pipe' });
     const [stdout, , code] = await Promise.all([new Response(child.stdout).text(),
@@ -303,7 +303,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<PrIden
     await mkdir(artifacts, { recursive: true });
     await writeFile(join(artifacts, 'pr-identity.json'), JSON.stringify(result, null, 2));
   }
-  return result;
+  return env.INPUTS_STAGE === 'resolve' ? { publish: operation === 'publish', candidate: result } : result;
 }
 
 if (import.meta.main) {

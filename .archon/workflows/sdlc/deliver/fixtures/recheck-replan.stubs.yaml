@@ -1,45 +1,84 @@
-# A correction can uncover that the remaining blocker needs a materially wider
-# work order. The loop stops on replan and gate-ready refuses the ready path.
+# Declared SDLC scenario: recheck-replan. Public actions are stubbed.
 impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true
-  summary: "stub: initial implementation green"
-impl__assert-changed: "2 files changed"
+  summary: 'stub: initial implementation green'
+impl__assert-changed: 2 files changed
 gate-green: '{"gate":"green"}'
-pr__pr: { number: 6, url: "https://github.com/example/repo/pull/6", head: "fixture-branch", base: "dev", is_draft: true }
+pr__pr: &id001
+  number: 6
+  url: https://github.com/example/repo/pull/6
+  head: fixture-branch
+  base: dev
+  is_draft: true
+  head_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  base_sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  repository: example/repo
 classify:
   errors: false
   docs: false
   reasons:
-    errors: "stub"
-    docs: "stub"
+    errors: stub
+    docs: stub
 resolve-scope: '{"errors":"false"}'
 review__mode: '{"continuation":false}'
-review__scope: "accepted contract recorded"
-review__code: "1 Important in-scope finding"
-review__seams: "0 findings"
-review__simplify: "0 findings"
-review__tests: "0 findings"
+review__scope: accepted contract recorded
+review__code: 1 Important in-scope finding
+review__seams: 0 findings
+review__simplify: 0 findings
+review__tests: 0 findings
 review__synthesize:
   ready: false
   action: correct
-  findings_summary: "stub: one in-scope correction"
-ci-note: "No CI evidence is available for this round (no checks reported, or the read failed). Proceed on the review findings alone."
+  findings_summary: 'stub: one in-scope correction'
+ci-note: No CI evidence is available for this round (no checks reported, or the read failed). Proceed on the review
+  findings alone.
 fix__record-start: '{"start":"recorded"}'
 fix__implement:
   done: true
   green: true
-  summary: "stub: correction exposed a scope conflict"
-fix__assert-changed: "1 file changed"
+  summary: 'stub: correction exposed a scope conflict'
+fix__assert-changed: 1 file changed
 gate-correction-green: '{"gate":"green"}'
 recheck__mode: '{"continuation":true}'
-recheck__scope: "light review with original accepted contract"
+recheck__scope: light review with original accepted contract
 recheck__synthesize:
   ready: false
   action: replan
-  findings_summary: "stub: remaining correction requires replanning"
+  findings_summary: 'stub: remaining correction requires replanning'
 fixture:
   expect: failed
   fail-node: gate-ready
 exec-code: true
+pr__resolve:
+  publish: false
+  candidate: *id001
+capture-pr__resolve:
+  publish: false
+  candidate: *id001
+capture-pr__pr: *id001
+publish-correction__resolve:
+  publish: false
+  candidate: *id001
+publish-correction__pr: *id001
+capture-ci-pr__resolve:
+  publish: false
+  candidate: *id001
+capture-ci-pr__pr: *id001
+publish-ci-correction__resolve:
+  publish: false
+  candidate: *id001
+publish-ci-correction__pr: *id001
+readback__resolve:
+  publish: false
+  candidate: *id001
+readback__pr:
+  number: 6
+  url: https://github.com/example/repo/pull/6
+  head: fixture-branch
+  base: dev
+  is_draft: false
+  head_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  base_sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  repository: example/repo

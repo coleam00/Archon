@@ -1,8 +1,10 @@
 # Prepare the Pull Request
 
-Create a clear, reviewer-friendly pull request for the committed work on the current branch. The PR itself is the artifact — produce no separate report. You never modify source files; your writes are git push and the PR. Every fact belongs in the PR title and body.
+Prepare a clear, reviewer-friendly title and body for the committed work on the current branch. Never modify source, commit, push, create, or edit a PR here. Deterministic publication owns those actions. Describe the pinned candidate below and return title, body, and base through structured output.
 
-Draft mode: **$INPUTS.draft** — `true` means open as a draft; anything else, ready for review.
+$INPUTS.candidate
+
+Draft mode: **$INPUTS.draft** - `true` means open as a draft; anything else, ready for review.
 
 Context from the run that may narrow this (often empty):
 
@@ -14,18 +16,18 @@ Record `HEAD_BRANCH=$(git branch --show-current)` before doing anything public; 
 
 ## 2. Verify the work is ready
 
-- Confirm the branch is not the base and has commits ahead of it. If intended work sits uncommitted, commit it first following the repository's conventions — staged by name, one coherent outcome per commit, human-sounding message, no AI attribution. Never sweep unrelated changes; if intended and unrelated changes cannot be separated safely, stop and say so.
-- Read the complete merge-base diff — not just the file list — and confirm it matches the work described by the run's artifacts.
+- Confirm the branch is not the base and has commits ahead of it. Uncommitted work is a refusal; implementation owns commits. Never sweep unrelated changes.
+- Read the complete merge-base diff - not just the file list - and confirm it matches the work described by the run's artifacts.
 
 ## 3. Write it
 
 - Read the run's artifacts for content: `$ARTIFACTS_DIR/implementation.md` and anything else relevant under `$ARTIFACTS_DIR/`.
 - Find the repository's PR template (`.github/pull_request_template.md` and its supported variants). Use it; fill every applicable section with concrete information and delete instructional comments. No template → problem first, then solution focused on behavior, then validation that actually ran.
-- Title: concise, human, the meaningful outcome — never an implementation inventory.
+- Title: concise, human, the meaningful outcome - never an implementation inventory.
 - Link the issue with `Closes #N` only when the PR fully resolves it; `Relates to #N` otherwise. Never infer linkage from a bare number.
 - Never add AI attribution, generated-by footers, or robot emoji.
 - If `$ARTIFACTS_DIR/red-causes.json` exists, this branch is being delivered while a project check is red. Add a short, plainly-titled section near the top of the body giving each record's cause and the evidence for it from `implementation.md`, and say that the PR's own CI is the check that still decides. A reviewer must not have to discover this from a red badge.
-- If you write the body to a file, put it under `$ARTIFACTS_DIR/` — never inside the repository.
+- If you write the body to a file, put it under `$ARTIFACTS_DIR/` - never inside the repository.
 
 ## 4. Return the preparation
 

@@ -6,7 +6,7 @@ description: |
   reviewed delivery tail. One governed run; the assessment is the work order.
 
   Use when: a dependency or security advisory should become a reviewed,
-  ready-to-merge PR — "update sharp", "address the undici advisory",
+  ready-to-merge PR - "update sharp", "address the undici advisory",
   "bump X to latest".
   NOT for: sweeping every outdated dependency at once (one target per run),
   or deciding fork-vs-replace questions (that is a human decision the
@@ -18,17 +18,17 @@ inputs:
   target:
     default: ""
     description: >-
-      The update to assess — a dependency name, version, or advisory. When
+      The update to assess - a dependency name, version, or advisory. When
       empty, the run's trigger message is the target.
   errors:
     default: "auto"
-    description: Silent-failure lens — auto, true, or false.
+    description: Silent-failure lens - auto, true, or false.
 
 returns: outcome
 
 nodes:
   # The assessment stage is advisory and inline (not a composed package): the
-  # record/judge/verify triad appears here for the second time after triage —
+  # record/judge/verify triad appears here for the second time after triage -
   # rule of three says extract on the third package that needs it, not now.
   - id: assess
     command: assess
@@ -52,7 +52,7 @@ nodes:
       # Tree-intactness is engine-enforced via mutates_checkout: false above;
       # what remains is the evidence contract.
       if [ ! -s "$ARTIFACTS_DIR/upkeep-assessment.md" ]; then
-        echo "assert-intact: the run completed but wrote no upkeep-assessment.md — a verdict without evidence is not an assessment." >&2
+        echo "assert-intact: the run completed but wrote no upkeep-assessment.md - a verdict without evidence is not an assessment." >&2
         exit 1
       fi
       echo '{"intact":"true"}'
@@ -67,7 +67,7 @@ nodes:
 
   # The work order authorizes exactly the lockfile change implement's default
   # forbids: implement.md's "never update a lockfile" exists to stop incidental
-  # churn, and the target dependency IS the work here — so the order re-scopes
+  # churn, and the target dependency IS the work here - so the order re-scopes
   # that rule explicitly (non-goals are transferable by the work item) while
   # keeping it in force for every other dependency.
   - id: deliver
@@ -76,12 +76,12 @@ nodes:
       errors: "$INPUTS.errors"
       work: >-
         Apply the dependency update specified in
-        $ARTIFACTS_DIR/upkeep-assessment.md. Read that file in full first — it
+        $ARTIFACTS_DIR/upkeep-assessment.md. Read that file in full first - it
         is the verified work order, and you know nothing about this update
         beyond it and the repository itself. Follow its update order: use the
         project's own package manager, change the manifest only as the
         assessment directs, and update the lockfile for the TARGET dependency
-        only — this work item explicitly authorizes that lockfile change; the
+        only - this work item explicitly authorizes that lockfile change; the
         no-lockfile-updates default still applies to every other dependency, so
         keep churn minimal and never downgrade anything unrelated. Fix what the
         bump breaks, validate with the project's own checks, and if reality
@@ -89,23 +89,69 @@ nodes:
         conflict), stop honestly with green false and the contradiction in your
         summary rather than improvising a different version. Carry the
         assessment's chosen mechanism, its blast radius, and the alternative it
-        rejected into your report — the reviewer must be able to judge that
+        rejected into your report - the reviewer must be able to judge that
         trade-off from the pull request. Original request:
         $INPUTS.target
     depends_on: [gate-update]
 
-  # One return for every legitimate terminal result: a no_action assessment
-  # completes with its report path; a delivered update is reported from the
-  # flip's verified URL the deliver branch returned (if_skipped binding, so a
-  # skipped flip arrives as null). A passed gate with no delivered output means delivery
-  # died mid-flight — outcome must never attribute that to the assessment.
   - id: outcome
-    script: outcome
-    runtime: uv
+    script: __archon_pack__bundled:sdlc:deliver::outcome
+    runtime: bun
     depends_on: [assess, assert-intact, gate-update, deliver]
     trigger_rule: none_failed_min_one_success
     with:
-      action: "$assess.output.action"
+      mode: upkeep
+      route: "$assess.output.action"
       summary: "$assess.output.summary"
-      delivered: { from: "$deliver.output", if_skipped: null }
-      gate_passed: { from: "$gate-update.output", if_skipped: null }
+      delivery: { from: "$deliver.output", if_skipped: null }
+      gate_direct: { from: "$gate-update.output", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        outcome:
+          type: string
+          enum:
+          - delivered
+          - no_action
+          - blocked
+        summary:
+          type: string
+        pr:
+          type:
+          - object
+          - 'null'
+          properties:
+            number:
+              type: integer
+            url:
+              type: string
+            head:
+              type: string
+            base:
+              type: string
+            head_sha:
+              type: string
+            base_sha:
+              type: string
+            repository:
+              type: string
+            is_draft:
+              type: boolean
+          required:
+          - number
+          - url
+          - head
+          - base
+          - head_sha
+          - base_sha
+          - repository
+          - is_draft
+        reports:
+          type: array
+          items:
+            type: string
+      required:
+      - outcome
+      - summary
+      - pr
+      - reports
