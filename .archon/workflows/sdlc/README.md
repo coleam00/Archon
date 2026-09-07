@@ -7,6 +7,11 @@ Conventions for this pack specifically. Project-wide judgment lives in
 The independently callable [governed merge](merge/README.md) consumes trusted
 external acceptance and operator policy. It owns no tracker or deployment lifecycle.
 
+The [regress workflow](regress/README.md) composes validation and investigation
+into regression diagnosis, with opt-in GitHub publication from trusted public
+evidence. Its external check profile, result contract, and publication limits are
+documented alongside the workflow.
+
 ## Guards
 
 A guard here must protect an action the node it lives in takes.

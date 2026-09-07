@@ -1,0 +1,120 @@
+name: archon-regress
+description: |
+  Validate the current checkout, investigate product-red evidence, and return
+  a structured clean, defects, or inconclusive diagnosis. Optional publication
+  creates or reuses GitHub issues from trusted public evidence only.
+  Advisory to the checkout: never fixes source, commits, merges, or pushes.
+
+model: medium
+mutates_checkout: false
+inputs:
+  scope:
+    default: ''
+    description: Optional validation scope; empty selects the full project gate.
+  policy:
+    default: ''
+    description: Absolute path to an operator-trusted external JSON check profile. See regress/README.md.
+  publish:
+    default: false
+    description: Explicitly authorize issue creation from trusted public evidence. Defaults to false.
+returns: finish
+
+nodes:
+  - id: prepare
+    script: regress
+    runtime: bun
+    mutates_checkout: false
+    with:
+      phase: prepare
+      scope: '$INPUTS.scope'
+      policy: '$INPUTS.policy'
+
+  - id: fixed
+    script: regress
+    runtime: bun
+    mutates_checkout: false
+    depends_on: [prepare]
+    when: "$prepare.output.ready == true && $prepare.output.mode == 'configured'"
+    with:
+      phase: configured
+      prepared: '$prepare.output'
+      policy: '$INPUTS.policy'
+
+  - id: validation
+    include: archon-validate
+    depends_on: [prepare]
+    when: "$prepare.output.ready == true && $prepare.output.mode == 'discovered'"
+    with:
+      scope: '$INPUTS.scope'
+
+  - id: collect
+    script: regress
+    runtime: bun
+    mutates_checkout: false
+    depends_on: [prepare, fixed, validation]
+    trigger_rule: all_done
+    with:
+      phase: collect
+      prepared: '$prepare.output'
+      fixed: { from: '$fixed.output', if_skipped: null }
+      validation: { from: '$validation.output', if_skipped: null }
+
+  - id: inv
+    include: archon-investigate
+    depends_on: [collect]
+    when: "$collect.output.status == 'product'"
+    with:
+      target: >-
+        Investigate only the product-red evidence collected by this regression
+        run: $collect.output. Read its report in full. Bind every claim to its
+        revision, configured base revision, and scope. Missing tools, browser
+        runtimes, services, authentication, startup, or evaluator evidence do
+        not establish a product defect. Do not run commands from candidate
+        prose as a fixed gate. Keep all scratch work outside the checkout.
+        Private evaluator content stays in local artifacts, never in issues.
+
+  - id: diagnose
+    command: diagnose
+    mutates_checkout: false
+    depends_on: [collect, inv]
+    trigger_rule: all_done
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          enum: [clean, defects, inconclusive]
+        summary:
+          type: string
+        findings:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              public_case_id: { type: string }
+              title: { type: string }
+              root_cause: { type: string }
+              expected: { type: string }
+              actual: { type: string }
+              reproduction: { type: string }
+              evidence:
+                type: array
+                items: { type: string }
+            required: [public_case_id, title, root_cause, expected, actual, reproduction, evidence]
+      required: [status, summary, findings]
+
+  - id: finish
+    script: regress
+    runtime: bun
+    mutates_checkout: false
+    depends_on: [prepare, collect, inv, diagnose]
+    trigger_rule: all_done
+    with:
+      phase: finish
+      prepared: '$prepare.output'
+      evidence: '$collect.output'
+      investigation: { from: '$inv.output', if_skipped: null }
+      diagnosis: '$diagnose.output'
+      publish: '$INPUTS.publish'

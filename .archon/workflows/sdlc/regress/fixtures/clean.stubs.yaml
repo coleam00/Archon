@@ -1,0 +1,7 @@
+prepare: { ready: true, mode: discovered }
+validation__validate: { green: true, red_cause: '', summary: 'Full check passed.' }
+collect: { status: clean }
+diagnose: { status: clean, summary: 'Checked scope is clean.', findings: [] }
+finish: { status: clean, publication: disabled, issues: [] }
+fixture:
+  expect: completed

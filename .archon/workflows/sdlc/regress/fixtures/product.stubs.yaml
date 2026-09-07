@@ -1,0 +1,19 @@
+prepare: { ready: true, mode: configured }
+fixed: { status: product }
+collect: { status: product }
+inv__investigate: { rooted: true, summary: 'The parser reads before checking length.' }
+inv__assert-intact: '{"intact":"true"}'
+diagnose:
+  status: defects
+  summary: 'Proven parser defect.'
+  findings:
+    - public_case_id: empty-input
+      title: Empty input raises
+      root_cause: Parser reads before checking length
+      expected: Empty result
+      actual: Exception
+      reproduction: Run the empty-input test
+      evidence: ['src/parser.ts:12']
+finish: { status: defects, publication: disabled, issues: [] }
+fixture:
+  expect: completed
