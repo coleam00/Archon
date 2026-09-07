@@ -35,6 +35,17 @@ route and summary. `triage.md` retains the full grounding. The JSON artifact add
 `evidence` (string array) and `grounding` (`route`, `summary`) to the returned fields.
 Missing, blank, malformed, or inconsistent fields fail without returning admission.
 
+Run against a work item with an isolated checkout:
+
+```sh
+archon workflow run archon-admit --branch assess/work-item \
+  --input target=https://github.com/OWNER/REPOSITORY/issues/NUMBER --detach
+```
+
+Optionally supply `--input policy=/absolute/path/to/operator-policy.md`.
+Admission does not implement the item. `archon-ship` remains the single
+issue-to-reviewed-PR entry point after the operator or caller admits work.
+
 Compose with `include: archon-admit` and bind `target`, `policy`, and `context` through
 `with:`. Gate later work on the returned disposition as well as route. This workflow
 does not launch engineering work. Like triage, it uses fixed artifact names, so run
