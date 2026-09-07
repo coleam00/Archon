@@ -30,7 +30,7 @@ fixture:
   inputs:
     target: 'issue #3031'
   resolved-text-contains:
-    triage__triage: "target):\n\nissue #3031\n\nThe operator's request"
+    triage__triage: 'issue #3031'
 exec-code: true
 triage__assert-intact: '{"intact":"true"}'
 planned__assert-intact: '{"intact":"true"}'

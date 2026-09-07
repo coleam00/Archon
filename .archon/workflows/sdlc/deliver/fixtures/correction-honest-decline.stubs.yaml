@@ -32,14 +32,12 @@ review__synthesize:
   ready: false
   action: correct
   findings_summary: 'stub: 1 Important finding open'
-ci-note: "CI state for this pull request (head abc123def456): Concluded non-green checks:\n- test (windows-latest)\
-  \ (fail)"
+ci-note: "CI state for this pull request (head abc123def456): Concluded non-green checks:\n- test (windows-latest) (fail)"
 fix__implement:
   done: true
   green: false
   red_cause: inherited
-  summary: 'stub: the finding is already satisfied on the branch and needed no edit; lint is red only for a violation
-    present at the reviewed starting commit, in a file this diff never touches'
+  summary: 'stub: the finding is already satisfied on the branch and needed no edit; lint is red only for a violation present at the reviewed starting commit, in a file this diff never touches'
 recheck__mode: '{"continuation":true}'
 recheck__scope: light mode; delta since cursor
 recheck__synthesize:

@@ -42,8 +42,7 @@ ci-fix__implement:
   done: true
   green: false
   red_cause: inherited
-  summary: 'stub: e2e-smoke is red at the run''s starting commit on a surface this diff never touches; no edit to
-    make'
+  summary: 'stub: e2e-smoke is red at the run''s starting commit on a surface this diff never touches; no edit to make'
 ci-recheck__mode: '{"continuation":true}'
 ci-recheck__scope: light mode; zero delta
 ci-recheck__synthesize:
@@ -67,8 +66,7 @@ fixture:
   - ci-attention-route
   - attention-ci-probe
   resolved-text-contains:
-    attention-ci-pause: 'pull request #10 after Archon classified the failure as inherited: e2e-smoke (fail) Re-run
-      the failing check, then resume this run.'
+    attention-ci-pause: 'pull request #10 after Archon classified the failure as inherited: e2e-smoke (fail) Re-run the failing check, then resume this run.'
 exec-code: true
 pr__resolve:
   publish: false

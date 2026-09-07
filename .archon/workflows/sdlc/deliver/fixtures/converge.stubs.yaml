@@ -26,8 +26,7 @@ review__synthesize:
   ready: false
   action: correct
   findings_summary: 'stub: 3 Important findings open'
-ci-note: 'CI state for this pull request (head abc123def456): No concluded failures. 2 check(s) still running —
-  never wait on them.'
+ci-note: 'CI state for this pull request (head abc123def456): No concluded failures. 2 check(s) still running — never wait on them.'
 fix__record-start: '{"start":"recorded"}'
 fix__implement:
   done: true

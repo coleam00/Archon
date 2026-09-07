@@ -66,8 +66,7 @@ fixture:
   - ci-attention-route
   - attention-ci-probe
   resolved-text-contains:
-    attention-ci-pause: 'pull request #11 after Archon classified the failure as environment: hosted runner lost
-      network (fail) Re-run the failing check, then resume this run.'
+    attention-ci-pause: 'pull request #11 after Archon classified the failure as environment: hosted runner lost network (fail) Re-run the failing check, then resume this run.'
 exec-code: true
 pr__resolve:
   publish: false

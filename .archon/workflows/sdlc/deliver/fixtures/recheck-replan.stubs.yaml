@@ -32,8 +32,7 @@ review__synthesize:
   ready: false
   action: correct
   findings_summary: 'stub: one in-scope correction'
-ci-note: No CI evidence is available for this round (no checks reported, or the read failed). Proceed on the review
-  findings alone.
+ci-note: No CI evidence is available for this round (no checks reported, or the read failed). Proceed on the review findings alone.
 fix__record-start: '{"start":"recorded"}'
 fix__implement:
   done: true
