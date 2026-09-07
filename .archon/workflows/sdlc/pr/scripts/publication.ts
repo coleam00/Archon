@@ -112,7 +112,12 @@ export class Publication {
   private git(...args: string[]): Promise<string> { return this.run(['git', ...args]); }
 
   private async repository(): Promise<string> {
-    return repositoryFromRemote(await this.git('remote', 'get-url', 'origin'));
+    const repository = repositoryFromRemote(await this.git('remote', 'get-url', 'origin'));
+    const pushUrls = (await this.git('remote', 'get-url', '--push', '--all', 'origin')).split(/\r?\n/);
+    if (pushUrls.length !== 1 || repositoryFromRemote(pushUrls[0]) !== repository) {
+      throw new Error('Origin must have one push destination matching its GitHub repository');
+    }
+    return repository;
   }
 
   private async clean(): Promise<void> {

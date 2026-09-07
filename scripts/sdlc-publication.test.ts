@@ -37,6 +37,7 @@ const preparation = {
 function fixture(existing = false) {
   const calls: string[][] = [];
   const state = {
+    pushRemote: 'https://github.com/owner/repo.git',
     dirty: false,
     head,
     branch: 'feature',
@@ -47,11 +48,13 @@ function fixture(existing = false) {
     protected: false,
     isolated: true,
     staleFetch: false,
+    descriptionMismatch: false,
   };
   const run: Run = async args => {
     calls.push(args);
     const command = args.join(' ');
     if (command === 'git remote get-url origin') return 'https://github.com/owner/repo.git';
+    if (command === 'git remote get-url --push --all origin') return state.pushRemote;
     if (args[1] === 'status') return state.dirty ? '?? uncommitted.txt' : '';
     if (command === 'git branch --show-current') return state.branch;
     if (command === 'git rev-parse HEAD') return state.head;
@@ -103,7 +106,10 @@ function fixture(existing = false) {
       });
     }
     if (args[2] === 'list') return JSON.stringify(state.pr ? [{ number: 42 }] : []);
-    if (args[2] === 'view') return JSON.stringify(preparation);
+    if (args[2] === 'view')
+      return JSON.stringify(
+        state.descriptionMismatch ? { ...preparation, body: 'wrong body' } : preparation
+      );
     if (args[2] === 'create') {
       state.pr = { ...record, head_sha: head };
       return 'prose deliberately ignored';
@@ -155,7 +161,10 @@ describe('deterministic PR publication', () => {
     const calls: string[][] = [];
     const run: Run = async args => {
       calls.push(args);
-      if (args.join(' ') === 'git remote get-url origin')
+      if (
+        args.join(' ') === 'git remote get-url origin' ||
+        args.join(' ') === 'git remote get-url --push --all origin'
+      )
         return 'https://github.com/owner/repo.git';
       if (args[0] === 'git') return git(checkout, ...args.slice(1));
       if (args[0] === 'fixed-gate') {
@@ -239,6 +248,26 @@ describe('deterministic PR publication', () => {
     expect(result.number).toBe(42);
     expect(result.head_sha).toBe(head);
     expect(f.calls.some(a => a[2] === 'create')).toBe(false);
+  });
+
+  test('a created PR with a different description fails readback', async () => {
+    const f = fixture();
+    f.state.descriptionMismatch = true;
+    await expect(
+      f.publication.publish(await f.publication.snapshot(null), preparation, true)
+    ).rejects.toThrow('title or body');
+  });
+
+  test('refuses a separate or multiple origin push destinations', async () => {
+    for (const remote of [
+      'https://github.com/another/repo.git',
+      'https://github.com/owner/repo.git\nhttps://github.com/another/repo.git',
+    ]) {
+      const f = fixture();
+      f.state.pushRemote = remote;
+      await expect(f.publication.snapshot(null)).rejects.toThrow('push destination');
+      expect(f.calls.some(a => a[1] === 'push')).toBe(false);
+    }
   });
 
   for (const problem of ['failGate', 'mutateGate', 'protected'] as const) {

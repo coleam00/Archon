@@ -27,8 +27,8 @@ review__synthesize:
   findings_summary: 'stub: clean on initial review'
 validate__validate:
   green: false
-  summary: 'stub: tests failed — 3 red'
-ci-probe: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
+  summary: 'stub: tests failed - 3 red'
+ci-probe: '{"state":"concluded","detail":"no checks configured on this repository - nothing to await"}'
 flip-ready: https://github.com/example/repo/pull/2
 classify:
   errors: true

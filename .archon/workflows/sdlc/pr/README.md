@@ -29,7 +29,9 @@ Publication requires a clean feature branch and committed work ahead of the
 base. It pins the SHA before preparation, rechecks local and remote identity
 after the fixed gate, pushes that SHA without force, and reads the PR back.
 The script never commits, rebases, or merges. A failed gate cannot be waived by
-model output. A remote update racing the final check can still reject the normal
+model output. Origin must have a single push destination matching its GitHub
+fetch repository. New descriptions use an artifact body file and must match
+the title/body readback. A remote update racing the final check can still reject the normal
 push; readback detects a conflicting result. GitHub does not offer a transaction
 combining push and PR creation, so a failed create can leave a pushed branch.
 Rerunning safely looks up the existing PR before creating one.

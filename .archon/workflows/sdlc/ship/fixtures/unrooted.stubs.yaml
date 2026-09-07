@@ -5,7 +5,7 @@ triage__triage:
 triage__assert-intact: '{"intact":"true"}'
 inv__investigate:
   rooted: false
-  summary: 'stub: two hypotheses survive — not proven'
+  summary: 'stub: two hypotheses survive - not proven'
 inv__assert-intact: '{"intact":"true"}'
 fixture:
   expect: completed
