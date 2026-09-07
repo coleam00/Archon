@@ -1264,8 +1264,15 @@ describe('SCRIPT_NODE_AI_FIELDS', () => {
       INCLUDE_NODE_IGNORED_FIELDS,
       WAIT_NODE_IGNORED_FIELDS,
     ]) {
-      for (const field of BASH_NODE_AI_FIELDS) expect(list).toContain(field);
+      for (const field of BASH_NODE_AI_FIELDS) {
+        // An include honours denied_tools rather than warning about it; pinned below.
+        if (list === INCLUDE_NODE_IGNORED_FIELDS && field === 'denied_tools') continue;
+        expect(list).toContain(field);
+      }
     }
+    expect(INCLUDE_NODE_IGNORED_FIELDS).not.toContain('denied_tools');
+    expect(GATE_AND_HALT_IGNORED_FIELDS).toContain('denied_tools');
+    expect(WAIT_NODE_IGNORED_FIELDS).toContain('denied_tools');
     // Re-added where the field stays meaningless…
     expect(GATE_AND_HALT_IGNORED_FIELDS).toContain('output_format');
     expect(LOOP_GROUP_NODE_AI_FIELDS).toContain('output_format');
@@ -2020,10 +2027,7 @@ describe('INCLUDE_NODE_IGNORED_FIELDS', () => {
   });
 
   test('does not claim denied_tools is ignored, because the expander applies it', () => {
-    // The carve-out is the point, not an exception to tidy away. An include unions its
-    // `denied_tools` onto every expanded non-exec node, so warning that the field was
-    // ignored would tell an author their sandbox does nothing while it is in force —
-    // and the likely response to that warning is to delete the restriction.
+    // Warning here would tell an author their sandbox does nothing while it is in force.
     expect(INCLUDE_NODE_IGNORED_FIELDS).not.toContain('denied_tools');
   });
 
