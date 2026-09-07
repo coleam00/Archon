@@ -75,6 +75,9 @@ nodes:
 
   - id: diagnose
     command: diagnose
+    with:
+      evidence: '$collect.output'
+      investigation: { from: '$inv.output', if_skipped: null }
     mutates_checkout: false
     depends_on: [collect, inv]
     trigger_rule: all_done

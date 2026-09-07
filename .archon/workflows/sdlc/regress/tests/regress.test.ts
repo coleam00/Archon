@@ -572,3 +572,69 @@ test('diagnosis schema conforms to the typed consumer, including every status an
     expect(readDiagnosis(variant)).toEqual(variant);
   }
 });
+
+test('CLI composes regress and delivers its structured return to a real deterministic consumer', async () => {
+  const root = await temporary();
+  const workflows = join(root, '.archon/workflows');
+  await mkdir(workflows, { recursive: true });
+  await writeFile(
+    join(workflows, 'regress-composition.yaml'),
+    `
+name: regress-composition
+description: Test the included regression contract without agents or publication.
+returns: result
+nodes:
+  - id: regression
+    include: archon-regress
+    with: { scope: parser, policy: '', publish: false }
+  - id: result
+    script: |
+      const result = JSON.parse(process.env.INPUTS_RESULT);
+      if (result.status !== 'clean' || result.publication !== 'disabled') throw new Error('Unexpected included result');
+      console.log(JSON.stringify(result));
+    runtime: bun
+    depends_on: [regression]
+    with: { result: '$regression.output' }
+`
+  );
+  const stubs = join(root, 'stubs.yaml');
+  await writeFile(
+    stubs,
+    `
+regression__prepare: { ready: true, mode: discovered }
+regression__validation__validate: { green: true, red_cause: '', summary: 'Checks passed.' }
+regression__collect: { status: clean }
+regression__diagnose: { status: clean, summary: 'Checks passed.', findings: [] }
+regression__finish: { status: clean, publication: disabled, issues: [] }
+`
+  );
+  const cli = resolve(import.meta.dir, '../../../../../packages/cli/src/cli.ts');
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      cli,
+      'workflow',
+      'run',
+      'regress-composition',
+      '--cwd',
+      root,
+      '--dry-run',
+      '--exec-code',
+      '--stubs',
+      stubs,
+      '--json',
+    ],
+    {
+      env: { ...process.env, DATABASE_URL: '', ARCHON_HOME: join(root, 'home') },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    }
+  );
+  const [code, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  if (code !== 0) throw new Error(`Composition failed: ${stdout}\n${stderr}`);
+  expect(JSON.parse(stdout).outcome).toBe('completed');
+});

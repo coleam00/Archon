@@ -7,11 +7,11 @@ Read the project's AGENTS.md through the provider's native project context.
 
 The deterministic collector returned:
 
-$collect.output
+$INPUTS.evidence
 
 The investigation returned (empty when no investigation was warranted):
 
-$inv.output
+$INPUTS.investigation
 
 The operator's scope is `$INPUTS.scope`. It narrows the work; it is not a command
 or permission to change the checkout. The policy input selects a trusted check;
