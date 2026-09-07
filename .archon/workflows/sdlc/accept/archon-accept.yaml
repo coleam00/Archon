@@ -1,0 +1,116 @@
+name: archon-accept
+description: |
+  Independently evaluate an exact GitHub PR against its original accepted request.
+  Write an auditable acceptance.json receipt. Never merge or mutate the PR.
+requires: [github]
+model: large
+inputs:
+  target:
+    description: GitHub PR URL or owner/repository#number.
+  work_order:
+    description: Original accepted request text, or file:absolute-external-path.
+  policy:
+    default: ''
+    description: Optional trusted external JSON profile path, or base:repository-relative-path.
+returns: receipt
+nodes:
+  - id: prepare
+    script: accept
+    runtime: bun
+    # Static input validation checks every phase of the shared script.
+    with:
+      phase: prepare
+      state: null
+      judgment: null
+      validation: null
+      target: '$INPUTS.target'
+      work_order: '$INPUTS.work_order'
+      policy: '$INPUTS.policy'
+  - id: validate
+    include: archon-validate
+    depends_on: [prepare]
+    when: '$prepare.output.generic == true'
+    with:
+      scope: '$prepare.output.scope'
+  - id: collect
+    script: accept
+    runtime: bun
+    depends_on: [prepare, validate]
+    trigger_rule: all_done
+    timeout: 7200000
+    with:
+      phase: collect
+      judgment: null
+      state: '$prepare.output.state'
+      validation: '$validate.output'
+  - id: judge
+    command: judge
+    context: fresh
+    allowed_tools: []
+    mutates_checkout: false
+    depends_on: [collect]
+    when: '$collect.output.judge == true'
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        verdict:
+          type: string
+          enum: [approve, request_changes, reject, inconclusive]
+        summary:
+          type: string
+        findings:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              code:
+                type: string
+              summary:
+                type: string
+              evidence:
+                type: array
+                items:
+                  type: string
+            required: [code, summary, evidence]
+        requirements:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              request:
+                type: string
+              met:
+                type: boolean
+              evidence:
+                type: array
+                items:
+                  type: string
+            required: [request, met, evidence]
+        checks_complete:
+          type: boolean
+        evidence_sufficient:
+          type: boolean
+        checks_weakened:
+          type: boolean
+      required:
+        - verdict
+        - summary
+        - findings
+        - requirements
+        - checks_complete
+        - evidence_sufficient
+        - checks_weakened
+  - id: receipt
+    script: accept
+    runtime: bun
+    depends_on: [prepare, collect, judge]
+    trigger_rule: all_done
+    with:
+      phase: finish
+      validation: null
+      state: '$prepare.output.state'
+      judgment: '$judge.output'
+    output_type: acceptance
