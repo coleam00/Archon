@@ -12,8 +12,8 @@
  * 4. Autodetect canonical install paths (npm prefix defaults per platform)
  * 5. Throw with install instructions
  *
- * In dev mode (BUNDLED_IS_BINARY=false), returns undefined so the SDK
- * uses its normal node_modules-based resolution.
+ * Source installs honor explicit env/config pins, then defer to the SDK's
+ * node_modules-based resolution when no pin is configured.
  */
 import { existsSync as _existsSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -132,7 +132,7 @@ function validateAndExpand(rawPath: string, pin: CodexBinaryPin): string {
 /**
  * Resolve the path to the Codex native binary.
  *
- * In dev mode: returns undefined (let SDK resolve via node_modules).
+ * In dev mode: honors explicit pins, otherwise lets the SDK resolve via node_modules.
  * In binary mode: resolves from env/config/vendor dir, or throws with install instructions.
  */
 export async function resolveCodexBinaryPath(
@@ -146,13 +146,11 @@ export async function resolveCodexBinaryPath(
  * Same resolution as {@link resolveCodexBinaryPath}, but also reports which
  * tier produced the path. Used by `archon doctor` to tell the user how the
  * binary was found (env / config / vendor / autodetect). Returns undefined in
- * dev mode; throws with install instructions in binary mode when unresolved.
+ * unpinned dev mode; throws with install instructions in binary mode when unresolved.
  */
 export async function resolveCodexBinaryWithSource(
   configCodexBinaryPath?: string
 ): Promise<CodexBinaryResolution | undefined> {
-  if (!BUNDLED_IS_BINARY) return undefined;
-
   // 1. Environment variable override
   const envPath = process.env.CODEX_BIN_PATH;
   if (envPath) {
@@ -167,6 +165,9 @@ export async function resolveCodexBinaryWithSource(
     getLog().info({ binaryPath: resolvedConfig, source: 'config' }, 'codex.binary_resolved');
     return { path: resolvedConfig, source: 'config' };
   }
+
+  // Source installs honor explicit pins too; the SDK remains the unpinned default.
+  if (!BUNDLED_IS_BINARY) return undefined;
 
   // 3-4. Vendor then autodetect. The same search supplies diagnostics for an
   // invalid explicit pin, but a candidate is returned only when no pin exists.
