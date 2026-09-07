@@ -679,9 +679,10 @@ async function main(): Promise<unknown> {
       hasInvestigation
     );
     if (
-      !(await intact(context)) ||
-      !sameBinding(context, { ...evidence }) ||
-      (evidence.report && hash(await readFile(evidence.report, 'utf8')) !== evidence.report_hash)
+      context.ready &&
+      (!(await intact(context)) ||
+        !sameBinding(context, { ...evidence }) ||
+        (evidence.report && hash(await readFile(evidence.report, 'utf8')) !== evidence.report_hash))
     ) {
       diagnosis = {
         status: 'inconclusive',

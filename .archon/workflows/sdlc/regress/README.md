@@ -176,7 +176,7 @@ the neighboring validate/investigate report paths within one run.
 
 ## Verification
 
-`bun run test:regress` exercises the evidence and publication boundaries and real
+`bun test ./.archon/workflows/sdlc/regress/tests/` exercises the evidence and publication boundaries and real
 script processes against scratch repositories. It is included in `bun run test`;
 the root type-check and lint also cover the scripts. `archon workflow test` picks
 up the colocated dry-run fixtures. The unresolved-base fixture executes the real

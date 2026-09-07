@@ -538,6 +538,34 @@ test('real ordinary collector rejects absent and stale artifacts and final gate 
   expect(finished.status).toBe('inconclusive');
   expect(finished.publication).toBe('not-applicable');
 });
+test('an unresolved base retains the concrete preparation failure in the returned result', async () => {
+  const { cwd, artifacts } = await checkout();
+  const prepared = await node(
+    cwd,
+    artifacts,
+    { phase: 'prepare', scope: '', policy: '' },
+    'absent-base'
+  );
+  expect(prepared.ready).toBe(false);
+  const collected = await node(cwd, artifacts, {
+    phase: 'collect',
+    prepared,
+    validation: null,
+    fixed: null,
+  });
+  const finished = await node(cwd, artifacts, {
+    phase: 'finish',
+    prepared,
+    evidence: collected,
+    diagnosis: { status: 'inconclusive', summary: 'Base unavailable', findings: [] },
+    investigation: null,
+    publish: true,
+  });
+  expect(finished.status).toBe('inconclusive');
+  expect(finished.summary).toBe(prepared.reason);
+  expect(finished.publication).toBe('not-applicable');
+});
+
 test('diagnosis schema conforms to the typed consumer, including every status and finding field', async () => {
   const workflow = object(
     Bun.YAML.parse(await readFile(resolve(import.meta.dir, '../archon-regress.yaml'), 'utf8'))
