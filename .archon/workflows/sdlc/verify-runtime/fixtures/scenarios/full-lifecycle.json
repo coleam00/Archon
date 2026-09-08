@@ -1,0 +1,14 @@
+{
+  "assertions": [
+    {
+      "id": "marker-present",
+      "description": "The setup command's marker file exists by the time start runs, proving the workflow ran setup before start"
+    }
+  ],
+  "environment": {
+    "setup": "echo setup-ran > .verify-runtime-fixture-marker",
+    "start": "test -f .verify-runtime-fixture-marker",
+    "teardown": "rm -f .verify-runtime-fixture-marker",
+    "candidate_command": "echo fixture-candidate-001"
+  }
+}

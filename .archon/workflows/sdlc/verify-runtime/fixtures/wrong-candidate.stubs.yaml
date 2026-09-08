@@ -1,0 +1,24 @@
+# The report is well-formed but names a candidate that does not match what
+# check-evidence independently re-runs the scenario's candidate_command to
+# observe (fixtures/scenarios/sample.json fixes it to
+# `echo fixture-candidate-001`). This is the check the prior harness's
+# "stale-result trap" comment admitted it did NOT have: agentcheck.py only
+# deleted a stale result file before rerunning, with nothing verifying a
+# report is actually about the running candidate.
+verify:
+  candidate: "stale-candidate-from-a-different-run"
+  assertions:
+    - id: help-text
+      ok: true
+      observed: "python3 --version printed 'Python 3.11.6'"
+      evidence_path: .archon/workflows/sdlc/verify-runtime/fixtures/evidence/help-text.txt
+    - id: always-true
+      ok: true
+      observed: "the check exited 0, as observed in the captured evidence"
+      evidence_path: .archon/workflows/sdlc/verify-runtime/fixtures/evidence/always-true.txt
+exec-code: true
+fixture:
+  expect: completed
+  reached: [gate-verified]
+  inputs:
+    scenario: .archon/workflows/sdlc/verify-runtime/fixtures/scenarios/sample.json

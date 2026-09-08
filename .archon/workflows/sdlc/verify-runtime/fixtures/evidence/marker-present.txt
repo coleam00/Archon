@@ -1,0 +1,2 @@
+$ test -f .verify-runtime-fixture-marker && echo present
+present

@@ -1,0 +1,15 @@
+{
+  "assertions": [
+    {
+      "id": "help-text",
+      "description": "The project's own interpreter reports itself as Python 3 when asked for its version"
+    },
+    {
+      "id": "always-true",
+      "description": "A trivial deterministic check that must always observe true on this target"
+    }
+  ],
+  "environment": {
+    "candidate_command": "echo fixture-candidate-001"
+  }
+}

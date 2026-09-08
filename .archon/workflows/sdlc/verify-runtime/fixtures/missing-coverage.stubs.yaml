@@ -1,0 +1,16 @@
+# The scenario declares two assertions; the report only covers one. A
+# same-count-but-wrong-id report exercises the same coverage rule (id not in
+# required_ids) — this fixture is the simpler missing-entirely case.
+verify:
+  candidate: "fixture-candidate-001"
+  assertions:
+    - id: help-text
+      ok: true
+      observed: "python3 --version printed 'Python 3.11.6'"
+      evidence_path: .archon/workflows/sdlc/verify-runtime/fixtures/evidence/help-text.txt
+exec-code: true
+fixture:
+  expect: completed
+  reached: [gate-verified]
+  inputs:
+    scenario: .archon/workflows/sdlc/verify-runtime/fixtures/scenarios/sample.json
