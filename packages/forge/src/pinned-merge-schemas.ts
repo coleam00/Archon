@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { prRefSchema, shaSchema } from './identity-schemas';
 
-export const PINNED_MERGE_OP = 'pr.merge-pinned';
+export { PINNED_MERGE_OP } from './protocol';
 // Fully qualified Git branch refs; Git also validates these before using them.
 export const mergeBranchRefSchema = z.string().regex(/^refs\/heads\/.+/);
 export const pinnedMergeRequestSchema = z.object({

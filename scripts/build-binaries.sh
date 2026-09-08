@@ -116,10 +116,13 @@ for target_pair in "${TARGETS[@]}"; do
   # --bytecode disabled: Bun 1.3.11 produces broken bytecode for our module graph
   # (likely triggered by @earendil-works/pi-coding-agent's CJS/ESM interop shape) —
   # "TypeError: Expected CommonJS module to have a function wrapper" at runtime.
-  # Always --minify to match release parity.
+  # Keep dynamic imports lazy in the executable. Bun embeds the ESM chunks in
+  # its virtual filesystem, so moving the binary needs no adjacent JS files.
   bun build \
     --compile \
     --minify \
+    --splitting \
+    --format=esm \
     --target="$target" \
     --outfile="$outfile" \
     packages/cli/src/cli.ts

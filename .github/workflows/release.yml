@@ -150,6 +150,12 @@ jobs:
             exit 1
           fi
 
+      - name: Test relocated executable and forge re-entry
+        if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
+        env:
+          ARCHON_TEST_BINARY: ${{ github.workspace }}/dist/${{ matrix.binary }}
+        run: bun run --cwd packages/cli test:binary
+
       - name: Smoke-test bundled defaults load
         if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
         run: |

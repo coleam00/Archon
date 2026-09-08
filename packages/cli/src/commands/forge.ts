@@ -2,20 +2,6 @@ import { parseArgs } from 'node:util';
 import { readFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { archonCliCommand } from '@archon/paths/cli-launch';
-import { getArchonHome } from '@archon/paths/archon-paths';
-import {
-  ForgeDispatcher,
-  DuplicateHostClaimError,
-  createGitHubPlugin,
-  forgeHostsConfigSchema,
-  prRefSchema,
-  PINNED_MERGE_OP,
-  pinnedMergeRequestSchema,
-  publicRequestSchema,
-  publicResultSchemas,
-  nativeGitHubCredential,
-} from '@archon/forge';
 import { writeJsonLine } from '../utils/stdout';
 import type { PluginCandidate } from '@archon/forge/dispatch';
 
@@ -32,6 +18,7 @@ export async function forgeCommand(
   try {
     // The maintained plugin speaks the same stateless stdio protocol as an external executable.
     if (args[0] === '__github') {
+      const { createGitHubPlugin } = await import('@archon/forge/github');
       const plugin = createGitHubPlugin();
       if (args[1] === 'metadata') {
         await writeJsonLine(plugin.metadata());
@@ -66,10 +53,13 @@ export async function forgeCommand(
       });
       return 0;
     }
+    const { archonCliCommand } = await import('@archon/paths/cli-launch');
+    const { getArchonHome } = await import('@archon/paths/archon-paths');
+    const forge = await import('@archon/forge');
     const op = positionals.join('.').replace('work-item.', 'workitem.');
     if (
-      !['resolve', 'checks', PINNED_MERGE_OP].includes(op) &&
-      !Object.hasOwn(publicResultSchemas, op)
+      !['resolve', 'checks', forge.PINNED_MERGE_OP].includes(op) &&
+      !Object.hasOwn(forge.publicResultSchemas, op)
     ) {
       await writeJsonLine({ kind: 'unsupported_op', op: positionals.join('.') });
       return 1;
@@ -87,7 +77,7 @@ export async function forgeCommand(
         throw new Error('Cannot load forge configuration');
     }
     const launch = archonCliCommand();
-    const dispatcher = new ForgeDispatcher(
+    const dispatcher = new forge.ForgeDispatcher(
       [
         githubPlugin ?? {
           source: 'builtin:github',
@@ -102,9 +92,9 @@ export async function forgeCommand(
           const { isPerUserGitHubEnabled } = await import('@archon/core');
           // A shared service account's keyring must never stand in for an Archon user.
           if (isPerUserGitHubEnabled()) return undefined;
-          return nativeGitHubCredential(process.env, host);
+          return forge.nativeGitHubCredential(process.env, host);
         },
-        configuredHosts: forgeHostsConfigSchema.parse(config),
+        configuredHosts: forge.forgeHostsConfigSchema.parse(config),
         signal: controller.signal,
         // The engine retains stderr in its existing exec_output transcript row (#2967).
         audit: (event): void => {
@@ -130,22 +120,25 @@ export async function forgeCommand(
       op === 'resolve'
         ? await dispatcher.resolve()
         : op === 'checks'
-          ? await dispatcher.checksState(prRefSchema.parse(JSON.parse(values.ref ?? 'null')))
-          : op === PINNED_MERGE_OP
-            ? await dispatcher.mergePinned(pinnedMergeRequestSchema.parse(await readRequest()))
+          ? await dispatcher.checksState(forge.prRefSchema.parse(JSON.parse(values.ref ?? 'null')))
+          : op === forge.PINNED_MERGE_OP
+            ? await dispatcher.mergePinned(
+                forge.pinnedMergeRequestSchema.parse(await readRequest())
+              )
             : await dispatcher.publicOperation(
-                publicRequestSchema.parse(Object.assign({}, await readRequest(), { op }))
+                forge.publicRequestSchema.parse(Object.assign({}, await readRequest(), { op }))
               );
     await writeJsonLine(
       result.kind === 'ok' ? result.value : result.kind === 'error' ? result.error : result
     );
     return result.kind === 'ok' ? 0 : result.kind === 'error' ? 1 : 2;
   } catch (error) {
+    const forge = await import('@archon/forge');
     // Never echo argv, config values, remote URLs, or parser diagnostics containing input.
     await writeJsonLine({
       kind: 'invalid_request',
       detail:
-        error instanceof DuplicateHostClaimError
+        error instanceof forge.DuplicateHostClaimError
           ? error.message
           : 'Forge invocation or configuration failed; check the ref, executable, and host claims',
     });

@@ -1,3 +1,6 @@
+import { createGitHubPlugin } from './github/plugin';
+import { publicRequestSchema, publicResultSchemas, RESOLVE_OP } from './schemas';
+import { PINNED_MERGE_OP } from './pinned-merge-schemas';
 import { expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { checkPluginConformance, checksVerdictFixture } from './conformance';
@@ -41,4 +44,12 @@ test('the executable conformance kit round-trips non-ASCII and rejects protocol 
   await expect(
     checkPluginConformance({ ...candidate, args: [candidate.args[0], '{"protocol":999}'] }, [])
   ).rejects.toThrow('metadata failed conformance');
+});
+
+test('lightweight GitHub metadata covers the owning public and pinned schemas', () => {
+  const operations = publicRequestSchema.options.map(schema => schema.shape.op.value).sort();
+  expect(Object.keys(publicResultSchemas).sort()).toEqual(operations);
+  expect(createGitHubPlugin().metadata().capabilities.slice().sort()).toEqual(
+    [RESOLVE_OP, CHECKS_STATE_OP, PINNED_MERGE_OP, ...operations].sort()
+  );
 });

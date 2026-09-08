@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { PUBLIC_OP, type PublicOp } from './protocol';
+export { FORGE_PROTOCOL_VERSION, RESOLVE_OP, CHECKS_STATE_OP } from './protocol';
 import { repoRefSchema, prRefSchema, shaSchema, type RepoRef } from './identity-schemas';
 import { mergeRecoverySchema } from './pinned-merge-schemas';
 export * from './identity-schemas';
@@ -50,9 +52,9 @@ export const commentRecordSchema = z.object({
   body: z.string(),
 });
 export const publicRequestSchema = z.discriminatedUnion('op', [
-  z.object({ op: z.literal('pr.view'), ref: prRefSchema }),
+  z.object({ op: z.literal(PUBLIC_OP.viewPr), ref: prRefSchema }),
   z.object({
-    op: z.literal('pr.create'),
+    op: z.literal(PUBLIC_OP.createPr),
     repo: repoRefSchema,
     ...expectedPrSchema.shape,
     title: z.string().min(1),
@@ -60,15 +62,15 @@ export const publicRequestSchema = z.discriminatedUnion('op', [
     is_draft: z.boolean(),
   }),
   z.object({
-    op: z.literal('pr.edit-body'),
+    op: z.literal(PUBLIC_OP.editPrBody),
     ref: prRefSchema,
     expected: expectedPrSchema,
     body: z.string(),
   }),
-  z.object({ op: z.literal('pr.ready'), ref: prRefSchema, expected: expectedPrSchema }),
-  z.object({ op: z.literal('workitem.view'), ref: workItemRefSchema }),
+  z.object({ op: z.literal(PUBLIC_OP.readyPr), ref: prRefSchema, expected: expectedPrSchema }),
+  z.object({ op: z.literal(PUBLIC_OP.viewWorkItem), ref: workItemRefSchema }),
   z.object({
-    op: z.literal('comment.upsert'),
+    op: z.literal(PUBLIC_OP.upsertComment),
     target: commentTargetSchema,
     marker: z.string().regex(/^<!-- [a-z0-9-]+ -->$/),
     body: z.string(),
@@ -76,13 +78,13 @@ export const publicRequestSchema = z.discriminatedUnion('op', [
 ]);
 export type PublicRequest = z.infer<typeof publicRequestSchema>;
 export const publicResultSchemas = {
-  'pr.view': prRecordSchema,
-  'pr.create': prRecordSchema,
-  'pr.edit-body': prRecordSchema,
-  'pr.ready': prRecordSchema,
-  'workitem.view': workItemRecordSchema,
-  'comment.upsert': commentRecordSchema,
-};
+  [PUBLIC_OP.viewPr]: prRecordSchema,
+  [PUBLIC_OP.createPr]: prRecordSchema,
+  [PUBLIC_OP.editPrBody]: prRecordSchema,
+  [PUBLIC_OP.readyPr]: prRecordSchema,
+  [PUBLIC_OP.viewWorkItem]: workItemRecordSchema,
+  [PUBLIC_OP.upsertComment]: commentRecordSchema,
+} satisfies Record<PublicOp, z.ZodType>;
 export type PublicResult = z.infer<(typeof publicResultSchemas)[keyof typeof publicResultSchemas]>;
 export function publicRequestRepo(request: PublicRequest): RepoRef {
   return request.op === 'pr.create'
@@ -176,7 +178,6 @@ export const forgeOpErrorKindSchema = z.enum(
   forgeOpErrorSchema.options.map(option => option.shape.kind.value)
 );
 export type ForgeOpErrorKind = z.infer<typeof forgeOpErrorKindSchema>;
-export const FORGE_PROTOCOL_VERSION = 1;
 export const pluginMetadataSchema = z.object({
   protocol: z.number().int().positive(),
   name: z.string().regex(/^[a-z0-9-]+$/),
@@ -199,9 +200,6 @@ export const forgeProcessFailureSchema = z.object({
   plugin: pluginMetadataSchema.pick({ name: true, version: true }).optional(),
 });
 export type ForgeProcessFailure = z.infer<typeof forgeProcessFailureSchema>;
-// resolve is the protocol's root operation; forge operations use dotted names.
-export const RESOLVE_OP = 'resolve';
-export const CHECKS_STATE_OP = 'checks.state';
 export const resolveRequestSchema = z.object({ repo: repoRefSchema });
 export type ResolveRequest = z.infer<typeof resolveRequestSchema>;
 export const resolveResultSchema = z
