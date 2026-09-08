@@ -58,6 +58,14 @@ the first two. Its `deliver` route does not establish permission or priority. It
 `no_action` route can mean missing evidence, a human decision, or proven obsolete
 work; read the explanation before choosing a disposition.
 
+Compare every explicit behavioral constraint with the assumptions in triage and
+your proposed decision. An assumption may fill an unspecified detail; it cannot
+replace a stated requirement with an existing convention. Reusing a helper does
+not justify changing observable behavior. If the requested behavior is permitted,
+admit that behavior unchanged. If it conflicts with a governing invariant, use
+the refusal rules below and identify the conflict. Never admit a different task
+by describing the changed requirement as a harmless interpretation.
+
 - `accepted`: the outcome is in scope, current evidence supports doing it now,
   and no unresolved material scope or invariant choice requires an operator.
   Harmless implementation details may remain: record the explicit assumptions
