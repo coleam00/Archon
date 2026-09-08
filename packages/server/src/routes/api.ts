@@ -104,7 +104,7 @@ import {
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { MessageRow } from '@archon/core/schemas/message';
 import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
-import { findMarkdownFilesRecursive } from '@archon/core/utils/commands';
+import { findCommandFiles } from '@archon/core/utils/commands';
 import { resumeWorkflowRunFromServer } from '../services/workflow-resume-service';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -4567,17 +4567,11 @@ export function registerApiRoutes(
         commandMap.set(name, 'bundled');
       }
 
-      // maxDepth: 1 matches the executor's resolver (resolveCommand /
-      // loadCommandPrompt) — without this cap, the UI palette would surface
-      // commands buried in deep subfolders that the executor silently can't
-      // resolve at runtime.
-      const COMMAND_LIST_DEPTH = { maxDepth: 1 };
-
       // 2. If not binary build, also check filesystem defaults
       if (!isBinaryBuild()) {
         try {
           const defaultsPath = getDefaultCommandsPath();
-          const files = await findMarkdownFilesRecursive(defaultsPath, '', COMMAND_LIST_DEPTH);
+          const files = await findCommandFiles(defaultsPath);
           for (const { commandName } of files) {
             commandMap.set(commandName, 'bundled');
           }
@@ -4592,7 +4586,7 @@ export function registerApiRoutes(
       // 3. Home-scoped commands (~/.archon/commands/) override bundled
       try {
         const homeCommandsPath = getHomeCommandsPath();
-        const files = await findMarkdownFilesRecursive(homeCommandsPath, '', COMMAND_LIST_DEPTH);
+        const files = await findCommandFiles(homeCommandsPath);
         for (const { commandName } of files) {
           commandMap.set(commandName, 'global');
         }
@@ -4609,7 +4603,7 @@ export function registerApiRoutes(
         for (const folder of searchPaths) {
           const dirPath = join(workingDir, folder);
           try {
-            const files = await findMarkdownFilesRecursive(dirPath, '', COMMAND_LIST_DEPTH);
+            const files = await findCommandFiles(dirPath);
             for (const { commandName } of files) {
               commandMap.set(commandName, 'project');
             }

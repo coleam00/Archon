@@ -529,7 +529,7 @@ export async function loadCommandPrompt(
   ];
 
   for (const dir of resolvedSearchPaths) {
-    const entries = await archonPaths.findMarkdownFilesRecursive(dir, '', { maxDepth: 1 });
+    const entries = await archonPaths.findCommandFiles(dir);
     const match = entries.find(e => e.commandName === commandName);
     if (!match) continue;
 
@@ -583,9 +583,7 @@ export async function loadCommandPrompt(
       // Bun (or any captured run): load from the bundled-commands root, walking 1 level
       // deep so `defaults/archon-*.md` resolves.
       const appDefaultsPath = roots.bundledCommands;
-      const entries = await archonPaths.findMarkdownFilesRecursive(appDefaultsPath, '', {
-        maxDepth: 1,
-      });
+      const entries = await archonPaths.findCommandFiles(appDefaultsPath);
       const match = entries.find(e => e.commandName === commandName);
       if (match) {
         const filePath = join(appDefaultsPath, match.relativePath);

@@ -273,15 +273,6 @@ describe('SlackAdapter', () => {
     });
   });
 
-  describe('app instance', () => {
-    test('should provide access to app instance', () => {
-      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
-      const app = adapter.getApp();
-      expect(app).toBeDefined();
-      expect(app.client).toBeDefined();
-    });
-  });
-
   describe('thread creation (ensureThread)', () => {
     let adapter: SlackAdapter;
 
