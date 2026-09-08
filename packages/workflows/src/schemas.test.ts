@@ -989,13 +989,16 @@ describe('dagNodeSchema — ExecNode', () => {
         node: { id: 'prompt', prompt: 'Review this.' },
         ignored: { bash: '   ', script: '   ', timeout: 0 },
       },
+      // `timeout` is absent from both loop cases: these two modes SELECT it, because
+      // an until_bash check is a subprocess that needs a budget. See
+      // 'dagNodeSchema — loop and loop_group select timeout'.
       {
         name: 'loop',
         node: {
           id: 'loop',
           loop: { prompt: 'Review this.', until: 'DONE', max_iterations: 1 },
         },
-        ignored: { bash: '   ', script: '   ', timeout: 0 },
+        ignored: { bash: '   ', script: '   ' },
       },
       {
         name: 'loop_group',
@@ -1007,7 +1010,7 @@ describe('dagNodeSchema — ExecNode', () => {
             nodes: [{ id: 'review', prompt: 'Review this.' }],
           },
         },
-        ignored: { bash: '   ', script: '   ', timeout: 0 },
+        ignored: { bash: '   ', script: '   ' },
       },
       {
         name: 'approval',
@@ -2345,5 +2348,34 @@ describe('runAttention', () => {
   test('an absent metadata bag on a paused run is unreadable, not silence', () => {
     const attention = runAttention({ id: 'run-1', status: 'paused' as WorkflowRunStatus });
     expect(attention).toMatchObject({ kind: 'unreadable', reason: 'malformed_gate' });
+  });
+});
+
+// No existing 'dagNodeSchema — loop' describe block exists (only '— loop_group' above), so
+// both node kinds' timeout validation live together here, next to the loop_group block whose
+// superRefine guard they share (`if (hasLoop || hasLoopGroup)`, dag-node.ts).
+describe('dagNodeSchema — loop and loop_group select timeout', () => {
+  // The mode transform drops every key the mode does not select, so a value that
+  // never reaches the parsed node can never reach the until_bash subprocess.
+  test('carries timeout through the loop transform', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'l',
+      timeout: 600_000,
+      loop: { prompt: 'p', until: 'DONE', max_iterations: 3 },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data).toMatchObject({ kind: 'loop', timeout: 600_000 });
+  });
+
+  test('carries timeout through the loop_group transform', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'grp',
+      timeout: 600_000,
+      loop_group: { until: 'DONE', max_iterations: 3, nodes: [{ id: 'x', prompt: 'x' }] },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data).toMatchObject({ kind: 'loop_group', timeout: 600_000 });
   });
 });
