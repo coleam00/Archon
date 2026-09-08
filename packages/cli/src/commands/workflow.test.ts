@@ -11541,16 +11541,8 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     });
   }
 
-  /**
-   * Stand-in for `prepareWorkflowSource` that performs the one piece of real-disk
-   * behavior the recapture bug depends on: filing the capture at
-   * `<tempRoot>/staged-source/<runId>` and replacing whatever was already there, the
-   * same way `captureWorkflowSource`'s replace-not-merge rename does. A detached
-   * child's replacement capture reuses the pre-created run id (workflow.ts passes
-   * `runId: detachedPreCreatedRun.id` to both the initial and the lane recapture), so
-   * two calls sharing a `runId` land at the SAME directory, reproducing the collision
-   * with a real file on disk instead of two mock objects that merely look distinct.
-   */
+  // Keep source-capture I/O real: equal run IDs replace one physical directory.
+  // This exposes cleanup deleting the replacement even with the executor mocked.
   async function stageRealCapture(
     tempRoot: string,
     opts: { sourceRoot: string; runId?: string }
@@ -11746,15 +11738,9 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
 
   it(
     'preserves the replacement capture when a detached child recaptures onto its own ' +
-      'pre-created run id (real files, #3213)',
+      'pre-created run id (real files, #3217)',
     async () => {
-      // The bug: a `--detach` child passes `runId: detachedPreCreatedRun.id` to BOTH its
-      // initial prepare (against the parent cwd) and its lane recapture (against the
-      // adopted worktree). Both therefore stage under the same
-      // `staged-source/<run-id>` directory, and the old code unconditionally rm'd
-      // `stale.anchor.root` after recapture, deleting the replacement it had just
-      // written, since the two roots were the same path. This test uses a real temp
-      // directory so that deletion, if it regresses, actually removes a file.
+      // Both capture calls use the detached child's pre-created run ID.
       setupAdoptMocks();
       const workflowDb = await import('@archon/core/db/workflows');
       (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -11765,7 +11751,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
       const { prepareWorkflowSource } = await import('@archon/workflows/executor');
       const prepareMock = prepareWorkflowSource as ReturnType<typeof mock>;
 
-      const tempRoot = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-recapture-samedroot-')));
+      const tempRoot = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-recapture-same-root-')));
       // Matches the mocked DETACHED_RUN_OWNER_ENV value the SUT reads from
       // '../utils/detached-run-control' (mocked at the top of this file).
       const ownerEnvVar = 'ARCHON_DETACHED_RUN_OWNER';
@@ -11805,11 +11791,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
   );
 
   it('still cleans up the superseded staged capture when the replacement lands at a different root', async () => {
-    // Companion to the same-root regression above: an ordinary (non-detached) adopt
-    // mints a fresh run id on each `prepareWorkflowSource` call, so the original and
-    // replacement captures land at genuinely different directories. That case must
-    // still be cleaned up. The fix narrows the cleanup condition; it must not remove
-    // it outright.
+    // Ordinary adoption uses separate roots and must reclaim the first capture.
     setupAdoptMocks();
     const { prepareWorkflowSource } = await import('@archon/workflows/executor');
     const prepareMock = prepareWorkflowSource as ReturnType<typeof mock>;
