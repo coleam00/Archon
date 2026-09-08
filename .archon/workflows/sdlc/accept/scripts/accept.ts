@@ -29,14 +29,27 @@ export interface Check {
   stderr_sha256: string;
   timestamp: string;
 }
+// Effective execution settings come only from the trusted profile. These defaults apply
+// when it omits them, and the ceilings bound one command and one judge packet.
+const DEFAULT_TIMEOUT_SECONDS = 600;
+const MAXIMUM_TIMEOUT_SECONDS = 7200;
+const DEFAULT_PACKET_BYTES = 96_000;
+const MAXIMUM_PACKET_BYTES = 512_000;
 export interface Profile {
   schema_version: 1;
-  commands: { id: string; argv: string[]; environment_exit_codes: number[]; public_description?: string }[];
+  commands: {
+    id: string;
+    argv: string[];
+    environment_exit_codes: number[];
+    timeout_seconds: number;
+    public_description?: string;
+  }[];
   gate?: { complete: boolean; description: string };
   context?: { id: string; source: string }[];
   required_evidence: string[];
   protected_paths: string[];
   require_isolation: boolean;
+  max_packet_bytes: number;
 }
 export interface Judgment {
   verdict: Verdict;
@@ -118,6 +131,12 @@ function integer(value: unknown): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value))
     throw new Error('Expected integer');
   return value;
+}
+function bounded(value: unknown, minimum: number, maximum: number): number {
+  const result = integer(value);
+  if (result < minimum || result > maximum)
+    throw new Error('Setting is outside its supported range');
+  return result;
 }
 function sha(value: unknown): string {
   const result = string(value);
@@ -204,6 +223,7 @@ export function parseProfile(value: unknown): Profile {
     'required_evidence',
     'protected_paths',
     'require_isolation',
+    'max_packet_bytes',
     'gate',
     'context',
   ];
@@ -211,7 +231,7 @@ export function parseProfile(value: unknown): Profile {
     throw new Error('Unsupported profile');
   const commands = array(p.commands).map(value => {
     const c = object(value);
-    if (Object.keys(c).some(k => !['id', 'argv', 'environment_exit_codes', 'public_description'].includes(k)))
+    if (Object.keys(c).some(k => !['id', 'argv', 'environment_exit_codes', 'timeout_seconds', 'public_description'].includes(k)))
       throw new Error('Unknown command field');
     const id = string(c.id);
     if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) throw new Error('Invalid check id');
@@ -221,6 +241,9 @@ export function parseProfile(value: unknown): Profile {
     if (environment_exit_codes.some(code => code < 1 || code > 255))
       throw new Error('Invalid environment exit code');
     return { id, argv, environment_exit_codes,
+      timeout_seconds: c.timeout_seconds === undefined
+        ? DEFAULT_TIMEOUT_SECONDS
+        : bounded(c.timeout_seconds, 1, MAXIMUM_TIMEOUT_SECONDS),
       ...(c.public_description === undefined ? {} : { public_description: string(c.public_description) }),
     };
   });
@@ -252,6 +275,10 @@ export function parseProfile(value: unknown): Profile {
     required_evidence,
     protected_paths: array(p.protected_paths).map(repoPath),
     require_isolation: boolean(p.require_isolation),
+    max_packet_bytes:
+      p.max_packet_bytes === undefined
+        ? DEFAULT_PACKET_BYTES
+        : bounded(p.max_packet_bytes, 1, MAXIMUM_PACKET_BYTES),
   };
 }
 export function parseJudgment(value: unknown): Judgment {
@@ -686,21 +713,22 @@ async function loadState(path: string): Promise<State> {
     blockers: findings(s.blockers),
   };
 }
-async function recordCheck(
-  state: State,
-  id: string,
-  argv: string[],
-  source: string,
-  environmentCodes: number[],
-  privateCommand: boolean
-): Promise<Check> {
+interface Recording {
+  id: string;
+  argv: string[];
+  source: string;
+  environment_exit_codes: number[];
+  timeout_seconds: number;
+  private: boolean;
+}
+async function recordCheck(state: State, command: Recording): Promise<Check> {
   if (!state.identity || state.blockers.length) throw new Error('Candidate is not prepared');
   const dir = join(state.artifacts, 'accept-private');
-  const stdout = join(dir, `${id}.stdout`);
-  const stderr = join(dir, `${id}.stderr`);
+  const stdout = join(dir, `${command.id}.stdout`);
+  const stderr = join(dir, `${command.id}.stderr`);
   let exit_code: number | null = null;
   try {
-    const child = Bun.spawn(argv, {
+    const child = Bun.spawn(command.argv, {
       cwd: join(state.root, 'candidate'),
       stdin: 'ignore',
       stdout: Bun.file(stdout),
@@ -711,25 +739,35 @@ async function recordCheck(
         ACCEPT_BASE_DIR: join(state.root, 'base'),
         ACCEPT_CANDIDATE_DIR: join(state.root, 'candidate'),
       },
-      timeout: 600_000,
     });
-    exit_code = await child.exited;
-    if (child.signalCode) exit_code = null;
+    let expired = false;
+    // Ending this process is cleanup, not an isolation boundary: whatever it started is
+    // the gate's own to end, and nothing here is killed by name or by pattern.
+    const deadline = setTimeout(() => {
+      expired = true;
+      child.kill('SIGKILL');
+    }, command.timeout_seconds * 1000);
+    try {
+      exit_code = await child.exited;
+    } finally {
+      clearTimeout(deadline);
+    }
+    if (expired || child.signalCode) exit_code = null;
   } catch {
     await writeFile(stdout, '');
     await writeFile(stderr, 'Command could not start.');
   }
   const check: Check = {
-    id,
+    id: command.id,
     identity: state.identity,
-    argv: privateCommand ? null : argv,
-    command_sha256: digest(JSON.stringify(argv)),
-    source,
+    argv: command.private ? null : command.argv,
+    command_sha256: digest(JSON.stringify(command.argv)),
+    source: command.source,
     exit_code,
     status:
       exit_code === 0
         ? 'passed'
-        : exit_code === null || environmentCodes.includes(exit_code)
+        : exit_code === null || command.environment_exit_codes.includes(exit_code)
           ? 'environment'
           : 'failed',
     stdout: relative(state.artifacts, stdout).replaceAll('\\', '/'),
@@ -738,7 +776,7 @@ async function recordCheck(
     stderr_sha256: digest(await readFile(stderr)),
     timestamp: new Date().toISOString(),
   };
-  await save(join(dir, `${id}.check.json`), check);
+  await save(join(dir, `${command.id}.check.json`), check);
   return check;
 }
 async function record(path: string, source: string, rawArgv: string): Promise<void> {
@@ -750,14 +788,14 @@ async function record(path: string, source: string, rawArgv: string): Promise<vo
   const content = await readFile(trusted, 'utf8');
   const argv = strings(JSON.parse(rawArgv));
   if (!argv.length) throw new Error('Empty command');
-  const check = await recordCheck(
-    state,
-    `ordinary-${randomUUID()}`,
+  const check = await recordCheck(state, {
+    id: `ordinary-${randomUUID()}`,
     argv,
-    `${relativeSource}@${digest(content)}`,
-    [],
-    false
-  );
+    source: `${relativeSource}@${digest(content)}`,
+    environment_exit_codes: [],
+    timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
+    private: false,
+  });
   await save(join(state.artifacts, 'accept-private', `${check.id}.source.json`), {
     path: relativeSource,
     sha256: digest(content),
@@ -808,7 +846,14 @@ async function collect(path: string): Promise<void> {
       if (state.policy) {
         await requireFreshOutputs(state);
         for (const c of state.policy.commands)
-          await recordCheck(state, c.id, c.argv, 'trusted_policy', c.environment_exit_codes, true);
+          await recordCheck(state, {
+            id: c.id,
+            argv: c.argv,
+            source: 'trusted_policy',
+            environment_exit_codes: c.environment_exit_codes,
+            timeout_seconds: c.timeout_seconds,
+            private: true,
+          });
       }
       for (const entry of await readdir(join(state.artifacts, 'accept-private'))) {
         if (!entry.endsWith('.check.json')) continue;
@@ -887,8 +932,9 @@ async function collect(path: string): Promise<void> {
       mode: 'fixed',
       declaration: state.policy.gate ?? null,
       policy_sha256: state.policy_sha256,
+      settings: { max_packet_bytes: state.policy.max_packet_bytes },
       commands: state.policy.commands.map(c => ({ id: c.id, description: c.public_description ?? null,
-        command_sha256: digest(JSON.stringify(c.argv)) })),
+        command_sha256: digest(JSON.stringify(c.argv)), timeout_seconds: c.timeout_seconds })),
     } : { mode: 'discovered' },
     source_context: state.context,
     work_order: state.work,
@@ -897,12 +943,12 @@ async function collect(path: string): Promise<void> {
     evidence: excerpts,
   });
   await writeFile(join(state.artifacts, 'accept-private', 'packet.json'), packet);
-  const clipped = Buffer.byteLength(packet, 'utf8') > 24_000;
+  const budget = state.policy?.max_packet_bytes ?? DEFAULT_PACKET_BYTES;
+  const clipped = Buffer.byteLength(packet, 'utf8') > budget;
   if (clipped)
     packet = JSON.stringify({
       identity: state.identity,
-      incomplete:
-        'Material evidence exceeds 24000 bytes. Return inconclusive. The full packet is private evidence.',
+      incomplete: `Material evidence exceeds ${budget} bytes. Return inconclusive. The full packet is private evidence.`,
     });
   await save(join(state.artifacts, 'accept-private', 'evidence.json'), {
     checks,
