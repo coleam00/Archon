@@ -64,9 +64,9 @@ For example, this external JSON profile invokes an operator-owned evaluator:
 ```
 
 `schema_version`, `commands`, `required_evidence`, `protected_paths`, and
-`require_isolation` are required; `gate` and `context` are optional; unknown
-fields and versions fail closed. Commands
-must have unique lowercase kebab-case IDs and nonempty argv arrays. There is no
+`require_isolation` are required; `gate` and `context` are optional; unknown fields
+and versions fail closed. Commands must have unique lowercase kebab-case IDs and
+nonempty argv arrays. There is no
 implicit shell, interpolation, dependency install, or candidate-selected command.
 An explicit shell argv is allowed when the operator intends it. Commands run in
 order in the candidate checkout, each with a ten-minute timeout and no stdin.
@@ -129,12 +129,12 @@ GitHub API data supplies the repository, PR number, exact head/base SHAs, and th
 metadata a request can require of the PR itself: target and source branch, open
 and merged and draft state, title, body, and URL. That metadata reaches the judge
 as evidence for linkage and target-branch requirements, never as instructions, and
-proves nothing about runtime behavior. Git
-fetches those commits into a new temporary bare repository with detached base and
-candidate worktrees. No remote branch is checked out in the application's checkout.
-Identity and that metadata are checked after execution and again before issuing
-the receipt; either changing invalidates the evaluation. Tracked
-candidate mutations invalidate the evidence. The owned temporary tree is removed
+proves nothing about runtime behavior. Git fetches those commits into a new
+temporary bare repository with detached base and candidate worktrees. No remote
+branch is checked out in the application's checkout. Identity and that metadata
+are checked after execution and again before issuing the receipt; either changing
+invalidates the evaluation, as do tracked
+candidate mutations. The owned temporary tree is removed
 before the receipt is issued; a cleanup failure is inconclusive and its manifest
 identifies the directory for operator cleanup. A killed process can leave that
 directory behind; no background orphan or ownership inference is performed.
