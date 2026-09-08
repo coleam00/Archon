@@ -6,7 +6,7 @@ import { join } from 'path';
 import * as realPaths from '@archon/paths';
 
 // Mock only the logger so test output stays clean. All other @archon/paths
-// exports (findMarkdownFilesRecursive, getHomeCommandsPath, etc.) use real
+// exports (findCommandFiles, getHomeCommandsPath, etc.) use real
 // implementations — loadCommandPrompt exercises them against a tmp dir set
 // via ARCHON_HOME below.
 const mockLogFn = mock(() => {});
@@ -102,6 +102,18 @@ describe('loadCommandPrompt — home-scope resolution', () => {
 
     expect(result.success).toBe(true);
     if (result.success) expect(result.content).toBe('Review body');
+  });
+
+  it('loads the first command in discovery order when basenames collide', async () => {
+    for (const folder of ['zeta', 'alpha']) {
+      const dir = join(repoRoot, '.archon', 'commands', folder);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'review.md'), folder);
+    }
+
+    const result = await loadCommandPrompt(makeDeps(false), repoRoot, 'review');
+
+    expect(result).toEqual({ success: true, content: 'alpha' });
   });
 
   it('does NOT resolve home commands buried >1 level deep', async () => {
