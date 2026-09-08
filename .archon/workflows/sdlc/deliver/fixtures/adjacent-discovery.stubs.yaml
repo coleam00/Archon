@@ -39,3 +39,5 @@ flip-ready: "https://github.com/example/repo/pull/5"
 outcome: "https://github.com/example/repo/pull/5"
 fixture:
   expect: completed
+
+forge-repo: { host: "github.com", path: "example/repo" }

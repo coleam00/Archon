@@ -49,3 +49,4 @@ resolve-scope: '{"errors":"false"}'
 fixture:
   expect: completed
 exec-code: true
+forge-repo: { host: "github.com", path: "example/repo" }

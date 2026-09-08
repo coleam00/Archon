@@ -43,3 +43,5 @@ fixture:
   expect: failed
   fail-node: gate-ready
 exec-code: true
+
+forge-repo: { host: "github.com", path: "example/repo" }

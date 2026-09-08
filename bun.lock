@@ -10,6 +10,7 @@
       },
       "devDependencies": {
         "@archon/core": "workspace:*",
+        "@archon/forge": "workspace:*",
         "@archon/git": "workspace:*",
         "@archon/paths": "workspace:*",
         "@archon/providers": "workspace:*",
@@ -24,6 +25,7 @@
         "prettier": "^3.7.4",
         "typescript": "^5.3.0",
         "typescript-eslint": "^8.48.0",
+        "zod": "^4.4.3",
       },
     },
     "packages/adapters": {
@@ -55,6 +57,7 @@
       "dependencies": {
         "@archon/adapters": "workspace:*",
         "@archon/core": "workspace:*",
+        "@archon/forge": "workspace:*",
         "@archon/git": "workspace:*",
         "@archon/isolation": "workspace:*",
         "@archon/paths": "workspace:*",
@@ -99,6 +102,17 @@
         "astro": "^6.1.0",
         "sharp": "^0.35.0",
         "starlight-llms-txt": "^0.10.0",
+      },
+    },
+    "packages/forge": {
+      "name": "@archon/forge",
+      "version": "0.10.1",
+      "dependencies": {
+        "@archon/paths": "workspace:*",
+        "zod": "^4.4.3",
+      },
+      "peerDependencies": {
+        "typescript": "^5.0.0",
       },
     },
     "packages/git": {
@@ -290,6 +304,8 @@
     "@archon/core": ["@archon/core@workspace:packages/core"],
 
     "@archon/docs-web": ["@archon/docs-web@workspace:packages/docs-web"],
+
+    "@archon/forge": ["@archon/forge@workspace:packages/forge"],
 
     "@archon/git": ["@archon/git@workspace:packages/git"],
 
@@ -796,8 +812,6 @@
     "@openai/codex-win32-x64": ["@openai/codex@0.151.0-win32-x64", "", { "os": "win32", "cpu": "x64" }, "sha512-sLT7xvID3jhU6tkzcwRPnMEclKRwUPbpo0mtfxIF9KpdZH3VJV7sM2/kXWXyvUM7Zt/YeyOaeATTEysbRz8Yog=="],
 
     "@opencode-ai/sdk": ["@opencode-ai/sdk@1.17.3", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-oXrEjOuP3+J9pPNw3cmOnRma/xiVQ4WIIvGd6YkhPQgqqi2PnD/b1qfNY0AMead3QfNhKwKdDM4QFJdN2LpByg=="],
-
-    "@opentelemetry/api": ["@opentelemetry/api@1.9.0", "", {}, "sha512-3giAOQvZiH5F9bMlMiv8+GSPMeqg0dbaeo58/0SlA9sxSqZhnUtxzX9/2FzyhS9sWQf5S0GJE0AKBrFqjpeYcg=="],
 
     "@opentelemetry/semantic-conventions": ["@opentelemetry/semantic-conventions@1.43.0", "", {}, "sha512-eSYWTm620tTk45EKSedaUL8MFYI8hW164hIXsgIHyxu3VobUB3fFCu5t0hQby6OoWRPsG1KkKUG2M5UadiLiVg=="],
 

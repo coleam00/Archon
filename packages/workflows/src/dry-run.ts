@@ -45,6 +45,7 @@ import {
 } from './workflow-source';
 import { defaultRunInputs } from './workflow-inputs';
 import { buildExecNodeEnvironment } from './exec-environment';
+import { archonCliLaunchEnv } from '@archon/paths/cli-launch';
 import {
   inputEnvKey,
   isGateNode,
@@ -720,6 +721,7 @@ async function executeCodeNode(
         PWD: ctx.execWorkspace,
         OLDPWD: ctx.execWorkspace,
         ...inputEnv,
+        ...archonCliLaunchEnv(),
         ...buildExecNodeEnvironment({
           artifactsDir: ctx.artifactsDir,
           stateDir: ctx.stateDir,

@@ -59,3 +59,5 @@ fixture:
   expect: paused
   reached: [fix__assert-changed, gate-correction-green, recheck__synthesize, gate-ready, gate-validated, ci-probe]
 exec-code: true
+
+forge-repo: { host: "github.com", path: "example/repo" }

@@ -62,3 +62,5 @@ fixture:
   fail-node: [gate-ci-fix, ci-corrections]
   reached: [ci-verdict, ci-fix__implement]
 exec-code: true
+
+forge-repo: { host: "github.com", path: "example/repo" }

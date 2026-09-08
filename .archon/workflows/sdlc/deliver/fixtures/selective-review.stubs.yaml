@@ -43,3 +43,5 @@ outcome: "https://github.com/example/repo/pull/2"
 fixture:
   expect: completed
   reached: [review__code, review__seams, review__simplify, review__tests, review__docs]
+
+forge-repo: { host: "github.com", path: "example/repo" }

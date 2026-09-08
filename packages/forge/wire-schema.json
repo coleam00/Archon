@@ -1,0 +1,698 @@
+{
+  "RepoRef": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "host": {
+        "type": "string",
+        "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+      },
+      "path": {
+        "type": "string",
+        "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+      }
+    },
+    "required": [
+      "host",
+      "path"
+    ],
+    "additionalProperties": false
+  },
+  "PrRef": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "repo": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+          }
+        },
+        "required": [
+          "host",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "number": {
+        "type": "integer",
+        "exclusiveMinimum": 0,
+        "maximum": 9007199254740991
+      }
+    },
+    "required": [
+      "repo",
+      "number"
+    ],
+    "additionalProperties": false
+  },
+  "Metadata": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "protocol": {
+        "type": "integer",
+        "exclusiveMinimum": 0,
+        "maximum": 9007199254740991
+      },
+      "name": {
+        "type": "string",
+        "pattern": "^[a-z0-9-]+$"
+      },
+      "version": {
+        "type": "string",
+        "minLength": 1
+      },
+      "forge": {
+        "type": "string",
+        "minLength": 1
+      },
+      "hosts": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+        }
+      },
+      "capabilities": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "token_env": {
+        "type": "string",
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+      }
+    },
+    "required": [
+      "protocol",
+      "name",
+      "version",
+      "forge",
+      "hosts",
+      "capabilities"
+    ],
+    "additionalProperties": false
+  },
+  "ResolveRequest": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "repo": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+          }
+        },
+        "required": [
+          "host",
+          "path"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "repo"
+    ],
+    "additionalProperties": false
+  },
+  "ResolveResult": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "forge": {
+        "type": "string"
+      },
+      "repo": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+          }
+        },
+        "required": [
+          "host",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "plugin": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]+$"
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "name",
+          "version"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "forge"
+    ],
+    "additionalProperties": false
+  },
+  "ChecksRequest": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "ref": {
+        "type": "object",
+        "properties": {
+          "repo": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+              },
+              "path": {
+                "type": "string",
+                "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+              }
+            },
+            "required": [
+              "host",
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "number": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "repo",
+          "number"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "ref"
+    ],
+    "additionalProperties": false
+  },
+  "ChecksResult": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "state": {
+        "type": "string",
+        "enum": [
+          "none",
+          "pending",
+          "green",
+          "red",
+          "gated",
+          "unknown"
+        ]
+      },
+      "counts": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "pending": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "green": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "red": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "gated": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "unknown": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "total",
+          "pending",
+          "green",
+          "red",
+          "gated",
+          "unknown"
+        ],
+        "additionalProperties": false
+      },
+      "units": {
+        "maxItems": 100,
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "check-run",
+                "status",
+                "native"
+              ]
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "green",
+                "red",
+                "gated",
+                "unknown"
+              ]
+            }
+          },
+          "required": [
+            "name",
+            "source",
+            "state"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "none",
+              "pending",
+              "green",
+              "red",
+              "gated",
+              "unknown"
+            ]
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "total": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "pending": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "green": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "red": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "gated": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "unknown": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "total",
+              "pending",
+              "green",
+              "red",
+              "gated",
+              "unknown"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "state",
+          "counts"
+        ],
+        "additionalProperties": false
+      },
+      "head_sha": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{40}$"
+      }
+    },
+    "required": [
+      "state",
+      "counts",
+      "units",
+      "head_sha"
+    ],
+    "additionalProperties": false
+  },
+  "OpError": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "unsupported_op"
+          },
+          "op": {
+            "type": "string"
+          },
+          "plugin": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "op"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "no_plugin_for_host"
+          },
+          "host": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "host"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "no_credential"
+          },
+          "host": {
+            "type": "string"
+          },
+          "token_env": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "host"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "not_found"
+          },
+          "target": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "target"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "verify_failed"
+          },
+          "expected": {
+            "type": "string"
+          },
+          "observed": {
+            "type": "string"
+          },
+          "leave_behind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "expected",
+          "observed"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "forge_error"
+          },
+          "status": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "evidence": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "evidence"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "invalid_request"
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "detail"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "const": "invalid_response"
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "detail"
+        ],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "ProcessFailure": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "kind": {
+        "type": "string",
+        "const": "process_failure"
+      },
+      "detail": {
+        "type": "string"
+      },
+      "plugin": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]+$"
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "name",
+          "version"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "kind",
+      "detail"
+    ],
+    "additionalProperties": false
+  },
+  "HostsConfig": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "propertyNames": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+    },
+    "additionalProperties": {
+      "type": "object",
+      "properties": {
+        "plugin": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$"
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1
+        },
+        "args": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "token_env": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        }
+      },
+      "required": [
+        "plugin",
+        "command",
+        "args"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "Audit": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "op": {
+        "type": "string"
+      },
+      "target": {
+        "type": "string"
+      },
+      "plugin": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]+$"
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "name",
+          "version"
+        ],
+        "additionalProperties": false
+      },
+      "outcome": {
+        "anyOf": [
+          {
+            "type": "string",
+            "const": "ok"
+          },
+          {
+            "type": "string",
+            "const": "process_failure"
+          },
+          {
+            "type": "string",
+            "enum": [
+              "unsupported_op",
+              "no_plugin_for_host",
+              "no_credential",
+              "not_found",
+              "verify_failed",
+              "forge_error",
+              "invalid_request",
+              "invalid_response"
+            ]
+          }
+        ]
+      },
+      "duration_ms": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      }
+    },
+    "required": [
+      "op",
+      "target",
+      "outcome",
+      "duration_ms"
+    ],
+    "additionalProperties": false
+  }
+}

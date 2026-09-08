@@ -61,3 +61,5 @@ fixture:
   resolved-text-contains:
     attention-ci-pause: "pull request #10 after Archon classified the failure as inherited: e2e-smoke (fail) Re-run the failing check, then resume this run."
 exec-code: true
+
+forge-repo: { host: "github.com", path: "example/repo" }

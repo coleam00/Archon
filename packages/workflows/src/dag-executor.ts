@@ -10,6 +10,7 @@ import { readFile } from 'fs/promises';
 import { basename, isAbsolute, join as joinPath, resolve as resolvePath, sep } from 'path';
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import { isEffortRung } from '@archon/paths/effort';
+import { archonCliLaunchEnv } from '@archon/paths/cli-launch';
 import { discoverScriptsForCwd } from './script-discovery';
 import { discoverWorkflowsWithConfig, resolveWorkflowCommandContents } from './workflow-discovery';
 import {
@@ -3473,6 +3474,7 @@ async function runSubprocess(
 ): Promise<{ stdout: string; stderr: string; credentialValues: readonly string[] }> {
   const subprocessEnv =
     execContext.kind === 'container' ? options.env : { ...process.env, ...options.env };
+  if (execContext.kind !== 'container') Object.assign(subprocessEnv, archonCliLaunchEnv());
   // Both outcomes redact against the same values, so the credential set is resolved
   // once here rather than separately per path — a success path that redacted less than
   // the failure path would be the security hole, not a style difference.

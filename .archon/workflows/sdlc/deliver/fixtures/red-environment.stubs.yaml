@@ -59,3 +59,5 @@ fixture:
   expect: completed
   reached: [gate-correction-green, flip-ready]
 exec-code: true
+
+forge-repo: { host: "github.com", path: "example/repo" }

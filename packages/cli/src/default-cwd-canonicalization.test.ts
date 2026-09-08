@@ -35,7 +35,7 @@ const CANONICALIZING_SITES = [
   'packages/core/src/orchestrator/orchestrator-agent.ts',
   // The pre-dispatch project gate — the reader that decides whether a command
   // may run at all in a non-git directory.
-  'packages/cli/src/cli.ts',
+  'packages/cli/src/cli-main.ts',
   // `archon doctor`'s folder-project check.
   'packages/cli/src/commands/doctor.ts',
 ] as const;
