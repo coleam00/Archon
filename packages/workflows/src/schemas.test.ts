@@ -1264,15 +1264,8 @@ describe('SCRIPT_NODE_AI_FIELDS', () => {
       INCLUDE_NODE_IGNORED_FIELDS,
       WAIT_NODE_IGNORED_FIELDS,
     ]) {
-      for (const field of BASH_NODE_AI_FIELDS) {
-        // An include honours denied_tools rather than warning about it; pinned below.
-        if (list === INCLUDE_NODE_IGNORED_FIELDS && field === 'denied_tools') continue;
-        expect(list).toContain(field);
-      }
+      for (const field of BASH_NODE_AI_FIELDS) expect(list).toContain(field);
     }
-    expect(INCLUDE_NODE_IGNORED_FIELDS).not.toContain('denied_tools');
-    expect(GATE_AND_HALT_IGNORED_FIELDS).toContain('denied_tools');
-    expect(WAIT_NODE_IGNORED_FIELDS).toContain('denied_tools');
     // Re-added where the field stays meaningless…
     expect(GATE_AND_HALT_IGNORED_FIELDS).toContain('output_format');
     expect(LOOP_GROUP_NODE_AI_FIELDS).toContain('output_format');
@@ -1919,6 +1912,7 @@ describe('dagNodeSchema — include', () => {
       model: 'opus',
       always_run: true,
       output_type: 'code',
+      denied_tools: ['Bash(rm:*)'],
     });
     expect(result.success).toBe(true);
     if (result.success) {
@@ -1926,6 +1920,10 @@ describe('dagNodeSchema — include', () => {
       expect(node.model).toBeUndefined();
       expect(node.always_run).toBeUndefined();
       expect(node.output_type).toBeUndefined();
+      // A caller-side denial cannot honestly narrow what the included block's own
+      // nodes will run (provider enforcement differs per node kind, and this is not
+      // path isolation) — the loader's ignored-field warning is the honest signal.
+      expect(node.denied_tools).toBeUndefined();
     }
   });
 });
@@ -2012,9 +2010,8 @@ describe('dagNodeSchema — launch-only options on an include node (#1764)', () 
 });
 
 describe('INCLUDE_NODE_IGNORED_FIELDS', () => {
-  test('is a superset of BASH_NODE_AI_FIELDS, except the one field an include honours', () => {
+  test('is a superset of BASH_NODE_AI_FIELDS plus exec-only fields', () => {
     for (const f of BASH_NODE_AI_FIELDS) {
-      if (f === 'denied_tools') continue;
       expect(INCLUDE_NODE_IGNORED_FIELDS).toContain(f);
     }
     for (const f of ['retry', 'output_type', 'always_run', 'idle_timeout', 'timeout']) {
@@ -2026,15 +2023,13 @@ describe('INCLUDE_NODE_IGNORED_FIELDS', () => {
     }
   });
 
-  test('does not claim denied_tools is ignored, because the expander applies it', () => {
-    // Warning here would tell an author their sandbox does nothing while it is in force.
-    expect(INCLUDE_NODE_IGNORED_FIELDS).not.toContain('denied_tools');
-  });
-
-  test('still ignores allowed_tools, which an include cannot narrow honestly', () => {
-    // Grants are patterns rather than set members (`Bash(git:*)` vs `Bash`), so there is
-    // no intersection to compute that is not a guess. Warning is the honest outcome: the
-    // author is told it does nothing instead of assuming it mirrors the denial beside it.
+  test('ignores denied_tools and allowed_tools: policy restrictions are not path isolation', () => {
+    // An include has no execution site of its own — provider enforcement of a tool
+    // policy differs per node kind, and a caller-side list cannot honestly narrow or
+    // deny what the included block's own nodes will run. #2848 owns building real
+    // provider-capability enforcement or path isolation across an include boundary;
+    // until then, warning is the honest outcome instead of a claimed sandbox.
+    expect(INCLUDE_NODE_IGNORED_FIELDS).toContain('denied_tools');
     expect(INCLUDE_NODE_IGNORED_FIELDS).toContain('allowed_tools');
   });
 });

@@ -812,7 +812,6 @@ export const includeDirectiveSchema = dagNodeBaseSchema
     depends_on: true,
     when: true,
     trigger_rule: true,
-    denied_tools: true,
   })
   .extend({
     kind: z.literal('include'),
@@ -1067,12 +1066,11 @@ export const WAIT_NODE_IGNORED_FIELDS: readonly string[] = [
  * ignored (the inlined child nodes carry their own). A superset of
  * `BASH_NODE_AI_FIELDS` plus the remaining execution-only fields. The structural
  * graph fields the include node DOES use (id / depends_on / when / trigger_rule /
- * description) are deliberately absent, as is `denied_tools`, which the expander unions
- * onto every expanded node. `allowed_tools` stays ignored: grants are patterns rather
- * than set members, so an include cannot narrow them honestly.
+ * description) are deliberately absent. Provider tool-policy enforcement and path
+ * isolation across an include boundary are out of scope here; #2848 owns that.
  */
 export const INCLUDE_NODE_IGNORED_FIELDS: readonly string[] = [
-  ...BASH_NODE_AI_FIELDS.filter(field => field !== 'denied_tools'),
+  ...BASH_NODE_AI_FIELDS,
   // Still inert after #2453: an include has no execution site, and the transform
   // drops the field — the included workflow's selected node owns the contract.
   'output_format',
@@ -1886,14 +1884,11 @@ export const dagNodeSchema = z
         } as ComposeFanOutNode;
       }
       // An include is a load-time directive, not an executable node. It carries the
-      // structural graph fields, target name, optional load-time input mapping, and
-      // `denied_tools`. The expander reads those fields to attach and parameterize the
-      // sub-DAG (description just rides along). aiOnly / shared (retry) and the exec-only
-      // base fields (always_run / output_type / idle_timeout) are intentionally dropped;
-      // the loader warns about them via INCLUDE_NODE_IGNORED_FIELDS.
-      //
-      // Rebuilt from `structuralBase`, so anything the pick admits must also be carried
-      // here or it reaches the expander as undefined.
+      // structural graph fields, target name, and optional load-time input mapping. The
+      // expander reads those fields to attach and parameterize the sub-DAG (description just
+      // rides along). aiOnly / shared (retry) and the exec-only base fields (always_run /
+      // output_type / idle_timeout) are intentionally dropped; the loader warns about them
+      // via INCLUDE_NODE_IGNORED_FIELDS.
       return {
         ...structuralBase,
         kind: 'include',
@@ -1901,7 +1896,6 @@ export const dagNodeSchema = z
         ...(data.with !== undefined
           ? { with: includeDirectiveSchema.shape.with.unwrap().parse(data.with) }
           : {}),
-        ...(data.denied_tools !== undefined ? { denied_tools: data.denied_tools } : {}),
       } as IncludeDirective;
     }
     if (data.workflow !== undefined && data.workflow.trim().length > 0) {
