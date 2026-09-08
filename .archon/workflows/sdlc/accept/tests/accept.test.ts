@@ -205,6 +205,33 @@ describe('acceptance decision', () => {
     expect(() => parseJudgment({ ...judgment, evidence_sufficient: 'yes' })).toThrow();
     expect(() => parseReceipt({ verdict: 'approve' })).toThrow();
   });
+  test('execution settings default conservatively and reject values outside their bounds', () => {
+    const command = { id: 'gate', argv: ['gate'], environment_exit_codes: [] };
+    const minimal = {
+      schema_version: 1,
+      commands: [command],
+      required_evidence: [],
+      protected_paths: [],
+      require_isolation: false,
+    };
+    expect(parseProfile(minimal)).toMatchObject({
+      commands: [{ timeout_seconds: 600 }],
+      max_packet_bytes: 96_000,
+    });
+    expect(
+      parseProfile({
+        ...minimal,
+        commands: [{ ...command, timeout_seconds: 7200 }],
+        max_packet_bytes: 512_000,
+      })
+    ).toMatchObject({ commands: [{ timeout_seconds: 7200 }], max_packet_bytes: 512_000 });
+    for (const timeout_seconds of [0, -1, 7201, 600.5, Number.NaN, Infinity, '600', null])
+      expect(() =>
+        parseProfile({ ...minimal, commands: [{ ...command, timeout_seconds }] })
+      ).toThrow();
+    for (const max_packet_bytes of [0, -1, 512_001, 96_000.5, Number.NaN, Infinity, '96000', null])
+      expect(() => parseProfile({ ...minimal, max_packet_bytes })).toThrow();
+  });
   test('the workflow parses with existing node and input schemas', async () => {
     const workflow = parseWorkflow(
       await readFile(resolve(import.meta.dir, '../archon-accept.yaml'), 'utf8'),
@@ -254,10 +281,18 @@ describe('acceptance decision', () => {
 function profile(code = 'console.log("checked new behavior")'): Profile {
   return {
     schema_version: 1,
-    commands: [{ id: 'gate', argv: [process.execPath, '-e', code], environment_exit_codes: [75] }],
+    commands: [
+      {
+        id: 'gate',
+        argv: [process.execPath, '-e', code],
+        environment_exit_codes: [75],
+        timeout_seconds: 600,
+      },
+    ],
     required_evidence: [],
     protected_paths: [],
     require_isolation: false,
+    max_packet_bytes: 96_000,
   };
 }
 async function exec(
@@ -541,6 +576,7 @@ describe('real acceptance CLI with temporary Git and GitHub harness', () => {
       ...profile(),
       gate: { complete: true, description: 'Full application value contract gate, including baseline comparison.' },
       commands: [{ id: 'gate', argv: [process.execPath, evaluator], environment_exit_codes: [75],
+        timeout_seconds: 900,
         public_description: 'Run the value assertion against candidate and prior application.' }],
       context: [{ id: 'checks', source: 'base:checks.txt' }, { id: 'invariants', source: context }],
       required_evidence: ['reports/behavior.json'],
@@ -551,7 +587,9 @@ describe('real acceptance CLI with temporary Git and GitHub harness', () => {
     expect(collected.judge).toBe(true);
     const packet = JSON.parse(String(collected.packet));
     expect(packet.gate).toMatchObject({ mode: 'fixed', declaration: policy.gate,
-      commands: [{ id: 'gate', description: policy.commands[0].public_description }] });
+      settings: { max_packet_bytes: 96_000 },
+      commands: [{ id: 'gate', description: policy.commands[0].public_description,
+        timeout_seconds: 900 }] });
     expect(packet.source_context).toMatchObject([
       { id: 'checks', source: 'base:checks.txt', content: 'Use the operator-defined fixture gate.\n' },
       { id: 'invariants', source: 'external', content: 'Preserve the existing data contract.' },
@@ -649,9 +687,10 @@ describe('real acceptance CLI with temporary Git and GitHub harness', () => {
       'inconclusive'
     );
   });
-  test('material clipping is explicit and retained privately', async () => {
-    const f = await fixture(null);
-    await prepared(f);
+  const recordOutput = async (
+    f: Awaited<ReturnType<typeof fixture>>,
+    characters: number
+  ): Promise<void> => {
     await exec(
       [
         process.execPath,
@@ -659,18 +698,60 @@ describe('real acceptance CLI with temporary Git and GitHub harness', () => {
         'record',
         f.state,
         'checks.txt',
-        JSON.stringify([process.execPath, '-e', 'console.log("x".repeat(30000))']),
+        JSON.stringify([process.execPath, '-e', `console.log("x".repeat(${characters}))`]),
       ],
       f.cwd,
       f.env
     );
+  };
+  test('a packet larger than the former fixed budget reaches the judge', async () => {
+    const f = await fixture(null);
+    await prepared(f);
+    await recordOutput(f, 30_000);
+    const collected = await f.phase('collect');
+    expect(Buffer.byteLength(String(collected.packet), 'utf8')).toBeGreaterThan(24_000);
+    expect(collected.judge).toBe(true);
+    const r = await f.phase('finish');
+    expect(r.clipped).toBe(false);
+    expect(r.verdict).toBe('approve');
+  });
+  test('material clipping above the budget is explicit and retained privately', async () => {
+    const f = await fixture(null);
+    await prepared(f);
+    await recordOutput(f, 120_000);
     expect((await f.phase('collect')).judge).toBe(false);
     expect(
       (await readFile(join(f.artifacts, 'accept-private', 'packet.json'), 'utf8')).length
-    ).toBeGreaterThan(30000);
+    ).toBeGreaterThan(96_000);
     const r = await f.phase('finish');
     expect(r.clipped).toBe(true);
     expect(r.verdict).toBe('inconclusive');
+  });
+  test('a trusted profile can lower the judge packet budget', async () => {
+    const f = await fixture({ ...profile(), max_packet_bytes: 1000 });
+    await prepared(f);
+    const collected = await f.phase('collect');
+    expect(collected.judge).toBe(false);
+    expect(String(collected.packet)).toContain('exceeds 1000 bytes');
+    expect((await f.phase('finish')).verdict).toBe('inconclusive');
+  });
+  test('an expired command timeout is an environment result, never a failure', async () => {
+    const f = await fixture({
+      ...profile(),
+      commands: [
+        {
+          id: 'gate',
+          argv: [process.execPath, '-e', 'await Bun.sleep(120_000)'],
+          environment_exit_codes: [],
+          timeout_seconds: 1,
+        },
+      ],
+    });
+    await prepared(f);
+    expect((await f.phase('collect')).judge).toBe(false);
+    const receipt = parseReceipt(await f.phase('finish'));
+    expect(receipt.checks[0]).toMatchObject({ exit_code: null, status: 'environment' });
+    expect(receipt.verdict).toBe('inconclusive');
   });
 });
 

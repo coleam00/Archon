@@ -46,6 +46,7 @@ For example, this external JSON profile invokes an operator-owned evaluator:
       "id": "acceptance-gate",
       "argv": ["bun", "/operator/evaluator.ts"],
       "environment_exit_codes": [75],
+      "timeout_seconds": 5400,
       "public_description": "Run the project unit suite against the candidate and the base."
     }
   ],
@@ -59,22 +60,57 @@ For example, this external JSON profile invokes an operator-owned evaluator:
   ],
   "required_evidence": ["acceptance-evidence.json"],
   "protected_paths": ["governance", "checks"],
-  "require_isolation": false
+  "require_isolation": false,
+  "max_packet_bytes": 96000
 }
 ```
 
 `schema_version`, `commands`, `required_evidence`, `protected_paths`, and
-`require_isolation` are required; `gate` and `context` are optional; unknown fields
-and versions fail closed. Commands must have unique lowercase kebab-case IDs and
-nonempty argv arrays. There is no
-implicit shell, interpolation, dependency install, or candidate-selected command.
-An explicit shell argv is allowed when the operator intends it. Commands run in
-order in the candidate checkout, each with a ten-minute timeout and no stdin.
-Exit zero passes; declared nonzero environment exit codes (1 through 255), startup
-failures, and timeouts are inconclusive. Other nonzero exits request changes.
+`require_isolation` are required; `gate`, `context`, `max_packet_bytes`, and each
+command's `timeout_seconds` are optional; unknown fields and versions fail closed.
+Commands must have unique lowercase kebab-case IDs and nonempty argv arrays. There
+is no implicit shell, interpolation, dependency install, or candidate-selected
+command. An explicit shell argv is allowed when the operator intends it. Commands
+run in order in the candidate checkout with no stdin. Exit zero passes; declared
+nonzero environment exit codes (1 through 255), startup failures, and expired
+deadlines are inconclusive. Other nonzero exits request changes.
 `DATABASE_URL` is explicitly empty for gate processes. Gates needing databases
 must create their own scratch database and clean it up. Other native process
 environment and provider configuration remain operator-owned.
+
+### Command deadlines
+
+A real gate that runs agent-driven journeys, holdout suites, or semantic mutations
+takes far longer than a unit run, so `timeout_seconds` sets each command's deadline.
+It defaults to 600 and must be an integer from 1 to 7200; zero, negative, fractional,
+non-numeric, and larger values are refused with the rest of the profile. The value
+comes only from the trusted profile, never from candidate code, the PR, or the work
+order, and `policy_sha256` covers the exact text that determines it. Effective
+deadlines reach the judge with the gate declaration, beside each command ID.
+
+Deadlines nest, and the caller owns the ordering: a gate's own internal timeout must
+be lower than its `timeout_seconds`, and the sum of the commands must fit the
+collection node's own 7,200,000 ms budget. An inner gate that ends itself reports a
+real failed check; a gate the recorder has to end is only an environment result, and
+an expired collection node produces no receipt at all.
+
+When a deadline expires the recorder ends that command's own process and nothing
+else. That is process cleanup, not an OS isolation boundary, and this workflow claims
+none: a process the command started and detached from itself is not owned here, and
+nothing is ever killed by process name or pattern. This is the second reason to give a
+gate an inner deadline, because a gate that ends itself also cleans up its own work.
+
+### Judge packet budget
+
+The judge packet carries the original request, the trusted context, the full diff,
+the check records, and the selected evidence, so a small feature with its issue text
+and project guidance already runs to tens of kilobytes. The budget defaults to
+96,000 bytes, and `max_packet_bytes` moves it as an integer from 1 to 512,000 under
+the same strict validation as a deadline. Generic acceptance has no profile and
+always uses the default. Above the effective budget the workflow still fails closed:
+nothing is summarized away, the judge receives only a notice that material evidence
+was withheld, `clipped` is true, and the verdict is inconclusive. The full packet
+stays in private artifacts for the operator.
 
 ### What the judge is told about a fixed gate
 
@@ -181,7 +217,7 @@ can use the parser or implement the documented contract with conformance tests.
 | `evidence_sha256`      | SHA-256 of the private `evidence.json` bytes.                                                                                              |
 | `judgment_sha256`      | SHA-256 of the received structured judgment text, or null when invalid/missing.                                                            |
 | `isolation`            | Literal `fresh_context_only`; never an enforced sandbox claim.                                                                             |
-| `clipped`              | True if material judge evidence exceeded the 24,000-byte packet budget; forces inconclusive.                                               |
+| `clipped`              | True if material judge evidence exceeded the effective packet budget; forces inconclusive.                                                 |
 
 Every check contains `id`, the complete `identity` (repository, PR, head/base SHAs),
 `argv` (null for private fixed commands), `command_sha256` (SHA-256 of JSON argv),
