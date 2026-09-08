@@ -13,6 +13,7 @@ diagnose:
     - public_case_id: ''
       public_proof:
         root_cause_key: src/parser.ts/empty-input
+        existing_issue: 0
         executions: ['9f9f5ccd-3ecf-43fa-ae9e-bc44c97a8353']
         test: { path: tests/parser.test.ts, start: 10, end: 14 }
         cause: { path: src/parser.ts, start: 12, end: 12 }

@@ -86,6 +86,8 @@ nodes:
       prepared: '$prepare.output'
       fixed: { from: '$fixed.output', if_skipped: null }
       validation: { from: '$validation.output', if_skipped: null }
+      # Authorized publication is what makes the existing-issue catalog worth a remote read.
+      publish: '$INPUTS.publish'
 
   - id: inv
     include: archon-investigate
@@ -140,6 +142,8 @@ nodes:
                 additionalProperties: false
                 properties:
                   root_cause_key: { type: string }
+                  # The existing issue this cause already has, or 0 to file a new one.
+                  existing_issue: { type: number }
                   executions:
                     type: array
                     items: { type: string }
@@ -161,7 +165,14 @@ nodes:
                     required: [path, start, end]
                   completed_product_assertion: { type: boolean }
                 required:
-                  [root_cause_key, executions, test, cause, completed_product_assertion]
+                  [
+                    root_cause_key,
+                    existing_issue,
+                    executions,
+                    test,
+                    cause,
+                    completed_product_assertion,
+                  ]
               title: { type: string }
               root_cause: { type: string }
               expected: { type: string }

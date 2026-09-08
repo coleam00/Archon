@@ -28,6 +28,25 @@ export interface PublicCase {
  * proves nothing about why the full gate failed.
  */
 export type EvidenceSource = 'configured' | 'discovered' | 'public-probe';
+/**
+ * One existing marked regression issue, offered to the diagnosis as untrusted remote
+ * evidence for duplicate comparison. Its text is bounded and is never an instruction.
+ */
+export interface CatalogEntry {
+  number: number;
+  url: string;
+  title: string;
+  summary: string;
+}
+/**
+ * The open marked regression issues this repository already tracks. `complete` false means
+ * the enumeration failed or exceeded its bound: duplicate detection is then unproven, and
+ * ordinary publication holds rather than filing a possible second issue for one cause.
+ */
+export interface IssueCatalog {
+  complete: boolean;
+  issues: CatalogEntry[];
+}
 export interface Evidence extends Binding {
   status: Verdict;
   source: EvidenceSource;
@@ -36,6 +55,7 @@ export interface Evidence extends Binding {
   report_hash: string;
   public_cases: PublicCase[];
   executions: Receipt[];
+  catalog: IssueCatalog;
 }
 export interface SourceReference {
   path: string;
@@ -49,6 +69,12 @@ export interface SourceReference {
  */
 export interface PublicProof {
   root_cause_key: string;
+  /**
+   * The catalog issue number the diagnosis judged to track this same cause, or 0 to file a
+   * new one. Independently coined keys drift, so the established issue, not the key, is what
+   * a repeat run must reuse.
+   */
+  existing_issue: number;
   executions: string[];
   test: SourceReference;
   cause: SourceReference;
@@ -74,6 +100,12 @@ export interface IssueReference {
   number: number;
   url: string;
   disposition: 'existing' | 'created';
+  /**
+   * What the issue's marker is anchored to. `key`: this run's `key`, because the run filed
+   * the issue or matched its marker exactly. `cause`: the diagnosis matched this cause to an
+   * issue filed under a different key, and that issue keeps its own marker and number.
+   */
+  matched: 'key' | 'cause';
   verified: boolean;
 }
 export interface Result extends Diagnosis, Binding {
@@ -98,6 +130,8 @@ export interface Prepared extends Binding {
   validation_scope: string;
   /** The operator authorized a public probe of a configured profile's non-clean full gate. */
   probe: boolean;
+  /** The public scope a probe answers for. The configured `scope` stays with the private gate. */
+  probe_scope: string;
 }
 /** Whether archon-validate runs at all, and the only scope text it may receive. */
 export interface Routing {
@@ -247,6 +281,15 @@ export function recordingScope(scope: string, recorder: string): string {
     'and keep destructive checks off live resources.'
   );
 }
+/**
+ * The context a public probe works under. A probe answers for the public scope the operator
+ * authorized, so that is the scope its receipts are stamped with and the scope its evidence,
+ * investigation, and diagnosis are bound to. The configured profile's own scope is private
+ * gate material and reaches none of them.
+ */
+export function publicContext(context: Prepared): Prepared {
+  return context.probe ? { ...context, scope: context.probe_scope } : context;
+}
 export async function prepare(
   scope: string,
   policy: string,
@@ -272,6 +315,7 @@ export async function prepare(
     recording_directory: '',
     validation_scope: '',
     probe,
+    probe_scope: probe ? publicProbeScope : '',
   };
   try {
     Object.assign(result, await binding(scope, base));
@@ -292,7 +336,10 @@ export async function prepare(
     }
     result.ready = true;
     if (result.recording_directory)
-      await writeFile(join(result.recording_directory, 'prepared.json'), JSON.stringify(result));
+      await writeFile(
+        join(result.recording_directory, 'prepared.json'),
+        JSON.stringify(publicContext(result))
+      );
   } catch (error) {
     result.reason = error instanceof Error ? error.message : String(error);
   }
@@ -392,6 +439,7 @@ function emptyEvidence(context: Prepared, reason: string, source: EvidenceSource
     report_hash: '',
     public_cases: [],
     executions: [],
+    catalog: { complete: false, issues: [] },
   };
 }
 export function configuredEvidence(
@@ -576,7 +624,7 @@ async function probeEvidence(
     'public-probe'
   );
 }
-async function collect(
+async function collected(
   context: Prepared,
   verdict: unknown,
   fixed: unknown,
@@ -588,7 +636,25 @@ async function collect(
   if (context.mode === 'discovered') return recorded(context, verdict, artifacts, 'discovered');
   const gate = readEvidence(fixed);
   if (gate.status === 'clean' || !context.probe) return gate;
-  return probeEvidence(context, verdict, artifacts);
+  return probeEvidence(publicContext(context), verdict, artifacts);
+}
+/**
+ * Collect the evidence, and for an authorized ordinary publication the issues this
+ * repository already tracks for earlier regressions. A trusted profile owns stable keys and
+ * needs no catalog; an independently coined discovery key does not, so its diagnosis is the
+ * stage that decides whether a proven cause already has an issue.
+ */
+async function collect(
+  context: Prepared,
+  verdict: unknown,
+  fixed: unknown,
+  artifacts: string,
+  authorized: boolean
+): Promise<Evidence> {
+  const evidence = await collected(context, verdict, fixed, artifacts);
+  if (!authorized || evidence.status !== 'product' || evidence.source === 'configured')
+    return evidence;
+  return { ...evidence, catalog: await issueCatalog(await originRepository(), runCommand) };
 }
 /**
  * Decide whether archon-validate runs and with what scope. The configured full gate is
@@ -647,9 +713,25 @@ function readPrepared(value: unknown): Prepared {
     recording_directory: typeof row.recording_directory === 'string' ? row.recording_directory : '',
     validation_scope: typeof row.validation_scope === 'string' ? row.validation_scope : '',
     probe: row.probe === true,
+    probe_scope: typeof row.probe_scope === 'string' ? row.probe_scope : '',
   };
 }
-function readEvidence(value: unknown): Evidence {
+function readCatalogEntry(value: unknown): CatalogEntry {
+  const row = object(value);
+  if (!Number.isInteger(row.number) || Number(row.number) < 1)
+    throw new Error('A catalog entry needs a positive issue number');
+  if (typeof row.title !== 'string' || typeof row.summary !== 'string')
+    throw new Error('A catalog entry needs text fields');
+  return { number: Number(row.number), url: text(row.url), title: row.title, summary: row.summary };
+}
+function readCatalog(value: unknown): IssueCatalog {
+  if (value === undefined) return { complete: false, issues: [] };
+  const row = object(value);
+  if (typeof row.complete !== 'boolean' || !Array.isArray(row.issues))
+    throw new Error('Invalid existing-issue catalog');
+  return { complete: row.complete, issues: row.issues.map(readCatalogEntry) };
+}
+export function readEvidence(value: unknown): Evidence {
   const row = object(value);
   if (
     (row.status !== 'clean' && row.status !== 'product' && row.status !== 'inconclusive') ||
@@ -671,6 +753,7 @@ function readEvidence(value: unknown): Evidence {
     report_hash: row.report_hash,
     public_cases: row.public_cases.map(publicCase),
     executions: Array.isArray(row.executions) ? row.executions.map(readReceipt) : [],
+    catalog: readCatalog(row.catalog),
   };
 }
 function readReference(value: unknown): SourceReference {
@@ -702,8 +785,11 @@ function readProof(value: unknown): PublicProof | null {
     throw new Error('A public proof root cause key must be a stable lowercase machine key');
   if (typeof row.completed_product_assertion !== 'boolean')
     throw new Error('Missing completed_product_assertion');
+  if (!Number.isInteger(row.existing_issue) || Number(row.existing_issue) < 0)
+    throw new Error('A public proof names an existing issue number, or zero for none');
   return {
     root_cause_key: row.root_cause_key,
+    existing_issue: Number(row.existing_issue),
     executions: strings(row.executions),
     test: readReference(row.test),
     cause: readReference(row.cause),
@@ -771,8 +857,15 @@ export function githubRepository(remote: string): string | null {
     return null;
   }
 }
+/** Every issue this workflow has ever filed opens with a marker built from this prefix. */
+const MARKER = '<!-- archon-regress:';
+/** The publication destination, or null when the origin is not a github.com repository. */
+async function originRepository(): Promise<string | null> {
+  const remote = await runCommand(['git', 'remote', 'get-url', 'origin']);
+  return remote.exitCode === 0 ? githubRepository(remote.stdout.trim()) : null;
+}
 export function issueMarker(repository: string, key: string): string {
-  return `<!-- archon-regress:${hash(`${repository.toLowerCase()}\n${key}`)} -->`;
+  return `${MARKER}${hash(`${repository.toLowerCase()}\n${key}`)} -->`;
 }
 export function issueBody(repository: string, candidate: PublicCase, revision: string): string {
   return (
@@ -782,18 +875,33 @@ export function issueBody(repository: string, candidate: PublicCase, revision: s
     `## Evidence\n\n${candidate.evidence.map(item => `- ${item}`).join('\n')}\n\nObserved revision: ${revision}\n`
   );
 }
-function issue(value: unknown, repository: string): { number: number; url: string; body: string } {
+interface RemoteIssue {
+  number: number;
+  url: string;
+  body: string;
+  title: string;
+  state: 'open' | 'closed';
+}
+function issue(value: unknown, repository: string): RemoteIssue {
   const row = object(value);
   if (
     row.pull_request ||
     !Number.isInteger(row.number) ||
     Number(row.number) < 1 ||
     (typeof row.body !== 'string' && row.body !== null) ||
+    typeof row.title !== 'string' ||
+    (row.state !== 'open' && row.state !== 'closed') ||
     typeof row.html_url !== 'string' ||
     row.html_url.toLowerCase() !== `https://github.com/${repository}/issues/${row.number}`
   )
     throw new Error('GitHub returned an invalid issue');
-  return { number: Number(row.number), url: row.html_url, body: row.body ?? '' };
+  return {
+    number: Number(row.number),
+    url: row.html_url,
+    body: row.body ?? '',
+    title: row.title,
+    state: row.state,
+  };
 }
 async function api(run: RunCommand, args: string[], input?: unknown): Promise<unknown> {
   const result = await run(
@@ -808,9 +916,76 @@ async function api(run: RunCommand, args: string[], input?: unknown): Promise<un
     throw new Error('GitHub returned malformed JSON; publication stopped');
   }
 }
-export async function publishCases(
+/**
+ * Every marked regression issue this repository tracks, lowest number first. It lists all
+ * states through REST instead of search, because indexing lag must never authorize a create,
+ * and a failed query throws rather than becoming an empty result.
+ */
+async function markedIssues(repository: string, run: RunCommand): Promise<RemoteIssue[]> {
+  const pages = await api(run, [
+    `repos/${repository}/issues?state=all&per_page=100`,
+    '--paginate',
+    '--slurp',
+  ]);
+  if (!Array.isArray(pages) || !pages.every(Array.isArray))
+    throw new Error('GitHub issue listing was not paginated JSON');
+  return pages
+    .flat()
+    .filter((value: unknown) => !object(value).pull_request)
+    .map((value: unknown) => issue(value, repository))
+    .filter(value => value.body.includes(MARKER))
+    .sort((a, b) => a.number - b.number);
+}
+/**
+ * How many marked issues can be compared at once. Past it the catalog is not a complete
+ * picture of what the repository already tracks, so ordinary publication holds instead of
+ * claiming a cause is new.
+ */
+const CATALOG_LIMIT = 100;
+const SUMMARY_LIMIT = 300;
+/** Untrusted remote text, bounded for comparison: markers stripped, whitespace collapsed. */
+function excerpt(body: string): string {
+  const collapsed = body
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return collapsed.length > SUMMARY_LIMIT ? `${collapsed.slice(0, SUMMARY_LIMIT)}…` : collapsed;
+}
+/**
+ * The open marked issues a diagnosis may reuse. Closed issues are excluded: a closed
+ * duplicate or a fixed defect is not an actionable existing defect to attach a new
+ * occurrence to. An unavailable, malformed, or over-bound listing yields an incomplete
+ * catalog, which holds publication rather than passing off partial knowledge as complete.
+ */
+export async function issueCatalog(
+  repository: string | null,
+  run: RunCommand
+): Promise<IssueCatalog> {
+  if (!repository) return { complete: false, issues: [] };
+  try {
+    const open = (await markedIssues(repository, run)).filter(row => row.state === 'open');
+    if (open.length > CATALOG_LIMIT) return { complete: false, issues: [] };
+    return {
+      complete: true,
+      issues: open.map(row => ({
+        number: row.number,
+        url: row.url,
+        title: row.title,
+        summary: excerpt(row.body),
+      })),
+    };
+  } catch {
+    return { complete: false, issues: [] };
+  }
+}
+/** A publishable case and the existing issue, if any, the diagnosis matched its cause to. */
+export interface Candidate {
+  publication: PublicCase;
+  existing: number;
+}
+async function publishCases(
   repository: string,
-  cases: PublicCase[],
+  candidates: Candidate[],
   revision: string,
   run: RunCommand,
   record: (issues: IssueReference[]) => Promise<void>,
@@ -822,38 +997,40 @@ export async function publishCases(
   try {
     await mkdir(lock);
     acquired = true;
-    for (const candidate of cases) {
-      const marker = issueMarker(repository, candidate.root_cause_key);
-      // List all states through REST instead of search: indexing lag must not authorize a create.
-      const pages = await api(run, [
-        `repos/${repository}/issues?state=all&per_page=100`,
-        '--paginate',
-        '--slurp',
-      ]);
-      if (!Array.isArray(pages) || !pages.every(Array.isArray))
-        throw new Error('GitHub issue listing was not paginated JSON');
-      const matches = pages
-        .flat()
-        .filter((value: unknown) => !object(value).pull_request)
-        .map((value: unknown) => issue(value, repository))
-        .filter(value => value.body.includes(marker))
-        .sort((a, b) => a.number - b.number);
-      let found = matches[0];
+    for (const candidate of candidates) {
+      const marker = issueMarker(repository, candidate.publication.root_cause_key);
+      const marked = await markedIssues(repository, run);
+      const keyed = marked.filter(value => value.body.includes(marker));
+      // The canonical issue for a key is its lowest open one. A closed issue with that key is
+      // still reported rather than duplicated: recurrence after a close is an operator call.
+      let found: RemoteIssue | undefined = keyed.find(value => value.state === 'open') ?? keyed[0];
+      let matched: IssueReference['matched'] = 'key';
+      if (!found && candidate.existing > 0) {
+        found = marked.find(
+          value => value.number === candidate.existing && value.state === 'open'
+        );
+        if (!found)
+          throw new Error(
+            'The diagnosis matched a cause to an issue that is not an open marked regression issue'
+          );
+        matched = 'cause';
+      }
       const disposition = found ? 'existing' : 'created';
-      const body = issueBody(repository, candidate, revision);
+      const body = issueBody(repository, candidate.publication, revision);
       if (!found)
         found = issue(
           await api(run, [`repos/${repository}/issues`, '--method', 'POST', '--input', '-'], {
-            title: candidate.title,
+            title: candidate.publication.title,
             body,
           }),
           repository
         );
       const reference: IssueReference = {
-        key: candidate.root_cause_key,
+        key: candidate.publication.root_cause_key,
         number: found.number,
         url: found.url,
         disposition,
+        matched,
         verified: false,
       };
       issues.push(reference);
@@ -864,7 +1041,10 @@ export async function publishCases(
       );
       if (
         readback.number !== found.number ||
-        !readback.body.includes(marker) ||
+        // A cause match inherits the issue's own marker, so only its regress identity and its
+        // open state can be re-checked; a key match and a create own the exact marker.
+        !readback.body.includes(matched === 'cause' ? MARKER : marker) ||
+        (matched === 'cause' && readback.state !== 'open') ||
         (disposition === 'created' && readback.body !== body)
       )
         throw new Error('GitHub issue readback did not verify the published evidence');
@@ -939,23 +1119,35 @@ async function discoveredCase(
     ],
   };
 }
-/** Every finding's publishable case, or null when any one of them lacks distinct evidence. */
+/**
+ * Every finding's publishable case, or null when any one of them lacks distinct evidence.
+ * Two findings may not share a cause identity, and may not be matched to the same existing
+ * issue: separate causes that happen to live in one file stay separate defects.
+ */
 async function publicationCases(
   evidence: Evidence,
   diagnosis: Diagnosis,
   verify: VerifyReference
-): Promise<PublicCase[] | null> {
-  const cases: PublicCase[] = [];
+): Promise<Candidate[] | null> {
+  const candidates: Candidate[] = [];
   for (const finding of diagnosis.findings) {
-    const candidate =
+    const publication =
       evidence.source === 'configured'
         ? (evidence.public_cases.find(row => row.id === finding.public_case_id) ?? null)
         : await discoveredCase(evidence, finding, verify);
-    if (!candidate) return null;
-    cases.push(candidate);
+    if (!publication) return null;
+    candidates.push({
+      publication,
+      // A trusted profile's key is stable by construction, so its route stays key-identified.
+      existing: evidence.source === 'configured' ? 0 : (finding.public_proof?.existing_issue ?? 0),
+    });
   }
-  if (cases.length === 0) return null;
-  return new Set(cases.map(row => row.root_cause_key)).size === cases.length ? cases : null;
+  if (candidates.length === 0) return null;
+  const reused = candidates.map(row => row.existing).filter(number => number > 0);
+  if (new Set(reused).size !== reused.length) return null;
+  return new Set(candidates.map(row => row.publication.root_cause_key)).size === candidates.length
+    ? candidates
+    : null;
 }
 /**
  * Refuse a case that carries a local path into a public issue. It checks the two paths
@@ -1005,14 +1197,14 @@ export async function publish(
       ...result,
       publication_reason: 'Publication needs product-red evidence bound to the checked revision',
     };
-  const cases = await publicationCases(request.evidence, request.diagnosis, request.verify);
-  if (!cases)
+  const candidates = await publicationCases(request.evidence, request.diagnosis, request.verify);
+  if (!candidates)
     return {
       ...result,
       publication_reason:
         'Every finding needs distinct public evidence: a trusted configured case, or a verified public proof over a recorded failing command and tracked source',
     };
-  if (cases.some(candidate => local(candidate, request.localPaths)))
+  if (candidates.some(candidate => local(candidate.publication, request.localPaths)))
     return {
       ...result,
       publication_reason: 'Public evidence still carries a local checkout or artifact path',
@@ -1022,9 +1214,17 @@ export async function publish(
       ...result,
       publication_reason: 'Publication supports github.com origin repositories only',
     };
+  // An independently coined key cannot carry identity by itself, so a discovery publishes
+  // only against a complete picture of the issues this repository already tracks.
+  if (request.evidence.source !== 'configured' && !request.evidence.catalog.complete)
+    return {
+      ...result,
+      publication_reason:
+        'Existing regression issues could not be enumerated completely, so this cause cannot be shown to be new; publication is held',
+    };
   const outcome = await publishCases(
     request.repository,
-    cases,
+    candidates,
     request.evidence.revision,
     request.run ?? runCommand,
     request.record,
@@ -1057,7 +1257,8 @@ async function main(): Promise<unknown> {
       context,
       parse(input('VALIDATION') || 'null'),
       parse(input('FIXED') || 'null'),
-      artifacts
+      artifacts,
+      input('PUBLISH') === 'true'
     );
   if (phase !== 'finish') throw new Error('Unknown regress phase');
   const evidence = readEvidence(parse(input('EVIDENCE')));
@@ -1081,7 +1282,10 @@ async function main(): Promise<unknown> {
     if (
       context.ready &&
       (!(await intact(context)) ||
-        !sameBinding(context, { ...evidence }) ||
+        !sameBinding(
+          evidence.source === 'public-probe' ? publicContext(context) : context,
+          { ...evidence }
+        ) ||
         (evidence.report && hash(await readFile(evidence.report, 'utf8')) !== evidence.report_hash))
     ) {
       diagnosis = {
@@ -1099,11 +1303,8 @@ async function main(): Promise<unknown> {
   }
   if (input('PUBLISH') !== 'true' && input('PUBLISH') !== 'false')
     throw new Error('publish must be true or false');
-  let repository: string | null = null;
-  if (input('PUBLISH') === 'true' && diagnosis.status === 'defects') {
-    const remote = await runCommand(['git', 'remote', 'get-url', 'origin']);
-    if (remote.exitCode === 0) repository = githubRepository(remote.stdout.trim());
-  }
+  const repository =
+    input('PUBLISH') === 'true' && diagnosis.status === 'defects' ? await originRepository() : null;
   const publication = await publish({
     evidence,
     diagnosis,
