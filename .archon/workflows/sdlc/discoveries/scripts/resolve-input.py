@@ -61,10 +61,22 @@ def normalize(records):
 def run_artifacts(run_id):
     if run_id.startswith("-") or any(c.isspace() or ord(c) < 32 for c in run_id):
         fail("resolve-input: invalid run ID.")
-    # Standalone scripts use the normal installed CLI on PATH, never a guessed
-    # source checkout or installation location. Failure does not change transport.
+    # The engine supplies its exact launch argv. Standalone callers without that
+    # context use PATH; incomplete or malformed context must never change owners.
+    executable = os.environ.get("ARCHON_EXECUTABLE")
+    encoded_args = os.environ.get("ARCHON_EXECUTABLE_ARGS")
+    argv = ["archon"]
+    if executable is not None or encoded_args is not None:
+        try:
+            args = json.loads(encoded_args)
+            if (not executable or not isinstance(args, list)
+                    or any(not isinstance(arg, str) for arg in args)):
+                raise ValueError("invalid launch context")
+        except (TypeError, ValueError):
+            fail("resolve-input: invalid Archon CLI launch context.")
+        argv = [executable, *args]
     try:
-        result = subprocess.run(["archon", "workflow", "get", run_id, "--json"],
+        result = subprocess.run([*argv, "workflow", "get", run_id, "--json"],
                                 capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as err:
         fail(f"resolve-input: workflow get failed ({type(err).__name__}).")

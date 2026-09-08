@@ -122,6 +122,41 @@ function normalized(result: Result) {
 }
 
 describe('native discovery run resolution through the real owning script', () => {
+  it('uses the engine launch argv without splitting paths or changing the CLI owner', async () => {
+    const launch = ['C:/Program Files/Bun/bun.exe', 'C:/pinned source/cli.ts'];
+    const result = await run({
+      ...nativeRun,
+      resolve_only: true,
+      artifact_files: { 'discoveries.json': [record] },
+      launch_env: {
+        ARCHON_EXECUTABLE: launch[0],
+        ARCHON_EXECUTABLE_ARGS: JSON.stringify(launch.slice(1)),
+      },
+      expected_launch: launch,
+    });
+    expect(normalized(result)).toHaveLength(1);
+    expect(result.calls).toContainEqual([...launch, 'workflow', 'get', 'prior-run', '--json']);
+    expect(result.calls.some(c => c[0] === 'archon')).toBe(false);
+  });
+
+  for (const launch_env of [
+    { ARCHON_EXECUTABLE: 'bun' },
+    { ARCHON_EXECUTABLE_ARGS: '[]' },
+    { ARCHON_EXECUTABLE: '', ARCHON_EXECUTABLE_ARGS: '[]' },
+    { ARCHON_EXECUTABLE: 'bun', ARCHON_EXECUTABLE_ARGS: 'invalid' },
+    { ARCHON_EXECUTABLE: 'bun', ARCHON_EXECUTABLE_ARGS: '[42]' },
+  ]) {
+    it(
+      'refuses invalid launch context without an ambient CLI fallback: ' +
+        JSON.stringify(launch_env),
+      async () => {
+        const result = await run({ ...nativeRun, launch_env });
+        refused(result, 'resolve-input', 'invalid Archon CLI launch context');
+        expect(result.calls.some(c => c[0] === 'archon')).toBe(false);
+      }
+    );
+  }
+
   it('prefers canonical consolidation, including an empty adjudication, over raw sidecars', async () => {
     for (const records of [[{ ...record, source_nodes: ['code', 'tests'] }], []]) {
       const result = await run({

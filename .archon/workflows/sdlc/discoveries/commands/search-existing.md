@@ -1,6 +1,8 @@
 # Find existing work
 
 Read only. Never create, edit, close, comment on, or label tracker items.
+Keep the checkout unchanged. Store any temporary query results or helper files
+under $ARTIFACTS_DIR/discoveries/, using absolute paths, never in the checkout.
 Read $ARTIFACTS_DIR/discoveries/normalized.json, discoveries/context.json,
 and evidence-check.json under the same artifact root.
 

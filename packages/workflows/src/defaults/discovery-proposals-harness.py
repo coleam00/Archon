@@ -67,12 +67,16 @@ os.environ.update({
 if request.get("run_only") or request.get("no_input"):
     os.environ["INPUTS_DISCOVERY_ARTIFACT"] = ""
 calls = []
+for key in ("ARCHON_EXECUTABLE", "ARCHON_EXECUTABLE_ARGS"):
+    os.environ.pop(key, None)
+os.environ.update(request.get("launch_env", {}))
+expected_launch = request.get("expected_launch", ["archon"])
 
 
 def transport(args, **kwargs):
     calls.append(args)
-    if args[0] == "archon":
-        if args != ["archon", "workflow", "get", request["run_id"], "--json"]:
+    if args[0] == expected_launch[0]:
+        if args != [*expected_launch, "workflow", "get", request["run_id"], "--json"]:
             raise AssertionError(f"Unexpected CLI operation: {args}")
         response = {"id": request["run_id"], "status": "completed",
                     "artifacts_dir": str(source_artifacts),
