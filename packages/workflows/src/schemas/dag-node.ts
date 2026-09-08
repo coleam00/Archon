@@ -1066,7 +1066,8 @@ export const WAIT_NODE_IGNORED_FIELDS: readonly string[] = [
  * ignored (the inlined child nodes carry their own). A superset of
  * `BASH_NODE_AI_FIELDS` plus the remaining execution-only fields. The structural
  * graph fields the include node DOES use (id / depends_on / when / trigger_rule /
- * description) are deliberately absent.
+ * description) are deliberately absent. Provider tool-policy enforcement and path
+ * isolation across an include boundary are out of scope here; #2848 owns that.
  */
 export const INCLUDE_NODE_IGNORED_FIELDS: readonly string[] = [
   ...BASH_NODE_AI_FIELDS,

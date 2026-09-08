@@ -1912,6 +1912,7 @@ describe('dagNodeSchema — include', () => {
       model: 'opus',
       always_run: true,
       output_type: 'code',
+      denied_tools: ['Bash(rm:*)'],
     });
     expect(result.success).toBe(true);
     if (result.success) {
@@ -1919,6 +1920,10 @@ describe('dagNodeSchema — include', () => {
       expect(node.model).toBeUndefined();
       expect(node.always_run).toBeUndefined();
       expect(node.output_type).toBeUndefined();
+      // A caller-side denial cannot honestly narrow what the included block's own
+      // nodes will run (provider enforcement differs per node kind, and this is not
+      // path isolation); the loader's ignored-field warning is the honest signal.
+      expect(node.denied_tools).toBeUndefined();
     }
   });
 });
@@ -2016,6 +2021,16 @@ describe('INCLUDE_NODE_IGNORED_FIELDS', () => {
     for (const f of ['id', 'depends_on', 'when', 'trigger_rule', 'include', 'description']) {
       expect(INCLUDE_NODE_IGNORED_FIELDS).not.toContain(f);
     }
+  });
+
+  test('ignores denied_tools and allowed_tools: policy restrictions are not path isolation', () => {
+    // An include has no execution site of its own. Provider enforcement of a tool
+    // policy differs per node kind, and a caller-side list cannot honestly narrow or
+    // deny what the included block's own nodes will run. #2848 owns building real
+    // provider-capability enforcement or path isolation across an include boundary;
+    // until then, warning is the honest outcome instead of a claimed sandbox.
+    expect(INCLUDE_NODE_IGNORED_FIELDS).toContain('denied_tools');
+    expect(INCLUDE_NODE_IGNORED_FIELDS).toContain('allowed_tools');
   });
 });
 

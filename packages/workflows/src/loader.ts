@@ -672,13 +672,24 @@ function parseDagNode(
     getLog().warn({ id: node.id }, 'node_with_ignored');
   }
 
-  // Warn about AI-specific fields on non-AI nodes (runtime behavior, not schema errors)
+  // Warn about AI-specific fields on non-AI nodes (runtime behavior, not schema errors).
+  // Surfaced through BOTH channels: the log stream, and `parseWarnings` (#2213), so the
+  // workflow's actual author sees it via `/api/workflows` and `/workflow list`. A field
+  // silently dropped by the schema (an include's `denied_tools`, a gate's `mcp`, ...) is
+  // the exact class of bug a log-only warning misses, since nothing reads that channel
+  // but an operator tailing server logs.
   const nonAiNode = ignoredFieldsForNode(node);
   if (nonAiNode) {
     const presentAiFields = nonAiNode.fields.filter(
       f => (raw as Record<string, unknown>)[f] !== undefined
     );
     if (presentAiFields.length > 0) {
+      const fieldList = presentAiFields.map(f => `'${f}'`).join(', ');
+      const verb = presentAiFields.length === 1 ? 'is' : 'are';
+      warnings.push(
+        `Node '${id}': ${fieldList} ${verb} ignored on a ${nonAiNode.type} node and ` +
+          'will have no effect'
+      );
       getLog().warn(
         { id: node.id, fields: presentAiFields },
         `${nonAiNode.type}_node_ai_fields_ignored`
