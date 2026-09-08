@@ -1,6 +1,6 @@
-# Sparse guard fixture: run with --default-stubs --exec-code. Triage is explicit,
-# every delivery node stays skipped, and the real outcome node returns the reason.
-triage__triage:
+# Dry-run fixture: the outcome is already delivered, so no action; the verdict
+# derives archon-close and the run completes with outcome false.
+triage:
   contract: NO_ACTION
   route: no_action
   design_first: false
@@ -9,7 +9,8 @@ triage__triage:
   area_labels: []
   edits_proposed: false
   summary: "stub: the requested outcome is already present on the current branch"
-triage__assert-intact: '{"intact":"true"}'
+assert-intact: '{"intact":"true"}'
 fixture:
   expect: completed
+  reached: [verdict]
 exec-code: true

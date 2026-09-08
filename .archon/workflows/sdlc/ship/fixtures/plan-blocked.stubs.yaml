@@ -2,7 +2,13 @@
 # needs a human decision completes honestly, while the delivery tail is skipped
 # and the real outcome node points to plan.md.
 triage__triage:
+  contract: READY
   route: plan
+  design_first: false
+  complexity: large
+  item: { repository: "", number: 0 }
+  area_labels: []
+  edits_proposed: false
   summary: "stub: material product shape remains undecided"
 triage__assert-intact: '{"intact":"true"}'
 planned__plan:

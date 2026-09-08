@@ -2,8 +2,10 @@ name: archon-triage
 description: |
   Ground one work item against the current repository before deciding what kind
   of work it needs. Reconciles tracker history, current code, moved branches,
-  stale assumptions, and explicit direction; then routes to investigate, plan,
-  deliver, or no action. Advisory: it leaves the checkout unchanged.
+  stale assumptions, and explicit direction; judges whether the item is a
+  contract a run can start from; then routes to investigate, plan, deliver, or
+  no action. Advisory: it leaves the checkout unchanged, and writes labels only
+  when asked to publish.
 
   Use when: an issue, plan, report, or request may be stale or may prescribe an
   unverified solution — "triage this issue", "what does this need next", "is
@@ -17,9 +19,17 @@ inputs:
     default: ""
     description: >-
       What to triage — an issue, document, plan, report, or free-form request.
-      When empty, the run's trigger message is the target.
+      When empty, the run's trigger message is the target. One item per run.
+  publish:
+    default: "false"
+    description: >-
+      Write the derived labels to the tracker item — true or false. Off by
+      default; the run then records the labels it would apply.
 
-returns: triage
+# The verdict node is what a composing caller resolves to: the same fields the
+# prompt declared, after the boundary has verified the tuple is legal.
+returns: verdict
+outcome_field: ready
 
 nodes:
   - id: triage
@@ -33,12 +43,37 @@ nodes:
     output_format:
       type: object
       properties:
+        contract:
+          type: string
+          enum: [READY, NEEDS_CONTRACT_WORK, BLOCKED, NO_ACTION]
         route:
           type: string
           enum: [investigate, plan, deliver, no_action]
+        design_first:
+          type: boolean
+        complexity:
+          type: string
+          enum: [small, risky, large]
+        # The tracker item the labels address. An empty repository means the
+        # target was not a tracker issue.
+        item:
+          type: object
+          properties:
+            repository:
+              type: string
+            number:
+              type: integer
+          required: [repository, number]
+        area_labels:
+          type: array
+          items:
+            type: string
+        edits_proposed:
+          type: boolean
         summary:
           type: string
-      required: [route, summary]
+      required:
+        [contract, route, design_first, complexity, item, area_labels, edits_proposed, summary]
 
   - id: assert-intact
     bash: |
@@ -51,3 +86,50 @@ nodes:
       fi
       echo '{"intact":"true"}'
     depends_on: [triage]
+
+  # The prompt judges; this boundary verifies. Only a READY contract carries an
+  # engineering route, design-first is a READY item routed to plan, and the
+  # pack's labels are derived here rather than chosen by the model. Labels are
+  # written only under publish, and read back before the node reports them.
+  - id: verdict
+    script: verdict
+    runtime: uv
+    depends_on: [triage, assert-intact]
+    with:
+      contract: "$triage.output.contract"
+      route: "$triage.output.route"
+      design_first: "$triage.output.design_first"
+      complexity: "$triage.output.complexity"
+      item: { from: "$triage.output.item" }
+      area_labels: { from: "$triage.output.area_labels" }
+      edits_proposed: "$triage.output.edits_proposed"
+      summary: "$triage.output.summary"
+      publish: "$INPUTS.publish"
+    output_format:
+      type: object
+      properties:
+        contract:
+          type: string
+          enum: [READY, NEEDS_CONTRACT_WORK, BLOCKED, NO_ACTION]
+        route:
+          type: string
+          enum: [investigate, plan, deliver, no_action]
+        ready:
+          type: boolean
+        design_first:
+          type: boolean
+        complexity:
+          type: string
+          enum: [small, risky, large]
+        labels:
+          type: array
+          items:
+            type: string
+        published:
+          type: boolean
+        edits_proposed:
+          type: boolean
+        summary:
+          type: string
+      required:
+        [contract, route, ready, design_first, complexity, labels, published, edits_proposed, summary]

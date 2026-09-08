@@ -1,7 +1,13 @@
 # Guard fixture: run with --exec-code. The triage verdict is stubbed, but no
 # triage.md exists, so assert-intact must execute and fail.
 triage:
+  contract: READY
   route: plan
+  design_first: false
+  complexity: small
+  item: { repository: "", number: 0 }
+  area_labels: []
+  edits_proposed: false
   summary: "stub: design choices remain"
 fixture:
   expect: failed

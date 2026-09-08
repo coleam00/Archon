@@ -2,7 +2,13 @@
 # result (run with --default-stubs --exec-code). gate-rooted and the complete
 # delivery tail stay skipped, while the real outcome node points to the report.
 triage__triage:
+  contract: READY
   route: investigate
+  design_first: false
+  complexity: risky
+  item: { repository: "", number: 0 }
+  area_labels: []
+  edits_proposed: false
   summary: "stub: reported failure still needs a proven cause"
 triage__assert-intact: '{"intact":"true"}'
 inv__investigate:

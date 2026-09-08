@@ -1,6 +1,6 @@
 # Triage One Work Item
 
-Confirm whether the work item still names real current work, choose the kind of reasoning owed next, and stop. Write the decisive evidence and handoff to `$ARTIFACTS_DIR/triage.md`. You assess and route only: the repository must be exactly as you found it when you finish. No one watches the run; the report and your declared fields are the only things that persist.
+Confirm whether the work item still names real current work, judge whether it is a contract a run can start from, choose the kind of reasoning owed next, and stop. Write the decisive evidence and handoff to `$ARTIFACTS_DIR/triage.md`. You assess and route only: the repository must be exactly as you found it when you finish. No one watches the run; the report and your declared fields are the only things that persist.
 
 The target — an issue, document, plan, report, or free-form request (may be empty — empty means the run's trigger message is the target):
 
@@ -31,6 +31,31 @@ Use the smallest precise evidence that decides those questions: a focused file o
 
 **Stop rule:** once one unresolved causal question or material design decision prevents direct delivery, write that exact question as the handoff, choose `investigate` or `plan`, and stop. Resolving it belongs to the next node. More evidence is useful only if it could change the route.
 
+## Judge the contract
+
+A run cannot recover from a premise that was never stated, so before choosing a route decide whether the item is a contract at all. It must communicate four things, semantically rather than by heading: the **problem** (what is wrong or missing today), **why** it matters (including urgency when material), the **outcome** (what should become observably true), and **acceptance** (how completed behavior will be recognized). Infer them from the complete source; do not invent product intent. Root cause, design, file paths, and test commands are not required — the next node owns those.
+
+Then check the delivery preconditions the outcome actually depends on: an existing primitive or owner, a data shape or typed seam, a persistence model, the observability needed to verify the result. A refactor of code the work must already touch is issue-owned enabling work, not a blocker. A missing foundation with its own outcome, broader owners, or a separate product decision is a prerequisite that must land first — report it with the same weight whether or not anyone has logged it. Treat alignment with current direction as part of readiness.
+
+Declare exactly one contract verdict:
+
+- `READY` — the four elements are present and agree with each other and with current direction, and the repository has a coherent place for the change, including any enabling work this item owns. This does not claim the solution is designed.
+- `NEEDS_CONTRACT_WORK` — the problem, why, outcome, or acceptance is materially missing, ambiguous, or contradictory. Write the contract you would propose (below) and stop.
+- `BLOCKED` — the contract is clear, but a prerequisite or a human decision must happen first: an unlogged foundation, an owner-level product decision, source material that cannot be reached, or direction that looks stale and needs a maintainer's judgment.
+- `NO_ACTION` — the outcome is already delivered, duplicated, obsolete, superseded, or explicitly rejected by current direction. Use direction alone only when the conflict is explicit; otherwise `BLOCKED`.
+
+Only a `READY` item carries an engineering route. For every other verdict, `route` is `no_action` and the verdict is the reason; the route you would have chosen belongs in the assessment for the human, not in the declared field.
+
+When the contract is sound but the engineering shape must be settled before any run should implement — the owning type or module, the supported and rejected cases, a compatibility boundary — declare `design_first: true` and route to `plan`. That is a `READY` item whose next step is design, not a contract defect.
+
+## Judge complexity
+
+Declare one `complexity` value on the item as written, so the delivery tail can compare its own read of the diff against yours:
+
+- `small` — bounded: one package or surface, no schema or destructive path, a handful of files, invariants stated.
+- `risky` — touches authentication, persisted data, a destructive path, a compatibility boundary, or crosses packages in a way a reviewer must think about.
+- `large` — several packages or schemas, or a shape decision the item does not settle.
+
 ## Choose one route
 
 - `investigate` — the work asserts broken or unexplained current behavior, but the causal chain or responsible fix boundary is not proven against current code.
@@ -40,6 +65,12 @@ Use the smallest precise evidence that decides those questions: a focused file o
 
 Never route from labels or issue type alone. A bug can need planning; a feature can need investigation; a tiny request can still rest on a false premise. Cost is not the criterion — uncertainty is.
 
+## Labels
+
+The workflow derives the pack's own labels from your declared fields; you do not choose those. You choose only area labels, and only from labels the repository already has (`gh label list`): declare the ones that name the areas this item touches, or none. Never invent a label. Nothing is written unless the run was launched with `publish` true; either way the run records what it would apply.
+
+When the target is a tracker issue, declare `item` as its repository (`owner/repo`) and number so the workflow can address it; otherwise declare `item: null`.
+
 ## Write the assessment
 
 Write `$ARTIFACTS_DIR/triage.md` with:
@@ -47,18 +78,26 @@ Write `$ARTIFACTS_DIR/triage.md` with:
 - **Source and outcome** — what was requested, the affected behavior, and which source material was considered.
 - **Current truth** — current HEAD/base context and only the evidence that decided the route.
 - **Assumptions checked** — each load-bearing claim or prescribed solution you confirmed, refuted, or could not establish.
-- **Disposition** — exactly one route and why the evidence requires it.
+- **Contract** — the verdict, which of the four elements are present or missing, the preconditions checked, and any prerequisite found.
+- **Disposition** — exactly one route and why the evidence requires it. When the verdict is not `READY`, name here the route the item would take once it is.
+- **Proposed contract** — only for `NEEDS_CONTRACT_WORK`: the title and body you would propose, in the repository's issue template shape when one exists, with only the context that constrains the work. Propose; never apply. A later gated step owns the edit.
 - **Handoff** — the precise investigation question, planning decision, implementation-ready work order, or reason no action should occur.
 
 Omit a section that does not apply; never write a placeholder to preserve one. Curate the evidence rather than dumping the tracker or repository.
 
 ## Not your job
 
-Do not investigate the full causal chain, choose the implementation design, implement, modify source files, commit, branch, push, or create or edit tracker items or pull requests. Scratch notes live under `$ARTIFACTS_DIR` only. The run fails on any working-tree change you leave behind.
+Do not investigate the full causal chain, choose the implementation design, implement, modify source files, commit, branch, push, or create or edit tracker items, labels, or pull requests. Scratch notes live under `$ARTIFACTS_DIR` only. The run fails on any working-tree change you leave behind.
 
 ## Declare the disposition
 
-- `route` — exactly one of `investigate`, `plan`, `deliver`, or `no_action`, using the definitions above.
-- `summary` — a few sentences naming the current truth that decided the route and pointing to `$ARTIFACTS_DIR/triage.md`.
+- `contract` — exactly one of `READY`, `NEEDS_CONTRACT_WORK`, `BLOCKED`, or `NO_ACTION`, using the definitions above.
+- `route` — exactly one of `investigate`, `plan`, `deliver`, or `no_action`; anything but `no_action` requires `contract: READY`.
+- `design_first` — true only for a `READY` item routed to `plan` because its engineering shape must be settled before implementation.
+- `complexity` — exactly one of `small`, `risky`, or `large`.
+- `item` — `{ "repository": "owner/repo", "number": N }` when the target is a tracker issue, otherwise `null`.
+- `area_labels` — the repository's existing area labels this item touches, possibly empty.
+- `edits_proposed` — true when the assessment carries a proposed contract.
+- `summary` — a few sentences naming the verdict, the current truth that decided the route, and pointing to `$ARTIFACTS_DIR/triage.md`.
 
 Before declaring, re-read the assessment. Confirm every decisive claim has evidence from this run, the requested outcome is separated from suggested implementation, you stopped at the routing boundary, and `git status` matches what you started with.

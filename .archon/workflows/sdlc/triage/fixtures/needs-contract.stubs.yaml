@@ -1,0 +1,17 @@
+# Dry-run fixture: the item is not a contract yet. The route is no_action by the
+# pack's invariant, the assessment carries a proposed contract, and the real
+# verdict script accepts the tuple without writing anything.
+triage:
+  contract: NEEDS_CONTRACT_WORK
+  route: no_action
+  design_first: false
+  complexity: risky
+  item: { repository: "", number: 0 }
+  area_labels: []
+  edits_proposed: true
+  summary: "stub: no acceptance stated; proposed contract in triage.md"
+assert-intact: '{"intact":"true"}'
+fixture:
+  expect: completed
+  reached: [verdict]
+exec-code: true

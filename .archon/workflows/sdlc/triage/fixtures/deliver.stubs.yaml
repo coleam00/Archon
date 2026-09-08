@@ -1,7 +1,17 @@
-# Dry-run fixture: current evidence says the target is implementation-ready.
+# Dry-run fixture: the contract is ready and current evidence says the target is
+# implementation-ready. assert-intact is stubbed; the real verdict script runs
+# (publish is off, so it writes nothing) and must accept the tuple.
 triage:
+  contract: READY
   route: deliver
+  design_first: false
+  complexity: small
+  item: { repository: "", number: 0 }
+  area_labels: []
+  edits_proposed: false
   summary: "stub: current code confirms the work order; no material decision remains"
 assert-intact: '{"intact":"true"}'
 fixture:
   expect: completed
+  reached: [verdict]
+exec-code: true

@@ -11,7 +11,13 @@
 # fixture covers the refusal for the pack. What differs between the two
 # tails is which verdict reaches the node, and their delivered fixtures cover that.
 triage__triage:
+  contract: READY
   route: deliver
+  design_first: false
+  complexity: small
+  item: { repository: "", number: 0 }
+  area_labels: []
+  edits_proposed: false
   summary: "stub: current code confirms a complete work order"
 triage__assert-intact: '{"intact":"true"}'
 gate-direct: '{"gate":"direct"}'

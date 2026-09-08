@@ -1,0 +1,17 @@
+# Dry-run fixture: a ready contract whose engineering shape must be settled
+# before implementation. design_first requires the plan route; the real verdict
+# script accepts it and derives the design-first label.
+triage:
+  contract: READY
+  route: plan
+  design_first: true
+  complexity: large
+  item: { repository: "", number: 0 }
+  area_labels: []
+  edits_proposed: false
+  summary: "stub: outcome is clear; owning module and compatibility boundary undecided"
+assert-intact: '{"intact":"true"}'
+fixture:
+  expect: completed
+  reached: [verdict]
+exec-code: true

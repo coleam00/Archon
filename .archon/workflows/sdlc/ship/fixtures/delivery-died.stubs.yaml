@@ -10,7 +10,13 @@
 # raw sidecars is proved by running the script directly against a seeded
 # $ARTIFACTS_DIR — a dry run has no node that writes discoveries/*.json.
 triage__triage:
+  contract: READY
   route: deliver
+  design_first: false
+  complexity: small
+  item: { repository: "", number: 0 }
+  area_labels: []
+  edits_proposed: false
   summary: "stub: current code confirms a complete work order"
 triage__assert-intact: '{"intact":"true"}'
 deliver__impl__record-start: '{"start":"recorded"}'
