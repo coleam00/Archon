@@ -15,6 +15,7 @@ import { requestDetachedRunStop } from '../utils/detached-run-control';
 const CLI_ENTRY = join(import.meta.dir, 'fixtures', 'workflow-cli-without-title.ts');
 const roots: string[] = [];
 const activeRuns = new Set<string>();
+const observers = new Map<string, Database>();
 
 afterEach(async () => {
   for (const id of activeRuns) {
@@ -24,6 +25,8 @@ afterEach(async () => {
     }
   }
   activeRuns.clear();
+  for (const db of observers.values()) db.close();
+  observers.clear();
   for (const root of roots.splice(0)) await removeTempTree(root);
 });
 
@@ -44,17 +47,28 @@ interface RunRow {
   adopted_from_run_id: string | null;
 }
 
-function readRun(fixture: Fixture, id: string): RunRow {
-  const db = new Database(join(fixture.home, 'archon.db'), { readonly: true });
-  try {
+function observer(fixture: Fixture): Database {
+  let db = observers.get(fixture.home);
+  if (!db) {
+    db = new Database(join(fixture.home, 'archon.db'), { readonly: true });
+    observers.set(fixture.home, db);
     db.run('PRAGMA busy_timeout = 5000');
-    const row = db
-      .query<RunRow, [string]>('SELECT * FROM remote_agent_workflow_runs WHERE id = ?')
-      .get(id);
+  }
+  return db;
+}
+
+function readRun(fixture: Fixture, id: string): RunRow {
+  // Keep one observer connection through child startup, with no statement or
+  // read transaction held between polls.
+  const stmt = observer(fixture).prepare<RunRow, [string]>(
+    'SELECT * FROM remote_agent_workflow_runs WHERE id = ?'
+  );
+  try {
+    const row = stmt.get(id);
     if (!row) throw new Error(`Missing run ${id}`);
     return row;
   } finally {
-    db.close();
+    stmt.finalize();
   }
 }
 
@@ -156,25 +170,25 @@ async function makeFixture(): Promise<Fixture> {
   expect(prior.output).toContain('probe');
   expect(prior.status).toBe(1);
   const db = new Database(join(fixture.home, 'archon.db'));
+  const priorRun = db.prepare<{ id: string; codebase_id: string; started_at: string }, []>(
+    'SELECT id, codebase_id, started_at FROM remote_agent_workflow_runs'
+  );
   try {
-    const row = db
-      .query<
-        { id: string; codebase_id: string; started_at: string },
-        []
-      >('SELECT id, codebase_id, started_at FROM remote_agent_workflow_runs')
-      .get();
+    const row = priorRun.get();
     if (!row) throw new Error(prior.output);
     fixture.priorId = row.id;
-    db.query('UPDATE remote_agent_workflow_runs SET working_path = ? WHERE id = ?').run(
+    db.run('UPDATE remote_agent_workflow_runs SET working_path = ? WHERE id = ?', [
       fixture.target,
-      row.id
-    );
-    db.query(
+      row.id,
+    ]);
+    db.run(
       `INSERT INTO remote_agent_isolation_environments
       (codebase_id, workflow_type, workflow_id, working_path, branch_name, created_at)
-      VALUES (?, 'task', ?, ?, 'fixture-lane', ?)`
-    ).run(row.codebase_id, row.id, fixture.target, row.started_at);
+      VALUES (?, 'task', ?, ?, 'fixture-lane', ?)`,
+      [row.codebase_id, row.id, fixture.target, row.started_at]
+    );
   } finally {
+    priorRun.finalize();
     db.close();
   }
   expect(readRun(fixture, fixture.priorId).status).toBe('failed');
@@ -228,18 +242,15 @@ async function adopt(fixture: Fixture, detached: boolean, explicit: boolean): Pr
   } else {
     expect(result.output).toContain('probe');
     expect(result.status).toBe(1);
-    const db = new Database(join(fixture.home, 'archon.db'), { readonly: true });
+    const stmt = observer(fixture).prepare<{ id: string }, [string]>(
+      'SELECT id FROM remote_agent_workflow_runs WHERE adopted_from_run_id = ?'
+    );
     try {
-      const row = db
-        .query<
-          { id: string },
-          [string]
-        >('SELECT id FROM remote_agent_workflow_runs WHERE adopted_from_run_id = ?')
-        .get(fixture.priorId);
+      const row = stmt.get(fixture.priorId);
       if (!row) throw new Error(result.output);
       id = row.id;
     } finally {
-      db.close();
+      stmt.finalize();
     }
   }
   return readRun(fixture, id);
