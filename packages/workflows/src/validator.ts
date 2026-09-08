@@ -18,7 +18,7 @@ import {
   getDefaultWorkflowsPath,
   getHomeCommandsPath,
   getHomeWorkflowsPath,
-  findMarkdownFilesRecursive,
+  findCommandFiles,
 } from '@archon/paths';
 import { execFileAsync } from '@archon/git';
 import { BUNDLED_COMMANDS, BUNDLED_WORKFLOWS, isBinaryBuild } from './defaults/bundled-defaults';
@@ -152,7 +152,7 @@ export async function discoverAvailableCommands(
   const searchPaths = getCommandFolderSearchPaths(config?.commandFolder);
   for (const folder of searchPaths) {
     const dirPath = join(cwd, folder);
-    const files = await findMarkdownFilesRecursive(dirPath, '', { maxDepth: 1 });
+    const files = await findCommandFiles(dirPath);
     for (const { commandName } of files) {
       names.add(commandName);
     }
@@ -163,7 +163,7 @@ export async function discoverAvailableCommands(
   // home-scope doesn't take down repo/bundled discovery.
   const homePath = getHomeCommandsPath();
   try {
-    const homeCommands = await findMarkdownFilesRecursive(homePath, '', { maxDepth: 1 });
+    const homeCommands = await findCommandFiles(homePath);
     for (const { commandName } of homeCommands) {
       names.add(commandName);
     }
@@ -180,7 +180,7 @@ export async function discoverAvailableCommands(
       }
     } else {
       const defaultsPath = getDefaultCommandsPath();
-      const files = await findMarkdownFilesRecursive(defaultsPath, '', { maxDepth: 1 });
+      const files = await findCommandFiles(defaultsPath);
       for (const { commandName } of files) {
         names.add(commandName);
       }
@@ -200,7 +200,7 @@ export async function discoverAvailableCommands(
  * deterministic walk order wins — duplicates within a scope are a user error.
  */
 async function resolveCommandInDir(rootDir: string, commandName: string): Promise<string | null> {
-  const entries = await findMarkdownFilesRecursive(rootDir, '', { maxDepth: 1 });
+  const entries = await findCommandFiles(rootDir);
   const match = entries.find(e => e.commandName === commandName);
   return match ? join(rootDir, match.relativePath) : null;
 }

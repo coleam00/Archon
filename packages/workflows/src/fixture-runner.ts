@@ -154,7 +154,10 @@ interface DiscoveredFixture {
   readonly workflowNames: readonly string[];
 }
 
-/** Collect every `*.yaml` sibling of a `fixtures/` dir and read its declared workflow names. */
+/**
+ * Collect every `*.yaml` sibling of a `fixtures/` dir and read its declared workflow
+ * names. Sorted: these names reach the operator in a no-matching-workflow failure.
+ */
 async function workflowNamesBeside(fixturesDir: string): Promise<string[]> {
   const parent = join(fixturesDir, '..');
   const names: string[] = [];
@@ -176,42 +179,67 @@ async function workflowNamesBeside(fixturesDir: string): Promise<string[]> {
       );
     }
   }
-  return [...new Set(names)];
+  // Sorted, not merely deduped: two sibling workflow YAMLs beside one fixtures/ dir
+  // would otherwise yield names in filesystem order, and these reach the operator in
+  // a no-matching-workflow failure. Covered by the two-sibling test.
+  return [...new Set(names)].sort();
 }
 
+/** Every fixture file directly inside one `fixtures/` directory. */
+async function fixturesInDir(
+  scopeRoot: string,
+  workflowDir: string,
+  fixturesDir: string
+): Promise<DiscoveredFixture[]> {
+  const dirs = relative(scopeRoot, workflowDir)
+    .split(sep)
+    .filter(segment => segment.length > 0);
+  const workflowNames = await workflowNamesBeside(fixturesDir);
+  // No catch: the walk already saw this directory, so a read failure here is a real
+  // fault (EACCES/EIO), not an absence. Swallowing it would let `workflow test` exit 0
+  // having silently skipped a directory instead of certifying it.
+  const files = await readdir(fixturesDir);
+  return files
+    .filter(file => file.endsWith(FIXTURE_SUFFIX))
+    .map(file => ({
+      label: [...dirs, FIXTURES_DIR, file].join('/'),
+      dirs,
+      path: join(fixturesDir, file),
+      workflowNames,
+    }));
+}
+
+/** Depth-first walk below one scope root, in whatever order the filesystem yields. */
 async function walkForFixtures(
   scopeRoot: string,
-  root: string,
-  depth: number,
-  out: DiscoveredFixture[]
-): Promise<void> {
-  if (depth > MAX_WALK_DEPTH) return;
-  let entries;
-  try {
-    entries = await readdir(root, { withFileTypes: true });
-  } catch {
-    return;
-  }
+  dir: string,
+  depth: number
+): Promise<DiscoveredFixture[]> {
+  if (depth > MAX_WALK_DEPTH) return [];
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+  const found: DiscoveredFixture[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const dirPath = join(root, entry.name);
-    if (entry.name === FIXTURES_DIR) {
-      const dirs = relative(scopeRoot, root)
-        .split(sep)
-        .filter(segment => segment.length > 0);
-      for (const file of await readdir(dirPath)) {
-        if (!file.endsWith(FIXTURE_SUFFIX)) continue;
-        out.push({
-          label: [...dirs, FIXTURES_DIR, file].join('/'),
-          dirs,
-          path: join(dirPath, file),
-          workflowNames: await workflowNamesBeside(dirPath),
-        });
-      }
-      continue;
-    }
-    await walkForFixtures(scopeRoot, dirPath, depth + 1, out);
+    const path = join(dir, entry.name);
+    found.push(
+      ...(entry.name === FIXTURES_DIR
+        ? await fixturesInDir(scopeRoot, dir, path)
+        : await walkForFixtures(scopeRoot, path, depth + 1))
+    );
   }
+  return found;
+}
+
+/**
+ * Fixtures under one scope root, ordered by label.
+ *
+ * `readdir` yields filesystem order, which is not stable across machines or
+ * filesystems, and this order reaches the report a human reads. Sorting here is the
+ * single point that defines it; nothing downstream reorders.
+ */
+async function fixturesUnderScope(scopeRoot: string): Promise<DiscoveredFixture[]> {
+  const found = await walkForFixtures(scopeRoot, scopeRoot, 0);
+  return found.sort((a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : 0));
 }
 
 async function discoverFixtures(roots: readonly string[]): Promise<DiscoveredFixture[]> {
@@ -223,21 +251,15 @@ async function discoverFixtures(roots: readonly string[]): Promise<DiscoveredFix
     // canonical spellings and a target spelled through a symlink still matches
     // (e.g. macOS /tmp → /private/tmp).
     const scopeRoot = await realpath(root).catch(() => root);
-    const before = found.length;
-    await walkForFixtures(scopeRoot, scopeRoot, 0, found);
-    for (let i = before; i < found.length; i++) {
+    for (const fixture of await fixturesUnderScope(scopeRoot)) {
       // Keyed on the scope-relative label, not the absolute path: an absolute path is
       // unique per scope by construction, so keying on it would never dedup anything and
       // a project copy of a bundled workflow would run both fixtures. The label is what
       // makes an override shadow the copy it overrides, matching how `workflow-discovery`
       // resolves the same scope chain for the workflow files themselves.
-      if (seen.has(found[i].label)) {
-        // Higher-precedence scope already discovered this fixture.
-        found.splice(i, 1);
-        i--;
-      } else {
-        seen.add(found[i].label);
-      }
+      if (seen.has(fixture.label)) continue;
+      seen.add(fixture.label);
+      found.push(fixture);
     }
   }
   return found;

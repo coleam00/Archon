@@ -48,6 +48,18 @@ beforeEach(() => {
   });
 });
 
+/**
+ * The home-scope `[archon] loaded` lines emitted so far. The repo-scope line
+ * carries the `repo scope, overrides user scope` suffix and is excluded here.
+ *
+ * Assertions go through the count and the line's content. `find(...)` plus a
+ * bare `toBeDefined()` proved only that some line matched, never which one or
+ * what it said (#3167).
+ */
+function homeScopeLoadedLines(): string[] {
+  return stderrWrites.filter(s => s.startsWith('[archon] loaded') && !s.includes('repo scope'));
+}
+
 afterEach(() => {
   stderrSpy.mockRestore();
   rmSync(tmpRoot, { recursive: true, force: true });
@@ -77,10 +89,10 @@ describe('loadArchonEnv', () => {
     // tmpdir lives under `homedir()`). On Windows CI the tmpdir is on a
     // different drive and the path renders absolute, so we match on count and
     // the archon-home tmpdir segment rather than a literal `~` prefix.
-    const line = stderrWrites.find(s => s.includes('[archon] loaded') && !s.includes('repo scope'));
-    expect(line).toBeDefined();
-    expect(line).toContain('loaded 2 keys');
-    expect(line).toContain(join('archon-home', '.env'));
+    const loaded = homeScopeLoadedLines();
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]).toContain('loaded 2 keys');
+    expect(loaded[0]).toContain(join('archon-home', '.env'));
   });
 
   it('loads keys from <cwd>/.archon/.env and marks it as repo scope when verbose-boot is set', () => {
@@ -90,13 +102,13 @@ describe('loadArchonEnv', () => {
     loadArchonEnv(repoDir);
 
     expect(process.env.TEST_EL_REPO_ONLY).toBe('from-repo');
-    const line = stderrWrites.find(s => s.includes('repo scope, overrides user scope'));
-    expect(line).toBeDefined();
-    expect(line).toContain('loaded 1 keys');
+    const repoScope = stderrWrites.filter(s => s.includes('repo scope, overrides user scope'));
+    expect(repoScope).toHaveLength(1);
+    expect(repoScope[0]).toContain('loaded 1 keys');
     // Path rendering tildes anything under the user's home directory — assert
     // on the suffix (the `.archon/.env` segment) rather than the full path,
     // because the tmpdir may or may not live under $HOME on CI.
-    expect(line).toContain(join('.archon', '.env'));
+    expect(repoScope[0]).toContain(join('.archon', '.env'));
   });
 
   it('does not emit loaded lines by default even when keys are present', () => {
@@ -118,8 +130,10 @@ describe('loadArchonEnv', () => {
 
     loadArchonEnv(repoDir);
 
-    const line = stderrWrites.find(s => s.includes('[archon] loaded') && !s.includes('repo scope'));
-    expect(line).toBeDefined();
+    const loaded = homeScopeLoadedLines();
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]).toContain('loaded 1 keys');
+    expect(loaded[0]).toContain(join('archon-home', '.env'));
   });
 
   it('repo scope overrides home scope on overlapping keys', () => {
@@ -180,8 +194,10 @@ describe('loadArchonEnv', () => {
 
     loadArchonEnv(repoDir);
 
-    const line = stderrWrites.find(s => s.includes('[archon] loaded') && !s.includes('repo scope'));
-    expect(line).toBeDefined();
+    const loaded = homeScopeLoadedLines();
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]).toContain('loaded 1 keys');
+    expect(loaded[0]).toContain(join('archon-home', '.env'));
   });
 
   it('does not emit loaded lines when ARCHON_VERBOSE_BOOT is set to a non-"1" value', () => {
