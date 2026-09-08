@@ -173,7 +173,7 @@ reach. The workflow enforces the rest:
 - The probe's findings publish through ordinary discovery's route: `publish=true`, a rooted
   investigation, an unchanged checkout and evidence record, and a `public_proof` whose
   receipts and source references the final script re-checks. The configured route's trusted
-  `public_cases` are unreachable from probe evidence — the evidence source alone decides
+  `public_cases` are unreachable from probe evidence ; the evidence source alone decides
   which proof a finding needs.
 - Nothing the configured check produced crosses over. Probe evidence is built only from
   `archon-validate`'s own artifact and this run's receipts: no raw check output, no report
