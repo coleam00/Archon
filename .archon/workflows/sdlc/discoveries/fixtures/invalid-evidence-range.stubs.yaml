@@ -1,0 +1,29 @@
+# Exec-code fixture: revalidate claims still_valid but cites a line number far
+# past the end of a real file. check-evidence (real script) must override
+# still_valid to false rather than trust the claim - unknown/missing evidence
+# must not become proved new work. classify here is well-behaved and reflects
+# the override, so the whole run still completes; inconsistent-classification
+# covers the case where classify ignores the override instead.
+revalidate:
+  entries:
+    - item_index: 0
+      still_valid: true
+      evidence_refs: [{ path: "AGENTS.md", line: 999999 }]
+      note: "stub: claims still valid, but the cited line is out of range"
+search-existing:
+  entries:
+    - item_index: 0
+      forge_checked: false
+      matches: []
+classify:
+  entries:
+    - item_index: 0
+      classification: stale
+      target_item: null
+      rationale: "stub: evidence-check overrode this to not valid; correctly classified stale"
+fixture:
+  expect: completed
+  reached: [resolve-input, revalidate, check-evidence, search-existing, classify, render]
+  inputs:
+    discovery_artifact: ".archon/workflows/sdlc/discoveries/fixtures/data/single.json"
+exec-code: true

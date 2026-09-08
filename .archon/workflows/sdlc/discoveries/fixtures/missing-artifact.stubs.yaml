@@ -1,0 +1,9 @@
+# Guard fixture: discovery_artifact names a path that does not exist.
+# resolve-input (real script) must fail cleanly rather than proceed on
+# nothing. Nothing downstream ever runs, so no other node needs a stub.
+fixture:
+  expect: failed
+  fail-node: resolve-input
+  inputs:
+    discovery_artifact: ".archon/workflows/sdlc/discoveries/fixtures/data/does-not-exist.json"
+exec-code: true

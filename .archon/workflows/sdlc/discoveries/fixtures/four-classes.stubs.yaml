@@ -1,0 +1,69 @@
+# Exec-code fixture: resolve-input, check-evidence, and render all run for
+# real against the four raw discoveries in fixtures/data/four-classes.json.
+# revalidate/search-existing/classify are agent nodes, always stubbed, one
+# per classification (stale, duplicate, update-existing, new) so render's
+# tuple guard and marker computation run against every legal combination.
+revalidate:
+  entries:
+    - item_index: 0
+      still_valid: false
+      evidence_refs: []
+      note: "stub: no longer reproduces"
+    - item_index: 1
+      still_valid: true
+      evidence_refs: [{ path: "AGENTS.md", line: 1 }]
+      note: "stub: still applies"
+    - item_index: 2
+      still_valid: true
+      evidence_refs: [{ path: "AGENTS.md", line: 1 }]
+      note: "stub: still applies"
+    - item_index: 3
+      still_valid: true
+      evidence_refs: [{ path: "AGENTS.md", line: 1 }]
+      note: "stub: still applies"
+search-existing:
+  entries:
+    - item_index: 0
+      forge_checked: false
+      matches: []
+    - item_index: 1
+      forge_checked: true
+      matches:
+        - number: 101
+          url: "https://github.com/example/repo/issues/101"
+          title: "Existing tracked item, same defect"
+          similarity_note: "stub: same underlying problem"
+    - item_index: 2
+      forge_checked: true
+      matches:
+        - number: 202
+          url: "https://github.com/example/repo/issues/202"
+          title: "Existing tracked item, related defect"
+          similarity_note: "stub: related but not identical"
+    - item_index: 3
+      forge_checked: true
+      matches: []
+classify:
+  entries:
+    - item_index: 0
+      classification: stale
+      target_item: null
+      rationale: "stub: evidence no longer verifies"
+    - item_index: 1
+      classification: duplicate
+      target_item: { number: 101, url: "https://github.com/example/repo/issues/101" }
+      rationale: "stub: same defect as #101"
+    - item_index: 2
+      classification: update-existing
+      target_item: { number: 202, url: "https://github.com/example/repo/issues/202" }
+      rationale: "stub: related to #202, should update it instead of filing new"
+    - item_index: 3
+      classification: new
+      target_item: null
+      rationale: "stub: no existing coverage found"
+fixture:
+  expect: completed
+  reached: [resolve-input, revalidate, check-evidence, search-existing, classify, render]
+  inputs:
+    discovery_artifact: ".archon/workflows/sdlc/discoveries/fixtures/data/four-classes.json"
+exec-code: true

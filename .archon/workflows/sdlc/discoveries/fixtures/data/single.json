@@ -1,0 +1,9 @@
+[
+  {
+    "title": "Fixture-only finding, not a real defect",
+    "claim": "This record exists only to exercise one node path in a fixture.",
+    "evidence": ["AGENTS.md:1"],
+    "relation": "adjacent",
+    "source_node": "review-code"
+  }
+]

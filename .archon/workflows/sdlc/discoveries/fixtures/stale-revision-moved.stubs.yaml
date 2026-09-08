@@ -1,0 +1,29 @@
+# Exec-code fixture: the source revision moved since the discovery was raised
+# and revalidate's own semantic judgment says so, citing evidence that is
+# formally verifiable (a real path:line) but no longer supports the claim.
+# This is the SEMANTIC staleness path, distinct from invalid-evidence-range's
+# FORMAT staleness path: check-evidence never has to override still_valid
+# here because revalidate already claimed false.
+revalidate:
+  entries:
+    - item_index: 0
+      still_valid: false
+      evidence_refs: [{ path: "AGENTS.md", line: 1 }]
+      note: "stub: the behavior this discovery named has since changed; the claim no longer holds at current HEAD"
+search-existing:
+  entries:
+    - item_index: 0
+      forge_checked: false
+      matches: []
+classify:
+  entries:
+    - item_index: 0
+      classification: stale
+      target_item: null
+      rationale: "stub: source moved, claim no longer holds"
+fixture:
+  expect: completed
+  reached: [resolve-input, revalidate, check-evidence, search-existing, classify, render]
+  inputs:
+    discovery_artifact: ".archon/workflows/sdlc/discoveries/fixtures/data/single.json"
+exec-code: true

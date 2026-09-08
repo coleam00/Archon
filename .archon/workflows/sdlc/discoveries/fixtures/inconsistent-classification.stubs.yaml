@@ -1,0 +1,29 @@
+# Guard fixture: same overridden evidence as invalid-evidence-range.stubs.yaml,
+# but classify's stub deliberately ignores the override and calls the item
+# 'new' anyway. render's tuple guard must reject this rather than render an
+# action set that contradicts evidence-check.json - this is the fixture that
+# demonstrates the guard actually failing on an invalid case.
+revalidate:
+  entries:
+    - item_index: 0
+      still_valid: true
+      evidence_refs: [{ path: "AGENTS.md", line: 999999 }]
+      note: "stub: claims still valid, but the cited line is out of range"
+search-existing:
+  entries:
+    - item_index: 0
+      forge_checked: false
+      matches: []
+classify:
+  entries:
+    - item_index: 0
+      classification: new
+      target_item: null
+      rationale: "stub: deliberately wrong - ignores evidence-check's override, to prove render rejects it"
+fixture:
+  expect: failed
+  fail-node: render
+  reached: [resolve-input, revalidate, check-evidence, search-existing, classify]
+  inputs:
+    discovery_artifact: ".archon/workflows/sdlc/discoveries/fixtures/data/single.json"
+exec-code: true

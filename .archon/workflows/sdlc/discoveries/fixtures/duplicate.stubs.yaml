@@ -1,0 +1,29 @@
+# Exec-code fixture: a single discovery classified duplicate against a named
+# existing forge match. resolve-input/check-evidence/render run for real.
+revalidate:
+  entries:
+    - item_index: 0
+      still_valid: true
+      evidence_refs: [{ path: "AGENTS.md", line: 1 }]
+      note: "stub: still applies"
+search-existing:
+  entries:
+    - item_index: 0
+      forge_checked: true
+      matches:
+        - number: 55
+          url: "https://github.com/example/repo/issues/55"
+          title: "Existing tracked item, same defect"
+          similarity_note: "stub: same underlying problem"
+classify:
+  entries:
+    - item_index: 0
+      classification: duplicate
+      target_item: { number: 55, url: "https://github.com/example/repo/issues/55" }
+      rationale: "stub: same defect as #55"
+fixture:
+  expect: completed
+  reached: [resolve-input, revalidate, check-evidence, search-existing, classify, render]
+  inputs:
+    discovery_artifact: ".archon/workflows/sdlc/discoveries/fixtures/data/single.json"
+exec-code: true

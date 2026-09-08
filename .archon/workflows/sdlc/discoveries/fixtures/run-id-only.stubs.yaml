@@ -1,0 +1,10 @@
+# Guard fixture: only run_id is supplied. There is no callable seam today
+# that turns a bare run id into that run's artifact directory from inside a
+# node, so resolve-input (real script) must fail naming that exact gap
+# rather than guess a path or read the workflow database by hand.
+fixture:
+  expect: failed
+  fail-node: resolve-input
+  inputs:
+    run_id: "01977e2a-0000-7000-8000-000000000000"
+exec-code: true
