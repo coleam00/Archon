@@ -50,7 +50,7 @@ describe('admission output and artifacts', () => {
       'triage.md',
     ])
       expect(markdown).toContain(value);
-    expect(await readdir(artifacts)).toEqual(['admission.json', 'admission.md']);
+    expect((await readdir(artifacts)).sort()).toEqual(['admission.json', 'admission.md']);
     expect(await readdir(checkout)).toEqual(['source.txt']);
     expect(await readFile(join(checkout, 'source.txt'), 'utf8')).toBe('untouched');
   });
