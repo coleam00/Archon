@@ -32,6 +32,7 @@ review__synthesize:
 review-action: '{"ready":true,"action":"none"}'
 gate-ready: '{"ready":"true"}'
 validate__validate:
+  checks_performed: true
   green: true
   summary: "stub: full gate green"
 gate-validated: '{"gate":"green"}'

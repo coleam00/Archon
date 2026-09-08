@@ -37,6 +37,7 @@ review__synthesize:
   action: none
   findings_summary: "stub: clean on initial review; CI still running"
 validate__validate:
+  checks_performed: true
   green: true
   red_cause: ""
   summary: "stub: full gate green"
