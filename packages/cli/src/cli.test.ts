@@ -91,7 +91,7 @@ describe('CLI startup import boundary', () => {
       join(repoRoot, 'packages/core/src/config/run-config-handoff.ts'),
       join(buildDir, 'handoff')
     );
-  }, 30000);
+  });
 
   afterAll(async () => {
     if (buildDir) await removeTempTree(buildDir);
@@ -1990,5 +1990,5 @@ describe('workflow test path targets', () => {
     } finally {
       await removeTempTree(repo);
     }
-  }, 30000);
+  });
 });
