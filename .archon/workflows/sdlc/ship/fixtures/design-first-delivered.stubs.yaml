@@ -1,35 +1,36 @@
 triage__triage: &judgment
-  route: "deliver"
-  summary: "stub: current code confirms a complete work order"
+  route: "plan"
+  summary: "stub: desired outcome is current; implementation shape needs a decision"
   contract: "READY"
-  design_first: false
+  design_first: true
   complexity: "small_bounded"
   proposed_edits: {"title":"","body":""}
-  labels: ["archon-ready"]
+  labels: ["archon-design-first"]
   blocked_by: []
+  blocked_reason: ""
   issue_repo: ""
   issue_number: 0
-  blocked_reason: ""
   issue_url: ""
 triage__validate-contract:
   <<: *judgment
   publication: { published: false, applied_labels: [], skipped_labels: [] }
-# Sparse dry-run fixture: the default launch leaves `fixture.inputs` absent, so
-# `target` takes its empty default. The current-truth check proves the work item
-# is already implementation-ready, so planning and investigation stay skipped.
-# Run with --default-stubs --exec-code.
+# Sparse dry-run fixture: a bound target reaches triage, planning, and the shared
+# delivery tail. The plan is ready and delivery completes. Run with
+# --default-stubs --exec-code.
 #
 # `outcome` is deliberately unstubbed: the real script runs and must report pull
-# request 4 from the delivered flip value alone. The exec workspace is a DETACHED
+# request 3 from the delivered flip value alone. The exec workspace is a DETACHED
 # worktree, so there is no current branch for an ambient pull request lookup to
-# resolve — a pass here is proof the report is built from the delivered value and nothing
+# resolve - a pass here is proof the report is built from the delivered value and nothing
 # the checkout happens to be sitting on.
 
-gate-direct: '{"gate":"direct"}'
+planned__plan:
+  ready: true
+  summary: "stub: approach chosen and plan ready"
 deliver__impl__implement:
   done: true
   green: true
-  summary: "stub: direct work implemented and green"
+  summary: "stub: planned work implemented and green"
 deliver__review__synthesize:
   ready: true
   action: none
@@ -48,19 +49,23 @@ deliver__classify:
 deliver__resolve-scope: '{"errors":"false"}'
 fixture:
   expect: completed
+  inputs:
+    target: "issue #3031"
   resolved-text-contains:
-    triage__triage: "empty means the run's trigger message is the target"
+    triage__triage: "issue #3031"
 exec-code: true
 
+planned__assert-intact: '{"intact":"true"}'
 deliver__gate-ready: '{"gate":"ready"}'
 deliver__impl__record-start: '{"start":"recorded"}'
 deliver__gate-validated: '{"gate":"green"}'
 deliver__impl__assert-changed: "2 files changed"
 deliver__gate-green: '{"gate":"green"}'
 deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
-deliver__flip-ready: "https://github.com/example/repo/pull/4"
-deliver__outcome: "https://github.com/example/repo/pull/4"
-deliver__pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 4, url: "https://github.com/example/repo/pull/4", head: "fixture-branch", base: "dev", is_draft: true }
+deliver__flip-ready: "https://github.com/example/repo/pull/3"
+deliver__outcome: "https://github.com/example/repo/pull/3"
+gate-planned: '{"gate":"planned"}'
+deliver__pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 3, url: "https://github.com/example/repo/pull/3", head: "fixture-branch", base: "dev", is_draft: true }
 deliver__review__mode: '{"continuation":false}'
 deliver__review__scope: "PR diff in scope; head sha stubbed"
 deliver__review__code: "0 findings"

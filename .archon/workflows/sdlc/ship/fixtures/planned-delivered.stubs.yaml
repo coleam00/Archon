@@ -1,3 +1,19 @@
+triage__triage: &judgment
+  route: "plan"
+  summary: "stub: desired outcome is current; implementation shape needs a decision"
+  contract: "READY"
+  design_first: false
+  complexity: "small_bounded"
+  proposed_edits: {"title":"","body":""}
+  labels: ["archon-ready"]
+  blocked_by: []
+  blocked_reason: ""
+  issue_repo: ""
+  issue_number: 0
+  issue_url: ""
+triage__validate-contract:
+  <<: *judgment
+  publication: { published: false, applied_labels: [], skipped_labels: [] }
 # Sparse dry-run fixture: a bound target reaches triage, planning, and the shared
 # delivery tail. The plan is ready and delivery completes. Run with
 # --default-stubs --exec-code.
@@ -7,9 +23,7 @@
 # worktree, so there is no current branch for an ambient pull request lookup to
 # resolve — a pass here is proof the report is built from the delivered value and nothing
 # the checkout happens to be sitting on.
-triage__triage:
-  route: plan
-  summary: "stub: desired outcome is current; implementation shape needs a decision"
+
 planned__plan:
   ready: true
   summary: "stub: approach chosen and plan ready"
@@ -38,9 +52,9 @@ fixture:
   inputs:
     target: "issue #3031"
   resolved-text-contains:
-    triage__triage: "target):\n\nissue #3031\n\nThe operator's request"
+    triage__triage: "issue #3031"
 exec-code: true
-triage__assert-intact: '{"intact":"true"}'
+
 planned__assert-intact: '{"intact":"true"}'
 deliver__gate-ready: '{"gate":"ready"}'
 deliver__impl__record-start: '{"start":"recorded"}'

@@ -94,6 +94,46 @@ Compare that with `"fix the upload bug"`. Both start a run. Only one can be chec
 Being wrong in the brief is fine and normal — being *silent* is what costs. State the
 assumption you are unsure about, and the run has something to contradict.
 
+## Check a work item before delivery
+
+`archon-triage` checks one issue, document, or prose request against current
+repository evidence and the pack's six-element contract standard above. It
+honors native project guidance without requiring Archon-specific context files.
+It returns a contract verdict beside the engineering route:
+
+- `READY`: investigate, plan, or deliver. `design_first: true` requires planning.
+- `NEEDS_CONTRACT_WORK`: stop with proposed title and body edits.
+- `BLOCKED`: stop with a dependency or external-decision reason and optional
+  qualified blocker URLs.
+- `NO_ACTION`: stop with the evidence for no delivery, including stale or
+  duplicate work. A request for several distinct items is refused.
+
+`archon-ship` starts engineering only for `READY`. Other verdicts complete with
+the triage report. Complexity uses `small_bounded`, `risky`, or `large`; it is
+an estimate of the work, not a priority ranking. Proposed edits are never applied
+by triage or planning.
+
+Publication defaults to `false`. For one resolved github.com issue, an explicit
+`--input publish=true` enables deterministic label publication and read-back.
+This creates missing pack labels (`archon-ready`, `archon-needs-contract`,
+`archon-design-first`, `archon-blocked`, `archon-close`), replaces stale pack
+state, and reuses proposed area labels only when they already exist. Unrelated
+labels observed before the write must survive read-back. A missing area label
+is reported in `publication.skipped_labels`.
+
+Publication currently uses `gh`; it verifies the requested repository, issue
+number and URL before writing and after publication. An explicit cross-repository
+URL is never substituted with the checkout's origin. Prose, other trackers, and
+refused multi-item input remain advisory with no writes. Triage never edits issue
+bodies, closes issues, or writes blocked-by relations. `archon-close` proposes
+human review of closure.
+
+Label replacement is one request, but creating repository labels and updating
+an issue are not a transaction. Failure can leave partial writes; rerunning is
+idempotent. Coordinate concurrent label editors: GitHub's label replacement
+cannot preserve an edit it did not observe. Live tracker and agent judgment
+checks are separate from the deterministic fixtures.
+
 ## What's Next?
 
 For the full getting started guide -- installation, authentication, Web UI setup, CLI setup, and troubleshooting -- see the [Overview](/getting-started/overview/).

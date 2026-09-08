@@ -5,7 +5,8 @@ is accepted when the deliver branch actually ran and handed back the pull reques
 it opened.
 
 Bound inputs (`with:` bindings, canonical text in env):
-- INPUTS_ROUTE / INPUTS_SUMMARY: triage's verdict.
+- INPUTS_ROUTE / INPUTS_SUMMARY / INPUTS_CONTRACT: triage's validated verdict.
+  INPUTS_CONTRACT names a negative contract verdict in the advisory report.
 - INPUTS_DELIVERED: the flip's verified pull request URL deliver returned, or
   "null" when the deliver branch was skipped (no_action, or an advisory stop
   upstream of the gates).
@@ -219,11 +220,13 @@ def main() -> int:
     sys.stderr.reconfigure(encoding="utf-8", newline="\n")
     route = os.environ["INPUTS_ROUTE"]
     summary = os.environ["INPUTS_SUMMARY"]
+    contract = os.environ.get("INPUTS_CONTRACT", "")
     delivered = os.environ.get("INPUTS_DELIVERED", "null")
     artifacts = os.environ["ARTIFACTS_DIR"]
 
     if route == "no_action":
-        base = f"No delivery needed: {summary}\nReport: {artifacts}/triage.md"
+        label = f" [{contract}]" if contract and contract != "NO_ACTION" else ""
+        base = f"No delivery needed{label}: {summary}\nReport: {artifacts}/triage.md"
         print(base + format_caveats(artifacts))
         return 0
 

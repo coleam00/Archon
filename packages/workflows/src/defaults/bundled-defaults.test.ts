@@ -310,11 +310,11 @@ describe('bundled-defaults', () => {
       const triage = parsed.workflow.nodes.find(node => node.id === 'triage');
       expect(triage?.kind).toBe('include');
       if (triage?.kind !== 'include') throw new Error('triage is not an include');
-      expect(triage.with).toEqual({ target: '$INPUTS.target' });
+      expect(triage.with).toEqual({ target: '$INPUTS.target', publish: '$INPUTS.publish' });
 
       const triageCommand = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:triage::triage'];
       expect(triageCommand).toContain('Write `$ARTIFACTS_DIR/triage.md`');
-      expect(triageCommand).toContain('**Source and outcome** — what was requested');
+      expect(triageCommand).toContain('**Source and outcome** - what was requested');
 
       const downstreamBindings = [
         { id: 'inv', input: 'target' },
