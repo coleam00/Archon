@@ -222,7 +222,8 @@ the checkout with the existing environment plus these bindings:
 | `REGRESS_BASE_REVISION` | Resolved base commit.                                                |
 | `REGRESS_SCOPE`         | Exact requested scope.                                               |
 
-Timeout is an integer from 1 to 3600 seconds. The check must use scratch resources
+Timeout is an integer from 1 to 7200 seconds. Allow cleanup time beyond a check's own
+internal deadline. The check must use scratch resources
 for data writes, keep source intact, and clean up any services it starts, including
 on termination. It must never write to an inherited live database. The workflow
 does not invent project startup commands or parse error prose to classify causes.

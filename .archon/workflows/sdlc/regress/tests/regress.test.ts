@@ -1194,7 +1194,7 @@ test('real script nodes run a trusted check on a non-main base and collect revis
   const policy = join(root, 'policy.json');
   await writeFile(
     policy,
-    JSON.stringify({ version: 1, argv: [process.execPath, check], timeout_seconds: 30 })
+    JSON.stringify({ version: 1, argv: [process.execPath, check], timeout_seconds: 3720 })
   );
   const prepared = await node(cwd, artifacts, { phase: 'prepare', scope: 'parser', policy });
   expect(prepared.ready).toBe(true);
@@ -1238,6 +1238,16 @@ test('real nodes reject checkout-local policy and missing tools without claiming
   const prepared = await node(cwd, artifacts, { phase: 'prepare', scope: '', policy: external });
   const fixed = await node(cwd, artifacts, { phase: 'configured', prepared, policy: external });
   expect(fixed.status).toBe('inconclusive');
+});
+
+test('trusted check deadlines remain finite and positive', async () => {
+  const { cwd, artifacts, root } = await checkout();
+  const policy = join(root, 'invalid-budget.json');
+  for (const timeout_seconds of [0, -1, 1.5, 7201]) {
+    await writeFile(policy, JSON.stringify({ version: 1, argv: ['never-executed'], timeout_seconds }));
+    const prepared = await node(cwd, artifacts, { phase: 'prepare', scope: '', policy });
+    expect(prepared.ready).toBe(false);
+  }
 });
 test('real ordinary collector rejects absent, stale, and unrecorded validation', async () => {
   const { cwd, artifacts } = await checkout();

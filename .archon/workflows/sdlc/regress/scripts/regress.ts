@@ -254,9 +254,9 @@ async function profile(path: string): Promise<{ value: Profile; digest: string }
     typeof value.timeout_seconds !== 'number' ||
     !Number.isInteger(value.timeout_seconds) ||
     value.timeout_seconds < 1 ||
-    value.timeout_seconds > 3600
+    value.timeout_seconds > 7200
   ) {
-    throw new Error('Invalid policy version or timeout_seconds (1..3600)');
+    throw new Error('Invalid policy version or timeout_seconds (1..7200)');
   }
   return {
     value: { version: 1, argv: strings(value.argv), timeout_seconds: value.timeout_seconds },
