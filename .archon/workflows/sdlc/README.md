@@ -5,9 +5,11 @@ Conventions for this pack specifically. Project-wide judgment lives in
 [`.archon/workflow-language-constitution.md`](../../workflow-language-constitution.md).
 
 The [regress workflow](regress/README.md) composes validation and investigation
-into regression diagnosis, with opt-in GitHub publication from trusted public
-evidence. Its external check profile, result contract, and publication limits are
-documented alongside the workflow.
+into regression diagnosis, with opt-in GitHub publication from public evidence the
+run can prove: a trusted check profile's approved cases, or a diagnosis whose cited
+executions and source locations the workflow re-checks itself. Its external check
+profile, execution receipts, result contract, and publication limits are documented
+alongside the workflow.
 
 ## Guards
 
