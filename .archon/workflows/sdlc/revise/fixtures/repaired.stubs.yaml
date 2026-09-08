@@ -1,0 +1,50 @@
+# Declared SDLC scenario: the PR is checked out, the findings repaired, the gate is
+# green and the same head is published. Every public action is stubbed.
+checkout__resolve:
+  publish: false
+  operation: checkout
+  candidate: &candidate
+    repository: example/repo
+    branch: feature/x
+    head_sha: abc1234
+    remote_sha: abc1234
+    pr: &pr
+      number: 4
+      url: https://github.com/example/repo/pull/4
+      head: feature/x
+      base: main
+      head_sha: abc1234
+      base_sha: def5678
+      repository: example/repo
+      is_draft: false
+checkout__pr: *pr
+repair__record-start: '{"start":"recorded"}'
+repair__implement:
+  done: true
+  green: true
+  summary: 'stub: findings repaired, quick gate green'
+repair__assert-changed: 1 file changed
+gate: '{"green":true}'
+publish__resolve:
+  publish: true
+  operation: publish
+  candidate: *candidate
+publish__prepare:
+  title: 'stub: repaired'
+  body: 'stub: repaired the public findings'
+  base: main
+publish__pr: *pr
+outcome:
+  outcome: delivered
+  summary: 'stub: repair published to the same head'
+  pr: *pr
+  reports: ['implementation.md', 'pr-identity.json']
+fixture:
+  expect: completed
+  reached: [repair__implement, publish__pr, outcome]
+  inputs:
+    target_pr: '4'
+    work_order: 'stub: original work order'
+    findings: 'stub: public findings'
+    publication_policy: ''
+exec-code: false

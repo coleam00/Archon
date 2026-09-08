@@ -1,0 +1,27 @@
+# Declared SDLC scenario: a generic candidate passes the project's own checks and the
+# judge approves. Every public action is stubbed; nothing is fetched or run.
+prepare: '{"generic":true,"scope":"pr","state":{"target":"example/repo#4","blockers":[],"policy":null}}'
+validate__validate:
+  green: true
+  summary: 'stub: project checks green on the candidate'
+collect: '{"judge":true,"state":{"target":"example/repo#4"},"packet":"{\"target\":\"example/repo#4\",\"validation\":{\"green\":true}}"}'
+judge:
+  verdict: approve
+  summary: 'stub: every requirement met, gate evidence sufficient'
+  findings: []
+  requirements:
+    - request: 'stub: the requested change'
+      met: true
+      evidence: ['stub: validation green']
+  checks_complete: true
+  evidence_sufficient: true
+  checks_weakened: false
+receipt: '{"verdict":"approve","target":"example/repo#4","receipt":"acceptance.json"}'
+fixture:
+  expect: completed
+  reached: [validate__validate, judge, receipt]
+  inputs:
+    target: 'example/repo#4'
+    work_order: 'stub: add the missing input check'
+    policy: ''
+exec-code: false
