@@ -107,6 +107,16 @@ async function runFixtures(
   });
 }
 
+/**
+ * The selected scope as a set. Discovery reports fixtures in directory-enumeration order,
+ * which is a filesystem property and nothing production promises: a name-ordered
+ * filesystem and a name-hashed one disagree on the same tree. Scope assertions are about
+ * membership, so they compare sorted labels and never the enumeration itself.
+ */
+function scopeOf(report: FixtureReport): string[] {
+  return report.results.map(result => result.fixture).sort();
+}
+
 interface TempFixtureOptions {
   workflowName?: string;
   fixtureName?: string;
@@ -698,9 +708,7 @@ describe('runFixtures', () => {
       cwd,
       target: 'target-wf',
     });
-    expect(report.results.map(r => r.fixture)).toEqual([
-      expect.stringContaining('only-target.stubs.yaml'),
-    ]);
+    expect(scopeOf(report)).toEqual([expect.stringContaining('only-target.stubs.yaml')]);
     expect(report.passed).toBe(1);
   });
 
@@ -750,9 +758,7 @@ describe('runFixtures', () => {
       ...workflowsOnDisk(cwd, ['ext-wf'], 'sdlc-ext/ext'),
     ];
     const fixtureLabels = (target: string | undefined) =>
-      runFixtures({ workflows, cwd, ...(target !== undefined ? { target } : {}) }).then(report =>
-        report.results.map(r => r.fixture)
-      );
+      runFixtures({ workflows, cwd, ...(target !== undefined ? { target } : {}) }).then(scopeOf);
 
     const packPath = join(cwd, '.archon', 'workflows', 'sdlc');
     // Exact labels pin both the scope-root-relative shape and the boundary against the
@@ -768,6 +774,45 @@ describe('runFixtures', () => {
     await expect(fixtureLabels('.archon/workflows/sdlc')).resolves.toHaveLength(2);
     await expect(fixtureLabels(packPath)).resolves.toHaveLength(2);
     await expect(fixtureLabels(undefined)).resolves.toHaveLength(3);
+  });
+
+  /**
+   * A pack of two workflow folders whose names are fixed, so the filesystem enumerates them
+   * in one order on any given machine and `planFolder` decides which workflow that order
+   * reaches first. Returns the workflows the run actually checked, which is the scope.
+   */
+  async function packScopeWithPlanIn(planFolder: 'alpha' | 'omega'): Promise<string[]> {
+    const cwd = makeTempProject();
+    const folderFor = { plan: planFolder, ship: planFolder === 'alpha' ? 'omega' : 'alpha' };
+    for (const [workflow, folder] of Object.entries(folderFor)) {
+      const workflowDir = join(cwd, '.archon', 'workflows', 'sdlc', folder);
+      mkdirSync(join(workflowDir, 'fixtures'), { recursive: true });
+      writeFileSync(
+        join(workflowDir, `${workflow}-wf.yaml`),
+        `name: ${workflow}-wf\ndescription: test\nnodes:\n  - id: node-a\n    prompt: hello\n`
+      );
+      writeFileSync(
+        join(workflowDir, 'fixtures', `${workflow}.stubs.yaml`),
+        ['fixture:', '  expect: completed', 'node-a: "stub output"', ''].join('\n')
+      );
+    }
+    const report = await runFixtures({
+      workflows: [
+        ...workflowsOnDisk(cwd, ['plan-wf'], `sdlc/${folderFor.plan}`),
+        ...workflowsOnDisk(cwd, ['ship-wf'], `sdlc/${folderFor.ship}`),
+      ],
+      cwd,
+      target: 'sdlc',
+    });
+    return report.results.map(result => result.workflow).sort();
+  }
+
+  it('selects the whole pack whichever of its workflows the filesystem enumerates first', async () => {
+    // The two projects share one folder-name set, so they share one enumeration order and
+    // swapping which folder holds `plan-wf` reverses the order the walk reaches the two
+    // workflows in. Both directions must select the same pack, not merely the same count.
+    await expect(packScopeWithPlanIn('alpha')).resolves.toEqual(['plan-wf', 'ship-wf']);
+    await expect(packScopeWithPlanIn('omega')).resolves.toEqual(['plan-wf', 'ship-wf']);
   });
 
   it('resolves relative path targets from the invoking directory before the project root', async () => {
@@ -786,7 +831,7 @@ describe('runFixtures', () => {
         cwd,
         targetCwd: invokingDir,
         target: '../.archon/workflows/sdlc/plan',
-      }).then(report => report.results.map(result => result.fixture))
+      }).then(scopeOf)
     ).resolves.toEqual(['sdlc/plan/fixtures/plan.stubs.yaml']);
 
     await expect(
@@ -795,16 +840,14 @@ describe('runFixtures', () => {
         cwd,
         targetCwd: invokingDir,
         target: '.archon/workflows/sdlc',
-      }).then(report => report.results.map(result => result.fixture))
+      }).then(scopeOf)
     ).resolves.toEqual([
       'sdlc/plan/fixtures/plan.stubs.yaml',
       'sdlc/ship/fixtures/ship.stubs.yaml',
     ]);
 
     await expect(
-      runFixtures({ workflows, cwd, targetCwd: invokingDir, target: 'sdlc' }).then(report =>
-        report.results.map(result => result.fixture)
-      )
+      runFixtures({ workflows, cwd, targetCwd: invokingDir, target: 'sdlc' }).then(scopeOf)
     ).resolves.toEqual([
       'sdlc/plan/fixtures/plan.stubs.yaml',
       'sdlc/ship/fixtures/ship.stubs.yaml',
@@ -825,9 +868,7 @@ describe('runFixtures', () => {
       ];
 
       await expect(
-        runFixtures({ workflows, cwd, targetCwd: invokingDir, target: 'plan-wf' }).then(report =>
-          report.results.map(result => result.fixture)
-        )
+        runFixtures({ workflows, cwd, targetCwd: invokingDir, target: 'plan-wf' }).then(scopeOf)
       ).resolves.toEqual(['sdlc/plan/fixtures/plan.stubs.yaml']);
     }
   );
@@ -849,7 +890,7 @@ describe('runFixtures', () => {
       const report = await runFixtures({ workflows, cwd, target: linkPath });
       // Selection outcomes, not implementation details: drops both the containment
       // anchor and the discovery-side realpath, so a revert cannot pass silently.
-      expect(report.results.map(r => r.fixture)).toEqual([
+      expect(scopeOf(report)).toEqual([
         'sdlc/plan/fixtures/plan.stubs.yaml',
         'sdlc/ship/fixtures/ship.stubs.yaml',
       ]);
@@ -889,7 +930,7 @@ describe('runFixtures', () => {
       target: 'ship',
     });
     // Name-first precedence would drop the ship-folder fixture; dir-first would drop the plan one.
-    expect(report.results.map(r => r.fixture).sort()).toEqual([
+    expect(scopeOf(report)).toEqual([
       'sdlc/plan/fixtures/ship.stubs.yaml',
       'sdlc/ship/fixtures/ship.stubs.yaml',
     ]);
@@ -934,7 +975,7 @@ describe('runFixtures', () => {
       cwd,
       target: 'ok-wf',
     });
-    expect(loaded.results.map(r => r.fixture)).toEqual(['ok/fixtures/ok.stubs.yaml']);
+    expect(scopeOf(loaded)).toEqual(['ok/fixtures/ok.stubs.yaml']);
   });
 
   it('lets a project fixture shadow the bundled fixture it overrides', async () => {
@@ -971,7 +1012,7 @@ describe('runFixtures', () => {
     // One result, and it is the project's: a path-keyed `seen` never dedups across scopes
     // (absolute paths are scope-unique) and yields two, while dedup that kept the wrong
     // side would report the bundled `expect: failed` under an identical label.
-    expect(report.results.map(r => r.fixture)).toEqual(['ship/fixtures/x.stubs.yaml']);
+    expect(scopeOf(report)).toEqual(['ship/fixtures/x.stubs.yaml']);
     expect(report.results[0].expect).toBe('completed');
   });
 });
