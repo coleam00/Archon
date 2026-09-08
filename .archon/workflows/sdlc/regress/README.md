@@ -12,7 +12,7 @@ an authenticated `gh` with issue read/write access.
 | --------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `scope`   | `""`    | Optional project validation scope. Empty selects the full applicable gate. It is data, never interpolated into a command.                                                                             |
 | `policy`  | `""`    | Absolute path to an operator-trusted JSON profile outside the checkout, including after symlink resolution. Selecting it authorizes its fixed command. Never accept this path from candidate content. |
-| `publish` | `false` | Only `true` authorizes issue creation. No publication capability is given to an agent node.                                                                                                           |
+| `publish` | `false` | Only `true` authorizes issue creation, and it authorizes export. A trusted profile contributes its approved public cases; ordinary discovery contributes the diagnosis agent's public finding text plus the tracked source locations it proves. No publication capability is given to an agent node. |
 
 ```sh
 archon workflow run archon-regress --input scope=parser
@@ -47,16 +47,70 @@ Use the host's execution isolation for untrusted repositories or commands.
 
 Without a policy, `archon-validate` discovers the project's own gate and writes
 `validation.md`. Regress collects a fresh, nonempty copy into its artifact
-directory and records its digest. The diagnosis agent checks the actual report;
-the model's green/cause fields are claims, not deterministic execution receipts.
-Missing artifacts, unavailable tools/services/browser runtimes, no runnable
-checks, and unproven causes are inconclusive. Inherited product-red can warrant
-investigation, but does not by itself prove this branch introduced the failure.
+directory and records its digest. Missing artifacts, unavailable
+tools/services/browser runtimes, no runnable checks, and unproven causes are
+inconclusive. Inherited product-red can warrant investigation, but does not by
+itself prove this branch introduced the failure.
 
-Ordinary discovery can return local defect findings. Publishing them requires
-independent public evidence from a trusted configured check. Model-written prose
-alone cannot grant permission to export evidence. This deliberate limitation
-prevents private validation or evaluator text from being copied into issues.
+The model's green/cause fields are claims, so preparation also plants a recorder
+and asks archon-validate to run every gate command through it:
+
+```sh
+bun "<artifacts>/regress/recordings-*/record.ts" --record bun run test
+```
+
+The recorder runs the command in the checkout, streams its output unchanged, exits
+with its status, and writes one receipt: the command, its exit status, the revision,
+base, and scope it ran under, and whether the tracked tree was still intact
+afterwards. Command output never enters a receipt, so no private stream can travel
+into evidence, a prompt, or an issue. That requirement reaches archon-validate
+through its `scope` input, which regress extends rather than replaces; a caller's
+scope is preserved verbatim.
+
+Receipts are the collector's execution proof. No receipts means inconclusive, for
+green as much as for red: an unproven gate is not a clean one. A receipt from
+another revision, base, scope, or checkout, or one taken against a dirtied tracked
+tree, makes the whole collection inconclusive. `clean` needs every recorded command
+to have exited zero; `product` needs the model's introduced/inherited classification
+and at least one command that ran to a nonzero exit. A command killed before it
+completed proves nothing in either direction.
+
+Receipts prove execution against a cooperating agent. They are not a defense against
+an agent that sets out to deceive: a node that can run the project's checks can also
+write files. The engine's `mutates_checkout: false` and these receipts detect
+mutation and fabrication after the fact; use host isolation when the checkout or its
+commands are untrusted.
+
+## Publication from ordinary discovery
+
+A discovered finding is publishable only when the diagnosis agent attaches a
+`public_proof` and every part of it survives a deterministic re-check:
+
+| Proof field                   | What the final script re-checks                                                                                                    |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `root_cause_key`              | A stable lowercase machine key; it alone decides issue identity across runs.                                                       |
+| `executions`                  | Every cited id is a receipt this run collected, and at least one ran to a completed nonzero exit.                                   |
+| `test` and `cause`            | Repository-relative paths whose line ranges exist in `git` at the checked revision, not in the working tree, and never outside it. |
+| `completed_product_assertion` | The agent's explicit per-finding claim that the product itself failed, rather than its environment.                                 |
+
+Publication additionally needs product-red evidence, a rooted investigation with a
+report, an unchanged checkout and evidence record, `publish=true`, and distinct root
+keys across findings. Anything missing leaves the finding local: a diagnosed defect
+with `publication: blocked`, never a filed issue.
+
+The issue then carries the agent's public finding fields plus the two verified source
+locations and the observed revision. The private material of an ordinary run, meaning
+`validation.md`, receipt commands, and artifact and checkout paths, is never copied
+into it, and a case whose public text still contains this run's checkout or artifact path
+is refused before any request. That is a path containment check, not a secret
+detector: everything else rests on the diagnosis prompt and the review of what it
+wrote. Read a first issue from a new project before scheduling unattended runs.
+
+Cause identity is the one part a model owns. A trusted profile's `root_cause_key`
+belongs to the check author and is stable by construction; a discovered key is stable
+only insofar as the agent derives it from the same source-owned cause on the next run.
+A drifting key files a second issue for one defect. Prefer a profile where duplicate
+issues are unacceptable.
 
 ## Trusted external check profile
 
@@ -137,9 +191,11 @@ fixable causes need different keys. Changing a key intentionally changes identit
 
 ## Publication and returned result
 
-Only a normalized `github.com` origin is supported. Other forges and GitHub
-Enterprise hosts are reported as unsupported, without guessing a destination.
-Repository identity and the trusted root key produce a SHA-256 issue marker.
+Publication judges the evidence before the destination, so a run learns that its
+findings are unpublishable rather than hearing about its remote. Only a normalized
+`github.com` origin is supported. Other forges and GitHub Enterprise hosts are
+reported as unsupported, without guessing a destination.
+Repository identity and the root cause key produce a SHA-256 issue marker.
 The publisher lists all issue states using paginated GitHub REST, excludes pull
 requests, and matches exact markers. Existing open or closed issues are reused
 and read back; they are not reopened or edited. If historical duplicates exist,
@@ -159,7 +215,7 @@ verification fails. A newly created issue must read back with the exact body.
 `returns: finish` exposes:
 
 - `status`, `summary`, and `findings` (structured title, cause, expected/actual,
-  reproduction, evidence, and selected `public_case_id`).
+  reproduction, evidence, a selected `public_case_id`, and a `public_proof`).
 - `revision`, `base`, `base_revision`, and `scope`.
 - `publication`: `disabled`, `not-applicable`, `blocked`, or `published`, with
   `publication_reason`. A defects diagnosis with blocked publication still
@@ -167,7 +223,8 @@ verification fails. A newly created issue must read back with the exact body.
 - `issues`: `{key, number, url, disposition: existing|created, verified}` records.
 
 Artifacts live under `$ARTIFACTS_DIR/regress/`: `result.json`, `issues.json` when
-publication reaches an issue, collected `validation.md` for discovery, or a fresh
+publication reaches an issue, a `recordings-*/` directory holding the recorder and its
+receipts plus collected `validation.md` for discovery, or a fresh
 `check-*/evidence.json` and `private-execution.json` for configured execution.
 Investigation retains the neighboring workflow's `investigation.md` contract.
 Model/provider failures can still fail the engine run; an inconclusive result does
@@ -176,10 +233,13 @@ the neighboring validate/investigate report paths within one run.
 
 ## Verification
 
-`bun test ./.archon/workflows/sdlc/regress/tests/` exercises the evidence and publication boundaries and real
-script processes against scratch repositories. It is included in `bun run test`;
-the root type-check and lint also cover the scripts. `archon workflow test` picks
-up the colocated dry-run fixtures. The unresolved-base fixture executes the real
-prepare, collect, and finish nodes with stubbed AI and cannot publish. Other
-fixtures prove routing. Actual model quality and live private-repository behavior
-need operator validation; unit tests make no claim about them.
+`bun test ./.archon/workflows/sdlc/regress/tests/` exercises the evidence and
+publication boundaries, and real script processes, real recorder subprocesses, and
+real `git` reference checks against scratch repositories. It is included in
+`bun run test`; the root type-check and lint also cover the scripts.
+`archon workflow test` picks up the colocated dry-run fixtures. The unresolved-base
+fixture executes the real prepare, collect, and finish nodes with stubbed AI and
+cannot publish; the clean fixture proves the recording requirement survives the
+include boundary into archon-validate. Other fixtures prove routing. Actual model
+quality and live private-repository behavior need operator validation; unit tests
+make no claim about them.

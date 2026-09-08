@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, realpath, rmdir, stat, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rmdir, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative } from 'node:path';
 
@@ -28,9 +28,28 @@ export interface Evidence extends Binding {
   report: string;
   report_hash: string;
   public_cases: PublicCase[];
+  executions: Receipt[];
+}
+export interface SourceReference {
+  path: string;
+  start: number;
+  end: number;
+}
+/**
+ * A model-authored publication claim over deterministically checkable facts: recorded
+ * executions this run owns, and source the checked revision actually tracks. The
+ * discovered counterpart of a configured check's operator-approved `public_cases`.
+ */
+export interface PublicProof {
+  root_cause_key: string;
+  executions: string[];
+  test: SourceReference;
+  cause: SourceReference;
+  completed_product_assertion: boolean;
 }
 export interface Finding {
   public_case_id: string;
+  public_proof: PublicProof | null;
   title: string;
   root_cause: string;
   expected: string;
@@ -67,6 +86,22 @@ export interface Prepared extends Binding {
   started: number;
   directory: string;
   profile_hash: string;
+  checkout: string;
+  recording_directory: string;
+  validation_scope: string;
+}
+/**
+ * Proof that one validation command actually ran against the checked revision.
+ * Command output is deliberately absent: the recorder streams it to the agent and
+ * archon-validate's own report keeps the decisive tails, so nothing here can carry a
+ * private stream into evidence, a prompt, or an issue.
+ */
+export interface Receipt extends Binding {
+  id: string;
+  argv: string[];
+  checkout: string;
+  intact: boolean;
+  exit_code: number | null;
 }
 export interface CommandResult {
   exitCode: number | null;
@@ -95,6 +130,9 @@ function strings(value: unknown): string[] {
 function hash(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
+/** Stable lowercase cause identity: the dedup key survives revisions, scopes, and reruns. */
+const MACHINE_KEY = /^[a-z0-9][a-z0-9._/-]{0,199}$/;
+const REPOSITORY_PATH = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
 function parse(value: string): unknown {
   return JSON.parse(value);
 }
@@ -177,6 +215,24 @@ async function profile(path: string): Promise<{ value: Profile; digest: string }
     digest: hash(raw),
   };
 }
+/**
+ * The scope archon-validate receives for ordinary discovery. It keeps the operator's
+ * narrowing and adds the execution-recording requirement, because regress cannot widen a
+ * neighboring pack's declared inputs to carry one.
+ */
+export function recordingScope(scope: string, recorder: string): string {
+  return (
+    `${scope || "The project's full applicable gate."}\n\n` +
+    'Record every command you run for this gate. Instead of running a command directly, run ' +
+    `\`bun ${JSON.stringify(recorder)} --record <command> [args...]\`. The recorder runs the command ` +
+    'in the checkout, streams its output unchanged, exits with its status, and saves an execution ' +
+    'receipt beside itself.\n\n' +
+    'Those receipts are the only proof this gate ran: a command run without them leaves no evidence ' +
+    'and cannot support a verdict, green or red. Never write or edit a receipt file yourself. Keep ' +
+    'tracked files unchanged, because a command that modifies tracked source invalidates its own receipt, ' +
+    'and keep destructive checks off live resources.'
+  );
+}
 export async function prepare(
   scope: string,
   policy: string,
@@ -196,23 +252,101 @@ export async function prepare(
     started: Date.now(),
     directory,
     profile_hash: '',
+    checkout: '',
+    recording_directory: '',
+    validation_scope: scope,
   };
   try {
     Object.assign(result, await binding(scope, base));
     if (!(await intact(result)))
       throw new Error('Tracked checkout changes prevent revision-bound validation');
     if (policy) result.profile_hash = (await profile(policy)).digest;
+    result.checkout = await realpath(await git(['rev-parse', '--show-toplevel']));
+    if (!policy) {
+      result.recording_directory = await mkdtemp(join(directory, 'recordings-'));
+      // A copy, not the checkout's own script path: the recorder must keep working after
+      // this run's materialized workflow source is gone, and it locates its context and
+      // writes its receipts beside itself.
+      const recorder = join(result.recording_directory, 'record.ts');
+      await writeFile(recorder, await readFile(import.meta.path, 'utf8'));
+      result.validation_scope = recordingScope(scope, recorder);
+    }
     result.ready = true;
+    if (result.recording_directory)
+      await writeFile(join(result.recording_directory, 'prepared.json'), JSON.stringify(result));
   } catch (error) {
     result.reason = error instanceof Error ? error.message : String(error);
   }
   return result;
 }
+/**
+ * Run one validation command in the checkout and leave a receipt beside this script.
+ * The child owns the console and the exit status so recording stays invisible to the
+ * agent's own workflow; only the receipt is added.
+ */
+async function recordExecution(argv: string[]): Promise<number> {
+  if (argv.length === 0) throw new Error('Recording needs a command to run');
+  const directory = import.meta.dir;
+  const context = readPrepared(parse(await readFile(join(directory, 'prepared.json'), 'utf8')));
+  process.chdir(context.checkout);
+  const child = Bun.spawn(argv, { stdout: 'inherit', stderr: 'inherit', stdin: 'inherit' });
+  const status = await child.exited;
+  const completed = child.signalCode ? null : status;
+  try {
+    const receipt: Receipt = {
+      ...(await binding(context.scope, context.base)),
+      id: randomUUID(),
+      argv,
+      checkout: await realpath(await git(['rev-parse', '--show-toplevel'])),
+      intact: await intact(context),
+      exit_code: completed,
+    };
+    await writeFile(join(directory, `receipt-${receipt.id}.json`), JSON.stringify(receipt));
+  } catch (error) {
+    // Never mask the command's own result: report the lost receipt and let the missing
+    // proof make the evidence inconclusive downstream.
+    console.error(
+      `Execution receipt was not written: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  return completed ?? 1;
+}
+function readReceipt(value: unknown): Receipt {
+  const row = object(value);
+  if (
+    typeof row.intact !== 'boolean' ||
+    (row.exit_code !== null && !Number.isInteger(row.exit_code))
+  ) {
+    throw new Error('Invalid execution receipt');
+  }
+  return {
+    ...readBinding(row),
+    id: text(row.id),
+    argv: strings(row.argv),
+    checkout: text(row.checkout),
+    intact: row.intact,
+    exit_code: row.exit_code as number | null,
+  };
+}
+async function receipts(context: Prepared): Promise<Receipt[]> {
+  if (!context.recording_directory) return [];
+  const names = (await readdir(context.recording_directory))
+    .filter(name => name.startsWith('receipt-') && name.endsWith('.json'))
+    .sort();
+  const collected = await Promise.all(
+    names.map(async name =>
+      readReceipt(parse(await readFile(join(context.recording_directory, name), 'utf8')))
+    )
+  );
+  if (new Set(collected.map(row => row.id)).size !== collected.length)
+    throw new Error('Duplicate execution receipt identity');
+  return collected;
+}
 function publicCase(value: unknown): PublicCase {
   const row = object(value);
   const id = text(row.id);
   const key = text(row.root_cause_key);
-  if (!/^[a-z0-9][a-z0-9._/-]{0,199}$/.test(id) || !/^[a-z0-9][a-z0-9._/-]{0,199}$/.test(key)) {
+  if (!MACHINE_KEY.test(id) || !MACHINE_KEY.test(key)) {
     throw new Error('Public case identifiers must be stable lowercase machine keys');
   }
   return {
@@ -238,6 +372,7 @@ function emptyEvidence(context: Prepared, reason: string): Evidence {
     report: '',
     report_hash: '',
     public_cases: [],
+    executions: [],
   };
 }
 export function configuredEvidence(
@@ -315,23 +450,43 @@ export function discoveredEvidence(
   context: Prepared,
   verdict: unknown,
   raw: string,
-  report: string
+  report: string,
+  executions: Receipt[]
 ): Evidence {
   const result = emptyEvidence(context, 'Ordinary validation has no usable artifact or verdict');
   if (!raw.trim()) return result;
+  if (executions.length === 0) {
+    result.reason = 'Ordinary validation recorded no command execution, so the gate is unproven';
+    return result;
+  }
+  if (
+    executions.some(
+      row => !row.intact || row.checkout !== context.checkout || !sameBinding(context, { ...row })
+    )
+  ) {
+    result.reason = 'Recorded executions are not bound to this revision and an intact checkout';
+    return result;
+  }
   const value = object(verdict);
   result.report = report;
   result.report_hash = hash(raw);
-  if (value.green === true && value.red_cause === '') {
+  result.executions = executions;
+  if (
+    value.green === true &&
+    value.red_cause === '' &&
+    executions.every(row => row.exit_code === 0)
+  ) {
     result.status = 'clean';
     result.reason =
-      'Model verdict backed by collected validation.md; not a deterministic check attestation';
+      'Every recorded command completed successfully; scope coverage remains model judgment';
   } else if (
     value.green === false &&
-    (value.red_cause === 'introduced' || value.red_cause === 'inherited')
+    (value.red_cause === 'introduced' || value.red_cause === 'inherited') &&
+    executions.some(row => row.exit_code !== null && row.exit_code !== 0)
   ) {
     result.status = 'product';
-    result.reason = 'Model classified product-red; investigation must establish the causal chain';
+    result.reason =
+      'Model classified product-red over a completed failing command; investigation must establish the causal chain';
   } else {
     result.reason = 'Validation is environmental, unrunnable, or unclassified';
   }
@@ -348,13 +503,19 @@ async function collect(
     return emptyEvidence(context, 'Checkout changed after evidence preparation');
   if (context.mode === 'configured') return readEvidence(fixed);
   const source = join(artifacts, 'validation.md');
+  let executions: Receipt[];
+  try {
+    executions = await receipts(context);
+  } catch {
+    return emptyEvidence(context, 'Execution receipts are unreadable, malformed, or ambiguous');
+  }
   try {
     if ((await stat(source)).mtimeMs < context.started)
       return emptyEvidence(context, 'Validation artifact predates this check');
     const raw = await readFile(source, 'utf8');
     const report = join(context.directory, 'validation.md');
     await writeFile(report, raw);
-    return discoveredEvidence(context, verdict, raw, report);
+    return discoveredEvidence(context, verdict, raw, report, executions);
   } catch {
     return emptyEvidence(context, 'Validation artifact or verdict is missing or unreadable');
   }
@@ -393,6 +554,9 @@ function readPrepared(value: unknown): Prepared {
     started: row.started,
     profile_hash: row.profile_hash,
     directory: text(row.directory),
+    checkout: typeof row.checkout === 'string' ? row.checkout : '',
+    recording_directory: typeof row.recording_directory === 'string' ? row.recording_directory : '',
+    validation_scope: typeof row.validation_scope === 'string' ? row.validation_scope : '',
   };
 }
 function readEvidence(value: unknown): Evidence {
@@ -414,6 +578,44 @@ function readEvidence(value: unknown): Evidence {
     report: row.report,
     report_hash: row.report_hash,
     public_cases: row.public_cases.map(publicCase),
+    executions: Array.isArray(row.executions) ? row.executions.map(readReceipt) : [],
+  };
+}
+function readReference(value: unknown): SourceReference {
+  const row = object(value);
+  const path = text(row.path);
+  const { start, end } = row;
+  if (!REPOSITORY_PATH.test(path) || path.split('/').includes('..'))
+    throw new Error('A public proof reference must be a repository-relative path');
+  if (
+    !Number.isInteger(start) ||
+    !Number.isInteger(end) ||
+    Number(start) < 1 ||
+    Number(end) < Number(start)
+  ) {
+    throw new Error('A public proof line range must be ordered positive integers');
+  }
+  return { path, start: Number(start), end: Number(end) };
+}
+/**
+ * An empty `root_cause_key` is the declared absent form: the schema's `required` cannot
+ * omit a property (OpenAI strict mode), so absence lives in the value like validate's
+ * `red_cause`. Absent means this finding stays local, never that publication is blocked.
+ */
+function readProof(value: unknown): PublicProof | null {
+  const row = object(value);
+  if (typeof row.root_cause_key !== 'string') throw new Error('Missing proof root_cause_key');
+  if (row.root_cause_key === '') return null;
+  if (!MACHINE_KEY.test(row.root_cause_key))
+    throw new Error('A public proof root cause key must be a stable lowercase machine key');
+  if (typeof row.completed_product_assertion !== 'boolean')
+    throw new Error('Missing completed_product_assertion');
+  return {
+    root_cause_key: row.root_cause_key,
+    executions: strings(row.executions),
+    test: readReference(row.test),
+    cause: readReference(row.cause),
+    completed_product_assertion: row.completed_product_assertion,
   };
 }
 export function readDiagnosis(value: unknown): Diagnosis {
@@ -426,6 +628,7 @@ export function readDiagnosis(value: unknown): Diagnosis {
     if (typeof finding.public_case_id !== 'string') throw new Error('Missing public_case_id');
     return {
       public_case_id: finding.public_case_id,
+      public_proof: readProof(finding.public_proof),
       title: text(finding.title),
       root_cause: text(finding.root_cause),
       expected: text(finding.expected),
@@ -591,51 +794,149 @@ export async function publishCases(
   }
 }
 
-export async function publish(
+export type VerifyReference = (
+  reference: SourceReference,
+  revision: string
+) => Promise<boolean>;
+/** A public proof may only name source the checked revision actually tracks. */
+export function referenceVerifier(checkout: string, run: RunCommand = runCommand): VerifyReference {
+  return async (reference, revision) => {
+    if (!checkout) return false;
+    const blob = await run(['git', '-C', checkout, 'cat-file', 'blob', `${revision}:${reference.path}`]);
+    if (blob.exitCode !== 0) return false;
+    const lines = blob.stdout.split('\n');
+    return reference.end <= (lines.at(-1) === '' ? lines.length - 1 : lines.length);
+  };
+}
+function located(reference: SourceReference): string {
+  return `${reference.path}:${reference.start}-${reference.end}`;
+}
+/**
+ * Turn one ordinary-discovery finding into a publishable case, or nothing. The model owns
+ * the words; this owns the prerequisites: a recorded command that ran to a failing exit
+ * under this run's binding, and source the checked revision tracks at the cited lines.
+ */
+async function discoveredCase(
+  evidence: Evidence,
+  finding: Finding,
+  verify: VerifyReference
+): Promise<PublicCase | null> {
+  const proof = finding.public_proof;
+  if (!proof?.completed_product_assertion) return null;
+  const cited: Receipt[] = [];
+  for (const id of proof.executions) {
+    const receipt = evidence.executions.find(row => row.id === id);
+    if (!receipt) return null;
+    cited.push(receipt);
+  }
+  if (!cited.some(row => row.exit_code !== null && row.exit_code !== 0)) return null;
+  if (!(await verify(proof.test, evidence.revision))) return null;
+  if (!(await verify(proof.cause, evidence.revision))) return null;
+  return {
+    id: proof.root_cause_key,
+    root_cause_key: proof.root_cause_key,
+    title: finding.title,
+    root_cause: finding.root_cause,
+    expected: finding.expected,
+    actual: finding.actual,
+    reproduction: finding.reproduction,
+    evidence: [
+      ...finding.evidence,
+      `Failing assertion: ${located(proof.test)}`,
+      `Source-owned cause: ${located(proof.cause)}`,
+    ],
+  };
+}
+/** Every finding's publishable case, or null when any one of them lacks distinct evidence. */
+async function publicationCases(
   evidence: Evidence,
   diagnosis: Diagnosis,
-  authorized: boolean,
-  repository: string | null,
-  record: (issues: IssueReference[]) => Promise<void>,
-  run: RunCommand = runCommand,
-  lockRoot?: string
+  verify: VerifyReference
+): Promise<PublicCase[] | null> {
+  const cases: PublicCase[] = [];
+  for (const finding of diagnosis.findings) {
+    const candidate =
+      evidence.source === 'configured'
+        ? (evidence.public_cases.find(row => row.id === finding.public_case_id) ?? null)
+        : await discoveredCase(evidence, finding, verify);
+    if (!candidate) return null;
+    cases.push(candidate);
+  }
+  if (cases.length === 0) return null;
+  return new Set(cases.map(row => row.root_cause_key)).size === cases.length ? cases : null;
+}
+/**
+ * Refuse a case that carries a local path into a public issue. It checks the two paths
+ * this run knows are local, the checkout and the artifact directory, and is not a
+ * secret detector: everything else rests on the trusted check author or the prompt.
+ */
+function local(candidate: PublicCase, paths: string[]): boolean {
+  const fields = [
+    candidate.title,
+    candidate.root_cause,
+    candidate.expected,
+    candidate.actual,
+    candidate.reproduction,
+    ...candidate.evidence,
+  ];
+  return paths.some(path => path.length > 0 && fields.some(field => field.includes(path)));
+}
+
+export interface PublicationRequest {
+  evidence: Evidence;
+  diagnosis: Diagnosis;
+  /** publish=true, the operator's explicit authorization to export this evidence. */
+  authorized: boolean;
+  repository: string | null;
+  record: (issues: IssueReference[]) => Promise<void>;
+  verify: VerifyReference;
+  /** Local paths that must never reach an issue: the checkout and the artifact directory. */
+  localPaths: string[];
+  run?: RunCommand;
+  lockRoot?: string;
+}
+export async function publish(
+  request: PublicationRequest
 ): Promise<Pick<Result, 'publication' | 'publication_reason' | 'issues'>> {
   const result: Pick<Result, 'publication' | 'publication_reason' | 'issues'> = {
     publication: 'disabled',
     publication_reason: '',
     issues: [],
   };
-  if (!authorized) return result;
-  if (diagnosis.status !== 'defects') return { ...result, publication: 'not-applicable' };
+  if (!request.authorized) return result;
+  if (request.diagnosis.status !== 'defects') return { ...result, publication: 'not-applicable' };
   result.publication = 'blocked';
-  if (!repository)
+  // Evidence before destination: an operator whose evidence cannot be published learns
+  // that, rather than hearing about a remote that was never the reason.
+  if (request.evidence.status !== 'product')
+    return {
+      ...result,
+      publication_reason: 'Publication needs product-red evidence bound to the checked revision',
+    };
+  const cases = await publicationCases(request.evidence, request.diagnosis, request.verify);
+  if (!cases)
+    return {
+      ...result,
+      publication_reason:
+        'Every finding needs distinct public evidence: a trusted configured case, or a verified public proof over a recorded failing command and tracked source',
+    };
+  if (cases.some(candidate => local(candidate, request.localPaths)))
+    return {
+      ...result,
+      publication_reason: 'Public evidence still carries a local checkout or artifact path',
+    };
+  if (!request.repository)
     return {
       ...result,
       publication_reason: 'Publication supports github.com origin repositories only',
     };
-  const cases = diagnosis.findings.map(finding =>
-    evidence.public_cases.find(row => row.id === finding.public_case_id)
-  );
-  if (
-    evidence.source !== 'configured' ||
-    evidence.status !== 'product' ||
-    cases.some(row => !row) ||
-    new Set(cases.map(row => row?.root_cause_key)).size !== cases.length
-  ) {
-    return {
-      ...result,
-      publication_reason:
-        'Every finding needs a distinct trusted public case from configured product evidence',
-    };
-  }
-  const verifiedCases = cases.filter((row): row is PublicCase => row !== undefined);
   const outcome = await publishCases(
-    repository,
-    verifiedCases,
-    evidence.revision,
-    run,
-    record,
-    lockRoot
+    request.repository,
+    cases,
+    request.evidence.revision,
+    request.run ?? runCommand,
+    request.record,
+    request.lockRoot
   );
   return {
     publication: outcome.reason ? 'blocked' : 'published',
@@ -704,15 +1005,17 @@ async function main(): Promise<unknown> {
     const remote = await runCommand(['git', 'remote', 'get-url', 'origin']);
     if (remote.exitCode === 0) repository = githubRepository(remote.stdout.trim());
   }
-  const publication = await publish(
+  const publication = await publish({
     evidence,
     diagnosis,
-    input('PUBLISH') === 'true',
+    authorized: input('PUBLISH') === 'true',
     repository,
-    async issues => {
+    record: async issues => {
       await writeFile(join(context.directory, 'issues.json'), JSON.stringify(issues, null, 2));
-    }
-  );
+    },
+    verify: referenceVerifier(context.checkout),
+    localPaths: [context.checkout, context.directory],
+  });
   const result: Result = {
     ...diagnosis,
     revision: evidence.revision,
@@ -726,7 +1029,8 @@ async function main(): Promise<unknown> {
 }
 if (import.meta.main) {
   try {
-    console.log(JSON.stringify(await main()));
+    if (process.argv[2] === '--record') process.exitCode = await recordExecution(process.argv.slice(3));
+    else console.log(JSON.stringify(await main()));
   } catch (error) {
     console.error(error instanceof Error ? error.message : 'Regression workflow contract failed');
     process.exitCode = 1;

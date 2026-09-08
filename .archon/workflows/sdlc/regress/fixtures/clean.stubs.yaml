@@ -1,7 +1,18 @@
-prepare: { ready: true, mode: discovered }
+prepare:
+  ready: true
+  mode: discovered
+  validation_scope: |
+    The project's full applicable gate.
+
+    Record every command you run for this gate. Instead of running a command directly, run
+    `bun "/artifacts/regress/recordings-1/record.ts" --record <command> [args...]`.
 validation__validate: { green: true, red_cause: '', summary: 'Full check passed.' }
 collect: { status: clean }
 diagnose: { status: clean, summary: 'Checked scope is clean.', findings: [] }
 finish: { status: clean, publication: disabled, issues: [] }
 fixture:
   expect: completed
+  # The recording requirement has to survive the include boundary into archon-validate,
+  # which declares one input of its own.
+  resolved-text-contains:
+    validation__validate: '--record <command> [args...]'
