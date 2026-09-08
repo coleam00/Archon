@@ -771,10 +771,8 @@ export function getProjectStoragePaths(key: ProjectStorageKey): ProjectStoragePa
 export function isInside(parent: string, candidate: string): boolean {
   const normalisedParent = normalize(parent);
   const normalisedCandidate = normalize(candidate);
-  return (
-    normalisedCandidate === normalisedParent ||
-    normalisedCandidate.startsWith(normalisedParent + sep)
-  );
+  const parentPrefix = normalisedParent.endsWith(sep) ? normalisedParent : normalisedParent + sep;
+  return (normalisedCandidate + sep).startsWith(parentPrefix);
 }
 
 /**

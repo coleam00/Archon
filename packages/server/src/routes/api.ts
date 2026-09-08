@@ -4847,6 +4847,9 @@ export function registerApiRoutes(
     try {
       content = await readFile(realFilePath, 'utf-8');
     } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return apiError(c, 404, 'Artifact file not found');
+      }
       getLog().error({ err, runId, filename }, 'artifacts.read_failed');
       return apiError(c, 500, 'Failed to read artifact file');
     }

@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { homedir, tmpdir } from 'os';
-import { join, sep } from 'path';
+import { join, parse, sep } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { mkdir, rm, writeFile, lstat, readlink, symlink as fsSymlink } from 'fs/promises';
 import { removeTempTree } from './test-utils';
@@ -8,6 +8,7 @@ import { removeTempTree } from './test-utils';
 const isWindows = process.platform === 'win32';
 
 import {
+  isInside,
   isDocker,
   isWSL,
   getWSLDistroName,
@@ -1460,5 +1461,25 @@ describe.skipIf(isWindows)('findMarkdownFilesRecursive - symlinks', () => {
     expect(files).toEqual([
       { commandName: 'nested', relativePath: join('first', 'second', 'nested.md') },
     ]);
+  });
+});
+
+describe('isInside', () => {
+  test('accepts roots, trailing separators, and equal paths without crossing sibling boundaries', () => {
+    const root = parse(process.cwd()).root;
+    const parent = join(root, 'artifacts');
+    for (const [boundary, candidate, expected] of [
+      [root, parent, true],
+      [root, root, true],
+      [parent + sep, join(parent, 'report.md'), true],
+      [parent + sep, parent, true],
+      [parent, parent + sep, true],
+      [parent, parent, true],
+      [parent, join(root, 'artifacts-other', 'report.md'), false],
+      [parent, join(parent, '..', 'outside.md'), false],
+      [parent, 'artifacts/report.md', false],
+    ] as const) {
+      expect(isInside(boundary, candidate)).toBe(expected);
+    }
   });
 });

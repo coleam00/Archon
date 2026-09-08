@@ -1,5 +1,6 @@
-import { describe, test, expect, mock, beforeAll, beforeEach, afterEach } from 'bun:test';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'fs/promises';
+import { describe, test, expect, mock, beforeAll, beforeEach, afterEach, spyOn } from 'bun:test';
+import { mkdir, mkdtemp, rm, symlink, writeFile, realpath } from 'fs/promises';
+import * as fsPromises from 'fs/promises';
 import { tmpdir } from 'os';
 import { join, sep } from 'path';
 import { OpenAPIHono } from '@hono/zod-openapi';
@@ -3467,6 +3468,42 @@ describe('GET /api/artifacts/:runId/* storage-key resolution', () => {
     const used = mockArchonHome;
     mockArchonHome = originalMockHome;
     await rm(used, { recursive: true, force: true });
+  });
+
+  test.each([
+    ['ENOENT', 404],
+    ['EACCES', 500],
+  ] as const)('maps a post-resolution read failure %s to %d', async (code, status) => {
+    const runId = 'run-read-error';
+    const dir = join(wsRoot(), '_local', 'workspace', 'artifacts', 'runs', runId);
+    const target = join(dir, 'report.md');
+    await mkdir(dir, { recursive: true });
+    await writeFile(target, '# report');
+    const resolvedTarget = await realpath(target);
+    mockGetWorkflowRun.mockImplementationOnce(async () => ({
+      ...MOCK_RUNNING_RUN,
+      id: runId,
+      codebase_id: 'cb-local',
+    }));
+    mockGetCodebase.mockImplementationOnce(async () => ({
+      name: 'workspace',
+      kind: 'repo',
+      default_cwd: '/home/u/workspace',
+    }));
+    const { app } = makeApp();
+    const read = spyOn(fsPromises, 'readFile').mockRejectedValueOnce(
+      Object.assign(new Error('artifact read failed'), { code })
+    );
+    try {
+      const response = await app.request(`/api/artifacts/${runId}/report.md`);
+      expect(read).toHaveBeenCalledWith(resolvedTarget, 'utf-8');
+      expect(response.status).toBe(status);
+      expect(await response.json()).toEqual({
+        error: code === 'ENOENT' ? 'Artifact file not found' : 'Failed to read artifact file',
+      });
+    } finally {
+      read.mockRestore();
+    }
   });
 
   test('returns 404 when there is no codebase and no output_root to resolve from', async () => {
