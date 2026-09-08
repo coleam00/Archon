@@ -17,13 +17,12 @@ def forge(*args):
 
 
 def main():
-    repo = json.loads(os.environ["INPUTS_REPO"])
-    ref = {"repo": repo, "number": int(os.environ["INPUTS_PR_NUMBER"])}
+    ref = json.loads(os.environ["INPUTS_REF"])
     verdict = forge("checks", "--ref", json.dumps(ref))
     if verdict["state"] == "none":
         time.sleep(60)
         verdict = forge("checks", "--ref", json.dumps(ref))
-    state = verdict["state"]
+    state = verdict.get("required", verdict)["state"]
     if state == "none":
         detail = "No check units were reported after registration grace; this is not a green verdict."
     else:

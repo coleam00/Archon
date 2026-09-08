@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { publicResultSchemas } from '../schemas';
+import { publicOperation } from './public';
 import {
   CHECKS,
   CHECKS_STATE_OP,
@@ -28,7 +30,7 @@ const metadata: PluginMetadata = {
   version: '1.0.0',
   forge: 'github',
   hosts: [GITHUB_HOST],
-  capabilities: [RESOLVE_OP, CHECKS_STATE_OP],
+  capabilities: [RESOLVE_OP, CHECKS_STATE_OP, ...Object.keys(publicResultSchemas)],
   token_env: 'GH_TOKEN',
 };
 // Validate the REST fields we consume. Open strings preserve unknown upstream states.
@@ -244,6 +246,14 @@ export function createGitHubPlugin(options: GitHubPluginOptions = {}): BuiltinPl
     name: metadata.name,
     metadata: () => metadata,
     execOp: async (op, request, env, signal): Promise<RawOpOutcome> => {
+      if (Object.hasOwn(publicResultSchemas, op)) {
+        return publicOperation(
+          typeof request === 'object' && request !== null ? { ...request, op } : null,
+          env,
+          options,
+          signal
+        );
+      }
       if (op === RESOLVE_OP) {
         const parsed = resolveRequestSchema.safeParse(request);
         if (!parsed.success || parsed.data.repo.host !== GITHUB_HOST)

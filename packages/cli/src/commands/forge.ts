@@ -10,10 +10,17 @@ import {
   createGitHubPlugin,
   forgeHostsConfigSchema,
   prRefSchema,
+  publicRequestSchema,
+  publicResultSchemas,
+  nativeGitHubCredential,
 } from '@archon/forge';
 import { writeJsonLine } from '../utils/stdout';
+import type { PluginCandidate } from '@archon/forge/dispatch';
 
-export async function forgeCommand(args: string[]): Promise<number> {
+export async function forgeCommand(
+  args: string[],
+  githubPlugin?: PluginCandidate
+): Promise<number> {
   const controller = new AbortController();
   const abort = (): void => {
     controller.abort();
@@ -42,19 +49,22 @@ export async function forgeCommand(args: string[]): Promise<number> {
       options: {
         json: { type: 'boolean' },
         ref: { type: 'string' },
+        request: { type: 'string' },
         config: { type: 'string' },
         help: { type: 'boolean' },
       },
     });
     if (values.help) {
       await writeJsonLine({
-        usage: 'archon forge resolve --json | archon forge checks --ref <PrRef JSON> --json',
+        usage:
+          'archon forge resolve --json | checks --ref <PrRef JSON> --json | pr view/create/edit-body/ready | work-item view | comment upsert --request <JSON or -> --json',
         config:
           'Optional --config <file> containing {"hosts":{...}}; defaults to ~/.archon/forge.json',
       });
       return 0;
     }
-    if (positionals.length !== 1 || !['resolve', 'checks'].includes(positionals[0])) {
+    const op = positionals.join('.').replace('work-item.', 'workitem.');
+    if (!['resolve', 'checks'].includes(op) && !Object.hasOwn(publicResultSchemas, op)) {
       await writeJsonLine({ kind: 'unsupported_op', op: positionals.join('.') });
       return 1;
     }
@@ -73,7 +83,7 @@ export async function forgeCommand(args: string[]): Promise<number> {
     const launch = archonCliCommand();
     const dispatcher = new ForgeDispatcher(
       [
-        {
+        githubPlugin ?? {
           source: 'builtin:github',
           command: launch.command,
           args: [...launch.args, 'forge', '__github'],
@@ -82,6 +92,12 @@ export async function forgeCommand(args: string[]): Promise<number> {
       {
         cwd: process.cwd(),
         env: process.env,
+        resolveCredential: async (host): Promise<string | undefined> => {
+          const { isPerUserGitHubEnabled } = await import('@archon/core');
+          // A shared service account's keyring must never stand in for an Archon user.
+          if (isPerUserGitHubEnabled()) return undefined;
+          return nativeGitHubCredential(process.env, host);
+        },
         configuredHosts: forgeHostsConfigSchema.parse(config),
         signal: controller.signal,
         // The engine retains stderr in its existing exec_output transcript row (#2967).
@@ -91,9 +107,18 @@ export async function forgeCommand(args: string[]): Promise<number> {
       }
     );
     const result =
-      positionals[0] === 'resolve'
+      op === 'resolve'
         ? await dispatcher.resolve()
-        : await dispatcher.checksState(prRefSchema.parse(JSON.parse(values.ref ?? 'null')));
+        : op === 'checks'
+          ? await dispatcher.checksState(prRefSchema.parse(JSON.parse(values.ref ?? 'null')))
+          : await dispatcher.publicOperation(
+              publicRequestSchema.parse({
+                ...JSON.parse(
+                  values.request === '-' ? readFileSync(0, 'utf8') : (values.request ?? 'null')
+                ),
+                op,
+              })
+            );
     await writeJsonLine(
       result.kind === 'ok' ? result.value : result.kind === 'error' ? result.error : result
     );

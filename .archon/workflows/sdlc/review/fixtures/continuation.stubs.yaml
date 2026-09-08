@@ -21,3 +21,8 @@ synthesize:
 fixture:
   expect: completed
   reached: [synthesize]
+
+publish:
+  ready: true
+  action: none
+  findings_summary: 'stub: prior findings verified against the delta; nothing open'

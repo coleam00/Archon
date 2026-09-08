@@ -1,4 +1,1309 @@
 {
+  "PrRecord": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "ref": {
+        "type": "object",
+        "properties": {
+          "repo": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+              },
+              "path": {
+                "type": "string",
+                "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+              }
+            },
+            "required": [
+              "host",
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "number": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "repo",
+          "number"
+        ],
+        "additionalProperties": false
+      },
+      "url": {
+        "type": "string",
+        "format": "uri"
+      },
+      "head_repo": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+          }
+        },
+        "required": [
+          "host",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "head": {
+        "type": "string",
+        "minLength": 1
+      },
+      "base": {
+        "type": "string",
+        "minLength": 1
+      },
+      "head_sha": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{40}$"
+      },
+      "is_draft": {
+        "type": "boolean"
+      },
+      "state": {
+        "type": "string",
+        "enum": [
+          "open",
+          "closed",
+          "merged"
+        ]
+      },
+      "title": {
+        "type": "string"
+      },
+      "body": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "ref",
+      "url",
+      "head_repo",
+      "head",
+      "base",
+      "head_sha",
+      "is_draft",
+      "state",
+      "title",
+      "body"
+    ],
+    "additionalProperties": false
+  },
+  "WorkItemRef": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "repo": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+          }
+        },
+        "required": [
+          "host",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "number": {
+        "type": "integer",
+        "exclusiveMinimum": 0,
+        "maximum": 9007199254740991
+      }
+    },
+    "required": [
+      "repo",
+      "number"
+    ],
+    "additionalProperties": false
+  },
+  "PublicRequest": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "pr.view"
+          },
+          "ref": {
+            "type": "object",
+            "properties": {
+              "repo": {
+                "type": "object",
+                "properties": {
+                  "host": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+                  },
+                  "path": {
+                    "type": "string",
+                    "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+                  }
+                },
+                "required": [
+                  "host",
+                  "path"
+                ],
+                "additionalProperties": false
+              },
+              "number": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "repo",
+              "number"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "ref"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "pr.create"
+          },
+          "repo": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+              },
+              "path": {
+                "type": "string",
+                "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+              }
+            },
+            "required": [
+              "host",
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "head_repo": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+              },
+              "path": {
+                "type": "string",
+                "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+              }
+            },
+            "required": [
+              "host",
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "head": {
+            "type": "string",
+            "minLength": 1
+          },
+          "base": {
+            "type": "string",
+            "minLength": 1
+          },
+          "head_sha": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "body": {
+            "type": "string"
+          },
+          "is_draft": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "op",
+          "repo",
+          "head_repo",
+          "head",
+          "base",
+          "head_sha",
+          "title",
+          "body",
+          "is_draft"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "pr.edit-body"
+          },
+          "ref": {
+            "type": "object",
+            "properties": {
+              "repo": {
+                "type": "object",
+                "properties": {
+                  "host": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+                  },
+                  "path": {
+                    "type": "string",
+                    "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+                  }
+                },
+                "required": [
+                  "host",
+                  "path"
+                ],
+                "additionalProperties": false
+              },
+              "number": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "repo",
+              "number"
+            ],
+            "additionalProperties": false
+          },
+          "expected": {
+            "type": "object",
+            "properties": {
+              "head_repo": {
+                "type": "object",
+                "properties": {
+                  "host": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+                  },
+                  "path": {
+                    "type": "string",
+                    "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+                  }
+                },
+                "required": [
+                  "host",
+                  "path"
+                ],
+                "additionalProperties": false
+              },
+              "head": {
+                "type": "string",
+                "minLength": 1
+              },
+              "base": {
+                "type": "string",
+                "minLength": 1
+              },
+              "head_sha": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{40}$"
+              }
+            },
+            "required": [
+              "head_repo",
+              "head",
+              "base",
+              "head_sha"
+            ],
+            "additionalProperties": false
+          },
+          "body": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "op",
+          "ref",
+          "expected",
+          "body"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "pr.ready"
+          },
+          "ref": {
+            "type": "object",
+            "properties": {
+              "repo": {
+                "type": "object",
+                "properties": {
+                  "host": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+                  },
+                  "path": {
+                    "type": "string",
+                    "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+                  }
+                },
+                "required": [
+                  "host",
+                  "path"
+                ],
+                "additionalProperties": false
+              },
+              "number": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "repo",
+              "number"
+            ],
+            "additionalProperties": false
+          },
+          "expected": {
+            "type": "object",
+            "properties": {
+              "head_repo": {
+                "type": "object",
+                "properties": {
+                  "host": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+                  },
+                  "path": {
+                    "type": "string",
+                    "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+                  }
+                },
+                "required": [
+                  "host",
+                  "path"
+                ],
+                "additionalProperties": false
+              },
+              "head": {
+                "type": "string",
+                "minLength": 1
+              },
+              "base": {
+                "type": "string",
+                "minLength": 1
+              },
+              "head_sha": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{40}$"
+              }
+            },
+            "required": [
+              "head_repo",
+              "head",
+              "base",
+              "head_sha"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "ref",
+          "expected"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "workitem.view"
+          },
+          "ref": {
+            "type": "object",
+            "properties": {
+              "repo": {
+                "type": "object",
+                "properties": {
+                  "host": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+                  },
+                  "path": {
+                    "type": "string",
+                    "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+                  }
+                },
+                "required": [
+                  "host",
+                  "path"
+                ],
+                "additionalProperties": false
+              },
+              "number": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "repo",
+              "number"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "op",
+          "ref"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "const": "comment.upsert"
+          },
+          "target": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "pr"
+                  },
+                  "ref": {
+                    "type": "object",
+                    "properties": {
+                      "repo": {
+                        "type": "object",
+                        "properties": {
+                          "host": {
+                            "type": "string",
+                            "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+                          },
+                          "path": {
+                            "type": "string",
+                            "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+                          }
+                        },
+                        "required": [
+                          "host",
+                          "path"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "number": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "repo",
+                      "number"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "expected": {
+                    "type": "object",
+                    "properties": {
+                      "head_repo": {
+                        "type": "object",
+                        "properties": {
+                          "host": {
+                            "type": "string",
+                            "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+                          },
+                          "path": {
+                            "type": "string",
+                            "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+                          }
+                        },
+                        "required": [
+                          "host",
+                          "path"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "head": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "base": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "head_sha": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{40}$"
+                      }
+                    },
+                    "required": [
+                      "head_repo",
+                      "head",
+                      "base",
+                      "head_sha"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "kind",
+                  "ref",
+                  "expected"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "workitem"
+                  },
+                  "ref": {
+                    "type": "object",
+                    "properties": {
+                      "repo": {
+                        "type": "object",
+                        "properties": {
+                          "host": {
+                            "type": "string",
+                            "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+                          },
+                          "path": {
+                            "type": "string",
+                            "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+                          }
+                        },
+                        "required": [
+                          "host",
+                          "path"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "number": {
+                        "type": "integer",
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "repo",
+                      "number"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": [
+                  "kind",
+                  "ref"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "marker": {
+            "type": "string",
+            "pattern": "^<!-- [a-z0-9-]+ -->$"
+          },
+          "body": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "op",
+          "target",
+          "marker",
+          "body"
+        ],
+        "additionalProperties": false
+      }
+    ]
+  },
+  "pr.view": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "ref": {
+        "type": "object",
+        "properties": {
+          "repo": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+              },
+              "path": {
+                "type": "string",
+                "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+              }
+            },
+            "required": [
+              "host",
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "number": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "repo",
+          "number"
+        ],
+        "additionalProperties": false
+      },
+      "url": {
+        "type": "string",
+        "format": "uri"
+      },
+      "head_repo": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+          }
+        },
+        "required": [
+          "host",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "head": {
+        "type": "string",
+        "minLength": 1
+      },
+      "base": {
+        "type": "string",
+        "minLength": 1
+      },
+      "head_sha": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{40}$"
+      },
+      "is_draft": {
+        "type": "boolean"
+      },
+      "state": {
+        "type": "string",
+        "enum": [
+          "open",
+          "closed",
+          "merged"
+        ]
+      },
+      "title": {
+        "type": "string"
+      },
+      "body": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "ref",
+      "url",
+      "head_repo",
+      "head",
+      "base",
+      "head_sha",
+      "is_draft",
+      "state",
+      "title",
+      "body"
+    ],
+    "additionalProperties": false
+  },
+  "pr.create": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "ref": {
+        "type": "object",
+        "properties": {
+          "repo": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+              },
+              "path": {
+                "type": "string",
+                "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+              }
+            },
+            "required": [
+              "host",
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "number": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "repo",
+          "number"
+        ],
+        "additionalProperties": false
+      },
+      "url": {
+        "type": "string",
+        "format": "uri"
+      },
+      "head_repo": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+          }
+        },
+        "required": [
+          "host",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "head": {
+        "type": "string",
+        "minLength": 1
+      },
+      "base": {
+        "type": "string",
+        "minLength": 1
+      },
+      "head_sha": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{40}$"
+      },
+      "is_draft": {
+        "type": "boolean"
+      },
+      "state": {
+        "type": "string",
+        "enum": [
+          "open",
+          "closed",
+          "merged"
+        ]
+      },
+      "title": {
+        "type": "string"
+      },
+      "body": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "ref",
+      "url",
+      "head_repo",
+      "head",
+      "base",
+      "head_sha",
+      "is_draft",
+      "state",
+      "title",
+      "body"
+    ],
+    "additionalProperties": false
+  },
+  "pr.edit-body": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "ref": {
+        "type": "object",
+        "properties": {
+          "repo": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+              },
+              "path": {
+                "type": "string",
+                "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+              }
+            },
+            "required": [
+              "host",
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "number": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "repo",
+          "number"
+        ],
+        "additionalProperties": false
+      },
+      "url": {
+        "type": "string",
+        "format": "uri"
+      },
+      "head_repo": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+          }
+        },
+        "required": [
+          "host",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "head": {
+        "type": "string",
+        "minLength": 1
+      },
+      "base": {
+        "type": "string",
+        "minLength": 1
+      },
+      "head_sha": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{40}$"
+      },
+      "is_draft": {
+        "type": "boolean"
+      },
+      "state": {
+        "type": "string",
+        "enum": [
+          "open",
+          "closed",
+          "merged"
+        ]
+      },
+      "title": {
+        "type": "string"
+      },
+      "body": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "ref",
+      "url",
+      "head_repo",
+      "head",
+      "base",
+      "head_sha",
+      "is_draft",
+      "state",
+      "title",
+      "body"
+    ],
+    "additionalProperties": false
+  },
+  "pr.ready": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "ref": {
+        "type": "object",
+        "properties": {
+          "repo": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+              },
+              "path": {
+                "type": "string",
+                "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+              }
+            },
+            "required": [
+              "host",
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "number": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "repo",
+          "number"
+        ],
+        "additionalProperties": false
+      },
+      "url": {
+        "type": "string",
+        "format": "uri"
+      },
+      "head_repo": {
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+          }
+        },
+        "required": [
+          "host",
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "head": {
+        "type": "string",
+        "minLength": 1
+      },
+      "base": {
+        "type": "string",
+        "minLength": 1
+      },
+      "head_sha": {
+        "type": "string",
+        "pattern": "^[a-f0-9]{40}$"
+      },
+      "is_draft": {
+        "type": "boolean"
+      },
+      "state": {
+        "type": "string",
+        "enum": [
+          "open",
+          "closed",
+          "merged"
+        ]
+      },
+      "title": {
+        "type": "string"
+      },
+      "body": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "ref",
+      "url",
+      "head_repo",
+      "head",
+      "base",
+      "head_sha",
+      "is_draft",
+      "state",
+      "title",
+      "body"
+    ],
+    "additionalProperties": false
+  },
+  "workitem.view": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "ref": {
+        "type": "object",
+        "properties": {
+          "repo": {
+            "type": "object",
+            "properties": {
+              "host": {
+                "type": "string",
+                "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+              },
+              "path": {
+                "type": "string",
+                "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+              }
+            },
+            "required": [
+              "host",
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          "number": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "repo",
+          "number"
+        ],
+        "additionalProperties": false
+      },
+      "url": {
+        "type": "string",
+        "format": "uri"
+      },
+      "title": {
+        "type": "string"
+      },
+      "body": {
+        "type": "string"
+      },
+      "state": {
+        "type": "string",
+        "enum": [
+          "open",
+          "closed"
+        ]
+      }
+    },
+    "required": [
+      "ref",
+      "url",
+      "title",
+      "body",
+      "state"
+    ],
+    "additionalProperties": false
+  },
+  "comment.upsert": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "target": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "pr"
+              },
+              "ref": {
+                "type": "object",
+                "properties": {
+                  "repo": {
+                    "type": "object",
+                    "properties": {
+                      "host": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+                      },
+                      "path": {
+                        "type": "string",
+                        "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+                      }
+                    },
+                    "required": [
+                      "host",
+                      "path"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "number": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "repo",
+                  "number"
+                ],
+                "additionalProperties": false
+              },
+              "expected": {
+                "type": "object",
+                "properties": {
+                  "head_repo": {
+                    "type": "object",
+                    "properties": {
+                      "host": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+                      },
+                      "path": {
+                        "type": "string",
+                        "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+                      }
+                    },
+                    "required": [
+                      "host",
+                      "path"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "head": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "base": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "head_sha": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{40}$"
+                  }
+                },
+                "required": [
+                  "head_repo",
+                  "head",
+                  "base",
+                  "head_sha"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "kind",
+              "ref",
+              "expected"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "workitem"
+              },
+              "ref": {
+                "type": "object",
+                "properties": {
+                  "repo": {
+                    "type": "object",
+                    "properties": {
+                      "host": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*$"
+                      },
+                      "path": {
+                        "type": "string",
+                        "pattern": "^[\\p{L}\\p{N}_.-]+(?:\\/[\\p{L}\\p{N}_.-]+)+$"
+                      }
+                    },
+                    "required": [
+                      "host",
+                      "path"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "number": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "repo",
+                  "number"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "kind",
+              "ref"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "id": {
+        "type": "integer",
+        "exclusiveMinimum": 0,
+        "maximum": 9007199254740991
+      },
+      "url": {
+        "type": "string",
+        "format": "uri"
+      },
+      "body": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "target",
+      "id",
+      "url",
+      "body"
+    ],
+    "additionalProperties": false
+  },
   "RepoRef": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",

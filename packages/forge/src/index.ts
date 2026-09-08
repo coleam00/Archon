@@ -7,6 +7,7 @@
  * §standalone-core).
  */
 export * from './schemas';
+export { nativeGitHubCredential } from './dispatch/credential';
 export { ForgeDispatcher, DuplicateHostClaimError, parseRemoteUrl } from './dispatch/dispatcher';
 export type {
   ForgeDispatchResult,

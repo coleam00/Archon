@@ -1,3 +1,4 @@
+import { prRefSchema, type RepoRef, type PrRef } from '@archon/forge';
 /**
  * GitHub platform adapter using Octokit REST API and Webhooks
  * Handles issue and PR comments with @mention detection
@@ -62,30 +63,13 @@ const BOT_RESPONSE_MARKER = '<!-- archon-bot-response -->';
 
 type ConversationLocker = Pick<ConversationLockManager, 'acquireLock'>;
 
-interface PullRequestIdentity {
-  host: string;
-  path: string;
-  number: number;
-}
+type PullRequestIdentity = RepoRef & Pick<PrRef, 'number'>;
 
 function readPullRequestIdentity(value: unknown): PullRequestIdentity | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  const repo = record.repo;
-  if (typeof repo !== 'object' || repo === null || Array.isArray(repo)) return null;
-  const repoRecord = repo as Record<string, unknown>;
-  if (
-    typeof repoRecord.host !== 'string' ||
-    repoRecord.host === '' ||
-    typeof repoRecord.path !== 'string' ||
-    repoRecord.path === '' ||
-    typeof record.number !== 'number' ||
-    !Number.isInteger(record.number) ||
-    record.number <= 0
-  ) {
-    return null;
-  }
-  return { host: repoRecord.host, path: repoRecord.path, number: record.number };
+  // Existing persisted runs predate the forge record's nested ref. Keep their wakeups working.
+  const parsed = prRefSchema.safeParse('ref' in value ? value.ref : value);
+  return parsed.success ? { ...parsed.data.repo, number: parsed.data.number } : null;
 }
 
 function candidateMatchesPullRequest(

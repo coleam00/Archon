@@ -53,7 +53,7 @@ describe('GitHub completed-check workflow signal — real SQLite', () => {
       waitingSince: new Date(now - 60_000).toISOString(),
       resumeAt: new Date(now + 3_600_000).toISOString(),
     };
-    const seedRun = async (id: string, repositoryPath: string): Promise<void> => {
+    const seedRun = async (id: string, repositoryPath: string, legacy = false): Promise<void> => {
       await createWorkflowRun({
         id,
         workflow_name: 'archon-deliver',
@@ -67,10 +67,14 @@ describe('GitHub completed-check workflow signal — real SQLite', () => {
         step_name: 'pr',
         data: {
           output_type: 'pull-request',
-          structured_output: {
-            repo: { host: 'github.com', path: repositoryPath },
-            number: 42,
-          },
+          structured_output: legacy
+            ? {
+                repo: { host: 'github.com', path: repositoryPath },
+                number: 43,
+              }
+            : {
+                ref: { repo: { host: 'github.com', path: repositoryPath }, number: 42 },
+              },
         },
       });
       await pauseWorkflowRunForWait(id, wait, {
@@ -81,6 +85,7 @@ describe('GitHub completed-check workflow signal — real SQLite', () => {
 
     await seedRun('owned-pr-run', 'example/repo');
     await seedRun('different-repo-run', 'other/repo');
+    await seedRun('legacy-pr-run', 'example/repo', true);
 
     const payload = JSON.stringify({
       action: 'completed',
@@ -88,7 +93,7 @@ describe('GitHub completed-check workflow signal — real SQLite', () => {
         status: 'completed',
         conclusion: 'success',
         completed_at: new Date(now).toISOString(),
-        pull_requests: [{ number: 42 }],
+        pull_requests: [{ number: 42 }, { number: 43 }],
       },
       repository: { full_name: 'example/repo' },
       sender: { login: 'github-actions[bot]' },
@@ -112,5 +117,8 @@ describe('GitHub completed-check workflow signal — real SQLite', () => {
     });
     const differentRun = await getWorkflowRun('different-repo-run');
     expect(differentRun?.metadata.wait).toEqual(wait);
+    expect((await getWorkflowRun('legacy-pr-run'))?.metadata.wait).toMatchObject({
+      signaledAt: expect.any(String),
+    });
   });
 });

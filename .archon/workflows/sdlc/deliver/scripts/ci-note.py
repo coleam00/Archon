@@ -4,7 +4,7 @@ import os
 import subprocess
 import sys
 
-ref = {"repo": json.loads(os.environ["INPUTS_REPO"]), "number": int(os.environ["INPUTS_PR_NUMBER"])}
+ref = json.loads(os.environ["INPUTS_REF"])
 command = [os.environ["ARCHON_EXECUTABLE"], *json.loads(os.environ["ARCHON_EXECUTABLE_ARGS"])]
 result = subprocess.run([*command, "forge", "checks", "--ref", json.dumps(ref), "--json"], capture_output=True, text=True, encoding="utf-8")
 sys.stderr.write(result.stderr)

@@ -11,6 +11,95 @@ export type RepoRef = z.infer<typeof repoRefSchema>;
 export const prRefSchema = z.object({ repo: repoRefSchema, number: z.number().int().positive() });
 export type PrRef = z.infer<typeof prRefSchema>;
 export const shaSchema = z.string().regex(/^[a-f0-9]{40}$/);
+export const branchSchema = z
+  .string()
+  .min(1)
+  .refine(
+    value =>
+      !value.startsWith('-') &&
+      !/[\s~^:?*[\\]/.test(value) &&
+      !value.includes('..') &&
+      !value.includes('@{')
+  );
+export const workItemRefSchema = prRefSchema;
+export const prRecordSchema = z.object({
+  ref: prRefSchema,
+  url: z.url(),
+  head_repo: repoRefSchema,
+  head: branchSchema,
+  base: branchSchema,
+  head_sha: shaSchema,
+  is_draft: z.boolean(),
+  state: z.enum(['open', 'closed', 'merged']),
+  title: z.string(),
+  body: z.string(),
+});
+export type PrRecord = z.infer<typeof prRecordSchema>;
+export const expectedPrSchema = prRecordSchema.pick({
+  head_repo: true,
+  head: true,
+  base: true,
+  head_sha: true,
+});
+export const workItemRecordSchema = z.object({
+  ref: workItemRefSchema,
+  url: z.url(),
+  title: z.string(),
+  body: z.string(),
+  state: z.enum(['open', 'closed']),
+});
+export const commentTargetSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('pr'), ref: prRefSchema, expected: expectedPrSchema }),
+  z.object({ kind: z.literal('workitem'), ref: workItemRefSchema }),
+]);
+export const commentRecordSchema = z.object({
+  target: commentTargetSchema,
+  id: z.number().int().positive(),
+  url: z.url(),
+  body: z.string(),
+});
+export const publicRequestSchema = z.discriminatedUnion('op', [
+  z.object({ op: z.literal('pr.view'), ref: prRefSchema }),
+  z.object({
+    op: z.literal('pr.create'),
+    repo: repoRefSchema,
+    ...expectedPrSchema.shape,
+    title: z.string().min(1),
+    body: z.string(),
+    is_draft: z.boolean(),
+  }),
+  z.object({
+    op: z.literal('pr.edit-body'),
+    ref: prRefSchema,
+    expected: expectedPrSchema,
+    body: z.string(),
+  }),
+  z.object({ op: z.literal('pr.ready'), ref: prRefSchema, expected: expectedPrSchema }),
+  z.object({ op: z.literal('workitem.view'), ref: workItemRefSchema }),
+  z.object({
+    op: z.literal('comment.upsert'),
+    target: commentTargetSchema,
+    marker: z.string().regex(/^<!-- [a-z0-9-]+ -->$/),
+    body: z.string(),
+  }),
+]);
+export type PublicRequest = z.infer<typeof publicRequestSchema>;
+export const publicResultSchemas = {
+  'pr.view': prRecordSchema,
+  'pr.create': prRecordSchema,
+  'pr.edit-body': prRecordSchema,
+  'pr.ready': prRecordSchema,
+  'workitem.view': workItemRecordSchema,
+  'comment.upsert': commentRecordSchema,
+};
+export type PublicResult = z.infer<(typeof publicResultSchemas)[keyof typeof publicResultSchemas]>;
+export function publicRequestRepo(request: PublicRequest): RepoRef {
+  return request.op === 'pr.create'
+    ? request.repo
+    : request.op === 'comment.upsert'
+      ? request.target.ref.repo
+      : request.ref.repo;
+}
 export const checksStateSchema = z.enum(['none', 'pending', 'green', 'red', 'gated', 'unknown']);
 export type ChecksState = z.infer<typeof checksStateSchema>;
 export const CHECKS = checksStateSchema.enum;
