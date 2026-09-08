@@ -181,7 +181,7 @@ async function loadWorkflowsFromDir(dirPath: string, depth = 0): Promise<DirLoad
         if (entryStat.isDirectory()) {
           // Only descend if we're still within the depth cap. Past the cap,
           // subdirectories are ignored (same convention as the paths-package
-          // `findMarkdownFilesRecursive` depth cap).
+          // `findCommandFiles` depth cap).
           if (depth >= MAX_DISCOVERY_DEPTH) continue;
           const subResult = await loadWorkflowsFromDir(entryPath, depth + 1);
           for (const [filename, parsed] of subResult.workflows) {
@@ -480,9 +480,9 @@ async function resolveCommandContentForScan(
   dirs.push(roots.globalCommands);
 
   for (const dir of dirs) {
-    let entries: Awaited<ReturnType<typeof archonPaths.findMarkdownFilesRecursive>>;
+    let entries: Awaited<ReturnType<typeof archonPaths.findCommandFiles>>;
     try {
-      entries = await archonPaths.findMarkdownFilesRecursive(dir, '', { maxDepth: 1 });
+      entries = await archonPaths.findCommandFiles(dir);
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code === 'ENOENT') continue;
@@ -507,9 +507,9 @@ async function resolveCommandContentForScan(
     return BUNDLED_COMMANDS[commandName] ?? null;
   }
   const defaultsDir = roots.bundledCommands;
-  let entries: Awaited<ReturnType<typeof archonPaths.findMarkdownFilesRecursive>>;
+  let entries: Awaited<ReturnType<typeof archonPaths.findCommandFiles>>;
   try {
-    entries = await archonPaths.findMarkdownFilesRecursive(defaultsDir, '', { maxDepth: 1 });
+    entries = await archonPaths.findCommandFiles(defaultsDir);
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
     if (err.code === 'ENOENT') return null;

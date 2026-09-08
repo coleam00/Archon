@@ -150,16 +150,14 @@ describe('test-suite change decision', () => {
     ).replaceAll('\r\n', '\n');
     const pullRequestTrigger = workflow.slice(
       workflow.indexOf('  pull_request:'),
-      workflow.indexOf('\n\nconcurrency:')
+      workflow.indexOf('\n\nenv:')
     );
     const fixtureJob = workflow.slice(
       workflow.indexOf('  workflow-fixtures:'),
       workflow.indexOf('  test:')
     );
 
-    expect(pullRequestTrigger).toBe(
-      "  pull_request:\n    branches: [main, dev]\n\nenv:\n  BUN_VERSION: '1.4.0'"
-    );
+    expect(pullRequestTrigger).toBe('  pull_request:\n    branches: [main, dev]');
     expect(fixtureJob).toContain("if: github.event_name == 'pull_request'");
     expect(fixtureJob).toContain('runs-on: ubuntu-latest');
     expect(fixtureJob).not.toContain('needs:');

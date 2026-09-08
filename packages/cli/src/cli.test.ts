@@ -56,33 +56,41 @@ function repositoryInput(path: string): string | undefined {
   return packagesIndex === -1 ? undefined : normalized.slice(packagesIndex);
 }
 
+function buildImportGraph(entry: string, outdir: string): BuildMetafile {
+  const metafilePath = join(outdir, 'metafile.json');
+  const result = spawnSync(
+    process.execPath,
+    [
+      'build',
+      entry,
+      '--target=bun',
+      '--format=esm',
+      '--splitting',
+      `--outdir=${outdir}`,
+      `--metafile=${metafilePath}`,
+    ],
+    { cwd: repoRoot, encoding: 'utf8' }
+  );
+  if (result.status !== 0) {
+    throw new Error(`Import graph build failed for ${entry}:\n${result.stdout}\n${result.stderr}`);
+  }
+  return JSON.parse(readFileSync(metafilePath, 'utf8')) as BuildMetafile;
+}
+
 describe('CLI startup import boundary', () => {
   let buildDir: string;
   let metafile: BuildMetafile;
+  let handoffMetafile: BuildMetafile;
 
-  beforeAll(async () => {
+  beforeAll(() => {
     buildDir = mkdtempSync(join(tmpdir(), 'archon-cli-import-graph-'));
-    const metafilePath = join(buildDir, 'metafile.json');
-    const result = spawnSync(
-      process.execPath,
-      [
-        'build',
-        CLI_ENTRY,
-        '--target=bun',
-        '--format=esm',
-        '--splitting',
-        `--outdir=${buildDir}`,
-        `--metafile=${metafilePath}`,
-      ],
-      {
-        cwd: repoRoot,
-        encoding: 'utf8',
-      }
+    metafile = buildImportGraph(CLI_ENTRY, join(buildDir, 'cli'));
+    // Shared chunks can include unrelated CLI inputs as Bun's splitting changes.
+    // An isolated entrypoint measures the decoder's own dependency boundary.
+    handoffMetafile = buildImportGraph(
+      join(repoRoot, 'packages/core/src/config/run-config-handoff.ts'),
+      join(buildDir, 'handoff')
     );
-    if (result.status !== 0) {
-      throw new Error(`CLI graph build failed:\n${result.stdout}\n${result.stderr}`);
-    }
-    metafile = JSON.parse(readFileSync(metafilePath, 'utf8')) as BuildMetafile;
   });
 
   afterAll(async () => {
@@ -110,16 +118,10 @@ describe('CLI startup import boundary', () => {
   });
 
   it('keeps detached handoff decoding on its audited schema, crypto, and path leaves', () => {
-    const decoderChunk = Object.entries(metafile.outputs).find(([, output]) =>
-      Object.keys(output.inputs).some(input =>
-        input.replaceAll('\\', '/').endsWith('packages/core/src/config/run-config-handoff.ts')
-      )
-    )?.[0];
-    expect(decoderChunk).toBeDefined();
-
-    const internalInputs = staticallyReachableInputs(metafile, decoderChunk ?? '')
+    const internalInputs = Object.keys(handoffMetafile.inputs)
       .map(repositoryInput)
-      .filter((input): input is string => input !== undefined);
+      .filter((input): input is string => input !== undefined)
+      .sort();
     expect(internalInputs).toEqual([
       'packages/core/src/config/run-config-handoff.ts',
       'packages/core/src/utils/token-crypto.ts',
@@ -133,6 +135,32 @@ describe('CLI startup import boundary', () => {
     ]);
   });
 });
+
+/**
+ * The `Options:` block of a scoped `--help` render, spawned as a subprocess so
+ * the assertion sees the real rendered output.
+ *
+ * Scoped-flag assertions target this slice rather than the whole render. A flag
+ * name or wording that also appears in the entry's `spec` or Commands-block
+ * description would otherwise keep the test green with the entry's
+ * `scopedFlags` deleted, which is the fake guard #3153 recorded for
+ * `workflow reset-sessions` and `isolation cleanup --merged`. Deleting a
+ * `scopedFlags` entry drops its line from this slice; deleting the whole block
+ * suppresses the section and fails the marker assertion below.
+ */
+function scopedHelpOptions(argv: string[]): string {
+  const result = spawnSync(process.execPath, [CLI_ENTRY, ...argv, '--help'], {
+    encoding: 'utf8',
+    env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
+  });
+  expect(result.status).toBe(0);
+  const marker = '\nOptions:\n';
+  const start = result.stdout.indexOf(marker);
+  expect(start, `no Options block in 'archon ${argv.join(' ')} --help'`).toBeGreaterThanOrEqual(0);
+  const body = result.stdout.slice(start + marker.length);
+  const end = body.indexOf('\n\n');
+  return end === -1 ? body : body.slice(0, end);
+}
 
 describe('CLI help output', () => {
   // The five tests assert disjoint fragments of one static usage string, so a
@@ -483,51 +511,24 @@ Examples:
   });
 
   it('renders --merged and --include-closed in isolation cleanup --help', () => {
-    const result = spawnSync(process.execPath, [CLI_ENTRY, 'isolation', 'cleanup', '--help'], {
-      encoding: 'utf8',
-      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
-    });
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain('--merged');
-    expect(result.stdout).toContain('--include-closed');
+    const options = scopedHelpOptions(['isolation', 'cleanup']);
+    expect(options).toContain('--merged');
+    expect(options).toContain('--include-closed');
   });
 
   it('renders --reason in workflow reject --help', () => {
-    const result = spawnSync(process.execPath, [CLI_ENTRY, 'workflow', 'reject', '--help'], {
-      encoding: 'utf8',
-      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
-    });
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain('--reason');
+    expect(scopedHelpOptions(['workflow', 'reject'])).toContain('--reason');
   });
 
   it('renders --scope, --node, and --yes in workflow reset-sessions --help', () => {
-    const result = spawnSync(
-      process.execPath,
-      [CLI_ENTRY, 'workflow', 'reset-sessions', '--help'],
-      {
-        encoding: 'utf8',
-        env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
-      }
-    );
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain('--scope');
-    expect(result.stdout).toContain('--node');
-    expect(result.stdout).toContain('--yes');
+    const options = scopedHelpOptions(['workflow', 'reset-sessions']);
+    expect(options).toContain('--scope');
+    expect(options).toContain('--node');
+    expect(options).toContain('--yes');
   });
 
   it('renders --full in workflow list --help', () => {
-    const result = spawnSync(process.execPath, [CLI_ENTRY, 'workflow', 'list', '--help'], {
-      encoding: 'utf8',
-      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
-    });
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain('--full');
-    // Unlike its siblings, `--full` is also mentioned in the Commands spec and
-    // description, so `toContain('--full')` alone would pass even without a
-    // scopedFlags entry. The scoped description is the unique contribution —
-    // guard it so deleting scopedFlags trips this test.
-    expect(result.stdout).toContain('exact description instead of the compact preview');
+    expect(scopedHelpOptions(['workflow', 'list'])).toContain('--full');
   });
 });
 
