@@ -673,8 +673,8 @@ function parseDagNode(
   }
 
   // Warn about AI-specific fields on non-AI nodes (runtime behavior, not schema errors).
-  // Surfaced through BOTH channels: the log stream, and `parseWarnings` (#2213) so the
-  // workflow's actual author sees it via `/api/workflows` and `/workflow list` — a field
+  // Surfaced through BOTH channels: the log stream, and `parseWarnings` (#2213), so the
+  // workflow's actual author sees it via `/api/workflows` and `/workflow list`. A field
   // silently dropped by the schema (an include's `denied_tools`, a gate's `mcp`, ...) is
   // the exact class of bug a log-only warning misses, since nothing reads that channel
   // but an operator tailing server logs.

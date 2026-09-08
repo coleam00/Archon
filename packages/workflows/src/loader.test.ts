@@ -2421,14 +2421,12 @@ nodes:
     it("warns, operator-visibly, that an include's denied_tools is dropped rather than enforced", async () => {
       // The real bug behind #3196: a caller sandboxing a block it did not write got no
       // signal that its restriction never attached. A log line only an operator tailing
-      // server output can see is not enough — this must land in `parseWarnings`, the
+      // server output can see is not enough; this must land in `parseWarnings`, the
       // channel the workflow's actual author reads via `/api/workflows` and `/workflow
       // list` (#2213).
-      const workflowDir = join(testDir, '.archon', 'workflows');
-      await mkdir(workflowDir, { recursive: true });
-
-      await writeFile(
-        join(workflowDir, 'block.yaml'),
+      await writeWorkflowFile(
+        testDir,
+        'block.yaml',
         `
 name: block
 description: An included building block
@@ -2437,8 +2435,9 @@ nodes:
     prompt: "do the work"
 `
       );
-      await writeFile(
-        join(workflowDir, 'include-denied-tools.yaml'),
+      await writeWorkflowFile(
+        testDir,
+        'include-denied-tools.yaml',
         `
 name: include-denied-tools
 description: A caller trying to sandbox a block it did not write

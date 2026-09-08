@@ -1922,7 +1922,7 @@ describe('dagNodeSchema — include', () => {
       expect(node.output_type).toBeUndefined();
       // A caller-side denial cannot honestly narrow what the included block's own
       // nodes will run (provider enforcement differs per node kind, and this is not
-      // path isolation) — the loader's ignored-field warning is the honest signal.
+      // path isolation); the loader's ignored-field warning is the honest signal.
       expect(node.denied_tools).toBeUndefined();
     }
   });
@@ -2024,7 +2024,7 @@ describe('INCLUDE_NODE_IGNORED_FIELDS', () => {
   });
 
   test('ignores denied_tools and allowed_tools: policy restrictions are not path isolation', () => {
-    // An include has no execution site of its own — provider enforcement of a tool
+    // An include has no execution site of its own. Provider enforcement of a tool
     // policy differs per node kind, and a caller-side list cannot honestly narrow or
     // deny what the included block's own nodes will run. #2848 owns building real
     // provider-capability enforcement or path isolation across an include boundary;
