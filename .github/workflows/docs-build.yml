@@ -18,7 +18,7 @@ on:
       - '.github/workflows/docs-build.yml'
 
 env:
-  BUN_VERSION: '1.4.0'
+  BUN_VERSION: '1.4.2'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

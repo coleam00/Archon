@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 env:
-  BUN_VERSION: '1.4.0'
+  BUN_VERSION: '1.4.2'
 
 permissions:
   contents: read

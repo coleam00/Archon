@@ -24,7 +24,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Pinned tool versions (bump deliberately; keep in sync with the version the
 # maintainer validated). CLAUDE_VERSION 'stable' / 'latest' / 'X.Y.Z' accepted.
 ARG CLAUDE_VERSION=2.1.211
-ARG BUN_VERSION=1.3.14
+ARG BUN_VERSION=1.4.2
 ARG UV_VERSION=0.11.29
 
 # Runtime deps: git/bash/rsync for workflow work, ca-certificates+curl for the

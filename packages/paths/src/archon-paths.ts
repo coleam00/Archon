@@ -319,8 +319,13 @@ export function getWorkflowFolderSearchPaths(): string[] {
  * the number of folder boundaries between `rootPath` and the file — so at
  * `maxDepth: 1`, files at `rootPath/file.md` (depth 0) and `rootPath/group/file.md`
  * (depth 1) are included, but `rootPath/group/sub/file.md` (depth 2) is not.
- * Default is `Infinity` (no cap) for backwards compatibility with callers that
- * want to copy arbitrary subtrees (e.g. clone handlers).
+ * Default is `Infinity` (no cap). Command consumers use `findCommandFiles`
+ * to apply the executable-command depth and duplicate-selection policy.
+ *
+ * Results are in a defined order: siblings are visited in code-unit order by
+ * name, and a directory's own results appear where that directory sorts among
+ * its siblings. Callers may rely on the order being the same on every machine
+ * and on every call; they must not sort again to obtain it.
  */
 export async function findMarkdownFilesRecursive(
   rootPath: string,
@@ -328,6 +333,19 @@ export async function findMarkdownFilesRecursive(
   options?: { maxDepth?: number }
 ): Promise<{ commandName: string; relativePath: string }[]> {
   return findMarkdownFilesRecursiveImpl(rootPath, relativePath, options, new Set<string>());
+}
+
+/** Discover executable commands in one scope: one folder deep, first name wins. */
+export async function findCommandFiles(
+  rootPath: string
+): ReturnType<typeof findMarkdownFilesRecursive> {
+  const entries = await findMarkdownFilesRecursive(rootPath, '', { maxDepth: 1 });
+  const seen = new Set<string>();
+  return entries.filter(({ commandName }) => {
+    if (seen.has(commandName)) return false;
+    seen.add(commandName);
+    return true;
+  });
 }
 
 function shouldSkipSymlinkTargetError(err: NodeJS.ErrnoException): boolean {
@@ -395,6 +413,14 @@ async function findMarkdownFilesRecursiveImpl(
     if (err.code === 'ENOENT') return results;
     throw err;
   }
+
+  // `readdir` returns entries in filesystem order, which differs between
+  // machines and can differ between calls on one machine. Every consumer of
+  // this walk inherits that order, and `GET /api/commands` renders it to an
+  // operator. Order is defined once here, at the only owner, rather than at
+  // each call site. The comparison is on code units, not `localeCompare`,
+  // so the result does not vary with the host locale.
+  entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 
   for (const entry of entries) {
     if (entry.name.startsWith('.') || entry.name === 'node_modules') {

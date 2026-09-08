@@ -11,7 +11,6 @@ import {
   checkPiModule,
   generateEnvContent,
   generateWebhookSecret,
-  spawnTerminalWithSetup,
   detectClaudeExecutablePath,
   writeScopedEnv,
   serializeEnv,
@@ -396,26 +395,6 @@ CODEX_ACCOUNT_ID=account1
       expect(content).toContain('OPENROUTER_API_KEY=or-key');
       expect(content).toContain('DEFAULT_AI_ASSISTANT=claude');
       expect(content).toContain('# Pi Authentication');
-    });
-  });
-
-  describe('spawnTerminalWithSetup', () => {
-    // Skip this test because it requires a terminal emulator to be present
-    // and spawn() throws synchronously when executable is not found in PATH
-    // The actual functionality is manually tested
-    it.skip('should return a SpawnResult object (requires terminal emulator)', () => {
-      const result = spawnTerminalWithSetup(TEST_DIR);
-
-      expect(result).toHaveProperty('success');
-      expect(typeof result.success).toBe('boolean');
-      if (!result.success) {
-        expect(result).toHaveProperty('error');
-      }
-    });
-
-    it('should export spawnTerminalWithSetup function', () => {
-      // Just verify the function is exported and callable
-      expect(typeof spawnTerminalWithSetup).toBe('function');
     });
   });
 

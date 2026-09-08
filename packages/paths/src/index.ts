@@ -57,6 +57,7 @@ export {
   ensureProjectStructure,
   createProjectSourceSymlink,
   findMarkdownFilesRecursive,
+  findCommandFiles,
   getWebDistDir,
 } from './archon-paths';
 export type { ProjectStorageKey, ProjectStoragePaths } from './archon-paths';
