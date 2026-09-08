@@ -520,7 +520,7 @@ describe('discovery proposals real scripts (agent judgments and gh transport sim
     const result = await run({
       classification: [{ ...classification, public_title: summary, public_summary: summary }],
     });
-    expect(proposals(result).proposals[0].summary).toBe(summary);
+    expect(proposals(result).proposals[0].title).toBe(summary);
   }, 20_000);
 
   it('keeps raw private content out of rendered proposals and respects disclosure refusal', async () => {
