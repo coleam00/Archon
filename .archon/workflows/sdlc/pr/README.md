@@ -44,10 +44,15 @@ Rerunning safely looks up the existing PR before creating one.
 
 Composition operations `checkout` and `readback` reuse the identity boundary.
 Checkout requires an explicit `target_pr` number, `work_order`, and `findings`,
-and refuses a primary checkout, dirty files, existing local branch ownership,
-fork PRs, closed PRs, or stale fetched identity. `expected_pr` pins an existing
-PR during publication. Readback permits a newly published head on the same PR
-but requires the local checkout to match it and the base identity to remain fixed.
+and refuses a primary checkout, dirty files, fork PRs, closed PRs, or stale
+fetched identity. It repairs on a fresh local branch named past every branch this
+clone already has locally and on origin, so the PR's own branch stays with the
+worktree that owns it. `expected_pr` pins an existing PR during publication and
+is then the authority on the published head: the local branch is only a checkout,
+while the push, base and identity checks follow the PR's head, so a repair never
+creates a remote branch or a PR for its local name. Readback reads the expected
+PR directly, permits a newly published head on the same PR, and requires the
+local checkout to match it and the base identity to remain fixed.
 
 This is GitHub-only orchestration, not a security sandbox. Operators own policy
 files and execution isolation; candidate code and agent tools can access the
