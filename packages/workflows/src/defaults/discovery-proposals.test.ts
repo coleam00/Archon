@@ -515,6 +515,14 @@ describe('discovery proposals real scripts (agent judgments and gh transport sim
     );
   }
 
+  it('accepts an HTTP route in a public defect description', async () => {
+    const summary = 'POST /api/items with malformed Content-Length drops the connection.';
+    const result = await run({
+      classification: [{ ...classification, public_title: summary, public_summary: summary }],
+    });
+    expect(proposals(result).proposals[0].summary).toBe(summary);
+  }, 20_000);
+
   it('keeps raw private content out of rendered proposals and respects disclosure refusal', async () => {
     const result = await run({
       records: [

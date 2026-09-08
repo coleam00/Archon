@@ -31,7 +31,7 @@ def public_text(value):
     # Structural path checks supplement the model's disclosure judgment. They
     # cannot recognize arbitrary private facts or certify prose for publication.
     decoded = unescape(unquote(value))
-    if (re.search(r"(?:(?<![A-Za-z0-9])[A-Za-z]:[\\/]|\\\\|(?:^|[\s\"'\x60(<=\[])/{1,2}\S)", decoded)
+    if (re.search(r"(?:(?<![A-Za-z0-9])[A-Za-z]:[\\/]|\\\\|(?:^|[\s\"'\x60(<=\[])/(?:home|Users|tmp|var|private|root|mnt|opt|etc)/)", decoded)
             or "$ARTIFACTS_DIR" in decoded or "${ARTIFACTS_DIR}" in decoded
             or "file://" in decoded.casefold()):
         fail("render: proposed public text contains a local absolute path.")
