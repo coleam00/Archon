@@ -35,8 +35,29 @@ count totals and aggregation precedence, which JSON Schema does not express.
 
 Aggregation is red, gated, unknown, pending, then green, in that order. Deliver
 reports gated and unknown as non-green and retains its registration grace for an
-empty set. The optional required-check subset is reserved in the contract but is
-not queried by this initial GitHub implementation; consumers use the full set.
+empty set.
+
+GitHub also returns `base_ref` and, when policy is known, a `required` summary.
+It queries the exact base ref's legacy `branchProtectionRule` through GraphQL and
+paginates [active branch rules](https://docs.github.com/en/rest/repos/rules#get-rules-for-a-branch),
+including inherited organization rules. GitHub resolves branch matching and legacy
+precedence. Required app/context pairs are deduplicated across both sources;
+missing required checks are pending. App-bound requirements cannot be satisfied
+by another app or by a status whose originating app cannot be verified.
+
+`required.state: none` with zero counts means both policy sources established no
+required status checks. An absent `required` means policy is unknown, with
+`required_policy_error` explaining the failed read without exposing response bodies.
+Permissions errors, GraphQL partial errors, malformed responses and unsupported
+required workflow, deployment, code-scanning or unrecognized rules remain unknown. HTTP 404 never means no
+policy. A PR head or base-branch change during enumeration refuses the observation.
+The result is a current observation, not an atomic lock on remote policy.
+
+The supervised merge queue requires the same pinned head and target base, known
+required policy, and green external CI. Absence of CI is accepted only when zero
+required checks are known and `.archon/merge-queue-policy.json` at the queue's
+original pinned base contains exactly `{"external_ci":"none"}`. A candidate's file,
+an agent verdict, and a caller-supplied policy cannot authorize that exception.
 
 ## Pinned merge
 

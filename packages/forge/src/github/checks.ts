@@ -1,3 +1,4 @@
+import { requiredChecks } from './required-checks';
 import { z } from 'zod';
 import {
   CHECKS,
@@ -5,6 +6,7 @@ import {
   aggregateChecks,
   emptyCounts,
   shaSchema,
+  branchSchema,
   type ChecksStateRequest,
   type ChecksVerdict,
   type ForgeOpError,
@@ -14,7 +16,10 @@ import type { RawOpOutcome } from '../dispatch/plugin-handle';
 import { GITHUB_HOST, metadata } from './metadata';
 import type { GitHubPluginOptions } from './plugin';
 // Validate the REST fields we consume. Open strings preserve unknown upstream states.
-const pullSchema = z.object({ head: z.object({ sha: shaSchema }) });
+const pullSchema = z.object({
+  head: z.object({ sha: shaSchema }),
+  base: z.object({ ref: branchSchema }),
+});
 const runSchema = z.object({
   id: z.number().int(),
   name: z.string(),
@@ -97,15 +102,18 @@ export async function checks(
     };
   const timeout = AbortSignal.timeout(30_000);
   const boundedSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
-  async function api<T>(path: string, schema: z.ZodType<T>): Promise<T> {
+  async function api<T>(path: string, schema: z.ZodType<T>, body?: unknown): Promise<T> {
     const response = await (options.fetchImpl ?? fetch)(
       `${options.apiBase ?? 'https://api.github.com'}${path}`,
       {
         signal: boundedSignal,
+        method: body === undefined ? 'GET' : 'POST',
+        body: body === undefined ? undefined : JSON.stringify(body),
         redirect: 'error',
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: 'application/vnd.github+json',
+          'Content-Type': 'application/json',
           'X-GitHub-Api-Version': '2022-11-28',
           'User-Agent': 'archon-forge-github',
         },
@@ -130,7 +138,20 @@ export async function checks(
   try {
     const base = `/repos/${request.ref.repo.path.split('/').map(encodeURIComponent).join('/')}`;
     const prPath = `${base}/pulls/${String(request.ref.number)}`;
-    const headSha = (await api(prPath, pullSchema)).head.sha;
+    const pull = await api(prPath, pullSchema);
+    const headSha = pull.head.sha;
+    let policy: Awaited<ReturnType<typeof requiredChecks>> | undefined;
+    let policyError: string | undefined;
+    try {
+      policy = await requiredChecks(api, request.ref.repo.path, pull.base.ref);
+    } catch (error) {
+      // Keep observed CI useful when policy access is unavailable. Absence of the
+      // required summary means unknown, never an empty set or permission bypass.
+      policyError =
+        error instanceof ApiError
+          ? `Required-check policy unavailable: ${error.error.kind}${error.error.kind === 'forge_error' && error.error.status !== undefined ? ` (HTTP ${String(error.error.status)})` : ''}`
+          : 'Required-check policy could not be established from GitHub responses';
+    }
     const runs: z.infer<typeof runSchema>[] = [];
     const statuses: z.infer<typeof statusSchema>[] = [];
     // Fixed-origin page numbers, never follow a server-supplied URL with credentials.
@@ -170,9 +191,16 @@ export async function checks(
         kind: 'invalid_response',
         detail: 'Check run belongs to a different SHA',
       });
-    const observed = (await api(prPath, pullSchema)).head.sha;
+    const observedPull = await api(prPath, pullSchema);
+    const observed = observedPull.head.sha;
     if (observed !== headSha)
       throw new ApiError({ kind: 'verify_failed', expected: headSha, observed });
+    if (observedPull.base.ref !== pull.base.ref)
+      throw new ApiError({
+        kind: 'verify_failed',
+        expected: pull.base.ref,
+        observed: observedPull.base.ref,
+      });
     // A push suite and a PR suite may have the same job name. Both are current.
     const latestRuns = new Map<string, z.infer<typeof runSchema>>();
     for (const run of runs) {
@@ -201,6 +229,38 @@ export async function checks(
       counts.total++;
       counts[unit.state]++;
     }
+    let required: ChecksVerdict['required'];
+    if (policy !== undefined) {
+      const requiredCounts = emptyCounts();
+      for (const check of policy) {
+        const matchingRuns = [...latestRuns.values()].filter(
+          run => run.name === check.context && (check.appId === null || run.app?.id === check.appId)
+        );
+        const states = [
+          ...matchingRuns.map(runState),
+          // REST commit statuses do not identify their originating app. They can
+          // satisfy unbound contexts only. Once an app-bound run is present, a
+          // same-name status must also pass, as GitHub requires both channels.
+          ...[...latestStatuses.values()]
+            .filter(
+              status =>
+                (check.appId === null || matchingRuns.length > 0) &&
+                status.context === check.context
+            )
+            .map(status => statusState(status.state)),
+        ];
+        const matching = emptyCounts();
+        for (const state of states) {
+          matching.total++;
+          matching[state]++;
+        }
+        const state = states.length ? aggregateChecks(matching) : CHECKS.pending;
+        if (state === CHECKS.none) throw new Error('Required check has no state');
+        requiredCounts.total++;
+        requiredCounts[state]++;
+      }
+      required = { state: aggregateChecks(requiredCounts), counts: requiredCounts };
+    }
     return {
       kind: 'ok',
       value: {
@@ -208,6 +268,8 @@ export async function checks(
         counts,
         units: units.slice(0, CHECKS_VERDICT_UNITS_CAP),
         head_sha: headSha,
+        base_ref: pull.base.ref,
+        ...(required === undefined ? { required_policy_error: policyError } : { required }),
       } satisfies ChecksVerdict,
     };
   } catch (error) {

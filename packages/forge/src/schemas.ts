@@ -139,6 +139,8 @@ export const checksVerdictSchema = summarySchema
     units: z.array(checkUnitSummarySchema).max(CHECKS_VERDICT_UNITS_CAP),
     required: summarySchema.refine(consistentSummary, 'counts and state disagree').optional(),
     head_sha: shaSchema,
+    base_ref: branchSchema.optional(),
+    required_policy_error: z.string().min(1).optional(),
   })
   .refine(consistentSummary, 'counts and state disagree')
   .refine(value => {

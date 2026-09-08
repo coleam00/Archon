@@ -71,6 +71,15 @@ function fixture() {
         if (request.method === 'PATCH' && !state.mismatch) pr.body = String(body.body);
         if (state.moved) pr.head.sha = 'c'.repeat(40);
         result = pr;
+      } else if (
+        url.pathname === '/graphql' &&
+        String(body.query).startsWith('query RequiredChecks(')
+      ) {
+        result = {
+          data: { repository: { ref: { name: pr.base.ref, branchProtectionRule: null } } },
+        };
+      } else if (url.pathname.startsWith('/repos/owner/repo/rules/branches/')) {
+        result = [];
       } else if (url.pathname === '/graphql') {
         expect(body.query).toContain('markPullRequestReadyForReview');
         expect(body.variables).toEqual({ id: 'PR_node' });

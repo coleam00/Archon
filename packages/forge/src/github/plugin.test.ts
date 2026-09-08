@@ -51,7 +51,10 @@ async function verdict(
       if (options.http) return new Response('fixture evidence', { status: options.http });
       if (url.pathname.endsWith('/pulls/42')) {
         pulls++;
-        return Response.json({ head: { sha: options.moved && pulls > 1 ? 'b'.repeat(40) : sha } });
+        return Response.json({
+          head: { sha: options.moved && pulls > 1 ? 'b'.repeat(40) : sha },
+          base: { ref: 'dev' },
+        });
       }
       const page = Number(url.searchParams.get('page'));
       if (url.pathname.endsWith(`/commits/${sha}/check-runs`))

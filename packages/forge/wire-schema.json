@@ -1947,6 +1947,14 @@
       "head_sha": {
         "type": "string",
         "pattern": "^[a-f0-9]{40}$"
+      },
+      "base_ref": {
+        "type": "string",
+        "minLength": 1
+      },
+      "required_policy_error": {
+        "type": "string",
+        "minLength": 1
       }
     },
     "required": [
