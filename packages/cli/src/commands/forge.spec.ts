@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { trackTempRoots, removeTempTree } from '@archon/paths/test-utils';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { archonCliLaunchEnv } from '@archon/paths/cli-launch';
 const exec = promisify(execFile);
 const track = trackTempRoots();
@@ -13,14 +13,18 @@ const plugin = resolve(
   import.meta.dir,
   '../../../forge/src/dispatch/fixtures/well-behaved-plugin.ts'
 );
-async function fixture(): Promise<{ root: string; home: string; env: NodeJS.ProcessEnv }> {
+async function fixture(
+  remote?: string
+): Promise<{ root: string; home: string; env: NodeJS.ProcessEnv }> {
   const root = track(await mkdtemp(join(tmpdir(), 'forge CLI space ')));
   const home = join(root, 'home');
   await mkdir(home);
-  await exec('git', ['init', '-q', root]);
-  await exec('git', ['remote', 'add', 'origin', 'https://fixture.test/owner/repo.git'], {
-    cwd: root,
-  });
+  // Only remote-reading scenarios need a repository. Sample hooks add fixture
+  // I/O to the real CLI's time budget without exercising any forge behavior.
+  if (remote) {
+    await exec('git', ['init', '-q', '--template=', root]);
+    await exec('git', ['remote', 'add', 'origin', remote], { cwd: root });
+  }
   await writeFile(
     join(home, 'forge.json'),
     JSON.stringify({
@@ -63,17 +67,22 @@ async function invoke(
   return { code, stdout, stderr };
 }
 describe('forge CLI real subprocess', () => {
-  it('uses explicit interpreter config, qualified identity, and separate audit output', async () => {
-    const f = await fixture();
+  it('resolves a qualified identity through the configured interpreter', async () => {
+    const f = await fixture('https://fixture.test/owner/repo.git');
     const resolution = await invoke(f.root, f.env, ['forge', 'resolve', '--json']);
     expect(resolution.code).toBe(0);
     const repo = (JSON.parse(resolution.stdout) as { repo: unknown }).repo;
     expect(repo).toEqual({ host: 'fixture.test', path: 'owner/repo' });
+    expect(resolution.stderr).toContain('"op":"resolve"');
+    expect(resolution.stdout + resolution.stderr).not.toContain('test-only-token');
+  });
+  it('checks a qualified identity through the configured interpreter with separate audit output', async () => {
+    const f = await fixture();
     const result = await invoke(f.root, f.env, [
       'forge',
       'checks',
       '--ref',
-      JSON.stringify({ repo, number: 42 }),
+      JSON.stringify({ repo: { host: 'fixture.test', path: 'owner/repo' }, number: 42 }),
       '--json',
     ]);
     expect(result.code).toBe(0);
@@ -83,10 +92,7 @@ describe('forge CLI real subprocess', () => {
     expect(result.stdout + result.stderr).not.toContain('test-only-token');
   });
   it('builtin GitHub uses the executable handshake and resolve protocol', async () => {
-    const f = await fixture();
-    await exec('git', ['remote', 'set-url', 'origin', 'git@github.com:owner/repo.git'], {
-      cwd: f.root,
-    });
+    const f = await fixture('git@github.com:owner/repo.git');
     const result = await invoke(f.root, f.env, ['forge', 'resolve', '--json']);
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({
@@ -122,10 +128,7 @@ describe('forge CLI real subprocess', () => {
     expect(result.stdout + result.stderr).not.toContain('private-secret-value');
   });
   it('executes the real deliver probe with the recorded number despite a different cwd remote', async () => {
-    const f = await fixture();
-    await exec('git', ['remote', 'set-url', 'origin', 'https://unrelated.test/other/repo'], {
-      cwd: f.root,
-    });
+    const f = await fixture('https://unrelated.test/other/repo');
     const script = resolve(
       import.meta.dir,
       '../../../../.archon/workflows/sdlc/deliver/scripts/check-ci.py'
@@ -156,7 +159,6 @@ describe('forge CLI real subprocess', () => {
     const f = await fixture();
     const workflows = join(f.root, '.archon/workflows');
     await mkdir(workflows, { recursive: true });
-    await removeTempTree(join(f.root, '.git'));
     await writeFile(
       join(workflows, 'forge-proof.yaml'),
       "name: forge-proof\ndescription: Verify engine forge transcript integration\nnodes:\n  - id: read\n    runtime: bun\n    script: |\n      const argv = [process.env.ARCHON_EXECUTABLE, ...JSON.parse(process.env.ARCHON_EXECUTABLE_ARGS), 'forge', 'resolve', '--json'];\n      const child = Bun.spawn(argv, { stdout: 'inherit', stderr: 'inherit' });\n      process.exit(await child.exited);\n"
