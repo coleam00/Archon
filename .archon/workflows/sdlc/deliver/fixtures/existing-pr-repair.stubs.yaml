@@ -1,0 +1,59 @@
+# Existing-PR work reaches both implementation turns and independent re-review.
+# AI and publication nodes are stubbed; real scripts enforce the correction route.
+# This proves composition, not live adoption, PR reuse, or agent compliance.
+impl__record-start: '{"start":"recorded"}'
+impl__implement:
+  done: true
+  green: true
+  summary: "stub: applied the review finding for PR #7 and committed to its branch"
+impl__assert-changed: "2 files changed"
+gate-green: '{"gate":"green"}'
+pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 7, url: "https://github.com/example/repo/pull/7", head: "fixture-branch", base: "dev", is_draft: false }
+review__mode: '{"continuation":false}'
+review__scope: "PR diff in scope; head sha stubbed"
+review__code: "1 finding (Important)"
+review__seams: "0 findings"
+review__simplify: "0 findings"
+review__tests: "0 findings"
+review__synthesize:
+  ready: false
+  action: correct
+  findings_summary: "stub: 1 Important finding open on PR #7"
+ci-note: "CI state for this pull request (head abc123def456): No concluded failures. 1 check(s) still running - never wait on them."
+fix__record-start: '{"start":"recorded"}'
+fix__implement:
+  done: true
+  green: true
+  summary: "stub: fixed the finding and pushed to the same branch; no new branch or PR opened"
+fix__assert-changed: "1 file changed"
+gate-correction-green: '{"gate":"green"}'
+recheck__mode: '{"continuation":true}'
+recheck__scope: "light mode; delta since cursor"
+recheck__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: no open Critical/Important"
+sync-pr-body: "body resynced: corrected the claims the correction round falsified"
+validate__validate:
+  green: true
+  summary: "stub: full gate green"
+gate-validated: '{"gate":"green"}'
+ci-probe: '{"state":"concluded","detail":"all 1 check(s) green"}'
+ci-verdict: '{"state":"concluded","detail":"all 1 check(s) green"}'
+flip-ready: "https://github.com/example/repo/pull/7"
+outcome: "https://github.com/example/repo/pull/7"
+classify:
+  errors: false
+  docs: false
+  reasons:
+    errors: "stub: no failure paths"
+    docs: "stub: no doc-facing changes"
+fixture:
+  expect: completed
+  reached: [review__code, ci-note, fix__implement, recheck__synthesize]
+  inputs:
+    work: "Findings for the review on pull request #7, already open on this branch: fix the Important finding below. This is a repair of an existing pull request on its own branch: commit here and never open another branch or pull request for it."
+  resolved-text-contains:
+    impl__implement: "repair of an existing pull request on its own branch: commit here and never open another branch or pull request for it"
+    fix__implement: "repair of an existing pull request on its own branch: commit here and never open another branch or pull request for it"
+exec-code: true

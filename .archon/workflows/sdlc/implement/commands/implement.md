@@ -52,7 +52,7 @@ Write no file when there is no proved discovery. Never add speculative filler, a
 
 ## Not your job
 
-Do not open pull requests. Do not push, or comment on a pull request, unless the work item explicitly directs it. Do not review beyond validating your own work. Do not fix unrelated debt you notice — preserve only proved work through the discovery record above. Do not merge or rebase.
+Do not open pull requests. Do not push or comment unless the work item explicitly directs it. For an existing-PR repair already on its branch, commit here without creating or switching branches; `pr` owns publication and reuse. Validate your work without reviewing beyond it. Leave unrelated debt alone, recording only proved discoveries as described above. Do not merge or rebase.
 
 ## If you cannot do the work
 
