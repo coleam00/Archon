@@ -27,8 +27,13 @@ Write a JSON report at this exact path:
 
 $INPUTS.report_path
 
-The report contains `candidate` (literal target-identity command output, or empty
-if unavailable) and `assertions` (one entry per declared id). Each entry contains:
+The report contains `candidate` (a string containing the target-identity command
+output with leading and trailing whitespace removed, or empty if unavailable)
+and `assertions` (one entry per declared id). This canonical identity removes
+surrounding spaces, tabs, and LF/CRLF line endings; interior characters stay exact.
+The checker applies the same normalization to the expected input, probe output,
+and reported string, so literal command output with a final newline is accepted.
+Preserve the raw command output in evidence. Each assertion entry contains:
 
 - `id`: the unchanged scenario id.
 - `outcome`: `passed`, `failed`, or `inconclusive`.

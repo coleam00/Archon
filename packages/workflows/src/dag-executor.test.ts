@@ -34108,6 +34108,7 @@ describe('archon-verify-runtime live target contract', () => {
     | 'unavailable'
     | 'wrong-target'
     | 'wrong-report'
+    | 'invalid-candidate'
     | 'malformed-then-pass'
     | 'malformed-exhausted'
     | 'missing-evidence'
@@ -34117,7 +34118,15 @@ describe('archon-verify-runtime live target contract', () => {
     | 'cancelled'
     | 'provider-failure';
 
-  async function exercise(mode: Mode) {
+  async function exercise(
+    mode: Mode,
+    identityOptions: {
+      output?: string;
+      expected?: string;
+      reported?: unknown;
+    } = {}
+  ) {
+    const identityOutput = identityOptions.output ?? 'deployed-build-123';
     const root = await mkdtemp(join(tmpdir(), 'runtime-contract-'));
     const cwd = join(root, 'checkout');
     const artifactsDir = join(root, 'artifacts');
@@ -34190,7 +34199,7 @@ describe('archon-verify-runtime live target contract', () => {
         join(root, 'target.ts'),
         `const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
         return new Response(new URL(request.url).pathname === '/identity'
-          ? 'deployed-build-123' : process.env.TARGET_VALUE);
+          ? ${JSON.stringify(identityOutput)} : process.env.TARGET_VALUE);
       }}); console.log(server.url.origin);`
       );
       const base = controller.url.origin;
@@ -34259,7 +34268,7 @@ describe('archon-verify-runtime live target contract', () => {
         const measured: unknown = JSON.parse(raw);
         const identity = (
           await git.execFileAsync(git.resolveBashPath(), ['-c', identityCommand], { cwd })
-        ).stdout.trim();
+        ).stdout;
         if (mode === 'cancelled')
           store.getWorkflowRunStatus.mockImplementation(async () => 'cancelled');
         const evidencePath = join(prepared.directory, 'observation.txt');
@@ -34269,7 +34278,12 @@ describe('archon-verify-runtime live target contract', () => {
             `GET ${base}/observe\nHTTP ${String(response.status)}\n${raw}`
           );
         const report = {
-          candidate: mode === 'wrong-report' ? 'another-build' : identity,
+          candidate:
+            mode === 'wrong-report'
+              ? 'another-build'
+              : 'reported' in identityOptions
+                ? identityOptions.reported
+                : identity,
           assertions:
             mode === 'missing-coverage'
               ? []
@@ -34310,7 +34324,8 @@ describe('archon-verify-runtime live target contract', () => {
             metadata: {
               inputs: {
                 scenario: 'scenario.json',
-                candidate: mode === 'wrong-target' ? checkout : 'deployed-build-123',
+                candidate:
+                  mode === 'wrong-target' ? checkout : (identityOptions.expected ?? identityOutput),
               },
             },
           }),
@@ -34356,8 +34371,9 @@ describe('archon-verify-runtime live target contract', () => {
             : 'inconclusive';
       expect(result.verdict).toBe(expectedVerdict);
       expect(result.verified).toBe(expectedVerdict === 'verified');
+      expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
       expect(result.checkout).toBe(checkout);
-      if (mode !== 'unavailable') expect(result.candidate).toBe('deployed-build-123');
+      if (mode !== 'unavailable') expect(result.candidate).toBe(identityOutput.trim());
       expect(authoredOutcomeWrites(store)).toEqual([
         expectedVerdict === 'verified' ? 'succeeded' : 'failed',
       ]);
@@ -34367,6 +34383,7 @@ describe('archon-verify-runtime live target contract', () => {
         'missing-evidence',
         'missing-coverage',
         'wrong-report',
+        'invalid-candidate',
       ].includes(mode);
       const attempts = retried ? 2 : 1;
       expect(calls).toBe(mode === 'unavailable' ? 0 : attempts);
@@ -34394,6 +34411,8 @@ describe('archon-verify-runtime live target contract', () => {
       if (mode === 'malformed-exhausted')
         expect(result.summary).toContain('exhausting the retry budget');
       if (mode === 'teardown-failure') expect(result.summary).toContain('teardown failed');
+      if (mode === 'invalid-candidate')
+        expect(result.summary).toContain('candidate must be a string');
     } finally {
       controller.stop(true);
       if (worker) {
@@ -34419,5 +34438,34 @@ describe('archon-verify-runtime live target contract', () => {
     'provider-failure',
   ] satisfies Mode[]) {
     it(`runs the actual runtime graph: ${mode}`, () => exercise(mode), 30_000);
+  }
+  for (const [ending, newline] of [
+    ['LF', '\n'],
+    ['CRLF', '\r\n'],
+  ]) {
+    for (const mode of ['passed', 'failed'] as const) {
+      it(
+        `accepts literal ${ending} identity output and report: ${mode} in one attempt`,
+        () => exercise(mode, { output: `deployed-build-123${newline}` }),
+        30_000
+      );
+    }
+  }
+  it(
+    'normalizes surrounding whitespace consistently across expected, probe and report identities',
+    () =>
+      exercise('passed', {
+        output: '\t deployed-build-123\r\n',
+        expected: 'deployed-build-123\n',
+        reported: ' deployed-build-123\t\n',
+      }),
+    30_000
+  );
+  for (const reported of [123, true, null, ['123'], { candidate: '123' }]) {
+    it(
+      `rejects a non-string report identity: ${JSON.stringify(reported)}`,
+      () => exercise('invalid-candidate', { output: '123\r\n', reported }),
+      30_000
+    );
   }
 });

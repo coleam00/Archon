@@ -14,7 +14,9 @@ def assess():
     directory = Path(os.environ["INPUTS_DIRECTORY"]).resolve()
     if os.environ["INPUTS_IDENTITY_OK"] != "true":
         return result("inconclusive", "target identity probe failed; see identity-run logs")
-    candidate = (directory / "target.txt").read_text(encoding="utf-8").strip()
+    # Strip surrounding command-output whitespace on every identity boundary.
+    # Decode bytes to preserve interior characters, including line endings.
+    candidate = (directory / "target.txt").read_bytes().decode("utf-8").strip()
     if not candidate:
         return result("inconclusive", "target identity probe returned no identity")
     expected = os.environ["INPUTS_EXPECTED_CANDIDATE"].strip()
@@ -30,7 +32,10 @@ def assess():
         return malformed("report is missing or is not valid UTF-8 JSON")
     if not isinstance(report, dict):
         return malformed("report must be an object")
-    if report.get("candidate") != candidate:
+    reported_candidate = report.get("candidate")
+    if not isinstance(reported_candidate, str):
+        return malformed("reported candidate must be a string")
+    if reported_candidate.strip() != candidate:
         return malformed("reported candidate does not match the target probe")
     assertions = report.get("assertions")
     if not isinstance(assertions, list) or not assertions:
