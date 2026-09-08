@@ -91,6 +91,7 @@ nodes:
   # reviewer judges the prior report and correction delta.
   - id: classify
     command: classify-review-scope
+    model: medium
     depends_on: [pr]
     mutates_checkout: false
     output_type: review-scope
