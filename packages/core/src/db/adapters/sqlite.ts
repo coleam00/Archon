@@ -41,17 +41,18 @@ export class SqliteAdapter implements IDatabase {
 
     this.db = new Database(dbPath);
 
-    // Enable WAL mode for better concurrent performance
-    this.db.run('PRAGMA journal_mode = WAL');
-
-    // Retry busy locks up to 5s to avoid SQLITE_BUSY during parallel workflows
-    this.db.run('PRAGMA busy_timeout = 5000');
-
-    // Enable foreign keys
-    this.db.run('PRAGMA foreign_keys = ON');
-
-    // Initialize schema if needed
-    this.initSchema();
+    try {
+      // Opening WAL can itself contend with another process. Install the existing
+      // five second busy budget before any operation that needs a database lock.
+      this.db.run('PRAGMA busy_timeout = 5000');
+      this.db.run('PRAGMA journal_mode = WAL');
+      this.db.run('PRAGMA foreign_keys = ON');
+      this.initSchema();
+    } catch (error) {
+      // A failed constructor has no caller that can close its native handle.
+      this.db.close();
+      throw error;
+    }
   }
 
   async query<T>(sql: string, params?: unknown[]): Promise<QueryResult<T>> {
