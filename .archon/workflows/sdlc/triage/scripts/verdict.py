@@ -135,7 +135,10 @@ def main() -> int:
     ):
         return fail("item must be null or {repository: owner/repo, number: N}")
 
-    labels = [STATE_LABEL[contract], COMPLEXITY_LABEL[complexity]]
+    labels = [STATE_LABEL[contract]]
+    # Size only matters on an item that can still be worked; a close verdict carries none.
+    if contract != "NO_ACTION":
+        labels.append(COMPLEXITY_LABEL[complexity])
     if design_first:
         labels.append(DESIGN_FIRST_LABEL)
 

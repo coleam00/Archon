@@ -41,8 +41,8 @@ Declare exactly one contract verdict:
 
 - `READY` — the four elements are present and agree with each other and with current direction, and the repository has a coherent place for the change, including any enabling work this item owns. This does not claim the solution is designed.
 - `NEEDS_CONTRACT_WORK` — the problem, why, outcome, or acceptance is materially missing, ambiguous, or contradictory. Write the contract you would propose (below) and stop.
-- `BLOCKED` — the contract is clear, but a prerequisite or a human decision must happen first: an unlogged foundation, an owner-level product decision, source material that cannot be reached, or direction that looks stale and needs a maintainer's judgment.
-- `NO_ACTION` — the outcome is already delivered, duplicated, obsolete, superseded, or explicitly rejected by current direction. Use direction alone only when the conflict is explicit; otherwise `BLOCKED`.
+- `BLOCKED` — the contract is clear, but something must happen first: a prerequisite that has its own owner, an owner-level product decision, source material that cannot be reached, direction that looks stale and needs a maintainer's judgment, or an open pull request that already carries this outcome (the item waits for it to merge or close; it is not a duplicate).
+- `NO_ACTION` — the item should be closed: the outcome is already delivered on the current base, another tracker item owns the same outcome, the item is obsolete or superseded, or current direction explicitly rejects it. Use direction alone only when the conflict is explicit; otherwise `BLOCKED`.
 
 Only a `READY` item carries an engineering route. For every other verdict, `route` is `no_action` and the verdict is the reason; the route you would have chosen belongs in the assessment for the human, not in the declared field.
 
@@ -73,7 +73,7 @@ When the target is a tracker issue, declare `item` as its repository (`owner/rep
 
 ## Write the assessment
 
-Write `$ARTIFACTS_DIR/triage.md` with:
+Write `$ARTIFACTS_DIR/triage.md`. Title it `# Triage: owner/repo#N — <item title>` for a tracker issue, otherwise `# Triage: <the request in a few words>`. Cite code by repository-relative path and line; the checkout you read is temporary and its absolute path is dead once the run ends. Sections:
 
 - **Source and outcome** — what was requested, the affected behavior, and which source material was considered.
 - **Current truth** — current HEAD/base context and only the evidence that decided the route.
