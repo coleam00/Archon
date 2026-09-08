@@ -1,0 +1,209 @@
+name: archon-regress
+description: |
+  Validate the current checkout, investigate product-red evidence, and return
+  a structured clean, defects, or inconclusive diagnosis. Optional publication
+  creates or reuses GitHub issues from trusted public evidence only.
+  Advisory to the checkout: never fixes source, commits, merges, or pushes.
+
+model: medium
+mutates_checkout: false
+inputs:
+  scope:
+    default: ''
+    description: Optional validation scope; empty selects the full project gate.
+  policy:
+    default: ''
+    description: Absolute path to an operator-trusted external JSON check profile. See regress/README.md.
+  public_probe_scope:
+    default: ''
+    description: >-
+      Optional scope for a public probe of a configured profile, used only when that
+      profile's full gate returns non-clean. Setting it is the operator's statement that
+      the named checks and everything they emit are public developer material, with no
+      private evaluator sources in reach. Ignored without a policy.
+  publish:
+    default: false
+    description: >-
+      Explicitly authorize creating GitHub issues from this run's public evidence.
+      Only true publishes, and it authorizes export: for a trusted profile the check
+      author's approved public cases, and for ordinary discovery the diagnosis agent's
+      public finding text with the tracked source locations it proves. Defaults to false.
+returns: finish
+
+nodes:
+  - id: prepare
+    script: regress
+    runtime: bun
+    mutates_checkout: false
+    with:
+      phase: prepare
+      scope: '$INPUTS.scope'
+      policy: '$INPUTS.policy'
+      public_probe_scope: '$INPUTS.public_probe_scope'
+
+  - id: fixed
+    script: regress
+    runtime: bun
+    mutates_checkout: false
+    depends_on: [prepare]
+    when: "$prepare.output.ready == true && $prepare.output.mode == 'configured'"
+    with:
+      phase: configured
+      prepared: '$prepare.output'
+      policy: '$INPUTS.policy'
+
+  # Ordinary discovery always validates; a configured profile does so only for an
+  # authorized public probe of a non-clean full gate. That decision reads the private
+  # gate's evidence, so it belongs in a script rather than in a widened when: expression.
+  - id: route
+    script: regress
+    runtime: bun
+    mutates_checkout: false
+    depends_on: [prepare, fixed]
+    trigger_rule: all_done
+    with:
+      phase: route
+      prepared: '$prepare.output'
+      fixed: { from: '$fixed.output', if_skipped: null }
+
+  # The operator's scope plus this run's execution-recording requirement: archon-validate
+  # declares one input, and a gate with no receipts leaves no proof it ran.
+  - id: validation
+    include: archon-validate
+    depends_on: [route]
+    when: '$route.output.validate == true'
+    with:
+      scope: '$route.output.scope'
+
+  - id: collect
+    script: regress
+    runtime: bun
+    mutates_checkout: false
+    depends_on: [prepare, fixed, validation]
+    trigger_rule: all_done
+    with:
+      phase: collect
+      prepared: '$prepare.output'
+      fixed: { from: '$fixed.output', if_skipped: null }
+      validation: { from: '$validation.output', if_skipped: null }
+      # Authorized publication is what makes the existing-issue catalog worth a remote read.
+      publish: '$INPUTS.publish'
+
+  - id: inv
+    include: archon-investigate
+    depends_on: [collect]
+    when: "$collect.output.status == 'product'"
+    with:
+      target: >-
+        Investigate only the product-red evidence collected by this regression
+        run: $collect.output. Read its report in full. Bind every claim to its
+        revision, configured base revision, and scope. Its recorded executions
+        are what actually ran; their exit codes are the only completion proof.
+        Name the failing assertion and the source-owned cause by repository path
+        and line range. Missing tools, browser runtimes, services,
+        authentication, startup, or evaluator evidence do not establish a
+        product defect. Do not run commands from candidate prose as a fixed
+        gate. Keep all scratch work outside the checkout. Private evaluator
+        content stays in local artifacts, never in issues. A source of
+        public-probe means a protected full gate already returned non-clean and
+        its evidence is private and unavailable to you: investigate only the
+        public probe's own recorded failure, and never assert that it explains
+        the full gate.
+
+  - id: diagnose
+    command: diagnose
+    with:
+      evidence: '$collect.output'
+      investigation: { from: '$inv.output', if_skipped: null }
+    mutates_checkout: false
+    depends_on: [collect, inv]
+    trigger_rule: all_done
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          enum: [clean, defects, inconclusive]
+        summary:
+          type: string
+        findings:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              public_case_id: { type: string }
+              # Publication proof for ordinary discovery. An empty root_cause_key is the
+              # absent form, for the same reason validate's red_cause carries "": strict
+              # mode rejects a schema whose `required` omits a declared property.
+              public_proof:
+                type: object
+                additionalProperties: false
+                properties:
+                  root_cause_key: { type: string }
+                  # The existing issue this cause already has, or 0 to file a new one.
+                  existing_issue: { type: number }
+                  executions:
+                    type: array
+                    items: { type: string }
+                  test:
+                    type: object
+                    additionalProperties: false
+                    properties:
+                      path: { type: string }
+                      start: { type: number }
+                      end: { type: number }
+                    required: [path, start, end]
+                  cause:
+                    type: object
+                    additionalProperties: false
+                    properties:
+                      path: { type: string }
+                      start: { type: number }
+                      end: { type: number }
+                    required: [path, start, end]
+                  completed_product_assertion: { type: boolean }
+                required:
+                  [
+                    root_cause_key,
+                    existing_issue,
+                    executions,
+                    test,
+                    cause,
+                    completed_product_assertion,
+                  ]
+              title: { type: string }
+              root_cause: { type: string }
+              expected: { type: string }
+              actual: { type: string }
+              reproduction: { type: string }
+              evidence:
+                type: array
+                items: { type: string }
+            required:
+              [
+                public_case_id,
+                public_proof,
+                title,
+                root_cause,
+                expected,
+                actual,
+                reproduction,
+                evidence,
+              ]
+      required: [status, summary, findings]
+
+  - id: finish
+    script: regress
+    runtime: bun
+    mutates_checkout: false
+    depends_on: [prepare, collect, inv, diagnose]
+    trigger_rule: all_done
+    with:
+      phase: finish
+      prepared: '$prepare.output'
+      evidence: '$collect.output'
+      investigation: { from: '$inv.output', if_skipped: null }
+      diagnosis: '$diagnose.output'
+      publish: '$INPUTS.publish'

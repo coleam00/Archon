@@ -1,0 +1,46 @@
+prepare: { ready: true, mode: configured, probe: true }
+fixed: { status: product }
+route:
+  validate: true
+  scope: |
+    The public developer smoke check.
+
+    Record every command you run for this gate.
+validation__validate:
+  { green: false, red_cause: inherited, summary: 'The public smoke check failed.' }
+collect: { status: product, source: public-probe }
+inv__investigate: { rooted: true, summary: 'The public check fails on empty input.' }
+inv__assert-intact: '{"intact":"true"}'
+diagnose:
+  status: defects
+  summary: 'One public defect proven by the probe; it does not explain the full gate.'
+  findings:
+    - public_case_id: ''
+      public_proof:
+        root_cause_key: src/parser.ts/empty-input
+        existing_issue: 0
+        executions: ['1b0c0b3a-8d20-4a5e-9c47-4d3b0f2b9a11']
+        test: { path: tests/parser.test.ts, start: 10, end: 14 }
+        cause: { path: src/parser.ts, start: 12, end: 12 }
+        completed_product_assertion: true
+      title: Empty input raises instead of returning a result
+      root_cause: The parser reads the first item before checking length
+      expected: Empty input returns an empty result
+      actual: Empty input raises an exception
+      reproduction: Run the public smoke check
+      evidence: ['tests/parser.test.ts asserts an empty result']
+finish:
+  status: defects
+  publication: blocked
+  publication_reason: 'Publication supports github.com origin repositories only'
+  issues: []
+fixture:
+  expect: completed
+  inputs:
+    policy: /operator/checks/regress.json
+    public_probe_scope: The public developer smoke check.
+  # The full private gate answers first, then the authorized probe reaches archon-validate
+  # and its public product-red drives ordinary investigation and diagnosis.
+  reached: [fixed, route, validation__validate, inv__investigate, diagnose, finish]
+  resolved-text-contains:
+    validation__validate: 'The public developer smoke check.'

@@ -1,0 +1,23 @@
+prepare: { ready: true, mode: configured, probe: false }
+fixed: { status: product }
+route: { validate: false, scope: '' }
+collect: { status: product }
+inv__investigate: { rooted: true, summary: 'The parser reads before checking length.' }
+inv__assert-intact: '{"intact":"true"}'
+diagnose:
+  status: defects
+  summary: 'Proven parser defect.'
+  findings:
+    - public_case_id: empty-input
+      title: Empty input raises
+      root_cause: Parser reads before checking length
+      expected: Empty result
+      actual: Exception
+      reproduction: Run the empty-input test
+      evidence: ['src/parser.ts:12']
+finish: { status: defects, publication: disabled, issues: [] }
+fixture:
+  expect: completed
+  # The trusted case route stays intact: a configured product-red without a public probe
+  # goes straight to investigation, never through archon-validate.
+  reached: [fixed, route, inv__investigate, diagnose, finish]

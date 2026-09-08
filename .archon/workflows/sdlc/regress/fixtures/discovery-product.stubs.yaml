@@ -1,0 +1,34 @@
+prepare: { ready: true, mode: discovered }
+route:
+  validate: true
+  scope: "The parser package.\n\nRecord every command you run for this gate."
+validation__validate: { green: false, red_cause: inherited, summary: 'The parser test failed.' }
+collect: { status: product }
+inv__investigate: { rooted: true, summary: 'The parser reads before checking length.' }
+inv__assert-intact: '{"intact":"true"}'
+diagnose:
+  status: defects
+  summary: 'One parser defect proven by the repository itself.'
+  findings:
+    - public_case_id: ''
+      public_proof:
+        root_cause_key: src/parser.ts/empty-input
+        existing_issue: 0
+        executions: ['9f9f5ccd-3ecf-43fa-ae9e-bc44c97a8353']
+        test: { path: tests/parser.test.ts, start: 10, end: 14 }
+        cause: { path: src/parser.ts, start: 12, end: 12 }
+        completed_product_assertion: true
+      title: Empty input raises instead of returning a result
+      root_cause: The parser reads the first item before checking length
+      expected: Empty input returns an empty result
+      actual: Empty input raises an exception
+      reproduction: Run the parser test suite
+      evidence: ['tests/parser.test.ts asserts an empty result']
+finish:
+  status: defects
+  publication: blocked
+  publication_reason: 'Publication supports github.com origin repositories only'
+  issues: []
+fixture:
+  expect: completed
+  reached: [route, validation__validate, inv__investigate, diagnose, finish]
