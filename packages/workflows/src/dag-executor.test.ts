@@ -389,6 +389,24 @@ function createMockPlatform(): MockWorkflowPlatform {
   };
 }
 
+/**
+ * Every message the run delivered to the platform, in call order.
+ *
+ * Assertions on this list should name an exact message. Operator prose is not a
+ * wire format: a `find(m => m.includes(a) && m.includes(b))` guard passes for
+ * any message that happens to contain both fragments, and breaks on a reword
+ * that changes no behavior (#3167). Where the outcome has a structured surface
+ * — a node status, a persisted event, a typed error — assert on that instead.
+ */
+function deliveredMessages(platform: MockWorkflowPlatform): string[] {
+  return platform.sendMessage.mock.calls.map(call => call[1]);
+}
+
+/** The workflow events the run persisted, in call order. */
+function persistedEvents(store: MockWorkflowStore) {
+  return store.createWorkflowEvent.mock.calls.map(([event]) => event);
+}
+
 const minimalConfig: WorkflowConfig = {
   assistant: 'claude',
   assistants: { claude: {}, codex: {} },
@@ -2285,12 +2303,9 @@ describe('executeDagWorkflow -- tool restrictions', () => {
       })
     );
 
-    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
-    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const warning = messages.find(
-      m => m.includes('allowed_tools/denied_tools') && m.includes('codex')
+    expect(deliveredMessages(platform)).toContain(
+      "Warning: Node 'review' uses allowed_tools/denied_tools but codex doesn't support it — this will be ignored."
     );
-    expect(warning).toBeDefined();
   });
 
   it('passes empty allowed_tools: [] (disable all tools) to sendQuery', async () => {
@@ -2395,10 +2410,9 @@ describe('executeDagWorkflow -- tool restrictions', () => {
       })
     );
 
-    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
-    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const warning = messages.find(m => m.includes('hooks') && m.includes('codex'));
-    expect(warning).toBeDefined();
+    expect(deliveredMessages(platform)).toContain(
+      "Warning: Node 'review' uses hooks but codex doesn't support it — this will be ignored."
+    );
   });
 });
 
@@ -2602,12 +2616,13 @@ describe('executeDagWorkflow -- bash nodes', () => {
       })
     );
 
-    // The workflow should complete (it handles failures) but the node failed
-    // The mock platform should have received a failure message about the failed node
-    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
-    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const failMsg = messages.find((m: string) => m.includes('failed') && m.includes('fail'));
-    expect(failMsg).toBeDefined();
+    // The run handles the failure rather than throwing, and records which node
+    // failed. Asserting the recorded step_name is what distinguishes "the node
+    // under test failed" from "something failed" (#3167).
+    const failedSteps = persistedEvents(mockDeps.store)
+      .filter(event => event.event_type === 'node_failed')
+      .map(event => event.step_name);
+    expect(failedSteps).toEqual(['fail']);
   });
 
   it('failure message surfaces stderr and does not leak the "Command failed: bash -c <body>" prefix', async () => {
@@ -2793,12 +2808,14 @@ describe('executeDagWorkflow -- bash nodes', () => {
     // No AI calls
     expect(mockSendQueryDag.mock.calls.length).toBe(0);
 
-    // The downstream node ran without injection: stdout should contain the literal value, not a separate INJECTED line
-    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
-    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    // 'INJECTED' as a standalone result of injection must not appear
-    const injectedMessage = messages.find((m: string) => m === 'INJECTED');
-    expect(injectedMessage).toBeUndefined();
+    // The downstream node received the upstream output as one literal value.
+    // Under injection the `;` would split it, `echo INJECTED` would run as its
+    // own command, and the recorded output would read `got: safe` — so pinning
+    // the exact output is what proves the absence, not a message scan (#3167).
+    const downstream = persistedEvents(mockDeps.store).find(
+      event => event.event_type === 'node_completed' && event.step_name === 'downstream'
+    );
+    expect(downstream?.data?.node_output).toBe('got: safe; echo INJECTED');
   });
 
   it('passes user message through env vars, not string substitution, preventing shell injection', async () => {
@@ -3112,14 +3129,13 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
         })
       );
 
-      const messages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(
-        (c: unknown[]) => c[1] as string
+      // The migration notice is itself the deliverable, and it names the
+      // language-appropriate accessor for both referenced vars.
+      expect(deliveredMessages(platform)).toContain(
+        "Script node 'legacy': $ARGUMENTS, $CONTEXT are no longer substituted into script " +
+          'source (security hardening, #2115). Read from the environment instead: ' +
+          'process.env.ARGUMENTS, process.env.CONTEXT.'
       );
-      const warn = messages.find(m => m.includes('no longer') && m.includes('#2115'));
-      expect(warn).toBeDefined();
-      // Language-appropriate accessor is suggested for both referenced vars.
-      expect(warn).toContain('process.env.ARGUMENTS');
-      expect(warn).toContain('process.env.CONTEXT');
     } finally {
       execSpy.mockRestore();
     }
@@ -3549,12 +3565,17 @@ describe('executeDagWorkflow -- when condition parse errors (fail-closed)', () =
       })
     );
 
-    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
-    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const warning = messages.find(m => m.includes('gate') && m.includes('skipped'));
-    expect(warning).toBeDefined();
-    // Must NOT indicate the node ran (the old fail-open behavior)
-    expect(warning).not.toMatch(/node ran/i);
+    // Fail-closed: the node is skipped, and the notice says so.
+    expect(
+      persistedEvents(mockDeps.store)
+        .filter(event => event.event_type === 'node_skipped')
+        .map(event => event.step_name)
+    ).toEqual(['gate']);
+    expect(deliveredMessages(platform)).toContain(
+      '⚠️ Node \'gate\': unparseable `when:` expression "not a valid condition" — node skipped ' +
+        "(fail-closed). Check syntax: `$nodeId.output == 'VALUE'`, `$nodeId.output > '5'`, or " +
+        "compound `$a.output == 'X' && $b.output != 'Y'`."
+    );
   });
 
   it('workflow completes without throwing when all nodes are skipped via parse error', async () => {
@@ -4853,10 +4874,9 @@ describe('executeDagWorkflow -- skills options', () => {
 
     // Codex workflow nodes suppress the ambient catalog. Authors invoke installed
     // native skills explicitly in the command/prompt with `$skill-name` instead.
-    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
-    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const warning = messages.find(m => m.includes('skills') && m.includes('codex'));
-    expect(warning).toBeDefined();
+    expect(deliveredMessages(platform)).toContain(
+      "Warning: Node 'review' uses skills but codex doesn't support it — this will be ignored."
+    );
   });
 
   it('passes agents to sendQuery nodeConfig when node has inline agents', async () => {
@@ -4935,10 +4955,9 @@ describe('executeDagWorkflow -- skills options', () => {
       })
     );
 
-    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
-    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const warning = messages.find(m => m.includes('agents') && m.includes('codex'));
-    expect(warning).toBeDefined();
+    expect(deliveredMessages(platform)).toContain(
+      "Warning: Node 'review' uses agents but codex doesn't support it — this will be ignored."
+    );
   });
 });
 
@@ -15190,10 +15209,12 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
       })
     );
 
-    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
-    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const capMessage = messages.find(m => m.includes('$2.50'));
-    expect(capMessage).toBeDefined();
+    // The cap is recorded against the node that carried it, with the configured
+    // amount — not merely "some message mentioned $2.50".
+    const capped = persistedEvents(store).find(
+      event => event.event_type === 'node_failed' && event.step_name === 'capped'
+    );
+    expect(capped?.data?.error).toBe("Node 'capped' exceeded cost cap of $2.50.");
   });
 
   it('fails node when SDK returns error_during_execution result', async () => {
@@ -15634,10 +15655,9 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
       })
     );
 
-    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
-    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const warning = messages.find(m => m.includes('webSearchMode'));
-    expect(warning).toBeDefined();
+    expect(deliveredMessages(platform)).toContain(
+      "Warning: Node 'step1' uses webSearchMode but claude doesn't support it — this will be ignored."
+    );
 
     // Nothing meaningless is written onto a provider that cannot read it.
     const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
@@ -15727,10 +15747,9 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
 
     expect(mockGetAgentProviderDag.mock.calls[0][0]).toBe('claude');
 
-    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
-    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const warning = messages.find(m => m.includes('webSearchMode'));
-    expect(warning).toBeDefined();
+    expect(deliveredMessages(platform)).toContain(
+      "Warning: Node 'step1' uses webSearchMode but claude doesn't support it — this will be ignored."
+    );
 
     const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
     const assistantConfig = optionsArg?.assistantConfig as Record<string, unknown>;
@@ -17041,10 +17060,11 @@ describe('executeDagWorkflow -- script nodes', () => {
       })
     );
 
-    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
-    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const failMsg = messages.find((m: string) => m.includes('failed') && m.includes('fail-script'));
-    expect(failMsg).toBeDefined();
+    expect(
+      persistedEvents(mockDeps.store)
+        .filter(event => event.event_type === 'node_failed')
+        .map(event => event.step_name)
+    ).toEqual(['fail-script']);
   });
 
   it('failure message strips the "Command failed: bun -e <body>" prefix and stays small', async () => {
@@ -17127,11 +17147,12 @@ describe('executeDagWorkflow -- script nodes', () => {
       })
     );
 
-    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
-    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    // Workflow fails because the only node failed (timeout)
-    const failMsg = messages.find((m: string) => m.includes('failed') && m.includes('slow-script'));
-    expect(failMsg).toBeDefined();
+    // The only node fails, and it fails on the timeout rather than on anything else.
+    const timedOut = persistedEvents(mockDeps.store).filter(
+      event => event.event_type === 'node_failed'
+    );
+    expect(timedOut.map(event => event.step_name)).toEqual(['slow-script']);
+    expect(String(timedOut[0]?.data?.error)).toContain('timed out');
   }, 10000);
 
   it('stderr output is sent to the user', async () => {
@@ -17162,11 +17183,9 @@ describe('executeDagWorkflow -- script nodes', () => {
       })
     );
 
-    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
-    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const stderrMsg = messages.find((m: string) => m.includes('error detail'));
-    expect(stderrMsg).toBeDefined();
-    expect(stderrMsg).toContain('stderr-script');
+    expect(deliveredMessages(platform)).toContain(
+      "Script node 'stderr-script' stderr:\n```\nerror detail\n```"
+    );
   });
 
   it('$WORKFLOW_ID and $ARTIFACTS_DIR are substituted into script text', async () => {
@@ -17419,10 +17438,14 @@ describe('executeDagWorkflow -- script nodes', () => {
       })
     );
 
-    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
-    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const notFoundMsg = messages.find((m: string) => m.includes('not found in .archon/scripts/'));
-    expect(notFoundMsg).toBeDefined();
+    const resolutionFailure =
+      "Script node 'gone-script': named script 'missing' not found in .archon/scripts/ " +
+      'or ~/.archon/scripts/';
+    expect(deliveredMessages(platform)).toContain(resolutionFailure);
+    const failed = persistedEvents(mockDeps.store).find(
+      event => event.event_type === 'node_failed' && event.step_name === 'gone-script'
+    );
+    expect(failed?.data?.error).toBe(resolutionFailure);
   });
 
   it('bun script node does not leak repo .env from execution cwd (#1135)', async () => {
@@ -18155,11 +18178,13 @@ describe('executeDagWorkflow -- final status derivation', () => {
       expect.objectContaining({ event_type: 'workflow_failed' })
     );
 
-    // Confirm the failure message names the failing node
-    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
-    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const failMsg = messages.find((m: string) => m.includes('completed with failures'));
-    expect(failMsg).toBeDefined();
+    // The run tail tells the operator the run failed and which node did it. The
+    // node's own error text is the subprocess's, so the assertion pins the
+    // sentence the executor owns and the node it names.
+    expect(deliveredMessages(platform)).toEqual([
+      "❌ DAG workflow 'status-test' completed with failures: 'fail': Bash node 'fail' failed " +
+        '[exit 1]: no diagnostic output',
+    ]);
   });
 
   it('multiple successes + one failure -> failWorkflowRun, not completeWorkflowRun', async () => {
@@ -18194,10 +18219,11 @@ describe('executeDagWorkflow -- final status derivation', () => {
       undefined
     );
 
-    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
-    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const failMsg = messages.find((m: string) => m.includes('completed with failures'));
-    expect(failMsg).toBeDefined();
+    // Only the failing node is named; the three successes are not.
+    expect(deliveredMessages(platform)).toEqual([
+      "❌ DAG workflow 'status-test-multi' completed with failures: 'fail': Bash node 'fail' " +
+        'failed [exit 1]: no diagnostic output',
+    ]);
   });
 
   it('trigger_rule: none_failed_min_one_success skips dependent node + anyFailed still marks run failed', async () => {
@@ -19114,14 +19140,13 @@ describe('executeDagWorkflow -- persist_session', () => {
       })
     );
 
-    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
-    const messages = sendMessage.mock.calls.map(c => String(c[1]));
-    const coldMessage = messages.find(m => m.includes('could not resume the prior session'));
-    expect(coldMessage).toBeDefined();
     // By reference: the message names the artifact file's path — never its content.
-    expect(coldMessage).toContain('available for recovery');
-    expect(coldMessage).toContain(join(scopeDir, 'nodes', 'planner.md'));
-    expect(coldMessage).not.toContain('the prior plan');
+    expect(deliveredMessages(platform)).toContain(
+      '⚠️ Node `planner`: could not resume the prior session — continued with a fresh ' +
+        'session, so the earlier context was not restored.\n' +
+        'Artifacts from the previous invocation are available for recovery (read on demand):\n' +
+        `- plan (\`planner\`): ${join(scopeDir, 'nodes', 'planner.md')}`
+    );
     // The #1842 invariant holds: the cold run is kept, never replayed.
     expect(mockSendQueryDag.mock.calls.length).toBe(1);
   });
@@ -19477,11 +19502,15 @@ describe('executeDagWorkflow -- persist_session', () => {
       })
     );
 
-    // executeDagWorkflow catches per-node errors and emits a failure message.
-    const sendMessage = platform.sendMessage as ReturnType<typeof mock>;
-    const messages = sendMessage.mock.calls.map((call: unknown[]) => call[1] as string);
-    const errMsg = messages.find(m => m.includes('persist_session') && m.includes('sessionResume'));
-    expect(errMsg).toBeDefined();
+    // executeDagWorkflow catches the per-node error and records it against the node.
+    const failed = persistedEvents(store).find(
+      event => event.event_type === 'node_failed' && event.step_name === 'planner'
+    );
+    expect(failed?.data?.error).toBe(
+      "Node 'planner' has persist_session: true but resolved provider 'claude' does not " +
+        'support sessionResume. Remove persist_session, or use a provider with ' +
+        'sessionResume capability.'
+    );
     expect(store.upsertWorkflowNodeSession).not.toHaveBeenCalled();
   });
 

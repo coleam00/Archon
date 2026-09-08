@@ -3,7 +3,7 @@
 # Multi-stage build: deps → web build → production image
 # =============================================================================
 
-ARG BUN_VERSION=1.4.0
+ARG BUN_VERSION=1.4.2
 
 # ---------------------------------------------------------------------------
 # Stage 1: Install dependencies
@@ -53,7 +53,7 @@ RUN bun run build:web && \
 # ---------------------------------------------------------------------------
 # Stage 3: Production image
 # ---------------------------------------------------------------------------
-ARG BUN_VERSION=1.4.0
+ARG BUN_VERSION=1.4.2
 FROM oven/bun:${BUN_VERSION}-slim AS production
 
 # OCI Labels for GHCR
