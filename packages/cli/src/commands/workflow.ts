@@ -1640,8 +1640,8 @@ async function runWorkflowWithOwnedSource(
 
   // A resolved continuation already discovered over its own roots; reusing that result is
   // what keeps a resume from paying digest verification and full discovery twice.
-  // Mutable: an adopt lane that runs inside the adopted run's worktree re-freezes and
-  // re-discovers from THAT checkout once its path is known (see recaptureForLane).
+  // Mutable: without an explicit source, an adopt lane re-freezes and re-discovers
+  // from the adopted checkout once its path is known (see recaptureForLane).
   let { workflows: workflowEntries, errors } = continuation
     ? { workflows: continuation.workflows, errors: continuation.errors }
     : preparedSource
@@ -1673,11 +1673,10 @@ async function runWorkflowWithOwnedSource(
   let workflowEntry = workflow ? workflowEntries.find(ws => ws.workflow === workflow) : undefined;
   let workflowSource = workflowEntry?.source;
 
-  // An adoption lane that executes inside an inherited or freshly cut worktree must run
-  // THAT checkout's `.archon`, not the parent checkout's bytes captured on entry — the
-  // branch may carry a different workflow YAML, and executing one against the other is
-  // exactly the mixed-vintage defect (#2660/#2747). Re-freeze the source and re-discover
-  // from the lane path once the lane resolves it.
+  // By default, adoption reads the inherited or freshly cut worktree's `.archon`:
+  // the branch may carry a different workflow than the invoking checkout (#2660/#2747).
+  // An explicit source instead owns the graph, commands, and scripts for the new run;
+  // adoption changes only its execution target. The caller recaptures only the default.
   const recaptureForLane = async (sourceRoot: string): Promise<void> => {
     try {
       const replacement = await prepareWorkflowSource(createWorkflowDeps(), {
@@ -2869,9 +2868,9 @@ async function runWorkflowWithOwnedSource(
     });
   }
 
-  // The lane's checkout is final here — reuse-worktree set it in the lane block, and
-  // checkout-branch when the resolver materialized its exact branch above.
-  if (adoptLaneRunsIsolatedCheckout) {
+  // The lane's checkout is final here. Preserve an explicitly selected authoring
+  // source; only default discovery follows the adopted execution checkout.
+  if (adoptLaneRunsIsolatedCheckout && options.discoveryCwd === undefined) {
     console.log(`Capturing workflow source from ${workingCwd}.`);
     await recaptureForLane(workingCwd);
   }

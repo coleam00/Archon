@@ -11705,6 +11705,44 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
     expect(opts.adoptedFromRunId).toBe('run-old');
   });
 
+  it('preserves an explicit source when adoption recreates the prior branch checkout', async () => {
+    setupAdoptMocks({
+      kind: 'checkout-branch',
+      taskBranch: { kind: 'existing', branch: 'feature/live-pr' },
+    });
+    const isolation = await import('@archon/isolation');
+    const { executeWorkflow, prepareWorkflowSource } = await import('@archon/workflows/executor');
+    (isolation.getIsolationProvider as ReturnType<typeof mock>).mockReturnValueOnce({
+      create: mock(() =>
+        Promise.resolve({
+          provider: 'worktree' as const,
+          id: '/wt/recreated',
+          workingPath: '/wt/recreated',
+          branchName: 'feature/live-pr',
+          status: 'active' as const,
+          createdAt: new Date(),
+          metadata: { adopted: true },
+        })
+      ),
+      healthCheck: mock(() => Promise.resolve(true)),
+    });
+
+    // Explicit selection matters even when it names the invoking checkout.
+    await workflowRunCommand('/test/path', 'assist', 'hello', {
+      adoptRunId: 'run-old',
+      discoveryCwd: '/test/path',
+    });
+
+    expect(prepareWorkflowSource).toHaveBeenCalledTimes(1);
+    expect(prepareWorkflowSource).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ sourceRoot: '/test/path' })
+    );
+    const executed = (executeWorkflow as ReturnType<typeof mock>).mock.calls.at(-1) as unknown[];
+    expect(executed[3]).toBe('/wt/recreated');
+    expect((executed[4] as { description: string }).description).toBe('Parent vintage');
+  });
+
   it('re-judges the declared-input gate against the branch vintage after recapture', async () => {
     // The parent checkout's YAML declares no inputs, so the invocation gate on entry
     // passes an input-less call; only the adopted branch's YAML requires one.
