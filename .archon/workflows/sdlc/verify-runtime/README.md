@@ -40,7 +40,12 @@ Each normal attempt sequences setup, start, agent verification, identity probe,
 evidence checks, then teardown. The agent writes a report and tool evidence into
 a newly allocated artifact directory. Missing/invalid JSON, missing coverage,
 invalid fields, absent evidence, or report/probe identity disagreement trigger
-one retry with fresh agent context and another setup/start cycle. The second
+one retry with fresh agent context and another setup/start cycle. Native
+`LOOP_PREV` carries the checker's rejection reason through `prepare-attempt` into
+the retry command as report feedback, never as a prior product observation. It is
+empty on the first attempt. Each `evidence_path` names exactly one existing
+nonempty file; combine multiple actual tool outputs into one file per assertion
+when needed, never a comma-separated filename list. The second
 malformed attempt explicitly completes as inconclusive before the engine's loop
 limit. `max_iterations` and the final-attempt bound share one YAML anchor.
 Unrecovered provider, subprocess, or engine node errors fail the run operationally

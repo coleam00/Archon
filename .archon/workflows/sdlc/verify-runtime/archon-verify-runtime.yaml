@@ -45,6 +45,7 @@ nodes:
           runtime: uv
           with:
             previous_attempt: '$LOOP_PREV.prepare-attempt.output.attempt'
+            previous_report_feedback: '$LOOP_PREV.check-evidence.output.reason'
           output_format:
             type: object
             properties:
@@ -52,7 +53,8 @@ nodes:
               directory: { type: string }
               report_path: { type: string }
               checkout: { type: string }
-            required: [attempt, directory, report_path, checkout]
+              report_feedback: { type: string }
+            required: [attempt, directory, report_path, checkout, report_feedback]
 
         - id: setup-run
           depends_on: [prepare-attempt]

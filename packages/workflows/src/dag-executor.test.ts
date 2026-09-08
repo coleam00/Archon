@@ -34110,6 +34110,8 @@ describe('archon-verify-runtime live target contract', () => {
     | 'wrong-report'
     | 'invalid-candidate'
     | 'malformed-then-pass'
+    | 'multiple-files-then-pass'
+    | 'comma-filename'
     | 'malformed-exhausted'
     | 'missing-evidence'
     | 'missing-coverage'
@@ -34254,8 +34256,33 @@ describe('archon-verify-runtime live target contract', () => {
             event =>
               event.event_type === 'node_completed' &&
               event.step_name === 'verify-loop.prepare-attempt'
-          )?.data?.structured_output as { directory: string; report_path: string; attempt: number };
+          )?.data?.structured_output as {
+          directory: string;
+          report_path: string;
+          attempt: number;
+          report_feedback: string;
+        };
         expect(prepared.attempt).toBe(calls);
+        const priorAssessment = persistedEvents(store)
+          .reverse()
+          .find(
+            event =>
+              event.event_type === 'node_completed' &&
+              event.step_name === 'verify-loop.check-evidence'
+          )?.data?.structured_output as { status: string; reason: string } | undefined;
+        expect(prepared.report_feedback).toBe(priorAssessment?.reason ?? '');
+        expect(prompt).toContain(
+          `Previous report feedback (empty on the first attempt):\n\n${prepared.report_feedback}\n`
+        );
+        expect(prompt).not.toContain('$LOOP_PREV.');
+        expect(existsSync(prepared.report_path)).toBe(false);
+        if (calls === 2) {
+          expect(priorAssessment?.status).toBe('malformed');
+          expect(prompt).not.toContain(directories[0]);
+          expect(existsSync(join(directories[0], 'report.json'))).toBe(true);
+          if (mode === 'multiple-files-then-pass')
+            expect(priorAssessment?.reason).toBe("assertion 'health' evidence is missing or empty");
+        }
         directories.push(prepared.directory);
         expect(prompt).toContain(JSON.stringify(assertions));
         expect(prompt).toContain(identityCommand);
@@ -34271,12 +34298,16 @@ describe('archon-verify-runtime live target contract', () => {
         ).stdout;
         if (mode === 'cancelled')
           store.getWorkflowRunStatus.mockImplementation(async () => 'cancelled');
-        const evidencePath = join(prepared.directory, 'observation.txt');
+        const evidencePath = join(
+          prepared.directory,
+          mode === 'comma-filename' ? 'observation, actual.txt' : 'observation.txt'
+        );
         if (mode !== 'missing-evidence')
           await writeFile(
             evidencePath,
             `GET ${base}/observe\nHTTP ${String(response.status)}\n${raw}`
           );
+        await writeFile(join(prepared.directory, 'identity.txt'), identity);
         const report = {
           candidate:
             mode === 'wrong-report'
@@ -34302,7 +34333,10 @@ describe('archon-verify-runtime live target contract', () => {
                       mode === 'scenario-gap'
                         ? 'Scenario provides no instructions'
                         : `Expected true; measured ${JSON.stringify(measured)}`,
-                    evidence_path: evidencePath,
+                    evidence_path:
+                      mode === 'multiple-files-then-pass' && calls === 1
+                        ? 'observation.txt, identity.txt'
+                        : evidencePath,
                   },
                 ],
         };
@@ -34363,12 +34397,16 @@ describe('archon-verify-runtime live target contract', () => {
         checkout: string;
         summary: string;
       };
-      const expectedVerdict =
-        mode === 'passed' || mode === 'malformed-then-pass'
-          ? 'verified'
-          : mode === 'failed'
-            ? 'failed'
-            : 'inconclusive';
+      const expectedVerdict = [
+        'passed',
+        'malformed-then-pass',
+        'multiple-files-then-pass',
+        'comma-filename',
+      ].includes(mode)
+        ? 'verified'
+        : mode === 'failed'
+          ? 'failed'
+          : 'inconclusive';
       expect(result.verdict).toBe(expectedVerdict);
       expect(result.verified).toBe(expectedVerdict === 'verified');
       expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
@@ -34379,6 +34417,7 @@ describe('archon-verify-runtime live target contract', () => {
       ]);
       const retried = [
         'malformed-then-pass',
+        'multiple-files-then-pass',
         'malformed-exhausted',
         'missing-evidence',
         'missing-coverage',
@@ -34429,6 +34468,8 @@ describe('archon-verify-runtime live target contract', () => {
     'wrong-target',
     'wrong-report',
     'malformed-then-pass',
+    'multiple-files-then-pass',
+    'comma-filename',
     'malformed-exhausted',
     'missing-evidence',
     'missing-coverage',
@@ -34613,6 +34654,7 @@ describe('archon-verify-runtime-suite packaged contract', () => {
           directory: string;
           report_path: string;
           attempt: number;
+          report_feedback: string;
         };
         expect(prepared).toBeDefined();
         const index = scenarios.findIndex(scenario =>
@@ -34623,6 +34665,26 @@ describe('archon-verify-runtime-suite packaged contract', () => {
         const count = (calls.get(item.id) ?? 0) + 1;
         calls.set(item.id, count);
         expect(prepared.attempt).toBe(count);
+        const priorAssessment = persistedEvents(store)
+          .reverse()
+          .find(
+            event =>
+              event.event_type === 'node_completed' &&
+              event.step_name ===
+                preparedEvent?.step_name?.replace(/\.prepare-attempt$/, '.check-evidence')
+          )?.data?.structured_output as { status: string; reason: string } | undefined;
+        expect(prepared.report_feedback).toBe(priorAssessment?.reason ?? '');
+        expect(prompt).toContain(
+          `Previous report feedback (empty on the first attempt):\n\n${prepared.report_feedback}\n`
+        );
+        expect(prompt).not.toContain('$LOOP_PREV.');
+        expect(existsSync(prepared.report_path)).toBe(false);
+        if (mode === 'retry' && count === 2) {
+          expect(priorAssessment).toMatchObject({
+            status: 'malformed',
+            reason: `assertion '${item.id}' evidence is missing or empty`,
+          });
+        }
         expect(prompt).toContain(scenarios[index].environment.candidate_command);
         expect(prompt).toContain('Do not modify application source');
         expect(prompt).not.toContain('$INPUTS.');
@@ -34642,6 +34704,7 @@ describe('archon-verify-runtime-suite packaged contract', () => {
             join(prepared.directory, 'observation.txt'),
             `${response.status}\n${JSON.stringify(measured)}\n${identity}`
           );
+          await writeFile(join(prepared.directory, 'identity.txt'), identity);
           const report = {
             candidate: identity,
             assertions: [
@@ -34656,16 +34719,17 @@ describe('archon-verify-runtime-suite packaged contract', () => {
                 expected: true,
                 observed: mode === 'unavailable' && index === 1 ? null : measured,
                 reason: 'Compared the disposable target response against true',
-                evidence_path: 'observation.txt',
+                evidence_path:
+                  mode === 'retry' && index === 1 && count === 1
+                    ? 'observation.txt, identity.txt'
+                    : 'observation.txt',
               },
             ],
           };
           if (mode !== 'absent-report' || index === 0) {
             await writeFile(
               prepared.report_path,
-              index === 1 && (mode === 'malformed' || (mode === 'retry' && count === 1))
-                ? '{broken'
-                : JSON.stringify(report)
+              index === 1 && mode === 'malformed' ? '{broken' : JSON.stringify(report)
             );
           }
           yield { type: 'assistant', content: 'Runtime evidence written.' };
