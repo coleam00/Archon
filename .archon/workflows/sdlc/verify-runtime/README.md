@@ -4,6 +4,11 @@
 `verified`, `failed`, or `inconclusive`. Supply `scenario`, a path to project-owned
 JSON, and optionally `candidate`, the expected target identity.
 
+For a finite set of healthy and deliberate negative controls, use
+[`archon-verify-runtime-suite`](../verify-runtime-suite/README.md). It composes
+this workflow for every case and reports baseline verification separately from
+whether control expectations passed.
+
 ```json
 {
   "assertions": [

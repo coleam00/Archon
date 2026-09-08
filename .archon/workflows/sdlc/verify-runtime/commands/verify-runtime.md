@@ -2,11 +2,11 @@
 
 Exercise the live target using tools. Judge its behavior against these assertions:
 
-$INPUTS.assertions_json
+$read-scenario.output.assertions_json
 
 Run this project command to observe the actual target identity:
 
-$INPUTS.candidate_command
+$read-scenario.output.candidate_command
 
 Additional scenario context:
 
@@ -21,11 +21,11 @@ the scenario. Preserve literal measurements, including boolean true or false.
 Capture the commands/tools used and their actual output in new evidence files
 inside this attempt directory:
 
-$INPUTS.evidence_directory
+$prepare-attempt.output.directory
 
 Write a JSON report at this exact path:
 
-$INPUTS.report_path
+$prepare-attempt.output.report_path
 
 The report contains `candidate` (a string containing the target-identity command
 output with leading and trailing whitespace removed, or empty if unavailable)

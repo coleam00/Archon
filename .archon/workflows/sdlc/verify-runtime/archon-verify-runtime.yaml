@@ -4,6 +4,7 @@ description: >-
   structure and target identity, then return verified, failed, or inconclusive.
   Malformed reports get one fresh attempt. Requires external environment ownership.
 model: medium
+mutates_checkout: false
 inputs:
   scenario:
     default: ''
@@ -87,11 +88,6 @@ nodes:
           depends_on: [start-run]
           when: '$start-run.output.ok == true'
           mutates_checkout: false
-          with:
-            assertions_json: '$read-scenario.output.assertions_json'
-            candidate_command: '$read-scenario.output.candidate_command'
-            report_path: '$prepare-attempt.output.report_path'
-            evidence_directory: '$prepare-attempt.output.directory'
 
         - id: identity-run
           depends_on: [verify]

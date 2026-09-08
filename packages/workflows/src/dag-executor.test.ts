@@ -9,7 +9,7 @@ import {
   setSystemTime,
   type Mock,
 } from 'bun:test';
-import { mkdir, writeFile, rm, readFile, mkdtemp, readdir } from 'fs/promises';
+import { cp, mkdir, writeFile, rm, readFile, mkdtemp, readdir } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { existsSync, unlinkSync } from 'fs';
 import { join, normalize, sep, resolve } from 'path';
@@ -34468,4 +34468,542 @@ describe('archon-verify-runtime live target contract', () => {
       30_000
     );
   }
+});
+
+describe('archon-verify-runtime-suite packaged contract', () => {
+  const pack = resolve(import.meta.dir, '../../..', '.archon/workflows/sdlc');
+  it('ships an executable ordinary CLI example with healthy and deliberate negative identities', async () => {
+    const calculator = join(pack, 'verify-runtime-suite/examples/calculator.cjs');
+    for (const [candidate, sum] of [
+      ['healthy-control', '5'],
+      ['negative-control', '6'],
+    ]) {
+      const identity = await git.execFileAsync('node', [calculator, candidate, 'identity']);
+      expect(identity.stdout.trim()).toBe(`calculator-${candidate}-v1`);
+      const addition = await git.execFileAsync('node', [calculator, candidate, 'add', '2', '3']);
+      expect(addition.stdout.trim()).toBe(sum);
+    }
+  });
+  type Mode =
+    | 'controls'
+    | 'escape'
+    | 'bad-baseline'
+    | 'wrong-identity'
+    | 'retry'
+    | 'malformed'
+    | 'absent-report'
+    | 'unavailable'
+    | 'provider-failure'
+    | 'cancelled'
+    | 'resume'
+    | 'bounded';
+  type Case = { id: string; scenario: string; candidate: string; expected_verdict: string };
+  type Row = {
+    id: string;
+    candidate: string;
+    candidate_observed: string | null;
+    underlying_verdict: string | null;
+    comparison: string;
+    executed: boolean;
+    attribution: {
+      run_id: string;
+      ordinal: number;
+      fan_out_node: string;
+      return_node: string;
+      agent_node: string;
+    };
+  };
+  type Result = {
+    expectations_passed: boolean;
+    baseline_verified: boolean;
+    baseline_verification: Row;
+    all_cases_executed: boolean;
+    verdict: string;
+    cases: Row[];
+  };
+
+  async function exercise(mode: Mode) {
+    const root = await mkdtemp(join(tmpdir(), 'runtime-suite-'));
+    const cwd = join(root, 'checkout');
+    const dataDir = join(root, 'case data');
+    const artifactsDir = join(root, 'artifacts');
+    const store = createMockStore();
+    const calls = new Map<string, number>();
+    const directories: string[] = [];
+    const requests: string[] = [];
+    let active = 0;
+    let peak = 0;
+    const target = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        const [, id, action] = url.pathname.split('/');
+        requests.push(url.pathname);
+        if (action === 'identity') return new Response(`${id}-build\r\n`);
+        const healthy = id === 'healthy-control';
+        return Response.json(healthy ? mode !== 'bad-baseline' : mode === 'escape');
+      },
+    });
+    try {
+      await mkdir(dataDir, { recursive: true });
+      for (const folder of ['verify-runtime', 'verify-runtime-suite']) {
+        await cp(join(pack, folder), join(cwd, '.archon/workflows/sdlc', folder), {
+          recursive: true,
+        });
+      }
+      const caseCount =
+        mode === 'bounded' ? 16 : mode === 'cancelled' ? 5 : mode === 'provider-failure' ? 3 : 2;
+      const cases: Case[] = Array.from({ length: caseCount }, (_, index) => {
+        const id = index === 0 ? 'healthy-control' : `negative-control-${String(index)}`;
+        return {
+          id,
+          scenario: `${id}.json`,
+          candidate: `${id}-build`,
+          expected_verdict: index === 0 ? 'verified' : 'failed',
+        };
+      });
+      if (mode === 'wrong-identity') cases[1].candidate = 'requested-other-build';
+      const scenarios = cases.map(item => ({
+        assertions: [
+          {
+            id: item.id,
+            description: `GET ${target.url.origin}/${item.id}/observe; expect JSON true`,
+          },
+        ],
+        environment: {
+          ownership: 'external',
+          candidate_command: `curl --fail --silent '${target.url.origin}/${item.id}/identity'`,
+        },
+      }));
+      for (let index = 0; index < cases.length; index++) {
+        await writeFile(join(dataDir, cases[index].scenario), JSON.stringify(scenarios[index]));
+      }
+      const manifestPath = join(dataDir, 'manifest.json');
+      const manifestText = JSON.stringify({ baseline: cases[0].id, cases });
+      await writeFile(manifestPath, manifestText);
+      await writeFile(join(cwd, 'source.txt'), 'source must remain unchanged\n');
+      const discovered = await discoverWorkflows(cwd, { loadDefaults: false });
+      expect(discovered.errors).toEqual([]);
+      const workflow = discovered.workflows.find(
+        item => item.workflow.name === 'archon-verify-runtime-suite'
+      )?.workflow;
+      if (!workflow) throw new Error('suite not discovered');
+      mockSendQueryDag.mockClear();
+      mockGetAgentProviderDag.mockImplementation(() => ({
+        sendQuery: mockSendQueryDag,
+        getType: () => 'claude',
+        getCapabilities: mockClaudeCapabilities,
+      }));
+      mockSendQueryDag.mockImplementation(async function* (prompt, providerCwd, resumeSessionId) {
+        expect(providerCwd).toBe(cwd);
+        expect(resumeSessionId).toBeUndefined();
+        // Select the actual prepared node by its rendered report path, not completion order.
+        const preparedEvent = persistedEvents(store)
+          .reverse()
+          .find(
+            event =>
+              event.event_type === 'node_completed' &&
+              event.step_name?.endsWith('.prepare-attempt') &&
+              prompt.includes(
+                String((event.data?.structured_output as { report_path?: string })?.report_path)
+              )
+          );
+        const prepared = preparedEvent?.data?.structured_output as {
+          directory: string;
+          report_path: string;
+          attempt: number;
+        };
+        expect(prepared).toBeDefined();
+        const index = scenarios.findIndex(scenario =>
+          prompt.includes(JSON.stringify(scenario.assertions))
+        );
+        expect(index).toBeGreaterThanOrEqual(0);
+        const item = cases[index];
+        const count = (calls.get(item.id) ?? 0) + 1;
+        calls.set(item.id, count);
+        expect(prepared.attempt).toBe(count);
+        expect(prompt).toContain(scenarios[index].environment.candidate_command);
+        expect(prompt).toContain('Do not modify application source');
+        expect(prompt).not.toContain('$INPUTS.');
+        directories.push(prepared.directory);
+        active++;
+        peak = Math.max(peak, active);
+        try {
+          if (mode === 'provider-failure' && index === 1)
+            throw new Error('test provider rejected case');
+          if (mode === 'cancelled') store.getWorkflowRunStatus.mockResolvedValue('cancelled');
+          const response = await fetch(`${target.url.origin}/${item.id}/observe`);
+          const measured: unknown = await response.json();
+          const identity = await fetch(`${target.url.origin}/${item.id}/identity`).then(res =>
+            res.text()
+          );
+          await writeFile(
+            join(prepared.directory, 'observation.txt'),
+            `${response.status}\n${JSON.stringify(measured)}\n${identity}`
+          );
+          const report = {
+            candidate: identity,
+            assertions: [
+              {
+                id: item.id,
+                outcome:
+                  mode === 'unavailable' && index === 1
+                    ? 'inconclusive'
+                    : measured === true
+                      ? 'passed'
+                      : 'failed',
+                expected: true,
+                observed: mode === 'unavailable' && index === 1 ? null : measured,
+                reason: 'Compared the disposable target response against true',
+                evidence_path: 'observation.txt',
+              },
+            ],
+          };
+          if (mode !== 'absent-report' || index === 0) {
+            await writeFile(
+              prepared.report_path,
+              index === 1 && (mode === 'malformed' || (mode === 'retry' && count === 1))
+                ? '{broken'
+                : JSON.stringify(report)
+            );
+          }
+          yield { type: 'assistant', content: 'Runtime evidence written.' };
+          yield { type: 'result', sessionId: `${item.id}-${String(count)}` };
+        } finally {
+          active--;
+        }
+      });
+      const options = dagOptions({
+        cwd,
+        workflow,
+        deps: createMockDeps(store),
+        artifactsDir,
+        stateDir: join(root, 'state'),
+        logDir: join(root, 'logs'),
+        workflowRun: makeWorkflowRun('suite-run', {
+          metadata: { inputs: { manifest: manifestPath } },
+        }),
+      });
+      await executeDagWorkflow(options);
+      const events = persistedEvents(store);
+      const tail = events.find(
+        event => event.event_type === 'node_completed' && event.step_name === 'compare'
+      );
+      if (mode === 'cancelled') {
+        expect(tail).toBeUndefined();
+        expect(authoredOutcomeWrites(store)).not.toContain('succeeded');
+        expect(calls.size).toBeGreaterThan(0);
+        expect(calls.size).toBeLessThanOrEqual(2);
+      } else {
+        expect(tail).toBeDefined();
+        const result = tail?.data?.structured_output as Result;
+        const passes = ['controls', 'retry', 'resume', 'bounded'].includes(mode);
+        expect(result.expectations_passed).toBe(passes);
+        expect(result.baseline_verified).toBe(mode !== 'bad-baseline');
+        expect(result.baseline_verification.id).toBe('healthy-control');
+        expect(result.cases).toHaveLength(cases.length);
+        expect(result.verdict).toBe(
+          passes ? 'passed' : ['escape', 'bad-baseline'].includes(mode) ? 'failed' : 'inconclusive'
+        );
+        expect(result.all_cases_executed).toBe(mode !== 'provider-failure');
+        expect(authoredOutcomeWrites(store)).toEqual([passes ? 'succeeded' : 'failed']);
+        expect(calls.size).toBe(cases.length);
+        expect(calls.get(cases[0].id)).toBe(1);
+        expect(calls.get(cases[1].id)).toBe(
+          ['retry', 'malformed', 'absent-report'].includes(mode) ? 2 : 1
+        );
+        const snapshot = events.find(event => event.event_type === 'fan_out_instances');
+        const instances = snapshot?.data?.instances as FanOutInstanceSnapshot[];
+        expect(instances).toHaveLength(cases.length);
+        const firstTerminal = events.findIndex(
+          event =>
+            (event.event_type === 'node_completed' || event.event_type === 'node_failed') &&
+            event.data?.type === 'compose_fan_out_instance'
+        );
+        const startsBeforeTerminal = events
+          .slice(0, firstTerminal)
+          .filter(
+            event =>
+              event.event_type === 'node_started' && event.data?.type === 'compose_fan_out_instance'
+          );
+        expect(startsBeforeTerminal).toHaveLength(2);
+        for (const [index, row] of result.cases.entries()) {
+          expect(row.id).toBe(cases[index].id);
+          expect(row.candidate).toBe(cases[index].candidate);
+          expect(row.attribution).toMatchObject({
+            run_id: 'suite-run',
+            fan_out_node: 'cases',
+            ordinal: index,
+          });
+          const scope = `${snapshot?.step_name}__${instances[index].identity}__cases__${instances[index].identity}__`;
+          expect(events.some(event => event.step_name === scope + row.attribution.agent_node)).toBe(
+            true
+          );
+          if (mode !== 'provider-failure' || index === 0)
+            expect(
+              events.some(
+                event =>
+                  event.step_name === scope + row.attribution.return_node &&
+                  event.event_type === 'node_completed'
+              )
+            ).toBe(true);
+          if (row.underlying_verdict !== null)
+            expect(row.candidate_observed).toBe(`${row.id}-build`);
+        }
+        if (mode === 'escape') expect(result.cases[1].comparison).toBe('escaped');
+        if (mode === 'bad-baseline') expect(result.cases[0].comparison).toBe('unexpected_failure');
+        if (mode === 'provider-failure') {
+          expect(result.cases[1].underlying_verdict).toBeNull();
+          expect(result.cases[1].executed).toBe(false);
+        }
+        if (mode === 'resume') {
+          // Hydrate from actual first-pass events. Leave the wrapper and collector
+          // uncommitted to prove instance terminals prevent rerunning runtime nodes.
+          const completedNodeOutputs = new Map<string, PersistedNodeOutput>();
+          const fanOutSnapshots = new Map<string, FanOutInstanceSnapshot[]>();
+          for (const event of events) {
+            if (
+              event.event_type === 'node_completed' &&
+              event.step_name &&
+              !['cases', 'compare'].includes(event.step_name) &&
+              typeof event.data?.node_output === 'string'
+            ) {
+              completedNodeOutputs.set(event.step_name, {
+                output: event.data.node_output,
+                structuredOutput: event.data.structured_output,
+              });
+            }
+            if (event.event_type === 'fan_out_instances' && event.step_name)
+              fanOutSnapshots.set(
+                event.step_name,
+                event.data?.instances as FanOutInstanceSnapshot[]
+              );
+          }
+          store.getDagResumeSnapshot.mockResolvedValue({
+            completedNodeOutputs,
+            fanOutSnapshots,
+            unresolvedNodeStarts: new Set(),
+            costUsd: 0,
+          });
+          const requestCount = requests.length;
+          for (let repeat = 0; repeat < 2; repeat++) {
+            store.createWorkflowEvent.mockClear();
+            await executeDagWorkflow(options);
+            const resumed = persistedEvents(store).find(
+              event => event.event_type === 'node_completed' && event.step_name === 'compare'
+            );
+            expect(resumed?.data?.structured_output).toEqual(result);
+            expect(requests).toHaveLength(requestCount);
+            expect(mockSendQueryDag).toHaveBeenCalledTimes(2);
+          }
+        }
+      }
+      expect(peak).toBeLessThanOrEqual(2);
+      expect(new Set(directories).size).toBe(directories.length);
+      for (const directory of directories) {
+        expect(directory.startsWith(artifactsDir + sep)).toBe(true);
+        if (mode !== 'provider-failure')
+          expect(existsSync(join(directory, 'observation.txt'))).toBe(true);
+      }
+      expect(await readFile(join(cwd, 'source.txt'), 'utf8')).toBe(
+        'source must remain unchanged\n'
+      );
+      expect(await readFile(manifestPath, 'utf8')).toBe(manifestText);
+      for (const [index, item] of cases.entries())
+        expect(await readFile(join(dataDir, item.scenario), 'utf8')).toBe(
+          JSON.stringify(scenarios[index])
+        );
+      expect(await readdir(cwd)).toEqual(['.archon', 'source.txt']);
+    } finally {
+      await target.stop(true);
+      await removeTempTree(root);
+    }
+  }
+
+  for (const mode of [
+    'controls',
+    'escape',
+    'bad-baseline',
+    'wrong-identity',
+    'retry',
+    'malformed',
+    'absent-report',
+    'unavailable',
+    'provider-failure',
+    'cancelled',
+    'resume',
+    'bounded',
+  ] satisfies Mode[]) {
+    it(`executes packaged runtime cases: ${mode}`, () => exercise(mode), 30_000);
+  }
+
+  it('rejects invalid manifests before admitting any runtime case', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'runtime-suite-admission-'));
+    try {
+      const cwd = join(root, 'checkout');
+      for (const folder of ['verify-runtime', 'verify-runtime-suite'])
+        await cp(join(pack, folder), join(cwd, '.archon/workflows/sdlc', folder), {
+          recursive: true,
+        });
+      const discovered = await discoverWorkflows(cwd, { loadDefaults: false });
+      expect(discovered.errors).toEqual([]);
+      const workflow = discovered.workflows.find(
+        item => item.workflow.name === 'archon-verify-runtime-suite'
+      )?.workflow;
+      if (!workflow) throw new Error('suite not discovered');
+      const path = join(root, 'manifest.json');
+      const goodCase = {
+        id: 'healthy-control',
+        candidate: 'build',
+        scenario: 'scenario.json',
+        expected_verdict: 'verified',
+      };
+      const negativeCase = { ...goodCase, id: 'negative-control', expected_verdict: 'failed' };
+      const valid = { baseline: goodCase.id, cases: [goodCase, negativeCase] };
+      await writeFile(join(root, 'scenario.json'), '{}');
+      const invalid: unknown[] = [
+        null,
+        [],
+        {},
+        { ...valid, cases: [] },
+        { ...valid, cases: [goodCase] },
+        {
+          ...valid,
+          cases: Array.from({ length: 17 }, (_, index) => ({
+            ...negativeCase,
+            id: `control-${String(index)}`,
+          })),
+        },
+        { ...valid, cases: [goodCase, goodCase] },
+        { ...valid, baseline: 'missing' },
+        { ...valid, baseline: negativeCase.id },
+        { ...valid, cases: [goodCase, { ...negativeCase, expected_verdict: 'verified' }] },
+        ...[null, '', '   ', ' control ', 'control\0'].map(id => ({
+          ...valid,
+          cases: [goodCase, { ...negativeCase, id }],
+        })),
+        ...[null, 42, '', 'build\n', 'bad\0identity'].map(candidate => ({
+          ...valid,
+          cases: [goodCase, { ...negativeCase, candidate }],
+        })),
+        { ...valid, cases: [goodCase, { ...negativeCase, scenario: 'missing.json' }] },
+        { ...valid, cases: [goodCase, { ...negativeCase, scenario: '.' }] },
+        { ...valid, cases: [goodCase, { ...negativeCase, expected_verdict: 'inconclusive' }] },
+      ];
+      mockSendQueryDag.mockClear();
+      for (const [index, manifest] of invalid.entries()) {
+        await writeFile(path, JSON.stringify(manifest));
+        const store = createMockStore();
+        await executeDagWorkflow(
+          dagOptions({
+            cwd,
+            workflow,
+            deps: createMockDeps(store),
+            artifactsDir: join(root, 'artifacts'),
+            stateDir: join(root, 'state'),
+            logDir: join(root, 'logs'),
+            workflowRun: makeWorkflowRun(`admission-${String(index)}`, {
+              metadata: { inputs: { manifest: path } },
+            }),
+          })
+        );
+        const events = persistedEvents(store);
+        expect(
+          events.some(
+            event => event.step_name === 'read-manifest' && event.event_type === 'node_failed'
+          )
+        ).toBe(true);
+        expect(events.some(event => event.event_type === 'fan_out_instances')).toBe(false);
+        expect(authoredOutcomeWrites(store)).not.toContain('succeeded');
+        expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+      }
+      expect(mockSendQueryDag).not.toHaveBeenCalled();
+    } finally {
+      await removeTempTree(root);
+    }
+  }, 30_000);
+
+  it('fails closed on missing, extra, absent and operational result slots', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'runtime-suite-comparison-'));
+    try {
+      const script = await readFile(join(pack, 'verify-runtime-suite/scripts/compare.py'), 'utf8');
+      const baseline = {
+        id: 'healthy-control',
+        candidate: 'healthy-build',
+        scenario: 'healthy.json',
+        expected_verdict: 'verified',
+      };
+      const negative = {
+        id: 'negative-control',
+        candidate: 'negative-build',
+        scenario: 'negative.json',
+        expected_verdict: 'failed',
+      };
+      const healthyReturn = {
+        verified: true,
+        verdict: 'verified',
+        candidate: baseline.candidate,
+        checkout: '',
+        summary: 'measured',
+      };
+      const negativeReturn = {
+        ...healthyReturn,
+        verified: false,
+        verdict: 'failed',
+        candidate: negative.candidate,
+      };
+      for (const results of [
+        [healthyReturn],
+        [healthyReturn, negativeReturn, negativeReturn],
+        [healthyReturn, null],
+        [healthyReturn, ''],
+        [healthyReturn, {}],
+        [healthyReturn, { archon_failed: true, status: 'cancelled', error: 'cancelled' }],
+        [
+          healthyReturn,
+          { archon_failed: true, status: 'failed', error: 'provider failure', ...negativeReturn },
+        ],
+        [healthyReturn, { ...negativeReturn, candidate: baseline.candidate }],
+      ]) {
+        const store = createMockStore();
+        await executeDagWorkflow(
+          dagOptions({
+            cwd: root,
+            deps: createMockDeps(store),
+            workflowRun: makeWorkflowRun('compare-run'),
+            workflow: {
+              name: 'compare-unit',
+              nodes: [
+                {
+                  id: 'compare',
+                  kind: 'exec',
+                  runtime: 'uv',
+                  script,
+                  with: {
+                    manifest: JSON.stringify({
+                      baseline: baseline.id,
+                      cases: [baseline, negative],
+                    }),
+                    results: JSON.stringify(results),
+                  },
+                },
+              ],
+            },
+          })
+        );
+        const completed = persistedEvents(store).find(
+          event => event.event_type === 'node_completed' && event.step_name === 'compare'
+        );
+        expect(completed).toBeDefined();
+        const result = JSON.parse(String(completed?.data?.node_output)) as Result;
+        expect(result.expectations_passed).toBe(false);
+        expect(result.verdict).toBe('inconclusive');
+        expect(result.baseline_verified).toBe(true);
+        expect(result.cases).toHaveLength(2);
+      }
+    } finally {
+      await removeTempTree(root);
+    }
+  }, 30_000);
 });
