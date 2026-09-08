@@ -231,10 +231,13 @@ jobs:
 
       # The test creates and drops its own scratch database; the 'postgres'
       # database named in the URL is only used to reach the server.
-      - name: Run Postgres parity test
+      - name: Run Postgres parity tests
+        working-directory: packages/core
         env:
           ARCHON_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
-        run: bun test packages/core/src/db/isolation-environments.live-run.postgres.integration.test.ts
+        run: |
+          bun test src/db/isolation-environments.live-run.postgres.integration.test.ts
+          bun test src/trigger-tests/admission.integration.test.ts
 
   docker-build:
     needs: changes

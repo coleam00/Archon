@@ -136,7 +136,7 @@ export { ensureIsolationConfigured };
 export async function validateAndResolveIsolation(
   conversation: Conversation,
   codebase: Codebase | null,
-  platform: IPlatformAdapter,
+  platform: Pick<IPlatformAdapter, 'sendMessage' | 'getPlatformType'>,
   conversationId: string,
   hints?: IsolationHints,
   _isRetry = false,

@@ -967,6 +967,22 @@ export async function finalizeWorkflowSource(
   };
 }
 
+/** Persist the capture identity with a pre-created run before handing it to a host. */
+export function preparedWorkflowSourceMetadata(
+  prepared: PreparedWorkflowSource
+): import('./schemas/workflow-run').WorkflowSourceMetadata {
+  return {
+    version: 1 as const,
+    root: prepared.anchor.root,
+    origin: prepared.origin,
+    captured_at: prepared.manifest.captured_at,
+    digest: prepared.manifest.digest,
+    source_config: prepared.anchor.config,
+    file_count: prepared.manifest.file_count,
+    byte_count: prepared.manifest.byte_count,
+  };
+}
+
 /**
  * Freeze a run's executable source and reserve the run id it belongs to, BEFORE the
  * workflow is discovered.
@@ -2740,16 +2756,10 @@ export async function executeWorkflow(
     }
     const sourceAnchor = { ...preparedSource.anchor, root: finalCaptureRoot };
     workflowSourceRoots = capturedSourceRoots(sourceAnchor);
-    const sourceRecord = {
-      version: 1 as const,
-      root: finalCaptureRoot,
-      origin: preparedSource.origin,
-      captured_at: preparedSource.manifest.captured_at,
-      digest: preparedSource.manifest.digest,
-      source_config: sourceAnchor.config,
-      file_count: preparedSource.manifest.file_count,
-      byte_count: preparedSource.manifest.byte_count,
-    };
+    const sourceRecord = preparedWorkflowSourceMetadata({
+      ...preparedSource,
+      anchor: sourceAnchor,
+    });
     // Mirror the record onto the IN-MEMORY run as well as the row. `workflowRun` is what
     // gets handed to child, fan-out, and `workflow:` dispatch, and those read the record
     // to find the parent's authoring origin — a stale in-memory copy sends them to the

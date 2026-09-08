@@ -1089,6 +1089,36 @@ ${userComment}`;
       return; // Silent rejection - no error response
     }
 
+    if (githubEvent === 'issues' && (event.action === 'opened' || event.action === 'labeled')) {
+      const { parseGitHubIssueTrigger } = await import('./trigger');
+      const { loadTriggerBindings, deliverWorkflowTrigger } =
+        await import('@archon/core/workflows/trigger-launch');
+      const triggerEvent = parseGitHubIssueTrigger(decoded, deliveryId);
+      if (triggerEvent?.kind !== 'github.issue') return;
+      const bindings = (await loadTriggerBindings()).filter(
+        binding =>
+          binding.kind === 'github.issue' &&
+          binding.repository.toLowerCase() === triggerEvent.repository.toLowerCase() &&
+          binding.action === triggerEvent.action &&
+          binding.label === triggerEvent.label
+      );
+      if (bindings.length > 1) throw new Error('Ambiguous GitHub issue trigger routing');
+      const binding = bindings[0];
+      if (!binding) return;
+      const { authorizeTriggerEvent } = await import('@archon/workflows/trigger');
+      authorizeTriggerEvent(binding, triggerEvent);
+      const user = await userDb.findOrCreateUserByPlatformIdentity(
+        'github',
+        triggerEvent.actor,
+        triggerEvent.actor
+      );
+      const delivery = await deliverWorkflowTrigger(binding, triggerEvent, undefined, user.id);
+      getLog().info({ ...delivery.admission, triggerId: binding.id }, 'github.trigger_admitted');
+      // Admission is durable before the webhook acknowledgement. The shared host
+      // observes execution failures; the engine owns the run's eventual outcome.
+      return;
+    }
+
     const parsed = this.parseEvent(event);
     if (!parsed) return;
 

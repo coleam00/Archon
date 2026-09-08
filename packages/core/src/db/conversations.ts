@@ -134,7 +134,7 @@ export async function getOrCreateConversation(
   assistantType ??= 'claude';
 
   const created = await pool.query<Conversation>(
-    'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+    'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (platform_type, platform_conversation_id) DO UPDATE SET platform_conversation_id = excluded.platform_conversation_id RETURNING *',
     [platformType, platformId, assistantType, finalCodebaseId, inheritedCwd, userId ?? null]
   );
 

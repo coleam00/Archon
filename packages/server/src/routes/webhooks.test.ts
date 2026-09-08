@@ -139,19 +139,22 @@ describe('POST /webhooks/github', () => {
     expect(mockHandleWebhook).toHaveBeenCalledTimes(1);
   });
 
-  test('returns 500 when check-run processing rejects', async () => {
-    const app = createWebhookApp();
-    mockHandleWebhook.mockImplementation(async () => {
-      throw new Error('workflow signal failed');
-    });
+  test.each(['check_run', 'issues'])(
+    'returns 500 when durable %s processing rejects',
+    async eventType => {
+      const app = createWebhookApp();
+      mockHandleWebhook.mockImplementation(async () => {
+        throw new Error('workflow signal failed');
+      });
 
-    const res = await postWebhook(app, {
-      'x-github-event': 'check_run',
-      'x-hub-signature-256': 'sha256=abc123',
-      'x-github-delivery': 'guid-1',
-    });
+      const res = await postWebhook(app, {
+        'x-github-event': eventType,
+        'x-hub-signature-256': 'sha256=abc123',
+        'x-github-delivery': 'guid-1',
+      });
 
-    expect(res.status).toBe(500);
-    expect(mockHandleWebhook).toHaveBeenCalledTimes(1);
-  });
+      expect(res.status).toBe(500);
+      expect(mockHandleWebhook).toHaveBeenCalledTimes(1);
+    }
+  );
 });

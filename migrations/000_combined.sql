@@ -200,6 +200,17 @@ CREATE TABLE IF NOT EXISTS remote_agent_workflow_runs (
   output_root TEXT
 );
 
+CREATE TABLE IF NOT EXISTS remote_agent_workflow_trigger_locks (
+  trigger_id TEXT PRIMARY KEY
+);
+CREATE TABLE IF NOT EXISTS remote_agent_workflow_trigger_events (
+  trigger_id TEXT NOT NULL REFERENCES remote_agent_workflow_trigger_locks(trigger_id),
+  event_id TEXT NOT NULL,
+  run_id UUID NOT NULL REFERENCES remote_agent_workflow_runs(id),
+  disposition TEXT NOT NULL CHECK (disposition IN ('accepted', 'skipped')),
+  PRIMARY KEY (trigger_id, event_id)
+);
+
 COMMENT ON TABLE remote_agent_workflow_runs IS
   'Tracks workflow execution state for resumption and observability';
 

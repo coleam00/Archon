@@ -54,6 +54,10 @@ archon workflow run assist --cwd /path/to/repo --no-worktree "Quick question"
 
 ## Commands
 
+### `workflow trigger <trigger-id> <event.json>`
+
+Deliver one scheduled tick using the binding in `ARCHON_HOME/triggers.json`. The command works from any directory, waits for the native run to finish or pause, and returns JSON containing the admission disposition and run ID. Repeated event IDs return the same run; overlapping schedule ticks are durably skipped. See [native trigger admission](/guides/native-triggers/) for the typed event document, configuration, and recovery behavior.
+
 ### `chat <message>`
 
 Send a message to the orchestrator for a one-off AI interaction.

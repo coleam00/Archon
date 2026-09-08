@@ -313,7 +313,7 @@ describe('CLI help output', () => {
   // Commands block stays byte-identical); the assertions below prove each
   // path now renders a Commands line plus its scoped flags, and that the
   // commands rendered for one subcommand do not leak into another's slice.
-  for (const sub of ['approve', 'reject', 'cleanup', 'reset-sessions', 'event']) {
+  for (const sub of ['approve', 'reject', 'cleanup', 'reset-sessions', 'event', 'trigger']) {
     it(`renders a non-empty Commands block and matching Options for workflow ${sub} --help`, () => {
       const scoped = spawnSync(process.execPath, [CLI_ENTRY, 'workflow', sub, '--help'], {
         encoding: 'utf8',

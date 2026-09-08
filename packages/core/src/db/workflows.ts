@@ -29,6 +29,7 @@ import type {
 } from '../schemas/workflow-run';
 import { createLogger } from '@archon/paths';
 import type {
+  IWorkflowStore,
   FanOutCancelReason,
   WorkflowCancellationEventDetails,
   WorkflowEventType,
@@ -357,26 +358,10 @@ export class WorkflowNotResumableError extends Error {
   }
 }
 
-export async function createWorkflowRun(data: {
-  /**
-   * Caller-reserved row id. Supplied when something had to exist at this run's own
-   * paths before the row could be written — today that is the workflow-source capture,
-   * which is frozen (and, for a container, bind-mounted) before the workflow is even
-   * selected. Omitted, the database generates one as it always has.
-   */
-  id?: string;
-  workflow_name: string;
-  conversation_id: string;
-  codebase_id?: string;
-  user_message: string;
-  metadata?: Record<string, unknown>;
-  working_path?: string;
-  parent_conversation_id?: string;
-  user_id?: string;
-  parent_run_id?: string;
-  /** Between-run continuation (#2747) — written once at creation, never on resume. */
-  adopted_from_run_id?: string;
-}): Promise<WorkflowRun> {
+export async function createWorkflowRun(
+  data: Parameters<IWorkflowStore['createWorkflowRun']>[0],
+  query: typeof pool.query = pool.query.bind(pool)
+): Promise<WorkflowRun> {
   // Serialize metadata with validation to catch circular references early
   let metadataJson: string;
   try {
@@ -408,7 +393,7 @@ export async function createWorkflowRun(data: {
   }
 
   try {
-    const result = await pool.query<WorkflowRun>(
+    const result = await query<WorkflowRun>(
       data.id === undefined
         ? `INSERT INTO remote_agent_workflow_runs
        (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id)
@@ -1178,15 +1163,21 @@ export async function updateWorkflowRun(
 
   values.push(id);
   const idParam = `$${values.length}`;
+  // A fresh executor can race cancellation during source/isolation startup.
+  // Lifecycle recovery goes through resumeWorkflowRun, never this generic writer.
+  const activeStatusGuard =
+    requestedStatus === undefined
+      ? ''
+      : ` AND status NOT IN (${TERMINAL_WORKFLOW_STATUSES.map(status => `'${status}'`).join(', ')})`;
 
   try {
     const result = await pool.query(
-      `UPDATE remote_agent_workflow_runs SET ${setClauses.join(', ')} WHERE id = ${idParam}`,
+      `UPDATE remote_agent_workflow_runs SET ${setClauses.join(', ')} WHERE id = ${idParam}${activeStatusGuard}`,
       values
     );
     if (result.rowCount === 0) {
       getLog().warn({ workflowRunId: id }, 'db.workflow_run_update_no_match');
-      throw new Error(`Workflow run not found (id: ${id})`);
+      throw new Error(`Workflow run not found or already terminal (id: ${id})`);
     }
   } catch (error) {
     if (error instanceof Error && error.message.startsWith('Workflow run not found')) throw error;
@@ -2252,21 +2243,26 @@ export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ co
     getDatabaseType() === 'postgresql'
       ? `NOW() - INTERVAL '${String(olderThanDays)} days'`
       : `datetime('now', '-${String(olderThanDays)} days')`;
+  // Admission retains its native run identity permanently. Exclude the same
+  // runs from both deletes so cleanup neither erases their events nor aborts
+  // unrelated retention work at the admission foreign key.
+  const deletable = `status IN ('completed', 'failed', 'cancelled')
+    AND started_at < ${cutoff}
+    AND NOT EXISTS (SELECT 1 FROM remote_agent_workflow_trigger_events admission
+      WHERE admission.run_id = remote_agent_workflow_runs.id)`;
   try {
     await pool.query('BEGIN', []);
     // Delete events first (FK reference)
     await pool.query(
       `DELETE FROM remote_agent_workflow_events WHERE workflow_run_id IN (
         SELECT id FROM remote_agent_workflow_runs
-        WHERE status IN ('completed', 'failed', 'cancelled')
-          AND started_at < ${cutoff}
+        WHERE ${deletable}
       )`,
       []
     );
     const result = await pool.query(
       `DELETE FROM remote_agent_workflow_runs
-       WHERE status IN ('completed', 'failed', 'cancelled')
-         AND started_at < ${cutoff}`,
+       WHERE ${deletable}`,
       []
     );
     await pool.query('COMMIT', []);

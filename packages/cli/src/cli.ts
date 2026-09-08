@@ -468,6 +468,12 @@ const commandHelp: HelpEntry[] = [
 const scopedOnlyHelp: HelpEntry[] = [
   {
     command: 'workflow',
+    subcommand: 'trigger',
+    spec: 'workflow trigger <trigger-id> <event.json>',
+    description: 'Deliver a configured schedule tick and await native execution (JSON result)',
+  },
+  {
+    command: 'workflow',
     subcommand: 'approve',
     spec: 'workflow approve <run-id>',
     description: 'Approve a paused gate (sugar for workflow respond <run-id> approve)',
@@ -1078,7 +1084,8 @@ async function main(): Promise<number> {
     'auth',
     'ai',
   ];
-  const requiresGitRepo = !noGitCommands.includes(command ?? '');
+  const requiresGitRepo =
+    !noGitCommands.includes(command ?? '') && !(command === 'workflow' && subcommand === 'trigger');
   let detachedRunConfig: WorkflowRunConfigInput | undefined;
 
   try {
@@ -1307,6 +1314,15 @@ async function main(): Promise<number> {
       }
 
       case 'workflow': {
+        if (subcommand === 'trigger') {
+          if (!positionals[2] || !positionals[3] || positionals[4])
+            return await fail(jsonFlag, 'Usage: archon workflow trigger <trigger-id> <event.json>');
+          const { workflowTriggerCommand } = await loadRoute(() => import('./commands/trigger'), {
+            providers: true,
+            database: true,
+          });
+          return await workflowTriggerCommand(positionals[2], positionals[3]);
+        }
         const modelOnContinue = rejectModelOnContinue(subcommand, values.model);
         if (modelOnContinue) {
           return await fail(jsonFlag, modelOnContinue);

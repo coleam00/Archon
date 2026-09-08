@@ -34,9 +34,9 @@ export function registerGithubWebhookRoute(app: OpenAPIHono, github: GithubWebho
       // CRITICAL: Use c.req.text() for raw body (signature verification)
       const payload = await c.req.text();
 
-      if (eventType === 'check_run') {
-        // GitHub must see a failed acknowledgement when the durable wait signal
-        // could not be recorded, otherwise it will not redeliver the check event.
+      if (eventType === 'check_run' || eventType === 'issues') {
+        // Acknowledge only after the durable wait signal or trigger admission is
+        // recorded, so persistence failures remain eligible for redelivery.
         await github.handleWebhook(payload, signature, deliveryId, eventType);
       } else {
         void github

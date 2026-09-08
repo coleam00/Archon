@@ -89,7 +89,7 @@ describe('conversations', () => {
       expect(mockQuery).toHaveBeenCalledTimes(2);
       expect(mockQuery).toHaveBeenNthCalledWith(
         2,
-        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (platform_type, platform_conversation_id) DO UPDATE SET platform_conversation_id = excluded.platform_conversation_id RETURNING *',
         ['telegram', 'chat-789', 'claude', null, null, null]
       );
     });
@@ -120,7 +120,7 @@ describe('conversations', () => {
       );
       expect(mockQuery).toHaveBeenNthCalledWith(
         3,
-        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (platform_type, platform_conversation_id) DO UPDATE SET platform_conversation_id = excluded.platform_conversation_id RETURNING *',
         ['telegram', 'chat-789', 'codex', 'codebase-123', null, null]
       );
       // The codebase-level assistant short-circuits the config chain.
@@ -148,7 +148,7 @@ describe('conversations', () => {
       expect(loadConfigSpy).toHaveBeenCalledTimes(1);
       expect(mockQuery).toHaveBeenNthCalledWith(
         2,
-        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (platform_type, platform_conversation_id) DO UPDATE SET platform_conversation_id = excluded.platform_conversation_id RETURNING *',
         ['web', 'web-new-chat', 'codex', null, null, null]
       );
     });
@@ -169,7 +169,7 @@ describe('conversations', () => {
       expect(result).toEqual(newConversation);
       expect(mockQuery).toHaveBeenNthCalledWith(
         2,
-        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (platform_type, platform_conversation_id) DO UPDATE SET platform_conversation_id = excluded.platform_conversation_id RETURNING *',
         ['web', 'web-new-chat', 'claude', null, null, null]
       );
     });
@@ -194,7 +194,7 @@ describe('conversations', () => {
       expect(loadConfigSpy).toHaveBeenCalledTimes(1);
       expect(mockQuery).toHaveBeenNthCalledWith(
         3,
-        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (platform_type, platform_conversation_id) DO UPDATE SET platform_conversation_id = excluded.platform_conversation_id RETURNING *',
         ['telegram', 'chat-789', 'claude', 'non-existent-codebase', null, null]
       );
     });
@@ -242,7 +242,7 @@ describe('conversations', () => {
       // Verify inherited values in INSERT
       expect(mockQuery).toHaveBeenNthCalledWith(
         3,
-        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (platform_type, platform_conversation_id) DO UPDATE SET platform_conversation_id = excluded.platform_conversation_id RETURNING *',
         ['discord', 'thread-123', 'codex', 'codebase-123', '/workspace/project', null]
       );
       // Parent inheritance short-circuits the config chain.
@@ -278,7 +278,7 @@ describe('conversations', () => {
       // Should use inherited assistant type but null for codebase/cwd
       expect(mockQuery).toHaveBeenNthCalledWith(
         3,
-        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+        'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (platform_type, platform_conversation_id) DO UPDATE SET platform_conversation_id = excluded.platform_conversation_id RETURNING *',
         ['discord', 'thread-123', 'claude', null, null, null]
       );
     });
