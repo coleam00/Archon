@@ -47,7 +47,10 @@ Example policy, denied until deliberately authorized:
 
 Use an OS-native absolute path for `stop_file`, or omit it. Its parent directory
 must exist. Any entry at that path stops mutation; inability to inspect it also
-refuses. Policy fields other than `authorized`, `accept_races`, and `stop_file`
+refuses. The external policy may name a STOP entry in the operator's checkout:
+presence only vetoes a merge and never supplies authority. Protect this entry and
+its parent against candidate deletion just as you protect the external policy.
+Policy and receipt paths still must be outside Git. Policy fields other than `authorized`, `accept_races`, and `stop_file`
 are required. Omitted authorization and race acknowledgment are false. Unknown
 fields and wrong types refuse. `accept_races` is the single explicit addition to
 the minimal policy needed to acknowledge the limitations below. It is not

@@ -605,7 +605,10 @@ export function localIO(
     },
     async stopped(policy) {
       if (!policy.stop_file) return false;
-      const path = await externalPath(policy.stop_file, cwd, true);
+      // Only the external policy selects this path. Presence can veto authority,
+      // never grant it, so an operator checkout may hold the STOP entry.
+      // Resolve the parent, not the entry: even a dangling symlink must stop.
+      const path = join(await realpath(dirname(policy.stop_file)), basename(policy.stop_file));
       try {
         await lstat(path);
         return true;
