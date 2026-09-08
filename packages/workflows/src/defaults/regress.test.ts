@@ -171,7 +171,8 @@ describe('one-shot regression composition with real scripts and stubbed agents',
           relation: 'adjacent',
           source_node: 'investigate__investigate',
         });
-        expect(output.discoveries[0].evidence).toContain(revision);
+        expect(Array.isArray(output.discoveries[0].evidence)).toBe(true);
+        expect(output.discoveries[0].evidence).toContain(`Revision: ${revision}`);
       }
     });
   }

@@ -46,7 +46,7 @@ def report(artifacts):
             discoveries.append({
                 "title": "Reproduced check defect",
                 "claim": summary,
-                "evidence": f"Revision: {revision}\n\n{validation}\n\n{investigation}",
+                "evidence": [f"Revision: {revision}", validation, investigation],
                 "relation": "adjacent",
                 "source_node": "investigate__investigate",
             })
