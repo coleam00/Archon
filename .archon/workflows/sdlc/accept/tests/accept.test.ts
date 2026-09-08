@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { chmod, cp, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, delimiter, join, resolve } from 'node:path';
+import { basename, delimiter, dirname, join, resolve } from 'node:path';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 import { parseWorkflow } from '../../../../../packages/workflows/src/loader';
 import {
@@ -518,6 +518,41 @@ describe('real acceptance CLI with temporary Git and GitHub harness', () => {
     );
     expect((await g.phase('collect')).judge).toBe(true);
     expect((await g.phase('finish')).verdict).toBe('approve');
+  });
+  test('a workspace reached through a noncanonical alias of the owned temp root still loads', async () => {
+    const g = await fixture(null);
+    await prepared(g);
+    const state = JSON.parse(await readFile(g.state, 'utf8')) as { root: string };
+    const temporary = dirname(state.root);
+    const alias = join(g.root, 'temp-alias-junction');
+    // A real Windows junction, not a stub of realpath: this is the same directory
+    // the OS tmpdir already resolves to, reached through a second, differently
+    // spelled path. loadState must accept it exactly as it accepts the original.
+    await symlink(temporary, alias, 'junction');
+    await writeFile(g.state, JSON.stringify({ ...state, root: join(alias, basename(state.root)) }));
+    await exec(
+      [
+        process.execPath,
+        script,
+        'record',
+        g.state,
+        'checks.txt',
+        JSON.stringify([process.execPath, '-e', 'console.log("real ordinary gate")']),
+      ],
+      g.cwd,
+      g.env
+    );
+    expect((await g.phase('collect')).judge).toBe(true);
+    expect((await g.phase('finish')).verdict).toBe('approve');
+  });
+  test('a manifest claiming a workspace outside the owned temp root is rejected', async () => {
+    const f = await fixture(null);
+    await prepared(f);
+    const state = JSON.parse(await readFile(f.state, 'utf8')) as Record<string, unknown>;
+    const foreign = join(f.root, 'foreign-root');
+    await mkdir(foreign);
+    await writeFile(f.state, JSON.stringify({ ...state, root: foreign }));
+    await expect(f.phase('collect')).rejects.toThrow();
   });
   test('missing required evidence is inconclusive', async () => {
     const f = await fixture({ ...profile(), required_evidence: ['missing.txt'] });

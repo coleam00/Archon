@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, readFile, realpath, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 
 export type Verdict = 'approve' | 'request_changes' | 'reject' | 'inconclusive';
 export interface Identity {
@@ -686,13 +686,30 @@ async function prepare(): Promise<void> {
 }
 async function loadState(path: string): Promise<State> {
   // This private manifest is written only by prepare; candidate files are never manifests.
+  // Ownership is a filesystem fact, so both sides of each comparison are realpathed here,
+  // together, rather than trusting a string realpathed once by prepare's own process. A
+  // location can realpath to a differently cased or short/long-name alias between separate
+  // process invocations on Windows; comparing two fresh realpaths keeps a noncanonical
+  // alias of the owned location accepted while a foreign path still resolves elsewhere.
   const s = object(await json(path));
-  const root = string(s.root);
-  const temporary = await realpath(tmpdir());
-  if (dirname(root) !== temporary || !root.startsWith(join(temporary, 'archon-accept-')))
+  let root: string;
+  try {
+    root = await realpath(string(s.root));
+  } catch {
     throw new Error('Invalid owned workspace');
-  const artifacts = string(s.artifacts);
-  if (resolve(path) !== join(artifacts, 'accept-private', 'state.json'))
+  }
+  const temporary = await realpath(tmpdir());
+  if (dirname(root) !== temporary || !basename(root).startsWith('archon-accept-'))
+    throw new Error('Invalid owned workspace');
+  let artifacts: string;
+  let manifest: string;
+  try {
+    artifacts = await realpath(string(s.artifacts));
+    manifest = await realpath(path);
+  } catch {
+    throw new Error('Invalid manifest location');
+  }
+  if (manifest !== join(artifacts, 'accept-private', 'state.json'))
     throw new Error('Invalid manifest location');
   return {
     identity: s.identity === null ? null : parseIdentity(s.identity),
