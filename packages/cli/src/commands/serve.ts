@@ -223,10 +223,24 @@ export async function downloadWebDist(
       'web_dist.extract_spawned'
     );
     // Drain stderr while waiting rather than after: a pipe nobody reads is the
-    // same deadlock in the other direction once `tar` fills its buffer.
+    // same deadlock in the other direction once `tar` fills its buffer. Record
+    // each completion separately: the combined wait has exceeded five seconds
+    // on Windows without revealing whether the child or its pipe was delayed.
     const [exitCode, stderrText] = await Promise.all([
-      proc.exited,
-      new Response(proc.stderr).text(),
+      proc.exited.then(exitCode => {
+        log.info(
+          { tarPid: proc.pid, exitCode, durationMs: Math.round(performance.now() - spawnedAt) },
+          'web_dist.extract_process_exited'
+        );
+        return exitCode;
+      }),
+      new Response(proc.stderr).text().then(stderr => {
+        log.info(
+          { tarPid: proc.pid, durationMs: Math.round(performance.now() - spawnedAt) },
+          'web_dist.extract_stderr_drained'
+        );
+        return stderr;
+      }),
     ]);
     extractionEndedAt = performance.now();
     log.info(

@@ -115,18 +115,22 @@ function rowLockClause(): string {
   return getDatabaseType() === 'postgresql' ? ' FOR UPDATE' : '';
 }
 
-function normalizeMetadata(raw: unknown): Record<string, unknown> {
-  let metadata = raw;
-  if (typeof metadata === 'string') {
+function parseJsonObject(raw: unknown): Record<string, unknown> | null {
+  let value = raw;
+  if (typeof value === 'string') {
     try {
-      metadata = JSON.parse(metadata) as unknown;
+      value = JSON.parse(value) as unknown;
     } catch {
-      return {};
+      return null;
     }
   }
-  return typeof metadata === 'object' && metadata !== null
-    ? (metadata as Record<string, unknown>)
-    : {};
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function normalizeMetadata(raw: unknown): Record<string, unknown> {
+  return parseJsonObject(raw) ?? {};
 }
 
 /**
@@ -1636,6 +1640,90 @@ export async function listDueWorkflowContinuations(
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_continuation_due_list_failed');
     throw new Error(`Failed to list due workflow continuations: ${err.message}`);
+  }
+}
+
+export interface WorkflowEventSignalCandidate {
+  runId: string;
+  wait: Extract<WorkflowWaitContext, { kind: 'event' }>;
+  outputType: string;
+  structuredOutput: unknown;
+}
+
+export async function listWorkflowEventSignalCandidates(
+  event: string,
+  now: Date
+): Promise<WorkflowEventSignalCandidate[]> {
+  const postgres = getDatabaseType() === 'postgresql';
+  const runJson = (path: string): string =>
+    postgres
+      ? `r.metadata->'wait'->>'${path}'`
+      : `CASE WHEN json_valid(r.metadata) THEN json_extract(r.metadata, '$.wait.${path}') END`;
+  const eventJson = (path: string): string =>
+    postgres
+      ? `e.data->>'${path}'`
+      : `CASE WHEN json_valid(e.data) THEN json_extract(e.data, '$.${path}') END`;
+  const structuredOutputType = postgres
+    ? "CASE WHEN e.data ? 'structured_output' THEN jsonb_typeof(e.data->'structured_output') END"
+    : "CASE WHEN json_valid(e.data) THEN json_type(e.data, '$.structured_output') END";
+
+  interface CandidateRow {
+    run_id: string;
+    run_metadata: unknown;
+    event_data: unknown;
+  }
+
+  try {
+    const result = await pool.query<CandidateRow>(
+      `SELECT r.id AS run_id, r.metadata AS run_metadata, e.data AS event_data
+       FROM remote_agent_workflow_runs r
+       JOIN remote_agent_workflow_events e ON e.workflow_run_id = r.id
+       WHERE r.status = 'paused'
+         AND ${runJson('kind')} = 'event'
+         AND ${runJson('event')} = $1
+         AND ${runJson('signaledAt')} IS NULL
+         AND ${runJson('resumeAt')} > $2
+         AND e.event_type = 'node_completed'
+         AND ${eventJson('output_type')} IS NOT NULL
+         AND ${eventJson('output_type')} <> ''
+         AND ${structuredOutputType} IS NOT NULL
+         AND ${structuredOutputType} <> 'null'`,
+      [event, now.toISOString()]
+    );
+
+    const candidates: WorkflowEventSignalCandidate[] = [];
+    for (const row of result.rows) {
+      const metadata = parseJsonObject(row.run_metadata);
+      const eventData = parseJsonObject(row.event_data);
+      if (!metadata || !eventData) continue;
+
+      const parsedWait = workflowWaitContextSchema.safeParse(metadata.wait);
+      const outputType = eventData.output_type;
+      if (
+        !parsedWait.success ||
+        parsedWait.data.kind !== 'event' ||
+        parsedWait.data.event !== event ||
+        parsedWait.data.signaledAt !== undefined ||
+        Date.parse(parsedWait.data.resumeAt) <= now.getTime() ||
+        typeof outputType !== 'string' ||
+        outputType === '' ||
+        !Object.hasOwn(eventData, 'structured_output')
+      ) {
+        continue;
+      }
+
+      candidates.push({
+        runId: row.run_id,
+        wait: parsedWait.data,
+        outputType,
+        structuredOutput: eventData.structured_output,
+      });
+    }
+    return candidates;
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, event }, 'db.workflow_event_signal_candidates_list_failed');
+    throw new Error(`Failed to list workflow event signal candidates: ${err.message}`);
   }
 }
 

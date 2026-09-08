@@ -119,10 +119,44 @@ describe('buildNodeSummaries', () => {
     const summaries = buildNodeSummaries([
       event('gate-skipped', 'node_skipped', 'deliver__gate-green', '2026-08-29T14:30:00.000Z', {
         reason: 'trigger_rule',
+        cause: { kind: 'upstream_failed', origin: 'deliver__validate' },
       }),
     ]);
 
-    expect(summaries).toEqual([{ nodeId: 'deliver__gate-green', state: 'skipped' }]);
+    expect(summaries).toEqual([
+      {
+        nodeId: 'deliver__gate-green',
+        state: 'skipped',
+        cause: { kind: 'upstream_failed', origin: 'deliver__validate' },
+      },
+    ]);
+  });
+
+  it('retains a timeout skip cause', () => {
+    const summaries = buildNodeSummaries([
+      event('timeout-skip', 'node_skipped', 'ci-note', '2026-08-29T14:30:00.000Z', {
+        reason: 'timeout',
+        cause: { kind: 'timeout' },
+      }),
+    ]);
+
+    expect(summaries).toEqual([
+      {
+        nodeId: 'ci-note',
+        state: 'skipped',
+        cause: { kind: 'timeout' },
+      },
+    ]);
+  });
+
+  it('keeps legacy skipped rows without a cause readable', () => {
+    const summaries = buildNodeSummaries([
+      event('legacy-skip', 'node_skipped', 'legacy', '2026-08-29T14:30:00.000Z', {
+        reason: 'trigger_rule',
+      }),
+    ]);
+
+    expect(summaries).toEqual([{ nodeId: 'legacy', state: 'skipped' }]);
   });
 
   it('reports a prior-success replay as completed when the original completion is absent', () => {

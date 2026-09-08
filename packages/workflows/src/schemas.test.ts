@@ -32,6 +32,7 @@ import {
   scheduledWorkflowResumeSchema,
   workflowWaitStepName,
   runAttention,
+  nodeOutputSchema,
 } from './schemas';
 import type { RunAttentionInput, SuspendReason, WorkflowRunStatus } from './schemas';
 import type {
@@ -61,6 +62,25 @@ const promptNode: AgentNode = {
 };
 const bashNode: ExecNode = { id: 'n3', kind: 'exec', runtime: 'sh', script: 'echo hello' };
 const cancelNode: HaltNode = { id: 'n5', kind: 'halt', reason: 'Precondition failed' };
+
+describe('nodeOutputSchema', () => {
+  test('requires provenance on skipped outputs while pending remains cause-free', () => {
+    expect(nodeOutputSchema.safeParse({ state: 'skipped', output: '' }).success).toBe(false);
+    expect(nodeOutputSchema.safeParse({ state: 'pending', output: '' }).success).toBe(true);
+
+    for (const cause of [
+      { kind: 'condition', expr: '$route.output == true' },
+      { kind: 'condition_parse_error', expr: '$route.output =' },
+      { kind: 'upstream_failed', origin: 'validate' },
+      { kind: 'upstream_skipped', origin: 'optional-review' },
+      { kind: 'timeout' },
+    ]) {
+      expect(nodeOutputSchema.safeParse({ state: 'skipped', output: '', cause }).success).toBe(
+        true
+      );
+    }
+  });
+});
 
 describe('persisted workflow continuation schemas', () => {
   const timeWait = {
@@ -923,6 +943,37 @@ describe('dagNodeSchema — ExecNode', () => {
     }
   });
 
+  test.each([
+    ['bash', { id: 'shell', bash: 'sleep 30', timeout: 100, on_timeout: 'skip' }],
+    [
+      'script',
+      {
+        id: 'program',
+        script: 'await Bun.sleep(30_000)',
+        runtime: 'bun',
+        timeout: 100,
+        on_timeout: 'skip',
+      },
+    ],
+  ] as const)('parses on_timeout: skip on a %s node', (_kind, input) => {
+    const result = dagNodeSchema.safeParse(input);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect((result.data as ExecNode).on_timeout).toBe('skip');
+    }
+  });
+
+  test('rejects unsupported timeout outcomes', () => {
+    expect(
+      dagNodeSchema.safeParse({
+        id: 'shell',
+        bash: 'sleep 30',
+        timeout: 100,
+        on_timeout: 'fail',
+      }).success
+    ).toBe(false);
+  });
+
   test('parses a script node with depends_on', () => {
     const result = dagNodeSchema.safeParse({
       id: 's',
@@ -982,12 +1033,12 @@ describe('dagNodeSchema — ExecNode', () => {
       {
         name: 'command',
         node: { id: 'command', command: 'review' },
-        ignored: { bash: '   ', script: '   ', timeout: 0 },
+        ignored: { bash: '   ', script: '   ', timeout: 0, on_timeout: 'skip' },
       },
       {
         name: 'prompt',
         node: { id: 'prompt', prompt: 'Review this.' },
-        ignored: { bash: '   ', script: '   ', timeout: 0 },
+        ignored: { bash: '   ', script: '   ', timeout: 0, on_timeout: 'skip' },
       },
       {
         name: 'loop',
@@ -995,7 +1046,7 @@ describe('dagNodeSchema — ExecNode', () => {
           id: 'loop',
           loop: { prompt: 'Review this.', until: 'DONE', max_iterations: 1 },
         },
-        ignored: { bash: '   ', script: '   ', timeout: 0 },
+        ignored: { bash: '   ', script: '   ', timeout: 0, on_timeout: 'skip' },
       },
       {
         name: 'loop_group',
@@ -1007,32 +1058,32 @@ describe('dagNodeSchema — ExecNode', () => {
             nodes: [{ id: 'review', prompt: 'Review this.' }],
           },
         },
-        ignored: { bash: '   ', script: '   ', timeout: 0 },
+        ignored: { bash: '   ', script: '   ', timeout: 0, on_timeout: 'skip' },
       },
       {
         name: 'approval',
         node: { id: 'approval', approval: { message: 'Continue?' } },
-        ignored: { bash: '   ', script: '   ', timeout: 0 },
+        ignored: { bash: '   ', script: '   ', timeout: 0, on_timeout: 'skip' },
       },
       {
         name: 'wait',
         node: { id: 'wait', wait: { duration_ms: 1 } },
-        ignored: { bash: '   ', script: '   ', timeout: 0 },
+        ignored: { bash: '   ', script: '   ', timeout: 0, on_timeout: 'skip' },
       },
       {
         name: 'cancel',
         node: { id: 'cancel', cancel: 'Stop.' },
-        ignored: { bash: '   ', script: '   ', timeout: 0 },
+        ignored: { bash: '   ', script: '   ', timeout: 0, on_timeout: 'skip' },
       },
       {
         name: 'include',
         node: { id: 'include', include: 'child' },
-        ignored: { bash: '   ', script: '   ', timeout: 0 },
+        ignored: { bash: '   ', script: '   ', timeout: 0, on_timeout: 'skip' },
       },
       {
         name: 'workflow',
         node: { id: 'workflow', workflow: 'child' },
-        ignored: { bash: '   ', script: '   ', timeout: 0 },
+        ignored: { bash: '   ', script: '   ', timeout: 0, on_timeout: 'skip' },
       },
       {
         name: 'bash',
