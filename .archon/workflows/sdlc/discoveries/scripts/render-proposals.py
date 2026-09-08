@@ -5,7 +5,8 @@ import os
 import re
 import subprocess
 import sys
-from urllib.parse import urlsplit
+from html import unescape
+from urllib.parse import unquote, urlsplit
 
 # The workflow declares this vocabulary; the package test checks conformance.
 CLASSIFICATIONS = ("stale", "duplicate", "update-existing", "new")
@@ -29,8 +30,10 @@ def public_text(value):
         fail("render: public title, summary, and rationale must be nonempty strings.")
     # Structural path checks supplement the model's disclosure judgment. They
     # cannot recognize arbitrary private facts or certify prose for publication.
-    if (re.search(r"(?:[A-Za-z]:[\\/]|\\\\|(?:^|[\s\"'\x60(])/(?!/)\S)", value)
-            or "$ARTIFACTS_DIR" in value or "file://" in value):
+    decoded = unescape(unquote(value))
+    if (re.search(r"(?:(?<![A-Za-z0-9])[A-Za-z]:[\\/]|\\\\|(?:^|[\s\"'\x60(<=\[])/{1,2}\S)", decoded)
+            or "$ARTIFACTS_DIR" in decoded or "${ARTIFACTS_DIR}" in decoded
+            or "file://" in decoded.casefold()):
         fail("render: proposed public text contains a local absolute path.")
     return value.strip()
 

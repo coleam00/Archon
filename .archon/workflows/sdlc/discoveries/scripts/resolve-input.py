@@ -5,14 +5,10 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path, PureWindowsPath
 from urllib.parse import urlsplit
 
-MISSING_SEAM_MESSAGE = (
-    "resolve-input: run_id resolution is unsupported. "
-    "archon workflow get <id> --json exposes output_root and "
-    "leave_behind.artifactFiles, but not a canonical absolute artifacts_dir. "
-    "Supply discovery_artifact directly; this workflow does not guess storage paths."
-)
+TERMINAL_STATUSES = ("completed", "failed", "cancelled")
 
 
 def fail(message):
@@ -28,8 +24,11 @@ def load_discoveries(path):
         fail(f"resolve-input: could not read discovery_artifact as JSON ({err}).")
     if not isinstance(records, list) or any(not isinstance(r, dict) for r in records):
         fail("resolve-input: discovery_artifact must be a JSON array of discovery objects.")
-    entries = []
-    keys = set()
+    return records
+
+
+def normalize(records):
+    entries = {}
     for index, record in enumerate(records):
         title, claim = record.get("title"), record.get("claim")
         evidence = record.get("evidence", [])
@@ -39,16 +38,102 @@ def load_discoveries(path):
                 or not isinstance(evidence, list) or any(not isinstance(e, str) for e in evidence)
                 or not isinstance(sources, list) or any(not isinstance(s, str) for s in sources)):
             fail(f"resolve-input: item {index} needs a title, claim, and string arrays for evidence and sources.")
-        key = " ".join(title.casefold().split())
-        if key in keys:
-            fail(f"resolve-input: duplicate discovery key at item {index}; consolidate repeated input first.")
-        keys.add(key)
-        entries.append({
-            "item_index": index, "title": title, "claim": claim, "evidence": evidence,
+        # This is exact normalized identity, not semantic deduplication. Evidence
+        # preserves case because source paths and command results can be case-sensitive.
+        key = json.dumps([" ".join(title.casefold().split()), " ".join(claim.split()),
+                          sorted(set(" ".join(e.split()) for e in evidence))], ensure_ascii=False)
+        if key in entries:
+            previous = entries[key]
+            previous["source_nodes"] = sorted(set(previous["source_nodes"] + sources))
+            previous["evidence"] = sorted(set(previous["evidence"] + evidence))
+            relation = record.get("relation", "unspecified")
+            if relation != previous["relation"]:
+                fail("resolve-input: duplicate finding has conflicting relations; select an explicit artifact.")
+            continue
+        entries[key] = {
+            "item_index": len(entries), "title": title, "claim": claim, "evidence": evidence,
             "relation": record.get("relation", "unspecified"), "source_nodes": sources,
             "key": key,
-        })
-    return entries
+        }
+    return list(entries.values())
+
+
+def run_artifacts(run_id):
+    if run_id.startswith("-") or any(c.isspace() or ord(c) < 32 for c in run_id):
+        fail("resolve-input: invalid run ID.")
+    # Standalone scripts use the normal installed CLI on PATH, never a guessed
+    # source checkout or installation location. Failure does not change transport.
+    try:
+        result = subprocess.run(["archon", "workflow", "get", run_id, "--json"],
+                                capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as err:
+        fail(f"resolve-input: workflow get failed ({type(err).__name__}).")
+    if result.returncode != 0:
+        fail(f"resolve-input: workflow get failed (exit {result.returncode}).")
+    try:
+        run = json.loads(result.stdout)
+    except ValueError:
+        fail("resolve-input: workflow get returned malformed JSON.")
+    if not isinstance(run, dict) or run.get("id") != run_id:
+        fail("resolve-input: workflow get returned mismatched run provenance.")
+    if run.get("status") not in TERMINAL_STATUSES:
+        fail("resolve-input: source run must have a terminal status.")
+    directory = run.get("artifacts_dir")
+    if not isinstance(directory, str) or not Path(directory).is_absolute():
+        fail("resolve-input: canonical absolute artifacts_dir is unavailable; update the CLI or supply an artifact.")
+    try:
+        root = Path(directory).resolve(strict=True)
+        if not root.is_dir():
+            raise ValueError("not a directory")
+        # A returned owned location does not establish existence or readability.
+        with os.scandir(root) as children:
+            root_names = {child.name for child in children}
+    except (OSError, ValueError, RuntimeError) as err:
+        fail(f"resolve-input: artifacts_dir is unavailable ({err}).")
+    behind = run.get("leave_behind")
+    names = behind.get("artifactFiles") if isinstance(behind, dict) else None
+    if not isinstance(names, list):
+        fail("resolve-input: leave_behind.artifactFiles is unavailable.")
+    paths = {}
+    for name in names:
+        if (not isinstance(name, str) or not name or "\\" in name or ":" in name
+                or PureWindowsPath(name).drive or name.startswith("/")
+                or any(ord(c) < 32 for c in name)
+                or any(p in ("", ".", "..") or p.endswith((" ", "."))
+                       or PureWindowsPath(p).is_reserved() for p in name.split("/"))):
+            fail("resolve-input: unsafe artifact filename in workflow get response.")
+        try:
+            path = (root / name).resolve()
+            if not path.is_relative_to(root):
+                fail("resolve-input: artifact symlink escapes artifacts_dir.")
+        except (OSError, ValueError, RuntimeError) as err:
+            fail(f"resolve-input: invalid artifact path ({err}).")
+        if path in paths.values() or name in paths:
+            fail("resolve-input: ambiguous duplicate artifact filename.")
+        paths[name] = path
+    # Review's empty consolidation is an adjudication, not a missing producer.
+    selected = (["discoveries.json"] if "discoveries.json" in paths else sorted(
+        name for name in paths if name.startswith("discoveries/")
+        and len(name.split("/")) == 2 and name.endswith(".json")))
+    # The CLI walk can omit files (its cap or an unreadable subtree). Verify the
+    # native discovery inventory, without depending on the CLI's private cap.
+    if "discoveries.json" in root_names and "discoveries.json" not in paths:
+        fail("resolve-input: canonical discovery missing from artifact listing; supply an explicit artifact.")
+    if "discoveries.json" not in selected and "discoveries" in root_names:
+        try:
+            raw_directory = (root / "discoveries").resolve(strict=True)
+            if not raw_directory.is_relative_to(root):
+                fail("resolve-input: artifact symlink escapes artifacts_dir.")
+            with os.scandir(raw_directory) as children:
+                actual = {"discoveries/" + child.name for child in children if child.name.endswith(".json")}
+            if actual != set(selected):
+                fail("resolve-input: incomplete raw artifact listing; supply an explicit artifact.")
+        except (OSError, ValueError, RuntimeError) as err:
+            fail(f"resolve-input: raw discovery storage is unavailable ({err}).")
+    records = []
+    for name in selected:
+        records.extend(load_discoveries(paths[name]))
+    return records, {"run_id": run_id, "status": run["status"], "artifact_files": selected}
 
 
 def probe_forge():
@@ -97,11 +182,12 @@ def main():
     sys.stdout.reconfigure(encoding="utf-8", newline="\n")
     sys.stderr.reconfigure(encoding="utf-8", newline="\n")
     artifact = os.environ.get("INPUTS_DISCOVERY_ARTIFACT", "").strip()
-    if os.environ.get("INPUTS_RUN_ID", "").strip():
-        fail(MISSING_SEAM_MESSAGE)
-    if not artifact:
-        fail("resolve-input: supply discovery_artifact.")
-    entries = load_discoveries(artifact)
+    run_id = os.environ.get("INPUTS_RUN_ID", "").strip()
+    if bool(artifact) == bool(run_id):
+        fail("resolve-input: supply exactly one discovery_artifact or run_id.")
+    records, provenance = (run_artifacts(run_id) if run_id else
+                           (load_discoveries(artifact), {"artifact": artifact}))
+    entries = normalize(records)
     head = subprocess.run(["git", "rev-parse", "--verify", "HEAD"], capture_output=True, text=True)
     if head.returncode != 0:
         fail("resolve-input: current repository has no readable HEAD.")
@@ -117,7 +203,7 @@ def main():
     os.makedirs(out, exist_ok=True)
     with open(os.path.join(out, "normalized.json"), "w", encoding="utf-8") as f:
         json.dump(entries, f, indent=2)
-    context = {"revision": head.stdout.strip(), "forge": forge}
+    context = {"revision": head.stdout.strip(), "forge": forge, "input": provenance}
     with open(os.path.join(out, "context.json"), "w", encoding="utf-8") as f:
         json.dump(context, f, indent=2)
     print(json.dumps({"count": len(entries), "forge_available": forge["available"],

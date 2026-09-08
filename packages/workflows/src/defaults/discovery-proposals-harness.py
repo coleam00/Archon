@@ -1,4 +1,4 @@
-"""Exercise real discovery scripts in a plain git repo; simulate only gh transport."""
+"""Exercise real discovery scripts and git; simulate only CLI transports."""
 
 import contextlib
 import io
@@ -38,6 +38,24 @@ if request.get("remote"):
 original_head = git("rev-parse", "HEAD")
 source = root / "input.json"
 source.write_text(json.dumps(request.get("records", [])), encoding="utf-8")
+source_artifacts = root / "source artifacts"
+source_artifacts.mkdir()
+for name, value in request.get("artifact_files", {}).items():
+    path = source_artifacts / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value), encoding="utf-8")
+if request.get("symlink_escape"):
+    outside = root / "outside"
+    outside.mkdir()
+    (outside / "regress.json").write_text(json.dumps(request["records"]), encoding="utf-8")
+    link = source_artifacts / "discoveries"
+    if os.name == "nt":
+        # Directory junctions exercise real resolve() escapes without symlink privilege.
+        result = real_run(["cmd", "/c", "mklink", "/J", str(link), str(outside)], capture_output=True)
+        if result.returncode:
+            raise RuntimeError("Could not create scratch junction")
+    else:
+        link.symlink_to(outside, target_is_directory=True)
 if "raw" in request:
     source.write_text(request["raw"], encoding="utf-8")
 os.chdir(repo)
@@ -46,13 +64,30 @@ os.environ.update({
     "INPUTS_DISCOVERY_ARTIFACT": str(source) if not request.get("missing") else str(root / "missing.json"),
     "INPUTS_RUN_ID": request.get("run_id", ""),
 })
+if request.get("run_only") or request.get("no_input"):
+    os.environ["INPUTS_DISCOVERY_ARTIFACT"] = ""
 calls = []
 
 
 def transport(args, **kwargs):
     calls.append(args)
+    if args[0] == "archon":
+        if args != ["archon", "workflow", "get", request["run_id"], "--json"]:
+            raise AssertionError(f"Unexpected CLI operation: {args}")
+        response = {"id": request["run_id"], "status": "completed",
+                    "artifacts_dir": str(source_artifacts),
+                    "leave_behind": {"artifactFiles": list(request.get("artifact_files", {}))}}
+        response.update(request.get("cli_response", {}))
+        if request.get("missing_storage"):
+            response["artifacts_dir"] = str(root / "absent storage")
+        if request.get("cli_error") == "timeout":
+            raise subprocess.TimeoutExpired(args, 60)
+        if request.get("cli_error") == "missing":
+            raise FileNotFoundError("test CLI unavailable")
+        return subprocess.CompletedProcess(args, request.get("cli_exit", 0),
+                                           request.get("cli_raw", json.dumps(response)), "test CLI diagnostic")
     if args[0] == "gh":
-        if args != ["gh", "repo", "view", "github.com/example/repo", "--json", "nameWithOwner"]:
+        if args != ["gh", "repo", "view", "github.com/" + request.get("gh_repository", "example/repo"), "--json", "nameWithOwner"]:
             raise AssertionError(f"Unexpected forge operation: {args}")
         return subprocess.CompletedProcess(args, request.get("gh_exit", 0),
                                            json.dumps({"nameWithOwner": request.get("gh_identity", "example/repo")}), "")
@@ -86,7 +121,7 @@ for name, binding in (
         except SystemExit as exc:
             code = exc.code
     steps.append({"name": name, "code": code, "stdout": out.getvalue(), "stderr": err.getvalue()})
-    if code:
+    if code or request.get("resolve_only"):
         break
 
 files = {}
@@ -100,4 +135,5 @@ print(json.dumps({
     "status": git("status", "--porcelain"), "head": original_head,
     "classifications": runpy.run_path(str(scripts / "render-proposals.py"))["CLASSIFICATIONS"],
     "verdicts": runpy.run_path(str(scripts / "check-evidence.py"))["VERDICTS"],
+    "terminal_statuses": runpy.run_path(str(scripts / "resolve-input.py"))["TERMINAL_STATUSES"],
 }))

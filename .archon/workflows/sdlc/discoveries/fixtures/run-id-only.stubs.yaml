@@ -1,4 +1,4 @@
-# Agent outputs are simulated; script nodes execute through the fixture runner.
+# Unknown run: the real resolver must refuse lookup failure. No agents execute.
 fixture:
   expect: failed
   fail-node: resolve-input

@@ -12,9 +12,8 @@ inputs:
   run_id:
     default: ""
     description: >-
-      Unsupported until workflow get --json exposes canonical artifacts_dir.
-      It already returns output_root and leave_behind.artifactFiles.
-      Any nonempty run_id is rejected; supply discovery_artifact instead.
+      Terminal run ID resolved through workflow get --json artifacts_dir and
+      leave_behind.artifactFiles. Supply exactly one run_id or discovery_artifact.
 
 returns: render
 

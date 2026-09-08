@@ -1,6 +1,7 @@
 # Discovery proposals
 
-Run archon-discoveries with discovery_artifact set to a readable JSON file.
+Run archon-discoveries with exactly one discovery_artifact or run_id.
+An explicit artifact must be a readable JSON file.
 It accepts the consolidated discoveries.json produced by review-synthesize
 or one raw review/implementation sidecar. Both are arrays of title, claim,
 evidence strings and relation; raw records use source_node, consolidated
@@ -34,14 +35,39 @@ unavailable reason. An unknown identity never receives a guessed marker.
 Enterprise GitHub and other forge adapters are not implemented in this slice.
 Search agents are instructed to read paginated exact markers and semantic
 matches. Marker stability uses SHA-256 of the normalized repository identity
-and normalized original title. A changed title changes the marker; semantic
-deduplication is still needed. Repeated title keys in one input are rejected.
+and normalized original title, claim, and sorted distinct evidence strings.
+Whitespace is normalized; title is case-folded, while claim and evidence retain
+case. Producer names and input ordering do not change identity. Exact repeats
+merge evidence and source attribution; conflicting relations fail as ambiguous.
+Different claims or evidence remain separate even with the same generic title.
+Changed wording or evidence changes the marker; semantic deduplication is still
+needed. These are local proposal markers, not a shipped publication identity.
 
-Any nonempty run_id fails explicitly, including when an artifact is supplied.
-archon workflow get <id> --json already exposes output_root and
-leave_behind.artifactFiles. The missing owning field is a canonical absolute
-artifacts_dir. The pack does not reconstruct engine storage paths or read
-its database.
+Run IDs use the public `archon workflow get <id> --json` contract from CLI
+prerequisite commit 267aa206913353b1e14a2a2d086585f24f4f8cc4. The response must
+identify the requested terminal run and return an absolute, readable
+artifacts_dir and leave_behind.artifactFiles. The script never reads the engine
+database or derives paths from output_root. CLI failure, unavailable storage,
+unsafe names and symlink escapes fail clearly. Returned paths alone do not
+establish that the listed artifacts exist: selected files must be read.
+
+A listed root discoveries.json wins, including an empty array; malformed or
+missing consolidation fails without falling back to raw data. Otherwise collect
+listed direct discoveries/*.json arrays in filename order. Nested lookalikes
+are not canonical inputs. No listed discovery yields an empty proposal set.
+The CLI file walk can omit files at its cap or in an unreadable subtree. The
+resolver checks the native discovery directory inventory under the returned
+root and rejects incomplete listings or unreadable raw storage. It does not
+silently supplement the CLI list with unlisted artifacts.
+The local context records the source run and selected filenames, separately
+from the checkout revision and destination forge identity used for proposals.
+The source run may belong to another repository; every claim must still be
+revalidated against the current checkout before it is actionable.
+
+Standalone execution uses the normal archon executable on PATH and inherits
+its installation environment. This branch and the CLI prerequisite do not
+expose an engine CLI executable launch-context field. No source-file or install
+path is guessed, and a failed CLI invocation does not switch installations.
 
 Public text is drafted separately from private raw evidence. The renderer
 requires the model's disclosure judgment and rejects obvious absolute paths;
@@ -60,9 +86,10 @@ read-only instructions are not an external-write sandbox.
 
 The package test discovery-proposals.test.ts executes the real Python script
 entry points and real git operations against a plain scratch repository.
-Agent outputs and the gh repository-read transport are simulated. It checks
+Agent outputs and the archon/gh CLI transports are simulated. It checks
 the four classes, actual HEAD movement, citation bounds, duplicate indices and
-input keys, missing/malformed artifacts, no-forge output, target identity,
+finding identities, run input precedence and path bounds, missing/malformed
+artifacts, no-forge output, target identity,
 disclosure refusal, and stable markers. All scripted subprocess operations are
 recorded; the transport refuses unexpected forge operations. No tracker API is
 called. The tests also compare Python vocabularies with the YAML contracts.

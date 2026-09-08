@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { parseWorkflow } from '../loader';
 import { parseFixtureFile } from '../fixture-runner';
+import { TERMINAL_WORKFLOW_STATUSES } from '../schemas/workflow-run';
 
 const ROOT = join(import.meta.dir, '../../../..');
 const PACK = join(ROOT, '.archon/workflows/sdlc/discoveries');
@@ -20,6 +21,7 @@ const responseSchema = z.object({
   head: z.string(),
   classifications: z.array(z.string()),
   verdicts: z.array(z.string()),
+  terminal_statuses: z.array(z.string()),
 });
 const documentSchema = z.object({
   publication_authorized: z.literal(false),
@@ -103,6 +105,206 @@ function refused(result: Result, node: string, evidence: string) {
   expect(result.steps.at(-1)?.stderr).toContain(evidence);
   expect(result.files).not.toHaveProperty('discovery-proposals.json');
 }
+
+const nativeRun = { run_id: 'prior-run', run_only: true };
+const normalizedSchema = z.array(
+  z.object({
+    item_index: z.number(),
+    claim: z.string(),
+    evidence: z.array(z.string()),
+    source_nodes: z.array(z.string()),
+    marker: z.string().nullable(),
+  })
+);
+function normalized(result: Result) {
+  expect(result.steps[0]?.code).toBe(0);
+  return normalizedSchema.parse(JSON.parse(result.files['discoveries/normalized.json']!));
+}
+
+describe('native discovery run resolution through the real owning script', () => {
+  it('prefers canonical consolidation, including an empty adjudication, over raw sidecars', async () => {
+    for (const records of [[{ ...record, source_nodes: ['code', 'tests'] }], []]) {
+      const result = await run({
+        ...nativeRun,
+        resolve_only: true,
+        artifact_files: {
+          'discoveries/review-code.json': [{ title: 'Malformed raw' }],
+          'nested/discoveries.json': [{ title: 'Unrelated' }],
+          'discoveries.json': records,
+        },
+      });
+      expect(normalized(result)).toHaveLength(records.length);
+      expect(result.terminal_statuses).toEqual([...TERMINAL_WORKFLOW_STATUSES]);
+      expect(result.calls.filter(c => c[0] === 'archon')).toEqual([
+        ['archon', 'workflow', 'get', 'prior-run', '--json'],
+      ]);
+    }
+  }, 20_000);
+
+  it('collects native raw arrays, merges exact repeats, and retains same-title defects', async () => {
+    const result = await run({
+      ...nativeRun,
+      resolve_only: true,
+      artifact_files: {
+        'discoveries/regress.json': [{ ...record, title: 'Reproduced check defect' }],
+        'discoveries/review code.json': [
+          { ...record, title: 'Reproduced check defect', source_node: 'code' },
+          { ...record, title: 'Reproduced check defect', claim: 'A different defect' },
+          { ...record, title: 'Reproduced check defect', evidence: ['folder/source.txt:1'] },
+        ],
+      },
+    });
+    const items = normalized(result);
+    expect(items.map(i => i.item_index)).toEqual([0, 1, 2]);
+    expect(items[0]?.source_nodes).toEqual(['code', 'review-code']);
+    expect(items[1]?.claim).toBe('A different defect');
+    expect(items[2]?.evidence).toEqual(['folder/source.txt:1']);
+  }, 20_000);
+
+  it('renders an empty proposal set for a readable run without discoveries', async () => {
+    for (const status of TERMINAL_WORKFLOW_STATUSES) {
+      const result = await run({
+        ...nativeRun,
+        cli_response: { status },
+        artifact_files: { 'report.md': 'No discoveries' },
+        revalidation: [],
+        search: [],
+        classification: [],
+      });
+      expect(proposals(result).proposals).toEqual([]);
+    }
+  }, 20_000);
+
+  for (const input of [
+    { cli_exit: 2 },
+    { cli_error: 'timeout' },
+    { cli_error: 'missing' },
+    { cli_raw: 'not JSON' },
+    { cli_raw: '[]' },
+    { cli_response: { id: 'different-run' } },
+    ...['pending', 'running', 'paused', null, 'unknown'].map(status => ({
+      cli_response: { status },
+    })),
+    { cli_response: { artifacts_dir: null } },
+    { cli_response: { artifacts_dir: 'relative' } },
+    { missing_storage: true },
+    { cli_response: { leave_behind: null } },
+    { cli_response: { leave_behind: { artifactFiles: [7] } } },
+    { cli_response: { leave_behind: { artifactFiles: ['discoveries.json'] } } },
+    { artifact_files: { 'discoveries.json': [{ ...record, evidence: 'not an array' }] } },
+    { artifact_files: { 'discoveries.json': {}, 'discoveries/regress.json': [record] } },
+    { artifact_files: { 'discoveries/regress.json': [{ ...record, evidence: 'not an array' }] } },
+    {
+      artifact_files: {
+        'discoveries/a.json': [record],
+        'discoveries/b.json': [{ ...record, relation: 'scope_conflict' }],
+      },
+    },
+    {
+      artifact_files: { 'discoveries/regress.json': [record] },
+      cli_response: { leave_behind: { artifactFiles: [] } },
+    },
+    {
+      artifact_files: { 'discoveries.json': [record], 'discoveries/regress.json': [record] },
+      cli_response: { leave_behind: { artifactFiles: ['discoveries/regress.json'] } },
+    },
+  ]) {
+    it(
+      'refuses unavailable or ambiguous input: ' + JSON.stringify(input),
+      async () => {
+        refused(await run({ ...nativeRun, ...input }), 'resolve-input', 'resolve-input:');
+      },
+      20_000
+    );
+  }
+
+  for (const filename of [
+    '/tmp/discoveries.json',
+    '../discoveries.json',
+    'discoveries/../outside.json',
+    'C:/private.json',
+    'C:private.json',
+    '\\\\host\\share\\private.json',
+    'discoveries\\regress.json',
+    'discoveries//regress.json',
+    './discoveries.json',
+    'discoveries/evil\u0000.json',
+  ]) {
+    it(
+      'rejects untrusted filenames even alongside canonical input: ' + JSON.stringify(filename),
+      async () => {
+        refused(
+          await run({
+            ...nativeRun,
+            artifact_files: { 'discoveries.json': [record] },
+            cli_response: { leave_behind: { artifactFiles: ['discoveries.json', filename] } },
+          }),
+          'resolve-input',
+          'unsafe artifact filename'
+        );
+      },
+      20_000
+    );
+  }
+
+  it('refuses duplicate filenames and actual symlink or junction escapes', async () => {
+    refused(
+      await run({
+        ...nativeRun,
+        cli_response: {
+          leave_behind: { artifactFiles: ['discoveries.json', 'discoveries.json'] },
+        },
+      }),
+      'resolve-input',
+      'ambiguous duplicate'
+    );
+    refused(
+      await run({
+        ...nativeRun,
+        symlink_escape: true,
+        cli_response: {
+          leave_behind: { artifactFiles: ['discoveries/regress.json'] },
+        },
+      }),
+      'resolve-input',
+      'symlink escapes'
+    );
+  }, 20_000);
+
+  it('uses claim and evidence in stable repository-scoped markers', async () => {
+    const input = { resolve_only: true, remote: 'https://github.com/example/repo.git' };
+    const first = normalized(await run(input))[0]?.marker;
+    const repeated = normalized(
+      await run({
+        ...input,
+        records: [
+          {
+            ...record,
+            title: ' EXAMPLE finding ',
+            claim: 'Fixture   hypothesis',
+            evidence: [' AGENTS.md:1 ', 'AGENTS.md:1'],
+            source_node: 'different producer',
+          },
+        ],
+      })
+    )[0]?.marker;
+    expect(first).toBeString();
+    expect(repeated).toBe(first);
+    for (const records of [
+      [{ ...record, claim: 'Different claim' }],
+      [{ ...record, evidence: ['folder/source.txt:1'] }],
+    ]) {
+      expect(normalized(await run({ ...input, records }))[0]?.marker).not.toBe(first);
+    }
+    const other = await run({
+      ...input,
+      remote: 'https://github.com/other/repo.git',
+      gh_identity: 'other/repo',
+      gh_repository: 'other/repo',
+    });
+    expect(normalized(other)[0]?.marker).not.toBe(first);
+  }, 30_000);
+});
 
 describe('discovery proposals real scripts (agent judgments and gh transport simulated)', () => {
   it('renders useful local proposals without a forge, identity guess, or publication authorization', async () => {
@@ -261,20 +463,20 @@ describe('discovery proposals real scripts (agent judgments and gh transport sim
     );
   }
 
-  it('rejects run_id even when an artifact is also provided, naming the precise missing field', async () => {
-    refused(
-      await run({ run_id: 'prior-run' }),
-      'resolve-input',
-      'canonical absolute artifacts_dir'
-    );
+  it('requires exactly one explicit input', async () => {
+    refused(await run({ run_id: 'prior-run' }), 'resolve-input', 'exactly one');
+    refused(await run({ no_input: true }), 'resolve-input', 'exactly one');
   }, 20_000);
 
-  it('rejects repeated input keys before proposing two actions', async () => {
-    refused(
-      await run({ records: [record, { ...record, title: ' EXAMPLE   finding ' }] }),
-      'resolve-input',
-      'duplicate discovery key'
-    );
+  it('merges exact normalized findings and preserves producer attribution', async () => {
+    const result = await run({
+      records: [record, { ...record, title: ' EXAMPLE   finding ', source_node: 'other' }],
+    });
+    expect(proposals(result).proposals).toHaveLength(1);
+    expect(JSON.parse(result.files['discoveries/normalized.json']!)[0].source_nodes).toEqual([
+      'other',
+      'review-code',
+    ]);
   }, 20_000);
 
   it('rejects repeated agent item indices instead of silently overwriting an entry', async () => {
@@ -295,6 +497,10 @@ describe('discovery proposals real scripts (agent judgments and gh transport sim
     '/private/evaluator.md',
     'See file:///tmp/result',
     'See $ARTIFACTS_DIR',
+    '<img src=/private/report.md>',
+    '[evidence](file%3A%2F%2F%2Fprivate%2Freport.md)',
+    '[evidence](&#47;private/report.md)',
+    'See ${ARTIFACTS_DIR}',
   ]) {
     it(
       'rejects absolute paths in public prose: ' + text,
@@ -330,6 +536,11 @@ describe('discovery proposals real scripts (agent judgments and gh transport sim
       'render-proposals',
       'public disclosure'
     );
+  }, 20_000);
+
+  it('allows public HTTPS citations without mistaking their scheme for a drive path', async () => {
+    const summary = 'See https://github.com/example/repo/issues/1 for public context.';
+    proposals(await run({ classification: [{ ...classification, public_summary: summary }] }));
   }, 20_000);
 
   it('keeps failed GitHub reads unavailable and refuses fabricated search results', async () => {
