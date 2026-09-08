@@ -169,6 +169,19 @@ describe('test-suite change decision', () => {
     expect(fixtureJob).toContain('run: bun install --frozen-lockfile');
     expect(fixtureJob).toContain('run: bun run cli workflow test --json');
   });
+
+  test('both main test matrix legs install uv before running real CLI probes', () => {
+    const workflow = readFileSync(
+      resolve(import.meta.dir, '../.github/workflows/test.yml'),
+      'utf8'
+    ).replaceAll('\r\n', '\n');
+    const job = workflow.slice(workflow.indexOf('  test:'), workflow.indexOf('  schema-upgrade:'));
+    expect(job).toContain('os: [ubuntu-latest, windows-latest]');
+    expect(job).toContain('      - name: Setup uv\n        uses: astral-sh/setup-uv@v4\n');
+    expect(job.indexOf('uses: astral-sh/setup-uv@v4')).toBeLessThan(
+      job.indexOf('run: bun run test')
+    );
+  });
 });
 
 describe('diff mode', () => {
