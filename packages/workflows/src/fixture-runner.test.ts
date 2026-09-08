@@ -1324,7 +1324,8 @@ describe('runFixtures exec-code isolation (#2851)', () => {
       workflows: [workflowsOnDisk(cwd, ['script-wf'])[0]],
       cwd,
     });
-    expect(report.results[0].outcome).toBe('completed');
+    const result = report.results[0];
+    expect(result?.outcome, result?.failureReason).toBe('completed');
   });
 
   it('captures the command folder the source config names (#2851)', async () => {

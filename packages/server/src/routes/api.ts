@@ -378,6 +378,7 @@ import {
   introspectOpencodeCredentials,
 } from '@archon/providers';
 import { messageSchema } from './schemas/conversation.schemas';
+import { dagNodeSseEventSchema } from '../adapters/web/workflow-event.schemas';
 import {
   workflowRunSchema,
   dashboardWorkflowRunSchema,
@@ -1590,6 +1591,8 @@ export function registerApiRoutes(
   lockManager: ConversationLockManager,
   activePlatforms?: readonly string[]
 ): void {
+  app.openAPIRegistry.register('DagNodeSseEvent', dagNodeSseEventSchema);
+
   function apiError(
     c: Context,
     status: 400 | 401 | 404 | 422 | 500 | 503,
@@ -4810,9 +4813,10 @@ export function registerApiRoutes(
     // #3160 — the lexical check above rejects `..` segments in the request
     // path, but readFile follows symlinks. Resolve the real path of the
     // artifact directory and of the file target, then re-check containment
-    // on the real paths and read from the resolved path. An escaping symlink
-    // is refused with the same 404 response as a missing file so the body
-    // cannot confirm what exists outside this run's artifacts directory.
+    // on the real paths and read from the resolved path. This protects stable
+    // symlinks; it does not make containment and reading atomic against
+    // concurrent filesystem changes. An escaping symlink is refused with the
+    // same 404 response as a missing file.
     let realArtifactDir: string;
     try {
       realArtifactDir = await realpath(artifactDir);
@@ -4821,8 +4825,7 @@ export function registerApiRoutes(
         getLog().error({ err, runId, artifactDir }, 'artifacts.read_failed');
         return apiError(c, 500, 'Failed to read artifact file');
       }
-      // artifactDir does not exist on disk — let readFile surface the
-      // existing 404 'Artifact file not found' below.
+      // The file realpath below also maps a missing artifact directory to 404.
       realArtifactDir = artifactDir;
     }
     let realFilePath: string;

@@ -59,6 +59,7 @@ export {
   findMarkdownFilesRecursive,
   findCommandFiles,
   getWebDistDir,
+  getSourceWebDistDir,
 } from './archon-paths';
 export type { ProjectStorageKey, ProjectStoragePaths } from './archon-paths';
 

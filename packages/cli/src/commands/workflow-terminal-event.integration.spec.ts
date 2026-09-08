@@ -5,11 +5,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
-import {
-  canConnect,
-  detachedRunControlPath,
-  requestDetachedRunStop,
-} from '../utils/detached-run-control';
+import { canConnectToRunLiveOwner, runLiveOwnerPath } from '@archon/core/services/run-live-owner';
+import { requestDetachedRunStop } from '../utils/detached-run-control';
 
 const cleanupPaths: string[] = [];
 const activeRunIds = new Set<string>();
@@ -80,6 +77,9 @@ function readRunById(
   if (!existsSync(databasePath)) return undefined;
   const database = new Database(databasePath, { readonly: true });
   try {
+    // The last writer's WAL cleanup can briefly lock a new reader. Wait for that
+    // lock, not for the acknowledged row to appear.
+    database.run('PRAGMA busy_timeout = 5000');
     return (
       database
         .query<
@@ -192,7 +192,7 @@ describe('detached workflow terminal database events', () => {
       // released its endpoint; re-asserting the same reading on the next line could only
       // turn one such misread into a failure, which is how it failed on Windows.
       await waitFor(async () =>
-        (await canConnect(detachedRunControlPath(created.id))) ? undefined : true
+        (await canConnectToRunLiveOwner(runLiveOwnerPath(created.id))) ? undefined : true
       );
       activeRunIds.delete(created.id);
 

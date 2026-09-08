@@ -9,12 +9,14 @@ import {
   afterEach,
   spyOn,
 } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
 // Mock @archon/paths BEFORE importing the module under test.
-// This sets BUNDLED_IS_BINARY = false (dev mode) so serveCommand rejects.
+// BUNDLED_IS_BINARY = false puts serveCommand on its source-checkout path, and
+// getSourceWebDistDir is redirected at a temp tree so a test can decide whether
+// `bun run build:web` has been run without depending on this checkout's state.
 const mockLogger = {
   fatal: mock(() => undefined),
   error: mock(() => undefined),
@@ -23,14 +25,27 @@ const mockLogger = {
   debug: mock(() => undefined),
   trace: mock(() => undefined),
 };
+let sourceWebDistDir = '/tmp/test-archon/unset-source-web-dist';
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getWebDistDir: mock((version: string) => `/tmp/test-archon/web-dist/${version}`),
+  getSourceWebDistDir: mock(() => sourceWebDistDir),
   BUNDLED_IS_BINARY: false,
   BUNDLED_VERSION: 'dev',
   BUNDLED_WEB_DIST_SHA256: '',
 }));
 
+// serveCommand reaches the real server through a dynamic import. Stub it so the
+// source-mode tests can read back which dist it was handed without opening a
+// listening socket.
+const startServerCalls: Array<{ webDistPath: string; port?: number }> = [];
+mock.module('@archon/server', () => ({
+  startServer: mock(async (opts: { webDistPath: string; port?: number }) => {
+    startServerCalls.push(opts);
+  }),
+}));
+
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { serveCommand, parseChecksum, parseEmbeddedChecksum, downloadWebDist } from './serve';
 
 describe('parseChecksum', () => {
@@ -319,6 +334,119 @@ describe('buildWebTarball structural conformance', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// serveCommand blocks in the foreground until SIGINT/SIGTERM. Raising a real
+// signal here would also reach the test runner, so the tests call the listeners
+// the command registered and drop them — what the signal itself would do — and
+// only ever touch listeners that were not already there.
+// ---------------------------------------------------------------------------
+
+const SHUTDOWN_SIGNALS = ['SIGINT', 'SIGTERM'] as const;
+type ShutdownListener = () => void;
+
+function shutdownListeners(): Map<string, Set<ShutdownListener>> {
+  return new Map(
+    SHUTDOWN_SIGNALS.map(signal => [
+      signal,
+      new Set(process.listeners(signal) as unknown as ShutdownListener[]),
+    ])
+  );
+}
+
+/** Listeners registered since `before` — the ones serveCommand is parked on. */
+function newShutdownListeners(
+  before: Map<string, Set<ShutdownListener>>
+): Array<[(typeof SHUTDOWN_SIGNALS)[number], ShutdownListener]> {
+  const added: Array<[(typeof SHUTDOWN_SIGNALS)[number], ShutdownListener]> = [];
+  for (const signal of SHUTDOWN_SIGNALS) {
+    for (const listener of process.listeners(signal) as unknown as ShutdownListener[]) {
+      if (!before.get(signal)?.has(listener)) added.push([signal, listener]);
+    }
+  }
+  return added;
+}
+
+/** Resolve once the command has started the server and parked on a signal. */
+async function waitForForegroundWait(before: Map<string, Set<ShutdownListener>>): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    if (newShutdownListeners(before).length > 0) return;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  throw new Error('serveCommand never reached its foreground wait');
+}
+
+function interruptForegroundWait(before: Map<string, Set<ShutdownListener>>): void {
+  for (const [signal, listener] of newShutdownListeners(before)) {
+    process.removeListener(signal, listener);
+    listener();
+  }
+}
+
+describe('serveCommand in a source checkout', () => {
+  const trackTempRoot = trackTempRoots();
+  let consoleErrorSpy: ReturnType<typeof spyOn>;
+  let fetchSpy: ReturnType<typeof spyOn>;
+  let builtDist: string;
+
+  beforeEach(() => {
+    consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {});
+    // Any fetch at all would mean the source path tried to download a release.
+    fetchSpy = spyOn(globalThis, 'fetch');
+    fetchSpy.mockImplementation(async () => {
+      throw new Error('serveCommand must not download in a source checkout');
+    });
+    startServerCalls.length = 0;
+    builtDist = trackTempRoot(mkdtempSync(join(tmpdir(), 'serve-source-dist-')));
+    writeFileSync(join(builtDist, 'index.html'), '<html>built</html>');
+    sourceWebDistDir = builtDist;
+  });
+
+  afterEach(() => {
+    consoleErrorSpy.mockRestore();
+    fetchSpy.mockRestore();
+  });
+
+  it('serves the locally built dist on the requested port', async () => {
+    const before = shutdownListeners();
+    const pending = serveCommand({ port: 4321 });
+
+    await waitForForegroundWait(before);
+    expect(startServerCalls).toEqual([{ webDistPath: builtDist, port: 4321 }]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    interruptForegroundWait(before);
+    expect(await pending).toBe(0);
+  });
+
+  it('refuses with a build instruction when the dist has not been built', async () => {
+    sourceWebDistDir = join(builtDist, 'not-built-yet');
+
+    const exitCode = await serveCommand({});
+
+    expect(exitCode).toBe(1);
+    expect(startServerCalls).toEqual([]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    const errors = consoleErrorSpy.mock.calls.flat().join('\n');
+    expect(errors).toContain(sourceWebDistDir);
+    expect(errors).toContain('bun run build:web');
+    // The old refusal sent source installs to `bun run dev`, which is a different
+    // thing (every package's dev server, HMR, a held terminal) and is why #3218
+    // was reported. It must not come back.
+    expect(errors).not.toContain('bun run dev');
+  });
+
+  it('refuses --download-only because a source checkout downloads nothing', async () => {
+    const exitCode = await serveCommand({ downloadOnly: true });
+
+    expect(exitCode).toBe(1);
+    expect(startServerCalls).toEqual([]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(consoleErrorSpy.mock.calls.flat().join('\n')).toContain(
+      '--download-only is for binary installs'
+    );
+  });
+});
+
 describe('serveCommand', () => {
   let consoleErrorSpy: ReturnType<typeof spyOn>;
 
@@ -328,19 +456,6 @@ describe('serveCommand', () => {
 
   afterEach(() => {
     consoleErrorSpy.mockRestore();
-  });
-
-  it('should reject in dev mode (non-binary)', async () => {
-    const exitCode = await serveCommand({});
-    expect(exitCode).toBe(1);
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
-      'Error: `archon serve` is for compiled binaries only.'
-    );
-  });
-
-  it('should reject with downloadOnly in dev mode', async () => {
-    const exitCode = await serveCommand({ downloadOnly: true });
-    expect(exitCode).toBe(1);
   });
 
   it('should reject invalid port (NaN)', async () => {

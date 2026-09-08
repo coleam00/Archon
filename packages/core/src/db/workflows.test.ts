@@ -37,6 +37,7 @@ import {
   pauseWorkflowRunForWait,
   failPausedAttentionWait,
   listDueWorkflowContinuations,
+  listWorkflowEventSignalCandidates,
   deferWorkflowContinuation,
   signalWorkflowWait,
   clearWorkflowWaitContext,
@@ -798,6 +799,70 @@ describe('workflows database', () => {
       expect(query).toContain("metadata->>'continuation_retry_at' IS NULL");
       expect(query).toContain("ORDER BY COALESCE(metadata->>'continuation_retry_at'");
       expect(params).toEqual(['2026-08-25T10:00:00.000Z', 25]);
+    });
+
+    test('lists typed outputs for exact open event waits and skips malformed rows', async () => {
+      const structuredOutput = {
+        repo: { host: 'github.com', path: 'example/repo' },
+        number: 42,
+      };
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            run_id: 'run-object-json',
+            run_metadata: { wait },
+            event_data: { output_type: 'pull-request', structured_output: structuredOutput },
+          },
+          {
+            run_id: 'run-string-json',
+            run_metadata: JSON.stringify({ wait }),
+            event_data: JSON.stringify({
+              output_type: 'pull-request',
+              structured_output: structuredOutput,
+            }),
+          },
+          {
+            run_id: 'malformed-metadata',
+            run_metadata: '{',
+            event_data: { output_type: 'pull-request', structured_output: structuredOutput },
+          },
+          {
+            run_id: 'malformed-event',
+            run_metadata: { wait },
+            event_data: '{',
+          },
+          {
+            run_id: 'wrong-event',
+            run_metadata: { wait: { ...wait, event: 'deploy.complete' } },
+            event_data: { output_type: 'pull-request', structured_output: structuredOutput },
+          },
+          {
+            run_id: 'already-signaled',
+            run_metadata: {
+              wait: { ...wait, signaledAt: '2026-08-24T10:01:00.000Z' },
+            },
+            event_data: { output_type: 'pull-request', structured_output: structuredOutput },
+          },
+        ])
+      );
+
+      const now = new Date('2026-08-24T10:02:00.000Z');
+      await expect(listWorkflowEventSignalCandidates('checks.complete', now)).resolves.toEqual([
+        { runId: 'run-object-json', wait, outputType: 'pull-request', structuredOutput },
+        { runId: 'run-string-json', wait, outputType: 'pull-request', structuredOutput },
+      ]);
+
+      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain('JOIN remote_agent_workflow_events e ON e.workflow_run_id = r.id');
+      expect(query).toContain("r.status = 'paused'");
+      expect(query).toContain("r.metadata->'wait'->>'kind' = 'event'");
+      expect(query).toContain("r.metadata->'wait'->>'event' = $1");
+      expect(query).toContain("r.metadata->'wait'->>'signaledAt' IS NULL");
+      expect(query).toContain("r.metadata->'wait'->>'resumeAt' > $2");
+      expect(query).toContain("e.event_type = 'node_completed'");
+      expect(query).toContain("e.data->>'output_type' <> ''");
+      expect(query).toContain("jsonb_typeof(e.data->'structured_output')");
+      expect(params).toEqual(['checks.complete', now.toISOString()]);
     });
 
     test('defers an unresolvable continuation without changing lifecycle status', async () => {

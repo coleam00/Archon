@@ -463,6 +463,17 @@ async function findMarkdownFilesRecursiveImpl(
 }
 
 /**
+ * Root of the checkout this build runs from.
+ *
+ * This file is at packages/paths/src/archon-paths.ts, so the repo root is three
+ * levels up from `import.meta.dir` (src → paths → packages → root). In Docker
+ * that is /app.
+ */
+function getSourceRepoRoot(): string {
+  return dirname(dirname(dirname(import.meta.dir)));
+}
+
+/**
  * Get the path to the app's base directory
  * This is where default commands/workflows are stored for copying to new repos
  *
@@ -470,11 +481,19 @@ async function findMarkdownFilesRecursiveImpl(
  * Locally: {repo_root}/.archon
  */
 export function getAppArchonBasePath(): string {
-  // This file is at packages/paths/src/archon-paths.ts
-  // Go up from src → paths → packages → repo root
-  // import.meta.dir = packages/paths/src
-  const repoRoot = dirname(dirname(dirname(import.meta.dir)));
-  return join(repoRoot, '.archon');
+  return join(getSourceRepoRoot(), '.archon');
+}
+
+/**
+ * Where a source checkout keeps its built web UI: the output of
+ * `bun run build:web`. Owns that location for every consumer, so the CLI's
+ * pre-flight check and the server's default cannot drift apart.
+ *
+ * A compiled binary has no checkout to build in and caches a downloaded copy
+ * under `getWebDistDir(version)` instead.
+ */
+export function getSourceWebDistDir(): string {
+  return join(getSourceRepoRoot(), 'packages', 'web', 'dist');
 }
 
 /**

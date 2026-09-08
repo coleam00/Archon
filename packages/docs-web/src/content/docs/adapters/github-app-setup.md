@@ -46,6 +46,7 @@ Archon refuses to start with **both** modes configured. Pick one set of env vars
 
 | Permission       | Access       | Used for                                          |
 | ---------------- | ------------ | ------------------------------------------------- |
+| Checks           | Read         | Waking workflow CI waits when a check concludes   |
 | Contents         | Read         | Cloning + reading repo metadata                   |
 | Issues           | Read & Write | `createComment` + `listComments`                  |
 | Pull requests    | Read & Write | `pulls.get` + comment posting                     |
@@ -58,9 +59,12 @@ Archon refuses to start with **both** modes configured. Pick one set of env vars
 Subscribe to:
 
 - Issue comments
+- Check runs
 - Pull request review comments
 - Pull request
 - Issues (used for `closed` cleanup)
+
+Existing installations must accept the added Checks permission before check-run wake-ups work. If a check-run webhook is unavailable, delivery still progresses after the wait's five-minute deadline and probes CI again.
 
 ## Step 4: Generate a private key
 
