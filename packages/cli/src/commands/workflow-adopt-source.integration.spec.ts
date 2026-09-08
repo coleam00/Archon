@@ -4,16 +4,13 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { canConnectToRunLiveOwner, runLiveOwnerPath } from '@archon/core/services/run-live-owner';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { readWorkflowSourceState } from '@archon/workflows/schemas/workflow-run';
 import { capturedSourceRoots, loadWorkflowSource } from '@archon/workflows/workflow-source';
 import { loadCommandPrompt } from '@archon/workflows/executor-shared';
-import {
-  canConnect,
-  detachedRunControlPath,
-  requestDetachedRunStop,
-} from '../utils/detached-run-control';
+import { requestDetachedRunStop } from '../utils/detached-run-control';
 
 const CLI_ENTRY = join(import.meta.dir, 'fixtures', 'workflow-cli-without-title.ts');
 const roots: string[] = [];
@@ -21,7 +18,7 @@ const activeRuns = new Set<string>();
 
 afterEach(async () => {
   for (const id of activeRuns) {
-    if (await canConnect(detachedRunControlPath(id))) {
+    if (await canConnectToRunLiveOwner(runLiveOwnerPath(id))) {
       const owner = await requestDetachedRunStop(id);
       await owner.stop();
     }
@@ -215,7 +212,7 @@ async function adopt(fixture: Fixture, detached: boolean, explicit: boolean): Pr
       const row = readRun(fixture, id);
       if (
         ['completed', 'failed'].includes(row.status) &&
-        !(await canConnect(detachedRunControlPath(id)))
+        !(await canConnectToRunLiveOwner(runLiveOwnerPath(id)))
       ) {
         activeRuns.delete(id);
         break;
