@@ -7,6 +7,8 @@
   ],
   "type": "module",
   "scripts": {
+    "generate:forge-schema": "bun run scripts/generate-forge-schema.ts",
+    "check:forge-schema": "bun run scripts/generate-forge-schema.ts --check",
     "cli": "bun --cwd packages/cli src/cli.ts",
     "dev": "bun --filter '*' dev",
     "dev:server": "bun --filter @archon/server dev",
@@ -41,11 +43,13 @@
     "build:web": "bun --filter @archon/web build",
     "dev:docs": "bun --filter @archon/docs-web dev",
     "build:docs": "bun --filter @archon/docs-web build",
-    "validate": "bun run check:bundled && bun run check:bundled-skill && bun run check:bundled-schema && bun run check:pi-vendor-map && bun run check:capability-matrix && bun run check:api-types && bun run type-check && bun run lint --max-warnings 0 && bun run format:check && bun run test:install && bun run test",
+    "validate": "bun run check:forge-schema && bun run check:bundled && bun run check:bundled-skill && bun run check:bundled-schema && bun run check:pi-vendor-map && bun run check:capability-matrix && bun run check:api-types && bun run type-check && bun run lint --max-warnings 0 && bun run format:check && bun run test:install && bun run test",
     "prepare": "husky",
     "setup-auth": "bun --filter @archon/server setup-auth"
   },
   "devDependencies": {
+    "@archon/forge": "workspace:*",
+    "zod": "^4.4.3",
     "@archon/core": "workspace:*",
     "@archon/git": "workspace:*",
     "@archon/paths": "workspace:*",

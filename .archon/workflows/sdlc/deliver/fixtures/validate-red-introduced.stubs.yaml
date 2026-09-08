@@ -39,3 +39,5 @@ fixture:
   fail-node: gate-validated
   reached: [pr__pr, review__synthesize]
 exec-code: true
+
+forge-repo: { host: "github.com", path: "example/repo" }

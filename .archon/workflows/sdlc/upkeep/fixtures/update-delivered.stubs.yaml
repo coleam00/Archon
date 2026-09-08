@@ -52,3 +52,5 @@ deliver__review__seams: "0 findings"
 deliver__review__simplify: "0 findings"
 deliver__review__tests: "0 findings"
 deliver__review__review-complete: "settled"
+
+deliver__forge-repo: { host: "github.com", path: "example/repo" }

@@ -49,3 +49,5 @@ fixture:
   inputs:
     errors: "false"
 exec-code: true
+
+forge-repo: { host: "github.com", path: "example/repo" }

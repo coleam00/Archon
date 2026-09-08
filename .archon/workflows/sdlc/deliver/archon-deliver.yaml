@@ -78,6 +78,11 @@ nodes:
       draft: "true"
     depends_on: [gate-green]
 
+  - id: forge-repo
+    script: resolve-forge
+    runtime: uv
+    depends_on: [pr]
+
   # Initial review: full on a first delivery, light continuation when
   # the caller passes the previous run's report (adjudications carry across
   # runs instead of being relitigated).
@@ -92,7 +97,7 @@ nodes:
   - id: classify
     command: classify-review-scope
     model: medium
-    depends_on: [pr]
+    depends_on: [pr, forge-repo]
     mutates_checkout: false
     output_type: review-scope
     output_format:
@@ -170,49 +175,15 @@ nodes:
       max_iterations: 5
       fresh_context: true
       nodes:
-        # Evidence provisioning, never a gate: this node cannot fail the round
-        # and never waits. A read that fails, times out, or finds no checks
-        # reports that fact and the round proceeds on the review findings
-        # alone. One read, one captured document — deriving failures and counts
-        # from separate reads could present a half-failed read as clean CI. The
-        # engine owns the bounded read. A timeout skips this optional producer;
-        # ci-evidence below turns that absence into the declared fallback passed
-        # to the fix. The exit code is read together with the captured output,
-        # never alone — this gh form can encode check state in its exit code and
-        # can exit zero on failing checks, so non-zero with output is data, and
-        # only empty output from a failed read means the read itself failed.
+        # Optional evidence read: a timeout or failed read leaves review findings authoritative.
         - id: ci-note
           timeout: 45000
           on_timeout: skip
-          bash: |
-            PR_NUMBER=$pr.output.number
-            ORIGIN_REPO=$(git remote get-url origin 2>/dev/null | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##' || true)
-            LINES=$(gh pr checks "$PR_NUMBER" --repo "$ORIGIN_REPO" --json name,bucket \
-              --jq '.[] | if .bucket == "pending" then "PENDING" elif .bucket == "pass" or .bucket == "skipping" then "GREEN" else "RED \(.name) (\(.bucket))" end' \
-              2>/dev/null)
-            RC=$?
-            if [ "$RC" -ne 0 ] && [ -z "$LINES" ]; then
-              echo "No CI evidence is available for this round (the check read failed). Proceed on the review findings alone."
-              exit 0
-            fi
-            if [ -z "$LINES" ]; then
-              echo "No CI evidence is available for this round (no checks reported). Proceed on the review findings alone."
-              exit 0
-            fi
-            FAILING=$(printf '%s\n' "$LINES" | sed -n 's/^RED /- /p')
-            PENDING=$(printf '%s\n' "$LINES" | grep -c '^PENDING') || true
-            echo "CI state for this pull request, read at the start of this round; it describes the currently pushed head:"
-            if [ -n "$FAILING" ]; then
-              echo "Concluded non-green checks:"
-              printf '%s\n' "$FAILING"
-            else
-              echo "No concluded failures."
-            fi
-            case "$PENDING" in
-              ''|0) ;;
-              *) echo "$PENDING check(s) still running — never wait on them." ;;
-            esac
-            exit 0
+          script: ci-note
+          runtime: uv
+          with:
+            repo: "$forge-repo.output"
+            pr_number: "$pr.output.number"
 
         - id: ci-evidence
           script: console.log(process.env.INPUTS_NOTE ?? '')
@@ -374,10 +345,14 @@ nodes:
       # with CI still running). Red counts as done here; ci-verdict below is
       # the node that classifies a concluded red — never flip-ready first —
       # and flip-ready's preflight refuses any non-green state regardless.
-      until_bash: '! gh pr checks --json bucket --jq ".[].bucket" 2>/dev/null | grep -q "^pending$"'
+      until_bash: |
+        uv run python -c 'import json,os,subprocess,sys; ref={"repo":json.loads(sys.argv[1]),"number":int(sys.argv[2])}; p=subprocess.run([os.environ["ARCHON_EXECUTABLE"],*json.loads(os.environ["ARCHON_EXECUTABLE_ARGS"]),"forge","checks","--ref",json.dumps(ref),"--json"],capture_output=True,text=True,encoding="utf-8"); sys.stderr.write(p.stderr); sys.exit(1 if p.returncode else int(json.loads(p.stdout)["state"] == "pending"))' $forge-repo.output $pr.output.number
       nodes:
         - id: ci-probe
           script: check-ci
+          with:
+            repo: "$forge-repo.output"
+            pr_number: "$pr.output.number"
           runtime: uv
           # The probe's only in-process wait is the single 60 s registration
           # grace; headroom over the 120 s script default keeps that honest.
@@ -399,6 +374,9 @@ nodes:
   # no back-edges.
   - id: ci-verdict
     script: check-ci
+    with:
+      repo: "$forge-repo.output"
+      pr_number: "$pr.output.number"
     runtime: uv
     timeout: 180000
     depends_on: [await-checks]
@@ -488,10 +466,14 @@ nodes:
   - id: await-fix-checks
     loop_group:
       max_iterations: 13
-      until_bash: '! gh pr checks --json bucket --jq ".[].bucket" 2>/dev/null | grep -q "^pending$"'
+      until_bash: |
+        uv run python -c 'import json,os,subprocess,sys; ref={"repo":json.loads(sys.argv[1]),"number":int(sys.argv[2])}; p=subprocess.run([os.environ["ARCHON_EXECUTABLE"],*json.loads(os.environ["ARCHON_EXECUTABLE_ARGS"]),"forge","checks","--ref",json.dumps(ref),"--json"],capture_output=True,text=True,encoding="utf-8"); sys.stderr.write(p.stderr); sys.exit(1 if p.returncode else int(json.loads(p.stdout)["state"] == "pending"))' $forge-repo.output $pr.output.number
       nodes:
         - id: fix-ci-probe
           script: check-ci
+          with:
+            repo: "$forge-repo.output"
+            pr_number: "$pr.output.number"
           runtime: uv
           timeout: 180000
         - id: fix-ci-pause
@@ -522,6 +504,9 @@ nodes:
       nodes:
         - id: attention-ci-probe
           script: check-ci
+          with:
+            repo: "$forge-repo.output"
+            pr_number: "$pr.output.number"
           runtime: uv
           timeout: 180000
         - id: attention-ci-pause
@@ -538,62 +523,10 @@ nodes:
   - id: flip-ready
     bash: |
       set -euo pipefail
-      # --repo pins to the origin remote: gh's default resolution in a
-      # fork clone targets the upstream parent instead. With --repo, gh disables
-      # branch inference and REQUIRES an explicit selector — omitting it is a
-      # usage error.
-      # Nothing below streams a command's own output. The engine broadcasts a
-      # node's stderr to the operator as it runs and retains what the node prints,
-      # so every git and gh call here is captured: this node's authored messages
-      # are the only text that reaches its streams. That also keeps the raw origin
-      # URL — which can carry a credential (https://<token>@host/...) — out of
-      # both, since it is normalized inside the substitution that reads it and
-      # only the owner/repo below ever reaches a command line or a message.
-      if ! ORIGIN_REPO=$(git remote get-url origin 2>/dev/null | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##'); then
-        printf '%s\n' "flip-ready: could not read the origin remote." >&2
-        exit 1
-      fi
-      case "$ORIGIN_REPO" in
-        *[!A-Za-z0-9_.-]*/* | */*[!A-Za-z0-9_.-]* | */*/* | /* | */ | "")
-          printf '%s\n' "flip-ready: origin remote does not resolve to an owner/repo." >&2
-          exit 1
-          ;;
-      esac
-      # The recorded number is the selector. Which branch is checked out is not
-      # re-derived here: the run owns its worktree and the PR was created in it,
-      # so this node cannot be the place that discovers otherwise. See the pack
-      # README on guards.
+      ORIGIN_REPO=$forge-repo.output.path
       PR_NUMBER=$pr.output.number
-      # Public-surface preflight: the flip is the one irreversible
-      # step, so it re-verifies CI itself instead of trusting the loop above —
-      # any pending or non-green check refuses the flip loudly. The check count
-      # is read through gh's GraphQL API, whose exit code is the structured
-      # signal: success returns the JSON totalCount (0 = no checks configured,
-      # or gated checks that never started — both proceed, matching the probe's
-      # permission-agnostic skip), and a non-zero exit is a failed read that
-      # refuses. A failed observation is not evidence that no CI exists, and the
-      # flip below must never run on one. stderr is dropped like every other
-      # value read in this node — a gh notice must never become the count.
-      if ! CHECK_COUNT=$(gh api graphql \
-        -f query='query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) { pullRequest(number: $number) { commits(last: 1) { nodes { commit { statusCheckRollup { contexts { totalCount } } } } } } } }' \
-        -f owner="${ORIGIN_REPO%/*}" -f repo="${ORIGIN_REPO#*/}" -F number="$PR_NUMBER" \
-        --jq '(.data.repository.pullRequest.commits.nodes[0].commit.statusCheckRollup.contexts.totalCount // 0)' 2>/dev/null); then
-        printf '%s\n' "flip-ready: could not read check state." >&2
-        exit 1
-      fi
-      if [ "$CHECK_COUNT" -gt 0 ]; then
-        # Checks exist: classify them with gh's structured bucket mapping. This
-        # read cannot legitimately be empty (the count above saw checks), so a
-        # failure here is a failed read too, never a no-checks case.
-        if ! NOT_GREEN=$(gh pr checks "$PR_NUMBER" --repo "$ORIGIN_REPO" --json name,bucket --jq '.[] | select(.bucket != "pass" and .bucket != "skipping") | "\(.name) (\(.bucket))"' 2>/dev/null); then
-          printf '%s\n' "flip-ready: checks exist but their state could not be read." >&2
-          exit 1
-        fi
-        if [ -n "$NOT_GREEN" ]; then
-          printf '%s\n' "flip-ready: refusing to flip with non-green checks: $NOT_GREEN" >&2
-          exit 1
-        fi
-      fi
+      # Refuse an unreadable or non-green check set before the existing ready write.
+      uv run python -c 'import json,os,subprocess,sys; ref={"repo":json.loads(sys.argv[1]),"number":int(sys.argv[2])}; p=subprocess.run([os.environ["ARCHON_EXECUTABLE"],*json.loads(os.environ["ARCHON_EXECUTABLE_ARGS"]),"forge","checks","--ref",json.dumps(ref),"--json"],capture_output=True,text=True,encoding="utf-8"); sys.stderr.write(p.stderr); v=json.loads(p.stdout) if p.returncode == 0 else {}; ok=v.get("state") in ("green","none"); sys.stderr.write("flip-ready: refusing unreadable or non-green checks: " + p.stdout if not ok else ""); sys.exit(0 if ok else 1)' $forge-repo.output $pr.output.number
       # The flip prints a confirmation this node has no use for, and its stdout is
       # not a value, so both streams are captured together and re-emitted only if
       # the flip failed — where gh's own words are the diagnostic.

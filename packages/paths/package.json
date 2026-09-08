@@ -5,6 +5,7 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
+    "./cli-launch": "./src/cli-launch.ts",
     ".": "./src/index.ts",
     "./bundled-build": "./src/bundled-build.ts",
     "./archon-paths": "./src/archon-paths.ts",

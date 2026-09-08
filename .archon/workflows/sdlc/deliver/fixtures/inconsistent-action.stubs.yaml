@@ -30,3 +30,5 @@ fixture:
   expect: failed
   fail-node: review-action
 exec-code: true
+
+forge-repo: { host: "github.com", path: "example/repo" }

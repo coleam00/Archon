@@ -63,3 +63,5 @@ fixture:
   expect: completed
   reached: [review__synthesize, gate-validated, ci-verdict, ci-fix__assert-changed, gate-ci-fix, ci-recheck__synthesize, ci-recheck-action, ci-round-result, fix-ci-probe, ci-attention-route, flip-ready]
 exec-code: true
+
+forge-repo: { host: "github.com", path: "example/repo" }

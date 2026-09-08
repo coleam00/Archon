@@ -44,3 +44,5 @@ fixture:
   expect: paused
   reached: [pr__pr, review__synthesize, gate-validated, ci-probe]
 exec-code: true
+
+forge-repo: { host: "github.com", path: "example/repo" }

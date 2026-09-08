@@ -69,3 +69,5 @@ fixture:
   fail-node: deliver__gate-validated
   reached: [outcome]
 exec-code: true
+
+deliver__forge-repo: { host: "github.com", path: "example/repo" }

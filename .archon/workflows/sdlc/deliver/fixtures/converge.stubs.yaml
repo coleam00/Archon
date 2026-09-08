@@ -63,3 +63,5 @@ fixture:
   expect: completed
   reached: [review__errors, ci-note]
 exec-code: true
+
+forge-repo: { host: "github.com", path: "example/repo" }

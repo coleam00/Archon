@@ -95,6 +95,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Check forge wire schemas
+        run: bun run check:forge-schema
+
       - name: Check bundled defaults
         run: bun run check:bundled
 
@@ -312,3 +315,14 @@ jobs:
               exit 1
             fi
           done
+
+  forge-windows-latest:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run --cwd packages/forge test
+      - run: bun run --cwd packages/forge type-check

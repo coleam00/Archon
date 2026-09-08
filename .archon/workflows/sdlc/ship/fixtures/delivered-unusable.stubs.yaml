@@ -70,3 +70,5 @@ fixture:
   expect: failed
   fail-node: outcome
 exec-code: true
+
+deliver__forge-repo: { host: "github.com", path: "example/repo" }

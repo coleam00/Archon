@@ -1,3 +1,5 @@
+import { archonCliLaunchEnv } from '@archon/paths/cli-launch';
+
 export interface ExecNodeEnvironmentContext {
   artifactsDir: string;
   stateDir: string;
@@ -35,8 +37,9 @@ export function buildExecNodeEnvironment(context: ExecNodeEnvironmentContext): N
   };
 }
 
-export const EXEC_NODE_ENVIRONMENT_NAMES: ReadonlySet<string> = new Set(
-  Object.keys(
+export const EXEC_NODE_ENVIRONMENT_NAMES: ReadonlySet<string> = new Set([
+  ...Object.keys(archonCliLaunchEnv()),
+  ...Object.keys(
     buildExecNodeEnvironment({
       artifactsDir: '',
       stateDir: '',
@@ -48,5 +51,5 @@ export const EXEC_NODE_ENVIRONMENT_NAMES: ReadonlySet<string> = new Set(
       loopPrevOutput: '',
       rejectionReason: '',
     })
-  )
-);
+  ),
+]);

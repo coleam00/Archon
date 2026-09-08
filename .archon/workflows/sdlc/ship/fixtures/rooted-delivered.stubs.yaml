@@ -77,3 +77,5 @@ fixture:
   resolved-text-contains:
     triage__triage: "issue #3031"
 exec-code: true
+
+deliver__forge-repo: { host: "github.com", path: "example/repo" }
