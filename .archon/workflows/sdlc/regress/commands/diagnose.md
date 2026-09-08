@@ -25,12 +25,23 @@ inconclusive. Confirm that the reported scope, checkout revision, and configured
 base revision are the ones under discussion. Never substitute a default branch
 or infer a regression's introduction merely from the branch name.
 
-There are two evidence sources. `configured` means an operator-selected command
+There are three evidence sources. `configured` means an operator-selected command
 actually ran and supplied a machine-readable report bound to this scope and
 revision. Its exit status and report must agree. The command owns the distinction
 between a product assertion failure and unavailable infrastructure. Its
 `public_cases` are explicit publication-safe evidence records. Raw execution
 streams and any other evaluator details are private, even if they look useful.
+
+`public-probe` means a configured full gate ran first and returned non-clean, and
+the operator authorized a separate public developer check of the scope they named.
+Everything you can see comes from that public probe. The full gate's report, output,
+scope, and evaluator sources are private and are deliberately absent; you cannot
+read them and must not ask for them, reconstruct them, or guess at them. Its
+non-clean status is all you know about it, and it stays a refusal: never call the
+run clean, and never claim the public defect you can prove is the reason the full
+gate failed, because that causal link is unknown here. A defect the public probe
+proves is a real defect on its own terms, worth diagnosing and filing. Judge and
+publish it exactly as you would `discovered` evidence, using `public_proof`.
 
 `discovered` means archon-validate found and ran repository checks and wrote
 validation.md. Its green and red-cause fields remain model judgments. Verify
@@ -87,8 +98,9 @@ invent an id or approve a merely similar case. The stable `root_cause_key` belon
 the trusted check author and identifies the cause across revisions and scopes. Leave
 `public_proof.root_cause_key` empty: a trusted case is already approved for export.
 
-For `discovered` evidence, `public_proof` is what makes a finding publishable. Fill it
-only when the repository itself proves the defect, and leave `public_case_id` empty:
+For `discovered` and `public-probe` evidence, `public_proof` is what makes a finding
+publishable. Fill it only when the repository itself proves the defect, and leave
+`public_case_id` empty:
 
 - `root_cause_key`: a stable lowercase machine key for this cause, derived from the
   source that must change, for example `packages/parser/src/tokens.ts/empty-input`.

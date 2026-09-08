@@ -1,5 +1,6 @@
-prepare: { ready: true, mode: configured }
+prepare: { ready: true, mode: configured, probe: false }
 fixed: { status: product }
+route: { validate: false, scope: '' }
 collect: { status: product }
 inv__investigate: { rooted: true, summary: 'The parser reads before checking length.' }
 inv__assert-intact: '{"intact":"true"}'
@@ -17,3 +18,6 @@ diagnose:
 finish: { status: defects, publication: disabled, issues: [] }
 fixture:
   expect: completed
+  # The trusted case route stays intact: a configured product-red without a public probe
+  # goes straight to investigation, never through archon-validate.
+  reached: [fixed, route, inv__investigate, diagnose, finish]

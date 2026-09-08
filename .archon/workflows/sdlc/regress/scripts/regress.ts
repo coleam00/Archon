@@ -21,9 +21,16 @@ export interface PublicCase {
   reproduction: string;
   evidence: string[];
 }
+/**
+ * Where the collected evidence came from, and therefore what may be published from it.
+ * `public-probe` is the operator's narrow public developer check, collected only after a
+ * configured full gate returned non-clean: it carries no private evaluator material and
+ * proves nothing about why the full gate failed.
+ */
+export type EvidenceSource = 'configured' | 'discovered' | 'public-probe';
 export interface Evidence extends Binding {
   status: Verdict;
-  source: 'configured' | 'discovered';
+  source: EvidenceSource;
   reason: string;
   report: string;
   report_hash: string;
@@ -89,6 +96,13 @@ export interface Prepared extends Binding {
   checkout: string;
   recording_directory: string;
   validation_scope: string;
+  /** The operator authorized a public probe of a configured profile's non-clean full gate. */
+  probe: boolean;
+}
+/** Whether archon-validate runs at all, and the only scope text it may receive. */
+export interface Routing {
+  validate: boolean;
+  scope: string;
 }
 /**
  * Proof that one validation command actually ran against the checked revision.
@@ -236,11 +250,13 @@ export function recordingScope(scope: string, recorder: string): string {
 export async function prepare(
   scope: string,
   policy: string,
+  publicProbeScope: string,
   artifacts: string,
   base: string
 ): Promise<Prepared> {
   const directory = join(artifacts, 'regress');
   await mkdir(directory, { recursive: true });
+  const probe = Boolean(policy) && Boolean(publicProbeScope);
   const result: Prepared = {
     revision: '',
     base,
@@ -254,7 +270,8 @@ export async function prepare(
     profile_hash: '',
     checkout: '',
     recording_directory: '',
-    validation_scope: scope,
+    validation_scope: '',
+    probe,
   };
   try {
     Object.assign(result, await binding(scope, base));
@@ -262,14 +279,16 @@ export async function prepare(
       throw new Error('Tracked checkout changes prevent revision-bound validation');
     if (policy) result.profile_hash = (await profile(policy)).digest;
     result.checkout = await realpath(await git(['rev-parse', '--show-toplevel']));
-    if (!policy) {
+    if (!policy || probe) {
       result.recording_directory = await mkdtemp(join(directory, 'recordings-'));
       // A copy, not the checkout's own script path: the recorder must keep working after
       // this run's materialized workflow source is gone, and it locates its context and
       // writes its receipts beside itself.
       const recorder = join(result.recording_directory, 'record.ts');
       await writeFile(recorder, await readFile(import.meta.path, 'utf8'));
-      result.validation_scope = recordingScope(scope, recorder);
+      // A probe carries only the operator's public scope; the configured profile's own
+      // scope belongs to the private gate and never reaches archon-validate.
+      result.validation_scope = recordingScope(policy ? publicProbeScope : scope, recorder);
     }
     result.ready = true;
     if (result.recording_directory)
@@ -360,13 +379,13 @@ function publicCase(value: unknown): PublicCase {
     evidence: strings(row.evidence),
   };
 }
-function emptyEvidence(context: Prepared, reason: string): Evidence {
+function emptyEvidence(context: Prepared, reason: string, source: EvidenceSource): Evidence {
   return {
     revision: context.revision,
     base: context.base,
     base_revision: context.base_revision,
     scope: context.scope,
-    source: context.mode,
+    source,
     status: 'inconclusive',
     reason,
     report: '',
@@ -383,7 +402,8 @@ export function configuredEvidence(
 ): Evidence {
   const result = emptyEvidence(
     context,
-    'Configured check supplied no usable revision-bound evidence'
+    'Configured check supplied no usable revision-bound evidence',
+    'configured'
   );
   try {
     const value = object(parse(raw));
@@ -412,7 +432,8 @@ export function configuredEvidence(
   } catch {
     return emptyEvidence(
       context,
-      'Configured evidence is absent, malformed, or has ambiguous public cases'
+      'Configured evidence is absent, malformed, or has ambiguous public cases',
+      'configured'
     );
   }
 }
@@ -420,7 +441,7 @@ export async function configured(context: Prepared, policy: string): Promise<Evi
   try {
     const selected = await profile(policy);
     if (selected.digest !== context.profile_hash)
-      return emptyEvidence(context, 'Policy changed after preparation');
+      return emptyEvidence(context, 'Policy changed after preparation', 'configured');
     // A fresh destination prevents an old successful check report surviving a failed startup.
     const directory = await mkdtemp(join(context.directory, 'check-'));
     const report = join(directory, 'evidence.json');
@@ -437,12 +458,13 @@ export async function configured(context: Prepared, policy: string): Promise<Evi
     await writeFile(join(directory, 'private-execution.json'), JSON.stringify(execution));
     const raw = await readFile(report, 'utf8').catch(() => '');
     if (!(await intact(context)))
-      return emptyEvidence(context, 'Checkout changed during configured validation');
+      return emptyEvidence(context, 'Checkout changed during configured validation', 'configured');
     return configuredEvidence(context, execution, raw, report);
   } catch {
     return emptyEvidence(
       context,
-      'Configured check could not start or collect evidence; inspect policy and environment'
+      'Configured check could not start or collect evidence; inspect policy and environment',
+      'configured'
     );
   }
 }
@@ -451,9 +473,14 @@ export function discoveredEvidence(
   verdict: unknown,
   raw: string,
   report: string,
-  executions: Receipt[]
+  executions: Receipt[],
+  source: EvidenceSource
 ): Evidence {
-  const result = emptyEvidence(context, 'Ordinary validation has no usable artifact or verdict');
+  const result = emptyEvidence(
+    context,
+    'Ordinary validation has no usable artifact or verdict',
+    source
+  );
   if (!raw.trim()) return result;
   if (executions.length === 0) {
     result.reason = 'Ordinary validation recorded no command execution, so the gate is unproven';
@@ -492,32 +519,94 @@ export function discoveredEvidence(
   }
   return result;
 }
+/**
+ * Collect what archon-validate actually produced: its artifact, this run's execution
+ * receipts, and its own green/cause claim. Both routes that reach archon-validate share
+ * it, so a public probe is held to exactly the proof an ordinary discovery must supply.
+ */
+async function recorded(
+  context: Prepared,
+  verdict: unknown,
+  artifacts: string,
+  source: EvidenceSource
+): Promise<Evidence> {
+  const produced = join(artifacts, 'validation.md');
+  let executions: Receipt[];
+  try {
+    executions = await receipts(context);
+  } catch {
+    return emptyEvidence(
+      context,
+      'Execution receipts are unreadable, malformed, or ambiguous',
+      source
+    );
+  }
+  try {
+    if ((await stat(produced)).mtimeMs < context.started)
+      return emptyEvidence(context, 'Validation artifact predates this check', source);
+    const raw = await readFile(produced, 'utf8');
+    const report = join(context.directory, 'validation.md');
+    await writeFile(report, raw);
+    return discoveredEvidence(context, verdict, raw, report, executions, source);
+  } catch {
+    return emptyEvidence(
+      context,
+      'Validation artifact or verdict is missing or unreadable',
+      source
+    );
+  }
+}
+/**
+ * The public probe's evidence, built from nothing the configured gate produced. A green or
+ * unavailable probe cannot answer for the full gate, so it keeps that gate's refusal rather
+ * than reporting a clean run. Only a proven public product failure travels onward, and it
+ * never claims to explain why the private gate failed.
+ */
+async function probeEvidence(
+  context: Prepared,
+  verdict: unknown,
+  artifacts: string
+): Promise<Evidence> {
+  const result = await recorded(context, verdict, artifacts, 'public-probe');
+  if (result.status === 'product') return result;
+  return emptyEvidence(
+    context,
+    'The configured full gate was not clean and the public probe proved no public product ' +
+      `defect: ${result.reason}`,
+    'public-probe'
+  );
+}
 async function collect(
   context: Prepared,
   verdict: unknown,
   fixed: unknown,
   artifacts: string
 ): Promise<Evidence> {
-  if (!context.ready) return emptyEvidence(context, context.reason);
+  if (!context.ready) return emptyEvidence(context, context.reason, context.mode);
   if (!(await intact(context)))
-    return emptyEvidence(context, 'Checkout changed after evidence preparation');
-  if (context.mode === 'configured') return readEvidence(fixed);
-  const source = join(artifacts, 'validation.md');
-  let executions: Receipt[];
+    return emptyEvidence(context, 'Checkout changed after evidence preparation', context.mode);
+  if (context.mode === 'discovered') return recorded(context, verdict, artifacts, 'discovered');
+  const gate = readEvidence(fixed);
+  if (gate.status === 'clean' || !context.probe) return gate;
+  return probeEvidence(context, verdict, artifacts);
+}
+/**
+ * Decide whether archon-validate runs and with what scope. The configured full gate is
+ * mandatory and answered first; a probe follows only when the operator authorized one and
+ * that gate came back non-clean. Nothing the gate reported crosses into the returned scope.
+ */
+export function route(context: Prepared, fixed: unknown): Routing {
+  const skip: Routing = { validate: false, scope: '' };
+  const run: Routing = { validate: true, scope: context.validation_scope };
+  if (!context.ready) return skip;
+  if (context.mode === 'discovered') return run;
+  if (!context.probe) return skip;
   try {
-    executions = await receipts(context);
+    return readEvidence(fixed).status === 'clean' ? skip : run;
   } catch {
-    return emptyEvidence(context, 'Execution receipts are unreadable, malformed, or ambiguous');
-  }
-  try {
-    if ((await stat(source)).mtimeMs < context.started)
-      return emptyEvidence(context, 'Validation artifact predates this check');
-    const raw = await readFile(source, 'utf8');
-    const report = join(context.directory, 'validation.md');
-    await writeFile(report, raw);
-    return discoveredEvidence(context, verdict, raw, report, executions);
-  } catch {
-    return emptyEvidence(context, 'Validation artifact or verdict is missing or unreadable');
+    // Unreadable configured evidence already fails the collector; spending a probe on it
+    // would only add a second failure.
+    return skip;
   }
 }
 function readBinding(value: ObjectValue): Binding {
@@ -557,13 +646,16 @@ function readPrepared(value: unknown): Prepared {
     checkout: typeof row.checkout === 'string' ? row.checkout : '',
     recording_directory: typeof row.recording_directory === 'string' ? row.recording_directory : '',
     validation_scope: typeof row.validation_scope === 'string' ? row.validation_scope : '',
+    probe: row.probe === true,
   };
 }
 function readEvidence(value: unknown): Evidence {
   const row = object(value);
   if (
     (row.status !== 'clean' && row.status !== 'product' && row.status !== 'inconclusive') ||
-    (row.source !== 'configured' && row.source !== 'discovered') ||
+    (row.source !== 'configured' &&
+      row.source !== 'discovered' &&
+      row.source !== 'public-probe') ||
     typeof row.report !== 'string' ||
     typeof row.report_hash !== 'string' ||
     !Array.isArray(row.public_cases)
@@ -950,9 +1042,16 @@ async function main(): Promise<unknown> {
   const artifacts = text(process.env.ARTIFACTS_DIR);
   const phase = input('PHASE');
   if (phase === 'prepare')
-    return prepare(input('SCOPE'), input('POLICY'), artifacts, process.env.BASE_BRANCH ?? '');
+    return prepare(
+      input('SCOPE'),
+      input('POLICY'),
+      input('PUBLIC_PROBE_SCOPE'),
+      artifacts,
+      process.env.BASE_BRANCH ?? ''
+    );
   const context = readPrepared(parse(input('PREPARED')));
   if (phase === 'configured') return configured(context, input('POLICY'));
+  if (phase === 'route') return route(context, parse(input('FIXED') || 'null'));
   if (phase === 'collect')
     return collect(
       context,
