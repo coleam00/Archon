@@ -92,11 +92,7 @@ def validate(triage: dict, artifacts: str) -> None:
 
 
 def gh(args: list[str], payload=None):
-    # JSON argv preserves Windows paths and spaces without invoking a shell.
-    command = json.loads(os.environ.get("ARCHON_TRIAGE_GH_CMD", '["gh"]'))
-    require(isinstance(command, list) and bool(command) and all(isinstance(s, str) and s for s in command),
-            "ARCHON_TRIAGE_GH_CMD must be a JSON argv array")
-    proc = subprocess.run([*command, *args], input=None if payload is None else json.dumps(payload),
+    proc = subprocess.run(["gh", *args], input=None if payload is None else json.dumps(payload),
                           capture_output=True, text=True, encoding="utf-8", timeout=30)
     require(proc.returncode == 0,
             f"gh {args[0]} failed (exit {proc.returncode}); writes may have partially completed: {proc.stderr.strip()}")

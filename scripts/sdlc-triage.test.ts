@@ -69,20 +69,29 @@ async function run(
   mode = '',
   raw?: string
 ) {
-  const proc = Bun.spawn(['uv', 'run', '--no-project', join(root, 'validate contract.py')], {
-    stdout: 'pipe',
-    stderr: 'pipe',
-    timeout: 4000,
-    env: {
-      ...process.env,
-      ARTIFACTS_DIR: root,
-      INPUTS_TRIAGE: raw ?? JSON.stringify({ ...BASE, ...overrides }),
-      INPUTS_PUBLISH: publish,
-      ARCHON_TRIAGE_GH_CMD: JSON.stringify(['uv', 'run', '--no-project', fake]),
-      FAKE_GH_STATE: statePath,
-      FAKE_GH_MODE: mode,
-    },
-  });
+  const proc = Bun.spawn(
+    [
+      'uv',
+      'run',
+      '--no-project',
+      join(import.meta.dir, '__fixtures__/triage-process-seam.py'),
+      join(root, 'validate contract.py'),
+      fake,
+    ],
+    {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      timeout: 4000,
+      env: {
+        ...process.env,
+        ARTIFACTS_DIR: root,
+        INPUTS_TRIAGE: raw ?? JSON.stringify({ ...BASE, ...overrides }),
+        INPUTS_PUBLISH: publish,
+        FAKE_GH_STATE: statePath,
+        FAKE_GH_MODE: mode,
+      },
+    }
+  );
   const [stdout, stderr, code] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
