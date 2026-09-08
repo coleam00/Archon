@@ -42,7 +42,6 @@ def main() -> int:
         return fail("scenario file must declare a non-empty 'assertions' array")
 
     ids: list[str] = []
-    descriptions: dict[str, str] = {}
     for entry in assertions:
         if not isinstance(entry, dict) or not isinstance(entry.get("id"), str) or not entry["id"].strip():
             return fail("every assertion needs a non-empty string 'id'")
@@ -50,7 +49,6 @@ def main() -> int:
         if aid in ids:
             return fail(f"duplicate assertion id in scenario file: {aid}")
         ids.append(aid)
-        descriptions[aid] = str(entry.get("description", ""))
 
     environment = data.get("environment")
     if environment is None:
@@ -58,13 +56,20 @@ def main() -> int:
     if not isinstance(environment, dict):
         return fail("scenario file's 'environment' must be an object when present")
 
+    if environment.get("ownership") != "external":
+        return fail("environment.ownership must be 'external'; cancellation and node failure can skip teardown")
+    for key in ("setup", "start", "teardown", "candidate_command"):
+        if not isinstance(environment.get(key, ""), str):
+            return fail(f"environment.{key} must be a shell command string")
+    if not environment.get("candidate_command", "").strip():
+        return fail("environment.candidate_command must probe the actual target identity")
+
     result = {
         "setup": str(environment.get("setup", "") or ""),
         "start": str(environment.get("start", "") or ""),
         "teardown": str(environment.get("teardown", "") or ""),
-        "candidate_command": str(environment.get("candidate_command", "") or "") or "git rev-parse HEAD",
+        "candidate_command": environment["candidate_command"],
         "assertion_ids": ids,
-        "assertion_descriptions": descriptions,
         "assertions_json": assertions,
     }
     print(json.dumps(result))
