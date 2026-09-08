@@ -1,9 +1,13 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { delimiter, join, resolve } from 'node:path';
+import { basename, delimiter, join, resolve } from 'node:path';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 import { parseWorkflow } from '../../../../../packages/workflows/src/loader';
+import {
+  dryRunResultSchema,
+  type DryRunResult,
+} from '../../../../../packages/workflows/src/dry-run';
 import { expandWorkflowIncludes } from '../../../../../packages/workflows/src/include-expander';
 import {
   collectExecInputValidationTargets,
@@ -24,6 +28,8 @@ import {
 
 const track = trackTempRoots();
 const script = resolve(import.meta.dir, '../scripts/accept.ts');
+const pack = resolve(import.meta.dir, '../..');
+const workflowFixture = resolve(import.meta.dir, 'workflow-fixture.ts');
 let commandHarness: string;
 beforeAll(async () => {
   commandHarness = await mkdtemp(join(tmpdir(), 'accept-gh-'));
@@ -117,6 +123,41 @@ describe('acceptance decision', () => {
       decide(identity, [check], [], false, { ...judgment, checks_weakened: true }).verdict
     ).toBe('request_changes');
   });
+  test('a supported refusal survives incomplete preservation evidence', () => {
+    const refusal: Judgment = {
+      ...judgment,
+      verdict: 'request_changes',
+      summary: 'The required response header is missing.',
+      findings: [{ code: 'missing_header', summary: 'Return the required header.', evidence: ['handler diff'] }],
+      checks_complete: false,
+      evidence_sufficient: false,
+      requirements: [{ request: 'Preserve existing invariants.', met: false, evidence: [] }],
+    };
+    expect(decide(identity, [check], [], false, refusal)).toMatchObject({
+      verdict: 'request_changes', summary: refusal.summary,
+    });
+    expect(decide(identity, [check], [], false, refusal).findings).toContainEqual(refusal.findings[0]);
+  });
+  test('a refusal carried only by an unmet requirement stays actionable', () => {
+    const refusal: Judgment = {
+      ...judgment,
+      verdict: 'request_changes',
+      summary: 'The requested header is never returned.',
+      findings: [],
+      requirements: [{ request: 'Return the header.', met: false, evidence: ['handler diff hunk'] }],
+    };
+    expect(decide(identity, [check], [], false, refusal)).toEqual({
+      verdict: 'request_changes',
+      summary: refusal.summary,
+      findings: [
+        { code: 'requirement_unmet', summary: 'Return the header.', evidence: ['handler diff hunk'] },
+      ],
+    });
+    expect(
+      decide(identity, [check], [], false, { ...refusal, requirements: [{ ...refusal.requirements[0], evidence: [] }] })
+        .verdict
+    ).toBe('inconclusive');
+  });
   test('missing checks, environment, missing judgment and clipped evidence fail closed', () => {
     expect(decide(identity, [], [], false, judgment).verdict).toBe('inconclusive');
     expect(decide(null, [check], [], false, judgment).verdict).toBe('inconclusive');
@@ -157,6 +198,10 @@ describe('acceptance decision', () => {
     expect(() => parseProfile({ ...profile(), protected_paths: ['../escape'] })).toThrow();
     expect(() => parseProfile({ ...profile(), require_isolation: 'false' })).toThrow();
     expect(() => parseProfile({ ...profile(), unknown: true })).toThrow();
+    expect(() => parseProfile({ ...profile(), gate: { complete: true, description: 'Full gate' } })).toThrow();
+    expect(() => parseProfile({ ...profile(), context: [{ id: 'source', source: 'candidate.txt' }] })).toThrow();
+    for (const path of ['.git/config', 'reports/*.json', 'reports/file:stream', 'reports/../old.json'])
+      expect(() => parseProfile({ ...profile(), required_evidence: [path] })).toThrow();
     expect(() => parseJudgment({ ...judgment, evidence_sufficient: 'yes' })).toThrow();
     expect(() => parseReceipt({ verdict: 'approve' })).toThrow();
   });
@@ -237,12 +282,17 @@ async function fixture(policy: Profile | null = profile()): Promise<{
   env: NodeJS.ProcessEnv;
   move: (side: 'head' | 'base') => Promise<void>;
   phase: (phase: string, extra?: NodeJS.ProcessEnv) => Promise<Record<string, unknown>>;
+  discover: () => Promise<unknown>;
+  dryRun: (extra?: NodeJS.ProcessEnv) => Promise<DryRunResult>;
 }> {
   const root = track(await mkdtemp(join(tmpdir(), 'accept-test-')));
   const cwd = join(root, 'app');
   const origin = join(root, 'origin');
   const artifacts = join(root, 'artifacts');
-  for (const dir of [cwd, origin, artifacts]) await mkdir(dir);
+  const home = join(root, 'home');
+  const project = join(root, 'project');
+  const temp = join(root, 'temp');
+  for (const dir of [cwd, origin, artifacts, home]) await mkdir(dir);
   await exec(['git', 'init', '-b', 'integration'], origin);
   await exec(['git', 'config', 'user.name', 'Fixture'], origin);
   await exec(['git', 'config', 'user.email', 'fixture@example.invalid'], origin);
@@ -259,9 +309,14 @@ async function fixture(policy: Profile | null = profile()): Promise<{
   const head = await exec(['git', 'rev-parse', 'HEAD'], origin);
   const pr = {
     state: 'open',
+    merged: false,
+    draft: false,
+    title: 'Resolve issue #3',
+    body: 'Closes #3. The full application gate passed.',
+    html_url: 'https://github.com/unit/project/pull/7',
     number: 7,
-    base: { sha: base, repo: { full_name: 'unit/project' } },
-    head: { sha: head },
+    base: { sha: base, ref: 'integration', repo: { full_name: 'unit/project' } },
+    head: { sha: head, ref: 'feature' },
   };
   const response = join(root, 'pr.json');
   await writeFile(response, JSON.stringify(pr));
@@ -288,12 +343,44 @@ async function fixture(policy: Profile | null = profile()): Promise<{
     INPUTS_POLICY: policy ? policyPath : '',
   };
   const state = join(artifacts, 'accept-private', 'state.json');
+  // The installed shape a real run reads: the pack's own files, without its tests,
+  // under a project that holds nothing else for discovery to trip over. The temporary
+  // directory moves under the tracked root so an interrupted run leaks nothing.
+  const install = async (): Promise<NodeJS.ProcessEnv> => {
+    for (const workflow of ['accept', 'validate'])
+      await cp(join(pack, workflow), join(project, '.archon', 'workflows', 'sdlc', workflow), {
+        recursive: true,
+        filter: source => basename(source) !== 'tests',
+      });
+    await mkdir(temp, { recursive: true });
+    return {
+      ...env,
+      ARCHON_HOME: home,
+      TMPDIR: temp,
+      TEMP: temp,
+      TMP: temp,
+      INPUTS_JUDGMENT: JSON.stringify(judgment),
+    };
+  };
   return {
     root,
     cwd,
     artifacts,
     state,
     env,
+    discover: async () =>
+      JSON.parse(
+        await exec([process.execPath, workflowFixture, project, 'discover'], cwd, await install())
+      ),
+    dryRun: async (extra = {}) =>
+      dryRunResultSchema.parse(
+        JSON.parse(
+          await exec([process.execPath, workflowFixture, project], cwd, {
+            ...(await install()),
+            ...extra,
+          })
+        )
+      ),
     move: async side => {
       pr[side].sha = side === 'head' ? base : head;
       await writeFile(response, JSON.stringify(pr));
@@ -401,6 +488,93 @@ describe('real acceptance CLI with temporary Git and GitHub harness', () => {
     await f.phase('collect');
     expect((await f.phase('finish')).verdict).toBe('inconclusive');
   });
+  test('a tracked report and a command producing nothing cannot satisfy fresh evidence', async () => {
+    const f = await fixture({ ...profile(), required_evidence: ['value.txt'] });
+    await prepared(f);
+    expect((await f.phase('collect')).judge).toBe(false);
+    const receipt = parseReceipt(await f.phase('finish'));
+    expect(receipt.verdict).toBe('inconclusive');
+    expect(receipt.checks).toEqual([]);
+  });
+  test('existing untracked output is refused without deleting it', async () => {
+    const f = await fixture({ ...profile(), required_evidence: ['report.json'] });
+    await prepared(f);
+    const state = JSON.parse(await readFile(f.state, 'utf8')) as { root: string };
+    const report = join(state.root, 'candidate', 'report.json');
+    await writeFile(report, 'old evidence');
+    expect((await f.phase('collect')).judge).toBe(false);
+    expect(await readFile(report, 'utf8')).toBe('old evidence');
+    expect(parseReceipt(await f.phase('finish')).checks).toEqual([]);
+  });
+  for (const wrong of ['evaluation', 'head', 'base'] as const) {
+    test(`generated evidence bound to another ${wrong} cannot approve`, async () => {
+      const f = await fixture({
+        ...profile(`const identity = JSON.parse(process.env.ACCEPT_IDENTITY);
+          ${wrong === 'evaluation' ? '' : `identity.${wrong}_sha = 'c'.repeat(40);`}
+          await Bun.write('report.json', JSON.stringify({schema_version: 1,
+            evaluation_id: ${wrong === 'evaluation' ? '"old-evaluation"' : 'process.env.ACCEPT_EVALUATION_ID'},
+            identity, evidence: 'Fresh observations'}));`),
+        required_evidence: ['report.json'],
+      });
+      await prepared(f);
+      expect((await f.phase('collect')).judge).toBe(false);
+      expect((await f.phase('finish')).verdict).toBe('inconclusive');
+    });
+  }
+  test('public gate, trusted context, PR metadata and fresh baseline evidence reach the judge', async () => {
+    const f = await fixture();
+    const context = join(f.root, 'operator-context.md');
+    await writeFile(context, 'Preserve the existing data contract.');
+    const evaluator = join(f.root, 'private-evaluator.ts');
+    await writeFile(evaluator, `
+      const test = 'if ((await Bun.file("value.txt").text()).trim() !== "new") process.exit(1)';
+      const baseline = Bun.spawnSync([process.execPath, '-e', test], {cwd: process.env.ACCEPT_BASE_DIR});
+      const candidate = Bun.spawnSync([process.execPath, '-e', test], {cwd: process.env.ACCEPT_CANDIDATE_DIR});
+      if (baseline.exitCode !== 1 || candidate.exitCode !== 0) process.exit(1);
+      console.log('private evaluator implementation detail');
+      await Bun.write('reports/behavior.json', JSON.stringify({schema_version: 1,
+        evaluation_id: process.env.ACCEPT_EVALUATION_ID,
+        identity: JSON.parse(process.env.ACCEPT_IDENTITY),
+        evidence: 'The added value assertion fails on prior application (exit 1) and passes on candidate (exit 0).'}));
+    `);
+    const policy: Profile = {
+      ...profile(),
+      gate: { complete: true, description: 'Full application value contract gate, including baseline comparison.' },
+      commands: [{ id: 'gate', argv: [process.execPath, evaluator], environment_exit_codes: [75],
+        public_description: 'Run the value assertion against candidate and prior application.' }],
+      context: [{ id: 'checks', source: 'base:checks.txt' }, { id: 'invariants', source: context }],
+      required_evidence: ['reports/behavior.json'],
+    };
+    await writeFile(f.env.INPUTS_POLICY || '', JSON.stringify(policy));
+    await prepared(f);
+    const collected = await f.phase('collect');
+    expect(collected.judge).toBe(true);
+    const packet = JSON.parse(String(collected.packet));
+    expect(packet.gate).toMatchObject({ mode: 'fixed', declaration: policy.gate,
+      commands: [{ id: 'gate', description: policy.commands[0].public_description }] });
+    expect(packet.source_context).toMatchObject([
+      { id: 'checks', source: 'base:checks.txt', content: 'Use the operator-defined fixture gate.\n' },
+      { id: 'invariants', source: 'external', content: 'Preserve the existing data contract.' },
+    ]);
+    expect(packet.pull_request).toMatchObject({ base_ref: 'integration', merged: false,
+      title: 'Resolve issue #3', body: 'Closes #3. The full application gate passed.' });
+    expect(packet.evidence[0].content).toContain('fails on prior application (exit 1)');
+    expect(String(collected.packet)).not.toContain(evaluator.replaceAll('\\', '\\\\'));
+    expect(String(collected.packet)).not.toContain('private evaluator implementation detail');
+    expect(String(collected.packet)).not.toContain(context.replaceAll('\\', '\\\\'));
+    expect((await f.phase('finish')).verdict).toBe('approve');
+  });
+  test('PR metadata changes invalidate the receipt', async () => {
+    const f = await fixture();
+    await prepared(f);
+    await f.phase('collect');
+    const path = join(f.root, 'pr.json');
+    const pr = JSON.parse(await readFile(path, 'utf8'));
+    await writeFile(path, JSON.stringify({ ...pr, body: 'Linkage removed' }));
+    const receipt = parseReceipt(await f.phase('finish'));
+    expect(receipt.verdict).toBe('inconclusive');
+    expect(receipt.findings.some(f => f.code === 'pr_metadata_changed')).toBe(true);
+  });
   for (const side of ['head', 'base'] as const) {
     test(`moved ${side} after evidence invalidates approval`, async () => {
       const f = await fixture();
@@ -497,5 +671,38 @@ describe('real acceptance CLI with temporary Git and GitHub harness', () => {
     const r = await f.phase('finish');
     expect(r.clipped).toBe(true);
     expect(r.verdict).toBe('inconclusive');
+  });
+});
+
+describe('the installed workflow through the engine dry run', () => {
+  test('static discovery binds every phase of the shared script', async () => {
+    expect(await (await fixture()).discover()).toEqual([]);
+  });
+  test('a configured gate skips ordinary validation and certifies the judgment', async () => {
+    const result = await (await fixture()).dryRun();
+    expect(result.outcome).toBe('completed');
+    const states = new Map(result.trace.map(entry => [entry.nodeId, entry.state]));
+    expect([...states].filter(([id]) => id.startsWith('validate')).map(([, s]) => s)).toEqual([
+      'skipped',
+    ]);
+    expect(states.get('judge')).toBe('stubbed');
+    expect(states.get('receipt')).toBe('completed');
+    const receipt = parseReceipt(JSON.parse(String(result.summary)));
+    expect(receipt.verdict).toBe('approve');
+    expect(receipt.checks.map(c => c.id)).toEqual(['gate']);
+    expect(receipt.judgment_sha256).toBe(digest(JSON.stringify(judgment)));
+  });
+  test('a preparation blocker skips the judge and still issues a receipt', async () => {
+    const f = await fixture({
+      ...profile('throw new Error("must not run")'),
+      require_isolation: true,
+    });
+    const result = await f.dryRun();
+    expect(result.outcome).toBe('completed');
+    expect(result.trace.find(entry => entry.nodeId === 'judge')?.state).toBe('skipped');
+    const receipt = parseReceipt(JSON.parse(String(result.summary)));
+    expect(receipt.verdict).toBe('inconclusive');
+    expect(receipt.findings.map(finding => finding.code)).toContain('isolation_unavailable');
+    expect(receipt.judgment_sha256).toBeNull();
   });
 });
