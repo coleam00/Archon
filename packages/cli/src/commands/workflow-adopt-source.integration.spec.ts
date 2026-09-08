@@ -159,9 +159,9 @@ async function makeFixture(): Promise<Fixture> {
   try {
     const row = db
       .query<
-        { id: string; codebase_id: string },
+        { id: string; codebase_id: string; started_at: string },
         []
-      >('SELECT id, codebase_id FROM remote_agent_workflow_runs')
+      >('SELECT id, codebase_id, started_at FROM remote_agent_workflow_runs')
       .get();
     if (!row) throw new Error(prior.output);
     fixture.priorId = row.id;
@@ -171,9 +171,9 @@ async function makeFixture(): Promise<Fixture> {
     );
     db.query(
       `INSERT INTO remote_agent_isolation_environments
-      (codebase_id, workflow_type, workflow_id, working_path, branch_name)
-      VALUES (?, 'task', ?, ?, 'fixture-lane')`
-    ).run(row.codebase_id, row.id, fixture.target);
+      (codebase_id, workflow_type, workflow_id, working_path, branch_name, created_at)
+      VALUES (?, 'task', ?, ?, 'fixture-lane', ?)`
+    ).run(row.codebase_id, row.id, fixture.target, row.started_at);
   } finally {
     db.close();
   }
@@ -286,7 +286,9 @@ describe('public CLI adopted workflow source', () => {
         expectProbe(fixture, 'fresh source');
         const state = readWorkflowSourceState(JSON.parse(run.metadata));
         if (state.kind !== 'recorded') throw new Error('Adopting run did not record its source');
-        expect(state.record.origin).toBe(fixture.source);
+        expect(await canonicalizeProjectPath(state.record.origin)).toBe(
+          await canonicalizeProjectPath(fixture.source)
+        );
         expect(state.record.source_config?.command_folder).toBe('.archon/prompts');
         const capture = await loadWorkflowSource(
           state.record.root,
@@ -335,7 +337,9 @@ describe('public CLI adopted workflow source', () => {
       expectProbe(fixture, 'adopted lane');
       const state = readWorkflowSourceState(JSON.parse(run.metadata));
       if (state.kind !== 'recorded') throw new Error('Adopting run did not record its source');
-      expect(state.record.origin).toBe(fixture.target);
+      expect(await canonicalizeProjectPath(state.record.origin)).toBe(
+        await canonicalizeProjectPath(fixture.target)
+      );
       const capture = await loadWorkflowSource(
         state.record.root,
         state.record.digest,
