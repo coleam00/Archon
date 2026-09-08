@@ -1,12 +1,8 @@
-# Guard fixture: same overridden evidence as invalid-evidence-range.stubs.yaml,
-# but classify's stub deliberately ignores the override and calls the item
-# 'new' anyway. render's tuple guard must reject this rather than render an
-# action set that contradicts evidence-check.json - this is the fixture that
-# demonstrates the guard actually failing on an invalid case.
+# Agent outputs are simulated; script nodes execute through the fixture runner.
 revalidate:
   entries:
     - item_index: 0
-      still_valid: true
+      verdict: supported
       evidence_refs: [{ path: "AGENTS.md", line: 999999 }]
       note: "stub: claims still valid, but the cited line is out of range"
 search-existing:
@@ -17,9 +13,12 @@ search-existing:
 classify:
   entries:
     - item_index: 0
-      classification: new
+      classification: stale
       target_item: null
-      rationale: "stub: deliberately wrong - ignores evidence-check's override, to prove render rejects it"
+      public_title: "Example source finding"
+      public_summary: "A fixture proposal for reviewer inspection."
+      disclosure_safe: true
+      rationale: "stub: deliberately labels missing evidence stale without a disproved verdict"
 fixture:
   expect: failed
   fail-node: render

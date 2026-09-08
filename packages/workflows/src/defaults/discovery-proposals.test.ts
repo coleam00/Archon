@@ -1,0 +1,378 @@
+import { describe, expect, it } from 'bun:test';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { z } from 'zod';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import { parseWorkflow } from '../loader';
+import { parseFixtureFile } from '../fixture-runner';
+
+const ROOT = join(import.meta.dir, '../../../..');
+const PACK = join(ROOT, '.archon/workflows/sdlc/discoveries');
+const track = trackTempRoots();
+const responseSchema = z.object({
+  steps: z.array(
+    z.object({ name: z.string(), code: z.number(), stdout: z.string(), stderr: z.string() })
+  ),
+  files: z.record(z.string(), z.string()),
+  calls: z.array(z.array(z.string())),
+  status: z.string(),
+  head: z.string(),
+  classifications: z.array(z.string()),
+  verdicts: z.array(z.string()),
+});
+const documentSchema = z.object({
+  publication_authorized: z.literal(false),
+  forge: z.object({ available: z.boolean(), host: z.string(), path: z.string() }),
+  proposals: z.array(
+    z.object({
+      classification: z.string(),
+      evidence_status: z.string(),
+      model_verdict: z.string(),
+      actionable: z.boolean(),
+      publication_authorized: z.literal(false),
+      marker: z.string().nullable(),
+      title: z.string(),
+      evidence_refs: z.array(z.object({ path: z.string(), line: z.number() })),
+    })
+  ),
+});
+type Result = z.infer<typeof responseSchema>;
+const record = {
+  title: 'Example finding',
+  claim: 'Fixture hypothesis',
+  evidence: ['AGENTS.md:1'],
+  source_node: 'review-code',
+};
+const revalidation = {
+  item_index: 0,
+  verdict: 'supported',
+  evidence_refs: [{ path: 'AGENTS.md', line: 1 }],
+  note: 'Simulated judgment',
+};
+const classification = {
+  item_index: 0,
+  classification: 'new',
+  target_item: null,
+  public_title: 'Public example',
+  public_summary: 'Source-backed problem description.',
+  disclosure_safe: true,
+  rationale: 'Needs review.',
+};
+const search = { item_index: 0, forge_checked: false, matches: [] };
+
+async function run(overrides: Record<string, unknown> = {}): Promise<Result> {
+  const directory = track(await mkdtemp(join(tmpdir(), 'archon-discoveries-')));
+  const child = Bun.spawn(
+    [
+      process.platform === 'win32' ? 'python' : 'python3',
+      join(import.meta.dir, 'discovery-proposals-harness.py'),
+      directory,
+      join(PACK, 'scripts'),
+    ],
+    {
+      stdin: new Blob([
+        JSON.stringify({
+          records: [record],
+          revalidation: [revalidation],
+          search: [search],
+          classification: [classification],
+          ...overrides,
+        }),
+      ]),
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
+    }
+  );
+  const [code, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  expect({ code, stderr }).toEqual({ code: 0, stderr: '' });
+  return responseSchema.parse(JSON.parse(stdout));
+}
+function proposals(result: Result) {
+  expect(result.steps.map(s => s.code)).toEqual([0, 0, 0]);
+  expect(result.status).toBe('');
+  return documentSchema.parse(JSON.parse(result.files['discovery-proposals.json']!));
+}
+function refused(result: Result, node: string, evidence: string) {
+  expect(result.steps.at(-1)).toMatchObject({ name: node, code: 1 });
+  expect(result.steps.at(-1)?.stderr).toContain(evidence);
+  expect(result.files).not.toHaveProperty('discovery-proposals.json');
+}
+
+describe('discovery proposals real scripts (agent judgments and gh transport simulated)', () => {
+  it('renders useful local proposals without a forge, identity guess, or publication authorization', async () => {
+    const result = await run();
+    const doc = proposals(result);
+    expect(doc.forge).toEqual({ available: false, host: '', path: '' });
+    expect(doc.proposals[0]).toMatchObject({
+      classification: 'new',
+      actionable: false,
+      marker: null,
+      evidence_status: 'source-bound',
+    });
+    expect(result.calls.some(c => c[0] === 'gh')).toBe(false);
+    expect(result.files['discoveries/normalized.json']).toContain('review-code');
+    expect(result.files['discovery-proposals.md']).toContain('Publication unavailable');
+    const parsed = parseWorkflow(
+      await Bun.file(join(PACK, 'archon-discoveries.yaml')).text(),
+      'archon-discoveries.yaml'
+    );
+    if (!parsed.workflow) throw new Error(JSON.stringify(parsed.error));
+    const classifyNode = parsed.workflow.nodes.find(n => n.id === 'classify');
+    const revalidateNode = parsed.workflow.nodes.find(n => n.id === 'revalidate');
+    if (classifyNode?.kind !== 'agent' || revalidateNode?.kind !== 'agent') {
+      throw new Error('Discovery judgments must be agent nodes');
+    }
+    expect(classifyNode.output_format).toMatchObject({
+      properties: {
+        entries: { items: { properties: { classification: { enum: result.classifications } } } },
+      },
+    });
+    expect(revalidateNode.output_format).toMatchObject({
+      properties: { entries: { items: { properties: { verdict: { enum: result.verdicts } } } } },
+    });
+  }, 20_000);
+
+  for (const name of ['four-classes', 'duplicate']) {
+    it(
+      'executes ' + name + ' scenario against real source and simulated GitHub reads',
+      async () => {
+        const fixture = parseFixtureFile(
+          await Bun.file(join(PACK, 'fixtures/' + name + '.scenario.yaml')).text(),
+          name
+        );
+        const result = await run({
+          records: JSON.parse(
+            await Bun.file(join(ROOT, fixture.declaration.inputs!.discovery_artifact!)).text()
+          ) as unknown,
+          remote: 'https://github.com/example/repo.git',
+          revalidation: z.object({ entries: z.array(z.unknown()) }).parse(fixture.stubs.revalidate)
+            .entries,
+          search: z
+            .object({ entries: z.array(z.unknown()) })
+            .parse(fixture.stubs['search-existing']).entries,
+          classification: z.object({ entries: z.array(z.unknown()) }).parse(fixture.stubs.classify)
+            .entries,
+        });
+        const doc = proposals(result);
+        expect(doc.proposals.map(p => p.classification)).toEqual(
+          name === 'four-classes' ? result.classifications : ['duplicate']
+        );
+        expect(doc.proposals.filter(p => p.actionable).map(p => p.classification)).toEqual(
+          name === 'four-classes' ? ['update-existing', 'new'] : []
+        );
+        expect(result.calls.filter(c => c[0] === 'gh')).toEqual([
+          ['gh', 'repo', 'view', 'github.com/example/repo', '--json', 'nameWithOwner'],
+        ]);
+      },
+      20_000
+    );
+  }
+
+  for (const refs of [
+    [],
+    [{ path: 'AGENTS.md', line: 999 }],
+    [{ path: '../outside', line: 1 }],
+    [{ path: '/private/file', line: 1 }],
+    [{ path: 'C:\\private\\file', line: 1 }],
+    [{ path: 'folder', line: 1 }],
+    [{ path: 'missing', line: 1 }],
+    [
+      { path: 'AGENTS.md', line: 1 },
+      { path: 'missing', line: 1 },
+    ],
+  ]) {
+    it(
+      'keeps unsupported citations unverified: ' + JSON.stringify(refs),
+      async () => {
+        const doc = proposals(
+          await run({
+            remote: 'https://github.com/example/repo.git',
+            search: [{ ...search, forge_checked: true }],
+            revalidation: [{ ...revalidation, evidence_refs: refs }],
+          })
+        );
+        expect(doc.proposals[0]).toMatchObject({
+          classification: 'new',
+          model_verdict: 'supported',
+          evidence_status: 'unverified',
+          actionable: false,
+          evidence_refs: [],
+        });
+      },
+      20_000
+    );
+  }
+
+  it('preserves an inconclusive model judgment even when every citation resolves', async () => {
+    const doc = proposals(
+      await run({
+        remote: 'https://github.com/example/repo.git',
+        search: [{ ...search, forge_checked: true }],
+        revalidation: [{ ...revalidation, verdict: 'inconclusive' }],
+      })
+    );
+    expect(doc.proposals[0]).toMatchObject({
+      model_verdict: 'inconclusive',
+      evidence_status: 'source-bound',
+      actionable: false,
+    });
+  }, 20_000);
+
+  it('rejects a stale classification when evidence was only missing', async () => {
+    refused(
+      await run({
+        revalidation: [{ ...revalidation, evidence_refs: [] }],
+        classification: [{ ...classification, classification: 'stale' }],
+      }),
+      'render-proposals',
+      'disproved model verdict'
+    );
+  }, 20_000);
+
+  for (const move of ['check-evidence', 'render-proposals']) {
+    it(
+      'rejects actual HEAD movement before ' + move,
+      async () => {
+        refused(await run({ move }), move, 'source revision moved');
+      },
+      20_000
+    );
+  }
+
+  for (const input of [
+    { raw: 'not JSON' },
+    { raw: '{}' },
+    { records: [null] },
+    { records: [{ title: 'Missing claim' }] },
+    { missing: true },
+  ]) {
+    it(
+      'rejects malformed or missing artifact: ' + JSON.stringify(input),
+      async () => {
+        refused(await run(input), 'resolve-input', 'resolve-input:');
+      },
+      20_000
+    );
+  }
+
+  it('rejects run_id even when an artifact is also provided, naming the precise missing field', async () => {
+    refused(
+      await run({ run_id: 'prior-run' }),
+      'resolve-input',
+      'canonical absolute artifacts_dir'
+    );
+  }, 20_000);
+
+  it('rejects repeated input keys before proposing two actions', async () => {
+    refused(
+      await run({ records: [record, { ...record, title: ' EXAMPLE   finding ' }] }),
+      'resolve-input',
+      'duplicate discovery key'
+    );
+  }, 20_000);
+
+  it('rejects repeated agent item indices instead of silently overwriting an entry', async () => {
+    refused(
+      await run({ revalidation: [revalidation, revalidation] }),
+      'check-evidence',
+      'exactly one revalidation'
+    );
+    refused(
+      await run({ classification: [classification, classification] }),
+      'render-proposals',
+      'exactly one entry'
+    );
+  }, 20_000);
+
+  for (const text of [
+    'C:\\private\\report.md',
+    '/private/evaluator.md',
+    'See file:///tmp/result',
+    'See $ARTIFACTS_DIR',
+  ]) {
+    it(
+      'rejects absolute paths in public prose: ' + text,
+      async () => {
+        refused(
+          await run({ classification: [{ ...classification, public_summary: text }] }),
+          'render-proposals',
+          'local absolute path'
+        );
+      },
+      20_000
+    );
+  }
+
+  it('keeps raw private content out of rendered proposals and respects disclosure refusal', async () => {
+    const result = await run({
+      records: [
+        {
+          ...record,
+          title: 'Private evaluator at C:\\private\\input.json',
+          claim: 'Confidential evaluator content',
+          source_node: 'private-node',
+        },
+      ],
+    });
+    proposals(result);
+    for (const file of ['discovery-proposals.json', 'discovery-proposals.md']) {
+      expect(result.files[file]).not.toContain('private');
+      expect(result.files[file]).not.toContain('Confidential');
+    }
+    refused(
+      await run({ classification: [{ ...classification, disclosure_safe: false }] }),
+      'render-proposals',
+      'public disclosure'
+    );
+  }, 20_000);
+
+  it('keeps failed GitHub reads unavailable and refuses fabricated search results', async () => {
+    const input = { remote: 'https://github.com/example/repo.git', gh_exit: 1 };
+    expect(proposals(await run(input)).forge.available).toBe(false);
+    refused(
+      await run({ ...input, search: [{ ...search, forge_checked: true }] }),
+      'render-proposals',
+      'forge is unavailable'
+    );
+  }, 20_000);
+
+  it('rejects mismatched repository identity from gh', async () => {
+    refused(
+      await run({ remote: 'https://github.com/example/repo.git', gh_identity: 'other/repo' }),
+      'resolve-input',
+      'different identity'
+    );
+  }, 20_000);
+
+  it('does not treat a non-GitHub origin as a configured GitHub forge', async () => {
+    const result = await run({ remote: 'https://gitlab.com/example/repo.git' });
+    expect(proposals(result).forge).toEqual({ available: false, host: '', path: '' });
+    expect(result.calls.some(c => c[0] === 'gh')).toBe(false);
+  }, 20_000);
+
+  it('rejects a target URL whose repository or number disagrees with the search identity', async () => {
+    const target = { number: 1, url: 'https://github.com/other/repo/issues/1' };
+    refused(
+      await run({
+        remote: 'https://github.com/example/repo.git',
+        search: [{ ...search, forge_checked: true, matches: [target] }],
+        classification: [{ ...classification, classification: 'duplicate', target_item: target }],
+      }),
+      'render-proposals',
+      'configured repository'
+    );
+  }, 20_000);
+
+  it('keeps markers stable across reruns and excludes embedded remote credentials', async () => {
+    const first = await run({ remote: 'https://credential@github.com/example/repo.git' });
+    const second = await run({ remote: 'git@github.com:example/repo.git' });
+    expect(proposals(first).proposals[0]?.marker).toBe(proposals(second).proposals[0]?.marker);
+    expect(first.files['discovery-proposals.json']).not.toContain('credential');
+  }, 20_000);
+});

@@ -1,15 +1,8 @@
-# Exec-code fixture: search-existing reports no forge search happened for any
-# item (the local-proposals-only path), so classify can only ever produce
-# 'new' or 'stale', never 'duplicate' or 'update-existing'. resolve-input's
-# own forge probe still runs for real against this checkout's actual git
-# remote and gh auth state, which fixtures cannot fully control; this fixture
-# proves the LOGICAL no-forge path through search-existing/classify/render
-# regardless of what that real probe finds in the environment it happens to
-# run in (documented as a limitation in the PR report).
+# Agent outputs are simulated; script nodes execute through the fixture runner.
 revalidate:
   entries:
     - item_index: 0
-      still_valid: true
+      verdict: supported
       evidence_refs: [{ path: "AGENTS.md", line: 1 }]
       note: "stub: still applies"
 search-existing:
@@ -22,6 +15,9 @@ classify:
     - item_index: 0
       classification: new
       target_item: null
+      public_title: "Example source finding"
+      public_summary: "A fixture proposal for reviewer inspection."
+      disclosure_safe: true
       rationale: "stub: no forge was reachable, so this is proposed locally with publication unavailable"
 fixture:
   expect: completed

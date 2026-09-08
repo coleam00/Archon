@@ -1,47 +1,24 @@
 name: archon-discoveries
 description: |
-  Turn an existing run's discovery sidecar into a reviewable, typed set of
-  proposed tracker actions, without writing anything to the tracker. Reads a
-  discovery artifact, revalidates each claim against the current repository,
-  searches the configured forge for existing work when one is configured, and
-  classifies every surviving item as stale, duplicate, update-existing, or
-  new. The action set and its human-readable rendering are the only output;
-  publication is a separate, later, gated workflow.
-
-  Use when: a review or implementation run produced discoveries that were
-  proved but out of scope, and a human wants to see what tracker action each
-  one deserves before anything is filed - "propose tracker items for these
-  discoveries", "what should we file from that run".
-  NOT for: filing, updating, or closing a tracker item (this workflow never
-  writes to the tracker); detecting regressions on a schedule (a separate
-  standing class); resolving a bare run id into that run's artifact directory
-  (the engine has no callable seam for that today - see resolve-input below).
+  Revalidate a discovery artifact against this checkout's pinned HEAD, find
+  existing work when GitHub is reachable, and render local action proposals.
+  Use after review or implementation records adjacent discoveries.
+  Publication requires a focused follow-up with an explicit gate.
 
 inputs:
   discovery_artifact:
     default: ""
-    description: >-
-      Path to a discovery artifact this run can read directly - typically a
-      prior run's consolidated $ARTIFACTS_DIR/discoveries.json, or one
-      producer's raw per-node sidecar. Required; there is no supported way to
-      derive this path from a run id inside a workflow node today.
+    description: Path to consolidated discoveries.json or a raw discovery sidecar.
   run_id:
     default: ""
     description: >-
-      Documented for the input contract in issue #3215, but not resolvable
-      inside a workflow node today: no CLI command, HTTP route, or other
-      callable seam turns a bare run id into that run's artifact directory
-      from inside a node's subprocess. Supplying only run_id fails the run
-      with that exact gap named rather than guessing a path or reading the
-      workflow database by hand. Supply discovery_artifact instead.
+      Unsupported until workflow get --json exposes canonical artifacts_dir.
+      It already returns output_root and leave_behind.artifactFiles.
+      Any nonempty run_id is rejected; supply discovery_artifact instead.
 
 returns: render
 
 nodes:
-  # Deterministic: parses/normalizes the artifact and probes forge
-  # availability. No judgment content, so it stays a script rather than a
-  # command - see resolve-input.py for the exact guards, including the
-  # honest failure when only run_id is supplied.
   - id: resolve-input
     script: resolve-input
     runtime: uv
@@ -58,21 +35,12 @@ nodes:
       discovery_artifact: "$INPUTS.discovery_artifact"
       run_id: "$INPUTS.run_id"
 
-  # Agent, read-only: does the claim still hold against current HEAD. Extracts
-  # the structured evidence_refs the deterministic check-evidence node then
-  # verifies - the model interprets prose evidence into a typed citation, the
-  # script validates the citation, per AGENTS.md's interpret-then-validate
-  # boundary. The full array is this node's declared output (not a file):
-  # fixtures always stub agent nodes, and only a declared output survives a
-  # stub - a custom file this node "would have written" would not.
   - id: revalidate
     command: revalidate
     mutates_checkout: false
     model: medium
+    allowed_tools: [Read, Grep, Glob, Bash]
     output_type: discovery-revalidation
-    # A structured-output contract must be a JSON object at the top level
-    # (packages/providers/src/shared/structured-output.ts): a bare top-level
-    # array parses to undefined, so the array is wrapped as `entries`.
     output_format:
       type: object
       properties:
@@ -82,7 +50,9 @@ nodes:
             type: object
             properties:
               item_index: { type: integer }
-              still_valid: { type: boolean }
+              verdict:
+                type: string
+                enum: [supported, disproved, inconclusive]
               evidence_refs:
                 type: array
                 items:
@@ -92,18 +62,10 @@ nodes:
                     line: { type: integer }
                   required: [path, line]
               note: { type: string }
-            required: [item_index, still_valid, evidence_refs, note]
+            required: [item_index, verdict, evidence_refs, note]
       required: [entries]
     depends_on: [resolve-input]
 
-  # Deterministic: verifies every evidence_ref the model claimed against the
-  # actual current HEAD tree, and forces still_valid false for anything it
-  # cannot verify. This is the guard that keeps unknown or missing evidence
-  # from becoming proved new work - it overrides the model's own claim rather
-  # than trusting it. Reads revalidate's array through `with:` (never a file
-  # revalidate would have written, for the same stub reason as above) and
-  # writes the reconciled per-item verdict to a file, because check-evidence
-  # itself always executes for real and downstream script nodes may trust it.
   - id: check-evidence
     script: check-evidence
     runtime: uv
@@ -112,21 +74,17 @@ nodes:
       type: object
       properties:
         count: { type: integer }
-        overridden_count: { type: integer }
-      required: [count, overridden_count]
+        unverified_count: { type: integer }
+      required: [count, unverified_count]
     depends_on: [revalidate]
     with:
       revalidation: "$revalidate.output.entries"
 
-  # Agent, read-only: searches the configured forge only when resolve-input
-  # proved one is reachable. When it is not, this records publication as
-  # unavailable rather than guessing an identity or skipping the search
-  # silently. Declares its full array as output for the same reason
-  # revalidate does.
   - id: search-existing
     command: search-existing
     mutates_checkout: false
     model: medium
+    allowed_tools: [Read, Grep, Glob, Bash]
     output_type: discovery-search
     output_format:
       type: object
@@ -152,14 +110,11 @@ nodes:
       required: [entries]
     depends_on: [check-evidence]
 
-  # Agent, read-only, typed: the one place semantic classification happens.
-  # Never writes to the tracker; publication is a separate, later, gated
-  # workflow. Declares its full array as output for the same reason
-  # revalidate does.
   - id: classify
     command: classify
     mutates_checkout: false
     model: medium
+    allowed_tools: [Read]
     output_type: discovery-classification
     output_format:
       type: object
@@ -179,18 +134,14 @@ nodes:
                   number: { type: integer }
                   url: { type: string }
                 required: [number, url]
+              public_title: { type: string }
+              public_summary: { type: string }
+              disclosure_safe: { type: boolean }
               rationale: { type: string }
-            required: [item_index, classification, target_item, rationale]
+            required: [item_index, classification, target_item, public_title, public_summary, disclosure_safe, rationale]
       required: [entries]
     depends_on: [search-existing]
 
-  # Deterministic: rejects an impossible (classification, evidence, match)
-  # combination before it ever reaches a human, computes the forward-looking
-  # dedup marker, and renders the public-safe action set. No tracker write of
-  # any kind happens here or anywhere else in this workflow. Reads
-  # search-existing's and classify's arrays through `with:` (both are agent
-  # nodes, always stubbed in fixtures); evidence-check.json is a plain file
-  # read because check-evidence, like this node, always executes for real.
   - id: render
     script: render-proposals
     runtime: uv
@@ -207,7 +158,5 @@ nodes:
         [count, stale_count, duplicate_count, update_existing_count, new_count]
     depends_on: [classify, resolve-input, search-existing]
     with:
-      forge_host: "$resolve-input.output.forge_host"
-      forge_path: "$resolve-input.output.forge_path"
       search_results: "$search-existing.output.entries"
       classification: "$classify.output.entries"

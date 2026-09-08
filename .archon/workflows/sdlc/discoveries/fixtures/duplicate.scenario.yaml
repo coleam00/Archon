@@ -1,9 +1,8 @@
-# Exec-code fixture: a single discovery classified duplicate against a named
-# existing forge match. resolve-input/check-evidence/render run for real.
+# Package-test scenario: agents and gh reads are simulated; scripts and git execute for real.
 revalidate:
   entries:
     - item_index: 0
-      still_valid: true
+      verdict: supported
       evidence_refs: [{ path: "AGENTS.md", line: 1 }]
       note: "stub: still applies"
 search-existing:
@@ -20,6 +19,9 @@ classify:
     - item_index: 0
       classification: duplicate
       target_item: { number: 55, url: "https://github.com/example/repo/issues/55" }
+      public_title: "Example source finding"
+      public_summary: "A fixture proposal for reviewer inspection."
+      disclosure_safe: true
       rationale: "stub: same defect as #55"
 fixture:
   expect: completed

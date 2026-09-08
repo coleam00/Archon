@@ -1,6 +1,4 @@
-# Guard fixture: discovery_artifact exists but is not valid JSON.
-# resolve-input (real script) must fail cleanly rather than proceed on
-# nothing. Nothing downstream ever runs, so no other node needs a stub.
+# Agent outputs are simulated; script nodes execute through the fixture runner.
 fixture:
   expect: failed
   fail-node: resolve-input

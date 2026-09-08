@@ -87,3 +87,10 @@ and let only your own authored messages reach the streams. Re-emit a command's
 output when it failed and its words are the diagnostic; drop it when it is just a
 tool narrating itself. Capture a value's stderr separately rather than merging it,
 too — a `gh` update notice merged into a read becomes the value.
+
+## Discovery proposals
+
+[archon-discoveries](discoveries/README.md) consumes existing review and
+implementation sidecars, revalidates them, and produces local action proposals.
+It performs no authored tracker writes. Publication is a focused follow-up
+with an explicit gate; model instructions are not an external-write sandbox.

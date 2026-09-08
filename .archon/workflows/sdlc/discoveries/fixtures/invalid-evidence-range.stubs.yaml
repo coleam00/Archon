@@ -1,13 +1,8 @@
-# Exec-code fixture: revalidate claims still_valid but cites a line number far
-# past the end of a real file. check-evidence (real script) must override
-# still_valid to false rather than trust the claim - unknown/missing evidence
-# must not become proved new work. classify here is well-behaved and reflects
-# the override, so the whole run still completes; inconsistent-classification
-# covers the case where classify ignores the override instead.
+# Agent outputs are simulated; script nodes execute through the fixture runner.
 revalidate:
   entries:
     - item_index: 0
-      still_valid: true
+      verdict: supported
       evidence_refs: [{ path: "AGENTS.md", line: 999999 }]
       note: "stub: claims still valid, but the cited line is out of range"
 search-existing:
@@ -18,9 +13,12 @@ search-existing:
 classify:
   entries:
     - item_index: 0
-      classification: stale
+      classification: new
       target_item: null
-      rationale: "stub: evidence-check overrode this to not valid; correctly classified stale"
+      public_title: "Example source finding"
+      public_summary: "A fixture proposal for reviewer inspection."
+      disclosure_safe: true
+      rationale: "stub: citation is out of range; tentative local proposal remains unverified"
 fixture:
   expect: completed
   reached: [resolve-input, revalidate, check-evidence, search-existing, classify, render]
