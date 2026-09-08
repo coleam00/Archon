@@ -34271,7 +34271,7 @@ describe('archon-verify-runtime live target contract', () => {
               event.step_name === 'verify-loop.check-evidence'
           )?.data?.structured_output as { status: string; reason: string } | undefined;
         expect(prepared.report_feedback).toBe(priorAssessment?.reason ?? '');
-        expect(prompt).toContain(
+        expect(prompt.replace(/\r\n/g, '\n')).toContain(
           `Previous report feedback (empty on the first attempt):\n\n${prepared.report_feedback}\n`
         );
         expect(prompt).not.toContain('$LOOP_PREV.');
