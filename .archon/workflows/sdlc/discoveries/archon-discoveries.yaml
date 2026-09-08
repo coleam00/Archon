@@ -3,9 +3,14 @@ description: |
   Revalidate a discovery artifact against this checkout's pinned HEAD, find
   existing work when GitHub is reachable, and render local action proposals.
   Use after review or implementation records adjacent discoveries.
-  Publication requires a focused follow-up with an explicit gate.
+  Optional publication uses a command agent and gh after explicit authorization.
 
+model: medium
+interactive: true
 inputs:
+  publication:
+    default: preview
+    description: preview writes local proposals; approve waits for a human; auto authorizes publication for this run.
   discovery_artifact:
     default: ""
     description: Path to consolidated discoveries.json or a raw discovery sidecar.
@@ -159,3 +164,32 @@ nodes:
     with:
       search_results: "$search-existing.output.entries"
       classification: "$classify.output.entries"
+
+  - id: authorize-publication
+    depends_on: [render]
+    when: "$INPUTS.publication == 'approve'"
+    approval:
+      message: "Publish the supported proposals in $ARTIFACTS_DIR/discovery-proposals.md?"
+      decisions:
+        - id: approve
+          label: Publish proposals
+        - id: hold
+          label: Keep local
+
+  - id: publish
+    command: publish-discoveries
+    context: fresh
+    mutates_checkout: false
+    depends_on: [render, authorize-publication]
+    trigger_rule: none_failed_min_one_success
+    when: "$INPUTS.publication == 'approve' || $INPUTS.publication == 'auto'"
+    with:
+      mode: "$INPUTS.publication"
+      approval: { from: "$authorize-publication.output", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        published: { type: boolean }
+        urls: { type: array, items: { type: string } }
+        summary: { type: string }
+      required: [published, urls, summary]
