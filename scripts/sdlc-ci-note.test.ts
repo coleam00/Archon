@@ -2,7 +2,7 @@
  * Executes the archon-deliver `ci-note` node's actual bash body under real
  * bash, with a fake `gh` on PATH standing in for the process boundary. Every
  * ship/deliver fixture stubs this node entirely (it is a `bash:` node, not an
- * AI turn), so no fixture run ever exercises its shell logic — a defect like
+ * AI turn), so no fixture run ever exercises its shell logic. A defect like
  * `RC=$?` mutated to `RC=$-` (seen once in review) passes every fixture and
  * every type check, and only shows up against a real shell.
  *
@@ -18,7 +18,6 @@ import { resolveBashPath } from '@archon/git';
 import { spawnSync } from 'node:child_process';
 import { parseWorkflow } from '../packages/workflows/src/loader';
 import { substituteNodeOutputRefs } from '../packages/workflows/src/dag-executor';
-import { isLoopGroupNode } from '../packages/workflows/src/schemas/dag-node';
 import type { NodeOutput } from '../packages/workflows/src/schemas/workflow-run';
 
 const REPO_ROOT = join(import.meta.dir, '..');
@@ -31,11 +30,11 @@ function readCiNoteScript(): string {
     throw new Error(`archon-deliver.yaml failed to parse: ${result.error.error}`);
   }
   const corrections = result.workflow.nodes.find(n => n.id === 'corrections');
-  if (!corrections || !isLoopGroupNode(corrections)) {
+  if (!corrections || corrections.kind !== 'loop_group') {
     throw new Error("Expected a loop_group node 'corrections' in archon-deliver.yaml");
   }
   const ciNote = corrections.loop_group.nodes.find(n => n.id === 'ci-note');
-  if (!ciNote || !('script' in ciNote) || typeof ciNote.script !== 'string') {
+  if (!ciNote || ciNote.kind !== 'exec') {
     throw new Error("Expected an exec node 'ci-note' with a script body");
   }
   return ciNote.script;
@@ -135,7 +134,7 @@ describe('archon-deliver ci-note bash node', () => {
   // the whole ci-note node, so a shell defect in it (RC=$- was submitted in review
   // instead of RC=$?) passed every fixture. Proving THIS test would have caught it
   // means mutating the exact line and showing the failed-read case stops being
-  // reported correctly — not asserting against a hand-copied expectation of the bug.
+  // reported correctly, not asserting against a hand-copied expectation of the bug.
   test('a mutated RC assignment breaks the failed-read case this suite depends on', () => {
     const correctScript = readCiNoteScript();
     expect(correctScript).toContain('RC=$?');
