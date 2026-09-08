@@ -1,8 +1,8 @@
 name: archon-merge-queue
 description: >-
-  Supervise an explicit batch of at most five same-repository PRs. Approve the
-  order, review and validate each local composition, then approve the exact
-  candidate chain before pinned forge merges. Conflicts require separate delivery.
+  Queue at most five same-repository PRs with supervised gates by default.
+  Committed project policy can authorize small bounded work after independent
+  triage, diff assessment, composition review, and positive checks.
 model: medium
 interactive: true
 worktree:
@@ -23,6 +23,7 @@ nodes:
   - id: assess
     command: assess-merge-queue
     context: fresh
+    mutates_checkout: false
     depends_on: [intake]
     with:
       intake: "$intake.output"
@@ -43,7 +44,7 @@ nodes:
             required: [number, size, reason]
       required: [order, judgments]
 
-  - id: order-snapshot
+  - id: assessment-record
     script: merge-queue
     runtime: uv
     depends_on: [assess]
@@ -51,8 +52,50 @@ nodes:
       action: assess
       assessment: "$assess.output"
 
+  - id: triages
+    depends_on: [assessment-record]
+    loop_group:
+      max_iterations: 5
+      until_bash: test "$triage-record.output.done" = "true"
+      fresh_context: true
+      nodes:
+        - id: triage-prepare
+          script: merge-queue
+          runtime: uv
+          with:
+            action: triage-prepare
+
+        - id: triage
+          include: archon-triage
+          depends_on: [triage-prepare]
+          when: "$triage-prepare.output.run == true"
+          with:
+            target: "$triage-prepare.output.target"
+            publish: "false"
+
+        - id: triage-record
+          script: merge-queue
+          runtime: uv
+          depends_on: [triage-prepare, triage]
+          trigger_rule: all_done
+          with:
+            action: triage-record
+            prepared: "$triage-prepare.output"
+            triage:
+              from: "$triage.output"
+              if_skipped: null
+
+  - id: order-snapshot
+    script: merge-queue
+    runtime: uv
+    depends_on: [triages]
+    trigger_rule: all_done
+    with:
+      action: order-snapshot
+
   - id: approve-order
     depends_on: [order-snapshot]
+    when: "$order-snapshot.output.human_required == true"
     approval:
       message: >-
         Approve this exact pinned intake and proposed order, or hold the queue.
@@ -67,10 +110,13 @@ nodes:
   - id: order-receipt
     script: merge-queue
     runtime: uv
-    depends_on: [approve-order]
+    depends_on: [order-snapshot, approve-order]
+    trigger_rule: all_done
     with:
       action: order
-      receipt: "$approve-order.output"
+      receipt:
+        from: "$approve-order.output"
+        if_skipped: null
       snapshot: "$order-snapshot.output.snapshot"
 
   - id: candidates
@@ -127,11 +173,13 @@ nodes:
 
   - id: approve-candidates
     depends_on: [candidate-snapshot]
-    when: "$candidate-snapshot.output.ready == true"
+    when: "$candidate-snapshot.output.human_required == true"
     approval:
       message: >-
         Approve only this ordered, tested candidate SHA chain and its evidence.
         Any changed head, base, candidate, or evidence invalidates approval.
+        Held or failed evidence requires correction and a fresh run; approval
+        cannot waive a failed merge guard.
         $candidate-snapshot.output
       decisions:
         - id: approve
@@ -142,10 +190,14 @@ nodes:
   - id: candidate-receipt
     script: merge-queue
     runtime: uv
-    depends_on: [approve-candidates]
+    depends_on: [candidate-snapshot, approve-candidates]
+    when: "$candidate-snapshot.output.ready == true || $candidate-snapshot.output.human_required == true"
+    trigger_rule: all_done
     with:
       action: candidate
-      receipt: "$approve-candidates.output"
+      receipt:
+        from: "$approve-candidates.output"
+        if_skipped: null
       snapshot: "$candidate-snapshot.output.snapshot"
 
   - id: merges
@@ -175,4 +227,6 @@ nodes:
         queue: { type: string }
         phase: { type: string }
         entries: { type: array, items: { type: object } }
+        order_decision: { type: [object, "null"] }
+        candidate_decision: { type: [object, "null"] }
       required: [merged, queue, phase, entries]

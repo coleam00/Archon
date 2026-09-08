@@ -8,11 +8,40 @@ import re
 import shutil
 import subprocess
 import tempfile
+from typing import Literal, TypedDict
 from uuid import uuid4
 
 
 MAX_BATCH = 5
 SHA = re.compile(r"[a-f0-9]{40}")
+AUTO_POLICY_PATH = ".archon/merge-queue-auto.json"
+MAX_FILES = 10
+MAX_CHANGED_LINES = 300
+COMPLEXITIES = ("small_bounded", "risky", "large")
+
+
+class AutomaticPolicy(TypedDict):
+    version: Literal[1]
+    mode: Literal["automatic"]
+    max_prs: int
+    max_files: int
+    max_changed_lines: int
+
+
+class PolicyDecision(TypedDict):
+    kind: Literal["automatic_policy", "human_required"]
+    stage: Literal["order", "candidate"]
+    source_policy_hash: str | None
+    snapshot: str
+    reasons: list[str]
+
+
+def unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        require(key not in result, "Duplicate policy field")
+        result[key] = value
+    return result
 
 
 def require(value, message):
@@ -58,12 +87,172 @@ class Queue:
 
     def order_plan(self):
         return {"intake": self.state["intake"], "base": self.state["base"], "base_sha": self.state["base_sha"],
-                "assessment": self.state["assessment"],
-                "items": [{"pr": i["pr"], "files": i["files"]} for i in self.state["items"]]}
+                "automatic_policy": self.state["automatic_policy"],
+                "assessment": self.state["assessment"], "order": self.state["order"],
+                "items": [{"pr": i["pr"], "files": i["files"], "triage": i.get("triage"), "order_checks": i.get("order_checks")}
+                          for i in self.state["items"]]}
+
+    def read_policy(self):
+        source = self.state["base_sha"] + ":" + AUTO_POLICY_PATH
+        result = self.git("show", source, allowed=(0, 128))
+        if result.returncode:
+            return {"policy": None, "source_policy_hash": None, "reason": "No committed automatic policy"}
+        source_hash = self.git("rev-parse", source).stdout.strip()
+        try:
+            entry = self.git("ls-tree", self.state["base_sha"], "--", AUTO_POLICY_PATH).stdout
+            require(entry.startswith("100644 blob "), "Automatic policy must be a regular committed file")
+            policy = json.loads(result.stdout, object_pairs_hook=unique_object)
+            require(isinstance(policy, dict) and set(policy) == set(AutomaticPolicy.__annotations__),
+                    "Malformed automatic policy fields")
+            require(type(policy["version"]) is int and policy["version"] == 1 and policy["mode"] == "automatic",
+                    "Unknown automatic policy version or mode")
+            for key, maximum in (("max_prs", MAX_BATCH), ("max_files", MAX_FILES), ("max_changed_lines", MAX_CHANGED_LINES)):
+                require(type(policy[key]) is int and 1 <= policy[key] <= maximum, "Automatic policy exceeds hard bounds: " + key)
+            return {"policy": policy, "source_policy_hash": source_hash, "reason": ""}
+        except (ValueError, TypeError) as error:
+            return {"policy": None, "source_policy_hash": source_hash, "reason": str(error)}
+
+    def verify_policy(self):
+        require(self.read_policy() == self.state["automatic_policy"], "Pinned automatic policy changed")
+
+    def triage_prepare(self):
+        if not self.state["automatic_policy"]["policy"]:
+            return {"run": False}
+        item = next((i for i in self.state["items"] if "triage" not in i), None)
+        if item is None:
+            return {"run": False}
+        self.clean(self.state["base_sha"])
+        require(not item.get("triage_started"), "Interrupted triage requires a fresh queue")
+        previous = self.artifacts / "triage.md"
+        if previous.exists():
+            archive = self.artifacts / "prior-evidence" / str(uuid4())
+            archive.mkdir(parents=True)
+            shutil.move(str(previous), str(archive / "triage.md"))
+        item["triage_started"] = True
+        self.save()
+        return {"run": True, "ref": item["pr"]["ref"], "head": item["pr"]["head_sha"],
+                "base": self.state["base_sha"], "target":
+                "Triage the single original source work item implemented by this pinned PR, at the current original base. "
+                "The PR below is provenance, not the work order. Read the actual PR and original tracker item and "
+                "verify their relationship. Do not treat a related issue, PR self-report, or caller verdict as a contract. "
+                "If the original item is absent, ambiguous, inaccessible, or cannot be attributed, return no_action "
+                "with empty issue identity and explain the gap. Otherwise return the verified original issue identity. "
+                "Do not publish. Pinned PR: " + json.dumps(item["pr"])}
+
+    def triage_record(self, prepared, result):
+        if not prepared.get("run"):
+            return {"done": True}
+        item = next(i for i in self.state["items"] if i["pr"]["ref"] == prepared["ref"])
+        require("triage" not in item, "Triage evidence is immutable; resume its completed node")
+        evidence = {"result": result, "source": None, "files": {}, "reason": ""}
+        try:
+            self.clean(self.state["base_sha"])
+            require(prepared["base"] == self.state["base_sha"] and prepared["head"] == item["pr"]["head_sha"],
+                    "Triage candidate identity changed")
+            require(self.view(item["pr"]["ref"]) == item["pr"], "Source PR changed during triage")
+            report = self.artifacts / "triage.md"
+            require(report.is_file() and bool(report.read_text(encoding="utf-8").strip()), "Missing fresh triage evidence")
+            destination = self.artifacts / "triage" / str(item["pr"]["ref"]["number"]) / "report.md"
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(report, destination)
+            evidence["files"][str(destination.relative_to(self.artifacts))] = hashlib.sha256(destination.read_bytes()).hexdigest()
+            require(isinstance(result, dict), "Missing shared triage output")
+            # The shared triage producer currently attributes only github.com issues.
+            # Other forges retain supervision until that producer supports their identities.
+            repo, number = result.get("issue_repo"), result.get("issue_number")
+            require(isinstance(repo, str) and re.fullmatch(r"[\w.-]+/[\w.-]+", repo)
+                    and type(number) is int and number > 0, "Missing original work-item attribution")
+            ref = {"repo": {"host": "github.com", "path": repo}, "number": number}
+            source = self.read_cli(["forge", "workitem", "view", "--request", "-"], {"ref": ref})
+            require(source.get("ref") == ref and source.get("url") == result.get("issue_url")
+                    and source.get("url") == f"https://github.com/{repo}/issues/{number}"
+                    and bool(source.get("body", "").strip()), "Original work-item read did not match triage")
+            evidence["source"] = source
+            require(result.get("contract") == "READY" and result.get("route") == "deliver"
+                    and result.get("design_first") is False and result.get("complexity") == "small_bounded",
+                    "Original work item is not independently ready and small_bounded")
+            item["order_checks"] = self.current(item, self.state["base_sha"])
+        except (ValueError, OSError) as error:
+            evidence["reason"] = str(error)
+        item["triage"] = evidence
+        self.save()
+        return {"done": all("triage" in i for i in self.state["items"])}
+
+    def bounded_diff(self, start, end, policy):
+        fields = self.git("diff", "--numstat", "-z", "--no-renames", start, end).stdout.split("\0")
+        entries = [entry.split("\t", 2) for entry in fields if entry]
+        require(all(len(entry) == 3 and entry[0].isdigit() and entry[1].isdigit() for entry in entries),
+                "Binary or unknown diff size requires supervision")
+        require(len(entries) <= policy["max_files"] and
+                sum(int(a) + int(d) for a, d, _ in entries) <= policy["max_changed_lines"], "Diff threshold exceeded")
+        require(all(path != AUTO_POLICY_PATH and path != ".archon/merge-queue-policy.json" for _, _, path in entries),
+                "Candidate authors policy changes")
+
+    def policy_decision(self, stage, snapshot):
+        reasons = []
+        source = self.state["automatic_policy"]
+        policy = source["policy"]
+        try:
+            self.verify_policy()
+            require(policy is not None, source["reason"])
+            require(len(self.state["items"]) <= policy["max_prs"], "Batch threshold exceeded")
+            require(self.state["assessment"] is not None, "Independent diff assessment is missing; intake order requires human review")
+            require(all(j["size"] == "small_bounded" for j in self.state["assessment"]["judgments"]),
+                    "Diff assessment is risky, large, or disagrees with small_bounded triage")
+            for item in self.ordered():
+                triage = item.get("triage")
+                require(triage is not None and not triage["reason"] and triage["source"] is not None,
+                        "Missing or ineligible original work-item triage: " + (triage["reason"] if triage else "not completed"))
+                for name, checksum in triage["files"].items():
+                    path = (self.artifacts / name).resolve()
+                    require(path.is_relative_to(self.artifacts) and path.is_file()
+                            and hashlib.sha256(path.read_bytes()).hexdigest() == checksum, "Triage evidence changed or missing")
+                self.bounded_diff(self.state["base_sha"], item["pr"]["head_sha"], policy)
+                checks = item.get("head_checks" if stage == "candidate" else "order_checks", {})
+                require(checks.get("state") == "green" and checks.get("counts", {}).get("total", 0) > 0
+                        and checks.get("required", {}).get("state") in ("green", "none"),
+                        "Automatic authorization requires actual positive external checks and known required policy")
+                if stage == "candidate":
+                    review = item.get("evidence", {}).get("review_result") or {}
+                    require(review.get("ready") is True,
+                            "Independent review is not green")
+                    validation = item.get("evidence", {}).get("validation_result") or {}
+                    require(validation.get("checks_performed") is True and validation.get("green") is True,
+                            "No positive applicable project checks")
+                    self.bounded_diff(self.state["base_sha"], item["candidate"], policy)
+            require(self.state["phase"] != "held", "Queue guard held the candidate chain")
+        except (ValueError, OSError, KeyError) as error:
+            reasons.append(str(error))
+        decision: PolicyDecision = {"kind": "human_required" if reasons else "automatic_policy", "stage": stage,
+                                    "source_policy_hash": source["source_policy_hash"], "snapshot": snapshot, "reasons": reasons}
+        return decision
+
+    def order_snapshot(self):
+        if "assessment" not in self.state:
+            require(self.state["automatic_policy"]["policy"] is not None, "Missing independent diff assessment")
+            # Missing model output stays missing. Only a human can authorize the
+            # original intake order when assessment failed before producing one.
+            self.state.update(assessment=None, order=[ref["number"] for ref in self.state["intake"]], phase="awaiting_order")
+        snapshot = digest(self.order_plan())
+        require(self.state.get("order_snapshot", snapshot) == snapshot, "Pinned intake or order changed")
+        self.state["order_snapshot"] = snapshot
+        decision = self.policy_decision("order", snapshot)
+        require(self.state.get("order_decision", decision) == decision, "Order policy decision changed")
+        self.state["order_decision"] = decision
+        self.save()
+        return {"snapshot": snapshot, "plan": self.order_plan(), "decision": decision,
+                "human_required": decision["kind"] == "human_required"}
+
+    def authorized(self, kind):
+        receipt = self.state[kind + "_receipt"]
+        return receipt is not None and (receipt.get("kind") == "automatic_policy" or
+                                       receipt.get("response", {}).get("decision") == "approve")
 
     def approved_order(self):
         require(digest(self.order_plan()) == self.state["order_snapshot"], "Pinned intake or order changed")
-        require(self.state["order"] == self.state["assessment"]["order"], "Approved order changed")
+        assessment = self.state["assessment"]
+        expected = assessment["order"] if assessment is not None else [ref["number"] for ref in self.state["intake"]]
+        require(self.state["order"] == expected, "Approved order changed")
 
     def git(self, *args, allowed=(0,), data=None):
         result = command(["git", *args], self.cwd, data)
@@ -160,6 +349,7 @@ class Queue:
                       "intake": refs, "base": base, "base_sha": base_sha, "phase": "intake",
                       "items": [], "order": [], "order_receipt": None, "candidate_receipt": None}
         self.clean(base_sha)
+        self.state["automatic_policy"] = self.read_policy()
         for item in items:
             self.git("fetch", "--no-tags", "origin", "refs/heads/" + item["head"])
             require(self.git("rev-parse", "FETCH_HEAD").stdout.strip() == item["head_sha"], "PR head moved during intake")
@@ -175,16 +365,16 @@ class Queue:
         require(all(type(n) is int for n in order) and sorted(order) == sorted(numbers), "Order must be an exact intake permutation")
         judgments = assessment.get("judgments", [])
         require(sorted(j.get("number", -1) for j in judgments) == sorted(numbers), "Every PR needs exactly one judgment")
-        require(all(j.get("size") in ("small_bounded", "risky", "large") and isinstance(j.get("reason"), str)
+        require(all(j.get("size") in COMPLEXITIES and isinstance(j.get("reason"), str)
                     and j["reason"].strip() for j in judgments), "Invalid size or missing order reasons")
         if "assessment" in self.state:
             require(self.state["assessment"] == assessment, "Assessment is immutable on resume")
         else:
             self.state.update(assessment=assessment, order=order, phase="awaiting_order")
-            self.state["order_snapshot"] = digest(self.order_plan())
             self.save()
-        self.approved_order()
-        return {"snapshot": self.state["order_snapshot"], "plan": self.order_plan()}
+        if not self.state["automatic_policy"]["policy"]:
+            return self.order_snapshot()
+        return {"assessment": assessment}
 
     def ordered(self):
         return [next(i for i in self.state["items"] if i["pr"]["ref"]["number"] == n) for n in self.state["order"]]
@@ -197,9 +387,25 @@ class Queue:
         self.save()
 
     def gate(self, kind, receipt, snapshot):
+        decision = self.state[kind + "_decision"]
+        require(decision["snapshot"] == snapshot == self.state[kind + "_snapshot"], "Approval snapshot changed")
+        if receipt is None:
+            require(decision["kind"] == "automatic_policy", "A genuine native human gate is required")
+            require(self.policy_decision(kind, snapshot) == decision, "Automatic policy authorization changed")
+            self.approved_order()
+            if kind == "candidate":
+                require(self.chain() == self.state["candidate_chain"], "Candidate chain changed after gate")
+                self.verify_evidence()
+            existing = self.state[kind + "_receipt"]
+            require(existing is None or existing == decision, "Policy receipt is immutable")
+            if existing is not None:
+                return {"proceed": self.state["phase"] not in ("held", "failed")}
+            self.state[kind + "_receipt"] = decision
+            self.state["phase"] = "preparing" if kind == "order" else "merging"
+            self.save()
+            return {"proceed": True}
         require(isinstance(receipt, dict) and receipt.get("decision") in ("approve", "hold")
                 and isinstance(receipt.get("text"), str), "Expected a declared native gate receipt; prose is not approval")
-        require(snapshot == self.state[kind + "_snapshot"], "Approval snapshot changed")
         self.approved_order()
         existing = self.state[kind + "_receipt"]
         if existing is not None:
@@ -207,6 +413,12 @@ class Queue:
             return {"proceed": self.state["phase"] not in ("held", "failed")}
         if kind == "candidate":
             require(self.chain() == self.state["candidate_chain"], "Candidate chain changed after gate")
+        if kind == "candidate" and self.state["phase"] == "held":
+            # A human sees the failed evidence, but cannot waive a merge guard.
+            self.state["candidate_receipt"] = {"response": receipt, "snapshot": snapshot}
+            self.save()
+            return {"proceed": False}
+        if kind == "candidate":
             self.verify_evidence()
         self.state[kind + "_receipt"] = {"response": receipt, "snapshot": snapshot}
         if receipt["decision"] == "hold":
@@ -236,11 +448,17 @@ class Queue:
     def current(self, item, base):
         record = self.view(item["pr"]["ref"])
         require(all(record[k] == item["pr"][k] for k in ("head", "head_sha", "head_repo", "base")), "PR head/base changed")
+        if self.state["automatic_policy"]["policy"]:
+            require(record == item["pr"], "PR source context changed")
+            triage = item.get("triage")
+            if triage and triage["source"]:
+                source = self.read_cli(["forge", "workitem", "view", "--request", "-"], {"ref": triage["source"]["ref"]})
+                require(source == triage["source"], "Original work-item context changed")
         require(self.remote_base(self.state["base"]) == base, "Upstream base changed; reapproval requires a fresh reviewed queue")
         return self.checks(item)
 
     def prepare(self):
-        require(self.state["order_receipt"]["response"]["decision"] == "approve", "Order is not approved")
+        require(self.authorized("order"), "Order is not approved")
         self.approved_order()
         if self.state["phase"] == "held":
             return {"run": False}
@@ -282,8 +500,9 @@ class Queue:
                     shutil.move(str(source), str(archive / name))
             item["evidence_started"] = True
             self.save()
+            source = (item.get("triage") or {}).get("source")
             return {"run": True, "number": item["pr"]["ref"]["number"], "candidate": item["candidate"],
-                    "local_range": base + ".." + item["candidate"], "work_order": item["pr"].get("body", ""),
+                    "local_range": base + ".." + item["candidate"], "work_order": source["body"] if source else item["pr"].get("body", ""),
                     "review_errors": True, "review_docs": "auto"}
         except (ValueError, OSError) as error:
             self.hold(str(error), index)
@@ -342,24 +561,40 @@ class Queue:
 
     def snapshot(self):
         if self.state["phase"] == "held":
-            return {"ready": False}
+            return self.held_snapshot()
         try:
             self.approved_order()
             self.verify_evidence()
         except (ValueError, OSError, KeyError) as error:
             self.hold("Candidate evidence is incomplete: " + str(error))
-            return {"ready": False}
+            return self.held_snapshot()
         chain = self.chain()
         if "candidate_chain" in self.state:
             require(chain == self.state["candidate_chain"] and digest(chain) == self.state["candidate_snapshot"],
                     "Candidate snapshot is immutable")
-            return {"ready": True, "snapshot": self.state["candidate_snapshot"], "chain": chain}
+            return self.candidate_output(True)
         self.state.update(candidate_chain=chain, candidate_snapshot=digest(chain), phase="awaiting_candidates")
+        self.state["candidate_decision"] = self.policy_decision("candidate", digest(chain))
         self.save()
-        return {"ready": True, "snapshot": digest(chain), "chain": chain}
+        return self.candidate_output(True)
+
+    def held_snapshot(self):
+        if not self.state["automatic_policy"]["policy"] or not self.authorized("order"):
+            return {"ready": False, "human_required": False}
+        chain = self.chain()
+        require(self.state.get("candidate_snapshot", digest(chain)) == digest(chain), "Held candidate snapshot is immutable")
+        self.state.update(candidate_chain=chain, candidate_snapshot=digest(chain))
+        self.state["candidate_decision"] = self.policy_decision("candidate", digest(chain))
+        self.save()
+        return self.candidate_output(False)
+
+    def candidate_output(self, ready):
+        return {"ready": ready, "snapshot": self.state["candidate_snapshot"], "chain": self.state["candidate_chain"],
+                "decision": self.state["candidate_decision"],
+                "human_required": self.state["candidate_decision"]["kind"] == "human_required"}
 
     def merge(self):
-        require(self.state["candidate_receipt"]["response"]["decision"] == "approve", "Candidates not approved")
+        require(self.authorized("candidate"), "Candidates not approved")
         require(self.chain() == self.state["candidate_chain"], "Approved chain changed")
         require(self.state["candidate_receipt"]["snapshot"] == self.state["candidate_snapshot"] == digest(self.chain()),
                 "Candidate approval does not match the exact snapshot")
@@ -372,6 +607,10 @@ class Queue:
             return {"done": True}
         try:
             self.approved_order()
+            self.verify_policy()
+            if self.state["candidate_receipt"].get("kind") == "automatic_policy":
+                require(self.policy_decision("candidate", self.state["candidate_snapshot"]) == self.state["candidate_receipt"],
+                        "Automatic candidate authorization changed")
             self.ownership()
             self.verify_evidence()
             # An uncertain attempt must reach the owner's exact identity recovery path:
@@ -423,6 +662,7 @@ class Queue:
     def report(self):
         return {"merged": bool(self.state["items"]) and all(i["status"] == "merged" for i in self.state["items"]),
                 "queue": str(self.path), "phase": self.state["phase"],
+                "order_decision": self.state.get("order_decision"), "candidate_decision": self.state.get("candidate_decision"),
                 "entries": [{"ref": i["pr"]["ref"], "status": i["status"], "reason": i.get("reason", ""),
                              "candidate": i.get("candidate"), "correction": i.get("correction")}
                             for i in self.state["items"]]}
@@ -434,10 +674,18 @@ def main():
         text = os.environ.get("INPUTS_" + name.upper(), json.dumps(default))
         return text if raw else json.loads(text)
     action = os.environ["INPUTS_ACTION"]
+    if queue.state:
+        require(value("prs") == queue.state["intake"], "Intake is immutable on resume")
     if action == "intake":
         result = queue.intake(value("prs"))
     elif action == "assess":
         result = queue.assess(value("assessment"))
+    elif action == "triage-prepare":
+        result = queue.triage_prepare()
+    elif action == "triage-record":
+        result = queue.triage_record(value("prepared"), value("triage"))
+    elif action == "order-snapshot":
+        result = queue.order_snapshot()
     elif action in ("order", "candidate"):
         result = queue.gate(action, value("receipt"), value("snapshot", raw=True))
     elif action == "prepare":

@@ -1,11 +1,84 @@
-# Supervised merge queue
+# Bounded merge queue
 
 `archon-merge-queue` accepts an explicit JSON array of **one to five** qualified
-PR references in one repository and base. It is a manual, fully supervised
-reference workflow. Both gates require a native `approve` or `hold` decision;
-response text is retained as notes. Reordering requires a fresh run. Size
-judgments (`small_bounded`, `risky`, `large`) advise the supervisor and grant no
-autonomy. There is no scheduler, label intake, global queue, or factory setting.
+PR references in one repository and base. It is supervised by default: both
+gates require a native `approve` or `hold` decision, with response text retained
+as notes. Reordering requires a fresh run. A project can explicitly authorize
+the bounded automatic path below. There is no scheduler, label intake, global
+queue, or factory setting.
+
+## Project-owned automatic policy
+
+Commit `.archon/merge-queue-auto.json` on the PRs' base before starting the run:
+
+```json
+{
+  "version": 1,
+  "mode": "automatic",
+  "max_prs": 5,
+  "max_files": 10,
+  "max_changed_lines": 300
+}
+```
+
+These are the complete typed policy fields. Integer limits must be positive
+and cannot exceed the shown hard bounds. Lower limits are supported. Unknown
+fields, versions, modes, duplicate fields, booleans as integers, and symlinks
+refuse automatic authorization and visibly require a human. The path is fixed;
+there is no caller file or path input. Only `git show ORIGINAL_BASE:path` supplies
+policy content, with its exact Git blob hash retained as `source_policy_hash`.
+An absent policy always means supervision. An uncommitted file, `publish=true`,
+agent receipt, or install setting cannot enable this mode.
+
+Before moving off the original base, a bounded native loop includes
+`archon-triage` once per PR, with publication disabled and fresh context. That
+agent reads the PR and judges which single original work item it implements.
+Absent, ambiguous, inaccessible, or unrelated source context must return a
+non-ready disposition, never a contract inferred from the PR self-report. The
+queue independently reads the attributed issue through `forge workitem view`,
+pins its body and identity, and hashes the fresh triage report. The shared triage
+producer currently attributes only github.com issues; other sources require
+supervision until that producer supports them.
+
+Triage must report `READY`, route `deliver`, `design_first: false`, and
+`small_bounded`. An independent read-only diff assessment must also report
+`small_bounded`. Both use the shared triage complexity vocabulary:
+`small_bounded`, `risky`, `large`. Risk, uncertainty, context gaps, disagreement,
+missing attribution, or incomplete triage requires the native order gate.
+If diff assessment fails to produce output, it remains null and the gate
+explicitly presents the original intake order for human review. Holding the
+order ends the queue without a second approval request.
+
+The order decision authorizes preparation only. It requires the policy, fresh
+triage, bounded diffs, and actual positive green external checks with known
+required-check state. The candidate decision separately authorizes the exact
+tested chain. It additionally requires independent green composition review,
+positive applicable project checks, and all existing evidence/identity guards.
+File and added-plus-deleted-line limits apply to each PR and every cumulative
+candidate against the original base. Binary changes require supervision.
+Changes to either queue policy file require supervision. A PR cannot grant
+itself authority by adding or modifying policy.
+
+Both decisions are typed `automatic_policy` or `human_required`, carry distinct
+`order`/`candidate` stages, snapshot hashes and policy blob identity, and appear
+in native node outputs, the report, and `queue.json`. The order snapshot binds
+PR/head/base, triage source and report hashes, checks, and assessment. The
+candidate snapshot binds the tested parent chain and review/check evidence.
+Composition review receives the attributed original work order when available.
+Automatic receipts preserve that decision; they never fabricate a native
+`approve` response. Skipped gates deliver null, which the computation accepts
+only for the corresponding pinned automatic decision.
+
+An automatic attempt with missing/red checks or failed review reaches a genuine
+native candidate gate showing the held evidence. Human approval cannot waive a
+failed merge guard; correction and a fresh run are required. The legacy no-CI
+exception below is supervised-only. Policy, evidence, source context, head,
+base, and external CI are checked again before mutation. Pausing or resuming
+cannot change input, order, candidate, policy or evidence.
+Every script invocation checks the resolved PR input against the pinned intake,
+including invocations after a native approval pause. Runtime-suite
+eligibility may be an additional caller requirement; the queue does not claim
+to have run `archon-verify-runtime-suite`.
 
 The engine creates the working checkout. Use a fresh default `archon/task-*`
 branch or an explicit `archon/merge-queue-*` branch, starting at the PR base.
@@ -32,7 +105,7 @@ archon workflow get RUN_ID --json
 Use `hold` instead of `approve` to retain the queue without publication. The first
 gate approves intake/order; the second approves the complete tested chain. The
 two gates are top-level. Native bounded `loop_group` nodes own repetition, with
-load-time `include: archon-review` and `include: archon-validate` composition.
+load-time `archon-triage`, `archon-review`, and `archon-validate` includes.
 
 ## State, evidence, and recovery
 
@@ -100,7 +173,7 @@ variables to their absolute schema files and run the focused tests:
 ```sh
 export ARCHON_MERGE_QUEUE_PUBLIC_SCHEMA=/path/to/public-owner/packages/forge/src/schemas.ts
 export ARCHON_MERGE_QUEUE_PINNED_SCHEMA=/path/to/pinned-owner/packages/forge/src/pinned-merge-schemas.ts
-bun --cwd packages/workflows test src/defaults/merge-queue.test.ts src/defaults/merge-queue-graph.test.ts
+bun --cwd packages/workflows test src/defaults/merge-queue.test.ts src/defaults/merge-queue-auto.test.ts src/defaults/merge-queue-graph.test.ts
 ```
 
 Without the pinned owner, the schema conformance case is explicitly skipped.
@@ -139,4 +212,4 @@ For the private integration check:
    transcripts, gate receipts, and observed remote refs as integration evidence.
 
 Only the operator performing that private procedure can report a live merge.
-The planned Allot isolated-base merge belongs to prerequisite integration.
+Any live isolated-base merge belongs to the operator's separate integration run.
