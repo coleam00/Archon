@@ -10,11 +10,12 @@
  * rather than copied here, so this test tracks the authored node instead of
  * a stale duplicate of it.
  */
-import { describe, test, expect, afterEach } from 'bun:test';
-import { readFileSync, mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
+import { describe, test, expect } from 'bun:test';
+import { readFileSync, mkdtempSync, writeFileSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { resolveBashPath } from '@archon/git';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { spawnSync } from 'node:child_process';
 import { parseWorkflow } from '../packages/workflows/src/loader';
 import { substituteNodeOutputRefs } from '../packages/workflows/src/dag-executor';
@@ -55,17 +56,10 @@ function resolvedCiNoteScript(): string {
   return substituteNodeOutputRefs(readCiNoteScript(), PR_NODE_OUTPUTS, true);
 }
 
-const tempDirs: string[] = [];
-afterEach(() => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (dir) rmSync(dir, { recursive: true, force: true });
-  }
-});
+const trackTempRoot = trackTempRoots();
 
 function fakeGhBin(body: string): string {
-  const dir = mkdtempSync(join(tmpdir(), 'ci-note-fake-gh-'));
-  tempDirs.push(dir);
+  const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'ci-note-fake-gh-')));
   const ghPath = join(dir, 'gh');
   writeFileSync(ghPath, `#!/bin/sh\n${body}\n`);
   chmodSync(ghPath, 0o755);
