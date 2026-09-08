@@ -45,8 +45,17 @@ For example, this external JSON profile invokes an operator-owned evaluator:
     {
       "id": "acceptance-gate",
       "argv": ["bun", "/operator/evaluator.ts"],
-      "environment_exit_codes": [75]
+      "environment_exit_codes": [75],
+      "public_description": "Run the project unit suite against the candidate and the base."
     }
+  ],
+  "gate": {
+    "complete": true,
+    "description": "The full applicable project gate, including the baseline comparison."
+  },
+  "context": [
+    { "id": "conventions", "source": "base:AGENTS.md" },
+    { "id": "invariants", "source": "/operator/acceptance-invariants.md" }
   ],
   "required_evidence": ["acceptance-evidence.json"],
   "protected_paths": ["governance", "checks"],
@@ -54,7 +63,9 @@ For example, this external JSON profile invokes an operator-owned evaluator:
 }
 ```
 
-All five fields are required; unknown fields and versions fail closed. Commands
+`schema_version`, `commands`, `required_evidence`, `protected_paths`, and
+`require_isolation` are required; `gate` and `context` are optional; unknown
+fields and versions fail closed. Commands
 must have unique lowercase kebab-case IDs and nonempty argv arrays. There is no
 implicit shell, interpolation, dependency install, or candidate-selected command.
 An explicit shell argv is allowed when the operator intends it. Commands run in
@@ -65,12 +76,45 @@ failures, and timeouts are inconclusive. Other nonzero exits request changes.
 must create their own scratch database and clean it up. Other native process
 environment and provider configuration remain operator-owned.
 
-Required evidence paths are literal repository-relative files, not globs. They
-must be nonempty and resolve inside the candidate tree. Their contents and hashes
-are copied to private artifacts and supplied to the judge. Configure only evidence
-safe for the evaluator to read; never put private evaluator internals in these
-files. Presence alone is not proof: committed candidate reports and self-reports
-remain claims. A fixed evaluator should write fresh behavioral evidence.
+### What the judge is told about a fixed gate
+
+Fixed argv and streams stay private, so without an operator attestation the judge
+cannot tell an authorized full gate from an arbitrary zero-exit command and is
+right to return inconclusive. `gate` supplies that attestation. `complete` states
+whether these commands are the whole applicable gate, `description` explains what
+the gate covers, and every command then needs a `public_description`; a profile
+declaring `gate` without them fails closed. The judge sees the declaration, the
+command IDs and argv digests, and the actual identity and exit status, and may
+establish completeness from a complete declaration whose checks all passed unless
+the evidence contradicts it. A declaration never establishes a semantic
+requirement, and it never overrides a deterministic failure.
+
+`context` supplies the project acceptance context the judge cannot fetch itself:
+it has no tools and cannot follow a pointer from `AGENTS.md` into a direction
+document. Each entry reads `base:relative/path` from the resolved base SHA or an
+absolute external operator path, must be nonempty, and reaches the judge with its
+ID, source label, digest, and full text. Nothing is read from the candidate, and
+the pack hardcodes no project path. Context shares the packet budget with the
+diff and evidence, so select the documents acceptance actually depends on.
+
+### Required evidence must be produced by this evaluation
+
+Required evidence paths are literal repository-relative files, not globs, patterns,
+`.git` entries, or names Windows cannot represent. Each must be absent when the
+gate starts: a path that is tracked at the candidate SHA, already present in the
+worktree, or reached through a symlink is refused rather than treated as output,
+and the existing file is never deleted. Presence alone is not proof; a committed
+report is a candidate claim, not evidence.
+
+Each file must be JSON with `schema_version: 1`, the `evaluation_id` and full
+`identity` of this evaluation, and a nonempty `evidence` string. A report bound to
+another evaluation or to another head or base SHA cannot certify this candidate.
+Gate processes receive that binding in their environment as `ACCEPT_EVALUATION_ID`
+and `ACCEPT_IDENTITY`, alongside `ACCEPT_CANDIDATE_DIR` and `ACCEPT_BASE_DIR` so an
+evaluator can run the same behavior against the candidate and the prior application
+and report what it actually observed. Contents and hashes are copied to private
+artifacts and supplied to the judge, so configure only evidence safe for the
+evaluator to publish to a builder; never put private evaluator internals in them.
 
 Protected paths match an exact path or a directory subtree, including deletions
 and either side of renames. A `base:` profile automatically protects its own path.
@@ -81,10 +125,15 @@ does not implement a policy configuration engine or invent project-specific path
 
 ## Trust and isolation
 
-GitHub API data supplies the repository, PR number, and exact head/base SHAs. Git
+GitHub API data supplies the repository, PR number, exact head/base SHAs, and the
+metadata a request can require of the PR itself: target and source branch, open
+and merged and draft state, title, body, and URL. That metadata reaches the judge
+as evidence for linkage and target-branch requirements, never as instructions, and
+proves nothing about runtime behavior. Git
 fetches those commits into a new temporary bare repository with detached base and
 candidate worktrees. No remote branch is checked out in the application's checkout.
-Identity is checked after execution and again before issuing the receipt. Tracked
+Identity and that metadata are checked after execution and again before issuing
+the receipt; either changing invalidates the evaluation. Tracked
 candidate mutations invalidate the evidence. The owned temporary tree is removed
 before the receipt is issued; a cleanup failure is inconclusive and its manifest
 identifies the directory for operator cleanup. A killed process can leave that
@@ -104,8 +153,9 @@ native configuration remains intact, and this workflow makes no tool-enforcement
 claim. There is no provider capability expansion in this pack.
 
 Fixed policy source, argv, and logs are withheld from the judge and repair text.
-The judge sees command IDs, exit status, stream digests, and explicitly selected
-evidence. Generic command output is visible to the judge. Every artifact should
+The judge sees command IDs, exit status, stream digests, the gate declaration,
+trusted context, and explicitly selected evidence.
+Generic command output is visible to the judge. Every artifact should
 remain private unless the operator reviews it for publication. Nothing is posted
 by this workflow. Passing tests alone cannot establish semantic acceptance.
 
@@ -141,7 +191,8 @@ Every check contains `id`, the complete `identity` (repository, PR, head/base SH
 `stdout_sha256`/`stderr_sha256`, and `timestamp`. Streams are retained in full even
 when empty. A passed label without this record is not evidence.
 
-`accept-private/` retains the prepared identity, original request and full diff in
+`accept-private/` retains the prepared identity, PR metadata, trusted context,
+original request and full diff in
 `state.json`, the exact profile when supplied, check records and streams, ordinary
 check source snapshots, required evidence snapshots, full `packet.json`, the
 bounded judge packet in `evidence.json`, and raw `judgment.json`. Material clipping
@@ -151,9 +202,13 @@ Artifact write failures fail the workflow rather than fabricate a receipt.
 A merge consumer must validate the receipt, require approve, verify the artifact
 digests from a trusted run, and resolve the current PR head **and base** again.
 This receipt certifies the observed identity at issuance, not a future moving PR.
-Unknown identity uses nulls and cannot approve. Incomplete evidence takes precedence
-over repair findings; deterministic failed checks take precedence over model
-approval. Invalid or absent model output is inconclusive.
+Unknown identity uses nulls and cannot approve. Deterministic failed checks take
+precedence over model approval, and unverifiable identity or evidence makes every
+verdict inconclusive. Only approval requires complete verification: a refusal the
+judge supports with concrete evidence stays a refusal and keeps its findings when
+other acceptance verification is still outstanding, with that gap recorded beside
+them as a `verification_incomplete` finding. An unsupported refusal, like any other
+unestablished contract, is inconclusive, as is invalid or absent model output.
 
 ## Validation
 
@@ -161,6 +216,10 @@ approval. Invalid or absent model output is inconclusive.
 Fixtures create real temporary Git commits and use a GitHub command harness that
 only permits the expected read-only API call. They execute the actual bundled
 script against a non-JavaScript checkout, including red and missing evidence.
+A further set installs the pack into a scratch project and drives it through the
+engine's own discovery and dry run, covering the wiring a direct phase call cannot
+reach: declared script inputs, the skipped validation branch, the skipped judge
+branch, and the receipt the composed run returns.
 Root `bun run test` includes this registration, and root type checking follows its
 imports. Live-model behavior and actual private PR acceptance are operator tests;
 the deterministic fixtures do not claim to prove model quality or host isolation.

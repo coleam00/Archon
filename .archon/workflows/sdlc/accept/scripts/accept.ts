@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, realpath, readdir, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, realpath, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
@@ -31,7 +31,9 @@ export interface Check {
 }
 export interface Profile {
   schema_version: 1;
-  commands: { id: string; argv: string[]; environment_exit_codes: number[] }[];
+  commands: { id: string; argv: string[]; environment_exit_codes: number[]; public_description?: string }[];
+  gate?: { complete: boolean; description: string };
+  context?: { id: string; source: string }[];
   required_evidence: string[];
   protected_paths: string[];
   require_isolation: boolean;
@@ -65,6 +67,9 @@ export interface Receipt {
 }
 interface State {
   identity: Identity | null;
+  evaluation_id: string;
+  pull_request: PullRequest | null;
+  context: { id: string; source: string; sha256: string; content: string }[];
   root: string;
   artifacts: string;
   work: string;
@@ -74,6 +79,16 @@ interface State {
   changed: string[];
   diff: string;
   blockers: Finding[];
+}
+interface PullRequest {
+  base_ref: string;
+  head_ref: string;
+  state: string;
+  merged: boolean;
+  draft: boolean;
+  title: string;
+  body: string;
+  url: string;
 }
 interface Evidence {
   checks: Check[];
@@ -150,6 +165,12 @@ function repoPath(value: unknown): string {
     throw new Error('Expected relative repository path');
   return path;
 }
+function outputPath(value: unknown): string {
+  const path = repoPath(value);
+  if (path.split('/').some(part => /[<>:"|?*]/.test(part) || /[. ]$/.test(part) || part.toLowerCase() === '.git'))
+    throw new Error('Expected a literal generated output path outside Git metadata');
+  return path;
+}
 export function digest(value: string | Uint8Array): string {
   return createHash('sha256').update(value).digest('hex');
 }
@@ -183,12 +204,14 @@ export function parseProfile(value: unknown): Profile {
     'required_evidence',
     'protected_paths',
     'require_isolation',
+    'gate',
+    'context',
   ];
   if (p.schema_version !== 1 || Object.keys(p).some(k => !keys.includes(k)))
     throw new Error('Unsupported profile');
   const commands = array(p.commands).map(value => {
     const c = object(value);
-    if (Object.keys(c).some(k => !['id', 'argv', 'environment_exit_codes'].includes(k)))
+    if (Object.keys(c).some(k => !['id', 'argv', 'environment_exit_codes', 'public_description'].includes(k)))
       throw new Error('Unknown command field');
     const id = string(c.id);
     if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) throw new Error('Invalid check id');
@@ -197,14 +220,36 @@ export function parseProfile(value: unknown): Profile {
     const environment_exit_codes = array(c.environment_exit_codes).map(integer);
     if (environment_exit_codes.some(code => code < 1 || code > 255))
       throw new Error('Invalid environment exit code');
-    return { id, argv, environment_exit_codes };
+    return { id, argv, environment_exit_codes,
+      ...(c.public_description === undefined ? {} : { public_description: string(c.public_description) }),
+    };
   });
   if (!commands.length || new Set(commands.map(c => c.id)).size !== commands.length)
     throw new Error('Commands must be nonempty and unique');
+  let gate: Profile['gate'];
+  if (p.gate !== undefined) {
+    const g = object(p.gate);
+    if (Object.keys(g).some(k => !['complete', 'description'].includes(k))) throw new Error('Unknown gate field');
+    gate = { complete: boolean(g.complete), description: string(g.description) };
+    if (commands.some(c => !c.public_description)) throw new Error('A declared gate needs public command descriptions');
+  }
+  const context = p.context === undefined ? undefined : array(p.context).map(value => {
+    const c = object(value);
+    if (Object.keys(c).some(k => !['id', 'source'].includes(k))) throw new Error('Unknown context field');
+    const source = string(c.source);
+    if (source.startsWith('base:')) repoPath(source.slice(5));
+    else if (!isAbsolute(source)) throw new Error('Context must come from trusted base or an absolute external path');
+    return { id: string(c.id), source };
+  });
+  if (context && new Set(context.map(c => c.id)).size !== context.length) throw new Error('Duplicate context IDs');
+  const required_evidence = array(p.required_evidence).map(outputPath);
+  if (new Set(required_evidence).size !== required_evidence.length) throw new Error('Duplicate evidence paths');
   return {
     schema_version: 1,
     commands,
-    required_evidence: array(p.required_evidence).map(repoPath),
+    ...(gate ? { gate } : {}),
+    ...(context ? { context } : {}),
+    required_evidence,
     protected_paths: array(p.protected_paths).map(repoPath),
     require_isolation: boolean(p.require_isolation),
   };
@@ -339,22 +384,37 @@ export function decide(
       summary: 'The independent judgment is missing or invalid.',
       findings: [],
     };
+  const unknowns = !judgment.checks_complete || !judgment.evidence_sufficient ||
+    !judgment.requirements.length || judgment.requirements.some(r => !r.evidence.length)
+    ? [finding('verification_incomplete', 'Additional acceptance verification remains outstanding.')]
+    : [];
+  // A refusal the judge supports with evidence survives outstanding verification, so
+  // the receipt must still name the defect: without an evidenced finding of its own it
+  // carries the unmet requirements instead of an empty, unactionable findings array.
+  const supported = judgment.findings.filter(f => f.evidence.length > 0);
+  const unmet = judgment.requirements.filter(r => !r.met && r.evidence.length > 0);
+  if ((judgment.verdict === 'request_changes' || judgment.verdict === 'reject') &&
+    (supported.length > 0 || unmet.length > 0))
+    return {
+      verdict: judgment.verdict,
+      summary: judgment.summary,
+      findings: [
+        ...judgment.findings,
+        ...(supported.length ? [] : unmet.map(r => finding('requirement_unmet', r.request, r.evidence))),
+        ...unknowns,
+      ],
+    };
   if (judgment.checks_weakened)
     return {
       verdict: 'request_changes',
       summary: 'The candidate weakened validation.',
       findings: judgment.findings,
     };
-  if (
-    !judgment.checks_complete ||
-    !judgment.evidence_sufficient ||
-    !judgment.requirements.length ||
-    judgment.requirements.some(r => !r.evidence.length)
-  )
+  if (unknowns.length)
     return {
       verdict: 'inconclusive',
-      summary: 'The judge could not establish complete acceptance evidence.',
-      findings: judgment.findings,
+      summary: judgment.summary,
+      findings: [...judgment.findings, ...unknowns],
     };
   if (
     (judgment.requirements.some(r => !r.met) || judgment.findings.length > 0) &&
@@ -390,7 +450,15 @@ async function run(argv: string[], cwd: string): Promise<string> {
   if (code !== 0) throw new Error(`${argv[0]} failed with exit ${code}`);
   return out;
 }
-async function resolveIdentity(target: ReturnType<typeof parseTarget>): Promise<Identity> {
+function parsePullRequest(value: unknown): PullRequest {
+  const p = object(value);
+  return {
+    base_ref: string(p.base_ref), head_ref: string(p.head_ref), state: string(p.state),
+    merged: boolean(p.merged), draft: boolean(p.draft), title: string(p.title),
+    body: typeof p.body === 'string' ? p.body : '', url: string(p.url),
+  };
+}
+async function resolvePullRequest(target: ReturnType<typeof parseTarget>): Promise<{ identity: Identity; metadata: PullRequest }> {
   const { owner, name } = target.repository;
   const pr = object(
     JSON.parse(await run(['gh', 'api', `repos/${owner}/${name}/pulls/${target.pr}`], process.cwd()))
@@ -403,7 +471,20 @@ async function resolveIdentity(target: ReturnType<typeof parseTarget>): Promise<
     string(repo.full_name).toLowerCase() !== `${owner}/${name}`.toLowerCase()
   )
     throw new Error('PR identity is unavailable');
-  return { ...target, head_sha: sha(object(pr.head).sha), base_sha: sha(base.sha) };
+  const head = object(pr.head);
+  return {
+    identity: { ...target, head_sha: sha(head.sha), base_sha: sha(base.sha) },
+    metadata: parsePullRequest({ base_ref: base.ref, head_ref: head.ref, state: pr.state,
+      merged: pr.merged, draft: pr.draft, title: pr.title, body: pr.body, url: pr.html_url }),
+  };
+}
+async function verifyPullRequest(state: State, blockers: Finding[]): Promise<void> {
+  if (!state.identity) return;
+  const current = await resolvePullRequest(state.identity);
+  if (!sameIdentity(state.identity, current.identity))
+    blockers.push(finding('identity_moved', 'PR head or base moved after preparation.'));
+  if (JSON.stringify(state.pull_request) !== JSON.stringify(current.metadata))
+    blockers.push(finding('pr_metadata_changed', 'PR metadata changed after preparation.'));
 }
 function inside(parent: string, child: string): boolean {
   const rel = relative(parent, child);
@@ -424,6 +505,9 @@ async function prepare(): Promise<void> {
   const root = await mkdtemp(join(await realpath(tmpdir()), 'archon-accept-'));
   const state: State = {
     identity: null,
+    evaluation_id: randomUUID(),
+    pull_request: null,
+    context: [],
     root,
     artifacts,
     work: '',
@@ -447,7 +531,9 @@ async function prepare(): Promise<void> {
     if (!state.work.trim()) throw new Error('Empty work order');
     stage = 'identity';
     const target = parseTarget(string(process.env.INPUTS_TARGET));
-    state.identity = await resolveIdentity(target);
+    const pull = await resolvePullRequest(target);
+    state.identity = pull.identity;
+    state.pull_request = pull.metadata;
     stage = 'fetch';
     await run(['git', 'init', '--bare', join(root, 'repo')], cwd);
     const git = ['git', '--git-dir', join(root, 'repo')];
@@ -505,6 +591,14 @@ async function prepare(): Promise<void> {
       state.policy_sha256 = digest(raw);
       state.policy_source = policy.startsWith('base:') ? policy : 'external';
       await writeFile(join(artifacts, 'accept-private', 'policy.json'), raw);
+      for (const c of state.policy.context ?? []) {
+        const fromBase = c.source.startsWith('base:');
+        const content = fromBase
+          ? await run([...git, 'show', `${state.identity.base_sha}:${repoPath(c.source.slice(5))}`], cwd)
+          : await readFile(await external(c.source, cwd), 'utf8');
+        if (!content.trim()) throw new Error('Empty source context');
+        state.context.push({ id: c.id, source: fromBase ? c.source : 'external', sha256: digest(content), content });
+      }
       const protectedPaths = [
         ...state.policy.protected_paths,
         ...(policy.startsWith('base:') ? [policy.slice(5)] : []),
@@ -575,6 +669,12 @@ async function loadState(path: string): Promise<State> {
     throw new Error('Invalid manifest location');
   return {
     identity: s.identity === null ? null : parseIdentity(s.identity),
+    evaluation_id: string(s.evaluation_id),
+    pull_request: s.pull_request === null ? null : parsePullRequest(s.pull_request),
+    context: array(s.context).map(value => {
+      const c = object(value);
+      return { id: string(c.id), source: string(c.source), sha256: hash(c.sha256), content: string(c.content) };
+    }),
     root,
     artifacts,
     work: typeof s.work === 'string' ? s.work : '',
@@ -605,7 +705,12 @@ async function recordCheck(
       stdin: 'ignore',
       stdout: Bun.file(stdout),
       stderr: Bun.file(stderr),
-      env: { ...process.env, DATABASE_URL: '', ARTIFACTS_DIR: '', INPUTS_POLICY: '' },
+      env: { ...process.env, DATABASE_URL: '', ARTIFACTS_DIR: '', INPUTS_POLICY: '',
+        ACCEPT_EVALUATION_ID: state.evaluation_id,
+        ACCEPT_IDENTITY: JSON.stringify(state.identity),
+        ACCEPT_BASE_DIR: join(state.root, 'base'),
+        ACCEPT_CANDIDATE_DIR: join(state.root, 'candidate'),
+      },
       timeout: 600_000,
     });
     exit_code = await child.exited;
@@ -666,6 +771,33 @@ async function candidateIntact(state: State): Promise<boolean> {
   const status = await run(['git', 'status', '--porcelain', '--untracked-files=no'], cwd);
   return head === state.identity?.head_sha && !status.trim();
 }
+async function generatedFile(state: State, path: string, mustExist: boolean): Promise<string> {
+  let file = join(state.root, 'candidate');
+  const parts = outputPath(path).split('/');
+  for (const [index, part] of parts.entries()) {
+    file = join(file, part);
+    let entry;
+    try {
+      entry = await lstat(file);
+    } catch (error) {
+      if (!mustExist && error instanceof Error && 'code' in error && error.code === 'ENOENT')
+        return join(state.root, 'candidate', path);
+      throw error;
+    }
+    if (entry.isSymbolicLink()) throw new Error('Generated evidence cannot use symlinks');
+    if (index < parts.length - 1 ? !entry.isDirectory() : !mustExist || !entry.isFile())
+      throw new Error('Generated output must be a new regular file');
+  }
+  return file;
+}
+async function requireFreshOutputs(state: State): Promise<void> {
+  const tracked = (await run(['git', 'ls-files', '-z'], join(state.root, 'candidate'))).split('\0').filter(Boolean);
+  for (const path of state.policy?.required_evidence ?? []) {
+    if (tracked.some(p => p === path || p.startsWith(path + '/') || path.startsWith(p + '/')))
+      throw new Error('Generated output conflicts with tracked source');
+    await generatedFile(state, path, false);
+  }
+}
 async function collect(path: string): Promise<void> {
   const state = await loadState(path);
   const blockers = [...state.blockers];
@@ -674,6 +806,7 @@ async function collect(path: string): Promise<void> {
   if (state.identity && !blockers.length) {
     try {
       if (state.policy) {
+        await requireFreshOutputs(state);
         for (const c of state.policy.commands)
           await recordCheck(state, c.id, c.argv, 'trusted_policy', c.environment_exit_codes, true);
       }
@@ -696,11 +829,13 @@ async function collect(path: string): Promise<void> {
           });
       }
       for (const required of state.policy?.required_evidence ?? []) {
-        const file = await realpath(join(state.root, 'candidate', required));
-        if (!inside(join(state.root, 'candidate'), file))
-          throw new Error('Evidence escaped workspace');
+        const file = await generatedFile(state, required, true);
         const content = await readFile(file, 'utf8');
-        if (!content.trim()) throw new Error('Empty required evidence');
+        const report = object(JSON.parse(content));
+        if (report.schema_version !== 1 || report.evaluation_id !== state.evaluation_id ||
+          !sameIdentity(parseIdentity(report.identity), state.identity))
+          throw new Error('Generated evidence belongs to another evaluation');
+        string(report.evidence);
         await save(join(state.artifacts, 'accept-private', `evidence-${digest(required)}.json`), {
           path: required,
           sha256: digest(content),
@@ -708,10 +843,7 @@ async function collect(path: string): Promise<void> {
         });
         excerpts.push({ path: required, sha256: digest(content), content });
       }
-      if (!sameIdentity(state.identity, await resolveIdentity(state.identity)))
-        blockers.push(
-          finding('identity_moved', 'PR head or base moved after evidence collection.')
-        );
+      await verifyPullRequest(state, blockers);
       if (!(await candidateIntact(state)))
         blockers.push(finding('candidate_changed', 'Validation changed tracked candidate files.'));
     } catch {
@@ -749,6 +881,16 @@ async function collect(path: string): Promise<void> {
   }
   let packet = JSON.stringify({
     identity: state.identity,
+    evaluation_id: state.evaluation_id,
+    pull_request: state.pull_request,
+    gate: state.policy ? {
+      mode: 'fixed',
+      declaration: state.policy.gate ?? null,
+      policy_sha256: state.policy_sha256,
+      commands: state.policy.commands.map(c => ({ id: c.id, description: c.public_description ?? null,
+        command_sha256: digest(JSON.stringify(c.argv)) })),
+    } : { mode: 'discovered' },
+    source_context: state.context,
     work_order: state.work,
     diff: state.diff,
     checks,
@@ -806,10 +948,7 @@ async function finish(path: string, rawJudgment: string): Promise<void> {
       )
         throw new Error('Evidence changed');
     }
-    if (state.identity && !sameIdentity(state.identity, await resolveIdentity(state.identity)))
-      blockers.push(
-        finding('identity_moved', 'PR head or base moved before the receipt was issued.')
-      );
+    await verifyPullRequest(state, blockers);
     if (state.identity && !state.blockers.length && !(await candidateIntact(state)))
       blockers.push(
         finding('candidate_changed', 'Tracked candidate files changed after evidence collection.')
