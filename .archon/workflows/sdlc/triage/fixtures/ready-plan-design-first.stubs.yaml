@@ -1,0 +1,21 @@
+triage: &judgment
+  route: "plan"
+  summary: "stub: outcome is clear; the implementation approach itself needs design"
+  contract: "READY"
+  design_first: true
+  complexity: "large"
+  proposed_edits: {"title":"","body":""}
+  labels: ["archon-design-first"]
+  blocked_by: []
+  issue_repo: ""
+  issue_number: 0
+  blocked_reason: ""
+  issue_url: ""
+validate-contract:
+  <<: *judgment
+  publication: { published: false, applied_labels: [], skipped_labels: [] }
+# Dry-run fixture: a sound contract whose engineering shape must be settled
+# before a run starts - design-first, its own state beside route=plan.
+
+fixture:
+  expect: completed

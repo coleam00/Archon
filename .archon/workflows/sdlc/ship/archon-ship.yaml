@@ -23,6 +23,12 @@ inputs:
   errors:
     default: "auto"
     description: Silent-failure lens — auto, true, or false.
+  publish:
+    default: "false"
+    description: >-
+      "true" lets triage write its proposed label set to the resolved GitHub
+      issue. "false" stays advisory; other values are rejected. Forwarded
+      unchanged to triage.
 
 returns: outcome
 
@@ -33,6 +39,7 @@ nodes:
     include: archon-triage
     with:
       target: "$INPUTS.target"
+      publish: "$INPUTS.publish"
 
   - id: inv
     include: archon-investigate
@@ -42,7 +49,7 @@ nodes:
         $ARTIFACTS_DIR/triage.md. Read that assessment first; its confirmed facts
         are context, while its unknowns are the investigation target.
     depends_on: [triage]
-    when: "$triage.output.route == 'investigate'"
+    when: "$triage.output.contract == 'READY' && $triage.output.route == 'investigate'"
 
   # These three route markers form one join into delivery. Expected negative
   # judgments skip their marker; contract failures inside the advisory package
@@ -51,7 +58,7 @@ nodes:
   - id: gate-direct
     bash: echo '{"gate":"direct"}'
     depends_on: [triage]
-    when: "$triage.output.route == 'deliver'"
+    when: "$triage.output.contract == 'READY' && $triage.output.route == 'deliver'"
 
   - id: gate-rooted
     bash: echo '{"gate":"rooted"}'
@@ -66,7 +73,7 @@ nodes:
         assessment first, preserve its verified outcome and constraints, and
         decide the implementation questions it identified.
     depends_on: [triage]
-    when: "$triage.output.route == 'plan'"
+    when: "$triage.output.contract == 'READY' && $triage.output.route == 'plan'"
 
   - id: gate-planned
     bash: echo '{"gate":"planned"}'
@@ -98,6 +105,7 @@ nodes:
     with:
       route: "$triage.output.route"
       summary: "$triage.output.summary"
+      contract: "$triage.output.contract"
       delivered: { from: "$deliver.output", if_skipped: null }
       # A passed spend gate with no delivered output means delivery STARTED and
       # died mid-flight — a different fact from an advisory stop, and the report

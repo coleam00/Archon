@@ -1,0 +1,22 @@
+triage: &judgment
+  route: "plan"
+  summary: "stub: desired outcome is current; implementation shape needs a decision"
+  contract: "READY"
+  design_first: false
+  complexity: "risky"
+  proposed_edits: {"title":"","body":""}
+  labels: ["archon-ready"]
+  blocked_by: []
+  issue_repo: ""
+  issue_number: 0
+  blocked_reason: ""
+  issue_url: ""
+validate-contract:
+  <<: *judgment
+  publication: { published: false, applied_labels: [], skipped_labels: [] }
+# Dry-run fixture: READY, routed to plan, contract sound but not design-first
+# (the implementation shape is undecided for reasons other than needing a
+# design pass first).
+
+fixture:
+  expect: completed

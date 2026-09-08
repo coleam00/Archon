@@ -1,3 +1,19 @@
+triage__triage: &judgment
+  route: "deliver"
+  summary: "stub: current code confirms a complete work order"
+  contract: "READY"
+  design_first: false
+  complexity: "small_bounded"
+  proposed_edits: {"title":"","body":""}
+  labels: ["archon-ready"]
+  blocked_by: []
+  issue_repo: ""
+  issue_number: 0
+  blocked_reason: ""
+  issue_url: ""
+triage__validate-contract:
+  <<: *judgment
+  publication: { published: false, applied_labels: [], skipped_labels: [] }
 # Dry-run fixture: delivery dies at the green gate, and the terminal report node
 # still runs. That reachability is what lets a failed run say anything at all —
 # ship's outcome depends on the deliver block's sinks, which are SKIPPED (never
@@ -9,10 +25,7 @@
 # a declared failure fixture asserts EXACTLY one failed node. Its rendering of the
 # raw sidecars is proved by running the script directly against a seeded
 # $ARTIFACTS_DIR — a dry run has no node that writes discoveries/*.json.
-triage__triage:
-  route: deliver
-  summary: "stub: current code confirms a complete work order"
-triage__assert-intact: '{"intact":"true"}'
+
 deliver__impl__record-start: '{"start":"recorded"}'
 deliver__impl__implement:
   done: true

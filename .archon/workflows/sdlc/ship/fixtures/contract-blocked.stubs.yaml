@@ -1,0 +1,25 @@
+triage__triage: &judgment
+  route: "no_action"
+  summary: "stub: depends on unresolved work in #45"
+  contract: "BLOCKED"
+  design_first: false
+  complexity: "risky"
+  proposed_edits: {"title":"","body":""}
+  labels: ["archon-blocked"]
+  blocked_by: ["https://github.com/example/dependency/issues/45"]
+  issue_repo: "example/repo"
+  issue_number: 100
+  blocked_reason: "Waiting for the upstream dependency."
+  issue_url: "https://github.com/example/repo/issues/100"
+triage__validate-contract:
+  <<: *judgment
+  publication: { published: false, applied_labels: [], skipped_labels: [] }
+# Dry-run fixture: the contract is sound but the work cannot start because it
+# depends on another unresolved issue. Always routes to no_action; names the
+# blocker rather than writing a forge relation (no op exists yet, #3042).
+
+fixture:
+  expect: completed
+  reached: [outcome]
+
+exec-code: true

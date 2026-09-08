@@ -1,0 +1,23 @@
+# Judgment is stubbed; the validator test executes this tuple with evidence.
+triage__triage: &judgment
+  route: "no_action"
+  summary: "stub: awaiting an external operator decision, with no tracker blocker"
+  contract: "BLOCKED"
+  design_first: false
+  complexity: "risky"
+  proposed_edits: {"title":"","body":""}
+  labels: ["archon-blocked"]
+  blocked_by: []
+  issue_repo: "example/repo"
+  issue_number: 100
+  blocked_reason: "Awaiting the external operator decision."
+  issue_url: "https://github.com/example/repo/issues/100"
+triage__validate-contract:
+  <<: *judgment
+  publication: { published: false, applied_labels: [], skipped_labels: [] }
+
+fixture:
+  expect: completed
+  reached: [outcome]
+
+exec-code: true

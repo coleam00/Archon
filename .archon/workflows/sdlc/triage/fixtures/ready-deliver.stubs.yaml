@@ -1,0 +1,20 @@
+triage: &judgment
+  route: "deliver"
+  summary: "stub: current code confirms the work order; no material decision remains"
+  contract: "READY"
+  design_first: false
+  complexity: "small_bounded"
+  proposed_edits: {"title":"","body":""}
+  labels: ["archon-ready"]
+  blocked_by: []
+  issue_repo: ""
+  issue_number: 0
+  blocked_reason: ""
+  issue_url: ""
+validate-contract:
+  <<: *judgment
+  publication: { published: false, applied_labels: [], skipped_labels: [] }
+# Dry-run fixture: current evidence says the target is implementation-ready.
+
+fixture:
+  expect: completed

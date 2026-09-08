@@ -3,12 +3,17 @@ description: |
   Ground one work item against the current repository before deciding what kind
   of work it needs. Reconciles tracker history, current code, moved branches,
   stale assumptions, and explicit direction; then routes to investigate, plan,
-  deliver, or no action. Advisory: it leaves the checkout unchanged.
+  deliver, or no action, and judges whether the item is a usable contract
+  (READY, NEEDS_CONTRACT_WORK, BLOCKED, NO_ACTION) beside the route. Proposes
+  labels and, for NEEDS_CONTRACT_WORK, the edits that would make it ready.
+  Advisory: it leaves the checkout unchanged and never writes to the tracker
+  unless `publish` is explicitly set.
 
   Use when: an issue, plan, report, or request may be stale or may prescribe an
-  unverified solution — "triage this issue", "what does this need next", "is
+  unverified solution - "triage this issue", "what does this need next", "is
   this ready to build".
-  NOT for: performing the investigation, writing the plan, or delivering work.
+  NOT for: performing the investigation, writing the plan, delivering work, or
+  applying the proposed edits.
 
 model: medium
 
@@ -16,38 +21,91 @@ inputs:
   target:
     default: ""
     description: >-
-      What to triage — an issue, document, plan, report, or free-form request.
+      What to triage - an issue, document, plan, report, or free-form request.
       When empty, the run's trigger message is the target.
+  publish:
+    default: "false"
+    description: >-
+      "true" writes the proposed label set to the resolved GitHub issue
+      (creating any of the five pack labels that do not already exist) and
+      reads them back. "false" stays advisory; other values are rejected.
 
-returns: triage
+returns: validate-contract
 
 nodes:
   - id: triage
     command: triage
-    # Triage is advisory: the engine fails this node with the touched paths
-    # named if it modifies the working tree. Replaced the
-    # record-state/assert-intact snapshot pair the pack carried before the
-    # engine could enforce this itself.
+    # The engine enforces checkout intactness.
     mutates_checkout: false
     output_type: work-triage
-    output_format:
+    output_format: &triage-output
       type: object
-      properties:
+      properties: &triage-properties
         route:
           type: string
           enum: [investigate, plan, deliver, no_action]
         summary:
           type: string
-      required: [route, summary]
+        contract:
+          type: string
+          enum: [READY, NEEDS_CONTRACT_WORK, BLOCKED, NO_ACTION]
+        design_first:
+          type: boolean
+        complexity:
+          type: string
+          enum: [small_bounded, risky, large]
+        proposed_edits:
+          type: object
+          properties:
+            title: { type: string }
+            body: { type: string }
+          required: [title, body]
+        labels:
+          type: array
+          items: { type: string }
+        blocked_by:
+          type: array
+          items: { type: string }
+        blocked_reason:
+          type: string
+        issue_repo:
+          type: string
+        issue_number:
+          type: integer
+        issue_url:
+          type: string
+      required:
+        - route
+        - summary
+        - contract
+        - design_first
+        - complexity
+        - proposed_edits
+        - labels
+        - blocked_reason
+        - blocked_by
+        - issue_repo
+        - issue_number
+        - issue_url
 
-  - id: assert-intact
-    bash: |
-      # Tree-intactness is engine-enforced via mutates_checkout: false above;
-      # what remains here is the evidence contract: a route without a written
-      # triage.md is not a triage.
-      if [ ! -s "$ARTIFACTS_DIR/triage.md" ]; then
-        echo "assert-intact: the run completed but wrote no triage.md — a route without evidence is not a triage." >&2
-        exit 1
-      fi
-      echo '{"intact":"true"}'
+  # Only validated tuples reach consumers. Publication, when enabled, must
+  # also verify before this node returns.
+  - id: validate-contract
+    script: validate-contract
+    runtime: uv
     depends_on: [triage]
+    output_format:
+      <<: *triage-output
+      properties:
+        <<: *triage-properties
+        publication:
+          type: object
+          properties:
+            published: { type: boolean }
+            applied_labels: { type: array, items: { type: string } }
+            skipped_labels: { type: array, items: { type: string } }
+          required: [published, applied_labels, skipped_labels]
+      required: [route, summary, contract, design_first, complexity, proposed_edits, labels, blocked_reason, blocked_by, issue_repo, issue_number, issue_url, publication]
+    with:
+      triage: "$triage.output"
+      publish: "$INPUTS.publish"

@@ -1,0 +1,25 @@
+triage: &judgment
+  route: "no_action"
+  summary: "stub: target names issues #10, #11, and #12 - refusing to choose one to triage"
+  contract: "NO_ACTION"
+  design_first: false
+  complexity: "small_bounded"
+  proposed_edits: {"title":"","body":""}
+  labels: ["archon-close"]
+  blocked_by: []
+  issue_repo: ""
+  issue_number: 0
+  blocked_reason: ""
+  issue_url: ""
+validate-contract:
+  <<: *judgment
+  publication: { published: false, applied_labels: [], skipped_labels: [] }
+# Dry-run fixture: the target names several distinct work items, and the
+# command refuses to choose among them rather than pick one silently. The
+# refusal itself is a prompt-level judgment a fixture cannot exercise (like
+# every route/contract choice); what this proves is that the tuple the
+# command file documents for a refusal - no_action/NO_ACTION, no single
+# resolved issue - is one that completes the run.
+
+fixture:
+  expect: completed
