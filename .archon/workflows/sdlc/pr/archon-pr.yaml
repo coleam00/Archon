@@ -33,6 +33,8 @@ nodes:
     script: publish-pr
     runtime: uv
     output_type: pull-request
+    # Decode the forge-validated record for persistence and native check signals.
+    output_format: { type: object }
     depends_on: [prepare]
     with:
       content: "$prepare.output"

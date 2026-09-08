@@ -639,7 +639,8 @@ describe('bundled-defaults', () => {
         const node = parsed.workflow.nodes.find(node => node.id === id);
         expect(node?.kind).toBe('exec');
         if (node?.kind !== 'exec') throw new Error('missing public exec node');
-        if (id !== 'publish') expect(node.output_format).toBeUndefined();
+        if (id === 'pr') expect(node.output_format).toEqual({ type: 'object' });
+        else if (id !== 'publish') expect(node.output_format).toBeUndefined();
       }
       expect(BUNDLED_WORKFLOWS['archon-pr']).toContain('command: pr');
       expect(BUNDLED_WORKFLOWS['archon-deliver']).toContain('command: sync-pr-body');

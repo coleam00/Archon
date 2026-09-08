@@ -10,6 +10,8 @@ Command nodes judge PR content and public review findings. Script nodes call the
 engine's forge CLI with JSON on stdin; content never becomes shell code. The
 forge schema owns the qualified PR record and the plugin owns target validation,
 write/read-back and retry reconciliation. Pack scripts do not copy that schema.
+The PR node declares only an object output format to persist the validated JSON
+beside its `pull-request` output type for native CI wakeups.
 
 The PR publisher pushes the exact checked-out SHA to the named origin branch.
 Origin is also the PR's base repository, including in fork clones. Delivery retains
