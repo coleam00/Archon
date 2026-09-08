@@ -19,6 +19,9 @@ description: |
 model: medium
 
 inputs:
+  local_range:
+    default: ""
+    description: Exact local base SHA..candidate SHA to review without forge reads or publication.
   scope:
     default: ""
     description: >-

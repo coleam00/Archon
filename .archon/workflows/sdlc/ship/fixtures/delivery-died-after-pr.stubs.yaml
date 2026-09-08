@@ -44,6 +44,7 @@ deliver__review__synthesize:
 deliver__review-action: '{"ready":true,"action":"none"}'
 deliver__gate-ready: '{"gate":"ready"}'
 deliver__validate__validate:
+  checks_performed: true
   green: false
   red_cause: introduced
   summary: "stub: the change broke one spec in the project gate"

@@ -45,6 +45,7 @@ recheck__synthesize:
 # proving the $corrections.output whole-ref binding on a completed loop_group.
 sync-pr-body: "body resynced: corrected the claims the correction round falsified"
 validate__validate:
+  checks_performed: true
   green: true
   summary: "stub: full gate green"
 gate-validated: '{"gate":"green"}'

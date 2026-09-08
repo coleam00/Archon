@@ -30,6 +30,7 @@ review__synthesize:
   action: none
   findings_summary: "stub: clean on initial review"
 validate__validate:
+  checks_performed: true
   green: false
   red_cause: introduced
   summary: "stub: the full gate caught two type errors this change added"

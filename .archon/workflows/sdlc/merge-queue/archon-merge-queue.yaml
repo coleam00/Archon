@@ -1,0 +1,178 @@
+name: archon-merge-queue
+description: >-
+  Supervise an explicit batch of at most five same-repository PRs. Approve the
+  order, review and validate each local composition, then approve the exact
+  candidate chain before pinned forge merges. Conflicts require separate delivery.
+model: medium
+interactive: true
+worktree:
+  enabled: true
+inputs:
+  prs:
+    description: JSON array of qualified PR refs, all in one repository and base.
+returns: report
+outcome_field: merged
+nodes:
+  - id: intake
+    script: merge-queue
+    runtime: uv
+    with:
+      action: intake
+      prs: "$INPUTS.prs"
+
+  - id: assess
+    command: assess-merge-queue
+    context: fresh
+    depends_on: [intake]
+    with:
+      intake: "$intake.output"
+    output_format:
+      type: object
+      properties:
+        order:
+          type: array
+          items: { type: integer }
+        judgments:
+          type: array
+          items:
+            type: object
+            properties:
+              number: { type: integer }
+              size: { type: string, enum: [small_bounded, risky, large] }
+              reason: { type: string }
+            required: [number, size, reason]
+      required: [order, judgments]
+
+  - id: order-snapshot
+    script: merge-queue
+    runtime: uv
+    depends_on: [assess]
+    with:
+      action: assess
+      assessment: "$assess.output"
+
+  - id: approve-order
+    depends_on: [order-snapshot]
+    approval:
+      message: >-
+        Approve this exact pinned intake and proposed order, or hold the queue.
+        Reordering requires a new run and assessment. Text is retained as notes.
+        $order-snapshot.output
+      decisions:
+        - id: approve
+          label: Approve exact order
+        - id: hold
+          label: Hold queue
+
+  - id: order-receipt
+    script: merge-queue
+    runtime: uv
+    depends_on: [approve-order]
+    with:
+      action: order
+      receipt: "$approve-order.output"
+      snapshot: "$order-snapshot.output.snapshot"
+
+  - id: candidates
+    depends_on: [order-receipt]
+    when: "$order-receipt.output.proceed == true"
+    loop_group:
+      max_iterations: 5
+      until_bash: test "$record.output.done" = "true"
+      fresh_context: true
+      nodes:
+        - id: prepare
+          script: merge-queue
+          runtime: uv
+          with:
+            action: prepare
+
+        - id: review
+          include: archon-review
+          depends_on: [prepare]
+          when: "$prepare.output.run == true"
+          with:
+            local_range: "$prepare.output.local_range"
+            work_order: "$prepare.output.work_order"
+            errors: "$prepare.output.review_errors"
+            docs: "$prepare.output.review_docs"
+
+        - id: validate
+          include: archon-validate
+          depends_on: [review]
+          when: "$prepare.output.run == true"
+
+        - id: record
+          script: merge-queue
+          runtime: uv
+          depends_on: [prepare, review, validate]
+          trigger_rule: all_done
+          with:
+            action: record
+            prepared: "$prepare.output"
+            review:
+              from: "$review.output"
+              if_skipped: null
+            validation:
+              from: "$validate.output"
+              if_skipped: null
+
+  - id: candidate-snapshot
+    script: merge-queue
+    runtime: uv
+    depends_on: [candidates]
+    trigger_rule: all_done
+    with:
+      action: snapshot
+
+  - id: approve-candidates
+    depends_on: [candidate-snapshot]
+    when: "$candidate-snapshot.output.ready == true"
+    approval:
+      message: >-
+        Approve only this ordered, tested candidate SHA chain and its evidence.
+        Any changed head, base, candidate, or evidence invalidates approval.
+        $candidate-snapshot.output
+      decisions:
+        - id: approve
+          label: Merge exact tested chain
+        - id: hold
+          label: Hold queue
+
+  - id: candidate-receipt
+    script: merge-queue
+    runtime: uv
+    depends_on: [approve-candidates]
+    with:
+      action: candidate
+      receipt: "$approve-candidates.output"
+      snapshot: "$candidate-snapshot.output.snapshot"
+
+  - id: merges
+    depends_on: [candidate-receipt]
+    loop_group:
+      max_iterations: 5
+      until_bash: test "$merge.output.done" = "true"
+      nodes:
+        - id: merge
+          script: merge-queue
+          runtime: uv
+          with:
+            action: merge
+    when: "$candidate-receipt.output.proceed == true"
+
+  - id: report
+    script: merge-queue
+    runtime: uv
+    depends_on: [intake, order-receipt, candidates, candidate-snapshot, candidate-receipt, merges]
+    trigger_rule: all_done
+    with:
+      action: report
+    output_format:
+      type: object
+      properties:
+        merged: { type: boolean }
+        queue: { type: string }
+        phase: { type: string }
+        entries: { type: array, items: { type: object } }
+      required: [merged, queue, phase, entries]

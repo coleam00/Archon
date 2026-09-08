@@ -29,6 +29,8 @@ nodes:
     output_format:
       type: object
       properties:
+        checks_performed:
+          type: boolean
         green:
           type: boolean
         # Why the checks are red, when they are. Carries the empty string
@@ -40,4 +42,4 @@ nodes:
           enum: [introduced, inherited, environment, ""]
         summary:
           type: string
-      required: [green, red_cause, summary]
+      required: [checks_performed, green, red_cause, summary]

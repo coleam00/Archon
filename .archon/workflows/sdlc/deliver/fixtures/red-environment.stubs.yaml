@@ -48,6 +48,7 @@ recheck__synthesize:
   findings_summary: "stub: the correction closed the finding"
 sync-pr-body: "body resynced, and the environment red disclosed"
 validate__validate:
+  checks_performed: true
   green: true
   summary: "stub: the contention cleared; full gate green"
 gate-validated: '{"gate":"green"}'

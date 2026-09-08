@@ -31,6 +31,8 @@ Write `$ARTIFACTS_DIR/validation.md`: each command run, its outcome, and for fai
 
 ## Declare the verdict
 
+- `checks_performed` is true only when at least one applicable project check actually ran to completion in this session. It is false when there are no defined checks or the gate could not run. A green verdict without performed checks is not evidence of a tested composition.
+
 - `green` — true only when every applicable check you ran passed.
 - `red_cause` — why the checks are red, required whenever a check you ran failed. `introduced`: the change under validation caused it. `inherited`: the same check was already failing at the base this branch came from. `environment`: the machine caused it, not any code — a database or port a parallel process holds, a missing credential, a network fault. Always declared: use the empty string `""` when `green` is true, and when the gate could not run at all — an unrunnable gate is no evidence about the change, and delivery must stop there.
 - `summary` — a few sentences: what ran, what passed, and for a red verdict the failing checks by name.

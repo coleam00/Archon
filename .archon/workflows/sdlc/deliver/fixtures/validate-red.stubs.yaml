@@ -31,6 +31,7 @@ review__synthesize:
 # gate-ready is deliberately unstubbed: under --exec-code the real script runs,
 # proving the review_ready binding and the corrections if_skipped default.
 validate__validate:
+  checks_performed: true
   green: false
   summary: "stub: tests failed — 3 red"
 ci-probe: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
