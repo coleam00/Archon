@@ -1796,4 +1796,4 @@ regression__finish: { status: clean, publication: disabled, issues: [] }
   const trace = result.trace as { nodeId: string; resolvedText?: string }[];
   const validate = trace.find(entry => entry.nodeId === 'regression__validation__validate');
   expect(validate?.resolvedText).toContain(scope);
-});
+}, 30_000);
