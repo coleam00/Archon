@@ -510,6 +510,20 @@ historical run whose storage location can no longer be resolved remains inspecta
 reports `null` (human output says `(unavailable)`) instead of guessing a path from the
 current directory.
 
+Every successful `workflow get --json` response also includes `artifacts_dir`
+(`string | null`), including `--verbose` and `--verbose --events`. This is the
+resolved absolute directory owned by the run. Join it with a relative entry in
+`leave_behind.artifactFiles` to read an artifact, including filenames with spaces.
+The same leave-behind details are available in all JSON modes.
+
+Resolution uses the stored `output_root` when it is inside the active
+`ARCHON_HOME`. Historical runs with a missing or out-of-tree root use their
+codebase's storage location under the active home. Without either a trusted root
+or usable codebase metadata, `artifacts_dir` is `null`; it never guesses from the
+CLI working directory. Inspection creates no artifact directories. A resolved
+directory may not exist yet, and an empty `artifactFiles` list does not imply
+that the directory is unavailable.
+
 For both commands, `--json --verbose` adds a `nodes` array. Nodes are ordered by the
 first appearance of each node in the deterministically ordered event stream. Every
 entry includes `nodeId` and `state`; nodes with a start event include the original ISO

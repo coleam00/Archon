@@ -2282,7 +2282,7 @@ async function runWorkflowWithOwnedSource(
     if (isContinuation) {
       if (!continuationRun) throw buildNoResumableRunError(workflowName, cwd);
       try {
-        transcriptPath = await resolveRunTranscriptPath(continuationRun);
+        transcriptPath = (await resolveRunOutputPaths(continuationRun)).transcript_path;
       } catch (error) {
         transcriptPath = null;
         getLog().warn(
@@ -3982,7 +3982,7 @@ export async function workflowLogsCommand(
       return 1;
     }
 
-    const transcriptPath = await resolveRunTranscriptPath(run);
+    const { transcript_path: transcriptPath } = await resolveRunOutputPaths(run);
     if (!transcriptPath) {
       await writeStderr(`Transcript path is unavailable for workflow run ${run.id}.\n`);
       return 1;
@@ -4084,40 +4084,39 @@ export async function workflowGetCommand(
     eventsFailed = fetched.failed;
   }
 
-  // Leave-behind view (#2747): what did this run leave, and where. Assembled
-  // from existing data — status/outcome, adoption chain, and its artifact file
-  // list resolved through the persisted output_root (read-only by contract).
+  let outputPaths: RunOutputPaths = { transcript_path: null, artifacts_dir: null };
+  try {
+    outputPaths = await resolveRunOutputPaths(run);
+  } catch (error) {
+    getLog().warn({ err: error as Error, runId: run.id }, 'cli.workflow_get_output_paths_failed');
+  }
+
+  // Resolve paths independently of optional adoption and branch lookups so a
+  // leave-behind failure cannot hide an otherwise available artifact directory.
   let leaveBehind: LeaveBehind | undefined;
   try {
-    leaveBehind = await buildLeaveBehind(run);
+    leaveBehind = await buildLeaveBehind(run, outputPaths.artifacts_dir);
   } catch (error) {
     getLog().warn({ err: error as Error, runId: run.id }, 'cli.workflow_get_leave_behind_failed');
   }
 
-  let transcriptPath: string | null = null;
-  try {
-    transcriptPath = await resolveRunTranscriptPath(run);
-  } catch (error) {
-    getLog().warn({ err: error as Error, runId: run.id }, 'cli.workflow_get_transcript_failed');
-  }
-
   if (json) {
+    const detail: WorkflowGetOutput = {
+      ...run,
+      ...outputPaths,
+      ...(leaveBehind ? { leave_behind: leaveBehind } : {}),
+    };
     if (!verbose) {
-      await writeJsonLine({
-        ...run,
-        transcript_path: transcriptPath,
-        ...(leaveBehind ? { leave_behind: leaveBehind } : {}),
-      });
+      await writeJsonLine(detail);
       return 0;
     }
 
     const verboseEvents = events ?? [];
     const parseWarnings = readParseWarningEvents(verboseEvents);
-    const output = rawEvents
-      ? { ...run, transcript_path: transcriptPath, events: verboseEvents }
+    const output: WorkflowGetOutput = rawEvents
+      ? { ...detail, events: verboseEvents }
       : {
-          ...run,
-          transcript_path: transcriptPath,
+          ...detail,
           nodes: buildNodeSummaries(verboseEvents),
           // Keys the engine dropped from this run's YAML (#2213). Surfaced as a
           // named field rather than leaving the caller to scan raw events.
@@ -4130,7 +4129,7 @@ export async function workflowGetCommand(
   console.log(`  ID:     ${run.id}`);
   console.log(`  Name:   ${run.workflow_name}`);
   console.log(`  Path:   ${run.working_path ?? '(none)'}`);
-  console.log(`  Transcript: ${transcriptPath ?? '(unavailable)'}`);
+  console.log(`  Transcript: ${outputPaths.transcript_path ?? '(unavailable)'}`);
   console.log(`  Status: ${run.status}`);
   if (run.outcome) console.log(`  Authored outcome: ${run.outcome}`);
   console.log(`  Age:    ${formatAge(run.started_at)}`);
@@ -4206,13 +4205,6 @@ export async function workflowGetCommand(
 }
 
 /**
- * Pull the dropped-key warnings out of a run's event log (#2213).
- *
- * The engine records them once at run start as `workflow_parse_warnings`,
- * whatever surface started the run — so this is the read path for a run that
- * had no conversation to post into (CLI, REST) or whose chat delivery failed.
- */
-/**
  * Leave-behind view (#2747): what a run concluded and what it left undone —
  * outcome, branch, worktree (live or gone), adoption chain, and its artifact
  * file list. Artifacts resolve through the persisted `output_root` and are
@@ -4228,15 +4220,31 @@ interface LeaveBehind {
   artifactFiles: string[];
 }
 
-async function resolveRunTranscriptPath(run: WorkflowRun): Promise<string | null> {
-  const codebase = run.codebase_id ? await codebaseDb.getCodebase(run.codebase_id) : null;
-  const root = archonPaths.resolveRunStorageRoot(run, codebase);
-  return root ? archonPaths.getRunLogPathForRoot(root, run.id) : null;
+interface RunOutputPaths {
+  transcript_path: string | null;
+  artifacts_dir: string | null;
 }
 
-async function buildLeaveBehind(run: WorkflowRun): Promise<LeaveBehind> {
-  const codebase = run.codebase_id ? await codebaseDb.getCodebase(run.codebase_id) : null;
+export interface WorkflowGetOutput extends WorkflowRun, RunOutputPaths {
+  leave_behind?: LeaveBehind;
+  nodes?: ReturnType<typeof buildNodeSummaries>;
+  events?: WorkflowEventRow[];
+  parseWarnings?: string[];
+}
 
+async function resolveRunOutputPaths(run: WorkflowRun): Promise<RunOutputPaths> {
+  const codebase = run.codebase_id ? await codebaseDb.getCodebase(run.codebase_id) : null;
+  const root = archonPaths.resolveRunStorageRoot(run, codebase);
+  return {
+    transcript_path: root ? archonPaths.getRunLogPathForRoot(root, run.id) : null,
+    artifacts_dir: root ? archonPaths.getRunArtifactsDirForRoot(root, run.id) : null,
+  };
+}
+
+async function buildLeaveBehind(
+  run: WorkflowRun,
+  artifactsDir: string | null
+): Promise<LeaveBehind> {
   const leaveBehind: LeaveBehind = { adopted_by: [], artifactFiles: [] };
 
   if (run.working_path) {
@@ -4257,16 +4265,10 @@ async function buildLeaveBehind(run: WorkflowRun): Promise<LeaveBehind> {
     }
   }
 
-  // Artifact file list — capped walk so `get` stays cheap on big runs.
-  // #3097: route the persisted `output_root` through the shared resolver so
-  // the same `ARCHON_HOME` containment check every other persisted-root
-  // reader in this file already enforces applies here. An unresolvable root
-  // (out-of-tree persisted value with no codebase row to re-derive from)
-  // yields the same null-root refusal the transcript reader exposes.
-  const artifactsRoot = archonPaths.resolveRunStorageRoot(run, codebase);
-  if (artifactsRoot) {
+  // Walk the same resolved directory exposed to CLI consumers, with a cap so
+  // inspection stays cheap. A refused storage root never reaches the walker.
+  if (artifactsDir) {
     try {
-      const artifactsDir = archonPaths.getRunArtifactsDirForRoot(artifactsRoot, run.id);
       leaveBehind.artifactFiles = listArtifactFiles(artifactsDir);
     } catch (error) {
       getLog().debug({ err: error as Error }, 'cli.workflow_get_artifact_walk_failed');
@@ -4297,6 +4299,7 @@ function listArtifactFiles(dir: string, maxFiles = 200): string[] {
   return out;
 }
 
+/** Read the dropped-key warnings recorded at run start (#2213). */
 function readParseWarningEvents(events: readonly WorkflowEventRow[]): string[] {
   const out: string[] = [];
   for (const event of events) {
