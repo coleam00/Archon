@@ -118,9 +118,7 @@ function validateAndExpand(rawPath: string, pin: CodexBinaryPin): string {
       pin.missingInstruction;
   }
 
-  // Source installs delegate an unpinned resolve to the SDK, not to
-  // findLowerTierBinary's vendor/autodetect search. A candidate found here
-  // would never actually be used, so only compiled mode may hint one.
+  // Only compiled installs use the vendor/autodetect fallback after removing a pin.
   const candidate = BUNDLED_IS_BINARY ? findLowerTierBinary() : undefined;
   throw new Error(
     appendBinaryCandidateHint(message, {

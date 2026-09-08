@@ -64,7 +64,7 @@ describe('resolveCodexBinaryPath (dev mode)', () => {
     await expect(resolveCodexBinaryPath(process.execPath)).rejects.toThrow('CODEX_BIN_PATH');
   });
 
-  test('an invalid pin omits the fallback hint even when a lower-tier candidate exists on disk', async () => {
+  test('an invalid pin omits the fallback hint when a lower-tier candidate is available', async () => {
     process.env.CODEX_BIN_PATH = '/missing/env/codex';
     const pathKindSpy = spyOn(resolver, 'pathKind').mockImplementation((path: string) =>
       path === '/missing/env/codex' ? 'missing' : 'file'
