@@ -94,7 +94,8 @@ A discovered finding is publishable only when the diagnosis agent attaches a
 
 | Proof field                   | What the final script re-checks                                                                                                    |
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `root_cause_key`              | A stable lowercase machine key; it alone decides issue identity across runs.                                                       |
+| `root_cause_key`              | A stable lowercase machine key. It identifies a new cause and marks the issue this run files.                                      |
+| `existing_issue`              | Zero, or an issue the tracker still returns as an open marked regression issue. Two findings may not name the same one.            |
 | `executions`                  | Every cited id is a receipt this run collected, and at least one ran to a completed nonzero exit.                                   |
 | `test` and `cause`            | Repository-relative paths whose line ranges exist in `git` at the checked revision, not in the working tree, and never outside it. |
 | `completed_product_assertion` | The agent's explicit per-finding claim that the product itself failed, rather than its environment.                                 |
@@ -112,11 +113,40 @@ is refused before any request. That is a path containment check, not a secret
 detector: everything else rests on the diagnosis prompt and the review of what it
 wrote. Read a first issue from a new project before scheduling unattended runs.
 
-Cause identity is the one part a model owns. A trusted profile's `root_cause_key`
-belongs to the check author and is stable by construction; a discovered key is stable
-only insofar as the agent derives it from the same source-owned cause on the next run.
-A drifting key files a second issue for one defect. Prefer a profile where duplicate
-issues are unacceptable.
+### Reusing the issue a cause already has
+
+A trusted profile's `root_cause_key` belongs to the check author and is stable by
+construction. A discovered key is not: two runs judging one defect phrase their keys
+differently, the markers do not match, and the second run files a duplicate. Keys
+therefore identify new causes only. Reuse is decided against the tracker itself.
+
+When `publish=true` and the collected evidence is product-red, the collector reads the
+repository's open marked regression issues and returns them as `catalog`: for each one its
+number, title, and a bounded, marker-free excerpt of its body. The diagnosis compares its
+proven cause against them and sets `existing_issue` to the number that tracks the same
+source-owned cause, or `0` for a new one. That comparison is model judgment on untrusted
+remote text; every consequence of it is checked deterministically:
+
+- A finding still needs its full `public_proof`. Reuse is not a way to publish something
+  the repository does not prove.
+- Before each create the publisher re-lists the tracker. An exact marker match wins
+  outright, and `existing_issue` is honoured only when that number is still an open issue
+  carrying a regress marker in this repository. Anything else stops publication with no
+  create, rather than guessing.
+- The reused issue is not edited, retitled, reopened, or re-marked. It keeps the marker and
+  number it was filed under, and the run's own key is reported beside it as `matched: cause`.
+- Two findings cannot name the same issue, and separate causes keep separate keys, so an
+  unrelated defect in the same file is still filed on its own.
+
+`catalog.complete` is false when the listing failed, could not be parsed, or holds more than
+100 marked open issues. Nothing in it is then a safe negative, so an ordinary publication is
+held with its reason rather than filing what may be a duplicate. The configured route is
+unaffected: its keys are stable, so it never depended on the catalog.
+
+Catalog text is public tracker content that anyone could have written. It is untrusted
+evidence for comparison only: the diagnosis prompt forbids treating it as instructions, and
+nothing from it can reach an issue, because issue bodies are built from the finding's own
+fields. A wrong match costs a missed filing, never a leak.
 
 ## Public probe of a configured full gate
 
@@ -150,6 +180,11 @@ reach. The workflow enforces the rest:
   fields, no report path, no `public_cases`. The gate contributes one opaque fact, that it
   was not clean, and the model context, the investigation, and any issue body see only
   the public probe's own material.
+- That includes the operator's own `scope`, which is a private brief for the evaluator gate
+  and reaches it only through `REGRESS_SCOPE`. A probe answers for `public_probe_scope`, so
+  that is the scope its receipts are stamped with and the scope its evidence, investigation
+  target, diagnosis, and returned result are bound to. On a probe run the returned `scope`
+  is therefore the public one; the configured scope stays with the gate.
 - A defect the probe proves is a real defect and a valid issue on its own terms. It is not
   evidence about why the full gate failed, and the diagnosis prompt forbids that claim,
   because the causal link is unknown to this run.
@@ -246,9 +281,18 @@ findings are unpublishable rather than hearing about its remote. Only a normaliz
 reported as unsupported, without guessing a destination.
 Repository identity and the root cause key produce a SHA-256 issue marker.
 The publisher lists all issue states using paginated GitHub REST, excludes pull
-requests, and matches exact markers. Existing open or closed issues are reused
-and read back; they are not reopened or edited. If historical duplicates exist,
-the lowest issue number is used. Failed queries never mean no matches.
+requests, and matches exact markers. An existing issue is reused and read back; it is
+never reopened or edited. The canonical issue for a marker is its lowest open one. A
+cause whose only issue is closed is reported as that issue rather than filed again:
+recurrence after a close, and a closed duplicate, are operator decisions, not something
+this workflow reopens or works around. For the same reason a closed issue is never
+offered to the diagnosis for reuse. Failed queries never mean no matches.
+
+The catalog is read once, when evidence is collected, and the publisher re-lists the
+tracker before each create. An exact-marker duplicate filed in between is therefore still
+caught, but an issue another publisher files under a different key in that window was not
+in the catalog the diagnosis compared against, and can be duplicated. That is the same
+window the lock below narrows for one host and cannot close across hosts.
 
 A repository lock serializes publishers sharing the same system temp directory.
 A lock that survives a crash is not timed out or stolen: the operator must confirm
@@ -269,7 +313,9 @@ verification fails. A newly created issue must read back with the exact body.
 - `publication`: `disabled`, `not-applicable`, `blocked`, or `published`, with
   `publication_reason`. A defects diagnosis with blocked publication still
   represents a diagnosed defect, not a successfully filed issue.
-- `issues`: `{key, number, url, disposition: existing|created, verified}` records.
+- `issues`: `{key, number, url, disposition: existing|created, matched: key|cause,
+  verified}` records. `matched: cause` means the issue was reused because the diagnosis
+  matched this run's cause to it, and it keeps its own marker rather than this run's `key`.
 
 Artifacts live under `$ARTIFACTS_DIR/regress/`: `result.json`, `issues.json` when
 publication reaches an issue, a `recordings-*/` directory holding the recorder and its
@@ -288,8 +334,12 @@ publication boundaries, and real script processes, real recorder subprocesses, a
 real `git` reference checks against scratch repositories. It is included in
 `bun run test`; the root type-check and lint also cover the scripts.
 Real script processes also cover the public probe end to end: a configured gate whose
-report, stream, and approved cases all carry a canary, and a probe route that publishes
-its own proof without any of it. `archon workflow test` picks up the colocated dry-run
+report, stream, approved cases, and operator scope all carry a canary, and a probe route
+whose routing, evidence, receipts, and result carry the public scope instead and publish
+its own proof without any of it. Duplicate detection is covered against a fake tracker:
+a repeat run coining a different key for one cause, an unrelated cause in the same file,
+a selection that is unknown, unmarked, closed, or another repository's, two findings
+claiming one issue, and an incomplete or malformed catalog. `archon workflow test` picks up the colocated dry-run
 fixtures. The unresolved-base fixture executes the real prepare, route, collect, and
 finish nodes with stubbed AI and cannot publish; the clean fixture proves the recording
 requirement survives the include boundary into archon-validate; the public-probe fixture

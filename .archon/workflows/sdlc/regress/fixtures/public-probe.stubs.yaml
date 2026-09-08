@@ -18,6 +18,7 @@ diagnose:
     - public_case_id: ''
       public_proof:
         root_cause_key: src/parser.ts/empty-input
+        existing_issue: 0
         executions: ['1b0c0b3a-8d20-4a5e-9c47-4d3b0f2b9a11']
         test: { path: tests/parser.test.ts, start: 10, end: 14 }
         cause: { path: src/parser.ts, start: 12, end: 12 }
