@@ -1,57 +1,28 @@
-# Declared SDLC scenario: delivery-died. Public actions are stubbed.
+# Dry-run fixture: delivery dies at the green gate, and the terminal report node
+# still runs. That reachability is what lets a failed run say anything at all —
+# ship's outcome depends on the deliver block's sinks, which are SKIPPED (never
+# failed) when a gate inside deliver refuses, so `none_failed_min_one_success`
+# still admits it. The shape is one where the implement node had already
+# written a discovery sidecar the report never surfaced.
+#
+# `outcome` is stubbed on purpose: the real script returns 1 on this branch, and
+# a declared failure fixture asserts EXACTLY one failed node. Its rendering of the
+# raw sidecars is proved by running the script directly against a seeded
+# $ARTIFACTS_DIR — a dry run has no node that writes discoveries/*.json.
 triage__triage:
   route: deliver
-  summary: 'stub: current code confirms a complete work order'
+  summary: "stub: current code confirms a complete work order"
 triage__assert-intact: '{"intact":"true"}'
 deliver__impl__record-start: '{"start":"recorded"}'
 deliver__impl__implement:
   done: true
   green: false
-  summary: 'stub: full validate red on one spec this change does not touch'
-deliver__impl__assert-changed: 2 files changed
+  summary: "stub: full validate red on one spec this change does not touch"
+deliver__impl__assert-changed: "2 files changed"
+# deliver__gate-green is deliberately unstubbed: the real gate must refuse.
+outcome: "outcome: delivery started but did not complete"
 fixture:
   expect: failed
   fail-node: deliver__gate-green
-  reached:
-  - outcome
+  reached: [outcome]
 exec-code: true
-deliver__pr__pr: &id001
-  number: 2
-  url: https://github.com/example/repo/pull/2
-  head: fixture-branch
-  base: dev
-  is_draft: true
-  head_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  base_sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-  repository: example/repo
-deliver__pr__resolve:
-  publish: false
-  candidate: *id001
-deliver__capture-pr__resolve:
-  publish: false
-  candidate: *id001
-deliver__capture-pr__pr: *id001
-deliver__publish-correction__resolve:
-  publish: false
-  candidate: *id001
-deliver__publish-correction__pr: *id001
-deliver__capture-ci-pr__resolve:
-  publish: false
-  candidate: *id001
-deliver__capture-ci-pr__pr: *id001
-deliver__publish-ci-correction__resolve:
-  publish: false
-  candidate: *id001
-deliver__publish-ci-correction__pr: *id001
-deliver__readback__resolve:
-  publish: false
-  candidate: *id001
-deliver__readback__pr:
-  number: 2
-  url: https://github.com/example/repo/pull/2
-  head: fixture-branch
-  base: dev
-  is_draft: false
-  head_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  base_sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-  repository: example/repo

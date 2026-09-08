@@ -1,48 +1,9 @@
-# Declared SDLC scenario: no-action. Public actions are stubbed.
+# Sparse guard fixture: run with --default-stubs --exec-code. Triage is explicit,
+# every delivery node stays skipped, and the real outcome node returns the reason.
 triage__triage:
   route: no_action
-  summary: 'stub: the requested outcome is already present on the current branch'
+  summary: "stub: the requested outcome is already present on the current branch"
 triage__assert-intact: '{"intact":"true"}'
 fixture:
   expect: completed
 exec-code: true
-deliver__pr__pr: &id001
-  number: 2
-  url: https://github.com/example/repo/pull/2
-  head: fixture-branch
-  base: dev
-  is_draft: true
-  head_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  base_sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-  repository: example/repo
-deliver__pr__resolve:
-  publish: false
-  candidate: *id001
-deliver__capture-pr__resolve:
-  publish: false
-  candidate: *id001
-deliver__capture-pr__pr: *id001
-deliver__publish-correction__resolve:
-  publish: false
-  candidate: *id001
-deliver__publish-correction__pr: *id001
-deliver__capture-ci-pr__resolve:
-  publish: false
-  candidate: *id001
-deliver__capture-ci-pr__pr: *id001
-deliver__publish-ci-correction__resolve:
-  publish: false
-  candidate: *id001
-deliver__publish-ci-correction__pr: *id001
-deliver__readback__resolve:
-  publish: false
-  candidate: *id001
-deliver__readback__pr:
-  number: 2
-  url: https://github.com/example/repo/pull/2
-  head: fixture-branch
-  base: dev
-  is_draft: false
-  head_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  base_sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-  repository: example/repo

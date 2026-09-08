@@ -1,91 +1,45 @@
-# Declared SDLC scenario: selective-review. Public actions are stubbed.
+# Dry-run fixture: code, seams, simplify, and tests run by default while the
+# classifier selects docs. The fixture keeps deterministic code stubbed; the
+# loader test protects the classifier-binding seam itself.
 impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true
-  summary: 'stub: implemented and green'
-impl__assert-changed: 3 files changed
+  summary: "stub: implemented and green"
+impl__assert-changed: "3 files changed"
 gate-green: '{"gate":"green"}'
-pr__pr: &id001
-  number: 2
-  url: https://github.com/example/repo/pull/2
-  head: fixture-branch
-  base: dev
-  is_draft: true
-  head_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  base_sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-  repository: example/repo
+pr__pr: { number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true }
 classify:
   errors: false
   docs: true
   reasons:
-    errors: 'stub: no failure paths'
-    docs: 'stub: changed shipped docs need impact review'
+    errors: "stub: no failure paths"
+    docs: "stub: changed shipped docs need impact review"
 resolve-scope: '{"errors":"false"}'
 review__mode: '{"continuation":false}'
 review__scope:
   docs: false
-review__code: 0 findings
-review__seams: 0 findings
-review__simplify: 0 findings
-review__tests: 0 findings
-review__docs: 0 findings
-review__review-complete: settled
+review__code: "0 findings"
+review__seams: "0 findings"
+review__simplify: "0 findings"
+review__tests: "0 findings"
+review__docs: "0 findings"
+review__review-complete: "settled"
 review__synthesize:
   ready: true
   action: none
-  findings_summary: 'stub: selected review is clean'
+  findings_summary: "stub: selected review is clean"
 review-action: '{"ready":true,"action":"none"}'
 gate-ready: '{"ready":"true"}'
 validate__validate:
   green: true
-  summary: 'stub: full gate green'
+  summary: "stub: full gate green"
 gate-validated: '{"gate":"green"}'
-ci-probe: '{"state":"concluded","detail":"no checks configured on this repository - nothing to await"}'
-ci-verdict: '{"state":"concluded","detail":"no checks configured on this repository - nothing to await"}'
+ci-probe: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
+ci-verdict: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
 ci-attention-route: '{"attention":false,"red_cause":""}'
-flip-ready: https://github.com/example/repo/pull/2
+flip-ready: "https://github.com/example/repo/pull/2"
+outcome: "https://github.com/example/repo/pull/2"
 fixture:
   expect: completed
-  reached:
-  - review__code
-  - review__seams
-  - review__simplify
-  - review__tests
-  - review__docs
-pr__resolve:
-  publish: false
-  candidate: *id001
-capture-pr__resolve:
-  publish: false
-  candidate: *id001
-capture-pr__pr: *id001
-publish-correction__resolve:
-  publish: false
-  candidate: *id001
-publish-correction__pr: *id001
-capture-ci-pr__resolve:
-  publish: false
-  candidate: *id001
-capture-ci-pr__pr: *id001
-publish-ci-correction__resolve:
-  publish: false
-  candidate: *id001
-publish-ci-correction__pr: *id001
-readback__resolve:
-  publish: false
-  candidate: *id001
-readback__pr: &id002
-  number: 2
-  url: https://github.com/example/repo/pull/2
-  head: fixture-branch
-  base: dev
-  is_draft: false
-  head_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  base_sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-  repository: example/repo
-outcome:
-  outcome: delivered
-  summary: https://github.com/example/repo/pull/2
-  pr: *id002
-  reports: []
+  reached: [review__code, review__seams, review__simplify, review__tests, review__docs]

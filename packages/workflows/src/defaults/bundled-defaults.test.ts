@@ -616,9 +616,7 @@ describe('bundled-defaults', () => {
       // (#2968 item 5): the explicit binding is the channel.
       expect(pr).not.toContain('output_type:');
       expect(deliver).not.toContain('output_type: public-action');
-      expect(pr).toContain(
-        'required: [number, url, head, base, head_sha, base_sha, repository, is_draft]'
-      );
+      expect(pr).toContain('required: [number, url, head, base, is_draft]');
       expect(deliver).toContain('scope: "$pr.output.number"');
       expect(deliver).toContain('PR_NUMBER=$pr.output.number');
       // The flip selects by recorded number and does not re-derive the branch:

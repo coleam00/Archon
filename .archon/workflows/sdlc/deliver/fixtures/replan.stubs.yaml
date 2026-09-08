@@ -1,69 +1,32 @@
-# Declared SDLC scenario: replan. Public actions are stubbed.
+# A proved scope conflict must not enter correction or reach validation. The
+# real verdict validator accepts the combination; the real ready gate fails
+# truthfully and leaves the draft PR plus canonical report intact.
 impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true
-  summary: 'stub: implemented inside the accepted contract'
-impl__assert-changed: 2 files changed
+  summary: "stub: implemented inside the accepted contract"
+impl__assert-changed: "2 files changed"
 gate-green: '{"gate":"green"}'
-pr__pr: &id001
-  number: 3
-  url: https://github.com/example/repo/pull/3
-  head: fixture-branch
-  base: dev
-  is_draft: true
-  head_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  base_sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-  repository: example/repo
+pr__pr: { number: 3, url: "https://github.com/example/repo/pull/3", head: "fixture-branch", base: "dev", is_draft: true }
 classify:
   errors: false
   docs: false
   reasons:
-    errors: 'stub: no failure paths'
-    docs: 'stub: no docs changes'
+    errors: "stub: no failure paths"
+    docs: "stub: no docs changes"
 resolve-scope: '{"errors":"false"}'
 review__mode: '{"continuation":false}'
-review__scope: accepted contract and scope conflict recorded
-review__code: 1 Important scope conflict
-review__seams: 0 findings
-review__simplify: 0 findings
-review__tests: 0 findings
+review__scope: "accepted contract and scope conflict recorded"
+review__code: "1 Important scope conflict"
+review__seams: "0 findings"
+review__simplify: "0 findings"
+review__tests: "0 findings"
 review__synthesize:
   ready: false
   action: replan
-  findings_summary: 'stub: requested outcome requires crossing an explicit boundary'
+  findings_summary: "stub: requested outcome requires crossing an explicit boundary"
 fixture:
   expect: failed
   fail-node: gate-ready
 exec-code: true
-pr__resolve:
-  publish: false
-  candidate: *id001
-capture-pr__resolve:
-  publish: false
-  candidate: *id001
-capture-pr__pr: *id001
-publish-correction__resolve:
-  publish: false
-  candidate: *id001
-publish-correction__pr: *id001
-capture-ci-pr__resolve:
-  publish: false
-  candidate: *id001
-capture-ci-pr__pr: *id001
-publish-ci-correction__resolve:
-  publish: false
-  candidate: *id001
-publish-ci-correction__pr: *id001
-readback__resolve:
-  publish: false
-  candidate: *id001
-readback__pr:
-  number: 3
-  url: https://github.com/example/repo/pull/3
-  head: fixture-branch
-  base: dev
-  is_draft: false
-  head_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  base_sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-  repository: example/repo
