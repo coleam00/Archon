@@ -16,7 +16,7 @@ If `HEAD_BRANCH` is a synthetic fork-review branch (`pr-<number>-review`, option
 
 Check for an open PR for this exact branch in the qualified repository. If one exists, read back its number, base, and state; reuse it and its base throughout this run. Refuse ambiguous matches. A repair must not create another PR.
 
-Otherwise determine the base branch from evidence, in order: the repository's documented development flow (steering files, CONTRIBUTING); branch ancestry against likely integration branches (`dev`, `development`, the remote default). Never assume `main`. Use the same resolved base for every diff and command.
+Otherwise determine the base branch from evidence, in order: explicit run authorization or a base named in the run context; the run's base (`$BASE_BRANCH`); the repository's documented development flow (steering files, CONTRIBUTING); branch ancestry against likely integration branches (`dev`, `development`, the remote default). Never assume `main`. Keep that logical branch name for publication; use its qualified `refs/remotes/origin/<base>` commit for Git comparisons, fetching the exact origin branch when needed. A missing authorized base is a failure, not permission to choose another.
 
 ## 2. Verify the work is ready
 

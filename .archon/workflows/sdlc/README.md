@@ -14,6 +14,10 @@ The PR node declares only an object output format to persist the validated JSON
 beside its `pull-request` output type for native CI wakeups.
 
 The PR publisher pushes the exact checked-out SHA to the named origin branch.
+It fetches the exact chosen base from origin and pins its remote-tracking commit
+for the ahead check, even when no local base branch exists. Missing bases and
+dirty or changed source checkouts fail before the push. An existing PR retains
+its base; for new PRs, explicit run authorization precedes repository defaults.
 Origin is also the PR's base repository, including in fork clones. Delivery retains
 the recorded ref and branch identity through correction pushes, body sync and
 ready. The native checks.complete wait and bounded deadline probes remain in place.

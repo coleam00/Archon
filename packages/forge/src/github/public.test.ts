@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test';
+import { beforeEach, describe, expect, it } from 'bun:test';
 import { join } from 'node:path';
 import { mkdtemp, writeFile, readFile, appendFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
@@ -144,27 +144,35 @@ function fixture() {
   };
 }
 
-async function packFixture(publication = false) {
+async function packFixture(publication = false, base = 'dev') {
   const f = fixture();
-  const root = track(await mkdtemp(join(tmpdir(), 'forge pack nodes ')));
-  const home = join(root, 'home');
-  const artifacts = join(root, 'artifacts');
+  const temp = track(await mkdtemp(join(tmpdir(), 'forge pack nodes ')));
+  let root = join(temp, 'source');
+  const home = join(temp, 'home');
+  const artifacts = join(temp, 'artifacts');
   await mkdir(home);
   await mkdir(join(artifacts, 'review'), { recursive: true });
   await writeFile(join(home, 'forge.json'), JSON.stringify({ hosts: {} }));
-  await exec('git', ['init', '-q', '-b', 'feature', root]);
+  await exec('git', ['init', '-q', '-b', publication ? 'fixture-source' : 'feature', root]);
   const imported = Bun.spawn(['git', '-C', root, 'fast-import', '--quiet'], {
     stdin: new Blob([
-      `commit refs/heads/dev
+      `commit refs/heads/${base}
 mark :1
 committer Fixture <fixture@example.test> 1700000000 +0000
 data 7
 fixture
+M 100644 inline work.txt
+data 5
+base
+
 commit refs/heads/feature
 committer Fixture <fixture@example.test> 1700000001 +0000
 data 6
 change
 from :1
+M 100644 inline work.txt
+data 7
+change
 
 done
 `,
@@ -174,24 +182,31 @@ done
   });
   const importError = await new Response(imported.stderr).text();
   expect(await imported.exited, importError).toBe(0);
-  const remote = join(root, 'remote.git');
+  const sha = (await readFile(join(root, '.git/refs/heads/feature'), 'utf8')).trim();
+  const baseSha = (await readFile(join(root, `.git/refs/heads/${base}`), 'utf8')).trim();
+  const remote = join(temp, 'remote.git');
   if (publication) {
     await exec('git', ['init', '--bare', '-q', remote]);
+    await exec('git', ['push', remote, `refs/heads/${base}`], { cwd: root });
     await appendFile(
       join(root, '.git/config'),
       `
 [remote "origin"]
-url = https://github.com/owner/repo.git
+url = ${remote.replaceAll('\\', '/')}
 pushurl = ${remote.replaceAll('\\', '/')}
 fetch = +refs/heads/*:refs/remotes/origin/*
 `
     );
+    const checkout = join(temp, 'checkout');
+    await exec('git', ['worktree', 'add', checkout, 'feature'], { cwd: root });
+    root = checkout;
   }
-  const sha = (await readFile(join(root, '.git/refs/heads/feature'), 'utf8')).trim();
   f.pr.head.sha = sha;
+  f.pr.base.ref = base;
   const pr = prRecordSchema.parse({
     ref,
     ...expected,
+    base,
     head_sha: sha,
     url: f.pr.html_url,
     is_draft: true,
@@ -207,13 +222,19 @@ fetch = +refs/heads/*:refs/remotes/origin/*
     ARTIFACTS_DIR: artifacts,
     ARCHON_EXECUTABLE: process.execPath,
     ARCHON_EXECUTABLE_ARGS: JSON.stringify([
-      join(import.meta.dir, '../../../cli/src/commands/fixtures/forge-public-cli.ts'),
+      join(
+        import.meta.dir,
+        publication
+          ? '../../../cli/src/commands/fixtures/publisher-forge-cli.ts'
+          : '../../../cli/src/commands/fixtures/forge-public-cli.ts'
+      ),
       f.server.url.origin,
+      ...(publication ? [JSON.stringify(repo)] : []),
     ]),
     INPUTS_PR: JSON.stringify(pr),
   };
   const pack = join(import.meta.dir, '../../../../.archon/workflows/sdlc');
-  return { f, root, remote, sha, pr, env, artifacts, pack };
+  return { f, root, remote, sha, baseSha, pr, env, artifacts, pack };
 }
 
 describe('public GitHub operations through the owning boundary', () => {
@@ -285,7 +306,7 @@ describe('public GitHub operations through the owning boundary', () => {
           (
             await exec('git', ['--git-dir', remote, 'for-each-ref', '--format=%(refname)'])
           ).stdout.trim()
-        ).toBe('');
+        ).toBe('refs/heads/dev');
         expect(f.requests).toHaveLength(0);
       } finally {
         f.server.stop(true);
@@ -559,30 +580,241 @@ describe('public GitHub operations through the owning boundary', () => {
       f.server.stop(true);
     }
   });
-  it('publishes the exact branch SHA through the actual script node', async () => {
-    const { f, root, remote, sha, env, pack } = await packFixture(true);
-    try {
-      f.state.exists = false;
-      const published = await exec(
-        'uv',
-        ['run', 'python', join(pack, 'pr/scripts/publish-pr.py')],
-        {
-          cwd: root,
-          env: {
-            ...env,
-            INPUTS_CONTENT: JSON.stringify({ title: create.title, body: create.body, base: 'dev' }),
-            INPUTS_DRAFT: 'true',
-          },
-        }
-      );
-      expect(prRecordSchema.parse(JSON.parse(published.stdout)).head_sha).toBe(sha);
-      expect(
-        (await exec('git', ['--git-dir', remote, 'rev-parse', 'refs/heads/feature'])).stdout.trim()
-      ).toBe(sha);
-    } finally {
-      f.server.stop(true);
+  describe('publisher base resolution', () => {
+    const base = 'integration/runtime';
+    for (const mode of [
+      'local',
+      'remote-only',
+      'unfetched',
+      'stale-local',
+      'stale-remote',
+      'ambiguous-tag',
+    ]) {
+      describe(`${mode} base`, () => {
+        let publication: Awaited<ReturnType<typeof packFixture>>;
+        let baseSha: string;
+        beforeEach(async () => {
+          publication = await packFixture(true, base);
+          const { f, root, sha } = publication;
+          f.state.exists = false;
+          baseSha = publication.baseSha;
+          if (mode === 'remote-only') await exec('git', ['fetch', 'origin'], { cwd: root });
+          if (mode === 'remote-only' || mode === 'unfetched') {
+            await exec('git', ['branch', '-D', base], { cwd: root });
+          }
+          if (mode === 'stale-local') await exec('git', ['branch', '-f', base, sha], { cwd: root });
+          if (mode === 'stale-remote')
+            await exec('git', ['update-ref', `refs/remotes/origin/${base}`, sha], { cwd: root });
+          if (mode === 'ambiguous-tag') await exec('git', ['tag', base, sha], { cwd: root });
+        });
+        it('publishes the exact branch SHA through the actual script node', async () => {
+          const { f, root, remote, sha, env, pack, artifacts } = publication;
+          try {
+            const trace = join(artifacts, 'publisher-git.log');
+            const published = await exec(
+              'uv',
+              ['run', 'python', join(pack, 'pr/scripts/publish-pr.py')],
+              {
+                cwd: root,
+                env: {
+                  ...env,
+                  GIT_TRACE: trace,
+                  INPUTS_CONTENT: JSON.stringify({ title: create.title, body: create.body, base }),
+                  INPUTS_DRAFT: 'true',
+                },
+              }
+            );
+            expect(prRecordSchema.parse(JSON.parse(published.stdout))).toMatchObject({
+              ref,
+              head_repo: repo,
+              head: 'feature',
+              base,
+              head_sha: sha,
+            });
+            expect(f.requests.filter(r => r.method === 'POST')).toEqual([
+              {
+                method: 'POST',
+                path: '/repos/owner/repo/pulls',
+                body: {
+                  title: create.title,
+                  body: create.body,
+                  base,
+                  head: 'owner:feature',
+                  head_repo: 'repo',
+                  draft: true,
+                },
+              },
+            ]);
+            const commands = await readFile(trace, 'utf8');
+            expect(commands).toContain(
+              `git fetch --no-tags --no-write-fetch-head origin +refs/heads/${base}:refs/remotes/origin/${base}`
+            );
+            expect(commands).toContain(`git rev-list --count ${baseSha}..${sha} --`);
+            const localRefs = (
+              await exec('git', ['for-each-ref', '--format=%(refname) %(objectname) %(HEAD)'], {
+                cwd: root,
+              })
+            ).stdout;
+            const remoteRefs = (
+              await exec('git', [
+                '--git-dir',
+                remote,
+                'for-each-ref',
+                '--format=%(refname) %(objectname)',
+              ])
+            ).stdout;
+            expect(localRefs).toContain(`refs/heads/feature ${sha} *`);
+            expect(localRefs).toContain(`refs/remotes/origin/${base} ${baseSha}`);
+            expect(remoteRefs.trim().split(/\r?\n/)).toEqual([
+              `refs/heads/feature ${sha}`,
+              `refs/heads/${base} ${baseSha}`,
+            ]);
+            if (mode === 'remote-only' || mode === 'unfetched')
+              expect(localRefs).not.toContain(`refs/heads/${base} `);
+            else
+              expect(localRefs).toContain(
+                `refs/heads/${base} ${mode === 'stale-local' ? sha : baseSha}`
+              );
+          } finally {
+            f.server.stop(true);
+          }
+        });
+      });
     }
   });
+  describe('publisher refusals and adoption', () => {
+    let publication: Awaited<ReturnType<typeof packFixture>>;
+    beforeEach(async () => {
+      publication = await packFixture(true);
+    });
+    it.each([
+      ['missing', 'missing-base', 'fetch'],
+      ['missing-remote', 'dev', 'fetch'],
+      ['no-commits', 'dev', 'commits ahead'],
+      ['same-branch', 'feature', 'distinct from the base'],
+      ['detached', 'dev', 'named branch'],
+      ['shorthand', '@{-1}', 'literal base branch'],
+      ['unsafe', '--upload-pack=unexpected', 'base'],
+      ['unsafe', 'dev:refs/heads/other', 'check-ref-format'],
+      ['unsafe', '@{-1}', 'check-ref-format'],
+      ['unsafe', 'refs/heads/dev', 'base'],
+      ['unsafe', 'dev\n$(touch injected)', 'check-ref-format'],
+      ['dirty', 'dev', 'clean checkout'],
+      ['dirty-tracked', 'dev', 'clean checkout'],
+      ['dirty-staged', 'dev', 'clean checkout'],
+      ['moved-head', 'dev', 'checkout changed'],
+    ])('refuses %s (%s) before pushing or creating', async (mode, base, diagnostic) => {
+      const { f, root, remote, env, pack, artifacts } = publication;
+      try {
+        const baseSha = publication.baseSha;
+        if (mode === 'missing-remote') {
+          await exec('git', ['fetch', 'origin'], { cwd: root });
+          await exec('git', ['--git-dir', remote, 'update-ref', '-d', 'refs/heads/dev']);
+        }
+        if (mode === 'detached') await exec('git', ['checkout', '--detach'], { cwd: root });
+        if (mode === 'shorthand') {
+          await exec('git', ['checkout', '-b', 'previous'], { cwd: root });
+          await exec('git', ['checkout', 'feature'], { cwd: root });
+        }
+        if (mode === 'no-commits')
+          await exec('git', ['push', 'origin', `${publication.sha}:refs/heads/dev`], { cwd: root });
+        if (mode === 'dirty') await writeFile(join(root, 'uncommitted.txt'), 'Uncommitted work');
+        if (mode === 'dirty-tracked' || mode === 'dirty-staged') {
+          await writeFile(join(root, 'work.txt'), 'Uncommitted work');
+          if (mode === 'dirty-staged') await exec('git', ['add', 'work.txt'], { cwd: root });
+        }
+        if (mode === 'moved-head') {
+          // A real upload-pack changes the source while the publisher fetches.
+          // No git operation or publisher guard is mocked.
+          const quote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
+          const upload = join(artifacts, 'move-head.sh');
+          await writeFile(
+            upload,
+            `git -C ${quote(root.replaceAll('\\', '/'))} update-ref refs/heads/feature ${baseSha}\nexec git-upload-pack "$@"\n`
+          );
+          await exec(
+            'git',
+            ['config', 'remote.origin.uploadpack', `sh ${quote(upload.replaceAll('\\', '/'))}`],
+            { cwd: root }
+          );
+        }
+        await expect(
+          exec('uv', ['run', 'python', join(pack, 'pr/scripts/publish-pr.py')], {
+            cwd: root,
+            env: {
+              ...env,
+              INPUTS_CONTENT: JSON.stringify({ title: create.title, body: create.body, base }),
+              INPUTS_DRAFT: 'true',
+            },
+          })
+        ).rejects.toThrow(diagnostic);
+        expect(
+          (
+            await exec('git', [
+              '--git-dir',
+              remote,
+              'for-each-ref',
+              '--format=%(refname) %(objectname)',
+            ])
+          ).stdout.trim()
+        ).toBe(
+          mode === 'missing-remote'
+            ? ''
+            : `refs/heads/dev ${mode === 'no-commits' ? publication.sha : baseSha}`
+        );
+        expect(f.requests).toHaveLength(0);
+        if (mode === 'moved-head')
+          expect((await exec('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim()).toBe(
+            baseSha
+          );
+      } finally {
+        f.server.stop(true);
+      }
+    });
+
+    it.each(['reuse', 'conflicting-base'])(
+      'preserves an adopted PR through the actual publisher: %s',
+      async mode => {
+        const { f, root, sha, env, pack } = publication;
+        try {
+          f.pr.draft = false;
+          f.pr.title = 'Existing title';
+          f.pr.body = 'Existing body';
+          const publish = (base: string) =>
+            exec('uv', ['run', 'python', join(pack, 'pr/scripts/publish-pr.py')], {
+              cwd: root,
+              env: {
+                ...env,
+                INPUTS_CONTENT: JSON.stringify({ title: create.title, body: create.body, base }),
+                INPUTS_DRAFT: 'true',
+              },
+            });
+          if (mode === 'reuse')
+            expect(prRecordSchema.parse(JSON.parse((await publish('dev')).stdout))).toMatchObject({
+              ref,
+              head_repo: repo,
+              head: 'feature',
+              head_sha: sha,
+              base: 'dev',
+              is_draft: false,
+              title: 'Existing title',
+              body: 'Existing body',
+            });
+          else {
+            await exec('git', ['push', 'origin', 'refs/heads/dev:refs/heads/other-base'], {
+              cwd: root,
+            });
+            await expect(publish('other-base')).rejects.toThrow('PR identity or head changed');
+          }
+          expect(f.requests.every(r => r.method === 'GET')).toBe(true);
+          expect(f.pr.base.ref).toBe('dev');
+        } finally {
+          f.server.stop(true);
+        }
+      }
+    );
+  });
+
   it('checks and flips ready through the actual script node', async () => {
     const { f, root, pr, env, pack } = await packFixture();
     try {

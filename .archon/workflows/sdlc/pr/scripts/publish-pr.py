@@ -9,7 +9,7 @@ import sys
 def git(*args):
     result = subprocess.run(["git", *args], capture_output=True, text=True, encoding="utf-8")
     if result.returncode:
-        raise RuntimeError("Git publication step failed; inspect repository state before retrying")
+        raise RuntimeError(f"Git publication {args[0]} failed (exit {result.returncode}); inspect repository state before retrying")
     return result.stdout.strip()
 
 
@@ -27,16 +27,31 @@ resolved = forge("resolve")
 if resolved["forge"] == "none":
     raise RuntimeError("PR publication requires a configured forge")
 repo = resolved["repo"]
-branch = git("branch", "--show-current")
+sha, head_ref = git("rev-parse", "HEAD", "--symbolic-full-name", "HEAD").splitlines()
+branch = head_ref.removeprefix("refs/heads/") if head_ref.startswith("refs/heads/") else ""
 if not branch or branch == content["base"]:
     raise RuntimeError("Publication requires a named branch distinct from the base")
 if re.fullmatch(r"(?:archon/)?pr-[0-9]+-review", branch):
     raise RuntimeError("Publication refuses a synthetic fork-review branch; arrange a writable checkout of the actual PR head")
-git("check-ref-format", "--branch", branch)
-git("check-ref-format", "--branch", content["base"])
-sha = git("rev-parse", "HEAD")
-if int(git("rev-list", "--count", content["base"] + ".." + sha)) == 0:
+base = content["base"]
+if not isinstance(base, str) or base.startswith(("-", "refs/")):
+    raise RuntimeError("Publication requires a logical base branch name")
+# --branch expands checkout shorthand such as @{-1}; only accept the literal name.
+if git("check-ref-format", "--branch", base) != base:
+    raise RuntimeError("Publication requires a literal base branch name")
+if git("status", "--porcelain", "--untracked-files=all"):
+    raise RuntimeError("Publication requires a clean checkout")
+# Origin owns the publication base. Fetch only that branch, never a local branch
+# or a default; pin the qualified ref so revision-name ambiguity cannot change the guard.
+base_ref = "refs/remotes/origin/" + base
+git("fetch", "--no-tags", "--no-write-fetch-head", "origin", "+refs/heads/" + base + ":" + base_ref)
+base_sha = git("rev-parse", "--verify", base_ref + "^{commit}")
+if int(git("rev-list", "--count", base_sha + ".." + sha, "--")) == 0:
     raise RuntimeError("Publication requires commits ahead of the base")
+if git("rev-parse", "HEAD", "--symbolic-full-name", "HEAD").splitlines() != [sha, head_ref]:
+    raise RuntimeError("Publication checkout changed during base verification")
+if git("status", "--porcelain", "--untracked-files=all"):
+    raise RuntimeError("Publication requires a clean checkout")
 # Exact SHA source and explicit origin destination preserve adopted branches and forks.
 git("push", "-u", "origin", sha + ":refs/heads/" + branch)
 git("branch", "--set-upstream-to=origin/" + branch, branch)
