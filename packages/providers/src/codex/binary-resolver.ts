@@ -118,7 +118,10 @@ function validateAndExpand(rawPath: string, pin: CodexBinaryPin): string {
       pin.missingInstruction;
   }
 
-  const candidate = findLowerTierBinary();
+  // Source installs delegate an unpinned resolve to the SDK, not to
+  // findLowerTierBinary's vendor/autodetect search. A candidate found here
+  // would never actually be used, so only compiled mode may hint one.
+  const candidate = BUNDLED_IS_BINARY ? findLowerTierBinary() : undefined;
   throw new Error(
     appendBinaryCandidateHint(message, {
       candidatePath: candidate?.path,
@@ -147,6 +150,7 @@ export async function resolveCodexBinaryPath(
  * tier produced the path. Used by `archon doctor` to tell the user how the
  * binary was found (env / config / vendor / autodetect). Returns undefined in
  * unpinned dev mode; throws with install instructions in binary mode when unresolved.
+ * An invalid explicit env or config pin throws in either mode.
  */
 export async function resolveCodexBinaryWithSource(
   configCodexBinaryPath?: string
