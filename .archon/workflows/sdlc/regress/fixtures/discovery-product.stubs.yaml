@@ -1,7 +1,7 @@
-prepare:
-  ready: true
-  mode: discovered
-  validation_scope: "The parser package.\n\nRecord every command you run for this gate."
+prepare: { ready: true, mode: discovered }
+route:
+  validate: true
+  scope: "The parser package.\n\nRecord every command you run for this gate."
 validation__validate: { green: false, red_cause: inherited, summary: 'The parser test failed.' }
 collect: { status: product }
 inv__investigate: { rooted: true, summary: 'The parser reads before checking length.' }
@@ -30,4 +30,4 @@ finish:
   issues: []
 fixture:
   expect: completed
-  reached: [validation__validate, inv__investigate, diagnose, finish]
+  reached: [route, validation__validate, inv__investigate, diagnose, finish]

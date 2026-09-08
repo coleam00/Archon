@@ -1,7 +1,7 @@
-prepare:
-  ready: true
-  mode: discovered
-  validation_scope: |
+prepare: { ready: true, mode: discovered }
+route:
+  validate: true
+  scope: |
     The project's full applicable gate.
 
     Record every command you run for this gate. Instead of running a command directly, run

@@ -5,5 +5,5 @@ diagnose:
 fixture:
   expect: completed
   # The deterministic nodes run for real here; only the agents are stubbed.
-  reached: [prepare, collect, finish]
+  reached: [prepare, route, collect, finish]
 exec-code: true

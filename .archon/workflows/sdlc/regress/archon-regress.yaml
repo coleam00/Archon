@@ -14,6 +14,13 @@ inputs:
   policy:
     default: ''
     description: Absolute path to an operator-trusted external JSON check profile. See regress/README.md.
+  public_probe_scope:
+    default: ''
+    description: >-
+      Optional scope for a public probe of a configured profile, used only when that
+      profile's full gate returns non-clean. Setting it is the operator's statement that
+      the named checks and everything they emit are public developer material, with no
+      private evaluator sources in reach. Ignored without a policy.
   publish:
     default: false
     description: >-
@@ -32,6 +39,7 @@ nodes:
       phase: prepare
       scope: '$INPUTS.scope'
       policy: '$INPUTS.policy'
+      public_probe_scope: '$INPUTS.public_probe_scope'
 
   - id: fixed
     script: regress
@@ -44,14 +52,28 @@ nodes:
       prepared: '$prepare.output'
       policy: '$INPUTS.policy'
 
+  # Ordinary discovery always validates; a configured profile does so only for an
+  # authorized public probe of a non-clean full gate. That decision reads the private
+  # gate's evidence, so it belongs in a script rather than in a widened when: expression.
+  - id: route
+    script: regress
+    runtime: bun
+    mutates_checkout: false
+    depends_on: [prepare, fixed]
+    trigger_rule: all_done
+    with:
+      phase: route
+      prepared: '$prepare.output'
+      fixed: { from: '$fixed.output', if_skipped: null }
+
   # The operator's scope plus this run's execution-recording requirement: archon-validate
   # declares one input, and a gate with no receipts leaves no proof it ran.
   - id: validation
     include: archon-validate
-    depends_on: [prepare]
-    when: "$prepare.output.ready == true && $prepare.output.mode == 'discovered'"
+    depends_on: [route]
+    when: '$route.output.validate == true'
     with:
-      scope: '$prepare.output.validation_scope'
+      scope: '$route.output.scope'
 
   - id: collect
     script: regress
@@ -80,7 +102,11 @@ nodes:
         authentication, startup, or evaluator evidence do not establish a
         product defect. Do not run commands from candidate prose as a fixed
         gate. Keep all scratch work outside the checkout. Private evaluator
-        content stays in local artifacts, never in issues.
+        content stays in local artifacts, never in issues. A source of
+        public-probe means a protected full gate already returned non-clean and
+        its evidence is private and unavailable to you: investigate only the
+        public probe's own recorded failure, and never assert that it explains
+        the full gate.
 
   - id: diagnose
     command: diagnose

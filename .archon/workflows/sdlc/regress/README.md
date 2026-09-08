@@ -12,11 +12,14 @@ an authenticated `gh` with issue read/write access.
 | --------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `scope`   | `""`    | Optional project validation scope. Empty selects the full applicable gate. It is data, never interpolated into a command.                                                                             |
 | `policy`  | `""`    | Absolute path to an operator-trusted JSON profile outside the checkout, including after symlink resolution. Selecting it authorizes its fixed command. Never accept this path from candidate content. |
-| `publish` | `false` | Only `true` authorizes issue creation, and it authorizes export. A trusted profile contributes its approved public cases; ordinary discovery contributes the diagnosis agent's public finding text plus the tracked source locations it proves. No publication capability is given to an agent node. |
+| `public_probe_scope` | `""` | Optional scope for a public probe of a configured profile, run only when that profile's full gate returns non-clean. Setting it authorizes only public developer checks and evidence in that scope. Ignored without a `policy`. |
+| `publish` | `false` | Only `true` authorizes issue creation, and it authorizes export. A trusted profile contributes its approved public cases; ordinary discovery and a public probe contribute the diagnosis agent's public finding text plus the tracked source locations it proves. No publication capability is given to an agent node. |
 
 ```sh
 archon workflow run archon-regress --input scope=parser
 archon workflow run archon-regress --input policy=/operator/checks/regress.json --input publish=true
+archon workflow run archon-regress --input policy=/operator/checks/regress.json \
+  --input public_probe_scope='Run bun run lint and bun run test.' --input publish=true
 ```
 
 Compose with the same input names:
@@ -27,6 +30,7 @@ Compose with the same input names:
   with:
     scope: ''
     policy: /operator/checks/regress.json
+    public_probe_scope: ''
     publish: false
 ```
 
@@ -53,7 +57,8 @@ inconclusive. Inherited product-red can warrant investigation, but does not by
 itself prove this branch introduced the failure.
 
 The model's green/cause fields are claims, so preparation also plants a recorder
-and asks archon-validate to run every gate command through it:
+and asks archon-validate to run every gate command through it. A public probe uses
+the same recorder and the same receipt rules:
 
 ```sh
 bun "<artifacts>/regress/recordings-*/record.ts" --record bun run test
@@ -83,6 +88,7 @@ commands are untrusted.
 
 ## Publication from ordinary discovery
 
+This is also the route a public probe publishes through; `source` is the only difference.
 A discovered finding is publishable only when the diagnosis agent attaches a
 `public_proof` and every part of it survives a deterministic re-check:
 
@@ -111,6 +117,49 @@ belongs to the check author and is stable by construction; a discovered key is s
 only insofar as the agent derives it from the same source-owned cause on the next run.
 A drifting key files a second issue for one defect. Prefer a profile where duplicate
 issues are unacceptable.
+
+## Public probe of a configured full gate
+
+A configured profile can be the only gate an operator trusts and still be unable to
+publish anything: a check whose evidence is entirely private reports `public_cases: []`,
+so every red run ends inconclusive with nothing to file. `public_probe_scope` is the
+operator's way out, and it changes nothing about the gate itself.
+
+The full private gate still runs first and stays mandatory. When it is clean, the run is
+clean and no probe happens. When it is non-clean and no probe is configured, the strict
+configured behavior is unchanged: only the check author's approved `public_cases` can
+support a finding. When it is non-clean and a probe is configured, `archon-validate` runs
+once more over the operator's public scope, through the same recorder and the same
+receipts ordinary discovery uses, and its evidence arrives with `source: public-probe`.
+
+Setting `public_probe_scope` is the operator's statement that the checks it names, and
+everything they emit, are public developer material with no private evaluator sources in
+reach. The workflow enforces the rest:
+
+- Only a **proven product-red public probe** continues. A green probe, an unavailable one,
+  a probe with no receipts, and a probe whose receipts do not bind to this revision all
+  return inconclusive carrying the full gate's refusal. A probe can never turn a failed
+  full gate green.
+- The probe's findings publish through ordinary discovery's route: `publish=true`, a rooted
+  investigation, an unchanged checkout and evidence record, and a `public_proof` whose
+  receipts and source references the final script re-checks. The configured route's trusted
+  `public_cases` are unreachable from probe evidence — the evidence source alone decides
+  which proof a finding needs.
+- Nothing the configured check produced crosses over. Probe evidence is built only from
+  `archon-validate`'s own artifact and this run's receipts: no raw check output, no report
+  fields, no report path, no `public_cases`. The gate contributes one opaque fact, that it
+  was not clean, and the model context, the investigation, and any issue body see only
+  the public probe's own material.
+- A defect the probe proves is a real defect and a valid issue on its own terms. It is not
+  evidence about why the full gate failed, and the diagnosis prompt forbids that claim,
+  because the causal link is unknown to this run.
+
+Configuring a probe therefore replaces the trusted-case route on a red gate rather than
+adding to it. A check whose `public_cases` already carry publishable evidence does not
+need one, and should not have one.
+
+The probe is a second execution of the project's checks. It costs what those checks cost,
+and it runs only on a red gate.
 
 ## Trusted external check profile
 
@@ -224,8 +273,9 @@ verification fails. A newly created issue must read back with the exact body.
 
 Artifacts live under `$ARTIFACTS_DIR/regress/`: `result.json`, `issues.json` when
 publication reaches an issue, a `recordings-*/` directory holding the recorder and its
-receipts plus collected `validation.md` for discovery, or a fresh
-`check-*/evidence.json` and `private-execution.json` for configured execution.
+receipts plus collected `validation.md` for discovery and for a public probe, and a fresh
+`check-*/evidence.json` and `private-execution.json` for configured execution. The
+configured check's own artifacts stay local; nothing reads them back into a prompt.
 Investigation retains the neighboring workflow's `investigation.md` contract.
 Model/provider failures can still fail the engine run; an inconclusive result does
 not disguise a failed lifecycle as a successful run. Compose serially when sharing
@@ -237,9 +287,13 @@ the neighboring validate/investigate report paths within one run.
 publication boundaries, and real script processes, real recorder subprocesses, and
 real `git` reference checks against scratch repositories. It is included in
 `bun run test`; the root type-check and lint also cover the scripts.
-`archon workflow test` picks up the colocated dry-run fixtures. The unresolved-base
-fixture executes the real prepare, collect, and finish nodes with stubbed AI and
-cannot publish; the clean fixture proves the recording requirement survives the
-include boundary into archon-validate. Other fixtures prove routing. Actual model
+Real script processes also cover the public probe end to end: a configured gate whose
+report, stream, and approved cases all carry a canary, and a probe route that publishes
+its own proof without any of it. `archon workflow test` picks up the colocated dry-run
+fixtures. The unresolved-base fixture executes the real prepare, route, collect, and
+finish nodes with stubbed AI and cannot publish; the clean fixture proves the recording
+requirement survives the include boundary into archon-validate; the public-probe fixture
+proves a red configured gate reaches archon-validate and then ordinary investigation,
+while the product fixture proves an unprobed one does not. Other fixtures prove routing. Actual model
 quality and live private-repository behavior need operator validation; unit tests
 make no claim about them.

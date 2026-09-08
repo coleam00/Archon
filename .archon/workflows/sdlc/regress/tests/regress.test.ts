@@ -14,6 +14,7 @@ import {
   readDiagnosis,
   recordingScope,
   referenceVerifier,
+  route,
   runCommand,
   settle,
   type CommandResult,
@@ -50,11 +51,20 @@ const context: Prepared = {
   checkout: '/checkout',
   recording_directory: '',
   validation_scope: '',
+  probe: false,
 };
 const discoveredContext: Prepared = {
   ...context,
   mode: 'discovered',
   recording_directory: '/artifacts/regress/recordings-1',
+  validation_scope: 'The parser package.',
+};
+/** A configured profile whose operator authorized a public probe of a non-clean full gate. */
+const probeContext: Prepared = {
+  ...context,
+  probe: true,
+  recording_directory: '/artifacts/regress/recordings-1',
+  validation_scope: 'The public developer smoke check.',
 };
 const publicCase: PublicCase = {
   id: 'empty-input',
@@ -149,7 +159,22 @@ function discovered(
     verdict,
     PRIVATE_REPORT,
     '/artifacts/regress/validation.md',
-    executions
+    executions,
+    'discovered'
+  );
+}
+/** What a public probe collects: archon-validate's own artifact, over the probe's receipts. */
+function probed(
+  verdict: unknown = { green: false, red_cause: 'inherited' },
+  executions: Receipt[] = [receipt()]
+): Evidence {
+  return discoveredEvidence(
+    probeContext,
+    verdict,
+    'public smoke check: exit 1',
+    '/artifacts/regress/validation.md',
+    executions,
+    'public-probe'
   );
 }
 const verifies: VerifyReference = async () => true;
@@ -206,7 +231,8 @@ describe('evidence and judgment boundary', () => {
         { green: true, red_cause: '' },
         '',
         'report',
-        [receipt({ exit_code: 0 })]
+        [receipt({ exit_code: 0 })],
+        'discovered'
       ).status
     ).toBe('inconclusive');
     expect(discovered({ green: true, red_cause: '' }, [receipt({ exit_code: 0 })]).status).toBe(
@@ -668,6 +694,70 @@ describe('publication from ordinary discovery', () => {
   });
 });
 
+describe('public probe of a configured full gate', () => {
+  const cleanGate = configuredEvidence(
+    context,
+    { ...execution, exitCode: 0 },
+    report('clean'),
+    '/artifacts/evidence.json'
+  );
+  test('a probe runs only for an authorized operator scope over a non-clean full gate', () => {
+    expect(route(discoveredContext, null)).toEqual({
+      validate: true,
+      scope: discoveredContext.validation_scope,
+    });
+    expect(route({ ...discoveredContext, ready: false }, null)).toEqual({
+      validate: false,
+      scope: '',
+    });
+    // No public_probe_scope: a configured profile keeps its strict single-gate shape.
+    expect(route(context, evidence())).toEqual({ validate: false, scope: '' });
+    const probing = { validate: true, scope: probeContext.validation_scope };
+    expect(route(probeContext, evidence())).toEqual(probing);
+    expect(route(probeContext, { ...evidence(), status: 'inconclusive' })).toEqual(probing);
+    expect(route(probeContext, cleanGate)).toEqual({ validate: false, scope: '' });
+    expect(route(probeContext, { status: 'product' })).toEqual({ validate: false, scope: '' });
+  });
+  test('the probe scope carries the operator public check and the recorder, not the gate scope', () => {
+    const scope = recordingScope(
+      'Run the public developer smoke check.',
+      '/artifacts/regress/recordings-1/record.ts'
+    );
+    expect(scope).toContain('Run the public developer smoke check.');
+    expect(scope).toContain('--record');
+    expect(scope).not.toContain(context.scope);
+  });
+  test('probe evidence keeps the discovery proof requirements and carries no trusted case', () => {
+    expect(probed().status).toBe('product');
+    expect(probed().source).toBe('public-probe');
+    expect(probed().public_cases).toEqual([]);
+    expect(probed({ green: false, red_cause: 'environment' }).status).toBe('inconclusive');
+    expect(probed({ green: false, red_cause: 'inherited' }, []).status).toBe('inconclusive');
+  });
+  test('a probe publishes its own verified proof, never a configured check trusted case', async () => {
+    const gh = fakeGithub();
+    const result = await publish(
+      discoveredRequest({ evidence: probed(), run: gh.run, lockRoot: await temporary() })
+    );
+    expect(result.publication).toBe('published');
+    expect(result.issues[0]).toMatchObject({ key: proven.root_cause_key, disposition: 'created' });
+    expect(gh.bodies[0]).not.toContain('private evaluator');
+    // Trusted cases belong to the configured route. Source alone decides which proof a
+    // finding needs, so a case smuggled onto probe evidence still cannot be published.
+    const smuggled = fakeGithub();
+    const blocked = await publish(
+      discoveredRequest({
+        evidence: { ...probed(), public_cases: [publicCase] },
+        diagnosis,
+        run: smuggled.run,
+      })
+    );
+    expect(blocked.publication).toBe('blocked');
+    expect(blocked.publication_reason).toContain('verified public proof');
+    expect(smuggled.calls).toHaveLength(0);
+  });
+});
+
 const script = resolve(import.meta.dir, '../scripts/regress.ts');
 async function node(
   cwd: string,
@@ -955,6 +1045,184 @@ test('real nodes publish an ordinary discovery only on a verified proof of the c
   const local = await finish({ ...proof, root_cause_key: '' });
   expect(String(local.publication_reason)).toContain('verified public proof');
 });
+const CANARY = 'PRIVATE-EVALUATOR-CANARY';
+/**
+ * A configured profile whose full gate fails and whose report is private throughout: an
+ * extra report field, its own console stream, and even its approved public case all carry
+ * the canary, so anything the probe route lets through would show it.
+ */
+async function privateGate(root: string, status: string): Promise<string> {
+  const check = join(root, 'check.ts');
+  await writeFile(
+    check,
+    `await Bun.write(process.env.REGRESS_EVIDENCE_PATH, JSON.stringify({
+    revision: process.env.REGRESS_REVISION, base: process.env.REGRESS_BASE, base_revision: process.env.REGRESS_BASE_REVISION,
+    scope: process.env.REGRESS_SCOPE, status: ${JSON.stringify(status)},
+    evaluator_notes: ${JSON.stringify(CANARY)},
+    public_cases: [{ id: 'evaluator-case', root_cause_key: 'evaluator/case',
+      title: ${JSON.stringify(CANARY)}, root_cause: ${JSON.stringify(CANARY)},
+      expected: ${JSON.stringify(CANARY)}, actual: ${JSON.stringify(CANARY)},
+      reproduction: ${JSON.stringify(CANARY)}, evidence: [${JSON.stringify(CANARY)}] }] }));
+    console.log(${JSON.stringify(CANARY)});
+    process.exit(${status === 'product' ? '1' : '0'});`
+  );
+  const policy = join(root, 'policy.json');
+  await writeFile(
+    policy,
+    JSON.stringify({ version: 1, argv: [process.execPath, check], timeout_seconds: 30 })
+  );
+  return policy;
+}
+/** A committed defect the public probe can prove on its own, with a remote off github.com. */
+async function parserRepository(cwd: string): Promise<void> {
+  await mkdir(join(cwd, 'src'));
+  await mkdir(join(cwd, 'tests'));
+  await writeFile(join(cwd, 'src/parser.ts'), 'export function parse(items) {\n  return items[0];\n}\n');
+  await writeFile(
+    join(cwd, 'tests/parser.test.ts'),
+    'test("empty input", () => {\n  expect(parse([])).toEqual([]);\n});\n'
+  );
+  await git(cwd, ['add', 'src/parser.ts', 'tests/parser.test.ts']);
+  await git(cwd, ['commit', '-m', 'parser']);
+  await git(cwd, ['remote', 'add', 'origin', 'https://elsewhere.invalid/owner/repo.git']);
+}
+const PROBE_SCOPE = 'Run the public developer smoke check.';
+
+test('a red full gate lets an authorized public probe publish what it proves, and nothing private', async () => {
+  const { cwd, artifacts, root } = await checkout();
+  await parserRepository(cwd);
+  const policy = await privateGate(root, 'product');
+  const prepared = await node(cwd, artifacts, {
+    phase: 'prepare',
+    scope: 'client',
+    policy,
+    public_probe_scope: PROBE_SCOPE,
+  });
+  expect(prepared.probe).toBe(true);
+  expect(String(prepared.validation_scope)).toContain(PROBE_SCOPE);
+  const fixed = await node(cwd, artifacts, { phase: 'configured', prepared, policy });
+  expect(fixed.status).toBe('product');
+  // The private gate really did produce the canary in the material a strict operator publishes.
+  expect(JSON.stringify(fixed)).toContain(CANARY);
+  const routed = await node(cwd, artifacts, { phase: 'route', prepared, fixed });
+  expect(routed).toEqual({ validate: true, scope: prepared.validation_scope });
+  const failure = await recorded(prepared, [process.execPath, '-e', 'process.exit(1)']);
+  expect(failure.code).toBe(1);
+  await writeFile(join(artifacts, 'validation.md'), 'public smoke check: exit 1');
+  await writeFile(join(artifacts, 'investigation.md'), 'The parser reads before checking length.');
+  const collected = await node(cwd, artifacts, {
+    phase: 'collect',
+    prepared,
+    fixed,
+    validation: { green: false, red_cause: 'inherited', summary: 'The public smoke check failed.' },
+  });
+  expect(collected.status).toBe('product');
+  expect(collected.source).toBe('public-probe');
+  expect(collected.public_cases).toEqual([]);
+  expect(collected.report).toBe(join(artifacts, 'regress', 'validation.md'));
+  expect(JSON.stringify(collected)).not.toContain(CANARY);
+  const finished = await node(cwd, artifacts, {
+    phase: 'finish',
+    prepared,
+    evidence: collected,
+    diagnosis: {
+      status: 'defects',
+      summary: 'One defect the public probe proves on its own.',
+      findings: [
+        {
+          public_case_id: '',
+          public_proof: {
+            root_cause_key: 'src/parser.ts/empty-input',
+            executions: [(collected.executions as Receipt[])[0].id],
+            test: { path: 'tests/parser.test.ts', start: 1, end: 3 },
+            cause: { path: 'src/parser.ts', start: 2, end: 2 },
+            completed_product_assertion: true,
+          },
+          title: 'Empty input raises instead of returning a result',
+          root_cause: 'The parser reads the first item before checking length.',
+          expected: 'Empty input returns an empty result.',
+          actual: 'Empty input throws an exception.',
+          reproduction: 'Run the public developer smoke check.',
+          evidence: ['tests/parser.test.ts asserts an empty result'],
+        },
+      ],
+    },
+    investigation: { rooted: true, summary: 'Rooted in the parser.' },
+    publish: true,
+  });
+  // Every evidence gate passed; only the unsupported forge stops the request.
+  expect(finished.status).toBe('defects');
+  expect(String(finished.publication_reason)).toContain('github.com origin');
+  expect(JSON.stringify(finished)).not.toContain(CANARY);
+});
+test('a green or missing public probe keeps the full gate refusal instead of reporting clean', async () => {
+  const { cwd, artifacts, root } = await checkout();
+  const policy = await privateGate(root, 'product');
+  const prepared = await node(cwd, artifacts, {
+    phase: 'prepare',
+    scope: 'client',
+    policy,
+    public_probe_scope: PROBE_SCOPE,
+  });
+  const fixed = await node(cwd, artifacts, { phase: 'configured', prepared, policy });
+  const collect = async (validation: unknown): Promise<Record<string, unknown>> =>
+    node(cwd, artifacts, { phase: 'collect', prepared, fixed, validation });
+  // The probe never produced an artifact.
+  const unavailable = await collect(null);
+  expect(unavailable.status).toBe('inconclusive');
+  expect(String(unavailable.reason)).toContain('full gate was not clean');
+  await recorded(prepared, [process.execPath, '-e', 'process.exit(0)']);
+  await writeFile(join(artifacts, 'validation.md'), 'public smoke check: exit 0');
+  const green = await collect({ green: true, red_cause: '', summary: 'The public check passed.' });
+  expect(green.status).toBe('inconclusive');
+  expect(String(green.reason)).toContain('full gate was not clean');
+  expect(JSON.stringify(green)).not.toContain(CANARY);
+});
+test('without a public probe scope a configured profile keeps its strict single-gate behavior', async () => {
+  const { cwd, artifacts, root } = await checkout();
+  const policy = await privateGate(root, 'product');
+  const prepared = await node(cwd, artifacts, { phase: 'prepare', scope: 'client', policy });
+  expect(prepared.probe).toBe(false);
+  expect(prepared.recording_directory).toBe('');
+  const fixed = await node(cwd, artifacts, { phase: 'configured', prepared, policy });
+  expect(await node(cwd, artifacts, { phase: 'route', prepared, fixed })).toEqual({
+    validate: false,
+    scope: '',
+  });
+  const collected = await node(cwd, artifacts, {
+    phase: 'collect',
+    prepared,
+    fixed,
+    validation: null,
+  });
+  expect(collected.status).toBe('product');
+  expect(collected.source).toBe('configured');
+  expect((collected.public_cases as PublicCase[])[0].root_cause_key).toBe('evaluator/case');
+});
+test('a clean full gate stays clean and never spends a public probe', async () => {
+  const { cwd, artifacts, root } = await checkout();
+  const policy = await privateGate(root, 'clean');
+  const prepared = await node(cwd, artifacts, {
+    phase: 'prepare',
+    scope: 'client',
+    policy,
+    public_probe_scope: PROBE_SCOPE,
+  });
+  const fixed = await node(cwd, artifacts, { phase: 'configured', prepared, policy });
+  expect(fixed.status).toBe('clean');
+  expect(await node(cwd, artifacts, { phase: 'route', prepared, fixed })).toEqual({
+    validate: false,
+    scope: '',
+  });
+  const collected = await node(cwd, artifacts, {
+    phase: 'collect',
+    prepared,
+    fixed,
+    validation: null,
+  });
+  expect(collected.status).toBe('clean');
+  expect(collected.source).toBe('configured');
+});
 test('the reference verifier reads the checked revision, not the working tree', async () => {
   const { cwd } = await checkout();
   await writeFile(join(cwd, 'source.txt'), 'one\ntwo\nthree\n');
@@ -1106,7 +1374,8 @@ nodes:
   await writeFile(
     stubs,
     `
-regression__prepare: { ready: true, mode: discovered, validation_scope: ${JSON.stringify(scope)} }
+regression__prepare: { ready: true, mode: discovered }
+regression__route: { validate: true, scope: ${JSON.stringify(scope)} }
 regression__validation__validate: { green: true, red_cause: '', summary: 'Checks passed.' }
 regression__collect: { status: clean }
 regression__diagnose: { status: clean, summary: 'Checks passed.', findings: [] }
