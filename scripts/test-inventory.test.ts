@@ -9,7 +9,8 @@
  * test targets and workspace declaration so tracked tests cannot sit outside every
  * command. The compiler guard separately protects normal package projects from
  * excluding their tests again. `bun run test` discovers all three through its
- * explicit `bun test ./scripts/` invocation.
+ * explicit `bun test ./scripts/` invocation. Binary tests are collected by the
+ * release job after a production build, which the inventory also verifies.
  */
 import { describe, test } from 'bun:test';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
@@ -61,9 +62,34 @@ function readPackageManifest(manifestPath: string): {
   }
 
   const scripts = isRecord(parsed.scripts) ? parsed.scripts : undefined;
+  let testScript = typeof scripts?.test === 'string' ? scripts.test : undefined;
+  if (typeof scripts?.['test:binary'] === 'string') {
+    // A compiled-artifact test cannot run in the source suite. Accept its
+    // selector only while the release workflow actually runs it with a binary.
+    const packageDirectory = normalizePath(relative(REPO_ROOT, resolve(manifestPath, '..')));
+    const command = `bun run --cwd ${packageDirectory} test:binary`;
+    const release: unknown = Bun.YAML.parse(
+      readFileSync(join(REPO_ROOT, '.github/workflows/release.yml'), 'utf8')
+    );
+    const jobs = isRecord(release) && isRecord(release.jobs) ? release.jobs : {};
+    const steps = Object.values(jobs).flatMap(job =>
+      isRecord(job) && Array.isArray(job.steps) ? job.steps : []
+    );
+    const runsBinaryTests = steps.some(
+      (step: unknown) =>
+        isRecord(step) &&
+        step.run === command &&
+        isRecord(step.env) &&
+        typeof step.env.ARCHON_TEST_BINARY === 'string' &&
+        step.env.ARCHON_TEST_BINARY.length > 0
+    );
+    if (!runsBinaryTests)
+      throw new Error(`Release does not run ${command} with ARCHON_TEST_BINARY`);
+    testScript = [testScript, scripts['test:binary']].filter(Boolean).join(' && ');
+  }
   return {
     name: typeof parsed.name === 'string' ? parsed.name : undefined,
-    testScript: typeof scripts?.test === 'string' ? scripts.test : undefined,
+    testScript,
     workspaces:
       Array.isArray(parsed.workspaces) &&
       parsed.workspaces.every(value => typeof value === 'string')
@@ -284,7 +310,7 @@ function formatMismatches(mismatches: InventoryMismatch[]): string {
 }
 
 describe('package test inventory', () => {
-  test('every TypeScript test is selected by its package test script', () => {
+  test('every TypeScript test is selected by a source or verified release test script', () => {
     const mismatches = readdirSync(PACKAGES_DIR, { withFileTypes: true })
       .filter((entry): boolean => entry.isDirectory())
       .sort((left, right): number => left.name.localeCompare(right.name))
@@ -296,7 +322,7 @@ describe('package test inventory', () => {
 });
 
 describe('repository test inventory', () => {
-  test('every tracked TypeScript test is selected by bun run test', () => {
+  test('every tracked TypeScript test is selected by the source suite or verified release job', () => {
     const { testScript, workspaces } = readRootTestConfig();
     const rootSelectors = directTestSelectors(testScript);
     const workspaceTestsRun = runsAllWorkspaceTests(testScript);
