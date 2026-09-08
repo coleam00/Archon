@@ -195,7 +195,14 @@ describe('issue to reviewed PR composition', () => {
           defaultStubs: true,
           execCode: true,
         });
-        expect(result.outcome).toBe(fixture.declaration.expect);
+        expect(
+          result.outcome,
+          JSON.stringify(
+            result.trace.filter(node => node.state === 'failed'),
+            null,
+            2
+          )
+        ).toBe(fixture.declaration.expect);
         for (const [nodeId, fragment] of Object.entries(
           fixture.declaration['resolved-text-contains'] ?? {}
         )) {
