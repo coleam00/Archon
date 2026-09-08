@@ -354,14 +354,15 @@ nodes:
 
   # CI wait, durably. The probe classifies check state once; a pending state
   # routes into the engine's `wait:` node, which suspends the run and
-  # releases the worker slot — the server's continuation scan resumes it when
-  # the clock fires, surviving restarts. This replaced a 60-minute in-process
-  # polling script the moment the engine could hold the time itself. Red is a
-  # reported state here, never a body failure: the probe declares it, the loop
-  # exits as concluded, and the convergence pass below owns what red means. A concluded probe skips the pause and `until_bash` ends the loop
-  # with zero wasted wait. 13 iterations bound the watch at ~60 minutes of CI
-  # time, the same ceiling the poller had — exhausting it fails the run rather
-  # than flipping a PR whose CI never ended.
+  # releases the worker slot. A concluded GitHub check signals the wait and
+  # the continuation scheduler resumes it; the five-minute deadline preserves
+  # progress when no webhook arrives. Red is a reported state here, never a
+  # body failure: the probe declares it, the loop exits as concluded, and the
+  # convergence pass below owns what red means. A concluded probe skips the
+  # pause and `until_bash` ends the loop with zero wasted wait. 13 iterations
+  # bound the watch at ~60 minutes of CI time, the same ceiling the poller had
+  # — exhausting it fails the run rather than flipping a PR whose CI never
+  # ended.
   - id: await-checks
     loop_group:
       max_iterations: 13
@@ -381,7 +382,8 @@ nodes:
           timeout: 180000
         - id: ci-pause
           wait:
-            duration_ms: 300000
+            event: checks.complete
+            deadline_ms: 300000
           when: $ci-probe.output.state == 'pending'
           depends_on: [ci-probe]
     depends_on: [gate-validated]
@@ -476,10 +478,11 @@ nodes:
             red_cause: "$ci-fix.output.red_cause"
           depends_on: [ci-recheck-action]
 
-  # The re-wait after a pushed correction: same probe, same durable pause, same
-  # ceiling as await-checks. On an inherited or environment classification
-  # nothing was pushed, the state is still concluded red, and this exits in one
-  # probe before the explicit action route below.
+  # The re-wait after a pushed correction: same probe, webhook wake-up,
+  # five-minute deadline fallback, and ceiling as await-checks. On an inherited
+  # or environment classification nothing was pushed, the state is still
+  # concluded red, and this exits in one probe before the explicit action route
+  # below.
   - id: await-fix-checks
     loop_group:
       max_iterations: 13
@@ -491,7 +494,8 @@ nodes:
           timeout: 180000
         - id: fix-ci-pause
           wait:
-            duration_ms: 300000
+            event: checks.complete
+            deadline_ms: 300000
           when: $fix-ci-probe.output.state == 'pending'
           depends_on: [fix-ci-probe]
     depends_on: [ci-corrections]

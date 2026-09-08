@@ -7,7 +7,7 @@ on:
       - 'packages/docs-web/src/data/marketplace.ts'
 
 env:
-  BUN_VERSION: '1.4.0'
+  BUN_VERSION: '1.4.2'
 
 jobs:
   lint:

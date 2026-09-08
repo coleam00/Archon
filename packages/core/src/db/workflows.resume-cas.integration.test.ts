@@ -52,6 +52,7 @@ const {
   clearWorkflowWaitContext,
   signalWorkflowWait,
   listDueWorkflowContinuations,
+  listWorkflowEventSignalCandidates,
   deferWorkflowContinuation,
   getWorkflowRun,
   findResumableRun,
@@ -818,6 +819,60 @@ describe('durable wait continuation races — real SQLite', () => {
     waitingSince: '2026-08-24T10:00:00.000Z',
     resumeAt: '2099-08-25T10:00:00.000Z',
   };
+
+  test('finds typed outputs only for exact open waits and signals with their cursor', async () => {
+    const pullRequest = {
+      repo: { host: 'github.com', path: 'example/repo' },
+      number: 42,
+    };
+    await seed('event-candidate', 'paused', "datetime('now')", { wait: waitA });
+    await seed('other-event-candidate', 'paused', "datetime('now')", {
+      wait: { ...waitA, event: 'deploy.complete' },
+    });
+    await seed('expired-event-candidate', 'paused', "datetime('now')", {
+      wait: { ...waitA, resumeAt: '2026-08-24T09:00:00.000Z' },
+    });
+
+    for (const [runId, outputType, structuredOutput] of [
+      ['event-candidate', 'pull-request', pullRequest],
+      ['event-candidate', 'plan', { summary: 'not a PR identity' }],
+      ['other-event-candidate', 'pull-request', pullRequest],
+      ['expired-event-candidate', 'pull-request', pullRequest],
+    ] as const) {
+      await db.query(
+        `INSERT INTO remote_agent_workflow_events
+           (workflow_run_id, event_type, step_name, data)
+         VALUES ($1, 'node_completed', 'producer', $2)`,
+        [runId, JSON.stringify({ output_type: outputType, structured_output: structuredOutput })]
+      );
+    }
+
+    const candidates = await listWorkflowEventSignalCandidates(
+      'checks.complete',
+      new Date('2026-08-24T10:00:00.000Z')
+    );
+    expect(
+      candidates
+        .map(candidate => ({ runId: candidate.runId, outputType: candidate.outputType }))
+        .sort((left, right) => left.outputType.localeCompare(right.outputType))
+    ).toEqual([
+      { runId: 'event-candidate', outputType: 'plan' },
+      { runId: 'event-candidate', outputType: 'pull-request' },
+    ]);
+
+    const candidate = candidates.find(item => item.outputType === 'pull-request');
+    if (!candidate) throw new Error('Expected the pull-request signal candidate');
+    expect(candidate.wait).toEqual(waitA);
+    await expect(
+      signalWorkflowWait(candidate.runId, candidate.wait, { conclusion: 'success' })
+    ).resolves.toEqual({ signaled: true });
+
+    const signaled = await getWorkflowRun('event-candidate');
+    expect(signaled?.metadata.wait).toMatchObject({
+      ...waitA,
+      payload: { conclusion: 'success' },
+    });
+  });
 
   test('never schedules an action-required wait and consumes it only after explicit resume', async () => {
     const attentionA = {

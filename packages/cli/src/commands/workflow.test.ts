@@ -1952,6 +1952,128 @@ describe('workflowRunCommand — --input declared inputs (#2554)', () => {
   });
 });
 
+describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
+  let tempRoot: string;
+  let consoleSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(async () => {
+    tempRoot = mkdtempSync(join(tmpdir(), 'archon-cli-resume-empty-'));
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const { executeWorkflow, hydrateResumableRun } = await import('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockClear();
+    (hydrateResumableRun as ReturnType<typeof mock>).mockClear();
+  });
+
+  afterEach(async () => {
+    consoleSpy.mockRestore();
+    await removeTempTree(tempRoot);
+  });
+
+  /**
+   * Stub discovery and a dead prior run. `status` drives the run's terminality
+   * and `isolationEnvs` seeds the isolation records the resume path matches —
+   * empty for an in-place prior run, the surviving worktree record by default.
+   */
+  async function stubFailedPriorRun(
+    status: 'failed' | 'running' = 'failed',
+    isolationEnvs: Array<Record<string, unknown>> = [
+      {
+        id: 'env-1',
+        codebase_id: 'cb-resume',
+        working_path: tempRoot,
+        branch_name: 'fix/issue-3124',
+      },
+    ]
+  ): Promise<void> {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'archon-ship' }, 'project')],
+      errors: [],
+    });
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const workflowDb = await import('@archon/core/db/workflows');
+    const isolationDb = await import('@archon/core/db/isolation-environments');
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-resume',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-resume',
+      default_cwd: '/repo/root',
+      default_branch: 'main',
+    });
+    (workflowDb.findResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-dead',
+      working_path: tempRoot,
+      workflow_name: 'archon-ship',
+      status,
+    });
+    (isolationDb.listByCodebase as ReturnType<typeof mock>).mockResolvedValueOnce(isolationEnvs);
+  }
+
+  it('refuses and names the same-branch relaunch with --supersedes', async () => {
+    const { executeWorkflow, hydrateResumableRun } = await import('@archon/workflows/executor');
+    await stubFailedPriorRun();
+    (hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    await expect(
+      workflowRunCommand('/repo/root', 'archon-ship', 'go', { resume: true })
+    ).rejects.toThrow(
+      /no completed nodes and no interactive-loop state[\s\S]*archon workflow run archon-ship --branch fix\/issue-3124 --supersedes run-dead/
+    );
+
+    // The refusal is still a refusal: no run is started.
+    expect(executeWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('suggests a fresh in-place relaunch when no isolation record matched', async () => {
+    const { executeWorkflow, hydrateResumableRun } = await import('@archon/workflows/executor');
+    await stubFailedPriorRun('failed', []);
+    (hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    // An in-place relaunch cannot carry --branch: the prior run's branch is the
+    // main checkout's own, so suggesting it would hand the operator a command
+    // this same CLI refuses.
+    await expect(
+      workflowRunCommand('/repo/root', 'archon-ship', 'go', { resume: true })
+    ).rejects.toThrow(
+      /^Cannot resume: the prior run for 'archon-ship' has no completed nodes and no interactive-loop state\.\nNothing can be skipped, so start a fresh run instead:\n  archon workflow run archon-ship --supersedes run-dead$/
+    );
+    expect(executeWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('names the abandon step for a stale-running orphan before the relaunch', async () => {
+    const { executeWorkflow, hydrateResumableRun } = await import('@archon/workflows/executor');
+    await stubFailedPriorRun('running');
+    (hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+
+    // --supersedes refuses a still-running run, so the message must first release it.
+    await expect(
+      workflowRunCommand('/repo/root', 'archon-ship', 'go', { resume: true })
+    ).rejects.toThrow(
+      /no completed nodes and no interactive-loop state[\s\S]*archon workflow abandon run-dead[\s\S]*archon workflow run archon-ship --branch fix\/issue-3124 --supersedes run-dead/
+    );
+    expect(executeWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('still resumes when the prior run has completed nodes', async () => {
+    const { executeWorkflow, hydrateResumableRun } = await import('@archon/workflows/executor');
+    await stubFailedPriorRun();
+    (hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      preCreatedRun: { id: 'run-dead', workflow_name: 'archon-ship' },
+      priorCompletedNodes: new Map([['triage', 'done']]),
+    });
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-dead',
+    });
+
+    await workflowRunCommand('/repo/root', 'archon-ship', 'go', { resume: true });
+
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('workflowRunCommand — sparse model bindings (#2481)', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
 

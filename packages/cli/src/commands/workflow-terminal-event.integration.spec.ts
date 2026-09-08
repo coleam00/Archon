@@ -80,6 +80,9 @@ function readRunById(
   if (!existsSync(databasePath)) return undefined;
   const database = new Database(databasePath, { readonly: true });
   try {
+    // The last writer's WAL cleanup can briefly lock a new reader. Wait for that
+    // lock, not for the acknowledged row to appear.
+    database.run('PRAGMA busy_timeout = 5000');
     return (
       database
         .query<

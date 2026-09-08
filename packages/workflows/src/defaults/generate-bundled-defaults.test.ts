@@ -17,21 +17,14 @@
  * tracked-set check) whose failure messages land on stderr
  * nondeterministically if raced in parallel, so merging them would force
  * weaker assertions. All original assertions from the six-case suite are
- * preserved verbatim (30 expect() calls).
+ * preserved verbatim.
  */
 import { describe, it, expect, afterAll } from 'bun:test';
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
+import { removeTempTree } from '@archon/paths/test-utils';
 
 const SCRIPT = resolve(import.meta.dir, '../../../../scripts/generate-bundled-defaults.ts');
 const OUTPUT_REL = 'packages/workflows/src/defaults/bundled-defaults.generated.ts';
@@ -81,9 +74,9 @@ function getTemplateRepo(): string {
   return templateRepo;
 }
 
-afterAll(() => {
+afterAll(async () => {
   if (templateRepo !== null) {
-    rmSync(templateRepo, { recursive: true, force: true });
+    await removeTempTree(templateRepo);
     templateRepo = null;
   }
 });
@@ -107,7 +100,7 @@ function runScript(repoRoot: string): { exitCode: number; stderr: string } {
 }
 
 describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
-  it('exits 0 for tracked defaults, staged-but-uncommitted defaults, and embedded packaged workflows (single amortized run)', () => {
+  it('exits 0 for tracked defaults, staged-but-uncommitted defaults, and embedded packaged workflows (single amortized run)', async () => {
     // One scenario covers what used to be three separate generator runs:
     //   - all tracked legacy defaults (positive path)
     //   - staged-but-uncommitted default (staged is not untracked)
@@ -166,11 +159,11 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
       expect(packagedOutput).toContain('__archon_pack__bundled:author-pack:release-flow::announce');
       expect(packagedOutput).toContain('BUNDLED_SCRIPTS');
     } finally {
-      rmSync(repoRoot, { recursive: true, force: true });
+      await removeTempTree(repoRoot);
     }
   });
 
-  it('exits 1 and leaves the bundle untouched for an untracked workflow default', () => {
+  it('exits 1 and leaves the bundle untouched for an untracked workflow default', async () => {
     const repoRoot = createRepo();
     try {
       writeFileSync(
@@ -185,11 +178,11 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
       expect(stderr).toContain('.archon/workflows/');
       expect(readFileSync(join(repoRoot, OUTPUT_REL), 'utf-8')).toBe(SENTINEL);
     } finally {
-      rmSync(repoRoot, { recursive: true, force: true });
+      await removeTempTree(repoRoot);
     }
   });
 
-  it('exits 1 and leaves the bundle untouched for an untracked command default', () => {
+  it('exits 1 and leaves the bundle untouched for an untracked command default', async () => {
     const repoRoot = createRepo();
     try {
       writeFileSync(join(repoRoot, '.archon/commands/defaults/untracked-draft.md'), '# Draft\n');
@@ -201,11 +194,11 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
       expect(stderr).toContain('.archon/commands/ (project-scope)');
       expect(readFileSync(join(repoRoot, OUTPUT_REL), 'utf-8')).toBe(SENTINEL);
     } finally {
-      rmSync(repoRoot, { recursive: true, force: true });
+      await removeTempTree(repoRoot);
     }
   });
 
-  it('embeds a tracked defaults/legacy/ workflow into the flat bundle (#2781)', () => {
+  it('embeds a tracked defaults/legacy/ workflow into the flat bundle (#2781)', async () => {
     const repoRoot = createRepo();
     try {
       const legacyDir = join(repoRoot, '.archon/workflows/defaults/legacy');
@@ -224,11 +217,11 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
       const output = readFileSync(join(repoRoot, OUTPUT_REL), 'utf-8');
       expect(output).toContain('"tracked-legacy-workflow"');
     } finally {
-      rmSync(repoRoot, { recursive: true, force: true });
+      await removeTempTree(repoRoot);
     }
   });
 
-  it('rejects an untracked file inside a packaged workflow', () => {
+  it('rejects an untracked file inside a packaged workflow', async () => {
     const repoRoot = createRepo();
     try {
       const packageDir = join(repoRoot, '.archon/workflows/author-pack/release-flow');
@@ -244,7 +237,7 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
       expect(stderr).toContain('.archon/workflows/author-pack/release-flow/release.yaml');
       expect(readFileSync(join(repoRoot, OUTPUT_REL), 'utf-8')).toBe(SENTINEL);
     } finally {
-      rmSync(repoRoot, { recursive: true, force: true });
+      await removeTempTree(repoRoot);
     }
   });
 });
