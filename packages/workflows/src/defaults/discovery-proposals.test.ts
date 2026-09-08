@@ -122,6 +122,32 @@ function normalized(result: Result) {
 }
 
 describe('native discovery run resolution through the real owning script', () => {
+  it('reads consolidated prose evidence as one unchanged citation input', async () => {
+    const evidence = '  AGENTS.md:1\nObserved behavior needs source verification.  ';
+    const result = await run({
+      records: [{ ...record, evidence }],
+      revalidation: [{ ...revalidation, evidence_refs: [] }],
+    });
+    expect(normalized(result)[0]?.evidence).toEqual([evidence]);
+    expect(proposals(result).proposals[0]).toMatchObject({
+      evidence_status: 'unverified',
+      actionable: false,
+    });
+  }, 20_000);
+
+  for (const evidence of [{ path: 'AGENTS.md' }, 42, ['AGENTS.md:1', 42]]) {
+    it(
+      'rejects non-string evidence ' + JSON.stringify(evidence),
+      async () => {
+        refused(
+          await run({ records: [{ ...record, evidence }] }),
+          'resolve-input',
+          'string arrays'
+        );
+      },
+      20_000
+    );
+  }
   it('uses the engine launch argv without splitting paths or changing the CLI owner', async () => {
     const launch = ['C:/Program Files/Bun/bun.exe', 'C:/pinned source/cli.ts'];
     const result = await run({
@@ -226,9 +252,9 @@ describe('native discovery run resolution through the real owning script', () =>
     { cli_response: { leave_behind: null } },
     { cli_response: { leave_behind: { artifactFiles: [7] } } },
     { cli_response: { leave_behind: { artifactFiles: ['discoveries.json'] } } },
-    { artifact_files: { 'discoveries.json': [{ ...record, evidence: 'not an array' }] } },
+    { artifact_files: { 'discoveries.json': [{ ...record, evidence: { invalid: true } }] } },
     { artifact_files: { 'discoveries.json': {}, 'discoveries/regress.json': [record] } },
-    { artifact_files: { 'discoveries/regress.json': [{ ...record, evidence: 'not an array' }] } },
+    { artifact_files: { 'discoveries/regress.json': [{ ...record, evidence: 42 }] } },
     {
       artifact_files: {
         'discoveries/a.json': [record],

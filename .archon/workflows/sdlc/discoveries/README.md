@@ -1,15 +1,19 @@
-# Discovery proposals
+# Discovery proposals and governed publication
 
 Run archon-discoveries with exactly one discovery_artifact or run_id.
 An explicit artifact must be a readable JSON file.
 It accepts the consolidated discoveries.json produced by review-synthesize
 or one raw review/implementation sidecar. Both are arrays of title, claim,
-evidence strings and relation; raw records use source_node, consolidated
+evidence strings and relation; a historical consolidated evidence string is
+accepted as one unchanged array element. Objects, numbers and mixed arrays fail.
+Raw records use source_node, consolidated
 records use source_nodes. Source attribution stays in the local normalized
 artifact. Malformed records fail clearly. Missing evidence remains unverified.
 
 The graph is resolve-input, revalidate, check-evidence, search-existing,
-classify, render. Agents are medium command nodes using native project
+classify, render, prepare-publication, approve-publication, publish.
+The default publish=false produces proposals without a gate or publication calls.
+Agents are medium command nodes using native project
 guidance. Scripts pin this checkout's HEAD, validate source bounds and
 identities, and render proposals. They do not fetch or switch to the default
 branch. A changed HEAD requires a fresh proposal run.
@@ -41,7 +45,7 @@ case. Producer names and input ordering do not change identity. Exact repeats
 merge evidence and source attribution; conflicting relations fail as ambiguous.
 Different claims or evidence remain separate even with the same generic title.
 Changed wording or evidence changes the marker; semantic deduplication is still
-needed. These are local proposal markers, not a shipped publication identity.
+needed. Publication preserves these exact markers across retries.
 
 Run IDs use the public `archon workflow get <id> --json` contract from CLI
 prerequisite commit 267aa206913353b1e14a2a2d086585f24f4f8cc4. The response must
@@ -64,10 +68,9 @@ from the checkout revision and destination forge identity used for proposals.
 The source run may belong to another repository; every claim must still be
 revalidated against the current checkout before it is actionable.
 
-Standalone execution uses the normal archon executable on PATH and inherits
-its installation environment. This branch and the CLI prerequisite do not
-expose an engine CLI executable launch-context field. No source-file or install
-path is guessed, and a failed CLI invocation does not switch installations.
+Scripts use the engine's ARCHON_EXECUTABLE and ARCHON_EXECUTABLE_ARGS launch
+context. Standalone execution without that context uses archon on PATH.
+Incomplete context fails; a failed invocation never switches installations.
 
 Public text is drafted separately from private raw evidence. The renderer
 requires the model's disclosure judgment and rejects obvious absolute paths;
@@ -106,12 +109,55 @@ bun run cli workflow test archon-discoveries --json from the repository root.
 Fixtures cannot prove live model revalidation, semantic deduplication,
 disclosure judgment, or provider enforcement. Those require live verification.
 
-## Governed publication follow-up
+## Human batch publication
 
-Extend this workflow responsibility in a separate focused slice. Bind an
-explicit human batch decision to the exact reviewed actions, recheck source
-and deduplication after approval delays, use the owning forge create/upsert
-contract, paginate marker checks immediately before writing, read writes back,
-and handle uncertain responses idempotently. Settle stable finding keys before
-claiming title-independent deduplication. Neither actionable nor publish=true
-can supply approval. No global discovery database or receipt protocol is added.
+Set publish=true to request publication. This input grants no authority. The
+native approval node presents the entire batch: exact public title and body,
+qualified repository or existing issue, marker, source revision, input identity,
+source citations and hashes of the proposal and evidence artifacts. Approve
+publishes the whole actionable batch; Reject holds it without writes. Leave the
+gate pending to defer the decision. There is no automatic policy in this slice.
+Do not approve a truncated message; inspect the complete native gate context and
+discovery-publication.json. These local review artifacts can contain private
+source input locations; only each action's public_body and request title are sent.
+
+The prepare node's persisted SHA-256 binds discovery-publication.json to the
+gate. Changing a target, public text, evidence artifact or action set fails on
+resume. Re-running preparation cannot replace an existing different batch.
+Changing an action requires a new proposal run and human decision. The engine
+owns the gate decision and completed-node outputs; passing caller JSON to a
+script outside the governed graph is not an authorization interface.
+
+Preparation and publication require a clean checkout. After the approval delay,
+publication rechecks actual HEAD, dirty state, artifact hashes and every cited
+file and line. A moved revision holds publication with an explicit failure that
+requires a fresh revalidation and gate. Restoring the same reviewed clean source
+allows a failed publication node to resume with its original batch.
+
+Immediately before each action, workitem.search through the qualified forge
+owner enumerates exact first-line markers in all issue states, bounded to 100
+pages. Incomplete enumeration or ambiguous duplicates fails without that write.
+An issue marker appearing during the pause is reused without modifying content
+or redirecting an approved update. New issues use workitem.create, which repeats
+the marker check and verifies the write. Existing issues use comment.upsert,
+whose owner completely paginates comments, rejects duplicate markers and verifies
+the exact comment. Publication never overwrites issue bodies or closes issues.
+PR targets and unsupported owners fail clearly.
+
+discovery-publication-results.json records progress for inspection. It does not
+authorize or suppress writes. Resume uses the original gate-bound requests and
+fresh owner reads, including after a successful write whose response was lost.
+Repeated creates reuse an issue and identical marked comments are not rewritten.
+Already completed actions can remain public if a later action fails or the run
+is cancelled; resume cannot apply different approved text. There is no atomic
+batch transaction or exactly-once guarantee: GitHub has no marker uniqueness
+constraint, and paginated reads are not a snapshot against simultaneous creators.
+Coordinate concurrent publication runs for the same findings.
+
+discovery-publication.test.ts executes the scripts, CLI, exec plugin and forge
+owner against fake HTTP. The native graph tests in dag-executor.test.ts resume
+from real proposal-script outputs, exercise the authored gate, then execute the
+real named publication script through the same owner transport. They simulate
+agent judgments and the host's persisted human decision. Live model judgment,
+public disclosure review and real tracker verification remain operator checks.
+Unattended policy and title-independent semantic identity are separate follow-ups.

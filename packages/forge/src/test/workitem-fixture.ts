@@ -12,6 +12,7 @@ export function workItemFixture(path = 'owner/repo') {
   const items = [makeItem(42)];
   items[0].labels = [{ name: 'unrelated-label' }, { name: 'archon-blocked' }];
   const definitions: { name: string; color: string; description: string }[] = [];
+  const comments: { id: number; body: string; issue_url: string; html_url: string }[] = [];
   const calls: { method: string; path: string; body: unknown }[] = [];
   const state = { mode: '', written: false };
   const server = Bun.serve({
@@ -21,7 +22,9 @@ export function workItemFixture(path = 'owner/repo') {
       const url = new URL(request.url);
       const endpoint = decodeURIComponent(url.pathname);
       const method = request.method;
-      const payload: unknown = method === 'POST' ? await request.json() : undefined;
+      const payload: unknown = ['POST', 'PATCH'].includes(method)
+        ? await request.json()
+        : undefined;
       calls.push({ method, path: url.pathname + url.search, body: payload });
       if (request.headers.get('Authorization') !== 'Bearer fixture-secret')
         return new Response('', { status: 401 });
@@ -33,6 +36,32 @@ export function workItemFixture(path = 'owner/repo') {
         const n = Number(url.searchParams.get('page') ?? 1);
         return values.slice((n - 1) * 100, n * 100);
       };
+      const commentTarget = items.find(
+        item => endpoint === `${base}/issues/${String(item.number)}/comments`
+      );
+      if (commentTarget) {
+        const issueUrl = `https://api.github.com${base}/issues/${String(commentTarget.number)}`;
+        if (method === 'GET')
+          return Response.json(page(comments.filter(value => value.issue_url === issueUrl)));
+        const id = comments.length + 1;
+        const value = {
+          id,
+          body: (payload as { body: string }).body,
+          issue_url: issueUrl,
+          html_url: `${commentTarget.html_url}#issuecomment-${String(id)}`,
+        };
+        comments.push(value);
+        if (state.mode === 'write_then_fail') return fail();
+        return Response.json(value);
+      }
+      const existingComment = comments.find(
+        value => endpoint === `${base}/issues/comments/${String(value.id)}`
+      );
+      if (existingComment && method === 'PATCH') {
+        existingComment.body = (payload as { body: string }).body;
+        if (state.mode === 'write_then_fail') return fail();
+        return Response.json(existingComment);
+      }
       if (endpoint === `${base}/issues`) {
         if (method === 'POST') {
           const body = payload as { title: string; body: string };
@@ -99,5 +128,5 @@ export function workItemFixture(path = 'owner/repo') {
         : Response.json(target.labels);
     },
   });
-  return { repo, items, definitions, calls, state, server, makeItem };
+  return { repo, items, definitions, comments, calls, state, server, makeItem };
 }

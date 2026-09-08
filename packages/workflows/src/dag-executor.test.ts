@@ -129,6 +129,9 @@ import {
 } from './schemas';
 import { discoverWorkflows } from './workflow-discovery';
 import { parseWorkflow } from './loader';
+import * as discoveryCliLaunch from '@archon/paths/cli-launch';
+import { qualifyWorkflowResources } from './packaged-workflow';
+import { discoveryPack, discoveryPublicationFixture } from './test/discovery-publication-fixture';
 import { expandWorkflowIncludes } from './include-expander';
 import {
   COMPILED_LOOP_COMMAND,
@@ -470,6 +473,192 @@ function dagOptions(overrides: DagOptionsOverrides): ExecuteDagWorkflowOptions {
     workflow: resolveTestWorkflow(workflow),
   };
 }
+
+describe('governed discovery publication native graph', () => {
+  for (const scenario of [
+    'default',
+    'hold',
+    'create',
+    'update',
+    'tamper',
+    'cancelled',
+    'moved',
+    'lost-response',
+  ]) {
+    it(
+      scenario + ' executes the authored gate and real publication scripts through the forge owner',
+      async () => {
+        const f = await discoveryPublicationFixture(scenario === 'update');
+        const launch = spyOn(discoveryCliLaunch, 'archonCliLaunchEnv').mockReturnValue({
+          ARCHON_EXECUTABLE: f.env.ARCHON_EXECUTABLE,
+          ARCHON_EXECUTABLE_ARGS: f.env.ARCHON_EXECUTABLE_ARGS,
+        });
+        try {
+          const parsed = parseWorkflow(
+            await readFile(join(discoveryPack, 'archon-discoveries.yaml'), 'utf8'),
+            'archon-discoveries.yaml'
+          );
+          if (!parsed.workflow) throw new Error(JSON.stringify(parsed.error));
+          const workflow = qualifyWorkflowResources(parsed.workflow, {
+            source: 'project',
+            pack: 'sdlc',
+            workflow: 'discoveries',
+          });
+          // Start from the real proposal scripts' completed outputs. Agent judgments
+          // are fixture data; the remaining authored graph runs and resumes natively.
+          const completed = new Map<string, PersistedNodeOutput>();
+          for (const step of f.steps) {
+            expect(step.code).toBe(0);
+            const output: unknown = JSON.parse(step.stdout);
+            completed.set(step.name === 'render-proposals' ? 'render' : step.name, {
+              output: step.stdout,
+              structuredOutput: output,
+            });
+          }
+          for (const id of ['revalidate', 'search-existing', 'classify'])
+            completed.set(id, { output: '{}' });
+          const store = createMockStore();
+          let status: WorkflowRun['status'] = 'running';
+          store.getWorkflowRunStatus.mockImplementation(async () => status);
+          store.pauseWorkflowRun.mockImplementation(async () => {
+            status = 'paused';
+          });
+          store.getDagResumeSnapshot.mockImplementation(async () => ({
+            completedNodeOutputs: new Map(completed),
+            fanOutSnapshots: new Map(),
+            unresolvedNodeStarts: new Set(),
+            costUsd: 0,
+          }));
+          const run = makeWorkflowRun('discovery-publication-native', {
+            metadata: { inputs: { publish: scenario === 'default' ? 'false' : 'true' } },
+          });
+          const options = dagOptions({
+            deps: createMockDeps(store),
+            cwd: f.repo,
+            workflow,
+            workflowRun: run,
+            artifactsDir: f.artifacts,
+            logDir: join(f.root, 'logs'),
+            stateDir: join(f.root, 'state'),
+            config: { ...minimalConfig, envVars: f.env },
+            workflowSourceRoots: {
+              kind: 'live',
+              project: join(discoveryPack, '../../../..'),
+              globalWorkflows: join(f.root, 'absent'),
+              globalCommands: join(f.root, 'absent'),
+              globalScripts: join(f.root, 'absent'),
+              bundledWorkflows: join(f.root, 'absent'),
+              bundledCommands: join(f.root, 'absent'),
+              config: { load_default_workflows: false, load_default_commands: false },
+            },
+          });
+          const execute = async () => {
+            store.createWorkflowEvent.mockClear();
+            await executeDagWorkflow({ ...options, priorCompletedNodes: new Map(completed) });
+            for (const event of persistedEvents(store)) {
+              if (event.event_type === 'node_completed' && event.step_name && event.data) {
+                const output = event.data.node_output;
+                if (typeof output === 'string')
+                  completed.set(event.step_name, {
+                    output,
+                    structuredOutput: event.data.structured_output,
+                    declaredFields: Array.isArray(event.data.declared_fields)
+                      ? event.data.declared_fields.filter((v): v is string => typeof v === 'string')
+                      : undefined,
+                  });
+              }
+            }
+          };
+          await execute();
+          expect(store.failWorkflowRun.mock.calls).toEqual([]);
+          expect(f.transport.calls).toEqual([]);
+          if (scenario === 'default') {
+            expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+            expect(store.failWorkflowRun).not.toHaveBeenCalled();
+            return;
+          }
+          expect(String(status)).toBe('paused');
+          const batch = await readFile(join(f.artifacts, 'discovery-publication.json'), 'utf8');
+          const gate = store.pauseWorkflowRun.mock.calls[0]?.[1];
+          expect(gate).toMatchObject({
+            type: 'approval',
+            nodeId: 'approve-publication',
+            decisionsAuthored: true,
+          });
+          expect(gate?.message).toContain(batch);
+          expect(completed.has('approve-publication')).toBe(false);
+          // The host's native decision operation persists this public output shape.
+          const decision = { decision: scenario === 'hold' ? 'reject' : 'approve', text: '' };
+          completed.set('approve-publication', {
+            output: JSON.stringify(decision),
+            structuredOutput: decision,
+            declaredFields: ['decision', 'text'],
+          });
+          status = 'running';
+          if (scenario === 'cancelled') {
+            status = 'cancelled';
+            await execute();
+            expect(f.transport.calls).toEqual([]);
+            status = 'running';
+          }
+          if (scenario === 'tamper' || scenario === 'cancelled')
+            await writeFile(
+              join(f.artifacts, 'discovery-publication.json'),
+              batch.replace('Source defect', 'Unapproved action')
+            );
+          if (scenario === 'moved') {
+            await writeFile(join(f.repo, 'AGENTS.md'), 'Moved source\n');
+            for (const args of [
+              ['add', '.'],
+              ['-c', 'core.hooksPath=', 'commit', '-qm', 'moved'],
+            ]) {
+              expect(
+                await Bun.spawn(['git', ...args], { cwd: f.repo, stdout: 'pipe', stderr: 'pipe' })
+                  .exited
+              ).toBe(0);
+            }
+          }
+          if (scenario === 'lost-response') f.transport.state.mode = 'write_then_fail';
+          await execute();
+          if (['hold', 'tamper', 'cancelled', 'moved'].includes(scenario)) {
+            expect(f.transport.calls.filter(c => c.method !== 'GET')).toEqual([]);
+            if (scenario !== 'hold') {
+              expect(store.failWorkflowRun).toHaveBeenCalled();
+              expect(
+                persistedEvents(store).find(event => event.event_type === 'node_failed')?.data
+                  ?.error
+              ).toContain(scenario === 'moved' ? 'source revision moved' : 'gate action tamper');
+            }
+            return;
+          }
+          if (scenario === 'lost-response') {
+            expect(store.failWorkflowRun).toHaveBeenCalled();
+            expect(completed.has('publish')).toBe(false);
+            f.transport.state.mode = '';
+            await execute();
+          }
+          expect(
+            persistedEvents(store).filter(event => event.event_type === 'node_failed')
+          ).toEqual([]);
+          expect(completed.has('publish')).toBe(true);
+          const writes = f.transport.calls.filter(c => c.method !== 'GET');
+          expect(writes).toHaveLength(1);
+          expect(writes[0]?.path).toBe(
+            scenario === 'update'
+              ? '/repos/example/repo/issues/42/comments'
+              : '/repos/example/repo/issues'
+          );
+          await execute();
+          expect(f.transport.calls.filter(c => c.method !== 'GET')).toHaveLength(1);
+        } finally {
+          launch.mockRestore();
+          await f.transport.server.stop(true);
+        }
+      },
+      30_000
+    );
+  }
+});
 
 describe('executeDagWorkflow options type contract', () => {
   it('requires one named object including workflowModel', () => {

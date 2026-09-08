@@ -3,9 +3,12 @@ description: |
   Revalidate a discovery artifact against this checkout's pinned HEAD, find
   existing work when GitHub is reachable, and render local action proposals.
   Use after review or implementation records adjacent discoveries.
-  Publication requires a focused follow-up with an explicit gate.
+  Optional publication pauses for a human batch decision before verified writes.
 
 inputs:
+  publish:
+    default: "false"
+    description: Set true to prepare a human batch gate. This input never grants approval.
   discovery_artifact:
     default: ""
     description: Path to consolidated discoveries.json or a raw discovery sidecar.
@@ -159,3 +162,49 @@ nodes:
     with:
       search_results: "$search-existing.output.entries"
       classification: "$classify.output.entries"
+
+  - id: prepare-publication
+    script: publication
+    runtime: uv
+    mutates_checkout: false
+    depends_on: [render]
+    with:
+      mode: prepare
+      publish: "$INPUTS.publish"
+      decision: ""
+      batch_hash: ""
+    output_format:
+      type: object
+      properties:
+        requires_gate: { type: boolean }
+        batch_hash: { type: string }
+        review: { type: string }
+      required: [requires_gate, batch_hash, review]
+
+  - id: approve-publication
+    depends_on: [prepare-publication]
+    when: "$prepare-publication.output.requires_gate == true"
+    approval:
+      message: |
+        Review the complete batch below, including exact public text, targets,
+        markers and evidence identities. Approve all actions or hold the batch.
+        Changed actions require a new proposal and a new gate.
+        Batch SHA-256: $prepare-publication.output.batch_hash
+
+        $prepare-publication.output.review
+      decisions:
+        - id: approve
+          label: Publish this exact batch
+        - id: reject
+          label: Hold without publishing
+
+  - id: publish
+    script: publication
+    runtime: uv
+    mutates_checkout: false
+    depends_on: [approve-publication, prepare-publication]
+    when: "$approve-publication.output.decision == 'approve'"
+    with:
+      mode: publish
+      decision: "$approve-publication.output.decision"
+      batch_hash: "$prepare-publication.output.batch_hash"

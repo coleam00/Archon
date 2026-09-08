@@ -121,7 +121,7 @@ def main():
         "publication_authorized": False, "proposals": rows,
     }
     lines = ["# Discovery proposals", "",
-             "Local review artifact. Publication is not authorized by this workflow.", "",
+             "Local review artifact. Publication requires a separate native batch decision.", "",
              "Source-bound citations check locations, not claim truth. Model judgments and public text need human review.", ""]
     if not forge["available"]:
         lines.extend(["Publication unavailable: " + forge["reason"] + ".", ""])
