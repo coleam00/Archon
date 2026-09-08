@@ -133,7 +133,7 @@ mock.module('@archon/core/db/env-vars', () => ({
   deleteEnvVar: mock(async () => {}),
 }));
 mock.module('@archon/core/utils/commands', () => ({
-  findMarkdownFilesRecursive: mock(async () => []),
+  findCommandFiles: mock(async () => []),
 }));
 
 // Bootstrap registry after mocks

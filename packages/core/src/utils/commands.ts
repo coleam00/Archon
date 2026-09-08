@@ -1,1 +1,1 @@
-export { findMarkdownFilesRecursive } from '@archon/paths';
+export { findCommandFiles } from '@archon/paths';
