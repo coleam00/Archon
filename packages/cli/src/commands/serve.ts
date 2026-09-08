@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, renameSync, rmSync } from 'fs';
 import {
   createLogger,
   getWebDistDir,
+  getSourceWebDistDir,
   BUNDLED_IS_BINARY,
   BUNDLED_VERSION,
   BUNDLED_WEB_DIST_SHA256,
@@ -50,10 +51,29 @@ export async function serveCommand(opts: ServeOptions): Promise<number> {
     return 1;
   }
 
+  // A source checkout builds the web UI locally instead of downloading it: there
+  // is no release tagged `dev` to fetch from, and the tree already holds the
+  // dist that `bun run build:web` produces.
   if (!BUNDLED_IS_BINARY) {
-    console.error('Error: `archon serve` is for compiled binaries only.');
-    console.error('For development, use: bun run dev');
-    return 1;
+    const webDistDir = getSourceWebDistDir();
+
+    if (opts.downloadOnly) {
+      console.error(
+        'Error: --download-only is for binary installs. A source checkout has nothing to download.'
+      );
+      console.error('Build the web UI instead: bun run build:web');
+      return 1;
+    }
+
+    if (!existsSync(webDistDir)) {
+      log.error({ webDistDir }, 'web_dist.source_build_missing');
+      console.error(`Error: Web UI is not built at ${webDistDir}.`);
+      console.error('Build it first: bun run build:web');
+      return 1;
+    }
+
+    log.info({ webDistDir }, 'web_dist.source_build_found');
+    return startServerUntilSignal(webDistDir, opts.port);
   }
 
   const version = BUNDLED_VERSION;
@@ -78,16 +98,24 @@ export async function serveCommand(opts: ServeOptions): Promise<number> {
     return 0;
   }
 
+  return startServerUntilSignal(webDistDir, opts.port);
+}
+
+/** Run the server in the foreground until the operator interrupts it. */
+async function startServerUntilSignal(
+  webDistDir: string,
+  port: number | undefined
+): Promise<number> {
   // Import server and start (dynamic import keeps CLI startup fast for other commands)
   try {
     const { startServer } = await import('@archon/server');
     await startServer({
       webDistPath: webDistDir,
-      port: opts.port,
+      port,
     });
   } catch (err) {
     const error = toError(err);
-    log.error({ err: error, version, webDistDir, port: opts.port }, 'server.start_failed');
+    log.error({ err: error, webDistDir, port }, 'server.start_failed');
     console.error(`Error: Server failed to start: ${error.message}`);
     return 1;
   }

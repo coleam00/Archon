@@ -45,6 +45,7 @@ import type * as WorkflowSourceRoot from '../utils/workflow-source-root';
 import type * as TitleGenerator from '../services/title-generator';
 import type * as UserProviderKeyStore from '../db/user-provider-key-store';
 import type * as Paths from '@archon/paths';
+import type * as RunLiveOwnerModule from '../services/run-live-owner';
 
 // ─── Mock setup (ALL mocks must come before the module under test import) ────
 
@@ -106,6 +107,22 @@ const mockGetCodebaseEnvVars = mock(() => Promise.resolve({}));
 const mockLoadConfig = mock<typeof ConfigLoader.loadConfig>(() => Promise.resolve(makeConfig()));
 
 const mockLogger = createMockLogger();
+
+const mockCloseRunLiveOwner = mock(() => Promise.resolve());
+const mockRunLiveOwner: RunLiveOwnerModule.RunLiveOwner = {
+  close: mockCloseRunLiveOwner,
+  isStopRequested: () => false,
+};
+const mockStartRunLiveOwner = mock<typeof RunLiveOwnerModule.startRunLiveOwner>(() =>
+  Promise.resolve(mockRunLiveOwner)
+);
+const mockWithRunLiveOwner = mock<typeof RunLiveOwnerModule.withRunLiveOwner>(
+  async (_runId, _options, body) => body(mockRunLiveOwner)
+);
+mock.module('../services/run-live-owner', () => ({
+  startRunLiveOwner: mockStartRunLiveOwner,
+  withRunLiveOwner: mockWithRunLiveOwner,
+}));
 
 const mockEnsureArchonWorkspacesPath = mock(() => Promise.resolve('/home/test/.archon/workspaces'));
 const mockCaptureChatTurn = mock<typeof Paths.captureChatTurn>(() => undefined);
@@ -391,6 +408,15 @@ const mockListDashboardRuns = mock<typeof WorkflowDb.listDashboardRuns>(() =>
     counts: { all: 0, running: 0, completed: 0, failed: 0, cancelled: 0, pending: 0, paused: 0 },
   })
 );
+class MockWorkflowNotResumableError extends Error {
+  constructor(
+    readonly runId: string,
+    readonly currentStatus: WorkflowRun['status']
+  ) {
+    super(`Workflow run is not resumable (id: ${runId}, status: ${currentStatus}).`);
+    this.name = 'WorkflowNotResumableError';
+  }
+}
 mock.module('../db/workflows', () => ({
   getPausedWorkflowRun: mockGetPausedWorkflowRun,
   getWorkflowRun: mockGetWorkflowRunDb,
@@ -400,6 +426,7 @@ mock.module('../db/workflows', () => ({
   resolveAndCancelApprovalGate: mockResolveAndCancelApprovalGate,
   findWorkflowRunsByIdPrefix: mockFindWorkflowRunsByIdPrefix,
   listDashboardRuns: mockListDashboardRuns,
+  WorkflowNotResumableError: MockWorkflowNotResumableError,
 }));
 
 const mockCreateWorkflowEvent = mock<typeof WorkflowEventDb.createWorkflowEvent>(() =>
@@ -2204,6 +2231,9 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockUpdateConversation.mockClear();
     mockResolveWorkflowSourceRoot.mockClear();
     mockResolveWorkflowSourceRoot.mockResolvedValue(undefined);
+    mockStartRunLiveOwner.mockClear();
+    mockWithRunLiveOwner.mockClear();
+    mockCloseRunLiveOwner.mockClear();
   });
 
   test('calls executeWorkflow (not dispatchBackground) for interactive workflow on web', async () => {
@@ -2218,6 +2248,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     expect(mockExecuteWorkflow).toHaveBeenCalled();
     expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    expect(mockWithRunLiveOwner).toHaveBeenCalledWith('prepared-run-id', {}, expect.any(Function));
     // The interactive web dispatch must pass the caller conversation's DB id
     // as opts.parentConversationId so the approve/reject API handlers can
     // dispatch resume back through the orchestrator.
@@ -3309,6 +3340,8 @@ describe('workflow dispatch routing — interactive flag', () => {
     const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
     expect(sent).not.toContain("requires input 'diff'");
     expect(mockExecuteWorkflow).toHaveBeenCalled();
+    expect(mockStartRunLiveOwner).toHaveBeenCalledWith('implicit-resume-1');
+    expect(mockCloseRunLiveOwner).toHaveBeenCalledTimes(1);
     expect(mockExecuteWorkflow.mock.calls[0][3]).toBe('/repos/test-repo/worktrees/paused');
   });
 
@@ -3460,6 +3493,9 @@ describe('workflow dispatch routing — interactive flag', () => {
     // Must NOT reach the generic "starting fresh in the same worktree" dispatch.
     expect(sent).not.toContain('starting fresh in the same worktree');
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockStartRunLiveOwner).toHaveBeenCalledWith('nothing-to-resume-1');
+    expect(mockCloseRunLiveOwner).toHaveBeenCalledTimes(1);
+    expect(mockWithRunLiveOwner).not.toHaveBeenCalled();
   });
 
   /** Drive the lost-resume-race path with an optional supplied-input map. */

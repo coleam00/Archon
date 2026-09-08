@@ -338,7 +338,7 @@ const commandHelp: HelpEntry[] = [
   {
     command: 'serve',
     spec: 'serve',
-    description: 'Start the web UI server (downloads web UI on first run)',
+    description: 'Start the web UI server (binary installs download it on first run)',
   },
   {
     command: 'skill',

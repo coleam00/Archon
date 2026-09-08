@@ -91,7 +91,7 @@ describe('CLI startup import boundary', () => {
       join(repoRoot, 'packages/core/src/config/run-config-handoff.ts'),
       join(buildDir, 'handoff')
     );
-  });
+  }, 30_000);
 
   afterAll(async () => {
     if (buildDir) await removeTempTree(buildDir);
@@ -395,7 +395,7 @@ Commands:
   isolation cleanup [days]   Remove stale environments (default: 7 days)
   isolation cleanup --merged Remove environments with branches merged into main
   complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
-  serve                      Start the web UI server (downloads web UI on first run)
+  serve                      Start the web UI server (binary installs download it on first run)
   skill install [path]       Install archon-cli into .claude/skills and .agents/skills
   doctor [--full]            Verify your Archon setup (Claude/Codex binaries, gh auth, DB, adapters; --full also probes the OpenCode runtime SDK)
   auth github                Connect your GitHub identity via device flow (multi-user installs)

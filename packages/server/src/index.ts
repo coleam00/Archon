@@ -120,6 +120,7 @@ import {
   shutdownTelemetry,
   captureArchonStarted,
   captureArchonActive,
+  getSourceWebDistDir,
 } from '@archon/paths';
 import { selectGitHubAuthMode, parseGitCredentialPath } from './github-auth-bootstrap';
 import { isDiscordMentionRequired } from './discord-mention';
@@ -855,13 +856,12 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   });
 
   // Serve web UI static files in production
-  // Uses import.meta.dir for absolute path (CWD varies with bun --filter)
   if (process.env.NODE_ENV === 'production' || !process.env.WEB_UI_DEV) {
     const { serveStatic } = await import('hono/bun');
-    const pathModule = await import('path');
-    const webDistPath =
-      opts.webDistPath ??
-      pathModule.join(pathModule.dirname(pathModule.dirname(import.meta.dir)), 'web', 'dist');
+    // Without an explicit path this is a source checkout or the Docker image,
+    // where the web UI is whatever `bun run build:web` produced. The resolved
+    // path is absolute because CWD varies with `bun --filter`.
+    const webDistPath = opts.webDistPath ?? getSourceWebDistDir();
 
     if (!existsSync(webDistPath)) {
       getLog().warn({ webDistPath }, 'web_dist_not_found');

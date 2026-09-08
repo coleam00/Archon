@@ -554,7 +554,8 @@ access to the local file as access to the run's input and execution data.
 ### `workflow wait`
 
 Block until a run reaches a state it will not leave on its own — it finished, parked
-on a gate awaiting a response, or paused for an outside action — then print what it needs. This is the intended
+on a gate awaiting a response, paused for an outside action, or lost its execution
+owner while still non-terminal — then print what it needs. This is the intended
 partner of `--detach --json`: take the `runId` from the launch ack and wait on it,
 instead of polling `workflow get` in a loop.
 
@@ -580,12 +581,22 @@ its own clock would be answering a question only the run can answer. `--timeout
 
 | Exit | Meaning |
 | --- | --- |
-| `0` | The run said something — it finished (`completed`, `failed`, or `cancelled`), is waiting for a response, or needs an outside action. The status is data on stdout. |
+| `0` | The run said something — it finished (`completed`, `failed`, or `cancelled`), is waiting for a response, needs an outside action, or lost its execution owner. The status is data on stdout. |
 | `3` | The timeout passed with the run still live. The `--json` payload carries `observedStatus`. |
 | `1` | The wait itself failed — unknown run id, database unreachable, or output that could not be delivered. |
 
 A `failed` or `cancelled` run is still exit `0`: mapping run state onto the process
 exit code would make a legitimately cancelled run look like a broken command.
+
+Owner loss is also exit `0`: the wait obtained a typed answer, but Archon did not
+invent a terminal status or change the run. Its JSON result is `owner_lost` with the
+persisted non-terminal `observedStatus` and no `attention` or terminal `status` field.
+After verifying that the run's work has stopped, release its persisted state with
+`archon workflow abandon <run-id>`.
+
+Live-owner detection is local to the host running `workflow wait`. With a shared remote
+PostgreSQL database, `owner_lost` means no owner endpoint is reachable on this host; the
+run may still be executing on another host. Check the owning host before abandoning it.
 
 `--json` emits one document. On a wake it carries the attention value:
 
@@ -657,8 +668,11 @@ command fails and leaves the run state unchanged. This is deliberate: a database
 transition cannot prove that host work stopped. After separately verifying that the
 owner process is gone, use `workflow abandon <run-id>` to clean up an orphaned row.
 
-`workflow cancel` applies only to a live detached CLI owner. Foreground runs remain
-owned by their terminal and should be interrupted there.
+`workflow cancel` applies only to a live detached CLI owner. Foreground CLI and
+in-process server runs publish the same liveness endpoint for `workflow wait`, but do
+not expose their process PID or active-stop capability. Foreground runs remain owned
+by their terminal and should be interrupted there; server-owned lifecycle changes
+remain explicit operator actions.
 
 After termination is confirmed, `cancel` records cancellation through the same run-tree
 operation as `abandon`. Cancelling a parent therefore cancels every non-terminal
@@ -922,18 +936,20 @@ before removing it. Accepts multiple branch names in one call.
 
 ### `serve`
 
-Start the web UI server. On first run, downloads a pre-built web UI tarball from the matching GitHub release, verifies the SHA-256 checksum, and extracts it. Subsequent runs use the cached copy.
+Start the web UI server in the foreground. The same command works from a binary install and from a source checkout. Only the source of the web UI differs.
 
-**Binary installs only** — in development, use `bun run dev` instead.
+**Binary installs** download a pre-built web UI tarball from the matching GitHub release on first run, verify its SHA-256 checksum, and extract it. Later runs use the cached copy.
+
+**Source checkouts** serve the web UI you build yourself, at `packages/web/dist`. Run `bun run build:web` from the repo root before your first `archon serve`, and again after frontend changes. Nothing is downloaded, so `--download-only` is refused, and a missing build stops the command with the build command to run instead of serving an empty page.
 
 ```bash
-# Start web UI server (downloads on first run)
+# Start web UI server (binary installs download it on first run)
 archon serve
 
 # Override the default port
 archon serve --port 4000
 
-# Download the web UI without starting the server
+# Download the web UI without starting the server (binary installs only)
 archon serve --download-only
 ```
 
@@ -942,9 +958,9 @@ archon serve --download-only
 | Flag | Effect |
 |------|--------|
 | `--port <port>` | Override server port (default: 3090, range: 1–65535) |
-| `--download-only` | Download and cache the web UI, then exit without starting the server |
+| `--download-only` | Download and cache the web UI, then exit without starting the server. Binary installs only |
 
-The cached web UI is stored at `~/.archon/web-dist/<version>/`. Each version is cached independently, so upgrading the binary automatically downloads the matching web UI.
+The downloaded web UI is cached at `~/.archon/web-dist/<version>/`. Each version is cached independently, so upgrading the binary automatically downloads the matching web UI.
 
 ### `skill install [path]`
 

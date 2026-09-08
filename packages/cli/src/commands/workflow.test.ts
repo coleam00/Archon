@@ -101,18 +101,18 @@ const mockReclaimContainerEnv = mock((): Promise<void> => Promise.resolve());
 const mockRequestDetachedRunStop = mock<typeof DetachedRunControl.requestDetachedRunStop>(() =>
   Promise.resolve({ stop: mockDetachedTargetStop, release: mockDetachedTargetRelease })
 );
-const mockDetachedControlClose = mock((): Promise<void> => Promise.resolve());
+const mockRunLiveOwnerClose = mock((): Promise<void> => Promise.resolve());
 const mockAssertDetachedRunProcessOwner = mock((): undefined => undefined);
 let mockDetachedStopRequested = false;
-const mockStartDetachedRunControlServer = mock(
+const mockStartRunLiveOwner = mock(
   (
     _runId: string
   ): Promise<{
-    close: typeof mockDetachedControlClose;
+    close: typeof mockRunLiveOwnerClose;
     isStopRequested: () => boolean;
   }> =>
     Promise.resolve({
-      close: mockDetachedControlClose,
+      close: mockRunLiveOwnerClose,
       isStopRequested: (): boolean => mockDetachedStopRequested,
     })
 );
@@ -123,14 +123,16 @@ mock.module(
     assertDetachedRunProcessOwner: typeof mockAssertDetachedRunProcessOwner;
     DETACHED_RUN_OWNER_ENV: string;
     requestDetachedRunStop: typeof mockRequestDetachedRunStop;
-    startDetachedRunControlServer: typeof mockStartDetachedRunControlServer;
   } => ({
     assertDetachedRunProcessOwner: mockAssertDetachedRunProcessOwner,
     DETACHED_RUN_OWNER_ENV: 'ARCHON_DETACHED_RUN_OWNER',
     requestDetachedRunStop: mockRequestDetachedRunStop,
-    startDetachedRunControlServer: mockStartDetachedRunControlServer,
   })
 );
+
+mock.module('@archon/core/services/run-live-owner', () => ({
+  startRunLiveOwner: mockStartRunLiveOwner,
+}));
 
 mock.module(
   '@archon/core/services/cleanup-service',
@@ -2015,7 +2017,12 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
   it('refuses and names the same-branch relaunch with --supersedes', async () => {
     const { executeWorkflow, hydrateResumableRun } = await import('@archon/workflows/executor');
     await stubFailedPriorRun();
-    (hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    mockStartRunLiveOwner.mockClear();
+    mockRunLiveOwnerClose.mockClear();
+    (hydrateResumableRun as ReturnType<typeof mock>).mockImplementationOnce(async () => {
+      expect(mockStartRunLiveOwner).toHaveBeenCalledWith('run-dead', {});
+      return null;
+    });
 
     await expect(
       workflowRunCommand('/repo/root', 'archon-ship', 'go', { resume: true })
@@ -2025,6 +2032,7 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
 
     // The refusal is still a refusal: no run is started.
     expect(executeWorkflow).not.toHaveBeenCalled();
+    expect(mockRunLiveOwnerClose).toHaveBeenCalledTimes(1);
   });
 
   it('suggests a fresh in-place relaunch when no isolation record matched', async () => {
@@ -7569,7 +7577,7 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
   beforeEach(() => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
     process.env.ARCHON_DETACHED_RUN_OWNER = '1';
-    mockStartDetachedRunControlServer.mockClear();
+    mockStartRunLiveOwner.mockClear();
   });
 
   afterEach(() => {
@@ -7614,8 +7622,11 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
     // A fresh pre-created row is NOT a resume: prior state would make the executor
     // skip nodes that never ran.
     expect(opts.priorCompletedNodes).toBeUndefined();
-    // The stop endpoint is keyed on the run this process owns.
-    expect(mockStartDetachedRunControlServer).toHaveBeenCalledWith('run-precreated');
+    // The live-owner endpoint is keyed on the run this process owns, and only a
+    // detached child exposes active stop.
+    expect(mockStartRunLiveOwner).toHaveBeenCalledWith('run-precreated', {
+      detachedProcessPid: process.pid,
+    });
   });
 
   // #2872 R2 — everything between the handover and the executor claiming the row can
@@ -10161,8 +10172,8 @@ describe('workflowRunCommand — progress rendering', () => {
     capturedSubscribeHandler = null;
     mockDetachedStopRequested = false;
     mockUnsubscribe.mockClear();
-    mockStartDetachedRunControlServer.mockClear();
-    mockDetachedControlClose.mockClear();
+    mockStartRunLiveOwner.mockClear();
+    mockRunLiveOwnerClose.mockClear();
     delete process.env.ARCHON_DETACHED_RUN_OWNER;
     mockLogger.info.mockClear();
     mockLogger.warn.mockClear();
@@ -10713,8 +10724,8 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
     mockDetachedStopRequested = false;
     mockAssertDetachedRunProcessOwner.mockReset();
     mockAssertDetachedRunProcessOwner.mockImplementation(() => undefined);
-    mockStartDetachedRunControlServer.mockClear();
-    mockDetachedControlClose.mockClear();
+    mockStartRunLiveOwner.mockClear();
+    mockRunLiveOwnerClose.mockClear();
     mockUnsubscribe.mockClear();
 
     const workflowsDb = require('@archon/core/db/workflows');
@@ -10745,6 +10756,7 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
     setupWorkflowMocks();
     await workflowRunCommand('/test/path', 'plan', 'hello', {});
     expect(duringRunSigterm).toBe(sigtermBaseline + 1);
+    expect(mockStartRunLiveOwner).toHaveBeenCalledWith('test-run-id', {});
     expect(process.listenerCount('SIGTERM')).toBe(sigtermBaseline);
     expect(process.listenerCount('SIGINT')).toBe(sigintBaseline);
 
@@ -10795,6 +10807,13 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
   it('still fails the run on a genuine mid-run interrupt (legacy behavior)', async () => {
     const workflowsDb = require('@archon/core/db/workflows');
     (workflowsDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValue('running');
+    const shutdownOrder: string[] = [];
+    mockRunLiveOwnerClose.mockImplementationOnce(async () => {
+      shutdownOrder.push('owner-close');
+    });
+    exitSpy.mockImplementationOnce((() => {
+      shutdownOrder.push('exit');
+    }) as never);
 
     const sigtermBefore = process.listeners('SIGTERM');
     const { executeWorkflow } = require('@archon/workflows/executor');
@@ -10819,9 +10838,10 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
     );
 
     expect(workflowsDb.failWorkflowRun).toHaveBeenCalledWith(
-      'run-1',
+      'test-run-id',
       'Process terminated (SIGTERM)'
     );
+    expect(shutdownOrder).toEqual(['owner-close', 'exit']);
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
@@ -10860,11 +10880,13 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
       workflowRunCommand('/test/path', 'plan', 'hello', { detachedRunId: 'test-run-id' })
     ).rejects.toThrow('Workflow failed');
 
-    expect(mockStartDetachedRunControlServer).toHaveBeenCalledWith('test-run-id');
+    expect(mockStartRunLiveOwner).toHaveBeenCalledWith('test-run-id', {
+      detachedProcessPid: process.pid,
+    });
     expect(statusReadsAtSignalTime).toBe(0);
     expect(workflowsDb.failWorkflowRun).not.toHaveBeenCalled();
     expect(exitSpy).toHaveBeenCalledWith(1);
-    expect(mockDetachedControlClose).toHaveBeenCalledTimes(1);
+    expect(mockRunLiveOwnerClose).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a detached marker when this process does not own its process group', async () => {
@@ -10877,18 +10899,19 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
       'does not own process group'
     );
 
-    expect(mockStartDetachedRunControlServer).not.toHaveBeenCalled();
+    expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
     expect(process.env.ARCHON_DETACHED_RUN_OWNER).toBeUndefined();
   });
 
-  it('never touches a run it does not own (no owned run id at signal time)', async () => {
+  it('uses the source-reserved run id before workflow_started is emitted', async () => {
     const workflowsDb = require('@archon/core/db/workflows');
+    (workflowsDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValue('running');
 
     const sigtermBefore = process.listeners('SIGTERM');
     const { executeWorkflow } = require('@archon/workflows/executor');
     (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
-      // No workflow_started yet — this process owns no run. Another process's
-      // run on the same conversation must never be failed by this handler.
+      // No workflow_started event is needed: source capture reserved the exact id
+      // before execution or its live-owner endpoint became visible.
       const [handler] = addedSigtermListeners(sigtermBefore);
       expect(handler).toBeDefined();
       handler();
@@ -10899,7 +10922,10 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
     setupWorkflowMocks();
     await workflowRunCommand('/test/path', 'plan', 'hello', {});
 
-    expect(workflowsDb.failWorkflowRun).not.toHaveBeenCalled();
+    expect(workflowsDb.failWorkflowRun).toHaveBeenCalledWith(
+      'test-run-id',
+      'Process terminated (SIGTERM)'
+    );
     expect(workflowsDb.getActiveWorkflowRun).not.toHaveBeenCalled();
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
@@ -12249,6 +12275,44 @@ describe('workflowWaitCommand', () => {
       deadlineMs: 5000,
       onAttached: expect.any(Function),
     });
+  });
+
+  it('renders owner loss as an unchanged non-terminal run with an abandon action', async () => {
+    mockWaitForRunAttention.mockResolvedValueOnce({
+      kind: 'owner_lost',
+      runId: FULL_ID,
+      observedStatus: 'running',
+    });
+
+    const code = await workflowWaitCommand(FULL_ID, undefined, '/repo');
+
+    expect(code).toBe(0);
+    const printed = consoleSpy.mock.calls.flat().join(' ');
+    expect(printed).toContain(`lost its execution owner while still running`);
+    expect(printed).toContain('The run was not changed');
+    expect(printed).toContain(`archon workflow abandon ${FULL_ID}`);
+  });
+
+  it('emits owner_lost JSON without inventing attention or terminal status', async () => {
+    mockWaitForRunAttention.mockResolvedValueOnce({
+      kind: 'owner_lost',
+      runId: FULL_ID,
+      observedStatus: 'paused',
+    });
+
+    const code = await workflowWaitCommand(FULL_ID, true, '/repo');
+    const payload = JSON.parse(firstJsonPayload(stdoutSpy)) as Record<string, unknown>;
+
+    expect(code).toBe(0);
+    expect(payload).toEqual({
+      ok: true,
+      action: 'wait',
+      runId: FULL_ID,
+      result: 'owner_lost',
+      observedStatus: 'paused',
+    });
+    expect(payload).not.toHaveProperty('status');
+    expect(payload).not.toHaveProperty('attention');
   });
 
   it('announces the attachment on stderr, leaving stdout one --json document', async () => {

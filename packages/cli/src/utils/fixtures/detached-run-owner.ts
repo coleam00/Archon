@@ -1,9 +1,7 @@
 import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
-import {
-  assertDetachedRunProcessOwner,
-  startDetachedRunControlServer,
-} from '../detached-run-control';
+import { startRunLiveOwner } from '@archon/core/services/run-live-owner';
+import { assertDetachedRunProcessOwner } from '../detached-run-control';
 
 const [runId, readyPath, leakPath, goPath] = process.argv.slice(2);
 if (!runId || !readyPath || !leakPath || !goPath) {
@@ -34,6 +32,6 @@ leakWriter.on('error', error => {
   throw error;
 });
 
-await startDetachedRunControlServer(runId);
+await startRunLiveOwner(runId, { detachedProcessPid: process.pid });
 writeFileSync(readyPath, JSON.stringify({ owner: process.pid, leakWriter: leakWriter.pid }));
 setInterval(() => undefined, 1_000);
