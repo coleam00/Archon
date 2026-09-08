@@ -47,14 +47,18 @@ async function fixture(): Promise<{ root: string; home: string; env: NodeJS.Proc
 async function invoke(
   cwd: string,
   env: NodeJS.ProcessEnv,
-  args: string[]
+  args: string[],
+  input?: string
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   const child = Bun.spawn([process.execPath, cli, ...args], {
     cwd,
     env,
     stdout: 'pipe',
     stderr: 'pipe',
+    stdin: 'pipe',
   });
+  child.stdin.write(input ?? '');
+  child.stdin.end();
   const [code, stdout, stderr] = await Promise.all([
     child.exited,
     new Response(child.stdout).text(),
@@ -63,6 +67,37 @@ async function invoke(
   return { code, stdout, stderr };
 }
 describe('forge CLI real subprocess', () => {
+  it('accepts pinned merge requests from a file and stdin through the maintained plugin', async () => {
+    const f = await fixture();
+    const request = JSON.stringify({
+      ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 42 },
+      expected_head_ref: 'refs/heads/head',
+      expected_head_sha: 'a'.repeat(40),
+      expected_base_ref: 'refs/heads/base',
+      expected_base_sha: 'b'.repeat(40),
+      candidate_sha: 'c'.repeat(40),
+      checkout: f.root,
+    });
+    const file = join(f.home, 'merge.json');
+    await writeFile(file, request);
+    for (const source of [file, '-']) {
+      const result = await invoke(
+        f.root,
+        { ...f.env, GH_TOKEN: 'selected-test-token' },
+        ['forge', 'pr', 'merge-pinned', '--request-file', source, '--json'],
+        source === '-' ? request : undefined
+      );
+      // The real plugin rejects this unrelated checkout before contacting GitHub.
+      expect(result).toMatchObject({ code: 1 });
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        kind: 'verify_failed',
+        observed: 'Checkout origin differs from qualified destination',
+        recovery: { publication: 'not_attempted' },
+      });
+      expect(result.stderr).toContain('"op":"pr.merge-pinned"');
+      expect(result.stdout + result.stderr).not.toContain('selected-test-token');
+    }
+  });
   it('uses explicit interpreter config, qualified identity, and separate audit output', async () => {
     const f = await fixture();
     const resolution = await invoke(f.root, f.env, ['forge', 'resolve', '--json']);

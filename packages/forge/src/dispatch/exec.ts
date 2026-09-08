@@ -76,7 +76,7 @@ async function killTree(pid: number): Promise<void> {
     }
   }
 }
-export async function execPlugin(
+export async function execBoundedProcess(
   candidate: Pick<PluginCandidate, 'command' | 'args'>,
   opArgs: string[],
   options: ExecPluginOptions
@@ -110,7 +110,7 @@ export async function execPlugin(
     let termination: Promise<void> | undefined;
     let backstop: ReturnType<typeof setTimeout> | undefined;
     const child = spawn(candidate.command, [...candidate.args, ...opArgs], {
-      env: pluginEnvironment(options.env, options.env.ARCHON_FORGE_TOKEN),
+      env: options.env,
       cwd: options.cwd,
       detached: process.platform !== 'win32',
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -181,5 +181,16 @@ export async function execPlugin(
       })();
     });
     child.stdin.end(options.stdin);
+  });
+}
+
+export function execPlugin(
+  candidate: Pick<PluginCandidate, 'command' | 'args'>,
+  opArgs: string[],
+  options: ExecPluginOptions
+): Promise<ExecPluginOutcome> {
+  return execBoundedProcess(candidate, opArgs, {
+    ...options,
+    env: pluginEnvironment(options.env, options.env.ARCHON_FORGE_TOKEN),
   });
 }

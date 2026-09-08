@@ -13,9 +13,15 @@ import {
   forgeHostsConfigSchema,
   forgeOpAuditEventSchema,
   forgeProcessFailureSchema,
+  pinnedMergeRequestSchema,
+  pinnedMergeResultSchema,
+  mergeRecoverySchema,
 } from '@archon/forge';
 
 const schemas = {
+  PinnedMergeRequest: pinnedMergeRequestSchema,
+  PinnedMergeResult: pinnedMergeResultSchema,
+  MergeRecovery: mergeRecoverySchema,
   RepoRef: repoRefSchema,
   PrRef: prRefSchema,
   Metadata: pluginMetadataSchema,

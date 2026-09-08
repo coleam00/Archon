@@ -2,6 +2,14 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { ZodType } from 'zod';
 import {
+  PINNED_MERGE_OP,
+  pinnedMergeRequestSchema,
+  pinnedMergePinsSchema,
+  pinnedMergeResultSchema,
+  type PinnedMergeRequest,
+  type PinnedMergeResult,
+} from '../pinned-merge-schemas';
+import {
   CHECKS_STATE_OP,
   RESOLVE_OP,
   FORGE_PROTOCOL_VERSION,
@@ -242,6 +250,64 @@ export class ForgeDispatcher {
           checksStateResultSchema,
           true
         );
+      }
+    );
+  }
+  mergePinned(request: PinnedMergeRequest): Promise<ForgeDispatchResult<PinnedMergeResult>> {
+    const parsed = pinnedMergeRequestSchema.safeParse(request);
+    return this.audited(
+      PINNED_MERGE_OP,
+      parsed.success
+        ? `${parsed.data.ref.repo.host}/${parsed.data.ref.repo.path}#${String(parsed.data.ref.number)}`
+        : 'invalid-ref',
+      async () => {
+        if (!parsed.success)
+          return {
+            kind: 'error',
+            error: {
+              kind: 'invalid_request',
+              detail:
+                'Pinned merge requires a qualified PR, exact head/base/candidate and checkout',
+            },
+          };
+        const result = await this.dispatch(
+          PINNED_MERGE_OP,
+          parsed.data.ref.repo.host,
+          parsed.data,
+          pinnedMergeResultSchema,
+          true
+        );
+        if (result.kind === 'process_failure') {
+          const pins = pinnedMergePinsSchema.parse(parsed.data);
+          return {
+            kind: 'error',
+            plugin: result.plugin,
+            error: {
+              kind: 'verify_failed',
+              expected: 'Verified pinned merge outcome',
+              observed: result.detail,
+              recovery: { ...pins, publication: 'unknown', cleanup: 'unknown' },
+            },
+          };
+        }
+        if (result.kind === 'ok') {
+          const pins = pinnedMergePinsSchema.parse(parsed.data);
+          if (
+            Object.entries(pins).some(
+              ([key, value]) =>
+                JSON.stringify(Reflect.get(result.value, key)) !== JSON.stringify(value)
+            )
+          )
+            return {
+              kind: 'error',
+              plugin: result.plugin,
+              error: {
+                kind: 'invalid_response',
+                detail: 'Pinned merge response changed the requested identity',
+              },
+            };
+        }
+        return result;
       }
     );
   }

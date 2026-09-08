@@ -1,16 +1,7 @@
 import { z } from 'zod';
-// All public vocabulary and wire shapes derive from this leaf module.
-export const repoRefSchema = z.object({
-  host: z.string().regex(/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/),
-  path: z
-    .string()
-    .regex(/^[\p{L}\p{N}_.-]+(?:\/[\p{L}\p{N}_.-]+)+$/u)
-    .refine(value => value.split('/').every(part => part !== '.' && part !== '..')),
-});
-export type RepoRef = z.infer<typeof repoRefSchema>;
-export const prRefSchema = z.object({ repo: repoRefSchema, number: z.number().int().positive() });
-export type PrRef = z.infer<typeof prRefSchema>;
-export const shaSchema = z.string().regex(/^[a-f0-9]{40}$/);
+import { repoRefSchema, prRefSchema, shaSchema } from './identity-schemas';
+import { mergeRecoverySchema } from './pinned-merge-schemas';
+export * from './identity-schemas';
 export const checksStateSchema = z.enum(['none', 'pending', 'green', 'red', 'gated', 'unknown']);
 export type ChecksState = z.infer<typeof checksStateSchema>;
 export const CHECKS = checksStateSchema.enum;
@@ -80,11 +71,13 @@ export const forgeOpErrorSchema = z.discriminatedUnion('kind', [
     expected: z.string(),
     observed: z.string(),
     leave_behind: z.string().optional(),
+    recovery: mergeRecoverySchema.optional(),
   }),
   z.object({
     kind: z.literal('forge_error'),
     status: z.number().int().optional(),
     evidence: z.string(),
+    recovery: mergeRecoverySchema.optional(),
   }),
   z.object({ kind: z.literal('invalid_request'), detail: z.string() }),
   z.object({ kind: z.literal('invalid_response'), detail: z.string() }),

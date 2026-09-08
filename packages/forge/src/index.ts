@@ -7,6 +7,7 @@
  * §standalone-core).
  */
 export * from './schemas';
+export * from './pinned-merge-schemas';
 export { ForgeDispatcher, DuplicateHostClaimError, parseRemoteUrl } from './dispatch/dispatcher';
 export type {
   ForgeDispatchResult,

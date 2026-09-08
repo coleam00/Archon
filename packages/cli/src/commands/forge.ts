@@ -10,6 +10,8 @@ import {
   createGitHubPlugin,
   forgeHostsConfigSchema,
   prRefSchema,
+  PINNED_MERGE_OP,
+  pinnedMergeRequestSchema,
 } from '@archon/forge';
 import { writeJsonLine } from '../utils/stdout';
 
@@ -42,19 +44,23 @@ export async function forgeCommand(args: string[]): Promise<number> {
       options: {
         json: { type: 'boolean' },
         ref: { type: 'string' },
+        request: { type: 'string' },
+        'request-file': { type: 'string' },
         config: { type: 'string' },
         help: { type: 'boolean' },
       },
     });
     if (values.help) {
       await writeJsonLine({
-        usage: 'archon forge resolve --json | archon forge checks --ref <PrRef JSON> --json',
+        usage:
+          'archon forge resolve --json | archon forge checks --ref <PrRef JSON> --json | archon forge pr merge-pinned --request-file <file or -> --json',
         config:
           'Optional --config <file> containing {"hosts":{...}}; defaults to ~/.archon/forge.json',
       });
       return 0;
     }
-    if (positionals.length !== 1 || !['resolve', 'checks'].includes(positionals[0])) {
+    const op = positionals.join('.');
+    if (!['resolve', 'checks', PINNED_MERGE_OP].includes(op)) {
       await writeJsonLine({ kind: 'unsupported_op', op: positionals.join('.') });
       return 1;
     }
@@ -91,9 +97,23 @@ export async function forgeCommand(args: string[]): Promise<number> {
       }
     );
     const result =
-      positionals[0] === 'resolve'
+      op === 'resolve'
         ? await dispatcher.resolve()
-        : await dispatcher.checksState(prRefSchema.parse(JSON.parse(values.ref ?? 'null')));
+        : op === 'checks'
+          ? await dispatcher.checksState(prRefSchema.parse(JSON.parse(values.ref ?? 'null')))
+          : await dispatcher.mergePinned(
+              pinnedMergeRequestSchema.parse(
+                JSON.parse(
+                  values['request-file']
+                    ? values['request-file'] === '-'
+                      ? readFileSync(0, 'utf8')
+                      : await readFile(values['request-file'], 'utf8')
+                    : values.request === '-'
+                      ? readFileSync(0, 'utf8')
+                      : (values.request ?? 'null')
+                )
+              )
+            );
     await writeJsonLine(
       result.kind === 'ok' ? result.value : result.kind === 'error' ? result.error : result
     );

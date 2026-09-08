@@ -1,6 +1,6 @@
 ---
 title: Forge operations
-description: Qualified resolve and checks operations and the versioned forge plugin protocol.
+description: Qualified forge operations, pinned merges, and the versioned plugin protocol.
 ---
 
 `archon forge resolve --json` resolves `origin` once to a repository with `host` and
@@ -38,6 +38,63 @@ reports gated and unknown as non-green and retains its registration grace for an
 empty set. The optional required-check subset is reserved in the contract but is
 not queried by this initial GitHub implementation; consumers use the full set.
 
+## Pinned merge
+
+`archon forge pr merge-pinned --request-file merge.json --json` publishes an exact,
+already-tested composition. Use `--request-file -` or `--request -` for stdin;
+`--request '<JSON>'` also accepts the request directly. The request is:
+
+```json
+{
+  "ref": { "repo": { "host": "github.com", "path": "owner/repo" }, "number": 42 },
+  "expected_head_ref": "refs/heads/feature",
+  "expected_head_sha": "1111111111111111111111111111111111111111",
+  "expected_base_ref": "refs/heads/dev",
+  "expected_base_sha": "2222222222222222222222222222222222222222",
+  "candidate_sha": "3333333333333333333333333333333333333333",
+  "checkout": "/absolute/path/to/tested/checkout"
+}
+```
+
+The checkout must have a matching origin, a clean index and working tree, and HEAD
+at `candidate_sha`. The candidate must have exactly two parents, **base first,
+head second**. The caller owns composition testing, evidence integrity, approval,
+queue ordering, and ensuring exclusive use of its checkout. This operation does
+not infer test success or grant approval. Queue scripts call the forge operation;
+they must not implement another publisher with `gh` or `git push`.
+
+GitHub currently supports same-repository PRs on github.com. Fork heads and other
+unsupported configurations return `unsupported_op`. The plugin uploads the exact
+commit to a fresh temporary tag through an explicit HTTPS URL, with the selected
+credential in the Git process environment. It then uses one
+[atomic `updateRefs` mutation](https://docs.github.com/en/graphql/reference/git#updaterefs)
+to compare both refs: a no-op head guard and a base update, both with `beforeOid`
+and `force: false`. GitHub enforces the actor's server policy; the operation requests
+no bypass or force update. This is a ref publication, not GitHub's merge queue or
+`mergePullRequest` mutation. Policies requiring those mechanisms may refuse it.
+
+Success requires read-back of the exact base commit, ordered parents, PR head,
+merged state, and merge commit. A lost response causes reconciliation reads, never
+a second publication in the same call. Repeating the identical request returns
+`already_merged` only while those exact identities still agree. Any changed base,
+head, or merge commit refuses verification. PR metadata itself is not part of the
+ref transaction, so callers must serialize retargeting and other lifecycle actions.
+
+Results and relevant errors carry `publication` (`not_attempted`, `unknown`, or
+`applied`), the pins, and temporary-ref cleanup evidence. `applied` can accompany a
+verification error when the base advanced but the PR read-back is unavailable or
+has not converged. Such an error does **not** mean unmerged. After interruption,
+retain the original request and reconcile it before creating another candidate.
+If the plugin process is terminated, dispatch reports unknown publication with
+the original pins; it may not know the temporary ref. Temporary tags use the
+`refs/tags/archon-merge-` prefix. Cleanup compares their object identity and deletes
+conditionally; failure never changes a verified merge into failure. A retained or
+unknown temporary ref requires inspection before operator cleanup.
+
+Offline tests exercise actual Git uploads and atomic ref transactions. The earlier
+disposable-ref probe establishes API CAS capability only; full live PR read-back
+and branch-protection behavior require a separate isolated integration run.
+
 ## Plugins
 
 A plugin responds to `<executable> metadata` and `<executable> op <op-id>`.
@@ -49,7 +106,7 @@ failure. Protocol 1 is a small compatibility integer, separate from the plugin
 release version. Unknown metadata fields and additive capability strings are
 allowed. Undeclared capabilities return `unsupported_op` before execution.
 
-The implemented capabilities are `resolve` and `checks.state`. Resolve is the
+The implemented capabilities include `resolve`, `checks.state`, and `pr.merge-pinned`. Resolve is the
 protocol root operation; subsequent forge intents use namespaced identifiers.
 Plugins receive a qualified repository for resolve and a qualified PR for checks.
 Metadata includes `protocol`, `name`, `version`, `forge`, canonical SaaS `hosts`,
@@ -119,7 +176,7 @@ engine `exec_output` transcript retains those records with the node's output.
 There is no global sidecar log. A separate persisted workflow-event and console
 projection are not part of this transcript integration.
 
-PR create/view/edit-body/ready, work-item view, marked comment upsert, merge and
+PR create/view/edit-body/ready, work-item view, marked comment upsert and
 trigger operations remain follow-ups. Per-user/per-host credential storage,
 generalized invocation requirements and doctor support are also not implemented
 here. The current `requires: [github]` semantics remain in force.

@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { mergePinnedGitHub, type PinnedMergeOptions } from './pinned-merge';
+import { PINNED_MERGE_OP, pinnedMergeRequestSchema } from '../pinned-merge-schemas';
 import {
   CHECKS,
   CHECKS_STATE_OP,
@@ -18,17 +20,14 @@ import {
 } from '../schemas';
 import type { BuiltinPlugin, RawOpOutcome } from '../dispatch/plugin-handle';
 export const GITHUB_HOST = 'github.com';
-export interface GitHubPluginOptions {
-  fetchImpl?: typeof fetch;
-  apiBase?: string;
-}
+export type GitHubPluginOptions = PinnedMergeOptions;
 const metadata: PluginMetadata = {
   protocol: FORGE_PROTOCOL_VERSION,
   name: 'github',
   version: '1.0.0',
   forge: 'github',
   hosts: [GITHUB_HOST],
-  capabilities: [RESOLVE_OP, CHECKS_STATE_OP],
+  capabilities: [RESOLVE_OP, CHECKS_STATE_OP, PINNED_MERGE_OP],
   token_env: 'GH_TOKEN',
 };
 // Validate the REST fields we consume. Open strings preserve unknown upstream states.
@@ -244,6 +243,15 @@ export function createGitHubPlugin(options: GitHubPluginOptions = {}): BuiltinPl
     name: metadata.name,
     metadata: () => metadata,
     execOp: async (op, request, env, signal): Promise<RawOpOutcome> => {
+      if (op === PINNED_MERGE_OP) {
+        const parsed = pinnedMergeRequestSchema.safeParse(request);
+        if (!parsed.success)
+          return {
+            kind: 'op_error',
+            raw: { kind: 'invalid_request', detail: 'Invalid pinned merge request' },
+          };
+        return mergePinnedGitHub(parsed.data, env, options, signal);
+      }
       if (op === RESOLVE_OP) {
         const parsed = resolveRequestSchema.safeParse(request);
         if (!parsed.success || parsed.data.repo.host !== GITHUB_HOST)
