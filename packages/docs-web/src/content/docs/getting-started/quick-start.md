@@ -128,10 +128,11 @@ refused multi-item input remain advisory with no writes. Triage never edits issu
 bodies, closes issues, or writes blocked-by relations. `archon-close` proposes
 human review of closure.
 
-Label replacement is one request, but creating repository labels and updating
-an issue are not a transaction. Failure can leave partial writes; rerunning is
-idempotent. Coordinate concurrent label editors: GitHub's label replacement
-cannot preserve an edit it did not observe. Live tracker and agent judgment
+Publication adds missing desired labels and removes only stale labels from the
+five-label pack vocabulary. Unrelated labels added concurrently survive these
+narrow operations. Creating repository labels and updating an issue are not a
+transaction: failure can leave partial writes; rerunning is idempotent. Concurrent
+pack-state edits can fail read-back verification. Live tracker and agent judgment
 checks are separate from the deterministic fixtures.
 
 ## What's Next?

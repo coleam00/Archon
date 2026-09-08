@@ -117,9 +117,7 @@ honest best estimate even when the contract is not yet `READY`.
 
 ## Propose labels
 
-Propose one pack state label and matching existing area labels. Include exactly one of the
-five pack labels, chosen by this table - never more than one, never a
-different one:
+Propose exactly one pack state label from this table, plus matching existing area labels:
 
 | `contract` | `design_first` | label |
 |---|---|---|
@@ -138,6 +136,7 @@ When `contract` is `BLOCKED`, explain the unresolved dependency or external
 decision in `blocked_reason`. Put verified, fully qualified blocker URLs in
 `blocked_by` when available; an external decision may have no issue URL.
 Never fabricate a blocker reference. Relations remain proposals in this slice.
+Leave both blocker fields empty for other verdicts.
 
 ## Write the assessment
 
@@ -161,15 +160,9 @@ Do not investigate the full causal chain, choose the implementation design, impl
 
 - `route` - exactly one of `investigate`, `plan`, `deliver`, or `no_action`.
 - `summary` - a few sentences naming the current truth that decided the route and pointing to `$ARTIFACTS_DIR/triage.md`.
-- `contract` - exactly one of `READY`, `NEEDS_CONTRACT_WORK`, `BLOCKED`, or `NO_ACTION`.
-- `design_first` - boolean, `true` only when `contract` is `READY` and `route` is `plan`.
-- `complexity` - exactly one of `small_bounded`, `risky`, or `large`.
 - `proposed_edits` - `{"title": "...", "body": "..."}`; both empty unless `contract` is `NEEDS_CONTRACT_WORK`, in which case both are non-empty.
-- `labels` - the proposed label set; exactly one pack label from the table above, plus any matching area labels.
-- `blocked_reason` - non-empty dependency or external-decision reason for `BLOCKED`; empty otherwise.
-- `blocked_by` - qualified HTTP(S) blocker URLs, optionally empty for `BLOCKED`; empty otherwise.
-- `issue_repo` - the resolved `owner/repo` when the target names one GitHub issue; empty otherwise.
-- `issue_number` - the resolved issue number; `0` when `issue_repo` is empty.
-- `issue_url` - the exact verified github.com issue URL; empty for non-tracker or refused input.
+- Issue identity - declare the verified `issue_repo` (`owner/repo`), `issue_number`, and `issue_url`; use empty strings and `0` for non-tracker or refused input.
+
+Return the remaining judgments in the declared output schema using the rules above.
 
 Before declaring, re-read the assessment. Confirm every decisive claim has evidence from this run, the requested outcome is separated from suggested implementation, the contract verdict is checked against the six elements rather than assumed, you stopped at the routing boundary, and `git status` matches what you started with.

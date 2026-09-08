@@ -239,33 +239,61 @@ test('publish off and non-tracker input make zero forge calls', async () => {
   expect(JSON.parse(prose.stdout).publication.published).toBe(false);
   expect((await state()).calls).toEqual([]);
 });
-test('explicit cross-repository identity, paginated labels and comma labels survive publication', async () => {
+test('an unrelated label added between the initial read and mutation survives', async () => {
+  const result = await run(ISSUE, 'true', 'concurrent_unrelated');
+  expect(result.stderr).toBe('');
+  expect(result.code).toBe(0);
+  expect(JSON.parse(result.stdout).publication.published).toBe(true);
+  expect((await state()).issue_labels.sort()).toEqual(
+    ['archon-ready', 'unrelated-label', 'area:concurrent/cli,api'].sort()
+  );
+});
+test('explicit cross-repository identity, paginated labels and comma/slash labels survive publication', async () => {
   const initial = await state();
   initial.labels = [
     ...Array.from({ length: 305 }, (_, i) => `area:${String(i)}`),
     'area:cli,api',
+    'area:cli/api',
     ...Object.values(labels),
     'archon-design-first',
   ];
   await writeFile(statePath, JSON.stringify({ ...initial, url: ISSUE.issue_url, number: 42 }));
   const result = await run(
-    { ...ISSUE, labels: ['archon-ready', 'area:cli,api', 'area:missing'] },
+    { ...ISSUE, labels: ['archon-ready', 'area:cli,api', 'area:cli/api', 'area:missing'] },
     'true'
   );
   expect(result.stderr).toBe('');
   expect(result.code).toBe(0);
   expect(JSON.parse(result.stdout).publication).toEqual({
     published: true,
-    applied_labels: ['archon-ready', 'area:cli,api'],
+    applied_labels: ['archon-ready', 'area:cli,api', 'area:cli/api'],
     skipped_labels: ['area:missing'],
   });
   const after = await state();
   expect(after.issue_labels.sort()).toEqual(
-    ['archon-ready', 'area:cli,api', 'unrelated-label'].sort()
+    ['archon-ready', 'area:cli,api', 'area:cli/api', 'unrelated-label'].sort()
   );
   expect(after.labels).toEqual(initial.labels);
-  expect(after.calls.filter(c => c.includes('POST'))).toHaveLength(0);
-  expect(after.calls.filter(c => c.includes('PUT'))).toHaveLength(1);
+  expect(after.calls.filter(c => c.includes('--method'))).toEqual([
+    [
+      'api',
+      '--hostname',
+      'github.com',
+      'repos/explicit/other-repo/issues/42/labels',
+      '--method',
+      'POST',
+      '--input',
+      '-',
+    ],
+    [
+      'api',
+      '--hostname',
+      'github.com',
+      'repos/explicit/other-repo/issues/42/labels/archon-blocked',
+      '--method',
+      'DELETE',
+    ],
+  ]);
   expect(after.calls.every(c => c[3].startsWith('repos/explicit/other-repo/'))).toBe(true);
 });
 test('empty repository creates exactly the pack labels; a repeat makes no writes', async () => {
@@ -273,20 +301,54 @@ test('empty repository creates exactly the pack labels; a repeat makes no writes
   expect(first.code).toBe(0);
   const after = await state();
   expect(after.labels.sort()).toEqual([...Object.values(labels), 'archon-design-first'].sort());
-  const writes = after.calls.filter(c => c.includes('POST') || c.includes('PUT')).length;
+  const writes = after.calls.filter(c => c.includes('--method')).length;
+  expect(writes).toBe(7);
   const second = await run(ISSUE, 'true');
   expect(second.code).toBe(0);
   expect(second.stdout).toBe(first.stdout);
-  expect((await state()).calls.filter(c => c.includes('POST') || c.includes('PUT'))).toHaveLength(
-    writes
+  expect((await state()).calls.filter(c => c.includes('--method'))).toHaveLength(writes);
+});
+test('only stale pack labels are removed, including ready when moving to design-first', async () => {
+  const initial = await state();
+  initial.issue_labels = [...Object.values(labels), 'area:old/cli,api', 'archon-custom'];
+  await writeFile(statePath, JSON.stringify(initial));
+  const result = await run(
+    { ...ISSUE, route: 'plan', design_first: true, labels: ['archon-design-first'] },
+    'true'
+  );
+  expect(result.stderr).toBe('');
+  expect(result.code).toBe(0);
+  const after = await state();
+  expect(after.issue_labels.sort()).toEqual(
+    ['archon-design-first', 'area:old/cli,api', 'archon-custom'].sort()
+  );
+  expect(
+    after.calls
+      .filter(c => c.includes('DELETE'))
+      .map(c => c[3])
+      .sort()
+  ).toEqual(
+    Object.values(labels)
+      .map(label => `repos/explicit/other-repo/issues/42/labels/${label}`)
+      .sort()
+  );
+  const ready = await run(ISSUE, 'true');
+  expect(ready.code).toBe(0);
+  expect((await state()).issue_labels.sort()).toEqual(
+    ['archon-ready', 'area:old/cli,api', 'archon-custom'].sort()
+  );
+  expect((await state()).calls.filter(c => c.includes('DELETE')).at(-1)?.[3]).toBe(
+    'repos/explicit/other-repo/issues/42/labels/archon-design-first'
   );
 });
 for (const mode of [
   'noop_write',
   'drop_unrelated',
   'retain_stale',
+  'concurrent_pack',
   'wrong_after',
   'partial_create',
+  'partial_remove',
   'write_then_fail',
   'read_failure',
   'malformed_labels',
@@ -299,6 +361,14 @@ for (const mode of [
     expect(result.stderr).not.toBe('');
     if (mode === 'partial_create') expect((await state()).labels).toHaveLength(1);
     if (mode === 'write_then_fail') expect((await state()).issue_labels).toContain('archon-ready');
+    if (mode === 'partial_remove') {
+      expect((await state()).issue_labels.sort()).toEqual(
+        ['archon-ready', 'archon-blocked', 'unrelated-label'].sort()
+      );
+      expect(result.stderr).toContain('synthetic remove failure after addition');
+      expect((await run(ISSUE, 'true')).code).toBe(0);
+      expect((await state()).issue_labels.sort()).toEqual(['archon-ready', 'unrelated-label']);
+    }
   });
 }
 test('mismatched pre-write identity refuses before even creating repository labels', async () => {

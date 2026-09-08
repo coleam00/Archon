@@ -11,7 +11,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 
 STATE_LABELS = {
@@ -136,12 +136,13 @@ def publish(triage: dict) -> dict:
                {"name": name, "color": color, "description": description})
     accepted = [label for label in triage["labels"] if label in PACK_LABELS or label in existing]
     target = (current - PACK_LABELS) | set(accepted)
-    if target != current:
-        # One replacement avoids an intermediate state with no pack label.
-        # GitHub has no conditional label-set update: concurrent edits still need
-        # operator coordination. Read-back verifies every label we observed.
-        gh(["api", "--hostname", "github.com", f"{endpoint}/labels", "--method", "PUT", "--input", "-"],
-           {"labels": sorted(target)})
+    additions = set(accepted) - current
+    if additions:
+        # Narrow mutations preserve unrelated labels added since the read.
+        gh(["api", "--hostname", "github.com", f"{endpoint}/labels", "--method", "POST", "--input", "-"],
+           {"labels": sorted(additions)})
+    for label in sorted((current & PACK_LABELS) - set(accepted)):
+        gh(["api", "--hostname", "github.com", f"{endpoint}/labels/{quote(label, safe='')}", "--method", "DELETE"])
     actual = read_issue(endpoint, triage)
     require(target <= actual and actual & PACK_LABELS == target & PACK_LABELS,
             "label read-back mismatch: proposed or unrelated labels missing, or stale pack labels remain; writes may have completed")
