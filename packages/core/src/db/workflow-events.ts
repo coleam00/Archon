@@ -9,6 +9,7 @@
  * Read operations also throw on error — callers own the degradation policy.
  */
 import { pool, getDialect, getDatabaseType } from './connection';
+import { toDbTimestampParam } from './timestamps';
 import type { QueryResult } from './adapters/types';
 import type { WorkflowEventRow } from '../schemas/workflow-event';
 import { createLogger } from '@archon/paths';
@@ -29,20 +30,6 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 export type { WorkflowEventRow } from '../schemas/workflow-event';
-
-/**
- * Format a Date for a `created_at` comparison param to match how each dialect
- * STORES it. SQLite stores `datetime('now')` → "YYYY-MM-DD HH:MM:SS" as TEXT and
- * compares lexicographically, so the cursor MUST use that exact shape — an ISO
- * string ("…T…Z") sorts wrong (the space at index 10 is below 'T'), so
- * `created_at >= cursor` would silently match nothing. Postgres has a native
- * timestamptz and accepts the ISO string.
- */
-function toDbDateParam(d: Date): string {
-  return getDatabaseType() === 'sqlite'
-    ? d.toISOString().replace('T', ' ').slice(0, 19) // "YYYY-MM-DD HH:MM:SS"
-    : d.toISOString();
-}
 
 /**
  * Parse a row's `data` JSON defensively. A single malformed row must not abort a
@@ -195,7 +182,7 @@ export async function listRecentEvents(
         `SELECT * FROM remote_agent_workflow_events
          WHERE workflow_run_id = $1 AND created_at > $2
          ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
-        [workflowRunId, toDbDateParam(since)]
+        [workflowRunId, toDbTimestampParam(since)]
       );
       return [...result.rows].map(row => ({
         ...row,
@@ -233,7 +220,7 @@ export async function listWorkflowEventsSince(
   eventTypes?: readonly string[]
 ): Promise<WorkflowEventRow[]> {
   try {
-    const params: unknown[] = [toDbDateParam(after)];
+    const params: unknown[] = [toDbTimestampParam(after)];
     let typeClause = '';
     if (eventTypes && eventTypes.length > 0) {
       const placeholders = eventTypes.map((_, i) => `$${String(i + 2)}`).join(', ');

@@ -219,6 +219,12 @@ describe('CLI help output', () => {
     );
   });
 
+  it('documents the ownership claim for an install turning web auth on', () => {
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain('conversations list --unowned');
+    expect(help.stdout).toContain('conversations claim --user <archon-user-id>');
+  });
+
   it('omits the removed branch-inferred continue command', () => {
     expect(help.status).toBe(0);
     expect(help.stdout).not.toMatch(/\bcontinue <branch>/);
@@ -371,6 +377,11 @@ Commands:
   skill install [path]       Install archon-cli into .claude/skills and .agents/skills
   doctor [--full]            Verify your Archon setup (Claude/Codex binaries, gh auth, DB, adapters; --full also probes the OpenCode runtime SDK)
   auth github                Connect your GitHub identity via device flow (multi-user installs)
+  conversations list --unowned [--platform web|cli] [--limit <n>]
+                             List conversations no Archon user owns (what a claim would take)
+  conversations claim --user <archon-user-id> [--platform web|cli] [--before <iso>] [--dry-run] [--yes]
+                             Attach unowned conversations and runs to one user after turning web auth on
+                             Shell-only on purpose: an unowned row has no owner to authenticate against
   ai key set <provider>      Connect an AI provider API key (multi-user installs; key read from prompt/stdin)
   ai login <provider>        Connect a Claude, ChatGPT/Codex, or Copilot subscription
   ai list                    List your connected AI provider keys
@@ -1875,6 +1886,31 @@ describe('pre-dispatch gates --json error envelope', () => {
 
   it('emits { ok: false } on stdout for an unknown command instead of usage text', () => {
     const { status, envelope } = spawnJsonError(['boguscmd', '--json']);
+
+    expect(status).toBe(1);
+    expect(envelope).not.toThrow();
+    expect(envelope()).toMatchObject({ ok: false });
+  });
+
+  // The subcommand switch is the only gate on a command that runs outside a git
+  // repo and writes ownership, so an unknown one must fail with usage rather
+  // than fall through to a default.
+  it('rejects a stray positional on conversations list rather than widening the list', () => {
+    const { status, envelope } = spawnJsonError([
+      'conversations',
+      'list',
+      '--unowned',
+      'typo',
+      '--json',
+    ]);
+
+    expect(status).toBe(1);
+    expect(envelope()).toMatchObject({ ok: false });
+    expect(JSON.stringify(envelope())).toContain('unexpected positional argument');
+  });
+
+  it('emits { ok: false } on stdout for an unknown conversations subcommand', () => {
+    const { status, envelope } = spawnJsonError(['conversations', 'bogus', '--json']);
 
     expect(status).toBe(1);
     expect(envelope).not.toThrow();

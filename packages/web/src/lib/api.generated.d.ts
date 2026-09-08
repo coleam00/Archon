@@ -782,7 +782,6 @@ export interface paths {
         query?: {
           platform?: string;
           codebaseId?: string;
-          mine?: 'true' | 'false';
         };
         header?: never;
         path?: never;
@@ -797,6 +796,15 @@ export interface paths {
           };
           content: {
             'application/json': components['schemas']['ConversationListResponse'];
+          };
+        };
+        /** @description Authentication required */
+        401: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
           };
         };
         /** @description Server error */
@@ -1102,6 +1110,15 @@ export interface paths {
         };
         /** @description Bad request */
         400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
           headers: {
             [name: string]: unknown;
           };
@@ -1546,6 +1563,15 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
           headers: {
@@ -1655,6 +1681,15 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Not the run starter */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Not found */
         404: {
           headers: {
@@ -1713,6 +1748,15 @@ export interface paths {
         };
         /** @description Bad request */
         400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not the run starter */
+        403: {
           headers: {
             [name: string]: unknown;
           };
@@ -1794,6 +1838,15 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Not the run starter */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Not found */
         404: {
           headers: {
@@ -1852,6 +1905,15 @@ export interface paths {
         };
         /** @description Bad request */
         400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not the run starter */
+        403: {
           headers: {
             [name: string]: unknown;
           };
@@ -1928,6 +1990,15 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Not the run starter */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Not found */
         404: {
           headers: {
@@ -1997,6 +2068,15 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Not the run starter */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Not found */
         404: {
           headers: {
@@ -2059,6 +2139,15 @@ export interface paths {
         };
         /** @description Bad request */
         400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not the run starter */
+        403: {
           headers: {
             [name: string]: unknown;
           };
@@ -2172,6 +2261,15 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description Not the run starter */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Not found */
         404: {
           headers: {
@@ -2234,6 +2332,24 @@ export interface paths {
         };
         /** @description Bad request */
         400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Cross-scope reset is not available while conversations are owned */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Conversation not found */
+        404: {
           headers: {
             [name: string]: unknown;
           };

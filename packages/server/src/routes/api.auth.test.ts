@@ -7,9 +7,10 @@ import { makeListDashboardRunsMock, mockAllWorkflowModules } from '../test/workf
 
 // ---------------------------------------------------------------------------
 // Mock setup — must precede the dynamic import of ./api below.
-// Covers: GET /api/auth/status (enabled/disabled shape) and the non-enforcing
-// ?mine filter on the runs + conversations list endpoints (session-first, then
-// the X-Archon-User header, threaded into the DB query as a userId filter).
+// Covers: GET /api/auth/status (enabled/disabled shape), the non-enforcing
+// ?mine filter on the runs list, and owner scoping of the conversations list
+// (session-first, then the X-Archon-User header, threaded into the DB query as
+// an explicit visibility).
 // ---------------------------------------------------------------------------
 
 const noopLogger = () => ({
@@ -31,6 +32,7 @@ const noopLogger = () => ({
 let authEnabled = false;
 let signupMode: 'allowlist' | 'open' | 'disabled' = 'disabled';
 let apiGateEnabled = false;
+let ownershipEnforced = false;
 let authInstance: { api: { getSession: (args: unknown) => Promise<unknown> } } | null = null;
 
 mock.module('../auth', () => ({
@@ -38,6 +40,7 @@ mock.module('../auth', () => ({
   isWebAuthEnabled: () => authEnabled,
   getSignupMode: () => signupMode,
   isApiGateEnabled: () => apiGateEnabled,
+  isConversationOwnershipEnforced: () => ownershipEnforced,
 }));
 
 // --- Identity resolution ---
@@ -62,7 +65,7 @@ const mockListConversations = mock(
     _platform?: string,
     _codebaseId?: string,
     _excludeEmpty?: boolean,
-    _userId?: string
+    _visibility?: { kind: string; userId?: string; privatePlatforms?: readonly string[] }
   ) => [] as unknown[]
 );
 
@@ -102,6 +105,7 @@ mock.module('@archon/git', () => ({
 
 mock.module('@archon/core/db/conversations', () => ({
   listConversations: mockListConversations,
+  PRIVATE_PLATFORM_TYPES: ['web', 'cli'] as const,
   findConversationByPlatformId: mock(async () => null),
   getOrCreateConversation: mock(async () => ({ id: 'c', platform_conversation_id: 'web-x' })),
   softDeleteConversation: mock(async () => {}),
@@ -198,6 +202,7 @@ describe('server-side /api/* gate', () => {
   beforeEach(() => {
     authEnabled = false;
     apiGateEnabled = false;
+    ownershipEnforced = false;
     authInstance = null;
     mockFindOrCreateUser.mockClear();
   });
@@ -267,10 +272,11 @@ describe('server-side /api/* gate', () => {
   });
 });
 
-describe('?mine filter — non-enforcing', () => {
+describe('?mine filter — non-enforcing (workflow runs)', () => {
   beforeEach(() => {
     authEnabled = false;
     signupMode = 'open';
+    ownershipEnforced = false;
     authInstance = null;
     mockListWorkflowRuns.mockClear();
     mockListConversations.mockClear();
@@ -312,40 +318,15 @@ describe('?mine filter — non-enforcing', () => {
     expect(mockListWorkflowRuns.mock.calls[0]?.[0]?.userId).toBe('user-from-sess-1');
   });
 
-  test('conversations: no ?mine → listConversations called without a userId filter', async () => {
-    const app = makeApp();
-    const res = await app.request('/api/conversations');
-    expect(res.status).toBe(200);
-    // listConversations(limit, platform, codebaseId, excludeEmpty, userId)
-    expect(mockListConversations.mock.calls[0]?.[4]).toBeUndefined();
-  });
-
-  test('conversations: ?mine=true with X-Archon-User header → filters by userId', async () => {
-    const app = makeApp();
-    const res = await app.request('/api/conversations?mine=true', {
-      headers: { 'X-Archon-User': 'bob' },
-    });
-    expect(res.status).toBe(200);
-    expect(mockListConversations.mock.calls[0]?.[4]).toBe('user-from-bob');
-  });
-
-  // The headline guarantee of this PR: ?mine is non-enforcing. With no
-  // resolvable identity (no session, no header) it must degrade to listing
-  // everything — NOT to an empty/zero-result gate.
+  // Run reads stay open by design (#3135), so ?mine on the runs list is a
+  // convenience filter, not a boundary: with no resolvable identity it must
+  // degrade to listing everything — NOT to an empty/zero-result gate.
   test('runs: ?mine=true with no identity → still returns all (no userId filter)', async () => {
     const app = makeApp();
     const res = await app.request('/api/workflows/runs?mine=true');
     expect(res.status).toBe(200);
     expect(mockFindOrCreateUser).not.toHaveBeenCalled();
     expect(mockListWorkflowRuns.mock.calls[0]?.[0]?.userId).toBeUndefined();
-  });
-
-  test('conversations: ?mine=true with no identity → still returns all (no userId filter)', async () => {
-    const app = makeApp();
-    const res = await app.request('/api/conversations?mine=true');
-    expect(res.status).toBe(200);
-    expect(mockFindOrCreateUser).not.toHaveBeenCalled();
-    expect(mockListConversations.mock.calls[0]?.[4]).toBeUndefined();
   });
 
   // Resilience: a Better Auth session lookup that throws (e.g. DB outage) must
@@ -366,5 +347,100 @@ describe('?mine filter — non-enforcing', () => {
     expect(res.status).toBe(200);
     expect(mockFindOrCreateUser).toHaveBeenCalledWith('web', 'fallback-user', 'fallback-user');
     expect(mockListWorkflowRuns.mock.calls[0]?.[0]?.userId).toBe('user-from-fallback-user');
+  });
+});
+describe('GET /api/conversations — owner scoping (#3135)', () => {
+  beforeEach(() => {
+    authEnabled = false;
+    signupMode = 'open';
+    apiGateEnabled = false;
+    ownershipEnforced = false;
+    authInstance = null;
+    mockListConversations.mockClear();
+    mockFindOrCreateUser.mockClear();
+  });
+  afterEach(() => {
+    ownershipEnforced = false;
+  });
+
+  /** listConversations(limit, platform, codebaseId, excludeEmpty, visibility) */
+  function visibilityArg(): {
+    kind: string;
+    userId?: string;
+    privatePlatforms?: readonly string[];
+  } {
+    const arg = mockListConversations.mock.calls[0]?.[4];
+    if (arg === undefined) throw new Error('listConversations was not called');
+    return arg;
+  }
+
+  test("enforcement off (solo install) → visibility is 'all', identity never consulted", async () => {
+    const res = await makeApp().request('/api/conversations');
+    expect(res.status).toBe(200);
+    expect(visibilityArg()).toEqual({ kind: 'all' });
+    expect(mockFindOrCreateUser).not.toHaveBeenCalled();
+  });
+
+  test('enforcement on + X-Archon-User header → scoped to the resolved user', async () => {
+    ownershipEnforced = true;
+    const res = await makeApp().request('/api/conversations', {
+      headers: { 'X-Archon-User': 'bob' },
+    });
+    expect(res.status).toBe(200);
+    expect(visibilityArg()).toEqual({
+      kind: 'ownerScoped',
+      userId: 'user-from-bob',
+      privatePlatforms: ['web', 'cli'],
+    });
+  });
+
+  test('enforcement on + Better Auth session → session wins over the header', async () => {
+    ownershipEnforced = true;
+    authEnabled = true;
+    authInstance = {
+      api: {
+        getSession: async () => ({ user: { id: 'sess-1', name: 'Sessioned', email: 's@x.io' } }),
+      },
+    };
+    const res = await makeApp().request('/api/conversations', {
+      headers: { 'X-Archon-User': 'header-user' },
+    });
+    expect(res.status).toBe(200);
+    expect(mockFindOrCreateUser).toHaveBeenCalledWith('web', 'sess-1', 'Sessioned');
+    expect(visibilityArg().userId).toBe('user-from-sess-1');
+  });
+
+  // The headline guarantee of #3135: an unresolved identity is refused, never
+  // widened back to every conversation on the install.
+  test('enforcement on + no identity → 401 and no listing at all', async () => {
+    ownershipEnforced = true;
+    const res = await makeApp().request('/api/conversations');
+    expect(res.status).toBe(401);
+    expect(mockListConversations).not.toHaveBeenCalled();
+  });
+
+  // Reachable only with ARCHON_WEB_AUTH_REQUIRED=false (a proxy owning
+  // admission); with the gate on, the 401 comes from the gate instead.
+  test('enforcement on + session lookup throws + no header → 401, never widened', async () => {
+    ownershipEnforced = true;
+    authEnabled = true;
+    authInstance = {
+      api: {
+        getSession: async () => {
+          throw new Error('PG connection refused');
+        },
+      },
+    };
+    const res = await makeApp().request('/api/conversations');
+    expect(res.status).toBe(401);
+    expect(mockListConversations).not.toHaveBeenCalled();
+  });
+
+  // `mine` is gone from the wire contract: a stale client still sending it
+  // gets the server's scoping decision, not its own.
+  test("a stale ?mine=true is ignored — scoping is the server's decision", async () => {
+    const res = await makeApp().request('/api/conversations?mine=true');
+    expect(res.status).toBe(200);
+    expect(visibilityArg()).toEqual({ kind: 'all' });
   });
 });

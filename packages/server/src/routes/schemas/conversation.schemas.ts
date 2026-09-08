@@ -15,14 +15,16 @@ export const conversationSchema = conversationRowSchema
   })
   .openapi('Conversation');
 
-/** GET /api/conversations query params. */
+/**
+ * GET /api/conversations query params.
+ *
+ * No `mine` filter: user scoping is the server's decision, not the caller's
+ * (#3135). Under enforcement the list is always owner-scoped; on a solo
+ * install it is always open.
+ */
 export const listConversationsQuerySchema = z.object({
   platform: z.string().optional(),
   codebaseId: z.string().optional(),
-  // Non-enforcing "mine" filter: 'true' restricts to the caller's own
-  // conversations when an identity resolves. Default lists everything. Enum
-  // makes the boolean contract explicit (the handler treats only 'true' as on).
-  mine: z.enum(['true', 'false']).optional(),
 });
 
 /** GET /api/conversations response. */

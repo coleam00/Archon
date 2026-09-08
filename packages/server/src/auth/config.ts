@@ -96,6 +96,24 @@ export function isApiGateEnabled(env: NodeJS.ProcessEnv = process.env): boolean 
 }
 
 /**
+ * Whether operator conversations are private to their owning user (#3135).
+ *
+ * True on any install where identity actually arrives: Better Auth configured,
+ * or a reverse proxy explicitly supplying it through `ARCHON_WEB_AUTH_HEADER`.
+ * That second door matters — a proxy-authenticated install has real distinct
+ * users but no Better Auth, and `isApiGateEnabled` is additionally off there
+ * whenever the proxy owns admission (`ARCHON_WEB_AUTH_REQUIRED=false`).
+ *
+ * Keys on the variable being SET, not on the default header name, which is
+ * honored even when unset — an operator setting it is the multi-user signal.
+ * False on solo/SQLite installs (no Postgres, no header): nothing is owned, so
+ * nothing is refused and today's open behavior is correct.
+ */
+export function isConversationOwnershipEnforced(env: NodeJS.ProcessEnv = process.env): boolean {
+  return isWebAuthEnabled(env) || Boolean(env.ARCHON_WEB_AUTH_HEADER);
+}
+
+/**
  * Paths under `/api/auth/*` that Archon owns and the Better Auth catch-all must
  * NOT handle. Better Auth's `basePath` is `/api/auth`, so when web auth is on its
  * handler claims every path under that prefix and 404s any it doesn't recognize.

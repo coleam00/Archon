@@ -359,6 +359,49 @@ const commandHelp: HelpEntry[] = [
     description: 'Connect your GitHub identity via device flow (multi-user installs)',
   },
   {
+    command: 'conversations',
+    subcommand: 'list',
+    spec: 'conversations list --unowned [--platform web|cli] [--limit <n>]',
+    description: 'List conversations no Archon user owns (what a claim would take)',
+    scopedFlags: [
+      { spec: '--unowned', description: 'Required: the rows no Archon user owns' },
+      {
+        spec: '--platform <web|cli>',
+        description: 'Narrow to one operator surface (default: both)',
+      },
+      {
+        spec: '--limit <n>',
+        description: 'Rows to print (default 20); the total is always reported',
+      },
+    ],
+  },
+  {
+    command: 'conversations',
+    subcommand: 'claim',
+    spec: 'conversations claim --user <archon-user-id> [--platform web|cli] [--before <iso>] [--dry-run] [--yes]',
+    description:
+      'Attach unowned conversations and runs to one user after turning web auth on\nShell-only on purpose: an unowned row has no owner to authenticate against',
+    scopedFlags: [
+      {
+        spec: '--user <archon-user-id>',
+        description: 'Required: the remote_agent_users id rows are claimed for',
+      },
+      {
+        spec: '--platform <web|cli>',
+        description: 'Narrow to one operator surface (default: both)',
+      },
+      {
+        spec: '--before <iso>',
+        description: "Only rows older than this date, by the database's clock",
+      },
+      { spec: '--dry-run', description: 'Report both counts and write nothing' },
+      {
+        spec: '--yes',
+        description: 'Apply; without it the command reports the counts and refuses',
+      },
+    ],
+  },
+  {
     command: 'ai',
     subcommand: 'key',
     spec: 'ai key set <provider>',
@@ -1077,6 +1120,7 @@ async function main(): Promise<number> {
     'telemetry',
     'auth',
     'ai',
+    'conversations',
   ];
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
   let detachedRunConfig: WorkflowRunConfigInput | undefined;
@@ -1892,6 +1936,49 @@ async function main(): Promise<number> {
                 ? 'Missing auth subcommand'
                 : `Unknown auth subcommand: ${subcommand}`;
             return await fail(jsonFlag, `${problem}\nAvailable: github`);
+          }
+        }
+      }
+
+      case 'conversations': {
+        // Both subcommands take flags only; a stray token is a typo that must not
+        // silently widen a list or ride along on an ownership-changing claim.
+        const extras = positionals.slice(2);
+        if (extras.length > 0) {
+          return await fail(
+            jsonFlag,
+            `Error: unexpected positional argument(s): ${extras.join(' ')}. ` +
+              "'conversations list' and 'conversations claim' take flags only."
+          );
+        }
+        const { conversationsClaimCommand, conversationsListCommand } = await loadRoute(
+          () => import('./commands/conversations'),
+          { database: true }
+        );
+        switch (subcommand) {
+          case 'list':
+            return await conversationsListCommand({
+              unowned: values.unowned as boolean | undefined,
+              platform: values.platform as string | undefined,
+              limit: values.limit as string | undefined,
+            });
+          case 'claim':
+            return await conversationsClaimCommand({
+              user: values.user as string | undefined,
+              platform: values.platform as string | undefined,
+              before: values.before as string | undefined,
+              dryRun: dryRunFlag,
+              yes: values.yes as boolean | undefined,
+            });
+          default: {
+            const problem =
+              subcommand === undefined
+                ? 'Missing conversations subcommand'
+                : `Unknown conversations subcommand: ${subcommand}`;
+            return await fail(
+              jsonFlag,
+              `${problem}\nAvailable: list --unowned, claim --user <archon-user-id>`
+            );
           }
         }
       }

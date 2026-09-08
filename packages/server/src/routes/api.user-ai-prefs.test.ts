@@ -31,6 +31,7 @@ mock.module('../auth', () => ({
   isWebAuthEnabled: () => false,
   getSignupMode: () => 'disabled',
   isApiGateEnabled: () => false,
+  isConversationOwnershipEnforced: () => false,
 }));
 
 // --- Identity resolution (X-Archon-User → user) ---

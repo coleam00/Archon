@@ -8,17 +8,26 @@ import * as configLoader from '../config/config-loader';
 const mockQuery = createMockQuery();
 
 // Mock the connection module before importing the module under test
+// `getDatabaseType` is part of this mock because the cutoff formatting in
+// timestamps.ts reads it, and because workflows.test.ts mocks the same module
+// in the same `bun test` invocation — the two stubs must agree.
 mock.module('./connection', () => ({
   pool: {
     query: mockQuery,
   },
   getDialect: () => mockPostgresDialect,
+  getDatabaseType: () => 'postgresql' as const,
 }));
 
 import {
   getOrCreateConversation,
   updateConversation,
   findConversationByPlatformId,
+  listConversations,
+  listOwnerlessConversations,
+  claimOwnerlessConversations,
+  PRIVATE_PLATFORM_TYPES,
+  isPrivatePlatformType,
 } from './conversations';
 import type { Conversation } from '../types';
 import { ConversationNotFoundError } from '../types';
@@ -415,6 +424,167 @@ describe('conversations', () => {
           'Conversation not found: test-conv-id'
         );
       }
+    });
+  });
+  describe('listConversations visibility', () => {
+    /** The SQL + params the single mocked pool.query call was issued with. */
+    function lastQuery(): { sql: string; params: unknown[] } {
+      const call = mockQuery.mock.calls[0] as unknown as [string, unknown[]];
+      return { sql: call[0], params: call[1] };
+    }
+
+    test("kind 'all' issues no user or platform-privacy clause", async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      await listConversations(50, undefined, undefined, false, { kind: 'all' });
+
+      const { sql, params } = lastQuery();
+      expect(sql).not.toContain('user_id');
+      expect(sql).not.toContain('NOT IN');
+      expect(params).toEqual([50]);
+    });
+
+    test("kind 'ownerScoped' returns the caller's rows plus non-private platforms", async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      await listConversations(50, undefined, undefined, false, {
+        kind: 'ownerScoped',
+        userId: 'user-1',
+        privatePlatforms: PRIVATE_PLATFORM_TYPES,
+      });
+
+      const { sql, params } = lastQuery();
+      // One placeholder per platform: neither dialect binds arrays.
+      expect(sql).toContain('AND (platform_type NOT IN ($1, $2) OR user_id = $3)');
+      expect(params).toEqual(['web', 'cli', 'user-1', 50]);
+    });
+
+    test('scoped placeholders stay positional behind the other filters', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      await listConversations(10, 'web', 'codebase-1', true, {
+        kind: 'ownerScoped',
+        userId: 'user-1',
+        privatePlatforms: PRIVATE_PLATFORM_TYPES,
+      });
+
+      const { sql, params } = lastQuery();
+      expect(sql).toContain('AND platform_type = $1');
+      expect(sql).toContain('AND codebase_id = $2');
+      expect(sql).toContain('AND (platform_type NOT IN ($3, $4) OR user_id = $5)');
+      expect(sql).toContain('LIMIT $6');
+      expect(params).toEqual(['web', 'codebase-1', 'web', 'cli', 'user-1', 10]);
+    });
+
+    // Fail-closed: an empty exempt set means NO platform is exempt, so the
+    // filter narrows to the caller alone rather than widening to everything.
+    test('an empty privatePlatforms list narrows to the caller, never widens', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      await listConversations(50, undefined, undefined, false, {
+        kind: 'ownerScoped',
+        userId: 'user-1',
+        privatePlatforms: [],
+      });
+
+      const { sql, params } = lastQuery();
+      expect(sql).toContain('AND user_id = $1');
+      expect(sql).not.toContain('NOT IN');
+      expect(params).toEqual(['user-1', 50]);
+    });
+  });
+
+  /**
+   * #3135 Phase 7: the escape hatch for an install that turns web auth on and
+   * finds its pre-enforcement history owned by nobody. The invariant lives in
+   * the WHERE clause, so these tests assert the SQL rather than a guard.
+   */
+  describe('ownerless conversation claim', () => {
+    function lastQuery(): { sql: string; params: unknown[] } {
+      const call = mockQuery.mock.calls[0] as unknown as [string, unknown[]];
+      return { sql: call[0], params: call[1] };
+    }
+
+    test('the preview lists only unowned, undeleted rows on the named platforms', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+
+      await listOwnerlessConversations({ platformTypes: PRIVATE_PLATFORM_TYPES });
+
+      const { sql, params } = lastQuery();
+      expect(sql).toContain('user_id IS NULL');
+      expect(sql).toContain('deleted_at IS NULL');
+      expect(sql).toContain('platform_type IN ($1, $2)');
+      expect(params).toEqual(['web', 'cli']);
+    });
+
+    // The whole safety of the command: claiming can never move a row between
+    // two real users, so a mistaken claim is recoverable and a second operator
+    // takes nothing the first one already took.
+    test('the UPDATE never widens past `user_id IS NULL`', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 3));
+
+      const claimed = await claimOwnerlessConversations('user-1', {
+        platformTypes: PRIVATE_PLATFORM_TYPES,
+      });
+
+      expect(claimed).toBe(3);
+      const { sql, params } = lastQuery();
+      expect(sql).toContain('UPDATE remote_agent_conversations SET user_id = $1');
+      expect(sql).toContain('WHERE user_id IS NULL');
+      expect(sql).toContain('platform_type IN ($2, $3)');
+      expect(params).toEqual(['user-1', 'web', 'cli']);
+    });
+
+    test('honors the platform filter on both halves', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      await claimOwnerlessConversations('user-1', { platformTypes: ['cli'] });
+
+      const { sql, params } = lastQuery();
+      expect(sql).toContain('platform_type IN ($2)');
+      expect(params).toEqual(['user-1', 'cli']);
+    });
+
+    test('honors --before as a created_at cutoff', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 2));
+      const before = new Date('2026-01-31T00:00:00.000Z');
+
+      await claimOwnerlessConversations('user-1', {
+        platformTypes: ['web'],
+        before,
+      });
+
+      const { sql, params } = lastQuery();
+      expect(sql).toContain('AND created_at < $3');
+      expect(params).toEqual(['user-1', 'web', before.toISOString()]);
+    });
+
+    // Fail closed: an empty platform list selects no platform, so it must select
+    // no row — never every row through an `IN ()` that does not parse.
+    test('an empty platform list touches nothing and issues no query', async () => {
+      expect(await listOwnerlessConversations({ platformTypes: [] })).toEqual([]);
+      expect(await claimOwnerlessConversations('user-1', { platformTypes: [] })).toBe(0);
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+  });
+
+  // The per-row counterpart of the list's `platform_type NOT IN (…)` clause.
+  // The by-id authorization check in the server reads this so the two paths
+  // cannot disagree about which surfaces privacy covers.
+  describe('isPrivatePlatformType', () => {
+    test('covers the operator surfaces', () => {
+      expect(isPrivatePlatformType('web')).toBe(true);
+      expect(isPrivatePlatformType('cli')).toBe(true);
+    });
+
+    test('leaves chat and forge platforms to their own access model', () => {
+      for (const platform of ['slack', 'discord', 'telegram', 'github', 'gitlab', 'gitea']) {
+        expect(isPrivatePlatformType(platform)).toBe(false);
+      }
+    });
+
+    test('agrees with PRIVATE_PLATFORM_TYPES', () => {
+      expect(PRIVATE_PLATFORM_TYPES.every(isPrivatePlatformType)).toBe(true);
     });
   });
 });
