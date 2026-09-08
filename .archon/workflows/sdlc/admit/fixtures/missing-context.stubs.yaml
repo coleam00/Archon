@@ -1,0 +1,17 @@
+grounding__triage:
+  route: no_action
+  summary: 'Fixture: required source document could not be read.'
+grounding__assert-intact: '{"intact":"true"}'
+judge:
+  decision:
+    disposition: needs-human
+    priority: medium
+    route: no_action
+    summary: 'Provide the required source document before deciding admission; obsolescence is unproven.'
+    assumptions: ['Medium is an advisory ranking until the source is available.']
+    rules_cited: ['Admission command, needs-human: missing material context prevents admission.']
+  evidence: ['Fixture source document read failed because the referenced document is unavailable.']
+fixture:
+  expect: completed
+  reached: [admission]
+exec-code: true

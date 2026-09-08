@@ -1,0 +1,24 @@
+grounding__triage:
+  route: deliver
+  summary: 'Fixture: the missing input check is verified and bounded.'
+grounding__assert-intact: '{"intact":"true"}'
+judge:
+  decision:
+    disposition: accepted
+    priority: high
+    route: deliver
+    summary: "Admit the verified input check under the operator's current reliability priority."
+    assumptions: ['Existing error presentation can be reused.']
+    rules_cited: ['Operator policy input: prioritize verified reliability defects.']
+  evidence:
+    ['Fixture source handler:12 accepts empty input; the stated invariant requires rejecting it.']
+fixture:
+  expect: completed
+  reached: [admission]
+  inputs:
+    target: 'Add the missing input check.'
+    policy: 'Prioritize verified reliability defects.'
+    context: 'The caller observed an empty input reaching the handler.'
+  resolved-text-contains:
+    judge: 'Prioritize verified reliability defects.'
+exec-code: true
