@@ -81,6 +81,7 @@ function fixture() {
           number: 42,
           html_url: 'https://github.com/owner/repo/issues/42',
           title: 'Issue',
+          labels: [],
           body: null,
           state: 'open',
           ...(state.wrongIssueKind ? { pull_request: {} } : {}),

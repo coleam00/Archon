@@ -325,7 +325,7 @@ export class ForgeDispatcher {
     return this.audited(
       parsed.success ? parsed.data.op : 'invalid',
       repo && parsed.success
-        ? `${repo.host}/${repo.path}${parsed.data.op === 'pr.create' ? '' : parsed.data.op === 'comment.upsert' ? `#${String(parsed.data.target.ref.number)}:${parsed.data.target.kind}` : `#${String(parsed.data.ref.number)}`}`
+        ? `${repo.host}/${repo.path}${'repo' in parsed.data ? '' : parsed.data.op === 'comment.upsert' ? `#${String(parsed.data.target.ref.number)}:${parsed.data.target.kind}` : `#${String(parsed.data.ref.number)}`}`
         : 'invalid-ref',
       async () => {
         if (!parsed.success || !repo)
@@ -370,11 +370,19 @@ export class ForgeDispatcher {
         plugin: id,
       };
     const publicRequest = publicRequestSchema.safeParse(request);
-    if (publicRequest.success && 'body' in publicRequest.data) {
-      const content = [
-        publicRequest.data.body,
-        ...('title' in publicRequest.data ? [publicRequest.data.title] : []),
-      ].join('\n');
+    if (publicRequest.success) {
+      const request = publicRequest.data;
+      const content = (
+        request.op === 'workitem.labels'
+          ? [...request.add, ...request.create.flatMap(label => [label.name, label.description])]
+          : 'body' in request
+            ? [
+                request.body,
+                ...('title' in request ? [request.title] : []),
+                ...('marker' in request ? [request.marker] : []),
+              ]
+            : []
+      ).join('\n');
       const artifacts = this.opts.env.ARTIFACTS_DIR?.replaceAll('\\', '/');
       if (
         (token && content.includes(token)) ||

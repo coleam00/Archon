@@ -146,6 +146,60 @@ Self-hosted credentials remain the configured plugin's responsibility.
 These are implementation choices for this slice, not approval of all broader
 credential, invocation-gate or plugin-distribution designs discussed in #3040.
 
+## Work-item operations
+
+`archon forge work-item view|search|create|labels --request - --json` uses the
+same schema, credential, exec-plugin and audit path as PR operations. Requests
+carry a qualified `repo: {host, path}` or `ref: {repo, number}`. GitHub supports
+github.com issues, including closed issues, and refuses PRs as work items.
+GitHub records contain `ref`, `url`, `title`, `body`, `state` and `labels` (names).
+Existing protocol-1 plugins may omit labels on view; the new operations require them.
+
+- **Search:** `{repo, marker?, max_pages?}` enumerates repository issues in
+  ascending creation order, all states, 100 entries per page. `max_pages` is
+  1 through 100, default 100. Without a marker it returns the title and body of
+  each issue for the caller's semantic comparison. With a marker it returns only
+  exact first-line matches. It uses the repository list endpoint, avoiding the
+  search index's lag and result ceiling. PRs count toward pagination but are
+  excluded from returned items. The result is `{repo, items, pages, completeness}`;
+  `completeness` is `complete` or `truncated`. A full final page is conservatively
+  truncated. Transport or malformed-response failures return errors, never an
+  empty successful search. Truncated results cannot establish marker absence or
+  uniqueness. Pagination is an observation, not a snapshot of concurrent edits.
+- **Create:** `{repo, marker, title, body, max_pages?}` requires a stable
+  caller-generated marker using the same syntax as comment upsert, for example
+  `<!-- archon-discovery:0123456789abcdef -->` (discovery supplies its full SHA-256 digest). Supply the same marker on every
+  retry. The owner prepends it as the first line; `body` must not repeat it.
+  Before writing, every bounded page is checked. Incomplete enumeration or
+  multiple matches refuses. A single match returns its verified existing
+  identity and preserves title, body, labels and state, even when the requested
+  content differs. No match creates an issue and reads back its qualified
+  identity, marker, title and body. An uncertain write returns `verify_failed`
+  with a leave-behind warning; retry the same marker to recover. GitHub marker
+  creation is **not atomic uniqueness** against simultaneous creators. Serialize
+  creators sharing a marker; this operation does not promise exactly once.
+- **Labels:** `{ref, add: string[], remove: string[], create?: [{name, color,
+  description}]}` adds and removes only named labels. Add/remove overlap and
+  duplicates are refused case-insensitively. Optional definitions create missing
+  repository labels and verify them, preserving existing definitions. The owner
+  uses additive POST and per-label DELETE, never whole-set replacement, so an
+  unrelated concurrent addition survives. Read-back verifies additions,
+  removals, and preservation of previously observed unrelated labels. Partial
+  writes return an uncertain-write refusal; repeating the delta reconciles it.
+  Opposing simultaneous changes to the same labels require caller coordination.
+
+For discovery, search exact markers and compare unfiltered summaries before
+choosing an action. Reuse `work-item view` for current evidence and
+`comment upsert` with `target: {kind: "workitem", ref}` to publish an explicitly
+chosen update. Work-item title/body editing is not currently supported. Create
+never doubles as an update operation. The workflow owns disclosure judgments,
+human gates and automatic-publication policy; these operations add none of them.
+The existing credential and local-artifact disclosure check still applies.
+
+Triage uses labels with only its five owned pack labels in the delta and missing
+label definitions. Other proposed labels are reported as skipped. Discovery
+retains its proposal-only workflow until governed publication is implemented.
+
 ## Plugins
 
 A plugin responds to `<executable> metadata` and `<executable> op <op-id>`.
@@ -158,7 +212,8 @@ release version. Unknown metadata fields and additive capability strings are
 allowed. Undeclared capabilities return `unsupported_op` before execution.
 
 The implemented capabilities include `resolve`, `checks.state`, `pr.merge-pinned`,
-`pr.view`, `pr.create`, `pr.edit-body`, `pr.ready`, `workitem.view` and
+`pr.view`, `pr.create`, `pr.edit-body`, `pr.ready`, `workitem.view`,
+`workitem.search`, `workitem.create`, `workitem.labels` and
 `comment.upsert`. Resolve is the
 protocol root operation; subsequent forge intents use namespaced identifiers.
 Plugins receive a qualified repository for resolve and a qualified PR for checks.

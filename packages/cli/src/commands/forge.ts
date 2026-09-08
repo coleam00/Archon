@@ -60,7 +60,7 @@ export async function forgeCommand(
     if (values.help) {
       await writeJsonLine({
         usage:
-          'archon forge resolve --json | checks --ref <PrRef JSON> --json | pr view/create/edit-body/ready/merge-pinned | work-item view | comment upsert --request <JSON or -> | --request-file <file or -> --json',
+          'archon forge resolve --json | checks --ref <PrRef JSON> --json | pr view/create/edit-body/ready/merge-pinned | work-item view/search/create/labels | comment upsert --request <JSON or -> | --request-file <file or -> --json',
         config:
           'Optional --config <file> containing {"hosts":{...}}; defaults to ~/.archon/forge.json',
       });

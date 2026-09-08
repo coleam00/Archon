@@ -38,6 +38,25 @@ export const workItemRecordSchema = z.object({
   title: z.string(),
   body: z.string(),
   state: z.enum(['open', 'closed']),
+  // Protocol-1 plugins may predate label operations. Their existing view remains valid.
+  labels: z.array(z.string()).optional(),
+});
+export const labeledWorkItemRecordSchema = workItemRecordSchema.required({ labels: true });
+export const markerSchema = z.string().regex(/^<!-- [a-z0-9-]+(?::[a-z0-9-]+)? -->$/);
+const maxPagesSchema = z.number().int().min(1).max(100).default(100);
+const labelNameSchema = z.string().min(1).max(50);
+const labelNamesSchema = z
+  .array(labelNameSchema)
+  .max(100)
+  .refine(
+    values => new Set(values.map(value => value.toLowerCase())).size === values.length,
+    'Duplicate label names'
+  );
+export const workItemSearchResultSchema = z.object({
+  repo: repoRefSchema,
+  items: z.array(labeledWorkItemRecordSchema),
+  completeness: z.enum(['complete', 'truncated']),
+  pages: z.number().int().min(1).max(100),
 });
 export const commentTargetSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('pr'), ref: prRefSchema, expected: expectedPrSchema }),
@@ -68,9 +87,57 @@ export const publicRequestSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('pr.ready'), ref: prRefSchema, expected: expectedPrSchema }),
   z.object({ op: z.literal('workitem.view'), ref: workItemRefSchema }),
   z.object({
+    op: z.literal('workitem.search'),
+    repo: repoRefSchema,
+    marker: markerSchema.optional(),
+    max_pages: maxPagesSchema,
+  }),
+  z
+    .object({
+      op: z.literal('workitem.create'),
+      repo: repoRefSchema,
+      marker: markerSchema,
+      title: z.string().min(1),
+      body: z.string(),
+      max_pages: maxPagesSchema,
+    })
+    .refine(
+      value => !value.body.split(/\r?\n/).includes(value.marker),
+      'Body must not repeat the caller marker'
+    ),
+  z
+    .object({
+      op: z.literal('workitem.labels'),
+      ref: workItemRefSchema,
+      add: labelNamesSchema,
+      remove: labelNamesSchema,
+      create: z
+        .array(
+          z.object({
+            name: labelNameSchema,
+            color: z.string().regex(/^[a-fA-F0-9]{6}$/),
+            description: z.string().max(100),
+          })
+        )
+        .max(100)
+        .default([]),
+    })
+    .refine(
+      value =>
+        !value.add.some(name =>
+          value.remove.some(removed => removed.toLowerCase() === name.toLowerCase())
+        ),
+      'Cannot add and remove the same label'
+    )
+    .refine(
+      value =>
+        new Set(value.create.map(label => label.name.toLowerCase())).size === value.create.length,
+      'Duplicate label definitions'
+    ),
+  z.object({
     op: z.literal('comment.upsert'),
     target: commentTargetSchema,
-    marker: z.string().regex(/^<!-- [a-z0-9-]+ -->$/),
+    marker: markerSchema,
     body: z.string(),
   }),
 ]);
@@ -81,11 +148,14 @@ export const publicResultSchemas = {
   'pr.edit-body': prRecordSchema,
   'pr.ready': prRecordSchema,
   'workitem.view': workItemRecordSchema,
+  'workitem.search': workItemSearchResultSchema,
+  'workitem.create': labeledWorkItemRecordSchema,
+  'workitem.labels': labeledWorkItemRecordSchema,
   'comment.upsert': commentRecordSchema,
-};
+} satisfies Record<PublicRequest['op'], z.ZodType>;
 export type PublicResult = z.infer<(typeof publicResultSchemas)[keyof typeof publicResultSchemas]>;
 export function publicRequestRepo(request: PublicRequest): RepoRef {
-  return request.op === 'pr.create'
+  return 'repo' in request
     ? request.repo
     : request.op === 'comment.upsert'
       ? request.target.ref.repo

@@ -8,7 +8,8 @@ import {
   type RepoRef,
   type ForgeOpError,
   type expectedPrSchema,
-  type workItemRecordSchema,
+  type labeledWorkItemRecordSchema,
+  type workItemSearchResultSchema,
 } from '../schemas';
 import type { RawOpOutcome } from '../dispatch/plugin-handle';
 import type { GitHubPluginOptions } from './plugin';
@@ -34,6 +35,7 @@ const issue = z.object({
   body: z.string().nullable(),
   state: z.enum(['open', 'closed']),
   pull_request: z.unknown().optional(),
+  labels: z.array(z.object({ name: z.string() })),
 });
 const comment = z.object({
   id: z.number().int().positive(),
@@ -128,7 +130,7 @@ export async function publicOperation(
               evidence: `GitHub ${method} failed (HTTP ${String(response.status)})`,
             }
       );
-    const result = schema.safeParse(await response.json());
+    const result = schema.safeParse(response.status === 204 ? null : await response.json());
     if (!result.success)
       throw new Refusal({
         kind: 'invalid_response',
@@ -160,8 +162,10 @@ export async function publicOperation(
   async function readPr(number: number): Promise<PrRecord> {
     return record(await api(`${base}/pulls/${String(number)}`, pull), number);
   }
-  async function readIssue(number: number): Promise<z.infer<typeof workItemRecordSchema>> {
-    const value = await api(`${base}/issues/${String(number)}`, issue);
+  function issueRecord(
+    value: z.infer<typeof issue>,
+    number = value.number
+  ): z.infer<typeof labeledWorkItemRecordSchema> {
     if (
       value.number !== number ||
       value.pull_request !== undefined ||
@@ -175,7 +179,42 @@ export async function publicOperation(
       title: value.title,
       body: value.body ?? '',
       state: value.state,
+      labels: value.labels.map(label => label.name),
     };
+  }
+  async function readIssue(number: number): Promise<z.infer<typeof labeledWorkItemRecordSchema>> {
+    return issueRecord(await api(`${base}/issues/${String(number)}`, issue), number);
+  }
+  async function searchItems(
+    maxPages: number,
+    marker?: string
+  ): Promise<z.infer<typeof workItemSearchResultSchema>> {
+    const items: z.infer<typeof labeledWorkItemRecordSchema>[] = [];
+    const seen = new Set<number>();
+    for (let page = 1; page <= maxPages; page++) {
+      // Listing avoids the search index's lag and 1,000-result ceiling. Ascending creation
+      // order keeps newly created items from shifting earlier pages during recovery.
+      const values = await api(
+        `${base}/issues?state=all&sort=created&direction=asc&per_page=100&page=${String(page)}`,
+        z.array(issue).max(100)
+      );
+      for (const value of values) {
+        const kind = value.pull_request === undefined ? 'issues' : 'pull';
+        if (
+          value.html_url.toLowerCase() !==
+          `https://${repo.host}/${repo.path}/${kind}/${String(value.number)}`.toLowerCase()
+        )
+          refuse('work items from requested repository', 'listing target mismatch');
+        if (seen.has(value.number))
+          refuse('distinct paginated identities', 'listing repeated an item');
+        seen.add(value.number);
+        if (value.pull_request !== undefined) continue;
+        const item = issueRecord(value);
+        if (marker === undefined || item.body.split(/\r?\n/, 1)[0] === marker) items.push(item);
+      }
+      if (values.length < 100) return { repo, items, completeness: 'complete', pages: page };
+    }
+    return { repo, items, completeness: 'truncated', pages: maxPages };
   }
   async function pages<T>(path: string, schema: z.ZodType<T>): Promise<T[]> {
     const results: T[] = [];
@@ -196,6 +235,90 @@ export async function publicOperation(
     if (request.op === 'pr.view') return { kind: 'ok', value: await readPr(request.ref.number) };
     if (request.op === 'workitem.view')
       return { kind: 'ok', value: await readIssue(request.ref.number) };
+    if (request.op === 'workitem.search')
+      return { kind: 'ok', value: await searchItems(request.max_pages, request.marker) };
+    if (request.op === 'workitem.create') {
+      const matches = await searchItems(request.max_pages, request.marker);
+      if (matches.completeness !== 'complete')
+        refuse(
+          'complete marker enumeration',
+          'pagination bound reached; marker uniqueness unknown'
+        );
+      if (matches.items.length > 1)
+        refuse('one canonical marker work item', 'duplicate markers; operator must reconcile');
+      const previous = matches.items[0];
+      const body = `${request.marker}\n${request.body}`;
+      const written =
+        previous ??
+        issueRecord(
+          await api(`${base}/issues`, issue, 'POST', {
+            title: request.title,
+            body,
+          })
+        );
+      const observed = await readIssue(written.ref.number);
+      if (
+        observed.body.split(/\r?\n/, 1)[0] !== request.marker ||
+        (!previous && (observed.body !== body || observed.title !== request.title))
+      )
+        refuse(
+          'requested work item with exact marker and created content',
+          'work item read-back mismatch'
+        );
+      // A reused item belongs to its public history. Create never rewrites it.
+      return { kind: 'ok', value: observed };
+    }
+    if (request.op === 'workitem.labels') {
+      const before = await readIssue(request.ref.number);
+      const names = (labels: string[]): Set<string> =>
+        new Set(labels.map(label => label.toLowerCase()));
+      const current = names(before.labels);
+      const adding = names(request.add);
+      const removing = names(request.remove);
+      if (request.create.length) {
+        const label = z.object({
+          name: z.string(),
+          color: z.string(),
+          description: z.string().nullable(),
+        });
+        const existing = names((await pages(`${base}/labels`, label)).map(value => value.name));
+        for (const definition of request.create) {
+          if (existing.has(definition.name.toLowerCase())) continue;
+          const written = await api(`${base}/labels`, label, 'POST', definition);
+          const observed = await api(
+            `${base}/labels/${encodeURIComponent(definition.name)}`,
+            label
+          );
+          if (
+            written.name !== definition.name ||
+            observed.name !== definition.name ||
+            observed.color.toLowerCase() !== definition.color.toLowerCase() ||
+            observed.description !== definition.description
+          )
+            refuse('requested label definition', 'label definition read-back mismatch');
+        }
+      }
+      const path = `${base}/issues/${String(request.ref.number)}/labels`;
+      const additions = request.add.filter(name => !current.has(name.toLowerCase()));
+      if (additions.length)
+        await api(path, z.array(z.object({ name: z.string() })), 'POST', { labels: additions });
+      for (const name of request.remove) {
+        if (current.has(name.toLowerCase()))
+          await api(`${path}/${encodeURIComponent(name)}`, z.unknown(), 'DELETE');
+      }
+      const observed = await readIssue(request.ref.number);
+      const actual = names(observed.labels);
+      if (
+        [...adding].some(name => !actual.has(name)) ||
+        [...removing].some(name => actual.has(name)) ||
+        [...current].some(name => !removing.has(name) && !actual.has(name))
+      )
+        refuse(
+          'added labels present, removed labels absent and unrelated labels preserved',
+          'label read-back mismatch'
+        );
+      return { kind: 'ok', value: observed };
+    }
     if (request.op === 'pr.create') {
       if (request.head_repo.host !== repo.host || request.head_repo.path.split('/').length !== 2)
         refuse('GitHub head repository', 'unsupported head host or path');
