@@ -34,12 +34,17 @@ export function registerGithubWebhookRoute(app: OpenAPIHono, github: GithubWebho
       // CRITICAL: Use c.req.text() for raw body (signature verification)
       const payload = await c.req.text();
 
-      // Process async (fire-and-forget for fast webhook response)
-      // Note: github.handleWebhook() has internal error handling that notifies users
-      // This catch is a fallback for truly unexpected errors (e.g., signature verification bugs)
-      github.handleWebhook(payload, signature, deliveryId).catch((error: unknown) => {
-        getLog().error({ err: error, eventType, deliveryId }, 'webhook_processing_error');
-      });
+      if (eventType === 'check_run') {
+        // GitHub must see a failed acknowledgement when the durable wait signal
+        // could not be recorded, otherwise it will not redeliver the check event.
+        await github.handleWebhook(payload, signature, deliveryId, eventType);
+      } else {
+        void github
+          .handleWebhook(payload, signature, deliveryId, eventType)
+          .catch((error: unknown) => {
+            getLog().error({ err: error, eventType, deliveryId }, 'webhook_processing_error');
+          });
+      }
 
       return c.text('OK', 200);
     } catch (error) {

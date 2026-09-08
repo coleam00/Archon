@@ -36,6 +36,10 @@ import type { Octokit } from '@octokit/rest';
 import { createHmac, randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { BUNDLED_WORKFLOWS } from '@archon/workflows/defaults';
+import { parseWorkflow } from '@archon/workflows/loader';
+import { validateStructuredOutput } from '@archon/providers';
+import type { WorkflowEventSignalCandidate } from '@archon/core/db/workflows';
 
 // Mock logger to suppress noisy output during tests
 const mockLogger = {
@@ -172,6 +176,7 @@ import type { WebhookEvent } from './types';
 // Namespace import so the dedup tests can spyOn(core, 'handleMessage') — the
 // orchestrator entry point the adapter calls after webhook setup succeeds.
 import * as core from '@archon/core';
+import * as workflowDb from '@archon/core/db/workflows';
 
 // Create a mock lock manager that immediately executes handlers
 const mockAcquireLock = mock(async (_id: string, handler: () => Promise<void>) => {
@@ -354,6 +359,218 @@ describe('GitHubAdapter', () => {
   describe('platform type', () => {
     test('should return github', () => {
       expect(adapter.getPlatformType()).toBe('github');
+    });
+  });
+
+  describe('check_run.completed workflow signal', () => {
+    const wait = {
+      owner: 'loop_group' as const,
+      nodeId: 'await-checks',
+      bodyWaitId: 'ci-pause',
+      iteration: 1,
+      sessionId: null,
+      sessionProvider: null,
+      kind: 'event' as const,
+      event: 'checks.complete',
+      waitingSince: '2026-08-24T10:00:00.000Z',
+      resumeAt: '2099-08-24T11:00:00.000Z',
+    };
+    const pullRequestRecord = {
+      repo: { host: 'github.com', path: 'Example/Repo' },
+      number: 42,
+      url: 'https://github.com/unrelated/project/pull/999',
+      head: 'a-branch-that-is-not-used-for-matching',
+      base: 'dev',
+      is_draft: true,
+    };
+    let originalAllowedUsers: string | undefined;
+    let listCandidatesSpy: ReturnType<
+      typeof spyOn<typeof workflowDb, 'listWorkflowEventSignalCandidates'>
+    >;
+    let signalWaitSpy: ReturnType<typeof spyOn<typeof workflowDb, 'signalWorkflowWait'>>;
+
+    const candidate = (
+      runId: string,
+      structuredOutput: unknown = pullRequestRecord,
+      candidateWait = wait
+    ): WorkflowEventSignalCandidate => ({
+      runId,
+      wait: candidateWait,
+      outputType: 'pull-request',
+      structuredOutput,
+    });
+
+    const payload = (overrides: Record<string, unknown> = {}): string =>
+      JSON.stringify({
+        action: 'completed',
+        check_run: {
+          status: 'completed',
+          conclusion: 'success',
+          completed_at: '2026-08-24T10:05:00.000Z',
+          pull_requests: [{ number: 42 }, { number: 42 }],
+        },
+        repository: { full_name: 'example/repo' },
+        sender: { login: 'github-actions[bot]' },
+        ...overrides,
+      });
+
+    const deliver = async (body: string): Promise<void> => {
+      const signature = 'sha256=' + createHmac('sha256', 'check-secret').update(body).digest('hex');
+      await adapter.handleWebhook(body, signature, 'delivery-check', 'check_run');
+    };
+
+    beforeAll(() => {
+      listCandidatesSpy = spyOn(workflowDb, 'listWorkflowEventSignalCandidates');
+      signalWaitSpy = spyOn(workflowDb, 'signalWorkflowWait');
+    });
+
+    afterAll(() => {
+      listCandidatesSpy.mockRestore();
+      signalWaitSpy.mockRestore();
+    });
+
+    beforeEach(() => {
+      originalAllowedUsers = process.env.GITHUB_ALLOWED_USERS;
+      process.env.GITHUB_ALLOWED_USERS = 'human-allowlisted-user';
+      adapter = new GitHubAdapter(
+        { kind: 'pat', token: 'fake-token-for-testing' },
+        'check-secret',
+        mockLockManager
+      );
+      listCandidatesSpy.mockReset();
+      listCandidatesSpy.mockImplementation(async () => []);
+      signalWaitSpy.mockReset();
+      signalWaitSpy.mockImplementation(async () => ({ signaled: true }));
+      handleMessageSpy.mockClear();
+      mockLogger.warn.mockClear();
+    });
+
+    afterEach(() => {
+      if (originalAllowedUsers === undefined) delete process.env.GITHUB_ALLOWED_USERS;
+      else process.env.GITHUB_ALLOWED_USERS = originalAllowedUsers;
+    });
+
+    test('the adapter matcher accepts the bundled PR producer contract', () => {
+      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-pr'], 'archon-pr.yaml');
+      if (parsed.workflow === null) throw new Error(parsed.error.error);
+      const node = parsed.workflow.nodes.find(item => item.id === 'pr');
+      if (node?.kind !== 'agent' || node.output_format === undefined) {
+        throw new Error('archon-pr does not expose an agent output contract');
+      }
+      expect(node.output_type).toBe('pull-request');
+      expect(validateStructuredOutput(pullRequestRecord, node.output_format).valid).toBe(true);
+    });
+
+    test('signals the exact matching wait and bypasses the human sender allowlist', async () => {
+      listCandidatesSpy.mockImplementation(async () => [candidate('run-42')]);
+
+      await deliver(payload());
+
+      expect(listCandidatesSpy).toHaveBeenCalledWith('checks.complete', expect.any(Date));
+      expect(signalWaitSpy).toHaveBeenCalledTimes(1);
+      expect(signalWaitSpy).toHaveBeenCalledWith('run-42', wait, { conclusion: 'success' });
+      expect(handleMessageSpy).not.toHaveBeenCalled();
+    });
+
+    test('matches only the qualified repository and PR number, never branch or URL', async () => {
+      listCandidatesSpy.mockImplementation(async () => [
+        candidate('wrong-repo', {
+          ...pullRequestRecord,
+          repo: { host: 'github.com', path: 'other/repo' },
+        }),
+        candidate('wrong-number', { ...pullRequestRecord, number: 7 }),
+        { ...candidate('wrong-type'), outputType: 'plan' },
+        candidate('malformed-record', { number: 42 }),
+      ]);
+
+      await deliver(payload());
+
+      expect(signalWaitSpy).not.toHaveBeenCalled();
+    });
+
+    test('does not let an old completion satisfy a newer wait occurrence', async () => {
+      const newerWait = { ...wait, waitingSince: '2026-08-24T10:06:00.000Z' };
+      listCandidatesSpy.mockImplementation(async () => [
+        candidate('run-new-wait', pullRequestRecord, newerWait),
+      ]);
+
+      await deliver(payload());
+
+      expect(signalWaitSpy).not.toHaveBeenCalled();
+    });
+
+    test('a lost signal CAS causes no secondary action', async () => {
+      listCandidatesSpy.mockImplementation(async () => [candidate('run-raced')]);
+      signalWaitSpy.mockImplementation(async () => ({ signaled: false }));
+
+      await deliver(payload());
+
+      expect(signalWaitSpy).toHaveBeenCalledTimes(1);
+      expect(handleMessageSpy).not.toHaveBeenCalled();
+    });
+
+    test('ambiguous ownership signals neither run', async () => {
+      listCandidatesSpy.mockImplementation(async () => [candidate('run-a'), candidate('run-b')]);
+
+      await deliver(payload());
+
+      expect(signalWaitSpy).not.toHaveBeenCalled();
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ repo: 'example/repo', number: 42, runIds: ['run-a', 'run-b'] }),
+        'github.check_run_ownership_ambiguous'
+      );
+    });
+
+    test.each([
+      ['non-completed action', { action: 'requested' }],
+      [
+        'non-completed status',
+        {
+          check_run: {
+            status: 'in_progress',
+            conclusion: 'success',
+            completed_at: '2026-08-24T10:05:00.000Z',
+            pull_requests: [{ number: 42 }],
+          },
+        },
+      ],
+      [
+        'null conclusion',
+        {
+          check_run: {
+            status: 'completed',
+            conclusion: null,
+            completed_at: '2026-08-24T10:05:00.000Z',
+            pull_requests: [{ number: 42 }],
+          },
+        },
+      ],
+      [
+        'invalid completion time',
+        {
+          check_run: {
+            status: 'completed',
+            conclusion: 'success',
+            completed_at: 'not-a-date',
+            pull_requests: [{ number: 42 }],
+          },
+        },
+      ],
+      [
+        'no associated PR',
+        {
+          check_run: {
+            status: 'completed',
+            conclusion: 'success',
+            completed_at: '2026-08-24T10:05:00.000Z',
+            pull_requests: [],
+          },
+        },
+      ],
+    ])('ignores %s deliveries', async (_label, overrides) => {
+      await deliver(payload(overrides));
+      expect(listCandidatesSpy).not.toHaveBeenCalled();
+      expect(signalWaitSpy).not.toHaveBeenCalled();
     });
   });
 

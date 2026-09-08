@@ -108,32 +108,32 @@ function listThroughVerySlowPipe(target: string): number | null {
   ).status;
 }
 
-beforeAll(() => {
-  scratch = mkdtempSync(join(tmpdir(), 'archon-pipe-test-'));
-  archonHome = join(scratch, 'home');
-  repoDir = join(scratch, 'repo');
-  mkdirSync(archonHome, { recursive: true });
-  const workflowsDir = join(repoDir, '.archon', 'workflows');
-  mkdirSync(workflowsDir, { recursive: true });
-  spawnSync('git', ['init', '-q', '.'], { cwd: repoDir });
-
-  const padding = 'x'.repeat(DESCRIPTION_CHARS);
-  for (let i = 0; i < WORKFLOW_COUNT; i++) {
-    const name = `probe-${String(i).padStart(3, '0')}`;
-    writeFileSync(
-      join(workflowsDir, `${name}.yaml`),
-      `name: ${name}\ndescription: ${padding}${i}\nnodes:\n  - id: only\n    prompt: hello\n`
-    );
-  }
-});
-
-afterAll(() => {
-  if (scratch) rmSync(scratch, { recursive: true, force: true });
-});
-
 const describePosix = process.platform === 'win32' ? describe.skip : describe;
 
 describePosix('CLI human-readable console.log over a real pipe (#2400)', () => {
+  beforeAll(() => {
+    scratch = mkdtempSync(join(tmpdir(), 'archon-pipe-test-'));
+    archonHome = join(scratch, 'home');
+    repoDir = join(scratch, 'repo');
+    mkdirSync(archonHome, { recursive: true });
+    const workflowsDir = join(repoDir, '.archon', 'workflows');
+    mkdirSync(workflowsDir, { recursive: true });
+    spawnSync('git', ['init', '-q', '.'], { cwd: repoDir });
+
+    const padding = 'x'.repeat(DESCRIPTION_CHARS);
+    for (let i = 0; i < WORKFLOW_COUNT; i++) {
+      const name = `probe-${String(i).padStart(3, '0')}`;
+      writeFileSync(
+        join(workflowsDir, `${name}.yaml`),
+        `name: ${name}\ndescription: ${padding}${i}\nnodes:\n  - id: only\n    prompt: hello\n`
+      );
+    }
+  });
+
+  afterAll(() => {
+    if (scratch) rmSync(scratch, { recursive: true, force: true });
+  });
+
   it('delivers the whole document, byte-identical to a file redirect, against a slow consumer', () => {
     const referencePath = join(scratch, 'reference.txt');
     expect(listToFile(referencePath)).toBe(0);

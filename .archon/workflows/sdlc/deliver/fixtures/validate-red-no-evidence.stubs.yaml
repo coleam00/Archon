@@ -8,7 +8,7 @@ impl__implement:
   green: true
   summary: "stub: implemented and green on the checks it ran"
 impl__assert-changed: "3 files changed"
-pr__pr: { number: 9, url: "https://github.com/example/repo/pull/9", head: "fixture-branch", base: "dev", is_draft: true }
+pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 9, url: "https://github.com/example/repo/pull/9", head: "fixture-branch", base: "dev", is_draft: true }
 classify:
   errors: false
   docs: false

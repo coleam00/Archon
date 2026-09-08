@@ -77,6 +77,7 @@ function makeNodeSkippedEvent(runId = 'run-1'): WorkflowEmitterEvent {
     nodeId: 'skip-me',
     nodeName: 'optional-node',
     reason: 'when_condition',
+    cause: { kind: 'condition', expr: '$route.output == true' },
   };
 }
 

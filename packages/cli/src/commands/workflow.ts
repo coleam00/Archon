@@ -114,6 +114,7 @@ import {
   isApprovalContext,
   isWorkflowWaitContext,
   isScheduledWorkflowResume,
+  skipCauseSchema,
   SUBRUN_METADATA_KEYS,
   CONTINUATION_METADATA_KEY,
 } from '@archon/workflows/schemas/workflow-run';
@@ -121,8 +122,12 @@ import type {
   WorkflowRun,
   WorkflowRunStatus,
   ContinuationMode,
+  SkipCause,
 } from '@archon/workflows/schemas/workflow-run';
-import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
+import {
+  TERMINAL_WORKFLOW_STATUSES,
+  isTerminalRunStatus,
+} from '@archon/workflows/schemas/workflow-run';
 import {
   approveWorkflow,
   rejectWorkflow,
@@ -1002,9 +1007,11 @@ function renderWorkflowEvent(event: WorkflowEmitterEvent, verbose: boolean): voi
     case 'node_failed':
       process.stderr.write(`[${event.nodeName}] Failed: ${event.error}\n`);
       break;
-    case 'node_skipped':
-      process.stderr.write(`[${event.nodeName}] Skipped (${event.reason})\n`);
+    case 'node_skipped': {
+      const detail = 'cause' in event ? formatSkipCause(event.cause) : event.reason;
+      process.stderr.write(`[${event.nodeName}] Skipped (${detail})\n`);
       break;
+    }
     case 'approval_pending':
       process.stderr.write(`[${event.nodeId}] Waiting for approval: ${event.message}\n`);
       break;
@@ -2483,6 +2490,10 @@ async function runWorkflowWithOwnedSource(
   // the resumed-run handle to executeWorkflow below via opts. The executor no
   // longer performs implicit resume detection on its own.
   let resumable: WorkflowRun | null = null;
+  // Branch of the prior run's worktree, from the isolation record the resume path
+  // matches. Only a worktree-isolated run has one; the no-completed-nodes refusal
+  // names it in the relaunch command it suggests (#3154).
+  let resumeBranch: string | undefined;
   if (options.resume) {
     if (!codebase) {
       if (codebaseLookupError) {
@@ -2543,6 +2554,7 @@ async function runWorkflowWithOwnedSource(
     const matchingEnv = allEnvs.find(e => e.working_path === workingCwd);
     if (matchingEnv) {
       isolationEnvId = matchingEnv.id;
+      resumeBranch = matchingEnv.branch_name;
       getLog().info(
         { envId: isolationEnvId, workingPath: workingCwd },
         'workflow.resume_env_found'
@@ -3108,8 +3120,29 @@ async function runWorkflowWithOwnedSource(
       );
     }
     if (!prepared) {
+      // `--branch` is only runnable when the prior run used worktree isolation:
+      // folder projects reject worktree options outright, and an in-place repo run
+      // cannot be relaunched onto the branch its own checkout holds. A stale-running
+      // orphan cannot be superseded until it is released, so name that step first.
+      const worktreeBranch = isFolderCodebase ? undefined : resumeBranch;
+      const unblock = isTerminalRunStatus(resumable.status)
+        ? ''
+        : `The run is still marked ${resumable.status}; release it before relaunching:\n` +
+          `  archon workflow abandon ${resumable.id}\n`;
+      const relaunch = [
+        'archon workflow run',
+        workflowName,
+        ...(worktreeBranch ? ['--branch', worktreeBranch] : []),
+        '--supersedes',
+        resumable.id,
+      ].join(' ');
       throw new Error(
-        `Cannot resume: the prior run for '${workflowName}' has no completed nodes and no interactive-loop state.`
+        `Cannot resume: the prior run for '${workflowName}' has no completed nodes and no interactive-loop state.\n` +
+          unblock +
+          (worktreeBranch
+            ? 'Nothing can be skipped, so relaunch on the same branch instead:\n'
+            : 'Nothing can be skipped, so start a fresh run instead:\n') +
+          `  ${relaunch}`
       );
     }
   }
@@ -3483,6 +3516,22 @@ export interface NodeSummary {
   durationMs?: number;
   outputPreview?: string;
   error?: string;
+  cause?: SkipCause;
+}
+
+function formatSkipCause(cause: SkipCause): string {
+  switch (cause.kind) {
+    case 'condition':
+      return `condition: ${cause.expr}`;
+    case 'condition_parse_error':
+      return `condition parse error: ${cause.expr}`;
+    case 'timeout':
+      return 'timeout';
+    case 'upstream_failed':
+      return `upstream failed: ${cause.origin}`;
+    case 'upstream_skipped':
+      return `upstream skipped: ${cause.origin}`;
+  }
 }
 
 /**
@@ -3541,7 +3590,12 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
         break;
       }
       case 'node_skipped': {
-        summaries.set(nodeId, { nodeId, state: 'skipped' });
+        const parsedCause = skipCauseSchema.safeParse(event.data.cause);
+        summaries.set(nodeId, {
+          nodeId,
+          state: 'skipped',
+          ...(parsedCause.success ? { cause: parsedCause.data } : {}),
+        });
         break;
       }
       case 'node_skipped_prior_success': {
@@ -3605,7 +3659,8 @@ function printVerboseNodes(events: WorkflowEventRow[]): void {
     const icon = iconMap[node.state] ?? '◌';
     const duration = node.durationMs !== undefined ? ` (${formatDuration(node.durationMs)})` : '';
     const stateLabel = node.state === 'running' ? ' (running)' : '';
-    console.log(`    ${icon} ${node.nodeId}${duration}${stateLabel}`);
+    const skipCause = node.cause ? ` (${formatSkipCause(node.cause)})` : '';
+    console.log(`    ${icon} ${node.nodeId}${duration}${stateLabel}${skipCause}`);
     if (node.outputPreview !== undefined) {
       console.log(`        Output: ${node.outputPreview}`);
     }

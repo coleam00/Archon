@@ -8,7 +8,7 @@ impl__implement:
   summary: "stub: applied the review finding for PR #7 and committed to its branch"
 impl__assert-changed: "2 files changed"
 gate-green: '{"gate":"green"}'
-pr__pr: { number: 7, url: "https://github.com/example/repo/pull/7", head: "fixture-branch", base: "dev", is_draft: false }
+pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 7, url: "https://github.com/example/repo/pull/7", head: "fixture-branch", base: "dev", is_draft: false }
 review__mode: '{"continuation":false}'
 review__scope: "PR diff in scope; head sha stubbed"
 review__code: "1 finding (Important)"
