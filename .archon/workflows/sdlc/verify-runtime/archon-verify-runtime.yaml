@@ -4,6 +4,7 @@ description: >-
   structure and target identity, then return verified, failed, or inconclusive.
   Malformed reports get one fresh attempt. Requires external environment ownership.
 model: medium
+mutates_checkout: false
 inputs:
   scenario:
     default: ''
@@ -44,6 +45,7 @@ nodes:
           runtime: uv
           with:
             previous_attempt: '$LOOP_PREV.prepare-attempt.output.attempt'
+            previous_report_feedback: '$LOOP_PREV.check-evidence.output.reason'
           output_format:
             type: object
             properties:
@@ -51,7 +53,8 @@ nodes:
               directory: { type: string }
               report_path: { type: string }
               checkout: { type: string }
-            required: [attempt, directory, report_path, checkout]
+              report_feedback: { type: string }
+            required: [attempt, directory, report_path, checkout, report_feedback]
 
         - id: setup-run
           depends_on: [prepare-attempt]
@@ -87,11 +90,6 @@ nodes:
           depends_on: [start-run]
           when: '$start-run.output.ok == true'
           mutates_checkout: false
-          with:
-            assertions_json: '$read-scenario.output.assertions_json'
-            candidate_command: '$read-scenario.output.candidate_command'
-            report_path: '$prepare-attempt.output.report_path'
-            evidence_directory: '$prepare-attempt.output.directory'
 
         - id: identity-run
           depends_on: [verify]

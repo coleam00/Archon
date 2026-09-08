@@ -17,4 +17,5 @@ print(json.dumps({
     "directory": str(directory),
     "report_path": str(directory / "report.json"),
     "checkout": checkout.stdout.strip() if checkout.returncode == 0 else "",
+    "report_feedback": os.environ["INPUTS_PREVIOUS_REPORT_FEEDBACK"],
 }))

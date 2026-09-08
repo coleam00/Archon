@@ -2,15 +2,23 @@
 
 Exercise the live target using tools. Judge its behavior against these assertions:
 
-$INPUTS.assertions_json
+$read-scenario.output.assertions_json
 
 Run this project command to observe the actual target identity:
 
-$INPUTS.candidate_command
+$read-scenario.output.candidate_command
 
 Additional scenario context:
 
 $ARGUMENTS
+
+Previous report feedback (empty on the first attempt):
+
+$prepare-attempt.output.report_feedback
+
+This is the checker's report rejection reason, not a previous product observation.
+Correct the report defect and collect fresh tool evidence against this attempt's
+newly started target; do not reuse previous observations or evidence files.
 
 Do not modify application source, the scenario, or assertion definitions. Do not
 infer runtime results from source, docs, existing fixtures, or previous attempts.
@@ -21,11 +29,11 @@ the scenario. Preserve literal measurements, including boolean true or false.
 Capture the commands/tools used and their actual output in new evidence files
 inside this attempt directory:
 
-$INPUTS.evidence_directory
+$prepare-attempt.output.directory
 
 Write a JSON report at this exact path:
 
-$INPUTS.report_path
+$prepare-attempt.output.report_path
 
 The report contains `candidate` (a string containing the target-identity command
 output with leading and trailing whitespace removed, or empty if unavailable)
@@ -40,8 +48,10 @@ Preserve the raw command output in evidence. Each assertion entry contains:
 - `expected` and `observed`: the expected and measured JSON values; use null for
   an unavailable measurement.
 - `reason`: explain the comparison or why assessment was impossible.
-- `evidence_path`: path relative to the attempt directory, or an absolute path
-  inside it, containing this turn's tool output or diagnostic.
+- `evidence_path`: exactly one existing nonempty file, relative to the attempt
+  directory or absolute inside it, containing this turn's tool output or diagnostic.
+  Never put a comma-separated list of filenames in this string. If an assertion
+  needs multiple outputs, combine their actual tool output into one file and name it.
 
 The downstream script checks structure, coverage, file presence, and identity.
 It cannot prove that model-authored evidence is truthful or that your comparison
