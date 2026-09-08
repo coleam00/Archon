@@ -1,69 +1,32 @@
-# Declared SDLC scenario: inconsistent-action. Public actions are stubbed.
+# The structured schema validates each field but not their cross-field
+# relationship. The deterministic validator must reject this impossible pair
+# before it can control correction or readiness.
 impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true
-  summary: 'stub: implemented and green'
-impl__assert-changed: 1 file changed
+  summary: "stub: implemented and green"
+impl__assert-changed: "1 file changed"
 gate-green: '{"gate":"green"}'
-pr__pr: &id001
-  number: 4
-  url: https://github.com/example/repo/pull/4
-  head: fixture-branch
-  base: dev
-  is_draft: true
-  head_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  base_sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-  repository: example/repo
+pr__pr: { number: 4, url: "https://github.com/example/repo/pull/4", head: "fixture-branch", base: "dev", is_draft: true }
 classify:
   errors: false
   docs: false
   reasons:
-    errors: stub
-    docs: stub
+    errors: "stub"
+    docs: "stub"
 resolve-scope: '{"errors":"false"}'
 review__mode: '{"continuation":false}'
-review__scope: accepted contract recorded
-review__code: 0 findings
-review__seams: 0 findings
-review__simplify: 0 findings
-review__tests: 0 findings
+review__scope: "accepted contract recorded"
+review__code: "0 findings"
+review__seams: "0 findings"
+review__simplify: "0 findings"
+review__tests: "0 findings"
 review__synthesize:
   ready: true
   action: correct
-  findings_summary: 'stub: deliberately inconsistent verdict'
+  findings_summary: "stub: deliberately inconsistent verdict"
 fixture:
   expect: failed
   fail-node: review-action
 exec-code: true
-pr__resolve:
-  publish: false
-  candidate: *id001
-capture-pr__resolve:
-  publish: false
-  candidate: *id001
-capture-pr__pr: *id001
-publish-correction__resolve:
-  publish: false
-  candidate: *id001
-publish-correction__pr: *id001
-capture-ci-pr__resolve:
-  publish: false
-  candidate: *id001
-capture-ci-pr__pr: *id001
-publish-ci-correction__resolve:
-  publish: false
-  candidate: *id001
-publish-ci-correction__pr: *id001
-readback__resolve:
-  publish: false
-  candidate: *id001
-readback__pr:
-  number: 4
-  url: https://github.com/example/repo/pull/4
-  head: fixture-branch
-  base: dev
-  is_draft: false
-  head_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  base_sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-  repository: example/repo

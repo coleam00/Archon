@@ -89,9 +89,6 @@ jobs:
           path: ~/.bun/install/cache
           key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
 
-      - name: Setup uv for executable SDLC tests
-        uses: astral-sh/setup-uv@v4
-
       - name: Install dependencies
         run: bun install --frozen-lockfile
 

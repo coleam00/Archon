@@ -1,52 +1,14 @@
-# Declared SDLC scenario: plan-blocked. Public actions are stubbed.
+# Sparse guard fixture: run with --default-stubs --exec-code. A plan that still
+# needs a human decision completes honestly, while the delivery tail is skipped
+# and the real outcome node points to plan.md.
 triage__triage:
   route: plan
-  summary: 'stub: material product shape remains undecided'
+  summary: "stub: material product shape remains undecided"
 triage__assert-intact: '{"intact":"true"}'
 planned__plan:
   ready: false
-  summary: 'stub: owner decision required before implementation'
+  summary: "stub: owner decision required before implementation"
 planned__assert-intact: '{"intact":"true"}'
 fixture:
   expect: completed
 exec-code: true
-deliver__pr__pr: &id001
-  number: 2
-  url: https://github.com/example/repo/pull/2
-  head: fixture-branch
-  base: dev
-  is_draft: true
-  head_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  base_sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-  repository: example/repo
-deliver__pr__resolve:
-  publish: false
-  candidate: *id001
-deliver__capture-pr__resolve:
-  publish: false
-  candidate: *id001
-deliver__capture-pr__pr: *id001
-deliver__publish-correction__resolve:
-  publish: false
-  candidate: *id001
-deliver__publish-correction__pr: *id001
-deliver__capture-ci-pr__resolve:
-  publish: false
-  candidate: *id001
-deliver__capture-ci-pr__pr: *id001
-deliver__publish-ci-correction__resolve:
-  publish: false
-  candidate: *id001
-deliver__publish-ci-correction__pr: *id001
-deliver__readback__resolve:
-  publish: false
-  candidate: *id001
-deliver__readback__pr:
-  number: 2
-  url: https://github.com/example/repo/pull/2
-  head: fixture-branch
-  base: dev
-  is_draft: false
-  head_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  base_sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-  repository: example/repo

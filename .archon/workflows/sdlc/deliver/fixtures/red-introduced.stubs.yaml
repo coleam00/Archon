@@ -1,52 +1,15 @@
-# Declared SDLC scenario: red-introduced. Public actions are stubbed.
+# Dry-run fixture: red the change caused still stops delivery dead (--exec-code, so
+# the real gate script decides). This is the route that must not change: a broken
+# check is the one red no downstream gate can excuse.
 impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: false
   red_cause: introduced
-  summary: 'stub: the new guard broke two type checks in the package it touches'
-impl__assert-changed: 3 files changed
+  summary: "stub: the new guard broke two type checks in the package it touches"
+impl__assert-changed: "3 files changed"
+# gate-green is deliberately unstubbed: the real script must refuse.
 fixture:
   expect: failed
   fail-node: gate-green
 exec-code: true
-pr__pr: &id001
-  number: 2
-  url: https://github.com/example/repo/pull/2
-  head: fixture-branch
-  base: dev
-  is_draft: true
-  head_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  base_sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-  repository: example/repo
-pr__resolve:
-  publish: false
-  candidate: *id001
-capture-pr__resolve:
-  publish: false
-  candidate: *id001
-capture-pr__pr: *id001
-publish-correction__resolve:
-  publish: false
-  candidate: *id001
-publish-correction__pr: *id001
-capture-ci-pr__resolve:
-  publish: false
-  candidate: *id001
-capture-ci-pr__pr: *id001
-publish-ci-correction__resolve:
-  publish: false
-  candidate: *id001
-publish-ci-correction__pr: *id001
-readback__resolve:
-  publish: false
-  candidate: *id001
-readback__pr:
-  number: 2
-  url: https://github.com/example/repo/pull/2
-  head: fixture-branch
-  base: dev
-  is_draft: false
-  head_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  base_sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-  repository: example/repo

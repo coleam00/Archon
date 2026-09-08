@@ -7,7 +7,7 @@ description: |
   One governed run, one artifact store, no inherited issue assumptions.
 
   Use when: a GitHub issue or request should be taken from current-truth check
-  through to a reviewed PR - "fix this issue", "implement issue #123", "take
+  through to a reviewed PR — "fix this issue", "implement issue #123", "take
   this work item to a PR".
   NOT for: bypassing triage with already-prepared work (deliver directly),
   reviewing an existing PR, or merging.
@@ -15,17 +15,14 @@ description: |
 requires: [github]
 
 inputs:
-  publication_policy:
-    default: ""
-    description: Optional operator-owned prepublication policy forwarded to delivery.
   target:
     default: ""
     description: >-
-      What to take through the pipeline - an issue, document, plan, report, or
+      What to take through the pipeline — an issue, document, plan, report, or
       free-form request. When empty, the run's trigger message is the target.
   errors:
     default: "auto"
-    description: Silent-failure lens - auto, true, or false.
+    description: Silent-failure lens — auto, true, or false.
 
 returns: outcome
 
@@ -80,7 +77,6 @@ nodes:
     include: archon-deliver
     with:
       errors: "$INPUTS.errors"
-      publication_policy: "$INPUTS.publication_policy"
       work: >-
         Deliver the work prepared by this run. Read $ARTIFACTS_DIR/triage.md
         first. When present, plan.md or investigation.md is the detailed work
@@ -90,66 +86,22 @@ nodes:
     depends_on: [gate-direct, gate-rooted, gate-planned]
     trigger_rule: none_failed_min_one_success
 
+  # One return for every legitimate terminal result. Negative advisory verdicts
+  # complete with the report that explains them; delivery is reported from the
+  # flip's verified URL the deliver branch returned (bound with if_skipped, so a
+  # skipped flip arrives as null) — see scripts/outcome.py.
   - id: outcome
-    script: __archon_pack__bundled:sdlc:deliver::outcome
-    runtime: bun
+    script: outcome
+    runtime: uv
     depends_on: [triage, inv, planned, gate-direct, gate-rooted, gate-planned, deliver]
     trigger_rule: none_failed_min_one_success
     with:
-      mode: ship
       route: "$triage.output.route"
       summary: "$triage.output.summary"
-      delivery: { from: "$deliver.output", if_skipped: null }
-      gate_direct: { from: "$gate-direct.output", if_skipped: null }
-      gate_rooted: { from: "$gate-rooted.output", if_skipped: null }
-      gate_planned: { from: "$gate-planned.output", if_skipped: null }
-    output_format:
-      type: object
-      properties:
-        outcome:
-          type: string
-          enum:
-          - delivered
-          - no_action
-          - blocked
-        summary:
-          type: string
-        pr:
-          type:
-          - object
-          - 'null'
-          properties:
-            number:
-              type: integer
-            url:
-              type: string
-            head:
-              type: string
-            base:
-              type: string
-            head_sha:
-              type: string
-            base_sha:
-              type: string
-            repository:
-              type: string
-            is_draft:
-              type: boolean
-          required:
-          - number
-          - url
-          - head
-          - base
-          - head_sha
-          - base_sha
-          - repository
-          - is_draft
-        reports:
-          type: array
-          items:
-            type: string
-      required:
-      - outcome
-      - summary
-      - pr
-      - reports
+      delivered: { from: "$deliver.output", if_skipped: null }
+      # A passed spend gate with no delivered output means delivery STARTED and
+      # died mid-flight — a different fact from an advisory stop, and the report
+      # must not claim the advisory refused.
+      gate_passed_direct: { from: "$gate-direct.output", if_skipped: null }
+      gate_passed_rooted: { from: "$gate-rooted.output", if_skipped: null }
+      gate_passed_planned: { from: "$gate-planned.output", if_skipped: null }

@@ -30949,16 +30949,6 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     const probeCountPath = join(testDir, 'deliver-attention-probe-count');
     const greenMarkerPath = join(testDir, 'deliver-attention-green');
     const flipMarkerPath = join(testDir, 'deliver-flip-ready');
-    const verifiedPr = {
-      number: 3115,
-      url: 'https://github.com/example/repo/pull/3115',
-      head: 'feature',
-      base: 'dev',
-      head_sha: 'a'.repeat(40),
-      base_sha: 'b'.repeat(40),
-      repository: 'example/repo',
-      is_draft: false,
-    };
     const discovered = await discoverWorkflows(repoRoot, {
       loadDefaults: false,
       loadDefaultCommands: false,
@@ -31015,21 +31005,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
         return {
           ...node,
           runtime: 'sh' as const,
-          script: `printf '%s' '${JSON.stringify({
-            outcome: 'delivered',
-            summary: 'delivered',
-            reports: [],
-            pr: verifiedPr,
-          })}'`,
-          deps: undefined,
-          with: undefined,
-        };
-      }
-      if (node.id === 'readback__resolve' || node.id === 'readback__pr') {
-        return {
-          ...node,
-          runtime: 'sh' as const,
-          script: `printf '%s' '${JSON.stringify(node.id === 'readback__resolve' ? { publish: false, candidate: verifiedPr } : verifiedPr)}'`,
+          script: "printf '%s' delivered",
           deps: undefined,
           with: undefined,
         };
@@ -31049,7 +31025,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     const inheritedRouteText = JSON.stringify(inheritedRoute);
     const completedBeforeAttention = new Map<string, PersistedNodeOutput>(
       workflow.nodes
-        .filter(node => !activeNodeIds.has(node.id) && !node.id.startsWith('readback__'))
+        .filter(node => !activeNodeIds.has(node.id))
         .map(node => [node.id, { output: inheritedRouteText, structuredOutput: inheritedRoute }])
     );
 
@@ -31112,7 +31088,6 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       })
     );
     expect(await Bun.file(flipMarkerPath).text()).toBe('flipped');
-    expect(resumedStore.failWorkflowRun.mock.calls).toEqual([]);
     expect(resumedStore.completeWorkflowRun).toHaveBeenCalledTimes(1);
   });
 

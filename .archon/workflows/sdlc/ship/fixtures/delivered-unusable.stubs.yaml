@@ -1,84 +1,58 @@
-# Declared SDLC scenario: delivered-unusable. Public actions are stubbed.
+# Dry-run fixture: the guard seen RED (run with --default-stubs --exec-code).
+#
+# Delivery hands back a flip value that is not a pull request URL, and the
+# terminal report refuses instead of printing garbage under a completed run.
+# The pr node's record below is deliberately COMPLETE, url included: the report
+# must be built from the flip's read-back value and nothing else, so a perfect
+# record must not rescue an unusable flip. If a future change quietly reads the
+# record again, this fixture goes green-to-red the other way and catches it.
+#
+# This is the shared delivered read that ship and upkeep both use, so one red
+# fixture covers the refusal for the pack. What differs between the two
+# tails is which verdict reaches the node, and their delivered fixtures cover that.
 triage__triage:
   route: deliver
-  summary: 'stub: current code confirms a complete work order'
+  summary: "stub: current code confirms a complete work order"
 triage__assert-intact: '{"intact":"true"}'
 gate-direct: '{"gate":"direct"}'
 deliver__impl__record-start: '{"start":"recorded"}'
 deliver__impl__implement:
   done: true
   green: true
-  summary: 'stub: direct work implemented and green'
-deliver__impl__assert-changed: 2 files changed
+  summary: "stub: direct work implemented and green"
+deliver__impl__assert-changed: "2 files changed"
 deliver__gate-green: '{"gate":"green"}'
-deliver__pr__pr: &id001
-  number: 5
-  url: https://github.com/example/repo/pull/5
-  head: fixture-branch
-  base: dev
-  is_draft: true
-  head_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-  base_sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-  repository: example/repo
+deliver__pr__pr: { number: 5, url: "https://github.com/example/repo/pull/5", head: "fixture-branch", base: "dev", is_draft: true }
 deliver__classify:
   errors: false
   docs: false
   reasons:
-    errors: 'stub: no failure paths'
-    docs: 'stub: no doc-facing changes'
+    errors: "stub: no failure paths"
+    docs: "stub: no doc-facing changes"
 deliver__resolve-scope: '{"errors":"false"}'
 deliver__review__mode: '{"continuation":false}'
-deliver__review__scope: PR diff in scope; head sha stubbed
-deliver__review__code: 0 findings
-deliver__review__seams: 0 findings
-deliver__review__simplify: 0 findings
-deliver__review__tests: 0 findings
-deliver__review__review-complete: settled
+deliver__review__scope: "PR diff in scope; head sha stubbed"
+deliver__review__code: "0 findings"
+deliver__review__seams: "0 findings"
+deliver__review__simplify: "0 findings"
+deliver__review__tests: "0 findings"
+deliver__review__review-complete: "settled"
 deliver__review__synthesize:
   ready: true
   action: none
-  findings_summary: 'stub: no open findings'
+  findings_summary: "stub: no open findings"
 deliver__review-action: '{"ready":true,"action":"none"}'
 deliver__gate-ready: '{"gate":"ready"}'
 deliver__validate__validate:
   green: true
-  summary: 'stub: project gate green'
+  summary: "stub: project gate green"
 deliver__gate-validated: '{"gate":"green"}'
 ci-probe: '{"state":"concluded","detail":"all checks green"}'
+# The mutation: the flip printed something that is not a URL.
 deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
-deliver__flip-ready: flip printed something that is not a pull request URL
+deliver__flip-ready: "flip printed something that is not a pull request URL"
+deliver__outcome: "https://github.com/example/repo/pull/5"
 fixture:
   expect: failed
-  fail-node: deliver__outcome
+  fail-node: outcome
 exec-code: true
-deliver__pr__resolve:
-  publish: false
-  candidate: *id001
-deliver__capture-pr__resolve:
-  publish: false
-  candidate: *id001
-deliver__capture-pr__pr: *id001
-deliver__publish-correction__resolve:
-  publish: false
-  candidate: *id001
-deliver__publish-correction__pr: *id001
-deliver__capture-ci-pr__resolve:
-  publish: false
-  candidate: *id001
-deliver__capture-ci-pr__pr: *id001
-deliver__publish-ci-correction__resolve:
-  publish: false
-  candidate: *id001
-deliver__publish-ci-correction__pr: *id001
-deliver__readback__resolve:
-  publish: false
-  candidate: *id001
-deliver__readback__pr:
-  number: 5
-  url: https://github.com/example/repo/pull/5
-  head: fixture-branch
-  base: dev
-  is_draft: false
-  head_sha: invalid
-  base_sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-  repository: example/repo
