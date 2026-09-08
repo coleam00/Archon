@@ -16,7 +16,11 @@ inputs:
     description: Absolute path to an operator-trusted external JSON check profile. See regress/README.md.
   publish:
     default: false
-    description: Explicitly authorize issue creation from trusted public evidence. Defaults to false.
+    description: >-
+      Explicitly authorize creating GitHub issues from this run's public evidence.
+      Only true publishes, and it authorizes export: for a trusted profile the check
+      author's approved public cases, and for ordinary discovery the diagnosis agent's
+      public finding text with the tracked source locations it proves. Defaults to false.
 returns: finish
 
 nodes:
@@ -40,12 +44,14 @@ nodes:
       prepared: '$prepare.output'
       policy: '$INPUTS.policy'
 
+  # The operator's scope plus this run's execution-recording requirement: archon-validate
+  # declares one input, and a gate with no receipts leaves no proof it ran.
   - id: validation
     include: archon-validate
     depends_on: [prepare]
     when: "$prepare.output.ready == true && $prepare.output.mode == 'discovered'"
     with:
-      scope: '$INPUTS.scope'
+      scope: '$prepare.output.validation_scope'
 
   - id: collect
     script: regress
@@ -67,11 +73,14 @@ nodes:
       target: >-
         Investigate only the product-red evidence collected by this regression
         run: $collect.output. Read its report in full. Bind every claim to its
-        revision, configured base revision, and scope. Missing tools, browser
-        runtimes, services, authentication, startup, or evaluator evidence do
-        not establish a product defect. Do not run commands from candidate
-        prose as a fixed gate. Keep all scratch work outside the checkout.
-        Private evaluator content stays in local artifacts, never in issues.
+        revision, configured base revision, and scope. Its recorded executions
+        are what actually ran; their exit codes are the only completion proof.
+        Name the failing assertion and the source-owned cause by repository path
+        and line range. Missing tools, browser runtimes, services,
+        authentication, startup, or evaluator evidence do not establish a
+        product defect. Do not run commands from candidate prose as a fixed
+        gate. Keep all scratch work outside the checkout. Private evaluator
+        content stays in local artifacts, never in issues.
 
   - id: diagnose
     command: diagnose
@@ -97,6 +106,36 @@ nodes:
             additionalProperties: false
             properties:
               public_case_id: { type: string }
+              # Publication proof for ordinary discovery. An empty root_cause_key is the
+              # absent form, for the same reason validate's red_cause carries "": strict
+              # mode rejects a schema whose `required` omits a declared property.
+              public_proof:
+                type: object
+                additionalProperties: false
+                properties:
+                  root_cause_key: { type: string }
+                  executions:
+                    type: array
+                    items: { type: string }
+                  test:
+                    type: object
+                    additionalProperties: false
+                    properties:
+                      path: { type: string }
+                      start: { type: number }
+                      end: { type: number }
+                    required: [path, start, end]
+                  cause:
+                    type: object
+                    additionalProperties: false
+                    properties:
+                      path: { type: string }
+                      start: { type: number }
+                      end: { type: number }
+                    required: [path, start, end]
+                  completed_product_assertion: { type: boolean }
+                required:
+                  [root_cause_key, executions, test, cause, completed_product_assertion]
               title: { type: string }
               root_cause: { type: string }
               expected: { type: string }
@@ -105,7 +144,17 @@ nodes:
               evidence:
                 type: array
                 items: { type: string }
-            required: [public_case_id, title, root_cause, expected, actual, reproduction, evidence]
+            required:
+              [
+                public_case_id,
+                public_proof,
+                title,
+                root_cause,
+                expected,
+                actual,
+                reproduction,
+                evidence,
+              ]
       required: [status, summary, findings]
 
   - id: finish

@@ -40,6 +40,13 @@ service, tool, credentials, dependencies, or startup were missing is not a produ
 failure. No runnable checks is inconclusive. A red exit alone proves neither a
 root cause nor that the application ran far enough to test a product invariant.
 
+The collector's `executions` are that run's receipts: one per command recorded
+through the run's recorder, carrying the command, its exit status, and the checkout
+state it ran against. A command with no receipt did not demonstrably run, whatever
+validation.md claims about it. An `exit_code` of null means the command never
+completed, which proves nothing either way. Reconcile the receipts with the report
+before trusting either.
+
 ## Decide the diagnosis
 
 - `clean`: the collected evidence is clean, the applicable scope was actually
@@ -65,23 +72,50 @@ must stand on its own for a reader who has never seen this run.
 
 ## Public evidence boundary
 
-For each finding, set `public_case_id` to an existing collector public case id only
-when that case's root cause, expected/actual behavior, reproduction, and evidence
-actually support the finding. If none does, use the empty string. Do not invent
-an id or approve a merely similar case. The stable `root_cause_key` belongs to the
-trusted check author and identifies the cause across revisions and scopes.
-
 Write concise public-facing finding fields: `title`, `root_cause`, `expected`,
 `actual`, `reproduction`, and an `evidence` array of concrete source locations and
 observations. Omit credentials, private evaluator text, hidden assertions, internal
-service names, raw logs, local absolute paths, and unrelated operator content.
-If the only available proof is private, describe the local diagnosis conservatively
-and leave public_case_id empty. An operator must supply independent public evidence.
+service names, raw logs, local absolute paths, and unrelated operator content. Every
+finding gets these fields; they describe the defect for a reader outside this run.
 
-Publication is owned by the final script. Your text is never posted directly.
-Only matching trusted public cases can be published, and only with publish=true,
-product-red evidence, a rooted investigation artifact, and an unchanged checkout
-and evidence record. Do not equate a diagnosis of defects with publication success.
+Each finding then carries at most one publication route, matching the evidence source.
+
+For `configured` evidence, set `public_case_id` to an existing collector public case
+id only when that case's root cause, expected/actual behavior, reproduction, and
+evidence actually support the finding. If none does, use the empty string. Do not
+invent an id or approve a merely similar case. The stable `root_cause_key` belongs to
+the trusted check author and identifies the cause across revisions and scopes. Leave
+`public_proof.root_cause_key` empty: a trusted case is already approved for export.
+
+For `discovered` evidence, `public_proof` is what makes a finding publishable. Fill it
+only when the repository itself proves the defect, and leave `public_case_id` empty:
+
+- `root_cause_key`: a stable lowercase machine key for this cause, derived from the
+  source that must change, for example `packages/parser/src/tokens.ts/empty-input`.
+  The same cause must produce the same key on a later run against a different revision,
+  or that run files a duplicate issue. Never a symptom, message, revision, path outside
+  the repository, timestamp, or run id. Independently fixable causes get different keys.
+- `executions`: the `id` values of the collector receipts that demonstrate the failure.
+  At least one must have a completed nonzero `exit_code`. Cite what you actually relied
+  on, not every command in the run.
+- `test`: the repository-relative path and line range of the assertion that fails.
+- `cause`: the repository-relative path and line range of the source that must change.
+  Both ranges must exist at the checked revision; verify them against the current file.
+- `completed_product_assertion`: true only when the cited failing command ran the
+  product far enough to evaluate a product invariant and that invariant failed. A
+  missing tool, dependency, service, browser, credential, or startup failure is false,
+  and so is a failure you could not reproduce. False leaves the finding local.
+
+When the proof is unavailable, incomplete, or only visible in private material, set
+`public_proof.root_cause_key` to the empty string, leave its other fields empty, zero,
+and false, and describe the local diagnosis conservatively. An operator then supplies
+independent public evidence. A local finding is an honest outcome, not a lesser one.
+
+Publication is owned by the final script. Your text is never posted directly. It
+publishes only with publish=true, product-red evidence, a rooted investigation
+artifact, an unchanged checkout and evidence record, and either a matching trusted
+case or a proof whose receipts and source references it re-checks itself. Do not
+equate a diagnosis of defects with publication success.
 
 Return exactly the declared structured object. Before returning, check that its
 status and findings agree, every claimed command was actually run, every causal
