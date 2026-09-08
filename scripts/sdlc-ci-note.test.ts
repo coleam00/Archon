@@ -12,7 +12,7 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { readFileSync, mkdtempSync, writeFileSync, chmodSync } from 'node:fs';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { resolveBashPath } from '@archon/git';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -72,7 +72,7 @@ function runUnderBash(
   fakeBinDir: string
 ): { stdout: string; status: number | null } {
   const bashPath = resolveBashPath();
-  const env = { ...process.env, PATH: `${fakeBinDir};${process.env.PATH}` };
+  const env = { ...process.env, PATH: `${fakeBinDir}${delimiter}${process.env.PATH}` };
   const result = spawnSync(bashPath, ['-c', script], {
     cwd: REPO_ROOT,
     env,
