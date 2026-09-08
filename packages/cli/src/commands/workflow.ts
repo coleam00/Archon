@@ -1688,7 +1688,13 @@ async function runWorkflowWithOwnedSource(
       originalStagedRoot = replacement.anchor.root;
       const stale = preparedSource;
       preparedSource = replacement;
-      if (stale) {
+      // A detached child's replacement capture is filed under the SAME pre-created run
+      // id as the original (both pass `runId: detachedPreCreatedRun.id`), so they share
+      // one physical staged-source directory and `replacement` already overwrote it in
+      // place. Removing `stale.anchor.root` here would delete the replacement that was
+      // just written, not a superseded one. Only clean up when the roots genuinely
+      // differ (the non-detached adopt lane, where each prepare mints its own run id).
+      if (stale && stale.anchor.root !== replacement.anchor.root) {
         rmSync(stale.anchor.root, { recursive: true, force: true });
       }
     } catch (error) {

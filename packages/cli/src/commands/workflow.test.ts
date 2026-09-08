@@ -24,10 +24,11 @@ import {
   truncateSync,
   writeFileSync,
 } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { getArchonHome, isDocker } from '@archon/paths';
-import { removeTempTree } from '@archon/paths/test-utils';
+import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 import {
   getProjectStoragePaths as getProjectStoragePathsReal,
   getRunArtifactsDirForRoot as getRunArtifactsDirForRootReal,
@@ -11473,6 +11474,7 @@ describe('workflowTestCommand', () => {
 
 describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
+  const trackTempRoot = trackTempRoots();
 
   beforeEach(() => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
@@ -11537,6 +11539,54 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
       adoptedRun: { id: 'run-old' },
       lane,
     });
+  }
+
+  /**
+   * Stand-in for `prepareWorkflowSource` that performs the one piece of real-disk
+   * behavior the recapture bug depends on: filing the capture at
+   * `<tempRoot>/staged-source/<runId>` and replacing whatever was already there, the
+   * same way `captureWorkflowSource`'s replace-not-merge rename does. A detached
+   * child's replacement capture reuses the pre-created run id (workflow.ts passes
+   * `runId: detachedPreCreatedRun.id` to both the initial and the lane recapture), so
+   * two calls sharing a `runId` land at the SAME directory, reproducing the collision
+   * with a real file on disk instead of two mock objects that merely look distinct.
+   */
+  async function stageRealCapture(
+    tempRoot: string,
+    opts: { sourceRoot: string; runId?: string }
+  ): Promise<WorkflowExecutor.PreparedWorkflowSource> {
+    const runId = opts.runId ?? randomUUID();
+    const captureRoot = join(tempRoot, 'staged-source', runId);
+    await removeTempTree(captureRoot);
+    mkdirSync(captureRoot, { recursive: true });
+    const anchor = {
+      root: captureRoot,
+      digest: `digest-${opts.sourceRoot}`,
+      config: { load_default_workflows: true, load_default_commands: true },
+    };
+    const manifest = {
+      version: 1 as const,
+      engine_version: 'test',
+      origin: opts.sourceRoot,
+      captured_at: new Date().toISOString(),
+      digest: anchor.digest,
+      file_count: 0,
+      byte_count: 0,
+      scopes: [],
+      source_config: anchor.config,
+    };
+    writeFileSync(join(captureRoot, 'manifest.json'), JSON.stringify(manifest));
+    const roots: WorkflowExecutor.WorkflowSourceRoots = {
+      project: join(captureRoot, 'project'),
+      globalWorkflows: join(captureRoot, 'global', 'workflows'),
+      globalCommands: join(captureRoot, 'global', 'commands'),
+      globalScripts: join(captureRoot, 'global', 'scripts'),
+      bundledWorkflows: join(captureRoot, 'bundled', 'workflows'),
+      bundledCommands: join(captureRoot, 'bundled', 'commands', 'defaults'),
+      kind: 'captured',
+      anchor,
+    };
+    return { runId, origin: opts.sourceRoot, manifest, anchor, roots };
   }
 
   it('adopts a normal run from a unique short run id prefix', async () => {
@@ -11692,6 +11742,105 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
       workflowRunCommand('/test/path', 'assist', 'hello', { adoptRunId: 'run-old' })
     ).rejects.toThrow(/requires input/);
     expect(executeWorkflow).not.toHaveBeenCalled();
+  });
+
+  it(
+    'preserves the replacement capture when a detached child recaptures onto its own ' +
+      'pre-created run id (real files, #3213)',
+    async () => {
+      // The bug: a `--detach` child passes `runId: detachedPreCreatedRun.id` to BOTH its
+      // initial prepare (against the parent cwd) and its lane recapture (against the
+      // adopted worktree). Both therefore stage under the same
+      // `staged-source/<run-id>` directory, and the old code unconditionally rm'd
+      // `stale.anchor.root` after recapture, deleting the replacement it had just
+      // written, since the two roots were the same path. This test uses a real temp
+      // directory so that deletion, if it regresses, actually removes a file.
+      setupAdoptMocks();
+      const workflowDb = await import('@archon/core/db/workflows');
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'run-detached-child',
+        workflow_name: 'assist',
+        status: 'pending',
+      });
+      const { prepareWorkflowSource } = await import('@archon/workflows/executor');
+      const prepareMock = prepareWorkflowSource as ReturnType<typeof mock>;
+
+      const tempRoot = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-recapture-samedroot-')));
+      // Matches the mocked DETACHED_RUN_OWNER_ENV value the SUT reads from
+      // '../utils/detached-run-control' (mocked at the top of this file).
+      const ownerEnvVar = 'ARCHON_DETACHED_RUN_OWNER';
+      const previousOwnerEnv = process.env[ownerEnvVar];
+      process.env[ownerEnvVar] = '1';
+      try {
+        prepareMock
+          .mockImplementationOnce((_deps: unknown, opts: { sourceRoot: string; runId?: string }) =>
+            stageRealCapture(tempRoot, opts)
+          )
+          .mockImplementationOnce((_deps: unknown, opts: { sourceRoot: string; runId?: string }) =>
+            stageRealCapture(tempRoot, opts)
+          );
+
+        await workflowRunCommand('/test/path', 'assist', 'hello', {
+          adoptRunId: 'run-old',
+          detachedRunId: 'run-detached-child',
+        });
+
+        const calls = prepareMock.mock.calls;
+        expect(calls).toHaveLength(2);
+        expect((calls[0][1] as { runId?: string }).runId).toBe('run-detached-child');
+        expect((calls[1][1] as { runId?: string }).runId).toBe('run-detached-child');
+
+        const replacementRoot = join(tempRoot, 'staged-source', 'run-detached-child');
+        const manifestPath = join(replacementRoot, 'manifest.json');
+        // The assertion the old code fails: the recapture's own cleanup deleted this
+        // file right after writing it, because stale.anchor.root === replacement's.
+        expect(existsSync(manifestPath)).toBe(true);
+        const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8')) as { origin: string };
+        expect(manifest.origin).toBe('/wt/adopted');
+      } finally {
+        if (previousOwnerEnv === undefined) delete process.env[ownerEnvVar];
+        else process.env[ownerEnvVar] = previousOwnerEnv;
+      }
+    }
+  );
+
+  it('still cleans up the superseded staged capture when the replacement lands at a different root', async () => {
+    // Companion to the same-root regression above: an ordinary (non-detached) adopt
+    // mints a fresh run id on each `prepareWorkflowSource` call, so the original and
+    // replacement captures land at genuinely different directories. That case must
+    // still be cleaned up. The fix narrows the cleanup condition; it must not remove
+    // it outright.
+    setupAdoptMocks();
+    const { prepareWorkflowSource } = await import('@archon/workflows/executor');
+    const prepareMock = prepareWorkflowSource as ReturnType<typeof mock>;
+
+    const tempRoot = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-recapture-distinctroot-')));
+    const capturedRoots: string[] = [];
+    prepareMock
+      .mockImplementationOnce(
+        async (_deps: unknown, opts: { sourceRoot: string; runId?: string }) => {
+          const prepared = await stageRealCapture(tempRoot, opts);
+          capturedRoots.push(prepared.anchor.root);
+          return prepared;
+        }
+      )
+      .mockImplementationOnce(
+        async (_deps: unknown, opts: { sourceRoot: string; runId?: string }) => {
+          const prepared = await stageRealCapture(tempRoot, opts);
+          capturedRoots.push(prepared.anchor.root);
+          return prepared;
+        }
+      );
+
+    await workflowRunCommand('/test/path', 'assist', 'hello', { adoptRunId: 'run-old' });
+
+    expect(capturedRoots).toHaveLength(2);
+    const [originalRoot, replacementRoot] = capturedRoots;
+    expect(originalRoot).not.toBe(replacementRoot);
+    // The superseded original is reclaimed...
+    expect(existsSync(originalRoot as string)).toBe(false);
+    // ...and the replacement it was superseded BY survives.
+    expect(existsSync(join(replacementRoot as string, 'manifest.json'))).toBe(true);
   });
 });
 
