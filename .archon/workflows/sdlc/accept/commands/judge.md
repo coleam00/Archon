@@ -71,6 +71,13 @@ the specific defect summary and evidence, record unknowns separately in findings
 and set checks_complete/evidence_sufficient truthfully. Only approval requires
 complete verification. A missing observation alone is not a product defect.
 
+`findings` is the refusal contract, not a general review-notes list. An approval
+must return an empty findings array. Include a finding only for an unmet accepted
+requirement, a proven defect, or missing evidence that prevents acceptance. Keep
+nonblocking observations in the summary if they help explain the judgment; do
+not turn optional wording preferences or unrelated improvements into repair work.
+The receipt writer conservatively refuses approval whenever findings remain.
+
 Findings must be safe to hand to a builder: describe the public behavior to repair
 and public candidate references. Never quote private evaluator sources, hidden
 assertions, absolute private paths, credentials, or private log details. Do not
