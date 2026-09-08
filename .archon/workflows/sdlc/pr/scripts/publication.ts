@@ -270,6 +270,24 @@ export class Publication {
         pr.base_sha !== base_sha || (!candidate.pr && pr.is_draft !== draft)) {
       throw new Error('Published PR identity mismatch');
     }
+    if (candidate.pr) {
+      // Repairs change the evidence a reviewer needs, including executed test counts.
+      // Update only the description after the fixed gate and exact-head readback.
+      const descriptionPath = join(this.artifacts, 'pr-description.json');
+      await mkdir(this.artifacts, { recursive: true });
+      await writeFile(descriptionPath, JSON.stringify({ title: string(preparation.title), body: string(preparation.body) }));
+      await this.run(['gh', 'api', `repos/${candidate.repository}/pulls/${String(pr.number)}`,
+        '--method', 'PATCH', '--input', descriptionPath]);
+      const description = object(JSON.parse(await this.run(['gh', 'pr', 'view', String(pr.number),
+        '--repo', candidate.repository, '--json', 'title,body'])));
+      if (description.title !== preparation.title || description.body !== preparation.body) {
+        throw new Error('Updated PR title or body does not match preparation');
+      }
+      const after = await this.read(candidate.repository, pr.number);
+      this.samePr(after, pr);
+      if (after.is_draft !== pr.is_draft) throw new Error('PR draft state changed during description update');
+      pr = after;
+    }
     return pr;
   }
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtemp, writeFile, mkdir, symlink } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, mkdir, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
@@ -49,6 +49,7 @@ function fixture(existing = false) {
     isolated: true,
     staleFetch: false,
     descriptionMismatch: false,
+    description: existing ? { title: 'Old title', body: 'Old test counts' } : { ...preparation },
   };
   const run: Run = async args => {
     calls.push(args);
@@ -95,6 +96,8 @@ function fixture(existing = false) {
       return '';
     }
     if (args[0] === 'gh' && args[1] === 'api') {
+      if (args.includes('PATCH'))
+        state.description = JSON.parse(await readFile(args.at(-1)!, 'utf8'));
       const pr = state.pr!;
       return JSON.stringify({
         number: pr.number,
@@ -108,7 +111,7 @@ function fixture(existing = false) {
     if (args[2] === 'list') return JSON.stringify(state.pr ? [{ number: 42 }] : []);
     if (args[2] === 'view')
       return JSON.stringify(
-        state.descriptionMismatch ? { ...preparation, body: 'wrong body' } : preparation
+        state.descriptionMismatch ? { ...preparation, body: 'wrong body' } : state.description
       );
     if (args[2] === 'create') {
       state.pr = { ...record, head_sha: head };
@@ -124,6 +127,35 @@ function fixture(existing = false) {
 }
 
 describe('deterministic PR publication', () => {
+  test('existing PR refreshes its description only after the fixed gate and verifies it', async () => {
+    const f = fixture(true);
+    const candidate = await f.publication.snapshot(
+      { command: ['fixed-gate'], protected_paths: [] },
+      record
+    );
+    f.state.failGate = true;
+    await expect(f.publication.publish(candidate, preparation, true)).rejects.toThrow(
+      'Fixed gate failed'
+    );
+    expect(f.calls.some(args => args.includes('PATCH'))).toBe(false);
+    expect(f.state.description.body).toBe('Old test counts');
+    f.state.failGate = false;
+    await f.publication.publish(candidate, preparation, true);
+    expect(f.state.description).toEqual({ title: preparation.title, body: preparation.body });
+    expect(f.calls.some(args => args[2] === 'create')).toBe(false);
+    expect(f.state.pr?.is_draft).toBe(record.is_draft);
+
+    const mismatch = fixture(true);
+    mismatch.state.descriptionMismatch = true;
+    await expect(
+      mismatch.publication.publish(
+        await mismatch.publication.snapshot(null, record),
+        preparation,
+        true
+      )
+    ).rejects.toThrow('Updated PR title or body does not match preparation');
+  });
+
   test('real git cold repair gates and advances the same remote branch', async () => {
     const root = track(await mkdtemp(join(tmpdir(), 'publication-git-')));
     const seed = join(root, 'seed');
@@ -158,6 +190,7 @@ describe('deterministic PR publication', () => {
     await git(clone, 'config', 'user.email', 'publication@example.invalid');
     await git(clone, 'worktree', 'add', '-b', 'repair-run', checkout, 'develop');
     let gateFails = true;
+    let description = { title: 'Old title', body: 'Old test counts' };
     const calls: string[][] = [];
     const run: Run = async args => {
       calls.push(args);
@@ -171,7 +204,8 @@ describe('deterministic PR publication', () => {
         if (gateFails) throw new Error('Mandatory gate failed');
         return '';
       }
-      if (args[1] === 'api')
+      if (args[1] === 'api') {
+        if (args.includes('PATCH')) description = JSON.parse(await readFile(args.at(-1)!, 'utf8'));
         return JSON.stringify({
           number: 42,
           html_url: record.url,
@@ -188,6 +222,8 @@ describe('deterministic PR publication', () => {
             repo: { full_name: record.repository },
           },
         });
+      }
+      if (args[2] === 'view') return JSON.stringify(description);
       if (args[2] === 'list') return '[{"number":42}]';
       throw new Error(`Unexpected public action: ${args.join(' ')}`);
     };
@@ -211,6 +247,7 @@ describe('deterministic PR publication', () => {
     expect(repaired.head_sha).not.toBe(original.head_sha);
     expect(repaired.head_sha).toBe(await git(checkout, 'rev-parse', 'HEAD'));
     expect(await git(remote, 'rev-parse', 'refs/heads/feature')).toBe(repaired.head_sha);
+    expect(description).toEqual({ title: preparation.title, body: preparation.body });
     expect(calls.flat()).not.toContain('--force');
   }, 20000);
 

@@ -7,6 +7,12 @@ to `$ARTIFACTS_DIR/pr-identity.json`. Existing open same-repository PRs are reus
 Base selection remains preparation judgment, using the existing PR first and
 repository guidance and ancestry otherwise. There is no assumed main base.
 
+For an existing PR, publication also applies the prepared title and body after
+the gate and push, then verifies their exact values and the unchanged PR identity.
+Preparation preserves issue linkage and updates validation claims after repairs.
+This prevents a successful correction from leaving the old test counts in the PR.
+Only description fields are patched; base and draft state are preserved.
+
 The optional `publication_policy` is an absolute path to operator-owned JSON
 outside the candidate checkout (symlinks are resolved before checking):
 

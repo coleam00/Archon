@@ -22,6 +22,7 @@ Record `HEAD_BRANCH=$(git branch --show-current)` before doing anything public; 
 ## 3. Write it
 
 - Read the run's artifacts for content: `$ARTIFACTS_DIR/implementation.md` and anything else relevant under `$ARTIFACTS_DIR/`.
+- For an existing PR, read its current description and preserve the original issue linkage and still-relevant context. Update validation claims to the evidence for the current candidate. Distinguish earlier checks from current checks when counts changed after a repair. The publication node applies and verifies this updated description.
 - Find the repository's PR template (`.github/pull_request_template.md` and its supported variants). Use it; fill every applicable section with concrete information and delete instructional comments. No template → problem first, then solution focused on behavior, then validation that actually ran.
 - Title: concise, human, the meaningful outcome - never an implementation inventory.
 - Link the issue with `Closes #N` only when the PR fully resolves it; `Relates to #N` otherwise. Never infer linkage from a bare number.
