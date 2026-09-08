@@ -1,0 +1,60 @@
+name: archon-merge-queue
+description: >-
+  Assess an explicit bounded list of GitHub PRs, then merge eligible changes
+  sequentially using gh and GitHub branch protection. Agents inspect current
+  review and CI evidence; no forge engine extension is required.
+model: medium
+interactive: true
+mutates_checkout: false
+inputs:
+  prs:
+    required: true
+    description: JSON array of 1-5 explicit PR URLs in this repository.
+  mode:
+    default: approve
+    description: preview only assesses; approve waits for a human; auto authorizes this batch.
+  evidence:
+    default: ''
+    description: Optional runtime/review report paths or structured evidence for this batch.
+returns: merge
+nodes:
+  - id: assess
+    command: assess-merge-queue
+    context: fresh
+    with:
+      prs: "$INPUTS.prs"
+      evidence: "$INPUTS.evidence"
+    output_format:
+      type: object
+      properties:
+        ready: { type: boolean }
+        summary: { type: string }
+      required: [ready, summary]
+
+  - id: approval
+    depends_on: [assess]
+    when: "$assess.output.ready == true && $INPUTS.mode == 'approve'"
+    approval:
+      message: "Approve the PRs and pinned heads in $ARTIFACTS_DIR/merge-plan.json? $assess.output.summary"
+      decisions:
+        - id: approve
+          label: Merge eligible PRs
+        - id: hold
+          label: Hold batch
+
+  - id: merge
+    command: merge-approved-prs
+    context: fresh
+    depends_on: [assess, approval]
+    trigger_rule: none_failed_min_one_success
+    with:
+      ready: "$assess.output.ready"
+      mode: "$INPUTS.mode"
+      approval: { from: "$approval.output", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        merged: { type: boolean }
+        urls: { type: array, items: { type: string } }
+        summary: { type: string }
+      required: [merged, urls, summary]
