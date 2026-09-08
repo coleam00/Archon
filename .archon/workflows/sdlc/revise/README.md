@@ -8,11 +8,13 @@ They are handed to the existing implementation workflow without a second repair
 planner or reasoning prompt.
 
 The workflow explicitly requires an isolated worktree. It resolves the open
-same-repository PR, fetches its head, refuses stale identity, and creates a local
-branch for that exact head. It refuses dirty files, a primary checkout, a local
-branch that already exists, fork PRs, and protected head names. No existing
-checkout is reset, cleaned or taken over. A fresh clone plus an engine-created
-worktree supports a cold invocation without artifacts from the original run.
+same-repository PR, fetches its head, refuses stale identity, and creates a fresh
+local branch at that exact head. The PR's own branch is usually still checked out
+in the worktree of the run that opened it, so repair never takes it over: no
+existing checkout or branch is reset, cleaned, moved or deleted. It refuses dirty
+files, a primary checkout, fork PRs, and protected head names. A fresh clone plus
+an engine-created worktree supports a cold invocation without artifacts from the
+original run.
 
 Implementation must finish green. Publication pins the original PR identity,
 runs the optional fixed policy, and pushes the committed SHA to the same head

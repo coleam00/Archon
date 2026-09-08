@@ -9,6 +9,7 @@ import {
   identity,
   loadPolicy,
   main,
+  parseCandidate,
   repositoryFromRemote,
   type PrIdentity,
   type Run,
@@ -41,6 +42,9 @@ function fixture(existing = false) {
     dirty: false,
     head,
     branch: 'feature',
+    // An earlier ship run in this clone still owns the PR branch locally.
+    localBranches: ['feature'],
+    publishedBranches: [] as string[],
     remote: existing ? old : '',
     pr: existing ? { ...record } : (null as PrIdentity | null),
     failGate: false,
@@ -75,13 +79,26 @@ function fixture(existing = false) {
       return '';
     if (args[1] === 'ls-remote') {
       const ref = args.at(-1);
+      if (ref === 'origin') {
+        return [
+          `${base}\trefs/heads/develop`,
+          state.remote && `${state.remote}\trefs/heads/feature`,
+          ...state.publishedBranches.map(name => `${base}\trefs/heads/${name}`),
+        ]
+          .filter(Boolean)
+          .join('\n');
+      }
       const value = ref === 'refs/heads/develop' ? base : state.remote;
       return value ? `${value}\t${ref}` : '';
     }
+    if (args[1] === 'for-each-ref') return state.localBranches.join('\n');
     if (args[1] === 'rev-list') return '1';
     if (args[1] === 'diff') return state.protected ? 'policy/check.ts\0' : 'src/fix.ts\0';
     if (args[1] === 'switch') {
-      state.branch = args[3]!;
+      const created = args[3]!;
+      if (state.localBranches.includes(created)) throw new Error('fatal: branch already exists');
+      state.localBranches.push(created);
+      state.branch = created;
       state.head = args[4]!;
       return '';
     }
@@ -156,11 +173,12 @@ describe('deterministic PR publication', () => {
     ).rejects.toThrow('Updated PR title or body does not match preparation');
   });
 
-  test('real git cold repair gates and advances the same remote branch', async () => {
+  test('real git cold repair coexists with the ship worktree that owns the PR branch', async () => {
     const root = track(await mkdtemp(join(tmpdir(), 'publication-git-')));
     const seed = join(root, 'seed');
     const remote = join(root, 'remote.git');
     const clone = join(root, 'clone');
+    const shipped = join(root, 'shipped');
     const checkout = join(root, 'repair');
     const git = async (cwd: string, ...args: string[]): Promise<string> => {
       const child = Bun.spawn(['git', ...args], { cwd, stdout: 'pipe', stderr: 'pipe' });
@@ -188,6 +206,7 @@ describe('deterministic PR publication', () => {
     await git(root, 'clone', remote, clone);
     await git(clone, 'config', 'user.name', 'Publication test');
     await git(clone, 'config', 'user.email', 'publication@example.invalid');
+    await git(clone, 'worktree', 'add', '-b', 'feature', shipped, 'origin/feature');
     await git(clone, 'worktree', 'add', '-b', 'repair-run', checkout, 'develop');
     let gateFails = true;
     let description = { title: 'Old title', body: 'Old test counts' };
@@ -229,6 +248,9 @@ describe('deterministic PR publication', () => {
     };
     const publication = new Publication(run, join(root, 'artifacts'));
     const original = await publication.checkout(42);
+    const repairBranch = await git(checkout, 'branch', '--show-current');
+    expect(repairBranch).not.toBe('feature');
+    expect(await git(checkout, 'rev-parse', 'HEAD')).toBe(original.head_sha);
     await writeFile(join(checkout, 'work.txt'), 'repaired\n');
     await expect(publication.snapshot(null, original)).rejects.toThrow('dirty');
     await git(checkout, 'commit', '-am', 'Repair finding');
@@ -249,6 +271,13 @@ describe('deterministic PR publication', () => {
     expect(await git(remote, 'rev-parse', 'refs/heads/feature')).toBe(repaired.head_sha);
     expect(description).toEqual({ title: preparation.title, body: preparation.body });
     expect(calls.flat()).not.toContain('--force');
+    expect(calls.some(args => args[2] === 'create')).toBe(false);
+    expect(await git(shipped, 'branch', '--show-current')).toBe('feature');
+    expect(await git(shipped, 'rev-parse', 'HEAD')).toBe(original.head_sha);
+    expect(await git(clone, 'rev-parse', 'refs/heads/feature')).toBe(original.head_sha);
+    expect(await git(remote, 'for-each-ref', '--format=%(refname:short)', 'refs/heads/')).toBe(
+      'develop\nfeature'
+    );
   }, 20000);
 
   test('new PR pins commits, uses non-main base, and reads typed identity', async () => {
@@ -343,19 +372,63 @@ describe('deterministic PR publication', () => {
     }
   });
 
-  test('cold checkout and repair preserve PR and its non-main base', async () => {
+  test('cold checkout and repair preserve PR, its non-main base, and the PR branch', async () => {
     const f = fixture(true);
     f.state.branch = 'isolated-run';
     const target = await f.publication.checkout(42);
+    const created = f.calls.find(a => a[1] === 'switch')![3];
+    expect(created).not.toBe('feature');
+    expect(f.state.branch).toBe(created);
     expect(f.state.head).toBe(old);
     f.state.head = head;
-    const result = await f.publication.publish(
-      await f.publication.snapshot(null, target),
-      preparation,
-      true
-    );
+    const candidate = await f.publication.snapshot(null, target);
+    // The resolve stage reaches publication as JSON, so the repair branch and
+    // the PR head must both survive that handoff.
+    const resolved = parseCandidate(JSON.parse(JSON.stringify(candidate)));
+    expect(resolved).toEqual(candidate);
+    const result = await f.publication.publish(resolved, preparation, true);
     expect(result).toEqual({ ...record, head_sha: head });
-    expect(f.calls.some(a => a[2] === 'create')).toBe(false);
+    expect(f.calls.find(a => a[1] === 'push')).toEqual([
+      'git',
+      'push',
+      'origin',
+      `${head}:refs/heads/feature`,
+    ]);
+    expect(f.calls.some(a => a[2] === 'create' || a[2] === 'list')).toBe(false);
+  });
+
+  test('a repair branch steps past every name taken locally or on origin', async () => {
+    const f = fixture(true);
+    f.state.branch = 'isolated-run';
+    await f.publication.checkout(42);
+    const first = f.state.branch;
+    f.state.branch = 'isolated-run';
+    f.state.head = old;
+    await f.publication.checkout(42);
+    expect(f.state.branch).not.toBe(first);
+    expect(f.state.localBranches).toEqual(['feature', first, f.state.branch]);
+
+    const occupied = fixture(true);
+    occupied.state.branch = 'isolated-run';
+    occupied.state.publishedBranches = [first];
+    await occupied.publication.checkout(42);
+    expect(occupied.state.branch).not.toBe(first);
+  });
+
+  test('readback pins the expected PR under the repair branch name', async () => {
+    const f = fixture(true);
+    f.state.branch = 'isolated-run';
+    f.state.head = old;
+    expect(await f.publication.readback(record)).toEqual(record);
+    expect(f.calls.some(a => a[2] === 'list')).toBe(false);
+    f.state.head = 'd'.repeat(40);
+    await expect(f.publication.readback(record)).rejects.toThrow('Local and published head differ');
+
+    const moved = fixture(true);
+    moved.state.branch = 'isolated-run';
+    moved.state.head = old;
+    moved.state.pr!.base = 'another';
+    await expect(moved.publication.readback(record)).rejects.toThrow('base changed');
   });
 
   test('checkout refuses shared checkout and stale fetch', async () => {

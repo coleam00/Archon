@@ -18,12 +18,18 @@ interface Policy {
 }
 
 interface Candidate {
-  head: string;
+  branch: string;
   head_sha: string;
   repository: string;
   remote_sha: string;
   pr: PrIdentity | null;
   policy: Policy | null;
+}
+
+// A repair prepares on a fresh local branch, so the branch that is published to
+// is the PR's own head. Deriving it keeps the two identities from drifting.
+function publicationHead(candidate: Pick<Candidate, 'branch' | 'pr'>): string {
+  return candidate.pr?.head ?? candidate.branch;
 }
 
 export interface Preparation {
@@ -132,6 +138,19 @@ export class Publication {
     return result ? sha(result.split(/\s+/)[0]) : '';
   }
 
+  // Repairs must not disturb any branch this clone already has, locally or on
+  // origin, so the repair branch is named past every ref that exists now.
+  private async freshBranch(pr: PrIdentity): Promise<string> {
+    const local = (await this.git('for-each-ref', '--format=%(refname:short)', 'refs/heads/')).split(/\r?\n/);
+    const published = (await this.git('ls-remote', '--heads', 'origin')).split(/\r?\n/)
+      .map(line => line.split('\t')[1]?.slice('refs/heads/'.length) ?? '');
+    const taken = new Set([...local, ...published].filter(Boolean));
+    const stem = `archon-repair-${String(pr.number)}-${pr.head_sha.slice(0, 12)}`;
+    let branch = stem;
+    for (let attempt = 2; taken.has(branch); attempt += 1) branch = `${stem}-${String(attempt)}`;
+    return branch;
+  }
+
   async read(repository: string, number: number): Promise<PrIdentity> {
     const raw = object(JSON.parse(await this.run([
       'gh', 'api', `repos/${repository}/pulls/${String(number)}`,
@@ -154,7 +173,9 @@ export class Publication {
     if (!result.length) return null;
     const number = object(result[0]).number;
     if (!Number.isSafeInteger(number)) throw new Error('Invalid existing PR number');
-    return this.read(repository, Number(number));
+    const pr = await this.read(repository, Number(number));
+    if (pr.head !== head) throw new Error('Existing PR lookup returned another head');
+    return pr;
   }
 
   private samePr(actual: PrIdentity, expected: PrIdentity): void {
@@ -166,16 +187,18 @@ export class Publication {
   async snapshot(policy: Policy | null, expected: PrIdentity | null = null): Promise<Candidate> {
     await this.clean();
     const repository = await this.repository();
-    const head = await this.git('branch', '--show-current');
-    if (!head || ['main', 'master'].includes(head)) throw new Error('Publication requires a feature branch');
+    const branch = await this.git('branch', '--show-current');
+    if (!branch || ['main', 'master'].includes(branch)) throw new Error('Publication requires a feature branch');
     const head_sha = sha(await this.git('rev-parse', 'HEAD'));
     if (expected && repository !== expected.repository) throw new Error('Repository changed');
-    const pr = expected ? await this.read(repository, expected.number) : await this.existing(repository, head);
-    if (pr && pr.head !== head) throw new Error('Checkout does not match PR head');
+    // An expected PR is the authority on the published head. Only an ordinary
+    // first publication looks a PR up, and then only for its own branch, so a
+    // repair branch can never adopt or create someone else's PR.
+    const pr = expected ? await this.read(repository, expected.number) : await this.existing(repository, branch);
     if (expected && pr) this.samePr(pr, expected);
-    const remote_sha = await this.remote(head);
+    const remote_sha = await this.remote(publicationHead({ branch, pr }));
     if (pr && remote_sha !== pr.head_sha) throw new Error('Remote head does not match PR');
-    return { head, head_sha, repository, remote_sha, pr, policy };
+    return { branch, head_sha, repository, remote_sha, pr, policy };
   }
 
   async checkout(number: number): Promise<PrIdentity> {
@@ -189,37 +212,44 @@ export class Publication {
     if (await this.remote(pr.head) !== pr.head_sha) throw new Error('Stale PR head');
     await this.git('fetch', '--no-tags', 'origin', `refs/heads/${pr.head}`);
     if (await this.git('rev-parse', 'FETCH_HEAD') !== pr.head_sha) throw new Error('Head changed during fetch');
-    // -c refuses an existing local branch, including one owned by another worktree.
-    await this.git('switch', '-c', pr.head, pr.head_sha);
+    // The PR's own branch usually already exists here: an earlier run in this
+    // clone still owns it in another worktree. Repair on a fresh branch instead
+    // of taking that one over, and -c still refuses to reuse a name.
+    await this.git('switch', '-c', await this.freshBranch(pr), pr.head_sha);
     await this.clean();
     this.samePr(await this.read(repository, number), pr);
     return pr;
   }
 
+  // Reads the expected PR itself rather than looking one up by branch name, so
+  // a repair reads back under its own local name and never finds another PR.
   async readback(expected: PrIdentity): Promise<PrIdentity> {
-    const candidate = await this.snapshot(null);
-    if (!candidate.pr) throw new Error('PR no longer exists');
-    const current = candidate.pr;
+    await this.clean();
+    const repository = await this.repository();
+    if (repository !== expected.repository) throw new Error('Repository changed');
+    const current = await this.read(repository, expected.number);
     this.samePr(current, { ...expected, head_sha: current.head_sha });
-    if (candidate.head_sha !== current.head_sha) throw new Error('Local and published head differ');
+    if (await this.remote(current.head) !== current.head_sha) throw new Error('Remote head does not match PR');
+    if (await this.git('rev-parse', 'HEAD') !== current.head_sha) throw new Error('Local and published head differ');
     return current;
   }
 
   private async unchanged(candidate: Candidate): Promise<void> {
     await this.clean();
     if (await this.repository() !== candidate.repository ||
-        await this.git('branch', '--show-current') !== candidate.head ||
+        await this.git('branch', '--show-current') !== candidate.branch ||
         await this.git('rev-parse', 'HEAD') !== candidate.head_sha ||
-        await this.remote(candidate.head) !== candidate.remote_sha) {
+        await this.remote(publicationHead(candidate)) !== candidate.remote_sha) {
       throw new Error('Candidate or remote identity changed after preparation');
     }
     if (candidate.pr) this.samePr(await this.read(candidate.repository, candidate.pr.number), candidate.pr);
   }
 
   async publish(candidate: Candidate, preparation: Preparation, draft: boolean): Promise<PrIdentity> {
+    const head = publicationHead(candidate);
     const base = candidate.pr?.base ?? string(preparation.base);
     await this.git('check-ref-format', `refs/heads/${base}`);
-    if (base === candidate.head) throw new Error('PR head equals base');
+    if (base === head) throw new Error('PR head equals base');
     const base_sha = await this.remote(base);
     if (!base_sha || (candidate.pr && candidate.pr.base_sha !== base_sha)) throw new Error('Base identity changed');
     await this.git('fetch', '--no-tags', 'origin', `refs/heads/${base}`);
@@ -239,23 +269,23 @@ export class Publication {
     }
     await this.unchanged(candidate);
     if (await this.remote(base) !== base_sha) throw new Error('Base changed before publication');
-    await this.git('push', 'origin', `${candidate.head_sha}:refs/heads/${candidate.head}`);
-    if (await this.remote(candidate.head) !== candidate.head_sha) throw new Error('Push readback mismatch');
-    let pr = candidate.pr ?? await this.existing(candidate.repository, candidate.head);
+    await this.git('push', 'origin', `${candidate.head_sha}:refs/heads/${head}`);
+    if (await this.remote(head) !== candidate.head_sha) throw new Error('Push readback mismatch');
+    let pr = candidate.pr ?? await this.existing(candidate.repository, head);
     if (!pr) {
       await this.clean();
       if (await this.git('rev-parse', 'HEAD') !== candidate.head_sha ||
           await this.repository() !== candidate.repository ||
-          await this.git('branch', '--show-current') !== candidate.head ||
-          await this.remote(candidate.head) !== candidate.head_sha ||
+          await this.git('branch', '--show-current') !== candidate.branch ||
+          await this.remote(head) !== candidate.head_sha ||
           await this.remote(base) !== base_sha) throw new Error('Identity changed before PR creation');
       const bodyPath = join(this.artifacts, 'pr-body.md');
       await mkdir(this.artifacts, { recursive: true });
       await writeFile(bodyPath, string(preparation.body));
-      await this.run(['gh', 'pr', 'create', '--repo', candidate.repository, '--head', candidate.head,
+      await this.run(['gh', 'pr', 'create', '--repo', candidate.repository, '--head', head,
         '--base', base, '--title', string(preparation.title), '--body-file', bodyPath,
         ...(draft ? ['--draft'] : [])]);
-      pr = await this.existing(candidate.repository, candidate.head);
+      pr = await this.existing(candidate.repository, head);
       if (pr) {
         const description = object(JSON.parse(await this.run(['gh', 'pr', 'view', String(pr.number),
           '--repo', candidate.repository, '--json', 'title,body'])));
@@ -266,7 +296,7 @@ export class Publication {
     }
     if (!pr) throw new Error('Created PR could not be read back');
     pr = await this.read(candidate.repository, pr.number);
-    if (pr.head !== candidate.head || pr.base !== base || pr.head_sha !== candidate.head_sha ||
+    if (pr.head !== head || pr.base !== base || pr.head_sha !== candidate.head_sha ||
         pr.base_sha !== base_sha || (!candidate.pr && pr.is_draft !== draft)) {
       throw new Error('Published PR identity mismatch');
     }
@@ -292,9 +322,10 @@ export class Publication {
   }
 }
 
-function parseCandidate(value: unknown): Candidate {
+// The resolve stage hands this shape to the finish stage as JSON.
+export function parseCandidate(value: unknown): Candidate {
   const p = object(value);
-  return { head: string(p.head), head_sha: sha(p.head_sha), repository: string(p.repository),
+  return { branch: string(p.branch), head_sha: sha(p.head_sha), repository: string(p.repository),
     remote_sha: p.remote_sha === '' ? '' : sha(p.remote_sha),
     pr: p.pr === null ? null : identity(p.pr), policy: p.policy === null ? null : parsePolicy(p.policy) };
 }
