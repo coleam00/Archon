@@ -306,6 +306,37 @@ describe('captureWorkflowSource', () => {
     );
   });
 
+  test('captures a scope whose root is a symlinked directory', async () => {
+    // The global-workflows guide tells people to symlink a scope root out of a dotfiles
+    // repo (`ln -sf ~/dotfiles/archon/workflows ~/.archon/workflows`). An `lstat` guard
+    // reports such a root as "not a directory" and drops the whole scope from the
+    // capture — silently, since a missing scope is a legitimate state. `copyTree` already
+    // dereferences symlinks, so the entry guard has to as well.
+    const { root, runArtifacts } = await createSandbox();
+    const sourceRoot = join(root, 'linked-source');
+    const realCommands = join(root, 'dotfiles', 'commands');
+    await mkdir(realCommands, { recursive: true });
+    await mkdir(join(sourceRoot, '.archon'), { recursive: true });
+    await writeFile(join(realCommands, 'review.md'), 'review the diff');
+    await symlink(realCommands, join(sourceRoot, '.archon', 'commands'), 'dir');
+
+    const capture = await captureWorkflowSource({
+      sourceRoot,
+      captureRoot: captureRootIn(runArtifacts),
+    });
+
+    expect(capture.manifest.scopes).toContain('project');
+    expect(await countScopeFiles(capture.anchor.root, 'project')).toBe(1);
+    // Dereferenced into an ordinary file, so the capture owns its bytes and stays
+    // readable after the link's target moves.
+    expect(
+      await readFile(
+        join(capture.anchor.root, 'project', '.archon', 'commands', 'review.md'),
+        'utf-8'
+      )
+    ).toBe('review the diff');
+  });
+
   test('leaves no usable capture behind when it cannot finish', async () => {
     const { source, runArtifacts } = await createSandbox();
     await writeFile(join(source, '.archon', 'commands', 'review.md'), 'x');
