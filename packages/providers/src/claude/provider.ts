@@ -19,9 +19,9 @@
  *   Claude CLI itself ignores it; it neither gates nor filters env here.
  *
  * Binary resolution:
- * - In compiled binaries, `pathToClaudeCodeExecutable` is resolved from
+ * - In both build modes, `pathToClaudeCodeExecutable` honors
  *   `CLAUDE_BIN_PATH` env or `assistants.claude.claudeBinaryPath` config;
- *   see ./binary-resolver.ts. In dev mode the resolver returns undefined
+ *   see ./binary-resolver.ts. In unpinned dev mode the resolver returns undefined
  *   and the SDK picks its bundled per-platform native binary (Mach-O/ELF/PE
  *   from `@anthropic-ai/claude-agent-sdk-<platform>` optional dep). Pre-0.2.x
  *   SDKs shipped `cli.js` in the package and dev mode resolved that JS file;
@@ -801,8 +801,8 @@ function buildBaseClaudeOptions(
 
   return {
     cwd,
-    // In compiled binaries, the resolver supplies an absolute executable path;
-    // in dev mode it returns undefined and the SDK resolves from node_modules.
+    // Explicit pins resolve in both build modes. Unpinned source installs leave
+    // resolution to the SDK; compiled builds use the autodetected executable.
     // Both are skipped for container runs (spawn hook bypasses disk resolution).
     ...(cliPath !== undefined && containerExecContext === undefined
       ? { pathToClaudeCodeExecutable: cliPath }
@@ -1429,9 +1429,8 @@ export class ClaudeProvider implements IAgentProvider {
     let lastError: Error | undefined;
     const assistantDefaults = parseClaudeConfig(requestOptions?.assistantConfig ?? {});
 
-    // Resolve Claude CLI path once before the retry loop. In binary mode this
-    // throws immediately if neither env nor config supplies a valid path, so
-    // the user gets a clean error rather than N retries of "Module not found".
+    // Resolve Claude CLI path once before the retry loop so an invalid explicit
+    // pin, or an unresolved compiled-mode binary, fails without retries.
     // SKIP entirely for container runs: the SDK bypasses disk resolution when
     // `spawnClaudeCodeProcess` is set (buildBaseClaudeOptions omits
     // pathToClaudeCodeExecutable), and Claude is baked into the runner image — a

@@ -19,9 +19,9 @@ export interface ClaudeProviderDefaults {
    *  @default ['project', 'user']
    */
   settingSources?: ('project' | 'user')[];
-  /** Absolute path to the Claude Code SDK's `cli.js`. Required in compiled
-   *  Archon builds when `CLAUDE_BIN_PATH` is not set; optional in dev mode
-   *  (SDK resolves from node_modules). */
+  /** Path to the Claude Code executable or its platform-package directory.
+   *  Honored in source and compiled builds, after `CLAUDE_BIN_PATH`.
+   *  Unpinned source installs use SDK resolution; compiled builds autodetect. */
   claudeBinaryPath?: string;
 }
 
@@ -50,9 +50,9 @@ export interface CopilotProviderDefaults {
    */
   modelReasoningEffort?: EffortRung;
   /**
-   * Absolute path to the Copilot CLI binary. Required in compiled Archon
-   * builds when `COPILOT_BIN_PATH` env var is not set. Dev-mode builds let
-   * the SDK resolve from `$PATH`.
+   * Absolute path to the Copilot CLI executable. Honored in source and compiled
+   * builds, after `COPILOT_BIN_PATH`. Unpinned source installs use SDK resolution;
+   * compiled builds search the vendor directory, canonical installs, and PATH.
    */
   copilotCliPath?: string;
   /**

@@ -74,7 +74,7 @@ If none of the three resolves in a compiled binary, Archon throws with install i
 
 The Claude Agent SDK accepts the native compiled binary, a JS `cli.js`, or the npm platform-package directory (e.g. `@anthropic-ai/claude-code-win32-x64`) — directories are auto-expanded to the contained `claude`/`claude.exe`.
 
-**Dev mode override:** when running from source (`bun run dev:server`), the SDK auto-resolves its bundled per-platform binary by default. Set `CLAUDE_BIN_PATH` if you need to override that — most commonly on glibc Linux where the SDK picks the musl variant first and fails to spawn. Config-file `claudeBinaryPath` is intentionally binary-mode-only (per-repo, not per-machine).
+**Source installs:** when running from source (`bun run dev:server`), `CLAUDE_BIN_PATH` takes precedence over `assistants.claude.claudeBinaryPath`. Both pins are validated in either build mode; an invalid pin fails instead of falling back. With neither pin set, the SDK resolves its bundled per-platform binary. Archon only probes the native-installer path in compiled builds.
 
 **Typical paths by install method:**
 
@@ -688,7 +688,7 @@ Copilot is registered as `builtIn: false` — like Pi, a bundled community provi
 
 ### Install
 
-For source installs (`bun run`), the SDK + its bundled CLI dependency come along with `bun install` — nothing extra to do.
+For source installs (`bun run`), the SDK and its bundled CLI dependency come along with `bun install`. Optional `COPILOT_BIN_PATH` and `assistants.copilot.copilotCliPath` pins override the SDK default in either build mode, with the environment variable taking precedence. An invalid pin fails instead of falling back. With neither pin set, the SDK retains its native resolution, including `COPILOT_CLI_PATH` and its bundled CLI.
 
 For compiled Archon binaries, install the Copilot CLI yourself and point Archon at it:
 
@@ -710,7 +710,7 @@ assistants:
     copilotCliPath: /absolute/path/to/copilot
 ```
 
-Or place the binary at `~/.archon/vendor/copilot/copilot` (POSIX) / `~/.archon/vendor/copilot/copilot.exe` (Windows) and the resolver picks it up automatically.
+For compiled builds, you can also place the binary at `~/.archon/vendor/copilot/copilot` (POSIX) / `~/.archon/vendor/copilot/copilot.exe` (Windows) and the resolver picks it up automatically.
 
 ### Authenticate
 

@@ -5,7 +5,7 @@
  * dep, and by default the SDK resolves the binary from its own bundled copy
  * via `import.meta.url`. In compiled archon binaries that path is frozen to
  * the build host's filesystem, so we resolve explicitly and pass the result
- * via `new CopilotClient({ cliPath })`.
+ * via `new CopilotClient({ connection: { kind: 'stdio', path } })`.
  *
  * Resolution order:
  *  1. `COPILOT_BIN_PATH` environment variable
@@ -15,7 +15,8 @@
  *  5. PATH lookup via `which` / `where`
  *  6. Throw with install instructions
  *
- * Mirrors `codex/binary-resolver.ts` and `claude/binary-resolver.ts`.
+ * Source installs honor explicit env/config pins, then defer to the SDK's
+ * bundled CLI when no pin is configured. Tiers 3-6 apply only to compiled builds.
  */
 import {
   accessSync as _accessSync,
@@ -96,14 +97,13 @@ function getVendorBinaryName(): string | undefined {
 /**
  * Resolve the path to the Copilot CLI binary.
  *
- * In dev mode: returns undefined (SDK resolves via its bundled CLI).
+ * In dev mode: honors explicit pins, otherwise lets the SDK use its bundled CLI.
  * In binary mode: env / config / vendor / autodetect, else throw.
+ * An invalid explicit env or config pin throws in either mode.
  */
 export async function resolveCopilotBinaryPath(
   configCliPath?: string
 ): Promise<string | undefined> {
-  if (!BUNDLED_IS_BINARY) return undefined;
-
   // 1. Environment variable override
   const envPath = process.env.COPILOT_BIN_PATH;
   if (envPath) {
@@ -128,6 +128,8 @@ export async function resolveCopilotBinaryPath(
     getLog().info({ source: 'config' }, 'copilot.binary_resolved');
     return configCliPath;
   }
+
+  if (!BUNDLED_IS_BINARY) return undefined;
 
   // 3. Vendor directory (user-placed)
   const binaryName = getVendorBinaryName();

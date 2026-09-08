@@ -10,11 +10,11 @@
  * 1. `CLAUDE_BIN_PATH` environment variable (honored in both modes — escape
  *    hatch for hosts where the SDK's per-platform binary auto-resolution
  *    picks the wrong variant, e.g. glibc Linux + musl SDK package)
- * 2. `assistants.claude.claudeBinaryPath` in config (binary mode only)
+ * 2. `assistants.claude.claudeBinaryPath` in config (both modes)
  * 3. Autodetect canonical install path (binary mode only — native installer default)
  * 4. Throw with install instructions (binary mode only)
  *
- * In dev mode (BUNDLED_IS_BINARY=false), if no env var is set, returns
+ * In dev mode (BUNDLED_IS_BINARY=false), if no explicit pin is set, returns
  * undefined so the caller omits `pathToClaudeCodeExecutable` entirely and
  * the SDK resolves via its normal node_modules lookup.
  */
@@ -140,7 +140,7 @@ export interface ClaudeBinaryResolution {
  * legacy `cli.js` is still accepted for operators pinned to npm-installed
  * SDKs that ship a JS entry point).
  *
- * In dev mode: honors `CLAUDE_BIN_PATH` if set; otherwise returns undefined
+ * In dev mode: honors explicit env/config pins; otherwise returns undefined
  * (let SDK resolve from its bundled per-platform native binary in
  * `@anthropic-ai/claude-agent-sdk-<platform>`).
  * In binary mode: resolves from env/config/autodetect, or throws with
@@ -159,7 +159,8 @@ export async function resolveClaudeBinaryPath(
  * binary was found (env / config / autodetect) instead of asserting that only
  * `CLAUDE_BIN_PATH` counts (#2263). Returns undefined when the SDK should
  * resolve the binary itself; throws with install instructions in binary mode
- * when the whole chain comes up empty.
+ * when the whole chain comes up empty. An invalid explicit env or config pin
+ * throws in either mode.
  */
 export async function resolveClaudeBinaryWithSource(
   configClaudeBinaryPath?: string
@@ -178,8 +179,6 @@ export async function resolveClaudeBinaryWithSource(
     return { path: resolvedEnv, source: 'env' };
   }
 
-  if (!BUNDLED_IS_BINARY) return undefined;
-
   // 2. Config file override
   if (configClaudeBinaryPath) {
     const resolvedConfig = validateAndExpand(
@@ -188,11 +187,13 @@ export async function resolveClaudeBinaryWithSource(
         sourceLabel: 'assistants.claude.claudeBinaryPath',
         removableSetting: 'claudeBinaryPath',
       },
-      findAutodetectedBinary
+      BUNDLED_IS_BINARY ? findAutodetectedBinary : undefined
     );
     getLog().info({ binaryPath: resolvedConfig, source: 'config' }, 'claude.binary_resolved');
     return { path: resolvedConfig, source: 'config' };
   }
+
+  if (!BUNDLED_IS_BINARY) return undefined;
 
   // 3. Autodetect — the Anthropic native installer
   // (`curl -fsSL https://claude.ai/install.sh | bash` on macOS/Linux,

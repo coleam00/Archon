@@ -71,11 +71,11 @@ assistants:
       - project       # Project-level <cwd>/.claude/ (CLAUDE.md, skills, commands, agents)
       - user          # User-level ~/.claude/ (CLAUDE.md, skills, commands, agents)
     # Optional: absolute path to the Claude Code executable.
-    # Required in compiled Archon binaries when CLAUDE_BIN_PATH is not set.
+    # Honored in both build modes, after CLAUDE_BIN_PATH.
     # Accepts the native binary (~/.local/bin/claude from the curl installer),
     # the npm-installed cli.js, or the npm platform-package directory
     # (e.g. @anthropic-ai/claude-code-win32-x64 — auto-expanded to claude/claude.exe).
-    # Source/dev mode auto-resolves.
+    # Without a pin: source builds use the SDK; compiled builds autodetect.
     # claudeBinaryPath: /absolute/path/to/claude
   codex:
     model: gpt-5.6-terra
@@ -459,7 +459,7 @@ When `CLAUDE_USE_GLOBAL_AUTH` is unset, Archon auto-detects: it uses explicit to
 | Variable | Description | Default |
 | --- | --- | --- |
 | `COPILOT_GITHUB_TOKEN` | Explicit GitHub PAT for the Copilot provider. Always wins over `useLoggedInUser` when set. | -- |
-| `COPILOT_BIN_PATH` | Absolute path to the Copilot CLI binary. Required in compiled Archon binaries when `assistants.copilot.copilotCliPath` is not set; auto-detected in dev mode. | -- |
+| `COPILOT_BIN_PATH` | Absolute path to the Copilot CLI executable. Takes precedence over `assistants.copilot.copilotCliPath` in both source and compiled builds. Invalid pins fail; unpinned source installs use SDK resolution, and compiled builds use vendor/autodetection/PATH lookup. | -- |
 
 The Copilot provider also reads `assistants.copilot.{model, modelReasoningEffort, copilotCliPath, configDir, enableConfigDiscovery, useLoggedInUser, logLevel}` from `~/.archon/config.yaml` or `.archon/config.yaml`. See the [AI Assistants guide](/getting-started/ai-assistants/) for the full setup.
 
