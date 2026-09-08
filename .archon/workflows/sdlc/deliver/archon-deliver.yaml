@@ -91,6 +91,7 @@ nodes:
   # reviewer judges the prior report and correction delta.
   - id: classify
     command: classify-review-scope
+    model: medium
     depends_on: [pr]
     mutates_checkout: false
     output_type: review-scope
@@ -191,7 +192,11 @@ nodes:
               --jq '.[] | if .bucket == "pending" then "PENDING" elif .bucket == "pass" or .bucket == "skipping" then "GREEN" else "RED \(.name) (\(.bucket))" end' \
               > "$TMP" 2>/dev/null &
             GH_PID=$!
-            ( sleep 45; kill "$GH_PID" 2>/dev/null && : > "$TMP.killed" ) &
+            # Redirected: an unreaped watchdog on a platform where `kill` cannot
+            # guarantee delivery (Windows/Git-Bash) would otherwise keep this node's
+            # own stdout pipe open until the full 45s elapses, even after the
+            # script below has already finished and exited.
+            ( sleep 45; kill "$GH_PID" 2>/dev/null && : > "$TMP.killed" ) >/dev/null 2>&1 &
             WATCHDOG=$!
             wait "$GH_PID"
             RC=$?
