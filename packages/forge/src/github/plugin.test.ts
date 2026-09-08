@@ -2,11 +2,22 @@ import { describe, expect, it } from 'bun:test';
 import { join } from 'node:path';
 import { ForgeDispatcher } from '../dispatch/dispatcher';
 import { createGitHubPlugin } from './plugin';
-import { CHECKS, type ChecksState } from '../schemas';
+import { CHECKS, publicRequestSchema, publicResultSchemas, type ChecksState } from '../schemas';
+import { CHECKS_STATE_OP, RESOLVE_OP, PUBLIC_OPS } from '../protocol';
 import type { ChecksVerdict } from '../schemas';
 import type { ForgeDispatchResult } from '../dispatch/dispatcher';
 const sha = 'a'.repeat(40);
 const ref = { repo: { host: 'github.com', path: 'owner/repo' }, number: 42 };
+it('advertises exactly the public operations supported by the request and result schemas', () => {
+  const operations = Object.values(PUBLIC_OPS).sort();
+  expect(publicRequestSchema.options.map(option => option.shape.op.value).sort()).toEqual(
+    operations
+  );
+  expect(Object.keys(publicResultSchemas).sort()).toEqual(operations);
+  expect([...createGitHubPlugin().metadata().capabilities].sort()).toEqual(
+    [RESOLVE_OP, CHECKS_STATE_OP, ...operations].sort()
+  );
+});
 const run = (
   id = 1,
   status = 'completed',

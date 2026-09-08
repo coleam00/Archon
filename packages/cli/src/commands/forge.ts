@@ -2,9 +2,13 @@ import { parseArgs } from 'node:util';
 import { readFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { PluginCandidate } from '@archon/forge/dispatch';
 import { writeJsonLine } from '../utils/stdout';
 
-export async function forgeCommand(args: string[]): Promise<number> {
+export async function forgeCommand(
+  args: string[],
+  githubPlugin?: PluginCandidate
+): Promise<number> {
   const controller = new AbortController();
   const abort = (): void => {
     controller.abort();
@@ -34,24 +38,28 @@ export async function forgeCommand(args: string[]): Promise<number> {
       options: {
         json: { type: 'boolean' },
         ref: { type: 'string' },
+        request: { type: 'string' },
+        'request-file': { type: 'string' },
         config: { type: 'string' },
         help: { type: 'boolean' },
       },
     });
     if (values.help) {
       await writeJsonLine({
-        usage: 'archon forge resolve --json | archon forge checks --ref <PrRef JSON> --json',
+        usage:
+          'archon forge resolve --json | archon forge checks --ref <PrRef JSON> --json | pr view/create/edit-body/ready | work-item view | comment upsert --request <JSON or -> | --request-file <file or -> --json',
         config:
           'Optional --config <file> containing {"hosts":{...}}; defaults to ~/.archon/forge.json',
       });
       return 0;
     }
-    if (positionals.length !== 1 || !['resolve', 'checks'].includes(positionals[0])) {
+    const op = positionals.join('.').replace('work-item.', 'workitem.');
+    const forge = await import('@archon/forge');
+    if (!['resolve', 'checks'].includes(op) && !Object.hasOwn(forge.publicResultSchemas, op)) {
       await writeJsonLine({ kind: 'unsupported_op', op: positionals.join('.') });
       return 1;
     }
     // Re-entered plugins need neither dispatcher discovery nor install paths.
-    const forge = await import('@archon/forge');
     const { archonCliCommand } = await import('@archon/paths/cli-launch');
     const { getArchonHome } = await import('@archon/paths/archon-paths');
     let config: unknown = {};
@@ -69,7 +77,7 @@ export async function forgeCommand(args: string[]): Promise<number> {
     const launch = archonCliCommand();
     const dispatcher = new forge.ForgeDispatcher(
       [
-        {
+        githubPlugin ?? {
           source: 'builtin:github',
           command: launch.command,
           args: [...launch.args, 'forge', '__github'],
@@ -78,6 +86,12 @@ export async function forgeCommand(args: string[]): Promise<number> {
       {
         cwd: process.cwd(),
         env: process.env,
+        resolveCredential: async (host): Promise<string | undefined> => {
+          const { isPerUserGitHubEnabled } = await import('@archon/core');
+          // A shared service account's keyring must never stand in for an Archon user.
+          if (isPerUserGitHubEnabled()) return undefined;
+          return forge.nativeGitHubCredential(process.env, host);
+        },
         configuredHosts: forge.forgeHostsConfigSchema.parse(config),
         signal: controller.signal,
         // The engine retains stderr in its existing exec_output transcript row (#2967).
@@ -86,10 +100,28 @@ export async function forgeCommand(args: string[]): Promise<number> {
         },
       }
     );
+    const readRequest = async (): Promise<unknown> => {
+      if (values['request-file'] !== undefined && values.request !== undefined)
+        throw new Error('Choose one request source');
+      const source = values['request-file'];
+      return JSON.parse(
+        source !== undefined
+          ? source === '-'
+            ? readFileSync(0, 'utf8')
+            : await readFile(source, 'utf8')
+          : values.request === '-'
+            ? readFileSync(0, 'utf8')
+            : (values.request ?? 'null')
+      );
+    };
     const result =
-      positionals[0] === 'resolve'
+      op === 'resolve'
         ? await dispatcher.resolve()
-        : await dispatcher.checksState(forge.prRefSchema.parse(JSON.parse(values.ref ?? 'null')));
+        : op === 'checks'
+          ? await dispatcher.checksState(forge.prRefSchema.parse(JSON.parse(values.ref ?? 'null')))
+          : await dispatcher.publicOperation(
+              forge.publicRequestSchema.parse(Object.assign({}, await readRequest(), { op }))
+            );
     await writeJsonLine(
       result.kind === 'ok' ? result.value : result.kind === 'error' ? result.error : result
     );

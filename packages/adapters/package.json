@@ -15,6 +15,7 @@
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
+    "@archon/forge": "workspace:*",
     "@archon/core": "workspace:*",
     "@archon/git": "workspace:*",
     "@archon/isolation": "workspace:*",

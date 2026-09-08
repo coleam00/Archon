@@ -3979,6 +3979,7 @@ async function executeBashNode(
         data: {
           duration_ms: duration,
           type: 'bash',
+          ...(node.output_type !== undefined ? { output_type: node.output_type } : {}),
           ...persistedOutputEventFields(persistedOutput, 'node_output'),
           // The certified logical value beside its text (#2453), so a cold resume
           // rehydrates typed field access instead of re-parsing the persisted preview.
@@ -4413,6 +4414,7 @@ async function executeScriptNode(
         data: {
           duration_ms: duration,
           type: 'script',
+          ...(node.output_type !== undefined ? { output_type: node.output_type } : {}),
           ...persistedOutputEventFields(persistedOutput, 'node_output'),
           // The certified logical value beside its text (#2453) — see executeBashNode.
           ...(certified.structuredOutput !== undefined

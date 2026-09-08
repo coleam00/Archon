@@ -1,4 +1,4 @@
-import { CHECKS_STATE_OP, RESOLVE_OP } from '../protocol';
+import { CHECKS_STATE_OP, RESOLVE_OP, PUBLIC_OPS } from '../protocol';
 import type { BuiltinPlugin, RawOpOutcome } from '../dispatch/plugin-handle';
 import { GITHUB_HOST, metadata } from './metadata';
 export { GITHUB_HOST } from './metadata';
@@ -12,6 +12,15 @@ export function createGitHubPlugin(options: GitHubPluginOptions = {}): BuiltinPl
     name: metadata.name,
     metadata: () => metadata,
     execOp: async (op, request, env, signal): Promise<RawOpOutcome> => {
+      if (Object.values<string>(PUBLIC_OPS).includes(op)) {
+        const { publicOperation } = await import('./public');
+        return publicOperation(
+          typeof request === 'object' && request !== null ? { ...request, op } : null,
+          env,
+          options,
+          signal
+        );
+      }
       if (op === RESOLVE_OP) {
         const { resolveRequestSchema } = await import('../schemas');
         const parsed = resolveRequestSchema.safeParse(request);

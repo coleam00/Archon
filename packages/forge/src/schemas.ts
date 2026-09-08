@@ -1,3 +1,4 @@
+import { PUBLIC_OPS } from './protocol';
 import { z } from 'zod';
 export { FORGE_PROTOCOL_VERSION, RESOLVE_OP, CHECKS_STATE_OP } from './protocol';
 // All public vocabulary and wire shapes derive from this leaf module.
@@ -12,6 +13,95 @@ export type RepoRef = z.infer<typeof repoRefSchema>;
 export const prRefSchema = z.object({ repo: repoRefSchema, number: z.number().int().positive() });
 export type PrRef = z.infer<typeof prRefSchema>;
 export const shaSchema = z.string().regex(/^[a-f0-9]{40}$/);
+export const branchSchema = z
+  .string()
+  .min(1)
+  .refine(
+    value =>
+      !value.startsWith('-') &&
+      !/[\s~^:?*[\\]/.test(value) &&
+      !value.includes('..') &&
+      !value.includes('@{')
+  );
+export const workItemRefSchema = prRefSchema;
+export const prRecordSchema = z.object({
+  ref: prRefSchema,
+  url: z.url(),
+  head_repo: repoRefSchema,
+  head: branchSchema,
+  base: branchSchema,
+  head_sha: shaSchema,
+  is_draft: z.boolean(),
+  state: z.enum(['open', 'closed', 'merged']),
+  title: z.string(),
+  body: z.string(),
+});
+export type PrRecord = z.infer<typeof prRecordSchema>;
+export const expectedPrSchema = prRecordSchema.pick({
+  head_repo: true,
+  head: true,
+  base: true,
+  head_sha: true,
+});
+export const workItemRecordSchema = z.object({
+  ref: workItemRefSchema,
+  url: z.url(),
+  title: z.string(),
+  body: z.string(),
+  state: z.enum(['open', 'closed']),
+});
+export const commentTargetSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('pr'), ref: prRefSchema, expected: expectedPrSchema }),
+  z.object({ kind: z.literal('workitem'), ref: workItemRefSchema }),
+]);
+export const commentRecordSchema = z.object({
+  target: commentTargetSchema,
+  id: z.number().int().positive(),
+  url: z.url(),
+  body: z.string(),
+});
+export const publicRequestSchema = z.discriminatedUnion('op', [
+  z.object({ op: z.literal(PUBLIC_OPS.prView), ref: prRefSchema }),
+  z.object({
+    op: z.literal(PUBLIC_OPS.prCreate),
+    repo: repoRefSchema,
+    ...expectedPrSchema.shape,
+    title: z.string().min(1),
+    body: z.string(),
+    is_draft: z.boolean(),
+  }),
+  z.object({
+    op: z.literal(PUBLIC_OPS.prEditBody),
+    ref: prRefSchema,
+    expected: expectedPrSchema,
+    body: z.string(),
+  }),
+  z.object({ op: z.literal(PUBLIC_OPS.prReady), ref: prRefSchema, expected: expectedPrSchema }),
+  z.object({ op: z.literal(PUBLIC_OPS.workItemView), ref: workItemRefSchema }),
+  z.object({
+    op: z.literal(PUBLIC_OPS.commentUpsert),
+    target: commentTargetSchema,
+    marker: z.string().regex(/^<!-- [a-z0-9-]+ -->$/),
+    body: z.string(),
+  }),
+]);
+export type PublicRequest = z.infer<typeof publicRequestSchema>;
+export const publicResultSchemas = {
+  [PUBLIC_OPS.prView]: prRecordSchema,
+  [PUBLIC_OPS.prCreate]: prRecordSchema,
+  [PUBLIC_OPS.prEditBody]: prRecordSchema,
+  [PUBLIC_OPS.prReady]: prRecordSchema,
+  [PUBLIC_OPS.workItemView]: workItemRecordSchema,
+  [PUBLIC_OPS.commentUpsert]: commentRecordSchema,
+} satisfies Record<(typeof PUBLIC_OPS)[keyof typeof PUBLIC_OPS], z.ZodType>;
+export type PublicResult = z.infer<(typeof publicResultSchemas)[keyof typeof publicResultSchemas]>;
+export function publicRequestRepo(request: PublicRequest): RepoRef {
+  return request.op === 'pr.create'
+    ? request.repo
+    : request.op === 'comment.upsert'
+      ? request.target.ref.repo
+      : request.ref.repo;
+}
 export const checksStateSchema = z.enum(['none', 'pending', 'green', 'red', 'gated', 'unknown']);
 export type ChecksState = z.infer<typeof checksStateSchema>;
 export const CHECKS = checksStateSchema.enum;

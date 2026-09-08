@@ -2,6 +2,13 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { ZodType } from 'zod';
 import {
+  publicRequestSchema,
+  publicRequestRepo,
+  publicResultSchemas,
+  type PublicRequest,
+  type PublicResult,
+} from '../schemas';
+import {
   CHECKS_STATE_OP,
   RESOLVE_OP,
   FORGE_PROTOCOL_VERSION,
@@ -54,6 +61,7 @@ interface HandshakenPlugin {
   metadata: PluginMetadata;
 }
 export interface DispatcherOptions {
+  resolveCredential?: (host: string) => Promise<string | undefined>;
   cwd: string;
   env: NodeJS.ProcessEnv;
   configuredHosts?: ForgeHostsConfig;
@@ -245,6 +253,28 @@ export class ForgeDispatcher {
       }
     );
   }
+  publicOperation(request: PublicRequest): Promise<ForgeDispatchResult<PublicResult>> {
+    const parsed = publicRequestSchema.safeParse(request);
+    const repo = parsed.success ? publicRequestRepo(parsed.data) : undefined;
+    return this.audited(
+      parsed.success ? parsed.data.op : 'invalid',
+      repo && parsed.success
+        ? `${repo.host}/${repo.path}${parsed.data.op === 'pr.create' ? '' : parsed.data.op === 'comment.upsert' ? `#${String(parsed.data.target.ref.number)}:${parsed.data.target.kind}` : `#${String(parsed.data.ref.number)}`}`
+        : 'invalid-ref',
+      async () => {
+        if (!parsed.success || !repo)
+          return {
+            kind: 'error',
+            error: {
+              kind: 'invalid_request',
+              detail: 'Public operation requires qualified identity',
+            },
+          };
+        const schema: ZodType<PublicResult> = publicResultSchemas[parsed.data.op];
+        return this.dispatch(parsed.data.op, repo.host, parsed.data, schema, true);
+      }
+    );
+  }
   private async dispatch<T>(
     op: string,
     host: string,
@@ -258,19 +288,42 @@ export class ForgeDispatcher {
     if (!plugin.metadata.capabilities.includes(op))
       return { kind: 'error', error: { kind: 'unsupported_op', op, plugin: id.name }, plugin: id };
     const tokenEnv = this.configuredHosts[host]?.token_env ?? plugin.metadata.token_env;
-    const token = needsToken
+    let token = needsToken
       ? this.configuredHosts[host]?.token_env
         ? this.opts.env[tokenEnv ?? '']
         : host === 'github.com'
           ? this.opts.env.GH_TOKEN || this.opts.env.GITHUB_TOKEN
           : this.opts.env[tokenEnv ?? '']
       : undefined;
+    if (needsToken && !token && !this.configuredHosts[host]?.token_env)
+      token = await this.opts.resolveCredential?.(host);
     if (needsToken && tokenEnv && !token)
       return {
         kind: 'error',
         error: { kind: 'no_credential', host, token_env: tokenEnv },
         plugin: id,
       };
+    const publicRequest = publicRequestSchema.safeParse(request);
+    if (publicRequest.success && 'body' in publicRequest.data) {
+      const content = [
+        publicRequest.data.body,
+        ...('title' in publicRequest.data ? [publicRequest.data.title] : []),
+      ].join('\n');
+      const artifacts = this.opts.env.ARTIFACTS_DIR?.replaceAll('\\', '/');
+      if (
+        (token && content.includes(token)) ||
+        (artifacts && content.replaceAll('\\', '/').includes(artifacts))
+      ) {
+        return {
+          kind: 'error',
+          error: {
+            kind: 'invalid_request',
+            detail: 'Public content contains a selected credential or local artifact path',
+          },
+          plugin: id,
+        };
+      }
+    }
     const env = pluginEnvironment(this.opts.env, token);
     let outcome: RawOpOutcome;
     try {

@@ -1,4 +1,4 @@
-import { CHECKS_STATE_OP, RESOLVE_OP, FORGE_PROTOCOL_VERSION } from '../protocol';
+import { CHECKS_STATE_OP, RESOLVE_OP, FORGE_PROTOCOL_VERSION, PUBLIC_OPS } from '../protocol';
 import type { PluginMetadata } from '../schemas';
 export const GITHUB_HOST = 'github.com';
 export const metadata: PluginMetadata = {
@@ -7,6 +7,6 @@ export const metadata: PluginMetadata = {
   version: '1.0.0',
   forge: 'github',
   hosts: [GITHUB_HOST],
-  capabilities: [RESOLVE_OP, CHECKS_STATE_OP],
+  capabilities: [RESOLVE_OP, CHECKS_STATE_OP, ...Object.values(PUBLIC_OPS)],
   token_env: 'GH_TOKEN',
 };

@@ -13,9 +13,17 @@ import {
   forgeHostsConfigSchema,
   forgeOpAuditEventSchema,
   forgeProcessFailureSchema,
+  prRecordSchema,
+  workItemRefSchema,
+  publicRequestSchema,
+  publicResultSchemas,
 } from '@archon/forge';
 
 const schemas = {
+  PrRecord: prRecordSchema,
+  WorkItemRef: workItemRefSchema,
+  PublicRequest: publicRequestSchema,
+  ...publicResultSchemas,
   RepoRef: repoRefSchema,
   PrRef: prRefSchema,
   Metadata: pluginMetadataSchema,

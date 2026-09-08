@@ -20,24 +20,22 @@ inputs:
 returns: pr
 
 nodes:
-  - id: pr
+  - id: prepare
     command: pr
-    output_type: pull-request
-    # This is the durable ownership record for every later public action in
-    # delivery and inbound forge event. Consumers use this qualified identity,
-    # never gh's ambient branch lookup.
     output_format:
       type: object
       properties:
-        repo:
-          type: object
-          properties:
-            host: { type: string }
-            path: { type: string }
-          required: [host, path]
-        number: { type: integer }
-        url: { type: string }
-        head: { type: string }
+        title: { type: string }
+        body: { type: string }
         base: { type: string }
-        is_draft: { type: boolean }
-      required: [repo, number, url, head, base, is_draft]
+      required: [title, body, base]
+  - id: pr
+    script: publish-pr
+    runtime: uv
+    output_type: pull-request
+    # Decode the forge-validated record for persistence and native check signals.
+    output_format: { type: object }
+    depends_on: [prepare]
+    with:
+      content: "$prepare.output"
+      draft: "$INPUTS.draft"

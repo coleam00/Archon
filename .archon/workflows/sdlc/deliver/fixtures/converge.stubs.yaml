@@ -13,7 +13,7 @@ impl__implement:
   summary: "stub: implemented and green"
 impl__assert-changed: "3 files changed"
 gate-green: '{"gate":"green"}'
-pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true }
+pr__pr: {"url": "https://github.com/example/repo/pull/1", "head": "fixture-branch", "base": "dev", "is_draft": true, "ref": {"repo": {"host": "github.com", "path": "example/repo"}, "number": 1}, "head_repo": {"host": "github.com", "path": "example/repo"}, "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "state": "open", "title": "Fixture", "body": "Fixture"}
 review__mode: '{"continuation":false}'
 review__scope: "PR diff in scope; head sha stubbed"
 review__code: "2 findings (Important)"
@@ -63,4 +63,18 @@ fixture:
   reached: [review__errors, ci-note]
 exec-code: true
 
-forge-repo: { host: "github.com", path: "example/repo" }
+
+pr__prepare:
+  title: Fixture
+  body: Fixture
+  base: dev
+review__publish:
+  ready: false
+  action: correct
+  findings_summary: 'stub: 3 Important findings open'
+recheck__publish:
+  ready: true
+  action: none
+  findings_summary: 'stub: no open Critical/Important'
+prepare-pr-body:
+  body: Fixture

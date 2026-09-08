@@ -134,8 +134,10 @@ describe('forge CLI real subprocess', () => {
       cwd: f.root,
       env: {
         ...f.env,
-        INPUTS_REPO: JSON.stringify({ host: 'fixture.test', path: 'owner/repo' }),
-        INPUTS_PR_NUMBER: '42',
+        INPUTS_REF: JSON.stringify({
+          repo: { host: 'fixture.test', path: 'owner/repo' },
+          number: 42,
+        }),
       },
       stdout: 'pipe',
       stderr: 'pipe',

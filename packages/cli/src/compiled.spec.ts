@@ -4,7 +4,13 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { pluginMetadataSchema, resolveResultSchema } from '@archon/forge';
+import {
+  pluginMetadataSchema,
+  resolveResultSchema,
+  publicRequestSchema,
+  publicResultSchemas,
+  prRecordSchema,
+} from '@archon/forge';
 
 // Run explicitly after build:binaries. The ordinary CLI suite needs no compiled artifact.
 const input = process.env.ARCHON_TEST_BINARY;
@@ -78,6 +84,9 @@ describe('production executable moved outside the repository', () => {
       name: 'github',
       hosts: ['github.com'],
     });
+    expect(JSON.parse(result.stdout).capabilities).toEqual(
+      expect.arrayContaining(Object.keys(publicResultSchemas))
+    );
   });
 
   test('resolves through executable discovery, handshake, operation and audit', async () => {
@@ -117,7 +126,125 @@ describe('production executable moved outside the repository', () => {
     );
     expect(checks.code).toBe(1);
     expect(JSON.parse(checks.stdout)).toMatchObject({ kind: 'no_credential' });
+    const publication = await invoke(
+      ['forge', '__github', 'op', 'pr.ready'],
+      {},
+      {
+        ref: { repo: { host: 'github.com', path: 'fixture/standalone' }, number: 42 },
+        expected: {
+          head_repo: { host: 'github.com', path: 'fixture/standalone' },
+          head: 'feature',
+          base: 'dev',
+          head_sha: 'a'.repeat(40),
+        },
+      }
+    );
+    expect(publication.code).toBe(1);
+    expect(JSON.parse(publication.stdout)).toMatchObject({ kind: 'no_credential' });
   });
+
+  test.each(['inline', 'stdin', 'file', 'file-stdin'] as const)(
+    'publishes a %s request through the real CLI and a loopback HTTP plugin',
+    async mode => {
+      const repo = { host: 'fixture.test', path: 'owner/repo' };
+      const request = {
+        repo,
+        head_repo: repo,
+        head: 'feature',
+        base: 'dev',
+        head_sha: 'a'.repeat(40),
+        title: 'Publication 日本語',
+        body: 'Line one\n`literal` $(data) "quotes"',
+        is_draft: true,
+      };
+      const requests: unknown[] = [];
+      const server = Bun.serve({
+        hostname: '127.0.0.1',
+        port: 0,
+        async fetch(http) {
+          expect(http.headers.get('Authorization')).toBe('Bearer fixture-only-token');
+          expect(new URL(http.url).pathname).toBe('/pr.create');
+          const received = publicRequestSchema.parse(await http.json());
+          requests.push(received);
+          return Response.json({
+            ...request,
+            ref: { repo, number: 42 },
+            url: 'https://fixture.test/owner/repo/pull/42',
+            state: 'open',
+          });
+        },
+      });
+      try {
+        const config = join(root, `public-${mode}.json`);
+        await writeFile(
+          config,
+          JSON.stringify({
+            hosts: {
+              'fixture.test': {
+                plugin: 'public-http-fixture',
+                command: process.execPath,
+                args: [
+                  resolve(
+                    import.meta.dir,
+                    '../../forge/src/dispatch/fixtures/public-http-plugin.ts'
+                  ),
+                  server.url.origin,
+                ],
+              },
+            },
+          })
+        );
+        const file = join(root, `publication request ${mode}.json`);
+        await writeFile(file, JSON.stringify(request));
+        const result = await invoke(
+          [
+            'forge',
+            'pr',
+            'create',
+            '--json',
+            '--config',
+            config,
+            mode.startsWith('file') ? '--request-file' : '--request',
+            mode === 'file' ? file : mode === 'inline' ? JSON.stringify(request) : '-',
+          ],
+          { FIXTURE_TOKEN: 'fixture-only-token' },
+          request
+        );
+        expect(result.code, result.stdout + result.stderr).toBe(0);
+        expect(prRecordSchema.parse(JSON.parse(result.stdout))).toMatchObject({
+          title: request.title,
+          body: request.body,
+          is_draft: true,
+          ref: { repo, number: 42 },
+        });
+        expect(requests).toEqual([{ ...request, op: 'pr.create' }]);
+        expect(result.stderr).toContain('"op":"pr.create"');
+        expect(result.stderr).toContain('"outcome":"ok"');
+        expect(result.stdout + result.stderr).not.toContain('fixture-only-token');
+
+        const ambiguous = await invoke(
+          [
+            'forge',
+            'pr',
+            'create',
+            '--config',
+            config,
+            '--request',
+            JSON.stringify(request),
+            '--request-file',
+            file,
+            '--json',
+          ],
+          { FIXTURE_TOKEN: 'fixture-only-token' }
+        );
+        expect(ambiguous.code).toBe(2);
+        expect(JSON.parse(ambiguous.stdout)).toMatchObject({ kind: 'invalid_request' });
+        expect(requests).toHaveLength(1);
+      } finally {
+        server.stop(true);
+      }
+    }
+  );
 
   test('dispatches qualified checks to a configured executable and retains its audit', async () => {
     const config = join(root, 'forge-fixture.json');

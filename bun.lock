@@ -33,6 +33,7 @@
       "version": "0.10.1",
       "dependencies": {
         "@archon/core": "workspace:*",
+        "@archon/forge": "workspace:*",
         "@archon/git": "workspace:*",
         "@archon/isolation": "workspace:*",
         "@archon/paths": "workspace:*",

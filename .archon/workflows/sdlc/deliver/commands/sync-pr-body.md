@@ -6,20 +6,11 @@ corrections since then may have falsified specific claims in it. Your product is
 an accurate PR body — nothing else.
 
 **Read-only on the repository:** never modify files, commit, push, change the
-PR's draft state, or touch the canonical review comment. The PR body is the only
-thing you may edit.
+PR's draft state, or touch the canonical review comment. Prepare the proposed PR body as output.
 
-The target is the run-owned PR, never the current branch's ambient PR mapping:
+The target is the qualified record **$INPUTS.pr**. Read that exact PR with the repository's forge CLI. Fail if its head repository or branches differ from the record, or its head SHA differs from the checkout.
 
-- Its recorded number is **$INPUTS.pr_number**.
-- Its recorded head branch is **$INPUTS.pr_head**.
-
-Derive the origin repository, read that exact PR by number, and fail unless its
-head and the checked-out branch both equal the recorded head branch. Use the
-recorded number as the selector for every `gh` read or edit.
-
-1. Read the current PR body and the full final diff
-   (`gh pr diff <number> --repo <owner/repo>`).
+1. Read the current PR body and complete final diff with the repository's forge CLI.
 2. Check every concrete claim in the body against the final diff: named
    functions and guards, described mechanics, file lists, "unchanged" claims.
    The Problem section describes the issue and rarely drifts; the Solution and
@@ -32,11 +23,4 @@ recorded number as the selector for every `gh` read or edit.
    a red the body does not already disclose, add that disclosure — cause and its
    evidence from `$ARTIFACTS_DIR/implementation.md`. A correction round can go red after the body
    was written, and a reviewer must not have to discover that from a red badge.
-5. After an edit, read the body back (`gh pr view`) and confirm it carries your
-   corrections.
-
-Before finishing, re-read the final body once against the diff: every mechanism
-it describes must be one the diff actually contains.
-
-Report which claims you corrected and the verified PR URL — or that the body
-was already accurate and you changed nothing.
+5. Return the complete corrected `body` as structured output, including when unchanged. The following deterministic node owns the edit and read-back. Do not perform any public write. Exclude local artifact paths, credentials and private evaluator content.

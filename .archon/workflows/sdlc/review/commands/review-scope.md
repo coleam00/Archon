@@ -22,9 +22,9 @@ $ARGUMENTS
 
 ## Resolve the target
 
-- When the requested scope is a bare PR number, delivery recorded it — review exactly that PR. Derive the normalized `owner/repo` from `origin` without writing its raw URL into an artifact, and use `gh ... --repo <owner/repo>` with that number for every GitHub read. Do not resolve a PR from the current branch, and do not accept a different target. The review object is that PR's diff, exactly.
-- A PR number, URL, or branch → resolve it with `gh pr view` (title, body, base, head, state, files) and `gh pr diff`. Make sure the PR's head is what the local checkout reflects; note the head SHA. **In PR mode the review object is the PR's diff, exactly — uncommitted or untracked local state is out of scope and must not appear in the scope file.**
-- Empty scope → first check whether the current branch has an open PR (`gh pr view`); if it does, that PR is the target (PR mode, as above). Otherwise the working diff: uncommitted changes plus commits ahead of the merge-base with the default/base branch (`git merge-base`, `git diff`, `git log`). Note the current HEAD SHA.
+- When the requested scope is a bare PR number, review exactly that PR. Derive the normalized `owner/repo` from `origin` without writing its raw URL into an artifact, and use the repository's forge CLI with that number for every GitHub read. Do not resolve a PR from the current branch, and do not accept a different target. The review object is that PR's diff, exactly.
+- A PR number, URL, or branch → use the repository's forge CLI to read its title, body, base, head, state, files and complete diff. Make sure the PR's head is what the local checkout reflects; note the head SHA. **In PR mode the review object is the PR's diff, exactly; uncommitted or untracked local state is out of scope and must not appear in the scope file.**
+- Empty scope → first check whether the current branch has an open PR (the repository's forge CLI); if it does, that PR is the target (PR mode, as above). Otherwise the working diff: uncommitted changes plus commits ahead of the merge-base with the default/base branch (`git merge-base`, `git diff`, `git log`). Note the current HEAD SHA.
 
 ## Resolve the accepted contract
 
@@ -52,9 +52,11 @@ Write `$ARTIFACTS_DIR/review/scope.md` containing:
 2. **Target** — PR reference or "working diff", base branch, and the **head SHA under review** (this becomes the next round's cursor).
 3. **Mode** — full review, or light (delta since `<cursor>`).
 4. **Changed files** — path list with a one-line shape of the change per file (added/modified/deleted, rough size).
-5. **The diff to review** — inline when small; for a large diff, the exact commands a reviewer runs to see it (`git diff <range>`, `gh pr diff <n>`).
+5. **The diff to review**: inline when small; for a large diff, the exact commands a reviewer runs to see it (`git diff <range>`, the repository's forge CLI).
 6. **Prior report** — continuation mode only: its path and reviewed-head cursor. Do not duplicate its findings or coverage.
 
 ## Verify before finishing
 
 Confirm `$ARTIFACTS_DIR/review/scope.md` exists, names the accepted contract and head SHA, and that the diff commands in it actually produce output in this checkout. Return `docs` as the boolean selected above.
+
+Write `$ARTIFACTS_DIR/review/publication-target.json`: in PR mode, the exact runtime-validated `archon forge pr view` record for the resolved qualified ref, including head repository and SHA; in working-diff mode, JSON `null`. Verify the local HEAD equals that record's head SHA. This structured file is the publication target; no later node parses scope prose to choose a public target.

@@ -12,7 +12,7 @@ impl__implement:
   green: true
   summary: "stub: implemented and green"
 impl__assert-changed: "3 files changed"
-pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 7, url: "https://github.com/example/repo/pull/7", head: "fixture-branch", base: "dev", is_draft: true }
+pr__pr: {"url": "https://github.com/example/repo/pull/7", "head": "fixture-branch", "base": "dev", "is_draft": true, "ref": {"repo": {"host": "github.com", "path": "example/repo"}, "number": 7}, "head_repo": {"host": "github.com", "path": "example/repo"}, "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "state": "open", "title": "Fixture", "body": "Fixture"}
 classify:
   errors: false
   docs: false
@@ -60,4 +60,18 @@ fixture:
   reached: [gate-correction-green, flip-ready]
 exec-code: true
 
-forge-repo: { host: "github.com", path: "example/repo" }
+
+pr__prepare:
+  title: Fixture
+  body: Fixture
+  base: dev
+review__publish:
+  ready: false
+  action: correct
+  findings_summary: 'stub: one Important finding open'
+recheck__publish:
+  ready: true
+  action: none
+  findings_summary: 'stub: the correction closed the finding'
+prepare-pr-body:
+  body: Fixture
