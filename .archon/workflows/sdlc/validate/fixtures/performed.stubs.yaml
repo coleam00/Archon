@@ -1,0 +1,7 @@
+validate:
+  green: true
+  checks_performed: true
+  red_cause: ""
+  summary: "stub: ordinary project checks passed"
+fixture:
+  expect: completed

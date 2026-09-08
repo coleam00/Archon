@@ -43,6 +43,7 @@ deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
 deliver__flip-ready: "https://github.com/example/repo/pull/2"
 deliver__outcome: "https://github.com/example/repo/pull/2"
 deliver__validate__validate:
+  checks_performed: true
   green: true
   summary: "stub: project gate green"
 deliver__impl__implement:

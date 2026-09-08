@@ -57,6 +57,7 @@ deliver__review__synthesize:
 deliver__review-action: '{"ready":true,"action":"none"}'
 deliver__gate-ready: '{"gate":"ready"}'
 deliver__validate__validate:
+  checks_performed: true
   green: true
   summary: "stub: project gate green"
 deliver__gate-validated: '{"gate":"green"}'

@@ -1,0 +1,109 @@
+name: archon-regress
+description: >-
+  Inspect an explicit immutable checkout revision once. Run ordinary project
+  checks, investigate a demonstrated failure, and report healthy, regression,
+  or inconclusive with discovery evidence. No repair or tracker publication.
+model: medium
+
+inputs:
+  revision:
+    required: true
+    description: Full commit object ID already checked out in the target workspace.
+  scope:
+    default: ""
+    description: Optional package, directory, or ordinary check to validate.
+
+returns: report
+
+nodes:
+  - id: before
+    script: identity
+    runtime: uv
+    always_run: true
+    mutates_checkout: false
+    with:
+      phase: before
+      revision: "$INPUTS.revision"
+
+  - id: validate
+    include: archon-validate
+    depends_on: [before]
+    with:
+      scope: "$INPUTS.scope"
+
+  - id: checked
+    script: identity
+    runtime: uv
+    mutates_checkout: false
+    depends_on: [before, validate]
+    with:
+      phase: checked
+      revision: "$INPUTS.revision"
+
+  - id: route
+    script: route
+    runtime: uv
+    depends_on: [checked, validate]
+    with:
+      green: "$validate.output.green"
+      checks_performed: "$validate.output.checks_performed"
+      red_cause: "$validate.output.red_cause"
+      summary: "$validate.output.summary"
+
+  - id: investigate
+    include: archon-investigate
+    depends_on: [route]
+    when: "$route.output.investigate == true"
+    with:
+      target: >-
+        Diagnose the ordinary check failure recorded in
+        $ARTIFACTS_DIR/validation.md at revision $INPUTS.revision.
+        This is read-only regression detection. Establish a reproduced product
+        or check defect at this exact revision and its causal chain. For this
+        target, rooted requires an actual reproduction of the defect, as well
+        as your normal proven chain and decided fix plan. Infrastructure,
+        unavailable checks, or an unreproduced symptom leave this target
+        unestablished: declare rooted false and explain the gap. Preserve the
+        original commands and failures. Do not repair source, change revision,
+        weaken checks, run factory or agent checks, or write to any tracker.
+
+  # Record the final identity even if a producer fails. Failed producers still
+  # fail the run; their missing output cannot become a healthy diagnosis.
+  - id: after
+    script: identity
+    runtime: uv
+    mutates_checkout: false
+    depends_on: [before, validate, checked, route, investigate]
+    trigger_rule: all_done
+    with:
+      phase: after
+      revision: "$INPUTS.revision"
+
+  - id: report
+    script: report
+    runtime: uv
+    depends_on: [before, validate, checked, route, investigate, after]
+    trigger_rule: none_failed_min_one_success
+    with:
+      revision: "$INPUTS.revision"
+      rooted: { from: "$investigate.output.rooted", if_skipped: null }
+      summary: { from: "$investigate.output.summary", if_skipped: null }
+    output_type: regression-diagnosis
+    output_format:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, regression, inconclusive]
+        reason:
+          type: string
+          enum: [checks_passed, no_checks, infrastructure, unclassified_failure, unrooted, reproduced_defect]
+        revision:
+          type: string
+        checks_performed:
+          type: boolean
+        summary:
+          type: string
+        discovery:
+          type: string
+      required: [status, reason, revision, checks_performed, summary, discovery]

@@ -36,6 +36,7 @@ deliver__review__synthesize:
   findings_summary: "stub: no open findings"
 deliver__review-action: '{"ready":true,"action":"none"}'
 deliver__validate__validate:
+  checks_performed: true
   green: true
   summary: "stub: project gate green"
 ci-probe: '{"state":"concluded","detail":"all checks green"}'
