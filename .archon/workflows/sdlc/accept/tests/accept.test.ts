@@ -369,6 +369,8 @@ async function fixture(policy: Profile | null = profile()): Promise<{
     ...inheritedEnv,
     PATH: `${commandHarness}${delimiter}${process.env.PATH}`,
     DATABASE_URL: '',
+    // Fixture stdout is a JSON protocol, independent of the operator's log level.
+    LOG_LEVEL: 'error',
     GIT_CONFIG_GLOBAL: config,
     GIT_CONFIG_NOSYSTEM: '1',
     FIXTURE_PR: response,
