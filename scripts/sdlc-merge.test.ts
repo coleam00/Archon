@@ -731,20 +731,30 @@ describe('external files and deterministic script execution', () => {
     await expect(externalPath(otherPolicy, cwd)).rejects.toThrow('Git worktrees');
     await expect(externalPath('relative.json', cwd)).rejects.toThrow('absolute');
   });
-  test('rereads actual policy and observes a newly created external stop file', async () => {
+  test.each(['external', 'checkout'])(
+    'rereads policy and observes a new %s stop entry',
+    async location => {
+      const root = temp();
+      const cwd = join(root, 'candidate');
+      mkdirSync(cwd);
+      const policyPath = join(root, 'policy.json');
+      const stopFile = join(location === 'checkout' ? cwd : root, 'stop');
+      writeFileSync(policyPath, JSON.stringify({ ...policy, stop_file: stopFile }));
+      const io = localIO({ INPUTS_POLICY: policyPath }, cwd);
+      const first = await io.readPolicy();
+      expect(await io.stopped(first)).toBe(false);
+      writeFileSync(stopFile, '');
+      expect(await io.stopped(first)).toBe(true);
+      writeFileSync(policyPath, JSON.stringify({ ...policy, authorized: false }));
+      expect((await io.readPolicy()).authorized).toBe(false);
+    }
+  );
+  test('a missing stop parent refuses instead of treating the stop as clear', async () => {
     const root = temp();
-    const cwd = join(root, 'candidate');
-    mkdirSync(cwd);
-    const policyPath = join(root, 'policy.json');
-    const stopFile = join(root, 'stop');
-    writeFileSync(policyPath, JSON.stringify({ ...policy, stop_file: stopFile }));
-    const io = localIO({ INPUTS_POLICY: policyPath }, cwd);
-    const first = await io.readPolicy();
-    expect(await io.stopped(first)).toBe(false);
-    writeFileSync(stopFile, '');
-    expect(await io.stopped(first)).toBe(true);
-    writeFileSync(policyPath, JSON.stringify({ ...policy, authorized: false }));
-    expect((await io.readPolicy()).authorized).toBe(false);
+    const io = localIO({}, root);
+    await expect(
+      io.stopped({ ...policy, stop_file: join(root, 'missing', 'STOP') })
+    ).rejects.toThrow();
   });
   test('real Bun entrypoint refuses missing policy and writes its result without calling gh', async () => {
     const root = temp();
