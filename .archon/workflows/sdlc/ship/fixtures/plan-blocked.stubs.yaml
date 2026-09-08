@@ -1,10 +1,23 @@
+triage__triage: &judgment
+  route: "plan"
+  summary: "stub: material product shape remains undecided"
+  contract: "READY"
+  design_first: false
+  complexity: "small_bounded"
+  proposed_edits: {"title":"","body":""}
+  labels: ["archon-ready"]
+  blocked_by: []
+  blocked_reason: ""
+  issue_repo: ""
+  issue_number: 0
+  issue_url: ""
+triage__validate-contract:
+  <<: *judgment
+  publication: { published: false, applied_labels: [], skipped_labels: [] }
 # Sparse guard fixture: run with --default-stubs --exec-code. A plan that still
 # needs a human decision completes honestly, while the delivery tail is skipped
 # and the real outcome node points to plan.md.
-triage__triage:
-  route: plan
-  summary: "stub: material product shape remains undecided"
-triage__assert-intact: '{"intact":"true"}'
+
 planned__plan:
   ready: false
   summary: "stub: owner decision required before implementation"

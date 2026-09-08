@@ -1,0 +1,22 @@
+triage: &judgment
+  route: "no_action"
+  summary: "stub: the issue names no acceptance criteria and no invariants"
+  contract: "NEEDS_CONTRACT_WORK"
+  design_first: false
+  complexity: "small_bounded"
+  proposed_edits: {"title":"Add acceptance criteria and invariants to issue #123","body":"Proposed missing sections: Acceptance (bulleted, checkable) and Invariants (what must remain true)."}
+  labels: ["archon-needs-contract"]
+  blocked_by: []
+  issue_repo: "example/repo"
+  issue_number: 123
+  blocked_reason: ""
+  issue_url: "https://github.com/example/repo/issues/123"
+validate-contract:
+  <<: *judgment
+  publication: { published: false, applied_labels: [], skipped_labels: [] }
+# Dry-run fixture: the outcome is worth pursuing but the item is missing one
+# of the six contract elements badly enough that a run would guess. Always
+# routes to no_action; proposes the edit that would make it ready.
+
+fixture:
+  expect: completed

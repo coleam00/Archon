@@ -1,3 +1,19 @@
+triage__triage: &judgment
+  route: "investigate"
+  summary: "stub: current evidence leaves the causal chain unresolved"
+  contract: "READY"
+  design_first: false
+  complexity: "small_bounded"
+  proposed_edits: {"title":"","body":""}
+  labels: ["archon-ready"]
+  blocked_by: []
+  blocked_reason: ""
+  issue_repo: ""
+  issue_number: 0
+  issue_url: ""
+triage__validate-contract:
+  <<: *judgment
+  publication: { published: false, applied_labels: [], skipped_labels: [] }
 # Dry-run fixture: a bound target takes the full investigation chain — rooted
 # investigation flows through the spend gate into the delivery tail, initial
 # review ready, PR flips. SPARSE:
@@ -11,10 +27,7 @@
 # worktree, so there is no current branch for an ambient pull request lookup to
 # resolve — a pass here is proof the report is built from the delivered value and nothing
 # the checkout happens to be sitting on.
-triage__triage:
-  route: investigate
-  summary: "stub: current evidence leaves the causal chain unresolved"
-triage__assert-intact: '{"intact":"true"}'
+
 inv__investigate:
   rooted: true
   summary: "stub: cause established — report at investigation.md"
@@ -61,5 +74,5 @@ fixture:
   inputs:
     target: "issue #3031"
   resolved-text-contains:
-    triage__triage: "target):\n\nissue #3031\n\nThe operator's request"
+    triage__triage: "issue #3031"
 exec-code: true

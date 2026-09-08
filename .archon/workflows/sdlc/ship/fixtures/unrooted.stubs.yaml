@@ -1,10 +1,23 @@
+triage__triage: &judgment
+  route: "investigate"
+  summary: "stub: reported failure still needs a proven cause"
+  contract: "READY"
+  design_first: false
+  complexity: "small_bounded"
+  proposed_edits: {"title":"","body":""}
+  labels: ["archon-ready"]
+  blocked_by: []
+  blocked_reason: ""
+  issue_repo: ""
+  issue_number: 0
+  issue_url: ""
+triage__validate-contract:
+  <<: *judgment
+  publication: { published: false, applied_labels: [], skipped_labels: [] }
 # Dry-run fixture: an honest inconclusive investigation is a valid terminal
 # result (run with --default-stubs --exec-code). gate-rooted and the complete
 # delivery tail stay skipped, while the real outcome node points to the report.
-triage__triage:
-  route: investigate
-  summary: "stub: reported failure still needs a proven cause"
-triage__assert-intact: '{"intact":"true"}'
+
 inv__investigate:
   rooted: false
   summary: "stub: two hypotheses survive — not proven"

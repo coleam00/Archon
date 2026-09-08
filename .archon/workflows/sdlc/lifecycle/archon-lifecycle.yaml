@@ -1,0 +1,171 @@
+name: archon-lifecycle
+description: >-
+  Take one issue through shared ship, runtime and independent holdout verification,
+  optional discovery publication and a shared merge queue. All agents are visible
+  Archon command nodes. Scheduling belongs to the caller.
+model: medium
+interactive: true
+inputs:
+  target:
+    default: ''
+    description: One issue or work order; empty uses the trigger message.
+  scenario:
+    required: true
+    description: Absolute path to a project runtime scenario JSON.
+  holdout:
+    required: true
+    description: Absolute path to an independent runtime scenario JSON.
+  merge_mode:
+    default: approve
+    description: preview, approve, or auto for the shared merge workflow.
+  discovery_publication:
+    default: preview
+    description: preview, approve, or auto for discovered adjacent work.
+returns: merge
+nodes:
+  - id: ship
+    include: archon-ship
+    with:
+      target: "$INPUTS.target"
+
+  - id: candidate
+    command: bind-delivered-pr
+    context: fresh
+    mutates_checkout: false
+    depends_on: [ship]
+    with:
+      delivery: "$ship.output"
+    output_format:
+      type: object
+      properties:
+        delivered: { type: boolean }
+        prs: { type: array, items: { type: string } }
+        head: { type: string }
+      required: [delivered, prs, head]
+
+  - id: runtime
+    include: archon-verify-runtime
+    depends_on: [candidate]
+    when: "$candidate.output.delivered == true"
+    with:
+      scenario: "$INPUTS.scenario"
+
+  - id: holdout
+    include: archon-verify-runtime
+    depends_on: [runtime]
+    when: "$runtime.output.verified == true"
+    with:
+      scenario: "$INPUTS.holdout"
+
+  - id: qualify
+    command: qualify-runtime
+    context: fresh
+    mutates_checkout: false
+    depends_on: [candidate, runtime, holdout]
+    trigger_rule: none_failed_min_one_success
+    with:
+      candidate: "$candidate.output"
+      runtime: { from: "$runtime.output", if_skipped: null }
+      holdout: { from: "$holdout.output", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        ready: { type: boolean }
+        repair: { type: boolean }
+        evidence: { type: string }
+      required: [ready, repair, evidence]
+
+  - id: repair
+    include: archon-deliver
+    depends_on: [qualify]
+    when: "$qualify.output.repair == true"
+    with:
+      work: >-
+        Repair the existing PR on this same branch using the concrete runtime
+        findings in $qualify.output.evidence. Preserve the original work order in
+        $ARTIFACTS_DIR/triage.md and the runtime scenarios. Do not switch branches
+        or create another PR. Independently review every correction.
+
+  - id: repaired-candidate
+    command: bind-delivered-pr
+    context: fresh
+    mutates_checkout: false
+    depends_on: [repair]
+    when: "$qualify.output.repair == true"
+    with:
+      delivery: "$repair.output"
+    output_format:
+      type: object
+      properties:
+        delivered: { type: boolean }
+        prs: { type: array, items: { type: string } }
+        head: { type: string }
+      required: [delivered, prs, head]
+
+  - id: runtime-retry
+    include: archon-verify-runtime
+    depends_on: [repaired-candidate]
+    when: "$repaired-candidate.output.delivered == true"
+    with:
+      scenario: "$INPUTS.scenario"
+
+  - id: holdout-retry
+    include: archon-verify-runtime
+    depends_on: [runtime-retry]
+    when: "$runtime-retry.output.verified == true"
+    with:
+      scenario: "$INPUTS.holdout"
+
+  - id: qualify-retry
+    command: qualify-runtime
+    context: fresh
+    mutates_checkout: false
+    depends_on: [repaired-candidate, runtime-retry, holdout-retry]
+    trigger_rule: none_failed_min_one_success
+    when: "$qualify.output.repair == true"
+    with:
+      candidate: "$repaired-candidate.output"
+      runtime: { from: "$runtime-retry.output", if_skipped: null }
+      holdout: { from: "$holdout-retry.output", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        ready: { type: boolean }
+        repair: { type: boolean }
+        evidence: { type: string }
+      required: [ready, repair, evidence]
+
+  - id: selected
+    script: select-qualified
+    runtime: uv
+    depends_on: [candidate, qualify, qualify-retry]
+    trigger_rule: none_failed_min_one_success
+    with:
+      candidate: "$candidate.output"
+      initial: "$qualify.output"
+      repaired: { from: "$repaired-candidate.output", if_skipped: null }
+      retried: { from: "$qualify-retry.output", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        ready: { type: boolean }
+        prs: { type: array, items: { type: string } }
+        evidence: { type: string }
+      required: [ready, prs, evidence]
+
+  - id: discoveries
+    include: archon-discoveries
+    depends_on: [selected]
+    when: "$selected.output.ready == true"
+    with:
+      discovery_artifact: "$ARTIFACTS_DIR/discoveries.json"
+      publication: "$INPUTS.discovery_publication"
+
+  - id: merge
+    include: archon-merge-queue
+    depends_on: [selected, discoveries]
+    when: "$selected.output.ready == true"
+    with:
+      prs: "$selected.output.prs"
+      mode: "$INPUTS.merge_mode"
+      evidence: "$selected.output.evidence"

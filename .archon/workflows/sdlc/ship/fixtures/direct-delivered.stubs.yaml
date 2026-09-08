@@ -1,3 +1,19 @@
+triage__triage: &judgment
+  route: "deliver"
+  summary: "stub: current code confirms a complete work order"
+  contract: "READY"
+  design_first: false
+  complexity: "small_bounded"
+  proposed_edits: {"title":"","body":""}
+  labels: ["archon-ready"]
+  blocked_by: []
+  issue_repo: ""
+  issue_number: 0
+  blocked_reason: ""
+  issue_url: ""
+triage__validate-contract:
+  <<: *judgment
+  publication: { published: false, applied_labels: [], skipped_labels: [] }
 # Sparse dry-run fixture: the default launch leaves `fixture.inputs` absent, so
 # `target` takes its empty default. The current-truth check proves the work item
 # is already implementation-ready, so planning and investigation stay skipped.
@@ -8,9 +24,7 @@
 # worktree, so there is no current branch for an ambient pull request lookup to
 # resolve — a pass here is proof the report is built from the delivered value and nothing
 # the checkout happens to be sitting on.
-triage__triage:
-  route: deliver
-  summary: "stub: current code confirms a complete work order"
+
 gate-direct: '{"gate":"direct"}'
 deliver__impl__implement:
   done: true
@@ -35,9 +49,9 @@ deliver__resolve-scope: '{"errors":"false"}'
 fixture:
   expect: completed
   resolved-text-contains:
-    triage__triage: "target):\n\n\n\nThe operator's request"
+    triage__triage: "empty means the run's trigger message is the target"
 exec-code: true
-triage__assert-intact: '{"intact":"true"}'
+
 deliver__gate-ready: '{"gate":"ready"}'
 deliver__impl__record-start: '{"start":"recorded"}'
 deliver__gate-validated: '{"gate":"green"}'

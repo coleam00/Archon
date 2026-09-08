@@ -1,0 +1,20 @@
+# Judgment is stubbed; the validator test executes this tuple with evidence.
+triage: &judgment
+  route: "no_action"
+  summary: "stub: outcome and invariant contradict each other"
+  contract: "NEEDS_CONTRACT_WORK"
+  design_first: false
+  complexity: "small_bounded"
+  proposed_edits: {"title":"Add acceptance criteria and invariants to issue #123","body":"Proposed missing sections: Acceptance (bulleted, checkable) and Invariants (what must remain true)."}
+  labels: ["archon-needs-contract"]
+  blocked_by: []
+  issue_repo: "example/repo"
+  issue_number: 123
+  blocked_reason: ""
+  issue_url: "https://github.com/example/repo/issues/123"
+validate-contract:
+  <<: *judgment
+  publication: { published: false, applied_labels: [], skipped_labels: [] }
+
+fixture:
+  expect: completed

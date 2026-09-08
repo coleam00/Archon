@@ -1,0 +1,12 @@
+{
+  "assertions": [
+    {
+      "id": "addition",
+      "description": "Run node .archon/workflows/sdlc/verify-runtime-suite/examples/calculator.cjs healthy-control add 2 3; expect exit 0 and numeric output 5."
+    }
+  ],
+  "environment": {
+    "ownership": "external",
+    "candidate_command": "node .archon/workflows/sdlc/verify-runtime-suite/examples/calculator.cjs healthy-control identity"
+  }
+}

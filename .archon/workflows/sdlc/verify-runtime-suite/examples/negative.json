@@ -1,0 +1,12 @@
+{
+  "assertions": [
+    {
+      "id": "addition",
+      "description": "Run node .archon/workflows/sdlc/verify-runtime-suite/examples/calculator.cjs negative-control add 2 3; expect exit 0 and numeric output 5. This is a deliberately faulty negative control. Assess the observed arithmetic against the same expected sum."
+    }
+  ],
+  "environment": {
+    "ownership": "external",
+    "candidate_command": "node .archon/workflows/sdlc/verify-runtime-suite/examples/calculator.cjs negative-control identity"
+  }
+}
