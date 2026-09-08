@@ -1,8 +1,7 @@
 """Validate the judgment, then optionally publish and verify labels.
 
-One standalone script owns the tuple and pack labels because bundled scripts
-are materialized independently. gh is the interim boundary permitted by #3212;
-the forthcoming forge work-item operation should absorb publication.
+This script owns the tuple and pack-label policy. The forge owner validates
+qualified identities, applies narrow mutations and verifies their read-back.
 """
 
 import json
@@ -11,7 +10,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import urlsplit
 
 
 STATE_LABELS = {
@@ -91,59 +90,27 @@ def validate(triage: dict, artifacts: str) -> None:
                 "issue_url must match the resolved issue_repo and issue_number")
 
 
-def gh(args: list[str], payload=None):
-    proc = subprocess.run(["gh", *args], input=None if payload is None else json.dumps(payload),
-                          capture_output=True, text=True, encoding="utf-8", timeout=30)
-    require(proc.returncode == 0,
-            f"gh {args[0]} failed (exit {proc.returncode}); writes may have partially completed: {proc.stderr.strip()}")
-    return json.loads(proc.stdout) if proc.stdout.strip() else None
-
-
-def label_names(entries) -> set[str]:
-    require(isinstance(entries, list) and all(isinstance(e, dict) and isinstance(e.get("name"), str) for e in entries),
-            "forge labels must be an array of named objects")
-    return {entry["name"] for entry in entries}
-
-
-def read_issue(endpoint: str, triage: dict) -> set[str]:
-    issue = gh(["api", "--hostname", "github.com", endpoint])
-    require(isinstance(issue, dict) and issue.get("number") == triage["issue_number"]
-            and isinstance(issue.get("html_url"), str)
-            and issue["html_url"].lower() == triage["issue_url"].lower()
-            and "pull_request" not in issue,
-            "issue identity mismatch on read-back; refusing publication success")
-    return label_names(issue.get("labels"))
-
-
 def publish(triage: dict) -> dict:
-    repo, number = triage["issue_repo"], triage["issue_number"]
     result = {"published": False, "applied_labels": [], "skipped_labels": []}
-    # Prose, unsupported trackers and refused multi-item input have no write target.
-    if not repo:
+    if not triage["issue_repo"]:
         return result
-    endpoint = f"repos/{repo}/issues/{number}"
-    current = read_issue(endpoint, triage)
-    pages = gh(["api", "--hostname", "github.com", f"repos/{repo}/labels?per_page=100", "--paginate", "--slurp"])
-    require(isinstance(pages, list), "forge label pages must be an array")
-    existing = set().union(*(label_names(page) for page in pages))
-    for name, color, description in STATE_LABELS.values():
-        if name not in existing:
-            gh(["api", "--hostname", "github.com", f"repos/{repo}/labels", "--method", "POST", "--input", "-"],
-               {"name": name, "color": color, "description": description})
-    accepted = [label for label in triage["labels"] if label in PACK_LABELS or label in existing]
-    target = (current - PACK_LABELS) | set(accepted)
-    additions = set(accepted) - current
-    if additions:
-        # Narrow mutations preserve unrelated labels added since the read.
-        gh(["api", "--hostname", "github.com", f"{endpoint}/labels", "--method", "POST", "--input", "-"],
-           {"labels": sorted(additions)})
-    for label in sorted((current & PACK_LABELS) - set(accepted)):
-        gh(["api", "--hostname", "github.com", f"{endpoint}/labels/{quote(label, safe='')}", "--method", "DELETE"])
-    actual = read_issue(endpoint, triage)
-    require(target <= actual and actual & PACK_LABELS == target & PACK_LABELS,
-            "label read-back mismatch: proposed or unrelated labels missing, or stale pack labels remain; writes may have completed")
+    accepted = [label for label in triage["labels"] if label in PACK_LABELS]
+    request = {
+        "ref": {"repo": {"host": "github.com", "path": triage["issue_repo"]},
+                "number": triage["issue_number"]},
+        "add": accepted,
+        "remove": sorted(PACK_LABELS - set(accepted)),
+        "create": [{"name": name, "color": color, "description": description}
+                   for name, color, description in STATE_LABELS.values()],
+    }
+    command = [os.environ["ARCHON_EXECUTABLE"], *json.loads(os.environ["ARCHON_EXECUTABLE_ARGS"])]
+    proc = subprocess.run([*command, "forge", "work-item", "labels", "--request", "-", "--json"],
+                          input=json.dumps(request), capture_output=True, text=True,
+                          encoding="utf-8", timeout=120)
+    sys.stderr.write(proc.stderr)
+    require(proc.returncode == 0, "Engine forge label publication failed: " + proc.stdout.strip())
     return {"published": True, "applied_labels": accepted,
-            "skipped_labels": [label for label in triage["labels"] if label not in accepted]}
+            "skipped_labels": [label for label in triage["labels"] if label not in PACK_LABELS]}
 
 
 def main() -> int:

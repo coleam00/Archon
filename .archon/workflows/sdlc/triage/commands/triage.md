@@ -129,8 +129,8 @@ Propose exactly one pack state label from this table, plus matching existing are
 
 Add any of the repository's existing area labels that plainly match this item.
 Read the labels the repository already has and reuse them; never invent one or
-propose creating an area label. Ordering and applying labels is a later
-deterministic step - you only propose the set.
+propose creating an area label. The deterministic publisher applies only the pack state label; area labels
+remain proposals. You only propose the set.
 
 When `contract` is `BLOCKED`, explain the unresolved dependency or external
 decision in `blocked_reason`. Put verified, fully qualified blocker URLs in

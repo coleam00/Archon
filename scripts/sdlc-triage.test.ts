@@ -1,6 +1,6 @@
-﻿/** Real triage guard and publication code; only the gh process is replaced. */
+﻿/** Real triage guard, CLI and exec plugin; only GitHub HTTP is replaced. */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { copyFile, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, writeFile } from 'node:fs/promises';
 import { readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,6 +10,7 @@ import {
   BUNDLED_WORKFLOWS,
   BUNDLED_WORKFLOW_OWNERS,
 } from '../packages/workflows/src/defaults/bundled-defaults';
+import { workItemFixture } from '../packages/forge/src/test/workitem-fixture';
 import { parseWorkflow } from '../packages/workflows/src/loader';
 import { expandWorkflowIncludes } from '../packages/workflows/src/include-expander';
 import { dryRunWorkflow } from '../packages/workflows/src/dry-run';
@@ -39,27 +40,16 @@ const ISSUE = {
   issue_url: 'https://github.com/explicit/other-repo/issues/42',
 };
 let root: string;
-let fake: string;
-let statePath: string;
+let transport: ReturnType<typeof workItemFixture>;
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'archon triage '));
-  fake = join(root, 'fake gh.py');
-  statePath = join(root, 'state.json');
+  transport = workItemFixture(ISSUE.issue_repo);
+  await writeFile(join(root, 'forge.json'), JSON.stringify({ hosts: {} }));
   await copyFile(SCRIPT, join(root, 'validate contract.py'));
-  await copyFile(join(import.meta.dir, '__fixtures__/triage-fake-gh.py'), fake);
   await writeFile(join(root, 'triage.md'), '# Triage\nCurrent source: src/main.ts:12.\n');
-  await writeFile(
-    statePath,
-    JSON.stringify({
-      url: ISSUE.issue_url,
-      number: 42,
-      labels: [],
-      issue_labels: ['unrelated-label', 'archon-blocked'],
-      calls: [],
-    })
-  );
 });
 afterEach(async () => {
+  await transport.server.stop(true);
   await removeTempTree(root);
 });
 
@@ -69,26 +59,27 @@ async function run(
   mode = '',
   raw?: string
 ) {
+  transport.state.mode = mode;
   const proc = Bun.spawn(
-    [
-      'uv',
-      'run',
-      '--no-project',
-      join(import.meta.dir, '__fixtures__/triage-process-seam.py'),
-      join(root, 'validate contract.py'),
-      fake,
-    ],
+    ['uv', 'run', '--no-project', 'python', join(root, 'validate contract.py')],
     {
       stdout: 'pipe',
       stderr: 'pipe',
-      timeout: 4000,
+      timeout: 10000,
       env: {
         ...process.env,
         ARTIFACTS_DIR: root,
         INPUTS_TRIAGE: raw ?? JSON.stringify({ ...BASE, ...overrides }),
         INPUTS_PUBLISH: publish,
-        FAKE_GH_STATE: statePath,
-        FAKE_GH_MODE: mode,
+        ARCHON_HOME: root,
+        ARCHON_EXECUTABLE: process.execPath,
+        ARCHON_EXECUTABLE_ARGS: JSON.stringify([
+          join(REPO, 'packages/cli/src/commands/fixtures/forge-public-cli.ts'),
+          transport.server.url.origin,
+        ]),
+        GH_TOKEN: 'fixture-secret',
+        GITHUB_TOKEN: '',
+        ARCHON_TELEMETRY_DISABLED: '1',
       },
     }
   );
@@ -100,10 +91,10 @@ async function run(
   return { stdout: stdout.trim(), stderr: stderr.trim(), code };
 }
 async function state() {
-  return JSON.parse(await readFile(statePath, 'utf8')) as {
-    labels: string[];
-    issue_labels: string[];
-    calls: string[][];
+  return {
+    labels: transport.definitions.map(label => label.name),
+    issue_labels: transport.items[0].labels.map(label => label.name),
+    calls: transport.calls.map(call => [call.method, call.path]),
   };
 }
 
@@ -250,82 +241,58 @@ test('publish off and non-tracker input make zero forge calls', async () => {
 });
 test('an unrelated label added between the initial read and mutation survives', async () => {
   const result = await run(ISSUE, 'true', 'concurrent_unrelated');
-  expect(result.stderr).toBe('');
   expect(result.code).toBe(0);
   expect(JSON.parse(result.stdout).publication.published).toBe(true);
   expect((await state()).issue_labels.sort()).toEqual(
     ['archon-ready', 'unrelated-label', 'area:concurrent/cli,api'].sort()
   );
 });
-test('explicit cross-repository identity, paginated labels and comma/slash labels survive publication', async () => {
-  const initial = await state();
-  initial.labels = [
-    ...Array.from({ length: 305 }, (_, i) => `area:${String(i)}`),
-    'area:cli,api',
-    'area:cli/api',
-    ...Object.values(labels),
-    'archon-design-first',
-  ];
-  await writeFile(statePath, JSON.stringify({ ...initial, url: ISSUE.issue_url, number: 42 }));
+test('only owned labels are published, with unrelated proposals skipped', async () => {
+  transport.definitions.push(
+    ...Array.from({ length: 305 }, (_, i) => ({
+      name: `area:${String(i)}`,
+      color: '123456',
+      description: 'Existing',
+    }))
+  );
   const result = await run(
     { ...ISSUE, labels: ['archon-ready', 'area:cli,api', 'area:cli/api', 'area:missing'] },
     'true'
   );
-  expect(result.stderr).toBe('');
   expect(result.code).toBe(0);
   expect(JSON.parse(result.stdout).publication).toEqual({
     published: true,
-    applied_labels: ['archon-ready', 'area:cli,api', 'area:cli/api'],
-    skipped_labels: ['area:missing'],
+    applied_labels: ['archon-ready'],
+    skipped_labels: ['area:cli,api', 'area:cli/api', 'area:missing'],
   });
-  const after = await state();
-  expect(after.issue_labels.sort()).toEqual(
-    ['archon-ready', 'area:cli,api', 'area:cli/api', 'unrelated-label'].sort()
+  expect((await state()).issue_labels.sort()).toEqual(['archon-ready', 'unrelated-label']);
+  expect(transport.calls.some(call => call.path.includes('page=4'))).toBe(true);
+  expect(transport.calls.every(call => call.path.startsWith('/repos/explicit/other-repo/'))).toBe(
+    true
   );
-  expect(after.labels).toEqual(initial.labels);
-  expect(after.calls.filter(c => c.includes('--method'))).toEqual([
-    [
-      'api',
-      '--hostname',
-      'github.com',
-      'repos/explicit/other-repo/issues/42/labels',
-      '--method',
-      'POST',
-      '--input',
-      '-',
-    ],
-    [
-      'api',
-      '--hostname',
-      'github.com',
-      'repos/explicit/other-repo/issues/42/labels/archon-blocked',
-      '--method',
-      'DELETE',
-    ],
-  ]);
-  expect(after.calls.every(c => c[3].startsWith('repos/explicit/other-repo/'))).toBe(true);
+  expect(result.stderr).toContain('"op":"workitem.labels"');
+  expect(result.stderr).not.toContain('fixture-secret');
 });
 test('empty repository creates exactly the pack labels; a repeat makes no writes', async () => {
   const first = await run(ISSUE, 'true');
   expect(first.code).toBe(0);
   const after = await state();
   expect(after.labels.sort()).toEqual([...Object.values(labels), 'archon-design-first'].sort());
-  const writes = after.calls.filter(c => c.includes('--method')).length;
+  const writes = after.calls.filter(c => c[0] !== 'GET').length;
   expect(writes).toBe(7);
   const second = await run(ISSUE, 'true');
   expect(second.code).toBe(0);
   expect(second.stdout).toBe(first.stdout);
-  expect((await state()).calls.filter(c => c.includes('--method'))).toHaveLength(writes);
+  expect((await state()).calls.filter(c => c[0] !== 'GET')).toHaveLength(writes);
 });
 test('only stale pack labels are removed, including ready when moving to design-first', async () => {
-  const initial = await state();
-  initial.issue_labels = [...Object.values(labels), 'area:old/cli,api', 'archon-custom'];
-  await writeFile(statePath, JSON.stringify(initial));
+  transport.items[0].labels = [...Object.values(labels), 'area:old/cli,api', 'archon-custom'].map(
+    name => ({ name })
+  );
   const result = await run(
     { ...ISSUE, route: 'plan', design_first: true, labels: ['archon-design-first'] },
     'true'
   );
-  expect(result.stderr).toBe('');
   expect(result.code).toBe(0);
   const after = await state();
   expect(after.issue_labels.sort()).toEqual(
@@ -334,11 +301,11 @@ test('only stale pack labels are removed, including ready when moving to design-
   expect(
     after.calls
       .filter(c => c.includes('DELETE'))
-      .map(c => c[3])
+      .map(c => c[1])
       .sort()
   ).toEqual(
     Object.values(labels)
-      .map(label => `repos/explicit/other-repo/issues/42/labels/${label}`)
+      .map(label => `/repos/explicit/other-repo/issues/42/labels/${label}`)
       .sort()
   );
   const ready = await run(ISSUE, 'true');
@@ -346,8 +313,8 @@ test('only stale pack labels are removed, including ready when moving to design-
   expect((await state()).issue_labels.sort()).toEqual(
     ['archon-ready', 'area:old/cli,api', 'archon-custom'].sort()
   );
-  expect((await state()).calls.filter(c => c.includes('DELETE')).at(-1)?.[3]).toBe(
-    'repos/explicit/other-repo/issues/42/labels/archon-design-first'
+  expect((await state()).calls.filter(c => c.includes('DELETE')).at(-1)?.[1]).toBe(
+    '/repos/explicit/other-repo/issues/42/labels/archon-design-first'
   );
 });
 for (const mode of [
@@ -374,7 +341,7 @@ for (const mode of [
       expect((await state()).issue_labels.sort()).toEqual(
         ['archon-ready', 'archon-blocked', 'unrelated-label'].sort()
       );
-      expect(result.stderr).toContain('synthetic remove failure after addition');
+      expect(result.stderr).toContain('verify_failed');
       expect((await run(ISSUE, 'true')).code).toBe(0);
       expect((await state()).issue_labels.sort()).toEqual(['archon-ready', 'unrelated-label']);
     }
@@ -383,7 +350,7 @@ for (const mode of [
 test('mismatched pre-write identity refuses before even creating repository labels', async () => {
   const result = await run(ISSUE, 'true', 'wrong_before');
   expect(result.code).toBe(1);
-  expect(result.stderr).toContain('identity mismatch');
+  expect(result.stderr).toContain('GitHub returned another target');
   expect((await state()).calls).toHaveLength(1);
 });
 

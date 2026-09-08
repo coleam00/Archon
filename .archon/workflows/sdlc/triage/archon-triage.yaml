@@ -26,9 +26,10 @@ inputs:
   publish:
     default: "false"
     description: >-
-      "true" writes the proposed label set to the resolved GitHub issue
+      "true" writes only the proposed pack state label to the resolved GitHub issue
       (creating any of the five pack labels that do not already exist) and
-      reads them back. "false" stays advisory; other values are rejected.
+      reads them back through the forge owner. Other labels remain proposals.
+      "false" stays advisory; other values are rejected.
 
 returns: validate-contract
 
