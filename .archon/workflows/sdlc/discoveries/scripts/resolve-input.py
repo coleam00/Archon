@@ -32,6 +32,9 @@ def normalize(records):
     for index, record in enumerate(records):
         title, claim = record.get("title"), record.get("claim")
         evidence = record.get("evidence", [])
+        # Existing review producers emit either prose or individual evidence strings.
+        if isinstance(evidence, str):
+            evidence = [evidence]
         sources = record.get("source_nodes", [record["source_node"]] if "source_node" in record else [])
         if (not isinstance(title, str) or not title.strip()
                 or not isinstance(claim, str) or not claim.strip()

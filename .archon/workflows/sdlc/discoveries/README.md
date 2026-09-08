@@ -4,8 +4,9 @@ Run archon-discoveries with exactly one discovery_artifact or run_id.
 An explicit artifact must be a readable JSON file.
 It accepts the consolidated discoveries.json produced by review-synthesize
 or one raw review/implementation sidecar. Both are arrays of title, claim,
-evidence strings and relation; raw records use source_node, consolidated
-records use source_nodes. Source attribution stays in the local normalized
+evidence prose or an array of evidence strings, and relation; raw records use source_node, consolidated
+records use source_nodes. Prose normalizes to one evidence entry without changing
+its content or conferring verified status. Source attribution stays in the local normalized
 artifact. Malformed records fail clearly. Missing evidence remains unverified.
 
 The graph is resolve-input, revalidate, check-evidence, search-existing,

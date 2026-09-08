@@ -122,6 +122,17 @@ function normalized(result: Result) {
 }
 
 describe('native discovery run resolution through the real owning script', () => {
+  for (const filename of ['discoveries.json', 'discoveries/review-seams.json']) {
+    it('preserves native review evidence prose from ' + filename, async () => {
+      const result = await run({
+        ...nativeRun,
+        resolve_only: true,
+        artifact_files: { [filename]: [{ ...record, evidence: 'AGENTS.md:1' }] },
+      });
+      expect(normalized(result)[0]?.evidence).toEqual(['AGENTS.md:1']);
+      expect(result.steps.map(step => step.name)).toEqual(['resolve-input']);
+    });
+  }
   it('uses the engine launch argv without splitting paths or changing the CLI owner', async () => {
     const launch = ['C:/Program Files/Bun/bun.exe', 'C:/pinned source/cli.ts'];
     const result = await run({
@@ -226,9 +237,9 @@ describe('native discovery run resolution through the real owning script', () =>
     { cli_response: { leave_behind: null } },
     { cli_response: { leave_behind: { artifactFiles: [7] } } },
     { cli_response: { leave_behind: { artifactFiles: ['discoveries.json'] } } },
-    { artifact_files: { 'discoveries.json': [{ ...record, evidence: 'not an array' }] } },
+    { artifact_files: { 'discoveries.json': [{ ...record, evidence: { unsupported: true } }] } },
     { artifact_files: { 'discoveries.json': {}, 'discoveries/regress.json': [record] } },
-    { artifact_files: { 'discoveries/regress.json': [{ ...record, evidence: 'not an array' }] } },
+    { artifact_files: { 'discoveries/regress.json': [{ ...record, evidence: [42] }] } },
     {
       artifact_files: {
         'discoveries/a.json': [record],
