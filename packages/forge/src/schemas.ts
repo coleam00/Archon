@@ -1,4 +1,5 @@
 import { z } from 'zod';
+export { FORGE_PROTOCOL_VERSION, RESOLVE_OP, CHECKS_STATE_OP } from './protocol';
 import { repoRefSchema, prRefSchema, shaSchema } from './identity-schemas';
 import { mergeRecoverySchema } from './pinned-merge-schemas';
 export * from './identity-schemas';
@@ -87,7 +88,6 @@ export const forgeOpErrorKindSchema = z.enum(
   forgeOpErrorSchema.options.map(option => option.shape.kind.value)
 );
 export type ForgeOpErrorKind = z.infer<typeof forgeOpErrorKindSchema>;
-export const FORGE_PROTOCOL_VERSION = 1;
 export const pluginMetadataSchema = z.object({
   protocol: z.number().int().positive(),
   name: z.string().regex(/^[a-z0-9-]+$/),
@@ -110,9 +110,6 @@ export const forgeProcessFailureSchema = z.object({
   plugin: pluginMetadataSchema.pick({ name: true, version: true }).optional(),
 });
 export type ForgeProcessFailure = z.infer<typeof forgeProcessFailureSchema>;
-// resolve is the protocol's root operation; forge operations use dotted names.
-export const RESOLVE_OP = 'resolve';
-export const CHECKS_STATE_OP = 'checks.state';
 export const resolveRequestSchema = z.object({ repo: repoRefSchema });
 export type ResolveRequest = z.infer<typeof resolveRequestSchema>;
 export const resolveResultSchema = z

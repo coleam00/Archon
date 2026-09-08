@@ -2,17 +2,7 @@ import { parseArgs } from 'node:util';
 import { readFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { archonCliCommand } from '@archon/paths/cli-launch';
-import { getArchonHome } from '@archon/paths/archon-paths';
-import {
-  ForgeDispatcher,
-  DuplicateHostClaimError,
-  createGitHubPlugin,
-  forgeHostsConfigSchema,
-  prRefSchema,
-  PINNED_MERGE_OP,
-  pinnedMergeRequestSchema,
-} from '@archon/forge';
+import { PINNED_MERGE_OP } from '@archon/forge/protocol';
 import { writeJsonLine } from '../utils/stdout';
 
 export async function forgeCommand(args: string[]): Promise<number> {
@@ -25,6 +15,7 @@ export async function forgeCommand(args: string[]): Promise<number> {
   try {
     // The maintained plugin speaks the same stateless stdio protocol as an external executable.
     if (args[0] === '__github') {
+      const { createGitHubPlugin } = await import('@archon/forge/github');
       const plugin = createGitHubPlugin();
       if (args[1] === 'metadata') {
         await writeJsonLine(plugin.metadata());
@@ -64,6 +55,10 @@ export async function forgeCommand(args: string[]): Promise<number> {
       await writeJsonLine({ kind: 'unsupported_op', op: positionals.join('.') });
       return 1;
     }
+    // Re-entered plugins need neither dispatcher discovery nor install paths.
+    const forge = await import('@archon/forge');
+    const { archonCliCommand } = await import('@archon/paths/cli-launch');
+    const { getArchonHome } = await import('@archon/paths/archon-paths');
     let config: unknown = {};
     try {
       const document: unknown = JSON.parse(
@@ -77,7 +72,7 @@ export async function forgeCommand(args: string[]): Promise<number> {
         throw new Error('Cannot load forge configuration');
     }
     const launch = archonCliCommand();
-    const dispatcher = new ForgeDispatcher(
+    const dispatcher = new forge.ForgeDispatcher(
       [
         {
           source: 'builtin:github',
@@ -88,7 +83,7 @@ export async function forgeCommand(args: string[]): Promise<number> {
       {
         cwd: process.cwd(),
         env: process.env,
-        configuredHosts: forgeHostsConfigSchema.parse(config),
+        configuredHosts: forge.forgeHostsConfigSchema.parse(config),
         signal: controller.signal,
         // The engine retains stderr in its existing exec_output transcript row (#2967).
         audit: (event): void => {
@@ -100,9 +95,9 @@ export async function forgeCommand(args: string[]): Promise<number> {
       op === 'resolve'
         ? await dispatcher.resolve()
         : op === 'checks'
-          ? await dispatcher.checksState(prRefSchema.parse(JSON.parse(values.ref ?? 'null')))
+          ? await dispatcher.checksState(forge.prRefSchema.parse(JSON.parse(values.ref ?? 'null')))
           : await dispatcher.mergePinned(
-              pinnedMergeRequestSchema.parse(
+              forge.pinnedMergeRequestSchema.parse(
                 JSON.parse(
                   values['request-file']
                     ? values['request-file'] === '-'
@@ -119,11 +114,12 @@ export async function forgeCommand(args: string[]): Promise<number> {
     );
     return result.kind === 'ok' ? 0 : result.kind === 'error' ? 1 : 2;
   } catch (error) {
+    const forge = await import('@archon/forge');
     // Never echo argv, config values, remote URLs, or parser diagnostics containing input.
     await writeJsonLine({
       kind: 'invalid_request',
       detail:
-        error instanceof DuplicateHostClaimError
+        error instanceof forge.DuplicateHostClaimError
           ? error.message
           : 'Forge invocation or configuration failed; check the ref, executable, and host claims',
     });
