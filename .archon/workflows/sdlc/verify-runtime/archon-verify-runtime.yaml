@@ -1,0 +1,179 @@
+name: archon-verify-runtime
+description: >-
+  Exercise a live target against project-declared assertions. Validate report
+  structure and target identity, then return verified, failed, or inconclusive.
+  Malformed reports get one fresh attempt. Requires external environment ownership.
+model: medium
+inputs:
+  scenario:
+    default: ''
+    description: Path to a project-owned runtime scenario JSON file. See README.md.
+  candidate:
+    default: ''
+    description: Expected target identity. Empty checks report/probe agreement only.
+returns: gate-verified
+outcome_field: verified
+
+nodes:
+  - id: read-scenario
+    script: read-scenario
+    runtime: uv
+    with:
+      scenario: '$INPUTS.scenario'
+    output_format:
+      type: object
+      properties:
+        setup: { type: string }
+        start: { type: string }
+        teardown: { type: string }
+        candidate_command: { type: string }
+        assertion_ids: { type: array, items: { type: string } }
+        assertions_json: { type: array }
+      required: [setup, start, teardown, candidate_command, assertion_ids, assertions_json]
+
+  - id: verify-loop
+    depends_on: [read-scenario]
+    loop_group:
+      until_bash: test $finish-attempt.output.done = true
+      max_iterations: &attempt-limit 2
+      fresh_context: true
+      nodes:
+        # LOOP_PREV is the supported body data channel; there is no iteration env var.
+        - id: prepare-attempt
+          script: prepare-attempt
+          runtime: uv
+          with:
+            previous_attempt: '$LOOP_PREV.prepare-attempt.output.attempt'
+          output_format:
+            type: object
+            properties:
+              attempt: { type: integer }
+              directory: { type: string }
+              report_path: { type: string }
+              checkout: { type: string }
+            required: [attempt, directory, report_path, checkout]
+
+        - id: setup-run
+          depends_on: [prepare-attempt]
+          bash: |
+            CMD=$read-scenario.output.setup
+            if [ -z "$CMD" ] || eval "$CMD" >&2; then
+              echo '{"ok":true}'
+            else
+              echo '{"ok":false}'
+            fi
+          output_format: &command-result
+            type: object
+            properties: { ok: { type: boolean } }
+            required: [ok]
+
+        - id: start-run
+          depends_on: [setup-run]
+          bash: |
+            if [ $setup-run.output.ok != true ]; then
+              echo '{"ok":false}'
+              exit 0
+            fi
+            CMD=$read-scenario.output.start
+            if [ -z "$CMD" ] || eval "$CMD" >&2; then
+              echo '{"ok":true}'
+            else
+              echo '{"ok":false}'
+            fi
+          output_format: *command-result
+
+        - id: verify
+          command: verify-runtime
+          depends_on: [start-run]
+          when: '$start-run.output.ok == true'
+          mutates_checkout: false
+          with:
+            assertions_json: '$read-scenario.output.assertions_json'
+            candidate_command: '$read-scenario.output.candidate_command'
+            report_path: '$prepare-attempt.output.report_path'
+            evidence_directory: '$prepare-attempt.output.directory'
+
+        - id: identity-run
+          depends_on: [verify]
+          trigger_rule: all_done
+          bash: |
+            if [ $start-run.output.ok != true ]; then
+              echo '{"ok":false}'
+              exit 0
+            fi
+            DIR=$prepare-attempt.output.directory
+            CMD=$read-scenario.output.candidate_command
+            if eval "$CMD" > "$DIR/target.txt"; then
+              echo '{"ok":true}'
+            else
+              echo '{"ok":false}'
+            fi
+          output_format: *command-result
+
+        - id: check-evidence
+          script: check-evidence
+          runtime: uv
+          depends_on: [identity-run]
+          with:
+            start_ok: '$start-run.output.ok'
+            identity_ok: '$identity-run.output.ok'
+            directory: '$prepare-attempt.output.directory'
+            report_path: '$prepare-attempt.output.report_path'
+            required_ids: '$read-scenario.output.assertion_ids'
+            expected_candidate: '$INPUTS.candidate'
+          output_format:
+            type: object
+            properties: &assessment-properties
+              status: { type: string, enum: [verified, failed, inconclusive, malformed] }
+              reason: { type: string }
+              candidate: { type: string }
+            required: [status, reason, candidate]
+
+        # Not finally cleanup: cancellation and some node errors can skip this node.
+        - id: teardown-run
+          depends_on: [check-evidence]
+          bash: |
+            CMD=$read-scenario.output.teardown
+            if [ -z "$CMD" ] || eval "$CMD" >&2; then
+              echo '{"ok":true}'
+            else
+              echo '{"ok":false}'
+            fi
+          output_format: *command-result
+
+        - id: finish-attempt
+          script: finish-attempt
+          runtime: uv
+          depends_on: [teardown-run]
+          with:
+            assessment: '$check-evidence.output'
+            teardown_ok: '$teardown-run.output.ok'
+            attempt: '$prepare-attempt.output.attempt'
+            attempt_limit: *attempt-limit
+            checkout: '$prepare-attempt.output.checkout'
+          output_format:
+            type: object
+            properties:
+              <<: *assessment-properties
+              done: { type: boolean }
+              checkout: { type: string }
+            required: [status, reason, candidate, done, checkout]
+
+  - id: gate-verified
+    script: gate-verified
+    runtime: uv
+    depends_on: [verify-loop]
+    with:
+      status: '$verify-loop.output.status'
+      reason: '$verify-loop.output.reason'
+      candidate: '$verify-loop.output.candidate'
+      checkout: '$verify-loop.output.checkout'
+    output_format:
+      type: object
+      properties:
+        verified: { type: boolean }
+        verdict: { type: string, enum: [verified, failed, inconclusive] }
+        candidate: { type: string }
+        checkout: { type: string }
+        summary: { type: string }
+      required: [verified, verdict, candidate, checkout, summary]

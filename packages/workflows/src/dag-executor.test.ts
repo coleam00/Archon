@@ -9,10 +9,10 @@ import {
   setSystemTime,
   type Mock,
 } from 'bun:test';
-import { mkdir, writeFile, rm, readFile } from 'fs/promises';
+import { mkdir, writeFile, rm, readFile, mkdtemp, readdir } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { existsSync, unlinkSync } from 'fs';
-import { join, normalize, sep } from 'path';
+import { join, normalize, sep, resolve } from 'path';
 import { tmpdir } from 'os';
 import * as git from '@archon/git';
 import { RATE_LIMIT_MAX_RETRIES } from './executor-shared';
@@ -34098,4 +34098,374 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
     const sent = platform.sendMessage.mock.calls.map(c => c[1]);
     expect(sent.some(m => m.includes('completed with failures'))).toBe(true);
   });
+});
+
+describe('archon-verify-runtime live target contract', () => {
+  const pack = resolve(import.meta.dir, '../../..', '.archon/workflows/sdlc/verify-runtime');
+  type Mode =
+    | 'passed'
+    | 'failed'
+    | 'unavailable'
+    | 'wrong-target'
+    | 'wrong-report'
+    | 'invalid-candidate'
+    | 'malformed-then-pass'
+    | 'malformed-exhausted'
+    | 'missing-evidence'
+    | 'missing-coverage'
+    | 'scenario-gap'
+    | 'teardown-failure'
+    | 'cancelled'
+    | 'provider-failure';
+
+  async function exercise(
+    mode: Mode,
+    identityOptions: {
+      output?: string;
+      expected?: string;
+      reported?: unknown;
+    } = {}
+  ) {
+    const identityOutput = identityOptions.output ?? 'deployed-build-123';
+    const root = await mkdtemp(join(tmpdir(), 'runtime-contract-'));
+    const cwd = join(root, 'checkout');
+    const artifactsDir = join(root, 'artifacts');
+    const order: string[] = [];
+    let worker: ReturnType<typeof Bun.spawn> | undefined;
+    let targetUrl = '';
+    let generations = 0;
+    const store = createMockStore();
+    const directories: string[] = [];
+    const quoteValue = 'owner\'s "build" $literal `literal`';
+    // The external owner outlives the workflow, including cancellation. Its child is the target.
+    const controller = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url);
+        order.push(url.pathname.slice(1));
+        switch (url.pathname) {
+          case '/setup':
+            expect(worker).toBeUndefined();
+            expect(url.searchParams.get('value')).toBe(quoteValue);
+            return new Response('ready');
+          case '/start': {
+            if (mode === 'unavailable') return new Response('unavailable', { status: 503 });
+            expect(worker).toBeUndefined();
+            worker = Bun.spawn([process.execPath, '--no-env-file', join(root, 'target.ts')], {
+              stdout: 'pipe',
+              stderr: 'inherit',
+              env: { ...process.env, TARGET_VALUE: mode === 'failed' ? 'false' : 'true' },
+            });
+            if (!(worker.stdout instanceof ReadableStream)) throw new Error('expected stdout pipe');
+            const reader = worker.stdout.getReader();
+            const ready = await reader.read();
+            reader.releaseLock();
+            targetUrl = new TextDecoder().decode(ready.value).trim();
+            expect(targetUrl).toStartWith('http://127.0.0.1:');
+            generations++;
+            return new Response('started');
+          }
+          case '/observe':
+          case '/identity':
+            if (!worker) return new Response('unavailable', { status: 503 });
+            return fetch(targetUrl + url.pathname);
+          case '/teardown':
+            if (worker) {
+              worker.kill();
+              await worker.exited;
+              worker = undefined;
+            }
+            return new Response('stopped', { status: mode === 'teardown-failure' ? 500 : 200 });
+          default:
+            return new Response('unknown route', { status: 404 });
+        }
+      },
+    });
+    try {
+      await mkdir(join(cwd, '.archon/scripts'), { recursive: true });
+      await mkdir(join(cwd, '.archon/commands'), { recursive: true });
+      for (const file of await readdir(join(pack, 'scripts'))) {
+        await writeFile(
+          join(cwd, '.archon/scripts', file),
+          await readFile(join(pack, 'scripts', file))
+        );
+      }
+      await writeFile(
+        join(cwd, '.archon/commands/verify-runtime.md'),
+        await readFile(join(pack, 'commands/verify-runtime.md'))
+      );
+      await writeFile(
+        join(root, 'target.ts'),
+        `const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+        return new Response(new URL(request.url).pathname === '/identity'
+          ? ${JSON.stringify(identityOutput)} : process.env.TARGET_VALUE);
+      }}); console.log(server.url.origin);`
+      );
+      const base = controller.url.origin;
+      const identityCommand = `curl --fail --silent '${base}/identity'`;
+      const assertions = [
+        {
+          id: 'health',
+          description: mode === 'scenario-gap' ? '' : `GET ${base}/observe; expect JSON true`,
+        },
+      ];
+      // Bash single-quote escaping is intentional: all metacharacters are literal data.
+      const quoted = "'" + quoteValue.replaceAll("'", "'\"'\"'") + "'";
+      const scenario = {
+        assertions,
+        environment: {
+          ownership: 'external',
+          setup: `curl --fail --silent --get --data-urlencode ${quoted.replace('owner', 'value=owner')} '${base}/setup'`,
+          start: `curl --fail --silent '${base}/start'`,
+          teardown: `curl --fail --silent '${base}/teardown'`,
+          candidate_command: identityCommand,
+        },
+      };
+      await writeFile(join(cwd, 'scenario.json'), JSON.stringify(scenario));
+      await git.execFileAsync('git', ['init', '-q'], { cwd });
+      await git.execFileAsync('git', ['add', '-A'], { cwd });
+      await git.execFileAsync(
+        'git',
+        ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'init'],
+        { cwd }
+      );
+      const checkout = (
+        await git.execFileAsync('git', ['rev-parse', 'HEAD'], { cwd })
+      ).stdout.trim();
+      const parsed = parseWorkflow(
+        await readFile(join(pack, 'archon-verify-runtime.yaml'), 'utf8'),
+        'archon-verify-runtime.yaml'
+      );
+      if (!parsed.workflow) throw new Error(JSON.stringify(parsed.error));
+      let calls = 0;
+      mockSendQueryDag.mockClear();
+      mockGetAgentProviderDag.mockImplementation(() => ({
+        sendQuery: mockSendQueryDag,
+        getType: () => 'claude',
+        getCapabilities: mockClaudeCapabilities,
+      }));
+      mockSendQueryDag.mockImplementation(async function* (prompt, _cwd, resumeSessionId) {
+        calls++;
+        expect(resumeSessionId).toBeUndefined();
+        const prepared = persistedEvents(store)
+          .reverse()
+          .find(
+            event =>
+              event.event_type === 'node_completed' &&
+              event.step_name === 'verify-loop.prepare-attempt'
+          )?.data?.structured_output as { directory: string; report_path: string; attempt: number };
+        expect(prepared.attempt).toBe(calls);
+        directories.push(prepared.directory);
+        expect(prompt).toContain(JSON.stringify(assertions));
+        expect(prompt).toContain(identityCommand);
+        expect(prompt).toContain(prepared.directory);
+        expect(prompt).toContain(prepared.report_path);
+        expect(prompt).not.toContain('$INPUTS.');
+        if (mode === 'provider-failure') throw new Error('test provider rejected the request');
+        const response = await fetch(`${base}/observe`);
+        const raw = await response.text();
+        const measured: unknown = JSON.parse(raw);
+        const identity = (
+          await git.execFileAsync(git.resolveBashPath(), ['-c', identityCommand], { cwd })
+        ).stdout;
+        if (mode === 'cancelled')
+          store.getWorkflowRunStatus.mockImplementation(async () => 'cancelled');
+        const evidencePath = join(prepared.directory, 'observation.txt');
+        if (mode !== 'missing-evidence')
+          await writeFile(
+            evidencePath,
+            `GET ${base}/observe\nHTTP ${String(response.status)}\n${raw}`
+          );
+        const report = {
+          candidate:
+            mode === 'wrong-report'
+              ? 'another-build'
+              : 'reported' in identityOptions
+                ? identityOptions.reported
+                : identity,
+          assertions:
+            mode === 'missing-coverage'
+              ? []
+              : [
+                  {
+                    id: 'health',
+                    outcome:
+                      mode === 'scenario-gap'
+                        ? 'inconclusive'
+                        : measured === true
+                          ? 'passed'
+                          : 'failed',
+                    expected: true,
+                    observed: mode === 'scenario-gap' ? null : measured,
+                    reason:
+                      mode === 'scenario-gap'
+                        ? 'Scenario provides no instructions'
+                        : `Expected true; measured ${JSON.stringify(measured)}`,
+                    evidence_path: evidencePath,
+                  },
+                ],
+        };
+        const malformed =
+          mode === 'malformed-exhausted' || (mode === 'malformed-then-pass' && calls === 1);
+        await writeFile(prepared.report_path, malformed ? '{invalid JSON' : JSON.stringify(report));
+        yield {
+          type: 'assistant',
+          content: 'Report written. This reply is deliberately not a success marker.',
+        };
+        yield { type: 'result', sessionId: `runtime-session-${String(calls)}` };
+      });
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd,
+          workflow: parsed.workflow,
+          workflowRun: makeWorkflowRun(`runtime-${mode}`, {
+            metadata: {
+              inputs: {
+                scenario: 'scenario.json',
+                candidate:
+                  mode === 'wrong-target' ? checkout : (identityOptions.expected ?? identityOutput),
+              },
+            },
+          }),
+          artifactsDir,
+          stateDir: join(root, 'state'),
+          logDir: join(root, 'logs'),
+        })
+      );
+      const events = persistedEvents(store);
+      const failures = events.filter(event => event.event_type === 'node_failed');
+      const tail = events.find(
+        event => event.event_type === 'node_completed' && event.step_name === 'gate-verified'
+      );
+      if (mode === 'cancelled' || mode === 'provider-failure') {
+        expect(tail).toBeUndefined();
+        expect(calls).toBe(1);
+        if (mode === 'provider-failure') {
+          // all_done permits this cleanup, but the failed body still fails the group.
+          expect(order).toEqual(['setup', 'start', 'identity', 'teardown']);
+          expect(worker).toBeUndefined();
+          expect(failures.map(event => event.step_name)).toEqual(['verify-loop.verify']);
+          expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+        } else {
+          expect(order).not.toContain('teardown');
+          expect(worker).toBeDefined();
+        }
+        return;
+      }
+      expect(failures).toEqual([]);
+      expect(tail).toBeDefined();
+      const result = tail?.data?.structured_output as {
+        verdict: string;
+        verified: boolean;
+        candidate: string;
+        checkout: string;
+        summary: string;
+      };
+      const expectedVerdict =
+        mode === 'passed' || mode === 'malformed-then-pass'
+          ? 'verified'
+          : mode === 'failed'
+            ? 'failed'
+            : 'inconclusive';
+      expect(result.verdict).toBe(expectedVerdict);
+      expect(result.verified).toBe(expectedVerdict === 'verified');
+      expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+      expect(result.checkout).toBe(checkout);
+      if (mode !== 'unavailable') expect(result.candidate).toBe(identityOutput.trim());
+      expect(authoredOutcomeWrites(store)).toEqual([
+        expectedVerdict === 'verified' ? 'succeeded' : 'failed',
+      ]);
+      const retried = [
+        'malformed-then-pass',
+        'malformed-exhausted',
+        'missing-evidence',
+        'missing-coverage',
+        'wrong-report',
+        'invalid-candidate',
+      ].includes(mode);
+      const attempts = retried ? 2 : 1;
+      expect(calls).toBe(mode === 'unavailable' ? 0 : attempts);
+      expect(generations).toBe(mode === 'unavailable' ? 0 : attempts);
+      expect(new Set(directories).size).toBe(calls);
+      const expectedOrder =
+        mode === 'unavailable'
+          ? ['setup', 'start', 'teardown']
+          : Array.from({ length: attempts }, () => [
+              'setup',
+              'start',
+              'observe',
+              'identity',
+              'identity',
+              'teardown',
+            ]).flat();
+      expect(order).toEqual(expectedOrder);
+      expect(worker).toBeUndefined();
+      const completedSteps = events
+        .filter(event => event.event_type === 'node_completed')
+        .map(event => event.step_name);
+      expect(completedSteps.indexOf('verify-loop.check-evidence')).toBeLessThan(
+        completedSteps.indexOf('verify-loop.teardown-run')
+      );
+      if (mode === 'malformed-exhausted')
+        expect(result.summary).toContain('exhausting the retry budget');
+      if (mode === 'teardown-failure') expect(result.summary).toContain('teardown failed');
+      if (mode === 'invalid-candidate')
+        expect(result.summary).toContain('candidate must be a string');
+    } finally {
+      controller.stop(true);
+      if (worker) {
+        worker.kill();
+        await worker.exited;
+      }
+      await removeTempTree(root);
+    }
+  }
+  for (const mode of [
+    'passed',
+    'failed',
+    'unavailable',
+    'wrong-target',
+    'wrong-report',
+    'malformed-then-pass',
+    'malformed-exhausted',
+    'missing-evidence',
+    'missing-coverage',
+    'scenario-gap',
+    'teardown-failure',
+    'cancelled',
+    'provider-failure',
+  ] satisfies Mode[]) {
+    it(`runs the actual runtime graph: ${mode}`, () => exercise(mode), 30_000);
+  }
+  for (const [ending, newline] of [
+    ['LF', '\n'],
+    ['CRLF', '\r\n'],
+  ]) {
+    for (const mode of ['passed', 'failed'] as const) {
+      it(
+        `accepts literal ${ending} identity output and report: ${mode} in one attempt`,
+        () => exercise(mode, { output: `deployed-build-123${newline}` }),
+        30_000
+      );
+    }
+  }
+  it(
+    'normalizes surrounding whitespace consistently across expected, probe and report identities',
+    () =>
+      exercise('passed', {
+        output: '\t deployed-build-123\r\n',
+        expected: 'deployed-build-123\n',
+        reported: ' deployed-build-123\t\n',
+      }),
+    30_000
+  );
+  for (const reported of [123, true, null, ['123'], { candidate: '123' }]) {
+    it(
+      `rejects a non-string report identity: ${JSON.stringify(reported)}`,
+      () => exercise('invalid-candidate', { output: '123\r\n', reported }),
+      30_000
+    );
+  }
 });
