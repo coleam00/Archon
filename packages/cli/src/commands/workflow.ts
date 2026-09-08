@@ -1688,7 +1688,9 @@ async function runWorkflowWithOwnedSource(
       originalStagedRoot = replacement.anchor.root;
       const stale = preparedSource;
       preparedSource = replacement;
-      if (stale) {
+      // Detached recapture replaces the same run directory in place.
+      // Remove only a distinct capture so the replacement manifest survives.
+      if (stale && stale.anchor.root !== replacement.anchor.root) {
         rmSync(stale.anchor.root, { recursive: true, force: true });
       }
     } catch (error) {
