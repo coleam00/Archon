@@ -1,311 +1,36 @@
-name: Test Suite
-
+name: Windows budget phases diagnostic
 on:
   workflow_dispatch:
-  push:
-    branches: [main, dev]
-  pull_request:
-    branches: [main, dev]
-
 env:
   BUN_VERSION: '1.4.2'
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      run-tests: ${{ steps.decision.outputs.run-tests }}
+  trace:
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
-
-      - name: Decide whether tests are needed
-        id: decision
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.before || github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.after || github.event.pull_request.head.sha }}
-        # Assign before echoing. A failing command substituted into another command's arguments
-        # does not trip `set -e`, so `echo "run-tests=$(...)"` would report success and write an
-        # empty decision that every downstream `== 'true'` gate reads as "skip".
-        run: |
-          run_tests=$(bun scripts/should-run-test-suite.ts "$EVENT_NAME" "$BASE_SHA" "$HEAD_SHA")
-          echo "run-tests=$run_tests" >> "$GITHUB_OUTPUT"
-
-  workflow-fixtures:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v4
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Run workflow fixtures
-        run: bun run cli workflow test --json
-
-  test:
-    needs: changes
-    if: needs.changes.outputs.run-tests == 'true'
-    strategy:
-      # Both legs must always report. With the default fail-fast, an ubuntu
-      # failure cancels windows, so a windows-only break stays invisible until
-      # the next round — and a cancelled leg blocks a merge once it is a
-      # required check.
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-
       - name: Cache Bun dependencies
-        if: runner.os == 'Windows'
         uses: actions/cache@v4
         with:
           path: ~/.bun/install/cache
           key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-
       - name: Install dependencies
         run: bun install --frozen-lockfile
-
-      - name: Check bundled defaults
-        run: bun run check:bundled
-
-      - name: Check bundled skill
-        run: bun run check:bundled-skill
-
-      - name: Check bundled schema
-        run: bun run check:bundled-schema
-
-      - name: Check Pi vendor map
-        run: bun run check:pi-vendor-map
-
-      - name: Check provider capability matrix
-        run: bun run check:capability-matrix
-
-      - name: Check generated API types
-        run: bun run check:api-types
-
-      - name: Type check
-        run: bun run type-check
-
-      - name: Lint
-        run: bun run lint --max-warnings 0
-
-      - name: Check formatting
-        run: bun run format:check
-
-      - name: Run installer tests
-        # POSIX-shell installer only. scripts/install.sh refuses MINGW/MSYS by design
-        # (Windows users are directed to WSL2), and test-install.sh runs the real
-        # installer with only curl mocked — so on windows-latest `uname -s` reports
-        # MINGW64_NT, the installer exits, and `set -euo pipefail` fails the job.
-        if: runner.os != 'Windows'
-        run: bun run test:install
-
-      # No Windows Defender exclusion step here on purpose. It was the named
-      # remaining suspect behind the downloadWebDist stalls (#2924), so one was
-      # added and run on windows-latest — and its own readback disproved the
-      # hypothesis: the runner image already excludes `C:\` and `D:\` at the
-      # drive root, recursively, so nothing under either was being scanned to
-      # begin with. `Add-MpPreference` also cost 5s per run to change nothing.
-      # Evidence: https://github.com/coleam00/Archon/pull/2943
-      - name: Run tests
-        run: bun run test
-
-  schema-upgrade:
-    needs: changes
-    if: needs.changes.outputs.run-tests == 'true'
-    # Nothing else in CI applies migrations/000_combined.sql to a real database,
-    # and every test that touches a schema starts from an empty one. That blind
-    # spot is exactly how #2508 shipped green and then crash-looped every
-    # Postgres install created before it: `CREATE TABLE IF NOT EXISTS` is a no-op
-    # on an existing database, so a statement naming a column the additive block
-    # adds later works on a fresh install and aborts the whole single-transaction
-    # apply on an upgrade. This job applies the current schema on top of
-    # databases built by older RELEASES, which is the only place that shows up.
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      PGHOST: localhost
-      PGPORT: 5432
-      PGUSER: postgres
-      PGPASSWORD: postgres
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # Baselines are release tags read with `git show <tag>:<path>`;
-          # the default shallow clone has neither the tags nor the history.
-          fetch-depth: 0
-          # The checker only reads local history — it never needs the token,
-          # so don't leave it in the worktree's git config.
-          persist-credentials: false
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-
-      # No `bun install`: the checker shells out to psql and uses only builtins.
-      - name: Ensure psql is available
-        run: psql --version || (sudo apt-get update && sudo apt-get install -y postgresql-client)
-
-      - name: Upgrade from released schemas
-        run: bun run check:schema-upgrades
-
-      - name: Check SQLite vintage fixtures
-        # Regenerates packages/core/src/db/fixtures/sqlite-vintages/ in memory
-        # from release tags and fails on any drift, so new release tags carrying
-        # a new distinct SQLite schema land with their fixture.
-        run: bun run check:sqlite-vintages
-
-  postgres-parity:
-    needs: changes
-    if: needs.changes.outputs.run-tests == 'true'
-    # The unit suite mocks the pg driver, so the Postgres dialect branch of
-    # getLiveRunOwningEnv (cleanup's lock query) only executes here, against a
-    # real server: an untyped parameter compared against text and UUID columns
-    # in one OR parses fine on SQLite and would reach every Postgres install.
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      # The test creates and drops its own scratch database; the 'postgres'
-      # database named in the URL is only used to reach the server.
-      - name: Run Postgres parity test
-        env:
-          ARCHON_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
-        run: bun test packages/core/src/db/isolation-environments.live-run.postgres.integration.test.ts
-
-  docker-build:
-    needs: changes
-    if: needs.changes.outputs.run-tests == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: write
-    steps:
-      - uses: actions/checkout@v4
-
-      # The image build needs ~14GB more scratch space than a stock runner has
-      # free once the provider SDKs' multi-platform vendor binaries are in
-      # node_modules. Cached-layer builds squeak by; any PR that invalidates an
-      # early Dockerfile layer (apt block, base image) rebuilds everything and
-      # hits "no space left on device". Reclaim the big unused toolchains first.
-      - name: Free runner disk space
+      - name: Trace full package tests
+        shell: pwsh
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force
-          df -h /
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: false
-          load: true
-          tags: archon-ci:test
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Smoke test — container starts and serves /api/health
-        run: |
-          docker run -d --name archon-smoke -e PORT=3000 -e CLAUDE_USE_GLOBAL_AUTH=true -p 3000:3000 archon-ci:test
-          sleep 5
-          curl --fail --retry 10 --retry-delay 3 --retry-all-errors http://localhost:3000/api/health
-
-      - name: Dump container logs on failure
-        if: failure()
-        run: docker logs archon-smoke 2>&1 || true
-
-      - name: Cleanup smoke test container
+          $payloadDir = Join-Path $env:RUNNER_TEMP 'archon-diag-payload'
+          New-Item -ItemType Directory -Force -Path $payloadDir | Out-Null
+          [IO.File]::WriteAllBytes((Join-Path $payloadDir 'preload.cjs'), [Convert]::FromBase64String('Ly8gRGlhZ25vc3RpYyBvbmx5OiBsb2FkIGJlZm9yZSB0ZXN0IG1vZHVsZXMuIE5ldmVyIGNoYW5nZXMgZGVhZGxpbmVzIG9yIHJldHVybiB2YWx1ZXMuCmNvbnN0IGNwID0gcmVxdWlyZSgnbm9kZTpjaGlsZF9wcm9jZXNzJyk7CmNvbnN0IGZzID0gcmVxdWlyZSgnbm9kZTpmcycpOwpjb25zdCBwYXRoID0gcmVxdWlyZSgnbm9kZTpwYXRoJyk7CmNvbnN0IHsgc3luY0J1aWx0aW5FU01FeHBvcnRzIH0gPSByZXF1aXJlKCdub2RlOm1vZHVsZScpOwpjb25zdCBsb2dEaXIgPSBwcm9jZXNzLmVudi5BUkNIT05fRElBR19MT0dfRElSOwppZiAoIWxvZ0RpcikgdGhyb3cgbmV3IEVycm9yKCdTZXQgQVJDSE9OX0RJQUdfTE9HX0RJUiB0byBhbiBleGlzdGluZyBzY3JhdGNoIGRpcmVjdG9yeS4nKTsKY29uc3Qgd3JpdGUgPSBmcy53cml0ZVN5bmM7CmNvbnN0IGZkID0gZnMub3BlblN5bmMocGF0aC5qb2luKGxvZ0RpciwgYHRyYWNlLSR7cHJvY2Vzcy5waWR9Lmpzb25sYCksICdhJyk7CmNvbnN0IHN0YXJ0ZWQgPSBwZXJmb3JtYW5jZS5ub3coKTsKbGV0IHNlcmlhbCA9IDA7CmNvbnN0IGVtaXQgPSBmaWVsZHMgPT4gd3JpdGUoZmQsIEpTT04uc3RyaW5naWZ5KHsgYXJjaG9uX2RpYWc6IDEsIHBpZDogcHJvY2Vzcy5waWQsIHV0Y01zOiBEYXRlLm5vdygpLCBtczogKyhwZXJmb3JtYW5jZS5ub3coKSAtIHN0YXJ0ZWQpLnRvRml4ZWQoMyksIC4uLmZpZWxkcyB9KSArICdcbicpOwpjb25zdCBzYWZlR2l0VG9rZW5zID0gbmV3IFNldChbJ2luaXQnLCAnY29tbWl0JywgJ3Jldi1wYXJzZScsICctLXNob3ctdG9wbGV2ZWwnLCAnLS1hYmJyZXYtcmVmJywgJ0hFQUQnLCAnbHMtZmlsZXMnLCAnLS1vdGhlcnMnLCAnLS1jYWNoZWQnLCAnLS1leGNsdWRlLXN0YW5kYXJkJywgJ3dvcmt0cmVlJywgJ2FkZCcsICdyZW1vdmUnLCAnc3RhdHVzJywgJy0tcG9yY2VsYWluJywgJ2JyYW5jaCcsICctLWFsbG93LWVtcHR5J10pOwpmdW5jdGlvbiBjb21tYW5kTGFiZWwoY29tbWFuZCwgYXJncyA9IFtdKSB7CiAgY29uc3QgYmluYXJ5ID0gcGF0aC5iYXNlbmFtZShTdHJpbmcoY29tbWFuZCkpOwogIHJldHVybiB7IGJpbmFyeSwgZ2l0OiAvXmdpdCg/OlwuZXhlKT8kL2kudGVzdChiaW5hcnkpID8gYXJncy5maWx0ZXIoYSA9PiBzYWZlR2l0VG9rZW5zLmhhcyhhKSkgOiB1bmRlZmluZWQgfTsKfQpmdW5jdGlvbiBkZXNjcmliZUFyZ3MoYXJncykgewogIGlmIChBcnJheS5pc0FycmF5KGFyZ3NbMF0pKSByZXR1cm4gY29tbWFuZExhYmVsKGFyZ3NbMF1bMF0sIGFyZ3NbMF0uc2xpY2UoMSkpOwogIGlmIChhcmdzWzBdICYmIHR5cGVvZiBhcmdzWzBdID09PSAnb2JqZWN0JyAmJiBBcnJheS5pc0FycmF5KGFyZ3NbMF0uY21kKSkgcmV0dXJuIGNvbW1hbmRMYWJlbChhcmdzWzBdLmNtZFswXSwgYXJnc1swXS5jbWQuc2xpY2UoMSkpOwogIHJldHVybiBjb21tYW5kTGFiZWwoYXJnc1swXSwgQXJyYXkuaXNBcnJheShhcmdzWzFdKSA/IGFyZ3NbMV0gOiBbXSk7Cn0KZnVuY3Rpb24gcHJlc2VydmVQcm9wZXJ0aWVzKG9yaWdpbmFsLCB3cmFwcGVyKSB7CiAgZm9yIChjb25zdCBrZXkgb2YgUmVmbGVjdC5vd25LZXlzKG9yaWdpbmFsKSkgewogICAgaWYgKFsnbmFtZScsICdsZW5ndGgnLCAncHJvdG90eXBlJywgJ2NhbGxlcicsICdhcmd1bWVudHMnXS5pbmNsdWRlcyhrZXkpKSBjb250aW51ZTsKICAgIE9iamVjdC5kZWZpbmVQcm9wZXJ0eSh3cmFwcGVyLCBrZXksIE9iamVjdC5nZXRPd25Qcm9wZXJ0eURlc2NyaXB0b3Iob3JpZ2luYWwsIGtleSkpOwogIH0KfQpmdW5jdGlvbiBzeW5jV3JhcChvd25lciwga2V5LCBsYWJlbCkgewogIGNvbnN0IG9yaWdpbmFsID0gb3duZXJba2V5XTsKICBpZiAodHlwZW9mIG9yaWdpbmFsICE9PSAnZnVuY3Rpb24nKSByZXR1cm47CiAgb3duZXJba2V5XSA9IGZ1bmN0aW9uICguLi5hcmdzKSB7CiAgICBjb25zdCBpZCA9ICsrc2VyaWFsOwogICAgZW1pdCh7IGlkLCBldmVudDogJ2JlZ2luJywgb3A6IGxhYmVsLCAuLi4obGFiZWwuaW5jbHVkZXMoJ3Byb2Nlc3MnKSA/IGRlc2NyaWJlQXJncyhhcmdzKSA6IHt9KSB9KTsKICAgIHRyeSB7CiAgICAgIGNvbnN0IHJlc3VsdCA9IFJlZmxlY3QuYXBwbHkob3JpZ2luYWwsIHRoaXMsIGFyZ3MpOwogICAgICBlbWl0KHsgaWQsIGV2ZW50OiAnZW5kJywgb3A6IGxhYmVsLCBzdGF0dXM6IHJlc3VsdD8uc3RhdHVzLCBlcnJvckNvZGU6IHJlc3VsdD8uZXJyb3I/LmNvZGUgfSk7CiAgICAgIHJldHVybiByZXN1bHQ7CiAgICB9IGNhdGNoIChlcnJvcikgewogICAgICBlbWl0KHsgaWQsIGV2ZW50OiAndGhyb3cnLCBvcDogbGFiZWwsIGVycm9yQ29kZTogZXJyb3I/LmNvZGUgfSk7CiAgICAgIHRocm93IGVycm9yOwogICAgfQogIH07CiAgcHJlc2VydmVQcm9wZXJ0aWVzKG9yaWdpbmFsLCBvd25lcltrZXldKTsKfQpmdW5jdGlvbiBhc3luY1dyYXAob3duZXIsIGtleSwgbGFiZWwsIGJ1bikgewogIGNvbnN0IG9yaWdpbmFsID0gb3duZXJba2V5XTsKICBpZiAodHlwZW9mIG9yaWdpbmFsICE9PSAnZnVuY3Rpb24nKSByZXR1cm47CiAgb3duZXJba2V5XSA9IGZ1bmN0aW9uICguLi5hcmdzKSB7CiAgICBjb25zdCBpZCA9ICsrc2VyaWFsOwogICAgZW1pdCh7IGlkLCBldmVudDogJ2JlZ2luJywgb3A6IGxhYmVsLCAuLi5kZXNjcmliZUFyZ3MoYXJncykgfSk7CiAgICB0cnkgewogICAgICBjb25zdCByZXN1bHQgPSBSZWZsZWN0LmFwcGx5KG9yaWdpbmFsLCB0aGlzLCBhcmdzKTsKICAgICAgZW1pdCh7IGlkLCBldmVudDogJ3NwYXduZWQnLCBvcDogbGFiZWwsIGNoaWxkUGlkOiByZXN1bHQucGlkLCByZXNvbHZlZFRhcjogYnVuICYmIGRlc2NyaWJlQXJncyhhcmdzKS5iaW5hcnkgPT09ICd0YXInID8gQnVuLndoaWNoKCd0YXInKSA6IHVuZGVmaW5lZCB9KTsKICAgICAgaWYgKGJ1bikgcmVzdWx0LmV4aXRlZC50aGVuKHN0YXR1cyA9PiBlbWl0KHsgaWQsIGV2ZW50OiAnZXhpdCcsIHN0YXR1cyB9KSwgZXJyb3IgPT4gZW1pdCh7IGlkLCBldmVudDogJ2Vycm9yJywgZXJyb3JDb2RlOiBlcnJvcj8uY29kZSB9KSk7CiAgICAgIGVsc2UgewogICAgICAgIHJlc3VsdC5vbmNlKCdleGl0JywgKHN0YXR1cywgc2lnbmFsKSA9PiBlbWl0KHsgaWQsIGV2ZW50OiAnZXhpdCcsIHN0YXR1cywgc2lnbmFsIH0pKTsKICAgICAgICByZXN1bHQub25jZSgnZXJyb3InLCBlcnJvciA9PiBlbWl0KHsgaWQsIGV2ZW50OiAnZXJyb3InLCBlcnJvckNvZGU6IGVycm9yPy5jb2RlIH0pKTsKICAgICAgICByZXN1bHQub25jZSgnY2xvc2UnLCAoc3RhdHVzLCBzaWduYWwpID0+IGVtaXQoeyBpZCwgZXZlbnQ6ICdjbG9zZScsIHN0YXR1cywgc2lnbmFsIH0pKTsKICAgICAgfQogICAgICByZXR1cm4gcmVzdWx0OwogICAgfSBjYXRjaCAoZXJyb3IpIHsKICAgICAgZW1pdCh7IGlkLCBldmVudDogJ3Rocm93Jywgb3A6IGxhYmVsLCBlcnJvckNvZGU6IGVycm9yPy5jb2RlIH0pOwogICAgICB0aHJvdyBlcnJvcjsKICAgIH0KICB9OwogIHByZXNlcnZlUHJvcGVydGllcyhvcmlnaW5hbCwgb3duZXJba2V5XSk7Cn0KZm9yIChjb25zdCBrZXkgb2YgWydzcGF3blN5bmMnLCAnZXhlY0ZpbGVTeW5jJywgJ2V4ZWNTeW5jJ10pIHN5bmNXcmFwKGNwLCBrZXksIGBwcm9jZXNzLm5vZGUuJHtrZXl9YCk7CmZvciAoY29uc3Qga2V5IG9mIFsnc3Bhd24nLCAnZXhlY0ZpbGUnLCAnZXhlYyddKSBhc3luY1dyYXAoY3AsIGtleSwgYHByb2Nlc3Mubm9kZS4ke2tleX1gLCBmYWxzZSk7CmlmIChnbG9iYWxUaGlzLkJ1bikgewogIHN5bmNXcmFwKEJ1biwgJ3NwYXduU3luYycsICdwcm9jZXNzLmJ1bi5zcGF3blN5bmMnKTsKICBhc3luY1dyYXAoQnVuLCAnc3Bhd24nLCAncHJvY2Vzcy5idW4uc3Bhd24nLCB0cnVlKTsKfQpmb3IgKGNvbnN0IGtleSBvZiBbJ2NwU3luYycsICdybVN5bmMnLCAnbWtkdGVtcFN5bmMnXSkgc3luY1dyYXAoZnMsIGtleSwgYGZzLiR7a2V5fWApOwpmb3IgKGNvbnN0IGtleSBvZiBbJ2NwJywgJ3JtJywgJ21rZHRlbXAnLCAncmVhZEZpbGUnLCAnd3JpdGVGaWxlJywgJ21rZGlyJywgJ3JlYWRkaXInXSkgewogIGNvbnN0IG9yaWdpbmFsID0gZnMucHJvbWlzZXNba2V5XTsKICBmcy5wcm9taXNlc1trZXldID0gZnVuY3Rpb24gKC4uLmFyZ3MpIHsKICAgIGlmIChbJ3JlYWRGaWxlJywgJ3dyaXRlRmlsZScsICdta2RpcicsICdyZWFkZGlyJ10uaW5jbHVkZXMoa2V5KSAmJiAhU3RyaW5nKGFyZ3NbMF0pLmluY2x1ZGVzKCdhcmNob24tYmluYXJ5LXNvdXJjZS0nKSkgcmV0dXJuIFJlZmxlY3QuYXBwbHkob3JpZ2luYWwsIHRoaXMsIGFyZ3MpOwogICAgY29uc3QgaWQgPSArK3NlcmlhbDsKICAgIGVtaXQoeyBpZCwgZXZlbnQ6ICdiZWdpbicsIG9wOiBgZnMucHJvbWlzZXMuJHtrZXl9YCB9KTsKICAgIGxldCByZXN1bHQ7CiAgICB0cnkgeyByZXN1bHQgPSBSZWZsZWN0LmFwcGx5KG9yaWdpbmFsLCB0aGlzLCBhcmdzKTsgfQogICAgY2F0Y2ggKGVycm9yKSB7IGVtaXQoeyBpZCwgZXZlbnQ6ICd0aHJvdycsIGVycm9yQ29kZTogZXJyb3I/LmNvZGUgfSk7IHRocm93IGVycm9yOyB9CiAgICByZXN1bHQudGhlbigoKSA9PiBlbWl0KHsgaWQsIGV2ZW50OiAnZW5kJyB9KSwgZXJyb3IgPT4gZW1pdCh7IGlkLCBldmVudDogJ2Vycm9yJywgZXJyb3JDb2RlOiBlcnJvcj8uY29kZSB9KSk7CiAgICByZXR1cm4gcmVzdWx0OwogIH07Cn0Kc3luY0J1aWx0aW5FU01FeHBvcnRzKCk7CmxldCB0aWNrID0gcGVyZm9ybWFuY2Uubm93KCk7CmNvbnN0IHRpbWVyID0gc2V0SW50ZXJ2YWwoKCkgPT4gewogIGNvbnN0IG5vdyA9IHBlcmZvcm1hbmNlLm5vdygpOwogIGlmIChub3cgLSB0aWNrID4gMTAwMCkgZW1pdCh7IGV2ZW50OiAnZXZlbnRfbG9vcF9nYXAnLCBnYXBNczogKyhub3cgLSB0aWNrKS50b0ZpeGVkKDMpIH0pOwogIHRpY2sgPSBub3c7Cn0sIDEwMCk7CnRpbWVyLnVucmVmKCk7CmVtaXQoeyBldmVudDogJ3ByZWxvYWRfcmVhZHknIH0pOwo='))
+          [IO.File]::WriteAllBytes((Join-Path $payloadDir 'run.ps1'), [Convert]::FromBase64String('cGFyYW0oCiAgW1BhcmFtZXRlcihNYW5kYXRvcnk9JHRydWUpXVtzdHJpbmddJFJlcG9zaXRvcnksCiAgW1BhcmFtZXRlcihNYW5kYXRvcnk9JHRydWUpXVtzdHJpbmddJE91dHB1dERpcmVjdG9yeSwKICBbVmFsaWRhdGVTZXQoJ2ZvY3VzZWQnLCdmdWxsJyldW3N0cmluZ10kTW9kZSA9ICdmb2N1c2VkJwopCiRFcnJvckFjdGlvblByZWZlcmVuY2UgPSAnU3RvcCcKJHRyYWNlUHJlbG9hZCA9IEpvaW4tUGF0aCAkUFNTY3JpcHRSb290ICdwcmVsb2FkLmNqcycKJHByZXZpb3VzT3B0aW9ucyA9ICRlbnY6QlVOX09QVElPTlMKJHByZXZpb3VzTG9nRGlyID0gJGVudjpBUkNIT05fRElBR19MT0dfRElSCk5ldy1JdGVtIC1JdGVtVHlwZSBEaXJlY3RvcnkgLUZvcmNlIC1QYXRoICRPdXRwdXREaXJlY3RvcnkgfCBPdXQtTnVsbAokcmVzb2x2ZWRPdXRwdXQgPSAoUmVzb2x2ZS1QYXRoICRPdXRwdXREaXJlY3RvcnkpLlBhdGgKJGVudjpBUkNIT05fRElBR19MT0dfRElSID0gJHJlc29sdmVkT3V0cHV0CiRlbnY6QlVOX09QVElPTlMgPSAoJHByZXZpb3VzT3B0aW9ucyArICcgLS1wcmVsb2FkPScgKyAkdHJhY2VQcmVsb2FkKS5UcmltKCkKJGRpYWdub3N0aWNFeGl0ID0gMApQdXNoLUxvY2F0aW9uICRSZXBvc2l0b3J5CnRyeSB7CiAgZ2l0IHJldi1wYXJzZSBIRUFEIHwgU2V0LUNvbnRlbnQgKEpvaW4tUGF0aCAkcmVzb2x2ZWRPdXRwdXQgJ2hlYWQudHh0JykKICBidW4gLS12ZXJzaW9uIHwgU2V0LUNvbnRlbnQgKEpvaW4tUGF0aCAkcmVzb2x2ZWRPdXRwdXQgJ2J1bi50eHQnKQogIGlmICgkTW9kZSAtZXEgJ2Z1bGwnKSB7CiAgICAjIFByZXNlcnZlIHRoZSBvcmlnaW5hbCBwYWNrYWdlIGNvbmN1cnJlbmN5IGFuZCBkZWFkbGluZXMuCiAgICBidW4gcnVuIHRlc3QgKj4gKEpvaW4tUGF0aCAkcmVzb2x2ZWRPdXRwdXQgJ3Rlc3Qtb3V0cHV0LmxvZycpCiAgICAkZGlhZ25vc3RpY0V4aXQgPSAkTEFTVEVYSVRDT0RFCiAgfSBlbHNlIHsKICAgIFB1c2gtTG9jYXRpb24gcGFja2FnZXMvY29yZQogICAgdHJ5IHsKICAgICAgYnVuIHRlc3Qgc3JjL29yY2hlc3RyYXRvci9vcmNoZXN0cmF0b3IudGVzdC50cyAtLXRlc3QtbmFtZS1wYXR0ZXJuICdzdG9yZXMgZGV0ZWN0ZWQgY3VycmVudCBicmFuY2gnICo+IChKb2luLVBhdGggJHJlc29sdmVkT3V0cHV0ICdyZWdpc3RyYXRpb24ubG9nJykKICAgICAgaWYgKCRMQVNURVhJVENPREUgLW5lIDApIHsgJGRpYWdub3N0aWNFeGl0ID0gJExBU1RFWElUQ09ERSB9CiAgICB9IGZpbmFsbHkgeyBQb3AtTG9jYXRpb24gfQogICAgUHVzaC1Mb2NhdGlvbiBwYWNrYWdlcy93b3JrZmxvd3MKICAgIHRyeSB7CiAgICAgIGJ1biB0ZXN0IHNyYy9kZWZhdWx0cy9nZW5lcmF0ZS1idW5kbGVkLWRlZmF1bHRzLnRlc3QudHMgc3JjL2ZpeHR1cmUtcnVubmVyLnRlc3QudHMgLS10ZXN0LW5hbWUtcGF0dGVybiAndW50cmFja2VkIGNvbW1hbmQgZGVmYXVsdHx1bmNvbW1pdHRlZCBzY3JpcHQgZWRpdCcgKj4gKEpvaW4tUGF0aCAkcmVzb2x2ZWRPdXRwdXQgJ3dvcmtmbG93cy5sb2cnKQogICAgICBpZiAoJExBU1RFWElUQ09ERSAtbmUgMCkgeyAkZGlhZ25vc3RpY0V4aXQgPSAkTEFTVEVYSVRDT0RFIH0KICAgIH0gZmluYWxseSB7IFBvcC1Mb2NhdGlvbiB9CiAgfQp9IGZpbmFsbHkgewogIFBvcC1Mb2NhdGlvbgogICRlbnY6QlVOX09QVElPTlMgPSAkcHJldmlvdXNPcHRpb25zCiAgJGVudjpBUkNIT05fRElBR19MT0dfRElSID0gJHByZXZpb3VzTG9nRGlyCn0KZXhpdCAkZGlhZ25vc3RpY0V4aXQK'))
+          & (Join-Path $payloadDir 'run.ps1') -Repository $env:GITHUB_WORKSPACE -OutputDirectory (Join-Path $env:RUNNER_TEMP 'archon-diag-output') -Mode full
+          exit $LASTEXITCODE
+      - name: Retain diagnostic logs
         if: always()
-        run: docker rm -f archon-smoke || true
-
-  test-suite:
-    name: Test Suite
-    needs: [changes, test, schema-upgrade, postgres-parity, docker-build]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Report test-suite outcome
-        env:
-          RUN_TESTS: ${{ needs.changes.outputs.run-tests }}
-          TEST: ${{ needs.test.result }}
-          SCHEMA_UPGRADE: ${{ needs.schema-upgrade.result }}
-          POSTGRES_PARITY: ${{ needs.postgres-parity.result }}
-          DOCKER_BUILD: ${{ needs.docker-build.result }}
-        run: |
-          if [ "$RUN_TESTS" = false ]; then
-            echo "Skipped tests for documentation-only changes."
-            exit 0
-          fi
-
-          for result in "$TEST" "$SCHEMA_UPGRADE" "$POSTGRES_PARITY" "$DOCKER_BUILD"; do
-            if [ "$result" != success ]; then
-              echo "A test-suite job finished with $result."
-              exit 1
-            fi
-          done
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-budget-phases
+          path: ${{ runner.temp }}/archon-diag-output

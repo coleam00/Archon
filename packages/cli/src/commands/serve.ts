@@ -225,8 +225,24 @@ export async function downloadWebDist(
     // Drain stderr while waiting rather than after: a pipe nobody reads is the
     // same deadlock in the other direction once `tar` fills its buffer.
     const [exitCode, stderrText] = await Promise.all([
-      proc.exited,
-      new Response(proc.stderr).text(),
+      proc.exited.then(exitCode => {
+        log.info(
+          { tarPid: proc.pid, exitCode, durationMs: Math.round(performance.now() - spawnedAt) },
+          'web_dist.diag_child_exited'
+        );
+        return exitCode;
+      }),
+      new Response(proc.stderr).text().then(stderr => {
+        log.info(
+          {
+            tarPid: proc.pid,
+            bytes: stderr.length,
+            durationMs: Math.round(performance.now() - spawnedAt),
+          },
+          'web_dist.diag_stderr_drained'
+        );
+        return stderr;
+      }),
     ]);
     extractionEndedAt = performance.now();
     log.info(
