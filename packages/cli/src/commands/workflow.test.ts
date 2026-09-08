@@ -5348,6 +5348,31 @@ describe('workflowGetCommand', () => {
     }
   });
 
+  it('keeps resolved output paths when the optional leave-behind lookup fails', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const outputRoot = join(getArchonHome(), 'workspaces', 'acme', 'widget');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-adoption-unavailable',
+      workflow_name: 'implement',
+      status: 'completed',
+      started_at: new Date(),
+      metadata: {},
+      output_root: outputRoot,
+      codebase_id: null,
+    });
+    (workflowDb.findAdoptingRuns as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error('adoption lookup unavailable')
+    );
+
+    expect(await workflowGetCommand('run-adoption-unavailable', true)).toBe(0);
+    const output = JSON.parse(firstJsonPayload(stdoutSpy));
+    expect(output).toMatchObject({
+      artifacts_dir: join(outputRoot, 'artifacts', 'runs', 'run-adoption-unavailable'),
+      transcript_path: join(outputRoot, 'logs', 'run-adoption-unavailable.jsonl'),
+    });
+    expect(output.leave_behind).toBeUndefined();
+  });
+
   it('re-derives an out-of-tree historical path through the run codebase', async () => {
     const previousHome = process.env.ARCHON_HOME;
     const archonHome = join(tmpdir(), 'archon-get-relocated-home');
@@ -5365,8 +5390,6 @@ describe('workflowGetCommand', () => {
         output_root: '/old-machine/.archon/workspaces/old/name',
         codebase_id: 'cb-relocated',
       });
-      // Both readers in workflow get consult the codebase row; the resolver
-      // re-derives identically on each call against the same id.
       (codebaseDb.getCodebase as ReturnType<typeof mock>).mockResolvedValue({
         id: 'cb-relocated',
         kind: 'repo',
@@ -5484,8 +5507,6 @@ describe('workflowGetCommand', () => {
         output_root: '/old-machine/.archon/workspaces/old/name',
         codebase_id: 'cb-relocated-artifact',
       });
-      // Both readers in workflow get consult the codebase row; the resolver
-      // re-derives identically on each call against the same id.
       (codebaseDb.getCodebase as ReturnType<typeof mock>).mockResolvedValue({
         id: 'cb-relocated-artifact',
         kind: 'repo',
