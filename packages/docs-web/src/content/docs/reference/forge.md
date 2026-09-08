@@ -1,6 +1,6 @@
 ---
 title: Forge operations
-description: Qualified forge operations, pinned merges, and the versioned plugin protocol.
+description: Qualified public operations, pinned merges, and the versioned forge plugin protocol.
 ---
 
 `archon forge resolve --json` resolves `origin` once to a repository with `host` and
@@ -95,6 +95,57 @@ Offline tests exercise actual Git uploads and atomic ref transactions. The earli
 disposable-ref probe establishes API CAS capability only; full live PR read-back
 and branch-protection behavior require a separate isolated integration run.
 
+## Public PR lifecycle
+
+Use `archon forge pr view|create|edit-body|ready --request - --json`,
+`archon forge work-item view --request - --json`, or
+`archon forge comment upsert --request - --json`. Supply the request JSON on stdin
+(or use `--request-file <file>`, `--request-file -`, or inline `--request` JSON). The CLI selects the operation; credentials
+never belong in the request. Generated wire schemas document every field.
+
+A PR record contains `ref: {repo: {host, path}, number}`, `url`, `head_repo`,
+`head`, `base`, `head_sha`, `is_draft`, `state`, `title` and `body`.
+View takes `ref`. Create takes `repo`, `head_repo`, `head`, `base`, `head_sha`,
+`title`, `body`, and `is_draft`. The head must already be pushed. Edit-body and
+ready take `ref` plus `expected: {head_repo, head, base, head_sha}`; edit-body also
+takes `body`. Writes refuse a closed PR or mismatched expected identity.
+
+Create searches the qualified head before creating; a retry after an accepted
+write with a lost response reads the existing PR. Reuse preserves its title, body
+and draft state. An ambiguous head or a different base, head repository, or SHA
+refuses. Content and draft changes require their explicit operations. Body edits
+and ready are idempotent. GitHub ready uses
+[markPullRequestReadyForReview](https://docs.github.com/en/graphql/reference/mutations#markpullrequestreadyforreview)
+and reads the PR back; a successful mutation response with a draft PR still fails.
+
+Comment upsert takes `target`, `marker` and `body`. A PR target is
+`{kind: "pr", ref, expected}`; a work-item target is `{kind: "workitem", ref}`.
+The marker must look like `<!-- archon-review-report -->` and becomes the first
+line. All comments are searched, up to 100 pages of 100, before a write. An
+incomplete enumeration or duplicate markers refuses. Read-back verifies target,
+comment ID and exact body. Work-item operations reject GitHub PRs at the shared
+issues endpoint. Serialize concurrent writers to one marker: GitHub provides no
+atomic marker uniqueness constraint; ambiguity is reported rather than hidden.
+
+All writes validate target identity and relevant fields after writing. A response
+lost after submission returns `verify_failed` with a possible leave-behind; the
+engine does not delete it. Retry the same request to reconcile. GitHub cannot
+atomically condition these mutations on a head SHA, so a concurrent push can be
+detected by read-back after a write has already happened. The refusal reports this
+limit rather than claiming an atomic transaction.
+
+The built-in GitHub plugin supports github.com. Explicit token configuration keeps
+precedence. On solo CLI installs without an environment token, the CLI host invokes
+[`gh auth token --hostname github.com`](https://cli.github.com/manual/gh_auth_token)
+for the OS user's active account, respecting `GH_CONFIG_DIR` and the native keyring.
+The token stays in memory and is neither printed nor stored. This lookup is disabled
+in Archon's per-user GitHub mode and for explicitly scrubbed tokens: service hosts
+must inject the selected user's credential. No provider configuration is replaced.
+Self-hosted credentials remain the configured plugin's responsibility.
+
+These are implementation choices for this slice, not approval of all broader
+credential, invocation-gate or plugin-distribution designs discussed in #3040.
+
 ## Plugins
 
 A plugin responds to `<executable> metadata` and `<executable> op <op-id>`.
@@ -106,7 +157,9 @@ failure. Protocol 1 is a small compatibility integer, separate from the plugin
 release version. Unknown metadata fields and additive capability strings are
 allowed. Undeclared capabilities return `unsupported_op` before execution.
 
-The implemented capabilities include `resolve`, `checks.state`, and `pr.merge-pinned`. Resolve is the
+The implemented capabilities include `resolve`, `checks.state`, `pr.merge-pinned`,
+`pr.view`, `pr.create`, `pr.edit-body`, `pr.ready`, `workitem.view` and
+`comment.upsert`. Resolve is the
 protocol root operation; subsequent forge intents use namespaced identifiers.
 Plugins receive a qualified repository for resolve and a qualified PR for checks.
 Metadata includes `protocol`, `name`, `version`, `forge`, canonical SaaS `hosts`,
@@ -142,10 +195,10 @@ with an argument array for a script plugin. Commands never use shell interpolati
 ```
 
 This is an install-owned forge configuration file for the initial seam. It does
-not replace provider settings or credential storage. GitHub initially accepts
+not replace provider settings or credential storage. GitHub accepts
 `GH_TOKEN`, then `GITHUB_TOKEN`, from the effective environment. Missing credentials
-return `no_credential`. No token is read from `gh` storage or passed in argv, URLs,
-or request JSON. Re-entry from a workflow preserves the host's credential selection
+return `no_credential` after the supported native CLI lookup described above. Tokens
+never travel in argv, URLs, or request JSON. Re-entry preserves the host's credential selection
 instead of reloading env files and restoring scrubbed tokens.
 
 Plugins are trusted local code, not a sandbox. Installing one permits code execution
@@ -176,7 +229,6 @@ engine `exec_output` transcript retains those records with the node's output.
 There is no global sidecar log. A separate persisted workflow-event and console
 projection are not part of this transcript integration.
 
-PR create/view/edit-body/ready, work-item view, marked comment upsert and
-trigger operations remain follow-ups. Per-user/per-host credential storage,
+Trigger operations remain follow-ups. Per-user/per-host credential storage,
 generalized invocation requirements and doctor support are also not implemented
 here. The current `requires: [github]` semantics remain in force.

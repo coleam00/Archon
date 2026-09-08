@@ -19,7 +19,7 @@ impl__implement:
 impl__assert-changed: "3 files changed"
 # gate-green, gate-correction-green, gate-ready and gate-validated are deliberately
 # unstubbed: the real scripts must accept this run at every gate it reaches.
-pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 7, url: "https://github.com/example/repo/pull/7", head: "fixture-branch", base: "dev", is_draft: true }
+pr__pr: {"url": "https://github.com/example/repo/pull/7", "head": "fixture-branch", "base": "dev", "is_draft": true, "ref": {"repo": {"host": "github.com", "path": "example/repo"}, "number": 7}, "head_repo": {"host": "github.com", "path": "example/repo"}, "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "state": "open", "title": "Fixture", "body": "Fixture"}
 classify:
   errors: false
   docs: false
@@ -61,4 +61,18 @@ fixture:
   reached: [fix__assert-changed, gate-correction-green, recheck__synthesize, gate-ready, gate-validated, ci-probe]
 exec-code: true
 
-forge-repo: { host: "github.com", path: "example/repo" }
+
+pr__prepare:
+  title: Fixture
+  body: Fixture
+  base: dev
+review__publish:
+  ready: false
+  action: correct
+  findings_summary: 'stub: 1 Important finding open'
+recheck__publish:
+  ready: true
+  action: none
+  findings_summary: 'stub: no open Critical/Important'
+prepare-pr-body:
+  body: Fixture

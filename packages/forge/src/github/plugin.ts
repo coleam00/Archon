@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { mergePinnedGitHub, type PinnedMergeOptions } from './pinned-merge';
 import { PINNED_MERGE_OP, pinnedMergeRequestSchema } from '../pinned-merge-schemas';
+import { publicResultSchemas } from '../schemas';
+import { publicOperation } from './public';
 import {
   CHECKS,
   CHECKS_STATE_OP,
@@ -27,7 +29,7 @@ const metadata: PluginMetadata = {
   version: '1.0.0',
   forge: 'github',
   hosts: [GITHUB_HOST],
-  capabilities: [RESOLVE_OP, CHECKS_STATE_OP, PINNED_MERGE_OP],
+  capabilities: [RESOLVE_OP, CHECKS_STATE_OP, PINNED_MERGE_OP, ...Object.keys(publicResultSchemas)],
   token_env: 'GH_TOKEN',
 };
 // Validate the REST fields we consume. Open strings preserve unknown upstream states.
@@ -251,6 +253,14 @@ export function createGitHubPlugin(options: GitHubPluginOptions = {}): BuiltinPl
             raw: { kind: 'invalid_request', detail: 'Invalid pinned merge request' },
           };
         return mergePinnedGitHub(parsed.data, env, options, signal);
+      }
+      if (Object.hasOwn(publicResultSchemas, op)) {
+        return publicOperation(
+          typeof request === 'object' && request !== null ? { ...request, op } : null,
+          env,
+          options,
+          signal
+        );
       }
       if (op === RESOLVE_OP) {
         const parsed = resolveRequestSchema.safeParse(request);

@@ -7,7 +7,7 @@ impl__implement:
   summary: "stub: implementation preserved one adjacent discovery"
 impl__assert-changed: "2 files changed"
 gate-green: '{"gate":"green"}'
-pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 5, url: "https://github.com/example/repo/pull/5", head: "fixture-branch", base: "dev", is_draft: true }
+pr__pr: {"url": "https://github.com/example/repo/pull/5", "head": "fixture-branch", "base": "dev", "is_draft": true, "ref": {"repo": {"host": "github.com", "path": "example/repo"}, "number": 5}, "head_repo": {"host": "github.com", "path": "example/repo"}, "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "state": "open", "title": "Fixture", "body": "Fixture"}
 classify:
   errors: false
   docs: false
@@ -41,4 +41,12 @@ outcome: "https://github.com/example/repo/pull/5"
 fixture:
   expect: completed
 
-forge-repo: { host: "github.com", path: "example/repo" }
+
+pr__prepare:
+  title: Fixture
+  body: Fixture
+  base: dev
+review__publish:
+  ready: true
+  action: none
+  findings_summary: 'stub: no blockers; one adjacent discovery preserved'

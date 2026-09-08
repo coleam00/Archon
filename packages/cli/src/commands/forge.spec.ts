@@ -67,24 +67,27 @@ async function invoke(
   return { code, stdout, stderr };
 }
 describe('forge CLI real subprocess', () => {
-  it('accepts pinned merge requests from a file and stdin through the maintained plugin', async () => {
-    const f = await fixture();
-    const request = JSON.stringify({
-      ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 42 },
-      expected_head_ref: 'refs/heads/head',
-      expected_head_sha: 'a'.repeat(40),
-      expected_base_ref: 'refs/heads/base',
-      expected_base_sha: 'b'.repeat(40),
-      candidate_sha: 'c'.repeat(40),
-      checkout: f.root,
-    });
-    const file = join(f.home, 'merge.json');
-    await writeFile(file, request);
-    for (const source of [file, '-']) {
+  it.each(['inline', 'stdin', 'file', 'file-stdin'] as const)(
+    'accepts pinned merge requests from %s through the maintained plugin',
+    async mode => {
+      const f = await fixture();
+      const request = JSON.stringify({
+        ref: { repo: { host: 'github.com', path: 'owner/repo' }, number: 42 },
+        expected_head_ref: 'refs/heads/head',
+        expected_head_sha: 'a'.repeat(40),
+        expected_base_ref: 'refs/heads/base',
+        expected_base_sha: 'b'.repeat(40),
+        candidate_sha: 'c'.repeat(40),
+        checkout: f.root,
+      });
+      const file = join(f.home, 'merge.json');
+      await writeFile(file, request);
+      const flag = mode.startsWith('file') ? '--request-file' : '--request';
+      const source = mode === 'file' ? file : mode === 'inline' ? request : '-';
       const result = await invoke(
         f.root,
         { ...f.env, GH_TOKEN: 'selected-test-token' },
-        ['forge', 'pr', 'merge-pinned', '--request-file', source, '--json'],
+        ['forge', 'pr', 'merge-pinned', flag, source, '--json'],
         source === '-' ? request : undefined
       );
       // The real plugin rejects this unrelated checkout before contacting GitHub.
@@ -97,7 +100,7 @@ describe('forge CLI real subprocess', () => {
       expect(result.stderr).toContain('"op":"pr.merge-pinned"');
       expect(result.stdout + result.stderr).not.toContain('selected-test-token');
     }
-  });
+  );
   it('uses explicit interpreter config, qualified identity, and separate audit output', async () => {
     const f = await fixture();
     const resolution = await invoke(f.root, f.env, ['forge', 'resolve', '--json']);
@@ -169,8 +172,10 @@ describe('forge CLI real subprocess', () => {
       cwd: f.root,
       env: {
         ...f.env,
-        INPUTS_REPO: JSON.stringify({ host: 'fixture.test', path: 'owner/repo' }),
-        INPUTS_PR_NUMBER: '42',
+        INPUTS_REF: JSON.stringify({
+          repo: { host: 'fixture.test', path: 'owner/repo' },
+          number: 42,
+        }),
       },
       stdout: 'pipe',
       stderr: 'pipe',

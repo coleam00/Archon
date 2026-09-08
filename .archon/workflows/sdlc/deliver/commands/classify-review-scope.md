@@ -6,7 +6,7 @@ and **docs** are yours to select. No one watches this run; your structured
 verdict is the only thing downstream nodes read.
 
 Ground the decision in the PR itself, not the work item: read the current
-branch's pull request description and its complete diff (the `gh` CLI is
+branch's pull request description and its complete diff (the the repository's forge CLI CLI is
 available; the PR for this branch was opened by an earlier node). Judge what is
 actually in the change. Do not modify any file.
 

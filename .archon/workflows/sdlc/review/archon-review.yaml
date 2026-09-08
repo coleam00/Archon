@@ -45,7 +45,7 @@ inputs:
       Docs-impact lens — auto selects shipped-documentation changes from the
       reviewed diff; true or false overrides that selection.
 
-returns: synthesize
+returns: publish
 outcome_field: ready
 
 nodes:
@@ -158,7 +158,7 @@ nodes:
     context: fresh
     output_type: review-report
     depends_on: [scope, review-complete]
-    output_format:
+    output_format: &review-result
       type: object
       properties:
         ready:
@@ -169,3 +169,11 @@ nodes:
         findings_summary:
           type: string
       required: [ready, action, findings_summary]
+
+  - id: publish
+    output_format: *review-result
+    script: publish-review
+    runtime: uv
+    depends_on: [synthesize]
+    with:
+      verdict: "$synthesize.output"

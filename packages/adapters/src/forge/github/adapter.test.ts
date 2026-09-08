@@ -38,7 +38,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BUNDLED_WORKFLOWS } from '@archon/workflows/defaults';
 import { parseWorkflow } from '@archon/workflows/loader';
-import { validateStructuredOutput } from '@archon/providers';
+import { prRecordSchema } from '@archon/forge';
 import type { WorkflowEventSignalCandidate } from '@archon/core/db/workflows';
 
 // Mock logger to suppress noisy output during tests
@@ -450,15 +450,26 @@ describe('GitHubAdapter', () => {
       else process.env.GITHUB_ALLOWED_USERS = originalAllowedUsers;
     });
 
-    test('the adapter matcher accepts the bundled PR producer contract', () => {
+    test('the adapter matcher accepts the bundled PR producer contract', async () => {
       const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-pr'], 'archon-pr.yaml');
       if (parsed.workflow === null) throw new Error(parsed.error.error);
       const node = parsed.workflow.nodes.find(item => item.id === 'pr');
-      if (node?.kind !== 'agent' || node.output_format === undefined) {
-        throw new Error('archon-pr does not expose an agent output contract');
+      if (node?.kind !== 'exec') {
+        throw new Error('archon-pr does not expose a deterministic producer');
       }
       expect(node.output_type).toBe('pull-request');
-      expect(validateStructuredOutput(pullRequestRecord, node.output_format).valid).toBe(true);
+      const record = prRecordSchema.parse({
+        ...pullRequestRecord,
+        ref: { repo: pullRequestRecord.repo, number: pullRequestRecord.number },
+        head_repo: pullRequestRecord.repo,
+        head_sha: 'a'.repeat(40),
+        state: 'open',
+        title: 'Fixture',
+        body: 'Fixture',
+      });
+      listCandidatesSpy.mockImplementation(async () => [candidate('run-schema', record)]);
+      await deliver(payload());
+      expect(signalWaitSpy).toHaveBeenCalledWith('run-schema', wait, { conclusion: 'success' });
     });
 
     test('signals the exact matching wait and bypasses the human sender allowlist', async () => {

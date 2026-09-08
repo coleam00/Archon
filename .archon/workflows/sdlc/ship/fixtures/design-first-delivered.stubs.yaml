@@ -37,6 +37,7 @@ deliver__review__synthesize:
   findings_summary: "stub: no open findings"
 deliver__review-action: '{"ready":true,"action":"none"}'
 deliver__validate__validate:
+  checks_performed: true
   green: true
   summary: "stub: project gate green"
 ci-probe: '{"state":"concluded","detail":"all checks green"}'
@@ -65,7 +66,7 @@ deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
 deliver__flip-ready: "https://github.com/example/repo/pull/3"
 deliver__outcome: "https://github.com/example/repo/pull/3"
 gate-planned: '{"gate":"planned"}'
-deliver__pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 3, url: "https://github.com/example/repo/pull/3", head: "fixture-branch", base: "dev", is_draft: true }
+deliver__pr__pr: {"ref": {"repo": {"host": "github.com", "path": "example/repo"}, "number": 3}, "url": "https://github.com/example/repo/pull/3", "head_repo": {"host": "github.com", "path": "example/repo"}, "head": "fixture-branch", "base": "dev", "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "is_draft": true, "state": "open", "title": "Fixture", "body": "Fixture"}
 deliver__review__mode: '{"continuation":false}'
 deliver__review__scope: "PR diff in scope; head sha stubbed"
 deliver__review__code: "0 findings"
@@ -73,3 +74,12 @@ deliver__review__seams: "0 findings"
 deliver__review__simplify: "0 findings"
 deliver__review__tests: "0 findings"
 deliver__review__review-complete: "settled"
+
+deliver__pr__prepare:
+  title: Fixture
+  body: Fixture
+  base: dev
+deliver__review__publish:
+  ready: true
+  action: none
+  findings_summary: "stub: no open findings"

@@ -16,12 +16,20 @@ import {
   pinnedMergeRequestSchema,
   pinnedMergeResultSchema,
   mergeRecoverySchema,
+  prRecordSchema,
+  workItemRefSchema,
+  publicRequestSchema,
+  publicResultSchemas,
 } from '@archon/forge';
 
 const schemas = {
   PinnedMergeRequest: pinnedMergeRequestSchema,
   PinnedMergeResult: pinnedMergeResultSchema,
   MergeRecovery: mergeRecoverySchema,
+  PrRecord: prRecordSchema,
+  WorkItemRef: workItemRefSchema,
+  PublicRequest: publicRequestSchema,
+  ...publicResultSchemas,
   RepoRef: repoRefSchema,
   PrRef: prRefSchema,
   Metadata: pluginMetadataSchema,

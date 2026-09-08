@@ -13,7 +13,7 @@ impl__implement:
 impl__assert-changed: "3 files changed"
 # gate-green, gate-validated, and gate-ci-fix are deliberately unstubbed: the
 # real gates must accept the inherited classification.
-pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 10, url: "https://github.com/example/repo/pull/10", head: "fixture-branch", base: "dev", is_draft: true }
+pr__pr: {"url": "https://github.com/example/repo/pull/10", "head": "fixture-branch", "base": "dev", "is_draft": true, "ref": {"repo": {"host": "github.com", "path": "example/repo"}, "number": 10}, "head_repo": {"host": "github.com", "path": "example/repo"}, "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "state": "open", "title": "Fixture", "body": "Fixture"}
 classify:
   errors: false
   docs: false
@@ -60,7 +60,19 @@ fixture:
   expect: paused
   reached: [review__synthesize, gate-validated, ci-verdict, ci-fix__assert-changed, gate-ci-fix, ci-recheck__synthesize, ci-recheck-action, ci-round-result, fix-ci-probe, ci-attention-route, attention-ci-probe]
   resolved-text-contains:
-    attention-ci-pause: "pull request #10 after Archon classified the failure as inherited: e2e-smoke (fail) Re-run the failing check, then resume this run."
+    attention-ci-pause: "pull request https://github.com/example/repo/pull/10 after Archon classified the failure as inherited: e2e-smoke (fail) Re-run the failing check, then resume this run."
 exec-code: true
 
-forge-repo: { host: "github.com", path: "example/repo" }
+
+pr__prepare:
+  title: Fixture
+  body: Fixture
+  base: dev
+review__publish:
+  ready: true
+  action: none
+  findings_summary: 'stub: clean on initial review; CI still running'
+ci-recheck__publish:
+  ready: true
+  action: none
+  findings_summary: 'stub: no delta; prior report stands'

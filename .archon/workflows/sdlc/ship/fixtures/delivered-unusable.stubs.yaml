@@ -35,7 +35,7 @@ deliver__impl__implement:
   summary: "stub: direct work implemented and green"
 deliver__impl__assert-changed: "2 files changed"
 deliver__gate-green: '{"gate":"green"}'
-deliver__pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 5, url: "https://github.com/example/repo/pull/5", head: "fixture-branch", base: "dev", is_draft: true }
+deliver__pr__pr: {"url": "https://github.com/example/repo/pull/5", "head": "fixture-branch", "base": "dev", "is_draft": true, "ref": {"repo": {"host": "github.com", "path": "example/repo"}, "number": 5}, "head_repo": {"host": "github.com", "path": "example/repo"}, "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "state": "open", "title": "Fixture", "body": "Fixture"}
 deliver__classify:
   errors: false
   docs: false
@@ -71,4 +71,12 @@ fixture:
   fail-node: outcome
 exec-code: true
 
-deliver__forge-repo: { host: "github.com", path: "example/repo" }
+
+deliver__pr__prepare:
+  title: Fixture
+  body: Fixture
+  base: dev
+deliver__review__publish:
+  ready: true
+  action: none
+  findings_summary: 'stub: no open findings'

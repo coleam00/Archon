@@ -8,6 +8,7 @@
  */
 export * from './schemas';
 export * from './pinned-merge-schemas';
+export { nativeGitHubCredential } from './dispatch/credential';
 export { ForgeDispatcher, DuplicateHostClaimError, parseRemoteUrl } from './dispatch/dispatcher';
 export type {
   ForgeDispatchResult,

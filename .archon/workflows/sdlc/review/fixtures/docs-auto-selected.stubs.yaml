@@ -17,3 +17,8 @@ synthesize:
 fixture:
   expect: completed
   reached: [code, seams, simplify, tests, docs]
+
+publish:
+  ready: true
+  action: none
+  findings_summary: 'stub: clean, docs lens included'

@@ -1,4 +1,4 @@
-# A failed PR node prevents downstream review and publication steps.
+# A failed PR preparation node prevents downstream review and publication steps.
 # Omitted AI stub simulates failure; it does not exercise live fork detection.
 impl__record-start: '{"start":"recorded"}'
 impl__implement:
@@ -7,9 +7,9 @@ impl__implement:
   summary: "stub: implemented and green on the fork's synthetic review branch"
 impl__assert-changed: "2 files changed"
 gate-green: '{"gate":"green"}'
-# pr__pr is deliberately unstubbed to simulate its failure.
+# pr__prepare is deliberately unstubbed to simulate its refusal before publication.
 fixture:
   expect: failed
-  fail-node: pr__pr
+  fail-node: pr__prepare
   reached: [gate-green]
 exec-code: true

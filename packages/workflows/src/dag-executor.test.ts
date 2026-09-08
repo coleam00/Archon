@@ -19199,6 +19199,58 @@ describe('executeDagWorkflow -- typed artifacts (output_type)', () => {
     expect(untypedData).not.toHaveProperty('output_type');
   });
 
+  it.each(['sh', 'bun', 'uv'] as const)(
+    '%s persists the declared output type beside exec JSON for event consumers',
+    async runtime => {
+      const structuredOutput = {
+        ref: { repo: { host: 'github.com', path: 'example/repo' }, number: 42 },
+      };
+      const json = JSON.stringify(structuredOutput);
+      const store = createMockStore();
+      await writeFile(join(testDir, '.archon', 'commands', 'use-ref.md'), '$producer.output.ref');
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow: {
+            name: 'typed-exec-event',
+            nodes: [
+              {
+                id: 'producer',
+                kind: 'exec',
+                runtime,
+                script:
+                  runtime === 'sh'
+                    ? `echo '${json}'`
+                    : runtime === 'bun'
+                      ? `console.log(${JSON.stringify(json)})`
+                      : `print('${json}')`,
+                output_type: 'pull-request',
+                output_format: { type: 'object' },
+              },
+              {
+                id: 'consumer',
+                kind: 'agent',
+                source: { kind: 'command', name: 'use-ref' },
+                depends_on: ['producer'],
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun(),
+        })
+      );
+      const events = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.map(
+        call => call[0] as { event_type: string; step_name?: string; data?: unknown }
+      );
+      expect(
+        events.find(
+          event => event.event_type === 'node_completed' && event.step_name === 'producer'
+        )?.data
+      ).toMatchObject({ output_type: 'pull-request', structured_output: structuredOutput });
+      expect(mockSendQueryDag.mock.calls[0][0]).toContain(JSON.stringify(structuredOutput.ref));
+    }
+  );
+
   it('bash node with output_type writes a sidecar with no sessionId', async () => {
     await executeDagWorkflow(
       dagOptions({
@@ -31561,7 +31613,8 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     const workflow = resolveWorkflow({ ...loaded.workflow, nodes });
     const activeNodeIds = new Set(['ci-attention', 'flip-ready', 'outcome']);
     const inheritedRoute = {
-      number: 3115,
+      ref: { repo: { host: 'github.com', path: 'example/repo' }, number: 3115 },
+      url: 'https://github.com/example/repo/pull/3115',
       attention: true,
       red_cause: 'inherited',
     };
@@ -31599,7 +31652,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     if (firstWait.kind !== 'attention')
       throw new Error('delivery did not persist an attention wait');
     expect(firstWait.message).toContain(
-      'CI remains non-green for pull request #3115 after Archon classified the failure as inherited'
+      'CI remains non-green for pull request https://github.com/example/repo/pull/3115 after Archon classified the failure as inherited'
     );
 
     await writeFile(greenMarkerPath, 'green');

@@ -8,7 +8,7 @@ impl__implement:
   summary: "stub: applied the review finding for PR #7 and committed to its branch"
 impl__assert-changed: "2 files changed"
 gate-green: '{"gate":"green"}'
-pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 7, url: "https://github.com/example/repo/pull/7", head: "fixture-branch", base: "dev", is_draft: false }
+pr__pr: {"ref": {"repo": {"host": "github.com", "path": "example/repo"}, "number": 7}, "url": "https://github.com/example/repo/pull/7", "head_repo": {"host": "github.com", "path": "example/repo"}, "head": "fixture-branch", "base": "dev", "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "is_draft": false, "state": "open", "title": "Fixture", "body": "Fixture"}
 review__mode: '{"continuation":false}'
 review__scope: "PR diff in scope; head sha stubbed"
 review__code: "1 finding (Important)"
@@ -35,6 +35,7 @@ recheck__synthesize:
   findings_summary: "stub: no open Critical/Important"
 sync-pr-body: "body resynced: corrected the claims the correction round falsified"
 validate__validate:
+  checks_performed: true
   green: true
   summary: "stub: full gate green"
 gate-validated: '{"gate":"green"}'
@@ -57,3 +58,18 @@ fixture:
     impl__implement: "repair of an existing pull request on its own branch: commit here and never open another branch or pull request for it"
     fix__implement: "repair of an existing pull request on its own branch: commit here and never open another branch or pull request for it"
 exec-code: true
+
+pr__prepare:
+  title: Fixture
+  body: Fixture
+  base: dev
+review__publish:
+  ready: false
+  action: correct
+  findings_summary: "stub: 1 Important finding open on PR #7"
+recheck__publish:
+  ready: true
+  action: none
+  findings_summary: "stub: no open Critical/Important"
+prepare-pr-body:
+  body: Fixture

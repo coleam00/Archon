@@ -78,11 +78,6 @@ nodes:
       draft: "true"
     depends_on: [gate-green]
 
-  - id: forge-repo
-    script: resolve-forge
-    runtime: uv
-    depends_on: [pr]
-
   # Initial review: full on a first delivery, light continuation when
   # the caller passes the previous run's report (adjudications carry across
   # runs instead of being relitigated).
@@ -97,7 +92,7 @@ nodes:
   - id: classify
     command: classify-review-scope
     model: medium
-    depends_on: [pr, forge-repo]
+    depends_on: [pr]
     mutates_checkout: false
     output_type: review-scope
     output_format:
@@ -128,7 +123,7 @@ nodes:
     with:
       # The PR node's structured read-back is the target authority. Review must
       # not rediscover an ambient branch→PR mapping.
-      scope: "$pr.output.number"
+      scope: "$pr.output.url"
       prior_report: "$INPUTS.prior_report"
       work_order: "$INPUTS.work"
       errors: "$resolve-scope.output.errors"
@@ -182,8 +177,7 @@ nodes:
           script: ci-note
           runtime: uv
           with:
-            repo: "$forge-repo.output"
-            pr_number: "$pr.output.number"
+            ref: "$pr.output.ref"
 
         - id: ci-evidence
           script: console.log(process.env.INPUTS_NOTE ?? '')
@@ -250,7 +244,7 @@ nodes:
         - id: recheck
           include: archon-review
           with:
-            scope: "$pr.output.number"
+            scope: "$pr.output.url"
             prior_report: "$ARTIFACTS_DIR/review/report.md"
             work_order: "$INPUTS.work"
             # Continuation mode owns coverage and skips every specialist,
@@ -292,14 +286,27 @@ nodes:
   # (that would be repeated public writes describing diffs the next iteration
   # falsifies). Skipped when the initial review was already ready: the diff
   # never changed after the body was written.
-  - id: sync-pr-body
+  - id: prepare-pr-body
     command: sync-pr-body
+    output_format:
+      type: object
+      properties:
+        body: { type: string }
+      required: [body]
     model: medium
     with:
-      pr_number: "$pr.output.number"
-      pr_head: "$pr.output.head"
+      pr: "$pr.output"
     depends_on: [gate-ready]
     when: "$review.output.ready == 'false'"
+
+  - id: sync-pr-body
+    script: public-pr
+    runtime: uv
+    depends_on: [prepare-pr-body]
+    with:
+      operation: edit-body
+      pr: "$pr.output"
+      body: "$prepare-pr-body.output.body"
 
   # Final local gate, ALWAYS run: the project's own checks via the validate
   # package. Uniform on every path — and when CI is maintainer-gated (fork
@@ -339,20 +346,19 @@ nodes:
   - id: await-checks
     loop_group:
       max_iterations: 13
-      # Completion computed EXTERNALLY (gh state), never from body-node output
+      # Completion computed EXTERNALLY (forge state), never from body-node output
       # substitution: the resumed-wait completion recheck does not evaluate
       # until_bash against the iteration's outputs (seen flipping a PR
       # with CI still running). Red counts as done here; ci-verdict below is
       # the node that classifies a concluded red — never flip-ready first —
       # and flip-ready's preflight refuses any non-green state regardless.
       until_bash: |
-        uv run python -c 'import json,os,subprocess,sys; ref={"repo":json.loads(sys.argv[1]),"number":int(sys.argv[2])}; p=subprocess.run([os.environ["ARCHON_EXECUTABLE"],*json.loads(os.environ["ARCHON_EXECUTABLE_ARGS"]),"forge","checks","--ref",json.dumps(ref),"--json"],capture_output=True,text=True,encoding="utf-8"); sys.stderr.write(p.stderr); sys.exit(1 if p.returncode else int(json.loads(p.stdout)["state"] == "pending"))' $forge-repo.output $pr.output.number
+        uv run python -c 'import json,os,subprocess,sys; ref=json.loads(sys.argv[1]); p=subprocess.run([os.environ["ARCHON_EXECUTABLE"],*json.loads(os.environ["ARCHON_EXECUTABLE_ARGS"]),"forge","checks","--ref",json.dumps(ref),"--json"],capture_output=True,text=True,encoding="utf-8"); sys.stderr.write(p.stderr); sys.exit(1 if p.returncode else int(json.loads(p.stdout).get("required",json.loads(p.stdout))["state"] == "pending"))' $pr.output.ref
       nodes:
         - id: ci-probe
           script: check-ci
           with:
-            repo: "$forge-repo.output"
-            pr_number: "$pr.output.number"
+            ref: "$pr.output.ref"
           runtime: uv
           # The probe's only in-process wait is the single 60 s registration
           # grace; headroom over the 120 s script default keeps that honest.
@@ -375,8 +381,7 @@ nodes:
   - id: ci-verdict
     script: check-ci
     with:
-      repo: "$forge-repo.output"
-      pr_number: "$pr.output.number"
+      ref: "$pr.output.ref"
     runtime: uv
     timeout: 180000
     depends_on: [await-checks]
@@ -434,7 +439,7 @@ nodes:
         - id: ci-recheck
           include: archon-review
           with:
-            scope: "$pr.output.number"
+            scope: "$pr.output.url"
             prior_report: "$ARTIFACTS_DIR/review/report.md"
             work_order: "$INPUTS.work"
             errors: "$resolve-scope.output.errors"
@@ -467,13 +472,12 @@ nodes:
     loop_group:
       max_iterations: 13
       until_bash: |
-        uv run python -c 'import json,os,subprocess,sys; ref={"repo":json.loads(sys.argv[1]),"number":int(sys.argv[2])}; p=subprocess.run([os.environ["ARCHON_EXECUTABLE"],*json.loads(os.environ["ARCHON_EXECUTABLE_ARGS"]),"forge","checks","--ref",json.dumps(ref),"--json"],capture_output=True,text=True,encoding="utf-8"); sys.stderr.write(p.stderr); sys.exit(1 if p.returncode else int(json.loads(p.stdout)["state"] == "pending"))' $forge-repo.output $pr.output.number
+        uv run python -c 'import json,os,subprocess,sys; ref=json.loads(sys.argv[1]); p=subprocess.run([os.environ["ARCHON_EXECUTABLE"],*json.loads(os.environ["ARCHON_EXECUTABLE_ARGS"]),"forge","checks","--ref",json.dumps(ref),"--json"],capture_output=True,text=True,encoding="utf-8"); sys.stderr.write(p.stderr); sys.exit(1 if p.returncode else int(json.loads(p.stdout).get("required",json.loads(p.stdout))["state"] == "pending"))' $pr.output.ref
       nodes:
         - id: fix-ci-probe
           script: check-ci
           with:
-            repo: "$forge-repo.output"
-            pr_number: "$pr.output.number"
+            ref: "$pr.output.ref"
           runtime: uv
           timeout: 180000
         - id: fix-ci-pause
@@ -505,15 +509,14 @@ nodes:
         - id: attention-ci-probe
           script: check-ci
           with:
-            repo: "$forge-repo.output"
-            pr_number: "$pr.output.number"
+            ref: "$pr.output.ref"
           runtime: uv
           timeout: 180000
         - id: attention-ci-pause
           wait:
             attention: >-
               CI remains non-green for pull request
-              #$pr.output.number after Archon classified the failure as
+              $pr.output.url after Archon classified the failure as
               $ci-attention-route.output.red_cause:
               $attention-ci-probe.output.detail
               Re-run the failing check, then resume this run.
@@ -521,36 +524,12 @@ nodes:
           depends_on: [attention-ci-probe]
 
   - id: flip-ready
-    bash: |
-      set -euo pipefail
-      ORIGIN_REPO=$forge-repo.output.path
-      PR_NUMBER=$pr.output.number
-      # Refuse an unreadable or non-green check set before the existing ready write.
-      uv run python -c 'import json,os,subprocess,sys; ref={"repo":json.loads(sys.argv[1]),"number":int(sys.argv[2])}; p=subprocess.run([os.environ["ARCHON_EXECUTABLE"],*json.loads(os.environ["ARCHON_EXECUTABLE_ARGS"]),"forge","checks","--ref",json.dumps(ref),"--json"],capture_output=True,text=True,encoding="utf-8"); sys.stderr.write(p.stderr); v=json.loads(p.stdout) if p.returncode == 0 else {}; ok=v.get("state") in ("green","none"); sys.stderr.write("flip-ready: refusing unreadable or non-green checks: " + p.stdout if not ok else ""); sys.exit(0 if ok else 1)' $forge-repo.output $pr.output.number
-      # The flip prints a confirmation this node has no use for, and its stdout is
-      # not a value, so both streams are captured together and re-emitted only if
-      # the flip failed — where gh's own words are the diagnostic.
-      if ! FLIP=$(gh pr ready "$PR_NUMBER" --repo "$ORIGIN_REPO" 2>&1); then
-        printf '%s\n' "flip-ready: the ready flip failed: $FLIP" >&2
-        exit 1
-      fi
-      # The two reads below capture a VALUE, so their stderr is dropped rather than
-      # merged: a gh notice must never become the draft state or the delivered URL.
-      # Each failure names the read it could not complete, so neither is silent.
-      if ! draft=$(gh pr view "$PR_NUMBER" --repo "$ORIGIN_REPO" --json isDraft --jq .isDraft 2>/dev/null); then
-        printf '%s\n' "flip-ready: PR was flipped but its draft state could not be read back." >&2
-        exit 1
-      fi
-      if [ "$draft" != "false" ]; then
-        printf '%s\n' "flip-ready: PR still reports draft after the ready flip" >&2
-        exit 1
-      fi
-      # This node's stdout is the delivered URL and nothing else; `outcome` reports
-      # the value verbatim.
-      if ! gh pr view "$PR_NUMBER" --repo "$ORIGIN_REPO" --json url --jq .url 2>/dev/null; then
-        printf '%s\n' "flip-ready: PR was flipped but its URL could not be read back." >&2
-        exit 1
-      fi
+    script: public-pr
+    runtime: uv
+    with:
+      operation: ready
+      pr: "$pr.output"
+      body: ""
     # Every failable ancestor is a DIRECT dependency, deliberately: the
     # engine's default rule turns a failed ancestor into a skipped dependent
     # at the very next hop, so a join that only names the tail of a chain
@@ -565,7 +544,7 @@ nodes:
     # return immediately and the flip could otherwise beat the resync.
     depends_on:
       [await-checks, ci-verdict, ci-corrections, await-fix-checks, ci-attention-route,
-       ci-attention, sync-pr-body,
+       ci-attention, prepare-pr-body, sync-pr-body,
        gate-validated, gate-ready, validate]
     trigger_rule: none_failed_min_one_success
 

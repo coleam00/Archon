@@ -11,7 +11,7 @@ impl__implement:
   green: true
   summary: "stub: implemented and green on the checks it ran"
 impl__assert-changed: "3 files changed"
-pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 8, url: "https://github.com/example/repo/pull/8", head: "fixture-branch", base: "dev", is_draft: true }
+pr__pr: {"url": "https://github.com/example/repo/pull/8", "head": "fixture-branch", "base": "dev", "is_draft": true, "ref": {"repo": {"host": "github.com", "path": "example/repo"}, "number": 8}, "head_repo": {"host": "github.com", "path": "example/repo"}, "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "state": "open", "title": "Fixture", "body": "Fixture"}
 classify:
   errors: false
   docs: false
@@ -40,4 +40,12 @@ fixture:
   reached: [pr__pr, review__synthesize]
 exec-code: true
 
-forge-repo: { host: "github.com", path: "example/repo" }
+
+pr__prepare:
+  title: Fixture
+  body: Fixture
+  base: dev
+review__publish:
+  ready: true
+  action: none
+  findings_summary: 'stub: clean on initial review'

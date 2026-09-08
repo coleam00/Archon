@@ -16,7 +16,7 @@ impl__implement:
 impl__assert-changed: "3 files changed"
 # gate-green and gate-validated are deliberately unstubbed: both real scripts must
 # pass this red and record it.
-pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 6, url: "https://github.com/example/repo/pull/6", head: "fixture-branch", base: "dev", is_draft: true }
+pr__pr: {"url": "https://github.com/example/repo/pull/6", "head": "fixture-branch", "base": "dev", "is_draft": true, "ref": {"repo": {"host": "github.com", "path": "example/repo"}, "number": 6}, "head_repo": {"host": "github.com", "path": "example/repo"}, "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "state": "open", "title": "Fixture", "body": "Fixture"}
 classify:
   errors: false
   docs: false
@@ -45,4 +45,12 @@ fixture:
   reached: [pr__pr, review__synthesize, gate-validated, ci-probe]
 exec-code: true
 
-forge-repo: { host: "github.com", path: "example/repo" }
+
+pr__prepare:
+  title: Fixture
+  body: Fixture
+  base: dev
+review__publish:
+  ready: true
+  action: none
+  findings_summary: 'stub: the change itself is clean'
