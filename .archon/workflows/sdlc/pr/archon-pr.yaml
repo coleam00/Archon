@@ -1,13 +1,8 @@
 name: archon-pr
 description: |
-  Open a pull request for the committed work on the current branch — draft by
-  default when composed, template-aware, with the body built from the run's
-  artifacts. Verifies by reading the created PR back. Never sweeps unrelated
-  changes and never force-pushes.
-
-  Use when: committed work on a branch needs a PR — "open a PR", "create a
-  draft PR for this branch".
-  NOT for: implementing (implement), reviewing (review), or merging (always human).
+  Publish committed work to a GitHub PR, draft by default. Prepare a template-aware
+  description, then deterministically gate, push and read back its identity.
+  Existing same-repository PRs are reused. Never force-push or merge.
 
 model: medium
 requires: [github]
@@ -15,16 +10,64 @@ requires: [github]
 inputs:
   draft:
     default: "true"
-    description: '"true" opens the PR as a draft; anything else opens it ready for review.'
+    description: '"true" opens a draft; other values open ready for review.'
+  publication_policy:
+    default: ""
+    description: Absolute operator-owned JSON policy path outside the candidate checkout.
+  operation:
+    default: publish
+    description: publish, checkout for cold repair, or readback for a delivered candidate.
+  expected_pr:
+    default: null
+    description: Prior structured PR identity; publication refuses stale remote identity.
+  target_pr:
+    default: ""
+    description: Explicit same-repository PR number for checkout.
+  work_order:
+    default: ""
+    description: Original work order required for cold repair checkout.
+  findings:
+    default: ""
+    description: Public findings required for cold repair checkout.
 
 returns: pr
 
 nodes:
-  - id: pr
+  - id: resolve
+    script: publication
+    runtime: bun
+    with:
+      stage: resolve
+      operation: "$INPUTS.operation"
+      publication_policy: "$INPUTS.publication_policy"
+      expected_pr: "$INPUTS.expected_pr"
+      target_pr: "$INPUTS.target_pr"
+      work_order: "$INPUTS.work_order"
+      findings: "$INPUTS.findings"
+
+  - id: prepare
     command: pr
-    # This is the durable ownership record for every later public action in
-    # delivery. Consumers bind these fields by name, never gh's ambient branch
-    # lookup.
+    depends_on: [resolve]
+    when: "$resolve.output.publish == true"
+    output_format:
+      type: object
+      properties:
+        title: { type: string }
+        body: { type: string }
+        base: { type: string }
+      required: [title, body, base]
+
+  - id: pr
+    script: publication
+    runtime: bun
+    depends_on: [resolve, prepare]
+    trigger_rule: none_failed_min_one_success
+    with:
+      stage: finish
+      operation: "$INPUTS.operation"
+      draft: "$INPUTS.draft"
+      resolved: "$resolve.output.candidate"
+      preparation: { from: "$prepare.output", if_skipped: null }
     output_format:
       type: object
       properties:
@@ -32,5 +75,8 @@ nodes:
         url: { type: string }
         head: { type: string }
         base: { type: string }
+        head_sha: { type: string }
+        base_sha: { type: string }
+        repository: { type: string }
         is_draft: { type: boolean }
-      required: [number, url, head, base, is_draft]
+      required: [number, url, head, base, head_sha, base_sha, repository, is_draft]

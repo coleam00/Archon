@@ -1,65 +1,91 @@
-# Dry-run fixture: a bound target takes the full investigation chain — rooted
-# investigation flows through the spend gate into the delivery tail, initial
-# review ready, PR flips. SPARSE:
-# the dry-run engine auto-defaults every node it can and names the ones it
-# cannot; this file stubs exactly those plus the verdict fields that steer
-# branches. Structured stubs are YAML mappings (they hydrate structuredOutput).
-# Run with --default-stubs --exec-code.
-#
-# `outcome` is deliberately unstubbed: the real script runs and must report pull
-# request 2 from the delivered flip value alone. The exec workspace is a DETACHED
-# worktree, so there is no current branch for an ambient pull request lookup to
-# resolve — a pass here is proof the report is built from the delivered value and nothing
-# the checkout happens to be sitting on.
+# Declared SDLC scenario: rooted-delivered. Public actions are stubbed.
 triage__triage:
   route: investigate
-  summary: "stub: current evidence leaves the causal chain unresolved"
+  summary: 'stub: current evidence leaves the causal chain unresolved'
 triage__assert-intact: '{"intact":"true"}'
 inv__investigate:
   rooted: true
-  summary: "stub: cause established — report at investigation.md"
+  summary: 'stub: cause established - report at investigation.md'
 inv__assert-intact: '{"intact":"true"}'
 gate-rooted: '{"gate":"rooted"}'
 deliver__gate-validated: '{"gate":"green"}'
 deliver__impl__record-start: '{"start":"recorded"}'
-deliver__impl__assert-changed: "3 files changed"
+deliver__impl__assert-changed: 3 files changed
 deliver__gate-green: '{"gate":"green"}'
-deliver__pr__pr: { number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true }
+deliver__pr__pr: &id001
+  number: 2
+  url: https://github.com/example/repo/pull/2
+  head: fixture-branch
+  base: dev
+  is_draft: true
+  head_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  base_sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  repository: example/repo
 ci-probe: '{"state":"concluded","detail":"all checks passed"}'
 deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
-deliver__flip-ready: "https://github.com/example/repo/pull/2"
-deliver__outcome: "https://github.com/example/repo/pull/2"
+deliver__flip-ready: https://github.com/example/repo/pull/2
 deliver__validate__validate:
   green: true
-  summary: "stub: project gate green"
+  summary: 'stub: project gate green'
 deliver__impl__implement:
   done: true
   green: true
-  summary: "stub: fix built per the investigation, checks green"
+  summary: 'stub: fix built per the investigation, checks green'
 deliver__review__mode: '{"continuation":false}'
-deliver__review__scope: "PR diff in scope; head sha stubbed"
-deliver__review__code: "0 findings"
-deliver__review__seams: "0 findings"
-deliver__review__simplify: "0 findings"
-deliver__review__tests: "0 findings"
-deliver__review__review-complete: "settled"
+deliver__review__scope: PR diff in scope; head sha stubbed
+deliver__review__code: 0 findings
+deliver__review__seams: 0 findings
+deliver__review__simplify: 0 findings
+deliver__review__tests: 0 findings
+deliver__review__review-complete: settled
 deliver__review__synthesize:
   ready: true
   action: none
-  findings_summary: "stub: no open findings"
+  findings_summary: 'stub: no open findings'
 deliver__review-action: '{"ready":true,"action":"none"}'
 deliver__gate-ready: '{"ready":"true"}'
 deliver__classify:
   errors: false
   docs: false
   reasons:
-    errors: "stub: no failure paths"
-    docs: "stub: no doc-facing changes"
+    errors: 'stub: no failure paths'
+    docs: 'stub: no doc-facing changes'
 deliver__resolve-scope: '{"errors":"false"}'
 fixture:
   expect: completed
   inputs:
-    target: "issue #3031"
+    target: 'issue #3031'
   resolved-text-contains:
-    triage__triage: "target):\n\nissue #3031\n\nThe operator's request"
+    triage__triage: 'issue #3031'
 exec-code: true
+deliver__pr__resolve:
+  publish: false
+  candidate: *id001
+deliver__capture-pr__resolve:
+  publish: false
+  candidate: *id001
+deliver__capture-pr__pr: *id001
+deliver__publish-correction__resolve:
+  publish: false
+  candidate: *id001
+deliver__publish-correction__pr: *id001
+deliver__capture-ci-pr__resolve:
+  publish: false
+  candidate: *id001
+deliver__capture-ci-pr__pr: *id001
+deliver__publish-ci-correction__resolve:
+  publish: false
+  candidate: *id001
+deliver__publish-ci-correction__pr: *id001
+deliver__readback__resolve:
+  publish: false
+  candidate: *id001
+deliver__readback__pr:
+  number: 2
+  url: https://github.com/example/repo/pull/2
+  head: fixture-branch
+  base: dev
+  is_draft: false
+  head_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  base_sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  repository: example/repo
