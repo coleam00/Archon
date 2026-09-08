@@ -58,9 +58,11 @@ import {
   isWorkflowNode,
   waitCondition,
   effortLevelSchema,
+  skipCauseSchema,
   workflowRunOutcomeSchema,
   type DagNode,
   type NodeOutput,
+  type SkipCause,
   type GraphPlan,
   type ResolvedWorkflow,
   type WorkflowRunOutcome,
@@ -355,6 +357,7 @@ export const dryRunTraceEntrySchema = z.discriminatedUnion('state', [
   dryRunTraceBaseSchema.extend({
     state: z.literal('skipped'),
     reason: z.string(),
+    cause: skipCauseSchema,
   }),
   dryRunTraceBaseSchema.extend({
     state: z.literal('failed'),
@@ -617,14 +620,16 @@ function recordSkipped(
   outputs: Map<string, NodeOutput>,
   ctx: DryRunContext,
   reason: string,
+  cause: SkipCause,
   iteration?: number
 ): void {
-  outputs.set(node.id, { state: 'skipped', output: '' });
+  outputs.set(node.id, { state: 'skipped', output: '', cause });
   ctx.trace.push({
     nodeId: node.id,
     nodeType: nodeType(node),
     state: 'skipped',
     reason,
+    cause,
     ...(iteration ? { iteration } : {}),
   });
 }
@@ -1006,12 +1011,14 @@ async function simulateNode(
   ctx: DryRunContext,
   iteration?: number
 ): Promise<void> {
-  if (checkComposedBlockBoundaries(node, outputs, ctx.inputs) === 'skip') {
-    recordSkipped(node, outputs, ctx, 'trigger_rule', iteration);
+  const boundaryDecision = checkComposedBlockBoundaries(node, outputs, ctx.inputs);
+  if (boundaryDecision.decision === 'skip') {
+    recordSkipped(node, outputs, ctx, 'trigger_rule', boundaryDecision.cause, iteration);
     return;
   }
-  if (checkTriggerRule(node, outputs) === 'skip') {
-    recordSkipped(node, outputs, ctx, 'trigger_rule', iteration);
+  const triggerDecision = checkTriggerRule(node, outputs);
+  if (triggerDecision.decision === 'skip') {
+    recordSkipped(node, outputs, ctx, 'trigger_rule', triggerDecision.cause, iteration);
     return;
   }
   if (node.when) {
@@ -1020,11 +1027,25 @@ async function simulateNode(
       // referencing `$INPUTS.<name>` branches on the same effective map a real run reads.
       const condition = evaluateCondition(node.when, outputs, ctx.inputs);
       if (!condition.parsed) {
-        recordSkipped(node, outputs, ctx, 'when_condition_parse_error', iteration);
+        recordSkipped(
+          node,
+          outputs,
+          ctx,
+          'when_condition_parse_error',
+          { kind: 'condition_parse_error', expr: node.when },
+          iteration
+        );
         return;
       }
       if (!condition.result) {
-        recordSkipped(node, outputs, ctx, 'when_condition_false', iteration);
+        recordSkipped(
+          node,
+          outputs,
+          ctx,
+          'when_condition_false',
+          { kind: 'condition', expr: node.when },
+          iteration
+        );
         return;
       }
     } catch (error) {

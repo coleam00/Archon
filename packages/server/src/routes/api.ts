@@ -377,6 +377,7 @@ import {
   introspectOpencodeCredentials,
 } from '@archon/providers';
 import { messageSchema } from './schemas/conversation.schemas';
+import { dagNodeSseEventSchema } from '../adapters/web/workflow-event.schemas';
 import {
   workflowRunSchema,
   dashboardWorkflowRunSchema,
@@ -1589,6 +1590,8 @@ export function registerApiRoutes(
   lockManager: ConversationLockManager,
   activePlatforms?: readonly string[]
 ): void {
+  app.openAPIRegistry.register('DagNodeSseEvent', dagNodeSseEventSchema);
+
   function apiError(
     c: Context,
     status: 400 | 401 | 404 | 422 | 500 | 503,

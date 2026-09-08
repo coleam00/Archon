@@ -80,7 +80,9 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
    sharing a ~2 KB diagnostic budget — stderr keeps priority, stdout gets the
    remainder, and a label prefixes each stream only when both are populated.
    With stderr empty, the stdout tail becomes the diagnostic. The script body
-   is never echoed back to users.
+   is never echoed back to users. A timeout also fails by default. Set
+   `on_timeout: skip` when the result is optional and downstream nodes handle
+   its absence with an `if_skipped` binding.
 5. **Retain.** Regardless of outcome, capped and credential-redacted tails of
    both streams are written to the run transcript as an `exec_output` row — see
    [Retained subprocess evidence](/guides/authoring-workflows#retained-subprocess-evidence).
@@ -94,6 +96,7 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
   runtime: bun | uv                            # required
   deps: ["httpx", "pydantic>=2"]               # optional, uv-only (see below)
   timeout: 60000                               # optional ms, default 120000
+  on_timeout: skip                             # optional; default is to fail
   depends_on: [upstream]                       # optional
   when: "$upstream.output != '[]'"             # optional (upstream is a bash/script node;
                                                #  an AI producer needs output_format + a field)
@@ -116,6 +119,7 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
 | `runtime` | `'bun'` \| `'uv'` | Yes | Which runtime executes the script. Must match the file extension for named scripts |
 | `deps` | string[] | No | Python dependencies to install for this run. **uv only** — ignored with a warning for `bun` |
 | `timeout` | number (ms) | No | Hard kill after this many milliseconds. Default: `120000` (2 min) |
+| `on_timeout` | `'skip'` | No | Complete the node as skipped after a timeout. The default is failed. The persisted skip cause is `timeout` |
 | `output_format` | object | No | JSON Schema the node's stdout must satisfy. See [Declaring a result contract](#declaring-a-result-contract) |
 
 Standard DAG fields (`id`, `depends_on`, `when`, `trigger_rule`, `retry`) all

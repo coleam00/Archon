@@ -16,7 +16,7 @@ impl__implement:
 impl__assert-changed: "3 files changed"
 # gate-green and gate-validated are deliberately unstubbed: both real scripts must
 # pass this red and record it.
-pr__pr: { number: 6, url: "https://github.com/example/repo/pull/6", head: "fixture-branch", base: "dev", is_draft: true }
+pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 6, url: "https://github.com/example/repo/pull/6", head: "fixture-branch", base: "dev", is_draft: true }
 classify:
   errors: false
   docs: false

@@ -372,7 +372,6 @@ export const LEGACY_RECURSIVE_CLEANUP: ReadonlyMap<string, number> = buildLedger
   ['packages/server/src/routes/api.workflows.test.ts', 29],
   ['packages/workflows/src/artifacts-index.test.ts', 1],
   ['packages/workflows/src/dag-executor.test.ts', 54],
-  ['packages/workflows/src/defaults/generate-bundled-defaults.test.ts', 6],
   ['packages/workflows/src/dry-run.test.ts', 1],
   ['packages/workflows/src/executor-preamble.test.ts', 1],
   ['packages/workflows/src/executor.test.ts', 3],
@@ -384,7 +383,6 @@ export const LEGACY_RECURSIVE_CLEANUP: ReadonlyMap<string, number> = buildLedger
   ['packages/workflows/src/subrun.test.ts', 8],
   ['packages/workflows/src/validator.test.ts', 5],
   ['packages/workflows/src/workflow-discovery-command-scan.test.ts', 1],
-  ['packages/workflows/src/workflow-source-binary.test.ts', 1],
   ['packages/workflows/src/workflow-source.test.ts', 1],
 ]);
 

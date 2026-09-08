@@ -7,7 +7,7 @@ impl__implement:
   summary: "stub: initial implementation green"
 impl__assert-changed: "2 files changed"
 gate-green: '{"gate":"green"}'
-pr__pr: { number: 6, url: "https://github.com/example/repo/pull/6", head: "fixture-branch", base: "dev", is_draft: true }
+pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 6, url: "https://github.com/example/repo/pull/6", head: "fixture-branch", base: "dev", is_draft: true }
 classify:
   errors: false
   docs: false

@@ -643,6 +643,9 @@ describe('GET /api/openapi.json', () => {
     expect(schemas['Conversation']).toBeDefined();
     expect(schemas['Codebase']).toBeDefined();
     expect(schemas['WorkflowEvent']).toBeDefined();
+    expect(schemas['DagNodeSseEvent']).toBeDefined();
+    expect(schemas['NodeSkipReason']).toBeDefined();
+    expect(schemas['SkipCause']).toBeDefined();
     // The WSL fields on /api/health are consumed by the generated web client
     // types — assert the schema actually exposes them.
     const health = schemas['HealthResponse'] as

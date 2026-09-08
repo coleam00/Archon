@@ -110,9 +110,7 @@ describe('archon-deliver ci-note bash node', () => {
     const { stdout, status } = runUnderBash(resolvedCiNoteScript(), fakeBinDir);
 
     expect(status).toBe(0);
-    expect(stdout).toContain(
-      'No CI evidence is available for this round (the check read failed or timed out)'
-    );
+    expect(stdout).toContain('No CI evidence is available for this round (the check read failed)');
   });
 
   test('reports no checks when gh succeeds with nothing to report', () => {
@@ -143,6 +141,6 @@ describe('archon-deliver ci-note bash node', () => {
     // $- holds shell option flags (e.g. "himBH"), never an exit status, so the
     // `[ "$RC" -ne 0 ]` comparison fails to evaluate as intended and the script
     // no longer reports the failed-read case the way the correct RC=$? does.
-    expect(stdout).not.toContain('the check read failed or timed out');
+    expect(stdout).not.toContain('the check read failed');
   });
 });
