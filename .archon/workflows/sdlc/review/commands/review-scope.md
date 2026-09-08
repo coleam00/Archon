@@ -22,6 +22,8 @@ $ARGUMENTS
 
 ## Resolve the target
 
+When `$INPUTS.local_range` is non-empty, it owns the target: require two full commit SHAs separated by `..`, verify both locally and that HEAD equals the second SHA, and review exactly `git diff <base>..<candidate>`. Record the target as "local composition", both SHAs, and the exact range. Do not resolve a PR, read a forge, or publish a comment in this mode. The supplied work order may mention source PRs as context; they are not the review target. Otherwise use the following scope rules.
+
 - When the requested scope is a bare PR number, delivery recorded it; review exactly that PR. Derive the normalized `owner/repo` from `origin` without writing its raw URL into an artifact, and use the repository's forge CLI with that number for every GitHub read. Do not resolve a PR from the current branch, and do not accept a different target. The review object is that PR's diff, exactly.
 - A PR number, URL, or branch → use the repository's forge CLI to read its title, body, base, head, state, files and complete diff. Make sure the PR's head is what the local checkout reflects; note the head SHA. **In PR mode the review object is the PR's diff, exactly; uncommitted or untracked local state is out of scope and must not appear in the scope file.**
 - Empty scope → first check whether the current branch has an open PR (the repository's forge CLI); if it does, that PR is the target (PR mode, as above). Otherwise the working diff: uncommitted changes plus commits ahead of the merge-base with the default/base branch (`git merge-base`, `git diff`, `git log`). Note the current HEAD SHA.
@@ -59,4 +61,4 @@ Write `$ARTIFACTS_DIR/review/scope.md` containing:
 
 Confirm `$ARTIFACTS_DIR/review/scope.md` exists, names the accepted contract and head SHA, and that the diff commands in it actually produce output in this checkout. Return `docs` as the boolean selected above.
 
-Write `$ARTIFACTS_DIR/review/publication-target.json`: in PR mode, the exact runtime-validated `archon forge pr view` record for the resolved qualified ref, including head repository and SHA; in working-diff mode, JSON `null`. Verify the local HEAD equals that record's head SHA. This structured file is the publication target; no later node parses scope prose to choose a public target.
+Write `$ARTIFACTS_DIR/review/publication-target.json`: in PR mode, the exact runtime-validated `archon forge pr view` record for the resolved qualified ref, including head repository and SHA; in working-diff or local-composition mode, JSON `null`. Verify the local HEAD equals that record's head SHA. This structured file is the publication target; no later node parses scope prose to choose a public target.

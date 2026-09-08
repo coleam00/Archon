@@ -6,7 +6,7 @@ import subprocess
 import sys
 
 verdict = json.loads(os.environ["INPUTS_VERDICT"])
-target = json.loads((Path(os.environ["ARTIFACTS_DIR"]) / "review" / "publication-target.json").read_text(encoding="utf-8"))
+target = None if os.environ.get("INPUTS_LOCAL_RANGE", "").strip() else json.loads((Path(os.environ["ARTIFACTS_DIR"]) / "review" / "publication-target.json").read_text(encoding="utf-8"))
 if target is not None:
     body = (Path(os.environ["ARTIFACTS_DIR"]) / "review" / "public-report.md").read_text(encoding="utf-8")
     request = {"target": {"kind": "pr", "ref": target["ref"], "expected": target}, "marker": "<!-- archon-review-report -->", "body": body}

@@ -98,7 +98,7 @@ The report contains:
 
 ## Prepare the public report
 
-Write `$ARTIFACTS_DIR/review/public-report.md` with the complete public findings and verdict. Exclude local artifact paths, credentials, private evaluator material and local discovery relay instructions; express public evidence using repository-relative source locations. Do not post or edit comments. The following deterministic node publishes this file to the scope node's structured target with the canonical marker, verifies it and updates the same comment on retry. Working-diff mode skips publication.
+Write `$ARTIFACTS_DIR/review/public-report.md` with the complete public findings and verdict. Exclude local artifact paths, credentials, private evaluator material and local discovery relay instructions; express public evidence using repository-relative source locations. Do not post or edit comments. The following deterministic node publishes this file to the scope node's structured target with the canonical marker, verifies it and updates the same comment on retry. Working-diff and local-composition modes skip publication.
 
 ## Verify before finishing
 

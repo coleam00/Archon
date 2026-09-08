@@ -541,6 +541,38 @@ describe('public GitHub operations through the owning boundary', () => {
       f.server.stop(true);
     }
   });
+  it.each(['stale', 'missing', 'malformed'])(
+    'local composition never publishes with a %s agent target',
+    async target => {
+      const { f, root, pr, env, artifacts, pack } = await packFixture();
+      try {
+        await writeFile(join(artifacts, 'review/public-report.md'), 'Local candidate review');
+        if (target !== 'missing')
+          await writeFile(
+            join(artifacts, 'review/publication-target.json'),
+            target === 'stale' ? JSON.stringify(pr) : 'invalid JSON'
+          );
+        const verdict = { ready: true, action: 'none', findings_summary: 'local report' };
+        const result = await exec(
+          'uv',
+          ['run', 'python', join(pack, 'review/scripts/publish-review.py')],
+          {
+            cwd: root,
+            env: {
+              ...env,
+              INPUTS_VERDICT: JSON.stringify(verdict),
+              INPUTS_LOCAL_RANGE: `${'a'.repeat(40)}..${'b'.repeat(40)}`,
+            },
+          }
+        );
+        expect(JSON.parse(result.stdout)).toEqual(verdict);
+        expect(f.comments).toHaveLength(0);
+        expect(f.requests).toHaveLength(0);
+      } finally {
+        f.server.stop(true);
+      }
+    }
+  );
   it('publishes the exact branch SHA through the actual script node', async () => {
     const { f, root, remote, sha, env, pack } = await packFixture(true);
     try {
