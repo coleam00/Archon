@@ -69,7 +69,7 @@ function buildImportGraph(entry: string, outdir: string): BuildMetafile {
       `--outdir=${outdir}`,
       `--metafile=${metafilePath}`,
     ],
-    { cwd: repoRoot, encoding: 'utf8' }
+    { cwd: repoRoot, encoding: 'utf8', timeout: 20000 }
   );
   if (result.status !== 0) {
     throw new Error(`Import graph build failed for ${entry}:\n${result.stdout}\n${result.stderr}`);
@@ -1972,6 +1972,7 @@ describe('workflow test path targets', () => {
         [CLI_ENTRY, 'workflow', 'test', '../.archon/workflows/sdlc/plan', '--cwd', tools, '--json'],
         {
           encoding: 'utf8',
+          timeout: 20000,
           env: {
             ...process.env,
             ARCHON_TELEMETRY_DISABLED: '1',

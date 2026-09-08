@@ -686,6 +686,12 @@ function parseDagNode(
       f => (raw as Record<string, unknown>)[f] !== undefined
     );
     if (presentAiFields.length > 0) {
+      const fieldList = presentAiFields.map(f => `'${f}'`).join(', ');
+      const verb = presentAiFields.length === 1 ? 'is' : 'are';
+      warnings.push(
+        `Node '${id}': ${fieldList} ${verb} ignored on a ${nonAiNode.type} node and ` +
+          'will have no effect'
+      );
       getLog().warn(
         { id: node.id, fields: presentAiFields },
         `${nonAiNode.type}_node_ai_fields_ignored`

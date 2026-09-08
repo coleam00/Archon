@@ -9,7 +9,7 @@ description: |
   "apply these review findings", "build what this describes", "fix this CI failure".
   NOT for: deciding what to build, reviewing changes, or opening a PR.
 
-model: large
+model: medium
 
 inputs:
   work:
