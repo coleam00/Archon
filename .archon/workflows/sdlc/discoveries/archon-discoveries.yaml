@@ -1,0 +1,161 @@
+name: archon-discoveries
+description: |
+  Revalidate a discovery artifact against this checkout's pinned HEAD, find
+  existing work when GitHub is reachable, and render local action proposals.
+  Use after review or implementation records adjacent discoveries.
+  Publication requires a focused follow-up with an explicit gate.
+
+inputs:
+  discovery_artifact:
+    default: ""
+    description: Path to consolidated discoveries.json or a raw discovery sidecar.
+  run_id:
+    default: ""
+    description: >-
+      Terminal run ID resolved through workflow get --json artifacts_dir and
+      leave_behind.artifactFiles. Supply exactly one run_id or discovery_artifact.
+
+returns: render
+
+nodes:
+  - id: resolve-input
+    script: resolve-input
+    runtime: uv
+    mutates_checkout: false
+    output_format:
+      type: object
+      properties:
+        count: { type: integer }
+        forge_available: { type: boolean }
+        forge_host: { type: string }
+        forge_path: { type: string }
+      required: [count, forge_available, forge_host, forge_path]
+    with:
+      discovery_artifact: "$INPUTS.discovery_artifact"
+      run_id: "$INPUTS.run_id"
+
+  - id: revalidate
+    command: revalidate
+    mutates_checkout: false
+    model: medium
+    allowed_tools: [Read, Grep, Glob, Bash]
+    output_type: discovery-revalidation
+    output_format:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            type: object
+            properties:
+              item_index: { type: integer }
+              verdict:
+                type: string
+                enum: [supported, disproved, inconclusive]
+              evidence_refs:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    path: { type: string }
+                    line: { type: integer }
+                  required: [path, line]
+              note: { type: string }
+            required: [item_index, verdict, evidence_refs, note]
+      required: [entries]
+    depends_on: [resolve-input]
+
+  - id: check-evidence
+    script: check-evidence
+    runtime: uv
+    mutates_checkout: false
+    output_format:
+      type: object
+      properties:
+        count: { type: integer }
+        unverified_count: { type: integer }
+      required: [count, unverified_count]
+    depends_on: [revalidate]
+    with:
+      revalidation: "$revalidate.output.entries"
+
+  - id: search-existing
+    command: search-existing
+    mutates_checkout: false
+    model: medium
+    allowed_tools: [Read, Grep, Glob, Bash]
+    output_type: discovery-search
+    output_format:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            type: object
+            properties:
+              item_index: { type: integer }
+              forge_checked: { type: boolean }
+              matches:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    number: { type: integer }
+                    url: { type: string }
+                    title: { type: string }
+                    similarity_note: { type: string }
+                  required: [number, url, title, similarity_note]
+            required: [item_index, forge_checked, matches]
+      required: [entries]
+    depends_on: [check-evidence]
+
+  - id: classify
+    command: classify
+    mutates_checkout: false
+    model: medium
+    allowed_tools: [Read]
+    output_type: discovery-classification
+    output_format:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            type: object
+            properties:
+              item_index: { type: integer }
+              classification:
+                type: string
+                enum: [stale, duplicate, update-existing, new]
+              target_item:
+                type: [object, "null"]
+                properties:
+                  number: { type: integer }
+                  url: { type: string }
+                required: [number, url]
+              public_title: { type: string }
+              public_summary: { type: string }
+              disclosure_safe: { type: boolean }
+              rationale: { type: string }
+            required: [item_index, classification, target_item, public_title, public_summary, disclosure_safe, rationale]
+      required: [entries]
+    depends_on: [search-existing]
+
+  - id: render
+    script: render-proposals
+    runtime: uv
+    mutates_checkout: false
+    output_format:
+      type: object
+      properties:
+        count: { type: integer }
+        stale_count: { type: integer }
+        duplicate_count: { type: integer }
+        update_existing_count: { type: integer }
+        new_count: { type: integer }
+      required:
+        [count, stale_count, duplicate_count, update_existing_count, new_count]
+    depends_on: [classify, resolve-input, search-existing]
+    with:
+      search_results: "$search-existing.output.entries"
+      classification: "$classify.output.entries"
