@@ -1,0 +1,60 @@
+name: archon-verify-runtime-suite
+description: >-
+  Run a finite manifest of runtime controls through archon-verify-runtime.
+  Compare exact verdicts; return baseline verification separately from suite expectations.
+mutates_checkout: false
+inputs:
+  manifest:
+    required: true
+    description: Path to a caller-owned JSON case manifest. See README.md.
+returns: compare
+outcome_field: expectations_passed
+
+nodes:
+  - id: read-manifest
+    script: read-manifest
+    runtime: uv
+    with:
+      manifest: '$INPUTS.manifest'
+    output_format:
+      type: object
+      properties:
+        baseline: { type: string }
+        cases: { type: array, items: { type: object } }
+        scenarios: { type: array, items: { type: string } }
+      required: [baseline, cases, scenarios]
+
+  - id: cases
+    include: archon-verify-runtime
+    depends_on: [read-manifest]
+    fan_out:
+      items: '$read-manifest.output.scenarios'
+      as: scenario
+      max_parallel: 2
+      join: all_done
+
+  - id: compare
+    script: compare
+    runtime: uv
+    depends_on: [cases]
+    with:
+      manifest: '$read-manifest.output'
+      results: '$cases.output'
+    output_format:
+      type: object
+      properties:
+        expectations_passed: { type: boolean }
+        verdict: { type: string, enum: [passed, failed, inconclusive] }
+        all_cases_executed: { type: boolean }
+        baseline_verified: { type: boolean }
+        baseline_verification: { type: object }
+        cases: { type: array, items: { type: object } }
+        summary: { type: string }
+      required:
+        - expectations_passed
+        - verdict
+        - all_cases_executed
+        - baseline_verified
+        - baseline_verification
+        - cases
+        - summary

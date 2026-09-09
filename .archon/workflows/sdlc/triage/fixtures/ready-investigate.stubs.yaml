@@ -1,0 +1,21 @@
+triage: &judgment
+  route: "investigate"
+  summary: "stub: current evidence leaves the causal chain unresolved"
+  contract: "READY"
+  design_first: false
+  complexity: "risky"
+  proposed_edits: {"title":"","body":""}
+  labels: ["archon-ready"]
+  blocked_by: []
+  issue_repo: ""
+  issue_number: 0
+  blocked_reason: ""
+  issue_url: ""
+validate-contract:
+  <<: *judgment
+  publication: { published: false, applied_labels: [], skipped_labels: [] }
+# Dry-run fixture: READY may still route to investigate - contract readiness
+# and route are different facts.
+
+fixture:
+  expect: completed

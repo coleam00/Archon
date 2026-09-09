@@ -1,0 +1,24 @@
+triage: &judgment
+  route: "no_action"
+  summary: "stub: the requested outcome is already present on the current branch"
+  contract: "NO_ACTION"
+  design_first: false
+  complexity: "small_bounded"
+  proposed_edits: {"title":"","body":""}
+  labels: ["archon-close"]
+  blocked_by: []
+  issue_repo: "example/repo"
+  issue_number: 88
+  blocked_reason: ""
+  issue_url: "https://github.com/example/repo/issues/88"
+validate-contract:
+  <<: *judgment
+  publication: { published: false, applied_labels: [], skipped_labels: [] }
+# Dry-run fixture: nothing should ever be delivered for this item - covers
+# stale, superseded, and duplicate alike (the distinguishing evidence is
+# prose in triage.md a fixture cannot exercise; this fixture proves the
+# workflow completes correctly for the tuple every one of those cases
+# produces).
+
+fixture:
+  expect: completed

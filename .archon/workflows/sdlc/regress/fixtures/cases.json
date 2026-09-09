@@ -1,0 +1,53 @@
+[
+  {
+    "name": "healthy",
+    "validation": { "green": true, "checks_performed": true, "red_cause": "", "summary": "stub: ordinary check passed" },
+    "status": "healthy",
+    "reason": "checks_passed"
+  },
+  {
+    "name": "product failure",
+    "validation": { "green": false, "checks_performed": true, "red_cause": "introduced", "summary": "stub: ordinary check failed" },
+    "investigation": { "rooted": true, "summary": "stub: reproduced defect with proven cause and fix plan" },
+    "status": "regression",
+    "reason": "reproduced_defect"
+  },
+  {
+    "name": "inherited product failure",
+    "validation": { "green": false, "checks_performed": true, "red_cause": "inherited", "summary": "stub: existing defect still fails" },
+    "investigation": { "rooted": true, "summary": "stub: reproduced existing defect" },
+    "status": "regression",
+    "reason": "reproduced_defect"
+  },
+  {
+    "name": "infrastructure failure",
+    "validation": { "green": false, "checks_performed": true, "red_cause": "environment", "summary": "stub: check dependency unavailable" },
+    "status": "inconclusive",
+    "reason": "infrastructure"
+  },
+  {
+    "name": "unavailable gate",
+    "validation": { "green": false, "checks_performed": false, "red_cause": "", "summary": "stub: setup prevented all checks" },
+    "status": "inconclusive",
+    "reason": "infrastructure"
+  },
+  {
+    "name": "no defined checks",
+    "validation": { "green": true, "checks_performed": false, "red_cause": "", "summary": "stub: no checks defined" },
+    "status": "inconclusive",
+    "reason": "no_checks"
+  },
+  {
+    "name": "unreproduced cause",
+    "validation": { "green": false, "checks_performed": true, "red_cause": "introduced", "summary": "stub: initial check failed" },
+    "investigation": { "rooted": false, "summary": "stub: failure did not reproduce; cause remains unknown" },
+    "status": "inconclusive",
+    "reason": "unrooted"
+  },
+  {
+    "name": "unclassified failure",
+    "validation": { "green": false, "checks_performed": true, "red_cause": "", "summary": "stub: insufficient classification evidence" },
+    "status": "inconclusive",
+    "reason": "unclassified_failure"
+  }
+]

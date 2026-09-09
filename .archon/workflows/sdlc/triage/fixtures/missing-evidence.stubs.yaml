@@ -1,0 +1,21 @@
+triage: &judgment
+  route: "plan"
+  summary: "stub: design choices remain"
+  contract: "READY"
+  design_first: false
+  complexity: "risky"
+  proposed_edits: {"title":"","body":""}
+  labels: ["archon-ready"]
+  blocked_by: []
+  issue_repo: ""
+  issue_number: 0
+  blocked_reason: ""
+  issue_url: ""
+# Guard fixture: run with --exec-code. The triage verdict is stubbed and the
+# tuple is otherwise legal, but no triage.md exists, so validate-contract must
+# execute for real and fail on the evidence check alone.
+
+fixture:
+  expect: failed
+  fail-node: validate-contract
+exec-code: true

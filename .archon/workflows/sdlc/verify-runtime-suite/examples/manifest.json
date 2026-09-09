@@ -1,0 +1,17 @@
+{
+  "baseline": "healthy-control",
+  "cases": [
+    {
+      "id": "healthy-control",
+      "scenario": "healthy.json",
+      "candidate": "calculator-healthy-control-v1",
+      "expected_verdict": "verified"
+    },
+    {
+      "id": "deliberate-negative-control",
+      "scenario": "negative.json",
+      "candidate": "calculator-negative-control-v1",
+      "expected_verdict": "failed"
+    }
+  ]
+}
