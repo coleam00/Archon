@@ -32,8 +32,13 @@ def main() -> int:
         tickets = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
         fail(f"backlog.json is not valid JSON: {error}")
-    if not isinstance(tickets, list) or not tickets:
-        fail("backlog.json must be a non-empty array")
+    if not isinstance(tickets, list):
+        fail("backlog.json must be an array")
+    if not tickets:
+        # Nothing the tracker does not already carry is a fact, not a failure:
+        # the planner said so in its summary, and the publisher has nothing to do.
+        print(json.dumps({"count": 0, "keys": []}))
+        return 0
     if len(tickets) > bound:
         fail(f"{len(tickets)} tickets exceed the bound of {bound}")
     seen: list[str] = []

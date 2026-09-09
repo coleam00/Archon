@@ -65,9 +65,11 @@ nodes:
         keys: { type: array, items: { type: string } }
       required: [count, keys]
 
+  # An empty slice (the tracker already carries everything the document yields)
+  # asks nobody and publishes nothing; the run completes with the planner's summary.
   - id: authorize
     depends_on: [check]
-    when: "$INPUTS.publication == 'approve'"
+    when: "$INPUTS.publication == 'approve' && $check.output.count > 0"
     approval:
       message: "Publish the $check.output.count tickets in $ARTIFACTS_DIR/backlog.md as GitHub issues?"
       decisions:
@@ -83,6 +85,7 @@ nodes:
     model: medium
     depends_on: [check, authorize]
     trigger_rule: none_failed_min_one_success
+    when: "$check.output.count > 0"
     with:
       mode: "$INPUTS.publication"
       approval: { from: "$authorize.output", if_skipped: null }
