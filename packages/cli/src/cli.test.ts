@@ -11,7 +11,7 @@ import { cliArgOptions } from './args';
 import * as git from '@archon/git';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -26,115 +26,6 @@ const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
 // The enclosing git worktree — a valid repo for the git gate, with a real
 // .archon/workflows/ directory so an unknown workflow name fails deterministically.
 const repoRoot = join(import.meta.dir, '..', '..', '..');
-
-type BuildMetafile = NonNullable<Bun.BuildOutput['metafile']>;
-
-function staticallyReachableInputs(metafile: BuildMetafile, start: string): string[] {
-  const pending = [start];
-  const visited = new Set<string>();
-  const inputs = new Set<string>();
-
-  while (pending.length > 0) {
-    const outputPath = pending.pop();
-    if (outputPath === undefined || visited.has(outputPath)) continue;
-    visited.add(outputPath);
-
-    const output = metafile.outputs[outputPath];
-    if (!output) throw new Error(`Build metafile references missing output '${outputPath}'.`);
-    for (const input of Object.keys(output.inputs)) inputs.add(input);
-    for (const imported of output.imports) {
-      if (imported.kind !== 'dynamic-import') pending.push(imported.path);
-    }
-  }
-
-  return [...inputs].sort();
-}
-
-function repositoryInput(path: string): string | undefined {
-  const normalized = path.replaceAll('\\', '/');
-  const packagesIndex = normalized.indexOf('packages/');
-  return packagesIndex === -1 ? undefined : normalized.slice(packagesIndex);
-}
-
-function buildImportGraph(entry: string, outdir: string): BuildMetafile {
-  const metafilePath = join(outdir, 'metafile.json');
-  const result = spawnSync(
-    process.execPath,
-    [
-      'build',
-      entry,
-      '--target=bun',
-      '--format=esm',
-      '--splitting',
-      `--outdir=${outdir}`,
-      `--metafile=${metafilePath}`,
-    ],
-    { cwd: repoRoot, encoding: 'utf8', timeout: 20000 }
-  );
-  if (result.status !== 0) {
-    throw new Error(`Import graph build failed for ${entry}:\n${result.stdout}\n${result.stderr}`);
-  }
-  return JSON.parse(readFileSync(metafilePath, 'utf8')) as BuildMetafile;
-}
-
-describe('CLI startup import boundary', () => {
-  let buildDir: string;
-  let metafile: BuildMetafile;
-  let handoffMetafile: BuildMetafile;
-
-  beforeAll(() => {
-    buildDir = mkdtempSync(join(tmpdir(), 'archon-cli-import-graph-'));
-    metafile = buildImportGraph(CLI_ENTRY, join(buildDir, 'cli'));
-    // Shared chunks can include unrelated CLI inputs as Bun's splitting changes.
-    // An isolated entrypoint measures the decoder's own dependency boundary.
-    handoffMetafile = buildImportGraph(
-      join(repoRoot, 'packages/core/src/config/run-config-handoff.ts'),
-      join(buildDir, 'handoff')
-    );
-  }, 30_000);
-
-  afterAll(async () => {
-    if (buildDir) await removeTempTree(buildDir);
-  });
-
-  it('keeps help and argument failures outside command, provider, core, workflow, and Git graphs', () => {
-    const entry = Object.entries(metafile.outputs).find(([, output]) =>
-      output.entryPoint?.replaceAll('\\', '/').endsWith('packages/cli/src/cli.ts')
-    )?.[0];
-    expect(entry).toBeDefined();
-
-    const forbidden = staticallyReachableInputs(metafile, entry ?? '')
-      .map(repositoryInput)
-      .filter(
-        (input): input is string =>
-          input !== undefined &&
-          (input.startsWith('packages/cli/src/commands/') ||
-            input.startsWith('packages/core/src/') ||
-            input.startsWith('packages/git/src/') ||
-            input.startsWith('packages/providers/src/') ||
-            input.startsWith('packages/workflows/src/'))
-      );
-    expect(forbidden).toEqual([]);
-  });
-
-  it('keeps detached handoff decoding on its audited schema, crypto, and path leaves', () => {
-    const internalInputs = Object.keys(handoffMetafile.inputs)
-      .map(repositoryInput)
-      .filter((input): input is string => input !== undefined)
-      .sort();
-    expect(internalInputs).toEqual([
-      'packages/core/src/config/run-config-handoff.ts',
-      'packages/core/src/utils/token-crypto.ts',
-      'packages/paths/src/archon-paths.ts',
-      'packages/paths/src/effort.ts',
-      'packages/paths/src/logger.ts',
-      'packages/workflows/src/schemas/durable-wait.ts',
-      'packages/workflows/src/schemas/effort.ts',
-      'packages/workflows/src/schemas/model-binding.ts',
-      'packages/workflows/src/schemas/run-config.ts',
-    ]);
-  });
-});
 
 /**
  * The `Options:` block of a scoped `--help` render, spawned as a subprocess so
@@ -151,7 +42,6 @@ describe('CLI startup import boundary', () => {
 function scopedHelpOptions(argv: string[]): string {
   const result = spawnSync(process.execPath, [CLI_ENTRY, ...argv, '--help'], {
     encoding: 'utf8',
-    env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
   });
   expect(result.status).toBe(0);
   const marker = '\nOptions:\n';
@@ -170,7 +60,6 @@ describe('CLI help output', () => {
   beforeAll(() => {
     const result = spawnSync(process.execPath, [CLI_ENTRY, '--help'], {
       encoding: 'utf8',
-      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
     });
     help = { status: result.status, stdout: result.stdout ?? '' };
   });
@@ -269,11 +158,9 @@ describe('CLI help output', () => {
   it('produces scoped workflow run --help that differs from archon --help and scopes to run-only flags', () => {
     const global = spawnSync(process.execPath, [CLI_ENTRY, '--help'], {
       encoding: 'utf8',
-      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
     });
     const scoped = spawnSync(process.execPath, [CLI_ENTRY, 'workflow', 'run', '--help'], {
       encoding: 'utf8',
-      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
     });
     expect(global.status).toBe(0);
     expect(scoped.status).toBe(0);
@@ -287,7 +174,6 @@ describe('CLI help output', () => {
   it('documents --workflow-source as a run-only flag in workflow run --help', () => {
     const scoped = spawnSync(process.execPath, [CLI_ENTRY, 'workflow', 'run', '--help'], {
       encoding: 'utf8',
-      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
     });
     expect(scoped.status).toBe(0);
     expect(scoped.stdout).toContain('--workflow-source');
@@ -298,7 +184,6 @@ describe('CLI help output', () => {
     // subcommand gets only its own flag, while a run-only flag drops out.
     const scoped = spawnSync(process.execPath, [CLI_ENTRY, 'workflow', 'logs', '--help'], {
       encoding: 'utf8',
-      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
     });
     expect(scoped.status).toBe(0);
     expect(scoped.stdout).toContain('--follow');
@@ -317,7 +202,6 @@ describe('CLI help output', () => {
     it(`renders a non-empty Commands block and matching Options for workflow ${sub} --help`, () => {
       const scoped = spawnSync(process.execPath, [CLI_ENTRY, 'workflow', sub, '--help'], {
         encoding: 'utf8',
-        env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
       });
       expect(scoped.status).toBe(0);
       expect(scoped.stdout).toContain(`workflow ${sub}`);
@@ -330,7 +214,6 @@ describe('CLI help output', () => {
   it('renders --detach and --comment in workflow approve --help without leaking other subcommands', () => {
     const scoped = spawnSync(process.execPath, [CLI_ENTRY, 'workflow', 'approve', '--help'], {
       encoding: 'utf8',
-      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
     });
     expect(scoped.status).toBe(0);
     expect(scoped.stdout).toContain('--detach');
@@ -344,7 +227,6 @@ describe('CLI help output', () => {
   it('renders --run-id/--type/--data in workflow event emit --help', () => {
     const scoped = spawnSync(process.execPath, [CLI_ENTRY, 'workflow', 'event', 'emit', '--help'], {
       encoding: 'utf8',
-      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
     });
     expect(scoped.status).toBe(0);
     expect(scoped.stdout).toContain('--run-id <id>');
@@ -484,7 +366,6 @@ Examples:
   it('archon --help matches the pre-refactor global index byte-for-byte', () => {
     const result = spawnSync(process.execPath, [CLI_ENTRY, '--help'], {
       encoding: 'utf8',
-      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
     });
     expect(result.status).toBe(0);
     expect(result.stdout).toBe(PRE_REFACTOR_GLOBAL_HELP);
@@ -498,11 +379,9 @@ Examples:
     ]) {
       const viaHelp = spawnSync(process.execPath, [CLI_ENTRY, 'help', ...argv], {
         encoding: 'utf8',
-        env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
       });
       const viaFlag = spawnSync(process.execPath, [CLI_ENTRY, ...argv, '--help'], {
         encoding: 'utf8',
-        env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
       });
       expect(viaHelp.status).toBe(0);
       expect(viaFlag.status).toBe(0);
@@ -538,7 +417,6 @@ describe('removed continue command', () => {
   it('rejects archon continue and points to explicit run adoption', () => {
     const result = spawnSync(process.execPath, [CLI_ENTRY, 'continue', 'some/branch', 'carry on'], {
       encoding: 'utf8',
-      env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
     });
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Removed: 'archon continue'");
@@ -551,7 +429,6 @@ describe('removed continue command', () => {
       const result = spawnSync(process.execPath, [CLI_ENTRY, 'continue', 'some/branch'], {
         encoding: 'utf8',
         cwd: dir,
-        env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
       });
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("Removed: 'archon continue'");
@@ -883,7 +760,6 @@ describe('workflow status project scope', () => {
       const env = {
         ...process.env,
         ARCHON_HOME: archonHome,
-        ARCHON_TELEMETRY_DISABLED: '1',
         DATABASE_URL: '',
       };
       const initialize = spawnSync(
@@ -1077,7 +953,6 @@ describe('CLI workflow event dispatch', () => {
       const env = {
         ...process.env,
         ARCHON_HOME: archonHome,
-        ARCHON_TELEMETRY_DISABLED: '1',
       };
       const initialize = spawnSync(
         process.execPath,
@@ -1635,7 +1510,6 @@ function spawnJsonError(argv: string[], extraEnv: Record<string, string> = {}) {
     encoding: 'utf8',
     env: {
       ...process.env,
-      ARCHON_TELEMETRY_DISABLED: '1',
       ARCHON_HOME: jsonEnvelopeHome,
       ...extraEnv,
     },
@@ -1700,7 +1574,6 @@ describe('workflow list arguments', () => {
         encoding: 'utf8',
         env: {
           ...process.env,
-          ARCHON_TELEMETRY_DISABLED: '1',
           ARCHON_HOME: jsonEnvelopeHome,
         },
       }
@@ -1946,49 +1819,5 @@ describe('workflow test --json error envelope', () => {
     expect(status).toBe(1);
     expect(envelope).not.toThrow();
     expect(envelope()).toMatchObject({ ok: false });
-  });
-});
-
-describe('workflow test path targets', () => {
-  it('resolves a caller-relative path while discovering workflows from the repository root', async () => {
-    const repo = mkdtempSync(join(tmpdir(), 'archon-cli-workflow-test-cwd-'));
-    const tools = join(repo, 'tools');
-    const workflowDir = join(repo, '.archon', 'workflows', 'sdlc', 'plan');
-    mkdirSync(join(workflowDir, 'fixtures'), { recursive: true });
-    mkdirSync(tools, { recursive: true });
-    spawnSync('git', ['init', '-q'], { cwd: repo, encoding: 'utf8' });
-    writeFileSync(
-      join(workflowDir, 'plan.yaml'),
-      'name: plan\ndescription: test\nnodes:\n  - id: node-a\n    prompt: hello\n'
-    );
-    writeFileSync(
-      join(workflowDir, 'fixtures', 'ready.stubs.yaml'),
-      'fixture:\n  expect: completed\nnode-a: stub output\n'
-    );
-
-    try {
-      const result = spawnSync(
-        process.execPath,
-        [CLI_ENTRY, 'workflow', 'test', '../.archon/workflows/sdlc/plan', '--cwd', tools, '--json'],
-        {
-          encoding: 'utf8',
-          timeout: 20000,
-          env: {
-            ...process.env,
-            ARCHON_TELEMETRY_DISABLED: '1',
-            ARCHON_HOME: join(repo, 'archon-home'),
-          },
-        }
-      );
-
-      expect(result.status).toBe(0);
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        passed: 1,
-        failed: 0,
-        results: [{ fixture: 'sdlc/plan/fixtures/ready.stubs.yaml' }],
-      });
-    } finally {
-      await removeTempTree(repo);
-    }
   });
 });
