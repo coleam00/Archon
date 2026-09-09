@@ -8,7 +8,15 @@ interactive: true
 inputs:
   target:
     default: ''
-    description: One issue or work order; empty uses the trigger message.
+    description: >-
+      One issue or work order. Empty selects the oldest open issue in the
+      origin repository that no earlier run has touched (no archon-* label and
+      no open PR naming it); nothing found completes the run with nothing to do.
+  publish:
+    default: 'false'
+    description: >-
+      Forwarded to triage. "true" writes the proposed state label to the issue,
+      which is what marks it as touched for backlog intake.
   scenario:
     required: true
     description: Absolute path to a project runtime scenario JSON.
@@ -21,12 +29,43 @@ inputs:
   discovery_publication:
     default: preview
     description: preview, approve, or auto for discovered adjacent work.
+  deploy:
+    default: ''
+    description: >-
+      Optional trusted project deployment command, forwarded to archon-deploy
+      after a successful merge. Empty skips deployment.
+  health:
+    default: ''
+    description: Trusted project health command for archon-deploy; required with deploy.
+  identity:
+    default: ''
+    description: Optional command printing the deployed revision, for archon-deploy.
 returns: merge
 nodes:
-  - id: ship
-    include: archon-ship
+  # Backlog intake is deterministic gh reads; judgment about the issue belongs
+  # to triage. An explicit target passes through unchanged.
+  - id: intake
+    script: select-target
+    runtime: uv
+    mutates_checkout: false
     with:
       target: "$INPUTS.target"
+    output_format:
+      type: object
+      properties:
+        target: { type: string }
+        found: { type: boolean }
+        selected: { type: boolean }
+        reason: { type: string }
+      required: [target, found, selected, reason]
+
+  - id: ship
+    include: archon-ship
+    depends_on: [intake]
+    when: "$intake.output.found == true"
+    with:
+      target: "$intake.output.target"
+      publish: "$INPUTS.publish"
 
   - id: candidate
     command: bind-delivered-pr
@@ -169,3 +208,14 @@ nodes:
       prs: "$selected.output.prs"
       mode: "$INPUTS.merge_mode"
       evidence: "$selected.output.evidence"
+
+  # Merging is not shipping. With deployment inputs set, a confirmed merge rolls
+  # the default branch onto the running service and reads the revision back.
+  - id: deploy
+    include: archon-deploy
+    depends_on: [merge]
+    when: "$merge.output.merged == true && $INPUTS.deploy != ''"
+    with:
+      deploy: "$INPUTS.deploy"
+      health: "$INPUTS.health"
+      identity: "$INPUTS.identity"

@@ -1,0 +1,12 @@
+# Dry-run fixture: backlog intake finds no untouched issue. Every downstream node
+# is skipped and the run completes with nothing to do — a fact, not a failure.
+intake:
+  target: ""
+  found: false
+  selected: true
+  reason: "stub: 3 open issue(s), none untouched"
+fixture:
+  expect: completed
+  inputs:
+    scenario: "/private/scenario.json"
+    holdout: "/private/holdout.json"
