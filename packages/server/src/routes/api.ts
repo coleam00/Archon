@@ -1,3 +1,4 @@
+import { getTerminalRecord } from '@archon/workflows/terminal-record';
 /**
  * REST API routes for the Archon Web UI.
  * Provides conversation, codebase, and SSE streaming endpoints.
@@ -4255,6 +4256,7 @@ export function registerApiRoutes(
           worker_platform_id: workerPlatformId,
           parent_platform_id: parentPlatformId,
           conversation_platform_id: conversationPlatformId ?? null,
+          terminal_record: getTerminalRecord(run.status, events),
         },
         events,
       });

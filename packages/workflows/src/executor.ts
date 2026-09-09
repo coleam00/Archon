@@ -1,6 +1,7 @@
 /**
  * Workflow Executor - runs DAG-based workflows
  */
+import { RUN_GRAPH_METADATA_KEY, runGraphSchema } from './schemas/terminal-record';
 import { mkdir, readdir, rename, rm, stat, writeFile } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
@@ -2856,6 +2857,16 @@ export async function executeWorkflow(
   // failed would either fail again or mask the real error.
   let terminalStatusWriteFailed = false;
   try {
+    // Capture the loaded graph on both fresh execution and resume before any node runs.
+    const graph = runGraphSchema.parse({
+      node_ids: workflow.nodes.map(node => node.id),
+      ...(workflow.returns !== undefined ? { returns: workflow.returns } : {}),
+    });
+    await deps.store.updateWorkflowRun(workflowRun.id, {
+      metadata: { [RUN_GRAPH_METADATA_KEY]: graph },
+    });
+    workflowRun.metadata = { ...workflowRun.metadata, [RUN_GRAPH_METADATA_KEY]: graph };
+
     getLog().info(
       {
         workflowName: workflow.name,

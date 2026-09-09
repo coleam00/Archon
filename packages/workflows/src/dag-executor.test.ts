@@ -14019,6 +14019,12 @@ describe('executeDagWorkflow -- cancel node', () => {
     // Track whether cancelWorkflowRun has been called to simulate status transition
     let cancelled = false;
     store.cancelWorkflowRun.mockImplementation(async _id => {
+      expect(
+        store.persistWorkflowEvent.mock.calls
+          .map(([event]) => event)
+          .filter(event => event.step_name === 'stop')
+          .map(event => event.event_type)
+      ).toEqual(['node_started']);
       cancelled = true;
       return { cancelled: true };
     });
@@ -14659,6 +14665,12 @@ describe('executeDagWorkflow -- durable wait node', () => {
     const platform = createMockPlatform();
     let pauseAttempted = false;
     store.pauseWorkflowRunForWait = mock(async () => {
+      expect(
+        store.persistWorkflowEvent.mock.calls
+          .map(([event]) => event)
+          .filter(event => event.step_name === 'delay')
+          .map(event => event.event_type)
+      ).toEqual(['node_started']);
       pauseAttempted = true;
       throw new Error('Workflow run not found or not in running state');
     });
@@ -16434,10 +16446,10 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
     // node_completed write so the run is unambiguously past accumulation and the
     // during-streaming cancel check never tears the node down mid-stream.
     let nodeFinished = false;
-    const realCreateEvent = store.createWorkflowEvent;
-    store.createWorkflowEvent = mock<IWorkflowStore['createWorkflowEvent']>(data => {
+    const realPersistEvent = store.persistWorkflowEvent;
+    store.persistWorkflowEvent = mock<IWorkflowStore['persistWorkflowEvent']>(data => {
       if (data.event_type === 'node_completed') nodeFinished = true;
-      return realCreateEvent(data);
+      return realPersistEvent(data);
     });
     store.getWorkflowRunStatus = mock(() =>
       Promise.resolve(nodeFinished ? ('cancelled' as const) : ('running' as const))
@@ -16661,13 +16673,13 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
     const nodeFinishedSignal = new Promise<void>(resolve => {
       announceNodeFinished = resolve;
     });
-    const realCreateEvent = store.createWorkflowEvent;
-    store.createWorkflowEvent = mock<IWorkflowStore['createWorkflowEvent']>(data => {
+    const realPersistEvent = store.persistWorkflowEvent;
+    store.persistWorkflowEvent = mock<IWorkflowStore['persistWorkflowEvent']>(data => {
       if (data.event_type === 'node_completed') {
         nodeFinished = true;
         announceNodeFinished?.();
       }
-      return realCreateEvent(data);
+      return realPersistEvent(data);
     });
 
     // Ordering is the real discriminator. The unwind catch runs AFTER runLayers throws, so
@@ -32490,9 +32502,10 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
       'name: compose-blk\ndescription: test block\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: "echo spent"'
     );
     const store = createMockStore();
-    (store.persistWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>).mockRejectedValue(
-      new Error('disk full')
-    );
+    store.persistWorkflowEvent = mock(async event => {
+      if (event.event_type === 'fan_out_instances') throw new Error('disk full');
+      await store.createWorkflowEvent(event);
+    });
 
     await executeDagWorkflow(
       dagOptions({
@@ -32750,12 +32763,19 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
       'name: child-workflow\ndescription: child\ninputs:\n  item: { required: true }\nnodes:\n  - id: work\n    bash: "echo child-$INPUTS.item"',
       'child-workflow'
     );
-    const runChildWorkflow = mock<RunChildWorkflowFn>(async args => ({
-      childRunId: `child-${args.nodeId}`,
-      status: 'completed',
-      output: `child-${String(args.inputs?.item)}`,
-    }));
     const store = createMockStore();
+    const runChildWorkflow = mock<RunChildWorkflowFn>(async args => {
+      expect(
+        eventsOf(store)
+          .filter(event => event.step_name === args.nodeId)
+          .map(event => event.event_type)
+      ).toEqual(['node_started']);
+      return {
+        childRunId: `child-${args.nodeId}`,
+        status: 'completed',
+        output: `child-${String(args.inputs?.item)}`,
+      };
+    });
 
     await executeDagWorkflow(
       dagOptions({
@@ -34200,6 +34220,41 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
       unsubscribe();
     }
   }
+
+  it('awaits committed node lifecycle before the run terminal write', async () => {
+    const store = createMockStore();
+    const committed: string[] = [];
+    store.persistWorkflowEvent = mock(async event => {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      committed.push(event.event_type);
+    });
+    store.completeWorkflowRun = mock(async () => {
+      expect(committed).toEqual(['node_started', 'node_completed']);
+    });
+    await run(store, createMockPlatform(), [okNode], []);
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry or report success when node completion cannot be stored', async () => {
+    const store = createMockStore();
+    store.persistWorkflowEvent = mock(async event => {
+      if (event.event_type === 'node_completed') throw new Error('storage offline');
+    });
+    const emitted: string[] = [];
+    await expect(
+      run(
+        store,
+        createMockPlatform(),
+        [{ ...okNode, retry: { max_attempts: 2, on_error: 'all', delay_ms: 1 } }],
+        emitted
+      )
+    ).rejects.toThrow('Could not persist node_completed for ok: storage offline');
+    expect(
+      store.persistWorkflowEvent.mock.calls.filter(([event]) => event.event_type === 'node_started')
+    ).toHaveLength(1);
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(emitted).not.toContain('node_completed');
+  });
 
   it('still emits workflow_completed and telemetry when the completion write rejects', async () => {
     const store = createMockStore();

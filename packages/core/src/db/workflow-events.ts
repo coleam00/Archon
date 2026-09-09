@@ -474,10 +474,9 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
       //
       // The spill file is addressed by a stable, node-scoped filename that a later
       // execution of the SAME node overwrites in place (by design — see
-      // `formatPersistedNodeOutput`'s doc comment). Its write races this row's own
-      // fire-and-forget insert (`createWorkflowEvent` never awaited, never throws), so a
-      // process crash between "spill file overwritten by a later execution" and "this
-      // row's insert lands" could otherwise leave an older, still-durable row pointing at
+      // `formatPersistedNodeOutput`'s doc comment). The spill precedes its awaited
+      // lifecycle insert, so a process crash between the file overwrite and that insert
+      // can still leave an older, durable row pointing at
       // a NEWER execution's content. Guard against that by validating the file's actual
       // byte length against this row's own recorded `node_output_original_bytes` before
       // trusting it — a mismatch means the file no longer describes this row, so fall

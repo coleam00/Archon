@@ -1,3 +1,4 @@
+import { getTerminalRecord } from '@archon/workflows/terminal-record';
 /**
  * Workflow command - list and run workflows
  */
@@ -4074,14 +4075,20 @@ export async function workflowGetCommand(
     return 1;
   }
 
-  // getWorkflowRun returns the base WorkflowRun (no current_step_name) — derive
-  // per-node detail from the event log, and only when verbose is requested.
-  let events: WorkflowEventRow[] | undefined;
-  let eventsFailed = false;
-  if (verbose) {
-    const fetched = await fetchVerboseEvents(run.id);
-    events = fetched.events;
-    eventsFailed = fetched.failed;
+  // The terminal record is persisted in the event log, including for default get.
+  let events: WorkflowEventRow[];
+  let terminalRecord;
+  try {
+    events = await workflowEventsDb.listWorkflowEvents(run.id);
+    terminalRecord = getTerminalRecord(run.status, events);
+  } catch (error) {
+    getLog().warn({ err: error as Error, runId: run.id }, 'cli.workflow_get_events_failed');
+    if (json) {
+      await writeJsonLine({ ok: false, runId: run.id, error: 'workflow_events_unavailable' });
+    } else {
+      console.log(`Workflow run events unavailable: ${run.id} (see logs)`);
+    }
+    return 1;
   }
 
   // Leave-behind view (#2747): what did this run leave, and where. Assembled
@@ -4106,6 +4113,7 @@ export async function workflowGetCommand(
       await writeJsonLine({
         ...run,
         transcript_path: transcriptPath,
+        terminal_record: terminalRecord,
         ...(leaveBehind ? { leave_behind: leaveBehind } : {}),
       });
       return 0;
@@ -4114,10 +4122,16 @@ export async function workflowGetCommand(
     const verboseEvents = events ?? [];
     const parseWarnings = readParseWarningEvents(verboseEvents);
     const output = rawEvents
-      ? { ...run, transcript_path: transcriptPath, events: verboseEvents }
+      ? {
+          ...run,
+          transcript_path: transcriptPath,
+          terminal_record: terminalRecord,
+          events: verboseEvents,
+        }
       : {
           ...run,
           transcript_path: transcriptPath,
+          terminal_record: terminalRecord,
           nodes: buildNodeSummaries(verboseEvents),
           // Keys the engine dropped from this run's YAML (#2213). Surfaced as a
           // named field rather than leaving the caller to scan raw events.
@@ -4173,6 +4187,20 @@ export async function workflowGetCommand(
   if (runError) {
     console.log(`  Error:  ${runError}`);
   }
+  if (terminalRecord) {
+    console.log('  Terminal record:');
+    if (terminalRecord.first_failed_node) {
+      console.log(`    First failed node: ${terminalRecord.first_failed_node}`);
+    }
+    console.log(`    Selected return: ${terminalRecord.returns.availability}`);
+    console.log(`    Artifacts observed: ${String(terminalRecord.artifacts.files.length)}`);
+    for (const file of terminalRecord.artifacts.files) console.log(`      - ${file.path}`);
+    for (const limitation of terminalRecord.artifacts.limitations) {
+      console.log(`    Inventory limitation: ${limitation.kind} (${limitation.path})`);
+    }
+  } else {
+    console.log('  Terminal record: (unavailable)');
+  }
   if (leaveBehind) {
     console.log('  Leave-behind:');
     if (leaveBehind.branch) console.log(`    Branch: ${leaveBehind.branch}`);
@@ -4191,10 +4219,7 @@ export async function workflowGetCommand(
       if (leaveBehind.artifactFiles.length > 20) console.log('      …');
     }
   }
-  if (events) {
-    if (eventsFailed) {
-      console.log('  (node events unavailable — see logs)');
-    }
+  if (verbose) {
     const parseWarnings = readParseWarningEvents(events);
     if (parseWarnings.length > 0) {
       console.log(`  Ignored keys (${String(parseWarnings.length)}):`);

@@ -3,6 +3,7 @@
  * Covers concurrent-run guards, model/provider resolution, and resume logic
  * that the inner dag-executor.test.ts cannot reach.
  */
+import { NodeEventWriteError } from './node-event-write';
 import { describe, it, expect, mock, beforeEach, spyOn } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -299,6 +300,30 @@ describe('executeWorkflow', () => {
     mockGetDefaultBranch.mockClear();
     mockGetDefaultBranch.mockImplementation(async () => 'main');
     mockExecuteDagWorkflow.mockImplementation(async () => undefined);
+  });
+
+  it.each([false, true])('persists loaded graph before DAG execution (resume=%s)', async resume => {
+    const store = makeStore();
+    const workflow = makeWorkflow({ returns: 'node1' });
+    mockExecuteDagWorkflow.mockImplementationOnce(async () => {
+      expect(store.updateWorkflowRun).toHaveBeenCalledWith(expect.any(String), {
+        metadata: {
+          terminal_graph: { node_ids: workflow.nodes.map(node => node.id), returns: 'node1' },
+        },
+      });
+      return undefined;
+    });
+    await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      workflow,
+      'msg',
+      'db-conv-1',
+      resume ? { preCreatedRun: makeRun(), priorCompletedNodes: new Map() } : {}
+    );
+    expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a structurally valid but semantically invalid outcome declaration before side effects', async () => {
@@ -3635,6 +3660,34 @@ describe('telemetry wiring', () => {
     expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
     expect(store.createWorkflowEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'workflow_failed' })
+    );
+  });
+
+  it('records a run failure when durable node evidence cannot be stored', async () => {
+    mockExecuteDagWorkflow.mockRejectedValueOnce(
+      new NodeEventWriteError(
+        {
+          workflow_run_id: 'run-1',
+          event_type: 'node_failed',
+          step_name: 'build',
+          data: { error: 'build exited 3' },
+        },
+        new Error('storage unavailable')
+      )
+    );
+    const store = makeStore();
+    await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'msg',
+      'db-conv-1'
+    );
+    expect(store.failWorkflowRun).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining('storage unavailable; original node failure: build exited 3')
     );
   });
 

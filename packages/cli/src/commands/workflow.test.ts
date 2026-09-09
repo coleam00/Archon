@@ -5406,7 +5406,10 @@ describe('workflowGetCommand', () => {
 
     const code = await workflowGetCommand('run-legacy', true);
 
-    expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({ transcript_path: null });
+    expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
+      transcript_path: null,
+      terminal_record: null,
+    });
     expect(code).toBe(0);
   });
 
@@ -5737,7 +5740,7 @@ describe('workflowGetCommand', () => {
     expect(parsed.transcript_path).toBeNull();
   });
 
-  it('degrades a raw verbose JSON event-query failure to an empty events payload', async () => {
+  it('fails explicitly when a raw verbose JSON event query fails', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const eventsDb = await import('@archon/core/db/workflow-events');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -5752,10 +5755,14 @@ describe('workflowGetCommand', () => {
       new Error('events unavailable')
     );
 
-    await workflowGetCommand('run-v', true, true, undefined, true);
+    const code = await workflowGetCommand('run-v', true, true, undefined, true);
 
-    const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as { events: unknown[] };
-    expect(parsed.events).toEqual([]);
+    expect(code).toBe(1);
+    expect(JSON.parse(firstJsonPayload(stdoutSpy))).toEqual({
+      ok: false,
+      runId: 'run-v',
+      error: 'workflow_events_unavailable',
+    });
   });
 });
 

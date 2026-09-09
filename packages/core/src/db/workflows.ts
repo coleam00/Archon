@@ -3,6 +3,7 @@
  */
 import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
 import { insertWorkflowEvent, listActiveWorkflowNodeIds } from './workflow-events';
+import { insertTerminalWorkflowEvent } from './workflow-terminal-event';
 import { toHydratedTimestamp } from './timestamps';
 import type { IDatabase, SqlDialect } from './adapters/types';
 import type {
@@ -322,7 +323,7 @@ export async function resolveAndCancelApprovalGate(
         for (const event of events) {
           await insertWorkflowEvent(query, { workflow_run_id: id, ...event });
         }
-        await insertWorkflowEvent(query, {
+        await insertTerminalWorkflowEvent(query, {
           workflow_run_id: id,
           event_type: 'workflow_cancelled',
           step_name: cancellation.step_name,
@@ -625,7 +626,7 @@ export async function cancelResumableRunsForConversation(
         );
       }
       for (const run of resumable) {
-        await insertWorkflowEvent(query, {
+        await insertTerminalWorkflowEvent(query, {
           workflow_run_id: run.id,
           event_type: 'workflow_cancelled',
         });
@@ -1219,7 +1220,7 @@ export async function completeWorkflowRun(
             [id]
           );
       if ((update.rowCount ?? 0) > 0) {
-        await insertWorkflowEvent(query, {
+        await insertTerminalWorkflowEvent(query, {
           workflow_run_id: id,
           event_type: 'workflow_completed',
           data: completion,
@@ -1290,7 +1291,7 @@ export async function failWorkflowRun(
         });
       }
       if ((update.rowCount ?? 0) > 0) {
-        await insertWorkflowEvent(query, {
+        await insertTerminalWorkflowEvent(query, {
           workflow_run_id: id,
           event_type: 'workflow_failed',
           data: { error },
@@ -1331,7 +1332,7 @@ export async function cancelWorkflowRun(
         [id]
       );
       if ((update.rowCount ?? 0) > 0) {
-        await insertWorkflowEvent(query, {
+        await insertTerminalWorkflowEvent(query, {
           workflow_run_id: id,
           event_type: 'workflow_cancelled',
           step_name: event?.step_name,
@@ -1372,7 +1373,7 @@ export async function cancelFanOutRun(
         [id, JSON.stringify({ cancelled_reason: reason })]
       );
       if ((update.rowCount ?? 0) > 0) {
-        await insertWorkflowEvent(query, {
+        await insertTerminalWorkflowEvent(query, {
           workflow_run_id: id,
           event_type: 'workflow_cancelled',
           data: { reason },
@@ -1528,7 +1529,7 @@ export async function failPausedAttentionWait(
       );
       const failed = (result.rowCount ?? 0) > 0;
       if (failed) {
-        await insertWorkflowEvent(query, {
+        await insertTerminalWorkflowEvent(query, {
           workflow_run_id: id,
           event_type: 'workflow_failed',
           data: { error },

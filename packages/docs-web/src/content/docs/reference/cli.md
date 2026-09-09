@@ -504,6 +504,22 @@ authored it yet, or the run predates the field. In that case human output keeps 
 presentation. Foreground `workflow run` uses the same labels when an outcome exists, but its exit
 code remains driven by execution success or failure.
 
+Every `workflow get --json` shape includes `terminal_record`. The API detail endpoint,
+`GET /api/workflows/runs/:runId`, exposes the same value as `run.terminal_record`.
+The engine persists this record with the terminal status transition, including detached
+runs and failures before a reporting node. It contains observed node states and skip
+causes, the selected `returns:` value or its explicit unavailability, and an artifact
+manifest. Historical runs without a record and active resumed runs report `null`.
+An event-query failure exits non-zero with `error: "workflow_events_unavailable"` in
+JSON; it does not masquerade as a missing historical record.
+
+The artifact manifest records paths, sizes, and typed metadata observed at termination.
+It survives later file deletion, but does not preserve file contents or contain previews.
+Its `limitations` array identifies missing roots, unreadable entries, invalid metadata,
+and excluded links. Files may change during the scan, especially during cancellation:
+this is an observation, not an atomic filesystem snapshot. The separate leave-behind
+file listing reflects the filesystem when you query it.
+
 Human output includes `Transcript: <path>`. Every successful JSON shape includes the
 same value as `transcript_path`, including verbose node summaries and raw events. A
 historical run whose storage location can no longer be resolved remains inspectable and
