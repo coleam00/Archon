@@ -42,9 +42,13 @@ Rules that make the backlog buildable by a factory rather than by a person:
    ticket makes that declared gate pass rather than inventing a parallel one. Say all
    of that in the ticket body, and say plainly that this ticket establishes the
    project's checks: it adds tests and the CI workflow and loosens nothing, which is
-   the side of a "do not modify the judge" invariant that is always allowed. In an
-   existing codebase that already has these, the first ticket is simply the first
-   story.
+   the side of a "do not modify the judge" invariant that is always allowed. Name
+   in that ticket the exact start command as an argv line with a port placeholder
+   (for example `python3 app.py --port <port>`), the health path and the build-id
+   path, and where the app keeps its state (a path or environment variable): the
+   operator wires runtime verification from those words before the ticket is built,
+   and the implementer honors them. In an existing codebase that already has these,
+   the first ticket is simply the first story.
 2. **Each ticket is one reviewable change** that leaves the product working.
 3. **Nothing from the mission's out-of-scope list**, and nothing that contradicts an
    invariant. If the document asks for such a thing, leave it out and say so.
