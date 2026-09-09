@@ -22,10 +22,12 @@ def default_branch_head() -> tuple[str, str]:
     out = git("ls-remote", "--symref", "origin", "HEAD")
     branch = sha = ""
     for line in out.splitlines():
-        if line.startswith("ref: refs/heads/"):
-            branch = line.split()[0][len("ref: refs/heads/"):]
-        elif line.endswith("\tHEAD"):
-            sha = line.split()[0]
+        fields = line.split()
+        # "ref: refs/heads/<branch>\tHEAD" names the branch; "<sha>\tHEAD" is its head.
+        if len(fields) == 3 and fields[0] == "ref:" and fields[1].startswith("refs/heads/"):
+            branch = fields[1][len("refs/heads/"):]
+        elif len(fields) == 2 and fields[1] == "HEAD":
+            sha = fields[0]
     if not branch or not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise ValueError("could not resolve the remote default branch head")
     return branch, sha
