@@ -15,7 +15,7 @@ import { execFileAsync } from '@archon/git';
 import {
   isBinaryBuild,
   BUNDLED_COMMANDS,
-  BUNDLED_SCRIPTS,
+  BUNDLED_SCRIPT_PACKS,
   BUNDLED_WORKFLOWS,
   BUNDLED_WORKFLOW_OWNERS,
 } from './bundled-defaults';
@@ -37,22 +37,6 @@ const WORKFLOWS_DIR = join(REPO_ROOT, '.archon/workflows/defaults');
 // `legacy/` holds the deprecated-window defaults (#2781): same flat file
 // convention, one grouping subfolder within the discovery depth cap.
 const LEGACY_WORKFLOWS_DIR = join(WORKFLOWS_DIR, 'legacy');
-
-function findPackagedScriptPath(scriptDir: string, name: string, extension: string): string {
-  const filename = `${name}${extension}`;
-  const direct = join(scriptDir, filename);
-  if (existsSync(direct)) return direct;
-  const matches = readdirSync(scriptDir, { withFileTypes: true })
-    .filter(entry => entry.isDirectory())
-    .map(entry => join(scriptDir, entry.name, filename))
-    .filter(path => existsSync(path));
-  if (matches.length !== 1) {
-    throw new Error(
-      `Expected exactly one packaged script named ${filename} under ${scriptDir}, found ${matches.length}`
-    );
-  }
-  return matches[0];
-}
 
 describe('bundled-defaults', () => {
   describe('isBinaryBuild', () => {
@@ -163,23 +147,23 @@ describe('bundled-defaults', () => {
           }
         }
       }
-      for (const [name, script] of Object.entries(BUNDLED_SCRIPTS)) {
-        expect(name.startsWith('__archon_pack__bundled:')).toBe(true);
-        expect(['.ts', '.js', '.py']).toContain(script.extension);
-        expect(['bun', 'uv']).toContain(script.runtime);
-        expect(script.content.length).toBeGreaterThan(0);
-        const packaged = parsePackagedResourceReference(name);
-        expect(packaged).not.toBeNull();
-        const scriptDir = join(
-          REPO_ROOT,
-          '.archon',
-          'workflows',
-          packaged!.owner.pack,
-          packaged!.owner.workflow,
-          'scripts'
-        );
-        const diskPath = findPackagedScriptPath(scriptDir, packaged!.name, script.extension);
-        expect(script.content).toBe(readFileSync(diskPath, 'utf-8').replace(/\r\n/g, '\n'));
+      for (const [pack, bundle] of Object.entries(BUNDLED_SCRIPT_PACKS)) {
+        for (const [path, content] of Object.entries(bundle.files)) {
+          expect(content).toBe(
+            readFileSync(join(REPO_ROOT, '.archon/workflows', pack, path), 'utf-8').replace(
+              /\r\n/g,
+              '\n'
+            )
+          );
+        }
+        for (const [name, script] of Object.entries(bundle.scripts)) {
+          const packaged = parsePackagedResourceReference(name);
+          if (packaged === null) throw new Error(`Missing packaged script owner: ${name}`);
+          expect(packaged.owner.pack).toBe(pack);
+          expect(script.path.startsWith(`${packaged.owner.workflow}/scripts/`)).toBe(true);
+          expect(bundle.files[script.path]?.length).toBeGreaterThan(0);
+          expect(['uv', 'bun']).toContain(script.runtime);
+        }
       }
     });
   });

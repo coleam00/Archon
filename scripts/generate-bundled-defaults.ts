@@ -23,13 +23,16 @@
  *   1  unexpected error (missing dir, unreadable source, invalid filename, etc.)
  *   2  --check was passed and the file would change
  */
-import { access, readFile, readdir, stat, writeFile } from 'fs/promises';
+import { access, lstat, readFile, readdir, stat, writeFile } from 'fs/promises';
 import { basename, extname, join, relative, resolve } from 'path';
 import { execFileAsync } from '@archon/git';
 import {
+  PACK_SHARED_DIRECTORY,
   formatPackagedResourceReference,
   isValidWorkflowFolderSegment,
 } from '../packages/workflows/src/packaged-workflow';
+
+import type { BundledScriptPack } from '../packages/workflows/src/defaults/bundled-script-pack';
 
 // BUNDLED_DEFAULTS_REPO_ROOT is a test seam: the integration tests point the
 // script at a throwaway git repo (see
@@ -60,18 +63,6 @@ interface BundledWorkflowOwner {
   workflow: string;
 }
 
-type BundledScript =
-  | {
-      content: string;
-      extension: '.py';
-      runtime: 'uv';
-    }
-  | {
-      content: string;
-      extension: '.js' | '.ts';
-      runtime: 'bun';
-    };
-
 type BundledScriptKind =
   | { extension: '.py'; runtime: 'uv' }
   | { extension: '.js' | '.ts'; runtime: 'bun' };
@@ -80,7 +71,7 @@ interface PackagedDefaults {
   workflows: BundledFile[];
   workflowOwners: Map<string, BundledWorkflowOwner>;
   commands: BundledFile[];
-  scripts: Map<string, BundledScript>;
+  scriptPacks: Map<string, BundledScriptPack>;
   sourcePaths: string[];
 }
 
@@ -119,6 +110,26 @@ async function listPackagedScriptFiles(scriptPath: string): Promise<PackagedScri
         relativePath: candidate.relativePath,
       });
     }
+  }
+  return files;
+}
+
+// Shared inventory contains regular modules only: symlinks cannot be silently
+// dropped or dereferenced differently between source and binary distributions.
+async function listSharedModuleFiles(directory: string): Promise<string[]> {
+  if ((await lstat(directory)).isSymbolicLink()) {
+    throw new Error(`Shared module symlinks are not supported: ${directory}`);
+  }
+  const files: string[] = [];
+  for (const entry of (await readdir(directory, { withFileTypes: true })).sort((a, b) =>
+    a.name.localeCompare(b.name)
+  )) {
+    const path = join(directory, entry.name);
+    if (entry.isSymbolicLink()) {
+      throw new Error(`Shared module symlinks are not supported: ${path}`);
+    }
+    if (entry.isDirectory()) files.push(...(await listSharedModuleFiles(path)));
+    else if (entry.isFile() && getBundledScriptKind(extname(entry.name)) !== null) files.push(path);
   }
   return files;
 }
@@ -260,7 +271,7 @@ async function collectPackagedDefaults(root: string): Promise<PackagedDefaults> 
   const workflows: BundledFile[] = [];
   const workflowOwners = new Map<string, BundledWorkflowOwner>();
   const commands: BundledFile[] = [];
-  const scripts = new Map<string, BundledScript>();
+  const scriptPacks = new Map<string, BundledScriptPack>();
   const sourcePaths: string[] = [];
 
   for (const pack of (await readdir(root)).sort((a, b) => a.localeCompare(b))) {
@@ -275,7 +286,20 @@ async function collectPackagedDefaults(root: string): Promise<PackagedDefaults> 
       throw new Error(`Invalid packaged workflow pack directory "${pack}".`);
     }
 
+    const files: Record<string, string> = {};
+    const scripts: Record<string, BundledScriptPack['scripts'][string]> = {};
+    const sharedPath = join(packPath, PACK_SHARED_DIRECTORY);
+    if (await isDirectory(sharedPath)) {
+      for (const path of await listSharedModuleFiles(sharedPath)) {
+        files[relative(packPath, path).replaceAll('\\', '/')] = (
+          await readFile(path, 'utf-8')
+        ).replace(/\r\n/g, '\n');
+        sourcePaths.push(path);
+      }
+    }
+
     for (const workflow of (await readdir(packPath)).sort((a, b) => a.localeCompare(b))) {
+      if (workflow === PACK_SHARED_DIRECTORY) continue;
       const workflowPath = join(packPath, workflow);
       if (!(await isDirectory(workflowPath))) continue;
       if (!isValidWorkflowFolderSegment(workflow)) {
@@ -343,16 +367,19 @@ async function collectPackagedDefaults(root: string): Promise<PackagedDefaults> 
           }
           seen.add(localName);
           const key = formatPackagedResourceReference(owner, localName);
-          scripts.set(key, { content: await readBundledContent(path), ...kind });
+          const packRelativePath = `${workflow}/scripts/${relativePath}`;
+          files[packRelativePath] = await readBundledContent(path);
+          scripts[key] = { path: packRelativePath, runtime: kind.runtime };
           sourcePaths.push(path);
         }
       }
     }
+    if (Object.keys(files).length > 0) scriptPacks.set(pack, { files, scripts });
   }
 
   workflows.sort((a, b) => a.name.localeCompare(b.name));
   commands.sort((a, b) => a.name.localeCompare(b.name));
-  return { workflows, workflowOwners, commands, scripts, sourcePaths };
+  return { workflows, workflowOwners, commands, scriptPacks, sourcePaths };
 }
 
 function renderRecord(comment: string, exportName: string, files: BundledFile[]): string {
@@ -390,7 +417,7 @@ function renderFile(
   commands: BundledFile[],
   workflows: BundledFile[],
   workflowOwners: ReadonlyMap<string, BundledWorkflowOwner>,
-  scripts: ReadonlyMap<string, BundledScript>
+  scriptPacks: ReadonlyMap<string, BundledScriptPack>
 ): string {
   const header = [
     '/**',
@@ -404,6 +431,7 @@ function renderFile(
     ' *   .archon/workflows/defaults/*.{yaml,yml} (current)',
     ' *   .archon/workflows/defaults/legacy/*.{yaml,yml} (deprecated window)',
     ' *   .archon/workflows/<pack>/<workflow>/',
+    ' *   .archon/workflows/<pack>/.shared/ (recursive .ts, .js, .py modules)',
     ' *',
     ' * Contents are inlined as plain string literals (JSON-escaped) so this',
     ' * module loads in both Bun and Node. Previous versions used',
@@ -414,14 +442,12 @@ function renderFile(
 
   return [
     header,
+    "import type { BundledScriptPack } from './bundled-script-pack';",
+    '',
     'export interface BundledWorkflowOwner {',
     '  readonly pack: string;',
     '  readonly workflow: string;',
     '}',
-    '',
-    'export type BundledScript =',
-    "  | { readonly content: string; readonly extension: '.py'; readonly runtime: 'uv' }",
-    "  | { readonly content: string; readonly extension: '.js' | '.ts'; readonly runtime: 'bun' };",
     '',
     renderRecord('Bundled commands', 'BUNDLED_COMMANDS', commands),
     '',
@@ -435,7 +461,12 @@ function renderFile(
       'Readonly<Partial<Record<keyof typeof BUNDLED_WORKFLOWS, BundledWorkflowOwner>>>'
     ),
     '',
-    renderMapRecord('Bundled scripts', 'BUNDLED_SCRIPTS', 'BundledScript', scripts),
+    renderMapRecord(
+      'Bundled script packs',
+      'BUNDLED_SCRIPT_PACKS',
+      'BundledScriptPack',
+      scriptPacks
+    ),
     '',
   ].join('\n');
 }
@@ -503,7 +534,7 @@ async function main(): Promise<void> {
     a.name.localeCompare(b.name)
   );
 
-  const contents = renderFile(commands, workflows, packaged.workflowOwners, packaged.scripts);
+  const contents = renderFile(commands, workflows, packaged.workflowOwners, packaged.scriptPacks);
 
   if (CHECK_ONLY) {
     let existing = '';
@@ -521,14 +552,14 @@ async function main(): Promise<void> {
       process.exit(2);
     }
     console.log(
-      `bundled-defaults.generated.ts is up to date (${commands.length} commands, ${workflows.length} workflows, ${packaged.scripts.size} scripts).`
+      `bundled-defaults.generated.ts is up to date (${commands.length} commands, ${workflows.length} workflows, ${packaged.scriptPacks.size} script packs).`
     );
     return;
   }
 
   await writeFile(OUTPUT_PATH, contents, 'utf-8');
   console.log(
-    `Wrote ${OUTPUT_PATH}\n  ${commands.length} commands, ${workflows.length} workflows, ${packaged.scripts.size} scripts.`
+    `Wrote ${OUTPUT_PATH}\n  ${commands.length} commands, ${workflows.length} workflows, ${packaged.scriptPacks.size} script packs.`
   );
 }
 
