@@ -21119,6 +21119,16 @@ describe('executeDagWorkflow -- loop_group node', () => {
       })
     );
 
+    expect(mockDeps.store.persistWorkflowEvent).toHaveBeenCalledWith({
+      workflow_run_id: workflowRun.id,
+      event_type: 'node_failed',
+      step_name: 'fixer',
+      data: expect.objectContaining({
+        type: 'loop_group',
+        aggregate: true,
+        error: expect.stringContaining("Loop-group node 'fixer' exceeded max iterations (2)"),
+      }),
+    });
     // The negated prose does not complete the group, so it exhausts max_iterations.
     expect(callCount).toBe(2);
     expect(result).toBeUndefined();

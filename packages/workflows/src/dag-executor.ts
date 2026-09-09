@@ -10426,6 +10426,21 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   loopGroupProvider,
                   ctx.stepNamePrefix
                 );
+                if (output.state === 'failed') {
+                  await persistNodeEvent(ctx.deps.store, {
+                    workflow_run_id: ctx.workflowRun.id,
+                    event_type: 'node_failed',
+                    step_name: ctx.stepNamePrefix + node.id,
+                    data: {
+                      type: 'loop_group',
+                      aggregate: true,
+                      error: output.error,
+                      ...(output.costUsd !== undefined ? { cost_usd: output.costUsd } : {}),
+                      ...(output.tokens !== undefined ? { tokens: output.tokens } : {}),
+                      ...(iteration !== undefined ? { iteration } : {}),
+                    },
+                  });
+                }
                 return { nodeId: node.id, output };
               }
 
