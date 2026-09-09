@@ -599,7 +599,7 @@ describe('dryRunWorkflow', () => {
         'import sys',
         'sys.path.insert(0, str(Path(__file__).resolve().parents[2] / ".shared"))',
         'from value import value',
-        'print(value)',
+        'sys.stdout.write(value)',
       ].join('\n')
     );
     const capture = await captureProjectSource({
