@@ -5,6 +5,7 @@ import type { WorkflowEventRow } from './workflow-events';
 import { mergeTokenUsage, type TokenUsage } from '@archon/providers/types';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { NODE_STATE_EVENT_TYPES, type NodeStateEventType } from '@archon/workflows/store';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -1221,6 +1222,43 @@ describe('workflow-events', () => {
         expect(mockLogger.warn).not.toHaveBeenCalled();
       });
     });
+
+    test.each([...NODE_STATE_EVENT_TYPES])(
+      'honors latest %s when hydrating earlier success',
+      async eventType => {
+        const expected = {
+          node_started: { cached: false, active: true },
+          node_completed: { cached: true, active: false },
+          node_failed: { cached: false, active: false },
+          node_skipped: { cached: false, active: false },
+          node_skipped_prior_success: { cached: true, active: false },
+          node_prior_cache_invalidated: { cached: false, active: false },
+          node_always_run_reset: { cached: false, active: false },
+        } satisfies Record<NodeStateEventType, { cached: boolean; active: boolean }>;
+        const rows = [
+          {
+            step_name: 'consumer',
+            event_type: 'node_completed',
+            data: { node_output: 'old', tokens: { input: 10, output: 1 }, cost_usd: 2 },
+          },
+          { step_name: 'consumer', event_type: 'node_started', data: {} },
+          { step_name: 'consumer', event_type: eventType, data: { node_output: 'latest' } },
+        ];
+        // Model the real SQL selection: returning every mocked row would miss an omitted kind.
+        mockQuery.mockImplementationOnce(async (_sql, params) =>
+          createQueryResult(
+            rows.filter(row => Array.isArray(params) && params.includes(row.event_type))
+          )
+        );
+        const snapshot = await getDagResumeSnapshot('run-node-state-fold');
+        expect(snapshot.completedNodeOutputs.get('consumer')).toEqual(
+          expected[eventType].cached ? { output: 'latest' } : undefined
+        );
+        expect(snapshot.unresolvedNodeStarts.has('consumer')).toBe(expected[eventType].active);
+        expect(snapshot.tokens).toEqual({ input: 10, output: 1 });
+        expect(snapshot.costUsd).toBe(2);
+      }
+    );
 
     test('returns an empty snapshot when no events exist', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));

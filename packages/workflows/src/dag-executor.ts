@@ -8806,10 +8806,7 @@ async function executeFanOutWorkflowNode(
     }
   );
 
-  const outcomes: ChildWorkflowOutcome[] = settled.map(result => {
-    if (result.status === 'rejected') throw result.reason;
-    return result.value;
-  });
+  const outcomes = settledValuesOrThrow(settled, parentRun.id);
 
   const totalCostUsd = sumFanOutCost(outcomes);
   const totalTokens = sumFanOutTokens(outcomes);
@@ -9458,10 +9455,7 @@ async function executeComposeFanOutNode(
     }
   );
 
-  const outcomes: ComposeInstanceOutcome[] = settled.map(result => {
-    if (result.status === 'rejected') throw result.reason;
-    return result.value;
-  });
+  const outcomes = settledValuesOrThrow(settled, parentRun.id);
 
   const totalCostUsd = sumFanOutCost(outcomes);
   const totalTokens = sumFanOutTokens(outcomes);
@@ -9841,6 +9835,30 @@ function structuredOutputsEqual(a: unknown, b: unknown): boolean {
   } catch {
     return false;
   }
+}
+
+/** Preserve the rejection that determines run recovery after all claimed work settles. */
+function settledValuesOrThrow<T>(
+  results: readonly PromiseSettledResult<T>[],
+  workflowRunId: string
+): T[] {
+  const values: T[] = [];
+  const failures: PromiseRejectedResult[] = [];
+  for (const result of results) {
+    if (result.status === 'fulfilled') values.push(result.value);
+    else failures.push(result);
+  }
+  const selected =
+    failures.find(result => result.reason instanceof TerminalStatusWriteError) ??
+    failures.find(result => result.reason instanceof NodeEventWriteError) ??
+    failures[0];
+  if (selected === undefined) return values;
+  for (const failure of failures) {
+    if (failure === selected) continue;
+    const reason: unknown = failure.reason;
+    getLog().error({ err: reason, workflowRunId }, 'dag.join_secondary_failure');
+  }
+  throw selected.reason;
 }
 
 /**
@@ -10967,8 +10985,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
         if (output.state === 'failed') layerHadFailure = true;
       }
     }
-    const rejected = layerResults.find(result => result.status === 'rejected');
-    if (rejected) throw rejected.reason;
+    settledValuesOrThrow(layerResults, ctx.workflowRun.id);
 
     if (layerHadFailure) {
       getLog().warn({ layerIdx, nodeCount: layer.length }, 'dag_layer_had_failures');

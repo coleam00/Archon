@@ -1,3 +1,5 @@
+import { TerminalStatusWriteError } from './terminal-status-write';
+import { NodeEventWriteError } from './node-event-write';
 import { buildTerminalRecord } from './terminal-record';
 import { RUN_GRAPH_METADATA_KEY } from './schemas/terminal-record';
 import {
@@ -32586,6 +32588,116 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     expect(wrapper?.data.structured_output).toEqual(['chosen-a']);
   });
 
+  it.each(['node', 'terminal'] as const)(
+    'mixed child fan-out rejections preserve the %s write failure',
+    async kind => {
+      await writeBlock(
+        'name: child-workflow\ndescription: child\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: "echo done"',
+        'child-workflow'
+      );
+      const store = createMockStore();
+      const ordinary = new Error('source read failed');
+      const cause = new Error('write rejected');
+      const primary =
+        kind === 'terminal'
+          ? new TerminalStatusWriteError(cause)
+          : new NodeEventWriteError(
+              { workflow_run_id: 'child', event_type: 'node_completed', step_name: 'work' },
+              cause
+            );
+      let siblingSettled = false;
+      mockLogFn.mockClear();
+      const runChildWorkflow = mock<RunChildWorkflowFn>(async args => {
+        if (args.childIndex === 0) throw ordinary;
+        await new Promise(resolve => setTimeout(resolve, args.childIndex === 1 ? 5 : 10));
+        if (args.childIndex === 1) throw primary;
+        siblingSettled = true;
+        return { childRunId: 'completed-sibling', status: 'completed', output: 'done' };
+      });
+      const pending = executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          runChildWorkflow,
+          workflow: {
+            name: 'mixed-child',
+            nodes: [
+              {
+                id: 'fan',
+                kind: 'workflow',
+                workflow: 'child-workflow',
+                fan_out: { items: '["a","b","c"]', max_parallel: 3, join: 'all_done' },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('mixed-child'),
+        })
+      );
+      await expect(pending).rejects.toBe(primary);
+      expect(runChildWorkflow).toHaveBeenCalledTimes(3);
+      expect(siblingSettled).toBe(true);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(mockLogFn).toHaveBeenCalledWith(
+        { err: ordinary, workflowRunId: 'mixed-child' },
+        'dag.join_secondary_failure'
+      );
+    }
+  );
+
+  it('mixed composed rejections preserve terminal rollback after claimed work settles', async () => {
+    await writeBlock(
+      'name: compose-blk\ndescription: body\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: "echo done"\n  - id: stop\n    cancel: stop\n    depends_on: [work]'
+    );
+    const store = createMockStore();
+    const cause = new Error('cancel record failed');
+    const nodeFailure = new Error('node storage offline');
+    let workStarts = 0;
+    let cancellationSettled = false;
+    store.cancelWorkflowRun = mock(async () => {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      cancellationSettled = true;
+      throw cause;
+    });
+    store.persistWorkflowEvent = mock(async event => {
+      if (
+        event.event_type === 'node_started' &&
+        event.step_name?.endsWith('__work') &&
+        ++workStarts === 1
+      )
+        throw nodeFailure;
+      await store.createWorkflowEvent(event);
+    });
+    mockLogFn.mockClear();
+    const pending = executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: {
+          name: 'mixed-composed',
+          nodes: [
+            {
+              id: 'fan',
+              kind: 'compose_fan_out',
+              include: 'compose-blk',
+              fan_out: { items: '["a","b"]', as: 'item', max_parallel: 2, join: 'all_done' },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('mixed-composed'),
+      })
+    );
+    await expect(pending).rejects.toMatchObject({ name: 'TerminalStatusWriteError', cause });
+    expect(workStarts).toBe(2);
+    expect(cancellationSettled).toBe(true);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(mockLogFn).toHaveBeenCalledWith(
+      { err: expect.objectContaining({ cause: nodeFailure }), workflowRunId: 'mixed-composed' },
+      'dag.join_secondary_failure'
+    );
+  });
+
   it.each([false, true])(
     'rejects composed all_done after inner storage rejection (cancellation=%s)',
     async cancellation => {
@@ -34435,6 +34547,40 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
     }
   }
 
+  it('mixed layer rejections preserve terminal rollback after successful siblings settle', async () => {
+    const store = createMockStore();
+    const cause = new Error('cancel record failed');
+    const nodeFailure = new Error('node storage offline');
+    let siblingSettled = false;
+    store.cancelWorkflowRun = mock(async () => {
+      throw cause;
+    });
+    store.persistWorkflowEvent = mock(async event => {
+      if (event.event_type === 'node_started' && event.step_name === 'ok') throw nodeFailure;
+      if (event.event_type === 'node_completed' && event.step_name === 'sibling') {
+        await new Promise(resolve => setTimeout(resolve, 5));
+        siblingSettled = true;
+      }
+      await store.createWorkflowEvent(event);
+    });
+    mockLogFn.mockClear();
+    await expect(
+      run(
+        store,
+        createMockPlatform(),
+        [okNode, { id: 'stop', kind: 'halt', reason: 'stop' }, { ...okNode, id: 'sibling' }],
+        []
+      )
+    ).rejects.toMatchObject({ name: 'TerminalStatusWriteError', cause });
+    expect(siblingSettled).toBe(true);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(mockLogFn).toHaveBeenCalledWith(
+      { err: expect.objectContaining({ cause: nodeFailure }), workflowRunId: 'terminal-order-run' },
+      'dag.join_secondary_failure'
+    );
+  });
+
   it('propagates halt cancellation rollback without a compensating failure', async () => {
     const store = createMockStore();
     store.cancelWorkflowRun = mock(async () => {
@@ -34481,6 +34627,54 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
     expect(emitted).not.toContain('node_completed');
   });
+
+  it.each(['agent', 'script'] as const)(
+    'does not retry successful %s work when its completion write rejects',
+    async kind => {
+      const store = createMockStore();
+      const cause = new Error('completion storage rejected');
+      store.persistWorkflowEvent = mock(async event => {
+        if (event.event_type === 'node_completed') throw cause;
+        await store.createWorkflowEvent(event);
+      });
+      mockSendQueryDag.mockClear();
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'assistant', content: 'done' };
+        yield { type: 'result', sessionId: 'completion-test' };
+      });
+      mockGetAgentProviderDag.mockImplementation(() => ({
+        sendQuery: mockSendQueryDag,
+        getType: () => 'claude',
+        getCapabilities: mockClaudeCapabilities,
+      }));
+      const retry = { max_attempts: 2, on_error: 'all' as const, delay_ms: 1 };
+      const node: DagNode =
+        kind === 'agent'
+          ? { id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'finish once' }, retry }
+          : {
+              id: 'work',
+              kind: 'exec',
+              runtime: 'bun',
+              script:
+                'import { appendFileSync } from "node:fs"; appendFileSync("workload-count", "x"); console.log("done");',
+              retry,
+            };
+      const emitted: string[] = [];
+      await expect(run(store, createMockPlatform(), [node], emitted)).rejects.toMatchObject({
+        name: 'NodeEventWriteError',
+        cause,
+      });
+      if (kind === 'agent') expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      else expect(await readFile(join(testDir, 'workload-count'), 'utf8')).toBe('x');
+      expect(
+        store.persistWorkflowEvent.mock.calls.filter(
+          ([event]) => event.event_type === 'node_failed'
+        )
+      ).toHaveLength(0);
+      expect(emitted).not.toContain('node_completed');
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
 
   it('still emits workflow_completed and telemetry when the completion write rejects', async () => {
     const store = createMockStore();

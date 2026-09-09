@@ -17,6 +17,8 @@ import { readFile } from 'node:fs/promises';
 import type { FanOutInstanceSnapshot } from '@archon/workflows/fan-out-identity';
 import {
   NODE_LIFECYCLE_EVENT_TYPES,
+  NODE_STATE_EVENT_TYPES,
+  type NodeStateEventType,
   type NodeLifecycleEventType,
   type DagResumeSnapshot,
   type PersistedNodeOutput,
@@ -362,7 +364,7 @@ interface NodeLifecycleEventRow extends NodeLifecycleEvent {
 function foldActiveNodeIds(
   activeNodeIds: Set<string>,
   stepName: string | null,
-  eventType: NodeLifecycleEventType
+  eventType: NodeStateEventType
 ): void {
   if (!stepName) return;
   if (eventType === 'node_started') {
@@ -402,15 +404,15 @@ export async function listActiveWorkflowNodeIds(
 export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagResumeSnapshot> {
   const result = await pool.query<{
     step_name: string | null;
-    event_type: NodeLifecycleEventType | 'fan_out_instances';
+    event_type: NodeStateEventType | 'fan_out_instances';
     data: string | Record<string, unknown>;
   }>(
     `SELECT step_name, event_type, data FROM remote_agent_workflow_events
-     WHERE workflow_run_id = $1 AND event_type IN (${NODE_LIFECYCLE_EVENT_TYPES.map(
+     WHERE workflow_run_id = $1 AND event_type IN (${NODE_STATE_EVENT_TYPES.map(
        (_, index) => `$${String(index + 2)}`
-     ).join(', ')}, $${String(NODE_LIFECYCLE_EVENT_TYPES.length + 2)})
+     ).join(', ')}, $${String(NODE_STATE_EVENT_TYPES.length + 2)})
      ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
-    [workflowRunId, ...NODE_LIFECYCLE_EVENT_TYPES, 'fan_out_instances']
+    [workflowRunId, ...NODE_STATE_EVENT_TYPES, 'fan_out_instances']
   );
   const completedNodeOutputs = new Map<string, PersistedNodeOutput>();
   const fanOutSnapshots = new Map<string, readonly FanOutInstanceSnapshot[]>();
@@ -423,6 +425,9 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagRe
     if (!row.step_name) continue;
     if (row.event_type !== 'fan_out_instances') {
       foldActiveNodeIds(unresolvedNodeStarts, row.step_name, row.event_type);
+      // Every later node state supersedes reusable success, even when that row
+      // carries no output (or its data cannot be recovered). Only success restores it.
+      completedNodeOutputs.delete(row.step_name);
     }
     let data: Record<string, unknown>;
     try {
@@ -441,14 +446,13 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagRe
       }
       continue;
     }
-    if (row.event_type === 'node_started' || row.event_type === 'node_skipped') continue;
-    if (row.event_type === 'node_failed') {
-      // A later failure for this step supersedes any earlier node_completed /
-      // node_skipped_prior_success entry (#2705 R2) — otherwise a node the engine's own
-      // prior-cache invalidation re-executed, and which then genuinely failed, is
-      // reported as a cached success again on a subsequent resume.
-      completedNodeOutputs.delete(row.step_name);
-    } else if (typeof data.node_output === 'string') {
+    if (
+      row.event_type !== 'node_completed' &&
+      row.event_type !== 'node_skipped_prior_success' &&
+      row.event_type !== 'node_failed'
+    )
+      continue;
+    if (row.event_type !== 'node_failed' && typeof data.node_output === 'string') {
       // A bash/script node's persisted text is a bounded preview once it exceeded the
       // truncation cap; the full bytes were spilled to `node_output_spill_path` at write
       // time (#2726). Prefer the spill so a resumed run's `$node.output`/`.field` sees
