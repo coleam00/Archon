@@ -482,10 +482,23 @@ function rewriteNodeOutputRefs(
     node.context.resume = renameOutputRef(node.context.resume);
   }
 
-  for (const boundary of readComposedMeta(node)?.boundaries ?? []) {
-    boundary.dependsOn = boundary.dependsOn.flatMap(expandDependency);
-    if (boundary.when !== undefined) boundary.when = whenExpr(boundary.when);
-  }
+  // A loop_group body node carries the enclosing include's boundary too (markComposedNode
+  // stamps it on every body node), and that boundary names outer-graph ids. When the
+  // enclosing block is itself included one level further out, those ids are renamed
+  // like every other reference here — otherwise a body node keeps pointing at an id that
+  // no longer exists in the flat graph and is skipped as "upstream failed" on the first
+  // iteration, which is how a two-level composition (lifecycle → ship → deliver's
+  // corrections loop) failed at runtime while each level worked on its own.
+  const rewriteBoundaries = (target: DagNode): void => {
+    for (const boundary of readComposedMeta(target)?.boundaries ?? []) {
+      boundary.dependsOn = boundary.dependsOn.flatMap(expandDependency);
+      if (boundary.when !== undefined) boundary.when = whenExpr(boundary.when);
+    }
+    if (isLoopGroupNode(target)) {
+      for (const body of target.loop_group.nodes) rewriteBoundaries(body);
+    }
+  };
+  rewriteBoundaries(node);
 
   const rewritten = mapNodeTemplateSlots(node, slot =>
     slot.surface === 'binding_default'
