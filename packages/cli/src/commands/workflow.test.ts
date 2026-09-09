@@ -156,6 +156,7 @@ mock.module('@archon/core/services/run-attention-watch', () => ({
 }));
 
 const mockCreateWorkflowEvent = mock(() => Promise.resolve());
+const mockPersistWorkflowEvent = mock(() => Promise.resolve());
 const mockFolderBackendPrepare = mock(() =>
   Promise.resolve({
     cwd: '/test/path',
@@ -251,7 +252,10 @@ mock.module('@archon/core', () => ({
   generateAndSetTitle: mock(() => Promise.resolve()),
   loadRepoConfig: mock(() => Promise.resolve(null)),
   getUserAiPrefs: mock(() => Promise.resolve({})),
-  createWorkflowStore: mock(() => ({ createWorkflowEvent: mockCreateWorkflowEvent })),
+  createWorkflowStore: mock(() => ({
+    createWorkflowEvent: mockCreateWorkflowEvent,
+    persistWorkflowEvent: mockPersistWorkflowEvent,
+  })),
   // requires: [github] gate. Default to a solo-install posture (disabled) so the
   // gate is a no-op for every existing test; the gate-specific tests below flip
   // isPerUserGitHubEnabled on per-invocation.
@@ -5406,7 +5410,10 @@ describe('workflowGetCommand', () => {
 
     const code = await workflowGetCommand('run-legacy', true);
 
-    expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({ transcript_path: null });
+    expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
+      transcript_path: null,
+      terminal_record: null,
+    });
     expect(code).toBe(0);
   });
 
@@ -5737,7 +5744,7 @@ describe('workflowGetCommand', () => {
     expect(parsed.transcript_path).toBeNull();
   });
 
-  it('degrades a raw verbose JSON event-query failure to an empty events payload', async () => {
+  it('fails explicitly when a raw verbose JSON event query fails', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const eventsDb = await import('@archon/core/db/workflow-events');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -5752,10 +5759,14 @@ describe('workflowGetCommand', () => {
       new Error('events unavailable')
     );
 
-    await workflowGetCommand('run-v', true, true, undefined, true);
+    const code = await workflowGetCommand('run-v', true, true, undefined, true);
 
-    const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as { events: unknown[] };
-    expect(parsed.events).toEqual([]);
+    expect(code).toBe(1);
+    expect(JSON.parse(firstJsonPayload(stdoutSpy))).toEqual({
+      ok: false,
+      runId: 'run-v',
+      error: 'workflow_events_unavailable',
+    });
   });
 });
 
@@ -5965,6 +5976,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
     (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockClear();
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockClear();
     mockCreateWorkflowEvent.mockClear();
+    mockPersistWorkflowEvent.mockClear();
   });
 
   afterEach(() => {
@@ -6218,6 +6230,27 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
     expect(consoleSpy).toHaveBeenCalledWith(
       `Event submitted (best-effort): workflow_started for run ${FULL_ID}`
     );
+  });
+
+  it('persists node-state events before reporting success', async () => {
+    const data = { node_output: 'done' };
+    await workflowEventEmitCommand(FULL_ID, 'node_completed', data);
+    expect(mockPersistWorkflowEvent).toHaveBeenCalledWith({
+      workflow_run_id: FULL_ID,
+      event_type: 'node_completed',
+      data,
+    });
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+    expect(consoleSpy).toHaveBeenCalledWith(`Event persisted: node_completed for run ${FULL_ID}`);
+  });
+
+  it('propagates a node-state persistence failure without reporting success', async () => {
+    mockPersistWorkflowEvent.mockRejectedValueOnce(new Error('database unavailable'));
+    await expect(
+      workflowEventEmitCommand(FULL_ID, 'node_failed', { error: 'producer failed' })
+    ).rejects.toThrow('database unavailable');
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+    expect(consoleSpy).not.toHaveBeenCalled();
   });
 
   it('resolves an event prefix from a workspace-scoped worktree', async () => {

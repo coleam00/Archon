@@ -3,7 +3,8 @@
  */
 import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
 import { insertWorkflowEvent, listActiveWorkflowNodeIds } from './workflow-events';
-import { toHydratedTimestamp } from './timestamps';
+import { insertTerminalWorkflowEvent } from './workflow-terminal-event';
+import { normalizeWorkflowRun } from './workflow-run-normalization';
 import type { IDatabase, SqlDialect } from './adapters/types';
 import type {
   WorkflowRun,
@@ -50,30 +51,6 @@ function rollback(): Promise<void> {
 
 /** Guard error for deleteWorkflowRun — re-thrown without wrapping in the outer catch. */
 class WorkflowRunGuardError extends Error {}
-
-/**
- * Normalize a WorkflowRun row from the database.
- * SQLite stores metadata as TEXT (JSON string) and timestamps as TEXT datetimes;
- * PostgreSQL returns parsed objects and real Dates. This makes both shapes match
- * the `WorkflowRun` type's promise for every consumer — downstream code may treat
- * them as a parsed object and a Date without re-guarding (a raw SQLite string once
- * crashed `resolveWorkflowAdoption` at `.toISOString()`, #2845).
- */
-function normalizeWorkflowRun<T extends WorkflowRun>(row: T): T {
-  if (typeof row.metadata === 'string') {
-    try {
-      row.metadata = JSON.parse(row.metadata) as Record<string, unknown>;
-    } catch {
-      row.metadata = {};
-    }
-  }
-  if (typeof row.started_at === 'string') row.started_at = toHydratedTimestamp(row.started_at);
-  if (typeof row.completed_at === 'string')
-    row.completed_at = toHydratedTimestamp(row.completed_at);
-  if (typeof row.last_activity_at === 'string')
-    row.last_activity_at = toHydratedTimestamp(row.last_activity_at);
-  return row;
-}
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -322,7 +299,7 @@ export async function resolveAndCancelApprovalGate(
         for (const event of events) {
           await insertWorkflowEvent(query, { workflow_run_id: id, ...event });
         }
-        await insertWorkflowEvent(query, {
+        await insertTerminalWorkflowEvent(query, {
           workflow_run_id: id,
           event_type: 'workflow_cancelled',
           step_name: cancellation.step_name,
@@ -625,7 +602,7 @@ export async function cancelResumableRunsForConversation(
         );
       }
       for (const run of resumable) {
-        await insertWorkflowEvent(query, {
+        await insertTerminalWorkflowEvent(query, {
           workflow_run_id: run.id,
           event_type: 'workflow_cancelled',
         });
@@ -1219,7 +1196,7 @@ export async function completeWorkflowRun(
             [id]
           );
       if ((update.rowCount ?? 0) > 0) {
-        await insertWorkflowEvent(query, {
+        await insertTerminalWorkflowEvent(query, {
           workflow_run_id: id,
           event_type: 'workflow_completed',
           data: completion,
@@ -1290,7 +1267,7 @@ export async function failWorkflowRun(
         });
       }
       if ((update.rowCount ?? 0) > 0) {
-        await insertWorkflowEvent(query, {
+        await insertTerminalWorkflowEvent(query, {
           workflow_run_id: id,
           event_type: 'workflow_failed',
           data: { error },
@@ -1331,7 +1308,7 @@ export async function cancelWorkflowRun(
         [id]
       );
       if ((update.rowCount ?? 0) > 0) {
-        await insertWorkflowEvent(query, {
+        await insertTerminalWorkflowEvent(query, {
           workflow_run_id: id,
           event_type: 'workflow_cancelled',
           step_name: event?.step_name,
@@ -1372,7 +1349,7 @@ export async function cancelFanOutRun(
         [id, JSON.stringify({ cancelled_reason: reason })]
       );
       if ((update.rowCount ?? 0) > 0) {
-        await insertWorkflowEvent(query, {
+        await insertTerminalWorkflowEvent(query, {
           workflow_run_id: id,
           event_type: 'workflow_cancelled',
           data: { reason },
@@ -1528,7 +1505,7 @@ export async function failPausedAttentionWait(
       );
       const failed = (result.rowCount ?? 0) > 0;
       if (failed) {
-        await insertWorkflowEvent(query, {
+        await insertTerminalWorkflowEvent(query, {
           workflow_run_id: id,
           event_type: 'workflow_failed',
           data: { error },

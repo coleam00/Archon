@@ -17,8 +17,13 @@ import { readFile } from 'node:fs/promises';
 import type { FanOutInstanceSnapshot } from '@archon/workflows/fan-out-identity';
 import {
   NODE_LIFECYCLE_EVENT_TYPES,
+  NODE_STATE_EVENT_TYPES,
+  type NodeStateEventType,
   type NodeLifecycleEventType,
-  type WorkflowEventType,
+  type DagResumeSnapshot,
+  type PersistedNodeOutput,
+  type WorkflowEventInput,
+  type ObservabilityEventInput,
 } from '@archon/workflows/store';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -62,14 +67,7 @@ function parseEventRow(row: WorkflowEventRow): WorkflowEventRow {
   }
 }
 
-/** The column payload for a single workflow-event row. */
-export interface WorkflowEventInput {
-  workflow_run_id: string;
-  event_type: WorkflowEventType;
-  step_index?: number;
-  step_name?: string;
-  data?: Record<string, unknown>;
-}
+export type { WorkflowEventInput } from '@archon/workflows/store';
 
 /**
  * A query function scoped to a specific connection — either the module-level
@@ -111,7 +109,7 @@ export async function insertWorkflowEvent(
 /**
  * Create a workflow event. Fire-and-forget - never throws.
  */
-export async function createWorkflowEvent(data: WorkflowEventInput): Promise<void> {
+export async function createWorkflowEvent(data: ObservabilityEventInput): Promise<void> {
   try {
     await insertWorkflowEvent((sql, params) => pool.query(sql, params), data);
   } catch (error) {
@@ -366,7 +364,7 @@ interface NodeLifecycleEventRow extends NodeLifecycleEvent {
 function foldActiveNodeIds(
   activeNodeIds: Set<string>,
   stepName: string | null,
-  eventType: NodeLifecycleEventType
+  eventType: NodeStateEventType
 ): void {
   if (!stepName) return;
   if (eventType === 'node_started') {
@@ -403,32 +401,20 @@ export async function listActiveWorkflowNodeIds(
   return new Map([...activeByRun].map(([runId, activeNodeIds]) => [runId, [...activeNodeIds]]));
 }
 
-export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
-  completedNodeOutputs: Map<
-    string,
-    { output: string; structuredOutput?: unknown; declaredFields?: readonly string[] }
-  >;
-  fanOutSnapshots: Map<string, readonly FanOutInstanceSnapshot[]>;
-  unresolvedNodeStarts: Set<string>;
-  tokens?: TokenUsage;
-  costUsd: number;
-}> {
+export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagResumeSnapshot> {
   const result = await pool.query<{
     step_name: string | null;
-    event_type: NodeLifecycleEventType | 'fan_out_instances';
+    event_type: NodeStateEventType | 'fan_out_instances';
     data: string | Record<string, unknown>;
   }>(
     `SELECT step_name, event_type, data FROM remote_agent_workflow_events
-     WHERE workflow_run_id = $1 AND event_type IN (${NODE_LIFECYCLE_EVENT_TYPES.map(
+     WHERE workflow_run_id = $1 AND event_type IN (${NODE_STATE_EVENT_TYPES.map(
        (_, index) => `$${String(index + 2)}`
-     ).join(', ')}, $${String(NODE_LIFECYCLE_EVENT_TYPES.length + 2)})
+     ).join(', ')}, $${String(NODE_STATE_EVENT_TYPES.length + 2)})
      ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
-    [workflowRunId, ...NODE_LIFECYCLE_EVENT_TYPES, 'fan_out_instances']
+    [workflowRunId, ...NODE_STATE_EVENT_TYPES, 'fan_out_instances']
   );
-  const completedNodeOutputs = new Map<
-    string,
-    { output: string; structuredOutput?: unknown; declaredFields?: readonly string[] }
-  >();
+  const completedNodeOutputs = new Map<string, PersistedNodeOutput>();
   const fanOutSnapshots = new Map<string, readonly FanOutInstanceSnapshot[]>();
   const unresolvedNodeStarts = new Set<string>();
   // Collected and merged once at the end rather than folded pairwise: a pairwise fold
@@ -439,6 +425,9 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
     if (!row.step_name) continue;
     if (row.event_type !== 'fan_out_instances') {
       foldActiveNodeIds(unresolvedNodeStarts, row.step_name, row.event_type);
+      // Every later node state supersedes reusable success, even when that row
+      // carries no output (or its data cannot be recovered). Only success restores it.
+      completedNodeOutputs.delete(row.step_name);
     }
     let data: Record<string, unknown>;
     try {
@@ -457,32 +446,43 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
       }
       continue;
     }
-    if (row.event_type === 'node_started' || row.event_type === 'node_skipped') continue;
-    if (row.event_type === 'node_failed') {
-      // A later failure for this step supersedes any earlier node_completed /
-      // node_skipped_prior_success entry (#2705 R2) — otherwise a node the engine's own
-      // prior-cache invalidation re-executed, and which then genuinely failed, is
-      // reported as a cached success again on a subsequent resume.
-      completedNodeOutputs.delete(row.step_name);
-    } else if (typeof data.node_output === 'string') {
+    if (
+      row.event_type !== 'node_completed' &&
+      row.event_type !== 'node_skipped_prior_success' &&
+      row.event_type !== 'node_failed'
+    )
+      continue;
+    if (row.event_type !== 'node_failed' && typeof data.node_output === 'string') {
       // A bash/script node's persisted text is a bounded preview once it exceeded the
       // truncation cap; the full bytes were spilled to `node_output_spill_path` at write
       // time (#2726). Prefer the spill so a resumed run's `$node.output`/`.field` sees
       // exactly what a fresh run's in-process consumer would have. A missing/unreadable
-      // spill degrades to the preview rather than failing resume — this is not a DB
-      // error, so it must not propagate as one (see this function's own doc comment).
+      // spill retains the preview and its incompleteness rather than failing resume.
+      // Prior-success replay must preserve that provenance for later terminal records.
       //
       // The spill file is addressed by a stable, node-scoped filename that a later
       // execution of the SAME node overwrites in place (by design — see
-      // `formatPersistedNodeOutput`'s doc comment). Its write races this row's own
-      // fire-and-forget insert (`createWorkflowEvent` never awaited, never throws), so a
-      // process crash between "spill file overwritten by a later execution" and "this
-      // row's insert lands" could otherwise leave an older, still-durable row pointing at
+      // `formatPersistedNodeOutput`'s doc comment). The spill precedes its awaited
+      // lifecycle insert, so a process crash between the file overwrite and that insert
+      // can still leave an older, durable row pointing at
       // a NEWER execution's content. Guard against that by validating the file's actual
       // byte length against this row's own recorded `node_output_original_bytes` before
       // trusting it — a mismatch means the file no longer describes this row, so fall
       // back to the bounded preview exactly like a missing spill would.
       let output = data.node_output;
+      let outputTruncation: PersistedNodeOutput['outputTruncation'] =
+        data.node_output_truncated === true || typeof data.node_output_spill_path === 'string'
+          ? {
+              originalBytes:
+                typeof data.node_output_original_bytes === 'number'
+                  ? data.node_output_original_bytes
+                  : null,
+              spillPath:
+                typeof data.node_output_spill_path === 'string'
+                  ? data.node_output_spill_path
+                  : null,
+            }
+          : undefined;
       if (typeof data.node_output_spill_path === 'string') {
         try {
           const spilled = await readFile(data.node_output_spill_path, 'utf8');
@@ -503,6 +503,7 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
             );
           } else {
             output = spilled;
+            outputTruncation = undefined;
           }
         } catch (spillErr) {
           getLog().warn(
@@ -527,6 +528,7 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
           : undefined;
       completedNodeOutputs.set(row.step_name, {
         output,
+        ...(outputTruncation !== undefined ? { outputTruncation } : {}),
         // The node's logical value (#2637), persisted beside its text by the emit
         // sites (and copied forward by node_skipped_prior_success re-emits). Absent
         // on pre-#2637 rows — the executor then falls back to text re-parsing.

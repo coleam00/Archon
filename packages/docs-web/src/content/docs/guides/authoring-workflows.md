@@ -2311,6 +2311,26 @@ A malformed schema is a **load error**. `archon validate workflows` and every ru
 each declared `output_format` before a provider is called, so a contract can never silently
 stop being enforced after the money is spent.
 
+### Inspecting a terminal run
+
+The engine records terminal facts even when failure skips your reporting node. Use
+[`archon workflow get <run-id> --json`](/reference/cli/#workflow-get) to read
+`terminal_record`, or read `run.terminal_record` from `GET /api/workflows/runs/:runId`.
+The record preserves execution status, authored outcome, node states and skip causes,
+the selected `returns:` value when available, and an artifact manifest. Execution
+status and authored outcome remain independent; the engine does not infer a delivery
+verdict from filenames or output prose. Runs created before this support may have no
+record. Resumed active runs expose `null` until their next terminal transition.
+
+The manifest contains file metadata, not content previews. Its `limitations` identify
+incomplete observations. Cancellation can record pending or running nodes and files
+that are still changing; terminalization does not make the filesystem snapshot atomic.
+You do not need a new YAML field or collector node to obtain these facts.
+
+Workflow-pack adoption remains separate: [#3127](https://github.com/coleam00/Archon/issues/3127)
+owns typed discovery and failure-cause consumption and completion-only outcome formatting.
+A consumer must still depend on the producers whose artifacts it needs.
+
 ### A deterministic producer owns the same contract
 
 Declare `output_format` on a `bash:` or `script:` node and that node certifies its own

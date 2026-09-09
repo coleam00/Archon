@@ -215,15 +215,19 @@ packages/cli/
 ┌──────────────────────────────────────────────────────────────────┐
 │ workflow.ts  workflowEventEmitCommand(..., cwd)                   │
 │              Resolve an unambiguous run-id prefix                 │
-│              createWorkflowStore().createWorkflowEvent(...)       │
-│              Persistence is non-throwing (fire-and-forget)        │
+│              Node state: persistWorkflowEvent(...)               │
+│              Observability: createWorkflowEvent(...)             │
 │              Run-ID resolution may fail                           │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
 **Code:** `packages/cli/src/cli.ts` (case 'event'), `packages/cli/src/commands/workflow.ts:workflowEventEmitCommand`
 
-**Contract:** Event persistence is best-effort. `createWorkflowEvent` catches all errors internally -- the CLI prints a confirmation but cannot guarantee the event was stored.
+**Contract:** The shared `isNodeStateEventType` predicate routes node-state events through
+`persistWorkflowEvent`, which propagates storage failures. The CLI prints `Event persisted`
+only after that write succeeds. Other events use `createWorkflowEvent` and retain best-effort
+persistence: `Event submitted (best-effort)` does not guarantee storage. Run-ID resolution
+can fail before either write.
 
 ---
 

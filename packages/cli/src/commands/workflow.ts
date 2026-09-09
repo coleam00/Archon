@@ -1,6 +1,8 @@
 /**
  * Workflow command - list and run workflows
  */
+
+import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { existsSync, readdirSync, type Dirent } from 'node:fs';
 import * as archonPaths from '@archon/paths';
 import {
@@ -19,7 +21,11 @@ import {
   normalizeRunConfigSemantics,
   sealWorkflowRunConfig,
 } from '@archon/core/config';
-import { WORKFLOW_EVENT_TYPES, type WorkflowEventType } from '@archon/workflows/store';
+import {
+  WORKFLOW_EVENT_TYPES,
+  isNodeStateEventType,
+  type WorkflowEventType,
+} from '@archon/workflows/store';
 import {
   isTierName,
   applyResolvedRunModelOverrides,
@@ -4074,14 +4080,20 @@ export async function workflowGetCommand(
     return 1;
   }
 
-  // getWorkflowRun returns the base WorkflowRun (no current_step_name) — derive
-  // per-node detail from the event log, and only when verbose is requested.
-  let events: WorkflowEventRow[] | undefined;
-  let eventsFailed = false;
-  if (verbose) {
-    const fetched = await fetchVerboseEvents(run.id);
-    events = fetched.events;
-    eventsFailed = fetched.failed;
+  // The terminal record is persisted in the event log, including for default get.
+  let events: WorkflowEventRow[];
+  let terminalRecord;
+  try {
+    events = await workflowEventsDb.listWorkflowEvents(run.id);
+    terminalRecord = getTerminalRecord(run.status, events);
+  } catch (error) {
+    getLog().warn({ err: error as Error, runId: run.id }, 'cli.workflow_get_events_failed');
+    if (json) {
+      await writeJsonLine({ ok: false, runId: run.id, error: 'workflow_events_unavailable' });
+    } else {
+      console.log(`Workflow run events unavailable: ${run.id} (see logs)`);
+    }
+    return 1;
   }
 
   // Leave-behind view (#2747): what did this run leave, and where. Assembled
@@ -4106,19 +4118,25 @@ export async function workflowGetCommand(
       await writeJsonLine({
         ...run,
         transcript_path: transcriptPath,
+        terminal_record: terminalRecord,
         ...(leaveBehind ? { leave_behind: leaveBehind } : {}),
       });
       return 0;
     }
 
-    const verboseEvents = events ?? [];
-    const parseWarnings = readParseWarningEvents(verboseEvents);
+    const parseWarnings = readParseWarningEvents(events);
     const output = rawEvents
-      ? { ...run, transcript_path: transcriptPath, events: verboseEvents }
+      ? {
+          ...run,
+          transcript_path: transcriptPath,
+          terminal_record: terminalRecord,
+          events,
+        }
       : {
           ...run,
           transcript_path: transcriptPath,
-          nodes: buildNodeSummaries(verboseEvents),
+          terminal_record: terminalRecord,
+          nodes: buildNodeSummaries(events),
           // Keys the engine dropped from this run's YAML (#2213). Surfaced as a
           // named field rather than leaving the caller to scan raw events.
           ...(parseWarnings.length > 0 ? { parseWarnings } : {}),
@@ -4173,6 +4191,20 @@ export async function workflowGetCommand(
   if (runError) {
     console.log(`  Error:  ${runError}`);
   }
+  if (terminalRecord) {
+    console.log('  Terminal record:');
+    if (terminalRecord.first_failed_node) {
+      console.log(`    First failed node: ${terminalRecord.first_failed_node}`);
+    }
+    console.log(`    Selected return: ${terminalRecord.returns.availability}`);
+    console.log(`    Artifacts observed: ${String(terminalRecord.artifacts.files.length)}`);
+    for (const file of terminalRecord.artifacts.files) console.log(`      - ${file.path}`);
+    for (const limitation of terminalRecord.artifacts.limitations) {
+      console.log(`    Inventory limitation: ${limitation.kind} (${limitation.path})`);
+    }
+  } else {
+    console.log('  Terminal record: (unavailable)');
+  }
   if (leaveBehind) {
     console.log('  Leave-behind:');
     if (leaveBehind.branch) console.log(`    Branch: ${leaveBehind.branch}`);
@@ -4191,10 +4223,7 @@ export async function workflowGetCommand(
       if (leaveBehind.artifactFiles.length > 20) console.log('      …');
     }
   }
-  if (events) {
-    if (eventsFailed) {
-      console.log('  (node events unavailable — see logs)');
-    }
+  if (verbose) {
     const parseWarnings = readParseWarningEvents(events);
     if (parseWarnings.length > 0) {
       console.log(`  Ignored keys (${String(parseWarnings.length)}):`);
@@ -5361,8 +5390,7 @@ export async function workflowCleanupCommand(days: number): Promise<void> {
 
 /**
  * Emit a workflow event directly to the database.
- * Event persistence mirrors createWorkflowEvent's fire-and-forget contract;
- * run-id resolution can still fail before the event reaches the store.
+ * Node-state writes propagate storage failures; observability remains best-effort.
  */
 export function isValidEventType(value: string): value is WorkflowEventType {
   return (WORKFLOW_EVENT_TYPES as readonly string[]).includes(value);
@@ -5376,6 +5404,15 @@ export async function workflowEventEmitCommand(
 ): Promise<void> {
   const resolvedId = await resolveRunIdArg(runId, cwd, true);
   const store = createWorkflowStore();
+  if (isNodeStateEventType(eventType)) {
+    await store.persistWorkflowEvent({
+      workflow_run_id: resolvedId,
+      event_type: eventType,
+      data,
+    });
+    console.log(`Event persisted: ${eventType} for run ${resolvedId}`);
+    return;
+  }
   await store.createWorkflowEvent({
     workflow_run_id: resolvedId,
     event_type: eventType,
