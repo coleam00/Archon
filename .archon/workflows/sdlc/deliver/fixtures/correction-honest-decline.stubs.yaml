@@ -51,6 +51,7 @@ recheck__synthesize:
   findings_summary: "stub: no open Critical/Important"
 sync-pr-body: "body resynced: the correction round changed nothing, so the body's claims still hold"
 validate__validate:
+  checks_performed: true
   green: false
   red_cause: inherited
   summary: "stub: the same inherited lint break, still red on the base"

@@ -35,6 +35,7 @@ review__synthesize:
   action: none
   findings_summary: "stub: the change itself is clean"
 validate__validate:
+  checks_performed: true
   green: false
   red_cause: inherited
   summary: "stub: the same inherited break, still red on the base"

@@ -25,11 +25,14 @@ nodes:
   - id: validate
     command: validate
     always_run: true
+    mutates_checkout: false
     output_type: validation
     output_format:
       type: object
       properties:
         green:
+          type: boolean
+        checks_performed:
           type: boolean
         # Why the checks are red, when they are. Carries the empty string
         # when there is no red to explain, for the same reason implement's does:
@@ -40,4 +43,4 @@ nodes:
           enum: [introduced, inherited, environment, ""]
         summary:
           type: string
-      required: [green, red_cause, summary]
+      required: [green, checks_performed, red_cause, summary]
