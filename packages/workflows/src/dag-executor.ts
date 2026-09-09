@@ -8780,6 +8780,9 @@ async function executeFanOutWorkflowNode(
         itemHash: hashFanOutItem(input),
         ...(Object.keys(childInputs).length > 0 ? { inputs: childInputs } : {}),
         ...(resumeChild ? { resumeChild } : {}),
+      }).catch((error: unknown) => {
+        if (error instanceof TerminalStatusWriteError) childCancellationFailure = error;
+        throw error;
       });
       // A paused child is cancelled HERE rather than at the join, and the timing is
       // load-bearing rather than tidiness. A pause is not terminal, and a non-terminal run

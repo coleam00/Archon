@@ -1648,6 +1648,66 @@ nodes:
     }
   );
 
+  it('does not start another serial child after setup cancellation rolls back', async () => {
+    await writeWorkflow(
+      'child-setup-failure',
+      `
+name: child-setup-failure
+description: child whose setup fails
+nodes:
+  - id: work
+    prompt: "do work"
+`
+    );
+    await writeWorkflow(
+      'parent-setup-failure',
+      `
+name: parent-setup-failure
+description: serial fan-out with inherited isolation
+nodes:
+  - id: sub
+    workflow: child-setup-failure
+    isolation: inherit
+    fan_out:
+      items: '["x", "y"]'
+      max_parallel: 1
+      join: all_done
+`
+    );
+    const store = new InMemoryStore();
+    store.cancelWorkflowRun = async () => {
+      throw new Error('child setup cancellation rolled back');
+    };
+    let envCalls = 0;
+    store.getCodebaseEnvVars = async () => {
+      if (++envCalls >= 2) throw new Error('child setup failed');
+      return {};
+    };
+    const parent = await discover('parent-setup-failure');
+    await expect(
+      executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        parent,
+        'goal',
+        'conv-db',
+        { codebaseId: 'cb-1' }
+      )
+    ).rejects.toThrow(
+      'Failed to persist terminal workflow status: child setup cancellation rolled back'
+    );
+    const children = [...store.runs.values()].filter(
+      run => run.workflow_name === 'child-setup-failure'
+    );
+    expect(children).toHaveLength(1);
+    expect(children[0].status).toBe('pending');
+    expect(
+      [...store.runs.values()].find(run => run.workflow_name === 'parent-setup-failure')?.status
+    ).toBe('running');
+  });
+
   it('rejects a CASE-VARIANT self-reference by resolving the name before the cycle check (I3)', async () => {
     // The node names its own workflow in a different case; resolveWorkflowName resolves
     // 'SELFIE' → 'selfie', and the cycle check (post-resolution) catches it as a cycle
