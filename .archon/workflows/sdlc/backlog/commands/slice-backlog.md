@@ -40,8 +40,11 @@ Rules that make the backlog buildable by a factory rather than by a person:
    repository already declares an ordinary gate (a factory's `harness/ci.py` reading
    `harness/harness.config.json`, a `validate` script, a Makefile target), the first
    ticket makes that declared gate pass rather than inventing a parallel one. Say all
-   of that in the ticket body. In an existing codebase that already has these, the
-   first ticket is simply the first story.
+   of that in the ticket body, and say plainly that this ticket establishes the
+   project's checks: it adds tests and the CI workflow and loosens nothing, which is
+   the side of a "do not modify the judge" invariant that is always allowed. In an
+   existing codebase that already has these, the first ticket is simply the first
+   story.
 2. **Each ticket is one reviewable change** that leaves the product working.
 3. **Nothing from the mission's out-of-scope list**, and nothing that contradicts an
    invariant. If the document asks for such a thing, leave it out and say so.
