@@ -241,8 +241,15 @@ async function materializeBundledScripts(): Promise<Map<string, ScriptDefinition
           await rename(staging, unitDir);
         } catch (error) {
           const code = (error as NodeJS.ErrnoException).code;
-          // A competing publisher can win only after writing this same complete unit.
-          if (code !== 'EEXIST' && code !== 'ENOTEMPTY') throw error;
+          // Windows reports EPERM for an existing directory. Accept a competing
+          // publisher only when its complete unit is present; other permission
+          // failures must retain the original rename error.
+          if (code !== 'EEXIST' && code !== 'ENOTEMPTY' && code !== 'EPERM') throw error;
+          const published = await stat(unitDir).then(
+            info => info.isDirectory(),
+            () => false
+          );
+          if (!published) throw error;
         }
       } finally {
         await rm(staging, { recursive: true, force: true });

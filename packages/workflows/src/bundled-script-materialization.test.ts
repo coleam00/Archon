@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import * as fs from 'fs/promises';
 import { mkdir, mkdtemp, readFile, readdir, stat, utimes, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -42,7 +43,7 @@ async function treeContents(root: string): Promise<Record<string, string>> {
   const result: Record<string, string> = {};
   for (const path of await readdir(root, { recursive: true })) {
     if ((await stat(join(root, path))).isFile()) {
-      result[path] = await readFile(join(root, path), 'utf8');
+      result[path.replaceAll('\\', '/')] = await readFile(join(root, path), 'utf8');
     }
   }
   return result;
@@ -125,7 +126,7 @@ describe('pack shared modules across source and binary distributions (#3251)', (
     const frozen = await discoverScriptsForCwd(target, capturedSourceRoots(capture.anchor));
     expect(frozen.size).toBe(6);
     for (const script of frozen.values()) {
-      expect(script.path.startsWith(capture.anchor.root)).toBe(true);
+      expect(script.path.startsWith(capture.anchor.root.replaceAll('\\', '/'))).toBe(true);
       expect(await execute(script, target)).toBe('shared-ok');
     }
     expect(await treeContents(capture.anchor.root)).toEqual(frozenBefore);
@@ -153,6 +154,25 @@ describe('pack shared modules across source and binary distributions (#3251)', (
     expect(changed.get(names.uv)?.path).not.toBe(oldPython.path);
     expect(await execute(changed.get(names.bun)!, target)).toBe('updated');
     expect(await execute(oldScript, target)).toBe('shared-ok');
+  });
+
+  it('accepts Windows publication races but preserves permission failures without a published unit', async () => {
+    const originalRename = fs.rename;
+    const failure = Object.assign(new Error('rename denied'), { code: 'EPERM' });
+    const rename = spyOn(fs, 'rename');
+    try {
+      rename.mockImplementationOnce(async (from, to) => {
+        await originalRename(from, to);
+        throw failure;
+      });
+      const scripts = await discoverScriptsForCwd(target);
+      expect(await execute(scripts.get(names.bun)!, target)).toBe('shared-ok');
+      packs.example = { ...fixture, files: { ...files, '.shared/other.ts': 'export {};\n' } };
+      rename.mockRejectedValueOnce(failure);
+      await expect(discoverScriptsForCwd(target)).rejects.toBe(failure);
+    } finally {
+      rename.mockRestore();
+    }
   });
 
   it('concurrent discovery returns complete pack trees with no module entry points', async () => {
