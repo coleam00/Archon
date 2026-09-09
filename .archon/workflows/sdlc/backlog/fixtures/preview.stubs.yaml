@@ -1,0 +1,21 @@
+# Dry-run fixture: preview mode. The planner and the check are stubbed; no
+# approval node fires and the publisher declines to write.
+read-prd:
+  path: "PRD.md"
+  characters: 2400
+  max_issues: 12
+slice:
+  count: 3
+  summary: "stub: three tickets, the first makes the product runnable"
+check:
+  count: 3
+  keys: ["skeleton", "create", "view"]
+publish:
+  published: false
+  created: []
+  existing: []
+  summary: "stub: preview mode, nothing written"
+fixture:
+  expect: completed
+  inputs:
+    prd: "PRD.md"

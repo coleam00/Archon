@@ -1,0 +1,96 @@
+name: archon-backlog
+description: >-
+  Turn a product document into an ordered GitHub backlog. A large-tier planner
+  slices the PRD into tickets that each pass triage's contract test, with the
+  first ticket making the product runnable end to end; a deterministic check
+  validates the slice; publication uses gh with a dedup marker so re-running
+  never creates a duplicate issue. This is how a factory starts from nothing:
+  the PRD is the only input.
+model: large
+interactive: true
+mutates_checkout: false
+inputs:
+  prd:
+    required: true
+    description: Path, inside the checkout, of the PRD or product document to slice.
+  publication:
+    default: preview
+    description: preview renders the backlog locally; approve waits for a human; auto publishes this run.
+  max_issues:
+    default: '12'
+    description: Upper bound on tickets in one slice; larger PRDs are sliced again later.
+returns: publish
+
+nodes:
+  - id: read-prd
+    script: read-prd
+    runtime: uv
+    with:
+      prd: "$INPUTS.prd"
+      max_issues: "$INPUTS.max_issues"
+    output_format:
+      type: object
+      properties:
+        path: { type: string }
+        characters: { type: integer }
+        max_issues: { type: integer }
+      required: [path, characters, max_issues]
+
+  # The one judgment node. Large tier: slicing a product into the right first
+  # ticket is planning, not routine work.
+  - id: slice
+    command: slice-backlog
+    depends_on: [read-prd]
+    mutates_checkout: false
+    output_type: backlog-slice
+    output_format:
+      type: object
+      properties:
+        count: { type: integer }
+        summary: { type: string }
+      required: [count, summary]
+
+  # Shape, uniqueness, dependency order and the bound are checked before anything
+  # is published; a slice that fails here fails the run.
+  - id: check
+    script: check-backlog
+    runtime: uv
+    depends_on: [slice]
+    with:
+      max_issues: "$read-prd.output.max_issues"
+    output_format:
+      type: object
+      properties:
+        count: { type: integer }
+        keys: { type: array, items: { type: string } }
+      required: [count, keys]
+
+  - id: authorize
+    depends_on: [check]
+    when: "$INPUTS.publication == 'approve'"
+    approval:
+      message: "Publish the $check.output.count tickets in $ARTIFACTS_DIR/backlog.md as GitHub issues?"
+      decisions:
+        - id: approve
+          label: Publish the backlog
+        - id: hold
+          label: Keep it local
+
+  - id: publish
+    command: publish-backlog
+    context: fresh
+    mutates_checkout: false
+    model: medium
+    depends_on: [check, authorize]
+    trigger_rule: none_failed_min_one_success
+    with:
+      mode: "$INPUTS.publication"
+      approval: { from: "$authorize.output", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        published: { type: boolean }
+        created: { type: array, items: { type: string } }
+        existing: { type: array, items: { type: string } }
+        summary: { type: string }
+      required: [published, created, existing, summary]
