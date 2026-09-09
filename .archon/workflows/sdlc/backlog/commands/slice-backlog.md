@@ -36,9 +36,12 @@ Rules that make the backlog buildable by a factory rather than by a person:
    build-identity endpoint (read the installed `factory/RUNTIME_HOST.md` when present
    for the exact expectation; otherwise `GET /build-id` returning the
    `FACTORY_RUNTIME_CANDIDATE` environment variable when set, else the git commit), has
-   a test command, and has a CI check that runs it on every pull request. Say all of
-   that in the ticket body. In an existing codebase that already has these, the first
-   ticket is simply the first story.
+   a test command, and has a CI check that runs it on every pull request. When the
+   repository already declares an ordinary gate (a factory's `harness/ci.py` reading
+   `harness/harness.config.json`, a `validate` script, a Makefile target), the first
+   ticket makes that declared gate pass rather than inventing a parallel one. Say all
+   of that in the ticket body. In an existing codebase that already has these, the
+   first ticket is simply the first story.
 2. **Each ticket is one reviewable change** that leaves the product working.
 3. **Nothing from the mission's out-of-scope list**, and nothing that contradicts an
    invariant. If the document asks for such a thing, leave it out and say so.
