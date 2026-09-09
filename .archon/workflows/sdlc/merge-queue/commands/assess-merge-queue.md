@@ -22,6 +22,10 @@ the canonical report is missing, not ready, or describes an older head.
 Read dependencies and diffs to select an order. Hold if the requested PRs have an
 unresolved dependency or incompatible changes; do not silently add PRs to the batch.
 Write merge-plan.json under $ARTIFACTS_DIR with repository, base, base_sha,
-ordered PR number/url/head_sha entries, evidence references and reasons. Record
-holds in merge-plan.md. Return ready only when the entire requested batch is
+ordered PR number/url/head_sha entries, evidence references and reasons. `base_sha`
+is the base branch's live head as read from GitHub during this assessment, not a
+PR's merge base: the merge node compares the live head against it to detect
+movement between assessment and merge. If a PR's validation predates the live base
+head, judge that here (GitHub's mergeability and the checks on the current PR head)
+rather than recording the older base. Record holds in merge-plan.md. Return ready only when the entire requested batch is
 eligible. No code changes, branch switches, custom worktrees, or agent subprocesses.
