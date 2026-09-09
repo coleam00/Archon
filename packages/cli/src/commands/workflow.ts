@@ -1188,10 +1188,12 @@ export class WorkflowListLookupError extends Error {
  * fails, a workflow cannot load, or an explicitly named target has none.
  */
 export async function workflowTestCommand(
-  cwd: string,
+  invokingCwd: string,
   target: string | undefined,
-  options: { json?: boolean; targetCwd?: string } = {}
+  options: { json?: boolean } = {}
 ): Promise<number> {
+  // Discovery uses the repository root; explicit relative targets use the caller's directory.
+  const cwd = (await git.findRepoRoot(invokingCwd)) ?? invokingCwd;
   const { workflows, errors } = await loadWorkflows(cwd);
   // The fixture runner freezes this repo's source before executing anything, exactly as
   // `workflow run` does, and this config decides which directories get frozen. A malformed
@@ -1207,7 +1209,7 @@ export async function workflowTestCommand(
     report = await runFixtures({
       workflows,
       cwd,
-      ...(options.targetCwd !== undefined ? { targetCwd: options.targetCwd } : {}),
+      targetCwd: invokingCwd,
       sourceConfig: workflowSourceConfigFrom(config),
       ...(target !== undefined ? { target } : {}),
     });
