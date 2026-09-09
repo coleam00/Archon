@@ -20,7 +20,8 @@ import {
   type NodeLifecycleEventType,
   type DagResumeSnapshot,
   type PersistedNodeOutput,
-  type WorkflowEventType,
+  type WorkflowEventInput,
+  type ObservabilityEventInput,
 } from '@archon/workflows/store';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -64,14 +65,7 @@ function parseEventRow(row: WorkflowEventRow): WorkflowEventRow {
   }
 }
 
-/** The column payload for a single workflow-event row. */
-export interface WorkflowEventInput {
-  workflow_run_id: string;
-  event_type: WorkflowEventType;
-  step_index?: number;
-  step_name?: string;
-  data?: Record<string, unknown>;
-}
+export type { WorkflowEventInput } from '@archon/workflows/store';
 
 /**
  * A query function scoped to a specific connection — either the module-level
@@ -113,7 +107,7 @@ export async function insertWorkflowEvent(
 /**
  * Create a workflow event. Fire-and-forget - never throws.
  */
-export async function createWorkflowEvent(data: WorkflowEventInput): Promise<void> {
+export async function createWorkflowEvent(data: ObservabilityEventInput): Promise<void> {
   try {
     await insertWorkflowEvent((sql, params) => pool.query(sql, params), data);
   } catch (error) {

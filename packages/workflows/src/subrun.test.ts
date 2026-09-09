@@ -384,13 +384,16 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve({ cancelled: false });
   };
 
-  createWorkflowEvent: IWorkflowStore['createWorkflowEvent'] = data => {
+  private recordWorkflowEvent: IWorkflowStore['persistWorkflowEvent'] = data => {
     this.events.push(data);
     return Promise.resolve();
   };
 
+  createWorkflowEvent: IWorkflowStore['createWorkflowEvent'] = data =>
+    this.recordWorkflowEvent(data);
+
   persistWorkflowEvent: IWorkflowStore['persistWorkflowEvent'] = data =>
-    this.createWorkflowEvent(data);
+    this.recordWorkflowEvent(data);
 
   persistWorkflowEventIfRunning: IWorkflowStore['persistWorkflowEventIfRunning'] = data => {
     const run = this.runs.get(data.workflow_run_id);

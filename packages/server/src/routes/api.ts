@@ -1,8 +1,9 @@
-import { getTerminalRecord } from '@archon/workflows/terminal-record';
 /**
  * REST API routes for the Archon Web UI.
  * Provides conversation, codebase, and SSE streaming endpoints.
  */
+
+import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';

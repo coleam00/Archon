@@ -834,7 +834,12 @@ its worktrees; use the full ID elsewhere.
 | `--type` | Yes | Event type (e.g., `ralph_story_started`, `node_completed`) |
 | `--data` | No | JSON string attached to the event. Invalid JSON prints a warning and is ignored. |
 
-Exit code: 0 on submission, 1 when a required argument is missing, the event type is invalid, or run-ID prefix resolution fails. Event persistence is best-effort (non-throwing) -- check server logs if events appear missing.
+Node-state events, including completion, failure, skip, and resume-cache changes, print
+`Event persisted` only after the database write succeeds. Storage failures exit with code 1.
+Other events print `Event submitted (best-effort)`; check server logs if they appear missing.
+
+Exit code: 0 after persistence or best-effort submission, 1 when a required argument is
+missing, the event type is invalid, run-ID prefix resolution fails, or a node-state write fails.
 
 ### `isolation list`
 

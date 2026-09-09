@@ -67,7 +67,7 @@ describe('workflow-events', () => {
 
       await createWorkflowEvent({
         workflow_run_id: 'run-456',
-        event_type: 'node_started',
+        event_type: 'loop_iteration_started',
         step_index: 0,
         step_name: 'plan',
         data: { duration: 100 },
@@ -79,7 +79,7 @@ describe('workflow-events', () => {
         [
           expect.any(String), // generated UUID
           'run-456',
-          'node_started',
+          'loop_iteration_started',
           0,
           'plan',
           JSON.stringify({ duration: 100 }),
@@ -111,7 +111,7 @@ describe('workflow-events', () => {
       // Should NOT throw — fire-and-forget logs error internally
       await createWorkflowEvent({
         workflow_run_id: 'run-456',
-        event_type: 'node_started',
+        event_type: 'loop_iteration_started',
       });
     });
   });

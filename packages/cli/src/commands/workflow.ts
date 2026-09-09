@@ -1,7 +1,8 @@
-import { getTerminalRecord } from '@archon/workflows/terminal-record';
 /**
  * Workflow command - list and run workflows
  */
+
+import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { existsSync, readdirSync, type Dirent } from 'node:fs';
 import * as archonPaths from '@archon/paths';
 import {
@@ -20,7 +21,11 @@ import {
   normalizeRunConfigSemantics,
   sealWorkflowRunConfig,
 } from '@archon/core/config';
-import { WORKFLOW_EVENT_TYPES, type WorkflowEventType } from '@archon/workflows/store';
+import {
+  WORKFLOW_EVENT_TYPES,
+  isNodeStateEventType,
+  type WorkflowEventType,
+} from '@archon/workflows/store';
 import {
   isTierName,
   applyResolvedRunModelOverrides,
@@ -4119,20 +4124,19 @@ export async function workflowGetCommand(
       return 0;
     }
 
-    const verboseEvents = events ?? [];
-    const parseWarnings = readParseWarningEvents(verboseEvents);
+    const parseWarnings = readParseWarningEvents(events);
     const output = rawEvents
       ? {
           ...run,
           transcript_path: transcriptPath,
           terminal_record: terminalRecord,
-          events: verboseEvents,
+          events,
         }
       : {
           ...run,
           transcript_path: transcriptPath,
           terminal_record: terminalRecord,
-          nodes: buildNodeSummaries(verboseEvents),
+          nodes: buildNodeSummaries(events),
           // Keys the engine dropped from this run's YAML (#2213). Surfaced as a
           // named field rather than leaving the caller to scan raw events.
           ...(parseWarnings.length > 0 ? { parseWarnings } : {}),
@@ -5386,8 +5390,7 @@ export async function workflowCleanupCommand(days: number): Promise<void> {
 
 /**
  * Emit a workflow event directly to the database.
- * Event persistence mirrors createWorkflowEvent's fire-and-forget contract;
- * run-id resolution can still fail before the event reaches the store.
+ * Node-state writes propagate storage failures; observability remains best-effort.
  */
 export function isValidEventType(value: string): value is WorkflowEventType {
   return (WORKFLOW_EVENT_TYPES as readonly string[]).includes(value);
@@ -5401,6 +5404,15 @@ export async function workflowEventEmitCommand(
 ): Promise<void> {
   const resolvedId = await resolveRunIdArg(runId, cwd, true);
   const store = createWorkflowStore();
+  if (isNodeStateEventType(eventType)) {
+    await store.persistWorkflowEvent({
+      workflow_run_id: resolvedId,
+      event_type: eventType,
+      data,
+    });
+    console.log(`Event persisted: ${eventType} for run ${resolvedId}`);
+    return;
+  }
   await store.createWorkflowEvent({
     workflow_run_id: resolvedId,
     event_type: eventType,

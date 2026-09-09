@@ -176,11 +176,16 @@ function composeInnerStep(
 
 // --- Mock helpers ---
 
+// This fixture's createWorkflowEvent mock collects both durable and best-effort writes.
+// The production IWorkflowStore interface separately restricts the best-effort route.
+type MockWorkflowEventCollector = Mock<IWorkflowStore['persistWorkflowEvent']>;
 type MockWorkflowStore = {
-  [K in keyof IWorkflowStore]: IWorkflowStore[K] extends (...args: infer Args) => infer Result
+  [K in Exclude<keyof IWorkflowStore, 'createWorkflowEvent'>]: IWorkflowStore[K] extends (
+    ...args: infer Args
+  ) => infer Result
     ? Mock<(...args: Args) => Result>
     : IWorkflowStore[K];
-};
+} & { createWorkflowEvent: MockWorkflowEventCollector };
 
 function mockWorkflowRun(id = 'mock-run-id'): WorkflowRun {
   return {
@@ -205,7 +210,7 @@ function mockWorkflowRun(id = 'mock-run-id'): WorkflowRun {
 }
 
 function createMockStore(): MockWorkflowStore {
-  const createWorkflowEvent = mock<IWorkflowStore['createWorkflowEvent']>(async _data => {});
+  const createWorkflowEvent = mock<IWorkflowStore['persistWorkflowEvent']>(async _data => {});
   return {
     createWorkflowRun: mock<IWorkflowStore['createWorkflowRun']>(async _data => mockWorkflowRun()),
     getWorkflowRun: mock<IWorkflowStore['getWorkflowRun']>(async _id => null),
@@ -14176,7 +14181,7 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     );
 
     // node_failed (not node_completed) must have been stored
-    const eventCalls = (store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>)
+    const eventCalls = (store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>)
       .mock.calls;
     const events = eventCalls.map((c: unknown[]) => (c[0] as { event_type: string }).event_type);
     expect(events).toContain('node_failed');
@@ -15189,7 +15194,7 @@ describe('executeDagWorkflow -- approval node', () => {
 
     // (b) The persisted approval_requested workflow event's data.message must be substituted.
     const approvalRequestedEvents = (
-      store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>
+      store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
     ).mock.calls.filter(
       (c: unknown[]) => (c[0] as { event_type: string }).event_type === 'approval_requested'
     );
@@ -26886,7 +26891,7 @@ describe('subprocess credential redaction', () => {
       expect(rejection?.spawnargs.join(' ')).toContain('BASE_BRANCH=main');
 
       const durableEventText = JSON.stringify(
-        (store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>).mock.calls
+        (store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>).mock.calls
       );
       const durableMessageText = JSON.stringify(platform.sendMessage.mock.calls);
       const durableLogText = await readFile(join(logDir, `${workflowRun.id}.jsonl`), 'utf-8');
@@ -26977,7 +26982,7 @@ describe('subprocess credential redaction', () => {
       expect(rejectionText).not.toContain(ambientDatabaseUrl);
 
       const durableEventText = JSON.stringify(
-        (store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>).mock.calls
+        (store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>).mock.calls
       );
       const durableMessageText = JSON.stringify(platform.sendMessage.mock.calls);
       const durableLogText = await readFile(join(logDir, `${workflowRun.id}.jsonl`), 'utf-8');
@@ -27205,7 +27210,7 @@ describe('subprocess credential redaction', () => {
     expect(stderrMessage).toBe("Bash node 'leaky' stderr:\n```\n[REDACTED]\n```");
 
     const consumerEvent = (
-      store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>
+      store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
     ).mock.calls.find(
       ([event]) => event.event_type === 'node_completed' && event.step_name === 'consumer'
     );
@@ -27354,7 +27359,7 @@ describe('retained exec output', () => {
     // The value channel is untouched: the downstream consumer measured the WHOLE
     // 40,008-character output, not the 2000-char evidence tail nor a 32KB preview.
     const consumerEvent = (
-      store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>
+      store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
     ).mock.calls.find(
       ([event]) => event.event_type === 'node_completed' && event.step_name === 'consumer'
     );
@@ -28036,7 +28041,7 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     // The lost CAS must NOT cascade into a node failure or any terminal write —
     // the external transition owns the run's final state.
     const events = (
-      store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>
+      store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
     ).mock.calls.map((c: unknown[]) => (c[0] as { event_type: string }).event_type);
     expect(events).not.toContain('node_failed');
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
@@ -28092,7 +28097,7 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
 
     expect(emitted).not.toContain('approval_pending');
     const events = (
-      store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>
+      store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
     ).mock.calls.map((c: unknown[]) => (c[0] as { event_type: string }).event_type);
     expect(events).not.toContain('node_failed');
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
@@ -28157,7 +28162,7 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     const sentMessages = platform.sendMessage.mock.calls.map(([, message]) => message);
     expect(sentMessages.some(message => message.includes('Blocked on sub-run'))).toBe(false);
     const events = (
-      store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>
+      store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
     ).mock.calls.map((c: unknown[]) => (c[0] as { event_type: string }).event_type);
     expect(events).not.toContain('node_failed');
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
@@ -28198,7 +28203,7 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     );
 
     const events = (
-      store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>
+      store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
     ).mock.calls.map((c: unknown[]) => (c[0] as { event_type: string }).event_type);
     expect(events).toContain('node_failed');
     expect(store.failWorkflowRun).toHaveBeenCalled();
@@ -32072,7 +32077,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     ).toBe(1);
 
     const completedEvents = (
-      store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>
+      store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
     ).mock.calls
       .map(call => call[0])
       .filter(data => data.event_type === 'node_completed' && data.step_name === 'grp');
@@ -32391,7 +32396,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
   };
 
   const eventsOf = (store: ReturnType<typeof createMockStore>) =>
-    (store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>).mock.calls.map(
+    (store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>).mock.calls.map(
       call => ({
         event_type: call[0].event_type,
         step_name: call[0].step_name ?? '',
@@ -32630,6 +32635,41 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
       expect(store.completeWorkflowRun).not.toHaveBeenCalled();
     }
   );
+
+  it('propagates child-result persistence rejection through workflow outcome handling', async () => {
+    await writeBlock(
+      'name: child-workflow\ndescription: child\nnodes:\n  - id: work\n    bash: "echo done"',
+      'child-workflow'
+    );
+    const store = createMockStore();
+    store.persistWorkflowEvent = mock(async event => {
+      if (event.event_type === 'node_completed' && event.step_name === 'child') {
+        throw new Error('child result storage rejected');
+      }
+      await store.createWorkflowEvent(event);
+    });
+    const runChildWorkflow = mock<RunChildWorkflowFn>(async () => ({
+      childRunId: 'completed-child',
+      status: 'completed',
+      output: 'done',
+    }));
+    await expect(
+      executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          runChildWorkflow,
+          workflow: {
+            name: 'child-result-write',
+            nodes: [{ id: 'child', kind: 'workflow', workflow: 'child-workflow' }],
+          },
+          workflowRun: makeWorkflowRun('child-result-write'),
+        })
+      )
+    ).rejects.toThrow('Could not persist node_completed for child: child result storage rejected');
+    expect(eventsOf(store).some(event => event.event_type === 'node_failed')).toBe(false);
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
 
   it('stops new siblings when a paused child cancellation rolls back', async () => {
     await writeBlock(
@@ -33240,7 +33280,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     const store = createMockStore();
     let parentPaused = false;
     let claimCount = 0;
-    (store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>).mockImplementation(
+    (store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>).mockImplementation(
       async data => {
         if (data.event_type === 'node_completed' && data.step_name?.endsWith('__first')) {
           parentPaused = true;
@@ -33330,7 +33370,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     let parentPaused = false;
     let pauseOnInnerList = true;
     let claimCount = 0;
-    (store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>).mockImplementation(
+    (store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>).mockImplementation(
       async data => {
         if (
           pauseOnInnerList &&
@@ -33425,7 +33465,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     parentPaused = false;
     pauseOnInnerList = false;
     claimCount = 0;
-    (store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>).mockClear();
+    (store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>).mockClear();
 
     await executeDagWorkflow(
       dagOptions({
@@ -33479,7 +33519,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     const store = createMockStore();
     let parentPaused = false;
     let claimCount = 0;
-    (store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>).mockImplementation(
+    (store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>).mockImplementation(
       async data => {
         if (data.event_type === 'node_completed' && data.step_name?.endsWith('.first')) {
           parentPaused = true;
@@ -33571,7 +33611,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     );
     const store = createMockStore();
     let runStatus: WorkflowRunStatus = 'running';
-    (store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>).mockImplementation(
+    (store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>).mockImplementation(
       async data => {
         if (data.event_type === 'node_completed' && data.step_name?.endsWith('__leaf-first')) {
           runStatus = 'cancelled';
