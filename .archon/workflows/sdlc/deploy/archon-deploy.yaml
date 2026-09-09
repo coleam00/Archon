@@ -1,0 +1,112 @@
+name: archon-deploy
+description: >-
+  Move a running service to the repository's default-branch head with the
+  project's own deployment commands, then prove the service is healthy and
+  reports that revision. Deterministic: no agent and no judgment. The project
+  supplies the commands; this workflow supplies the ordering, the read-back and
+  the refusal to call a deployment done on exit code alone.
+mutates_checkout: false
+inputs:
+  deploy:
+    required: true
+    description: >-
+      Trusted project shell command that moves the running service to the
+      default-branch head, e.g. "git -C /srv/app pull --ff-only origin main &&
+      systemctl restart app".
+  health:
+    required: true
+    description: >-
+      Trusted project shell command that exits 0 only when the deployed service
+      is healthy. Retried for up to thirty seconds after the deploy command.
+  identity:
+    default: ''
+    description: >-
+      Optional trusted project shell command that prints the revision the
+      running service was built from. When set, the deployment counts only if
+      that output equals the deployed revision.
+  revision:
+    default: ''
+    description: >-
+      Optional full commit SHA to deploy. Empty resolves the remote default
+      branch head; a revision that is not on that branch is refused.
+returns: verify
+outcome_field: deployed
+
+nodes:
+  # Resolve what is being deployed before anything moves, and refuse a
+  # revision that is not the default branch head: this workflow rolls the
+  # merged line forward, never an arbitrary commit.
+  - id: resolve
+    script: resolve-revision
+    runtime: uv
+    mutates_checkout: false
+    with:
+      revision: "$INPUTS.revision"
+      deploy: "$INPUTS.deploy"
+      health: "$INPUTS.health"
+      identity: "$INPUTS.identity"
+    output_format:
+      type: object
+      properties:
+        revision: { type: string }
+        branch: { type: string }
+        deploy: { type: string }
+        health: { type: string }
+        identity: { type: string }
+      required: [revision, branch, deploy, health, identity]
+
+  # The command's own output goes to the operator stream; only the result is
+  # a value. A failed deploy is reported, never retried here.
+  - id: deploy
+    depends_on: [resolve]
+    bash: |
+      CMD=$resolve.output.deploy
+      if eval "$CMD" >&2; then
+        echo '{"ok":true}'
+      else
+        echo '{"ok":false}'
+      fi
+    output_format: &command-result
+      type: object
+      properties: { ok: { type: boolean } }
+      required: [ok]
+
+  - id: health
+    depends_on: [deploy]
+    bash: |
+      if [ $deploy.output.ok != true ]; then
+        echo '{"ok":false}'
+        exit 0
+      fi
+      CMD=$resolve.output.health
+      for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if eval "$CMD" >&2; then
+          echo '{"ok":true}'
+          exit 0
+        fi
+        sleep 3
+      done
+      echo '{"ok":false}'
+    output_format: *command-result
+
+  # The read-back. deployed=true only when the service is healthy and, when an
+  # identity command exists, reports exactly the resolved revision.
+  - id: verify
+    script: verify-deployment
+    runtime: uv
+    mutates_checkout: false
+    depends_on: [health]
+    with:
+      revision: "$resolve.output.revision"
+      branch: "$resolve.output.branch"
+      identity: "$resolve.output.identity"
+      deploy_ok: "$deploy.output.ok"
+      health_ok: "$health.output.ok"
+    output_format:
+      type: object
+      properties:
+        deployed: { type: boolean }
+        revision: { type: string }
+        observed: { type: string }
+        summary: { type: string }
+      required: [deployed, revision, observed, summary]
