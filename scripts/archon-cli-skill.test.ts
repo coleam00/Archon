@@ -114,7 +114,9 @@ ${indent(loopGroup)}
     const yaml = yamlFenceAfter('### Result contracts —');
     expectWorkflowToLoad(yaml);
     const { workflow } = parseWorkflow(yaml, 'certified-result.yaml');
-    expect(workflow?.nodes.find(node => node.id === 'consume')?.with).toEqual({
+    const consumer = workflow?.nodes.find(node => node.id === 'consume');
+    if (consumer?.kind !== 'exec') throw new Error('Expected an exec consumer');
+    expect(consumer.with).toEqual({
       ready: '$build.output.ready',
     });
   });
