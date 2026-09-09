@@ -2,8 +2,8 @@
 
 Requested PR URLs: $INPUTS.prs
 Additional evidence: $INPUTS.evidence
-Keep the checkout and GitHub unchanged. Read project guidance and use gh with an
-explicit repository. Require 1-5 distinct same-repository PRs targeting one base.
+Keep the checkout unchanged; the only GitHub write here is the hold comment
+described below. Read project guidance and use gh with an explicit repository. Require 1-5 distinct same-repository PRs targeting one base.
 Reject ambiguous identity, forks, drafts, closed PRs, conflicts, unknown checks,
 or unresolved review findings. Read PR bodies, review comments, status checks and
 required CI for the current head; pending is not passing. Require independent
@@ -29,3 +29,17 @@ movement between assessment and merge. If a PR's validation predates the live ba
 head, judge that here (GitHub's mergeability and the checks on the current PR head)
 rather than recording the older base. Record holds in merge-plan.md. Return ready only when the entire requested batch is
 eligible. No code changes, branch switches, custom worktrees, or agent subprocesses.
+
+A hold recorded only under this run's artifacts is a hold nobody sees, and in an
+unattended factory the PR then sits open forever. When a PR is held for a reason
+its own next commit can fix — an acceptance criterion or runtime contract the diff
+does not meet, a canonical review that is missing, not ready, or stale, a conflict
+with its base — publish the hold on that PR as one issue comment whose first line
+is `<!-- archon-merge-hold -->`, naming the head SHA assessed and each reason with
+the evidence that proves it (the criterion quoted, the code that misses it). Search
+the PR's comments for that marker first and edit the existing comment in place;
+never append a second. When a PR carrying the marker is now eligible, edit the
+comment to say the hold cleared at the new head. A transient hold — checks still
+pending, the base moved — is not published; a later run resolves it without a code
+change. The shared review workflow reads this comment when a delivery is re-driven
+on the branch, which is how the hold becomes a finding that gets fixed.

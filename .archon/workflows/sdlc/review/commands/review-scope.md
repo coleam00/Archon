@@ -31,6 +31,7 @@ $ARGUMENTS
 - When `work_order` is non-empty, read it in full. It is the accepted contract implementation received. Preserve its required outcome, explicit non-goals, and boundaries as prose; do not parse it with scripts, regexes, or keyword extraction.
 - When `work_order` is empty and the target is a PR, use the PR body's problem/outcome and explicit scope or non-goals as the standalone review contract. Do not infer a broader promise from the changed files.
 - When neither supplies an explicit boundary, state that the review is using the requested scope and repository contracts without inventing a non-goal.
+- When the target PR carries a comment whose first line is `<!-- archon-merge-hold -->`, read it: the shared merge queue held this PR and wrote down why. Its reasons are claims about the head it names, to be settled against the code by the reviewers that follow — never accepted on the merge queue's word and never dropped. Record them verbatim under **Merge hold** in scope.md with the head the comment names; when the diff since that head has plainly addressed a reason, say so beside it.
 
 ## Select docs review
 
@@ -54,6 +55,7 @@ Write `$ARTIFACTS_DIR/review/scope.md` containing:
 4. **Changed files** — path list with a one-line shape of the change per file (added/modified/deleted, rough size).
 5. **The diff to review** — inline when small; for a large diff, the exact commands a reviewer runs to see it (`git diff <range>`, `gh pr diff <n>`).
 6. **Prior report** — continuation mode only: its path and reviewed-head cursor. Do not duplicate its findings or coverage.
+7. **Merge hold** — only when the PR carries one: the head it names and its reasons, verbatim.
 
 ## Verify before finishing
 
