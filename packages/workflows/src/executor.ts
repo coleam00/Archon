@@ -1543,10 +1543,8 @@ async function runChildWorkflow(
   } catch (err) {
     if (err instanceof TerminalStatusWriteError) throw err;
 
-    // Honor the never-throws contract: executeWorkflow can throw from its early
-    // setup (before its own failWorkflowRun catch-all), and the read-back can
-    // throw on a DB error — both must surface as a failed node outcome, not an
-    // exception unwinding the parent's DAG.
+    // Ordinary setup/read-back failures become failed child outcomes after cleanup.
+    // A terminal write rejection escapes instead: cleanup may not have released the lock.
     //
     // Wedge guard (symmetric to maybeResumeParentRun's post-CAS handler): a throw in
     // executeWorkflow's EARLY setup (config load, getCodebaseEnvVars, token
@@ -1556,8 +1554,9 @@ async function runChildWorkflow(
     // failWorkflowRun, whose `WHERE status='running'` would miss the 'pending' case)
     // flips any non-terminal child to 'cancelled' and no-ops on a child that reached
     // completed/cancelled on its own. childRunId is always assigned once step 3 ran.
-    await deps.store.cancelWorkflowRun(childRunId).catch((cancelErr: unknown) => {
-      getLog().error({ err: cancelErr as Error, childRunId }, 'workflow.child_setup_cancel_failed');
+    await requireTerminalStatusWrite(deps.store.cancelWorkflowRun(childRunId), {
+      workflowRunId: childRunId,
+      site: 'executor.child_setup_cancel',
     });
     return failOutcome(
       `Sub-run '${childWorkflowName}' errored: ${(err as Error).message}`,
@@ -2337,11 +2336,9 @@ export async function executeWorkflow(
         // active set immediately — without this, our row sits as
         // pending/running and blocks the path until the 5-min stale window
         // (or never, if we'd already promoted it to running via resume).
-        await deps.store.cancelWorkflowRun(workflowRun.id).catch((cleanupErr: Error) => {
-          getLog().warn(
-            { err: cleanupErr, workflowRunId: workflowRun?.id, cwd },
-            'workflow.guard_self_cancel_failed'
-          );
+        await requireTerminalStatusWrite(deps.store.cancelWorkflowRun(workflowRun.id), {
+          workflowRunId: workflowRun.id,
+          site: 'executor.guard_self_cancel',
         });
 
         const elapsedMs = Date.now() - parseDbTimestamp(activeWorkflow.started_at);
@@ -2380,6 +2377,7 @@ export async function executeWorkflow(
         };
       }
     } catch (error) {
+      if (error instanceof TerminalStatusWriteError) throw error;
       const err = error as Error;
       getLog().error(
         { err, conversationId, cwd, pendingRunId: workflowRun.id },
@@ -2391,11 +2389,9 @@ export async function executeWorkflow(
       // window would clear it eventually; for a row already promoted to
       // running (e.g., resumed), nothing would clear it without manual
       // intervention.
-      await deps.store.cancelWorkflowRun(workflowRun.id).catch((cleanupErr: Error) => {
-        getLog().warn(
-          { err: cleanupErr, workflowRunId: workflowRun?.id },
-          'workflow.guard_query_failure_cleanup_failed'
-        );
+      await requireTerminalStatusWrite(deps.store.cancelWorkflowRun(workflowRun.id), {
+        workflowRunId: workflowRun.id,
+        site: 'executor.guard_query_failure_cleanup',
       });
       await sendCriticalMessage(
         platform,

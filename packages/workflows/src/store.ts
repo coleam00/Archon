@@ -36,6 +36,9 @@ export interface PersistedNodeOutput {
   output: string;
   structuredOutput?: unknown;
   declaredFields?: readonly string[];
+  /** Present only when resume recovered a preview rather than the full text.
+   * Replay must retain this original provenance instead of certifying the preview. */
+  outputTruncation?: { originalBytes: number | null; spillPath: string | null };
 }
 
 export interface DagResumeSnapshot {

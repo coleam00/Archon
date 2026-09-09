@@ -1156,36 +1156,37 @@ describe('executeWorkflow', () => {
       expect(result.error).toContain('already active');
     });
 
-    it('still returns failure when guard self-cancel update throws (best-effort)', async () => {
-      const selfRun = makeRun({ id: 'self-run', status: 'pending' });
-      const otherRun = makeRun({ id: 'other-run', status: 'running' });
-      const updateSpy = mock(async (id: string) => {
-        // Self-cancel attempt fails — must not crash, must still surface
-        // the "in use" failure to the user.
-        if (id === 'self-run') throw new Error('Update failed');
-      });
-      const store = makeStore({
-        createWorkflowRun: mock(async () => selfRun),
-        getActiveWorkflowRunByPath: mock(async () => otherRun),
-        updateWorkflowRun: updateSpy,
-      });
-      const deps = makeDeps(store);
-
-      const result = await executeWorkflow(
-        deps,
-        makePlatform(),
-        'conv-1',
-        '/tmp',
-        makeWorkflow(),
-        'test',
-        'db-conv-1'
-      );
-
-      // Cleanup failure must not mask the "in use" outcome.
-      expect(result.success).toBe(false);
-      if (result.success) throw new Error('Expected checkout-lock rejection');
-      expect(result.error).toContain('already active');
-    });
+    it.each([false, true])(
+      'propagates self-cancellation rollback (lock query fails=%s)',
+      async queryFails => {
+        const selfRun = makeRun({ id: 'self-run', status: 'pending' });
+        const store = makeStore({
+          createWorkflowRun: mock(async () => selfRun),
+          getActiveWorkflowRunByPath: mock(async () => {
+            if (queryFails) throw new Error('lock lookup failed');
+            return makeRun({ id: 'other-run', status: 'running' });
+          }),
+          cancelWorkflowRun: mock(async () => {
+            throw new Error('self cancellation rolled back');
+          }),
+        });
+        await expect(
+          executeWorkflow(
+            makeDeps(store),
+            makePlatform(),
+            'conv-1',
+            '/tmp',
+            makeWorkflow(),
+            'test',
+            'db-conv-1'
+          )
+        ).rejects.toThrow(
+          'Failed to persist terminal workflow status: self cancellation rolled back'
+        );
+        expect(store.cancelWorkflowRun).toHaveBeenCalledTimes(1);
+        expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      }
+    );
   });
 
   // -------------------------------------------------------------------------

@@ -7575,10 +7575,13 @@ async function executeApprovalNode(
     // Check if max attempts exhausted
     if (rejectionCount >= maxAttempts) {
       const reason = `max_attempts (${String(maxAttempts)}) exhausted`;
-      await deps.store.cancelWorkflowRun(workflowRun.id, {
-        step_name: stepName,
-        reason,
-      });
+      await requireTerminalStatusWrite(
+        deps.store.cancelWorkflowRun(workflowRun.id, {
+          step_name: stepName,
+          reason,
+        }),
+        { workflowRunId: workflowRun.id, site: 'dag.approval_exhausted_cancel' }
+      );
       getWorkflowEventEmitter().emit({
         type: 'workflow_cancelled',
         runId: workflowRun.id,
@@ -8409,14 +8412,18 @@ async function executeFanOutWorkflowNode(
 
   // Cancel a child the fan-out path OWNS, stamping WHY (C2/I4) so the cancel is
   // attributable AND — unlike a user's out-of-band cancel — recoverable on resume.
+  let childCancellationFailure: TerminalStatusWriteError | undefined;
   const cancelChild = async (childId: string, reason: FanOutCancelReason): Promise<void> => {
     if (!childId) return;
-    await deps.store.cancelFanOutRun(childId, reason).catch((err: unknown) => {
-      getLog().error(
-        { err: err as Error, childRunId: childId, reason },
-        'workflow.fan_out_cancel_failed'
-      );
-    });
+    try {
+      await requireTerminalStatusWrite(deps.store.cancelFanOutRun(childId, reason), {
+        workflowRunId: childId,
+        site: 'dag.fan_out_cancel',
+      });
+    } catch (error) {
+      if (error instanceof TerminalStatusWriteError) childCancellationFailure = error;
+      throw error;
+    }
   };
 
   // Item → child input/$ARGUMENTS (canonical value text: strings raw, objects JSON).
@@ -8569,6 +8576,7 @@ async function executeFanOutWorkflowNode(
       existingByIndex.set(idx, child);
     }
   } catch (err) {
+    if (err instanceof TerminalStatusWriteError) throw err;
     // Notify like every other early-failure branch — this one was the odd one out, so a
     // store error was the single fan-out failure that reached the user only via the
     // end-of-run digest.
@@ -8727,6 +8735,9 @@ async function executeFanOutWorkflowNode(
     items,
     fanOut.max_parallel,
     async (item, i): Promise<ChildWorkflowOutcome> => {
+      // A rolled-back cancellation has not released the child's working-path lock.
+      // Let claimed siblings settle, but do not start another child against that lock.
+      if (childCancellationFailure) throw childCancellationFailure;
       const existing = existingByIndex.get(i);
       // Existing completed child → thread its outcome without re-spawning (resume skip).
       if (existing?.status === 'completed') return childOutcomeFromRun(existing);
@@ -9376,7 +9387,8 @@ async function executeComposeFanOutNode(
       try {
         await runLayers(instanceCtx);
       } catch (err) {
-        if (err instanceof NodeEventWriteError) throw err;
+        if (err instanceof NodeEventWriteError || err instanceof TerminalStatusWriteError)
+          throw err;
         const error = (err as Error).message;
         const outcome: ComposeInstanceOutcome = {
           status: 'failed',
@@ -9488,7 +9500,11 @@ async function executeComposeFanOutNode(
   );
 
   for (const result of settled) {
-    if (result.status === 'rejected' && result.reason instanceof NodeEventWriteError) {
+    if (
+      result.status === 'rejected' &&
+      (result.reason instanceof NodeEventWriteError ||
+        result.reason instanceof TerminalStatusWriteError)
+    ) {
       throw result.reason;
     }
   }
@@ -10073,13 +10089,22 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                     }
                   );
                   const skipStepName = ctx.stepNamePrefix + node.id;
-                  // Copy the logical value forward (#2637) so a SECOND resume's snapshot
-                  // still sees it — this re-emit is that resume's source. `prior.output` is
-                  // already the FULL value (getDagResumeSnapshot prefers the spill over the
-                  // truncated preview when one exists, #2726), so it must go back through the
-                  // same bounded-preview+spill helper here or this row would re-introduce an
-                  // unbounded write on every subsequent resume pass.
-                  const priorSkipOutput = formatThisNodesPriorOutput(skipStepName);
+                  // Preserve incomplete recovery as a preview with its original provenance.
+                  // Re-spilling that preview would falsely certify it as the full result.
+                  const prior = priorCompletedNodes.get(node.id);
+                  const truncation = prior?.outputTruncation;
+                  const priorSkipOutput = truncation
+                    ? {
+                        nodeOutput: prior?.output ?? '',
+                        truncated: true,
+                        ...(truncation.originalBytes !== null
+                          ? { originalBytes: truncation.originalBytes }
+                          : {}),
+                        ...(truncation.spillPath !== null
+                          ? { spillPath: truncation.spillPath }
+                          : {}),
+                      }
+                    : formatThisNodesPriorOutput(skipStepName);
                   await persistNodeEvent(ctx.deps.store, {
                     workflow_run_id: ctx.workflowRun.id,
                     event_type: 'node_skipped_prior_success',
@@ -10483,10 +10508,13 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   workflowId: ctx.workflowRun.id,
                   nodeName: node.id,
                 });
-                await ctx.deps.store.cancelWorkflowRun(ctx.workflowRun.id, {
-                  step_name: ctx.stepNamePrefix + node.id,
-                  reason,
-                });
+                await requireTerminalStatusWrite(
+                  ctx.deps.store.cancelWorkflowRun(ctx.workflowRun.id, {
+                    step_name: ctx.stepNamePrefix + node.id,
+                    reason,
+                  }),
+                  { workflowRunId: ctx.workflowRun.id, site: 'dag.halt_cancel' }
+                );
                 getWorkflowEventEmitter().emit({
                   type: 'workflow_cancelled',
                   runId: ctx.workflowRun.id,

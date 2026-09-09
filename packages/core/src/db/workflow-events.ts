@@ -18,6 +18,8 @@ import type { FanOutInstanceSnapshot } from '@archon/workflows/fan-out-identity'
 import {
   NODE_LIFECYCLE_EVENT_TYPES,
   type NodeLifecycleEventType,
+  type DagResumeSnapshot,
+  type PersistedNodeOutput,
   type WorkflowEventType,
 } from '@archon/workflows/store';
 
@@ -403,16 +405,7 @@ export async function listActiveWorkflowNodeIds(
   return new Map([...activeByRun].map(([runId, activeNodeIds]) => [runId, [...activeNodeIds]]));
 }
 
-export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
-  completedNodeOutputs: Map<
-    string,
-    { output: string; structuredOutput?: unknown; declaredFields?: readonly string[] }
-  >;
-  fanOutSnapshots: Map<string, readonly FanOutInstanceSnapshot[]>;
-  unresolvedNodeStarts: Set<string>;
-  tokens?: TokenUsage;
-  costUsd: number;
-}> {
+export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagResumeSnapshot> {
   const result = await pool.query<{
     step_name: string | null;
     event_type: NodeLifecycleEventType | 'fan_out_instances';
@@ -425,10 +418,7 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
      ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
     [workflowRunId, ...NODE_LIFECYCLE_EVENT_TYPES, 'fan_out_instances']
   );
-  const completedNodeOutputs = new Map<
-    string,
-    { output: string; structuredOutput?: unknown; declaredFields?: readonly string[] }
-  >();
+  const completedNodeOutputs = new Map<string, PersistedNodeOutput>();
   const fanOutSnapshots = new Map<string, readonly FanOutInstanceSnapshot[]>();
   const unresolvedNodeStarts = new Set<string>();
   // Collected and merged once at the end rather than folded pairwise: a pairwise fold
@@ -469,8 +459,8 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
       // truncation cap; the full bytes were spilled to `node_output_spill_path` at write
       // time (#2726). Prefer the spill so a resumed run's `$node.output`/`.field` sees
       // exactly what a fresh run's in-process consumer would have. A missing/unreadable
-      // spill degrades to the preview rather than failing resume — this is not a DB
-      // error, so it must not propagate as one (see this function's own doc comment).
+      // spill retains the preview and its incompleteness rather than failing resume.
+      // Prior-success replay must preserve that provenance for later terminal records.
       //
       // The spill file is addressed by a stable, node-scoped filename that a later
       // execution of the SAME node overwrites in place (by design — see
@@ -482,6 +472,19 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
       // trusting it — a mismatch means the file no longer describes this row, so fall
       // back to the bounded preview exactly like a missing spill would.
       let output = data.node_output;
+      let outputTruncation: PersistedNodeOutput['outputTruncation'] =
+        data.node_output_truncated === true || typeof data.node_output_spill_path === 'string'
+          ? {
+              originalBytes:
+                typeof data.node_output_original_bytes === 'number'
+                  ? data.node_output_original_bytes
+                  : null,
+              spillPath:
+                typeof data.node_output_spill_path === 'string'
+                  ? data.node_output_spill_path
+                  : null,
+            }
+          : undefined;
       if (typeof data.node_output_spill_path === 'string') {
         try {
           const spilled = await readFile(data.node_output_spill_path, 'utf8');
@@ -502,6 +505,7 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
             );
           } else {
             output = spilled;
+            outputTruncation = undefined;
           }
         } catch (spillErr) {
           getLog().warn(
@@ -526,6 +530,7 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<{
           : undefined;
       completedNodeOutputs.set(row.step_name, {
         output,
+        ...(outputTruncation !== undefined ? { outputTruncation } : {}),
         // The node's logical value (#2637), persisted beside its text by the emit
         // sites (and copied forward by node_skipped_prior_success re-emits). Absent
         // on pre-#2637 rows — the executor then falls back to text re-parsing.
