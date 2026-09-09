@@ -495,7 +495,12 @@ function rewriteNodeOutputRefs(
       if (boundary.when !== undefined) boundary.when = whenExpr(boundary.when);
     }
     if (isLoopGroupNode(target)) {
-      for (const body of target.loop_group.nodes) rewriteBoundaries(body);
+      // A body may still be an unexpanded include directive at this stage; those carry
+      // no composed metadata of their own, so only real nodes are rewritten (the same
+      // guard markComposedNode applies when it stamps the boundary in the first place).
+      for (const body of target.loop_group.nodes) {
+        if (!isIncludeDirective(body)) rewriteBoundaries(body);
+      }
     }
   };
   rewriteBoundaries(node);
