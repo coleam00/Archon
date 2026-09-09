@@ -1,0 +1,133 @@
+# Dry-run fixture: discoveries in preview mode skip their publication sink, and
+# the merge stage must still run on the qualified candidate. Seen live on
+# 2026-09-09: a verified PR was left open while the run reported success because
+# the merge entry joined on the skipped sink with the default all-success rule.
+intake:
+  target: "https://github.com/example/app/issues/1"
+  found: true
+  selected: false
+  reason: "explicit target"
+ship__triage__triage: &judgment
+  route: "deliver"
+  summary: "stub: ready to deliver"
+  contract: "READY"
+  design_first: false
+  complexity: "small_bounded"
+  proposed_edits: {"title":"","body":""}
+  labels: ["archon-ready"]
+  blocked_by: []
+  issue_repo: "example/app"
+  issue_number: 1
+  blocked_reason: ""
+  issue_url: "https://github.com/example/app/issues/1"
+ship__triage__validate-contract:
+  <<: *judgment
+  publication: { published: false, applied_labels: [], skipped_labels: [] }
+ship__gate-direct: '{"gate":"direct"}'
+ship__deliver__impl__record-start: '{"start":"recorded"}'
+ship__deliver__impl__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: implemented, checks green"
+ship__deliver__impl__assert-changed: "1 file changed"
+ship__deliver__gate-green: "green"
+ship__deliver__pr__pr:
+  repo: { host: "github.com", path: "example/app" }
+  number: 7
+  url: "https://github.com/example/app/pull/7"
+  head: "0123456789abcdef0123456789abcdef01234567"
+  base: "main"
+  is_draft: true
+ship__deliver__classify:
+  errors: false
+  docs: false
+  reasons: { errors: "stub", docs: "stub" }
+ship__deliver__resolve-scope: '{"errors":"false"}'
+ship__deliver__review__mode: '{"continuation":false}'
+ship__deliver__review__scope: { docs: false }
+ship__deliver__review__code: "stub"
+ship__deliver__review__seams: "stub"
+ship__deliver__review__simplify: "stub"
+ship__deliver__review__tests: "stub"
+ship__deliver__review__review-complete: "true"
+ship__deliver__review__synthesize:
+  ready: true
+  action: "none"
+  findings_summary: "stub: clean"
+ship__deliver__review-action: '{"ready":"true","action":"none"}'
+ship__deliver__gate-ready: "ready"
+ship__deliver__validate__validate:
+  green: true
+  red_cause: ""
+  summary: "stub: checks green"
+ship__deliver__gate-validated: "green"
+ship__deliver__await-checks: "concluded"
+ship__deliver__ci-verdict: '{"state":"green","detail":""}'
+ship__deliver__ci-attention-route: '{"attention":"false","red_cause":""}'
+ship__deliver__flip-ready: "https://github.com/example/app/pull/7"
+ship__deliver__outcome: "delivered"
+ship__outcome: "delivered https://github.com/example/app/pull/7"
+candidate:
+  delivered: true
+  prs: ["https://github.com/example/app/pull/7"]
+  head: "0123456789abcdef0123456789abcdef01234567"
+runtime__read-scenario: '{"setup":"","start":"","teardown":"","candidate_command":"true","assertion_ids":["a"],"assertions_json":[{"id":"a"}]}'
+# The runtime verifier's loop body is keyed by bare node id; the same stubs serve
+# the runtime and holdout instances (both verify on the first attempt).
+prepare-attempt: '{"attempt":1,"directory":"/artifacts/attempt-1","report_path":"/artifacts/attempt-1/report.json","checkout":"0123456789abcdef0123456789abcdef01234567","report_feedback":""}'
+setup-run: '{"ok":true}'
+start-run: '{"ok":true}'
+verify: "stub: report written"
+identity-run: '{"ok":true}'
+check-evidence: '{"status":"verified","reason":"stub","candidate":"c"}'
+teardown-run: '{"ok":true}'
+finish-attempt: '{"status":"verified","reason":"stub","candidate":"c","done":true,"checkout":"0123456789abcdef0123456789abcdef01234567"}'
+# The runtime gate is stubbed as not verified so the holdout instance (whose loop
+# body shares these bare stub ids and cannot be stubbed a second time in a dry
+# run) is skipped by its when:. qualify joins on none_failed and is itself a stub;
+# this fixture proves the merge wiring, not verification.
+runtime__gate-verified:
+  verified: false
+  verdict: "inconclusive"
+  candidate: "c"
+  checkout: "0123456789abcdef0123456789abcdef01234567"
+  summary: "stub"
+qualify:
+  ready: true
+  repair: false
+  evidence: "/artifacts/runtime-qualification.md"
+selected:
+  ready: true
+  prs: ["https://github.com/example/app/pull/7"]
+  evidence: "/artifacts/runtime-qualification.md"
+discoveries__resolve-input:
+  count: 0
+  forge_available: true
+  forge_host: "github.com"
+  forge_path: "example/app"
+discoveries__revalidate: { entries: [] }
+discoveries__check-evidence: { count: 0, unverified_count: 0 }
+discoveries__search-existing: { entries: [] }
+discoveries__classify: { entries: [] }
+discoveries__render:
+  count: 0
+  stale_count: 0
+  duplicate_count: 0
+  update_existing_count: 0
+  new_count: 0
+merge__assess:
+  ready: true
+  summary: "stub: batch eligible"
+merge__merge:
+  merged: true
+  urls: ["https://github.com/example/app/pull/7"]
+  summary: "stub: merged"
+fixture:
+  expect: completed
+  reached: [merge__assess, merge__merge]
+  inputs:
+    target: "https://github.com/example/app/issues/1"
+    scenario: "/private/scenario.json"
+    holdout: "/private/holdout.json"
+    merge_mode: "auto"

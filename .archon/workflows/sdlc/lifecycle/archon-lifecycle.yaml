@@ -200,9 +200,15 @@ nodes:
       discovery_artifact: "$ARTIFACTS_DIR/discoveries.json"
       publication: "$INPUTS.discovery_publication"
 
+  # `depends_on: [discoveries]` waits on every sink of that block, and its publish
+  # sink is skipped by design in preview mode. The default all-success join would
+  # skip the merge entry on that skip and still report the run as a success — a
+  # verified PR left open while the run says done. none_failed lets a skipped
+  # sibling sink through; a FAILED discovery node still blocks the merge.
   - id: merge
     include: archon-merge-queue
     depends_on: [selected, discoveries]
+    trigger_rule: none_failed_min_one_success
     when: "$selected.output.ready == true"
     with:
       prs: "$selected.output.prs"
