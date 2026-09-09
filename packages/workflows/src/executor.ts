@@ -2329,16 +2329,6 @@ export async function executeWorkflow(
             ...(pathLockExclude.length > 0 ? { excludeRunIds: pathLockExclude } : {}),
           });
       if (activeWorkflow) {
-        // The lock query found another active row that wins the older-wins
-        // tiebreaker. Mark our own row terminal so it falls out of the
-        // active set immediately — without this, our row sits as
-        // pending/running and blocks the path until the 5-min stale window
-        // (or never, if we'd already promoted it to running via resume).
-        await requireTerminalStatusWrite(deps.store.cancelWorkflowRun(workflowRun.id), {
-          workflowRunId: workflowRun.id,
-          site: 'executor.guard_self_cancel',
-        });
-
         const elapsedMs = Date.now() - parseDbTimestamp(activeWorkflow.started_at);
         const duration = formatDuration(elapsedMs);
         const shortId = activeWorkflow.id.slice(0, 8);
@@ -2369,6 +2359,13 @@ export async function executeWorkflow(
           `❌ **This worktree is in use** by \`${activeWorkflow.workflow_name}\` ` +
             `(${stateLine}).\n${actionLines}`
         );
+        // The notification explains the block; it does not prove cleanup succeeded.
+        // Release our lock token, preserving a rejected write instead of returning.
+        await requireTerminalStatusWrite(deps.store.cancelWorkflowRun(workflowRun.id), {
+          workflowRunId: workflowRun.id,
+          site: 'executor.guard_self_cancel',
+        });
+
         return {
           success: false,
           error: `Workflow already active on this path (${activeWorkflow.status}): ${activeWorkflow.workflow_name}`,
@@ -2381,21 +2378,17 @@ export async function executeWorkflow(
         { err, conversationId, cwd, pendingRunId: workflowRun.id },
         'db_active_workflow_check_failed'
       );
-      // Release the lock token. workflowRun is finalized at this point
-      // (pre-created or resumed or freshly created) and would otherwise sit
-      // as pending/running, blocking the path. For pending the 5-min stale
-      // window would clear it eventually; for a row already promoted to
-      // running (e.g., resumed), nothing would clear it without manual
-      // intervention.
-      await requireTerminalStatusWrite(deps.store.cancelWorkflowRun(workflowRun.id), {
-        workflowRunId: workflowRun.id,
-        site: 'executor.guard_query_failure_cleanup',
-      });
       await sendCriticalMessage(
         platform,
         conversationId,
         '❌ **Workflow blocked**: Unable to verify if another workflow is running (database error). Please try again in a moment.'
       );
+      // Even if notification delivery failed, release this run's lock token.
+      // A rejected cleanup must escape rather than become an ordinary guard result.
+      await requireTerminalStatusWrite(deps.store.cancelWorkflowRun(workflowRun.id), {
+        workflowRunId: workflowRun.id,
+        site: 'executor.guard_query_failure_cleanup',
+      });
       return { success: false, error: 'Database error checking for active workflow' };
     }
   }

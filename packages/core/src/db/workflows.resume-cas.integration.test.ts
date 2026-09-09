@@ -25,10 +25,12 @@ import type { TokenUsage } from '@archon/providers/types';
 import { isWorkflowWaitContext } from '@archon/workflows/schemas/workflow-run';
 import type { GateResolutionEvent } from './workflows';
 
+const workflowWarnings = mock((_context: unknown, _message: string) => {});
+
 mock.module('@archon/paths', () => ({
   createLogger: () => ({
     info() {},
-    warn() {},
+    warn: workflowWarnings,
     error() {},
     debug() {},
     trace() {},
@@ -655,6 +657,64 @@ async function countEvents(runId: string, eventType: string): Promise<number> {
 }
 
 describe('terminal workflow transitions — real SQLite', () => {
+  test.each(['completed', 'cancelled'] as const)(
+    'malformed metadata does not prevent %s without a metadata merge',
+    async status => {
+      const runId = `terminal-malformed-${status}`;
+      const rawMetadata = '{"private":"must-not-be-logged"';
+      await seed(runId, 'running', "datetime('now')");
+      await db.query('UPDATE remote_agent_workflow_runs SET metadata = $1 WHERE id = $2', [
+        rawMetadata,
+        runId,
+      ]);
+      expect((await getWorkflowRun(runId))?.metadata).toEqual({});
+      if (status === 'completed') await completeWorkflowRun(runId, { duration_ms: 5 });
+      else await expect(cancelWorkflowRun(runId)).resolves.toEqual({ cancelled: true });
+      expect((await getWorkflowRun(runId))?.status).toBe(status);
+      const record = await terminalRecord(runId);
+      expect(record.status).toBe(status);
+      expect(record.returns).toEqual({
+        availability: 'unavailable',
+        node_id: null,
+        reason: 'graph_unavailable',
+      });
+      const stored = await db.query<{ metadata: string }>(
+        'SELECT metadata FROM remote_agent_workflow_runs WHERE id = $1',
+        [runId]
+      );
+      expect(stored.rows[0]?.metadata).toBe(rawMetadata);
+      expect(workflowWarnings).toHaveBeenCalledWith(
+        { workflowRunId: runId, errorType: 'SyntaxError' },
+        'db.workflow_run_metadata_parse_failed'
+      );
+      expect(JSON.stringify(workflowWarnings.mock.calls)).not.toContain('must-not-be-logged');
+    }
+  );
+
+  test.each([
+    { label: 'object', raw: '{"kept":true}', expected: { kept: true } },
+    { label: 'JSON null', raw: 'null', expected: null },
+    { label: 'SQL null', raw: null, expected: null },
+  ])('preserves $label metadata when reading and terminating', async ({ label, raw, expected }) => {
+    const runId = `terminal-valid-${label}`;
+    await seed(runId, 'running', "datetime('now')");
+    await db.query('UPDATE remote_agent_workflow_runs SET metadata = $1 WHERE id = $2', [
+      raw,
+      runId,
+    ]);
+    const metadataBefore: unknown = (await getWorkflowRun(runId))?.metadata;
+    expect(metadataBefore).toEqual(expected);
+    await cancelWorkflowRun(runId);
+    const metadataAfter: unknown = (await getWorkflowRun(runId))?.metadata;
+    expect(metadataAfter).toEqual(expected);
+    expect((await terminalRecord(runId)).status).toBe('cancelled');
+    const stored = await db.query<{ metadata: string | null }>(
+      'SELECT metadata FROM remote_agent_workflow_runs WHERE id = $1',
+      [runId]
+    );
+    expect(stored.rows[0]?.metadata).toBe(raw);
+  });
+
   test('commits completion and its matching event together', async () => {
     await seed('terminal-complete', 'running', "datetime('now')");
 

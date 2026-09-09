@@ -32705,9 +32705,10 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
         `name: compose-blk\ndescription: body\nmutates_checkout: false\nnodes:\n  - id: work\n    ${cancellation ? 'cancel: stop' : 'bash: "echo done"'}`
       );
       const store = createMockStore();
+      const cause = new Error('inner storage failed');
       if (cancellation)
         store.cancelWorkflowRun = mock(async () => {
-          throw new Error('inner storage failed');
+          throw cause;
         });
       store.persistWorkflowEvent = mock(async event => {
         if (
@@ -32715,30 +32716,34 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
           event.event_type === 'node_completed' &&
           event.step_name?.endsWith('__work')
         ) {
-          throw new Error('inner storage failed');
+          throw cause;
         }
         await store.createWorkflowEvent(event);
       });
-      await expect(
-        executeDagWorkflow(
-          dagOptions({
-            deps: createMockDeps(store),
-            cwd: testDir,
-            workflow: {
-              name: 'composed-write-failure',
-              nodes: [
-                {
-                  id: 'fan',
-                  kind: 'compose_fan_out',
-                  include: 'compose-blk',
-                  fan_out: { items: '["a"]', as: 'item', max_parallel: 1, join: 'all_done' },
-                },
-              ],
-            },
-            workflowRun: makeWorkflowRun('composed-write-failure'),
-          })
-        )
-      ).rejects.toThrow('inner storage failed');
+      const error: unknown = await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow: {
+            name: 'composed-write-failure',
+            nodes: [
+              {
+                id: 'fan',
+                kind: 'compose_fan_out',
+                include: 'compose-blk',
+                fan_out: { items: '["a"]', as: 'item', max_parallel: 1, join: 'all_done' },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('composed-write-failure'),
+        })
+      ).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      expect(error).toBeInstanceOf(cancellation ? TerminalStatusWriteError : NodeEventWriteError);
+      if (!(error instanceof Error)) throw new Error('Expected storage rejection');
+      expect(error.cause).toBe(cause);
       expect(
         eventsOf(store).some(
           event => event.event_type === 'node_completed' && event.step_name === 'fan'

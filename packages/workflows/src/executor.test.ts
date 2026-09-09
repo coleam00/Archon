@@ -1160,6 +1160,14 @@ describe('executeWorkflow', () => {
       'propagates self-cancellation rollback (lock query fails=%s)',
       async queryFails => {
         const selfRun = makeRun({ id: 'self-run', status: 'pending' });
+        const cause = new Error('self cancellation rolled back');
+        const order: string[] = [];
+        const messages: string[] = [];
+        const platform = makePlatform();
+        platform.sendMessage = mock(async (_conversationId, message) => {
+          messages.push(message);
+          order.push('notify');
+        });
         const store = makeStore({
           createWorkflowRun: mock(async () => selfRun),
           getActiveWorkflowRunByPath: mock(async () => {
@@ -1167,22 +1175,64 @@ describe('executeWorkflow', () => {
             return makeRun({ id: 'other-run', status: 'running' });
           }),
           cancelWorkflowRun: mock(async () => {
-            throw new Error('self cancellation rolled back');
+            order.push('cancel');
+            throw cause;
           }),
         });
-        await expect(
-          executeWorkflow(
-            makeDeps(store),
-            makePlatform(),
-            'conv-1',
-            '/tmp',
-            makeWorkflow(),
-            'test',
-            'db-conv-1'
-          )
-        ).rejects.toThrow(
-          'Failed to persist terminal workflow status: self cancellation rolled back'
+        const error: unknown = await executeWorkflow(
+          makeDeps(store),
+          platform,
+          'conv-1',
+          '/tmp',
+          makeWorkflow(),
+          'test',
+          'db-conv-1'
+        ).then(
+          () => undefined,
+          (error: unknown) => error
         );
+        expect(error).toBeInstanceOf(TerminalStatusWriteError);
+        if (!(error instanceof TerminalStatusWriteError))
+          throw new Error('Expected terminal write rejection');
+        expect(error.cause).toBe(cause);
+        expect(order).toEqual(['notify', 'cancel']);
+        expect(messages[0]).toContain(
+          queryFails ? 'Unable to verify if another workflow is running' : 'This worktree is in use'
+        );
+        expect(store.cancelWorkflowRun).toHaveBeenCalledTimes(1);
+        expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      }
+    );
+    it.each([false, true])(
+      'still cancels after notification fails (lock query fails=%s)',
+      async queryFails => {
+        const order: string[] = [];
+        const store = makeStore({
+          getActiveWorkflowRunByPath: mock(async () => {
+            if (queryFails) throw new Error('lock lookup failed');
+            return makeRun({ id: 'other-run', status: 'running' });
+          }),
+          cancelWorkflowRun: mock(async () => {
+            order.push('cancel');
+            return { cancelled: true };
+          }),
+        });
+        const platform = makePlatform();
+        platform.sendMessage = mock(async () => {
+          order.push('notify');
+          throw new Error('unauthorized');
+        });
+        const result = await executeWorkflow(
+          makeDeps(store),
+          platform,
+          'conv-1',
+          '/tmp',
+          makeWorkflow(),
+          'test',
+          'db-conv-1'
+        );
+        expect(result.success).toBe(false);
+        expect(order).toEqual(['notify', 'cancel']);
         expect(store.cancelWorkflowRun).toHaveBeenCalledTimes(1);
         expect(store.failWorkflowRun).not.toHaveBeenCalled();
       }

@@ -1,6 +1,7 @@
 import { buildTerminalRecord, type TerminalRecordEvent } from '@archon/workflows/terminal-record';
 import type { WorkflowRun, RunTerminalStatus } from '@archon/workflows/schemas/workflow-run';
 import type { IDatabase } from './adapters/types';
+import { normalizeWorkflowRun } from './workflow-run-normalization';
 import { insertWorkflowEvent, type WorkflowEventInput } from './workflow-events';
 
 /** The winning status update, its projection, and its event share this transaction. */
@@ -23,13 +24,7 @@ export async function insertTerminalWorkflowEvent(
     [event.workflow_run_id]
   );
   const terminalRecord = await buildTerminalRecord({
-    run: {
-      ...run,
-      metadata:
-        typeof run.metadata === 'string'
-          ? (JSON.parse(run.metadata) as Record<string, unknown>)
-          : run.metadata,
-    },
+    run: normalizeWorkflowRun(run),
     events: eventResult.rows,
   });
   await insertWorkflowEvent(query, {
