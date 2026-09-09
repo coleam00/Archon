@@ -1,0 +1,7 @@
+validate:
+  green: true
+  checks_performed: false
+  red_cause: ""
+  summary: "stub: no ordinary checks defined"
+fixture:
+  expect: completed
