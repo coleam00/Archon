@@ -12,7 +12,12 @@ Use gh with the explicit repository. Before EACH merge, re-read the PR, its head
 base, review and CI. Require the recorded head SHA and target base, a non-draft
 open same-repository PR, resolved review findings, and passing required checks.
 Compare the live base SHA with the plan before the first merge and with the
-previous merge's read-back thereafter. Stop on unrelated base movement.
+previous merge's read-back thereafter. The live base SHA is the branch reference
+itself: `gh api repos/<owner>/<repo>/branches/<base> --jq .commit.sha` (or
+`git ls-remote origin <base>`). A pull request record's `base.sha`, `baseRefOid`
+or `mergeBaseOid` is a snapshot of where the PR branched or was last updated,
+not the live reference, and reading it as the live head reports movement that
+never happened. Stop on unrelated base movement.
 After an earlier PR merges, require the next PR's validation to cover the updated
 base. If GitHub requires an update or fresh checks, hold for a new run; never
 treat old CI as validation of a new composition.
