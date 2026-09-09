@@ -88,7 +88,10 @@ Work through these questions in order, with the user where marked:
    the way you prove fixtures red.
 6. **Data flow.** What does each node hand the next? Declared values
    (`$node.output`, `output_format` fields, workflow `inputs:`/`returns:`) carry
-   scalars; artifacts (`$ARTIFACTS_DIR`) carry documents and evidence for humans.
+   JSON values; artifacts (`$ARTIFACTS_DIR`) carry files. The producing node owns
+   the schema, including for script results and composed workflows. Read
+   `node-reference.md` → Result contracts before declaring a result, and
+   `variables.md` → Artifact pointers when returning a file reference.
 7. **Prompting** per node → see `../prompting-mistakes/prompting-mistakes.md` before writing prose.
 8. **Wiring** into YAML (below), then **fixtures**: every authored workflow ships
    a dry-run fixture under `<pack>/<workflow>/fixtures/*.stubs.yaml` declaring its
