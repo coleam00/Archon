@@ -42,16 +42,20 @@ describe('waitCompletionEvents', () => {
 
   it('is the only place that spells the wait node row, in either package', async () => {
     // The same-tick path (executor) and the resumed path (core store) both write this
-    // row. A second spelling anywhere is the hand-synced pair this owner removes.
+    // row. A second spelling anywhere is the hand-synced pair this owner removes. The
+    // row is recognised by its first two keys together: `type: 'wait'` alone also names
+    // the wait node kind elsewhere (the ignored-fields table in schemas/dag-node.ts).
     const here = join(import.meta.dir);
-    const workflowSources = (await readdir(here))
+    const workflowSources = (await readdir(here, { recursive: true }))
+      .map(String)
       .filter(name => name.endsWith('.ts') && !name.endsWith('.test.ts'))
       .map(name => join(here, name));
     const coreStore = join(here, '..', '..', 'core', 'src', 'db', 'workflows.ts');
+    const waitRow = /type:\s*'wait',\s*duration_ms\s*:/;
     const spellings: string[] = [];
     for (const file of [...workflowSources, coreStore]) {
       const source = await readFile(file, 'utf8');
-      if (/type: 'wait',/.test(source)) spellings.push(file);
+      if (waitRow.test(source)) spellings.push(file);
     }
     expect(spellings).toEqual([join(here, 'store.ts')]);
   });
