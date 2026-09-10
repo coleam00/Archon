@@ -50,14 +50,24 @@ outcome_field: ready
 
 nodes:
   # A continuation round is one whose caller handed it the prior round's report.
-  # That report reached the caller as a certified artifact pointer from this
-  # workflow's own synthesize node, so its existence is the producer's contract
-  # and nothing here re-checks it. The node exists only because an include's
-  # inputs are substituted as text at load time and cannot be compared in a
-  # `when:`; it turns the input into the routable fact the lenses gate on.
+  # Deliver's rounds pass the path of a pointer this workflow's own synthesize
+  # node certified, but `prior_report` is also a declared input an outside
+  # caller can fill with a path from an earlier run, which no pointer covers.
+  # That boundary is checked here, once, because a continuation that cannot
+  # read the report it continues from would review nothing and say it reviewed
+  # everything. The node also turns the input into the routable fact the lenses
+  # gate on: an include's inputs are substituted as text at load time and cannot
+  # be compared in a `when:`.
   - id: mode
     script: |
-      console.log(JSON.stringify({ continuation: (process.env.INPUTS_PRIOR_REPORT ?? '') !== '' }));
+      const prior = (process.env.INPUTS_PRIOR_REPORT ?? '').trim();
+      const exists = prior !== '' && (() => { try { return require('node:fs').statSync(prior).isFile(); } catch { return false; } })();
+      if (prior !== '' && !exists) {
+        console.error(`Previous review report does not exist: ${prior}`);
+        process.exitCode = 1;
+      } else {
+        console.log(JSON.stringify({ continuation: prior !== '' }));
+      }
     runtime: bun
     with:
       prior_report: "$INPUTS.prior_report"

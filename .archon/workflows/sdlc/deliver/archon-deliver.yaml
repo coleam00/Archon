@@ -508,10 +508,11 @@ nodes:
             action: "$ci-recheck.output.action"
             red_cause: "$ci-fix.output.red_cause"
           depends_on: [ci-recheck]
+          # Shape only: which actions exist is synthesize's enum, certified there.
           output_format:
             type: object
             properties:
-              action: { type: string, enum: [none, correct, replan] }
+              action: { type: string }
               red_cause: { type: string }
             required: [action, red_cause]
 

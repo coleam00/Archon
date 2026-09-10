@@ -179,14 +179,22 @@ function redCauses(artifacts: string): string {
     return '';
   }
 
-  const lines: string[] = [];
-  const unreadable: string[] = [];
+  // Sidecars carry when they were written; the gates ran in that order, and the
+  // reader should meet the reds in it, not in the order of a filename digest.
+  const gates: { producedAt: string; meta: Record<string, unknown> }[] = [];
   for (const name of names) {
     const meta = readJson(join(directory, name));
     if (meta === undefined || 'error' in meta) continue;
     const record = records([meta.value])[0];
     if (record?.outputType !== 'green-gate') continue;
-    const outputPath = join(artifacts, display(record.path));
+    gates.push({ producedAt: display(record.producedAt), meta: record });
+  }
+  gates.sort((a, b) => a.producedAt.localeCompare(b.producedAt));
+
+  const lines: string[] = [];
+  const unreadable: string[] = [];
+  for (const { meta } of gates) {
+    const outputPath = join(artifacts, display(meta.path));
     const gate = readJson(outputPath);
     if (gate === undefined || 'error' in gate) {
       unreadable.push(`- ${outputPath}: could not read the gate's record. Open it directly.`);
