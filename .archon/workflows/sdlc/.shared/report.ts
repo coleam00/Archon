@@ -97,7 +97,12 @@ function rawDiscoveries(artifacts: string): string {
   for (const name of names) {
     const path = join(directory, name);
     const read = readJson(path);
-    if (read === undefined) continue;
+    // The directory listing already said this entry is there, so "not a readable
+    // regular file" is a record this cannot show, never a record that is absent.
+    if (read === undefined) {
+      unreadable.push(`- ${path}: could not read (not a regular file). Open it directly.`);
+      continue;
+    }
     if ('error' in read) {
       unreadable.push(`- ${path}: could not read (${read.error}). Open it directly.`);
       continue;
