@@ -161,6 +161,10 @@ def main() -> int:
         return fail("summary is empty")
     if not isinstance(area, list) or any(not isinstance(name, str) or not name for name in area):
         return fail("area_labels must be a list of label names")
+    if any(name in PACK_LABELS for name in area):
+        # The state and size labels are derived above; a pack label smuggled in as an
+        # area label would be added beside the derived state or removed as stale.
+        return fail("area_labels may not name a pack label; those derive from the verdict")
     if item is not None and (
         not isinstance(item, dict)
         or not isinstance(item.get("repository"), str)
