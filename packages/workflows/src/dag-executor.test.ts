@@ -2338,8 +2338,8 @@ describe('executeDagWorkflow -- tool restrictions', () => {
     const workflowRun = makeWorkflowRun();
     const aiProfile = buildAiProfile('claude', {
       repoTiers: {
-        small: { provider: 'claude', model: 'haiku' },
-        large: { provider: 'claude', model: 'opus' },
+        small: { provider: 'claude', model: 'haiku', effort: 'low' },
+        large: { provider: 'claude', model: 'opus', effort: 'max' },
       },
     });
 
@@ -2372,6 +2372,19 @@ describe('executeDagWorkflow -- tool restrictions', () => {
     // workflow's `large`.
     const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
     expect(optionsArg.model).toBe('haiku');
+
+    // Tier and preset travel with the model. Forwarding the model alone would run
+    // `haiku` while attributing it to `large` and applying that preset's `max` effort.
+    const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
+    expect(nodeConfig.effort).toBe('low');
+
+    const createEventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock
+      .calls as Array<[{ event_type: string; step_name?: string; data?: Record<string, unknown> }]>;
+    const bodyStarted = createEventCalls.find(
+      ([arg]) => arg.event_type === 'node_started' && arg.step_name?.endsWith('body')
+    );
+    expect(bodyStarted?.[0].data?.tier).toBe('small');
+    expect(bodyStarted?.[0].data?.model).toBe('haiku');
   });
 
   it('surfaces the workflow-level tier on nodes that inherit the workflow model', async () => {
