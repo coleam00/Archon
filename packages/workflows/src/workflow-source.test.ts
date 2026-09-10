@@ -504,8 +504,11 @@ describe('measuring where a capture spends its time', () => {
       // and it has to be excluded — a zero here would make the identity above vacuous.
       expect(totals.bundled_write.files).toBeGreaterThan(0);
       expect(totals.digest.files).toBe(totals.copy.files);
+      // Every declared phase is actually wired to a range of the capture. A phase that is
+      // named but never timed reports 0.00 forever, which reads as "free" rather than as
+      // "unmeasured" — the one way this instrument can lie to whoever runs it.
       for (const phase of CAPTURE_PHASES) {
-        expect(totals[phase].ms).toBeGreaterThanOrEqual(0);
+        expect(totals[phase].ms).toBeGreaterThan(0);
       }
     } finally {
       await rm(bundledFile, { force: true });
