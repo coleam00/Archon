@@ -51,6 +51,12 @@ const NOT_IN_VALIDATE: readonly { command: string; reason: string }[] = [
       'bun test packages/core/src/db/isolation-environments.live-run.postgres.integration.test.ts',
     reason: 'Exercises the Postgres dialect against a live PostgreSQL service.',
   },
+  {
+    command: 'bun packages/docs-web/scripts/lint-marketplace.ts',
+    reason:
+      'Spends 9 unauthenticated github.com API calls per run against a 60/hour per-IP quota, so ' +
+      'six validate runs an hour turn the gate red with HTTP 403s that say nothing about the change.',
+  },
 ];
 
 interface WorkflowCommand {

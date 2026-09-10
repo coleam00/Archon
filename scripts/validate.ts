@@ -76,11 +76,6 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
     command: ['bun', 'run', 'format:check'],
   },
   {
-    id: 'marketplace-lint',
-    label: 'Marketplace entries resolve at their pinned SHAs (reaches github.com)',
-    command: ['bun', 'packages/docs-web/scripts/lint-marketplace.ts'],
-  },
-  {
     id: 'workflow-fixtures',
     label: 'Every workflow fixture reaches its expected outcome under dry-run',
     command: ['bun', 'run', 'cli', 'workflow', 'test'],
