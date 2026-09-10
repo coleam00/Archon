@@ -59,11 +59,13 @@ function isCheck(value: unknown): value is Check {
 /**
  * Whether this pull request has no checks, asked as a count rather than read as prose.
  *
- * The listing above conflates two states in its exit code — a pull request with no
- * checks, and a read that failed — and says which only in a sentence. The rollup
- * answers the same question as a number: zero on a check-less pull request, and a
- * non-zero exit when the read itself failed. A failed observation is never evidence
- * that no CI exists, so anything but a clean zero refuses.
+ * The listing below encodes check state in its exit code rather than read success —
+ * it can exit zero on failing checks and non-zero on none — so its status separates
+ * neither "this pull request has no checks" from "the read failed", and it says which
+ * only in a sentence. The rollup answers that one question as a number: zero on a
+ * check-less pull request, a non-zero exit when the read itself failed. A failed
+ * observation is never evidence that no CI exists, so anything but a clean zero
+ * refuses. `length` reads a null rollup as zero, which is the same answer.
  */
 function hasNoChecks(): boolean {
   const counted = gh(
@@ -72,7 +74,7 @@ function hasNoChecks(): boolean {
     '--json',
     'statusCheckRollup',
     '--jq',
-    '(.statusCheckRollup // []) | length'
+    '.statusCheckRollup | length'
   );
   return counted.ok && counted.stdout.trim() === '0';
 }
@@ -82,8 +84,10 @@ function checks(): readonly Check[] | undefined {
   const result = gh('pr', 'checks', '--json', 'name,bucket');
   let parsed: unknown;
   try {
-    // A non-zero exit WITH data still parses: gh exits 1 when checks failed. Only the
-    // absence of a document sends this to the count.
+    // The document decides, not the exit status: this form reports failing checks
+    // through the buckets it prints, and its status says nothing reliable about
+    // whether the read worked. Only stdout that is no JSON document at all goes on to
+    // ask the count.
     parsed = JSON.parse(result.stdout) as unknown;
   } catch {
     if (hasNoChecks()) return [];

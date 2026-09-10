@@ -233,10 +233,11 @@ function stubSatisfiesNode(node: DagNode, stub: DryRunStubValue): boolean {
  * Throwing here is what the surrounding catch turns into a failed node, so the fixture
  * reports the schema errors rather than a downstream symptom.
  *
- * Both routes that hydrate an authored stub call this — `simulateNode` and
- * `simulateLoop`. A loop node's stub is the one most worth checking, not the one to
- * skip: `loop:` is how a workflow declares an iterated verdict, so its schema is
- * usually the contract a composition is built on.
+ * Called from `stubFor`, the single point an authored stub enters a simulation, so a
+ * new consumer cannot forget it. It sat at the two hydration sites first and one of
+ * them was missed — the loop one, which is the one that matters most: `loop:` is how
+ * a workflow declares an iterated verdict, so its schema is usually the contract a
+ * composition is built on.
  */
 function assertAuthoredStubSatisfiesSchema(node: DagNode, stub: DryRunStubValue): void {
   if (node.output_format === undefined) return;
@@ -804,7 +805,11 @@ const TOLERATED_STUB_REASON =
 function stubFor(node: DagNode, ctx: DryRunContext): DryRunStubValue | undefined {
   if (Object.hasOwn(ctx.stubs, node.id)) {
     ctx.consumedStubs.add(node.id);
-    return ctx.stubs[node.id];
+    const authored = ctx.stubs[node.id];
+    // The one place an authored stub enters a simulation, so the one place that can
+    // hold its contract by construction rather than by each caller remembering to.
+    if (authored !== undefined) assertAuthoredStubSatisfiesSchema(node, authored);
+    return authored;
   }
   if (ctx.defaultStubs && !(isExecNode(node) && ctx.execCode)) {
     return generatedStubFor(node);
@@ -974,7 +979,6 @@ async function simulateLoop(
       });
       return;
     }
-    assertAuthoredStubSatisfiesSchema(node, stub);
     const hydrated = completedOutput(node, stub);
     previous = hydrated.output;
     const completion = loopIterationCompletes(node.loop, hydrated);
@@ -1287,7 +1291,6 @@ async function simulateNode(
       // whole body then fails the node — so a node added to `toleratedMissingStubs`
       // any earlier would report a gap that never blocked it while that gap is
       // exactly what blocked it, and `checkFixture` would filter the blocker away.
-      if (stub !== undefined) assertAuthoredStubSatisfiesSchema(node, stub);
       const hydrated = completedOutput(node, stub ?? generatedStubFor(node));
       if (tolerated) ctx.toleratedMissingStubs.add(node.id);
       outputs.set(node.id, hydrated);
