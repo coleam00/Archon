@@ -347,11 +347,17 @@ function readRunStatus(archonHome: string, runId: string): string | undefined {
  * result. Windows widens the same window to `disk I/O error` while a commit settles
  * (#2306). `workflow-terminal-event.integration.spec.ts` catches for exactly this
  * reason; a bare loop here would surface a startup race as a test failure.
+ *
+ * `timeoutMs` has no default on purpose. It used to default to 30 s, and the sites
+ * waiting on one condition — a run booting — split into one that named a deadline and
+ * two that inherited it silently, so nothing moved them together when 30 s turned out
+ * to be wrong on Windows (#3288). Every caller states its own; the boot ones state it
+ * through `waitForRunBoot` below.
  */
 async function waitFor<T>(
   what: string,
   read: () => T | undefined | Promise<T | undefined>,
-  timeoutMs = 30_000,
+  timeoutMs: number,
   owner?: ForegroundOwner
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
@@ -384,6 +390,58 @@ async function waitFor<T>(
   );
 }
 
+/**
+ * How long a run launched in another process may take to boot far enough to be
+ * observable: to apply the schema and write its row, and to reach `running`.
+ *
+ * This is a SETUP deadline and not a test budget. Every site that uses it is waiting
+ * for the fixture to exist so the contract can begin; the contract's own deadline is
+ * the `--timeout` handed to `startWait`, which none of this moves. #2924's standing
+ * rule against fixing a Windows failure with a budget bump is intact — the `}, N)`
+ * budgets below are untouched, and the 120 s ones were never what expired.
+ *
+ * 30 s was the old value and it was too small. On Windows CI this poll ran its full
+ * 30 s and gave up reporting `no such table: remote_agent_workflow_runs` — the
+ * launcher had created `archon.db` and not yet applied the schema (#3288). The boot it
+ * was waiting on measures 360–464 ms locally. Sibling cases in the same file passed on
+ * that same runner at 8.2 s and 41.4 s, against ~16 s for all ten of them locally, and
+ * the amplification measured elsewhere in this repository is ~34x (676 ms on the runner
+ * against ~20 ms locally, #2924). So 90 s is roughly 195x the local sample and an order
+ * of magnitude past anything that runner has been seen doing healthily: a boot that
+ * misses it is not slow, it is stuck.
+ *
+ * Do not read this as "the launcher was alive and slow". That sample predates the
+ * owner-exit guard in `waitFor`, so it could not tell a slow launcher from a dead one.
+ * The guard now fails fast with the launcher's streams, which is what makes a raise
+ * safe: a launcher that dies reports itself instead of spending the deadline.
+ *
+ * It stays well under the 120 s budgets on purpose. A stall has to surface as
+ * `Timed out waiting for …` carrying the launcher's streams, not as Bun cutting the
+ * test off with nothing to read.
+ */
+const RUN_BOOT_DEADLINE_MS = 90_000;
+
+/**
+ * Wait for a run launched in another process to boot, recording how long it took.
+ *
+ * The duration is why this exists rather than three calls naming the constant. Raising
+ * a deadline without a signal only makes a stall take longer to appear; a boot creeping
+ * toward the ceiling should be a number climbing in the CI transcript, visible before
+ * it fails again. One line per boot, and none on the failure path — `waitFor` already
+ * reports that one.
+ */
+async function waitForRunBoot<T>(
+  what: string,
+  read: () => T | undefined | Promise<T | undefined>,
+  owner?: ForegroundOwner
+): Promise<T> {
+  const startedAt = Date.now();
+  const value = await waitFor(what, read, RUN_BOOT_DEADLINE_MS, owner);
+  const elapsed = Date.now() - startedAt;
+  console.log(`[boot] ${what}: ${String(elapsed)}ms of ${String(RUN_BOOT_DEADLINE_MS)}ms`);
+  return value;
+}
+
 describe('foreground run discovery', () => {
   test('reports owner exit and both streams before the row-discovery deadline', async () => {
     const fixture = makeFixture('archon-wait-startup-failure-', {});
@@ -391,7 +449,10 @@ describe('foreground run discovery', () => {
       '-e',
       'console.log("startup stdout"); console.error("controlled startup failure"); process.exit(23)',
     ]);
-    const error = await waitFor('the failed run row', () => undefined, 30_000, owner).catch(
+    // Through the same helper the boot waits use, at the same deadline: the claim is
+    // that owner exit beats `RUN_BOOT_DEADLINE_MS`, and this test's own budget is Bun's
+    // 5 s default. A guard that stopped firing could only fail here, never pass slowly.
+    const error = await waitForRunBoot('the failed run row', () => undefined, owner).catch(
       (error: unknown) => error
     );
     expect(String(error)).toMatch(
@@ -470,12 +531,18 @@ describe('archon workflow wait against a detached run', () => {
       });
 
       // The detail comes from an ordinary inspection afterwards — polling is now a
-      // diagnostic, not the orchestration contract.
-      const detail = await waitFor('workflow get to read the terminal run', async () => {
-        const inspected = await runCli(fixture, ['workflow', 'get', runId, '--json']);
-        if (inspected.exitCode !== 0) throw new Error(inspected.stderr || inspected.stdout);
-        return JSON.parse(inspected.stdout.trim()) as Record<string, unknown>;
-      });
+      // diagnostic, not the orchestration contract. Not a boot wait: the run is already
+      // terminal by the assertion above, so this retries one `workflow get` against the
+      // commit window (#2306) rather than against a process starting up.
+      const detail = await waitFor(
+        'workflow get to read the terminal run',
+        async () => {
+          const inspected = await runCli(fixture, ['workflow', 'get', runId, '--json']);
+          if (inspected.exitCode !== 0) throw new Error(inspected.stderr || inspected.stdout);
+          return JSON.parse(inspected.stdout.trim()) as Record<string, unknown>;
+        },
+        30_000
+      );
       expect(detail).toMatchObject({
         id: runId,
         status,
@@ -498,10 +565,9 @@ describe('archon workflow wait against a detached run', () => {
 
     // Discovering the id is test setup, not the contract under test — the launcher
     // above has no `--detach --json` ack to carry one.
-    const runId = await waitFor(
+    const runId = await waitForRunBoot(
       'the gated run row',
       () => readRunId(fixture.archonHome, 'wait-gated'),
-      30_000,
       owner
     );
     activeRunIds.add(runId);
@@ -552,7 +618,7 @@ describe('archon workflow wait against a detached run', () => {
     // that covers both. Guessing 1.5s here instead is what failed on Windows — as
     // "Cannot actively cancel run with status 'pending'" and as a taskkill walking a
     // tree that was still spawning (#2982).
-    await waitFor('the detached owner to start running', () =>
+    await waitForRunBoot('the detached owner to start running', () =>
       readRunStatus(fixture.archonHome, runId) === 'running' ? true : undefined
     );
 
@@ -586,7 +652,7 @@ describe('archon workflow wait against a detached run', () => {
         'nodes:\n  - id: hold\n    bash: "sleep 60; echo done"\n',
     });
     const { runId } = await launchDetached(fixture, 'wait-orphan');
-    await waitFor('the detached owner to start running', () =>
+    await waitForRunBoot('the detached owner to start running', () =>
       readRunStatus(fixture.archonHome, runId) === 'running' ? true : undefined
     );
 
