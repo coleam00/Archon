@@ -2336,6 +2336,65 @@ describe('executeDagWorkflow -- tool restrictions', () => {
     expect(nodeStartedCall?.[0].data?.effort).toBe('max');
   });
 
+  it('forwards a loop_group tier to a body AI node that declares none', async () => {
+    // The schema documents `model`/`provider` as forwarded from a loop_group to its
+    // body AI nodes. The provider always was; the model was resolved and then thrown
+    // away, so a body node silently took the enclosing workflow's model — or, when the
+    // workflow declared none, the install's default assistant.
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+    const aiProfile = buildAiProfile('claude', {
+      repoTiers: {
+        small: { provider: 'claude', model: 'haiku', effort: 'low' },
+        large: { provider: 'claude', model: 'opus', effort: 'max' },
+      },
+    });
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        platform,
+        cwd: testDir,
+        workflow: {
+          name: 'loop-group-tier-forwarding',
+          model: 'large',
+          nodes: [
+            dagNodeSchema.parse({
+              id: 'group',
+              model: 'small',
+              loop_group: {
+                until_bash: 'exit 0',
+                max_iterations: 1,
+                nodes: [{ id: 'body', prompt: 'body work' }],
+              },
+            }),
+          ],
+        },
+        workflowRun,
+        aiProfile,
+      })
+    );
+
+    // The body node declares no model, so it takes the group's `small`, not the
+    // workflow's `large`.
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    expect(optionsArg.model).toBe('haiku');
+
+    // Tier and preset travel with the model. Forwarding the model alone would run
+    // `haiku` while attributing it to `large` and applying that preset's `max` effort.
+    const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
+    expect(nodeConfig.effort).toBe('low');
+
+    const createEventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock
+      .calls as Array<[{ event_type: string; step_name?: string; data?: Record<string, unknown> }]>;
+    const bodyStarted = createEventCalls.find(
+      ([arg]) => arg.event_type === 'node_started' && arg.step_name?.endsWith('body')
+    );
+    expect(bodyStarted?.[0].data?.tier).toBe('small');
+    expect(bodyStarted?.[0].data?.model).toBe('haiku');
+  });
+
   it('surfaces the workflow-level tier on nodes that inherit the workflow model', async () => {
     // Regression guard for #2036: the bundled default workflows set the tier at
     // the WORKFLOW level (e.g. `model: medium`), and their nodes have no own

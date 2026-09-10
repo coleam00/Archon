@@ -1683,6 +1683,7 @@ async function resolveNodeProviderAndModel(
   options: SendQueryOptions | undefined;
   tier?: TierName;
   effort?: EffortLevel;
+  preset?: ModelAliasPreset;
 }> {
   // The chain itself lives in node-model-resolution.ts so `workflow dry-run` reports the
   // same answer this produces (#1764). Everything below is the part a dry run must NOT
@@ -1919,7 +1920,14 @@ async function resolveNodeProviderAndModel(
   // string (e.g. "opus"). Surface `tier` when the ref was a tier keyword — from
   // the node's own `model`, or (when the node inherits the workflow-level model)
   // from the workflow tier, mirroring the effectivePreset inheritance condition.
-  return { provider, model, options, tier: resolution.tier, effort: resolvedEffort };
+  return {
+    provider,
+    model,
+    options,
+    tier: resolution.tier,
+    effort: resolvedEffort,
+    preset: effectivePreset,
+  };
 }
 
 export type TriggerRuleDecision = { decision: 'run' } | { decision: 'skip'; cause: SkipCause };
@@ -4519,6 +4527,9 @@ async function executeLoopGroupNode(
   ctx: RunLayersContext,
   node: LoopGroupNode,
   workflowProvider: string,
+  workflowModel: string | undefined,
+  workflowTier: TierName | undefined,
+  workflowPreset: ModelAliasPreset | undefined,
   stepNamePrefix = ''
 ): Promise<NodeExecutionResult> {
   const {
@@ -4965,12 +4976,19 @@ async function executeLoopGroupNode(
       workflowSourceRoots: ctx.workflowSourceRoots,
       config: ctx.config,
       workflowProvider,
-      // Forward inherited workflow-level model/tier/options/profile so body AI nodes
-      // resolve model aliases and workflow defaults the same way top-level nodes do.
-      workflowModel: ctx.workflowModel,
-      workflowLevelOptions: ctx.workflowLevelOptions,
+      // The group's own resolved provider and model become the body's defaults, the
+      // pair the schema documents. `workflowModel` already carries the group's model
+      // when it declared one and the enclosing workflow's otherwise, so body AI nodes
+      // resolve aliases and defaults the same way top-level nodes do, and a per-node
+      // `model:` in the body still wins over both.
+      workflowModel,
+      // The tier and preset travel WITH the model. A tier ref resolves to a provider,
+      // a model and an effort as one unit; forwarding the model while leaving the
+      // enclosing tier and preset in place would run the group's model, attribute it to
+      // the workflow's tier, and apply the workflow preset's effort to it.
+      workflowLevelOptions: { ...ctx.workflowLevelOptions, workflowTier },
       aiProfile: ctx.aiProfile,
-      workflowPreset: ctx.workflowPreset,
+      workflowPreset,
       artifactsDir: ctx.artifactsDir,
       stateDir: ctx.stateDir,
       logDir: ctx.logDir,
@@ -10102,10 +10120,15 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 // Loop-group node dispatch — manages its own subgraph iteration
                 // (body is a sealed sub-DAG re-executed per iteration; the loop is
                 // encapsulated inside this one node, keeping the outer DAG acyclic).
-                // Resolve provider for the group (group-level provider/model overrides are
-                // forwarded to body AI nodes; the group itself never calls sendQuery, so
-                // the resolved SendQueryOptions are not needed here).
-                const { provider: loopGroupProvider } = await resolveNodeProviderAndModel(
+                // Resolve provider and model for the group: both are forwarded to body
+                // AI nodes as their defaults. The group itself never calls sendQuery, so
+                // the resolved SendQueryOptions are not needed here.
+                const {
+                  provider: loopGroupProvider,
+                  model: loopGroupModel,
+                  tier: loopGroupTier,
+                  preset: loopGroupPreset,
+                } = await resolveNodeProviderAndModel(
                   node,
                   ctx.workflowProvider,
                   ctx.workflowModel,
@@ -10126,6 +10149,9 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   ctx,
                   node,
                   loopGroupProvider,
+                  loopGroupModel,
+                  loopGroupTier,
+                  loopGroupPreset,
                   ctx.stepNamePrefix
                 );
                 if (output.state === 'failed') {
