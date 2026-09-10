@@ -68,3 +68,51 @@ describe('planRequestedRuns', () => {
     expect(planRequestedRuns([fromRoot('../outside-the-repo.test.ts')])).toEqual([]);
   });
 });
+
+/**
+ * `planRequestedRuns` above decides where a run goes. These cover what the script does with
+ * that plan, which is the half that enforces the invariant rather than describing it.
+ *
+ * Each assertion fails on a one-line regression: returning 0 from the zero-owner branch
+ * answers a mistyped path with success, which is the defect this runner exists to remove,
+ * and dropping the `code !== 0` check turns a failing suite into a green run.
+ *
+ * `runPlan`'s loop shares that propagation shape, but exercising it would run every suite
+ * in the repository. It stays uncovered here by choice, not by oversight.
+ */
+describe('repo-tests exit codes', () => {
+  const SCRIPT = fromRoot('scripts/repo-tests.ts');
+  const invoke = (args: string[]): { exitCode: number | null; stderr: string } => {
+    const result = Bun.spawnSync(['bun', SCRIPT, ...args], {
+      cwd: REPO_ROOT,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    return { exitCode: result.exitCode, stderr: result.stderr.toString() };
+  };
+
+  test('exits non-zero and names what it accepts when no argument routes', () => {
+    const { exitCode, stderr } = invoke(['some/where/nope.test.ts']);
+
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain('No argument named a test path this runner can place');
+  });
+
+  test('propagates a failing run instead of reporting success', () => {
+    // A real file so the argument routes, plus a filter `bun test` cannot match, so the
+    // child exits non-zero and the runner has a real failure to carry back.
+    const { exitCode } = invoke([
+      fromRoot('packages/paths/src/effort.test.ts'),
+      '-t',
+      'no-such-test-name-exists',
+    ]);
+
+    expect(exitCode).not.toBe(0);
+  });
+
+  test('exits 0 when the routed run passes', () => {
+    const { exitCode } = invoke([fromRoot('packages/paths/src/effort.test.ts')]);
+
+    expect(exitCode).toBe(0);
+  });
+});
