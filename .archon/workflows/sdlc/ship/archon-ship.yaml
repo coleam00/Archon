@@ -96,16 +96,20 @@ nodes:
   # flip's certified URL the deliver branch returned (bound with if_skipped, so a
   # skipped flip arrives as null) — see scripts/outcome.ts.
   #
-  # The three spend gates stay in the dependency list for ordering across the
-  # mutually exclusive routes, but nothing binds their outputs any more. They were
-  # read here to tell "delivery started and died mid-flight" apart from an advisory
-  # stop; a failed delivery now cascades an `upstream_failed` skip that blocks this
-  # join outright, so that case never reaches this node and the run's terminal
-  # record names the node that actually failed.
+  # Two dependencies carry the whole graph. `deliver` depends on all three spend
+  # gates, which depend on triage, inv and planned in turn, so nothing this node
+  # reports on can settle after it. `triage` is named because
+  # none_failed_min_one_success needs one completed dependency, and on the no_action
+  # route `deliver` is the skipped one.
+  #
+  # The gates' outputs used to be bound here to tell "delivery started and died
+  # mid-flight" apart from an advisory stop. A failed delivery now cascades an
+  # `upstream_failed` skip that blocks this join outright, so that case never
+  # reaches this node and the run's terminal record names the node that failed.
   - id: outcome
     script: outcome
     runtime: bun
-    depends_on: [triage, inv, planned, gate-direct, gate-rooted, gate-planned, deliver]
+    depends_on: [triage, deliver]
     trigger_rule: none_failed_min_one_success
     with:
       route: "$triage.output.route"

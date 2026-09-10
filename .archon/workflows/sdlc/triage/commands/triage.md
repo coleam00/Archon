@@ -66,8 +66,8 @@ Do not investigate the full causal chain, choose the implementation design, impl
   {"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "triage.md"}
   ```
 
-  The engine checks the file exists before this node completes, so a verdict
-  never leaves here without the evidence behind it. `run_id` is the value above
-  verbatim, and `path` is relative to `$ARTIFACTS_DIR`.
+  This node is refused if that file does not exist, so write the report before you
+  declare. `run_id` is the value above verbatim, and `path` is relative to
+  `$ARTIFACTS_DIR`.
 
 Before declaring, re-read the assessment. Confirm every decisive claim has evidence from this run, the requested outcome is separated from suggested implementation, you stopped at the routing boundary, and `git status` matches what you started with.

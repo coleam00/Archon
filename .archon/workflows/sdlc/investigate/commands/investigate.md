@@ -77,8 +77,8 @@ Do not modify source files, commit, branch, push, open or comment on pull reques
   {"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "investigation.md"}
   ```
 
-  The engine checks the file exists before this node completes, so a verdict
-  never leaves here without the evidence behind it. `run_id` is the value above
-  verbatim, and `path` is relative to `$ARTIFACTS_DIR`.
+  This node is refused if that file does not exist, so write the report before you
+  declare. `run_id` is the value above verbatim, and `path` is relative to
+  `$ARTIFACTS_DIR`.
 
 Before declaring, re-read the report: confirm every cited location exists in the current code, every command you cite actually ran in this session, no unresolved gap was disguised by extra breadth, and `git status` matches what you started with.

@@ -1,15 +1,12 @@
 /**
  * The two vocabularies the delivery tail routes on, declared once for the pack.
  *
- * Both were re-enumerated at every consumer before this module existed: the
- * red-cause vocabulary six times across two packages, the review verdict twice
- * inside one. A cause one gate accepted and another refused would strand an
- * iteration between them, and the pack carried a comment ordering the reader to
- * keep two of the copies in step by hand.
+ * A consumer never re-enumerates either list: a cause one gate accepts and another
+ * refuses would strand an iteration between them.
  *
- * The two workflow schemas that let an agent declare a cause — implement's and
- * validate's `red_cause` enum — cannot import from here: they are JSON Schema
- * inside YAML. A conformance test asserts they carry exactly the vocabulary below,
+ * The schemas that let an agent declare one — implement's and validate's `red_cause`,
+ * and review's `action` — cannot import from here, because they are JSON Schema
+ * inside YAML. A conformance test asserts each carries exactly the vocabulary below,
  * so the owner is still one place and drift fails the suite rather than a run.
  */
 
@@ -49,8 +46,16 @@ export function passesRed(cause: DeclaredRedCause): cause is (typeof PASSES_RED)
   return (PASSES_RED as readonly string[]).includes(cause);
 }
 
-/** What delivery may do about a review's verdict. */
-export type ReviewAction = 'none' | 'correct' | 'replan';
+/**
+ * What delivery may do about a review's verdict.
+ *
+ * The review node's own schema declares this list too, and a conformance test holds
+ * the two together for the same reason it holds the red causes: an action the review
+ * may author and this pack refuses would strand a delivery between them.
+ */
+export const REVIEW_ACTIONS = ['none', 'correct', 'replan'] as const;
+
+export type ReviewAction = (typeof REVIEW_ACTIONS)[number];
 
 export interface ReviewVerdict {
   readonly ready: boolean;
@@ -65,10 +70,10 @@ export interface ReviewVerdict {
  * that is not ready must name which of the two remedies it needs.
  */
 export function parseReviewVerdict(ready: string, action: string): ReviewVerdict | undefined {
-  if (ready === 'true' && action === 'none') return { ready: true, action: 'none' };
-  if (ready === 'false' && (action === 'correct' || action === 'replan')) {
-    return { ready: false, action };
-  }
+  const authored = REVIEW_ACTIONS.find(candidate => candidate === action);
+  if (authored === undefined) return undefined;
+  if (ready === 'true' && authored === 'none') return { ready: true, action: authored };
+  if (ready === 'false' && authored !== 'none') return { ready: false, action: authored };
   return undefined;
 }
 

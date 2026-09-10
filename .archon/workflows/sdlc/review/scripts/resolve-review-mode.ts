@@ -8,7 +8,7 @@
  */
 
 import { statSync } from 'node:fs';
-import { emit, refuse, trimmedInput } from '../../.shared/io.ts';
+import { emit, refuse, trimmed } from '../../.shared/io.ts';
 
 function isFile(path: string): boolean {
   try {
@@ -18,7 +18,7 @@ function isFile(path: string): boolean {
   }
 }
 
-const priorReport = trimmedInput('PRIOR_REPORT');
+const priorReport = trimmed(process.env.INPUTS_PRIOR_REPORT);
 if (priorReport !== '' && !isFile(priorReport)) {
   refuse(`Previous review report does not exist: ${priorReport}`);
 } else {

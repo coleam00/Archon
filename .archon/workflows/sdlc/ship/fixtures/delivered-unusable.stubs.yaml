@@ -8,16 +8,11 @@
 # unusable flip. If a future change quietly reads the record again, this fixture
 # goes green-to-red the other way and catches it.
 #
-# The refusal now lands one node earlier than it used to, at the flip's first
-# consumer rather than at the far end of the chain. flip-ready declares
-# `output_format: { pr_url }`, so `$flip-ready.output.pr_url` is a contract: a
-# value that cannot supply the field fails the node that reads it. Two hand-written
-# copies of a URL sniffer used to do that job at the two composing tails.
-#
-# In a real run the refusal is earlier still — the engine certifies flip-ready's
-# own stdout against that schema — but a fixture stubs the flip rather than
-# executing it, so what this proves is the consumer half: a producer that broke
-# its contract cannot hand a usable value on.
+# The refusal lands at the flip itself now, where a real run enforces it too.
+# flip-ready declares `output_format: { pr_url }`, so its stdout is a contract the
+# engine certifies rather than a convention a reader hopes for — and a stub that
+# stands in for that stdout is held to the same contract. Two hand-written copies of
+# a URL sniffer used to do this job at the two composing tails, one whole node later.
 triage__triage:
   route: deliver
   summary: "stub: current code confirms a complete work order"
@@ -27,6 +22,7 @@ deliver__impl__record-start: '{"start":"recorded"}'
 deliver__impl__implement:
   done: true
   green: true
+  red_cause: ""
   summary: "stub: direct work implemented and green"
 deliver__impl__assert-changed: "2 files changed"
 deliver__gate-green: '{"gate":"green"}'
@@ -39,7 +35,9 @@ deliver__classify:
     docs: "stub: no doc-facing changes"
 deliver__resolve-scope: '{"errors":"false"}'
 deliver__review__mode: '{"continuation":false}'
-deliver__review__scope: "PR diff in scope; head sha stubbed"
+deliver__review__scope:
+  # PR diff in scope; head sha stubbed
+  docs: false
 deliver__review__code: "0 findings"
 deliver__review__seams: "0 findings"
 deliver__review__simplify: "0 findings"
@@ -53,6 +51,7 @@ deliver__review-action: '{"ready":true,"action":"none"}'
 deliver__gate-ready: '{"gate":"ready"}'
 deliver__validate__validate:
   green: true
+  red_cause: ""
   summary: "stub: project gate green"
 deliver__gate-validated: '{"gate":"green"}'
 ci-probe: '{"state":"concluded","detail":"all checks green"}'
@@ -61,5 +60,5 @@ deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
 deliver__flip-ready: "flip printed something that is not a pull request URL"
 fixture:
   expect: failed
-  fail-node: deliver__outcome
+  fail-node: deliver__flip-ready
 exec-code: true

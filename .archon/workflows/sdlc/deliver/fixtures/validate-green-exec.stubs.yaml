@@ -12,12 +12,15 @@ impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true
+  red_cause: ""
   summary: "stub: implemented and green"
 impl__assert-changed: "3 files changed"
 gate-green: '{"gate":"green"}'
 pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true }
 review__mode: '{"continuation":false}'
-review__scope: "PR diff in scope; head sha stubbed"
+review__scope:
+  # PR diff in scope; head sha stubbed
+  docs: false
 review__code: "0 findings"
 review__seams: "0 findings"
 review__simplify: "0 findings"

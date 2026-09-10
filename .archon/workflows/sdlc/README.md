@@ -69,8 +69,15 @@ is the owning configuration — `bun run type-check` compiles that project, and 
 rather than restating them. A script placed outside those globs fails
 `pack-scripts.test.ts` rather than going quietly unchecked.
 
-Two rules the runtime imposes:
+Three rules, each protecting something a script cannot get back on its own:
 
+- **Read every binding as a literal `process.env.INPUTS_<NAME>`.** The engine scans
+  each script's own source at load and refuses a workflow whose script reads a
+  binding no `with:` clause provides. It matches that literal form only, and it never
+  follows imports — so a helper that built the key from a name would hide every read
+  in the pack from that check, and a renamed binding would surface as a wrong result
+  at the end of a paid run instead of a refusal before it started. Pass the value to
+  `.shared/io.ts`, never the name.
 - **Never call `process.exit()`.** Bun leaves without draining stdout — a 500 KB
   write to a pipe arrives as 131072 bytes, silently. Set `process.exitCode` and
   return; `.shared/io.ts` is the only place that should need to know this.
@@ -78,6 +85,10 @@ Two rules the runtime imposes:
   `node_modules`, no `tsconfig.json`, no npm dependency. Relative imports within
   the pack and the standard library are the whole surface, which is what keeps
   these workflows runnable against a project in any language.
+
+A vocabulary a node declares in YAML has exactly one owner. A script that routes on
+one imports it from `.shared/verdict.ts`; a script that merely consumes another
+node's certified value does not restate the list at all.
 
 ## Evidence never carries credentials
 

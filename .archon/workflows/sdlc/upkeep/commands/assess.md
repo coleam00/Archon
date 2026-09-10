@@ -55,6 +55,6 @@ Before declaring, re-read your assessment against the checkout: every version nu
   {"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "upkeep-assessment.md"}
   ```
 
-  The engine checks the file exists before this node completes, so a verdict
-  never leaves here without the evidence behind it. `run_id` is the value above
-  verbatim, and `path` is relative to `$ARTIFACTS_DIR`.
+  This node is refused if that file does not exist, so write the report before you
+  declare. `run_id` is the value above verbatim, and `path` is relative to
+  `$ARTIFACTS_DIR`.

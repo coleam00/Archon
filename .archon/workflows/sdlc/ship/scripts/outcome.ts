@@ -19,33 +19,33 @@
  * bound here purely to tell that case apart from an advisory stop.
  */
 
-import { artifactsDir, emit, input, refuse } from '../../.shared/io.ts';
+import { artifactsDir, emit, refuse, text } from '../../.shared/io.ts';
 import { caveats } from '../../.shared/report.ts';
 
-const ROUTES = ['investigate', 'plan', 'deliver', 'no_action'] as const;
-type Route = (typeof ROUTES)[number];
-
-/** The advisory report a route stopped at, when stopping there is a valid result. */
-const ADVISORY_STOP: Partial<Record<Route, { readonly reason: string; readonly report: string }>> = {
-  investigate: {
-    reason: 'the investigation did not establish a safe fix boundary',
-    report: 'investigation.md',
-  },
-  plan: { reason: 'planning left a material decision unresolved', report: 'plan.md' },
-};
+/**
+ * The advisory report a route stopped at, when stopping there is a valid result.
+ *
+ * Keyed by plain string on purpose. Which routes exist is triage's vocabulary,
+ * declared in its own schema; re-enumerating it here would be a second owner that
+ * nothing keeps in step. A route this table does not know still cannot reach a
+ * delivered report — it opens no spend gate, so it always arrives with no delivered
+ * value and refuses through the branch below.
+ */
+const ADVISORY_STOP: Record<string, { readonly reason: string; readonly report: string } | undefined> =
+  {
+    investigate: {
+      reason: 'the investigation did not establish a safe fix boundary',
+      report: 'investigation.md',
+    },
+    plan: { reason: 'planning left a material decision unresolved', report: 'plan.md' },
+  };
 
 const artifacts = artifactsDir();
-const raw = input('ROUTE');
-const route: Route | undefined = ROUTES.find(candidate => candidate === raw);
-const summary = input('SUMMARY');
-const delivered = input('DELIVERED') || 'null';
+const route = text(process.env.INPUTS_ROUTE);
+const summary = text(process.env.INPUTS_SUMMARY);
+const delivered = text(process.env.INPUTS_DELIVERED) || 'null';
 
-if (route === undefined) {
-  refuse(
-    `outcome: triage declared a route this tail does not handle: '${raw}'.` +
-      caveats(artifacts, { failed: true })
-  );
-} else if (route === 'no_action') {
+if (route === 'no_action') {
   emit({
     delivered: false,
     summary:

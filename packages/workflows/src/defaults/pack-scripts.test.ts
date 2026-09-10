@@ -63,48 +63,55 @@ describe('workflow pack scripts are validated where they live', () => {
   });
 });
 
-describe('the red-cause vocabulary has one owner', () => {
-  /** The vocabulary as the pack's own module exports it, read by executing it. */
-  function declaredVocabulary(): string[] {
+describe('every routed vocabulary has one owner', () => {
+  /** A vocabulary as the pack's own module exports it, read by executing the module. */
+  function exportedVocabulary(name: string): string[] {
     const run = Bun.spawnSync(
       [
         'bun',
         '--no-env-file',
         '-e',
-        `import { RED_CAUSES } from ${JSON.stringify(SHARED_VERDICT)};` +
-          'console.log(JSON.stringify(RED_CAUSES));',
+        `import { ${name} } from ${JSON.stringify(SHARED_VERDICT)};` +
+          `console.log(JSON.stringify(${name}));`,
       ],
       { cwd: REPO_ROOT, stdout: 'pipe', stderr: 'pipe' }
     );
     if (run.exitCode !== 0) {
-      throw new Error(`could not read the shared vocabulary: ${run.stderr.toString().trim()}`);
+      throw new Error(`could not read ${name}: ${run.stderr.toString().trim()}`);
     }
     return JSON.parse(run.stdout.toString()) as string[];
   }
 
-  function redCauseEnum(workflow: string, nodeId: string): unknown {
+  function declaredEnum(workflow: string, nodeId: string, field: string): unknown {
     const parsed = parseWorkflow(BUNDLED_WORKFLOWS[workflow] ?? '', `${workflow}.yaml`);
     if (parsed.workflow === null) throw new Error(parsed.error.error);
     const node = parsed.workflow.nodes.find(candidate => candidate.id === nodeId);
     const properties = (outputFormat(node) as { properties?: Record<string, unknown> } | undefined)
       ?.properties;
-    return (properties?.red_cause as { enum?: unknown } | undefined)?.enum;
+    return (properties?.[field] as { enum?: unknown } | undefined)?.enum;
   }
 
-  // Every script that routes on a red cause imports it from `.shared/verdict.ts`, so
-  // changing the list there changes every consumer without another edit. Two
-  // declarations cannot import: implement's and validate's `red_cause` schemas are
-  // JSON Schema inside YAML, and they are the only thing that constrains what an
-  // agent may declare. This is what keeps them from drifting away from the module —
-  // a cause one side accepts and the other refuses would strand an iteration
-  // between them. The empty string rides along in the schemas because OpenAI strict
-  // mode rejects a schema whose `required` omits a declared property.
+  // Every script that routes on one of these imports it from `.shared/verdict.ts`, so
+  // changing the list there changes every consumer without another edit. The schemas
+  // below cannot import: they are JSON Schema inside YAML, and they are the only thing
+  // constraining what an agent may declare. This is what keeps them from drifting away
+  // from the module — a value one side accepts and the other refuses would strand an
+  // iteration between them. `red_cause` carries the empty string as its absent form,
+  // because OpenAI strict mode rejects a schema whose `required` omits a declared
+  // property; the enum is otherwise exactly the module's.
   it.each([
-    ['archon-implement', 'implement'],
-    ['archon-validate', 'validate'],
-  ])('%s declares exactly the shared vocabulary', (workflow, nodeId) => {
-    expect(redCauseEnum(workflow, nodeId)).toEqual([...declaredVocabulary(), '']);
-  });
+    ['archon-implement', 'implement', 'red_cause', 'RED_CAUSES', ['']],
+    ['archon-validate', 'validate', 'red_cause', 'RED_CAUSES', ['']],
+    ['archon-review', 'synthesize', 'action', 'REVIEW_ACTIONS', []],
+  ] as const)(
+    '%s declares exactly the shared vocabulary for %s.%s',
+    (workflow, nodeId, field, exportName, extra) => {
+      expect(declaredEnum(workflow, nodeId, field)).toEqual([
+        ...exportedVocabulary(exportName),
+        ...extra,
+      ]);
+    }
+  );
 });
 
 describe('advisory verdicts carry the report that backs them', () => {
@@ -126,25 +133,15 @@ describe('advisory verdicts carry the report that backs them', () => {
       | { properties?: Record<string, unknown>; required?: string[] }
       | undefined;
 
+    // The three properties the engine's validator keys on, not the object's identity:
+    // adding a constraint such as `minLength` to `run_id` is a tightening, not a
+    // regression, and should not fail here.
+    const pointer = schema?.properties?.report as
+      | { properties?: Record<string, unknown>; required?: string[] }
+      | undefined;
     expect(schema?.required).toContain('report');
-    expect(schema?.properties?.report).toEqual({
-      type: 'object',
-      properties: {
-        type: { type: 'string', enum: ['archon_artifact'] },
-        run_id: { type: 'string' },
-        path: { type: 'string', enum: [reportFile] },
-      },
-      required: ['type', 'run_id', 'path'],
-    });
-  });
-
-  it('no pack workflow still guards its report with an assert-intact node', () => {
-    for (const [name, source] of Object.entries(BUNDLED_WORKFLOWS)) {
-      if (!name.startsWith('archon-')) continue;
-      expect({ name, guards: source.includes('id: assert-intact') }).toEqual({
-        name,
-        guards: false,
-      });
-    }
+    expect(pointer?.required).toEqual(['type', 'run_id', 'path']);
+    expect(pointer?.properties?.type).toMatchObject({ enum: ['archon_artifact'] });
+    expect(pointer?.properties?.path).toMatchObject({ enum: [reportFile] });
   });
 });

@@ -10,11 +10,11 @@
  * - INPUTS_PR_URL: `$flip-ready.output.pr_url`, certified non-empty at the producer.
  */
 
-import { artifactsDir, emit, refuse, trimmedInput } from '../../.shared/io.ts';
+import { artifactsDir, emit, refuse, trimmed } from '../../.shared/io.ts';
 import { caveats } from '../../.shared/report.ts';
 
 const artifacts = artifactsDir();
-const url = trimmedInput('PR_URL');
+const url = trimmed(process.env.INPUTS_PR_URL);
 
 if (url === '') {
   refuse(

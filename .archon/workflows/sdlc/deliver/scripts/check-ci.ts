@@ -22,10 +22,10 @@
  * while inherited or environment red pauses for explicit operator action. Nothing here
  * retries: a concluded check does not re-run itself.
  *
- * The one in-process wait left: when CI is configured but nothing has started yet,
- * registration gets a single 60 s grace before the maintainer-gated skip is declared —
- * the same grace the polling predecessor gave it. #3155 owns the time BETWEEN probes,
- * not the case where no check has registered to signal anything.
+ * The one in-process wait: when CI is configured but nothing has started yet,
+ * registration gets a single 60 s grace before the maintainer-gated skip is declared.
+ * The durable wait around this probe owns the time BETWEEN probes, which is a
+ * different problem from a check that has not registered to signal anything yet.
  */
 
 import { emit, refuse } from '../../.shared/io.ts';

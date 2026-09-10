@@ -222,6 +222,52 @@ function stubSatisfiesNode(node: DagNode, stub: DryRunStubValue): boolean {
   return true;
 }
 
+/**
+ * An authored stub stands in for a node's real output, so it owes the same contract.
+ *
+ * The generated-scaffold route already validates its placeholder against
+ * `output_format` (`generatedStubFor` throws on a schema it cannot satisfy); this is
+ * that check for a value a fixture wrote by hand, which otherwise reached
+ * `completedOutput` unexamined. Without it a fixture keeps passing while the schema it
+ * stands in for moves, and the suite's green stops meaning the real run would certify.
+ * Throwing here is what the surrounding catch turns into a failed node, so the fixture
+ * reports the schema errors rather than a downstream symptom.
+ */
+function assertAuthoredStubSatisfiesSchema(node: DagNode, stub: DryRunStubValue): void {
+  if (node.output_format === undefined) return;
+  // A string stub stands in for what the node PRINTS, which the engine parses before
+  // it validates; a non-string stub already is the structured value. Parse the first
+  // the way `certifyExecOutput` does, so a fixture may keep writing either form and
+  // both are held to the same contract.
+  let value: unknown = stub;
+  if (typeof stub === 'string') {
+    try {
+      value = JSON.parse(stub);
+    } catch {
+      throw new Error(
+        `Stub for node '${node.id}' declares output_format but is not one JSON document: ` +
+          stub.slice(0, 120)
+      );
+    }
+  }
+  let compileError: string | undefined;
+  const validation = validateStructuredOutput(value, node.output_format, message => {
+    compileError = message;
+  });
+  if (compileError !== undefined) {
+    throw new Error(
+      `Stub for node '${node.id}' cannot be checked: its output_format could not be ` +
+        `compiled (${compileError})`
+    );
+  }
+  if (!validation.valid) {
+    throw new Error(
+      `Stub for node '${node.id}' does not satisfy its output_format: ` +
+        validation.errors.join('; ')
+    );
+  }
+}
+
 function collectsStub(node: DagNode): boolean {
   // `include:` is no longer a DagNode member (#2486) — it never reaches this function.
   return !(
@@ -1235,6 +1281,7 @@ async function simulateNode(
       // whole body then fails the node — so a node added to `toleratedMissingStubs`
       // any earlier would report a gap that never blocked it while that gap is
       // exactly what blocked it, and `checkFixture` would filter the blocker away.
+      if (stub !== undefined) assertAuthoredStubSatisfiesSchema(node, stub);
       const hydrated = completedOutput(node, stub ?? generatedStubFor(node));
       if (tolerated) ctx.toleratedMissingStubs.add(node.id);
       outputs.set(node.id, hydrated);

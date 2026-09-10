@@ -31,13 +31,17 @@ deliver__flip-ready: { pr_url: "https://github.com/example/repo/pull/2" }
 deliver__outcome: { pr_url: "https://github.com/example/repo/pull/2", summary: "https://github.com/example/repo/pull/2" }
 deliver__validate__validate:
   green: true
+  red_cause: ""
   summary: "stub: project gate green"
 deliver__impl__implement:
   done: true
   green: true
+  red_cause: ""
   summary: "stub: fix built per the investigation, checks green"
 deliver__review__mode: '{"continuation":false}'
-deliver__review__scope: "PR diff in scope; head sha stubbed"
+deliver__review__scope:
+  # PR diff in scope; head sha stubbed
+  docs: false
 deliver__review__code: "0 findings"
 deliver__review__seams: "0 findings"
 deliver__review__simplify: "0 findings"

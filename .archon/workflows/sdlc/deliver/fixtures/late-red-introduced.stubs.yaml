@@ -27,7 +27,9 @@ classify:
     docs: "stub: no doc-facing changes"
 resolve-scope: '{"errors":"false"}'
 review__mode: '{"continuation":false}'
-review__scope: "PR diff in scope; head sha stubbed"
+review__scope:
+  # PR diff in scope; head sha stubbed
+  docs: false
 review__code: "0 findings"
 review__seams: "0 findings"
 review__simplify: "0 findings"
@@ -50,7 +52,9 @@ ci-fix__implement:
   summary: "stub: the branch's new test asserted an unsorted order; fixed at the cause and pushed"
 ci-fix__assert-changed: "1 file changed"
 ci-recheck__mode: '{"continuation":true}'
-ci-recheck__scope: "light mode; delta since cursor"
+ci-recheck__scope:
+  # light mode; delta since cursor
+  docs: false
 ci-recheck__synthesize:
   ready: true
   action: none

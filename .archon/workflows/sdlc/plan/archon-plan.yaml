@@ -49,10 +49,11 @@ nodes:
         summary:
           type: string
         report:
-          # The evidence contract, enforced by the engine at this node. A pointer
-          # that names a file this run did not write is refused here, so a verdict
-          # can no longer arrive without the report behind it. Four copies of a
-          # `test -s` node used to check this one hop later.
+          # The evidence contract, enforced by the engine at this node: a pointer at a
+          # file this run's artifacts do not hold is refused before the node completes,
+          # so a verdict cannot arrive without its report. The bar is existence, not
+          # content — a zero-byte report satisfies it, where the node this replaced
+          # also required the file to be non-empty.
           type: object
           properties:
             type: { type: string, enum: [archon_artifact] }

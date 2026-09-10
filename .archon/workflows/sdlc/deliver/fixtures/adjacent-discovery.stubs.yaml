@@ -4,6 +4,7 @@ impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true
+  red_cause: ""
   summary: "stub: implementation preserved one adjacent discovery"
 impl__assert-changed: "2 files changed"
 gate-green: '{"gate":"green"}'
@@ -16,7 +17,9 @@ classify:
     docs: "stub"
 resolve-scope: '{"errors":"false"}'
 review__mode: '{"continuation":false}'
-review__scope: "accepted contract recorded"
+review__scope:
+  # accepted contract recorded
+  docs: false
 review__code: "0 findings; 1 adjacent discovery recorded"
 review__seams: "0 findings"
 review__simplify: "0 findings"
@@ -30,6 +33,7 @@ review-action: '{"ready":true,"action":"none"}'
 gate-ready: '{"ready":"true"}'
 validate__validate:
   green: true
+  red_cause: ""
   summary: "stub: full gate green"
 gate-validated: '{"gate":"green"}'
 ci-probe: '{"state":"concluded","detail":"no checks configured"}'

@@ -1,6 +1,6 @@
 /** Carry a validated late-CI review verdict and its red classification out of the loop. */
 
-import { emit, input, refuse, trimmedInput } from '../../.shared/io.ts';
+import { emit, refuse, text, trimmed } from '../../.shared/io.ts';
 import {
   invalidRedCauseMessage,
   invalidVerdictMessage,
@@ -8,9 +8,9 @@ import {
   parseReviewVerdict,
 } from '../../.shared/verdict.ts';
 
-const ready = input('READY');
-const action = input('ACTION');
-const rawCause = trimmedInput('RED_CAUSE');
+const ready = text(process.env.INPUTS_READY);
+const action = text(process.env.INPUTS_ACTION);
+const rawCause = trimmed(process.env.INPUTS_RED_CAUSE);
 
 const verdict = parseReviewVerdict(ready, action);
 const redCause = parseDeclaredRedCause(rawCause);

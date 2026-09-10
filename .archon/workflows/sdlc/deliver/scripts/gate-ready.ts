@@ -10,12 +10,12 @@
  * the loop's own completion cannot be the gate.
  */
 
-import { input, refuse, report } from '../../.shared/io.ts';
+import { refuse, report, text } from '../../.shared/io.ts';
 
-const reviewReady = input('REVIEW_READY');
-const reviewAction = input('REVIEW_ACTION') || 'null';
-const correctionReady = input('CORRECTION_READY') || 'false';
-const correctionAction = input('CORRECTION_ACTION') || 'null';
+const reviewReady = text(process.env.INPUTS_REVIEW_READY);
+const reviewAction = text(process.env.INPUTS_REVIEW_ACTION) || 'null';
+const correctionReady = text(process.env.INPUTS_CORRECTION_READY) || 'false';
+const correctionAction = text(process.env.INPUTS_CORRECTION_ACTION) || 'null';
 
 const reviewedReady = reviewReady === 'true' && reviewAction === 'none';
 const correctedReady =

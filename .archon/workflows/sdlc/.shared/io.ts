@@ -7,10 +7,16 @@
  * interprets those spellings — what a value means belongs to the script that knows
  * what it is for.
  *
+ * Read every binding as a literal `process.env.INPUTS_<NAME>` at its own call site
+ * and pass the value in. The engine scans each script's source at workflow load and
+ * refuses a workflow whose script reads a binding no `with:` clause or declared
+ * input provides. It matches the literal form only, and it reads the entry script
+ * alone, never its imports — so a helper that composed the key from a name would
+ * hide every read in this pack from that check.
+ *
  * Bun writes UTF-8 with `\n` line endings on every platform, so a terminal report
- * composed here is byte-identical wherever a run happens. The Python predecessors
- * had to pin both by hand at four call sites, because Windows Python wrote stdout
- * in the console code page and rewrote '\n' as '\r\n'.
+ * composed here is byte-identical wherever a run happens. Nothing in this pack needs
+ * to pin either by hand.
  */
 
 /**
@@ -27,33 +33,29 @@ function setFailed(): void {
   process.exitCode = 1;
 }
 
-/** A bound input, or the empty string when the binding is absent. */
-export function input(name: string): string {
-  return process.env[`INPUTS_${name}`] ?? '';
+/** A bound input's value, or the empty string when the binding is absent. */
+export function text(value: string | undefined): string {
+  return value ?? '';
 }
 
-/** A bound input with surrounding whitespace removed. */
-export function trimmedInput(name: string): string {
-  return input(name).trim();
+/** A bound input's value with surrounding whitespace removed. */
+export function trimmed(value: string | undefined): string {
+  return (value ?? '').trim();
 }
 
 /**
- * A variable the engine supplies to every exec node. Its absence is a bug in the
- * engine or in the node's declaration, never a state a script should report on, so
- * this throws rather than substituting a default that would read or write
- * somewhere else.
+ * This run's artifact directory.
+ *
+ * The engine supplies it to every exec node, so its absence is a bug in the engine
+ * or in the node's declaration rather than a state a script should report on. This
+ * throws instead of substituting a default that would read or write somewhere else.
  */
-export function requiredEnv(name: string): string {
-  const value = process.env[name];
+export function artifactsDir(): string {
+  const value = process.env.ARTIFACTS_DIR;
   if (value === undefined || value === '') {
-    throw new Error(`${name} is not set; the engine supplies it to every exec node.`);
+    throw new Error('ARTIFACTS_DIR is not set; the engine supplies it to every exec node.');
   }
   return value;
-}
-
-/** This run's artifact directory. */
-export function artifactsDir(): string {
-  return requiredEnv('ARTIFACTS_DIR');
 }
 
 /**
@@ -68,8 +70,8 @@ export function emit(value: unknown): void {
 }
 
 /** A plain-text result, for a node that declares no schema. */
-export function report(text: string): void {
-  console.log(text);
+export function report(value: string): void {
+  console.log(value);
 }
 
 /**

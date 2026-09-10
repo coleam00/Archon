@@ -10,7 +10,7 @@
  * because it has no operator override to merge over.
  */
 
-import { emit, input, refuse } from '../../.shared/io.ts';
+import { emit, refuse, text } from '../../.shared/io.ts';
 
 type Verdict = 'true' | 'false';
 
@@ -18,8 +18,8 @@ function isVerdict(value: string): value is Verdict {
   return value === 'true' || value === 'false';
 }
 
-const forced = input('ERRORS');
-const judged = input('C_ERRORS');
+const forced = text(process.env.INPUTS_ERRORS);
+const judged = text(process.env.INPUTS_C_ERRORS);
 
 if (isVerdict(forced)) {
   emit({ errors: forced });

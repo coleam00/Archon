@@ -25,7 +25,9 @@ classify:
     docs: "stub: no doc-facing changes"
 resolve-scope: '{"errors":"false"}'
 review__mode: '{"continuation":false}'
-review__scope: "PR diff in scope; head sha stubbed"
+review__scope:
+  # PR diff in scope; head sha stubbed
+  docs: false
 review__code: "0 findings"
 review__seams: "0 findings"
 review__simplify: "0 findings"

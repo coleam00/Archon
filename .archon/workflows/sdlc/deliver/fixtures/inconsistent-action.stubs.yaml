@@ -5,6 +5,7 @@ impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true
+  red_cause: ""
   summary: "stub: implemented and green"
 impl__assert-changed: "1 file changed"
 gate-green: '{"gate":"green"}'
@@ -17,7 +18,9 @@ classify:
     docs: "stub"
 resolve-scope: '{"errors":"false"}'
 review__mode: '{"continuation":false}'
-review__scope: "accepted contract recorded"
+review__scope:
+  # accepted contract recorded
+  docs: false
 review__code: "0 findings"
 review__seams: "0 findings"
 review__simplify: "0 findings"

@@ -59,8 +59,8 @@ Do not implement, modify source files, commit, branch, push, or open or comment 
   {"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "plan.md"}
   ```
 
-  The engine checks the file exists before this node completes, so a verdict
-  never leaves here without the evidence behind it. `run_id` is the value above
-  verbatim, and `path` is relative to `$ARTIFACTS_DIR`.
+  This node is refused if that file does not exist, so write the report before you
+  declare. `run_id` is the value above verbatim, and `path` is relative to
+  `$ARTIFACTS_DIR`.
 
 Before declaring, re-read the plan: confirm every named anchor exists in the current code, every decision has its why, and `git status` matches what you started with.

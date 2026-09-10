@@ -9,6 +9,7 @@ deliver__impl__record-start: '{"start":"recorded"}'
 deliver__impl__implement:
   done: true
   green: false
+  red_cause: ""
   summary: "stub: full validate red on one spec this change does not touch"
 deliver__impl__assert-changed: "2 files changed"
 # deliver__gate-green is deliberately unstubbed: the real gate must refuse.

@@ -35,7 +35,7 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { artifactsDir, refuse, report, trimmedInput } from '../../.shared/io.ts';
+import { artifactsDir, refuse, report, trimmed } from '../../.shared/io.ts';
 import { PASSES_RED, parseDeclaredRedCause, passesRed } from '../../.shared/verdict.ts';
 
 const EXCLUDE = ':(exclude).archon';
@@ -71,9 +71,14 @@ function decide(): Decision {
   // The loop's verdict, bound by the workflow (`with:`): green as canonical boolean
   // text ("true"/"false"), the declared cause of any red, and the summary that carries
   // the evidence for it.
-  const green = trimmedInput('GREEN');
-  const redCause = parseDeclaredRedCause(trimmedInput('RED_CAUSE'));
-  const summary = trimmedInput('SUMMARY');
+  const green = trimmed(process.env.INPUTS_GREEN);
+  // The declared text and the parsed value are both kept: the refusal below names
+  // what the loop actually said, so "declared nothing" and "declared something this
+  // pack does not route on" stay distinguishable to the operator who has to fix one
+  // of them.
+  const declaredCause = trimmed(process.env.INPUTS_RED_CAUSE);
+  const redCause = parseDeclaredRedCause(declaredCause);
+  const summary = trimmed(process.env.INPUTS_SUMMARY);
 
   const tracked = git('diff', '--name-only', 'HEAD', '--', EXCLUDE);
   const untracked = git('ls-files', '--others', '--exclude-standard', '--', EXCLUDE);
@@ -112,7 +117,7 @@ function decide(): Decision {
     refusal:
       'implement produced neither a commit nor a working-tree change outside .archon/, ' +
       'and the branch carries no verified work ahead of the base ' +
-      `(green=${green || 'unknown'}, red_cause=${redCause || 'unknown'}).\n` +
+      `(green=${green || 'unknown'}, red_cause=${declaredCause || 'unknown'}).\n` +
       'Nothing to show is only acceptable on red the change did not cause -- declared ' +
       `${PASSES_RED.join(' or ')}, with the failing check named in the summary. Red the ` +
       'change introduced, red nobody explained, and a cause with no evidence behind it ' +

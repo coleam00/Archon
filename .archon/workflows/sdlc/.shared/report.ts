@@ -3,12 +3,11 @@
  *
  * Two sections, both existing because their channel is otherwise write-only: red a
  * green gate deliberately accepted, and discoveries a run recorded outside its own
- * scope. The engine collects neither — the terminal record assembled at a terminal
- * transition (#3043) is built from the durable event log and is readable only after
- * the run has ended, while these sections have to reach the reader from inside it —
- * so composing them stays pack-owned. What changed is the ownership: the three SDLC
- * tails carried three byte-identical copies of this file, because a packaged script
- * had no import channel to share one through. This is that one copy.
+ * scope. The engine collects neither. The terminal record it assembles is built from
+ * the durable event log when a run reaches a terminal status, and is readable only
+ * after that, while these sections have to reach the reader from inside the run. So
+ * composing them is the pack's, and this module is where all three SDLC tails
+ * compose them.
  *
  * Presentation only. Discoveries and caveats never gate readiness, so nothing here
  * may fail a tail that has already done its irreversible work: an unreadable record

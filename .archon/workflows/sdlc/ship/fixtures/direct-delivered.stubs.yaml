@@ -16,6 +16,7 @@ gate-direct: '{"gate":"direct"}'
 deliver__impl__implement:
   done: true
   green: true
+  red_cause: ""
   summary: "stub: direct work implemented and green"
 deliver__review__synthesize:
   ready: true
@@ -24,6 +25,7 @@ deliver__review__synthesize:
 deliver__review-action: '{"ready":true,"action":"none"}'
 deliver__validate__validate:
   green: true
+  red_cause: ""
   summary: "stub: project gate green"
 ci-probe: '{"state":"concluded","detail":"all checks green"}'
 deliver__classify:
@@ -48,7 +50,9 @@ deliver__flip-ready: { pr_url: "https://github.com/example/repo/pull/4" }
 deliver__outcome: { pr_url: "https://github.com/example/repo/pull/4", summary: "https://github.com/example/repo/pull/4" }
 deliver__pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 4, url: "https://github.com/example/repo/pull/4", head: "fixture-branch", base: "dev", is_draft: true }
 deliver__review__mode: '{"continuation":false}'
-deliver__review__scope: "PR diff in scope; head sha stubbed"
+deliver__review__scope:
+  # PR diff in scope; head sha stubbed
+  docs: false
 deliver__review__code: "0 findings"
 deliver__review__seams: "0 findings"
 deliver__review__simplify: "0 findings"

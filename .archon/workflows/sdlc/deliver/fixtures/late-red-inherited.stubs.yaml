@@ -22,7 +22,9 @@ classify:
     docs: "stub: no doc-facing changes"
 resolve-scope: '{"errors":"false"}'
 review__mode: '{"continuation":false}'
-review__scope: "PR diff in scope; head sha stubbed"
+review__scope:
+  # PR diff in scope; head sha stubbed
+  docs: false
 review__code: "0 findings"
 review__seams: "0 findings"
 review__simplify: "0 findings"
@@ -48,7 +50,9 @@ ci-fix__implement:
   red_cause: inherited
   summary: "stub: e2e-smoke is red at the run's starting commit on a surface this diff never touches; no edit to make"
 ci-recheck__mode: '{"continuation":true}'
-ci-recheck__scope: "light mode; zero delta"
+ci-recheck__scope:
+  # light mode; zero delta
+  docs: false
 ci-recheck__synthesize:
   ready: true
   action: none

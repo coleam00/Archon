@@ -36,7 +36,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { artifactsDir, note, refuse, report, trimmedInput } from '../../.shared/io.ts';
+import { artifactsDir, note, refuse, report, trimmed } from '../../.shared/io.ts';
 import { RED_CAUSES, parseDeclaredRedCause, passesRed } from '../../.shared/verdict.ts';
 
 /**
@@ -63,10 +63,10 @@ function recordRedCause(artifacts: string, cause: string, stage: string, summary
 }
 
 const artifacts = artifactsDir();
-const green = trimmedInput('GREEN');
-const rawCause = trimmedInput('RED_CAUSE');
-const summary = trimmedInput('SUMMARY');
-const stage = trimmedInput('STAGE') || 'The work';
+const green = trimmed(process.env.INPUTS_GREEN);
+const rawCause = trimmed(process.env.INPUTS_RED_CAUSE);
+const summary = trimmed(process.env.INPUTS_SUMMARY);
+const stage = trimmed(process.env.INPUTS_STAGE) || 'The work';
 
 const cause = parseDeclaredRedCause(rawCause);
 

@@ -11,6 +11,7 @@ deliver__impl__record-start: '{"start":"recorded"}'
 deliver__impl__implement:
   done: true
   green: true
+  red_cause: ""
   summary: "stub: direct work implemented and green"
 deliver__impl__assert-changed: "2 files changed"
 deliver__gate-green: '{"gate":"green"}'
@@ -23,7 +24,9 @@ deliver__classify:
     docs: "stub: no doc-facing changes"
 deliver__resolve-scope: '{"errors":"false"}'
 deliver__review__mode: '{"continuation":false}'
-deliver__review__scope: "PR diff in scope; head sha stubbed"
+deliver__review__scope:
+  # PR diff in scope; head sha stubbed
+  docs: false
 deliver__review__code: "0 findings"
 deliver__review__seams: "0 findings"
 deliver__review__simplify: "0 findings"

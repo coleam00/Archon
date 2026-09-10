@@ -5,6 +5,7 @@ impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true
+  red_cause: ""
   summary: "stub: implemented inside the accepted contract"
 impl__assert-changed: "2 files changed"
 gate-green: '{"gate":"green"}'
@@ -17,7 +18,9 @@ classify:
     docs: "stub: no docs changes"
 resolve-scope: '{"errors":"false"}'
 review__mode: '{"continuation":false}'
-review__scope: "accepted contract and scope conflict recorded"
+review__scope:
+  # accepted contract and scope conflict recorded
+  docs: false
 review__code: "1 Important scope conflict"
 review__seams: "0 findings"
 review__simplify: "0 findings"

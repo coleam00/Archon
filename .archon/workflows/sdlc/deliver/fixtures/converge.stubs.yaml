@@ -10,12 +10,15 @@ impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true
+  red_cause: ""
   summary: "stub: implemented and green"
 impl__assert-changed: "3 files changed"
 gate-green: '{"gate":"green"}'
 pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true }
 review__mode: '{"continuation":false}'
-review__scope: "PR diff in scope; head sha stubbed"
+review__scope:
+  # PR diff in scope; head sha stubbed
+  docs: false
 review__code: "2 findings (Important)"
 review__seams: "0 findings"
 review__simplify: "0 findings"
@@ -30,11 +33,14 @@ fix__record-start: '{"start":"recorded"}'
 fix__implement:
   done: true
   green: true
+  red_cause: ""
   summary: "stub: findings fixed, pushed"
 fix__assert-changed: "2 files changed"
 gate-correction-green: '{"gate":"green"}'
 recheck__mode: '{"continuation":true}'
-recheck__scope: "light mode; delta since cursor"
+recheck__scope:
+  # light mode; delta since cursor
+  docs: false
 # No recheck specialist stubs: continuation mode must skip the fan-out and let
 # the deciding agent review the prior report and correction delta itself.
 recheck__synthesize:
@@ -46,6 +52,7 @@ recheck__synthesize:
 sync-pr-body: "body resynced: corrected the claims the correction round falsified"
 validate__validate:
   green: true
+  red_cause: ""
   summary: "stub: full gate green"
 gate-validated: '{"gate":"green"}'
 ci-probe: '{"state":"concluded","detail":"all 2 check(s) green"}'
