@@ -1019,12 +1019,12 @@ describe('bundled-defaults', () => {
         const workflow = parsed.workflow;
         if (workflow === null) continue;
 
-        // Coverage mirrors the resolver, not the doc comments:
+        // Coverage mirrors the resolver:
         //  - a node's own `model:` always wins;
         //  - a workflow's `model:` reaches a node only when the node resolves to the
         //    workflow's own provider (include-expander's `workflowModelTravelsTo`);
-        //  - a `loop_group`'s own `model:` covers nothing — the executor forwards only
-        //    its resolved provider into the body context, never its model.
+        //  - a `loop_group`'s own `model:` covers its body, which the executor forwards
+        //    alongside its provider into the per-iteration context.
         const covered = (node: PackNode | LoopGroupBodyNode): boolean => {
           if ('model' in node && node.model !== undefined) return true;
           if (workflow.model === undefined) return false;
@@ -1032,18 +1032,25 @@ describe('bundled-defaults', () => {
           return nodeProvider === undefined || nodeProvider === workflow.provider;
         };
 
-        const visit = (nodes: readonly (PackNode | LoopGroupBodyNode)[], trail: string): void => {
+        const visit = (
+          nodes: readonly (PackNode | LoopGroupBodyNode)[],
+          trail: string,
+          inherited: boolean
+        ): void => {
           for (const node of nodes) {
             const id = `${trail}${node.id}`;
+            const nodeCovered = inherited || covered(node);
             // `agent` and `loop` both invoke a provider. `loop_group` runs none
-            // itself; its body holds the work, so descend into it.
-            if ((node.kind === 'agent' || node.kind === 'loop') && !covered(node)) {
+            // itself; its body holds the work, and it forwards its own model there.
+            if ((node.kind === 'agent' || node.kind === 'loop') && !nodeCovered) {
               uncovered.push(`${name}:${id}`);
             }
-            if (node.kind === 'loop_group') visit(node.loop_group.nodes, `${id}/`);
+            if (node.kind === 'loop_group') {
+              visit(node.loop_group.nodes, `${id}/`, nodeCovered);
+            }
           }
         };
-        visit(workflow.nodes, '');
+        visit(workflow.nodes, '', false);
       }
 
       expect(uncovered).toEqual([]);

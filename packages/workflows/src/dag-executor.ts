@@ -4660,6 +4660,7 @@ async function executeLoopGroupNode(
   ctx: RunLayersContext,
   node: LoopGroupNode,
   workflowProvider: string,
+  workflowModel: string | undefined,
   stepNamePrefix = ''
 ): Promise<NodeExecutionResult> {
   const {
@@ -5111,9 +5112,12 @@ async function executeLoopGroupNode(
       workflowSourceRoots: ctx.workflowSourceRoots,
       config: ctx.config,
       workflowProvider,
-      // Forward inherited workflow-level model/tier/options/profile so body AI nodes
-      // resolve model aliases and workflow defaults the same way top-level nodes do.
-      workflowModel: ctx.workflowModel,
+      // The group's own resolved provider and model become the body's defaults, the
+      // pair the schema documents. `workflowModel` already carries the group's model
+      // when it declared one and the enclosing workflow's otherwise, so body AI nodes
+      // resolve aliases and defaults the same way top-level nodes do, and a per-node
+      // `model:` in the body still wins over both.
+      workflowModel,
       workflowLevelOptions: ctx.workflowLevelOptions,
       aiProfile: ctx.aiProfile,
       workflowPreset: ctx.workflowPreset,
@@ -10388,30 +10392,32 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 // Loop-group node dispatch — manages its own subgraph iteration
                 // (body is a sealed sub-DAG re-executed per iteration; the loop is
                 // encapsulated inside this one node, keeping the outer DAG acyclic).
-                // Resolve provider for the group (group-level provider/model overrides are
-                // forwarded to body AI nodes; the group itself never calls sendQuery, so
-                // the resolved SendQueryOptions are not needed here).
-                const { provider: loopGroupProvider } = await resolveNodeProviderAndModel(
-                  node,
-                  ctx.workflowProvider,
-                  ctx.workflowModel,
-                  ctx.config,
-                  ctx.platform,
-                  ctx.conversationId,
-                  ctx.workflowRun.id,
-                  ctx.cwd,
-                  ctx.workflowLevelOptions,
-                  ctx.aiProfile,
-                  ctx.workflowPreset,
-                  resolveAiConfigText,
-                  ctx.warnedProviderConflicts,
-                  ctx.execContext
-                );
+                // Resolve provider and model for the group: both are forwarded to body
+                // AI nodes as their defaults. The group itself never calls sendQuery, so
+                // the resolved SendQueryOptions are not needed here.
+                const { provider: loopGroupProvider, model: loopGroupModel } =
+                  await resolveNodeProviderAndModel(
+                    node,
+                    ctx.workflowProvider,
+                    ctx.workflowModel,
+                    ctx.config,
+                    ctx.platform,
+                    ctx.conversationId,
+                    ctx.workflowRun.id,
+                    ctx.cwd,
+                    ctx.workflowLevelOptions,
+                    ctx.aiProfile,
+                    ctx.workflowPreset,
+                    resolveAiConfigText,
+                    ctx.warnedProviderConflicts,
+                    ctx.execContext
+                  );
 
                 const output = await executeLoopGroupNode(
                   ctx,
                   node,
                   loopGroupProvider,
+                  loopGroupModel,
                   ctx.stepNamePrefix
                 );
                 if (output.state === 'failed') {
