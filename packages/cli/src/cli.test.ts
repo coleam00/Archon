@@ -11,7 +11,7 @@ import { cliArgOptions } from './args';
 import * as git from '@archon/git';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -26,56 +26,6 @@ const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
 // The enclosing git worktree — a valid repo for the git gate, with a real
 // .archon/workflows/ directory so an unknown workflow name fails deterministically.
 const repoRoot = join(import.meta.dir, '..', '..', '..');
-
-type BuildMetafile = NonNullable<Bun.BuildOutput['metafile']>;
-
-function staticallyReachableInputs(metafile: BuildMetafile, start: string): string[] {
-  const pending = [start];
-  const visited = new Set<string>();
-  const inputs = new Set<string>();
-
-  while (pending.length > 0) {
-    const outputPath = pending.pop();
-    if (outputPath === undefined || visited.has(outputPath)) continue;
-    visited.add(outputPath);
-
-    const output = metafile.outputs[outputPath];
-    if (!output) throw new Error(`Build metafile references missing output '${outputPath}'.`);
-    for (const input of Object.keys(output.inputs)) inputs.add(input);
-    for (const imported of output.imports) {
-      if (imported.kind !== 'dynamic-import') pending.push(imported.path);
-    }
-  }
-
-  return [...inputs].sort();
-}
-
-function repositoryInput(path: string): string | undefined {
-  const normalized = path.replaceAll('\\', '/');
-  const packagesIndex = normalized.indexOf('packages/');
-  return packagesIndex === -1 ? undefined : normalized.slice(packagesIndex);
-}
-
-function buildImportGraph(entry: string, outdir: string): BuildMetafile {
-  const metafilePath = join(outdir, 'metafile.json');
-  const result = spawnSync(
-    process.execPath,
-    [
-      'build',
-      entry,
-      '--target=bun',
-      '--format=esm',
-      '--splitting',
-      `--outdir=${outdir}`,
-      `--metafile=${metafilePath}`,
-    ],
-    { cwd: repoRoot, encoding: 'utf8', timeout: 20000 }
-  );
-  if (result.status !== 0) {
-    throw new Error(`Import graph build failed for ${entry}:\n${result.stdout}\n${result.stderr}`);
-  }
-  return JSON.parse(readFileSync(metafilePath, 'utf8')) as BuildMetafile;
-}
 
 describe('removed continue command', () => {
   // Full interpreter startup: the rejection lives in main()'s dispatch, not in
