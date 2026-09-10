@@ -265,7 +265,16 @@ function startWait(fixture: Fixture, runId: string, timeoutSeconds: number): Pen
   };
 }
 
-/** Launch a detached run and return the id its ack carried (#2872). */
+/**
+ * Launch a detached run and return the id its ack carried (#2872).
+ *
+ * The process spawned here is the launcher, not the run's owner: it forks the owner
+ * into its own process group, waits a fixed startup window, acks, and exits 0. A
+ * caller therefore gets a run id and no owner handle, which is why the boot waits on
+ * these runs pass no `owner` — see `waitForRunBoot`. The one failure this does cover
+ * is a child that dies inside that startup window: the launcher exits non-zero and
+ * the throw below carries its output.
+ */
 async function launchDetached(
   fixture: Fixture,
   workflow: string
@@ -398,26 +407,25 @@ async function waitFor<T>(
  * for the fixture to exist so the contract can begin; the contract's own deadline is
  * the `--timeout` handed to `startWait`, which none of this moves. #2924's standing
  * rule against fixing a Windows failure with a budget bump is intact — the `}, N)`
- * budgets below are untouched, and the 120 s ones were never what expired.
+ * budgets below are untouched, and they were never what expired.
  *
- * 30 s was the old value and it was too small. On Windows CI this poll ran its full
- * 30 s and gave up reporting `no such table: remote_agent_workflow_runs` — the
- * launcher had created `archon.db` and not yet applied the schema (#3288). The boot it
- * was waiting on measures 360–464 ms locally. Sibling cases in the same file passed on
- * that same runner at 8.2 s and 41.4 s, against ~16 s for all ten of them locally, and
- * the amplification measured elsewhere in this repository is ~34x (676 ms on the runner
- * against ~20 ms locally, #2924). So 90 s is roughly 195x the local sample and an order
- * of magnitude past anything that runner has been seen doing healthily: a boot that
- * misses it is not slow, it is stuck.
+ * 30 s was the old value and it was too small: on Windows CI this poll spent all of it
+ * and gave up reporting `no such table: remote_agent_workflow_runs`, so the launcher
+ * had created `archon.db` and had not yet applied the schema (#3288).
  *
- * Do not read this as "the launcher was alive and slow". That sample predates the
- * owner-exit guard in `waitFor`, so it could not tell a slow launcher from a dead one.
- * The guard now fails fast with the launcher's streams, which is what makes a raise
- * safe: a launcher that dies reports itself instead of spending the deadline.
+ * The value has to clear the boots that runner completes when it is healthy by enough
+ * that missing it means stuck rather than slow, and stay under the `}, N)` budgets so a
+ * stall surfaces as `Timed out waiting for …` carrying what the wait knows, rather than
+ * as Bun cutting the test off with nothing to read. #3288 holds the boot times it was
+ * picked against. Those are one reading of one runner, and the margin over the slowest
+ * healthy sample in that reading is real but not generous — which is what the `[boot]`
+ * line below is for: the next Windows run reports a number instead of leaving the next
+ * person to infer one.
  *
- * It stays well under the 120 s budgets on purpose. A stall has to surface as
- * `Timed out waiting for …` carrying the launcher's streams, not as Bun cutting the
- * test off with nothing to read.
+ * Do not read the original failure as "the launcher was alive and slow". That sample
+ * predates the owner-exit guard in `waitFor`, so it could not tell a slow launcher from
+ * a dead one. A boot that has an owner now fails fast with the launcher's streams
+ * instead of spending this deadline; a detached boot has none — see `waitForRunBoot`.
  */
 const RUN_BOOT_DEADLINE_MS = 90_000;
 
@@ -429,6 +437,17 @@ const RUN_BOOT_DEADLINE_MS = 90_000;
  * toward the ceiling should be a number climbing in the CI transcript, visible before
  * it fails again. One line per boot, and none on the failure path — `waitFor` already
  * reports that one.
+ *
+ * `owner` is optional because only some boots have one to offer. A run launched in the
+ * foreground of another process is this process's child, so `waitFor` sees it die and
+ * fails in milliseconds carrying its streams. A detached run hands back no such handle
+ * (`launchDetached`), and the alternatives are worse than the gap: the launcher exits 0
+ * by design, so passing it would fail every healthy boot that needs a second poll; the
+ * owner's pid is only ever the reply to a `stop` frame, which takes a termination lease
+ * against the run under test; and its control endpoint opens after isolation setup, so
+ * for most of a boot "unreachable" means "not yet", not "dead". A detached owner that
+ * dies after its ack therefore spends this deadline and reports the plain timeout —
+ * slower, never a false pass.
  */
 async function waitForRunBoot<T>(
   what: string,
