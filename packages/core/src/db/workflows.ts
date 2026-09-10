@@ -38,7 +38,7 @@ import type {
   WorkflowWaitPause,
   NodeStateEventInput,
 } from '@archon/workflows/store';
-import { FAN_OUT_CANCEL_REASONS } from '@archon/workflows/store';
+import { FAN_OUT_CANCEL_REASONS, waitCompletionEvents } from '@archon/workflows/store';
 
 /** Best-effort ROLLBACK — log but swallow errors since we're already in an error path. */
 function rollback(): Promise<void> {
@@ -1547,25 +1547,10 @@ export async function clearWorkflowWaitContext(
         [id, waitContext.nodeId, cursor]
       );
       if ((result.rowCount ?? 0) === 0) return { cleared: false };
-      await insertWorkflowEvent(query, {
-        workflow_run_id: id,
-        event_type: completion.result.status === 'expired' ? 'wait_expired' : 'wait_completed',
-        step_name: completion.stepName,
-        data: completion.result,
-      });
-      const nodeEvent: NodeStateEventInput = {
-        workflow_run_id: id,
-        event_type: 'node_completed',
-        step_name: completion.stepName,
-        data: {
-          type: 'wait',
-          duration_ms: completion.result.waited_ms,
-          node_output: JSON.stringify(completion.result),
-          structured_output: completion.result,
-        },
-      };
-      await insertWorkflowEvent(query, nodeEvent);
-      return { cleared: true, nodeEvent };
+      const rows = waitCompletionEvents(id, completion);
+      await insertWorkflowEvent(query, rows.outcome);
+      await insertWorkflowEvent(query, rows.node);
+      return { cleared: true, nodeEvent: rows.node };
     });
   } catch (error) {
     const err = error as Error;

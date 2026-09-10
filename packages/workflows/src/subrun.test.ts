@@ -164,7 +164,8 @@ import { captureWorkflowSource, resolveRunSourceCapture } from './workflow-sourc
 import { discoverWorkflows } from './workflow-discovery';
 import { validateWorkflowResources } from './validator';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
-import type { IWorkflowStore, NodeStateEventInput } from './store';
+import type { IWorkflowStore } from './store';
+import { waitCompletionEvents } from './store';
 import type { WorkflowRun, WorkflowWaitContext } from './schemas/workflow-run';
 import type { ResolvedWorkflow } from './schemas/workflow';
 import type { WorkflowRunConfigMetadata } from './schemas/run-config';
@@ -397,25 +398,9 @@ class InMemoryStore implements IWorkflowStore {
       r.metadata = metadata;
       // Mirror the real store: both rows land in the same transaction as the cursor
       // clear, and the node row is handed back so the caller derives its sinks from it.
-      this.events.push({
-        workflow_run_id: id,
-        event_type: completion.result.status === 'expired' ? 'wait_expired' : 'wait_completed',
-        step_name: completion.stepName,
-        data: completion.result,
-      });
-      const nodeEvent: NodeStateEventInput = {
-        workflow_run_id: id,
-        event_type: 'node_completed',
-        step_name: completion.stepName,
-        data: {
-          type: 'wait',
-          duration_ms: completion.result.waited_ms,
-          node_output: JSON.stringify(completion.result),
-          structured_output: completion.result,
-        },
-      };
-      this.events.push(nodeEvent);
-      return Promise.resolve({ cleared: true, nodeEvent });
+      const rows = waitCompletionEvents(id, completion);
+      this.events.push(rows.outcome, rows.node);
+      return Promise.resolve({ cleared: true, nodeEvent: rows.node });
     }
     return Promise.resolve({ cleared: false });
   };

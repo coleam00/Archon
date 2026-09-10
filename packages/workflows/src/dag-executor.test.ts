@@ -145,6 +145,7 @@ import {
 import { OutputRefError } from './output-ref';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore, PersistedNodeOutput } from './store';
+import { waitCompletionEvents } from './store';
 import {
   buildInstanceSnapshots,
   composeFanOutScopeSegment,
@@ -247,12 +248,7 @@ function createMockStore(): MockWorkflowStore {
     clearWorkflowWaitContext: mock<IWorkflowStore['clearWorkflowWaitContext']>(
       async (id, _waitContext, completion) => ({
         cleared: true,
-        nodeEvent: {
-          workflow_run_id: id,
-          event_type: 'node_completed',
-          step_name: completion.stepName,
-          data: { type: 'wait', duration_ms: completion.result.waited_ms },
-        },
+        nodeEvent: waitCompletionEvents(id, completion).node,
       })
     ),
     rewriteApprovalContext: mock<IWorkflowStore['rewriteApprovalContext']>(
