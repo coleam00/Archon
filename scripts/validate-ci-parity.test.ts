@@ -60,13 +60,17 @@ interface WorkflowCommand {
 
 /** Workflows that gate a pull request. `pull_request_target` is deliberately not one. */
 function pullRequestWorkflows(): { name: string; content: string }[] {
-  return readdirSync(WORKFLOW_DIR)
-    .filter(name => name.endsWith('.yml'))
-    .map(name => ({
-      name,
-      content: readFileSync(resolve(WORKFLOW_DIR, name), 'utf8').replace(/\r\n/g, '\n'),
-    }))
-    .filter(({ content }) => /^ {2}pull_request:\s*$/m.test(content));
+  return (
+    readdirSync(WORKFLOW_DIR)
+      .filter(name => name.endsWith('.yml'))
+      .map(name => ({
+        name,
+        content: readFileSync(resolve(WORKFLOW_DIR, name), 'utf8').replace(/\r\n/g, '\n'),
+      }))
+      // Matches the block form these workflows use and an inline `pull_request: {…}` alike, so a
+      // future workflow cannot slip past this test by writing its trigger in flow style.
+      .filter(({ content }) => /^ {2}pull_request(?![_A-Za-z])/m.test(content))
+  );
 }
 
 /** Every `run:` step body, inline or block scalar. */
