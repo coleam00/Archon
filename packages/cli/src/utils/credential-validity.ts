@@ -268,8 +268,12 @@ export function collectWorkflowRequiredProviders(
     }
 
     if (provider === 'pi') {
-      if (!model && config?.assistants?.pi?.model) {
-        model = config.assistants.pi.model;
+      // `assistants.pi` resolves through ProviderDefaultsMap's generic index, whose
+      // values are `unknown` — narrow it the same way node/workflow model is narrowed
+      // above rather than trusting the index.
+      const piDefaultModel = config?.assistants?.pi?.model;
+      if (!model && typeof piDefaultModel === 'string') {
+        model = piDefaultModel;
       }
       if (model) {
         const parsed = parsePiModelRef(model);
