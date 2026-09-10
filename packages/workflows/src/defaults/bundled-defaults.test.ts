@@ -585,7 +585,7 @@ describe('bundled-defaults', () => {
     // (archon-pr-review-scope etc.) view explicit PR numbers supplied as
     // workflow input — pinning those is a separate concern.
 
-    // Join backslash-continued shell lines so multi-line `gh pr create \`
+    // Join backslash-continued shell lines so multi-line `gh pr create `
     // blocks are checked as a single command.
     const mergeContinuations = (content: string): string[] => {
       const merged: string[] = [];
@@ -992,5 +992,59 @@ describe('bundled-defaults', () => {
         }
       }
     );
+  });
+
+  // Every AI node in the SDLC pack must resolve a tier. A node that names none,
+  // in a workflow that names none either, falls through to the install's default
+  // assistant — so a run pinned to one provider silently executes that node on
+  // another and spends its quota. Which tier a node names is an ordinary
+  // authoring choice and changes freely; that it resolves one at all is the
+  // invariant this protects.
+  // Derived from parseWorkflow rather than restated: a hand-written copy of the
+  // node union would drift the moment a node kind is added.
+  type PackNode = NonNullable<ReturnType<typeof parseWorkflow>['workflow']>['nodes'][number];
+  type LoopGroupBodyNode = Extract<PackNode, { kind: 'loop_group' }>['loop_group']['nodes'][number];
+
+  describe('sdlc pack tier coverage', () => {
+    it('resolves a tier for every AI node', () => {
+      const uncovered: string[] = [];
+
+      for (const [name, owner] of Object.entries(BUNDLED_WORKFLOW_OWNERS)) {
+        if (owner?.pack !== 'sdlc') continue;
+        const source = BUNDLED_WORKFLOWS[name];
+        if (source === undefined) continue;
+
+        const parsed = parseWorkflow(source, name);
+        const workflow = parsed.workflow;
+        expect(parsed.error).toBeNull();
+        if (workflow === null) continue;
+
+        // A workflow-level model covers every node under it, so only workflows
+        // without one can leave a node uncovered.
+        if (workflow.model !== undefined) continue;
+
+        // A loop_group forwards its own model/provider to body AI nodes, so a body
+        // node is covered by any enclosing declaration as well as its own.
+        const visit = (
+          nodes: readonly (PackNode | LoopGroupBodyNode)[],
+          trail: string,
+          inherited: boolean
+        ): void => {
+          for (const node of nodes) {
+            const id = `${trail}${node.id}`;
+            const covered = inherited || ('model' in node && node.model !== undefined);
+            // `agent` and `loop` both invoke a provider. `loop_group` runs none
+            // itself; its body holds the work, so descend with what it forwards.
+            if ((node.kind === 'agent' || node.kind === 'loop') && !covered) {
+              uncovered.push(`${name}:${id}`);
+            }
+            if (node.kind === 'loop_group') visit(node.loop_group.nodes, `${id}/`, covered);
+          }
+        };
+        visit(workflow.nodes, '', false);
+      }
+
+      expect(uncovered).toEqual([]);
+    });
   });
 });
