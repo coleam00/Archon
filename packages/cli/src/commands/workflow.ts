@@ -847,15 +847,91 @@ async function assertCliWorkflowRequirementsMet(
   assertWorkflowRequirementsMet(workflow, { githubConnected });
 }
 
-async function resolveCliDryRunAiPrefs(): Promise<Awaited<ReturnType<typeof getUserAiPrefs>>> {
+async function resolveCliUserAiPrefs(): Promise<Awaited<ReturnType<typeof getUserAiPrefs>>> {
   const cliId = resolveCliUserId();
   if (!cliId) return {};
   try {
     const cliUser = await userDb.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
     return await getUserAiPrefs(cliUser.id);
   } catch (error) {
-    getLog().warn({ err: error as Error, cliId }, 'cli.dry_run_user_ai_prefs_resolve_failed');
+    getLog().warn({ err: error as Error, cliId }, 'cli.user_ai_prefs_resolve_failed');
     return {};
+  }
+}
+
+/**
+ * The install's effective config and AI profile for this invocation, layered exactly as
+ * `executeWorkflow` layers them: file config, then the `--config` / detached run-config
+ * layer, then the CLI user's saved preferences. `--model` assignments are NOT applied
+ * here — they can fail validation, and each caller owns what that failure means.
+ *
+ * Both pre-execution readers of a workflow's provider/model — the `--dry-run` report and
+ * the credential pre-flight gate — resolve through this, so neither can name a tier,
+ * alias or provider the run itself would not use.
+ *
+ * `loadConfig` is deliberately NOT wrapped in a catch: it returns defaults when there is
+ * no config file, so a throw means a malformed or unreadable one, and resolving against
+ * fabricated defaults would answer confidently about a run that cannot happen.
+ */
+async function resolveCliModelContext(
+  cwd: string,
+  runConfig: { layer: NonNullable<Parameters<typeof applyWorkflowRunConfigLayer>[1]> } | undefined
+): Promise<{
+  config: ReturnType<typeof applyWorkflowRunConfigLayer>;
+  baseProfile: ResolvedAiProfile;
+}> {
+  const fileConfig = await loadConfig(cwd);
+  const config = applyWorkflowRunConfigLayer(fileConfig, runConfig?.layer);
+  const userPrefs = await resolveCliUserAiPrefs();
+  let defaultProvider =
+    runConfig?.layer.assistant ?? userPrefs.defaultProvider ?? fileConfig.assistant;
+  let profileOptions: BuildAiProfileOptions = {
+    repoTiers: fileConfig.tiers,
+    repoAliases: fileConfig.aliases,
+    userTiers: userPrefs.tiers,
+    userAliases: userPrefs.aliases,
+    runTiers: runConfig?.layer.tiers,
+    runAliases: runConfig?.layer.aliases,
+  };
+  let baseProfile: ResolvedAiProfile;
+  try {
+    baseProfile = buildAiProfile(defaultProvider, profileOptions);
+  } catch (error) {
+    // A corrupt saved user tier/alias must not take the invocation down: drop that one
+    // layer, keep the repo and run layers, and say which layer was dropped.
+    getLog().error({ err: error as Error }, 'cli.user_ai_prefs_profile_invalid');
+    defaultProvider = runConfig?.layer.assistant ?? fileConfig.assistant;
+    profileOptions = {
+      repoTiers: fileConfig.tiers,
+      repoAliases: fileConfig.aliases,
+      runTiers: runConfig?.layer.tiers,
+      runAliases: runConfig?.layer.aliases,
+    };
+    baseProfile = buildAiProfile(defaultProvider, profileOptions);
+  }
+  return { config, baseProfile };
+}
+
+/**
+ * The profile the credential pre-flight resolves against. `--model` bindings are applied
+ * when they resolve, because they can move a node onto another vendor's key; when they do
+ * not resolve the gate keeps the base profile and stays quiet. Validating those flags
+ * belongs to `executeWorkflow`, which owns the error and the run row it has to fail —
+ * re-raising here would turn a mistyped flag into a credential failure.
+ */
+function preflightAiProfile(
+  baseProfile: ResolvedAiProfile,
+  modelOverrides: ReturnType<typeof parseRunModelAssignments> | undefined
+): ResolvedAiProfile {
+  if (!modelOverrides) return baseProfile;
+  try {
+    return applyResolvedRunModelOverrides(
+      baseProfile,
+      resolveRunModelOverrides(baseProfile, modelOverrides)
+    );
+  } catch (error) {
+    getLog().debug({ err: error as Error }, 'cli.preflight_model_overrides_unresolved');
+    return baseProfile;
   }
 }
 
@@ -1860,44 +1936,13 @@ async function runWorkflowWithOwnedSource(
       return;
     }
     const stubs = await loadDryRunStubs(stubsPath);
-    // The install's config + AI profile are what make the per-node provider/model report
-    // match a real run — tier keywords and `@alias` refs resolve through the same profile
-    // the executor builds.
-    //
-    // NOT wrapped in a catch: `loadConfig` returns defaults when there is no config file,
-    // so a throw means a malformed or unreadable one. Reporting against fabricated
-    // defaults would hand the user a clean-looking trace of a run that cannot happen —
-    // the same fail-fast reasoning the container-policy load below spells out.
     // The target workspace, never the authoring root: `--exec-code` runs real bash and
     // script nodes, and running them in the checkout the workflow was merely READ from
     // would mutate the author's tree instead of the one they aimed the dry run at.
-    const dryRunFileConfig = await loadConfig(cwd);
-    const dryRunConfig = applyWorkflowRunConfigLayer(dryRunFileConfig, runConfig?.layer);
-    const dryRunUserPrefs = await resolveCliDryRunAiPrefs();
-    let dryRunDefaultProvider =
-      runConfig?.layer.assistant ?? dryRunUserPrefs.defaultProvider ?? dryRunFileConfig.assistant;
-    let dryRunProfileOptions: BuildAiProfileOptions = {
-      repoTiers: dryRunFileConfig.tiers,
-      repoAliases: dryRunFileConfig.aliases,
-      userTiers: dryRunUserPrefs.tiers,
-      userAliases: dryRunUserPrefs.aliases,
-      runTiers: runConfig?.layer.tiers,
-      runAliases: runConfig?.layer.aliases,
-    };
-    let dryRunBaseProfile: ResolvedAiProfile;
-    try {
-      dryRunBaseProfile = buildAiProfile(dryRunDefaultProvider, dryRunProfileOptions);
-    } catch (error) {
-      getLog().error({ err: error as Error }, 'cli.dry_run_user_ai_prefs_profile_invalid');
-      dryRunDefaultProvider = runConfig?.layer.assistant ?? dryRunFileConfig.assistant;
-      dryRunProfileOptions = {
-        repoTiers: dryRunFileConfig.tiers,
-        repoAliases: dryRunFileConfig.aliases,
-        runTiers: runConfig?.layer.tiers,
-        runAliases: runConfig?.layer.aliases,
-      };
-      dryRunBaseProfile = buildAiProfile(dryRunDefaultProvider, dryRunProfileOptions);
-    }
+    const { config: dryRunConfig, baseProfile: dryRunBaseProfile } = await resolveCliModelContext(
+      cwd,
+      runConfig
+    );
     const dryRunModelOverrides = resolveRunModelOverrides(dryRunBaseProfile, modelOverrides);
     const result = await dryRunWorkflow({
       workflow,
@@ -2081,9 +2126,15 @@ async function runWorkflowWithOwnedSource(
 
   // Credential pre-flight gate (#3274): hard-fail before the --detach fork
   // and before any worktree/clone/AI cost if a provider required by this workflow
-  // has an unusable or expired credential. Scoped strictly to the providers
-  // the workflow actually needs (#3273).
-  await assertWorkflowCredentialsValid(workflow, { cwd });
+  // has an unusable or unverifiable credential. Scoped strictly to the providers
+  // the workflow actually needs (#3273) — which is why it resolves through the same
+  // config + AI profile the run will use, rather than a bare default: a node
+  // authored with a tier or `@alias` otherwise gets gated on the wrong vendor's key.
+  const runModelContext = await resolveCliModelContext(cwd, runConfig);
+  await assertWorkflowCredentialsValid(workflow, {
+    config: runModelContext.config,
+    aiProfile: preflightAiProfile(runModelContext.baseProfile, modelOverrides),
+  });
 
   // --detach: hand the whole run to a detached background child and return now.
   // Done AFTER workflow resolution + flag validation above (so unknown-workflow /
@@ -2923,20 +2974,16 @@ async function runWorkflowWithOwnedSource(
 
   // Auto-generate title for CLI workflow conversations (fire-and-forget)
   void (async (): Promise<void> => {
-    let workflowConfig: Awaited<ReturnType<typeof loadConfig>> | undefined;
-    try {
-      workflowConfig = await loadConfig(cwd);
-    } catch (error) {
-      getLog().warn({ err: error as Error, cwd }, 'workflow.title_config_load_failed');
-    }
-
+    // The config this run already resolved, not a second load: the title should name the
+    // assistant the run is using, including any run-config layer.
+    const workflowConfig = runModelContext.config;
     try {
       const titleAssistantType = resolveTitleAssistantType(
         workflowEntry?.declared,
-        workflowConfig?.assistant,
+        workflowConfig.assistant,
         conversation.ai_assistant_type
       );
-      const titleAssistantConfig = workflowConfig?.assistants?.[titleAssistantType] ?? {};
+      const titleAssistantConfig = workflowConfig.assistants?.[titleAssistantType] ?? {};
       await generateAndSetTitle(
         conversation.id,
         userMessage,

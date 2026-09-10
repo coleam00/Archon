@@ -37,7 +37,7 @@ import {
   type OpenCodeDeps,
 } from './doctor';
 import * as doctorModule from './doctor';
-import type { MergedConfig } from '@archon/core';
+import type { MergedConfig, StoredCredentialInspection } from '@archon/core';
 
 describe('checkClaudeBinary', () => {
   let execSpy: ReturnType<typeof spyOn<typeof git, 'execFileAsync'>>;
@@ -1064,11 +1064,13 @@ describe('doctorCommand', () => {
 
 describe('checkConnectedProviders', () => {
   const mockUser = { id: 'user-1' };
+  const usable = async (): Promise<StoredCredentialInspection> => ({ status: 'valid' });
 
   it('returns skip when CLI identity is not resolvable', async () => {
     const result = await checkConnectedProviders({}, async () => ({
       listUserProviderKeys: async () => [],
       findOrCreateUserByPlatformIdentity: async () => mockUser,
+      inspectStoredProviderCredential: usable,
     }));
     expect(result.status).toBe('skip');
     expect(result.message).toContain('no CLI identity');
@@ -1078,6 +1080,7 @@ describe('checkConnectedProviders', () => {
     const result = await checkConnectedProviders({ USER: 'testuser' }, async () => ({
       listUserProviderKeys: async () => [],
       findOrCreateUserByPlatformIdentity: async () => mockUser,
+      inspectStoredProviderCredential: usable,
     }));
     expect(result.status).toBe('skip');
     expect(result.message).toContain('archon ai login');
@@ -1090,6 +1093,7 @@ describe('checkConnectedProviders', () => {
         { provider: 'openrouter', kind: 'api_key', label: null },
       ],
       findOrCreateUserByPlatformIdentity: async () => mockUser,
+      inspectStoredProviderCredential: usable,
     }));
     expect(result.status).toBe('pass');
     expect(result.message).toContain('2 connected');
@@ -1102,13 +1106,62 @@ describe('checkConnectedProviders', () => {
         { provider: 'anthropic', kind: 'oauth', label: 'subscription' },
       ],
       findOrCreateUserByPlatformIdentity: async () => mockUser,
-      checkKeyValidity: async () => ({
-        status: 'expired',
+      inspectStoredProviderCredential: async () => ({
+        status: 'expired' as const,
         expires: 1717804800000,
       }),
     }));
     expect(result.status).toBe('fail');
     expect(result.message).toContain('anthropic credential expired 8 June 2024');
+  });
+
+  it('does not report a credential it could not verify as connected', async () => {
+    // The defect #3274 was filed over, reproduced inside its own fix: a row whose
+    // validity could not be established must not be counted as working.
+    const result = await checkConnectedProviders({ USER: 'testuser' }, async () => ({
+      listUserProviderKeys: async () => [
+        { provider: 'anthropic', kind: 'oauth', label: 'subscription' },
+      ],
+      findOrCreateUserByPlatformIdentity: async () => mockUser,
+      inspectStoredProviderCredential: async () => ({
+        status: 'undetermined' as const,
+        reason: 'stored subscription could not be decrypted',
+      }),
+    }));
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('could not verify');
+    expect(result.message).toContain('anthropic');
+    expect(result.message).toContain('could not be decrypted');
+  });
+
+  it('reports an expired credential even when another row is unverifiable', async () => {
+    const result = await checkConnectedProviders({ USER: 'testuser' }, async () => ({
+      listUserProviderKeys: async () => [
+        { provider: 'openrouter', kind: 'api_key', label: null },
+        { provider: 'anthropic', kind: 'oauth', label: 'subscription' },
+      ],
+      findOrCreateUserByPlatformIdentity: async () => mockUser,
+      inspectStoredProviderCredential: async (_userId: string, provider: string) =>
+        provider === 'anthropic'
+          ? { status: 'expired' as const, expires: 1717804800000 }
+          : { status: 'undetermined' as const, reason: 'db timeout' },
+    }));
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('anthropic credential expired 8 June 2024');
+  });
+
+  it('does not let one inspector throw hide the rest', async () => {
+    const result = await checkConnectedProviders({ USER: 'testuser' }, async () => ({
+      listUserProviderKeys: async () => [
+        { provider: 'anthropic', kind: 'oauth', label: 'subscription' },
+      ],
+      findOrCreateUserByPlatformIdentity: async () => mockUser,
+      inspectStoredProviderCredential: async () => {
+        throw new Error('inspector exploded');
+      },
+    }));
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('inspector exploded');
   });
 
   it('returns skip (not fail) when loadDeps throws', async () => {
@@ -1125,6 +1178,7 @@ describe('checkConnectedProviders', () => {
         throw new Error('db down');
       },
       findOrCreateUserByPlatformIdentity: async () => mockUser,
+      inspectStoredProviderCredential: usable,
     }));
     expect(result.status).toBe('skip');
     expect(result.message).toContain('db down');

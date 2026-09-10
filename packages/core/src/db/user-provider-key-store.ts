@@ -183,6 +183,115 @@ export async function getDecryptedProviderCredential(
 }
 
 /**
+ * Decrypt one stored OAuth blob into credentials carrying a usable `expires`.
+ *
+ * The single owner of that shape guard. Both mint paths decide refresh from
+ * `creds.expires`, and so does {@link inspectStoredProviderCredential}; a missing
+ * or non-numeric value from a legacy/corrupt row would make every one of those
+ * comparisons silently false and serve a stale token as success. So enforce the
+ * shape here, where the raw blob enters, and treat a mismatch like a decrypt
+ * failure. Never throws; logs the reason on every null.
+ */
+function decryptOAuthCredentials(
+  userId: string,
+  provider: string,
+  ciphertext: string,
+  key: Buffer
+): { creds: OAuthCredentials; expires: number } | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(decryptToken(ciphertext, key));
+  } catch (err) {
+    getLog().error(
+      { err: err as Error, userId, provider },
+      'user_provider_key.oauth_decrypt_failed'
+    );
+    return null;
+  }
+  const creds = typeof parsed === 'object' && parsed !== null ? (parsed as OAuthCredentials) : null;
+  if (!creds || !Number.isFinite(creds.expires)) {
+    getLog().error(
+      { userId, provider, expiresType: typeof creds?.expires },
+      'user_provider_key.oauth_malformed_expires'
+    );
+    return null;
+  }
+  return { creds, expires: creds.expires as number };
+}
+
+/**
+ * What a stored credential proves about itself right now, for `archon doctor`
+ * and the run pre-flight gate.
+ *
+ * `undetermined` is the state a caller must never read as "fine": the row could
+ * not be read, decrypted, or trusted, so nothing was established either way.
+ * Each caller owns its own policy for it — `doctor` reports it rather than
+ * counting the credential as connected; the launch gate refuses the run.
+ */
+export type StoredCredentialInspection =
+  | { status: 'missing' }
+  | { status: 'valid'; expires?: number }
+  | { status: 'expired'; expires: number }
+  | { status: 'undetermined'; reason: string };
+
+/**
+ * Inspect the user's stored credential for a provider WITHOUT a network refresh.
+ *
+ * Deliberately not `getDecryptedProviderCredential`: that mints/refreshes a live
+ * bearer, which turns a diagnostic into a vendor round-trip and collapses "the
+ * network is down" into "this credential is dead" (#3274 requires those to report
+ * differently). The `expires` a stored blob already carries answers the question
+ * with no I/O, compared in the same raw units the refresh path uses because both
+ * read the same field of the same vendor blob.
+ *
+ * Never throws, and never returns any part of a credential value.
+ */
+export async function inspectStoredProviderCredential(
+  userId: string,
+  provider: string,
+  now: number = Date.now()
+): Promise<StoredCredentialInspection> {
+  try {
+    const row = await getUserProviderKeyRecord(userId, provider);
+    if (!row) return { status: 'missing' };
+    const key = getEncryptionKey();
+    if (row.kind === 'api_key') {
+      if (!row.api_key_encrypted) {
+        getLog().warn({ userId, provider }, 'user_provider_key.missing_api_key_ciphertext');
+        return { status: 'undetermined', reason: 'stored API key row carries no ciphertext' };
+      }
+      try {
+        decryptToken(row.api_key_encrypted, key);
+      } catch (err) {
+        getLog().error({ err: err as Error, userId, provider }, 'user_provider_key.decrypt_failed');
+        return { status: 'undetermined', reason: 'stored API key could not be decrypted' };
+      }
+      // An API key carries no expiry; only the vendor can say whether it still works.
+      return { status: 'valid' };
+    }
+    if (!row.oauth_creds_encrypted) {
+      getLog().warn({ userId, provider }, 'user_provider_key.missing_oauth_ciphertext');
+      return { status: 'undetermined', reason: 'stored subscription row carries no ciphertext' };
+    }
+    const decrypted = decryptOAuthCredentials(userId, provider, row.oauth_creds_encrypted, key);
+    if (!decrypted) {
+      return {
+        status: 'undetermined',
+        reason: 'stored subscription could not be decrypted or carries no usable expiry',
+      };
+    }
+    return now >= decrypted.expires
+      ? { status: 'expired', expires: decrypted.expires }
+      : { status: 'valid', expires: decrypted.expires };
+  } catch (err) {
+    // Reaches here for a DB failure or a missing/rotated TOKEN_ENCRYPTION_KEY —
+    // an install problem, not a verdict on the credential.
+    getLog().error({ err: err as Error, userId, provider }, 'user_provider_key.inspect_failed');
+    return { status: 'undetermined', reason: (err as Error).message };
+  }
+}
+
+/**
  * Decrypt + refresh one OAuth credential. Vendor `openai` refreshes through
  * the Archon-owned flow (`mintOpenAiOAuthApiKey`) — Pi's `getOAuthApiKey`
  * would rebuild the blob from its own shape and DROP the `id_token` the Codex
@@ -203,28 +312,9 @@ async function resolveOAuthCredential(
     getLog().warn({ userId, provider }, 'user_provider_key.oauth_no_pi_provider');
     return null;
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(decryptToken(ciphertext, key));
-  } catch (err) {
-    getLog().error(
-      { err: err as Error, userId, provider },
-      'user_provider_key.oauth_decrypt_failed'
-    );
-    return null;
-  }
-  const creds = typeof parsed === 'object' && parsed !== null ? (parsed as OAuthCredentials) : null;
-  // Both mint paths decide refresh from `creds.expires`. A missing or
-  // non-numeric value from a legacy/corrupt row would make that comparison
-  // silently false and serve a stale token as success, so enforce the shape
-  // here where the raw blob enters and treat a mismatch like decrypt failure.
-  if (!creds || !Number.isFinite(creds.expires)) {
-    getLog().error(
-      { userId, provider, expiresType: typeof creds?.expires },
-      'user_provider_key.oauth_malformed_expires'
-    );
-    return null;
-  }
+  const decrypted = decryptOAuthCredentials(userId, provider, ciphertext, key);
+  if (!decrypted) return null;
+  const creds = decrypted.creds;
   let result: { newCredentials: PiOAuthCredentials | OAuthCredentials; apiKey: string } | null;
   try {
     result = piProvider

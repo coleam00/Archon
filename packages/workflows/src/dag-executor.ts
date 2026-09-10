@@ -84,7 +84,6 @@ import {
   isGateNode,
   isWorkflowWaitContext,
   isScheduledWorkflowResume,
-  isHaltNode,
   isIncludeDirective,
   isPersistableNode,
   readSubrunMetadata,
@@ -131,7 +130,12 @@ import {
   type LoopWithCompiledCommand,
   type IncludeCommandContent,
 } from './compiled-command';
-import { assistantModelDefaults, resolveNodeModel } from './node-model-resolution';
+import {
+  assistantModelDefaults,
+  collectNodeModelBindings,
+  providerOnlyScope,
+  resolveNodeModel,
+} from './node-model-resolution';
 import {
   logNodeComplete,
   logAssistant,
@@ -169,9 +173,7 @@ import {
   type SendMessageContext,
 } from './executor-shared';
 import {
-  isLiteralSpec,
   isTierName,
-  resolveModelSpec,
   resolvePresetEffort,
   type ModelAliasPreset,
   type ResolvedAiProfile,
@@ -1756,10 +1758,10 @@ async function resolveNodeProviderAndModel(
   const declaredEffort = resolution.declaredEffort;
 
   // Runtime backstop for container dispatch: the run-start pre-scan
-  // (collectContainerIncompatibleProviders) hand-mirrors this same provider
-  // resolution, so it could drift. Re-check the RESOLVED provider here, at the
-  // actual dispatch point, so a container turn can never reach a provider that
-  // can't honor it — no silent host downgrade (defense in depth).
+  // (collectContainerIncompatibleProviders) now resolves through this same
+  // `resolveNodeModel` chain, but it scans a static graph. Re-check the RESOLVED
+  // provider here, at the actual dispatch point, so a container turn can never
+  // reach a provider that can't honor it — no silent host downgrade.
   if (execContext.kind === 'container' && !caps.containerExec) {
     throw new Error(
       `Provider '${provider}' cannot run inside a container yet (containerExec ` +
@@ -10748,31 +10750,15 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
 }
 
 /**
- * Resolve the AI provider a node would use, WITHOUT the messaging/side effects
- * of `resolveNodeProviderAndModel` — just enough for the container capability
- * pre-flight. Mirrors the provider half of that resolver: `node.provider ??
- * workflowProvider`, then a model tier/alias ref may override the provider.
- */
-function resolveNodeProviderForPreflight(
-  node: DagNode,
-  workflowProvider: string,
-  aiProfile?: ResolvedAiProfile
-): string {
-  let provider: string = node.provider ?? workflowProvider;
-  if (node.model && aiProfile) {
-    const spec = resolveModelSpec(aiProfile, node.model);
-    if (!isLiteralSpec(spec)) provider = spec.provider;
-  }
-  return provider;
-}
-
-/**
  * Collect providers used by AI nodes that CANNOT run inside a container
- * (`capabilities.containerExec === false`), recursing loop_group bodies. bash/
- * script/cancel nodes are deterministic (they exec via `docker exec` directly,
- * no provider) and are skipped; an approval node counts only when it has an
- * `on_reject` reprompt (the one AI turn it can spawn). Unknown providers are
- * skipped here — they fail later with a clearer "unknown provider" error.
+ * (`capabilities.containerExec === false`). Node traversal and provider
+ * resolution come from `collectNodeModelBindings`, the one implementation the
+ * credential pre-flight shares, so this pre-scan cannot drift from the
+ * resolution the dispatch point re-checks. Only the provider half is read, so
+ * the model-side fallbacks (`assistantModels`, a workflow-level `model:`) are
+ * left empty — they cannot change which provider a node resolves to. Unknown
+ * providers are skipped here; they fail later with a clearer "unknown provider"
+ * error.
  */
 export function collectContainerIncompatibleProviders(
   nodes: readonly DagNode[],
@@ -10780,29 +10766,16 @@ export function collectContainerIncompatibleProviders(
   aiProfile?: ResolvedAiProfile
 ): Set<string> {
   const incompatible = new Set<string>();
-  const check = (provider: string): void => {
-    if (!isRegisteredProvider(provider)) return;
+  const bindings = collectNodeModelBindings(
+    nodes,
+    providerOnlyScope(workflowProvider),
+    {},
+    aiProfile
+  );
+  for (const { provider } of bindings) {
+    if (!isRegisteredProvider(provider)) continue;
     if (!getProviderCapabilities(provider).containerExec) incompatible.add(provider);
-  };
-  const visit = (ns: readonly (DagNode | IncludeDirective)[]): void => {
-    for (const node of ns) {
-      if (isIncludeDirective(node) || isExecNode(node) || isHaltNode(node)) continue;
-      if (isLoopGroupNode(node)) {
-        check(resolveNodeProviderForPreflight(node, workflowProvider, aiProfile));
-        visit(node.loop_group.nodes);
-        continue;
-      }
-      if (isGateNode(node)) {
-        if (node.decisions.some(d => d.rework !== undefined)) {
-          check(resolveNodeProviderForPreflight(node, workflowProvider, aiProfile));
-        }
-        continue;
-      }
-      // agent / loop → AI node
-      check(resolveNodeProviderForPreflight(node, workflowProvider, aiProfile));
-    }
-  };
-  visit(nodes);
+  }
   return incompatible;
 }
 

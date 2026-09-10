@@ -248,7 +248,16 @@ mock.module('@archon/core', () => ({
       alreadyExisted: false,
     })
   ),
-  loadConfig: mock(() => Promise.resolve({ defaults: {} })),
+  // `assistant`/`assistants` are what every real `loadConfig` returns, and what provider
+  // resolution (dry-run report, credential pre-flight) reads. A mock without them is a
+  // shape no install produces.
+  loadConfig: mock(() =>
+    Promise.resolve({ defaults: {}, assistant: 'claude', assistants: { claude: {}, codex: {} } })
+  ),
+  // The credential pre-flight gate asks this before every launch. Left unmocked it opens
+  // the real credential database; 'missing' is the shape of an install with nothing
+  // connected, which is what these tests are about.
+  inspectStoredProviderCredential: mock(() => Promise.resolve({ status: 'missing' as const })),
   generateAndSetTitle: mock(() => Promise.resolve()),
   loadRepoConfig: mock(() => Promise.resolve(null)),
   getUserAiPrefs: mock(() => Promise.resolve({})),
@@ -657,9 +666,12 @@ async function finishStartupWindow(
   spawnSpy: ReturnType<typeof spyOn>,
   expectedSpawnCount = 1
 ): Promise<void> {
+  // The budget is generous because the pre-fork gates (requirements, credentials) await
+  // dynamic imports, each of which costs several microtask turns. It only has to be
+  // finite: a spawn that never happens still fails on the assertion below.
   for (
     let attempt = 0;
-    attempt < 20 && spawnSpy.mock.calls.length < expectedSpawnCount;
+    attempt < 500 && spawnSpy.mock.calls.length < expectedSpawnCount;
     attempt++
   ) {
     await Promise.resolve();
@@ -1290,6 +1302,7 @@ describe('workflowRunCommand — dry-run', () => {
       const dryRun = await import('@archon/workflows/dry-run');
       (core.loadConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
         assistant: 'claude',
+        assistants: {},
         tiers: {},
         aliases: {},
       });
@@ -7583,7 +7596,7 @@ describe('workflowRunCommand — detach', () => {
 
     try {
       const commandPromise = workflowRunCommand('/test/path', 'assist', 'hello', { detach: true });
-      for (let attempt = 0; attempt < 20 && spawnSpy.mock.calls.length === 0; attempt++) {
+      for (let attempt = 0; attempt < 500 && spawnSpy.mock.calls.length === 0; attempt++) {
         await Promise.resolve();
       }
       expect(spawnSpy).toHaveBeenCalledTimes(1);
@@ -7622,7 +7635,7 @@ describe('workflowRunCommand — detach', () => {
 
     try {
       const commandPromise = workflowRunCommand('/test/path', 'assist', 'hello', { detach: true });
-      for (let attempt = 0; attempt < 20 && spawnSpy.mock.calls.length === 0; attempt++) {
+      for (let attempt = 0; attempt < 500 && spawnSpy.mock.calls.length === 0; attempt++) {
         await Promise.resolve();
       }
       expect(spawnSpy).toHaveBeenCalledTimes(1);
@@ -7665,7 +7678,7 @@ describe('workflowRunCommand — detach', () => {
         json: true,
         conversationId,
       });
-      for (let attempt = 0; attempt < 20 && spawnSpy.mock.calls.length === 0; attempt++) {
+      for (let attempt = 0; attempt < 500 && spawnSpy.mock.calls.length === 0; attempt++) {
         await Promise.resolve();
       }
       expect(spawnSpy).toHaveBeenCalledTimes(1);
@@ -8275,7 +8288,7 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
 
     try {
       const commandPromise = workflowApproveCommand('run-123', undefined, true, undefined, true);
-      for (let attempt = 0; attempt < 20 && spawnSpy.mock.calls.length === 0; attempt++) {
+      for (let attempt = 0; attempt < 500 && spawnSpy.mock.calls.length === 0; attempt++) {
         await Promise.resolve();
       }
       expect(spawnSpy).toHaveBeenCalledTimes(1);
@@ -11288,6 +11301,7 @@ describe('maybePrintTierNotice', () => {
       defaults: {},
       tiers: {},
       assistant: 'claude',
+      assistants: {},
     });
     (getUserAiPrefs as ReturnType<typeof mock>).mockResolvedValue({});
   });
@@ -11321,6 +11335,7 @@ describe('maybePrintTierNotice', () => {
     (loadConfig as ReturnType<typeof mock>).mockResolvedValue({
       defaults: {},
       tiers: { large: { provider: 'claude', model: 'opus' } },
+      assistants: {},
     });
     const workflow = makeTierWorkflow('large');
     await maybePrintTierNotice(workflow, '/cwd', undefined, false);
@@ -11352,6 +11367,7 @@ describe('maybePrintTierNotice', () => {
       defaults: {},
       tiers: {},
       assistant: 'pi',
+      assistants: {},
     });
     const workflow = makeTierWorkflow('large');
     await maybePrintTierNotice(workflow, '/cwd', undefined, false);

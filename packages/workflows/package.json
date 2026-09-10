@@ -15,6 +15,7 @@
     "./event-emitter": "./src/event-emitter.ts",
     "./workflow-discovery": "./src/workflow-discovery.ts",
     "./model-validation": "./src/model-validation.ts",
+    "./node-model-resolution": "./src/node-model-resolution.ts",
     "./run-config": "./src/run-config.ts",
     "./script-discovery": "./src/script-discovery.ts",
     "./command-validation": "./src/command-validation.ts",

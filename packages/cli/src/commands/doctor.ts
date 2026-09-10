@@ -29,7 +29,12 @@ import {
   resolveClaudeBinaryWithSource,
   type ClaudeBinaryResolution,
 } from '@archon/providers/claude/binary-resolver';
-import type { Codebase, MergedConfig, SchemaVersionInfo } from '@archon/core';
+import type {
+  Codebase,
+  MergedConfig,
+  SchemaVersionInfo,
+  StoredCredentialInspection,
+} from '@archon/core';
 
 // Vendor-canonical credential id for Codex (since #1955 credentials are keyed
 // by vendor, not agent). A connected `openai` key signals Codex intent even
@@ -636,17 +641,31 @@ export interface ProviderDeps {
     id: string,
     name: string
   ) => Promise<{ id: string }>;
-  checkKeyValidity?: (
+  /**
+   * Core's own credential inspector. Not re-derived here: a second
+   * decrypt-and-compare would be one rotated blob away from disagreeing with the
+   * one the run uses.
+   */
+  inspectStoredProviderCredential: (
     userId: string,
     provider: string
-  ) => Promise<{ status: 'valid' | 'expired' | 'unreachable'; expires?: number; reason?: string }>;
+  ) => Promise<StoredCredentialInspection>;
 }
 
 /**
- * Report how many AI-provider credentials the current CLI user has connected,
- * plus how to connect when none are. Skip (never fail) on any error — credential
- * status is informational, and a missing CLI identity or DB hiccup shouldn't make
- * `archon doctor` exit non-zero.
+ * Report the AI-provider credentials the current CLI user has connected, and whether
+ * each one still works. A count is not a validity check (#3274), so every row is
+ * inspected and the three outcomes are reported apart:
+ *
+ * - expired → `fail`, naming the provider and the date it lapsed.
+ * - undetermined (corrupt row, rotated `TOKEN_ENCRYPTION_KEY`, DB error) → `skip`,
+ *   naming what could not be verified. It must never be folded into "connected":
+ *   reporting an unverifiable credential as fine is the defect this check exists for.
+ * - otherwise → `pass` with the connected list.
+ *
+ * `skip` rather than `fail` for the undetermined case keeps a missing CLI identity or a
+ * DB hiccup from making `archon doctor` exit non-zero, which the rest of this check
+ * already promises.
  */
 export async function checkConnectedProviders(
   env: NodeJS.ProcessEnv = process.env,
@@ -679,27 +698,30 @@ export async function checkConnectedProviders(
       };
     }
 
-    if (deps.checkKeyValidity) {
-      const expired: { provider: string; expires?: number }[] = [];
-      for (const row of rows) {
-        try {
-          const validity = await deps.checkKeyValidity(user.id, row.provider);
-          if (validity.status === 'expired') {
-            expired.push({ provider: row.provider, expires: validity.expires });
-          }
-        } catch {
-          // best-effort
-        }
+    const expired: string[] = [];
+    const unverified: string[] = [];
+    for (const row of rows) {
+      let inspection: StoredCredentialInspection;
+      try {
+        inspection = await deps.inspectStoredProviderCredential(user.id, row.provider);
+      } catch (err) {
+        inspection = { status: 'undetermined', reason: (err as Error).message };
       }
-      if (expired.length > 0) {
-        const details = expired
-          .map(
-            e =>
-              `${e.provider} credential expired${e.expires ? ` ${formatExpiryDate(e.expires)}` : ''}`
-          )
-          .join(', ');
-        return { label, status: 'fail', message: details };
+      if (inspection.status === 'expired') {
+        expired.push(`${row.provider} credential expired ${formatExpiryDate(inspection.expires)}`);
+      } else if (inspection.status === 'undetermined') {
+        unverified.push(`${row.provider} (${inspection.reason})`);
       }
+    }
+    if (expired.length > 0) {
+      return { label, status: 'fail', message: expired.join(', ') };
+    }
+    if (unverified.length > 0) {
+      return {
+        label,
+        status: 'skip',
+        message: `could not verify: ${unverified.join(', ')}`,
+      };
     }
 
     const summary = rows.map(r => `${r.provider}(${r.kind})`).join(', ');
@@ -715,44 +737,13 @@ export async function checkConnectedProviders(
 
 async function defaultLoadProviderDeps(): Promise<ProviderDeps> {
   // Lazy imports for the same reason as defaultLoadDatabaseDeps.
-  const { listUserProviderKeys, getUserProviderKeyRecord } = await import('@archon/core');
+  const { listUserProviderKeys, inspectStoredProviderCredential } = await import('@archon/core');
   const userDb = await import('@archon/core/db/users');
-  const { decryptToken, getEncryptionKey } = await import('@archon/core/utils/token-crypto');
   return {
     listUserProviderKeys,
     findOrCreateUserByPlatformIdentity: userDb.findOrCreateUserByPlatformIdentity,
-    checkKeyValidity: async (
-      userId: string,
-      provider: string
-    ): Promise<{
-      status: 'valid' | 'expired' | 'unreachable';
-      expires?: number;
-      reason?: string;
-    }> => {
-      try {
-        const row = await getUserProviderKeyRecord(userId, provider);
-        if (!row) return { status: 'valid' };
-        if (row.kind === 'oauth' && row.oauth_creds_encrypted) {
-          const key = getEncryptionKey();
-          const parsed = JSON.parse(decryptToken(row.oauth_creds_encrypted, key)) as {
-            expires?: number;
-          };
-          if (
-            parsed &&
-            typeof parsed === 'object' &&
-            typeof parsed.expires === 'number' &&
-            Number.isFinite(parsed.expires)
-          ) {
-            if (Date.now() >= parsed.expires) {
-              return { status: 'expired', expires: parsed.expires };
-            }
-          }
-        }
-        return { status: 'valid' };
-      } catch (err) {
-        return { status: 'unreachable', reason: (err as Error).message };
-      }
-    },
+    inspectStoredProviderCredential: (userId, provider) =>
+      inspectStoredProviderCredential(userId, provider),
   };
 }
 

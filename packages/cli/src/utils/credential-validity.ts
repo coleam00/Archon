@@ -1,8 +1,42 @@
+/**
+ * Does the credential a run (or `archon doctor`) depends on actually work?
+ *
+ * Two stores are in scope, and only those two: Pi's `~/.pi/agent/auth.json` and the
+ * credentials a user connected to Archon itself (`archon ai login|key set`). A runner
+ * with its own credential store — Claude Code's, Codex's — authenticates through it,
+ * and Archon deliberately does not read those (#3274). That boundary is why the gate
+ * below reports "not verifiable here" rather than pretending, and why it never treats
+ * silence as a pass.
+ *
+ * Nothing in this module puts a credential value into a message, a log field, or a
+ * thrown error. Provider name, state, and expiry date only.
+ */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { PI_PROVIDER_ENV_VARS, PI_OAUTH_ENV_VARS, parsePiModelRef } from '@archon/providers';
-import type { MergedConfig } from '@archon/core';
+import { createLogger } from '@archon/paths';
+import {
+  PI_AMBIENT_VENDORS,
+  PI_PROVIDER_ENV_VARS,
+  PI_OAUTH_ENV_VARS,
+  parsePiModelRef,
+} from '@archon/providers';
+import { normalizeCredentialVendor } from '@archon/core/credentials/delivery';
+import type { StoredCredentialInspection } from '@archon/core';
+import {
+  assistantModelDefaults,
+  collectNodeModelBindings,
+  resolveWorkflowModelScope,
+} from '@archon/workflows/node-model-resolution';
+import type { ResolvedAiProfile } from '@archon/workflows/model-validation';
+import type { DagNode, IncludeDirective } from '@archon/workflows/schemas/dag-node';
+import type { WorkflowConfig } from '@archon/workflows/deps';
+
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('cli.credentials');
+  return cachedLog;
+}
 
 export interface PiCredentialStatus {
   provider: string;
@@ -65,37 +99,43 @@ export function defaultReadAuthJson(path: string): string | null {
   }
 }
 
+/**
+ * Ask Pi itself whether a credential still works, for an entry that carries no
+ * `expires` to compare against.
+ *
+ * Classification comes from the structured channel only — the `--json` payload Pi
+ * prints, or the errno embedded in a spawn failure. An error this cannot place is
+ * `unreachable` ("no answer"), never `invalid` ("the credential is dead"): matching
+ * vendor prose would let a reworded message silently flip a run-affecting verdict.
+ * A missing `pi` binary is exactly that no-answer case, not a pass.
+ */
 export async function probePiCredential(
   provider: string
 ): Promise<'ready' | 'invalid' | 'unreachable'> {
+  const readStatus = (stdout: unknown): 'ready' | 'invalid' | undefined => {
+    if (typeof stdout !== 'string' || stdout.trim().length === 0) return undefined;
+    try {
+      const parsed = JSON.parse(stdout) as { status?: unknown };
+      if (parsed.status === 'ready') return 'ready';
+      return typeof parsed.status === 'string' ? 'invalid' : undefined;
+    } catch {
+      return undefined;
+    }
+  };
   try {
     const { execFileAsync } = await import('@archon/git');
     const { stdout } = await execFileAsync(
       'pi',
       ['auth', 'check', '--provider', provider, '--json'],
-      {
-        timeout: 5000,
-      }
+      { timeout: 5000 }
     );
-    const parsed = JSON.parse(stdout) as { status?: string };
-    if (parsed.status === 'ready') return 'ready';
-    return 'invalid';
+    return readStatus(stdout) ?? 'unreachable';
   } catch (err) {
-    const msg = (err as Error).message || '';
-    if (msg.includes('ENOENT')) {
-      // pi command not found — cannot probe via CLI
-      return 'ready';
-    }
-    if (
-      msg.includes('ETIMEDOUT') ||
-      msg.includes('ENOTFOUND') ||
-      msg.includes('ECONNREFUSED') ||
-      msg.includes('network') ||
-      msg.includes('fetch failed')
-    ) {
-      return 'unreachable';
-    }
-    return 'invalid';
+    // A non-zero exit still carries Pi's `--json` verdict on stdout; read that before
+    // giving up, so "credential is invalid" doesn't arrive as "could not check".
+    const fromStdout = readStatus((err as { stdout?: unknown }).stdout);
+    if (fromStdout) return fromStdout;
+    return 'unreachable';
   }
 }
 
@@ -113,8 +153,10 @@ export async function inspectPiAuthJson(
   let data: unknown;
   try {
     data = JSON.parse(content);
-  } catch (err) {
-    return { exists: true, error: (err as Error).message, entries: [] };
+  } catch {
+    // Deliberately NOT the parser's message: a JSON syntax error quotes the source text
+    // around the fault, and every byte of this file is a credential.
+    return { exists: true, error: 'not valid JSON', entries: [] };
   }
 
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {
@@ -223,103 +265,192 @@ function readPiSettingsDefaultProvider(): string | undefined {
   return undefined;
 }
 
-export function collectWorkflowRequiredProviders(
-  workflow: { provider?: string; model?: string; nodes?: readonly unknown[] },
-  config?: MergedConfig
-): Set<string> {
-  const providers = new Set<string>();
-
-  function inspectNode(node: Record<string, unknown>): void {
-    if (node.kind === 'loop_group' || 'loop_group' in node) {
-      const loopGroup = (node.loop_group ?? node.body) as { nodes?: unknown[] } | undefined;
-      if (Array.isArray(loopGroup?.nodes)) {
-        for (const child of loopGroup.nodes) {
-          if (typeof child === 'object' && child !== null) {
-            inspectNode(child as Record<string, unknown>);
-          }
-        }
-      }
-      return;
-    }
-
-    // Only nodes that invoke AI reasoning with a configured provider or model
-    const isAi =
-      node.kind === 'loop' ||
-      'prompt' in node ||
-      'loop' in node ||
-      (node.kind === 'agent' &&
-        (typeof node.source !== 'object' ||
-          (node as { source?: { kind?: string } }).source?.kind === 'inline'));
-    if (!isAi) return;
-
-    let provider =
-      (typeof node.provider === 'string' ? node.provider : undefined) ?? workflow.provider;
-    let model = (typeof node.model === 'string' ? node.model : undefined) ?? workflow.model;
-
-    // Resolve model tier or alias preset in config
-    if (model && config?.tiers && (model === 'small' || model === 'medium' || model === 'large')) {
-      const preset = config.tiers[model];
-      if (preset?.provider) provider = preset.provider;
-      if (preset?.model) model = preset.model;
-    } else if (model && config?.aliases && model in config.aliases) {
-      const preset = config.aliases[model];
-      if (preset?.provider) provider = preset.provider;
-      if (preset?.model) model = preset.model;
-    }
-
-    if (provider === 'pi') {
-      // `assistants.pi` resolves through ProviderDefaultsMap's generic index, whose
-      // values are `unknown` — narrow it the same way node/workflow model is narrowed
-      // above rather than trusting the index.
-      const piDefaultModel = config?.assistants?.pi?.model;
-      if (!model && typeof piDefaultModel === 'string') {
-        model = piDefaultModel;
-      }
-      if (model) {
-        const parsed = parsePiModelRef(model);
-        if (parsed) {
-          providers.add(parsed.provider);
-          return;
-        }
-      }
-      const settingsProvider = readPiSettingsDefaultProvider();
-      if (settingsProvider) {
-        providers.add(settingsProvider);
-        return;
-      }
-      providers.add('pi');
-    } else if (provider) {
-      providers.add(provider);
-    }
-  }
-
-  for (const node of (workflow.nodes ?? []) as Record<string, unknown>[]) {
-    if (typeof node === 'object' && node !== null) {
-      inspectNode(node);
-    }
-  }
-
-  return providers;
+/** One credential a run needs: which runner will ask for it, and whose it is. */
+export interface RequiredCredential {
+  /** The provider an AI node resolves to (`pi`, `claude`, `codex`, …). */
+  runner: string;
+  /**
+   * The vendor whose credential that runner presents (`anthropic`, `openrouter`, …).
+   * Vendor-canonical, so it matches both `auth.json` keys and connected-credential rows.
+   */
+  vendor: string;
 }
 
-export async function assertWorkflowCredentialsValid(
-  workflow: { name: string; provider?: string; model?: string; nodes?: readonly unknown[] },
-  options?: {
-    cwd?: string;
-    env?: NodeJS.ProcessEnv;
-    config?: MergedConfig;
-    authJsonPath?: string;
-    now?: number;
-    readAuthJson?: (path: string) => string | null;
+/** The parts of a loaded workflow provider resolution reads. */
+export interface WorkflowShape {
+  provider?: string;
+  model?: string;
+  nodes?: readonly (DagNode | IncludeDirective)[];
+}
+
+export interface WorkflowResolutionOptions {
+  config?: WorkflowConfig;
+  aiProfile?: ResolvedAiProfile;
+}
+
+/**
+ * The credentials a workflow's AI nodes will actually need.
+ *
+ * Node traversal and provider/model resolution come from
+ * `collectNodeModelBindings` — the executor's own chain — so a `command:` node, a
+ * `loop_group` body, and a gate's rework reprompt are seen exactly as the run sees
+ * them, and a tier or `@alias` resolves to the provider it will really run on.
+ *
+ * A `pi` node is asked for its MODEL's vendor, because that is whose key Pi presents;
+ * every other runner maps through `normalizeCredentialVendor` (claude → anthropic,
+ * codex → openai). A `pi` node whose vendor cannot be resolved is dropped with a log:
+ * Pi picks its backend at runtime, and guessing one here would gate the wrong key.
+ */
+export function collectWorkflowRequiredCredentials(
+  workflow: WorkflowShape,
+  options?: WorkflowResolutionOptions
+): RequiredCredential[] {
+  const config = options?.config;
+  const assistantModels = config ? assistantModelDefaults(config) : {};
+  const scope = resolveWorkflowModelScope(
+    workflow,
+    config?.assistant ?? 'claude',
+    assistantModels,
+    options?.aiProfile
+  );
+  const bindings = collectNodeModelBindings(
+    workflow.nodes ?? [],
+    scope,
+    assistantModels,
+    options?.aiProfile
+  );
+
+  const required = new Map<string, RequiredCredential>();
+  for (const { provider, model } of bindings) {
+    let vendor: string | undefined;
+    if (provider === 'pi') {
+      vendor =
+        (model ? parsePiModelRef(model)?.provider : undefined) ?? readPiSettingsDefaultProvider();
+      if (!vendor) {
+        getLog().debug({ model }, 'cli.credential_preflight_pi_vendor_unresolved');
+        continue;
+      }
+    } else {
+      vendor = normalizeCredentialVendor(provider);
+    }
+    required.set(`${provider} ${vendor}`, { runner: provider, vendor });
   }
+  return [...required.values()];
+}
+
+/**
+ * What the stores Archon inspects prove about one credential.
+ *
+ * `unverifiable` and `absent` are separate on purpose. `unverifiable` means a store
+ * held something and would not give up a usable answer — a corrupt row, a rotated
+ * encryption key, an unreadable `auth.json`; the launcher refuses on it. `absent`
+ * means no store Archon reads holds anything, which for a runner with its own
+ * credential store is the normal, healthy state.
+ */
+type CredentialVerdict =
+  | { kind: 'usable' }
+  | { kind: 'unusable'; reason: string }
+  | { kind: 'unverifiable'; reason: string }
+  | { kind: 'absent' };
+
+function verdictFromPiAuthEntry(entry: PiCredentialStatus): CredentialVerdict {
+  switch (entry.status) {
+    case 'valid':
+      return { kind: 'usable' };
+    case 'expired':
+      return {
+        kind: 'unusable',
+        reason: `credential expired${entry.expires !== undefined ? ` ${formatExpiryDate(entry.expires)}` : ''}`,
+      };
+    case 'invalid':
+      return { kind: 'unusable', reason: entry.message ?? 'credential invalid' };
+    case 'unreachable':
+      return { kind: 'unverifiable', reason: entry.message ?? 'provider unreachable' };
+  }
+}
+
+function verdictFromStoredCredential(inspection: StoredCredentialInspection): CredentialVerdict {
+  switch (inspection.status) {
+    case 'missing':
+      return { kind: 'absent' };
+    case 'valid':
+      return { kind: 'usable' };
+    case 'expired':
+      return {
+        kind: 'unusable',
+        reason: `connected credential expired ${formatExpiryDate(inspection.expires)}`,
+      };
+    case 'undetermined':
+      return { kind: 'unverifiable', reason: inspection.reason };
+  }
+}
+
+/**
+ * Inspect the connected-credential row for a vendor through core's own inspector, so
+ * the CLI never re-derives decrypt-and-compare. Returns `missing` when this install has
+ * no CLI identity to look one up for.
+ */
+async function inspectConnectedCredential(
+  vendor: string,
+  env: NodeJS.ProcessEnv,
+  now: number
+): Promise<StoredCredentialInspection> {
+  const cliId = env.ARCHON_USER_ID || env.USER || env.USERNAME;
+  if (!cliId) return { status: 'missing' };
+  let userId: string;
+  try {
+    const userDb = await import('@archon/core/db/users');
+    userId = (await userDb.findOrCreateUserByPlatformIdentity('cli', cliId, cliId)).id;
+  } catch (err) {
+    // The identity store failed, which says nothing about any credential — and this
+    // boundary cannot explain a database or module failure. Report no connected
+    // credential and log the real cause: the run creates its own row seconds later and
+    // fails there naming the database, rather than blaming the user's key.
+    getLog().warn({ err: err as Error, vendor }, 'cli.credential_preflight_identity_unavailable');
+    return { status: 'missing' };
+  }
+  const { inspectStoredProviderCredential } = await import('@archon/core');
+  return inspectStoredProviderCredential(userId, vendor, now);
+}
+
+export interface CredentialGateOptions extends WorkflowResolutionOptions {
+  env?: NodeJS.ProcessEnv;
+  authJsonPath?: string;
+  now?: number;
+  readAuthJson?: (path: string) => string | null;
+  /** Injected by tests; defaults to the connected-credential store. */
+  inspectConnected?: (vendor: string) => Promise<StoredCredentialInspection>;
+}
+
+/**
+ * Refuse to launch a run whose credentials Archon can see are broken.
+ *
+ * Every required credential resolves to one of four verdicts, and only `usable` and a
+ * documented `absent` let the run through. There is no fall-through: a store that
+ * answered "I can't tell you" blocks, because the alternative is a gate that reports
+ * success for the one condition it exists to catch.
+ *
+ * The one deliberate pass is `absent` for a runner that keeps its own credential store
+ * (Claude Code, Codex) or a Pi vendor authenticated from an ambient cloud chain. Archon
+ * reads neither, so it has nothing to judge; the decision is logged at
+ * `cli.credential_preflight_unverified` and the run fails at its first node the way it
+ * did before this gate existed. For `pi`, absence IS the verdict — Pi authenticates
+ * from these stores and nowhere else.
+ */
+export async function assertWorkflowCredentialsValid(
+  workflow: WorkflowShape & { name: string },
+  options?: CredentialGateOptions
 ): Promise<void> {
   const env = options?.env ?? process.env;
-  const config = options?.config;
   const now = options?.now ?? Date.now();
   const readFn = options?.readAuthJson ?? defaultReadAuthJson;
+  const inspectConnected =
+    options?.inspectConnected ??
+    ((vendor: string): Promise<StoredCredentialInspection> =>
+      inspectConnectedCredential(vendor, env, now));
 
-  const requiredProviders = collectWorkflowRequiredProviders(workflow, config);
-  if (requiredProviders.size === 0) return;
+  const required = collectWorkflowRequiredCredentials(workflow, options);
+  if (required.length === 0) return;
 
   const authJsonPath =
     options?.authJsonPath ??
@@ -327,84 +458,60 @@ export async function assertWorkflowCredentialsValid(
     join(homedir(), '.pi', 'agent', 'auth.json');
   const piAuth = await inspectPiAuthJson(authJsonPath, now, readFn);
 
-  for (const provider of requiredProviders) {
-    // 1. Check env vars
-    const envKey = PI_PROVIDER_ENV_VARS[provider];
-    if (envKey && (env[envKey] ?? '').trim().length > 0) {
-      continue;
+  for (const { runner, vendor } of required) {
+    const verdict = await verifyRequiredCredential(runner, vendor, env, piAuth, inspectConnected);
+    if (verdict.kind === 'usable') continue;
+    if (verdict.kind === 'unusable') {
+      throw new Error(`${vendor} ${verdict.reason}. ${reconnectHint(vendor)}`);
     }
-    const oauthKey = PI_OAUTH_ENV_VARS[provider];
-    if (oauthKey && (env[oauthKey] ?? '').trim().length > 0) {
-      continue;
+    if (verdict.kind === 'unverifiable') {
+      throw new Error(
+        `could not verify the ${vendor} credential this run needs: ${verdict.reason}. ` +
+          reconnectHint(vendor)
+      );
     }
-    if (
-      (provider === 'claude' || provider === 'anthropic') &&
-      ((env.ANTHROPIC_API_KEY ?? '').trim().length > 0 ||
-        (env.CLAUDE_CODE_TOKEN ?? '').trim().length > 0)
-    ) {
-      continue;
+    // absent
+    if (runner === 'pi' && !PI_AMBIENT_VENDORS.includes(vendor)) {
+      throw new Error(
+        `no ${vendor} credential found for this run. ` +
+          `Pi reads credentials from ~/.pi/agent/auth.json, ${PI_PROVIDER_ENV_VARS[vendor] ?? 'the vendor API-key variable'}, ` +
+          `or a credential connected to Archon. ${reconnectHint(vendor)}`
+      );
     }
-    if (
-      (provider === 'codex' || provider === 'openai') &&
-      (env.OPENAI_API_KEY ?? '').trim().length > 0
-    ) {
-      continue;
-    }
-
-    // 2. Check pi auth.json
-    if (piAuth.exists && !piAuth.error) {
-      const entry = piAuth.entries.find(e => e.provider === provider);
-      if (entry) {
-        if (entry.status === 'expired') {
-          const expStr = entry.expires !== undefined ? ` ${formatExpiryDate(entry.expires)}` : '';
-          throw new Error(`${provider} credential expired${expStr}`);
-        }
-        if (entry.status === 'invalid') {
-          throw new Error(
-            `${provider} credential invalid${entry.message ? `: ${entry.message}` : ''}`
-          );
-        }
-        if (entry.status === 'valid') {
-          continue;
-        }
-      }
-    }
-
-    // 3. Check DB credentials (if CLI user has a connected key)
-    const cliId = env.ARCHON_USER_ID || env.USER || env.USERNAME;
-    if (cliId) {
-      try {
-        const { getUserProviderKeyRecord } = await import('@archon/core');
-        const userDb = await import('@archon/core/db/users');
-        const { decryptToken, getEncryptionKey } = await import('@archon/core/utils/token-crypto');
-        const user = await userDb.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
-        const row = await getUserProviderKeyRecord(user.id, provider);
-        if (row) {
-          if (row.kind === 'oauth' && row.oauth_creds_encrypted) {
-            const key = getEncryptionKey();
-            const parsed = JSON.parse(decryptToken(row.oauth_creds_encrypted, key)) as {
-              expires?: number;
-            };
-            if (
-              parsed &&
-              typeof parsed === 'object' &&
-              typeof parsed.expires === 'number' &&
-              Number.isFinite(parsed.expires)
-            ) {
-              if (now >= parsed.expires) {
-                throw new Error(
-                  `${provider} credential expired ${formatExpiryDate(parsed.expires)}`
-                );
-              }
-            }
-          }
-          continue;
-        }
-      } catch (err) {
-        if ((err as Error).message.includes('expired')) {
-          throw err;
-        }
-      }
-    }
+    getLog().info(
+      { runner, vendor, workflow: workflow.name },
+      'cli.credential_preflight_unverified'
+    );
   }
+}
+
+function reconnectHint(vendor: string): string {
+  return `Reconnect with \`archon ai login ${vendor}\` or \`archon ai key set ${vendor}\`.`;
+}
+
+async function verifyRequiredCredential(
+  runner: string,
+  vendor: string,
+  env: NodeJS.ProcessEnv,
+  piAuth: PiAuthInspectionResult,
+  inspectConnected: (vendor: string) => Promise<StoredCredentialInspection>
+): Promise<CredentialVerdict> {
+  // 1. An env var the runner will read wins outright — it is what the process gets.
+  for (const key of [PI_OAUTH_ENV_VARS[vendor], PI_PROVIDER_ENV_VARS[vendor]]) {
+    if (key && (env[key] ?? '').trim().length > 0) return { kind: 'usable' };
+  }
+
+  // 2. Pi's own store — for Pi nodes only. Another runner authenticates from its own
+  // store, so an entry here would not be the credential it presents, and a corrupt file
+  // here is not a reason to refuse its run.
+  if (runner === 'pi' && piAuth.exists) {
+    if (piAuth.error) {
+      return { kind: 'unverifiable', reason: `~/.pi/agent/auth.json is ${piAuth.error}` };
+    }
+    const entry = piAuth.entries.find(e => e.provider === vendor);
+    if (entry) return verdictFromPiAuthEntry(entry);
+  }
+
+  // 3. A credential connected to Archon itself.
+  return verdictFromStoredCredential(await inspectConnected(vendor));
 }
