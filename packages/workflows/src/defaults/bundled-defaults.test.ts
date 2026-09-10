@@ -993,4 +993,60 @@ describe('bundled-defaults', () => {
       }
     );
   });
+
+  // Every AI node in the SDLC pack must resolve a tier. A node that resolves none
+  // falls through to the install's default assistant — so a run pinned to one
+  // provider silently executes that node on another and spends its quota. Which
+  // tier a node names is an ordinary authoring choice and changes freely; that it
+  // resolves one at all is the invariant this protects.
+  //
+  // Node types are derived from parseWorkflow rather than restated: a hand-written
+  // copy of the node union would drift the moment a node kind is added.
+  type PackNode = NonNullable<ReturnType<typeof parseWorkflow>['workflow']>['nodes'][number];
+  type LoopGroupBodyNode = Extract<PackNode, { kind: 'loop_group' }>['loop_group']['nodes'][number];
+
+  describe('sdlc pack tier coverage', () => {
+    it('resolves a tier for every AI node', () => {
+      const uncovered: string[] = [];
+
+      for (const [name, owner] of Object.entries(BUNDLED_WORKFLOW_OWNERS)) {
+        if (owner?.pack !== 'sdlc') continue;
+        const source = BUNDLED_WORKFLOWS[name];
+        if (source === undefined) continue;
+
+        const parsed = parseWorkflow(source, name);
+        expect(parsed.error).toBeNull();
+        const workflow = parsed.workflow;
+        if (workflow === null) continue;
+
+        // Coverage mirrors the resolver, not the doc comments:
+        //  - a node's own `model:` always wins;
+        //  - a workflow's `model:` reaches a node only when the node resolves to the
+        //    workflow's own provider (include-expander's `workflowModelTravelsTo`);
+        //  - a `loop_group`'s own `model:` covers nothing — the executor forwards only
+        //    its resolved provider into the body context, never its model.
+        const covered = (node: PackNode | LoopGroupBodyNode): boolean => {
+          if ('model' in node && node.model !== undefined) return true;
+          if (workflow.model === undefined) return false;
+          const nodeProvider = 'provider' in node ? node.provider : undefined;
+          return nodeProvider === undefined || nodeProvider === workflow.provider;
+        };
+
+        const visit = (nodes: readonly (PackNode | LoopGroupBodyNode)[], trail: string): void => {
+          for (const node of nodes) {
+            const id = `${trail}${node.id}`;
+            // `agent` and `loop` both invoke a provider. `loop_group` runs none
+            // itself; its body holds the work, so descend into it.
+            if ((node.kind === 'agent' || node.kind === 'loop') && !covered(node)) {
+              uncovered.push(`${name}:${id}`);
+            }
+            if (node.kind === 'loop_group') visit(node.loop_group.nodes, `${id}/`);
+          }
+        };
+        visit(workflow.nodes, '');
+      }
+
+      expect(uncovered).toEqual([]);
+    });
+  });
 });
