@@ -154,10 +154,11 @@ nodes:
   # Claude Code, Codex, and Pi. Bundled defaults stay on that shared capability
   # floor even where the configured provider can resume a named upstream session.
   #
-  # v1 note: adversarial per-finding verification happens inside this node's
-  # prompt. When in-parent runtime fan-out lands, a verify stage slots in
-  # between the lenses and this node without changing either side's contract —
-  # the findings files are the declared boundary.
+  # Adversarial per-finding verification happens inside this node's prompt. A
+  # separate verify stage between the lenses and this node is now expressible and
+  # would not change either side's contract — the findings files are the declared
+  # boundary — but nothing has measured it as better than the in-prompt pass, so
+  # it stays here until something does.
   - id: synthesize
     command: review-synthesize
     context: fresh

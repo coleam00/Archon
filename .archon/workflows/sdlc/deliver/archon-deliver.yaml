@@ -46,9 +46,11 @@ inputs:
 # The deliberate cost: when the flip itself FAILS, the composing tail's
 # terminal node is blocked, so its caveat and discovery surfacing is skipped
 # along with the false delivery claim — the operator gets the flip's own
-# error, which names the recovery. Truthful failure beats a lying report;
-# surfacing caveats on every failure path is terminal-result ownership the
-# engine is growing toward, not something each tail should hand-roll.
+# error, which names the recovery. Truthful failure beats a lying report. The
+# engine's terminal record does not close that gap: it is assembled when the run
+# reaches a terminal status and read back from outside, so no node of this run
+# can compose from it, and it carries no discoveries or red causes of its own.
+# What it does supply the operator is the node that actually failed.
 returns: flip-ready
 
 nodes:
