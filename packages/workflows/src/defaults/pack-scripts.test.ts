@@ -4,6 +4,14 @@ import { join } from 'node:path';
 import { BUNDLED_WORKFLOWS } from './bundled-defaults';
 import { parseWorkflow } from '../loader';
 
+type ParsedNode = NonNullable<ReturnType<typeof parseWorkflow>['workflow']>['nodes'][number];
+
+/** The declared schema of a node kind that can carry one. `include:` cannot. */
+function outputFormat(node: ParsedNode | undefined): Record<string, unknown> | undefined {
+  if (node === undefined || !('output_format' in node)) return undefined;
+  return node.output_format;
+}
+
 const REPO_ROOT = join(import.meta.dir, '..', '..', '..', '..');
 const PACKS_ROOT = join(REPO_ROOT, '.archon', 'workflows');
 const PACK_TSCONFIG = join(PACKS_ROOT, 'tsconfig.json');
@@ -27,9 +35,8 @@ function trackedPackScripts(): string[] {
 }
 
 function includedByOwningProject(): string[] {
-  const include = (
-    JSON.parse(readFileSync(PACK_TSCONFIG, 'utf-8')) as { include: string[] }
-  ).include;
+  const include = (JSON.parse(readFileSync(PACK_TSCONFIG, 'utf-8')) as { include: string[] })
+    .include;
   const matched = new Set<string>();
   for (const pattern of include) {
     for (const path of new Bun.Glob(pattern).scanSync({ cwd: PACKS_ROOT, dot: true })) {
@@ -79,7 +86,7 @@ describe('the red-cause vocabulary has one owner', () => {
     const parsed = parseWorkflow(BUNDLED_WORKFLOWS[workflow] ?? '', `${workflow}.yaml`);
     if (parsed.workflow === null) throw new Error(parsed.error.error);
     const node = parsed.workflow.nodes.find(candidate => candidate.id === nodeId);
-    const properties = (node?.output_format as { properties?: Record<string, unknown> } | undefined)
+    const properties = (outputFormat(node) as { properties?: Record<string, unknown> } | undefined)
       ?.properties;
     return (properties?.red_cause as { enum?: unknown } | undefined)?.enum;
   }
@@ -115,7 +122,7 @@ describe('advisory verdicts carry the report that backs them', () => {
     const parsed = parseWorkflow(BUNDLED_WORKFLOWS[workflow] ?? '', `${workflow}.yaml`);
     if (parsed.workflow === null) throw new Error(parsed.error.error);
     const node = parsed.workflow.nodes.find(candidate => candidate.id === nodeId);
-    const schema = node?.output_format as
+    const schema = outputFormat(node) as
       | { properties?: Record<string, unknown>; required?: string[] }
       | undefined;
 
