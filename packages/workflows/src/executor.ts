@@ -1205,13 +1205,6 @@ async function runChildWorkflow(
   // Ordinary refusals return a failed outcome; failures before a child row exists
   // carry an empty childRunId. Terminal-write rejection escapes to the run owner.
   const failOutcome = (error: string, childRunId = ''): ChildWorkflowOutcome => {
-    // Reclaim the child's staged capture. Several ordinary refusals happen between
-    // capturing and creating the child row — an unknown name, a cycle, the depth cap, a
-    // contract violation — and each would otherwise strand a complete tree under
-    // `staged-source`. Safe after the child HAS started too: `executeWorkflow` moves the
-    // capture into the child's artifacts, so the staged path is already gone and this is
-    // a no-op. Fire-and-forget because cleanup must never mask the failure being reported.
-    if (childSource) void disposeWorkflowSource({ captureRoot: childSource.anchor.root });
     return { childRunId, status: 'failed', error };
   };
 
@@ -1222,188 +1215,213 @@ async function runChildWorkflow(
   // discovering from the capture rather than from the live directory is what stops the
   // child executing one moment's YAML against another moment's scripts.
   const parentSourceRoot = await resolveChildDiscoveryRoot(parentRun.metadata);
-  let childSource: PreparedWorkflowSource | undefined;
-  try {
-    childSource = await prepareWorkflowSource(deps, { sourceRoot: parentSourceRoot ?? cwd });
-  } catch (err) {
-    return failOutcome(
-      `Failed to capture workflow source for sub-run '${childWorkflowName}': ${(err as Error).message}`
-    );
-  }
-
-  // 1. Resolve the child workflow by NAME (static target — constitution guardrail).
-  //    Resolution runs BEFORE the cycle check so a case-variant / suffix / substring
-  //    reference to an ancestor (e.g. `workflow: SELFIE` naming its own run) is caught
-  //    as a cycle by canonical name, not left to the less-informative depth cap.
-  let childWorkflow: ResolvedWorkflow | undefined;
-  try {
-    // DELIBERATE AFFORDANCE — do not "fix" this by adding a load-time existence
-    // check for `workflow:` targets. Discovery runs HERE, when the node executes,
-    // so a run can author a workflow mid-flight and then execute it as a governed
-    // child run; a load-time check would compile, pass every existing test, and
-    // silently delete that capability. Recorded in the constitution's case-law
-    // table (.archon/workflow-language-constitution.md) and locked by
-    // `describe('workflow: late resolution is a deliberate affordance')` in
-    // subrun.test.ts.
-    const { workflows } = await discoverWorkflowsWithConfig(
-      cwd,
-      deps.loadConfig,
-      childSource.roots
-    );
-    childWorkflow = resolveWorkflowName(
-      childWorkflowName,
-      workflows.map(w => w.workflow)
-    );
-    if (childWorkflow) await recordSelectedWorkflow(childSource.anchor.root, childWorkflow.name);
-  } catch (err) {
-    // resolveWorkflowName throws only on ambiguity.
-    return failOutcome(
-      `Failed to resolve sub-run '${childWorkflowName}': ${(err as Error).message}`
-    );
-  }
-  if (!childWorkflow) {
-    return failOutcome(`Unknown sub-run workflow '${childWorkflowName}'.`);
-  }
-
-  // 2. Cycle guard + depth cap (D9), compared against the RESOLVED canonical name.
-  //    The child's ancestor chain is the parent plus the parent's ancestors; a
-  //    resolved target already in the chain is a cycle.
-  let ancestry: WorkflowRun[];
-  try {
-    ancestry = [parentRun, ...(await deps.store.getRunAncestry(parentRun.id))];
-  } catch (err) {
-    return failOutcome(
-      `Failed to resolve run ancestry for sub-run guard: ${(err as Error).message}`
-    );
-  }
-  if (ancestry.some(a => a.workflow_name === childWorkflow.name)) {
-    return failOutcome(
-      `Sub-run cycle detected: '${childWorkflow.name}' is already an ancestor of this run.`
-    );
-  }
-  if (ancestry.length >= CHILD_WORKFLOW_DEPTH_CAP) {
-    return failOutcome(
-      `Sub-run depth cap (${String(CHILD_WORKFLOW_DEPTH_CAP)}) exceeded nesting '${childWorkflow.name}'.`
-    );
-  }
-
-  // 2b. Enforce the RESOLVED child's declared `inputs:` contract (#2470) — the exact
-  //     same resolution `include:` performs at load time, through the same shared
-  //     implementation, so a `with:` map accepted by one surface is accepted by the
-  //     other. It can only run here (not at load time) because the target is resolved
-  //     late by design, so it sits before isolation/worktree creation and before the
-  //     child run row exists: a contract violation must never leave an orphan worktree
-  //     or a doomed child row behind.
-  let childInputs: Record<string, JsonValue> | undefined;
-  try {
-    const resolved = resolveDeclaredInputs(
-      inputs ?? {},
-      childWorkflow.inputs,
-      `Node '${nodeId}'`,
-      `sub-run workflow '${childWorkflow.name}'`
-    );
-    childInputs = Object.keys(resolved).length > 0 ? resolved : undefined;
-  } catch (err) {
-    return failOutcome((err as Error).message);
-  }
-
-  // 3. Resolve the child's execution cwd (slice 2, PR-A). `isolation: 'worktree'`
-  //    runs the child in its own git worktree obtained from the injected resolver.
-  //    A resume whose child run row still exists reuses that row's recorded path
-  //    instead of resolving again; a resume whose child row is GONE (never written,
-  //    or deleted) falls through to the fresh-spawn path and does re-resolve —
-  //    safely, because the identifier is deterministic per (parent, node, index)
-  //    and the env-row write is an upsert (see child-isolation-resolver.ts).
-  //    `inherit` (or undefined) shares the parent's checkout — slice-1 behavior.
-  //    Resolving AFTER the name + cycle guards means a bad reference never leaves an
-  //    orphan worktree behind. The resolver throwing surfaces as a failed outcome
-  //    (never a silent shared-checkout fallback — a parallel write into the shared
-  //    checkout is the exact collision worktree isolation prevents).
-  let childCwd: string;
-  // Populated only when THIS spawn created a fresh isolated worktree — its env id +
-  // branch are stamped into the child's metadata (S3; PR-E console grouping reads it).
-  let childIsolationEnv: ChildIsolationResult | undefined;
-  if (resumeChild) {
-    // Reuse the child's own recorded working_path: its worktree for an isolated
-    // child, the shared parent checkout for `inherit`. Reaching this branch at all
-    // means the child row survived, so there is nothing to re-resolve.
-    const priorPath = resumeChild.run.working_path;
-    // An isolated child's worktree can be pruned by `isolation cleanup`/`complete`
-    // between its failure and this resume. Reusing a vanished path would surface as a
-    // deep ENOENT mid-run; fail fast with the same guidance the top-level CLI resume
-    // gives (workflow.ts resume precedent).
-    if (priorPath && !existsSync(priorPath)) {
-      return failOutcome(
-        `Cannot resume sub-run '${childWorkflowName}': its working path no longer exists ` +
-          `(${priorPath}). The worktree may have been cleaned up — start a fresh run.`,
-        resumeChild.run.id
-      );
-    }
-    // `working_path` is nullable in the schema, and falling back to the parent's
-    // `cwd` here would be the one silent shared-checkout fallback in this function —
-    // for an ISOLATED child that is exactly the concurrent-write collision the
-    // isolation was requested to prevent. Unreachable today (every child row is
-    // created with a real path, see the createWorkflowRun call below), so this is
-    // defense-in-depth: fail loudly rather than resume somewhere the author didn't ask for.
-    if (!priorPath) {
-      return failOutcome(
-        `Cannot resume sub-run '${childWorkflowName}': its run row has no recorded working ` +
-          'path, so the checkout it ran in is unknown — start a fresh run.',
-        resumeChild.run.id
-      );
-    }
-    childCwd = priorPath;
-  } else if (isolation === 'worktree') {
-    if (!resolveChildIsolation) {
-      return failOutcome(
-        `isolation: 'worktree' on sub-run '${childWorkflowName}' requires an injected ` +
-          'child-isolation resolver (available for git-repo codebases run via the CLI or ' +
-          "orchestrator). Remove the isolation or use 'inherit' (shared checkout)."
-      );
-    }
+  // Refusals and recursive execution share one owner until adoption or disposal.
+  return withCapturedSource(async owner => {
+    let childSource: PreparedWorkflowSource | undefined;
     try {
-      childIsolationEnv = await resolveChildIsolation.resolve({
-        parentRun,
-        nodeId,
-        childIndex,
-        codebaseId,
-      });
-      childCwd = childIsolationEnv.cwd;
+      childSource = await prepareWorkflowSource(deps, { sourceRoot: parentSourceRoot ?? cwd });
+      owner.hold(childSource);
     } catch (err) {
-      // The resolver already classified + logged the failure (child-isolation-resolver);
-      // prepend the sub-run context for the node-facing outcome.
       return failOutcome(
-        `Failed to create isolated worktree for sub-run '${childWorkflowName}': ${(err as Error).message}`
+        `Failed to capture workflow source for sub-run '${childWorkflowName}': ${(err as Error).message}`
       );
     }
-  } else {
-    childCwd = cwd;
-  }
 
-  // 4. Create the child run row (fresh) or hydrate the failed one (resume path).
-  let childOpts: ExecuteWorkflowOptions;
-  let childRunId: string;
-  // Thread the resolver into every child so a NESTED grandchild `workflow:` node can
-  // also request its own worktree (nesting is first-class up to the depth cap) — the
-  // recursive executeWorkflow otherwise has no resolver and would fail-fast. (The
-  // sibling `container:` context has the same non-propagation gap today; out of scope
-  // for this PR, but noted so it isn't mistaken for intentional.)
-  try {
+    // 1. Resolve the child workflow by NAME (static target — constitution guardrail).
+    //    Resolution runs BEFORE the cycle check so a case-variant / suffix / substring
+    //    reference to an ancestor (e.g. `workflow: SELFIE` naming its own run) is caught
+    //    as a cycle by canonical name, not left to the less-informative depth cap.
+    let childWorkflow: ResolvedWorkflow | undefined;
+    try {
+      // DELIBERATE AFFORDANCE — do not "fix" this by adding a load-time existence
+      // check for `workflow:` targets. Discovery runs HERE, when the node executes,
+      // so a run can author a workflow mid-flight and then execute it as a governed
+      // child run; a load-time check would compile, pass every existing test, and
+      // silently delete that capability. Recorded in the constitution's case-law
+      // table (.archon/workflow-language-constitution.md) and locked by
+      // `describe('workflow: late resolution is a deliberate affordance')` in
+      // subrun.test.ts.
+      const { workflows } = await discoverWorkflowsWithConfig(
+        cwd,
+        deps.loadConfig,
+        childSource.roots
+      );
+      childWorkflow = resolveWorkflowName(
+        childWorkflowName,
+        workflows.map(w => w.workflow)
+      );
+      if (childWorkflow) await recordSelectedWorkflow(childSource.anchor.root, childWorkflow.name);
+    } catch (err) {
+      // resolveWorkflowName throws only on ambiguity.
+      return failOutcome(
+        `Failed to resolve sub-run '${childWorkflowName}': ${(err as Error).message}`
+      );
+    }
+    if (!childWorkflow) {
+      return failOutcome(`Unknown sub-run workflow '${childWorkflowName}'.`);
+    }
+
+    // 2. Cycle guard + depth cap (D9), compared against the RESOLVED canonical name.
+    //    The child's ancestor chain is the parent plus the parent's ancestors; a
+    //    resolved target already in the chain is a cycle.
+    let ancestry: WorkflowRun[];
+    try {
+      ancestry = [parentRun, ...(await deps.store.getRunAncestry(parentRun.id))];
+    } catch (err) {
+      return failOutcome(
+        `Failed to resolve run ancestry for sub-run guard: ${(err as Error).message}`
+      );
+    }
+    if (ancestry.some(a => a.workflow_name === childWorkflow.name)) {
+      return failOutcome(
+        `Sub-run cycle detected: '${childWorkflow.name}' is already an ancestor of this run.`
+      );
+    }
+    if (ancestry.length >= CHILD_WORKFLOW_DEPTH_CAP) {
+      return failOutcome(
+        `Sub-run depth cap (${String(CHILD_WORKFLOW_DEPTH_CAP)}) exceeded nesting '${childWorkflow.name}'.`
+      );
+    }
+
+    // 2b. Enforce the RESOLVED child's declared `inputs:` contract (#2470) — the exact
+    //     same resolution `include:` performs at load time, through the same shared
+    //     implementation, so a `with:` map accepted by one surface is accepted by the
+    //     other. It can only run here (not at load time) because the target is resolved
+    //     late by design, so it sits before isolation/worktree creation and before the
+    //     child run row exists: a contract violation must never leave an orphan worktree
+    //     or a doomed child row behind.
+    let childInputs: Record<string, JsonValue> | undefined;
+    try {
+      const resolved = resolveDeclaredInputs(
+        inputs ?? {},
+        childWorkflow.inputs,
+        `Node '${nodeId}'`,
+        `sub-run workflow '${childWorkflow.name}'`
+      );
+      childInputs = Object.keys(resolved).length > 0 ? resolved : undefined;
+    } catch (err) {
+      return failOutcome((err as Error).message);
+    }
+
+    // 3. Resolve the child's execution cwd (slice 2, PR-A). `isolation: 'worktree'`
+    //    runs the child in its own git worktree obtained from the injected resolver.
+    //    A resume whose child run row still exists reuses that row's recorded path
+    //    instead of resolving again; a resume whose child row is GONE (never written,
+    //    or deleted) falls through to the fresh-spawn path and does re-resolve —
+    //    safely, because the identifier is deterministic per (parent, node, index)
+    //    and the env-row write is an upsert (see child-isolation-resolver.ts).
+    //    `inherit` (or undefined) shares the parent's checkout — slice-1 behavior.
+    //    Resolving AFTER the name + cycle guards means a bad reference never leaves an
+    //    orphan worktree behind. The resolver throwing surfaces as a failed outcome
+    //    (never a silent shared-checkout fallback — a parallel write into the shared
+    //    checkout is the exact collision worktree isolation prevents).
+    let childCwd: string;
+    // Populated only when THIS spawn created a fresh isolated worktree — its env id +
+    // branch are stamped into the child's metadata (S3; PR-E console grouping reads it).
+    let childIsolationEnv: ChildIsolationResult | undefined;
     if (resumeChild) {
-      if (resumeChild.kind === 'failed') {
-        const hydrated = await hydrateResumableRun(deps, resumeChild.run);
-        if (hydrated) {
-          childOpts = {
-            ...hydrated,
-            codebaseId,
-            resolveChildIsolation,
-            preparedSource: childSource,
-          };
-          childRunId = hydrated.preCreatedRun.id;
+      // Reuse the child's own recorded working_path: its worktree for an isolated
+      // child, the shared parent checkout for `inherit`. Reaching this branch at all
+      // means the child row survived, so there is nothing to re-resolve.
+      const priorPath = resumeChild.run.working_path;
+      // An isolated child's worktree can be pruned by `isolation cleanup`/`complete`
+      // between its failure and this resume. Reusing a vanished path would surface as a
+      // deep ENOENT mid-run; fail fast with the same guidance the top-level CLI resume
+      // gives (workflow.ts resume precedent).
+      if (priorPath && !existsSync(priorPath)) {
+        return failOutcome(
+          `Cannot resume sub-run '${childWorkflowName}': its working path no longer exists ` +
+            `(${priorPath}). The worktree may have been cleaned up — start a fresh run.`,
+          resumeChild.run.id
+        );
+      }
+      // `working_path` is nullable in the schema, and falling back to the parent's
+      // `cwd` here would be the one silent shared-checkout fallback in this function —
+      // for an ISOLATED child that is exactly the concurrent-write collision the
+      // isolation was requested to prevent. Unreachable today (every child row is
+      // created with a real path, see the createWorkflowRun call below), so this is
+      // defense-in-depth: fail loudly rather than resume somewhere the author didn't ask for.
+      if (!priorPath) {
+        return failOutcome(
+          `Cannot resume sub-run '${childWorkflowName}': its run row has no recorded working ` +
+            'path, so the checkout it ran in is unknown — start a fresh run.',
+          resumeChild.run.id
+        );
+      }
+      childCwd = priorPath;
+    } else if (isolation === 'worktree') {
+      if (!resolveChildIsolation) {
+        return failOutcome(
+          `isolation: 'worktree' on sub-run '${childWorkflowName}' requires an injected ` +
+            'child-isolation resolver (available for git-repo codebases run via the CLI or ' +
+            "orchestrator). Remove the isolation or use 'inherit' (shared checkout)."
+        );
+      }
+      try {
+        childIsolationEnv = await resolveChildIsolation.resolve({
+          parentRun,
+          nodeId,
+          childIndex,
+          codebaseId,
+        });
+        childCwd = childIsolationEnv.cwd;
+      } catch (err) {
+        // The resolver already classified + logged the failure (child-isolation-resolver);
+        // prepend the sub-run context for the node-facing outcome.
+        return failOutcome(
+          `Failed to create isolated worktree for sub-run '${childWorkflowName}': ${(err as Error).message}`
+        );
+      }
+    } else {
+      childCwd = cwd;
+    }
+
+    // 4. Create the child run row (fresh) or hydrate the failed one (resume path).
+    let childOpts: ExecuteWorkflowOptions;
+    let childRunId: string;
+    // Thread the resolver into every child so a NESTED grandchild `workflow:` node can
+    // also request its own worktree (nesting is first-class up to the depth cap) — the
+    // recursive executeWorkflow otherwise has no resolver and would fail-fast. (The
+    // sibling `container:` context has the same non-propagation gap today; out of scope
+    // for this PR, but noted so it isn't mistaken for intentional.)
+    try {
+      if (resumeChild) {
+        if (resumeChild.kind === 'failed') {
+          const hydrated = await hydrateResumableRun(deps, resumeChild.run);
+          if (hydrated) {
+            childOpts = {
+              ...hydrated,
+              codebaseId,
+              resolveChildIsolation,
+              preparedSource: childSource,
+            };
+            childRunId = hydrated.preCreatedRun.id;
+          } else {
+            const preCreatedRun = await deps.store.resumeWorkflowRun(resumeChild.run.id);
+            childOpts = {
+              preCreatedRun,
+              codebaseId,
+              resolveChildIsolation,
+              preparedSource: childSource,
+            };
+            childRunId = preCreatedRun.id;
+          }
         } else {
-          const preCreatedRun = await deps.store.resumeWorkflowRun(resumeChild.run.id);
+          const inspection = await inspectResumableRun(deps, resumeChild.run);
+          const completedNodeIds = new Set(inspection?.priorCompletedNodes.keys() ?? []);
+          const priorNodeSessions = (
+            await deps.store.listWorkflowRunNodeSessions(resumeChild.run.id)
+          ).filter(row => completedNodeIds.has(row.node_id));
+          const preCreatedRun = await deps.store.recoverCancelledFanOutRun(resumeChild.run.id);
           childOpts = {
             preCreatedRun,
+            ...(inspection
+              ? {
+                  priorCompletedNodes: inspection.priorCompletedNodes,
+                  priorUsage: inspection.priorUsage,
+                  priorNodeSessions,
+                }
+              : {}),
             codebaseId,
             resolveChildIsolation,
             preparedSource: childSource,
@@ -1411,110 +1429,78 @@ async function runChildWorkflow(
           childRunId = preCreatedRun.id;
         }
       } else {
-        const inspection = await inspectResumableRun(deps, resumeChild.run);
-        const completedNodeIds = new Set(inspection?.priorCompletedNodes.keys() ?? []);
-        const priorNodeSessions = (
-          await deps.store.listWorkflowRunNodeSessions(resumeChild.run.id)
-        ).filter(row => completedNodeIds.has(row.node_id));
-        const preCreatedRun = await deps.store.recoverCancelledFanOutRun(resumeChild.run.id);
+        const childRun = await deps.store.createWorkflowRun({
+          // The id its capture is already filed under (see prepareWorkflowSource).
+          id: childSource.runId,
+          workflow_name: childWorkflow.name,
+          conversation_id: conversationDbId,
+          codebase_id: codebaseId,
+          user_message: input,
+          working_path: childCwd,
+          parent_run_id: parentRun.id,
+          // Share the parent's parent_conversation_id back-link so approve/reject
+          // auto-resume scoping keeps working for the child on chat platforms.
+          parent_conversation_id: parentRun.parent_conversation_id ?? undefined,
+          user_id: userId,
+          metadata: {
+            [SUBRUN_METADATA_KEYS.parentNodeId]: nodeId,
+            // Fan-out instance index (slice 2, PR-C) — stamped only for a fan-out child so
+            // parent resume can re-key the ordered instance set by index (findChildRuns is
+            // started_at-ordered, which ≠ items order under max_parallel concurrency). A
+            // single (non-fan-out) child carries no child_index. The item-content hash rides
+            // alongside so resume can WARN on a non-deterministic producer (same index, new item).
+            ...(childIndex !== undefined ? { [SUBRUN_METADATA_KEYS.childIndex]: childIndex } : {}),
+            ...(itemHash !== undefined ? { [SUBRUN_METADATA_KEYS.fanOutItemHash]: itemHash } : {}),
+            // Named inputs (#2470) — persisted at spawn so the child's `$INPUTS.<name>`
+            // resolves from metadata at runtime (resolveRunInputs) and survives a COLD
+            // resume: both resume paths (hydrateResumableRun and the zero-completed-node
+            // resumeWorkflowRun fallback) reload THIS run row, so the map is intact without
+            // re-resolving parent refs that may be out of scope. Stamped only when non-empty.
+            // This is the CONTRACT-RESOLVED map (declared defaults applied), not the raw
+            // caller map — the child must see exactly what its `inputs:` block promises.
+            // `inputs` stays canonical TEXT forever (shipped binaries read a non-string map
+            // as corrupt/unset); the logical map rides the additive `inputs_values` sibling
+            // (#2637), written only when a value is actually non-string.
+            ...(childInputs !== undefined
+              ? {
+                  [SUBRUN_METADATA_KEYS.inputs]: Object.fromEntries(
+                    Object.entries(childInputs).map(([k, v]) => [k, canonicalValueText(v)])
+                  ),
+                  ...(Object.values(childInputs).some(v => typeof v !== 'string')
+                    ? { [SUBRUN_METADATA_KEYS.inputsValues]: childInputs }
+                    : {}),
+                }
+              : {}),
+            // Record the child's own worktree env + branch (mirrors the container path's
+            // isolation_env_id) so `isolation list` correlation + PR-E console grouping
+            // can find it. Absent for `inherit`/shared-checkout children.
+            ...(childIsolationEnv
+              ? {
+                  isolation_env_id: childIsolationEnv.envId,
+                  branch_name: childIsolationEnv.branchName,
+                }
+              : {}),
+          },
+        });
         childOpts = {
-          preCreatedRun,
-          ...(inspection
-            ? {
-                priorCompletedNodes: inspection.priorCompletedNodes,
-                priorUsage: inspection.priorUsage,
-                priorNodeSessions,
-              }
-            : {}),
+          preCreatedRun: childRun,
           codebaseId,
           resolveChildIsolation,
           preparedSource: childSource,
+          ...(runConfig ? { runConfig } : {}),
         };
-        childRunId = preCreatedRun.id;
+        childRunId = childRun.id;
       }
-    } else {
-      const childRun = await deps.store.createWorkflowRun({
-        // The id its capture is already filed under (see prepareWorkflowSource).
-        id: childSource.runId,
-        workflow_name: childWorkflow.name,
-        conversation_id: conversationDbId,
-        codebase_id: codebaseId,
-        user_message: input,
-        working_path: childCwd,
-        parent_run_id: parentRun.id,
-        // Share the parent's parent_conversation_id back-link so approve/reject
-        // auto-resume scoping keeps working for the child on chat platforms.
-        parent_conversation_id: parentRun.parent_conversation_id ?? undefined,
-        user_id: userId,
-        metadata: {
-          [SUBRUN_METADATA_KEYS.parentNodeId]: nodeId,
-          // Fan-out instance index (slice 2, PR-C) — stamped only for a fan-out child so
-          // parent resume can re-key the ordered instance set by index (findChildRuns is
-          // started_at-ordered, which ≠ items order under max_parallel concurrency). A
-          // single (non-fan-out) child carries no child_index. The item-content hash rides
-          // alongside so resume can WARN on a non-deterministic producer (same index, new item).
-          ...(childIndex !== undefined ? { [SUBRUN_METADATA_KEYS.childIndex]: childIndex } : {}),
-          ...(itemHash !== undefined ? { [SUBRUN_METADATA_KEYS.fanOutItemHash]: itemHash } : {}),
-          // Named inputs (#2470) — persisted at spawn so the child's `$INPUTS.<name>`
-          // resolves from metadata at runtime (resolveRunInputs) and survives a COLD
-          // resume: both resume paths (hydrateResumableRun and the zero-completed-node
-          // resumeWorkflowRun fallback) reload THIS run row, so the map is intact without
-          // re-resolving parent refs that may be out of scope. Stamped only when non-empty.
-          // This is the CONTRACT-RESOLVED map (declared defaults applied), not the raw
-          // caller map — the child must see exactly what its `inputs:` block promises.
-          // `inputs` stays canonical TEXT forever (shipped binaries read a non-string map
-          // as corrupt/unset); the logical map rides the additive `inputs_values` sibling
-          // (#2637), written only when a value is actually non-string.
-          ...(childInputs !== undefined
-            ? {
-                [SUBRUN_METADATA_KEYS.inputs]: Object.fromEntries(
-                  Object.entries(childInputs).map(([k, v]) => [k, canonicalValueText(v)])
-                ),
-                ...(Object.values(childInputs).some(v => typeof v !== 'string')
-                  ? { [SUBRUN_METADATA_KEYS.inputsValues]: childInputs }
-                  : {}),
-              }
-            : {}),
-          // Record the child's own worktree env + branch (mirrors the container path's
-          // isolation_env_id) so `isolation list` correlation + PR-E console grouping
-          // can find it. Absent for `inherit`/shared-checkout children.
-          ...(childIsolationEnv
-            ? {
-                isolation_env_id: childIsolationEnv.envId,
-                branch_name: childIsolationEnv.branchName,
-              }
-            : {}),
-        },
-      });
-      childOpts = {
-        preCreatedRun: childRun,
-        codebaseId,
-        resolveChildIsolation,
-        preparedSource: childSource,
-        ...(runConfig ? { runConfig } : {}),
-      };
-      childRunId = childRun.id;
+    } catch (err) {
+      return failOutcome(
+        `Failed to create sub-run '${childWorkflowName}': ${(err as Error).message}`
+      );
     }
-  } catch (err) {
-    return failOutcome(
-      `Failed to create sub-run '${childWorkflowName}': ${(err as Error).message}`
-    );
-  }
 
-  // 5. Run the child in-process (reuses the whole lifecycle) in its resolved cwd
-  //    (its own worktree when isolated, else the parent's checkout). Its terminal
-  //    output + cost + tokens land in the child run metadata on completion.
-  //
-  //    Wrapped in `withCapturedSource` so the staged capture above is reclaimed by
-  //    the wrap's `finally` if `executeWorkflow`'s move-into-artifacts rename fails
-  //    (#2690 recursive path). `failOutcome` already covers early-refusal paths
-  //    before this point; the rename failure inside the recursive call is the one
-  //    path the wrap is the only thing that can see — `executeWorkflow` returns
-  //    `{success: false}` from that branch rather than throwing, so without the
-  //    wrap the staged directory sits for the hourly age sweep.
-  try {
-    await withCapturedSource(async owner => {
-      owner.hold(childSource);
+    // 5. Run the child in-process (reuses the whole lifecycle) in its resolved cwd
+    //    (its own worktree when isolated, else the parent's checkout). Its terminal
+    //    output + cost + tokens land in the child run metadata on completion.
+    try {
       await executeWorkflow(
         deps,
         platform,
@@ -1529,38 +1515,38 @@ async function runChildWorkflow(
           modelOverrideLayer: { kind: 'resolved', overrides: resolvedModelOverrides },
         }
       );
-    });
 
-    // 6. Read the child back for the node-facing outcome (status + summary + cost +
-    //    tokens). Works for synchronous completion AND a child paused at its gate.
-    const finalChild = await deps.store.getWorkflowRun(childRunId);
-    if (!finalChild) {
-      return failOutcome('Child run row disappeared after execution.', childRunId);
+      // 6. Read the child back for the node-facing outcome (status + summary + cost +
+      //    tokens). Works for synchronous completion AND a child paused at its gate.
+      const finalChild = await deps.store.getWorkflowRun(childRunId);
+      if (!finalChild) {
+        return failOutcome('Child run row disappeared after execution.', childRunId);
+      }
+      return childOutcomeFromRun(finalChild);
+    } catch (err) {
+      if (err instanceof TerminalStatusWriteError) throw err;
+
+      // Ordinary setup/read-back failures become failed child outcomes after cleanup.
+      // A terminal write rejection escapes instead: cleanup may not have released the lock.
+      //
+      // Wedge guard (symmetric to maybeResumeParentRun's post-CAS handler): a throw in
+      // executeWorkflow's EARLY setup (config load, getCodebaseEnvVars, token
+      // resolution) fires BEFORE the status→running flip and BEFORE its own catch-all,
+      // stranding the pre-created child at 'pending' (or 'running' on a later window) —
+      // a non-terminal row that holds the working-path lock. `cancelWorkflowRun` (NOT
+      // failWorkflowRun, whose `WHERE status='running'` would miss the 'pending' case)
+      // flips any non-terminal child to 'cancelled' and no-ops on a child that reached
+      // completed/cancelled on its own. childRunId is always assigned once step 3 ran.
+      await requireTerminalStatusWrite(deps.store.cancelWorkflowRun(childRunId), {
+        workflowRunId: childRunId,
+        site: 'executor.child_setup_cancel',
+      });
+      return failOutcome(
+        `Sub-run '${childWorkflowName}' errored: ${(err as Error).message}`,
+        childRunId
+      );
     }
-    return childOutcomeFromRun(finalChild);
-  } catch (err) {
-    if (err instanceof TerminalStatusWriteError) throw err;
-
-    // Ordinary setup/read-back failures become failed child outcomes after cleanup.
-    // A terminal write rejection escapes instead: cleanup may not have released the lock.
-    //
-    // Wedge guard (symmetric to maybeResumeParentRun's post-CAS handler): a throw in
-    // executeWorkflow's EARLY setup (config load, getCodebaseEnvVars, token
-    // resolution) fires BEFORE the status→running flip and BEFORE its own catch-all,
-    // stranding the pre-created child at 'pending' (or 'running' on a later window) —
-    // a non-terminal row that holds the working-path lock. `cancelWorkflowRun` (NOT
-    // failWorkflowRun, whose `WHERE status='running'` would miss the 'pending' case)
-    // flips any non-terminal child to 'cancelled' and no-ops on a child that reached
-    // completed/cancelled on its own. childRunId is always assigned once step 3 ran.
-    await requireTerminalStatusWrite(deps.store.cancelWorkflowRun(childRunId), {
-      workflowRunId: childRunId,
-      site: 'executor.child_setup_cancel',
-    });
-    return failOutcome(
-      `Sub-run '${childWorkflowName}' errored: ${(err as Error).message}`,
-      childRunId
-    );
-  }
+  });
 }
 
 /**
