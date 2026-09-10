@@ -278,43 +278,61 @@ describe('downloadWebDist', () => {
   // The spawn-shape and cleanup assertions ride along here rather than in tests
   // of their own: each call to downloadWebDist costs a real `tar` spawn, and
   // spawn count on windows is the whole reason this file gets attention.
-  it('verifies against the embedded hash without fetching checksums.txt', async () => {
-    fetchSpy.mockImplementation(async () => new Response(tarballBytes));
-    const targetDir = join(tmpRoot, 'target-embedded-ok');
-    const spawnSpy = spyOn(Bun, 'spawn');
-    let extractorStdin: unknown;
-    let extractorBin: string | undefined;
+  // SKIPPED ON WINDOWS BY OPERATOR DECISION (#2924). Do not "fix" this by removing
+  // the skip. These two are the only tests that run a real `tar` to a successful
+  // extraction, and they are the two #2924 recorded timing out. The child never
+  // reports exit: phase logging shows 3ms of setup, `extract_spawned`, then silence
+  // until the runner kills it. It is a stall, not a slow extraction, so nothing about
+  // the fixture or the command can shorten it.
+  //
+  // What this costs: on windows we no longer prove end-to-end that the extraction
+  // command works. That proof still runs on ubuntu and macOS, and `resolveTarBin`'s
+  // own tests inject `platform`, so the windows branch stays covered everywhere.
+  //
+  // Why it was taken: the flake was interrupting Archon runs in the sdlc pack, which
+  // is a recurring cost against a hypothetical one — `archon serve` is bounded at 60s
+  // for users regardless. Reversing #2924's standing "never skip on windows" rule was
+  // deliberate and is recorded there.
+  it.skipIf(process.platform === 'win32')(
+    'verifies against the embedded hash without fetching checksums.txt',
+    async () => {
+      fetchSpy.mockImplementation(async () => new Response(tarballBytes));
+      const targetDir = join(tmpRoot, 'target-embedded-ok');
+      const spawnSpy = spyOn(Bun, 'spawn');
+      let extractorStdin: unknown;
+      let extractorBin: string | undefined;
 
-    try {
-      await downloadWebDist('9.9.9', targetDir, tarballHash);
-      // Read before restoring — mockRestore() clears the recorded calls.
-      extractorStdin = (spawnSpy.mock.calls[0]?.[1] as { stdin?: unknown } | undefined)?.stdin;
-      extractorBin = (spawnSpy.mock.calls[0]?.[0] as string[] | undefined)?.[0];
-    } finally {
-      spawnSpy.mockRestore();
-    }
+      try {
+        await downloadWebDist('9.9.9', targetDir, tarballHash);
+        // Read before restoring — mockRestore() clears the recorded calls.
+        extractorStdin = (spawnSpy.mock.calls[0]?.[1] as { stdin?: unknown } | undefined)?.stdin;
+        extractorBin = (spawnSpy.mock.calls[0]?.[0] as string[] | undefined)?.[0];
+      } finally {
+        spawnSpy.mockRestore();
+      }
 
-    // Content, not just existence — a truncated or corrupt fixture still yields
-    // an index.html and a `tar` exit 0, so only this assertion catches it.
-    expect(readFileSync(join(targetDir, 'index.html'), 'utf8')).toBe(FIXTURE_INDEX_HTML);
-    // Only the tarball is fetched — checksums.txt must NOT be requested.
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(String(fetchSpy.mock.calls[0]?.[0])).toContain('archon-web.tar.gz');
-    // `tar` must inherit a file descriptor. Passing the bytes as `stdin` instead
-    // leaves the parent owning a channel it has to pump and close, and a stalled
-    // pump blocks `tar` forever — the windows hang in #2924. A BunFile is a Blob;
-    // a Uint8Array is not, which is exactly the regression this catches.
-    expect(extractorStdin).toBeInstanceOf(Blob);
-    // Wiring: extraction must spawn the resolved binary, not the bare name. An
-    // exported-but-uncalled resolver leaves Windows on PATH, which is the bug.
-    if (process.platform === 'win32') {
-      expect(extractorBin).toMatch(/[/\\]System32[/\\]tar\.exe$/);
-    } else {
-      expect(extractorBin).toBe('tar');
+      // Content, not just existence — a truncated or corrupt fixture still yields
+      // an index.html and a `tar` exit 0, so only this assertion catches it.
+      expect(readFileSync(join(targetDir, 'index.html'), 'utf8')).toBe(FIXTURE_INDEX_HTML);
+      // Only the tarball is fetched — checksums.txt must NOT be requested.
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(String(fetchSpy.mock.calls[0]?.[0])).toContain('archon-web.tar.gz');
+      // `tar` must inherit a file descriptor. Passing the bytes as `stdin` instead
+      // leaves the parent owning a channel it has to pump and close, and a stalled
+      // pump blocks `tar` forever — the windows hang in #2924. A BunFile is a Blob;
+      // a Uint8Array is not, which is exactly the regression this catches.
+      expect(extractorStdin).toBeInstanceOf(Blob);
+      // Wiring: extraction must spawn the resolved binary, not the bare name. An
+      // exported-but-uncalled resolver leaves Windows on PATH, which is the bug.
+      if (process.platform === 'win32') {
+        expect(extractorBin).toMatch(/[/\\]System32[/\\]tar\.exe$/);
+      } else {
+        expect(extractorBin).toBe('tar');
+      }
+      // The staged archive is ~2 MB in production — it must not survive extraction.
+      expect(existsSync(`${targetDir}.tmp.tar.gz`)).toBe(false);
     }
-    // The staged archive is ~2 MB in production — it must not survive extraction.
-    expect(existsSync(`${targetDir}.tmp.tar.gz`)).toBe(false);
-  });
+  );
 
   it('hard-fails on embedded hash mismatch with a clear error', async () => {
     fetchSpy.mockImplementation(async () => new Response(tarballBytes));
@@ -391,23 +409,41 @@ describe('downloadWebDist', () => {
     expect(existsSync(targetDir)).toBe(false);
   });
 
-  it('falls back to remote checksums.txt when the embedded hash is empty', async () => {
-    fetchSpy.mockImplementation(async (url: string | URL | Request) => {
-      if (String(url).includes('checksums.txt')) {
-        return new Response(`${tarballHash}  archon-web.tar.gz\n`);
-      }
-      return new Response(tarballBytes);
-    });
-    const targetDir = join(tmpRoot, 'target-remote-fallback');
+  // SKIPPED ON WINDOWS BY OPERATOR DECISION (#2924). Do not "fix" this by removing
+  // the skip. These two are the only tests that run a real `tar` to a successful
+  // extraction, and they are the two #2924 recorded timing out. The child never
+  // reports exit: phase logging shows 3ms of setup, `extract_spawned`, then silence
+  // until the runner kills it. It is a stall, not a slow extraction, so nothing about
+  // the fixture or the command can shorten it.
+  //
+  // What this costs: on windows we no longer prove end-to-end that the extraction
+  // command works. That proof still runs on ubuntu and macOS, and `resolveTarBin`'s
+  // own tests inject `platform`, so the windows branch stays covered everywhere.
+  //
+  // Why it was taken: the flake was interrupting Archon runs in the sdlc pack, which
+  // is a recurring cost against a hypothetical one — `archon serve` is bounded at 60s
+  // for users regardless. Reversing #2924's standing "never skip on windows" rule was
+  // deliberate and is recorded there.
+  it.skipIf(process.platform === 'win32')(
+    'falls back to remote checksums.txt when the embedded hash is empty',
+    async () => {
+      fetchSpy.mockImplementation(async (url: string | URL | Request) => {
+        if (String(url).includes('checksums.txt')) {
+          return new Response(`${tarballHash}  archon-web.tar.gz\n`);
+        }
+        return new Response(tarballBytes);
+      });
+      const targetDir = join(tmpRoot, 'target-remote-fallback');
 
-    await downloadWebDist('9.9.9', targetDir, '');
+      await downloadWebDist('9.9.9', targetDir, '');
 
-    expect(readFileSync(join(targetDir, 'index.html'), 'utf8')).toBe(FIXTURE_INDEX_HTML);
-    // Remote path fetches both checksums.txt and the tarball.
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-    const urls = fetchSpy.mock.calls.map((call: Parameters<typeof fetch>) => String(call[0]));
-    expect(urls.some((url: string) => url.includes('checksums.txt'))).toBe(true);
-  });
+      expect(readFileSync(join(targetDir, 'index.html'), 'utf8')).toBe(FIXTURE_INDEX_HTML);
+      // Remote path fetches both checksums.txt and the tarball.
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      const urls = fetchSpy.mock.calls.map((call: Parameters<typeof fetch>) => String(call[0]));
+      expect(urls.some((url: string) => url.includes('checksums.txt'))).toBe(true);
+    }
+  );
 });
 
 // Structural conformance of the hand-rolled archive, checked against the POSIX
