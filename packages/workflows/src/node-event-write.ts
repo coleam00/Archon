@@ -1,17 +1,11 @@
 import type { WorkflowDeps, WorkflowTokenUsage } from './deps';
-import type { NodeStateEventInput } from './store';
-import type { EffortLevel, NodeSkipReason, SkipCause } from './schemas';
+import type { DagNode, EffortLevel, NodeSkipReason, SkipCause, TierName } from './schemas';
 import type { WorkflowEvent } from './logger';
 import { logWorkflowEvent } from './logger';
 import type { WorkflowEmitterEvent } from './event-emitter';
 import { getWorkflowEventEmitter } from './event-emitter';
-import { createLogger } from '@archon/paths';
 
-let cachedLog: ReturnType<typeof createLogger> | undefined;
-function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('workflow.node-event-write');
-  return cachedLog;
-}
+import type { NodeStateEventInput } from './store';
 
 /** Storage rejection must leave node retry policy and reach the run failure boundary. */
 export class NodeEventWriteError extends Error {
@@ -36,77 +30,68 @@ export async function persistNodeEvent(
   }
 }
 
-export interface RecordNodeStateTarget {
-  id: string;
-  name?: string;
-  kind?: string;
-  runtime?: string;
-  source?: { kind: string; name?: string };
+/**
+ * The node a state fact is about. Usually the authored node, whose kind and source
+ * name it in the transcript; a step the executor synthesizes (a loop finalized from a
+ * gate signal) has only an id.
+ */
+export type NodeStateSubject = DagNode | Pick<DagNode, 'id'>;
+
+/**
+ * What the run resolved for an AI node's execution. It is a fact about this run, not
+ * a field of the authored node, so it travels beside the node rather than on it. The
+ * emitter shows it on `node_started`; the durable row carries its own copy in `data`.
+ */
+export interface ResolvedExecution {
   provider?: string;
   model?: string;
-  tier?: 'small' | 'medium' | 'large';
+  tier?: TierName;
   effort?: EffortLevel;
-  [key: string]: unknown;
 }
 
-export interface RecordNodeStateDeps {
-  store?: WorkflowDeps['store'];
-  deps?: { store: WorkflowDeps['store'] };
-  logDir?: string;
+/**
+ * The three sinks one node-state fact reaches: the durable row, the JSONL transcript,
+ * and the in-process emitter. `logDir` is required because a site without a transcript
+ * is exactly the silently dropped sink #3255 removes.
+ */
+export interface NodeStateSinks {
+  store: WorkflowDeps['store'];
+  logDir: string;
   emitter?: Pick<ReturnType<typeof getWorkflowEventEmitter>, 'emit'>;
 }
 
-export function getNodeName(node: RecordNodeStateTarget): string {
-  if (typeof node.name === 'string' && node.name) return node.name;
-  if (
-    'source' in node &&
-    typeof node.source === 'object' &&
-    node.source !== null &&
-    (node.source as { kind?: string }).kind === 'command' &&
-    typeof (node.source as { name?: string }).name === 'string'
-  ) {
-    return (node.source as { name: string }).name;
+function isAuthoredNode(node: NodeStateSubject): node is DagNode {
+  return 'kind' in node;
+}
+
+function commandNameOf(node: NodeStateSubject): string | undefined {
+  return isAuthoredNode(node) && node.kind === 'agent' && node.source.kind === 'command'
+    ? node.source.name
+    : undefined;
+}
+
+export function getNodeName(node: NodeStateSubject): string {
+  return commandNameOf(node) ?? node.id;
+}
+
+function transcriptContent(node: NodeStateSubject, event: NodeStateEventInput): string {
+  if (typeof event.data?.command === 'string') return event.data.command;
+  if (isAuthoredNode(node)) {
+    if (node.kind === 'agent') return commandNameOf(node) ?? '<inline>';
+    if (node.kind === 'exec') return node.runtime === 'sh' ? '<bash>' : '<script>';
   }
+  if (typeof event.data?.type === 'string') return `<${event.data.type}>`;
   return node.id;
 }
 
-function getNodeContent(node: RecordNodeStateTarget, event: NodeStateEventInput): string {
-  if (typeof event.data?.command === 'string') {
-    return event.data.command;
-  }
-  if (node.kind === 'agent') {
-    if (
-      'source' in node &&
-      typeof node.source === 'object' &&
-      node.source !== null &&
-      (node.source as { kind?: string }).kind === 'command' &&
-      typeof (node.source as { name?: string }).name === 'string'
-    ) {
-      return (node.source as { name: string }).name;
-    }
-    return '<inline>';
-  }
-  if (node.kind === 'exec') {
-    return node.runtime === 'sh' ? '<bash>' : '<script>';
-  }
-  if (typeof event.data?.type === 'string') {
-    return `<${event.data.type}>`;
-  }
-  return getNodeName(node);
-}
-
 export function deriveTranscriptEvent(
-  node: RecordNodeStateTarget,
+  node: NodeStateSubject,
   event: NodeStateEventInput
 ): Omit<WorkflowEvent, 'ts' | 'workflow_id'> | undefined {
-  const content = getNodeContent(node, event);
+  const content = transcriptContent(node, event);
   switch (event.event_type) {
     case 'node_started':
-      return {
-        type: 'node_start',
-        step: node.id,
-        content,
-      };
+      return { type: 'node_start', step: node.id, content };
     case 'node_completed':
       return {
         type: 'node_complete',
@@ -134,11 +119,7 @@ export function deriveTranscriptEvent(
         ...(event.data?.cause !== undefined ? { cause: event.data.cause as SkipCause } : {}),
       };
     case 'node_skipped_prior_success':
-      return {
-        type: 'node_skipped',
-        step: node.id,
-        content: 'prior_success',
-      };
+      return { type: 'node_skipped', step: node.id, content: 'prior_success' };
     case 'node_prior_cache_invalidated':
     case 'node_always_run_reset':
       return undefined;
@@ -150,8 +131,9 @@ export function deriveTranscriptEvent(
 }
 
 export function deriveEmitterEvent(
-  node: RecordNodeStateTarget,
-  event: NodeStateEventInput
+  node: NodeStateSubject,
+  event: NodeStateEventInput,
+  execution: ResolvedExecution = {}
 ): WorkflowEmitterEvent | undefined {
   const nodeName = getNodeName(node);
   switch (event.event_type) {
@@ -161,10 +143,10 @@ export function deriveEmitterEvent(
         runId: event.workflow_run_id,
         nodeId: node.id,
         nodeName,
-        ...(typeof node.provider === 'string' && node.provider ? { provider: node.provider } : {}),
-        ...(typeof node.model === 'string' && node.model ? { model: node.model } : {}),
-        ...(node.tier ? { tier: node.tier } : {}),
-        ...(node.effort ? { effort: node.effort } : {}),
+        ...(execution.provider ? { provider: execution.provider } : {}),
+        ...(execution.model ? { model: execution.model } : {}),
+        ...(execution.tier ? { tier: execution.tier } : {}),
+        ...(execution.effort ? { effort: execution.effort } : {}),
       };
     case 'node_completed':
       return {
@@ -224,39 +206,29 @@ export function deriveEmitterEvent(
   }
 }
 
+/**
+ * Write one node-state fact to every sink. The durable row goes first and is awaited:
+ * its rejection is a NodeEventWriteError that must reach the run failure boundary. The
+ * transcript and the emitter derive from the same value. Each already isolates its own
+ * I/O: `logWorkflowEvent` logs an append failure, and the emitter catches listener
+ * errors. Nothing here catches, so a throw past the row is a derivation defect and
+ * surfaces as one instead of degrading to a warning.
+ */
 export async function recordNodeState(
-  deps: RecordNodeStateDeps,
-  node: RecordNodeStateTarget,
-  event: NodeStateEventInput
+  sinks: NodeStateSinks,
+  node: NodeStateSubject,
+  event: NodeStateEventInput,
+  execution?: ResolvedExecution
 ): Promise<void> {
-  const store = deps.store ?? deps.deps?.store;
-  if (!store) {
-    throw new Error('recordNodeState requires deps.store or deps.deps.store');
+  await persistNodeEvent(sinks.store, event);
+
+  const transcript = deriveTranscriptEvent(node, event);
+  if (transcript) {
+    await logWorkflowEvent(sinks.logDir, event.workflow_run_id, transcript);
   }
 
-  // 1. Durable sink: must be awaited and throw NodeEventWriteError on rejection
-  await persistNodeEvent(store, event);
-
-  // 2. Transcript sink: best-effort, never fails the node
-  if (deps.logDir) {
-    try {
-      const transcriptEvent = deriveTranscriptEvent(node, event);
-      if (transcriptEvent) {
-        await logWorkflowEvent(deps.logDir, event.workflow_run_id, transcriptEvent);
-      }
-    } catch (err) {
-      getLog().warn({ err, nodeId: node.id }, 'dag.node_state_transcript_failed');
-    }
-  }
-
-  // 3. Emitter sink: fire-and-forget, listener errors must not propagate
-  try {
-    const emitterEvent = deriveEmitterEvent(node, event);
-    if (emitterEvent) {
-      const emitter = deps.emitter ?? getWorkflowEventEmitter();
-      emitter.emit(emitterEvent);
-    }
-  } catch (err) {
-    getLog().warn({ err, nodeId: node.id }, 'dag.node_state_emitter_failed');
+  const emitted = deriveEmitterEvent(node, event, execution);
+  if (emitted) {
+    (sinks.emitter ?? getWorkflowEventEmitter()).emit(emitted);
   }
 }

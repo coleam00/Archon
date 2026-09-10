@@ -11,6 +11,7 @@ import {
 import type { NodeStateEventInput } from './store';
 import type { SkipCause } from './schemas';
 import type { WorkflowEmitterEvent } from './event-emitter';
+import { getWorkflowEventEmitter } from './event-emitter';
 
 describe('node-event-write', () => {
   let testLogDir: string;
@@ -204,23 +205,48 @@ describe('node-event-write', () => {
       expect(emitter.emit).toHaveBeenCalledTimes(1);
     });
 
-    it('emitter failure does not propagate to caller', async () => {
+    it('a crashing emitter listener does not propagate to the caller', async () => {
       const store = { persistWorkflowEvent: mock(async () => {}) } as any;
-      const throwingEmitter = {
-        emit: mock(() => {
-          throw new Error('listener crashed');
-        }),
-      };
+      const emitter = getWorkflowEventEmitter();
+      const unsubscribe = emitter.subscribe(() => {
+        throw new Error('listener crashed');
+      });
+      try {
+        await expect(
+          recordNodeState(
+            { store, logDir: testLogDir, emitter },
+            { id: 'node-emit-fail' },
+            {
+              workflow_run_id: 'run-emit',
+              event_type: 'node_completed',
+              step_name: 'node-emit-fail',
+            }
+          )
+        ).resolves.toBeUndefined();
+      } finally {
+        unsubscribe();
+      }
+
+      expect(store.persistWorkflowEvent).toHaveBeenCalledTimes(1);
+    });
+
+    it('a derivation defect surfaces instead of degrading to a warning', async () => {
+      const store = { persistWorkflowEvent: mock(async () => {}) } as any;
+      const emitter = { emit: mock(() => {}) };
 
       await expect(
         recordNodeState(
-          { store, logDir: testLogDir, emitter: throwingEmitter },
-          { id: 'node-emit-fail' },
-          { workflow_run_id: 'run-emit', event_type: 'node_completed', step_name: 'node-emit-fail' }
+          { store, logDir: testLogDir, emitter },
+          { id: 'node-bogus' },
+          {
+            workflow_run_id: 'run-bogus',
+            event_type: 'not_a_node_state' as never,
+            step_name: 'node-bogus',
+          }
         )
-      ).resolves.toBeUndefined();
+      ).rejects.toThrow(/Unhandled NodeStateEventType/);
 
-      expect(store.persistWorkflowEvent).toHaveBeenCalledTimes(1);
+      expect(emitter.emit).not.toHaveBeenCalled();
     });
   });
 
@@ -316,8 +342,8 @@ describe('node-event-write', () => {
         data: { command: 'implement.md' },
       };
 
-      const node = {
-        id: 'step-start',
+      const node = { id: 'step-start' };
+      const execution = {
         provider: 'claude',
         model: 'claude-3-7-sonnet',
         tier: 'medium' as const,
@@ -331,7 +357,7 @@ describe('node-event-write', () => {
         content: 'implement.md',
       });
 
-      const emitter = deriveEmitterEvent(node, event);
+      const emitter = deriveEmitterEvent(node, event, execution);
       expect(emitter).toMatchObject({
         type: 'node_started',
         nodeId: 'step-start',

@@ -1299,7 +1299,7 @@ async function assertCheckoutUntouched(
   deps: WorkflowDeps,
   workflowRunId: string,
   stepName: string,
-  logDir?: string
+  logDir: string
 ): Promise<NodeExecutionResult> {
   if (node.mutates_checkout !== false || before === undefined || result.state !== 'completed') {
     return result;
@@ -2128,7 +2128,7 @@ async function executeNodeInternal(
 
   await recordNodeState(
     { store: deps.store, logDir },
-    { ...node, provider, model: resolvedModel, tier: resolvedTier, effort: resolvedEffort },
+    node,
     {
       workflow_run_id: workflowRun.id,
       event_type: 'node_started',
@@ -2142,7 +2142,8 @@ async function executeNodeInternal(
         ...namedSessionAuditData,
         ...iterationData,
       },
-    }
+    },
+    { provider, model: resolvedModel, tier: resolvedTier, effort: resolvedEffort }
   );
 
   let nodeTokens: TokenUsage | undefined;
@@ -3608,7 +3609,7 @@ async function recordExecTimeoutSkip(
   const cause: SkipCause = { kind: 'timeout' };
   getLog().info({ nodeId: node.id, nodeType }, 'dag_node_skipped_timeout');
 
-  await recordNodeState(ctx, node, {
+  await recordNodeState({ store: ctx.deps.store, logDir: ctx.logDir }, node, {
     workflow_run_id: ctx.workflowRun.id,
     event_type: 'node_skipped',
     step_name: stepName,
@@ -4431,9 +4432,9 @@ async function finalizeLoopFromSignal(
   stepName: string,
   nodeLabel: string,
   finalizeOutput: string,
-  finalizeUsage?: { costUsd?: number; tokens?: TokenUsage },
-  finalizeStructuredOutput?: unknown,
-  logDir?: string
+  finalizeUsage: { costUsd?: number; tokens?: TokenUsage } | undefined,
+  finalizeStructuredOutput: unknown,
+  logDir: string
 ): Promise<void> {
   // Impossible by construction today (the gate writes signaledOutput whenever
   // completionSignaled is true) — this warn guards a future decoupling so a
@@ -5602,13 +5603,7 @@ async function executeLoopNode(
 
   await recordNodeState(
     { store: deps.store, logDir },
-    {
-      ...node,
-      provider: workflowProvider,
-      model: resolvedModel,
-      tier: resolvedTier,
-      effort: resolvedEffort,
-    },
+    node,
     {
       workflow_run_id: workflowRun.id,
       event_type: 'node_started',
@@ -5624,7 +5619,8 @@ async function executeLoopNode(
         tier: resolvedTier,
         ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
       },
-    }
+    },
+    { provider: workflowProvider, model: resolvedModel, tier: resolvedTier, effort: resolvedEffort }
   );
 
   /**
@@ -7157,8 +7153,8 @@ async function executeWaitNode(
   conversationId: string,
   nodeOutputs: Map<string, NodeOutput>,
   stepNamePrefix = '',
-  loopOwner?: WaitLoopOwner,
-  logDir?: string
+  loopOwner: WaitLoopOwner | undefined,
+  logDir: string
 ): Promise<NodeOutput> {
   const now = new Date();
   const rawPersisted = workflowRun.metadata?.wait;
@@ -9777,7 +9773,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 // audit row must go through the same bounded-preview+spill helper as the
                 // primary node_completed/node_skipped_prior_success writers, not the raw text.
                 const alwaysRunPriorOutput = formatThisNodesPriorOutput(alwaysRunStepName);
-                await recordNodeState(ctx, node, {
+                await recordNodeState({ store: ctx.deps.store, logDir: ctx.logDir }, node, {
                   workflow_run_id: ctx.workflowRun.id,
                   event_type: 'node_always_run_reset',
                   step_name: alwaysRunStepName,
@@ -9812,7 +9808,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                     { nodeId: node.id, invalidatingDeps: staleDeps },
                     'dag.node_prior_cache_invalidated'
                   );
-                  await recordNodeState(ctx, node, {
+                  await recordNodeState({ store: ctx.deps.store, logDir: ctx.logDir }, node, {
                     workflow_run_id: ctx.workflowRun.id,
                     event_type: 'node_prior_cache_invalidated',
                     step_name: invalidatedStepName,
@@ -9851,7 +9847,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                           : {}),
                       }
                     : formatThisNodesPriorOutput(skipStepName);
-                  await recordNodeState(ctx, node, {
+                  await recordNodeState({ store: ctx.deps.store, logDir: ctx.logDir }, node, {
                     workflow_run_id: ctx.workflowRun.id,
                     event_type: 'node_skipped_prior_success',
                     step_name: skipStepName,
@@ -9896,7 +9892,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             if (triggerDecision.decision === 'skip') {
               const { cause } = triggerDecision;
               getLog().info({ nodeId: node.id, reason: 'trigger_rule' }, 'dag_node_skipped');
-              await recordNodeState(ctx, node, {
+              await recordNodeState({ store: ctx.deps.store, logDir: ctx.logDir }, node, {
                 workflow_run_id: ctx.workflowRun.id,
                 event_type: 'node_skipped',
                 step_name: ctx.stepNamePrefix + node.id,
@@ -9934,7 +9930,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   { nodeId: node.id, when: node.when },
                   'dag_node_skipped_condition_parse_error'
                 );
-                await recordNodeState(ctx, node, {
+                await recordNodeState({ store: ctx.deps.store, logDir: ctx.logDir }, node, {
                   workflow_run_id: ctx.workflowRun.id,
                   event_type: 'node_skipped',
                   step_name: ctx.stepNamePrefix + node.id,
@@ -9948,7 +9944,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               if (!conditionPasses) {
                 const cause: SkipCause = { kind: 'condition', expr: node.when };
                 getLog().info({ nodeId: node.id, when: node.when }, 'dag_node_skipped_condition');
-                await recordNodeState(ctx, node, {
+                await recordNodeState({ store: ctx.deps.store, logDir: ctx.logDir }, node, {
                   workflow_run_id: ctx.workflowRun.id,
                   event_type: 'node_skipped',
                   step_name: ctx.stepNamePrefix + node.id,
@@ -9970,7 +9966,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             // Agent, exec and loop executors own their starts (including retries).
             // Coordination nodes start here before they can pause or terminalize the run.
             const persistDispatchStart = (): Promise<void> =>
-              recordNodeState(ctx, node, {
+              recordNodeState({ store: ctx.deps.store, logDir: ctx.logDir }, node, {
                 workflow_run_id: ctx.workflowRun.id,
                 event_type: 'node_started',
                 step_name: ctx.stepNamePrefix + node.id,
@@ -10147,7 +10143,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   ctx.stepNamePrefix
                 );
                 if (output.state === 'failed') {
-                  await recordNodeState(ctx, node, {
+                  await recordNodeState({ store: ctx.deps.store, logDir: ctx.logDir }, node, {
                     workflow_run_id: ctx.workflowRun.id,
                     event_type: 'node_failed',
                     step_name: ctx.stepNamePrefix + node.id,
@@ -10578,7 +10574,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
 
             const err = error as Error;
             getLog().error({ err, nodeId: node.id }, 'dag_node_pre_execution_failed');
-            await recordNodeState(ctx, node, {
+            await recordNodeState({ store: ctx.deps.store, logDir: ctx.logDir }, node, {
               workflow_run_id: ctx.workflowRun.id,
               event_type: 'node_failed',
               step_name: ctx.stepNamePrefix + node.id,
