@@ -30,6 +30,7 @@ review__synthesize:
 review-action: '{"ready":true,"action":"none"}'
 gate-ready: '{"ready":"true"}'
 validate__validate:
+  checks_performed: true
   green: true
   red_cause: ""
   summary: "stub: full gate green — the tree was corrected"
