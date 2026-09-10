@@ -23,6 +23,12 @@ inputs:
   errors:
     default: "auto"
     description: Silent-failure lens — auto, true, or false.
+  publish:
+    default: "false"
+    description: >-
+      Let triage write its derived labels to the tracker item — true or false.
+      Off by default. Forwarded unchanged to triage; a scheduled ship run is the
+      only place an unattended intake can turn it on.
 
 returns: outcome
 
@@ -33,6 +39,7 @@ nodes:
     include: archon-triage
     with:
       target: "$INPUTS.target"
+      publish: "$INPUTS.publish"
 
   - id: inv
     include: archon-investigate
