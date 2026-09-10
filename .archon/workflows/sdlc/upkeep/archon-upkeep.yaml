@@ -33,12 +33,13 @@ outcome_field: delivered
 
 nodes:
   # The assessment stage is advisory and inline (not a composed package): the
-  # record/judge/verify triad appears here for the second time after triage —
-  # rule of three says extract on the third package that needs it, not now.
+  # judge-and-return shape appears here for the second time after triage — rule
+  # of three says extract on the third package that needs it, not now.
   - id: assess
     command: assess
-    # Advisory: the engine fails this node with the touched paths named if it
-    # modifies the working tree; replaced the record-state snapshot.
+    # Advisory on both counts, and the engine holds both: it fails this node with
+    # the touched paths named if the checkout is modified, and it refuses the
+    # artifact pointer below if the report it names does not exist.
     mutates_checkout: false
     model: medium
     output_type: dependency-assessment

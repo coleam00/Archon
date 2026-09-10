@@ -36,8 +36,9 @@ nodes:
   # $plan.output.ready before building.
   - id: plan
     command: plan
-    # Advisory: the engine fails this node with the touched paths named if it
-    # modifies the working tree; replaced the record-state snapshot.
+    # Advisory on both counts, and the engine holds both: it fails this node with
+    # the touched paths named if the checkout is modified, and it refuses the
+    # artifact pointer below if the report it names does not exist.
     mutates_checkout: false
     output_type: implementation-plan
     output_format:
