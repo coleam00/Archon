@@ -1,3 +1,4 @@
+import { terminalRecordSchema } from '@archon/workflows/schemas/terminal-record';
 /**
  * Zod schemas for workflow API endpoints.
  */
@@ -158,6 +159,7 @@ export const workflowRunDetailSchema = z
       worker_platform_id: z.string().optional(),
       parent_platform_id: z.string().optional(),
       conversation_platform_id: z.string().nullable(),
+      terminal_record: terminalRecordSchema.nullable(),
     }),
     events: z.array(workflowEventSchema),
   })

@@ -22,6 +22,16 @@ const mockExecuteWorkflow = mock<(typeof import('@archon/workflows/executor'))['
     summary: 'done',
   })
 );
+const runLiveOwnerCalls: string[] = [];
+const mockCloseRunLiveOwner = mock(async () => {
+  runLiveOwnerCalls.push('close');
+});
+const mockStartRunLiveOwner = mock<
+  (typeof import('@archon/core/services/run-live-owner'))['startRunLiveOwner']
+>(async runId => {
+  runLiveOwnerCalls.push(`start:${runId}`);
+  return { close: mockCloseRunLiveOwner, isStopRequested: () => false };
+});
 
 mock.module('@archon/core', () => ({
   createChildWorktreeResolver: mock(() => undefined),
@@ -29,6 +39,9 @@ mock.module('@archon/core', () => ({
 }));
 mock.module('@archon/core/handlers', () => ({
   resolveRunContinuation: mockResolveRunContinuation,
+}));
+mock.module('@archon/core/services/run-live-owner', () => ({
+  startRunLiveOwner: mockStartRunLiveOwner,
 }));
 mock.module('@archon/core/db/codebases', () => ({ getCodebase: mock(async () => null) }));
 const mockFailWorkflowRun = mock<(typeof import('@archon/core/db/workflows'))['failWorkflowRun']>(
@@ -106,6 +119,9 @@ describe('workflow continuation scanner', () => {
     });
     mockFailWorkflowRun.mockReset();
     mockFailWorkflowRun.mockResolvedValue(undefined);
+    runLiveOwnerCalls.length = 0;
+    mockStartRunLiveOwner.mockClear();
+    mockCloseRunLiveOwner.mockClear();
   });
 
   // #2910: the headless scanner is the unattended path — nothing revisits a row it
@@ -135,10 +151,14 @@ describe('workflow continuation scanner', () => {
     };
 
     test('marks the run failed when execution rejects with an ordinary error', async () => {
+      mockFailWorkflowRun.mockImplementationOnce(async () => {
+        runLiveOwnerCalls.push('fail');
+      });
       await startHeadlessResume(new Error('resume boom'));
 
       expect(mockFailWorkflowRun).toHaveBeenCalledTimes(1);
       expect(mockFailWorkflowRun.mock.calls[0]?.[0]).toBe('wait-headless');
+      expect(runLiveOwnerCalls).toEqual(['start:wait-headless', 'fail', 'close']);
     });
 
     test('does not compensate a rejected terminal write with a second failure write', async () => {
@@ -386,8 +406,51 @@ describe('workflow continuation scanner', () => {
     expect(mockExecuteWorkflow.mock.calls[0]?.[2]).toBe('slack-thread-123');
   });
 
-  test('surfaces a resumed background-web terminal result on the visible conversation', async () => {
+  test('publishes the owner before claiming the run and closes it after execution', async () => {
+    const paused = run('wait-owned', 'paused', {});
+    mockResolveRunContinuation.mockResolvedValueOnce({
+      ok: true,
+      workflowName: 'deliver',
+      workflow: { definition: makeTestResolvedWorkflow({ name: 'deliver' }), args: '' },
+    });
+    mockHydrateResumableRun.mockImplementationOnce(async () => {
+      runLiveOwnerCalls.push('hydrate');
+      return {
+        preCreatedRun: { ...paused, status: 'running' },
+        priorCompletedNodes: new Map(),
+        priorUsage: { costUsd: 0 },
+        priorNodeSessions: [],
+      };
+    });
+    mockExecuteWorkflow.mockImplementationOnce(async () => {
+      runLiveOwnerCalls.push('execute');
+      return { success: true, workflowRunId: paused.id, summary: 'done' };
+    });
+
+    await expect(resumeWorkflowRunFromServer(paused)).resolves.toBe(true);
+    await Promise.resolve();
+
+    expect(runLiveOwnerCalls).toEqual(['start:wait-owned', 'hydrate', 'execute', 'close']);
+  });
+
+  test('closes the owner when hydration declines the execution claim', async () => {
+    const paused = run('wait-empty', 'paused', {});
+    mockResolveRunContinuation.mockResolvedValueOnce({
+      ok: true,
+      workflowName: 'deliver',
+      workflow: { definition: makeTestResolvedWorkflow({ name: 'deliver' }), args: '' },
+    });
+
+    await expect(resumeWorkflowRunFromServer(paused)).resolves.toBe(false);
+
+    expect(mockStartRunLiveOwner).toHaveBeenCalledWith('wait-empty');
+    expect(mockCloseRunLiveOwner).toHaveBeenCalledTimes(1);
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  test('surfaces a resumed background-web result when owner cleanup fails', async () => {
     const paused = run('wait-web', 'paused', {});
+    const cleanupError = new Error('owner cleanup failed');
     mockResolveRunContinuation.mockResolvedValueOnce({
       ok: true,
       workflowName: 'deliver',
@@ -404,6 +467,10 @@ describe('workflow continuation scanner', () => {
       getStreamingMode: () => 'batch' as const,
       getPlatformType: () => 'web',
     } satisfies IWorkflowPlatform;
+    mockCloseRunLiveOwner.mockImplementationOnce(async () => {
+      runLiveOwnerCalls.push('close');
+      throw cleanupError;
+    });
 
     await expect(
       resumeWorkflowRunFromServer(paused, undefined, {

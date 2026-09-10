@@ -15,7 +15,7 @@ import { execFileAsync } from '@archon/git';
 import {
   isBinaryBuild,
   BUNDLED_COMMANDS,
-  BUNDLED_SCRIPTS,
+  BUNDLED_SCRIPT_PACKS,
   BUNDLED_WORKFLOWS,
   BUNDLED_WORKFLOW_OWNERS,
 } from './bundled-defaults';
@@ -37,22 +37,6 @@ const WORKFLOWS_DIR = join(REPO_ROOT, '.archon/workflows/defaults');
 // `legacy/` holds the deprecated-window defaults (#2781): same flat file
 // convention, one grouping subfolder within the discovery depth cap.
 const LEGACY_WORKFLOWS_DIR = join(WORKFLOWS_DIR, 'legacy');
-
-function findPackagedScriptPath(scriptDir: string, name: string, extension: string): string {
-  const filename = `${name}${extension}`;
-  const direct = join(scriptDir, filename);
-  if (existsSync(direct)) return direct;
-  const matches = readdirSync(scriptDir, { withFileTypes: true })
-    .filter(entry => entry.isDirectory())
-    .map(entry => join(scriptDir, entry.name, filename))
-    .filter(path => existsSync(path));
-  if (matches.length !== 1) {
-    throw new Error(
-      `Expected exactly one packaged script named ${filename} under ${scriptDir}, found ${matches.length}`
-    );
-  }
-  return matches[0];
-}
 
 describe('bundled-defaults', () => {
   describe('isBinaryBuild', () => {
@@ -163,23 +147,23 @@ describe('bundled-defaults', () => {
           }
         }
       }
-      for (const [name, script] of Object.entries(BUNDLED_SCRIPTS)) {
-        expect(name.startsWith('__archon_pack__bundled:')).toBe(true);
-        expect(['.ts', '.js', '.py']).toContain(script.extension);
-        expect(['bun', 'uv']).toContain(script.runtime);
-        expect(script.content.length).toBeGreaterThan(0);
-        const packaged = parsePackagedResourceReference(name);
-        expect(packaged).not.toBeNull();
-        const scriptDir = join(
-          REPO_ROOT,
-          '.archon',
-          'workflows',
-          packaged!.owner.pack,
-          packaged!.owner.workflow,
-          'scripts'
-        );
-        const diskPath = findPackagedScriptPath(scriptDir, packaged!.name, script.extension);
-        expect(script.content).toBe(readFileSync(diskPath, 'utf-8').replace(/\r\n/g, '\n'));
+      for (const [pack, bundle] of Object.entries(BUNDLED_SCRIPT_PACKS)) {
+        for (const [path, content] of Object.entries(bundle.files)) {
+          expect(content).toBe(
+            readFileSync(join(REPO_ROOT, '.archon/workflows', pack, path), 'utf-8').replace(
+              /\r\n/g,
+              '\n'
+            )
+          );
+        }
+        for (const [name, script] of Object.entries(bundle.scripts)) {
+          const packaged = parsePackagedResourceReference(name);
+          if (packaged === null) throw new Error(`Missing packaged script owner: ${name}`);
+          expect(packaged.owner.pack).toBe(pack);
+          expect(script.path.startsWith(`${packaged.owner.workflow}/scripts/`)).toBe(true);
+          expect(bundle.files[script.path]?.length).toBeGreaterThan(0);
+          expect(['uv', 'bun']).toContain(script.runtime);
+        }
       }
     });
   });
@@ -1008,5 +992,61 @@ describe('bundled-defaults', () => {
         }
       }
     );
+  });
+
+  // Every AI node in the SDLC pack must resolve a tier. A node that resolves none
+  // falls through to the install's default assistant — so a run pinned to one
+  // provider silently executes that node on another and spends its quota. Which
+  // tier a node names is an ordinary authoring choice and changes freely; that it
+  // resolves one at all is the invariant this protects.
+  //
+  // Node types are derived from parseWorkflow rather than restated: a hand-written
+  // copy of the node union would drift the moment a node kind is added.
+  type PackNode = NonNullable<ReturnType<typeof parseWorkflow>['workflow']>['nodes'][number];
+  type LoopGroupBodyNode = Extract<PackNode, { kind: 'loop_group' }>['loop_group']['nodes'][number];
+
+  describe('sdlc pack tier coverage', () => {
+    it('resolves a tier for every AI node', () => {
+      const uncovered: string[] = [];
+
+      for (const [name, owner] of Object.entries(BUNDLED_WORKFLOW_OWNERS)) {
+        if (owner?.pack !== 'sdlc') continue;
+        const source = BUNDLED_WORKFLOWS[name];
+        if (source === undefined) continue;
+
+        const parsed = parseWorkflow(source, name);
+        expect(parsed.error).toBeNull();
+        const workflow = parsed.workflow;
+        if (workflow === null) continue;
+
+        // Coverage mirrors the resolver, not the doc comments:
+        //  - a node's own `model:` always wins;
+        //  - a workflow's `model:` reaches a node only when the node resolves to the
+        //    workflow's own provider (include-expander's `workflowModelTravelsTo`);
+        //  - a `loop_group`'s own `model:` covers nothing — the executor forwards only
+        //    its resolved provider into the body context, never its model.
+        const covered = (node: PackNode | LoopGroupBodyNode): boolean => {
+          if ('model' in node && node.model !== undefined) return true;
+          if (workflow.model === undefined) return false;
+          const nodeProvider = 'provider' in node ? node.provider : undefined;
+          return nodeProvider === undefined || nodeProvider === workflow.provider;
+        };
+
+        const visit = (nodes: readonly (PackNode | LoopGroupBodyNode)[], trail: string): void => {
+          for (const node of nodes) {
+            const id = `${trail}${node.id}`;
+            // `agent` and `loop` both invoke a provider. `loop_group` runs none
+            // itself; its body holds the work, so descend into it.
+            if ((node.kind === 'agent' || node.kind === 'loop') && !covered(node)) {
+              uncovered.push(`${name}:${id}`);
+            }
+            if (node.kind === 'loop_group') visit(node.loop_group.nodes, `${id}/`);
+          }
+        };
+        visit(workflow.nodes, '');
+      }
+
+      expect(uncovered).toEqual([]);
+    });
   });
 });

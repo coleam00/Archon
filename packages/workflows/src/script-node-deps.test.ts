@@ -111,7 +111,16 @@ function createMockStore(): IWorkflowStore {
     pauseWorkflowRun: mock(() => Promise.resolve()),
     pauseWorkflowRunForWait: mock(() => Promise.resolve()),
     failPausedAttentionWait: mock(() => Promise.resolve({ failed: true })),
-    clearWorkflowWaitContext: mock(() => Promise.resolve({ cleared: true })),
+    clearWorkflowWaitContext: mock((id: string, _wait: unknown, completion: { stepName: string }) =>
+      Promise.resolve({
+        cleared: true as const,
+        nodeEvent: {
+          workflow_run_id: id,
+          event_type: 'node_completed' as const,
+          step_name: completion.stepName,
+        },
+      })
+    ),
     rewriteApprovalContext: mock(() => Promise.resolve({ resolved: true })),
     claimWriteback: mock(() => Promise.resolve({ claimed: true })),
     releaseWritebackClaim: mock(() => Promise.resolve()),

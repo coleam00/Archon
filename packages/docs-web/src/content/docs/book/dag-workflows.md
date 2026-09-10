@@ -228,10 +228,16 @@ When a node has multiple dependencies and some might be skipped, `trigger_rule` 
 |-------|----------|
 | `all_success` | Run only if all upstream deps completed successfully (default) |
 | `one_success` | Run if at least one upstream dep completed successfully |
-| `none_failed_min_one_success` | Run if no deps failed AND at least one succeeded (skipped deps are OK) |
+| `none_failed_min_one_success` | Run if at least one dependency succeeded and none failed or skipped because of an upstream failure (`upstream_failed`) |
 | `all_done` | Run when all deps are in a terminal state (completed, failed, or skipped) |
 
-The classify-and-route example uses `none_failed_min_one_success` on `implement` because exactly one of `investigate` or `plan` will be skipped. The default `all_success` would fail because a skipped node doesn't count as a success.
+The classify-and-route example uses `none_failed_min_one_success` on `implement` because exactly one of `investigate` or `plan` will be skipped. The default `all_success` would skip `implement` because a skipped node doesn't count as a success.
+
+A skip caused by an upstream failure is different: `none_failed_min_one_success`
+blocks it by default, even when another dependency succeeded. This applies across
+chains and includes, and the skip cause retains the original failed node. Condition
+skips and optional timeout skips (`on_timeout: skip`) remain admissible with a successful
+dependency. `if_skipped` affects output bindings, not trigger eligibility.
 
 ---
 

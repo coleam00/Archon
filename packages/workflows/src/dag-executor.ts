@@ -5,6 +5,7 @@
  * Independent nodes within the same layer run concurrently via Promise.allSettled.
  * Captures all assistant output regardless of streaming mode for $node_id.output substitution.
  */
+import { NodeEventWriteError, recordDerivedNodeState, recordNodeState } from './node-event-write';
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { basename, isAbsolute, join as joinPath, resolve as resolvePath, sep } from 'path';
@@ -132,10 +133,7 @@ import {
 } from './compiled-command';
 import { assistantModelDefaults, resolveNodeModel } from './node-model-resolution';
 import {
-  logNodeStart,
   logNodeComplete,
-  logNodeSkip,
-  logNodeError,
   logAssistant,
   logExecOutput,
   logTool,
@@ -208,14 +206,6 @@ function dagNodeTelemetryType(node: DagNode): WorkflowNodeType {
       return exhaustive;
     }
   }
-}
-
-/**
- * Display name for a node in user-facing events: a command node's file name (matching
- * today's `node.command ?? node.id` convention), otherwise the node's own id.
- */
-function nodeDisplayName(node: DagNode): string {
-  return isAgentNode(node) && node.source.kind === 'command' ? node.source.name : node.id;
 }
 
 /**
@@ -1308,7 +1298,8 @@ async function assertCheckoutUntouched(
   result: NodeExecutionResult,
   deps: WorkflowDeps,
   workflowRunId: string,
-  stepName: string
+  stepName: string,
+  logDir: string
 ): Promise<NodeExecutionResult> {
   if (node.mutates_checkout !== false || before === undefined || result.state !== 'completed') {
     return result;
@@ -1325,26 +1316,11 @@ async function assertCheckoutUntouched(
     .join(', ');
   const error = `Node \`${node.id}\` declared \`mutates_checkout: false\` but modified the working tree: ${changedPaths}`;
   getLog().error({ nodeId: node.id, changed: changedPaths }, 'dag_mutates_checkout_violation');
-  const emitter = getWorkflowEventEmitter();
-  deps.store
-    .createWorkflowEvent({
-      workflow_run_id: workflowRunId,
-      event_type: 'node_failed',
-      step_name: stepName,
-      data: { error },
-    })
-    .catch((err: Error) => {
-      getLog().error(
-        { err, workflowRunId, eventType: 'node_failed' },
-        'workflow_event_persist_failed'
-      );
-    });
-  emitter.emit({
-    type: 'node_failed',
-    runId: workflowRunId,
-    nodeId: node.id,
-    nodeName: node.id,
-    error,
+  await recordNodeState({ store: deps.store, logDir }, node, {
+    workflow_run_id: workflowRunId,
+    event_type: 'node_failed',
+    step_name: stepName,
+    data: { error },
   });
   return { ...result, state: 'failed', output: '', error };
 }
@@ -2012,7 +1988,11 @@ function checkTriggerRuleForDependencies(
       blocking = upstreams.some(upstream => upstream.output.state === 'completed') ? [] : upstreams;
       break;
     case 'none_failed_min_one_success': {
-      const failed = upstreams.filter(upstream => upstream.output.state === 'failed');
+      const failed = upstreams.filter(
+        upstream =>
+          upstream.output.state === 'failed' ||
+          (upstream.output.state === 'skipped' && upstream.output.cause.kind === 'upstream_failed')
+      );
       const anySucceeded = upstreams.some(upstream => upstream.output.state === 'completed');
       blocking = failed.length > 0 ? failed : anySucceeded ? [] : upstreams;
       break;
@@ -2145,10 +2125,11 @@ async function executeNodeInternal(
   const configuredMcpNames = await loadConfiguredMcpServerNames(node.mcp, cwd);
 
   getLog().info({ nodeId: node.id, provider }, 'dag_node_started');
-  await logNodeStart(logDir, workflowRun.id, node.id, commandName ?? '<inline>');
 
-  deps.store
-    .createWorkflowEvent({
+  await recordNodeState(
+    { store: deps.store, logDir },
+    node,
+    {
       workflow_run_id: workflowRun.id,
       event_type: 'node_started',
       step_name: stepName,
@@ -2161,25 +2142,9 @@ async function executeNodeInternal(
         ...namedSessionAuditData,
         ...iterationData,
       },
-    })
-    .catch((err: Error) => {
-      getLog().error(
-        { err, workflowRunId: workflowRun.id, eventType: 'node_started' },
-        'workflow_event_persist_failed'
-      );
-    });
-
-  const emitter = getWorkflowEventEmitter();
-  emitter.emit({
-    type: 'node_started',
-    runId: workflowRun.id,
-    nodeId: node.id,
-    nodeName: commandName ?? node.id,
-    provider,
-    model: resolvedModel,
-    tier: resolvedTier,
-    ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
-  });
+    },
+    { provider, model: resolvedModel, tier: resolvedTier, effort: resolvedEffort }
+  );
 
   let nodeTokens: TokenUsage | undefined;
   let nodeCostUsd: number | undefined;
@@ -2198,35 +2163,19 @@ async function executeNodeInternal(
     extras: { output?: string; data?: Record<string, unknown> } = {}
   ): Promise<NodeExecutionResult> => {
     const usage = nodeUsageEventData();
-    await logNodeError(logDir, workflowRun.id, node.id, error, usage);
 
-    deps.store
-      .createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'node_failed',
-        step_name: stepName,
-        data: {
-          error,
-          duration_ms: Date.now() - nodeStartTime,
-          ...usage,
-          ...namedSessionAuditData,
-          ...iterationData,
-          ...(extras.data ?? {}),
-        },
-      })
-      .catch((err: Error) => {
-        getLog().error(
-          { err, workflowRunId: workflowRun.id, eventType: 'node_failed' },
-          'workflow_event_persist_failed'
-        );
-      });
-
-    emitter.emit({
-      type: 'node_failed',
-      runId: workflowRun.id,
-      nodeId: node.id,
-      nodeName: commandName ?? node.id,
-      error,
+    await recordNodeState({ store: deps.store, logDir }, node, {
+      workflow_run_id: workflowRun.id,
+      event_type: 'node_failed',
+      step_name: stepName,
+      data: {
+        error,
+        duration_ms: Date.now() - nodeStartTime,
+        ...usage,
+        ...namedSessionAuditData,
+        ...iterationData,
+        ...(extras.data ?? {}),
+      },
     });
 
     lastNodeCancelCheck.delete(nodeKey);
@@ -3004,7 +2953,10 @@ async function executeNodeInternal(
     }
   };
 
-  try {
+  const runWorkload = async (): Promise<
+    | (NodeExecutionResult & { state: 'completed' })
+    | { state: 'failed'; output: string; error: string }
+  > => {
     // Validate-and-reask loop. Enforced / non-output_format nodes run exactly once
     // (maxReasks = 0). A best-effort node whose structured output is missing or
     // schema-invalid is re-run with the errors appended, up to maxReasks times;
@@ -3144,7 +3096,7 @@ async function executeNodeInternal(
         { nodeId: node.id, durationMs: duration },
         'dag_node_cancelled_during_streaming'
       );
-      return await failAgentNode('Cancelled by user', { output: nodeOutputText });
+      return { state: 'failed', output: nodeOutputText, error: 'Cancelled by user' };
     }
 
     if (streamingMode === 'batch' && batchMessages.length > 0) {
@@ -3161,7 +3113,7 @@ async function executeNodeInternal(
     if (creditError) {
       const duration = Date.now() - nodeStartTime;
       getLog().warn({ nodeId: node.id, durationMs: duration }, 'dag.node_credit_exhausted');
-      return await failAgentNode(creditError, { output: nodeOutputText });
+      return { state: 'failed', output: nodeOutputText, error: creditError };
     }
 
     // Fail for zero output: covers both silent non-timeout exits AND idle-timeout before first token (time-to-first-token exceeded the window).
@@ -3171,7 +3123,7 @@ async function executeNodeInternal(
         ? `Node '${node.id}' timed out with no output (idle for ${String(effectiveIdleTimeout / 60000)} min).${formatWatchdogResetDiagnostic(lastWatchdogReset)} Consider increasing idle_timeout or reducing prompt size.`
         : `Node '${node.id}' produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.`;
       getLog().error({ nodeId: node.id, durationMs: duration }, 'dag.node_empty_output');
-      return await failAgentNode(emptyError);
+      return { state: 'failed', output: '', error: emptyError };
     }
 
     if (namedResumeSourceNodeId !== undefined) {
@@ -3204,68 +3156,6 @@ async function executeNodeInternal(
       if (badPointer !== null) throw new Error(`Node '${node.id}': ${badPointer}.`);
     }
 
-    const duration = Date.now() - nodeStartTime;
-    getLog().info({ nodeId: node.id, durationMs: duration }, 'dag_node_completed');
-    await logNodeComplete(logDir, workflowRun.id, node.id, commandName ?? '<inline>', {
-      durationMs: duration,
-      ...nodeUsageEventData(),
-    });
-
-    deps.store
-      .createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'node_completed',
-        step_name: stepName,
-        data: {
-          duration_ms: duration,
-          node_output: nodeOutputText,
-          // The logical value beside its text (#2637), so a cold resume rehydrates
-          // typed field access instead of degrading to a text re-parse. Additive:
-          // rows without it resume exactly as before.
-          ...(structuredOutput !== undefined ? { structured_output: structuredOutput } : {}),
-          ...(node.output_type !== undefined ? { output_type: node.output_type } : {}),
-          ...nodeUsageEventData(),
-          ...(nodeStopReason ? { stop_reason: nodeStopReason } : {}),
-          ...(nodeNumTurns !== undefined ? { num_turns: nodeNumTurns } : {}),
-          ...(nodeResolvedModel
-            ? { model_usage: { requested: resolvedModel, resolved: nodeResolvedModel.id } }
-            : {}),
-          ...(namedResumeSourceNodeId !== undefined
-            ? {
-                session_source_node_id: namedResumeSourceNodeId,
-                session_forked: true,
-              }
-            : {}),
-          // Background Agent tasks still live when the stream ended (#2083) —
-          // this node's artifacts may be incomplete.
-          ...(backgroundTasksIncomplete.length > 0
-            ? { background_tasks_incomplete: backgroundTasksIncomplete }
-            : {}),
-          ...iterationData,
-        },
-      })
-      .catch((err: Error) => {
-        getLog().error(
-          { err, workflowRunId: workflowRun.id, eventType: 'node_completed' },
-          'workflow_event_persist_failed'
-        );
-      });
-
-    emitter.emit({
-      type: 'node_completed',
-      runId: workflowRun.id,
-      nodeId: node.id,
-      nodeName: commandName ?? node.id,
-      duration,
-      ...(nodeCostUsd !== undefined ? { costUsd: nodeCostUsd } : {}),
-      ...(nodeStopReason ? { stopReason: nodeStopReason } : {}),
-      ...(nodeNumTurns !== undefined ? { numTurns: nodeNumTurns } : {}),
-    });
-
-    // Clean up throttle entries on completion
-    lastNodeCancelCheck.delete(`${workflowRun.id}:${node.id}`);
-    lastNodeActivityUpdate.delete(`${workflowRun.id}:${node.id}`);
-
     // Capture the producer's declared field set so downstream `$node.output.field`
     // refs can tell a declared-optional-absent field ('') from a typo (throws).
     // Only present when output_format declares an object with `properties`.
@@ -3281,6 +3171,10 @@ async function executeNodeInternal(
       ...(declaredFields !== undefined ? { declaredFields } : {}),
       ...(nodeResumed !== undefined ? { resumed: nodeResumed } : {}),
     };
+  };
+  let result: Awaited<ReturnType<typeof runWorkload>>;
+  try {
+    result = await runWorkload();
   } catch (error) {
     const err = error as Error;
 
@@ -3293,6 +3187,50 @@ async function executeNodeInternal(
     }
     return failAgentNode(failureMessage);
   }
+  if (result.state === 'failed') {
+    return failAgentNode(result.error, { output: result.output });
+  }
+  const duration = Date.now() - nodeStartTime;
+  getLog().info({ nodeId: node.id, durationMs: duration }, 'dag_node_completed');
+
+  await recordNodeState({ store: deps.store, logDir }, node, {
+    workflow_run_id: workflowRun.id,
+    event_type: 'node_completed',
+    step_name: stepName,
+    data: {
+      duration_ms: duration,
+      node_output: nodeOutputText,
+      // The logical value beside its text (#2637), so a cold resume rehydrates
+      // typed field access instead of degrading to a text re-parse. Additive:
+      // rows without it resume exactly as before.
+      ...(structuredOutput !== undefined ? { structured_output: structuredOutput } : {}),
+      ...(node.output_type !== undefined ? { output_type: node.output_type } : {}),
+      ...nodeUsageEventData(),
+      ...(nodeStopReason ? { stop_reason: nodeStopReason } : {}),
+      ...(nodeNumTurns !== undefined ? { num_turns: nodeNumTurns } : {}),
+      ...(nodeResolvedModel
+        ? { model_usage: { requested: resolvedModel, resolved: nodeResolvedModel.id } }
+        : {}),
+      ...(namedResumeSourceNodeId !== undefined
+        ? {
+            session_source_node_id: namedResumeSourceNodeId,
+            session_forked: true,
+          }
+        : {}),
+      // Background Agent tasks still live when the stream ended (#2083) —
+      // this node's artifacts may be incomplete.
+      ...(backgroundTasksIncomplete.length > 0
+        ? { background_tasks_incomplete: backgroundTasksIncomplete }
+        : {}),
+      ...iterationData,
+    },
+  });
+
+  // Clean up throttle entries on completion
+  lastNodeCancelCheck.delete(`${workflowRun.id}:${node.id}`);
+  lastNodeActivityUpdate.delete(`${workflowRun.id}:${node.id}`);
+
+  return result;
 }
 
 /** Default timeout for subprocess nodes (bash, script): 2 minutes */
@@ -3562,11 +3500,10 @@ function utf8SequenceLength(leadByte: number): number {
  * A spill write failure never fails the node — it degrades to preview-only persistence,
  * matching `shellQuoteOrFile`'s existing fallback behavior for the same class of error.
  *
- * Because the spill filename is reused (see above), the returned `originalBytes` is
- * also this write's identity token: `getDagResumeSnapshot` (packages/core) validates a
- * spill's actual byte length against the row's own recorded `originalBytes` before
- * trusting it, so a spill overwritten by a LATER execution racing an unlanded
- * fire-and-forget event insert is detected as stale rather than silently trusted.
+ * Because the spill filename is reused, `getDagResumeSnapshot` (packages/core)
+ * checks its byte length against the row's `originalBytes`. A later execution can
+ * overwrite the file before its event commits; a length mismatch exposes that stale
+ * pairing. The check cannot distinguish different contents of the same length.
  */
 function formatPersistedNodeOutput(
   output: string,
@@ -3671,34 +3608,12 @@ async function recordExecTimeoutSkip(
 ): Promise<NodeOutput> {
   const cause: SkipCause = { kind: 'timeout' };
   getLog().info({ nodeId: node.id, nodeType }, 'dag_node_skipped_timeout');
-  await logNodeSkip(ctx.logDir, ctx.workflowRun.id, node.id, 'timeout').catch((err: Error) => {
-    getLog().error(
-      { err, workflowRunId: ctx.workflowRun.id, nodeId: node.id },
-      'dag.node_skip_log_failed'
-    );
-  });
 
-  ctx.deps.store
-    .createWorkflowEvent({
-      workflow_run_id: ctx.workflowRun.id,
-      event_type: 'node_skipped',
-      step_name: stepName,
-      data: { reason: 'timeout', cause, type: nodeType, ...iterationData },
-    })
-    .catch((err: Error) => {
-      getLog().error(
-        { err, workflowRunId: ctx.workflowRun.id, eventType: 'node_skipped' },
-        'workflow_event_persist_failed'
-      );
-    });
-
-  getWorkflowEventEmitter().emit({
-    type: 'node_skipped',
-    runId: ctx.workflowRun.id,
-    nodeId: node.id,
-    nodeName: node.id,
-    reason: 'timeout',
-    cause,
+  await recordNodeState({ store: ctx.deps.store, logDir: ctx.logDir }, node, {
+    workflow_run_id: ctx.workflowRun.id,
+    event_type: 'node_skipped',
+    step_name: stepName,
+    data: { reason: 'timeout', cause, type: nodeType, ...iterationData },
   });
 
   return { state: 'skipped', output: '', cause };
@@ -3842,28 +3757,12 @@ async function executeBashNode(
   const iterationData = iteration !== undefined ? { iteration } : {};
 
   getLog().info({ nodeId: node.id, type: 'bash' }, 'dag_node_started');
-  await logNodeStart(logDir, workflowRun.id, node.id, '<bash>');
 
-  deps.store
-    .createWorkflowEvent({
-      workflow_run_id: workflowRun.id,
-      event_type: 'node_started',
-      step_name: stepName,
-      data: { type: 'bash', ...iterationData },
-    })
-    .catch((err: Error) => {
-      getLog().error(
-        { err, workflowRunId: workflowRun.id, eventType: 'node_started' },
-        'workflow_event_persist_failed'
-      );
-    });
-
-  const emitter = getWorkflowEventEmitter();
-  emitter.emit({
-    type: 'node_started',
-    runId: workflowRun.id,
-    nodeId: node.id,
-    nodeName: node.id,
+  await recordNodeState({ store: deps.store, logDir }, node, {
+    workflow_run_id: workflowRun.id,
+    event_type: 'node_started',
+    step_name: stepName,
+    data: { type: 'bash', ...iterationData },
   });
 
   // Variable substitution on script
@@ -3922,6 +3821,7 @@ async function executeBashNode(
   };
 
   const bashPath = resolveBashPath();
+  let certified: ReturnType<typeof certifyExecOutput>;
   try {
     const { stdout, stderr, credentialValues } = await runSubprocess(
       execContext,
@@ -3959,58 +3859,8 @@ async function executeBashNode(
     // and hand downstream consumers the canonical document instead of raw text (#2453).
     // Runs AFTER the stderr relay so a contract failure never swallows the script's own
     // diagnostics; it throws an ExecOutputContractError, handled by this function's catch.
-    const certified = certifyExecOutput(node, trimmedStdout, credentialValues);
-    const output = certified.output;
+    certified = certifyExecOutput(node, trimmedStdout, credentialValues);
     await assertExecArtifactPointers(workflowRun, node, certified.structuredOutput);
-
-    const duration = Date.now() - nodeStartTime;
-    getLog().info({ nodeId: node.id, durationMs: duration }, 'dag_node_completed');
-    await logNodeComplete(logDir, workflowRun.id, node.id, '<bash>', { durationMs: duration });
-
-    const persistedOutput = formatPersistedNodeOutput(output, artifactsDir, stepName);
-
-    deps.store
-      .createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'node_completed',
-        step_name: stepName,
-        data: {
-          duration_ms: duration,
-          type: 'bash',
-          ...persistedOutputEventFields(persistedOutput, 'node_output'),
-          // The certified logical value beside its text (#2453), so a cold resume
-          // rehydrates typed field access instead of re-parsing the persisted preview.
-          ...(certified.structuredOutput !== undefined
-            ? { structured_output: certified.structuredOutput }
-            : {}),
-          ...iterationData,
-        },
-      })
-      .catch((err: Error) => {
-        getLog().error(
-          { err, workflowRunId: workflowRun.id, eventType: 'node_completed' },
-          'workflow_event_persist_failed'
-        );
-      });
-
-    emitter.emit({
-      type: 'node_completed',
-      runId: workflowRun.id,
-      nodeId: node.id,
-      nodeName: node.id,
-      duration,
-    });
-
-    return {
-      state: 'completed',
-      output,
-      ...(certified.structuredOutput !== undefined
-        ? { structuredOutput: certified.structuredOutput }
-        : {}),
-      ...(certified.declaredFields !== undefined
-        ? { declaredFields: certified.declaredFields }
-        : {}),
-    };
   } catch (error) {
     const err = error as RawSubprocessRejection;
     // A contract failure (#2453) is Archon's own diagnosis of stdout, not a subprocess
@@ -4045,28 +3895,12 @@ async function executeBashNode(
       { ...formatted.logFields, nodeId: node.id, nodeType: 'bash', isTimeout },
       'dag_node_failed'
     );
-    await logNodeError(logDir, workflowRun.id, node.id, errorMsg);
 
-    deps.store
-      .createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'node_failed',
-        step_name: stepName,
-        data: { error: errorMsg, type: 'bash' },
-      })
-      .catch((dbErr: Error) => {
-        getLog().error(
-          { err: dbErr, workflowRunId: workflowRun.id, eventType: 'node_failed' },
-          'workflow_event_persist_failed'
-        );
-      });
-
-    emitter.emit({
-      type: 'node_failed',
-      runId: workflowRun.id,
-      nodeId: node.id,
-      nodeName: node.id,
-      error: errorMsg,
+    await recordNodeState({ store: deps.store, logDir }, node, {
+      workflow_run_id: workflowRun.id,
+      event_type: 'node_failed',
+      step_name: stepName,
+      data: { error: errorMsg, type: 'bash' },
     });
 
     return {
@@ -4076,6 +3910,38 @@ async function executeBashNode(
       ...(contractFailure ? { retryable: false as const } : {}),
     };
   }
+
+  const output = certified.output;
+  const duration = Date.now() - nodeStartTime;
+  getLog().info({ nodeId: node.id, durationMs: duration }, 'dag_node_completed');
+
+  const persistedOutput = formatPersistedNodeOutput(output, artifactsDir, stepName);
+
+  await recordNodeState({ store: deps.store, logDir }, node, {
+    workflow_run_id: workflowRun.id,
+    event_type: 'node_completed',
+    step_name: stepName,
+    data: {
+      duration_ms: duration,
+      type: 'bash',
+      ...persistedOutputEventFields(persistedOutput, 'node_output'),
+      // The certified logical value beside its text (#2453), so a cold resume
+      // rehydrates typed field access instead of re-parsing the persisted preview.
+      ...(certified.structuredOutput !== undefined
+        ? { structured_output: certified.structuredOutput }
+        : {}),
+      ...iterationData,
+    },
+  });
+
+  return {
+    state: 'completed',
+    output,
+    ...(certified.structuredOutput !== undefined
+      ? { structuredOutput: certified.structuredOutput }
+      : {}),
+    ...(certified.declaredFields !== undefined ? { declaredFields: certified.declaredFields } : {}),
+  };
 }
 
 /**
@@ -4167,28 +4033,12 @@ async function executeScriptNode(
   const iterationData = iteration !== undefined ? { iteration } : {};
 
   getLog().info({ nodeId: node.id, type: 'script', runtime: node.runtime }, 'dag_node_started');
-  await logNodeStart(logDir, workflowRun.id, node.id, '<script>');
 
-  deps.store
-    .createWorkflowEvent({
-      workflow_run_id: workflowRun.id,
-      event_type: 'node_started',
-      step_name: stepName,
-      data: { type: 'script', runtime: node.runtime, ...iterationData },
-    })
-    .catch((err: Error) => {
-      getLog().error(
-        { err, workflowRunId: workflowRun.id, eventType: 'node_started' },
-        'workflow_event_persist_failed'
-      );
-    });
-
-  const emitter = getWorkflowEventEmitter();
-  emitter.emit({
-    type: 'node_started',
-    runId: workflowRun.id,
-    nodeId: node.id,
-    nodeName: node.id,
+  await recordNodeState({ store: deps.store, logDir }, node, {
+    workflow_run_id: workflowRun.id,
+    event_type: 'node_started',
+    step_name: stepName,
+    data: { type: 'script', runtime: node.runtime, ...iterationData },
   });
 
   // Resolve before deciding whether this is inline or filesystem-backed: substitutions
@@ -4267,103 +4117,74 @@ async function executeScriptNode(
 
   const nodeDeps = node.deps ?? [];
 
-  try {
-    if (isInlineScript(finalScript)) {
-      // Inline code execution
-      if (node.runtime === 'bun') {
-        cmd = 'bun';
-        // --no-env-file prevents Bun from auto-loading .env from the execution
-        // cwd (the target repo). Without this, repo .env leaks into the script
-        // subprocess despite Archon's parent process cleanup.
-        args = ['--no-env-file', '-e', finalScript];
-      } else {
-        // uv run --with dep1 --with dep2 python -c <code>
-        cmd = 'uv';
-        const withFlags = nodeDeps.flatMap(dep => ['--with', dep]);
-        args = ['run', ...withFlags, 'python', '-c', finalScript];
-      }
+  if (isInlineScript(finalScript)) {
+    // Inline code execution
+    if (node.runtime === 'bun') {
+      cmd = 'bun';
+      // --no-env-file prevents Bun from auto-loading .env from the execution
+      // cwd (the target repo). Without this, repo .env leaks into the script
+      // subprocess despite Archon's parent process cleanup.
+      args = ['--no-env-file', '-e', finalScript];
     } else {
-      // Named script — look up across repo and home scopes.
-      // Precedence: <cwd>/.archon/scripts/ > ~/.archon/scripts/ (repo wins).
-      // Wrap discovery in its own try/catch so a permission error on ~/.archon/scripts/
-      // isn't mis-attributed by the outer catch's "permission denied (check cwd
-      // permissions)" branch — that branch is for execFileAsync EACCES.
-      let scripts: Awaited<ReturnType<typeof discoverScriptsForCwd>>;
-      try {
-        scripts = await discoverScriptsForCwd(cwd, workflowSourceRoots);
-      } catch (discoveryErr) {
-        const err = discoveryErr as Error;
-        const errorMsg = `Script node '${node.id}': failed to discover scripts — ${err.message}`;
-        getLog().error({ err, nodeId: node.id, cwd }, 'script_discovery_failed');
-        await safeSendMessage(platform, conversationId, errorMsg, nodeContext);
-        await logNodeError(logDir, workflowRun.id, node.id, errorMsg);
+      // uv run --with dep1 --with dep2 python -c <code>
+      cmd = 'uv';
+      const withFlags = nodeDeps.flatMap(dep => ['--with', dep]);
+      args = ['run', ...withFlags, 'python', '-c', finalScript];
+    }
+  } else {
+    // Named script — look up across repo and home scopes.
+    // Precedence: <cwd>/.archon/scripts/ > ~/.archon/scripts/ (repo wins).
+    // Wrap discovery in its own try/catch so a permission error on ~/.archon/scripts/
+    // isn't mis-attributed by the outer catch's "permission denied (check cwd
+    // permissions)" branch — that branch is for execFileAsync EACCES.
+    let scripts: Awaited<ReturnType<typeof discoverScriptsForCwd>>;
+    try {
+      scripts = await discoverScriptsForCwd(cwd, workflowSourceRoots);
+    } catch (discoveryErr) {
+      const err = discoveryErr as Error;
+      const errorMsg = `Script node '${node.id}': failed to discover scripts — ${err.message}`;
+      getLog().error({ err, nodeId: node.id, cwd }, 'script_discovery_failed');
+      await safeSendMessage(platform, conversationId, errorMsg, nodeContext);
 
-        emitter.emit({
-          type: 'node_failed',
-          runId: workflowRun.id,
-          nodeId: node.id,
-          nodeName: node.id,
-          error: errorMsg,
-        });
-        deps.store
-          .createWorkflowEvent({
-            workflow_run_id: workflowRun.id,
-            event_type: 'node_failed',
-            step_name: stepName,
-            data: { error: errorMsg, type: 'script' },
-          })
-          .catch((dbErr: Error) => {
-            getLog().error(
-              { err: dbErr, workflowRunId: workflowRun.id, eventType: 'node_failed' },
-              'workflow_event_persist_failed'
-            );
-          });
+      await recordNodeState({ store: deps.store, logDir }, node, {
+        workflow_run_id: workflowRun.id,
+        event_type: 'node_failed',
+        step_name: stepName,
+        data: { error: errorMsg, type: 'script' },
+      });
 
-        return { state: 'failed', output: '', error: errorMsg };
-      }
-      const scriptDef = scripts.get(finalScript);
+      return { state: 'failed', output: '', error: errorMsg };
+    }
+    const scriptDef = scripts.get(finalScript);
 
-      if (!scriptDef) {
-        const errorMsg = `Script node '${node.id}': named script '${finalScript}' not found in .archon/scripts/ or ~/.archon/scripts/`;
-        getLog().error({ nodeId: node.id, scriptName: finalScript }, 'script_not_found');
-        await safeSendMessage(platform, conversationId, errorMsg, nodeContext);
-        await logNodeError(logDir, workflowRun.id, node.id, errorMsg);
+    if (!scriptDef) {
+      const errorMsg = `Script node '${node.id}': named script '${finalScript}' not found in .archon/scripts/ or ~/.archon/scripts/`;
+      getLog().error({ nodeId: node.id, scriptName: finalScript }, 'script_not_found');
+      await safeSendMessage(platform, conversationId, errorMsg, nodeContext);
 
-        emitter.emit({
-          type: 'node_failed',
-          runId: workflowRun.id,
-          nodeId: node.id,
-          nodeName: node.id,
-          error: errorMsg,
-        });
-        deps.store
-          .createWorkflowEvent({
-            workflow_run_id: workflowRun.id,
-            event_type: 'node_failed',
-            step_name: stepName,
-            data: { error: errorMsg, type: 'script' },
-          })
-          .catch((dbErr: Error) => {
-            getLog().error(
-              { err: dbErr, workflowRunId: workflowRun.id, eventType: 'node_failed' },
-              'workflow_event_persist_failed'
-            );
-          });
+      await recordNodeState({ store: deps.store, logDir }, node, {
+        workflow_run_id: workflowRun.id,
+        event_type: 'node_failed',
+        step_name: stepName,
+        data: { error: errorMsg, type: 'script' },
+      });
 
-        return { state: 'failed', output: '', error: errorMsg };
-      }
-
-      // Use scriptDef.runtime (canonical source) instead of re-deriving from extension
-      if (scriptDef.runtime === 'uv') {
-        cmd = 'uv';
-        const withFlags = nodeDeps.flatMap(dep => ['--with', dep]);
-        args = ['run', ...withFlags, scriptDef.path];
-      } else {
-        cmd = 'bun';
-        args = ['--no-env-file', 'run', scriptDef.path];
-      }
+      return { state: 'failed', output: '', error: errorMsg };
     }
 
+    // Use scriptDef.runtime (canonical source) instead of re-deriving from extension
+    if (scriptDef.runtime === 'uv') {
+      cmd = 'uv';
+      const withFlags = nodeDeps.flatMap(dep => ['--with', dep]);
+      args = ['run', ...withFlags, scriptDef.path];
+    } else {
+      cmd = 'bun';
+      args = ['--no-env-file', 'run', scriptDef.path];
+    }
+  }
+
+  let certified: ReturnType<typeof certifyExecOutput>;
+  try {
     const { stdout, stderr, credentialValues } = await runSubprocess(execContext, cmd, args, {
       cwd,
       timeout,
@@ -4393,57 +4214,8 @@ async function executeScriptNode(
 
     // Identical certification to executeBashNode (#2453): a declared output_format makes
     // this node's stdout a contract, and the canonical document replaces the raw text.
-    const certified = certifyExecOutput(node, trimmedStdout, credentialValues);
-    const output = certified.output;
+    certified = certifyExecOutput(node, trimmedStdout, credentialValues);
     await assertExecArtifactPointers(workflowRun, node, certified.structuredOutput);
-
-    const duration = Date.now() - nodeStartTime;
-    getLog().info({ nodeId: node.id, durationMs: duration }, 'dag_node_completed');
-    await logNodeComplete(logDir, workflowRun.id, node.id, '<script>', { durationMs: duration });
-
-    const persistedOutput = formatPersistedNodeOutput(output, artifactsDir, stepName);
-
-    deps.store
-      .createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'node_completed',
-        step_name: stepName,
-        data: {
-          duration_ms: duration,
-          type: 'script',
-          ...persistedOutputEventFields(persistedOutput, 'node_output'),
-          // The certified logical value beside its text (#2453) — see executeBashNode.
-          ...(certified.structuredOutput !== undefined
-            ? { structured_output: certified.structuredOutput }
-            : {}),
-          ...iterationData,
-        },
-      })
-      .catch((err: Error) => {
-        getLog().error(
-          { err, workflowRunId: workflowRun.id, eventType: 'node_completed' },
-          'workflow_event_persist_failed'
-        );
-      });
-
-    emitter.emit({
-      type: 'node_completed',
-      runId: workflowRun.id,
-      nodeId: node.id,
-      nodeName: node.id,
-      duration,
-    });
-
-    return {
-      state: 'completed',
-      output,
-      ...(certified.structuredOutput !== undefined
-        ? { structuredOutput: certified.structuredOutput }
-        : {}),
-      ...(certified.declaredFields !== undefined
-        ? { declaredFields: certified.declaredFields }
-        : {}),
-    };
   } catch (error) {
     const err = error as RawSubprocessRejection;
     // See executeBashNode: a contract failure (#2453) stays outside subprocess classification.
@@ -4474,28 +4246,12 @@ async function executeScriptNode(
       { ...formatted.logFields, nodeId: node.id, nodeType: 'script', isTimeout },
       'dag_node_failed'
     );
-    await logNodeError(logDir, workflowRun.id, node.id, errorMsg);
 
-    deps.store
-      .createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'node_failed',
-        step_name: stepName,
-        data: { error: errorMsg, type: 'script' },
-      })
-      .catch((dbErr: Error) => {
-        getLog().error(
-          { err: dbErr, workflowRunId: workflowRun.id, eventType: 'node_failed' },
-          'workflow_event_persist_failed'
-        );
-      });
-
-    emitter.emit({
-      type: 'node_failed',
-      runId: workflowRun.id,
-      nodeId: node.id,
-      nodeName: node.id,
-      error: errorMsg,
+    await recordNodeState({ store: deps.store, logDir }, node, {
+      workflow_run_id: workflowRun.id,
+      event_type: 'node_failed',
+      step_name: stepName,
+      data: { error: errorMsg, type: 'script' },
     });
 
     return {
@@ -4505,6 +4261,37 @@ async function executeScriptNode(
       ...(contractFailure ? { retryable: false as const } : {}),
     };
   }
+
+  const output = certified.output;
+  const duration = Date.now() - nodeStartTime;
+  getLog().info({ nodeId: node.id, durationMs: duration }, 'dag_node_completed');
+
+  const persistedOutput = formatPersistedNodeOutput(output, artifactsDir, stepName);
+
+  await recordNodeState({ store: deps.store, logDir }, node, {
+    workflow_run_id: workflowRun.id,
+    event_type: 'node_completed',
+    step_name: stepName,
+    data: {
+      duration_ms: duration,
+      type: 'script',
+      ...persistedOutputEventFields(persistedOutput, 'node_output'),
+      // The certified logical value beside its text (#2453) — see executeBashNode.
+      ...(certified.structuredOutput !== undefined
+        ? { structured_output: certified.structuredOutput }
+        : {}),
+      ...iterationData,
+    },
+  });
+
+  return {
+    state: 'completed',
+    output,
+    ...(certified.structuredOutput !== undefined
+      ? { structuredOutput: certified.structuredOutput }
+      : {}),
+    ...(certified.declaredFields !== undefined ? { declaredFields: certified.declaredFields } : {}),
+  };
 }
 
 /** Cap for the iteration-output excerpt embedded in gate messages — keeps the
@@ -4641,13 +4428,15 @@ async function finalizeLoopFromSignal(
   platform: IWorkflowPlatform,
   conversationId: string,
   workflowRun: WorkflowRun,
-  nodeId: string,
+  node: LoopNode | LoopGroupNode,
   stepName: string,
   nodeLabel: string,
   finalizeOutput: string,
-  finalizeUsage?: { costUsd?: number; tokens?: TokenUsage },
-  finalizeStructuredOutput?: unknown
+  finalizeUsage: { costUsd?: number; tokens?: TokenUsage } | undefined,
+  finalizeStructuredOutput: unknown,
+  logDir: string
 ): Promise<void> {
+  const nodeId = node.id;
   // Impossible by construction today (the gate writes signaledOutput whenever
   // completionSignaled is true) — this warn guards a future decoupling so a
   // finalize that silently loses the iteration output is diagnosable.
@@ -4663,34 +4452,19 @@ async function finalizeLoopFromSignal(
     `${nodeLabel} '${nodeId}' accepted after a completion condition was met (no re-run)`,
     { workflowId: workflowRun.id, nodeName: nodeId }
   );
-  await deps.store
-    .createWorkflowEvent({
-      workflow_run_id: workflowRun.id,
-      event_type: 'node_completed',
-      step_name: stepName,
-      data: {
-        duration_ms: 0,
-        node_output: finalizeOutput,
-        ...(finalizeStructuredOutput !== undefined
-          ? { structured_output: finalizeStructuredOutput }
-          : {}),
-        ...(finalizeUsage?.costUsd !== undefined ? { cost_usd: finalizeUsage.costUsd } : {}),
-        ...(finalizeUsage?.tokens !== undefined ? { tokens: finalizeUsage.tokens } : {}),
-      },
-    })
-    .catch((err: Error) => {
-      getLog().error(
-        { err, workflowRunId: workflowRun.id, eventType: 'node_completed' },
-        'workflow_event_persist_failed'
-      );
-    });
-  getWorkflowEventEmitter().emit({
-    type: 'node_completed',
-    runId: workflowRun.id,
-    nodeId,
-    nodeName: nodeId,
-    duration: 0,
-    ...(finalizeUsage?.costUsd !== undefined ? { costUsd: finalizeUsage.costUsd } : {}),
+  await recordNodeState({ store: deps.store, logDir }, node, {
+    workflow_run_id: workflowRun.id,
+    event_type: 'node_completed',
+    step_name: stepName,
+    data: {
+      duration_ms: 0,
+      node_output: finalizeOutput,
+      ...(finalizeStructuredOutput !== undefined
+        ? { structured_output: finalizeStructuredOutput }
+        : {}),
+      ...(finalizeUsage?.costUsd !== undefined ? { cost_usd: finalizeUsage.costUsd } : {}),
+      ...(finalizeUsage?.tokens !== undefined ? { tokens: finalizeUsage.tokens } : {}),
+    },
   });
 }
 
@@ -4840,7 +4614,7 @@ async function executeLoopGroupNode(
       platform,
       conversationId,
       workflowRun,
-      node.id,
+      node,
       stepName,
       'Loop-group node',
       finalizeOutput,
@@ -4853,7 +4627,8 @@ async function executeLoopGroupNode(
       // DOES pass it — its per-iteration rows carry no usage, so its finalize row is
       // the only record.
       undefined,
-      finalizeStructured ?? undefined
+      finalizeStructured ?? undefined,
+      logDir
     );
     return {
       state: 'completed',
@@ -4880,7 +4655,8 @@ async function executeLoopGroupNode(
         iteration: resumeIteration,
         sessionId: loopOwnedWaitMeta?.sessionId ?? null,
         sessionProvider: loopOwnedWaitMeta?.sessionProvider ?? null,
-      }
+      },
+      logDir
     );
     const status = await deps.store.getWorkflowRunStatus(workflowRun.id);
     if (status === 'paused') {
@@ -5048,31 +4824,17 @@ async function executeLoopGroupNode(
           `Loop-group node '${node.id}' completed after ${String(resumedIteration)} iteration${resumedIteration > 1 ? 's' : ''}`,
           msgContext
         );
-        deps.store
-          .createWorkflowEvent({
-            workflow_run_id: workflowRun.id,
-            event_type: 'node_completed',
-            step_name: stepName,
-            data: {
-              node_output: resumedOutput,
-              ...(resumedStructuredOutput !== undefined
-                ? { structured_output: resumedStructuredOutput }
-                : {}),
-              aggregate: true,
-            },
-          })
-          .catch((err: Error) => {
-            getLog().error(
-              { err, workflowRunId: workflowRun.id, eventType: 'node_completed' },
-              'workflow_event_persist_failed'
-            );
-          });
-        getWorkflowEventEmitter().emit({
-          type: 'node_completed',
-          runId: workflowRun.id,
-          nodeId: node.id,
-          nodeName: node.id,
-          duration: 0,
+        await recordNodeState({ store: deps.store, logDir }, node, {
+          workflow_run_id: workflowRun.id,
+          event_type: 'node_completed',
+          step_name: stepName,
+          data: {
+            node_output: resumedOutput,
+            ...(resumedStructuredOutput !== undefined
+              ? { structured_output: resumedStructuredOutput }
+              : {}),
+            aggregate: true,
+          },
         });
         return {
           state: 'completed',
@@ -5564,56 +5326,41 @@ async function executeLoopGroupNode(
         `Loop-group node '${node.id}' completed after ${String(i)} iteration${i > 1 ? 's' : ''}`,
         msgContext
       );
-      deps.store
-        .createWorkflowEvent({
-          workflow_run_id: workflowRun.id,
-          event_type: 'node_completed',
-          step_name: stepName,
-          data: {
-            duration_ms: duration,
-            node_output: lastIterationOutput,
-            // The terminal sink's logical value (#2637) — persisted so cold resume
-            // rehydrates typed `$group.output.field` access identically to fresh runs.
-            ...(lastIterationStructuredOutput !== undefined
-              ? { structured_output: lastIterationStructuredOutput }
-              : {}),
-            // This row is an AGGREGATE of rows that are already in the event log.
-            // Unlike every other node type, a loop_group's body nodes write their OWN
-            // node_completed rows (namespaced `<groupId>.<nodeId>`, one per iteration)
-            // carrying their own usage, so any consumer summing usage across
-            // node_completed rows would count this group twice.
-            //
-            // `tokens` is omitted outright: the leaves are authoritative (they are
-            // per-provider — a body node may override `provider:`, so the group total
-            // can mix providers and is useless for the cross-provider comparison #2333
-            // exists to enable) and the group total is recoverable by summing the
-            // `<groupId>.` prefix. The RETURN value below still carries `tokens` — that
-            // is the run-level roll-up path, which counts each group exactly once (body
-            // results land in the scoped iteration ctx, never the run ctx).
-            //
-            // `cost_usd` is KEPT, because the console renders it per event
-            // (web/.../console/primitives/event.ts) and dropping it would blank the
-            // loop_group card's cost. `aggregate: true` is what makes that safe: it
-            // marks the row as derived so a summing consumer can skip it. #2469 added
-            // the first such consumer (getDagResumeSnapshot rebuilds cost across resume
-            // passes), which turned this from a latent shape into a live double count.
-            aggregate: true,
-            ...(loopTotalCostUsd !== undefined ? { cost_usd: loopTotalCostUsd } : {}),
-          },
-        })
-        .catch((err: Error) => {
-          getLog().error(
-            { err, workflowRunId: workflowRun.id, eventType: 'node_completed' },
-            'workflow_event_persist_failed'
-          );
-        });
-      getWorkflowEventEmitter().emit({
-        type: 'node_completed',
-        runId: workflowRun.id,
-        nodeId: node.id,
-        nodeName: node.id,
-        duration,
-        ...(loopTotalCostUsd !== undefined ? { costUsd: loopTotalCostUsd } : {}),
+      await recordNodeState({ store: deps.store, logDir }, node, {
+        workflow_run_id: workflowRun.id,
+        event_type: 'node_completed',
+        step_name: stepName,
+        data: {
+          duration_ms: duration,
+          node_output: lastIterationOutput,
+          // The terminal sink's logical value (#2637) — persisted so cold resume
+          // rehydrates typed `$group.output.field` access identically to fresh runs.
+          ...(lastIterationStructuredOutput !== undefined
+            ? { structured_output: lastIterationStructuredOutput }
+            : {}),
+          // This row is an AGGREGATE of rows that are already in the event log.
+          // Unlike every other node type, a loop_group's body nodes write their OWN
+          // node_completed rows (namespaced `<groupId>.<nodeId>`, one per iteration)
+          // carrying their own usage, so any consumer summing usage across
+          // node_completed rows would count this group twice.
+          //
+          // `tokens` is omitted outright: the leaves are authoritative (they are
+          // per-provider — a body node may override `provider:`, so the group total
+          // can mix providers and is useless for the cross-provider comparison #2333
+          // exists to enable) and the group total is recoverable by summing the
+          // `<groupId>.` prefix. The RETURN value below still carries `tokens` — that
+          // is the run-level roll-up path, which counts each group exactly once (body
+          // results land in the scoped iteration ctx, never the run ctx).
+          //
+          // `cost_usd` is KEPT, because the console renders it per event
+          // (web/.../console/primitives/event.ts) and dropping it would blank the
+          // loop_group card's cost. `aggregate: true` is what makes that safe: it
+          // marks the row as derived so a summing consumer can skip it. #2469 added
+          // the first such consumer (getDagResumeSnapshot rebuilds cost across resume
+          // passes), which turned this from a latent shape into a live double count.
+          aggregate: true,
+          ...(loopTotalCostUsd !== undefined ? { cost_usd: loopTotalCostUsd } : {}),
+        },
       });
       return {
         state: 'completed',
@@ -5850,10 +5597,11 @@ async function executeLoopNode(
   // until_bash system errors) are paired by the dispatcher's catch in
   // runLayers, which emits its own node_failed.
   getLog().info({ nodeId: node.id, type: 'loop' }, 'loop_node.started');
-  await logNodeStart(logDir, workflowRun.id, node.id, '<loop>');
 
-  deps.store
-    .createWorkflowEvent({
+  await recordNodeState(
+    { store: deps.store, logDir },
+    node,
+    {
       workflow_run_id: workflowRun.id,
       event_type: 'node_started',
       step_name: stepName,
@@ -5868,24 +5616,9 @@ async function executeLoopNode(
         tier: resolvedTier,
         ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
       },
-    })
-    .catch((err: Error) => {
-      getLog().error(
-        { err, workflowRunId: workflowRun.id, eventType: 'node_started' },
-        'workflow_event_persist_failed'
-      );
-    });
-
-  getWorkflowEventEmitter().emit({
-    type: 'node_started',
-    runId: workflowRun.id,
-    nodeId: node.id,
-    nodeName: node.id,
-    provider: workflowProvider,
-    model: resolvedModel,
-    tier: resolvedTier,
-    ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
-  });
+    },
+    { provider: workflowProvider, model: resolvedModel, tier: resolvedTier, effort: resolvedEffort }
+  );
 
   /**
    * Single failure finalizer for this loop node (see the pairing contract on
@@ -5913,30 +5646,15 @@ async function executeLoopNode(
       ...(extras.tokens !== undefined ? { tokens: extras.tokens } : {}),
       ...(extras.costUsd !== undefined ? { cost_usd: extras.costUsd } : {}),
     };
-    await logNodeError(logDir, workflowRun.id, node.id, error, loopUsage);
-    deps.store
-      .createWorkflowEvent({
-        workflow_run_id: workflowRun.id,
-        event_type: 'node_failed',
-        step_name: stepName,
-        data: {
-          error,
-          ...loopUsage,
-          ...(extras.data ?? {}),
-        },
-      })
-      .catch((err: Error) => {
-        getLog().error(
-          { err, workflowRunId: workflowRun.id, eventType: 'node_failed' },
-          'workflow_event_persist_failed'
-        );
-      });
-    getWorkflowEventEmitter().emit({
-      type: 'node_failed',
-      runId: workflowRun.id,
-      nodeId: node.id,
-      nodeName: node.id,
-      error,
+    await recordNodeState({ store: deps.store, logDir }, node, {
+      workflow_run_id: workflowRun.id,
+      event_type: 'node_failed',
+      step_name: stepName,
+      data: {
+        error,
+        ...loopUsage,
+        ...(extras.data ?? {}),
+      },
     });
     return {
       state: 'failed',
@@ -5987,7 +5705,7 @@ async function executeLoopNode(
       platform,
       conversationId,
       workflowRun,
-      node.id,
+      node,
       stepName,
       'Loop node',
       finalizeOutput,
@@ -5995,7 +5713,8 @@ async function executeLoopNode(
         ...(persistedLoopCostUsd !== undefined ? { costUsd: persistedLoopCostUsd } : {}),
         ...(persistedLoopTokens !== undefined ? { tokens: persistedLoopTokens } : {}),
       },
-      finalizeStructured ?? undefined
+      finalizeStructured ?? undefined,
+      logDir
     );
     // Same declared-field capture as the normal completion return below and as the
     // resume-hydration path (#2091). This is a COMPLETION exit, so a consumer's
@@ -6721,26 +6440,6 @@ async function executeLoopNode(
               );
             }
           }
-
-          // Cancelled mid-stream (not idle timeout): stop the node before signal
-          // detection / until_bash / the interactive gate run against a truncated
-          // iteration — mirrors both the AI-node 'Cancelled by user' return and
-          // this loop's own between-iteration stop path.
-          if (iterationAbortController.signal.aborted && !iterationIdleTimedOut) {
-            const effectiveStatus = streamStopStatus ?? 'cancelled';
-            await safeSendMessage(
-              platform,
-              conversationId,
-              `Loop node '${node.id}' stopped during iteration ${String(i)} (${effectiveStatus})`,
-              msgContext
-            );
-            return await failLoopNode(`Workflow ${effectiveStatus}`, {
-              costUsd: loopTotalCostUsd,
-              ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
-              loopIterations: i,
-              data: { status: effectiveStatus, iteration: i },
-            });
-          }
         } catch (error) {
           foldIterationUsage();
           const err = error as Error;
@@ -6774,6 +6473,26 @@ async function executeLoopNode(
           });
         } finally {
           await watchdogResetLog;
+        }
+
+        // Cancelled mid-stream (not idle timeout): stop the node before signal
+        // detection / until_bash / the interactive gate run against a truncated
+        // iteration — mirrors both the AI-node 'Cancelled by user' return and
+        // this loop's own between-iteration stop path.
+        if (iterationAbortController.signal.aborted && !iterationIdleTimedOut) {
+          const effectiveStatus = streamStopStatus ?? 'cancelled';
+          await safeSendMessage(
+            platform,
+            conversationId,
+            `Loop node '${node.id}' stopped during iteration ${String(i)} (${effectiveStatus})`,
+            msgContext
+          );
+          return failLoopNode(`Workflow ${effectiveStatus}`, {
+            costUsd: loopTotalCostUsd,
+            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+            loopIterations: i,
+            data: { status: effectiveStatus, iteration: i },
+          });
         }
 
         // Empty assistant output is an iteration failure for AI loops — same
@@ -7202,52 +6921,35 @@ async function executeLoopNode(
       );
       // Write node_completed event so resume hydration knows this
       // node is done. Without this, a resumed DAG would re-enter the loop node.
-      deps.store
-        .createWorkflowEvent({
-          workflow_run_id: workflowRun.id,
-          event_type: 'node_completed',
-          step_name: stepName,
-          data: {
-            duration_ms: Date.now() - iterationStart,
-            node_output: lastIterationOutput,
-            // The completing iteration's logical payload (#2637) — mirrors the
-            // prompt/command emit so cold resume keeps typed field access.
-            ...(lastIterationStructuredOutput !== undefined
-              ? { structured_output: lastIterationStructuredOutput }
-              : {}),
-            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
-            ...(loopTotalCostUsd !== undefined ? { cost_usd: loopTotalCostUsd } : {}),
-            ...(loopFinalStopReason ? { stop_reason: loopFinalStopReason } : {}),
-            ...(loopTotalNumTurns !== undefined ? { num_turns: loopTotalNumTurns } : {}),
-            // Requested alias vs the model the provider actually ran (#2314) —
-            // mirrors the AI-node path. Omitted entirely when the provider
-            // reports no resolved model (e.g. Codex), never faked.
-            ...(loopResolvedModel
-              ? { model_usage: { requested: resolvedModel, resolved: loopResolvedModel.id } }
-              : {}),
-            // Background Agent tasks still live when any iteration's stream
-            // ended (#2083) — this node's artifacts may be incomplete, even
-            // though a later iteration signaled completion.
-            ...(loopBackgroundTasksIncomplete.size > 0
-              ? { background_tasks_incomplete: [...loopBackgroundTasksIncomplete] }
-              : {}),
-          },
-        })
-        .catch((err: Error) => {
-          getLog().error(
-            { err, workflowRunId: workflowRun.id, eventType: 'node_completed' },
-            'workflow_event_persist_failed'
-          );
-        });
-      getWorkflowEventEmitter().emit({
-        type: 'node_completed',
-        runId: workflowRun.id,
-        nodeId: node.id,
-        nodeName: node.id,
-        duration: Date.now() - iterationStart,
-        ...(loopTotalCostUsd !== undefined ? { costUsd: loopTotalCostUsd } : {}),
-        ...(loopFinalStopReason ? { stopReason: loopFinalStopReason } : {}),
-        ...(loopTotalNumTurns !== undefined ? { numTurns: loopTotalNumTurns } : {}),
+      await recordNodeState({ store: deps.store, logDir }, node, {
+        workflow_run_id: workflowRun.id,
+        event_type: 'node_completed',
+        step_name: stepName,
+        data: {
+          duration_ms: Date.now() - iterationStart,
+          node_output: lastIterationOutput,
+          // The completing iteration's logical payload (#2637) — mirrors the
+          // prompt/command emit so cold resume keeps typed field access.
+          ...(lastIterationStructuredOutput !== undefined
+            ? { structured_output: lastIterationStructuredOutput }
+            : {}),
+          ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+          ...(loopTotalCostUsd !== undefined ? { cost_usd: loopTotalCostUsd } : {}),
+          ...(loopFinalStopReason ? { stop_reason: loopFinalStopReason } : {}),
+          ...(loopTotalNumTurns !== undefined ? { num_turns: loopTotalNumTurns } : {}),
+          // Requested alias vs the model the provider actually ran (#2314) —
+          // mirrors the AI-node path. Omitted entirely when the provider
+          // reports no resolved model (e.g. Codex), never faked.
+          ...(loopResolvedModel
+            ? { model_usage: { requested: resolvedModel, resolved: loopResolvedModel.id } }
+            : {}),
+          // Background Agent tasks still live when any iteration's stream
+          // ended (#2083) — this node's artifacts may be incomplete, even
+          // though a later iteration signaled completion.
+          ...(loopBackgroundTasksIncomplete.size > 0
+            ? { background_tasks_incomplete: [...loopBackgroundTasksIncomplete] }
+            : {}),
+        },
       });
       // Declared field set, so a downstream `$loop.output.field` gets the same
       // strict contract every other producer enforces: a field not in the schema
@@ -7448,7 +7150,8 @@ async function executeWaitNode(
   conversationId: string,
   nodeOutputs: Map<string, NodeOutput>,
   stepNamePrefix = '',
-  loopOwner?: WaitLoopOwner
+  loopOwner: WaitLoopOwner | undefined,
+  logDir: string
 ): Promise<NodeOutput> {
   const now = new Date();
   const rawPersisted = workflowRun.metadata?.wait;
@@ -7598,13 +7301,16 @@ async function executeWaitNode(
   const output = JSON.stringify(result);
   const stepName = stepNamePrefix + node.id;
   if (persisted !== undefined) {
-    const { cleared } = await deps.store.clearWorkflowWaitContext(workflowRun.id, context, {
+    const outcome = await deps.store.clearWorkflowWaitContext(workflowRun.id, context, {
       stepName,
       result,
     });
-    if (!cleared) {
+    if (!outcome.cleared) {
       throw new Error(`Wait node '${node.id}' lost ownership of its persisted wait cursor`);
     }
+    // The store wrote the node_completed row inside the cursor-clearing transaction and
+    // handed it back; the transcript and emitter derive from that row, not a rebuilt one.
+    await recordDerivedNodeState({ logDir }, node, outcome.nodeEvent);
   } else {
     await deps.store.createWorkflowEvent({
       workflow_run_id: workflowRun.id,
@@ -7612,7 +7318,7 @@ async function executeWaitNode(
       step_name: stepName,
       data: result,
     });
-    await deps.store.createWorkflowEvent({
+    await recordNodeState({ store: deps.store, logDir }, node, {
       workflow_run_id: workflowRun.id,
       event_type: 'node_completed',
       step_name: stepName,
@@ -7624,13 +7330,6 @@ async function executeWaitNode(
       },
     });
   }
-  getWorkflowEventEmitter().emit({
-    type: 'node_completed',
-    runId: workflowRun.id,
-    nodeId: node.id,
-    nodeName: node.id,
-    duration: result.waited_ms,
-  });
   return {
     state: 'completed',
     output,
@@ -7700,10 +7399,13 @@ async function executeApprovalNode(
     // Check if max attempts exhausted
     if (rejectionCount >= maxAttempts) {
       const reason = `max_attempts (${String(maxAttempts)}) exhausted`;
-      await deps.store.cancelWorkflowRun(workflowRun.id, {
-        step_name: stepName,
-        reason,
-      });
+      await requireTerminalStatusWrite(
+        deps.store.cancelWorkflowRun(workflowRun.id, {
+          step_name: stepName,
+          reason,
+        }),
+        { workflowRunId: workflowRun.id, site: 'dag.approval_exhausted_cancel' }
+      );
       getWorkflowEventEmitter().emit({
         type: 'workflow_cancelled',
         runId: workflowRun.id,
@@ -7881,36 +7583,22 @@ async function executeWorkflowNode(
   // executor), the workflow node returns a failed NodeExecutionResult that runLayers
   // does NOT turn into an event — so without this the sub-run failure reason (cycle,
   // unknown target, cancelled child, …) would be swallowed into the run-level DAG
-  // summary and never auditable per-node. Fire-and-forget like every other event.
-  const failResult = (
+  // summary and never auditable per-node.
+  const failResult = async (
     error: string,
     costUsd?: number,
     tokens?: TokenUsage
-  ): NodeExecutionResult => {
-    deps.store
-      .createWorkflowEvent({
-        workflow_run_id: parentRun.id,
-        event_type: 'node_failed',
-        step_name: executionNodeId,
-        data: {
-          error,
-          type: 'workflow',
-          ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
-          ...(tokens !== undefined ? { tokens } : {}),
-        },
-      })
-      .catch((err: Error) => {
-        getLog().error(
-          { err, workflowRunId: parentRun.id, eventType: 'node_failed' },
-          'workflow.event_persist_failed'
-        );
-      });
-    getWorkflowEventEmitter().emit({
-      type: 'node_failed',
-      runId: parentRun.id,
-      nodeId: executionNodeId,
-      nodeName: node.id,
-      error,
+  ): Promise<NodeExecutionResult> => {
+    await recordNodeState({ store: deps.store, logDir: ctx.logDir }, node, {
+      workflow_run_id: parentRun.id,
+      event_type: 'node_failed',
+      step_name: executionNodeId,
+      data: {
+        error,
+        type: 'workflow',
+        ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
+        ...(tokens !== undefined ? { tokens } : {}),
+      },
     });
     return {
       state: 'failed',
@@ -8018,54 +7706,33 @@ async function executeWorkflowNode(
       );
     }
     const output = outcome.output ?? '';
-    // Fire-and-forget (matches every other event write in this file): the run
-    // lifecycle must not hinge on the observability event. Awaiting it unguarded
-    // would let a transient event-store failure report a successfully-completed
-    // child as a FAILED parent node (it self-heals on resume, but reads wrong). A
-    // lost write just means the node re-runs on resume and re-threads the same
-    // completed child — idempotent.
-    deps.store
-      .createWorkflowEvent({
-        workflow_run_id: parentRun.id,
-        event_type: 'node_completed',
-        step_name: executionNodeId,
-        data: {
-          node_output: output,
-          type: 'workflow',
-          child_run_id: outcome.childRunId,
-          // The child's terminal logical value (#2637), so parent cold resume
-          // rehydrates typed access to `$<node>.output.field`.
-          ...(outcome.structuredOutput !== undefined
-            ? { structured_output: outcome.structuredOutput }
-            : {}),
-          // The field contract this node completed under (#2453). Persisted because a
-          // resume cannot re-derive it: the child owns it, and this node's own
-          // definition never states it.
-          ...(declaredFields !== undefined ? { declared_fields: [...declaredFields] } : {}),
-          ...(outcome.costUsd !== undefined ? { cost_usd: outcome.costUsd } : {}),
-          // Rolled up from the child run's persisted totals, exactly like cost_usd —
-          // tokens are the axis every provider reports (Codex reports no cost at all),
-          // so dropping them here while keeping cost would hide the one comparable
-          // number. Does not double count WITHIN this run: the child's own per-node
-          // rows are filed under `child_run_id`, a different workflow_run_id.
-          ...(outcome.tokens !== undefined ? { tokens: outcome.tokens } : {}),
-        },
-      })
-      .catch((err: Error) => {
-        getLog().error(
-          { err, workflowRunId: parentRun.id, eventType: 'node_completed' },
-          'workflow.event_persist_failed'
-        );
-      });
-    getWorkflowEventEmitter().emit({
-      type: 'node_completed',
-      runId: parentRun.id,
-      nodeId: executionNodeId,
-      nodeName: node.id,
-      // The wrapper node has no meaningful duration of its own — the child run's
-      // own events carry real timing. Emitted as 0 to satisfy NodeCompletedEvent.
-      duration: 0,
-      ...(outcome.costUsd !== undefined ? { costUsd: outcome.costUsd } : {}),
+    // The parent's terminal record and resume snapshot require this committed result.
+    // Storage rejection fails the parent run without reclassifying the completed child.
+    await recordNodeState({ store: deps.store, logDir: ctx.logDir }, node, {
+      workflow_run_id: parentRun.id,
+      event_type: 'node_completed',
+      step_name: executionNodeId,
+      data: {
+        node_output: output,
+        type: 'workflow',
+        child_run_id: outcome.childRunId,
+        // The child's terminal logical value (#2637), so parent cold resume
+        // rehydrates typed access to `$<node>.output.field`.
+        ...(outcome.structuredOutput !== undefined
+          ? { structured_output: outcome.structuredOutput }
+          : {}),
+        // The field contract this node completed under (#2453). Persisted because a
+        // resume cannot re-derive it: the child owns it, and this node's own
+        // definition never states it.
+        ...(declaredFields !== undefined ? { declared_fields: [...declaredFields] } : {}),
+        ...(outcome.costUsd !== undefined ? { cost_usd: outcome.costUsd } : {}),
+        // Rolled up from the child run's persisted totals, exactly like cost_usd —
+        // tokens are the axis every provider reports (Codex reports no cost at all),
+        // so dropping them here while keeping cost would hide the one comparable
+        // number. Does not double count WITHIN this run: the child's own per-node
+        // rows are filed under `child_run_id`, a different workflow_run_id.
+        ...(outcome.tokens !== undefined ? { tokens: outcome.tokens } : {}),
+      },
     });
     return {
       state: 'completed',
@@ -8202,7 +7869,7 @@ async function executeWorkflowNode(
     // freshly-run child uses (interpret handles both).
     return await interpret(childOutcomeFromRun(existing));
   } catch (err) {
-    if (err instanceof TerminalStatusWriteError) throw err;
+    if (err instanceof TerminalStatusWriteError || err instanceof NodeEventWriteError) throw err;
 
     return failResult(`Sub-run '${node.workflow}' errored: ${(err as Error).message}`);
   }
@@ -8452,8 +8119,8 @@ function sumFanOutTokens(
  *     failed/cancelled entries represented);
  *   - aggregate `$<id>.output` = JSON array in item order; cost/tokens = Σ children.
  *
- * Never throws — every failure returns a failed NodeExecutionResult so a child-store
- * error can't unwind the whole DAG. `node_completed` is written ONLY when the join is
+ * Execution failures return a failed NodeExecutionResult; lifecycle persistence
+ * rejection escapes to the run failure boundary. `node_completed` is written ONLY when the join is
  * satisfied, so a failed fan-out node re-runs and re-inspects its children on resume
  * (resume correctness is sourced from child-run status, not the node's own events).
  */
@@ -8469,35 +8136,21 @@ async function executeFanOutWorkflowNode(
 
   // node_failed writer (mirrors executeWorkflowNode.failResult) — a fan-out failure may
   // still carry accumulated cost/tokens so spend over already-run children is tracked.
-  const failResult = (
+  const failResult = async (
     error: string,
     costUsd?: number,
     tokens?: TokenUsage
-  ): NodeExecutionResult => {
-    deps.store
-      .createWorkflowEvent({
-        workflow_run_id: parentRun.id,
-        event_type: 'node_failed',
-        step_name: stepName,
-        data: {
-          error,
-          type: 'workflow',
-          ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
-          ...(tokens !== undefined ? { tokens } : {}),
-        },
-      })
-      .catch((err: Error) => {
-        getLog().error(
-          { err, workflowRunId: parentRun.id, eventType: 'node_failed' },
-          'workflow.event_persist_failed'
-        );
-      });
-    getWorkflowEventEmitter().emit({
-      type: 'node_failed',
-      runId: parentRun.id,
-      nodeId: node.id,
-      nodeName: node.id,
-      error,
+  ): Promise<NodeExecutionResult> => {
+    await recordNodeState({ store: deps.store, logDir: ctx.logDir }, node, {
+      workflow_run_id: parentRun.id,
+      event_type: 'node_failed',
+      step_name: stepName,
+      data: {
+        error,
+        type: 'workflow',
+        ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
+        ...(tokens !== undefined ? { tokens } : {}),
+      },
     });
     return {
       state: 'failed',
@@ -8511,69 +8164,56 @@ async function executeFanOutWorkflowNode(
   // node_completed writer (mirrors executeWorkflowNode.asCompleted) — written ONLY when
   // the join is satisfied, so getCompletedDagNodeOutputs skips a finished fan-out node
   // on resume but re-runs an unfinished one (which re-inspects children by child_index).
-  const writeCompleted = (
+  const writeCompleted = async (
     output: string,
     costUsd?: number,
     tokens?: TokenUsage,
     structured?: unknown
-  ): void => {
-    deps.store
-      .createWorkflowEvent({
-        workflow_run_id: parentRun.id,
-        event_type: 'node_completed',
-        step_name: stepName,
-        data: {
-          node_output: output,
-          type: 'workflow',
-          fan_out: true,
-          // The logical aggregate array (#2637), so parent cold resume rehydrates
-          // it identically to the fresh join.
-          ...(structured !== undefined ? { structured_output: structured } : {}),
-          ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
-          // Both usage keys are what survives resume: getDagResumeSnapshot rebuilds a
-          // run's cumulative usage by summing `data.tokens` and `data.cost_usd` off
-          // these events, so dropping either here makes every resumed run under-report
-          // by exactly the children's usage — silently, since an absent key is skipped
-          // without warning.
-          ...(tokens !== undefined ? { tokens } : {}),
-        },
-      })
-      .catch((err: Error) => {
-        getLog().error(
-          { err, workflowRunId: parentRun.id, eventType: 'node_completed' },
-          'workflow.event_persist_failed'
-        );
-      });
-    getWorkflowEventEmitter().emit({
-      type: 'node_completed',
-      runId: parentRun.id,
-      nodeId: node.id,
-      nodeName: node.id,
-      // The wrapper node has no meaningful duration of its own — child runs carry real
-      // timing. Emitted as 0 to satisfy NodeCompletedEvent (mirrors the single path).
-      duration: 0,
-      ...(costUsd !== undefined ? { costUsd } : {}),
+  ): Promise<void> => {
+    await recordNodeState({ store: deps.store, logDir: ctx.logDir }, node, {
+      workflow_run_id: parentRun.id,
+      event_type: 'node_completed',
+      step_name: stepName,
+      data: {
+        node_output: output,
+        type: 'workflow',
+        fan_out: true,
+        // The logical aggregate array (#2637), so parent cold resume rehydrates
+        // it identically to the fresh join.
+        ...(structured !== undefined ? { structured_output: structured } : {}),
+        ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
+        // Both usage keys are what survives resume: getDagResumeSnapshot rebuilds a
+        // run's cumulative usage by summing `data.tokens` and `data.cost_usd` off
+        // these events, so dropping either here makes every resumed run under-report
+        // by exactly the children's usage — silently, since an absent key is skipped
+        // without warning.
+        ...(tokens !== undefined ? { tokens } : {}),
+      },
     });
   };
 
   // Notify the platform immediately of a fan-out failure (S3). Every early-failure branch
   // uses this — items resolution, both gate paths, the child-lookup error, the collision
   // preflight and the join — so a fan-out failure never reaches the user through the
-  // end-of-run digest alone. safeSendMessage never throws.
+  // end-of-run digest alone.
   const notify = async (text: string): Promise<void> => {
     await safeSendMessage(platform, conversationId, text, msgContext);
   };
 
   // Cancel a child the fan-out path OWNS, stamping WHY (C2/I4) so the cancel is
   // attributable AND — unlike a user's out-of-band cancel — recoverable on resume.
+  let childCancellationFailure: TerminalStatusWriteError | undefined;
   const cancelChild = async (childId: string, reason: FanOutCancelReason): Promise<void> => {
     if (!childId) return;
-    await deps.store.cancelFanOutRun(childId, reason).catch((err: unknown) => {
-      getLog().error(
-        { err: err as Error, childRunId: childId, reason },
-        'workflow.fan_out_cancel_failed'
-      );
-    });
+    try {
+      await requireTerminalStatusWrite(deps.store.cancelFanOutRun(childId, reason), {
+        workflowRunId: childId,
+        site: 'dag.fan_out_cancel',
+      });
+    } catch (error) {
+      if (error instanceof TerminalStatusWriteError) childCancellationFailure = error;
+      throw error;
+    }
   };
 
   // Item → child input/$ARGUMENTS (canonical value text: strings raw, objects JSON).
@@ -8585,7 +8225,7 @@ async function executeFanOutWorkflowNode(
   //    then $node.output refs) exactly as the input surface uses. A `.field` ref that
   //    can't be honored throws an OutputRefError → caught → fail closed. Never silently
   //    zero items: a resolution that isn't a JSON array fails the node.
-  let items: unknown[];
+  let parsedItems: unknown;
   try {
     const { prompt: itemsVarsResolved } = substituteWorkflowVariables(
       fanOut.items,
@@ -8597,20 +8237,21 @@ async function executeFanOutWorkflowNode(
       ctx.issueContext
     );
     const itemsResolved = substituteNodeOutputRefs(itemsVarsResolved, ctx.nodeOutputs);
-    const parsed: unknown = JSON.parse(itemsResolved);
-    if (!Array.isArray(parsed)) {
-      const msg =
-        `fan_out.items on '${node.id}' resolved to ${typeof parsed}, not a JSON array. ` +
-        `'${fanOut.items}' must reference a node output that produces a JSON array.`;
-      await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
-      return failResult(msg);
-    }
-    items = parsed;
+    parsedItems = JSON.parse(itemsResolved);
   } catch (err) {
     const msg = `fan_out.items on '${node.id}' could not be resolved to a JSON array: ${(err as Error).message}`;
     await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
     return failResult(msg);
   }
+
+  if (!Array.isArray(parsedItems)) {
+    const msg =
+      `fan_out.items on '${node.id}' resolved to ${typeof parsedItems}, not a JSON array. ` +
+      `'${fanOut.items}' must reference a node output that produces a JSON array.`;
+    await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
+    return failResult(msg);
+  }
+  const items: unknown[] = parsedItems;
 
   // Resolve the node's static `with:` map (#2470) once — the same $INPUTS applied to EVERY
   // fan-out child. Per-item, the `fan_out.as` channel adds `$INPUTS.<as> = <item>` on top
@@ -8649,7 +8290,7 @@ async function executeFanOutWorkflowNode(
   // 2. Empty array → a valid zero-width expansion (#977 acceptance): complete with '[]'.
   if (items.length === 0) {
     getLog().info({ parentRunId: parentRun.id, nodeId: node.id }, 'workflow.fan_out_empty');
-    writeCompleted('[]', undefined);
+    await writeCompleted('[]', undefined);
     return { state: 'completed', output: '[]' };
   }
 
@@ -8725,6 +8366,7 @@ async function executeFanOutWorkflowNode(
       existingByIndex.set(idx, child);
     }
   } catch (err) {
+    if (err instanceof TerminalStatusWriteError) throw err;
     // Notify like every other early-failure branch — this one was the odd one out, so a
     // store error was the single fan-out failure that reached the user only via the
     // end-of-run digest.
@@ -8883,6 +8525,9 @@ async function executeFanOutWorkflowNode(
     items,
     fanOut.max_parallel,
     async (item, i): Promise<ChildWorkflowOutcome> => {
+      // A rolled-back cancellation has not released the child's working-path lock.
+      // Let claimed siblings settle, but do not start another child against that lock.
+      if (childCancellationFailure) throw childCancellationFailure;
       const existing = existingByIndex.get(i);
       // Existing completed child → thread its outcome without re-spawning (resume skip).
       if (existing?.status === 'completed') return childOutcomeFromRun(existing);
@@ -8925,6 +8570,9 @@ async function executeFanOutWorkflowNode(
         itemHash: hashFanOutItem(input),
         ...(Object.keys(childInputs).length > 0 ? { inputs: childInputs } : {}),
         ...(resumeChild ? { resumeChild } : {}),
+      }).catch((error: unknown) => {
+        if (error instanceof TerminalStatusWriteError) childCancellationFailure = error;
+        throw error;
       });
       // A paused child is cancelled HERE rather than at the join, and the timing is
       // load-bearing rather than tidiness. A pause is not terminal, and a non-terminal run
@@ -8943,23 +8591,7 @@ async function executeFanOutWorkflowNode(
     }
   );
 
-  const terminalWriteFailure = settled.find(
-    (result): result is PromiseRejectedResult =>
-      result.status === 'rejected' && result.reason instanceof TerminalStatusWriteError
-  );
-  if (terminalWriteFailure) throw terminalWriteFailure.reason;
-
-  // Terminal status-write failures propagate above. Other unexpected rejections become a
-  // synthetic failed outcome.
-  const outcomes: ChildWorkflowOutcome[] = settled.map((r, i) =>
-    r.status === 'fulfilled'
-      ? r.value
-      : {
-          childRunId: '',
-          status: 'failed',
-          error: `fan-out child ${String(i)} threw: ${String(r.reason)}`,
-        }
-  );
+  const outcomes = settledValuesOrThrow(settled, parentRun.id);
 
   const totalCostUsd = sumFanOutCost(outcomes);
   const totalTokens = sumFanOutTokens(outcomes);
@@ -9036,7 +8668,7 @@ async function executeFanOutWorkflowNode(
     // (#2637), serialized once for the text channel.
     const elements = outcomes.map((o, i) => childElement(o, i));
     const aggregate = JSON.stringify(elements);
-    writeCompleted(aggregate, totalCostUsd, totalTokens, elements);
+    await writeCompleted(aggregate, totalCostUsd, totalTokens, elements);
     return {
       state: 'completed',
       output: aggregate,
@@ -9062,7 +8694,7 @@ async function executeFanOutWorkflowNode(
       : { archon_failed: true, error: o.error ?? `child ${o.status}`, status: o.status }
   );
   const aggregate = JSON.stringify(elements);
-  writeCompleted(aggregate, totalCostUsd, totalTokens, elements);
+  await writeCompleted(aggregate, totalCostUsd, totalTokens, elements);
   return {
     state: 'completed',
     output: aggregate,
@@ -9129,36 +8761,22 @@ async function executeComposeFanOutNode(
   const msgContext = { workflowId: parentRun.id, nodeName: node.id };
   const stepName = ctx.stepNamePrefix + node.id;
 
-  const failResult = (
+  const failResult = async (
     error: string,
     costUsd?: number,
     tokens?: TokenUsage
-  ): NodeExecutionResult => {
-    deps.store
-      .createWorkflowEvent({
-        workflow_run_id: parentRun.id,
-        event_type: 'node_failed',
-        step_name: stepName,
-        data: {
-          error,
-          type: 'compose_fan_out',
-          aggregate: true,
-          ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
-          ...(tokens !== undefined ? { tokens } : {}),
-        },
-      })
-      .catch((err: Error) => {
-        getLog().error(
-          { err, workflowRunId: parentRun.id, eventType: 'node_failed' },
-          'workflow.event_persist_failed'
-        );
-      });
-    getWorkflowEventEmitter().emit({
-      type: 'node_failed',
-      runId: parentRun.id,
-      nodeId: node.id,
-      nodeName: node.id,
-      error,
+  ): Promise<NodeExecutionResult> => {
+    await recordNodeState({ store: deps.store, logDir: ctx.logDir }, node, {
+      workflow_run_id: parentRun.id,
+      event_type: 'node_failed',
+      step_name: stepName,
+      data: {
+        error,
+        type: 'compose_fan_out',
+        aggregate: true,
+        ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
+        ...(tokens !== undefined ? { tokens } : {}),
+      },
     });
     return {
       state: 'failed',
@@ -9171,40 +8789,25 @@ async function executeComposeFanOutNode(
 
   // Written ONLY when the join is satisfied, mirroring executeFanOutWorkflowNode — so
   // cold resume skips a finished fan-out but re-runs an unfinished one.
-  const writeCompleted = (
+  const writeCompleted = async (
     output: string,
     costUsd?: number,
     tokens?: TokenUsage,
     structured?: unknown
-  ): void => {
-    deps.store
-      .createWorkflowEvent({
-        workflow_run_id: parentRun.id,
-        event_type: 'node_completed',
-        step_name: stepName,
-        data: {
-          node_output: output,
-          type: 'compose_fan_out',
-          fan_out: true,
-          aggregate: true,
-          ...(structured !== undefined ? { structured_output: structured } : {}),
-          ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
-          ...(tokens !== undefined ? { tokens } : {}),
-        },
-      })
-      .catch((err: Error) => {
-        getLog().error(
-          { err, workflowRunId: parentRun.id, eventType: 'node_completed' },
-          'workflow.event_persist_failed'
-        );
-      });
-    getWorkflowEventEmitter().emit({
-      type: 'node_completed',
-      runId: parentRun.id,
-      nodeId: node.id,
-      nodeName: node.id,
-      duration: 0,
-      ...(costUsd !== undefined ? { costUsd } : {}),
+  ): Promise<void> => {
+    await recordNodeState({ store: deps.store, logDir: ctx.logDir }, node, {
+      workflow_run_id: parentRun.id,
+      event_type: 'node_completed',
+      step_name: stepName,
+      data: {
+        node_output: output,
+        type: 'compose_fan_out',
+        fan_out: true,
+        aggregate: true,
+        ...(structured !== undefined ? { structured_output: structured } : {}),
+        ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
+        ...(tokens !== undefined ? { tokens } : {}),
+      },
     });
   };
 
@@ -9401,7 +9004,7 @@ async function executeComposeFanOutNode(
 
   if (snapshots.length === 0) {
     getLog().info({ parentRunId: parentRun.id, nodeId: node.id }, 'workflow.compose_fan_out_empty');
-    writeCompleted('[]', undefined, undefined, []);
+    await writeCompleted('[]', undefined, undefined, []);
     return { state: 'completed', output: '[]', structuredOutput: [] };
   }
 
@@ -9541,39 +9144,7 @@ async function executeComposeFanOutNode(
         stepNamePrefix: instanceStepNamePrefix,
         loopGroupPath: ctx.loopGroupPath,
       };
-      try {
-        await runLayers(instanceCtx);
-      } catch (err) {
-        const error = (err as Error).message;
-        const outcome: ComposeInstanceOutcome = {
-          status: 'failed',
-          output: '',
-          error,
-          ...(instanceCtx.totalCostUsd > 0 ? { costUsd: instanceCtx.totalCostUsd } : {}),
-          ...(instanceCtx.totalTokens !== undefined ? { tokens: instanceCtx.totalTokens } : {}),
-        };
-        try {
-          await deps.store.persistWorkflowEvent({
-            workflow_run_id: parentRun.id,
-            event_type: 'node_failed',
-            step_name: instanceScopeName,
-            data: {
-              type: 'compose_fan_out_instance',
-              aggregate: true,
-              error,
-              ...(outcome.costUsd !== undefined ? { cost_usd: outcome.costUsd } : {}),
-              ...(outcome.tokens !== undefined ? { tokens: outcome.tokens } : {}),
-            },
-          });
-        } catch (persistErr) {
-          return {
-            ...outcome,
-            status: 'ambiguous',
-            error: `instance ${snapshot.identity} failed and its terminal state could not be stored: ${(persistErr as Error).message}`,
-          };
-        }
-        return outcome;
-      }
+      await runLayers(instanceCtx);
       const failed = [...instanceCtx.nodeOutputs.values()].filter(o => o.state === 'failed');
       if (failed.length > 0) {
         const outcome: ComposeInstanceOutcome = {
@@ -9654,15 +9225,7 @@ async function executeComposeFanOutNode(
     }
   );
 
-  const outcomes: ComposeInstanceOutcome[] = settled.map((r, i) =>
-    r.status === 'fulfilled'
-      ? r.value
-      : {
-          status: 'failed',
-          output: '',
-          error: `composed instance ${snapshots[i].identity} threw: ${String(r.reason)}`,
-        }
-  );
+  const outcomes = settledValuesOrThrow(settled, parentRun.id);
 
   const totalCostUsd = sumFanOutCost(outcomes);
   const totalTokens = sumFanOutTokens(outcomes);
@@ -9728,7 +9291,7 @@ async function executeComposeFanOutNode(
         }
   );
   const aggregate = JSON.stringify(elements);
-  writeCompleted(aggregate, totalCostUsd, totalTokens, elements);
+  await writeCompleted(aggregate, totalCostUsd, totalTokens, elements);
   return {
     state: 'completed',
     output: aggregate,
@@ -10044,6 +9607,30 @@ function structuredOutputsEqual(a: unknown, b: unknown): boolean {
   }
 }
 
+/** Preserve the rejection that determines run recovery after all claimed work settles. */
+function settledValuesOrThrow<T>(
+  results: readonly PromiseSettledResult<T>[],
+  workflowRunId: string
+): T[] {
+  const values: T[] = [];
+  const failures: PromiseRejectedResult[] = [];
+  for (const result of results) {
+    if (result.status === 'fulfilled') values.push(result.value);
+    else failures.push(result);
+  }
+  const selected =
+    failures.find(result => result.reason instanceof TerminalStatusWriteError) ??
+    failures.find(result => result.reason instanceof NodeEventWriteError) ??
+    failures[0];
+  if (selected === undefined) return values;
+  for (const failure of failures) {
+    if (failure === selected) continue;
+    const reason: unknown = failure.reason;
+    getLog().error({ err: reason, workflowRunId }, 'dag.join_secondary_failure');
+  }
+  throw selected.reason;
+}
+
 /**
  * Await thunks one at a time, collecting outcomes in `Promise.allSettled` shape so the
  * caller's result handling is identical for the sequential and concurrent paths.
@@ -10172,25 +9759,20 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 // audit row must go through the same bounded-preview+spill helper as the
                 // primary node_completed/node_skipped_prior_success writers, not the raw text.
                 const alwaysRunPriorOutput = formatThisNodesPriorOutput(alwaysRunStepName);
-                ctx.deps.store
-                  .createWorkflowEvent({
-                    workflow_run_id: ctx.workflowRun.id,
-                    event_type: 'node_always_run_reset',
-                    step_name: alwaysRunStepName,
-                    data: persistedOutputEventFields(alwaysRunPriorOutput, 'prior_output'),
-                  })
-                  .catch((err: Error) => {
-                    getLog().error(
-                      {
-                        err,
-                        workflowRunId: ctx.workflowRun.id,
-                        eventType: 'node_always_run_reset',
-                      },
-                      'workflow_event_persist_failed'
-                    );
-                  });
+                await recordNodeState({ store: ctx.deps.store, logDir: ctx.logDir }, node, {
+                  workflow_run_id: ctx.workflowRun.id,
+                  event_type: 'node_always_run_reset',
+                  step_name: alwaysRunStepName,
+                  data: persistedOutputEventFields(alwaysRunPriorOutput, 'prior_output'),
+                });
                 // falls through to re-execute the node
-              } else if (composedBoundaryDecision.decision === 'run') {
+              } else if (
+                composedBoundaryDecision.decision === 'run' &&
+                // A join cached before failure-cascade skips blocked this rule must
+                // satisfy its current eligibility before that success can be reused.
+                (node.trigger_rule !== 'none_failed_min_one_success' ||
+                  checkTriggerRule(node, ctx.nodeOutputs).decision === 'run')
+              ) {
                 // #2402 — a cached prior-success skip is only safe when every
                 // dependency's current value still matches the prior snapshot.
                 // If any dep re-ran during this resume (e.g. an `always_run: true`
@@ -10212,94 +9794,68 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                     { nodeId: node.id, invalidatingDeps: staleDeps },
                     'dag.node_prior_cache_invalidated'
                   );
-                  ctx.deps.store
-                    .createWorkflowEvent({
-                      workflow_run_id: ctx.workflowRun.id,
-                      event_type: 'node_prior_cache_invalidated',
-                      step_name: invalidatedStepName,
-                      data: {
-                        reason: 'stale_dependency',
-                        invalidating_deps: staleDeps,
-                        ...persistedOutputEventFields(invalidatedPriorOutput, 'prior_output'),
-                        // Carry the cached logical value too so the audit log shows
-                        // exactly what was thrown away, matching the text channel
-                        // (#2637).
-                        ...(priorCompletedNodes.get(node.id)?.structuredOutput !== undefined
-                          ? {
-                              prior_structured_output: priorCompletedNodes.get(node.id)
-                                ?.structuredOutput,
-                            }
-                          : {}),
-                      },
-                    })
-                    .catch((err: Error) => {
-                      getLog().error(
-                        {
-                          err,
-                          workflowRunId: ctx.workflowRun.id,
-                          eventType: 'node_prior_cache_invalidated',
-                        },
-                        'workflow_event_persist_failed'
-                      );
-                    });
+                  await recordNodeState({ store: ctx.deps.store, logDir: ctx.logDir }, node, {
+                    workflow_run_id: ctx.workflowRun.id,
+                    event_type: 'node_prior_cache_invalidated',
+                    step_name: invalidatedStepName,
+                    data: {
+                      reason: 'stale_dependency',
+                      invalidating_deps: staleDeps,
+                      ...persistedOutputEventFields(invalidatedPriorOutput, 'prior_output'),
+                      // Carry the cached logical value too so the audit log shows
+                      // exactly what was thrown away, matching the text channel
+                      // (#2637).
+                      ...(priorCompletedNodes.get(node.id)?.structuredOutput !== undefined
+                        ? {
+                            prior_structured_output: priorCompletedNodes.get(node.id)
+                              ?.structuredOutput,
+                          }
+                        : {}),
+                    },
+                  });
                   // falls through to re-execute the node with fresh dep output
                 } else {
                   getLog().info({ nodeId: node.id }, 'dag.node_skipped_prior_success');
-                  await logNodeSkip(ctx.logDir, ctx.workflowRun.id, node.id, 'prior_success').catch(
-                    (err: Error) => {
-                      getLog().warn({ err, nodeId: node.id }, 'dag.node_skip_log_write_failed');
-                    }
-                  );
                   const skipStepName = ctx.stepNamePrefix + node.id;
-                  // Copy the logical value forward (#2637) so a SECOND resume's snapshot
-                  // still sees it — this re-emit is that resume's source. `prior.output` is
-                  // already the FULL value (getDagResumeSnapshot prefers the spill over the
-                  // truncated preview when one exists, #2726), so it must go back through the
-                  // same bounded-preview+spill helper here or this row would re-introduce an
-                  // unbounded write on every subsequent resume pass.
-                  const priorSkipOutput = formatThisNodesPriorOutput(skipStepName);
-                  ctx.deps.store
-                    .createWorkflowEvent({
-                      workflow_run_id: ctx.workflowRun.id,
-                      event_type: 'node_skipped_prior_success',
-                      step_name: skipStepName,
-                      data: {
-                        reason: 'prior_success',
-                        ...persistedOutputEventFields(priorSkipOutput, 'node_output'),
-                        ...(priorCompletedNodes.get(node.id)?.structuredOutput !== undefined
-                          ? {
-                              structured_output: priorCompletedNodes.get(node.id)?.structuredOutput,
-                            }
+                  // Preserve incomplete recovery as a preview with its original provenance.
+                  // Re-spilling that preview would falsely certify it as the full result.
+                  const prior = priorCompletedNodes.get(node.id);
+                  const truncation = prior?.outputTruncation;
+                  const priorSkipOutput = truncation
+                    ? {
+                        nodeOutput: prior?.output ?? '',
+                        truncated: true,
+                        ...(truncation.originalBytes !== null
+                          ? { originalBytes: truncation.originalBytes }
                           : {}),
-                        // Same reason as the logical value (#2453): this re-emit is the
-                        // NEXT resume's source, so a `workflow:` node's child-owned field
-                        // contract has to ride along or the second resume loses it.
-                        ...(priorCompletedNodes.get(node.id)?.declaredFields !== undefined
-                          ? {
-                              declared_fields: [
-                                ...(priorCompletedNodes.get(node.id)?.declaredFields ?? []),
-                              ],
-                            }
+                        ...(truncation.spillPath !== null
+                          ? { spillPath: truncation.spillPath }
                           : {}),
-                      },
-                    })
-                    .catch((err: Error) => {
-                      getLog().error(
-                        {
-                          err,
-                          workflowRunId: ctx.workflowRun.id,
-                          eventType: 'node_skipped_prior_success',
-                        },
-                        'workflow_event_persist_failed'
-                      );
-                    });
-                  const emitterPrior = getWorkflowEventEmitter();
-                  emitterPrior.emit({
-                    type: 'node_skipped',
-                    runId: ctx.workflowRun.id,
-                    nodeId: node.id,
-                    nodeName: nodeDisplayName(node),
-                    reason: 'prior_success',
+                      }
+                    : formatThisNodesPriorOutput(skipStepName);
+                  await recordNodeState({ store: ctx.deps.store, logDir: ctx.logDir }, node, {
+                    workflow_run_id: ctx.workflowRun.id,
+                    event_type: 'node_skipped_prior_success',
+                    step_name: skipStepName,
+                    data: {
+                      reason: 'prior_success',
+                      ...persistedOutputEventFields(priorSkipOutput, 'node_output'),
+                      ...(priorCompletedNodes.get(node.id)?.structuredOutput !== undefined
+                        ? {
+                            structured_output: priorCompletedNodes.get(node.id)?.structuredOutput,
+                          }
+                        : {}),
+                      // Same reason as the logical value (#2453): this re-emit is the
+                      // NEXT resume's source, so a `workflow:` node's child-owned field
+                      // contract has to ride along or the second resume loses it.
+                      ...(priorCompletedNodes.get(node.id)?.declaredFields !== undefined
+                        ? {
+                            declared_fields: [
+                              ...(priorCompletedNodes.get(node.id)?.declaredFields ?? []),
+                            ],
+                          }
+                        : {}),
+                    },
                   });
                   // Return the pre-populated output (already in nodeOutputs)
                   const cachedOutput = ctx.nodeOutputs.get(node.id);
@@ -10322,32 +9878,11 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             if (triggerDecision.decision === 'skip') {
               const { cause } = triggerDecision;
               getLog().info({ nodeId: node.id, reason: 'trigger_rule' }, 'dag_node_skipped');
-              await logNodeSkip(ctx.logDir, ctx.workflowRun.id, node.id, 'trigger_rule').catch(
-                (err: Error) => {
-                  getLog().warn({ err, nodeId: node.id }, 'dag.node_skip_log_write_failed');
-                }
-              );
-              ctx.deps.store
-                .createWorkflowEvent({
-                  workflow_run_id: ctx.workflowRun.id,
-                  event_type: 'node_skipped',
-                  step_name: ctx.stepNamePrefix + node.id,
-                  data: { reason: 'trigger_rule', cause },
-                })
-                .catch((err: Error) => {
-                  getLog().error(
-                    { err, workflowRunId: ctx.workflowRun.id, eventType: 'node_skipped' },
-                    'workflow_event_persist_failed'
-                  );
-                });
-              const emitter = getWorkflowEventEmitter();
-              emitter.emit({
-                type: 'node_skipped',
-                runId: ctx.workflowRun.id,
-                nodeId: node.id,
-                nodeName: nodeDisplayName(node),
-                reason: 'trigger_rule',
-                cause,
+              await recordNodeState({ store: ctx.deps.store, logDir: ctx.logDir }, node, {
+                workflow_run_id: ctx.workflowRun.id,
+                event_type: 'node_skipped',
+                step_name: ctx.stepNamePrefix + node.id,
+                data: { reason: 'trigger_rule', cause },
               });
               return {
                 nodeId: node.id,
@@ -10381,35 +9916,11 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   { nodeId: node.id, when: node.when },
                   'dag_node_skipped_condition_parse_error'
                 );
-                await logNodeSkip(
-                  ctx.logDir,
-                  ctx.workflowRun.id,
-                  node.id,
-                  'when_condition_parse_error'
-                ).catch((err: Error) => {
-                  getLog().warn({ err, nodeId: node.id }, 'dag.node_skip_log_write_failed');
-                });
-                ctx.deps.store
-                  .createWorkflowEvent({
-                    workflow_run_id: ctx.workflowRun.id,
-                    event_type: 'node_skipped',
-                    step_name: ctx.stepNamePrefix + node.id,
-                    data: { reason: 'when_condition_parse_error', expr: node.when, cause },
-                  })
-                  .catch((err: Error) => {
-                    getLog().error(
-                      { err, workflowRunId: ctx.workflowRun.id, eventType: 'node_skipped' },
-                      'workflow_event_persist_failed'
-                    );
-                  });
-                const emitter = getWorkflowEventEmitter();
-                emitter.emit({
-                  type: 'node_skipped',
-                  runId: ctx.workflowRun.id,
-                  nodeId: node.id,
-                  nodeName: nodeDisplayName(node),
-                  reason: 'when_condition_parse_error',
-                  cause,
+                await recordNodeState({ store: ctx.deps.store, logDir: ctx.logDir }, node, {
+                  workflow_run_id: ctx.workflowRun.id,
+                  event_type: 'node_skipped',
+                  step_name: ctx.stepNamePrefix + node.id,
+                  data: { reason: 'when_condition_parse_error', expr: node.when, cause },
                 });
                 return {
                   nodeId: node.id,
@@ -10419,32 +9930,11 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               if (!conditionPasses) {
                 const cause: SkipCause = { kind: 'condition', expr: node.when };
                 getLog().info({ nodeId: node.id, when: node.when }, 'dag_node_skipped_condition');
-                await logNodeSkip(ctx.logDir, ctx.workflowRun.id, node.id, 'when_condition').catch(
-                  (err: Error) => {
-                    getLog().warn({ err, nodeId: node.id }, 'dag.node_skip_log_write_failed');
-                  }
-                );
-                ctx.deps.store
-                  .createWorkflowEvent({
-                    workflow_run_id: ctx.workflowRun.id,
-                    event_type: 'node_skipped',
-                    step_name: ctx.stepNamePrefix + node.id,
-                    data: { reason: 'when_condition', expr: node.when, cause },
-                  })
-                  .catch((err: Error) => {
-                    getLog().error(
-                      { err, workflowRunId: ctx.workflowRun.id, eventType: 'node_skipped' },
-                      'workflow_event_persist_failed'
-                    );
-                  });
-                const emitter = getWorkflowEventEmitter();
-                emitter.emit({
-                  type: 'node_skipped',
-                  runId: ctx.workflowRun.id,
-                  nodeId: node.id,
-                  nodeName: nodeDisplayName(node),
-                  reason: 'when_condition',
-                  cause,
+                await recordNodeState({ store: ctx.deps.store, logDir: ctx.logDir }, node, {
+                  workflow_run_id: ctx.workflowRun.id,
+                  event_type: 'node_skipped',
+                  step_name: ctx.stepNamePrefix + node.id,
+                  data: { reason: 'when_condition', expr: node.when, cause },
                 });
                 return {
                   nodeId: node.id,
@@ -10459,6 +9949,15 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             // kind is added without a matching `case` here (AC1). Every case below
             // returns except `'agent'`, which `break`s to fall through to the shared
             // agent-handling code that follows — `node` narrows to `AgentNode` there.
+            // Agent, exec and loop executors own their starts (including retries).
+            // Coordination nodes start here before they can pause or terminalize the run.
+            const persistDispatchStart = (): Promise<void> =>
+              recordNodeState({ store: ctx.deps.store, logDir: ctx.logDir }, node, {
+                workflow_run_id: ctx.workflowRun.id,
+                event_type: 'node_started',
+                step_name: ctx.stepNamePrefix + node.id,
+                data: { type: node.kind, ...(iteration !== undefined ? { iteration } : {}) },
+              });
             switch (node.kind) {
               case 'exec': {
                 // Bash/script dispatch — no AI, no session. Opt-in retry only: a
@@ -10507,7 +10006,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                       output,
                       ctx.deps,
                       ctx.workflowRun.id,
-                      ctx.stepNamePrefix + node.id
+                      ctx.stepNamePrefix + node.id,
+                      ctx.logDir
                     ),
                   };
                 }
@@ -10549,7 +10049,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                     output,
                     ctx.deps,
                     ctx.workflowRun.id,
-                    ctx.stepNamePrefix + node.id
+                    ctx.stepNamePrefix + node.id,
+                    ctx.logDir
                   ),
                 };
               }
@@ -10597,6 +10098,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               }
 
               case 'loop_group': {
+                await persistDispatchStart();
                 // Loop-group node dispatch — manages its own subgraph iteration
                 // (body is a sealed sub-DAG re-executed per iteration; the loop is
                 // encapsulated inside this one node, keeping the outer DAG acyclic).
@@ -10626,16 +10128,33 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   loopGroupProvider,
                   ctx.stepNamePrefix
                 );
+                if (output.state === 'failed') {
+                  await recordNodeState({ store: ctx.deps.store, logDir: ctx.logDir }, node, {
+                    workflow_run_id: ctx.workflowRun.id,
+                    event_type: 'node_failed',
+                    step_name: ctx.stepNamePrefix + node.id,
+                    data: {
+                      type: 'loop_group',
+                      aggregate: true,
+                      error: output.error,
+                      ...(output.costUsd !== undefined ? { cost_usd: output.costUsd } : {}),
+                      ...(output.tokens !== undefined ? { tokens: output.tokens } : {}),
+                      ...(iteration !== undefined ? { iteration } : {}),
+                    },
+                  });
+                }
                 return { nodeId: node.id, output };
               }
 
               case 'gate': {
+                await persistDispatchStart();
                 // Approval node dispatch — pauses workflow for human review
                 const output = await executeApprovalNode(ctx, node, ctx.stepNamePrefix, iteration);
                 return { nodeId: node.id, output };
               }
 
               case 'wait': {
+                await persistDispatchStart();
                 const loopFrame = ctx.loopGroupPath.at(-1);
                 const output = await executeWaitNode(
                   node,
@@ -10652,12 +10171,14 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                         iteration: loopFrame.iteration,
                         sessionId: ctx.lastSequentialSession?.sessionId ?? null,
                         sessionProvider: ctx.lastSequentialSession?.provider ?? null,
-                      }
+                      },
+                  ctx.logDir
                 );
                 return { nodeId: node.id, output };
               }
 
               case 'halt': {
+                await persistDispatchStart();
                 // Cancel node dispatch — terminates the workflow run
                 const reason = substituteNodeOutputRefs(node.reason, ctx.nodeOutputs);
                 const cancelMsg = `❌ **Workflow cancelled** (node \`${node.id}\`): ${reason}`;
@@ -10665,10 +10186,13 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   workflowId: ctx.workflowRun.id,
                   nodeName: node.id,
                 });
-                await ctx.deps.store.cancelWorkflowRun(ctx.workflowRun.id, {
-                  step_name: ctx.stepNamePrefix + node.id,
-                  reason,
-                });
+                await requireTerminalStatusWrite(
+                  ctx.deps.store.cancelWorkflowRun(ctx.workflowRun.id, {
+                    step_name: ctx.stepNamePrefix + node.id,
+                    reason,
+                  }),
+                  { workflowRunId: ctx.workflowRun.id, site: 'dag.halt_cancel' }
+                );
                 getWorkflowEventEmitter().emit({
                   type: 'workflow_cancelled',
                   runId: ctx.workflowRun.id,
@@ -10680,6 +10204,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               }
 
               case 'workflow': {
+                await persistDispatchStart();
                 // Workflow (sub-run) node dispatch — starts/re-inspects a child run
                 // (#2121 Phase 2). Makes no direct provider call; the closure captured on
                 // ctx.runChildWorkflow drives the child's own executeWorkflow. The
@@ -10691,9 +10216,10 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               }
 
               case 'compose_fan_out': {
+                await persistDispatchStart();
                 // Composed fan-out dispatch (#2512): per-item in-parent expansion. Like
                 // the sub-run wrapper it makes no provider call of its own and writes its
-                // own lifecycle events.
+                // own completion/failure events.
                 const output = await executeComposeFanOutNode(node, ctx, node.fan_out);
                 return { nodeId: node.id, output };
               }
@@ -10925,7 +10451,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               retriedOutput,
               ctx.deps,
               ctx.workflowRun.id,
-              ctx.stepNamePrefix + node.id
+              ctx.stepNamePrefix + node.id,
+              ctx.logDir
             );
 
             // Cold-resume surfacing: this node requested a session resume but the
@@ -11026,31 +10553,23 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
 
             return { nodeId: node.id, output, sessionProvider: provider };
           } catch (error) {
-            if (error instanceof TerminalStatusWriteError) throw error;
+            // This dispatch boundary also owns provider/binding preparation failures.
+            // Durable-write rejection must reach run recovery without becoming a node outcome.
+            if (error instanceof TerminalStatusWriteError || error instanceof NodeEventWriteError)
+              throw error;
 
             const err = error as Error;
             getLog().error({ err, nodeId: node.id }, 'dag_node_pre_execution_failed');
-            ctx.deps.store
-              .createWorkflowEvent({
-                workflow_run_id: ctx.workflowRun.id,
-                event_type: 'node_failed',
-                step_name: ctx.stepNamePrefix + node.id,
-                data: {
-                  error: err.message,
-                  ...(isNodeContextResume(node.context)
-                    ? { session_source_node_id: node.context.resume }
-                    : {}),
-                },
-              })
-              .catch((dbErr: Error) => {
-                getLog().error({ err: dbErr, nodeId: node.id }, 'workflow_event_persist_failed');
-              });
-            getWorkflowEventEmitter().emit({
-              type: 'node_failed',
-              runId: ctx.workflowRun.id,
-              nodeId: node.id,
-              nodeName: nodeDisplayName(node),
-              error: err.message,
+            await recordNodeState({ store: ctx.deps.store, logDir: ctx.logDir }, node, {
+              workflow_run_id: ctx.workflowRun.id,
+              event_type: 'node_failed',
+              step_name: ctx.stepNamePrefix + node.id,
+              data: {
+                error: err.message,
+                ...(isNodeContextResume(node.context)
+                  ? { session_source_node_id: node.context.resume }
+                  : {}),
+              },
             });
             await safeSendMessage(
               ctx.platform,
@@ -11173,21 +10692,9 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               : undefined;
         }
         if (output.state === 'failed') layerHadFailure = true;
-      } else {
-        if (result.reason instanceof TerminalStatusWriteError) throw result.reason;
-
-        // Should not happen — all errors are caught in the inner try-catch
-        // Handle defensively: log the unexpected rejection
-        getLog().error({ err: result.reason as Error, layerIdx }, 'dag_node_unexpected_rejection');
-        layerHadFailure = true;
-        await safeSendMessage(
-          ctx.platform,
-          ctx.conversationId,
-          `An unexpected error occurred executing a node in layer ${String(layerIdx)}. Check server logs.`,
-          { workflowId: ctx.workflowRun.id }
-        );
       }
     }
+    settledValuesOrThrow(layerResults, ctx.workflowRun.id);
 
     if (layerHadFailure) {
       getLog().warn({ layerIdx, nodeCount: layer.length }, 'dag_layer_had_failures');

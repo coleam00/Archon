@@ -20,12 +20,13 @@
  * that race leaves the file dirty for whatever runs next. A temp fixture removes
  * the question.
  */
+import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, expect, test } from 'bun:test';
+import { afterEach, expect, spyOn, test } from 'bun:test';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { applyApiTypes } from './generate-api-types';
+import { applyApiTypes, runOpenApiGenerator } from './generate-api-types';
 
 const tempRoots: string[] = [];
 
@@ -83,4 +84,39 @@ test('generate mode writes the types', async () => {
 
   expect(await applyApiTypes({ outputPath, generated, checkOnly: false })).toBe('written');
   expect(await readFile(outputPath, 'utf8')).toBe(generated);
+});
+
+// The one deliberate subprocess in this file, and it is bounded by the thing
+// under test: a child that genuinely never exits, killed at 250ms. What the
+// docblock above removed was the cost of regenerating the types, not spawning as
+// such — and a bound proved against a fake subprocess would only be proving that
+// the fake models kill-ends-the-wait, which is the part worth doubting.
+//
+// `bun run check:api-types` runs this generator inside `bun run validate` and on
+// every windows CI leg, with nothing else to end a stalled child.
+test('the generator bound kills a stalled child, names the timeout, and unstages the schema', async () => {
+  const realSpawn = Bun.spawn.bind(Bun);
+  let stagedStdin: unknown;
+  const spawnSpy = spyOn(Bun, 'spawn').mockImplementation(((
+    _command: string[],
+    options: Parameters<typeof Bun.spawn>[1]
+  ) => {
+    stagedStdin = options?.stdin;
+    return realSpawn([process.execPath, '-e', 'await new Promise(() => {})'], options);
+  }) as unknown as typeof Bun.spawn);
+
+  try {
+    await expect(runOpenApiGenerator('{"openapi":"3.1.0"}', 250)).rejects.toThrow(
+      /Timed out generating API types: openapi-typescript .* did not finish within 250ms/
+    );
+  } finally {
+    spawnSpy.mockRestore();
+  }
+
+  // A BunFile is a Blob; the `Uint8Array` this replaced is not. That array form
+  // is the parent-pumped channel that hung `archon serve` on windows (#2924).
+  expect(stagedStdin).toBeInstanceOf(Blob);
+  const stagedPath = (stagedStdin as { name?: string }).name;
+  expect(stagedPath).toBeTruthy();
+  expect(existsSync(stagedPath as string)).toBe(false);
 });

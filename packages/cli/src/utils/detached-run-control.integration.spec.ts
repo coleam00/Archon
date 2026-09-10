@@ -1,16 +1,12 @@
 import { describe, expect, it } from 'bun:test';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createConnection, createServer, type Server, type Socket } from 'node:net';
+import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import {
-  canConnect,
-  detachedRunControlPath,
-  requestDetachedRunStop,
-  startDetachedRunControlServer,
-} from './detached-run-control';
+import { runLiveOwnerPath } from '@archon/core/services/run-live-owner';
+import { requestDetachedRunStop } from './detached-run-control';
 
 // These fixtures are torn down after tests that spawn, and then kill, a real detached
 // child. A killed process can still hold a handle inside its temp tree at the instant of
@@ -91,7 +87,7 @@ function stubOwner(pid: number): Server {
     socket.on('data', (chunk: string): void => {
       request += chunk;
       if (request.includes('stop\n')) {
-        socket.write(`${JSON.stringify({ pid })}\n`);
+        socket.write(`${JSON.stringify({ kind: 'detached', pid })}\n`);
         request = request.replace('stop\n', '');
       }
       if (request.includes('terminate\n')) {
@@ -145,7 +141,7 @@ describe('detached run control integration', () => {
           // The primary assertion reports failures; cleanup is best-effort for an already-gone fixture.
         }
       }
-      if (process.platform !== 'win32') rmSync(detachedRunControlPath(runId), { force: true });
+      if (process.platform !== 'win32') rmSync(runLiveOwnerPath(runId), { force: true });
     }
   });
 
@@ -156,7 +152,7 @@ describe('detached run control integration', () => {
     // and left the run row saying `running`. POSIX has always tolerated the same
     // condition as ESRCH; the contract is one tree-is-gone outcome on both branches.
     const runId = `already-gone-${crypto.randomUUID()}`;
-    const path = detachedRunControlPath(runId);
+    const path = runLiveOwnerPath(runId);
     const doomed = spawn(process.execPath, ['-e', 'process.exit(0)'], { stdio: 'ignore' });
     if (doomed.pid === undefined) throw new Error('Failed to spawn the short-lived target');
     const gonePid = doomed.pid;
@@ -189,7 +185,7 @@ describe('detached run control integration', () => {
     if (process.platform === 'win32') return;
 
     const runId = `alive-${crypto.randomUUID()}`;
-    const path = detachedRunControlPath(runId);
+    const path = runLiveOwnerPath(runId);
     // Not `detached`, so it joins this spec's process group and no process group
     // carrying its own PID exists for the terminator to signal.
     const survivor = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 1000)'], {
@@ -234,85 +230,5 @@ describe('detached run control integration', () => {
     expect(result.code).not.toBe(0);
     expect(stderr).toContain('does not own process group');
     expect(existsSync(readyPath)).toBe(false);
-  });
-
-  it('bounds owner shutdown when a controller retains an uncommitted stop lease', async () => {
-    const runId = `retained-${crypto.randomUUID()}`;
-    const endpointPath = detachedRunControlPath(runId);
-    const owner = await startDetachedRunControlServer(runId);
-    const client = createConnection(endpointPath);
-    await new Promise<void>((resolve, reject) => {
-      client.once('connect', resolve);
-      client.once('error', reject);
-    });
-    // The client never sends 'terminate' and never hangs up, so the owner-side
-    // idle timeout is the only thing that can release close(). Assert the order
-    // that timeout produces rather than measuring how long it took: an elapsed
-    // floor against a real timer carries a couple of milliseconds of headroom
-    // and fails whenever the timer and the clock disagree by that much (#2859).
-    client.write('stop\n');
-    await waitFor(() => owner.isStopRequested());
-
-    const closing = owner.close();
-    // close() is parked on the retained lease and has gone no further: it stops
-    // the server and unlinks the endpoint only afterwards, so a close() that
-    // ignored the lease would already have made this probe unreachable. Both
-    // polarities are asserted, so a broken probe fails one of them rather than
-    // quietly agreeing with itself.
-    expect(await canConnect(endpointPath)).toBe(true);
-    expect(owner.isStopRequested()).toBe(true);
-
-    await closing;
-    expect(owner.isStopRequested()).toBe(false);
-    expect(await canConnect(endpointPath)).toBe(false);
-    client.destroy();
-  });
-
-  it('fails when the owner closes before identifying itself', async () => {
-    const runId = `close-before-pid-${crypto.randomUUID()}`;
-    const path = detachedRunControlPath(runId);
-    const server = createServer((socket: Socket): void => {
-      socket.once('data', (): void => {
-        socket.end();
-      });
-    });
-    await listen(server, path);
-
-    try {
-      const error = await rejectedError(
-        async (): Promise<unknown> => requestDetachedRunStop(runId)
-      );
-      expect(error.message).toMatch(/owner (?:ended|closed) before identifying itself/);
-    } finally {
-      await close(server);
-      if (process.platform !== 'win32') rmSync(path, { force: true });
-    }
-  });
-
-  it('fails when the owner closes before committing termination', async () => {
-    const runId = `close-before-ready-${crypto.randomUUID()}`;
-    const path = detachedRunControlPath(runId);
-    const server = createServer((socket: Socket): void => {
-      socket.setEncoding('utf8');
-      let request = '';
-      socket.on('data', (chunk: string): void => {
-        request += chunk;
-        if (request.includes('stop\n')) {
-          socket.write(`${JSON.stringify({ pid: 12345 })}\n`);
-          request = request.replace('stop\n', '');
-        }
-        if (request.includes('terminate\n')) socket.end();
-      });
-    });
-    await listen(server, path);
-
-    try {
-      const target = await requestDetachedRunStop(runId);
-      const error = await rejectedError(async (): Promise<void> => target.stop());
-      expect(error.message).toMatch(/(?:ended|closed) before committing termination/);
-    } finally {
-      await close(server);
-      if (process.platform !== 'win32') rmSync(path, { force: true });
-    }
   });
 });

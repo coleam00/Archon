@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { homedir, tmpdir } from 'os';
-import { join, sep } from 'path';
+import { dirname, join, sep } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { mkdir, rm, writeFile, lstat, readlink, symlink as fsSymlink } from 'fs/promises';
 import { removeTempTree } from './test-utils';
@@ -28,6 +28,7 @@ import {
   expandTilde,
   canonicalizeProjectPath,
   getAppArchonBasePath,
+  getSourceWebDistDir,
   getDefaultCommandsPath,
   getDefaultWorkflowsPath,
   logArchonPaths,
@@ -480,6 +481,19 @@ describe('archon-paths', () => {
       // The path should end with .archon and the directory should exist
       expect(path).toMatch(/\.archon$/);
       expect(existsSync(path)).toBe(true);
+    });
+  });
+
+  describe('getSourceWebDistDir', () => {
+    test('points at the web package build output in this checkout', () => {
+      const path = getSourceWebDistDir();
+      expect(path.endsWith(join('packages', 'web', 'dist'))).toBe(true);
+      // Anchored on the package that owns the build rather than on a second copy
+      // of the same path arithmetic: `bun run build:web` writes this directory,
+      // and `archon serve` refuses to start without it.
+      const webPackageJson = join(dirname(path), 'package.json');
+      expect(existsSync(webPackageJson)).toBe(true);
+      expect(JSON.parse(readFileSync(webPackageJson, 'utf8')).name).toBe('@archon/web');
     });
   });
 

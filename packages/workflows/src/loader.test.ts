@@ -146,7 +146,8 @@ describe('Workflow Loader', () => {
   describe('packaged workflow folders (#2527)', () => {
     it('discovers arbitrary repo pack/workflow folders and qualifies local resources', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows', 'team-kit', 'ship-it');
-      await mkdir(workflowDir, { recursive: true });
+      await mkdir(join(workflowDir, 'scripts'), { recursive: true });
+      await writeFile(join(workflowDir, 'scripts', 'publish.ts'), 'console.log(1);');
       await writeFile(
         join(workflowDir, 'release.yaml'),
         `name: release\ndescription: release\nnodes:\n  - id: command\n    command: prepare\n  - id: script\n    script: publish\n    runtime: bun\n`
@@ -232,6 +233,39 @@ describe('Workflow Loader', () => {
       const parent = result.workflows.find(entry => entry.workflow.name === 'parent')?.workflow;
       const included = parent?.nodes.find(node => node.id === 'review__run');
       expect(inlinePrompt(included) ?? '').toBe('Package-owned review prompt.');
+    });
+
+    it('rejects a shared module used as a named script while loading the workflow', async () => {
+      const pack = join(testDir, '.archon', 'workflows', 'module-pack');
+      await mkdir(join(pack, '.shared'), { recursive: true });
+      await mkdir(join(pack, 'release'), { recursive: true });
+      await writeFile(join(pack, '.shared', 'helper.ts'), 'export const value = 1;');
+      await writeFile(
+        join(pack, 'release', 'release.yaml'),
+        'name: release\ndescription: release\nnodes:\n  - id: run\n    script: helper\n    runtime: bun\n'
+      );
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows).toHaveLength(0);
+      expect(result.errors).toEqual([
+        expect.objectContaining({
+          errorType: 'validation_error',
+          error: expect.stringContaining('Named packaged script'),
+        }),
+      ]);
+    });
+
+    it('reserves pack .shared folders for modules without workflow discovery errors', async () => {
+      const pack = join(testDir, '.archon', 'workflows', 'module-pack');
+      await mkdir(join(pack, '.shared'), { recursive: true });
+      await mkdir(join(pack, 'release'), { recursive: true });
+      await writeFile(join(pack, '.shared', 'value.ts'), 'export const value = 1;');
+      await writeFile(
+        join(pack, 'release', 'release.yaml'),
+        'name: release\ndescription: release\nnodes:\n  - id: run\n    bash: echo ok\n'
+      );
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toEqual([]);
+      expect(result.workflows.map(entry => entry.workflow.name)).toContain('release');
     });
 
     it('uses the identical authored structure in home scope', async () => {

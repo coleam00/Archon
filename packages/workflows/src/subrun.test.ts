@@ -33,23 +33,22 @@ const mockLogger = {
   isLevelEnabled: mock(() => true),
   level: 'info',
 };
-// Capture-cost control: captureWorkflowSource copies the BUNDLED defaults scope
-// (the repo's .archon/workflows/defaults + .archon/commands/defaults, ~58 files /
-// ~660KB) into EVERY staged source capture, on every executeWorkflow level of
-// every run in this file — e2e timing evidence (#2121 Phase 2 CI) shows that
-// uncontrolled per-run fs fan-out is what pushed the specimen test past Bun's
-// default 5000ms budget on Windows CI. No test here exercises bundled default
-// CONTENT: every discovery call opts out of loading them (`loadDefaults: false`)
-// and every workflow under test is written to the tmp cwd. Pointing the two
-// bundle path getters at a dedicated EMPTY directory (outside ARCHON_HOME) keeps
-// the capture's bundled-scope semantics (an existing-but-empty tree is scanned,
-// recorded in the manifest with 0 files) while removing ~58 file writes per
-// capture per platform-multiplied runner.
+// Capture-cost control: captureWorkflowSource writes the BUNDLED defaults scope
+// (the repo's own .archon/workflows + .archon/commands) into EVERY staged source
+// capture, on every executeWorkflow level of every run in this file — e2e timing
+// evidence (#2121 Phase 2 CI) shows that uncontrolled per-run fs fan-out is what
+// pushed the specimen test past Bun's default 5000ms budget on Windows CI. #2924
+// hoisted the READ and the hash of that scope out of the per-capture path, but
+// the bytes still have to land in each capture, so the writes remain and so does
+// this lever. No test here exercises bundled default CONTENT: every discovery call
+// opts out of loading them (`loadDefaults: false`) and every workflow under test is
+// written to the tmp cwd. Pointing the two bundle path getters at a dedicated EMPTY
+// directory (outside ARCHON_HOME) keeps the capture's bundled-scope semantics (an
+// existing-but-empty tree is scanned, recorded in the manifest with 0 files) while
+// removing that file fan-out per capture per platform-multiplied runner.
 const bundledDefaultsRoot = join(tmpdir(), `subrun-test-empty-bundled-${process.pid}`);
 await mkdir(join(bundledDefaultsRoot, 'defaults'), { recursive: true });
-afterAll(() => {
-  void rm(bundledDefaultsRoot, { recursive: true, force: true }).catch(() => {});
-});
+afterAll(() => removeTempTree(bundledDefaultsRoot));
 const realArchonPaths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
   ...realArchonPaths,
@@ -116,7 +115,7 @@ import { captureWorkflowSource, resolveRunSourceCapture } from './workflow-sourc
 import { discoverWorkflows } from './workflow-discovery';
 import { validateWorkflowResources } from './validator';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
-import type { IWorkflowStore } from './store';
+import type { IWorkflowStore, NodeStateEventInput } from './store';
 import type { WorkflowRun, WorkflowWaitContext } from './schemas/workflow-run';
 import type { ResolvedWorkflow } from './schemas/workflow';
 import type { WorkflowRunConfigMetadata } from './schemas/run-config';
@@ -331,7 +330,11 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve({ failed: false });
   };
 
-  clearWorkflowWaitContext: IWorkflowStore['clearWorkflowWaitContext'] = (id, waitContext) => {
+  clearWorkflowWaitContext: IWorkflowStore['clearWorkflowWaitContext'] = (
+    id,
+    waitContext,
+    completion
+  ) => {
     const r = this.runs.get(id);
     const wait = r?.metadata.wait as WorkflowWaitContext | undefined;
     const cursorMatches =
@@ -343,7 +346,27 @@ class InMemoryStore implements IWorkflowStore {
     if (r?.status === 'running' && wait?.nodeId === waitContext.nodeId && cursorMatches) {
       const { wait: _wait, ...metadata } = r.metadata;
       r.metadata = metadata;
-      return Promise.resolve({ cleared: true });
+      // Mirror the real store: both rows land in the same transaction as the cursor
+      // clear, and the node row is handed back so the caller derives its sinks from it.
+      this.events.push({
+        workflow_run_id: id,
+        event_type: completion.result.status === 'expired' ? 'wait_expired' : 'wait_completed',
+        step_name: completion.stepName,
+        data: completion.result,
+      });
+      const nodeEvent: NodeStateEventInput = {
+        workflow_run_id: id,
+        event_type: 'node_completed',
+        step_name: completion.stepName,
+        data: {
+          type: 'wait',
+          duration_ms: completion.result.waited_ms,
+          node_output: JSON.stringify(completion.result),
+          structured_output: completion.result,
+        },
+      };
+      this.events.push(nodeEvent);
+      return Promise.resolve({ cleared: true, nodeEvent });
     }
     return Promise.resolve({ cleared: false });
   };
@@ -384,13 +407,16 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve({ cancelled: false });
   };
 
-  createWorkflowEvent: IWorkflowStore['createWorkflowEvent'] = data => {
+  private recordWorkflowEvent: IWorkflowStore['persistWorkflowEvent'] = data => {
     this.events.push(data);
     return Promise.resolve();
   };
 
+  createWorkflowEvent: IWorkflowStore['createWorkflowEvent'] = data =>
+    this.recordWorkflowEvent(data);
+
   persistWorkflowEvent: IWorkflowStore['persistWorkflowEvent'] = data =>
-    this.createWorkflowEvent(data);
+    this.recordWorkflowEvent(data);
 
   persistWorkflowEventIfRunning: IWorkflowStore['persistWorkflowEventIfRunning'] = data => {
     const run = this.runs.get(data.workflow_run_id);
@@ -1568,20 +1594,22 @@ nodes:
     );
   });
 
-  it('a throw during the child spawn does NOT leave a non-terminal zombie child (I1)', async () => {
-    await writeWorkflow(
-      'child-plain',
-      `
+  it.each([false, true])(
+    'preserves child setup cancellation result (rollback=%s)',
+    async rollback => {
+      await writeWorkflow(
+        'child-plain',
+        `
 name: child-plain
 description: child with no gate
 nodes:
   - id: work
     prompt: "do work for $ARGUMENTS"
 `
-    );
-    await writeWorkflow(
-      'parent-plain',
-      `
+      );
+      await writeWorkflow(
+        'parent-plain',
+        `
 name: parent-plain
 description: parent that spawns a child
 nodes:
@@ -1589,41 +1617,121 @@ nodes:
     workflow: child-plain
     input: "x"
 `
-    );
+      );
 
+      const store = new InMemoryStore();
+      if (rollback)
+        store.cancelWorkflowRun = async () => {
+          throw new Error('child setup cancellation rolled back');
+        };
+      const deps = makeDeps(store);
+      // The child inherits the parent's codebase_id, so its executeWorkflow early setup
+      // calls getCodebaseEnvVars. Make the SECOND call (the child's — the parent's is
+      // first) throw, sabotaging the child's setup BEFORE its own status→running flip
+      // and catch-all. Without the wedge guard the pre-created child stays 'pending',
+      // holding the path lock.
+      let envCalls = 0;
+      store.getCodebaseEnvVars = () => {
+        envCalls++;
+        return envCalls >= 2
+          ? Promise.reject(new Error('env lookup exploded'))
+          : Promise.resolve({});
+      };
+
+      const parent = await discover('parent-plain');
+      const execution = executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        parent,
+        'goal',
+        'conv-db',
+        { codebaseId: 'cb-1' }
+      );
+
+      if (rollback) {
+        await expect(execution).rejects.toThrow(
+          'Failed to persist terminal workflow status: child setup cancellation rolled back'
+        );
+        expect(
+          [...store.runs.values()].find(run => run.workflow_name === 'child-plain')?.status
+        ).toBe('pending');
+        expect(
+          [...store.runs.values()].find(run => run.workflow_name === 'parent-plain')?.status
+        ).toBe('running');
+        return;
+      }
+      const result = await execution;
+      expect(result.success).toBe(false);
+      const child = [...store.runs.values()].find(r => r.workflow_name === 'child-plain');
+      expect(child).toBeDefined();
+      if (!child) throw new Error('Expected child run');
+      // The child must be TERMINAL — not a 'pending'/'running' zombie holding the lock.
+      expect(['cancelled', 'failed']).toContain(child.status);
+      const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-plain');
+      expect(parentRun?.status).toBe('failed');
+    }
+  );
+
+  it('does not start another serial child after setup cancellation rolls back', async () => {
+    await writeWorkflow(
+      'child-setup-failure',
+      `
+name: child-setup-failure
+description: child whose setup fails
+nodes:
+  - id: work
+    prompt: "do work"
+`
+    );
+    await writeWorkflow(
+      'parent-setup-failure',
+      `
+name: parent-setup-failure
+description: serial fan-out with inherited isolation
+nodes:
+  - id: sub
+    workflow: child-setup-failure
+    isolation: inherit
+    fan_out:
+      items: '["x", "y"]'
+      max_parallel: 1
+      join: all_done
+`
+    );
     const store = new InMemoryStore();
-    const deps = makeDeps(store);
-    // The child inherits the parent's codebase_id, so its executeWorkflow early setup
-    // calls getCodebaseEnvVars. Make the SECOND call (the child's — the parent's is
-    // first) throw, sabotaging the child's setup BEFORE its own status→running flip
-    // and catch-all. Without the wedge guard the pre-created child stays 'pending',
-    // holding the path lock.
-    let envCalls = 0;
-    store.getCodebaseEnvVars = () => {
-      envCalls++;
-      return envCalls >= 2 ? Promise.reject(new Error('env lookup exploded')) : Promise.resolve({});
+    store.cancelWorkflowRun = async () => {
+      throw new Error('child setup cancellation rolled back');
     };
-
-    const parent = await discover('parent-plain');
-    const result = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      'conv-db',
-      { codebaseId: 'cb-1' }
+    let envCalls = 0;
+    store.getCodebaseEnvVars = async () => {
+      if (++envCalls >= 2) throw new Error('child setup failed');
+      return {};
+    };
+    const parent = await discover('parent-setup-failure');
+    await expect(
+      executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        parent,
+        'goal',
+        'conv-db',
+        { codebaseId: 'cb-1' }
+      )
+    ).rejects.toThrow(
+      'Failed to persist terminal workflow status: child setup cancellation rolled back'
     );
-
-    expect(result.success).toBe(false);
-    const child = [...store.runs.values()].find(r => r.workflow_name === 'child-plain');
-    expect(child).toBeDefined();
-    if (!child) throw new Error('Expected child run');
-    // The child must be TERMINAL — not a 'pending'/'running' zombie holding the lock.
-    expect(['cancelled', 'failed']).toContain(child.status);
-    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-plain');
-    expect(parentRun?.status).toBe('failed');
+    const children = [...store.runs.values()].filter(
+      run => run.workflow_name === 'child-setup-failure'
+    );
+    expect(children).toHaveLength(1);
+    expect(children[0].status).toBe('pending');
+    expect(
+      [...store.runs.values()].find(run => run.workflow_name === 'parent-setup-failure')?.status
+    ).toBe('running');
   });
 
   it('rejects a CASE-VARIANT self-reference by resolving the name before the cycle check (I3)', async () => {
@@ -3301,6 +3409,27 @@ nodes:
     expect(tracker.max).toBe(2);
   });
 
+  function makeAccountingDeps(store: IWorkflowStore): WorkflowDeps {
+    const paidProvider = makeProvider();
+    const provider = {
+      ...paidProvider,
+      sendQuery: mock(function* (prompt: string) {
+        if (prompt.includes('CHECK_SPEND')) {
+          if (prompt.includes('doomed')) throw new Error('failed after paid work');
+          // The check adds no usage to the preceding paid node's accounting.
+          yield { type: 'assistant', content: 'check passed' };
+          yield { type: 'result', sessionId: 'check' };
+          return;
+        }
+        yield* paidProvider.sendQuery();
+      }),
+    };
+    return {
+      ...makeDeps(store),
+      getAgentProvider: mock(() => provider) as unknown as WorkflowDeps['getAgentProvider'],
+    };
+  }
+
   it('rolls up child cost onto the fan-out node (Σ child costs → parent total)', async () => {
     await writeWorkflow(
       'fan-child-cost',
@@ -3319,14 +3448,10 @@ nodes:
 name: fan-cost
 description: three AI children, cost rolls up
 nodes:
-  - id: plan
-    bash: |
-      printf '%s' '["a","b","c"]'
   - id: work
     workflow: fan-child-cost
-    depends_on: [plan]
     fan_out:
-      items: "$plan.output"
+      items: '["a","b","c"]'
 `
     );
 
@@ -3345,7 +3470,7 @@ nodes:
 
     expect(result.success).toBe(true);
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'fan-cost');
-    // 3 children × 0.01 each = 0.03 rolled up to the parent (plan is bash → 0 cost).
+    // 3 children × 0.01 each = 0.03 rolled up to the parent (the parent has no other paid nodes).
     expect((parentRun?.metadata as Record<string, unknown>).total_cost_usd).toBeCloseTo(0.03, 5);
 
     // Usage must be PERSISTED on the node_completed event, not merely computed. These
@@ -3375,8 +3500,7 @@ nodes:
     prompt: "work on $ARGUMENTS"
   - id: fail
     depends_on: [think]
-    bash: |
-      exit 1
+    prompt: "CHECK_SPEND doomed"
 `
     );
     await writeWorkflow(
@@ -3392,7 +3516,7 @@ nodes:
     );
 
     const store = new InMemoryStore();
-    const deps = makeDeps(store);
+    const deps = makeAccountingDeps(store);
     const parent = await discover('solo-parent');
     await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', 'conv-db');
 
@@ -3430,8 +3554,7 @@ nodes:
     prompt: "work on $ARGUMENTS"
   - id: check
     depends_on: [think]
-    bash: |
-      test "$ARGUMENTS" != "doomed"
+    prompt: "CHECK_SPEND $ARGUMENTS"
 `
     );
     await writeWorkflow(
@@ -3440,19 +3563,15 @@ nodes:
 name: fan-partial
 description: three children, one fails AFTER its AI node already spent tokens
 nodes:
-  - id: plan
-    bash: |
-      printf '%s' '["a","doomed","c"]'
   - id: work
     workflow: fan-child-partial
-    depends_on: [plan]
     fan_out:
-      items: "$plan.output"
+      items: '["a","doomed","c"]'
 `
     );
 
     const store = new InMemoryStore();
-    const deps = makeDeps(store);
+    const deps = makeAccountingDeps(store);
     const parent = await discover('fan-partial');
     const result = await executeWorkflow(
       deps,
@@ -3470,6 +3589,16 @@ nodes:
     expect(children).toHaveLength(3);
     const failedChild = children.find(r => r.status === 'failed');
     expect(failedChild).toBeDefined();
+    expect(children.filter(child => child.status === 'completed')).toHaveLength(2);
+    expect(children.filter(child => child.status === 'failed')).toHaveLength(1);
+    expect(
+      store.events.filter(
+        event =>
+          event.workflow_run_id === failedChild?.id &&
+          event.event_type === 'node_completed' &&
+          event.step_name === 'think'
+      )
+    ).toHaveLength(1);
 
     // The failed child's OWN row carries what it spent. This is the assertion that
     // fails on the pre-fix engine: failWorkflowRun wrote only { error }.
@@ -3809,6 +3938,68 @@ nodes:
     expect((orphanAfter?.metadata as Record<string, unknown>).cancelled_reason).toBe(
       'fan_out_orphan'
     );
+  });
+
+  it('propagates orphan cancellation rollback without completing its parent', async () => {
+    await writeWorkflow('fan-child-echo2', fanChildEcho.replace('fan-child', 'fan-child-echo2'));
+    await writeWorkflow(
+      'fan-i2',
+      `
+name: fan-i2
+description: items shrank between attempts — a child_index falls out of range
+nodes:
+  - id: plan
+    bash: |
+      printf '%s' '["only-one"]'
+  - id: work
+    workflow: fan-child-echo2
+    depends_on: [plan]
+    isolation: inherit
+    fan_out:
+      items: "$plan.output"
+      max_parallel: 1
+`
+    );
+
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const parent = await discover('fan-i2');
+
+    const parentRun = await store.createWorkflowRun({
+      workflow_name: 'fan-i2',
+      conversation_id: 'conv-db',
+      user_message: 'goal',
+      working_path: cwd,
+    });
+    store.events.push({
+      workflow_run_id: parentRun.id,
+      event_type: 'node_completed',
+      step_name: 'plan',
+      data: { node_output: '["only-one"]' },
+    });
+    // A leftover child at index 5 (items now length 1) still 'running'.
+    const orphan = await store.createWorkflowRun({
+      workflow_name: 'fan-child-echo2',
+      conversation_id: 'conv-db',
+      user_message: 'gone',
+      parent_run_id: parentRun.id,
+      working_path: join(cwd, 'orphan-wt'),
+      metadata: { parent_node_id: 'work', child_index: 5 },
+    });
+    await store.updateWorkflowRun(orphan.id, { status: 'running' });
+
+    store.cancelFanOutRun = async () => {
+      throw new Error('terminal projection read failed');
+    };
+
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun.id))!);
+    await expect(
+      executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', 'conv-db', {
+        ...hydrated!,
+      })
+    ).rejects.toThrow('terminal projection read failed');
+    expect((await store.getWorkflowRun(parentRun.id))?.status).not.toBe('completed');
+    expect((await store.getWorkflowRun(orphan.id))?.status).toBe('running');
   });
 
   it('a fan-out refused for an interactive-class target recovers on resume once the class is removed (#2707 step 2)', async () => {
@@ -4181,8 +4372,12 @@ nodes:
     process.env.ARCHON_HOME = join(cwd, 'home');
   });
 
+  // `ARCHON_HOME` points inside `cwd`, so this hook removes the staged captures a run
+  // still holds open when a test times out. A raw recursive `rm` gives up the moment
+  // Windows answers EPERM/EBUSY for one of those handles; `removeTempTree` retries until
+  // they close, and reports rather than throwing if they never do (#2924).
   afterEach(async () => {
-    await rm(cwd, { recursive: true, force: true }).catch(() => {});
+    await removeTempTree(cwd);
     if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = originalArchonHome;
   });

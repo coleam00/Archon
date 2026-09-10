@@ -52,6 +52,7 @@ import { expandWorkflowIncludes } from './include-expander';
 import { collectFileBackedCommandNames } from './command-file';
 import {
   getPackagedResourceDirectory,
+  PACK_SHARED_DIRECTORY,
   isValidWorkflowFolderSegment,
   parsePackagedResourceReference,
   qualifyWorkflowResources,
@@ -292,6 +293,7 @@ async function loadPackagedWorkflowsFromDir(
       continue;
     }
     for (const workflowFolder of workflowFolders.sort((a, b) => a.localeCompare(b))) {
+      if (workflowFolder === PACK_SHARED_DIRECTORY) continue;
       const workflowPath = join(packPath, workflowFolder);
       try {
         if (!(await stat(workflowPath)).isDirectory()) continue;
@@ -639,7 +641,7 @@ export async function discoverWorkflows(
   const workflowsByFile = new Map<string, ParsedWorkflowFile & { source: WorkflowSource }>();
   const allErrors: WorkflowLoadError[] = [];
 
-  const validateNamedExecInputs = async (): Promise<void> => {
+  const validateNamedScripts = async (): Promise<void> => {
     const targetsByFile = new Map<
       string,
       { workflow: WorkflowDefinition; targets: readonly ExecInputValidationTarget[] }
@@ -677,7 +679,17 @@ export async function discoverWorkflows(
       let unreadable = false;
       for (const target of targets) {
         const script = scripts.get(target.slot.value);
-        if (script === undefined) continue;
+        if (script === undefined) {
+          if (parsePackagedResourceReference(target.slot.value) === null) continue;
+          allErrors.push({
+            filename,
+            error: `Named packaged script '${target.slot.value}' was not found in its workflow's scripts directory.`,
+            errorType: 'validation_error',
+          });
+          workflowsByFile.delete(filename);
+          unreadable = true;
+          break;
+        }
         try {
           sources.set(target, {
             text: await readScript(script.path),
@@ -728,7 +740,7 @@ export async function discoverWorkflows(
    * its error surfaced via `allErrors`. Only `.workflow` changes — `source` is kept.
    */
   const expandIncludes = async (): Promise<WorkflowWithSource[]> => {
-    await validateNamedExecInputs();
+    await validateNamedScripts();
     // Overrides are by FILENAME, but include targets resolve by workflow NAME. Two
     // surviving files (after filename-precedence) declaring the same `name:` would
     // silently collapse in the name map — last-writer-wins, emitting the same expanded
