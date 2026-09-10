@@ -1,18 +1,18 @@
 # Dry-run fixture: the guard seen RED (run with --default-stubs --exec-code).
 #
-# Delivery hands back a flip value that does not satisfy the flip's declared
-# result contract, and no terminal report is built from it — the run fails instead
-# of printing garbage under a completed one. The pr node's record below is
-# deliberately COMPLETE, url included: the report must be built from the flip's
-# read-back value and nothing else, so a perfect record must not rescue an
-# unusable flip. If a future change quietly reads the record again, this fixture
-# goes green-to-red the other way and catches it.
+# Delivery hands back a flip value that does not satisfy the flip's declared result
+# contract, and the run fails at the flip — nothing downstream is given the chance to
+# build a report from it. flip-ready declares `output_format: { pr_url }`, so its
+# stdout is a contract the engine certifies rather than a convention a reader hopes
+# for, and a stub standing in for that stdout is held to the same contract. Two
+# hand-written copies of a URL sniffer used to do this job at the two composing tails,
+# one whole node later.
 #
-# The refusal lands at the flip itself now, where a real run enforces it too.
-# flip-ready declares `output_format: { pr_url }`, so its stdout is a contract the
-# engine certifies rather than a convention a reader hopes for — and a stub that
-# stands in for that stdout is held to the same contract. Two hand-written copies of
-# a URL sniffer used to do this job at the two composing tails, one whole node later.
+# The pr node's record below stays deliberately COMPLETE, url included, as the record
+# a tail must not fall back on. It no longer catches a fallback on its own: with the
+# flip failed, every consumer is skipped and never reads anything. What keeps that
+# honest is the flip's own contract being the only source of the delivered value —
+# `deliver/scripts/outcome.ts` and both composing tails bind `pr_url` and nothing else.
 triage__triage:
   route: deliver
   summary: "stub: current code confirms a complete work order"

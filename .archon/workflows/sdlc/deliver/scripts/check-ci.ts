@@ -56,20 +56,37 @@ function isCheck(value: unknown): value is Check {
   return typeof record.name === 'string' && typeof record.bucket === 'string';
 }
 
+/**
+ * Whether this pull request has no checks, asked as a count rather than read as prose.
+ *
+ * The listing above conflates two states in its exit code — a pull request with no
+ * checks, and a read that failed — and says which only in a sentence. The rollup
+ * answers the same question as a number: zero on a check-less pull request, and a
+ * non-zero exit when the read itself failed. A failed observation is never evidence
+ * that no CI exists, so anything but a clean zero refuses.
+ */
+function hasNoChecks(): boolean {
+  const counted = gh(
+    'pr',
+    'view',
+    '--json',
+    'statusCheckRollup',
+    '--jq',
+    '(.statusCheckRollup // []) | length'
+  );
+  return counted.ok && counted.stdout.trim() === '0';
+}
+
 /** `undefined` means the read itself failed and nothing may be concluded from it. */
 function checks(): readonly Check[] | undefined {
   const result = gh('pr', 'checks', '--json', 'name,bucket');
-  // A last-resort match on a vendor message, kept because gh has no structured way to
-  // say "this PR has no checks": it exits non-zero with that sentence and an empty
-  // stdout, which is otherwise indistinguishable from a failed read. Non-zero WITH
-  // data still parses — gh exits 1 when checks failed.
-  if (!result.ok && `${result.stdout}${result.stderr}`.toLowerCase().includes('no checks reported')) {
-    return [];
-  }
   let parsed: unknown;
   try {
+    // A non-zero exit WITH data still parses: gh exits 1 when checks failed. Only the
+    // absence of a document sends this to the count.
     parsed = JSON.parse(result.stdout) as unknown;
   } catch {
+    if (hasNoChecks()) return [];
     refuse(`check-ci: could not read check state: ${result.stderr.trim()}`);
     return undefined;
   }

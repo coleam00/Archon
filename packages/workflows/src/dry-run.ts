@@ -232,6 +232,11 @@ function stubSatisfiesNode(node: DagNode, stub: DryRunStubValue): boolean {
  * stands in for moves, and the suite's green stops meaning the real run would certify.
  * Throwing here is what the surrounding catch turns into a failed node, so the fixture
  * reports the schema errors rather than a downstream symptom.
+ *
+ * Both routes that hydrate an authored stub call this — `simulateNode` and
+ * `simulateLoop`. A loop node's stub is the one most worth checking, not the one to
+ * skip: `loop:` is how a workflow declares an iterated verdict, so its schema is
+ * usually the contract a composition is built on.
  */
 function assertAuthoredStubSatisfiesSchema(node: DagNode, stub: DryRunStubValue): void {
   if (node.output_format === undefined) return;
@@ -969,6 +974,7 @@ async function simulateLoop(
       });
       return;
     }
+    assertAuthoredStubSatisfiesSchema(node, stub);
     const hydrated = completedOutput(node, stub);
     previous = hydrated.output;
     const completion = loopIterationCompletes(node.loop, hydrated);
