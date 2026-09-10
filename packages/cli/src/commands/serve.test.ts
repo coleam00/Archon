@@ -292,6 +292,48 @@ describe('downloadWebDist', () => {
     expect(existsSync(targetDir)).toBe(false);
   });
 
+  // The bound is the only thing between a stuck `tar` and an `archon serve` that
+  // waits forever, so it is proved against a child that genuinely never exits.
+  // A fake subprocess would have to model kill-ends-the-wait, which is the part
+  // worth doubting: this asserts it instead. The extra child is deliberate spawn
+  // cost on windows (#2924) and it is bounded by the thing under test — 250ms,
+  // then killed.
+  it('bounds a stalled extraction, names the timeout, and leaves no partial tree', async () => {
+    fetchSpy.mockImplementation(async () => new Response(tarballBytes));
+    const targetDir = join(tmpRoot, 'target-extract-stall');
+    const tmpDir = `${targetDir}.tmp`;
+    const partialFile = join(tmpDir, 'index.html');
+    const realSpawn = Bun.spawn.bind(Bun);
+    let partialTreeExisted = false;
+    const spawnSpy = spyOn(Bun, 'spawn').mockImplementation(((
+      _command: string[],
+      options: Parameters<typeof Bun.spawn>[1]
+    ) => {
+      // Written here, not by the child, so a half-extracted tree is present
+      // before the stall rather than racing the timer for its own existence.
+      writeFileSync(partialFile, 'half a tree');
+      partialTreeExisted = existsSync(partialFile);
+      return realSpawn([process.execPath, '-e', 'await new Promise(() => {})'], options);
+    }) as unknown as typeof Bun.spawn);
+
+    try {
+      await expect(downloadWebDist('9.9.9', targetDir, tarballHash, 250)).rejects.toThrow(
+        /Timed out extracting the web UI: tar did not finish within 250ms/
+      );
+    } finally {
+      spawnSpy.mockRestore();
+    }
+
+    expect(partialTreeExisted).toBe(true);
+    // Nothing survives the bound: not the half-extracted tree, not the staged
+    // archive, and above all no target dir that the next run would read as a
+    // complete install.
+    expect(existsSync(partialFile)).toBe(false);
+    expect(existsSync(tmpDir)).toBe(false);
+    expect(existsSync(`${targetDir}.tmp.tar.gz`)).toBe(false);
+    expect(existsSync(targetDir)).toBe(false);
+  });
+
   it('falls back to remote checksums.txt when the embedded hash is empty', async () => {
     fetchSpy.mockImplementation(async (url: string | URL | Request) => {
       if (String(url).includes('checksums.txt')) {
