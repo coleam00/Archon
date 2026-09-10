@@ -25,11 +25,12 @@ import { BUNDLED_IS_BINARY } from '@archon/paths';
 
 export {
   BUNDLED_COMMANDS,
-  BUNDLED_SCRIPTS,
+  BUNDLED_SCRIPT_PACKS,
   BUNDLED_WORKFLOWS,
   BUNDLED_WORKFLOW_OWNERS,
 } from './bundled-defaults.generated';
-export type { BundledScript, BundledWorkflowOwner } from './bundled-defaults.generated';
+export type { BundledWorkflowOwner } from './bundled-defaults.generated';
+export type { BundledScriptPack } from './bundled-script-pack';
 
 /**
  * Check if the current process is running as a compiled binary (not via Bun CLI).
