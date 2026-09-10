@@ -8,7 +8,9 @@ triage:
   complexity: risky
   item: { repository: "", number: 0 }
   area_labels: []
-  edits_proposed: true
+  proposed_edits: { title: "stub: proposed title", body: "stub: proposed body" }
+  blocked_reason: ""
+  blocked_by: []
   summary: "stub: no acceptance stated; proposed contract in triage.md"
 assert-intact: '{"intact":"true"}'
 fixture:

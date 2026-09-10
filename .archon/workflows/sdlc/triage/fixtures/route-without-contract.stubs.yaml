@@ -7,7 +7,9 @@ triage:
   complexity: small
   item: { repository: "", number: 0 }
   area_labels: []
-  edits_proposed: true
+  proposed_edits: { title: "stub: proposed title", body: "stub: proposed body" }
+  blocked_reason: ""
+  blocked_by: []
   summary: "stub: an illegal pair the boundary must catch"
 assert-intact: '{"intact":"true"}'
 fixture:

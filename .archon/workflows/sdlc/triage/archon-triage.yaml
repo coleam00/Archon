@@ -68,12 +68,35 @@ nodes:
           type: array
           items:
             type: string
-        edits_proposed:
-          type: boolean
+        # Only NEEDS_CONTRACT_WORK fills these; a later gated step applies them.
+        proposed_edits:
+          type: object
+          properties:
+            title:
+              type: string
+            body:
+              type: string
+          required: [title, body]
+        # Only BLOCKED fills these. URLs are verified references, never guesses.
+        blocked_reason:
+          type: string
+        blocked_by:
+          type: array
+          items:
+            type: string
         summary:
           type: string
       required:
-        [contract, route, design_first, complexity, item, area_labels, edits_proposed, summary]
+        - contract
+        - route
+        - design_first
+        - complexity
+        - item
+        - area_labels
+        - proposed_edits
+        - blocked_reason
+        - blocked_by
+        - summary
 
   - id: assert-intact
     bash: |
@@ -88,9 +111,12 @@ nodes:
     depends_on: [triage]
 
   # The prompt judges; this boundary verifies. Only a READY contract carries an
-  # engineering route, design-first is a READY item routed to plan, and the
-  # pack's labels are derived here rather than chosen by the model. Labels are
-  # written only under publish, and read back before the node reports them.
+  # engineering route, design-first is a READY item routed to plan, only
+  # NEEDS_CONTRACT_WORK proposes edits, only BLOCKED names blockers, and the
+  # pack's labels are derived here rather than chosen by the model: one state
+  # label, plus a size label while the item can still be worked. Labels are
+  # written only under publish, after the item's identity is verified on the
+  # tracker, and read back before the node reports them.
   - id: verdict
     script: verdict
     runtime: uv
@@ -102,7 +128,9 @@ nodes:
       complexity: "$triage.output.complexity"
       item: { from: "$triage.output.item" }
       area_labels: { from: "$triage.output.area_labels" }
-      edits_proposed: "$triage.output.edits_proposed"
+      proposed_edits: { from: "$triage.output.proposed_edits" }
+      blocked_reason: "$triage.output.blocked_reason"
+      blocked_by: { from: "$triage.output.blocked_by" }
       summary: "$triage.output.summary"
       publish: "$INPUTS.publish"
     output_format:
@@ -127,9 +155,31 @@ nodes:
             type: string
         published:
           type: boolean
-        edits_proposed:
-          type: boolean
+        proposed_edits:
+          type: object
+          properties:
+            title:
+              type: string
+            body:
+              type: string
+          required: [title, body]
+        blocked_reason:
+          type: string
+        blocked_by:
+          type: array
+          items:
+            type: string
         summary:
           type: string
       required:
-        [contract, route, ready, design_first, complexity, labels, published, edits_proposed, summary]
+        - contract
+        - route
+        - ready
+        - design_first
+        - complexity
+        - labels
+        - published
+        - proposed_edits
+        - blocked_reason
+        - blocked_by
+        - summary

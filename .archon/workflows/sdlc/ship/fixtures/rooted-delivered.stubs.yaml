@@ -18,7 +18,9 @@ triage__triage:
   complexity: risky
   item: { repository: "", number: 0 }
   area_labels: []
-  edits_proposed: false
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
   summary: "stub: current evidence leaves the causal chain unresolved"
 triage__assert-intact: '{"intact":"true"}'
 inv__investigate:

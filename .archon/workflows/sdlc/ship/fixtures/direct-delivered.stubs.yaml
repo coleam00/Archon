@@ -15,7 +15,9 @@ triage__triage:
   complexity: small
   item: { repository: "", number: 0 }
   area_labels: []
-  edits_proposed: false
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
   summary: "stub: current code confirms a complete work order"
 gate-direct: '{"gate":"direct"}'
 deliver__impl__implement:
