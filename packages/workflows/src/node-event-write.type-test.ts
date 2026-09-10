@@ -1,4 +1,4 @@
-import type { persistNodeEvent } from './node-event-write';
+import type { persistNodeEvent, recordNodeState } from './node-event-write';
 import type { IWorkflowStore, NodeStateEventType } from './store';
 
 type AssertNever<Value extends never> = Value;
@@ -15,6 +15,14 @@ export type NodeWriterAcceptsEveryState = AssertNever<
 >;
 export type NodeWriterRejectsOtherEvents = AssertNever<
   Exclude<Parameters<typeof persistNodeEvent>[1]['event_type'], NodeStateEventType>
+>;
+
+/** recordNodeState admits all node states and no unrelated event kinds. */
+export type RecordNodeStateAcceptsEveryState = AssertNever<
+  Exclude<NodeStateEventType, Parameters<typeof recordNodeState>[2]['event_type']>
+>;
+export type RecordNodeStateRejectsOtherEvents = AssertNever<
+  Exclude<Parameters<typeof recordNodeState>[2]['event_type'], NodeStateEventType>
 >;
 
 /** General durable writes also own non-node evidence such as the fan-out snapshot. */

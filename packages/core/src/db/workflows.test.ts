@@ -928,7 +928,7 @@ describe('workflows database', () => {
           stepName: 'await-ci',
           result: { status: 'satisfied', waited_ms: 1000 },
         })
-      ).resolves.toEqual({ cleared: true });
+      ).resolves.toMatchObject({ cleared: true });
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("metadata - 'wait'");
       expect(query).toContain("status = 'running'");
@@ -956,7 +956,7 @@ describe('workflows database', () => {
           stepName: 'rerun-ci',
           result: { status: 'satisfied', waited_ms: 1000 },
         })
-      ).resolves.toEqual({ cleared: true });
+      ).resolves.toMatchObject({ cleared: true });
 
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("metadata->'wait'->>'waitingSince' = $3");
