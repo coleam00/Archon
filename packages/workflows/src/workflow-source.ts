@@ -30,10 +30,9 @@
  * SCOPE: every source scope a static `include:` can reach is captured — project, global
  * (`~/.archon/`), and, in source builds, the on-disk bundled defaults. Freezing only the
  * project scope would leave a hole: a project workflow that includes a global one would
- * still change shape across a resume. In a compiled binary the bundled defaults are
- * embedded constants rather than files, so they cannot move under a run at all; the
- * manifest records the engine version, which is what distinguishes one binary's bundled
- * set from another's.
+ * still change shape across a resume. Bundled content is selected by the same inventory
+ * in source and binary builds, then written into the run's capture so an engine upgrade
+ * cannot replace its executable source.
  *
  * Runtime `workflow:` children are deliberately NOT part of the closure. A child is not a
  * run until it starts and freezes its own source — see {@link resolveChildDiscoveryRoot}.
@@ -61,9 +60,14 @@ import {
   BUNDLED_COMMANDS,
   BUNDLED_SCRIPT_PACKS,
   BUNDLED_WORKFLOWS,
-  BUNDLED_WORKFLOW_OWNERS,
+  BUNDLED_WORKFLOW_PATHS,
   isBinaryBuild,
 } from './defaults/bundled-defaults';
+import {
+  collectInstalledBundleSources,
+  readBundleContent,
+  type BundleSourceFile,
+} from './defaults/bundle-inventory';
 import {
   readWorkflowSourceState,
   workflowSourceConfigSchema,
@@ -420,35 +424,13 @@ interface BundledFile extends DigestEntry {
 }
 
 /**
- * The bundled scope this process holds, ready to be written into a capture.
+ * Selected bundled bytes held in this process and written into every run's own capture.
+ * Independent files let paused runs verify their source after an Archon upgrade; sharing
+ * a mutable file with another capture or the authoring tree would violate that contract.
  *
- * Why it exists: `captureWorkflowSource` used to copy the whole bundled scope and then
- * re-read every copied byte to hash it, on every capture — and `runChildWorkflow` captures
- * once per child spawn. On this checkout that was 200 files read twice and hashed per
- * spawn, none of it the workflow under test (#2924).
- *
- * The bytes still have to BE in each capture — that is what lets a run that statically
- * included a bundled workflow prove on resume that it did not change under an Archon
- * upgrade — so what is hoisted is reading and hashing them, never writing them. A binary
- * already keeps its bundled set in memory as constants and writes it out per capture; this
- * gives a source build the same shape, from one read of the two on-disk trees.
- *
- * Why the copy is rechecked instead of memoized for the life of the process: in a source
- * build those two trees are the checkout's own `.archon/workflows` and `.archon/commands`,
- * and a running Archon writes there itself — `PUT`/`DELETE /api/workflows/:name` write
- * under `<cwd>/.archon/workflows`, which for a maintainer running Archon from source IS
- * the checkout. A stale workflow catalogue is a wrong answer, not a slow one, so every
- * reuse revalidates against the live trees first and any difference re-reads them. A
- * binary's constants cannot move under the process and are read once.
- *
- * Deliberately NOT the content-addressed on-disk cache `script-discovery.ts` publishes
- * bundled script packs into. That cache works because its input is already in memory, so
- * hashing it is free, and because a script node executes from the cached path, which has
- * to be stable and shared. Here the bytes must land inside each capture regardless, so a
- * shared directory would be an extra hop rather than the destination — and on a source
- * build a content key would have to read the whole tree to compute, which is the cost this
- * removes. What it borrows is the principle: key on an identity that changes when the
- * bytes do.
+ * Source builds reselect the indexed inventory and compare size/mtime on every capture,
+ * so additions, edits and deletions remain visible without rereading unchanged bytes.
+ * A binary's embedded constants cannot change and are read once.
  */
 interface BundledScope {
   /** Identity of the build these bytes came from. */
@@ -507,13 +489,10 @@ function readBundledConstants(): Omit<BundledScope, 'key' | 'stamp'> {
   const { add: write, result } = bundledScopeBuilder();
 
   for (const [name, content] of Object.entries(BUNDLED_WORKFLOWS)) {
-    // A packaged bundled workflow lives under `<pack>/<workflow>/`; a bare one under
-    // `defaults/`. The owners map is what distinguishes them, exactly as on disk.
-    const owner = BUNDLED_WORKFLOW_OWNERS[name];
-    const relative = owner
-      ? join('workflows', owner.pack, owner.workflow, `${name}.yaml`)
-      : join('workflows', 'defaults', `${name}.yaml`);
-    write(relative, content);
+    // The generator owns authored extensions and legacy subfolders, too.
+    const path = BUNDLED_WORKFLOW_PATHS[name];
+    if (path === undefined) throw new Error(`Bundled workflow "${name}" has no source path.`);
+    write(path, content);
   }
 
   for (const [name, content] of Object.entries(BUNDLED_COMMANDS)) {
@@ -539,17 +518,14 @@ function readBundledConstants(): Omit<BundledScope, 'key' | 'stamp'> {
   return result();
 }
 
-/** Read a source build's on-disk bundled trees, hashing each file as it is read. */
-async function readBundledTrees(
-  listings: readonly { name: string; listing: TreeListing }[]
+/** Read only the generator's selected source files, using the same LF normalization. */
+async function readBundledSources(
+  files: readonly BundleSourceFile[]
 ): Promise<Omit<BundledScope, 'key' | 'stamp'>> {
   const { add, addDir, result } = bundledScopeBuilder();
-
-  for (const { name, listing } of listings) {
-    for (const dir of listing.dirs) addDir(dir === '' ? name : join(name, dir));
-    for (const file of listing.files) add(join(name, file.relPath), await readFile(file.absPath));
-  }
-
+  addDir('workflows');
+  addDir(join('commands', 'defaults'));
+  for (const file of files) add(file.relativePath, await readBundleContent(file));
   return result();
 }
 
@@ -598,18 +574,23 @@ async function resolveBundledScope(): Promise<BundledScope | undefined> {
   }
 
   const roots = bundledSourceRoots();
-  const listings: { name: string; listing: TreeListing }[] = [];
-  for (const { name, from } of roots) {
-    if (await isDirectory(from)) listings.push({ name, listing: await listTree(from) });
+  const sources = await collectInstalledBundleSources(roots[0].from, roots[1].from);
+  if (!sources) return undefined;
+  const files: TreeFile[] = [];
+  for (const file of sources) {
+    const info = await stat(file.sourcePath);
+    files.push({
+      relPath: file.relativePath,
+      absPath: file.sourcePath,
+      size: info.size,
+      mtimeMs: info.mtimeMs,
+    });
   }
-  // Nothing on disk means no bundled scope. An existing but EMPTY root still counts: it is
-  // captured as an empty scope directory, which is what a resolver reading it expects.
-  if (listings.length === 0) return undefined;
 
   const key = `source\0${roots.map(r => r.from).join('\0')}`;
-  const stamp = stampListings(listings);
+  const stamp = stampListings([{ name: 'bundled', listing: { dirs: [], files } }]);
   if (bundledScope?.key !== key || bundledScope.stamp !== stamp) {
-    bundledScope = { key, stamp, ...(await readBundledTrees(listings)) };
+    bundledScope = { key, stamp, ...(await readBundledSources(sources)) };
   }
   return bundledScope;
 }
@@ -657,17 +638,9 @@ function foldDigest(entries: readonly DigestEntry[]): string {
  * `skipScope` names a top-level scope directory whose per-file digests the caller already
  * holds — the bundled scope, written from bytes this process is still holding. Everything
  * else is read here, which is what makes the digest a statement about bytes, not paths.
- *
- * `bytes` is what was actually read, not what the caller expected to be there. It is the
- * only phase whose byte volume no other counter already holds, and a phase reporting zero
- * bytes while reading a megabyte is the way a measurement lies to whoever reads it.
  */
-async function digestEntries(
-  root: string,
-  skipScope?: string
-): Promise<{ entries: DigestEntry[]; bytes: number }> {
+async function digestEntries(root: string, skipScope?: string): Promise<DigestEntry[]> {
   const entries: DigestEntry[] = [];
-  let bytes = 0;
 
   const walk = async (dir: string, rel: string): Promise<void> => {
     let dirEntries;
@@ -684,118 +657,22 @@ async function digestEntries(
       } else if (entry.isFile()) {
         if (relPath === MANIFEST_FILE) continue;
         const content = await readFile(join(dir, entry.name));
-        bytes += content.byteLength;
         entries.push({ relPath, hash: createHash('sha256').update(content).digest('hex') });
       }
     }
   };
   await walk(root, '');
 
-  return { entries, bytes };
+  return entries;
 }
 
 /** Content digest over every captured file. */
 async function digestTree(root: string): Promise<string> {
-  return foldDigest((await digestEntries(root)).entries);
+  return foldDigest(await digestEntries(root));
 }
 
 async function writeManifest(captureRoot: string, manifest: WorkflowSourceManifest): Promise<void> {
   await writeFile(join(captureRoot, MANIFEST_FILE), `${JSON.stringify(manifest, null, 2)}\n`);
-}
-
-/**
- * The contiguous blocks one capture spends its time in.
- *
- * Named here rather than in the measuring script because the names have to keep meaning
- * the same thing as the code moves: a phase is a range of {@link captureWorkflowSource},
- * and a reader comparing one platform's numbers with another's is comparing these ranges.
- */
-export const CAPTURE_PHASES = [
-  /** Probe which mutable source directories exist and are worth capturing. */
-  'scan',
-  /** Clear and create the `.partial` staging root. */
-  'stage',
-  /** Walk each mutable source tree, listing its directories and files. */
-  'walk',
-  /** Recreate those directories in staging and copy every listed file into them. */
-  'copy',
-  /** Resolve this build's bundled bytes: revalidate the cached scope, or read it. */
-  'bundled_read',
-  /** Write those bytes into staging, one file at a time. */
-  'bundled_write',
-  /** Read back and hash every non-bundled captured file, then fold the capture digest. */
-  'digest',
-  /** Write `manifest.json`. */
-  'manifest',
-  /** Remove any prior capture at the destination and rename staging into place. */
-  'publish',
-] as const;
-
-export type CapturePhase = (typeof CAPTURE_PHASES)[number];
-
-/** What one phase spent, and what it spent it on. */
-export interface CapturePhaseTotals {
-  ms: number;
-  /** Directories walked or created. */
-  dirs: number;
-  /** Files walked, copied, written, or hashed. */
-  files: number;
-  /** Bytes those files carry. */
-  bytes: number;
-}
-
-/**
- * Measurement hook for one capture.
- *
- * Production callers pass nothing and get {@link NO_PROFILER}, which adds one function
- * call per phase — nine per capture — and no clock reads, allocations, or syscalls. The
- * only caller that passes a real one is `scripts/capture-cost.ts`, so a normal run never
- * pays for a measurement nobody asked for.
- */
-export interface CaptureProfiler {
-  time<T>(phase: CapturePhase, work: () => Promise<T>): Promise<T>;
-  count(phase: CapturePhase, counts: Partial<Omit<CapturePhaseTotals, 'ms'>>): void;
-}
-
-/** The profiler an unmeasured capture runs against. */
-const NO_PROFILER: CaptureProfiler = {
-  time: (_phase, work) => work(),
-  count: () => undefined,
-};
-
-/**
- * A profiler and the totals it accumulates.
- *
- * `totals` is live: it is the same object the returned profiler writes into, so a caller
- * reads it after the capture resolves rather than being handed a snapshot mid-flight.
- */
-export function createCaptureProfiler(): {
-  profiler: CaptureProfiler;
-  totals: Record<CapturePhase, CapturePhaseTotals>;
-} {
-  const totals = Object.fromEntries(
-    CAPTURE_PHASES.map(phase => [phase, { ms: 0, dirs: 0, files: 0, bytes: 0 }])
-  ) as Record<CapturePhase, CapturePhaseTotals>;
-
-  return {
-    totals,
-    profiler: {
-      time: async <T>(phase: CapturePhase, work: () => Promise<T>): Promise<T> => {
-        const started = performance.now();
-        try {
-          return await work();
-        } finally {
-          totals[phase].ms += performance.now() - started;
-        }
-      },
-      count: (phase, counts): void => {
-        const total = totals[phase];
-        total.dirs += counts.dirs ?? 0;
-        total.files += counts.files ?? 0;
-        total.bytes += counts.bytes ?? 0;
-      },
-    },
-  };
 }
 
 /**
@@ -814,18 +691,12 @@ export async function captureWorkflowSource(opts: {
   captureRoot: string;
   commandFolder?: string;
   sourceConfig?: WorkflowSourceConfig;
-  /**
-   * Measure where this capture spends its time. Off unless a caller asks — see
-   * {@link CaptureProfiler}. Passing one changes nothing the capture produces.
-   */
-  profiler?: CaptureProfiler;
 }): Promise<WorkflowSourceCapture> {
   const {
     sourceRoot,
     captureRoot,
     commandFolder,
     sourceConfig = DEFAULT_WORKFLOW_SOURCE_CONFIG,
-    profiler = NO_PROFILER,
   } = opts;
 
   // (relative destination, absolute origin) pairs, one per MUTABLE directory worth copying.
@@ -833,41 +704,33 @@ export async function captureWorkflowSource(opts: {
   // {@link BundledScope} and written from there.
   const jobs: { dest: string; from: string; scope: 'project' | 'global' }[] = [];
 
-  await profiler.time('scan', async () => {
-    for (const dir of projectSourceDirs(commandFolder)) {
-      const from = join(sourceRoot, dir);
-      if (await isDirectory(from))
-        jobs.push({ dest: join(PROJECT_SCOPE_DIR, dir), from, scope: 'project' });
-    }
-    for (const [name, from] of [
-      ['workflows', archonPaths.getHomeWorkflowsPath()],
-      ['commands', archonPaths.getHomeCommandsPath()],
-      ['scripts', archonPaths.getHomeScriptsPath()],
-    ] as const) {
-      if (await isDirectory(from))
-        jobs.push({ dest: join(GLOBAL_SCOPE_DIR, name), from, scope: 'global' });
-    }
-  });
+  for (const dir of projectSourceDirs(commandFolder)) {
+    const from = join(sourceRoot, dir);
+    if (await isDirectory(from))
+      jobs.push({ dest: join(PROJECT_SCOPE_DIR, dir), from, scope: 'project' });
+  }
+  for (const [name, from] of [
+    ['workflows', archonPaths.getHomeWorkflowsPath()],
+    ['commands', archonPaths.getHomeCommandsPath()],
+    ['scripts', archonPaths.getHomeScriptsPath()],
+  ] as const) {
+    if (await isDirectory(from))
+      jobs.push({ dest: join(GLOBAL_SCOPE_DIR, name), from, scope: 'global' });
+  }
 
   const staging = `${captureRoot}.partial`;
-  await profiler.time('stage', () => rm(staging, { recursive: true, force: true }));
+  await rm(staging, { recursive: true, force: true });
 
   let fileCount = 0;
   let byteCount = 0;
   const scopesCaptured = new Set<'project' | 'global' | 'bundled'>(jobs.map(j => j.scope));
   try {
-    await profiler.time('stage', () => mkdir(staging, { recursive: true }));
+    await mkdir(staging, { recursive: true });
     for (const job of jobs) {
       const target = join(staging, job.dest);
-      await profiler.time('copy', () => mkdir(dirname(target), { recursive: true }));
-      const listing = await profiler.time('walk', () => listTree(job.from));
-      profiler.count('walk', { dirs: listing.dirs.length, files: listing.files.length });
-      const copied = await profiler.time('copy', () => copyListing(listing, target));
-      profiler.count('copy', {
-        dirs: listing.dirs.length,
-        files: copied.files,
-        bytes: copied.bytes,
-      });
+      await mkdir(dirname(target), { recursive: true });
+      const listing = await listTree(job.from);
+      const copied = await copyListing(listing, target);
       fileCount += copied.files;
       byteCount += copied.bytes;
     }
@@ -875,14 +738,9 @@ export async function captureWorkflowSource(opts: {
     // The run's own bundled bytes, written from what this process already holds. They have
     // to be present, not referenced: that is what lets a run that statically included a
     // bundled workflow prove on resume that it did not change under an Archon upgrade.
-    const bundled = await profiler.time('bundled_read', () => resolveBundledScope());
+    const bundled = await resolveBundledScope();
     if (bundled) {
-      await profiler.time('bundled_write', () => writeBundledScope(bundled, staging));
-      profiler.count('bundled_write', {
-        dirs: bundled.dirs.length,
-        files: bundled.files.length,
-        bytes: bundled.byteCount,
-      });
+      await writeBundledScope(bundled, staging);
       fileCount += bundled.files.length;
       byteCount += bundled.byteCount;
       scopesCaptured.add('bundled');
@@ -890,11 +748,8 @@ export async function captureWorkflowSource(opts: {
 
     // The bundled files were written from bytes whose hashes are already known, so reading
     // them back would restate what the scope already carries. Everything else is read.
-    const digest = await profiler.time('digest', async () => {
-      const read = await digestEntries(staging, bundled ? BUNDLED_SCOPE_DIR : undefined);
-      profiler.count('digest', { files: read.entries.length, bytes: read.bytes });
-      return foldDigest([...read.entries, ...(bundled?.files ?? [])]);
-    });
+    const entries = await digestEntries(staging, bundled ? BUNDLED_SCOPE_DIR : undefined);
+    const digest = foldDigest([...entries, ...(bundled?.files ?? [])]);
     const manifest: WorkflowSourceManifest = {
       version: 1,
       engine_version: BUNDLED_VERSION,
@@ -906,15 +761,13 @@ export async function captureWorkflowSource(opts: {
       scopes: [...scopesCaptured],
       source_config: sourceConfig,
     };
-    await profiler.time('manifest', () => writeManifest(staging, manifest));
+    await writeManifest(staging, manifest);
 
     // Replace rather than merge: a stale capture at this path would silently mix two
     // vintages of source, which is the failure this module exists to prevent.
-    await profiler.time('publish', async () => {
-      await rm(captureRoot, { recursive: true, force: true });
-      await mkdir(dirname(captureRoot), { recursive: true });
-      await rename(staging, captureRoot);
-    });
+    await rm(captureRoot, { recursive: true, force: true });
+    await mkdir(dirname(captureRoot), { recursive: true });
+    await rename(staging, captureRoot);
 
     if (byteCount > CAPTURE_WARN_BYTES) {
       getLog().warn(

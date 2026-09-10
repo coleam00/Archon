@@ -17,7 +17,7 @@
  * Same-named files at a higher scope override those at lower scopes.
  */
 import { readFile, readdir, access, stat } from 'fs/promises';
-import { basename, join } from 'path';
+import { basename, dirname, join } from 'path';
 import type {
   WorkflowDefinition,
   WorkflowLoadError,
@@ -43,8 +43,14 @@ import {
   BUNDLED_WORKFLOWS,
   BUNDLED_COMMANDS,
   BUNDLED_WORKFLOW_OWNERS,
+  BUNDLED_WORKFLOW_PATHS,
   isBinaryBuild,
 } from './defaults/bundled-defaults';
+import {
+  collectInstalledBundleSources,
+  readBundleContent,
+  readBundleIndex,
+} from './defaults/bundle-inventory';
 import { createLogger } from '@archon/paths';
 import { isValidCommandName, MAX_DISCOVERY_DEPTH } from './command-validation';
 import { parseWorkflow } from './loader';
@@ -391,7 +397,9 @@ function loadBundledWorkflows(): DirLoadResult {
   const errors: WorkflowLoadError[] = [];
 
   for (const [name, content] of Object.entries(BUNDLED_WORKFLOWS)) {
-    const filename = `${name}.yaml`;
+    const path = BUNDLED_WORKFLOW_PATHS[name];
+    if (path === undefined) throw new Error(`Bundled workflow "${name}" has no source path.`);
+    const filename = basename(path);
     const result = parseWorkflow(content, filename);
     if (result.workflow) {
       const owner = BUNDLED_WORKFLOW_OWNERS[name];
@@ -446,6 +454,12 @@ async function resolveCommandContentForScan(
       // A captured run reads the bundled bytes IT froze; the capture materialized a
       // binary's embedded constants to files.
       if (isBinaryBuild() && roots.kind === 'live') return BUNDLED_COMMANDS[commandName] ?? null;
+      if (
+        roots.kind === 'live' &&
+        (packaged.owner.pack === 'defaults' ||
+          !(await readBundleIndex()).includes(packaged.owner.pack))
+      )
+        return null;
     }
 
     let workflowsRoot: string;
@@ -508,6 +522,7 @@ async function resolveCommandContentForScan(
   if (isBinaryBuild() && roots.kind === 'live') {
     return BUNDLED_COMMANDS[commandName] ?? null;
   }
+  if (roots.kind === 'live' && !(await readBundleIndex()).includes('defaults')) return null;
   const defaultsDir = roots.bundledCommands;
   let entries: Awaited<ReturnType<typeof archonPaths.findCommandFiles>>;
   try {
@@ -517,7 +532,11 @@ async function resolveCommandContentForScan(
     if (err.code === 'ENOENT') return null;
     return { path: defaultsDir, message: err.message, operation: 'inspect' };
   }
-  const match = entries.find(e => e.commandName === commandName);
+  const match = entries.find(
+    e =>
+      e.commandName === commandName &&
+      (roots.kind === 'captured' || e.relativePath === `${commandName}.md`)
+  );
   if (!match) return null;
   const commandPath = join(defaultsDir, match.relativePath);
   try {
@@ -850,11 +869,37 @@ export async function discoverWorkflows(
       );
       getLog().debug({ appWorkflowsPath }, 'loading_app_default_workflows');
       try {
-        await access(appWorkflowsPath);
-        const appResult = mergeScopeResults(
-          await loadWorkflowsFromDir(appDefaultsPath),
-          await loadPackagedWorkflowsFromDir(appWorkflowsPath, 'bundled')
-        );
+        let appResult: DirLoadResult;
+        if (roots.kind === 'live') {
+          appResult = { workflows: new Map(), errors: [] };
+          const files =
+            (await collectInstalledBundleSources(
+              appWorkflowsPath,
+              dirname(roots.bundledCommands)
+            )) ?? [];
+          for (const file of files) {
+            if (file.kind !== 'workflow') continue;
+            const filename = basename(file.sourcePath);
+            const parsed = parseWorkflow(await readBundleContent(file), filename);
+            if (!parsed.workflow) {
+              appResult.errors.push(parsed.error);
+              continue;
+            }
+            if (file.owner)
+              qualifyWorkflowResources(parsed.workflow, { source: 'bundled', ...file.owner });
+            appResult.workflows.set(filename, {
+              workflow: parsed.workflow,
+              parseWarnings: parsed.warnings,
+            });
+          }
+        } else {
+          // A capture's inventory belongs to that run, including packs no longer shipped.
+          await access(appWorkflowsPath);
+          appResult = mergeScopeResults(
+            await loadWorkflowsFromDir(appDefaultsPath),
+            await loadPackagedWorkflowsFromDir(appWorkflowsPath, 'bundled')
+          );
+        }
         for (const [filename, parsed] of appResult.workflows) {
           workflowsByFile.set(filename, { ...parsed, source: 'bundled' });
         }
@@ -868,8 +913,13 @@ export async function discoverWorkflows(
         getLog().info({ count: appResult.workflows.size }, 'app_default_workflows_loaded');
       } catch (error) {
         const err = error as NodeJS.ErrnoException;
-        if (err.code !== 'ENOENT') {
+        if (roots.kind === 'live' || err.code !== 'ENOENT') {
           getLog().warn({ err, appWorkflowsPath }, 'app_defaults_access_error');
+          allErrors.push({
+            filename: appWorkflowsPath,
+            error: err.message,
+            errorType: 'read_error',
+          });
         } else {
           getLog().debug({ appWorkflowsPath }, 'app_defaults_directory_not_found');
         }
