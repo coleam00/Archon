@@ -59,7 +59,7 @@ import * as archonPaths from '@archon/paths';
 import { BUNDLED_VERSION } from '@archon/paths/bundled-build';
 import {
   BUNDLED_COMMANDS,
-  BUNDLED_SCRIPTS,
+  BUNDLED_SCRIPT_PACKS,
   BUNDLED_WORKFLOWS,
   BUNDLED_WORKFLOW_OWNERS,
   isBinaryBuild,
@@ -414,18 +414,10 @@ async function materializeBundledDefaults(bundledRoot: string): Promise<number> 
     await write(relative, content);
   }
 
-  for (const [name, script] of Object.entries(BUNDLED_SCRIPTS)) {
-    const packaged = parsePackagedResourceReference(name);
-    const relative = packaged
-      ? join(
-          'workflows',
-          packaged.owner.pack,
-          packaged.owner.workflow,
-          'scripts',
-          `${packaged.name}${script.extension}`
-        )
-      : join('scripts', `${name}${script.extension}`);
-    await write(relative, script.content);
+  for (const [pack, bundled] of Object.entries(BUNDLED_SCRIPT_PACKS)) {
+    for (const [relativePath, content] of Object.entries(bundled.files)) {
+      await write(join('workflows', pack, relativePath), content);
+    }
   }
 
   return written;
