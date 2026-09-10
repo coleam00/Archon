@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -11,7 +10,8 @@ import { join } from 'node:path';
  * runs the whole chain and then tacks the path onto the last group. Going through this
  * runner makes the argument mean what it says.
  *
- * Groups live in the package's own `package.json` under `testGroups`.
+ * Groups live in the package's own `package.json` under `testGroups`, which is also
+ * where `scripts/test-inventory.test.ts` reads them to prove every test file is run.
  */
 
 interface PackageManifest {
@@ -39,20 +39,12 @@ const run = async (args: string[]): Promise<number> => {
 
 const requested = Bun.argv.slice(2);
 
-if (requested.length > 0) {
-  // `bun test` treats a path that matches nothing as an empty run and exits 0, so a typo
-  // or a stale path reports a pass. Refuse the run instead. Once a flag is present any
-  // argument could be its value, so the whole line goes through unchecked rather than
-  // this runner guessing at `bun test`'s flag grammar.
-  if (!requested.some(arg => arg.startsWith('-'))) {
-    const missing = requested.filter(arg => !existsSync(join(packageDir, arg)));
-    if (missing.length > 0) {
-      console.error(`No such test path: ${missing.join(', ')}`);
-      process.exit(1);
-    }
-  }
-  process.exit(await run(requested));
-}
+// Requested arguments go through verbatim. Do not add a path-existence check here:
+// `bun test` already exits 1 when a selector matches no test file, and its selectors are
+// substring filters rather than paths, so `bun run test logger` is a valid run that any
+// such check would refuse. The exit-0-on-a-bad-path this runner was written to fix came
+// from `bun run` appending the argument to a chain whose other selectors still matched.
+if (requested.length > 0) process.exit(await run(requested));
 
 for (const group of groups) {
   const code = await run(group);
