@@ -11257,6 +11257,9 @@ describe('workflowTestCommand', () => {
   beforeEach(async () => {
     stdoutSpy = spyOnJsonStdout();
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const gitModule = await import('@archon/git');
+    (gitModule.findRepoRoot as ReturnType<typeof mock>).mockReset().mockResolvedValue(null);
+    mockDiscoverWorkflowsWithConfig.mockClear();
     const fixtureRunner = await import('@archon/workflows/fixture-runner');
     (fixtureRunner.runFixtures as ReturnType<typeof mock>).mockClear();
     (fixtureRunner.formatFixtureReport as ReturnType<typeof mock>).mockClear();
@@ -11303,7 +11306,9 @@ describe('workflowTestCommand', () => {
     expect(payload.results[0]).toMatchObject({ fixture: 'sdlc/plan/fixtures/ready.stubs.yaml' });
   });
 
-  it('keeps the invoking directory for relative fixture path targets', async () => {
+  it('discovers workflows at the repository root while resolving targets from the invoking directory', async () => {
+    const gitModule = await import('@archon/git');
+    (gitModule.findRepoRoot as ReturnType<typeof mock>).mockResolvedValueOnce('/test/repository');
     const fixtureRunner = await import('@archon/workflows/fixture-runner');
     (fixtureRunner.runFixtures as ReturnType<typeof mock>).mockResolvedValue({
       results: [],
@@ -11311,10 +11316,13 @@ describe('workflowTestCommand', () => {
       failed: 0,
     });
 
-    await workflowTestCommand('/test/repository', 'local-pack', {
-      targetCwd: '/test/repository/tools',
-    });
+    await workflowTestCommand('/test/repository/tools', '../.archon/workflows/local-pack');
 
+    expect(gitModule.findRepoRoot).toHaveBeenCalledWith('/test/repository/tools');
+    expect(mockDiscoverWorkflowsWithConfig).toHaveBeenCalledWith(
+      '/test/repository',
+      expect.any(Function)
+    );
     expect(fixtureRunner.runFixtures).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: '/test/repository', targetCwd: '/test/repository/tools' })
     );

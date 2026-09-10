@@ -7,11 +7,11 @@
  * internal keys. Runtime is inferred from the extension: .ts/.js -> bun,
  * .py -> uv.
  */
-import { access, mkdir, readdir, rename, rm, stat, writeFile } from 'fs/promises';
+import { mkdir, readdir, rename, rm, stat, writeFile } from 'fs/promises';
 import { createHash, randomUUID } from 'crypto';
-import { join, basename, extname } from 'path';
+import { join, basename, dirname, extname } from 'path';
 import { createLogger, getArchonHome } from '@archon/paths';
-import { BUNDLED_SCRIPTS, isBinaryBuild } from './defaults/bundled-defaults';
+import { BUNDLED_SCRIPT_PACKS, isBinaryBuild } from './defaults/bundled-defaults';
 import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
 import {
   formatPackagedResourceReference,
@@ -210,40 +210,62 @@ async function discoverPackagedScripts(
 
 async function materializeBundledScripts(): Promise<Map<string, ScriptDefinition>> {
   const scripts = new Map<string, ScriptDefinition>();
-  for (const [name, bundled] of Object.entries(BUNDLED_SCRIPTS)) {
-    const packaged = parsePackagedResourceReference(name);
-    if (packaged?.owner.source !== 'bundled') {
-      throw new Error(`Invalid bundled packaged script key: ${name}`);
-    }
-    const contentHash = createHash('sha256').update(bundled.content).digest('hex').slice(0, 16);
-    const scriptDir = join(
-      getArchonHome(),
-      'cache',
-      'workflow-scripts',
-      packaged.owner.pack,
-      packaged.owner.workflow
-    );
-    const scriptPath = join(scriptDir, `${packaged.name}-${contentHash}${bundled.extension}`);
+  for (const [pack, bundled] of Object.entries(BUNDLED_SCRIPT_PACKS)) {
+    const files = Object.entries(bundled.files).sort(([a], [b]) => a.localeCompare(b));
+    const contentHash = createHash('sha256')
+      .update(JSON.stringify(files))
+      .digest('hex')
+      .slice(0, 16);
+    const packCache = join(getArchonHome(), 'cache', 'workflow-scripts', pack);
+    const unitDir = join(packCache, contentHash);
+    let exists = false;
     try {
-      await access(scriptPath);
-    } catch {
-      await mkdir(scriptDir, { recursive: true });
-      const tempPath = `${scriptPath}.${process.pid}.${randomUUID()}.tmp`;
-      await writeFile(tempPath, bundled.content, 'utf-8');
+      if (!(await stat(unitDir)).isDirectory()) {
+        throw new Error(`Bundled script cache is not a directory: ${unitDir}`);
+      }
+      exists = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    if (!exists) {
+      // Publish the complete tree at once; another discovery must never see half a pack.
+      const staging = `${unitDir}.${process.pid}.${randomUUID()}.tmp`;
       try {
-        await rename(tempPath, scriptPath);
-      } catch (error) {
-        const err = error as NodeJS.ErrnoException;
-        try {
-          await access(scriptPath);
-          await rm(tempPath, { force: true });
-        } catch {
-          await rm(tempPath, { force: true });
-          throw err;
+        await mkdir(staging, { recursive: true });
+        for (const [relativePath, content] of files) {
+          const target = join(staging, relativePath);
+          await mkdir(dirname(target), { recursive: true });
+          await writeFile(target, content, 'utf-8');
         }
+        try {
+          await rename(staging, unitDir);
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          // Windows reports EPERM for an existing directory. Accept a competing
+          // publisher only when its complete unit is present; other permission
+          // failures must retain the original rename error.
+          if (code !== 'EEXIST' && code !== 'ENOTEMPTY' && code !== 'EPERM') throw error;
+          const published = await stat(unitDir).then(
+            info => info.isDirectory(),
+            () => false
+          );
+          if (!published) throw error;
+        }
+      } finally {
+        await rm(staging, { recursive: true, force: true });
       }
     }
-    scripts.set(name, { name, path: normalizeSep(scriptPath), runtime: bundled.runtime });
+    for (const [name, entry] of Object.entries(bundled.scripts)) {
+      const packaged = parsePackagedResourceReference(name);
+      if (packaged?.owner.source !== 'bundled' || packaged.owner.pack !== pack) {
+        throw new Error(`Invalid bundled packaged script key: ${name}`);
+      }
+      scripts.set(name, {
+        name,
+        path: normalizeSep(join(unitDir, entry.path)),
+        runtime: entry.runtime,
+      });
+    }
   }
   return scripts;
 }

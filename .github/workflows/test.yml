@@ -82,6 +82,9 @@ jobs:
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
       - name: Cache Bun dependencies
         if: runner.os == 'Windows'
         uses: actions/cache@v4
@@ -91,6 +94,9 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      - name: Check CLI import boundaries
+        run: bun run check:cli-import-boundary
 
       - name: Check bundled defaults
         run: bun run check:bundled

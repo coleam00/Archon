@@ -77,65 +77,6 @@ function buildImportGraph(entry: string, outdir: string): BuildMetafile {
   return JSON.parse(readFileSync(metafilePath, 'utf8')) as BuildMetafile;
 }
 
-describe('CLI startup import boundary', () => {
-  let buildDir: string;
-  let metafile: BuildMetafile;
-  let handoffMetafile: BuildMetafile;
-
-  beforeAll(() => {
-    buildDir = mkdtempSync(join(tmpdir(), 'archon-cli-import-graph-'));
-    metafile = buildImportGraph(CLI_ENTRY, join(buildDir, 'cli'));
-    // Shared chunks can include unrelated CLI inputs as Bun's splitting changes.
-    // An isolated entrypoint measures the decoder's own dependency boundary.
-    handoffMetafile = buildImportGraph(
-      join(repoRoot, 'packages/core/src/config/run-config-handoff.ts'),
-      join(buildDir, 'handoff')
-    );
-  }, 30_000);
-
-  afterAll(async () => {
-    if (buildDir) await removeTempTree(buildDir);
-  });
-
-  it('keeps help and argument failures outside command, provider, core, workflow, and Git graphs', () => {
-    const entry = Object.entries(metafile.outputs).find(([, output]) =>
-      output.entryPoint?.replaceAll('\\', '/').endsWith('packages/cli/src/cli.ts')
-    )?.[0];
-    expect(entry).toBeDefined();
-
-    const forbidden = staticallyReachableInputs(metafile, entry ?? '')
-      .map(repositoryInput)
-      .filter(
-        (input): input is string =>
-          input !== undefined &&
-          (input.startsWith('packages/cli/src/commands/') ||
-            input.startsWith('packages/core/src/') ||
-            input.startsWith('packages/git/src/') ||
-            input.startsWith('packages/providers/src/') ||
-            input.startsWith('packages/workflows/src/'))
-      );
-    expect(forbidden).toEqual([]);
-  });
-
-  it('keeps detached handoff decoding on its audited schema, crypto, and path leaves', () => {
-    const internalInputs = Object.keys(handoffMetafile.inputs)
-      .map(repositoryInput)
-      .filter((input): input is string => input !== undefined)
-      .sort();
-    expect(internalInputs).toEqual([
-      'packages/core/src/config/run-config-handoff.ts',
-      'packages/core/src/utils/token-crypto.ts',
-      'packages/paths/src/archon-paths.ts',
-      'packages/paths/src/effort.ts',
-      'packages/paths/src/logger.ts',
-      'packages/workflows/src/schemas/durable-wait.ts',
-      'packages/workflows/src/schemas/effort.ts',
-      'packages/workflows/src/schemas/model-binding.ts',
-      'packages/workflows/src/schemas/run-config.ts',
-    ]);
-  });
-});
-
 describe('removed continue command', () => {
   // Full interpreter startup: the rejection lives in main()'s dispatch, not in
   // a pure guard, so a subprocess is the only way to pin the actual outcome.
@@ -1550,49 +1491,5 @@ describe('workflow test --json error envelope', () => {
     expect(status).toBe(1);
     expect(envelope).not.toThrow();
     expect(envelope()).toMatchObject({ ok: false });
-  });
-});
-
-describe('workflow test path targets', () => {
-  it('resolves a caller-relative path while discovering workflows from the repository root', async () => {
-    const repo = mkdtempSync(join(tmpdir(), 'archon-cli-workflow-test-cwd-'));
-    const tools = join(repo, 'tools');
-    const workflowDir = join(repo, '.archon', 'workflows', 'sdlc', 'plan');
-    mkdirSync(join(workflowDir, 'fixtures'), { recursive: true });
-    mkdirSync(tools, { recursive: true });
-    spawnSync('git', ['init', '-q'], { cwd: repo, encoding: 'utf8' });
-    writeFileSync(
-      join(workflowDir, 'plan.yaml'),
-      'name: plan\ndescription: test\nnodes:\n  - id: node-a\n    prompt: hello\n'
-    );
-    writeFileSync(
-      join(workflowDir, 'fixtures', 'ready.stubs.yaml'),
-      'fixture:\n  expect: completed\nnode-a: stub output\n'
-    );
-
-    try {
-      const result = spawnSync(
-        process.execPath,
-        [CLI_ENTRY, 'workflow', 'test', '../.archon/workflows/sdlc/plan', '--cwd', tools, '--json'],
-        {
-          encoding: 'utf8',
-          timeout: 20000,
-          env: {
-            ...process.env,
-            ARCHON_TELEMETRY_DISABLED: '1',
-            ARCHON_HOME: join(repo, 'archon-home'),
-          },
-        }
-      );
-
-      expect(result.status).toBe(0);
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        passed: 1,
-        failed: 0,
-        results: [{ fixture: 'sdlc/plan/fixtures/ready.stubs.yaml' }],
-      });
-    } finally {
-      await removeTempTree(repo);
-    }
   });
 });
