@@ -93,6 +93,7 @@ import {
   assertWorkflowRequirementsMet,
   resolveTopLevelInputs,
 } from '@archon/workflows/utils/workflow-requirements';
+import { assertWorkflowCredentialsValid } from '../utils/credential-validity';
 import type { RequirementBearingWorkflow } from '@archon/workflows/utils/workflow-requirements';
 import { parseInputAssignments } from '@archon/workflows/workflow-inputs';
 import { formatDeprecationNotice } from '@archon/workflows/deprecation';
@@ -2077,6 +2078,12 @@ async function runWorkflowWithOwnedSource(
   // gate (dispatchOrchestratorWorkflow) so CLI, REST (via orchestrator), and
   // chat dispatch enforce `requires: [github]` identically.
   await assertCliWorkflowRequirementsMet(workflow);
+
+  // Credential pre-flight gate (#3274): hard-fail before the --detach fork
+  // and before any worktree/clone/AI cost if a provider required by this workflow
+  // has an unusable or expired credential. Scoped strictly to the providers
+  // the workflow actually needs (#3273).
+  await assertWorkflowCredentialsValid(workflow, { cwd });
 
   // --detach: hand the whole run to a detached background child and return now.
   // Done AFTER workflow resolution + flag validation above (so unknown-workflow /

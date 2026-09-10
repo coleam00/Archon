@@ -213,7 +213,7 @@ import { PI_PROVIDER_ENV_VARS } from './pi-vendor-map.generated';
 // shipped by delivery.ts as a CODEX_HOME/auth.json file (dropped in env-only chat),
 // never an env var — so on this env channel anthropic is the only backend that
 // needs a distinct OAuth var.
-const PI_OAUTH_ENV_VARS: Readonly<Record<string, string>> = {
+export const PI_OAUTH_ENV_VARS: Readonly<Record<string, string>> = {
   anthropic: 'ANTHROPIC_OAUTH_TOKEN',
 };
 

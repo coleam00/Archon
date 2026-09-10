@@ -5,10 +5,15 @@
  * return value so a doctor failure does not abort setup (the env file was
  * already written successfully).
  */
-import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
+import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { execFileAsync } from '@archon/git';
+import {
+  inspectPiAuthJson,
+  formatExpiryDate,
+  probePiCredential,
+} from '../utils/credential-validity';
 import {
   BUNDLED_IS_BINARY,
   getArchonHome,
@@ -376,7 +381,29 @@ export function probeAuthJsonExists(path: string): boolean {
   return existsSync(path);
 }
 
-export async function checkPi(env: NodeJS.ProcessEnv): Promise<CheckResult> {
+/**
+ * Thin wrapper around `readFileSync` so tests can spy on it by name.
+ */
+export function readAuthJson(path: string): string | null {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+export interface PiDeps {
+  authJsonPath?: string;
+  probeAuthJsonExists?: (path: string) => boolean;
+  readAuthJson?: (path: string) => string | null;
+  probeCredential?: (provider: string) => Promise<'ready' | 'invalid' | 'unreachable'>;
+  now?: number;
+}
+
+export async function checkPi(
+  env: NodeJS.ProcessEnv = process.env,
+  deps?: PiDeps
+): Promise<CheckResult> {
   const label = 'Pi provider';
   const isDefault = env.DEFAULT_AI_ASSISTANT === 'pi';
 
@@ -388,9 +415,65 @@ export async function checkPi(env: NodeJS.ProcessEnv): Promise<CheckResult> {
 
   // Pi reads OAuth credentials from ~/.pi/agent/auth.json (written by `pi /login`)
   // or API key env vars; either path is sufficient.
-  const authJsonPath = join(homedir(), '.pi', 'agent', 'auth.json');
-  if (probeAuthJsonExists(authJsonPath)) {
-    return { label, status: 'pass', message: '~/.pi/agent/auth.json found' };
+  const authJsonPath =
+    deps?.authJsonPath ?? env.ARCHON_PI_AUTH_PATH ?? join(homedir(), '.pi', 'agent', 'auth.json');
+  const probeExists = deps?.probeAuthJsonExists ?? probeAuthJsonExists;
+  const readAuth = deps?.readAuthJson ?? readAuthJson;
+  const probeCred = deps?.probeCredential ?? probePiCredential;
+  const now = deps?.now ?? Date.now();
+
+  if (probeExists(authJsonPath)) {
+    const result = await inspectPiAuthJson(authJsonPath, now, readAuth, probeCred);
+    if (result.error) {
+      return {
+        label,
+        status: 'fail',
+        message: `failed to read ~/.pi/agent/auth.json: ${result.error}`,
+      };
+    }
+    if (result.entries.length > 0) {
+      const expired = result.entries.filter(e => e.status === 'expired');
+      if (expired.length > 0) {
+        const details = expired
+          .map(
+            e =>
+              `${e.provider} credential expired${e.expires !== undefined ? ` ${formatExpiryDate(e.expires)}` : ''}`
+          )
+          .join(', ');
+        return { label, status: 'fail', message: details };
+      }
+
+      const invalid = result.entries.filter(e => e.status === 'invalid');
+      if (invalid.length > 0) {
+        const details = invalid
+          .map(e => `${e.provider} credential invalid${e.message ? `: ${e.message}` : ''}`)
+          .join(', ');
+        return { label, status: 'fail', message: details };
+      }
+
+      const unreachable = result.entries.filter(e => e.status === 'unreachable');
+      const valid = result.entries.filter(e => e.status === 'valid');
+      if (valid.length > 0) {
+        const validSummary = valid.map(e => e.provider).join(', ');
+        const unreachSuffix =
+          unreachable.length > 0
+            ? ` (${unreachable.map(e => `${e.provider} unreachable`).join(', ')})`
+            : '';
+        return {
+          label,
+          status: 'pass',
+          message: `~/.pi/agent/auth.json valid (${validSummary})${unreachSuffix}`,
+        };
+      }
+
+      if (unreachable.length > 0) {
+        return {
+          label,
+          status: 'skip',
+          message: `provider unreachable: ${unreachable.map(e => `${e.provider} (${e.message ?? 'network error'})`).join(', ')}`,
+        };
+      }
+    }
   }
 
   const foundKey = PI_API_KEY_VARS.find(v => (env[v] ?? '').trim().length > 0);
@@ -553,6 +636,10 @@ export interface ProviderDeps {
     id: string,
     name: string
   ) => Promise<{ id: string }>;
+  checkKeyValidity?: (
+    userId: string,
+    provider: string
+  ) => Promise<{ status: 'valid' | 'expired' | 'unreachable'; expires?: number; reason?: string }>;
 }
 
 /**
@@ -591,6 +678,30 @@ export async function checkConnectedProviders(
         message: 'none connected — run: archon ai login <vendor>  or  archon ai key set <vendor>',
       };
     }
+
+    if (deps.checkKeyValidity) {
+      const expired: { provider: string; expires?: number }[] = [];
+      for (const row of rows) {
+        try {
+          const validity = await deps.checkKeyValidity(user.id, row.provider);
+          if (validity.status === 'expired') {
+            expired.push({ provider: row.provider, expires: validity.expires });
+          }
+        } catch {
+          // best-effort
+        }
+      }
+      if (expired.length > 0) {
+        const details = expired
+          .map(
+            e =>
+              `${e.provider} credential expired${e.expires ? ` ${formatExpiryDate(e.expires)}` : ''}`
+          )
+          .join(', ');
+        return { label, status: 'fail', message: details };
+      }
+    }
+
     const summary = rows.map(r => `${r.provider}(${r.kind})`).join(', ');
     return { label, status: 'pass', message: `${rows.length} connected: ${summary}` };
   } catch (err) {
@@ -604,11 +715,44 @@ export async function checkConnectedProviders(
 
 async function defaultLoadProviderDeps(): Promise<ProviderDeps> {
   // Lazy imports for the same reason as defaultLoadDatabaseDeps.
-  const { listUserProviderKeys } = await import('@archon/core');
+  const { listUserProviderKeys, getUserProviderKeyRecord } = await import('@archon/core');
   const userDb = await import('@archon/core/db/users');
+  const { decryptToken, getEncryptionKey } = await import('@archon/core/utils/token-crypto');
   return {
     listUserProviderKeys,
     findOrCreateUserByPlatformIdentity: userDb.findOrCreateUserByPlatformIdentity,
+    checkKeyValidity: async (
+      userId: string,
+      provider: string
+    ): Promise<{
+      status: 'valid' | 'expired' | 'unreachable';
+      expires?: number;
+      reason?: string;
+    }> => {
+      try {
+        const row = await getUserProviderKeyRecord(userId, provider);
+        if (!row) return { status: 'valid' };
+        if (row.kind === 'oauth' && row.oauth_creds_encrypted) {
+          const key = getEncryptionKey();
+          const parsed = JSON.parse(decryptToken(row.oauth_creds_encrypted, key)) as {
+            expires?: number;
+          };
+          if (
+            parsed &&
+            typeof parsed === 'object' &&
+            typeof parsed.expires === 'number' &&
+            Number.isFinite(parsed.expires)
+          ) {
+            if (Date.now() >= parsed.expires) {
+              return { status: 'expired', expires: parsed.expires };
+            }
+          }
+        }
+        return { status: 'valid' };
+      } catch (err) {
+        return { status: 'unreachable', reason: (err as Error).message };
+      }
+    },
   };
 }
 

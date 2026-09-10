@@ -10,7 +10,7 @@
 import { describe, it, expect, spyOn, afterEach, beforeEach } from 'bun:test';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import * as git from '@archon/git';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -444,13 +444,23 @@ describe('checkPi', () => {
   // due to ESM rebinding — the wrapper pattern (same as `probeFileExists` in setup.ts)
   // is the correct way to make this testable.
   let authJsonSpy: ReturnType<typeof spyOn<typeof doctorModule, 'probeAuthJsonExists'>>;
+  let readAuthJsonSpy: ReturnType<typeof spyOn<typeof doctorModule, 'readAuthJson'>>;
 
   beforeEach(() => {
     authJsonSpy = spyOn(doctorModule, 'probeAuthJsonExists');
+    readAuthJsonSpy = spyOn(doctorModule, 'readAuthJson').mockReturnValue(
+      JSON.stringify({
+        anthropic: {
+          type: 'api_key',
+          key: 'sk-ant-test-key',
+        },
+      })
+    );
   });
 
   afterEach(() => {
     authJsonSpy.mockRestore();
+    readAuthJsonSpy.mockRestore();
   });
 
   it('returns skip when Pi is not configured', async () => {
@@ -465,6 +475,94 @@ describe('checkPi', () => {
     const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
     expect(result.status).toBe('pass');
     expect(result.message).toContain('auth.json');
+  });
+
+  it('fails when ~/.pi/agent/auth.json contains an expired OAuth credential (#3274)', async () => {
+    authJsonSpy.mockReturnValue(true);
+    readAuthJsonSpy.mockReturnValue(
+      JSON.stringify({
+        anthropic: {
+          type: 'oauth',
+          access: 'sk-ant-oat01-test',
+          refresh: 'sk-ant-ort01-test',
+          expires: 1717804800000, // 8 June 2024
+        },
+      })
+    );
+    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('anthropic credential expired 8 June 2024');
+  });
+
+  it('fails with a real fixture file containing an expired credential (#3274 regression)', async () => {
+    // Restores spies so real existsSync and readFileSync operate against the fixture file
+    authJsonSpy.mockRestore();
+    readAuthJsonSpy.mockRestore();
+    const tempDir = mkdtempSync(join(tmpdir(), 'archon-doctor-auth-'));
+    try {
+      const fixturePath = join(tempDir, 'auth.json');
+      writeFileSync(
+        fixturePath,
+        JSON.stringify({
+          anthropic: {
+            type: 'oauth',
+            access: 'sk-ant-oat01-fixture',
+            refresh: 'sk-ant-ort01-fixture',
+            expires: 1717804800000, // 8 June 2024
+          },
+        })
+      );
+      const result = await checkPi({
+        DEFAULT_AI_ASSISTANT: 'pi',
+        ARCHON_PI_AUTH_PATH: fixturePath,
+      });
+      expect(result.status).toBe('fail');
+      expect(result.message).toContain('anthropic credential expired 8 June 2024');
+    } finally {
+      await removeTempTree(tempDir);
+    }
+  });
+
+  it('reports unreachable distinctly from expired and does not fail doctor run', async () => {
+    authJsonSpy.mockReturnValue(true);
+    readAuthJsonSpy.mockReturnValue(
+      JSON.stringify({
+        anthropic: {
+          type: 'oauth',
+          access: 'sk-ant-oat01-test',
+        },
+      })
+    );
+    const result = await checkPi(
+      { DEFAULT_AI_ASSISTANT: 'pi' },
+      {
+        probeCredential: async () => 'unreachable',
+      }
+    );
+    expect(result.status).toBe('skip');
+    expect(result.message).toContain('anthropic');
+    expect(result.message).toContain('unreachable');
+  });
+
+  it('fails when one credential is valid and another is expired', async () => {
+    authJsonSpy.mockReturnValue(true);
+    readAuthJsonSpy.mockReturnValue(
+      JSON.stringify({
+        openrouter: {
+          type: 'api_key',
+          key: 'sk-or-valid',
+        },
+        anthropic: {
+          type: 'oauth',
+          access: 'sk-ant-oat01-test',
+          refresh: 'sk-ant-ort01-test',
+          expires: 1717804800000,
+        },
+      })
+    );
+    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('anthropic credential expired 8 June 2024');
   });
 
   it('returns pass when a Pi API key env var is set', async () => {
@@ -996,6 +1094,21 @@ describe('checkConnectedProviders', () => {
     expect(result.status).toBe('pass');
     expect(result.message).toContain('2 connected');
     expect(result.message).toContain('anthropic');
+  });
+
+  it('returns fail when a connected credential is expired', async () => {
+    const result = await checkConnectedProviders({ USER: 'testuser' }, async () => ({
+      listUserProviderKeys: async () => [
+        { provider: 'anthropic', kind: 'oauth', label: 'subscription' },
+      ],
+      findOrCreateUserByPlatformIdentity: async () => mockUser,
+      checkKeyValidity: async () => ({
+        status: 'expired',
+        expires: 1717804800000,
+      }),
+    }));
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('anthropic credential expired 8 June 2024');
   });
 
   it('returns skip (not fail) when loadDeps throws', async () => {

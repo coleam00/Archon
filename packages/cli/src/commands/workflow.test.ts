@@ -1739,6 +1739,192 @@ describe('workflowRunCommand — requires: [github] gate', () => {
   });
 });
 
+describe('workflowRunCommand — credential pre-flight gate (#3274)', () => {
+  let consoleSpy: ReturnType<typeof spyOn>;
+  let tempAuthDir: string | undefined;
+  let savedAuthPath: string | undefined;
+  let savedAntKey: string | undefined;
+  let savedOrKey: string | undefined;
+
+  beforeEach(async () => {
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    savedAuthPath = process.env.ARCHON_PI_AUTH_PATH;
+    savedAntKey = process.env.ANTHROPIC_API_KEY;
+    savedOrKey = process.env.OPENROUTER_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
+
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockClear();
+  });
+
+  afterEach(async () => {
+    consoleSpy.mockRestore();
+    if (savedAuthPath !== undefined) process.env.ARCHON_PI_AUTH_PATH = savedAuthPath;
+    else delete process.env.ARCHON_PI_AUTH_PATH;
+    if (savedAntKey !== undefined) process.env.ANTHROPIC_API_KEY = savedAntKey;
+    else delete process.env.ANTHROPIC_API_KEY;
+    if (savedOrKey !== undefined) process.env.OPENROUTER_API_KEY = savedOrKey;
+    else delete process.env.OPENROUTER_API_KEY;
+
+    if (tempAuthDir) {
+      await removeTempTree(tempAuthDir);
+      tempAuthDir = undefined;
+    }
+  });
+
+  it('fails before worktree creation when configured provider has an expired credential', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const isolation = await import('@archon/isolation');
+
+    tempAuthDir = mkdtempSync(join(tmpdir(), 'archon-preflight-auth-'));
+    const authPath = join(tempAuthDir, 'auth.json');
+    writeFileSync(
+      authPath,
+      JSON.stringify({
+        anthropic: {
+          type: 'oauth',
+          access: 'sk-ant-oat01-test',
+          refresh: 'sk-ant-ort01-test',
+          expires: 1717804800000, // 8 June 2024
+        },
+      })
+    );
+    process.env.ARCHON_PI_AUTH_PATH = authPath;
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [
+        makeTestWorkflowWithSource({
+          name: 'anthropic-wf',
+          nodes: [
+            {
+              id: 'ai-step',
+              prompt: 'analyze code',
+              provider: 'pi',
+              model: 'anthropic/claude-3-5-sonnet',
+            },
+          ],
+        }),
+      ],
+      errors: [],
+    });
+
+    await expect(workflowRunCommand('/repo/root', 'anthropic-wf', 'go', {})).rejects.toThrow(
+      /anthropic credential expired 8 June 2024/
+    );
+
+    // Hard-blocked before worktree creation and before executeWorkflow
+    expect(executeWorkflow).not.toHaveBeenCalled();
+    const provider = isolation.getIsolationProvider();
+    expect(provider.create).not.toHaveBeenCalled();
+  });
+
+  it('allows a run configured for provider A when provider B has an expired credential (#3273)', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const conversationDb = await import('@archon/core/db/conversations');
+
+    tempAuthDir = mkdtempSync(join(tmpdir(), 'archon-preflight-auth-'));
+    const authPath = join(tempAuthDir, 'auth.json');
+    writeFileSync(
+      authPath,
+      JSON.stringify({
+        anthropic: {
+          type: 'oauth',
+          access: 'sk-ant-oat01-test',
+          refresh: 'sk-ant-ort01-test',
+          expires: 1717804800000, // expired!
+        },
+        openrouter: {
+          type: 'api_key',
+          key: 'sk-or-valid-key',
+        },
+      })
+    );
+    process.env.ARCHON_PI_AUTH_PATH = authPath;
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [
+        makeTestWorkflowWithSource({
+          name: 'or-wf',
+          nodes: [
+            {
+              id: 'ai-step',
+              prompt: 'analyze code',
+              provider: 'pi',
+              model: 'openrouter/qwen/qwen3',
+            },
+          ],
+        }),
+      ],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-ok',
+    });
+
+    await workflowRunCommand('/repo/root', 'or-wf', 'go', { noWorktree: true });
+
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows a workflow with no AI nodes to run even with an expired credential', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const conversationDb = await import('@archon/core/db/conversations');
+
+    tempAuthDir = mkdtempSync(join(tmpdir(), 'archon-preflight-auth-'));
+    const authPath = join(tempAuthDir, 'auth.json');
+    writeFileSync(
+      authPath,
+      JSON.stringify({
+        anthropic: {
+          type: 'oauth',
+          access: 'sk-ant-oat01-test',
+          refresh: 'sk-ant-ort01-test',
+          expires: 1717804800000, // expired!
+        },
+      })
+    );
+    process.env.ARCHON_PI_AUTH_PATH = authPath;
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [
+        makeTestWorkflowWithSource({
+          name: 'bash-wf',
+          nodes: [
+            {
+              id: 'shell-step',
+              bash: 'echo hello',
+            },
+          ],
+        }),
+      ],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-ok',
+    });
+
+    await workflowRunCommand('/repo/root', 'bash-wf', 'go', { noWorktree: true });
+
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('workflowRunCommand — --input declared inputs (#2554)', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
 

@@ -91,8 +91,11 @@ export {
   parsePiConfig,
   registerPiProvider,
   listPiModels,
+  parsePiModelRef,
+  type PiModelRef,
   type PiProviderDefaults,
   type PiModelInfo,
+  PI_OAUTH_ENV_VARS,
 } from './community/pi';
 // Generated Pi backend → env-var map + ambient vendors (single source for the
 // Pi runtime bridge and @archon/core's credential delivery — see #1955).
