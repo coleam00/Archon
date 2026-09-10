@@ -63,7 +63,8 @@
     ],
     [
       "src/logger.test.ts",
-      "src/terminal-status-write.test.ts"
+      "src/terminal-status-write.test.ts",
+      "src/node-event-write.test.ts"
     ],
     [
       "src/condition-evaluator.test.ts"

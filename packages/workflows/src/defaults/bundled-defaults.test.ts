@@ -1019,31 +1019,41 @@ describe('bundled-defaults', () => {
         const workflow = parsed.workflow;
         if (workflow === null) continue;
 
-        // Coverage mirrors the resolver, not the doc comments:
+        // Walk with the scope a node actually resolves against, mirroring the resolver:
         //  - a node's own `model:` always wins;
-        //  - a workflow's `model:` reaches a node only when the node resolves to the
-        //    workflow's own provider (include-expander's `workflowModelTravelsTo`);
-        //  - a `loop_group`'s own `model:` covers nothing — the executor forwards only
-        //    its resolved provider into the body context, never its model.
-        const covered = (node: PackNode | LoopGroupBodyNode): boolean => {
-          if ('model' in node && node.model !== undefined) return true;
-          if (workflow.model === undefined) return false;
-          const nodeProvider = 'provider' in node ? node.provider : undefined;
-          return nodeProvider === undefined || nodeProvider === workflow.provider;
-        };
+        //  - an inherited model reaches a node only when the node resolves to the scope's
+        //    own provider (include-expander's `workflowModelTravelsTo`), so a node naming
+        //    a different provider inherits nothing;
+        //  - a `loop_group` becomes the scope for its body, carrying whichever model it
+        //    resolved, because the executor forwards its provider, model, tier and preset
+        //    into the per-iteration context.
+        interface Scope {
+          provider: string | undefined;
+          model: string | undefined;
+        }
 
-        const visit = (nodes: readonly (PackNode | LoopGroupBodyNode)[], trail: string): void => {
+        const visit = (
+          nodes: readonly (PackNode | LoopGroupBodyNode)[],
+          trail: string,
+          scope: Scope
+        ): void => {
           for (const node of nodes) {
             const id = `${trail}${node.id}`;
-            // `agent` and `loop` both invoke a provider. `loop_group` runs none
-            // itself; its body holds the work, so descend into it.
-            if ((node.kind === 'agent' || node.kind === 'loop') && !covered(node)) {
+            const ownProvider = 'provider' in node ? node.provider : undefined;
+            const ownModel = 'model' in node ? node.model : undefined;
+            const provider = ownProvider ?? scope.provider;
+            const model = ownModel ?? (provider === scope.provider ? scope.model : undefined);
+
+            // `agent` and `loop` both invoke a provider. `loop_group` runs none itself.
+            if ((node.kind === 'agent' || node.kind === 'loop') && model === undefined) {
               uncovered.push(`${name}:${id}`);
             }
-            if (node.kind === 'loop_group') visit(node.loop_group.nodes, `${id}/`);
+            if (node.kind === 'loop_group') {
+              visit(node.loop_group.nodes, `${id}/`, { provider, model });
+            }
           }
         };
-        visit(workflow.nodes, '');
+        visit(workflow.nodes, '', { provider: workflow.provider, model: workflow.model });
       }
 
       expect(uncovered).toEqual([]);

@@ -1593,6 +1593,39 @@ describe('dryRunWorkflow', () => {
     expect(paused.unusedStubs).toEqual(['after']);
   });
 
+  test('a gate inside a loop_group body pauses the whole run', async () => {
+    // simulateLoopGroup gives the body a scope of its own. It must do that on the
+    // caller's context, not a copy: `halted` is written by the nested simulation, so a
+    // copied context swallows the pause and the run continues past the gate and ends
+    // failed. The fixture corpus catches this too, in a job outside `bun run validate`.
+    const workflow = makeTestWorkflow({
+      name: 'gate-in-loop-group',
+      nodes: [
+        {
+          id: 'group',
+          loop_group: {
+            until_bash: 'exit 0',
+            max_iterations: 2,
+            nodes: [
+              { id: 'work', prompt: 'p' },
+              { id: 'gate', approval: { message: 'ok?' }, depends_on: ['work'] },
+            ],
+          },
+        },
+      ],
+    });
+
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { work: 'done' },
+      pauseAtGates: true,
+    });
+
+    expect(result.outcome).toBe('paused');
+  });
+
   test('reports a durable wait as a pause without AI resolution', async () => {
     const workflow = makeTestWorkflow({
       name: 'wait',
@@ -2513,6 +2546,30 @@ describe('dryRunWorkflow — effective provider/model per node', () => {
       providerFrom: 'node',
       authoredIn: 'blk',
     });
+  });
+
+  test('reports a loop_group body node against the group own resolved model', async () => {
+    // The executor builds the body's context from the group's resolved provider and
+    // model, so a body node declaring neither inherits the GROUP's, not the enclosing
+    // workflow's. A dry run that reported the workflow's would name a model the run
+    // never uses.
+    const byId = await trace([
+      {
+        id: 'group',
+        model: 'large',
+        loop_group: {
+          until_bash: 'exit 0',
+          max_iterations: 1,
+          nodes: [{ id: 'body', prompt: 'p' }],
+        },
+      },
+    ]);
+
+    const group = byId.get('group');
+    const body = byId.get('body');
+    expect(body).toBeDefined();
+    expect(body?.model).toBe(group?.model);
+    expect(body?.provider).toBe(group?.provider);
   });
 
   test('reports a provider/model conflict the real run would warn about', async () => {
