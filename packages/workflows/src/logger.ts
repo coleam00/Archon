@@ -5,6 +5,7 @@ import { appendFile, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
 import type { WorkflowTokenUsage } from './deps';
 import type { MessageChunk } from '@archon/providers/types';
+import type { SkipCause } from './schemas';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -48,6 +49,7 @@ export interface WorkflowEvent {
   cost_usd?: number;
   check?: string;
   result?: 'pass' | 'fail' | 'warn' | 'unknown';
+  cause?: SkipCause;
   error?: string;
   /** `watchdog_reset` only. The chunk content is deliberately never retained. */
   chunk_type?: MessageChunk['type'];
@@ -267,12 +269,14 @@ export async function logNodeSkip(
   logDir: string,
   workflowRunId: string,
   nodeId: string,
-  reason: string
+  reason: string,
+  cause?: SkipCause
 ): Promise<void> {
   await logWorkflowEvent(logDir, workflowRunId, {
     type: 'node_skipped',
     step: nodeId,
     content: reason,
+    ...(cause !== undefined ? { cause } : {}),
   });
 }
 

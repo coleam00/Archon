@@ -5,7 +5,7 @@
  * Independent nodes within the same layer run concurrently via Promise.allSettled.
  * Captures all assistant output regardless of streaming mode for $node_id.output substitution.
  */
-import { NodeEventWriteError, persistNodeEvent } from './node-event-write';
+import { NodeEventWriteError, recordNodeState } from './node-event-write';
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { basename, isAbsolute, join as joinPath, resolve as resolvePath, sep } from 'path';
@@ -133,10 +133,7 @@ import {
 } from './compiled-command';
 import { assistantModelDefaults, resolveNodeModel } from './node-model-resolution';
 import {
-  logNodeStart,
   logNodeComplete,
-  logNodeSkip,
-  logNodeError,
   logAssistant,
   logExecOutput,
   logTool,
@@ -209,14 +206,6 @@ function dagNodeTelemetryType(node: DagNode): WorkflowNodeType {
       return exhaustive;
     }
   }
-}
-
-/**
- * Display name for a node in user-facing events: a command node's file name (matching
- * today's `node.command ?? node.id` convention), otherwise the node's own id.
- */
-function nodeDisplayName(node: DagNode): string {
-  return isAgentNode(node) && node.source.kind === 'command' ? node.source.name : node.id;
 }
 
 /**
@@ -1309,7 +1298,8 @@ async function assertCheckoutUntouched(
   result: NodeExecutionResult,
   deps: WorkflowDeps,
   workflowRunId: string,
-  stepName: string
+  stepName: string,
+  logDir?: string
 ): Promise<NodeExecutionResult> {
   if (node.mutates_checkout !== false || before === undefined || result.state !== 'completed') {
     return result;
@@ -1326,19 +1316,11 @@ async function assertCheckoutUntouched(
     .join(', ');
   const error = `Node \`${node.id}\` declared \`mutates_checkout: false\` but modified the working tree: ${changedPaths}`;
   getLog().error({ nodeId: node.id, changed: changedPaths }, 'dag_mutates_checkout_violation');
-  const emitter = getWorkflowEventEmitter();
-  await persistNodeEvent(deps.store, {
+  await recordNodeState({ store: deps.store, logDir }, node, {
     workflow_run_id: workflowRunId,
     event_type: 'node_failed',
     step_name: stepName,
     data: { error },
-  });
-  emitter.emit({
-    type: 'node_failed',
-    runId: workflowRunId,
-    nodeId: node.id,
-    nodeName: node.id,
-    error,
   });
   return { ...result, state: 'failed', output: '', error };
 }
@@ -2143,34 +2125,25 @@ async function executeNodeInternal(
   const configuredMcpNames = await loadConfiguredMcpServerNames(node.mcp, cwd);
 
   getLog().info({ nodeId: node.id, provider }, 'dag_node_started');
-  await logNodeStart(logDir, workflowRun.id, node.id, commandName ?? '<inline>');
 
-  await persistNodeEvent(deps.store, {
-    workflow_run_id: workflowRun.id,
-    event_type: 'node_started',
-    step_name: stepName,
-    data: {
-      command: commandName ?? null,
-      provider,
-      model: resolvedModel,
-      tier: resolvedTier,
-      ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
-      ...namedSessionAuditData,
-      ...iterationData,
-    },
-  });
-
-  const emitter = getWorkflowEventEmitter();
-  emitter.emit({
-    type: 'node_started',
-    runId: workflowRun.id,
-    nodeId: node.id,
-    nodeName: commandName ?? node.id,
-    provider,
-    model: resolvedModel,
-    tier: resolvedTier,
-    ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
-  });
+  await recordNodeState(
+    { store: deps.store, logDir },
+    { ...node, provider, model: resolvedModel, tier: resolvedTier, effort: resolvedEffort },
+    {
+      workflow_run_id: workflowRun.id,
+      event_type: 'node_started',
+      step_name: stepName,
+      data: {
+        command: commandName ?? null,
+        provider,
+        model: resolvedModel,
+        tier: resolvedTier,
+        ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
+        ...namedSessionAuditData,
+        ...iterationData,
+      },
+    }
+  );
 
   let nodeTokens: TokenUsage | undefined;
   let nodeCostUsd: number | undefined;
@@ -2189,9 +2162,8 @@ async function executeNodeInternal(
     extras: { output?: string; data?: Record<string, unknown> } = {}
   ): Promise<NodeExecutionResult> => {
     const usage = nodeUsageEventData();
-    await logNodeError(logDir, workflowRun.id, node.id, error, usage);
 
-    await persistNodeEvent(deps.store, {
+    await recordNodeState({ store: deps.store, logDir }, node, {
       workflow_run_id: workflowRun.id,
       event_type: 'node_failed',
       step_name: stepName,
@@ -2203,14 +2175,6 @@ async function executeNodeInternal(
         ...iterationData,
         ...(extras.data ?? {}),
       },
-    });
-
-    emitter.emit({
-      type: 'node_failed',
-      runId: workflowRun.id,
-      nodeId: node.id,
-      nodeName: commandName ?? node.id,
-      error,
     });
 
     lastNodeCancelCheck.delete(nodeKey);
@@ -3227,12 +3191,8 @@ async function executeNodeInternal(
   }
   const duration = Date.now() - nodeStartTime;
   getLog().info({ nodeId: node.id, durationMs: duration }, 'dag_node_completed');
-  await logNodeComplete(logDir, workflowRun.id, node.id, commandName ?? '<inline>', {
-    durationMs: duration,
-    ...nodeUsageEventData(),
-  });
 
-  await persistNodeEvent(deps.store, {
+  await recordNodeState({ store: deps.store, logDir }, node, {
     workflow_run_id: workflowRun.id,
     event_type: 'node_completed',
     step_name: stepName,
@@ -3263,17 +3223,6 @@ async function executeNodeInternal(
         : {}),
       ...iterationData,
     },
-  });
-
-  emitter.emit({
-    type: 'node_completed',
-    runId: workflowRun.id,
-    nodeId: node.id,
-    nodeName: commandName ?? node.id,
-    duration,
-    ...(nodeCostUsd !== undefined ? { costUsd: nodeCostUsd } : {}),
-    ...(nodeStopReason ? { stopReason: nodeStopReason } : {}),
-    ...(nodeNumTurns !== undefined ? { numTurns: nodeNumTurns } : {}),
   });
 
   // Clean up throttle entries on completion
@@ -3658,27 +3607,12 @@ async function recordExecTimeoutSkip(
 ): Promise<NodeOutput> {
   const cause: SkipCause = { kind: 'timeout' };
   getLog().info({ nodeId: node.id, nodeType }, 'dag_node_skipped_timeout');
-  await logNodeSkip(ctx.logDir, ctx.workflowRun.id, node.id, 'timeout').catch((err: Error) => {
-    getLog().error(
-      { err, workflowRunId: ctx.workflowRun.id, nodeId: node.id },
-      'dag.node_skip_log_failed'
-    );
-  });
 
-  await persistNodeEvent(ctx.deps.store, {
+  await recordNodeState(ctx, node, {
     workflow_run_id: ctx.workflowRun.id,
     event_type: 'node_skipped',
     step_name: stepName,
     data: { reason: 'timeout', cause, type: nodeType, ...iterationData },
-  });
-
-  getWorkflowEventEmitter().emit({
-    type: 'node_skipped',
-    runId: ctx.workflowRun.id,
-    nodeId: node.id,
-    nodeName: node.id,
-    reason: 'timeout',
-    cause,
   });
 
   return { state: 'skipped', output: '', cause };
@@ -3822,21 +3756,12 @@ async function executeBashNode(
   const iterationData = iteration !== undefined ? { iteration } : {};
 
   getLog().info({ nodeId: node.id, type: 'bash' }, 'dag_node_started');
-  await logNodeStart(logDir, workflowRun.id, node.id, '<bash>');
 
-  await persistNodeEvent(deps.store, {
+  await recordNodeState({ store: deps.store, logDir }, node, {
     workflow_run_id: workflowRun.id,
     event_type: 'node_started',
     step_name: stepName,
     data: { type: 'bash', ...iterationData },
-  });
-
-  const emitter = getWorkflowEventEmitter();
-  emitter.emit({
-    type: 'node_started',
-    runId: workflowRun.id,
-    nodeId: node.id,
-    nodeName: node.id,
   });
 
   // Variable substitution on script
@@ -3969,21 +3894,12 @@ async function executeBashNode(
       { ...formatted.logFields, nodeId: node.id, nodeType: 'bash', isTimeout },
       'dag_node_failed'
     );
-    await logNodeError(logDir, workflowRun.id, node.id, errorMsg);
 
-    await persistNodeEvent(deps.store, {
+    await recordNodeState({ store: deps.store, logDir }, node, {
       workflow_run_id: workflowRun.id,
       event_type: 'node_failed',
       step_name: stepName,
       data: { error: errorMsg, type: 'bash' },
-    });
-
-    emitter.emit({
-      type: 'node_failed',
-      runId: workflowRun.id,
-      nodeId: node.id,
-      nodeName: node.id,
-      error: errorMsg,
     });
 
     return {
@@ -3997,11 +3913,10 @@ async function executeBashNode(
   const output = certified.output;
   const duration = Date.now() - nodeStartTime;
   getLog().info({ nodeId: node.id, durationMs: duration }, 'dag_node_completed');
-  await logNodeComplete(logDir, workflowRun.id, node.id, '<bash>', { durationMs: duration });
 
   const persistedOutput = formatPersistedNodeOutput(output, artifactsDir, stepName);
 
-  await persistNodeEvent(deps.store, {
+  await recordNodeState({ store: deps.store, logDir }, node, {
     workflow_run_id: workflowRun.id,
     event_type: 'node_completed',
     step_name: stepName,
@@ -4016,14 +3931,6 @@ async function executeBashNode(
         : {}),
       ...iterationData,
     },
-  });
-
-  emitter.emit({
-    type: 'node_completed',
-    runId: workflowRun.id,
-    nodeId: node.id,
-    nodeName: node.id,
-    duration,
   });
 
   return {
@@ -4125,21 +4032,12 @@ async function executeScriptNode(
   const iterationData = iteration !== undefined ? { iteration } : {};
 
   getLog().info({ nodeId: node.id, type: 'script', runtime: node.runtime }, 'dag_node_started');
-  await logNodeStart(logDir, workflowRun.id, node.id, '<script>');
 
-  await persistNodeEvent(deps.store, {
+  await recordNodeState({ store: deps.store, logDir }, node, {
     workflow_run_id: workflowRun.id,
     event_type: 'node_started',
     step_name: stepName,
     data: { type: 'script', runtime: node.runtime, ...iterationData },
-  });
-
-  const emitter = getWorkflowEventEmitter();
-  emitter.emit({
-    type: 'node_started',
-    runId: workflowRun.id,
-    nodeId: node.id,
-    nodeName: node.id,
   });
 
   // Resolve before deciding whether this is inline or filesystem-backed: substitutions
@@ -4246,16 +4144,8 @@ async function executeScriptNode(
       const errorMsg = `Script node '${node.id}': failed to discover scripts — ${err.message}`;
       getLog().error({ err, nodeId: node.id, cwd }, 'script_discovery_failed');
       await safeSendMessage(platform, conversationId, errorMsg, nodeContext);
-      await logNodeError(logDir, workflowRun.id, node.id, errorMsg);
 
-      emitter.emit({
-        type: 'node_failed',
-        runId: workflowRun.id,
-        nodeId: node.id,
-        nodeName: node.id,
-        error: errorMsg,
-      });
-      await persistNodeEvent(deps.store, {
+      await recordNodeState({ store: deps.store, logDir }, node, {
         workflow_run_id: workflowRun.id,
         event_type: 'node_failed',
         step_name: stepName,
@@ -4270,16 +4160,8 @@ async function executeScriptNode(
       const errorMsg = `Script node '${node.id}': named script '${finalScript}' not found in .archon/scripts/ or ~/.archon/scripts/`;
       getLog().error({ nodeId: node.id, scriptName: finalScript }, 'script_not_found');
       await safeSendMessage(platform, conversationId, errorMsg, nodeContext);
-      await logNodeError(logDir, workflowRun.id, node.id, errorMsg);
 
-      emitter.emit({
-        type: 'node_failed',
-        runId: workflowRun.id,
-        nodeId: node.id,
-        nodeName: node.id,
-        error: errorMsg,
-      });
-      await persistNodeEvent(deps.store, {
+      await recordNodeState({ store: deps.store, logDir }, node, {
         workflow_run_id: workflowRun.id,
         event_type: 'node_failed',
         step_name: stepName,
@@ -4363,21 +4245,12 @@ async function executeScriptNode(
       { ...formatted.logFields, nodeId: node.id, nodeType: 'script', isTimeout },
       'dag_node_failed'
     );
-    await logNodeError(logDir, workflowRun.id, node.id, errorMsg);
 
-    await persistNodeEvent(deps.store, {
+    await recordNodeState({ store: deps.store, logDir }, node, {
       workflow_run_id: workflowRun.id,
       event_type: 'node_failed',
       step_name: stepName,
       data: { error: errorMsg, type: 'script' },
-    });
-
-    emitter.emit({
-      type: 'node_failed',
-      runId: workflowRun.id,
-      nodeId: node.id,
-      nodeName: node.id,
-      error: errorMsg,
     });
 
     return {
@@ -4391,11 +4264,10 @@ async function executeScriptNode(
   const output = certified.output;
   const duration = Date.now() - nodeStartTime;
   getLog().info({ nodeId: node.id, durationMs: duration }, 'dag_node_completed');
-  await logNodeComplete(logDir, workflowRun.id, node.id, '<script>', { durationMs: duration });
 
   const persistedOutput = formatPersistedNodeOutput(output, artifactsDir, stepName);
 
-  await persistNodeEvent(deps.store, {
+  await recordNodeState({ store: deps.store, logDir }, node, {
     workflow_run_id: workflowRun.id,
     event_type: 'node_completed',
     step_name: stepName,
@@ -4409,14 +4281,6 @@ async function executeScriptNode(
         : {}),
       ...iterationData,
     },
-  });
-
-  emitter.emit({
-    type: 'node_completed',
-    runId: workflowRun.id,
-    nodeId: node.id,
-    nodeName: node.id,
-    duration,
   });
 
   return {
@@ -4568,7 +4432,8 @@ async function finalizeLoopFromSignal(
   nodeLabel: string,
   finalizeOutput: string,
   finalizeUsage?: { costUsd?: number; tokens?: TokenUsage },
-  finalizeStructuredOutput?: unknown
+  finalizeStructuredOutput?: unknown,
+  logDir?: string
 ): Promise<void> {
   // Impossible by construction today (the gate writes signaledOutput whenever
   // completionSignaled is true) — this warn guards a future decoupling so a
@@ -4585,28 +4450,24 @@ async function finalizeLoopFromSignal(
     `${nodeLabel} '${nodeId}' accepted after a completion condition was met (no re-run)`,
     { workflowId: workflowRun.id, nodeName: nodeId }
   );
-  await persistNodeEvent(deps.store, {
-    workflow_run_id: workflowRun.id,
-    event_type: 'node_completed',
-    step_name: stepName,
-    data: {
-      duration_ms: 0,
-      node_output: finalizeOutput,
-      ...(finalizeStructuredOutput !== undefined
-        ? { structured_output: finalizeStructuredOutput }
-        : {}),
-      ...(finalizeUsage?.costUsd !== undefined ? { cost_usd: finalizeUsage.costUsd } : {}),
-      ...(finalizeUsage?.tokens !== undefined ? { tokens: finalizeUsage.tokens } : {}),
-    },
-  });
-  getWorkflowEventEmitter().emit({
-    type: 'node_completed',
-    runId: workflowRun.id,
-    nodeId,
-    nodeName: nodeId,
-    duration: 0,
-    ...(finalizeUsage?.costUsd !== undefined ? { costUsd: finalizeUsage.costUsd } : {}),
-  });
+  await recordNodeState(
+    { store: deps.store, logDir },
+    { id: nodeId },
+    {
+      workflow_run_id: workflowRun.id,
+      event_type: 'node_completed',
+      step_name: stepName,
+      data: {
+        duration_ms: 0,
+        node_output: finalizeOutput,
+        ...(finalizeStructuredOutput !== undefined
+          ? { structured_output: finalizeStructuredOutput }
+          : {}),
+        ...(finalizeUsage?.costUsd !== undefined ? { cost_usd: finalizeUsage.costUsd } : {}),
+        ...(finalizeUsage?.tokens !== undefined ? { tokens: finalizeUsage.tokens } : {}),
+      },
+    }
+  );
 }
 
 /**
@@ -4768,7 +4629,8 @@ async function executeLoopGroupNode(
       // DOES pass it — its per-iteration rows carry no usage, so its finalize row is
       // the only record.
       undefined,
-      finalizeStructured ?? undefined
+      finalizeStructured ?? undefined,
+      logDir
     );
     return {
       state: 'completed',
@@ -4795,7 +4657,8 @@ async function executeLoopGroupNode(
         iteration: resumeIteration,
         sessionId: loopOwnedWaitMeta?.sessionId ?? null,
         sessionProvider: loopOwnedWaitMeta?.sessionProvider ?? null,
-      }
+      },
+      logDir
     );
     const status = await deps.store.getWorkflowRunStatus(workflowRun.id);
     if (status === 'paused') {
@@ -4963,7 +4826,7 @@ async function executeLoopGroupNode(
           `Loop-group node '${node.id}' completed after ${String(resumedIteration)} iteration${resumedIteration > 1 ? 's' : ''}`,
           msgContext
         );
-        await persistNodeEvent(deps.store, {
+        await recordNodeState({ store: deps.store, logDir }, node, {
           workflow_run_id: workflowRun.id,
           event_type: 'node_completed',
           step_name: stepName,
@@ -4974,13 +4837,6 @@ async function executeLoopGroupNode(
               : {}),
             aggregate: true,
           },
-        });
-        getWorkflowEventEmitter().emit({
-          type: 'node_completed',
-          runId: workflowRun.id,
-          nodeId: node.id,
-          nodeName: node.id,
-          duration: 0,
         });
         return {
           state: 'completed',
@@ -5472,7 +5328,7 @@ async function executeLoopGroupNode(
         `Loop-group node '${node.id}' completed after ${String(i)} iteration${i > 1 ? 's' : ''}`,
         msgContext
       );
-      await persistNodeEvent(deps.store, {
+      await recordNodeState({ store: deps.store, logDir }, node, {
         workflow_run_id: workflowRun.id,
         event_type: 'node_completed',
         step_name: stepName,
@@ -5507,14 +5363,6 @@ async function executeLoopGroupNode(
           aggregate: true,
           ...(loopTotalCostUsd !== undefined ? { cost_usd: loopTotalCostUsd } : {}),
         },
-      });
-      getWorkflowEventEmitter().emit({
-        type: 'node_completed',
-        runId: workflowRun.id,
-        nodeId: node.id,
-        nodeName: node.id,
-        duration,
-        ...(loopTotalCostUsd !== undefined ? { costUsd: loopTotalCostUsd } : {}),
       });
       return {
         state: 'completed',
@@ -5751,35 +5599,33 @@ async function executeLoopNode(
   // until_bash system errors) are paired by the dispatcher's catch in
   // runLayers, which emits its own node_failed.
   getLog().info({ nodeId: node.id, type: 'loop' }, 'loop_node.started');
-  await logNodeStart(logDir, workflowRun.id, node.id, '<loop>');
 
-  await persistNodeEvent(deps.store, {
-    workflow_run_id: workflowRun.id,
-    event_type: 'node_started',
-    step_name: stepName,
-    data: {
-      type: 'loop',
-      command: loop.command ?? null,
-      // Requested-model attribution, same fields the AI-node path records
-      // (#2314) — every iteration runs on this one resolved provider/model,
-      // so it belongs on the node's single _started row.
+  await recordNodeState(
+    { store: deps.store, logDir },
+    {
+      ...node,
       provider: workflowProvider,
       model: resolvedModel,
       tier: resolvedTier,
-      ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
+      effort: resolvedEffort,
     },
-  });
-
-  getWorkflowEventEmitter().emit({
-    type: 'node_started',
-    runId: workflowRun.id,
-    nodeId: node.id,
-    nodeName: node.id,
-    provider: workflowProvider,
-    model: resolvedModel,
-    tier: resolvedTier,
-    ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
-  });
+    {
+      workflow_run_id: workflowRun.id,
+      event_type: 'node_started',
+      step_name: stepName,
+      data: {
+        type: 'loop',
+        command: loop.command ?? null,
+        // Requested-model attribution, same fields the AI-node path records
+        // (#2314) — every iteration runs on this one resolved provider/model,
+        // so it belongs on the node's single _started row.
+        provider: workflowProvider,
+        model: resolvedModel,
+        tier: resolvedTier,
+        ...(resolvedEffort !== undefined ? { effort: resolvedEffort } : {}),
+      },
+    }
+  );
 
   /**
    * Single failure finalizer for this loop node (see the pairing contract on
@@ -5807,8 +5653,7 @@ async function executeLoopNode(
       ...(extras.tokens !== undefined ? { tokens: extras.tokens } : {}),
       ...(extras.costUsd !== undefined ? { cost_usd: extras.costUsd } : {}),
     };
-    await logNodeError(logDir, workflowRun.id, node.id, error, loopUsage);
-    await persistNodeEvent(deps.store, {
+    await recordNodeState({ store: deps.store, logDir }, node, {
       workflow_run_id: workflowRun.id,
       event_type: 'node_failed',
       step_name: stepName,
@@ -5817,13 +5662,6 @@ async function executeLoopNode(
         ...loopUsage,
         ...(extras.data ?? {}),
       },
-    });
-    getWorkflowEventEmitter().emit({
-      type: 'node_failed',
-      runId: workflowRun.id,
-      nodeId: node.id,
-      nodeName: node.id,
-      error,
     });
     return {
       state: 'failed',
@@ -5882,7 +5720,8 @@ async function executeLoopNode(
         ...(persistedLoopCostUsd !== undefined ? { costUsd: persistedLoopCostUsd } : {}),
         ...(persistedLoopTokens !== undefined ? { tokens: persistedLoopTokens } : {}),
       },
-      finalizeStructured ?? undefined
+      finalizeStructured ?? undefined,
+      logDir
     );
     // Same declared-field capture as the normal completion return below and as the
     // resume-hydration path (#2091). This is a COMPLETION exit, so a consumer's
@@ -7089,7 +6928,7 @@ async function executeLoopNode(
       );
       // Write node_completed event so resume hydration knows this
       // node is done. Without this, a resumed DAG would re-enter the loop node.
-      await persistNodeEvent(deps.store, {
+      await recordNodeState({ store: deps.store, logDir }, node, {
         workflow_run_id: workflowRun.id,
         event_type: 'node_completed',
         step_name: stepName,
@@ -7118,16 +6957,6 @@ async function executeLoopNode(
             ? { background_tasks_incomplete: [...loopBackgroundTasksIncomplete] }
             : {}),
         },
-      });
-      getWorkflowEventEmitter().emit({
-        type: 'node_completed',
-        runId: workflowRun.id,
-        nodeId: node.id,
-        nodeName: node.id,
-        duration: Date.now() - iterationStart,
-        ...(loopTotalCostUsd !== undefined ? { costUsd: loopTotalCostUsd } : {}),
-        ...(loopFinalStopReason ? { stopReason: loopFinalStopReason } : {}),
-        ...(loopTotalNumTurns !== undefined ? { numTurns: loopTotalNumTurns } : {}),
       });
       // Declared field set, so a downstream `$loop.output.field` gets the same
       // strict contract every other producer enforces: a field not in the schema
@@ -7328,7 +7157,8 @@ async function executeWaitNode(
   conversationId: string,
   nodeOutputs: Map<string, NodeOutput>,
   stepNamePrefix = '',
-  loopOwner?: WaitLoopOwner
+  loopOwner?: WaitLoopOwner,
+  logDir?: string
 ): Promise<NodeOutput> {
   const now = new Date();
   const rawPersisted = workflowRun.metadata?.wait;
@@ -7485,6 +7315,20 @@ async function executeWaitNode(
     if (!cleared) {
       throw new Error(`Wait node '${node.id}' lost ownership of its persisted wait cursor`);
     }
+    if (logDir) {
+      await logNodeComplete(logDir, workflowRun.id, node.id, node.id, {
+        durationMs: result.waited_ms,
+      }).catch((err: Error) => {
+        getLog().warn({ err, nodeId: node.id }, 'dag.wait_transcript_log_failed');
+      });
+    }
+    getWorkflowEventEmitter().emit({
+      type: 'node_completed',
+      runId: workflowRun.id,
+      nodeId: node.id,
+      nodeName: node.id,
+      duration: result.waited_ms,
+    });
   } else {
     await deps.store.createWorkflowEvent({
       workflow_run_id: workflowRun.id,
@@ -7492,7 +7336,7 @@ async function executeWaitNode(
       step_name: stepName,
       data: result,
     });
-    await persistNodeEvent(deps.store, {
+    await recordNodeState({ store: deps.store, logDir }, node, {
       workflow_run_id: workflowRun.id,
       event_type: 'node_completed',
       step_name: stepName,
@@ -7504,13 +7348,6 @@ async function executeWaitNode(
       },
     });
   }
-  getWorkflowEventEmitter().emit({
-    type: 'node_completed',
-    runId: workflowRun.id,
-    nodeId: node.id,
-    nodeName: node.id,
-    duration: result.waited_ms,
-  });
   return {
     state: 'completed',
     output,
@@ -7770,7 +7607,7 @@ async function executeWorkflowNode(
     costUsd?: number,
     tokens?: TokenUsage
   ): Promise<NodeExecutionResult> => {
-    await persistNodeEvent(deps.store, {
+    await recordNodeState({ store: deps.store, logDir: ctx.logDir }, node, {
       workflow_run_id: parentRun.id,
       event_type: 'node_failed',
       step_name: executionNodeId,
@@ -7780,13 +7617,6 @@ async function executeWorkflowNode(
         ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
         ...(tokens !== undefined ? { tokens } : {}),
       },
-    });
-    getWorkflowEventEmitter().emit({
-      type: 'node_failed',
-      runId: parentRun.id,
-      nodeId: executionNodeId,
-      nodeName: node.id,
-      error,
     });
     return {
       state: 'failed',
@@ -7896,7 +7726,7 @@ async function executeWorkflowNode(
     const output = outcome.output ?? '';
     // The parent's terminal record and resume snapshot require this committed result.
     // Storage rejection fails the parent run without reclassifying the completed child.
-    await persistNodeEvent(deps.store, {
+    await recordNodeState({ store: deps.store, logDir: ctx.logDir }, node, {
       workflow_run_id: parentRun.id,
       event_type: 'node_completed',
       step_name: executionNodeId,
@@ -7921,16 +7751,6 @@ async function executeWorkflowNode(
         // rows are filed under `child_run_id`, a different workflow_run_id.
         ...(outcome.tokens !== undefined ? { tokens: outcome.tokens } : {}),
       },
-    });
-    getWorkflowEventEmitter().emit({
-      type: 'node_completed',
-      runId: parentRun.id,
-      nodeId: executionNodeId,
-      nodeName: node.id,
-      // The wrapper node has no meaningful duration of its own — the child run's
-      // own events carry real timing. Emitted as 0 to satisfy NodeCompletedEvent.
-      duration: 0,
-      ...(outcome.costUsd !== undefined ? { costUsd: outcome.costUsd } : {}),
     });
     return {
       state: 'completed',
@@ -8339,7 +8159,7 @@ async function executeFanOutWorkflowNode(
     costUsd?: number,
     tokens?: TokenUsage
   ): Promise<NodeExecutionResult> => {
-    await persistNodeEvent(deps.store, {
+    await recordNodeState({ store: deps.store, logDir: ctx.logDir }, node, {
       workflow_run_id: parentRun.id,
       event_type: 'node_failed',
       step_name: stepName,
@@ -8349,13 +8169,6 @@ async function executeFanOutWorkflowNode(
         ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
         ...(tokens !== undefined ? { tokens } : {}),
       },
-    });
-    getWorkflowEventEmitter().emit({
-      type: 'node_failed',
-      runId: parentRun.id,
-      nodeId: node.id,
-      nodeName: node.id,
-      error,
     });
     return {
       state: 'failed',
@@ -8375,7 +8188,7 @@ async function executeFanOutWorkflowNode(
     tokens?: TokenUsage,
     structured?: unknown
   ): Promise<void> => {
-    await persistNodeEvent(deps.store, {
+    await recordNodeState({ store: deps.store, logDir: ctx.logDir }, node, {
       workflow_run_id: parentRun.id,
       event_type: 'node_completed',
       step_name: stepName,
@@ -8394,16 +8207,6 @@ async function executeFanOutWorkflowNode(
         // without warning.
         ...(tokens !== undefined ? { tokens } : {}),
       },
-    });
-    getWorkflowEventEmitter().emit({
-      type: 'node_completed',
-      runId: parentRun.id,
-      nodeId: node.id,
-      nodeName: node.id,
-      // The wrapper node has no meaningful duration of its own — child runs carry real
-      // timing. Emitted as 0 to satisfy NodeCompletedEvent (mirrors the single path).
-      duration: 0,
-      ...(costUsd !== undefined ? { costUsd } : {}),
     });
   };
 
@@ -8981,7 +8784,7 @@ async function executeComposeFanOutNode(
     costUsd?: number,
     tokens?: TokenUsage
   ): Promise<NodeExecutionResult> => {
-    await persistNodeEvent(deps.store, {
+    await recordNodeState({ store: deps.store, logDir: ctx.logDir }, node, {
       workflow_run_id: parentRun.id,
       event_type: 'node_failed',
       step_name: stepName,
@@ -8992,13 +8795,6 @@ async function executeComposeFanOutNode(
         ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
         ...(tokens !== undefined ? { tokens } : {}),
       },
-    });
-    getWorkflowEventEmitter().emit({
-      type: 'node_failed',
-      runId: parentRun.id,
-      nodeId: node.id,
-      nodeName: node.id,
-      error,
     });
     return {
       state: 'failed',
@@ -9017,7 +8813,7 @@ async function executeComposeFanOutNode(
     tokens?: TokenUsage,
     structured?: unknown
   ): Promise<void> => {
-    await persistNodeEvent(deps.store, {
+    await recordNodeState({ store: deps.store, logDir: ctx.logDir }, node, {
       workflow_run_id: parentRun.id,
       event_type: 'node_completed',
       step_name: stepName,
@@ -9030,14 +8826,6 @@ async function executeComposeFanOutNode(
         ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
         ...(tokens !== undefined ? { tokens } : {}),
       },
-    });
-    getWorkflowEventEmitter().emit({
-      type: 'node_completed',
-      runId: parentRun.id,
-      nodeId: node.id,
-      nodeName: node.id,
-      duration: 0,
-      ...(costUsd !== undefined ? { costUsd } : {}),
     });
   };
 
@@ -9989,7 +9777,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 // audit row must go through the same bounded-preview+spill helper as the
                 // primary node_completed/node_skipped_prior_success writers, not the raw text.
                 const alwaysRunPriorOutput = formatThisNodesPriorOutput(alwaysRunStepName);
-                await persistNodeEvent(ctx.deps.store, {
+                await recordNodeState(ctx, node, {
                   workflow_run_id: ctx.workflowRun.id,
                   event_type: 'node_always_run_reset',
                   step_name: alwaysRunStepName,
@@ -10024,7 +9812,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                     { nodeId: node.id, invalidatingDeps: staleDeps },
                     'dag.node_prior_cache_invalidated'
                   );
-                  await persistNodeEvent(ctx.deps.store, {
+                  await recordNodeState(ctx, node, {
                     workflow_run_id: ctx.workflowRun.id,
                     event_type: 'node_prior_cache_invalidated',
                     step_name: invalidatedStepName,
@@ -10046,11 +9834,6 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   // falls through to re-execute the node with fresh dep output
                 } else {
                   getLog().info({ nodeId: node.id }, 'dag.node_skipped_prior_success');
-                  await logNodeSkip(ctx.logDir, ctx.workflowRun.id, node.id, 'prior_success').catch(
-                    (err: Error) => {
-                      getLog().warn({ err, nodeId: node.id }, 'dag.node_skip_log_write_failed');
-                    }
-                  );
                   const skipStepName = ctx.stepNamePrefix + node.id;
                   // Preserve incomplete recovery as a preview with its original provenance.
                   // Re-spilling that preview would falsely certify it as the full result.
@@ -10068,7 +9851,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                           : {}),
                       }
                     : formatThisNodesPriorOutput(skipStepName);
-                  await persistNodeEvent(ctx.deps.store, {
+                  await recordNodeState(ctx, node, {
                     workflow_run_id: ctx.workflowRun.id,
                     event_type: 'node_skipped_prior_success',
                     step_name: skipStepName,
@@ -10092,14 +9875,6 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                         : {}),
                     },
                   });
-                  const emitterPrior = getWorkflowEventEmitter();
-                  emitterPrior.emit({
-                    type: 'node_skipped',
-                    runId: ctx.workflowRun.id,
-                    nodeId: node.id,
-                    nodeName: nodeDisplayName(node),
-                    reason: 'prior_success',
-                  });
                   // Return the pre-populated output (already in nodeOutputs)
                   const cachedOutput = ctx.nodeOutputs.get(node.id);
                   if (cachedOutput === undefined) {
@@ -10121,25 +9896,11 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             if (triggerDecision.decision === 'skip') {
               const { cause } = triggerDecision;
               getLog().info({ nodeId: node.id, reason: 'trigger_rule' }, 'dag_node_skipped');
-              await logNodeSkip(ctx.logDir, ctx.workflowRun.id, node.id, 'trigger_rule').catch(
-                (err: Error) => {
-                  getLog().warn({ err, nodeId: node.id }, 'dag.node_skip_log_write_failed');
-                }
-              );
-              await persistNodeEvent(ctx.deps.store, {
+              await recordNodeState(ctx, node, {
                 workflow_run_id: ctx.workflowRun.id,
                 event_type: 'node_skipped',
                 step_name: ctx.stepNamePrefix + node.id,
                 data: { reason: 'trigger_rule', cause },
-              });
-              const emitter = getWorkflowEventEmitter();
-              emitter.emit({
-                type: 'node_skipped',
-                runId: ctx.workflowRun.id,
-                nodeId: node.id,
-                nodeName: nodeDisplayName(node),
-                reason: 'trigger_rule',
-                cause,
               });
               return {
                 nodeId: node.id,
@@ -10173,28 +9934,11 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   { nodeId: node.id, when: node.when },
                   'dag_node_skipped_condition_parse_error'
                 );
-                await logNodeSkip(
-                  ctx.logDir,
-                  ctx.workflowRun.id,
-                  node.id,
-                  'when_condition_parse_error'
-                ).catch((err: Error) => {
-                  getLog().warn({ err, nodeId: node.id }, 'dag.node_skip_log_write_failed');
-                });
-                await persistNodeEvent(ctx.deps.store, {
+                await recordNodeState(ctx, node, {
                   workflow_run_id: ctx.workflowRun.id,
                   event_type: 'node_skipped',
                   step_name: ctx.stepNamePrefix + node.id,
                   data: { reason: 'when_condition_parse_error', expr: node.when, cause },
-                });
-                const emitter = getWorkflowEventEmitter();
-                emitter.emit({
-                  type: 'node_skipped',
-                  runId: ctx.workflowRun.id,
-                  nodeId: node.id,
-                  nodeName: nodeDisplayName(node),
-                  reason: 'when_condition_parse_error',
-                  cause,
                 });
                 return {
                   nodeId: node.id,
@@ -10204,25 +9948,11 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               if (!conditionPasses) {
                 const cause: SkipCause = { kind: 'condition', expr: node.when };
                 getLog().info({ nodeId: node.id, when: node.when }, 'dag_node_skipped_condition');
-                await logNodeSkip(ctx.logDir, ctx.workflowRun.id, node.id, 'when_condition').catch(
-                  (err: Error) => {
-                    getLog().warn({ err, nodeId: node.id }, 'dag.node_skip_log_write_failed');
-                  }
-                );
-                await persistNodeEvent(ctx.deps.store, {
+                await recordNodeState(ctx, node, {
                   workflow_run_id: ctx.workflowRun.id,
                   event_type: 'node_skipped',
                   step_name: ctx.stepNamePrefix + node.id,
                   data: { reason: 'when_condition', expr: node.when, cause },
-                });
-                const emitter = getWorkflowEventEmitter();
-                emitter.emit({
-                  type: 'node_skipped',
-                  runId: ctx.workflowRun.id,
-                  nodeId: node.id,
-                  nodeName: nodeDisplayName(node),
-                  reason: 'when_condition',
-                  cause,
                 });
                 return {
                   nodeId: node.id,
@@ -10240,7 +9970,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             // Agent, exec and loop executors own their starts (including retries).
             // Coordination nodes start here before they can pause or terminalize the run.
             const persistDispatchStart = (): Promise<void> =>
-              persistNodeEvent(ctx.deps.store, {
+              recordNodeState(ctx, node, {
                 workflow_run_id: ctx.workflowRun.id,
                 event_type: 'node_started',
                 step_name: ctx.stepNamePrefix + node.id,
@@ -10294,7 +10024,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                       output,
                       ctx.deps,
                       ctx.workflowRun.id,
-                      ctx.stepNamePrefix + node.id
+                      ctx.stepNamePrefix + node.id,
+                      ctx.logDir
                     ),
                   };
                 }
@@ -10336,7 +10067,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                     output,
                     ctx.deps,
                     ctx.workflowRun.id,
-                    ctx.stepNamePrefix + node.id
+                    ctx.stepNamePrefix + node.id,
+                    ctx.logDir
                   ),
                 };
               }
@@ -10415,7 +10147,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   ctx.stepNamePrefix
                 );
                 if (output.state === 'failed') {
-                  await persistNodeEvent(ctx.deps.store, {
+                  await recordNodeState(ctx, node, {
                     workflow_run_id: ctx.workflowRun.id,
                     event_type: 'node_failed',
                     step_name: ctx.stepNamePrefix + node.id,
@@ -10457,7 +10189,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                         iteration: loopFrame.iteration,
                         sessionId: ctx.lastSequentialSession?.sessionId ?? null,
                         sessionProvider: ctx.lastSequentialSession?.provider ?? null,
-                      }
+                      },
+                  ctx.logDir
                 );
                 return { nodeId: node.id, output };
               }
@@ -10736,7 +10469,8 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               retriedOutput,
               ctx.deps,
               ctx.workflowRun.id,
-              ctx.stepNamePrefix + node.id
+              ctx.stepNamePrefix + node.id,
+              ctx.logDir
             );
 
             // Cold-resume surfacing: this node requested a session resume but the
@@ -10844,7 +10578,7 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
 
             const err = error as Error;
             getLog().error({ err, nodeId: node.id }, 'dag_node_pre_execution_failed');
-            await persistNodeEvent(ctx.deps.store, {
+            await recordNodeState(ctx, node, {
               workflow_run_id: ctx.workflowRun.id,
               event_type: 'node_failed',
               step_name: ctx.stepNamePrefix + node.id,
@@ -10854,13 +10588,6 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   ? { session_source_node_id: node.context.resume }
                   : {}),
               },
-            });
-            getWorkflowEventEmitter().emit({
-              type: 'node_failed',
-              runId: ctx.workflowRun.id,
-              nodeId: node.id,
-              nodeName: nodeDisplayName(node),
-              error: err.message,
             });
             await safeSendMessage(
               ctx.platform,
