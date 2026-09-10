@@ -355,6 +355,8 @@ CI environments (`CI=true`) are auto-disabled — forks running fixtures in GitH
 
 **Check the current state:** run `archon telemetry status` to see whether telemetry is enabled, why (if not), the install UUID, and the active host. Run `archon telemetry reset` to rotate the install UUID. `archon doctor` also surfaces the current state in its check list.
 
+Shutdown gives pending telemetry a 75 ms flush window, then cancels outstanding requests. Slow or unreachable ingestion can lose events; it does not hold up command exit.
+
 Self-host PostHog or use a different project by setting `POSTHOG_API_KEY` and `POSTHOG_HOST`.
 
 ## Contributing
