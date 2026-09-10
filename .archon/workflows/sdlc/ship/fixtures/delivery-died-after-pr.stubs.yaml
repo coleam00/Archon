@@ -1,15 +1,7 @@
-# Dry-run fixture: delivery dies AFTER the pull request exists. The project
-# gate goes red on an introduced failure, the flip is skipped, and the run
-# fails with the terminal report reachable — this pins the post-creation death
-# REACHING the died-mid-flight path at all, not the report's content.
-#
-# `outcome` is stubbed for the same reason delivery-died stubs it: the real
-# script returns 1 on this branch, and a declared failure fixture asserts
-# exactly one failed node. Because of that stub, this fixture cannot tell a
-# stale record from a null delivered value — the proof that a creation-time
-# record never masquerades as a delivery lives in delivered-unusable (which
-# runs the real script) and in the five delivered fixtures that go red when
-# the returns choice is reverted.
+# Dry-run fixture: delivery dies after the pull request exists. The project gate
+# refuses an introduced failure, and the flip and ship's outcome join are skipped.
+# Terminal reporting after delivery failure belongs to #3043. This fixture checks
+# that the original validation gate remains the failed node.
 triage__triage:
   route: deliver
   summary: "stub: current code confirms a complete work order"
@@ -49,9 +41,7 @@ deliver__validate__validate:
   summary: "stub: the change broke one spec in the project gate"
 # deliver__gate-validated is deliberately unstubbed: the real gate must refuse
 # introduced red.
-outcome: "outcome: delivery started but did not complete"
 fixture:
   expect: failed
   fail-node: deliver__gate-validated
-  reached: [outcome]
 exec-code: true

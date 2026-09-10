@@ -228,7 +228,7 @@ describe('createWorkflowStore', () => {
     await expect(
       store.createWorkflowEvent({
         workflow_run_id: 'run-1',
-        event_type: 'node_started',
+        event_type: 'loop_iteration_started',
         step_index: 0,
         step_name: 'test-step',
       })
