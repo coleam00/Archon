@@ -44,5 +44,6 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # The command lives in scripts/validate.ts so `bun run validate` builds the docs too.
       - name: Build docs
-        run: bun run build:docs
+        run: bun run validate --only docs-build

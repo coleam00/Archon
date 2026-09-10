@@ -14,32 +14,49 @@ Thank you for your interest in contributing to Archon!
 
 ### Code Quality
 
-Before submitting a PR, ensure:
+`bun run validate` is the gate. Run it before opening a pull request: it runs every
+check that gates a pull request except the three service-dependent jobs listed below,
+so a green run means CI's `test`, `workflow-fixtures`, `docs-build` and
+`marketplace-lint` jobs will pass. It takes a couple of minutes and prints what each
+check cost, so you can see where the time goes.
 
 ```bash
-bun run check:bundled  # Bundled defaults are up to date
-bun run type-check     # TypeScript types
-bun run lint           # ESLint
-bun run format         # Prettier
-bun run test           # All tests (per-package isolation)
-
-# Or run the full validation suite:
-bun run validate
+bun run validate                            # the whole gate
+bun run validate --only workflow-fixtures   # one check, while iterating
 ```
 
-**Schema changes**: `bun run validate` does not cover `migrations/000_combined.sql`
-upgrades — that check needs a live PostgreSQL, so CI runs it as its own job. If you
-touched the schema, run it yourself against any PostgreSQL:
+`scripts/validate.ts` owns the list of checks, and the CI jobs call that script instead
+of restating its commands, so the two cannot describe different work.
 
-```bash
-bun run check:schema-upgrades   # PGHOST/PGUSER/… or DATABASE_URL
-```
+While you work, run the narrow check instead — `bun run type-check`, `bun run lint`,
+`bun run test <path>`, `bun run check:bundled` — and keep the full gate for the end.
+
+**Important:** Use `bun run test` (not `bun test` from the repo root) to avoid mock pollution across packages.
+
+**Network:** the marketplace lint resolves each marketplace entry at its pinned SHA
+against github.com, so `bun run validate` needs network access.
+
+#### What `bun run validate` deliberately leaves out
+
+Three PR-gating jobs need a service or daemon a contributor may not have, so they stay
+in CI only. If you touched what they cover, run them yourself.
+
+| CI job | Needs | Run it yourself |
+| --- | --- | --- |
+| `schema-upgrade` | a live PostgreSQL; the SQLite half also reads every release tag | `bun run check:schema-upgrades` (`PGHOST`/`PGUSER`/… or `DATABASE_URL`) and `bun run check:sqlite-vintages` |
+| `postgres-parity` | a live PostgreSQL | `ARCHON_TEST_PG_URL=postgres://… bun test packages/core/src/db/isolation-environments.live-run.postgres.integration.test.ts` |
+| `docker-build` | a Docker daemon, and ~14GB of free disk for the image | `docker build .` |
+
+**Schema changes**: run `bun run check:schema-upgrades` yourself if you touched
+`migrations/000_combined.sql`. A statement that applies cleanly to a fresh install can
+abort the whole apply on an upgrade, and nothing before that job catches it.
+
+`scripts/validate-ci-parity.test.ts` holds the same exclusions as a machine-checked list,
+so a fourth PR-gating command cannot appear without a deliberate decision to leave it out.
 
 **SDLC workflows**: We do not accept pull requests that change
 `.archon/workflows/sdlc/`. Open an issue instead and describe the problem or
 change you want the maintainers to consider.
-
-**Important:** Use `bun run test` (not `bun test` from the repo root) to avoid mock pollution across packages.
 
 ### Commit messages
 

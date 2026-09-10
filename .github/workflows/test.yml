@@ -59,8 +59,11 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # A dedicated job so fixture breakage reports in ~2 minutes instead of behind the
+      # full matrix. The command itself lives in scripts/validate.ts, which is also what
+      # `bun run validate` runs locally.
       - name: Run workflow fixtures
-        run: bun run cli workflow test --json
+        run: bun run validate --only workflow-fixtures
 
   test:
     needs: changes
@@ -76,6 +79,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+
+      # `validate` builds the docs site, and Astro's CLI runs under Node rather than
+      # Bun — keep this matched to docs-build.yml and deploy-docs.yml.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -95,44 +104,6 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Check CLI import boundaries
-        run: bun run check:cli-import-boundary
-
-      - name: Check bundled defaults
-        run: bun run check:bundled
-
-      - name: Check bundled skill
-        run: bun run check:bundled-skill
-
-      - name: Check bundled schema
-        run: bun run check:bundled-schema
-
-      - name: Check Pi vendor map
-        run: bun run check:pi-vendor-map
-
-      - name: Check provider capability matrix
-        run: bun run check:capability-matrix
-
-      - name: Check generated API types
-        run: bun run check:api-types
-
-      - name: Type check
-        run: bun run type-check
-
-      - name: Lint
-        run: bun run lint --max-warnings 0
-
-      - name: Check formatting
-        run: bun run format:check
-
-      - name: Run installer tests
-        # POSIX-shell installer only. scripts/install.sh refuses MINGW/MSYS by design
-        # (Windows users are directed to WSL2), and test-install.sh runs the real
-        # installer with only curl mocked — so on windows-latest `uname -s` reports
-        # MINGW64_NT, the installer exits, and `set -euo pipefail` fails the job.
-        if: runner.os != 'Windows'
-        run: bun run test:install
-
       # No Windows Defender exclusion step here on purpose. It was the named
       # remaining suspect behind the downloadWebDist stalls (#2924), so one was
       # added and run on windows-latest — and its own readback disproved the
@@ -140,8 +111,15 @@ jobs:
       # drive root, recursively, so nothing under either was being scanned to
       # begin with. `Add-MpPreference` also cost 5s per run to change nothing.
       # Evidence: https://github.com/coleam00/Archon/pull/2943
-      - name: Run tests
-        run: bun run test
+
+      # This job used to restate every command in `bun run validate`, which meant the
+      # documented pre-pull-request command and the gate it was supposed to reproduce
+      # could disagree — and did. scripts/validate.ts now owns the list, this step runs
+      # it, and scripts/validate-ci-parity.test.ts fails if a check reappears here as its
+      # own step. Add a check there, not here. The installer test skips itself on Windows
+      # (scripts/install.sh refuses MINGW/MSYS by design) and says so in the log.
+      - name: Validate
+        run: bun run validate
 
   schema-upgrade:
     needs: changes
