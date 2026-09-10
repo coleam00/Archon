@@ -3385,6 +3385,27 @@ nodes:
     expect(tracker.max).toBe(2);
   });
 
+  function makeAccountingDeps(store: IWorkflowStore): WorkflowDeps {
+    const paidProvider = makeProvider();
+    const provider = {
+      ...paidProvider,
+      sendQuery: mock(function* (prompt: string) {
+        if (prompt.includes('CHECK_SPEND')) {
+          if (prompt.includes('doomed')) throw new Error('failed after paid work');
+          // The check adds no usage to the preceding paid node's accounting.
+          yield { type: 'assistant', content: 'check passed' };
+          yield { type: 'result', sessionId: 'check' };
+          return;
+        }
+        yield* paidProvider.sendQuery();
+      }),
+    };
+    return {
+      ...makeDeps(store),
+      getAgentProvider: mock(() => provider) as unknown as WorkflowDeps['getAgentProvider'],
+    };
+  }
+
   it('rolls up child cost onto the fan-out node (Σ child costs → parent total)', async () => {
     await writeWorkflow(
       'fan-child-cost',
@@ -3403,14 +3424,10 @@ nodes:
 name: fan-cost
 description: three AI children, cost rolls up
 nodes:
-  - id: plan
-    bash: |
-      printf '%s' '["a","b","c"]'
   - id: work
     workflow: fan-child-cost
-    depends_on: [plan]
     fan_out:
-      items: "$plan.output"
+      items: '["a","b","c"]'
 `
     );
 
@@ -3429,7 +3446,7 @@ nodes:
 
     expect(result.success).toBe(true);
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'fan-cost');
-    // 3 children × 0.01 each = 0.03 rolled up to the parent (plan is bash → 0 cost).
+    // 3 children × 0.01 each = 0.03 rolled up to the parent (the parent has no other paid nodes).
     expect((parentRun?.metadata as Record<string, unknown>).total_cost_usd).toBeCloseTo(0.03, 5);
 
     // Usage must be PERSISTED on the node_completed event, not merely computed. These
@@ -3459,8 +3476,7 @@ nodes:
     prompt: "work on $ARGUMENTS"
   - id: fail
     depends_on: [think]
-    bash: |
-      exit 1
+    prompt: "CHECK_SPEND doomed"
 `
     );
     await writeWorkflow(
@@ -3476,7 +3492,7 @@ nodes:
     );
 
     const store = new InMemoryStore();
-    const deps = makeDeps(store);
+    const deps = makeAccountingDeps(store);
     const parent = await discover('solo-parent');
     await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', 'conv-db');
 
@@ -3514,8 +3530,7 @@ nodes:
     prompt: "work on $ARGUMENTS"
   - id: check
     depends_on: [think]
-    bash: |
-      test "$ARGUMENTS" != "doomed"
+    prompt: "CHECK_SPEND $ARGUMENTS"
 `
     );
     await writeWorkflow(
@@ -3524,19 +3539,15 @@ nodes:
 name: fan-partial
 description: three children, one fails AFTER its AI node already spent tokens
 nodes:
-  - id: plan
-    bash: |
-      printf '%s' '["a","doomed","c"]'
   - id: work
     workflow: fan-child-partial
-    depends_on: [plan]
     fan_out:
-      items: "$plan.output"
+      items: '["a","doomed","c"]'
 `
     );
 
     const store = new InMemoryStore();
-    const deps = makeDeps(store);
+    const deps = makeAccountingDeps(store);
     const parent = await discover('fan-partial');
     const result = await executeWorkflow(
       deps,
@@ -3554,6 +3565,16 @@ nodes:
     expect(children).toHaveLength(3);
     const failedChild = children.find(r => r.status === 'failed');
     expect(failedChild).toBeDefined();
+    expect(children.filter(child => child.status === 'completed')).toHaveLength(2);
+    expect(children.filter(child => child.status === 'failed')).toHaveLength(1);
+    expect(
+      store.events.filter(
+        event =>
+          event.workflow_run_id === failedChild?.id &&
+          event.event_type === 'node_completed' &&
+          event.step_name === 'think'
+      )
+    ).toHaveLength(1);
 
     // The failed child's OWN row carries what it spent. This is the assertion that
     // fails on the pre-fix engine: failWorkflowRun wrote only { error }.
