@@ -82,6 +82,9 @@ jobs:
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
       - name: Cache Bun dependencies
         if: runner.os == 'Windows'
         uses: actions/cache@v4

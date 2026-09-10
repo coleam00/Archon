@@ -120,8 +120,8 @@ when:/trigger_rule wiring, fixtures) with the full substitution semantics in
 
 ## File layout — one folder per workflow
 
-A workflow IS a folder: everything it needs travels with it, and the folder is
-copyable between repos as one unit. To start one in a repo:
+Keep each workflow in its own folder. If its scripts use pack-level shared
+modules, copy the pack when moving it between repos. To start a workflow:
 
 ```bash
 mkdir -p .archon/workflows/my-pack/my-workflow/{commands,scripts,fixtures}
@@ -138,9 +138,22 @@ mkdir -p .archon/workflows/my-pack/my-workflow/{commands,scripts,fixtures}
 Substantive prompts live in command files, not inline. Inline `bash:` only for
 one-or-two-line glue; anything with branching is a script file. Never shell as a
 script language for logic. Ask the user their script-language preference if they
-will maintain it. Each script is one self-contained file: declare dependencies
-inline (`deps:` for `uv`), never import a sibling script, and never keep a
-`node_modules` or virtual environment beside it.
+will maintain it. Declare Python dependencies inline (`deps:` for `uv`); keep
+`node_modules` and virtual environments out of the packaged script tree.
+
+Put shared `.ts`, `.js`, or `.py` modules in `<pack>/.shared/` (subfolders are
+supported). This reserved directory supplies modules, never workflow definitions
+or `script:` targets. Missing packaged script targets fail at load time. From `<workflow>/scripts/publish.ts`, Bun can import
+`../../.shared/result.ts`. Python files can add
+`str(Path(__file__).resolve().parents[2] / ".shared")` to `sys.path` using
+`pathlib.Path`, then import normally; Archon does not inject `PYTHONPATH`.
+Adjust the relative depth for grouped scripts.
+
+The same paths work in project/global source, bundled binaries, and frozen
+captures. Keep imports inside the pack and require no npm packages or target
+project configuration. Use regular module files: the binary generator rejects
+symlinks under `.shared`. Write outputs to `ARTIFACTS_DIR` or `STATE_DIR`, never
+beside a script; Python bytecode caching is disabled in runs and executable fixtures.
 
 ## Node types — one per node
 
