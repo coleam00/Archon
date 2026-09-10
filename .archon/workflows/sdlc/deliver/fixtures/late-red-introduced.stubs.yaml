@@ -38,6 +38,7 @@ review__synthesize:
   ready: true
   action: none
   findings_summary: "stub: clean on initial review; CI still running"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 validate__validate:
   green: true
   red_cause: ""
@@ -59,10 +60,11 @@ ci-recheck__synthesize:
   ready: true
   action: none
   findings_summary: "stub: correction delta clean; no open Critical/Important"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 fix-ci-probe: '{"state":"concluded","detail":"all 9 required check(s) green"}'
 flip-ready: { pr_url: "https://github.com/example/repo/pull/9" }
 outcome: { pr_url: "https://github.com/example/repo/pull/9", summary: "https://github.com/example/repo/pull/9" }
 fixture:
   expect: completed
-  reached: [review__synthesize, gate-validated, ci-verdict, ci-fix__assert-changed, gate-ci-fix, ci-recheck__synthesize, ci-recheck-action, ci-round-result, fix-ci-probe, ci-attention-route, flip-ready]
+  reached: [review__synthesize, gate-validated, ci-verdict, ci-fix__assert-changed, gate-ci-fix, ci-recheck__synthesize, ci-round-result, fix-ci-probe, ci-attention-route, flip-ready]
 exec-code: true

@@ -20,10 +20,10 @@ inv__investigate:
   summary: "stub: cause established — report at investigation.md"
   report: { type: archon_artifact, run_id: "fixture-run", path: "investigation.md" }
 gate-rooted: '{"gate":"rooted"}'
-deliver__gate-validated: '{"gate":"green"}'
+deliver__gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":""}'
 deliver__impl__record-start: '{"start":"recorded"}'
 deliver__impl__assert-changed: "3 files changed"
-deliver__gate-green: '{"gate":"green"}'
+deliver__gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
 deliver__pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true }
 ci-probe: '{"state":"concluded","detail":"all checks passed"}'
 deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
@@ -51,7 +51,7 @@ deliver__review__synthesize:
   ready: true
   action: none
   findings_summary: "stub: no open findings"
-deliver__review-action: '{"ready":true,"action":"none"}'
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 deliver__gate-ready: '{"ready":"true"}'
 deliver__classify:
   errors: false

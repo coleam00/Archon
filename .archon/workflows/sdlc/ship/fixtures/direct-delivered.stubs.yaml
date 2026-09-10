@@ -22,7 +22,7 @@ deliver__review__synthesize:
   ready: true
   action: none
   findings_summary: "stub: no open findings"
-deliver__review-action: '{"ready":true,"action":"none"}'
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 deliver__validate__validate:
   green: true
   red_cause: ""
@@ -42,9 +42,9 @@ fixture:
 exec-code: true
 deliver__gate-ready: '{"gate":"ready"}'
 deliver__impl__record-start: '{"start":"recorded"}'
-deliver__gate-validated: '{"gate":"green"}'
+deliver__gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":""}'
 deliver__impl__assert-changed: "2 files changed"
-deliver__gate-green: '{"gate":"green"}'
+deliver__gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
 deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
 deliver__flip-ready: { pr_url: "https://github.com/example/repo/pull/4" }
 deliver__outcome: { pr_url: "https://github.com/example/repo/pull/4", summary: "https://github.com/example/repo/pull/4" }

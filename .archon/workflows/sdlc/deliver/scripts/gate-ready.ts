@@ -2,8 +2,10 @@
  * Deterministic readiness join: certifies the review verdict before validate and
  * flip spend.
  *
- * The verdicts arrive through `with:` bindings, no latch files: the initial review's,
- * and the correction loop's final one — false/null when the loop was skipped.
+ * Two actions arrive through `with:` bindings, no latch files: the initial review's,
+ * and the correction loop's final one — null when the loop was skipped. Both are
+ * enum values the engine certified on the node that produced them, so this reads
+ * them as facts and decides.
  *
  * The correction loop completes for either `none` or `replan`; only `none` is ready.
  * A replan fails here with the draft PR and the canonical report intact, which is why
@@ -12,16 +14,10 @@
 
 import { refuse, report, text } from '../../.shared/io.ts';
 
-const reviewReady = text(process.env.INPUTS_REVIEW_READY);
-const reviewAction = text(process.env.INPUTS_REVIEW_ACTION) || 'null';
-const correctionReady = text(process.env.INPUTS_CORRECTION_READY) || 'false';
+const reviewAction = text(process.env.INPUTS_REVIEW_ACTION);
 const correctionAction = text(process.env.INPUTS_CORRECTION_ACTION) || 'null';
 
-const reviewedReady = reviewReady === 'true' && reviewAction === 'none';
-const correctedReady =
-  reviewAction === 'correct' && correctionReady === 'true' && correctionAction === 'none';
-
-if (reviewedReady || correctedReady) {
+if (reviewAction === 'none' || (reviewAction === 'correct' && correctionAction === 'none')) {
   report('{"ready":"true"}');
 } else if (reviewAction === 'replan' || correctionAction === 'replan') {
   refuse(

@@ -41,6 +41,7 @@ review__synthesize:
   ready: true
   action: none
   findings_summary: "stub: clean on initial review; CI still running"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 validate__validate:
   green: true
   red_cause: ""

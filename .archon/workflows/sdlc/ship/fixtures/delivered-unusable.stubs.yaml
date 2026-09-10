@@ -25,7 +25,7 @@ deliver__impl__implement:
   red_cause: ""
   summary: "stub: direct work implemented and green"
 deliver__impl__assert-changed: "2 files changed"
-deliver__gate-green: '{"gate":"green"}'
+deliver__gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
 deliver__pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 5, url: "https://github.com/example/repo/pull/5", head: "fixture-branch", base: "dev", is_draft: true }
 deliver__classify:
   errors: false
@@ -47,13 +47,13 @@ deliver__review__synthesize:
   ready: true
   action: none
   findings_summary: "stub: no open findings"
-deliver__review-action: '{"ready":true,"action":"none"}'
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 deliver__gate-ready: '{"gate":"ready"}'
 deliver__validate__validate:
   green: true
   red_cause: ""
   summary: "stub: project gate green"
-deliver__gate-validated: '{"gate":"green"}'
+deliver__gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":""}'
 ci-probe: '{"state":"concluded","detail":"all checks green"}'
 # The mutation: the flip printed something that is not a URL.
 deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'

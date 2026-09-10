@@ -8,7 +8,7 @@ impl__implement:
   red_cause: ""
   summary: "stub: implemented inside the accepted contract"
 impl__assert-changed: "2 files changed"
-gate-green: '{"gate":"green"}'
+gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
 pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 3, url: "https://github.com/example/repo/pull/3", head: "fixture-branch", base: "dev", is_draft: true }
 classify:
   errors: false
@@ -29,6 +29,7 @@ review__synthesize:
   ready: false
   action: replan
   findings_summary: "stub: requested outcome requires crossing an explicit boundary"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 fixture:
   expect: failed
   fail-node: gate-ready

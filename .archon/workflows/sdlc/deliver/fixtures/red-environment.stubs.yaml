@@ -33,6 +33,7 @@ review__synthesize:
   ready: false
   action: correct
   findings_summary: "stub: one Important finding open"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 ci-note: "CI state for this pull request (head abc123def456): No concluded failures."
 fix__record-start: '{"start":"recorded"}'
 fix__implement:
@@ -51,12 +52,13 @@ recheck__synthesize:
   ready: true
   action: none
   findings_summary: "stub: the correction closed the finding"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 sync-pr-body: "body resynced, and the environment red disclosed"
 validate__validate:
   green: true
   red_cause: ""
   summary: "stub: the contention cleared; full gate green"
-gate-validated: '{"gate":"green"}'
+gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":""}'
 ci-probe: '{"state":"concluded","detail":"all checks green"}'
 ci-verdict: '{"state":"concluded","detail":"all checks green"}'
 flip-ready: { pr_url: "https://github.com/example/repo/pull/7" }

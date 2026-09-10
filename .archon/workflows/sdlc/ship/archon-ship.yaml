@@ -61,7 +61,7 @@ nodes:
   - id: gate-rooted
     bash: echo '{"gate":"rooted"}'
     depends_on: [inv]
-    when: "$inv.output.rooted == 'true'"
+    when: "$inv.output.rooted == true"
 
   - id: planned
     include: archon-plan
@@ -76,7 +76,7 @@ nodes:
   - id: gate-planned
     bash: echo '{"gate":"planned"}'
     depends_on: [planned]
-    when: "$planned.output.ready == 'true'"
+    when: "$planned.output.ready == true"
 
   - id: deliver
     include: archon-deliver

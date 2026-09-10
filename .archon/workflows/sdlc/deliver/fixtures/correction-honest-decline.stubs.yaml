@@ -39,6 +39,7 @@ review__synthesize:
   ready: false
   action: correct
   findings_summary: "stub: 1 Important finding open"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 ci-note: "CI state for this pull request (head abc123def456): Concluded non-green checks:\n- test (windows-latest) (fail)"
 fix__implement:
   done: true
@@ -53,6 +54,7 @@ recheck__synthesize:
   ready: true
   action: none
   findings_summary: "stub: no open Critical/Important"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 sync-pr-body: "body resynced: the correction round changed nothing, so the body's claims still hold"
 validate__validate:
   green: false

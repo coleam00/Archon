@@ -36,7 +36,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { artifactsDir, refuse, report, trimmed } from '../../.shared/io.ts';
-import { PASSES_RED, parseDeclaredRedCause, passesRed } from '../../.shared/verdict.ts';
+import { PASSES_RED, passesRed } from '../../.shared/verdict.ts';
 
 const EXCLUDE = ':(exclude).archon';
 
@@ -72,12 +72,9 @@ function decide(): Decision {
   // text ("true"/"false"), the declared cause of any red, and the summary that carries
   // the evidence for it.
   const green = trimmed(process.env.INPUTS_GREEN);
-  // The declared text and the parsed value are both kept: the refusal below names
-  // what the loop actually said, so "declared nothing" and "declared something this
-  // pack does not route on" stay distinguishable to the operator who has to fix one
-  // of them.
+  // Certified at the loop's own node: `red_cause` is an enum on its output_format,
+  // so the value here is a member or the empty string, never something to re-check.
   const declaredCause = trimmed(process.env.INPUTS_RED_CAUSE);
-  const redCause = parseDeclaredRedCause(declaredCause);
   const summary = trimmed(process.env.INPUTS_SUMMARY);
 
   const tracked = git('diff', '--name-only', 'HEAD', '--', EXCLUDE);
@@ -107,9 +104,9 @@ function decide(): Decision {
   // Nothing to show, and nothing to do about it. The evidence bar is the green gates'
   // own: emptiness is all that is checked, because whether the prose names a real
   // failing check is the declaring agent's judgment and the reviewer's.
-  if (green !== 'true' && redCause !== undefined && passesRed(redCause) && summary !== '') {
+  if (green !== 'true' && passesRed(declaredCause) && summary !== '') {
     return {
-      shown: `no new changes this run; the remaining red is declared ${redCause}, not introduced`,
+      shown: `no new changes this run; the remaining red is declared ${declaredCause}, not introduced`,
     };
   }
 

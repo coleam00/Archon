@@ -41,9 +41,8 @@ nodes:
         report:
           # The evidence contract, enforced by the engine at this node: a pointer at a
           # file this run's artifacts do not hold is refused before the node completes,
-          # so a verdict cannot arrive without its report. The bar is existence, not
-          # content — a zero-byte report satisfies it, where the node this replaced
-          # also required the file to be non-empty.
+          # so a verdict cannot arrive without its report. The bar is an existing, non-empty
+          # file, the bar the node this replaced enforced by hand.
           type: object
           properties:
             type: { type: string, enum: [archon_artifact] }

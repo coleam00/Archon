@@ -28,7 +28,10 @@
  * different problem from a check that has not registered to signal anything yet.
  */
 
-import { emit, refuse } from '../../.shared/io.ts';
+import { emit, refuse, trimmed } from '../../.shared/io.ts';
+
+/** The recorded pull request, so no read ever falls back to the ambient branch. */
+const prUrl = trimmed(process.env.INPUTS_PR_URL);
 
 interface Check {
   readonly name: string;
@@ -71,6 +74,7 @@ function hasNoChecks(): boolean {
   const counted = gh(
     'pr',
     'view',
+    prUrl,
     '--json',
     'statusCheckRollup',
     '--jq',
@@ -81,7 +85,7 @@ function hasNoChecks(): boolean {
 
 /** `undefined` means the read itself failed and nothing may be concluded from it. */
 function checks(): readonly Check[] | undefined {
-  const result = gh('pr', 'checks', '--json', 'name,bucket');
+  const result = gh('pr', 'checks', prUrl, '--json', 'name,bucket');
   let parsed: unknown;
   try {
     // The document decides, not the exit status: this form reports failing checks
@@ -103,11 +107,15 @@ function checks(): readonly Check[] | undefined {
 
 /** `undefined` means the answer could not be determined, which counts as configured. */
 function repoHasActiveWorkflows(): boolean | undefined {
+  // Every page: the default read stops at thirty workflows, and an active one on a
+  // later page would otherwise read as "no CI configured".
   const result = gh(
     'api',
     'repos/{owner}/{repo}/actions/workflows',
+    '--paginate',
+    '--slurp',
     '--jq',
-    '[.workflows[] | select(.state == "active")] | length'
+    '[.[] | .workflows[] | select(.state == "active")] | length'
   );
   if (!result.ok) return undefined;
   const count = Number.parseInt(result.stdout.trim(), 10);
@@ -142,32 +150,36 @@ function classify(rounds: readonly Check[]): void {
   emit({ state: 'concluded', detail: `all ${passed.length} required check(s) green${note}` });
 }
 
-const first = checks();
-if (first !== undefined) {
-  if (first.length > 0) {
-    classify(first);
-  } else if (repoHasActiveWorkflows() === false) {
-    emit({
-      state: 'concluded',
-      detail: 'no checks configured on this repository — nothing to await',
-    });
-  } else {
-    // CI exists (or could not be ruled out) but nothing started. Give registration one
-    // grace interval, then skip with the reason: starting gated CI is a maintainer's
-    // power, not this run's.
-    Bun.sleepSync(60_000);
-    const second = checks();
-    if (second !== undefined) {
-      if (second.length > 0) {
-        classify(second);
-      } else {
-        emit({
-          state: 'concluded',
-          detail:
-            'CI is configured but no checks started on this PR — most likely awaiting ' +
-            "a maintainer's approval to run (fork or first contribution), or path filters. " +
-            'Skipping the CI gate; running and verifying checks stays with the maintainer.',
-        });
+if (prUrl === '') {
+  refuse('check-ci: no pull request was bound; the probe reads the recorded pull request, never the ambient branch.');
+} else {
+  const first = checks();
+  if (first !== undefined) {
+    if (first.length > 0) {
+      classify(first);
+    } else if (repoHasActiveWorkflows() === false) {
+      emit({
+        state: 'concluded',
+        detail: 'no checks configured on this repository — nothing to await',
+      });
+    } else {
+      // CI exists (or could not be ruled out) but nothing started. Give registration one
+      // grace interval, then skip with the reason: starting gated CI is a maintainer's
+      // power, not this run's.
+      Bun.sleepSync(60_000);
+      const second = checks();
+      if (second !== undefined) {
+        if (second.length > 0) {
+          classify(second);
+        } else {
+          emit({
+            state: 'concluded',
+            detail:
+              'CI is configured but no checks started on this PR — most likely awaiting ' +
+              "a maintainer's approval to run (fork or first contribution), or path filters. " +
+              'Skipping the CI gate; running and verifying checks stays with the maintainer.',
+          });
+        }
       }
     }
   }

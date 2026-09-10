@@ -67,6 +67,17 @@ nodes:
   - id: gate-green
     script: gate-green
     runtime: bun
+    # Every gate that passes red leaves the cause as its own typed artifact;
+    # readers find them by type under nodes/, never through one shared file.
+    output_type: green-gate
+    output_format: &green_gate
+      type: object
+      properties:
+        gate: { type: string, enum: [green] }
+        red_cause: { type: string }
+        stage: { type: string }
+        summary: { type: string }
+      required: [gate, red_cause, stage, summary]
     depends_on: [impl]
     with:
       green: "$impl.output.green"
@@ -141,24 +152,6 @@ nodes:
 
   # Validate the authored verdict before it controls a costly branch. `ready`
   # remains the review outcome; `action` says what delivery may do about it.
-  - id: review-action
-    script: validate-review-action
-    runtime: bun
-    with:
-      ready: "$review.output.ready"
-      action: "$review.output.action"
-    depends_on: [review]
-    # Shape only. Which actions exist is the pack's vocabulary, owned by
-    # .shared/verdict.ts and enforced by this script, which refuses a verdict
-    # whose two fields contradict each other. A second enum here would be a
-    # second owner of the same list.
-    output_format: &review_verdict
-      type: object
-      properties:
-        ready: { type: boolean }
-        action: { type: string }
-      required: [ready, action]
-
   # A ready initial review skips this block. Otherwise each iteration corrects
   # the current canonical findings, proves the correction is green, then runs a
   # fresh continuation review over the report and delta, never an unreviewed
@@ -178,14 +171,18 @@ nodes:
   # check can prove is cheapest to fix here, in the round that caused it, not
   # an hour later at the terminal wait. The loop itself never waits on CI, and
   # await-checks below remains the authority on the flip.
+  # The review's verdict is certified at its producer: `action` is an enum the
+  # engine enforces on synthesize, so it routes here unvalidated. A verdict that
+  # contradicts itself (`ready: true` with `correct`) cannot mislead this graph,
+  # which reads only `action`.
   - id: corrections
-    depends_on: [review-action]
-    when: "$review-action.output.action == 'correct'"
+    depends_on: [review]
+    when: "$review.output.action == 'correct'"
     loop_group:
       # `none` converged and `replan` must stop correction. gate-ready below
       # accepts only `none`; a replan outcome leaves the PR draft and fails with
       # the canonical report intact instead of spending another correction.
-      until_bash: test $recheck-action.output.action != "correct"
+      until_bash: test $recheck.output.action != "correct"
       max_iterations: 5
       fresh_context: true
       nodes:
@@ -288,6 +285,10 @@ nodes:
         - id: gate-correction-green
           script: gate-green
           runtime: bun
+          # Every gate that passes red leaves the cause as its own typed artifact;
+          # readers find them by type under nodes/, never through one shared file.
+          output_type: green-gate
+          output_format: *green_gate
           depends_on: [fix]
           with:
             green: "$fix.output.green"
@@ -307,15 +308,6 @@ nodes:
             docs: "$classify.output.docs"
           depends_on: [gate-correction-green]
 
-        - id: recheck-action
-          script: validate-review-action
-          runtime: bun
-          with:
-            ready: "$recheck.output.ready"
-            action: "$recheck.output.action"
-          depends_on: [recheck]
-          output_format: *review_verdict
-
   # none_failed_min_one_success joins the mutually exclusive paths as bound
   # values: the
   # initial review's verdict directly, and the correction loop's final verdict
@@ -327,12 +319,10 @@ nodes:
   - id: gate-ready
     script: gate-ready
     runtime: bun
-    depends_on: [review-action, corrections]
+    depends_on: [review, corrections]
     trigger_rule: none_failed_min_one_success
     with:
-      review_ready: { from: "$review-action.output.ready", if_skipped: false }
-      review_action: { from: "$review-action.output.action", if_skipped: null }
-      correction_ready: { from: "$corrections.output.ready", if_skipped: false }
+      review_action: "$review.output.action"
       correction_action: { from: "$corrections.output.action", if_skipped: null }
 
   # Correction rounds change the diff after `pr` wrote the description, so
@@ -347,8 +337,11 @@ nodes:
     with:
       pr_number: "$pr.output.number"
       pr_head: "$pr.output.head"
-    depends_on: [gate-ready]
-    when: "$review.output.ready == 'false'"
+    # After the project gate, not beside it: the gates record the red they let
+    # through as typed artifacts, and the body must disclose every one of them,
+    # so this reads once all of them exist instead of racing the last writer.
+    depends_on: [gate-validated]
+    when: "$review.output.action != 'none'"
 
   # Final local gate, ALWAYS run: the project's own checks via the validate
   # package. Uniform on every path — and when CI is maintainer-gated (fork
@@ -367,6 +360,10 @@ nodes:
   - id: gate-validated
     script: gate-green
     runtime: bun
+    # Every gate that passes red leaves the cause as its own typed artifact;
+    # readers find them by type under nodes/, never through one shared file.
+    output_type: green-gate
+    output_format: *green_gate
     depends_on: [validate]
     with:
       green: "$validate.output.green"
@@ -401,6 +398,8 @@ nodes:
         - id: ci-probe
           script: check-ci
           runtime: bun
+          with:
+            pr_url: "$pr.output.url"
           # The probe's only in-process wait is the single 60 s registration
           # grace; headroom over the 120 s script default keeps that honest.
           timeout: 180000
@@ -428,6 +427,8 @@ nodes:
   - id: ci-verdict
     script: check-ci
     runtime: bun
+    with:
+      pr_url: "$pr.output.url"
     timeout: 180000
     depends_on: [await-checks]
     output_format: *ci_state
@@ -473,6 +474,10 @@ nodes:
         - id: gate-ci-fix
           script: gate-green
           runtime: bun
+          # Every gate that passes red leaves the cause as its own typed artifact;
+          # readers find them by type under nodes/, never through one shared file.
+          output_type: green-gate
+          output_format: *green_gate
           depends_on: [ci-fix]
           with:
             green: "$ci-fix.output.green"
@@ -492,30 +497,23 @@ nodes:
             docs: "$classify.output.docs"
           depends_on: [gate-ci-fix]
 
-        - id: ci-recheck-action
-          script: validate-review-action
-          runtime: bun
-          with:
-            ready: "$ci-recheck.output.ready"
-            action: "$ci-recheck.output.action"
-          depends_on: [ci-recheck]
-          output_format: *review_verdict
-
+        # The loop's output is its last node's, and the tail below needs both
+        # the recheck's action and the fix's red cause, which live on two
+        # producers. This joins them; both values were certified where they
+        # were produced.
         - id: ci-round-result
           script: ci-round-result
           runtime: bun
           with:
-            ready: "$ci-recheck-action.output.ready"
-            action: "$ci-recheck-action.output.action"
+            action: "$ci-recheck.output.action"
             red_cause: "$ci-fix.output.red_cause"
-          depends_on: [ci-recheck-action]
+          depends_on: [ci-recheck]
           output_format:
             type: object
             properties:
-              ready: { type: boolean }
-              action: { type: string }
+              action: { type: string, enum: [none, correct, replan] }
               red_cause: { type: string }
-            required: [ready, action, red_cause]
+            required: [action, red_cause]
 
   # The re-wait after a pushed correction: same probe, webhook wake-up,
   # five-minute deadline fallback, and ceiling as await-checks. On an inherited
@@ -530,6 +528,8 @@ nodes:
         - id: fix-ci-probe
           script: check-ci
           runtime: bun
+          with:
+            pr_url: "$pr.output.url"
           timeout: 180000
           output_format: *ci_state
         - id: fix-ci-pause
@@ -559,7 +559,7 @@ nodes:
 
   - id: ci-attention
     depends_on: [ci-attention-route]
-    when: "$ci-attention-route.output.attention == 'true'"
+    when: "$ci-attention-route.output.attention == true"
     loop_group:
       max_iterations: 13
       until_bash: test $attention-ci-probe.output.state = "concluded"
@@ -567,6 +567,8 @@ nodes:
         - id: attention-ci-probe
           script: check-ci
           runtime: bun
+          with:
+            pr_url: "$pr.output.url"
           timeout: 180000
           output_format: *ci_state
         - id: attention-ci-pause

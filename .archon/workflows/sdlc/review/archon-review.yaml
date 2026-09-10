@@ -49,8 +49,15 @@ returns: synthesize
 outcome_field: ready
 
 nodes:
+  # A continuation round is one whose caller handed it the prior round's report.
+  # That report reached the caller as a certified artifact pointer from this
+  # workflow's own synthesize node, so its existence is the producer's contract
+  # and nothing here re-checks it. The node exists only because an include's
+  # inputs are substituted as text at load time and cannot be compared in a
+  # `when:`; it turns the input into the routable fact the lenses gate on.
   - id: mode
-    script: resolve-review-mode
+    script: |
+      console.log(JSON.stringify({ continuation: (process.env.INPUTS_PRIOR_REPORT ?? '') !== '' }));
     runtime: bun
     with:
       prior_report: "$INPUTS.prior_report"
@@ -174,4 +181,14 @@ nodes:
           enum: [none, correct, replan]
         findings_summary:
           type: string
-      required: [ready, action, findings_summary]
+        # The report the verdict rests on, as a certified artifact pointer: the
+        # engine refuses the verdict at this node when the file is missing or
+        # empty, so a caller that continues over it never has to check.
+        report:
+          type: object
+          properties:
+            type: { type: string, enum: [archon_artifact] }
+            run_id: { type: string }
+            path: { type: string, enum: [review/report.md] }
+          required: [type, run_id, path]
+      required: [ready, action, findings_summary, report]

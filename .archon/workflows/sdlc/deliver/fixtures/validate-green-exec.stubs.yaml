@@ -15,7 +15,7 @@ impl__implement:
   red_cause: ""
   summary: "stub: implemented and green"
 impl__assert-changed: "3 files changed"
-gate-green: '{"gate":"green"}'
+gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
 pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true }
 review__mode: '{"continuation":false}'
 review__scope:
@@ -30,7 +30,7 @@ review__synthesize:
   ready: true
   action: none
   findings_summary: "stub: clean on initial review"
-review-action: '{"ready":true,"action":"none"}'
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 gate-ready: '{"ready":"true"}'
 validate__validate:
   green: true

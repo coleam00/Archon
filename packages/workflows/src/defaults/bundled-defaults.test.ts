@@ -384,48 +384,6 @@ describe('bundled-defaults', () => {
       expect(fix?.depends_on).toEqual(['ci-evidence']);
     });
 
-    it('archon-deliver validates review action before correction and carries the work order into recheck', () => {
-      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
-      if (parsed.workflow === null) throw new Error(parsed.error.error);
-
-      const reviewAction = parsed.workflow.nodes.find(node => node.id === 'review-action');
-      expect(reviewAction?.kind).toBe('exec');
-      if (reviewAction?.kind !== 'exec') throw new Error('review-action is not executable');
-      expect(reviewAction.script).toBe('validate-review-action');
-      expect(reviewAction.with).toEqual({
-        ready: '$review.output.ready',
-        action: '$review.output.action',
-      });
-
-      const corrections = parsed.workflow.nodes.find(node => node.id === 'corrections');
-      expect(corrections?.kind).toBe('loop_group');
-      if (corrections?.kind !== 'loop_group') throw new Error('corrections is not a loop group');
-      expect(corrections.when).toBe("$review-action.output.action == 'correct'");
-      expect(corrections.loop_group.until_bash).toContain(
-        '$recheck-action.output.action != "correct"'
-      );
-
-      const recheck = corrections.loop_group.nodes.find(node => node.id === 'recheck');
-      expect(recheck?.kind).toBe('include');
-      if (recheck?.kind !== 'include') throw new Error('recheck is not an include');
-      expect(recheck.with).toMatchObject({
-        scope: '$pr.output.number',
-        work_order: '$INPUTS.work',
-      });
-      expect(recheck.with).not.toHaveProperty('pr_number');
-      expect(recheck.with).not.toHaveProperty('pr_head');
-
-      const gateReady = parsed.workflow.nodes.find(node => node.id === 'gate-ready');
-      expect(gateReady?.kind).toBe('exec');
-      if (gateReady?.kind !== 'exec') throw new Error('gate-ready is not executable');
-      expect(gateReady.with).toEqual({
-        review_ready: { from: '$review-action.output.ready', if_skipped: false },
-        review_action: { from: '$review-action.output.action', if_skipped: null },
-        correction_ready: { from: '$corrections.output.ready', if_skipped: false },
-        correction_action: { from: '$corrections.output.action', if_skipped: null },
-      });
-    });
-
     it('flip-ready names only what it needs, and never loses a gate to a longer chain', () => {
       // The flip used to name ten ancestors because a failure propagated exactly one
       // hop: a join that named only the tail of a chain never saw the chain's gates

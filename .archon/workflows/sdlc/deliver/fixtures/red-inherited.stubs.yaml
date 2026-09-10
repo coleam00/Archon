@@ -36,6 +36,7 @@ review__synthesize:
   ready: true
   action: none
   findings_summary: "stub: the change itself is clean"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 validate__validate:
   green: false
   red_cause: inherited

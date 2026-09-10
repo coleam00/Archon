@@ -106,6 +106,10 @@ function rawDiscoveries(artifacts: string): string {
       unreadable.push(`- ${path}: could not read (${read.error}). Open it directly.`);
       continue;
     }
+    if (!Array.isArray(read.value)) {
+      unreadable.push(`- ${path}: not a JSON array of records. Open it directly.`);
+      continue;
+    }
     for (const record of records(read.value)) {
       const title = display(record.title) || '(untitled discovery)';
       const relation = display(record.relation) || 'relation unstated';
@@ -138,7 +142,10 @@ function discoveries(artifacts: string, failed: boolean): string {
   if ('error' in read) {
     return `\n\nDiscoveries: could not read ${path} (${read.error}). Open it directly.`;
   }
-  if (!Array.isArray(read.value) || read.value.length === 0) return '';
+  if (!Array.isArray(read.value)) {
+    return `\n\nDiscoveries: ${path} is not a JSON array of records. Open it directly.`;
+  }
+  if (read.value.length === 0) return '';
 
   const titles = read.value.map(entry => {
     const record = records([entry])[0];
@@ -152,30 +159,54 @@ function discoveries(artifacts: string, failed: boolean): string {
 }
 
 /**
- * The caveat for red this run's green gate deliberately let through.
+ * The caveat for red this run's green gates deliberately let through.
  *
- * The gate fails on red the change introduced and passes red it cannot have caused,
- * which is only a safe trade while every reader of this report meets the claim. A
- * run whose gates never passed red has no record and prints nothing.
+ * Each gate leaves its decision as its own typed artifact (`output_type:
+ * green-gate`): the engine writes `nodes/<stem>.md` with the gate's JSON result and
+ * `nodes/<stem>.meta.json` naming the type, one pair per gate execution, loop
+ * iterations included. Reading by type is what makes the record complete without a
+ * shared file: no gate appends to another's record, so nothing races. A gate whose
+ * `red_cause` is empty passed on green and has nothing to disclose.
  */
 function redCauses(artifacts: string): string {
-  const path = join(artifacts, 'red-causes.json');
-  const read = readJson(path);
-  if (read === undefined) return '';
-  if ('error' in read) {
-    return `\n\nDelivered on red: could not read ${path} (${read.error}). Open it directly.`;
+  const directory = join(artifacts, 'nodes');
+  let names: string[];
+  try {
+    names = readdirSync(directory)
+      .filter(name => name.endsWith('.meta.json'))
+      .sort();
+  } catch {
+    return '';
   }
 
-  const lines = records(read.value).map(record => {
-    const cause = display(record.cause) || 'cause unstated';
-    const stage = display(record.stage) || 'A stage';
-    const summary = display(record.summary);
-    return `- ${stage}: ${cause} red${summary ? `\n  ${summary}` : ''}`;
-  });
-  if (lines.length === 0) return '';
+  const lines: string[] = [];
+  const unreadable: string[] = [];
+  for (const name of names) {
+    const meta = readJson(join(directory, name));
+    if (meta === undefined || 'error' in meta) continue;
+    const record = records([meta.value])[0];
+    if (record?.outputType !== 'green-gate') continue;
+    const outputPath = join(artifacts, display(record.path));
+    const gate = readJson(outputPath);
+    if (gate === undefined || 'error' in gate) {
+      unreadable.push(`- ${outputPath}: could not read the gate's record. Open it directly.`);
+      continue;
+    }
+    const result = records([gate.value])[0];
+    if (result === undefined) {
+      unreadable.push(`- ${outputPath}: not a gate record. Open it directly.`);
+      continue;
+    }
+    const cause = display(result.red_cause);
+    if (cause === '') continue;
+    const stage = display(result.stage) || 'A stage';
+    const summary = display(result.summary);
+    lines.push(`- ${stage}: ${cause} red${summary ? `\n  ${summary}` : ''}`);
+  }
+  if (lines.length === 0 && unreadable.length === 0) return '';
   return (
     `\n\nDelivered on red (${lines.length}) — a gate accepted red this change did ` +
-    `not cause:\n${lines.join('\n')}\n\n${RED_CAUSE_CAVEAT}`
+    `not cause:\n${[...lines, ...unreadable].join('\n')}\n\n${RED_CAUSE_CAVEAT}`
   );
 }
 
