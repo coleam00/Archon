@@ -33,7 +33,7 @@ export const ROOT_TEST_PLAN: readonly RootTestStep[] = [
 ];
 
 /** Each workspace runs its own `test` script, which owns that package's group splitting. */
-export const WORKSPACE_TEST_COMMAND = ['bun', '--filter', '*', '--parallel', 'test'];
+const WORKSPACE_TEST_COMMAND = ['bun', '--filter', '*', '--parallel', 'test'];
 
 const REPO_ROOT = join(import.meta.dir, '..');
 

@@ -61,11 +61,29 @@ describe('planRequestedRuns', () => {
     expect(runs[0].args).toEqual(['--bail', '-t', 'effort', 'src/effort.test.ts']);
   });
 
+  test('forwards an unplaced argument to every owner the paths named', () => {
+    const runs = planRequestedRuns([
+      '--bail',
+      fromRoot('packages/isolation/src/resolver.test.ts'),
+      fromRoot('packages/paths/src/effort.test.ts'),
+    ]);
+
+    expect(runs.map((run): string => run.owner.label)).toEqual([
+      'packages/isolation',
+      'packages/paths',
+    ]);
+    expect(runs[0].args).toEqual(['--bail', 'src/resolver.test.ts']);
+    expect(runs[1].args).toEqual(['--bail', 'src/effort.test.ts']);
+  });
+
   test('plans no run when no argument names an owner', () => {
     expect(planRequestedRuns(['some/where/nope.test.ts'])).toEqual([]);
     expect(planRequestedRuns(['logger'])).toEqual([]);
     expect(planRequestedRuns([fromRoot('packages/not-a-workspace/src/x.test.ts')])).toEqual([]);
     expect(planRequestedRuns([fromRoot('../outside-the-repo.test.ts')])).toEqual([]);
+    // A bare package directory reaches the same outcome down a different branch: the
+    // package exists, but there is no selector after it for `bun test` to run.
+    expect(planRequestedRuns([fromRoot('packages/paths')])).toEqual([]);
   });
 });
 
