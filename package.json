@@ -29,6 +29,7 @@
     "check:sqlite-vintages": "bun run scripts/generate-sqlite-vintages.ts --check",
     "check:schema-upgrades": "bun run scripts/check-schema-upgrades.ts",
     "lens-yield": "bun run scripts/lens-yield.ts",
+    "bench:capture": "bun run scripts/capture-cost.ts",
     "test:install": "bash scripts/test-install.sh",
     "test": "bun --filter '*' --parallel test && bun test ./scripts/ && bun test ./.archon/scripts/",
     "test:watch": "bun --filter @archon/server test:watch",
