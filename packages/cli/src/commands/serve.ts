@@ -14,10 +14,10 @@ const log = createLogger('cli.serve');
 const GITHUB_REPO = 'coleam00/Archon';
 
 /**
- * Upper bound on the `tar` child. The measured pass band for this extraction is
- * 16–156 ms on the runner it stalls on, and the shipped 2.1 MB archive extracts
- * in ~20 ms locally, so 60 s is roughly 400x the slowest healthy sample — a disk
- * that misses it is not slow, it is stuck. Its only job is to stop a stalled
+ * Upper bound on the `tar` child. Healthy extractions on the windows runner this
+ * stalls on measure 16–676 ms, and the shipped 2.1 MB archive extracts in ~20 ms
+ * locally, so 60 s is nearly 90x the slowest healthy sample seen — a disk that
+ * misses it is not slow, it is stuck. Its only job is to stop a stalled
  * child from turning `archon serve` into a silent permanent hang: the
  * parent-owned stdin channel that caused the observed stall is gone (#2924), but
  * filesystem-side stalls on windows were never ruled out, and there is no budget
