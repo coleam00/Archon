@@ -101,7 +101,7 @@ import type { BindingDirective } from './schemas';
 import { mapNodeTemplateSlots } from './template-walker';
 import { buildExecNodeEnvironment } from './exec-environment';
 import { planGraph, resolvedBodyNodes } from './graph-plan';
-import { FAN_OUT_CANCEL_REASONS } from './store';
+import { FAN_OUT_CANCEL_REASONS, waitCompletionEvents } from './store';
 import type { DagResumeSnapshot, FanOutCancelReason, PersistedNodeOutput } from './store';
 import { formatToolCall } from './utils/tool-formatter';
 import { createLogger, captureWorkflowCompleted } from '@archon/paths';
@@ -7330,23 +7330,9 @@ async function executeWaitNode(
     // handed it back; the transcript and emitter derive from that row, not a rebuilt one.
     await recordDerivedNodeState({ logDir }, node, outcome.nodeEvent);
   } else {
-    await deps.store.createWorkflowEvent({
-      workflow_run_id: workflowRun.id,
-      event_type: status === 'expired' ? 'wait_expired' : 'wait_completed',
-      step_name: stepName,
-      data: result,
-    });
-    await recordNodeState({ store: deps.store, logDir }, node, {
-      workflow_run_id: workflowRun.id,
-      event_type: 'node_completed',
-      step_name: stepName,
-      data: {
-        type: 'wait',
-        duration_ms: result.waited_ms,
-        node_output: output,
-        structured_output: result,
-      },
-    });
+    const rows = waitCompletionEvents(workflowRun.id, { stepName, result });
+    await deps.store.createWorkflowEvent(rows.outcome);
+    await recordNodeState({ store: deps.store, logDir }, node, rows.node);
   }
   return {
     state: 'completed',
