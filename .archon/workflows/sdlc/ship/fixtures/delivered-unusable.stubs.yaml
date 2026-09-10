@@ -1,15 +1,23 @@
 # Dry-run fixture: the guard seen RED (run with --default-stubs --exec-code).
 #
-# Delivery hands back a flip value that is not a pull request URL, and the
-# terminal report refuses instead of printing garbage under a completed run.
-# The pr node's record below is deliberately COMPLETE, url included: the report
-# must be built from the flip's read-back value and nothing else, so a perfect
-# record must not rescue an unusable flip. If a future change quietly reads the
-# record again, this fixture goes green-to-red the other way and catches it.
+# Delivery hands back a flip value that does not satisfy the flip's declared
+# result contract, and no terminal report is built from it — the run fails instead
+# of printing garbage under a completed one. The pr node's record below is
+# deliberately COMPLETE, url included: the report must be built from the flip's
+# read-back value and nothing else, so a perfect record must not rescue an
+# unusable flip. If a future change quietly reads the record again, this fixture
+# goes green-to-red the other way and catches it.
 #
-# This is the shared delivered read that ship and upkeep both use, so one red
-# fixture covers the refusal for the pack. What differs between the two
-# tails is which verdict reaches the node, and their delivered fixtures cover that.
+# The refusal now lands one node earlier than it used to, at the flip's first
+# consumer rather than at the far end of the chain. flip-ready declares
+# `output_format: { pr_url }`, so `$flip-ready.output.pr_url` is a contract: a
+# value that cannot supply the field fails the node that reads it. Two hand-written
+# copies of a URL sniffer used to do that job at the two composing tails.
+#
+# In a real run the refusal is earlier still — the engine certifies flip-ready's
+# own stdout against that schema — but a fixture stubs the flip rather than
+# executing it, so what this proves is the consumer half: a producer that broke
+# its contract cannot hand a usable value on.
 triage__triage:
   route: deliver
   summary: "stub: current code confirms a complete work order"
@@ -51,8 +59,7 @@ ci-probe: '{"state":"concluded","detail":"all checks green"}'
 # The mutation: the flip printed something that is not a URL.
 deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
 deliver__flip-ready: "flip printed something that is not a pull request URL"
-deliver__outcome: "https://github.com/example/repo/pull/5"
 fixture:
   expect: failed
-  fail-node: outcome
+  fail-node: deliver__outcome
 exec-code: true

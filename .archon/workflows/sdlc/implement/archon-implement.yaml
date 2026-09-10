@@ -56,7 +56,7 @@ nodes:
         # any schema whose `required` omits a declared property, so optionality has to
         # live inside the type rather than in what `required` leaves out: every
         # archon-deliver run on a Codex config died at the first turn while this
-        # was optional by omission. '' is the value gate-green.py already treats as
+        # was optional by omission. '' is the value gate-green.ts already treats as
         # no cause declared, so the gate that spends on this verdict is unchanged.
         red_cause:
           type: string
@@ -67,14 +67,14 @@ nodes:
 
   # Decline is not success: an AI node that declines its task still exits 0. This
   # deterministic guard proves work actually happened before anything downstream
-  # spends money or goes public — see scripts/assert-changed.py. The whole verdict
+  # spends money or goes public — see scripts/assert-changed.ts. The whole verdict
   # arrives as bound inputs, no artifact bridge: green, the declared cause of any
   # red, and the summary carrying the evidence for it. The guard needs all three,
   # because an iteration whose remaining red is inherited or environmental can
   # honestly have nothing left to change.
   - id: assert-changed
     script: assert-changed
-    runtime: uv
+    runtime: bun
     depends_on: [implement]
     with:
       green: "$implement.output.green"

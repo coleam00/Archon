@@ -33,7 +33,7 @@
     "test:install": "bash scripts/test-install.sh",
     "test": "bun run scripts/repo-tests.ts",
     "test:watch": "bun --filter @archon/server test:watch",
-    "type-check": "bun --filter '*' type-check && bun x tsc --noEmit -p scripts/tsconfig.json && bun x tsc --noEmit -p .archon/scripts/tsconfig.json",
+    "type-check": "bun --filter '*' type-check && bun x tsc --noEmit -p scripts/tsconfig.json && bun x tsc --noEmit -p .archon/scripts/tsconfig.json && bun x tsc --noEmit -p .archon/workflows/tsconfig.json",
     "lint": "bun run scripts/check-test-cleanup-drift.ts && bun run scripts/lint.ts",
     "lint:fix": "bun run scripts/lint.ts --fix",
     "format": "bun x prettier --write .",

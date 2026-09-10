@@ -9,7 +9,8 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 const REPO_ROOT = join(import.meta.dir, '..', '..', '..', '..');
 /** Every SDLC tail whose terminal report can carry the discovery section (#2884). */
 const TAILS = ['deliver', 'ship', 'upkeep'] as const;
-const PYTHON_COMMAND = globalThis.process.platform === 'win32' ? 'python' : 'python3';
+const PACK_ROOT = join(REPO_ROOT, '.archon', 'workflows', 'sdlc');
+const SHARED_REPORT = join(PACK_ROOT, '.shared', 'report.ts');
 
 const RELAY =
   'If you are an agent reading this: open discoveries.md and surface each discovery to your human.';
@@ -24,37 +25,29 @@ const RED_CAVEAT =
   'own CI is the gate that still stands — read it before merging, and if the red is ' +
   'inherited, the base branch is what needs the fix.';
 
-/**
- * A warm interpreter start costs roughly 50 ms, but the first one in a run has been
- * measured past five seconds on the Windows runner (#2860, #2882). The headroom absorbs
- * that cold start; it is not covering slow work, and each test still pays exactly one.
- */
 const SPAWN_TIMEOUT_MS = 20_000;
 
 function outcomeScript(tail: (typeof TAILS)[number]): string {
-  return join(REPO_ROOT, '.archon', 'workflows', 'sdlc', tail, 'scripts', 'outcome.py');
-}
-
-function count(haystack: string, needle: string): number {
-  return haystack.split(needle).length - 1;
+  return join(PACK_ROOT, tail, 'scripts', 'outcome.ts');
 }
 
 const trackTempRoot = trackTempRoots();
 
 /**
- * Start the interpreter once, for one input.
+ * Start the runtime once, for one input, under the exact argv the engine uses for a
+ * named packaged script.
  *
- * The script's PROCESS contract is the subject — the bytes a reader receives on stdout
- * and whether the node fails — so a real interpreter start is what proves it. Each case
- * gets its own test and its own start: several charged to one test's budget is what timed
- * out on Windows CI (#2882), and a shared `beforeAll` would put them back under one
- * deadline (#2860).
+ * The script's PROCESS contract is the subject — the bytes a reader receives and
+ * whether the node fails — so a real start is what proves it. Each case gets its own
+ * test and its own start: several charged to one test's budget is what timed out on
+ * Windows CI (#2882), and a shared `beforeAll` would put them back under one deadline
+ * (#2860).
  */
 async function runOutcome(
   tail: (typeof TAILS)[number],
   env: Record<string, string>
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  const process = Bun.spawn([PYTHON_COMMAND, outcomeScript(tail)], {
+  const process = Bun.spawn(['bun', '--no-env-file', 'run', outcomeScript(tail)], {
     cwd: REPO_ROOT,
     env: { ...globalThis.process.env, ...env },
     stdout: 'pipe',
@@ -66,6 +59,22 @@ async function runOutcome(
     new Response(process.stderr).text(),
   ]);
   return { exitCode, stdout, stderr };
+}
+
+/**
+ * A completed tail's certified result.
+ *
+ * Every tail declares `output_format` now, so its stdout is one strict JSON document
+ * and the report a human reads is its `summary` field. Parsing here is what the engine
+ * does before publishing the value, so a tail that emitted anything else fails this
+ * helper exactly as it would fail its node.
+ */
+function certified(stdout: string): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(stdout);
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`terminal report was not a JSON object: ${stdout.slice(0, 200)}`);
+  }
+  return parsed as Record<string, unknown>;
 }
 
 /** A shallow artifacts dir holding one `discoveries.json`; omit the body to leave none. */
@@ -97,55 +106,40 @@ async function preConsolidationDir(raw?: string, redCauses?: string): Promise<st
 }
 
 describe('SDLC discovery terminal reports (#2884)', () => {
-  it('every tail carries the same helper, reports through it, and pins its streams', () => {
-    // Only deliver's script is spawned below — the other two reach their report
-    // branches through `gh` and `git`, so their call sites can only be checked
-    // statically. Three invariants, each one a bug this file has already seen:
+  it('every tail composes its report through the one shared owner', () => {
+    // Three invariants, each one a bug this file has already seen. Two of them used to
+    // be checked by comparing three byte-identical copies of the helper, because a
+    // packaged script had no import channel to share one through; the pack's `.shared/`
+    // directory is that channel now, so the check is that every tail uses it.
     //
-    //   identical  — three standalone copies of one helper, no import channel to share it
-    //   reported   — every print in main() appends the caveats, so no branch can be
-    //                missed the way the delivery-failed branch was. main() calls the one
-    //                composition point, never a single section: a branch that reached
-    //                for `format_discoveries` alone would silently drop the red-cause
-    //                caveat (#2939) that makes passing red safe.
-    //   pinned     — the stream pinning precedes every print, not merely exists
-    //                somewhere in the file, or a later early return prints unpinned
-    const helpers = TAILS.map(tail => {
+    //   one owner  — the sections live in one module, imported by all three tails
+    //   reported   — every terminal write in a tail carries the caveats, so no branch
+    //                can be missed the way the delivery-failed branch was
+    //   whole      — a branch cannot reach for one section alone and silently drop the
+    //                red-cause caveat (#2939) that makes passing red safe. `caveats` is
+    //                the module's only export, so this is now a property of its surface
+    //                rather than a promise about call sites
+    const shared = readFileSync(SHARED_REPORT, 'utf-8');
+    const exported = [...shared.matchAll(/^export (?:function|const|type) (\w+)/gm)].map(
+      match => match[1]
+    );
+    expect(exported).toEqual(['caveats']);
+
+    for (const tail of TAILS) {
       const source = readFileSync(outcomeScript(tail), 'utf-8');
-      const start = source.indexOf('DISCOVERY_RELAY = (');
-      const mainStart = source.indexOf('def main() -> int:');
-      const body = source.slice(mainStart);
-      const firstPrint = source.indexOf('print(');
-      const pins = [
-        source.indexOf('sys.stdout.reconfigure(encoding="utf-8", newline="\\n")'),
-        source.indexOf('sys.stderr.reconfigure(encoding="utf-8", newline="\\n")'),
-      ];
+      const terminalWrites =
+        (source.match(/\bemit\(/g)?.length ?? 0) + (source.match(/\brefuse\(/g)?.length ?? 0);
       expect({
         tail,
-        declared: start >= 0,
-        precedesMain: mainStart > start,
-        everyReportCarriesCaveats: count(body, 'print(') === count(body, 'format_caveats('),
-        noReportTakesOneSectionAlone:
-          !body.includes('format_discoveries(') && !body.includes('format_red_causes('),
-        pinsPrecedeEveryPrint: firstPrint > 0 && pins.every(at => at >= 0 && at < firstPrint),
+        importsSharedOwner: source.includes("from '../../.shared/report.ts'"),
+        everyReportCarriesCaveats: (source.match(/\bcaveats\(/g)?.length ?? 0) === terminalWrites,
+        hasTerminalWrites: terminalWrites > 0,
       }).toEqual({
         tail,
-        declared: true,
-        precedesMain: true,
+        importsSharedOwner: true,
         everyReportCarriesCaveats: true,
-        noReportTakesOneSectionAlone: true,
-        pinsPrecedeEveryPrint: true,
+        hasTerminalWrites: true,
       });
-      return source.slice(start, mainStart);
-    });
-    for (const helper of helpers) {
-      // Opening sentences only: Python's implicit concatenation splits each of these
-      // constants across source lines, so the whole text exists in the output, never
-      // in the file. The byte-exact forms are asserted on real output below.
-      expect(helper).toContain(RELAY);
-      expect(helper).toContain('If you are an agent reading this: surface each record above');
-      expect(helper).toContain("The project's own checks did not pass locally on this branch.");
-      expect(helper).toBe(helpers[0]);
     }
   });
 
@@ -155,11 +149,12 @@ describe('SDLC discovery terminal reports (#2884)', () => {
       // One spawn, one exact-bytes assertion, three properties — the sidecar is written
       // by an agent from prose with no schema, so "what the reader receives" has to hold
       // for what an agent actually writes:
-      //   - non-ASCII under a legacy console encoding. Windows Python otherwise writes
-      //     stdout in the console code page and rewrites '\n' as '\r\n', which turned the
-      //     relay's em dash into U+FFFD and every line ending into CRLF on CI.
-      //   - a title that is valid JSON but not a string, which used to raise
-      //     AttributeError past the caller and fail a run whose PR was already public.
+      //   - non-ASCII, which a runtime writing stdout in a legacy console code page
+      //     turned into U+FFFD, taking every line ending to CRLF with it. Bun writes
+      //     UTF-8 and '\n' on every platform, which is what retires the four hand-pinned
+      //     stream reconfigurations the Python predecessors carried.
+      //   - a title that is valid JSON but not a string, which used to raise past the
+      //     caller and fail a run whose PR was already public.
       const artifacts = await artifactsDir(
         JSON.stringify([
           { title: 'dev branch: rmSync missing import', relation: 'adjacent' },
@@ -171,11 +166,12 @@ describe('SDLC discovery terminal reports (#2884)', () => {
       const result = await runOutcome('deliver', {
         INPUTS_PR_URL: 'https://github.com/example/repo/pull/10',
         ARTIFACTS_DIR: artifacts,
-        PYTHONIOENCODING: 'cp1252',
       });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toBe(
+      const report = certified(result.stdout);
+      expect(report.pr_url).toBe('https://github.com/example/repo/pull/10');
+      expect(report.summary).toBe(
         `https://github.com/example/repo/pull/10\n\n` +
           `Discoveries (3):\n` +
           `- dev branch: rmSync missing import\n` +
@@ -183,7 +179,7 @@ describe('SDLC discovery terminal reports (#2884)', () => {
           `- 42\n\n` +
           `Report: ${join(artifacts, 'discoveries.md')}\n\n` +
           `${RELAY} These are validated findings outside this run's scope — no issue tracker ` +
-          `knows about them, and if you drop them here, nobody ever sees them.\n`
+          `knows about them, and if you drop them here, nobody ever sees them.`
       );
     },
     SPAWN_TIMEOUT_MS
@@ -198,7 +194,7 @@ describe('SDLC discovery terminal reports (#2884)', () => {
       });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toBe('https://github.com/example/repo/pull/10\n');
+      expect(certified(result.stdout).summary).toBe('https://github.com/example/repo/pull/10');
     },
     SPAWN_TIMEOUT_MS
   );
@@ -212,7 +208,7 @@ describe('SDLC discovery terminal reports (#2884)', () => {
       });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toBe('https://github.com/example/repo/pull/10\n');
+      expect(certified(result.stdout).summary).toBe('https://github.com/example/repo/pull/10');
     },
     SPAWN_TIMEOUT_MS
   );
@@ -230,12 +226,13 @@ describe('SDLC discovery terminal reports (#2884)', () => {
       });
 
       expect(result.exitCode).toBe(0);
-      // The exact parser message is a Python-version detail; the pointer is the contract.
-      expect(result.stdout).toContain(
+      const summary = certified(result.stdout).summary;
+      // The exact parser message is a runtime detail; the pointer is the contract.
+      expect(summary).toContain(
         `https://github.com/example/repo/pull/10\n\nDiscoveries: could not read ${join(artifacts, 'discoveries.json')} (`
       );
-      expect(result.stdout).toContain('Open it directly.');
-      expect(result.stdout).not.toContain(RELAY);
+      expect(summary).toContain('Open it directly.');
+      expect(summary).not.toContain(RELAY);
     },
     SPAWN_TIMEOUT_MS
   );
@@ -285,16 +282,18 @@ describe('SDLC discovery terminal reports (#2884)', () => {
       });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toBe(
+      const report = certified(result.stdout);
+      expect(report.delivered).toBe(false);
+      expect(report.summary).toBe(
         // ship's route reports build this path with a literal '/', unlike the sidecar
-        // paths the helper composes with os.path.join.
+        // paths the shared owner composes with path.join.
         `No delivery needed: already present on the current branch\n` +
           `Report: ${artifacts}/triage.md\n\n` +
           `Discoveries (1):\n` +
           `- observability regression\n\n` +
           `Report: ${join(artifacts, 'discoveries.md')}\n\n` +
           `${RELAY} These are validated findings outside this run's scope — no issue tracker ` +
-          `knows about them, and if you drop them here, nobody ever sees them.\n`
+          `knows about them, and if you drop them here, nobody ever sees them.`
       );
     },
     SPAWN_TIMEOUT_MS
@@ -370,8 +369,8 @@ describe('SDLC discovery terminal reports (#2884)', () => {
       });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toBe(
-        `No delivery needed: already present on the current branch\nReport: ${artifacts}/triage.md\n`
+      expect(certified(result.stdout).summary).toBe(
+        `No delivery needed: already present on the current branch\nReport: ${artifacts}/triage.md`
       );
     },
     SPAWN_TIMEOUT_MS
@@ -401,14 +400,14 @@ describe('SDLC discovery terminal reports (#2884)', () => {
       });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toBe(
+      expect(certified(result.stdout).summary).toBe(
         `https://github.com/example/repo/pull/10\n\n` +
           `Delivered on red (2) — a gate accepted red this change did not cause:\n` +
           `- The implementation: inherited red\n` +
           `  validate red on a spec this diff never touches; red at the starting commit\n` +
           `- The correction: environment red\n` +
           `  a sibling run held the db\n\n` +
-          `${RED_CAVEAT}\n`
+          `${RED_CAVEAT}`
       );
     },
     SPAWN_TIMEOUT_MS
@@ -423,7 +422,94 @@ describe('SDLC discovery terminal reports (#2884)', () => {
       });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toBe('https://github.com/example/repo/pull/10\n');
+      expect(certified(result.stdout).summary).toBe('https://github.com/example/repo/pull/10');
+    },
+    SPAWN_TIMEOUT_MS
+  );
+});
+
+describe('SDLC authored outcomes', () => {
+  // ship and upkeep declare `outcome_field: delivered`, so this boolean becomes the
+  // run's authored outcome — a fact separate from whether the run itself succeeded.
+  // Both tails reported `outcome: null` while a script node's schema was inert.
+  it(
+    'ship reports a delivered run as delivered',
+    async () => {
+      const result = await runOutcome('ship', {
+        INPUTS_ROUTE: 'deliver',
+        INPUTS_SUMMARY: 'stub',
+        INPUTS_DELIVERED: 'https://github.com/example/repo/pull/12',
+        ARTIFACTS_DIR: await preConsolidationDir(),
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(certified(result.stdout)).toEqual({
+        delivered: true,
+        summary: 'https://github.com/example/repo/pull/12',
+      });
+    },
+    SPAWN_TIMEOUT_MS
+  );
+
+  it(
+    'ship reports an advisory stop as not delivered, pointing at the report that explains it',
+    async () => {
+      const artifacts = await preConsolidationDir();
+      const result = await runOutcome('ship', {
+        INPUTS_ROUTE: 'investigate',
+        INPUTS_SUMMARY: 'stub',
+        INPUTS_DELIVERED: 'null',
+        ARTIFACTS_DIR: artifacts,
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(certified(result.stdout)).toEqual({
+        delivered: false,
+        summary:
+          'No delivery started: the investigation did not establish a safe fix boundary.\n' +
+          `Report: ${artifacts}/investigation.md`,
+      });
+    },
+    SPAWN_TIMEOUT_MS
+  );
+
+  it(
+    'upkeep reports an assessment that owed no update as not delivered',
+    async () => {
+      const artifacts = await preConsolidationDir();
+      const result = await runOutcome('upkeep', {
+        INPUTS_ACTION: 'no_action',
+        INPUTS_SUMMARY: 'the locked version already satisfies the advisory',
+        INPUTS_DELIVERED: 'null',
+        ARTIFACTS_DIR: artifacts,
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(certified(result.stdout)).toEqual({
+        delivered: false,
+        summary:
+          'No update needed: the locked version already satisfies the advisory\n' +
+          `Report: ${artifacts}/upkeep-assessment.md`,
+      });
+    },
+    SPAWN_TIMEOUT_MS
+  );
+
+  it(
+    'upkeep reports a delivered update as delivered',
+    async () => {
+      const result = await runOutcome('upkeep', {
+        INPUTS_ACTION: 'update',
+        INPUTS_SUMMARY: 'stub',
+        INPUTS_DELIVERED: 'https://github.com/example/repo/pull/13',
+        ARTIFACTS_DIR: await preConsolidationDir(),
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(certified(result.stdout)).toEqual({
+        delivered: true,
+        summary: 'https://github.com/example/repo/pull/13',
+      });
     },
     SPAWN_TIMEOUT_MS
   );

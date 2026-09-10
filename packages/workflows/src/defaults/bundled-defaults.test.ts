@@ -327,7 +327,7 @@ describe('bundled-defaults', () => {
       expect(resolveScope).toBeDefined();
       expect(resolveScope?.kind).toBe('exec');
       if (resolveScope?.kind !== 'exec') throw new Error('resolve-scope is not executable');
-      expect(resolveScope.runtime).toBe('uv');
+      expect(resolveScope.runtime).toBe('bun');
       expect(resolveScope.script).toBe('resolve-review-scope');
       expect(resolveScope.with).toEqual({
         c_errors: '$classify.output.errors',
@@ -426,13 +426,26 @@ describe('bundled-defaults', () => {
       });
     });
 
-    it('flip-ready directly depends on every failable gate ancestor', () => {
+    it('flip-ready names only what it needs, and never loses a gate to a longer chain', () => {
+      // The flip used to name ten ancestors because a failure propagated exactly one
+      // hop: a join that named only the tail of a chain never saw the chain's gates
+      // fail. Failure-cascade skips carry `upstream_failed` across every hop now, so
+      // the list is the four the flip actually needs. gate-validated, gate-ready and
+      // validate are reachable through ci-verdict; ci-verdict stays because the rule
+      // needs one successful dependency, and a clean-review delivery has no other.
+      // That the cascade really blocks is proved by execution, not by this list —
+      // deliver's validate-red* and late-red-unconverged fixtures expect the gate
+      // itself as the failed node and never reach the flip.
       const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
       if (parsed.workflow === null) throw new Error(parsed.error.error);
       const flipReady = parsed.workflow.nodes.find(node => node.id === 'flip-ready');
-      expect(flipReady?.depends_on).toContain('gate-validated');
-      expect(flipReady?.depends_on).toContain('gate-ready');
-      expect(flipReady?.depends_on).toContain('validate');
+      expect(flipReady?.depends_on).toEqual([
+        'ci-verdict',
+        'ci-attention-route',
+        'ci-attention',
+        'sync-pr-body',
+      ]);
+      expect(flipReady?.trigger_rule).toBe('none_failed_min_one_success');
     });
 
     it('archon-review exposes the three-way action contract behind a successful preflight', () => {
@@ -808,7 +821,11 @@ describe('bundled-defaults', () => {
         const group = parsed.workflow.nodes.find(node => node.id === groupId);
         if (group?.kind !== 'loop_group') throw new Error(`${groupId} is not a loop group`);
         expect(group.loop_group.max_iterations).toBe(13);
-        expect(group.loop_group.until_bash).toContain('gh pr checks');
+        // Completion reads the probe's own certified field. It shelled out to `gh`
+        // while a resumed wait was believed unable to see the iteration's outputs;
+        // that was a quoting error in this predicate, not an engine limit, so the
+        // reference is bare and the probe owns the answer.
+        expect(group.loop_group.until_bash).toBe(`test $${probeId}.output.state != "pending"`);
 
         const probeIndex = group.loop_group.nodes.findIndex(node => node.id === probeId);
         const pauseIndex = group.loop_group.nodes.findIndex(node => node.id === pauseId);

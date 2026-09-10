@@ -61,10 +61,10 @@ nodes:
   # before anything public happens. Strict field access: a missing field fails
   # the node rather than passing the gate. It fails on red the change introduced
   # and passes red the change cannot have caused, recording that caveat for every
-  # downstream reader — see scripts/gate-green.py for why that trade is safe.
+  # downstream reader — see scripts/gate-green.ts for why that trade is safe.
   - id: gate-green
     script: gate-green
-    runtime: uv
+    runtime: bun
     depends_on: [impl]
     with:
       green: "$impl.output.green"
@@ -115,10 +115,15 @@ nodes:
   # lens gates compare against.
   - id: resolve-scope
     script: resolve-review-scope
-    runtime: uv
+    runtime: bun
     with:
       c_errors: "$classify.output.errors"
     depends_on: [classify]
+    output_format:
+      type: object
+      properties:
+        errors: { type: string, enum: ['true', 'false'] }
+      required: [errors]
 
   - id: review
     include: archon-review
@@ -136,11 +141,21 @@ nodes:
   # remains the review outcome; `action` says what delivery may do about it.
   - id: review-action
     script: validate-review-action
-    runtime: uv
+    runtime: bun
     with:
       ready: "$review.output.ready"
       action: "$review.output.action"
     depends_on: [review]
+    # Shape only. Which actions exist is the pack's vocabulary, owned by
+    # .shared/verdict.ts and enforced by this script, which refuses a verdict
+    # whose two fields contradict each other. A second enum here would be a
+    # second owner of the same list.
+    output_format: &review_verdict
+      type: object
+      properties:
+        ready: { type: boolean }
+        action: { type: string }
+      required: [ready, action]
 
   # A ready initial review skips this block. Otherwise each iteration corrects
   # the current canonical findings, proves the correction is green, then runs a
@@ -270,7 +285,7 @@ nodes:
         # correction refused for a red it did not cause wastes the whole round.
         - id: gate-correction-green
           script: gate-green
-          runtime: uv
+          runtime: bun
           depends_on: [fix]
           with:
             green: "$fix.output.green"
@@ -292,11 +307,12 @@ nodes:
 
         - id: recheck-action
           script: validate-review-action
-          runtime: uv
+          runtime: bun
           with:
             ready: "$recheck.output.ready"
             action: "$recheck.output.action"
           depends_on: [recheck]
+          output_format: *review_verdict
 
   # none_failed_min_one_success joins the mutually exclusive paths as bound
   # values: the
@@ -308,7 +324,7 @@ nodes:
   # covers only skipped/pending producers, never failed ones.
   - id: gate-ready
     script: gate-ready
-    runtime: uv
+    runtime: bun
     depends_on: [review-action, corrections]
     trigger_rule: none_failed_min_one_success
     with:
@@ -348,7 +364,7 @@ nodes:
   # explicit operator action before any ready flip can run.
   - id: gate-validated
     script: gate-green
-    runtime: uv
+    runtime: bun
     depends_on: [validate]
     with:
       green: "$validate.output.green"
@@ -370,20 +386,28 @@ nodes:
   - id: await-checks
     loop_group:
       max_iterations: 13
-      # Completion computed EXTERNALLY (gh state), never from body-node output
-      # substitution: the resumed-wait completion recheck does not evaluate
-      # until_bash against the iteration's outputs (seen flipping a PR
-      # with CI still running). Red counts as done here; ci-verdict below is
-      # the node that classifies a concluded red — never flip-ready first —
-      # and flip-ready's preflight refuses any non-green state regardless.
-      until_bash: '! gh pr checks --json bucket --jq ".[].bucket" 2>/dev/null | grep -q "^pending$"'
+      # Completion reads the probe's own certified field. It once shelled out to
+      # `gh` instead, because a resumed wait looked like it could not see the
+      # iteration's outputs — investigated and disproven: the incident was a
+      # quoting error in this predicate, where a second layer of quotes around an
+      # already shell-quoted substitution corrupted the comparison. Write the
+      # reference bare, as below. Red counts as done here; ci-verdict is the node
+      # that classifies a concluded red — never flip-ready first — and
+      # flip-ready's preflight refuses any non-green state regardless.
+      until_bash: test $ci-probe.output.state != "pending"
       nodes:
         - id: ci-probe
           script: check-ci
-          runtime: uv
+          runtime: bun
           # The probe's only in-process wait is the single 60 s registration
           # grace; headroom over the 120 s script default keeps that honest.
           timeout: 180000
+          output_format: &ci_state
+            type: object
+            properties:
+              state: { type: string, enum: [pending, concluded, red] }
+              detail: { type: string }
+            required: [state, detail]
         - id: ci-pause
           wait:
             event: checks.complete
@@ -401,9 +425,10 @@ nodes:
   # no back-edges.
   - id: ci-verdict
     script: check-ci
-    runtime: uv
+    runtime: bun
     timeout: 180000
     depends_on: [await-checks]
+    output_format: *ci_state
 
   # One round, expressed natively: max_iterations bounds the pass, and the
   # loop converges only on a `none` verdict. The terminal result carries both
@@ -445,7 +470,7 @@ nodes:
         # wait below.
         - id: gate-ci-fix
           script: gate-green
-          runtime: uv
+          runtime: bun
           depends_on: [ci-fix]
           with:
             green: "$ci-fix.output.green"
@@ -467,20 +492,28 @@ nodes:
 
         - id: ci-recheck-action
           script: validate-review-action
-          runtime: uv
+          runtime: bun
           with:
             ready: "$ci-recheck.output.ready"
             action: "$ci-recheck.output.action"
           depends_on: [ci-recheck]
+          output_format: *review_verdict
 
         - id: ci-round-result
           script: ci-round-result
-          runtime: uv
+          runtime: bun
           with:
             ready: "$ci-recheck-action.output.ready"
             action: "$ci-recheck-action.output.action"
             red_cause: "$ci-fix.output.red_cause"
           depends_on: [ci-recheck-action]
+          output_format:
+            type: object
+            properties:
+              ready: { type: boolean }
+              action: { type: string }
+              red_cause: { type: string }
+            required: [ready, action, red_cause]
 
   # The re-wait after a pushed correction: same probe, webhook wake-up,
   # five-minute deadline fallback, and ceiling as await-checks. On an inherited
@@ -490,12 +523,13 @@ nodes:
   - id: await-fix-checks
     loop_group:
       max_iterations: 13
-      until_bash: '! gh pr checks --json bucket --jq ".[].bucket" 2>/dev/null | grep -q "^pending$"'
+      until_bash: test $fix-ci-probe.output.state != "pending"
       nodes:
         - id: fix-ci-probe
           script: check-ci
-          runtime: uv
+          runtime: bun
           timeout: 180000
+          output_format: *ci_state
         - id: fix-ci-pause
           wait:
             event: checks.complete
@@ -509,11 +543,17 @@ nodes:
   # then probe once per explicit resume until the operator has rerun the check.
   - id: ci-attention-route
     script: ci-attention-route
-    runtime: uv
+    runtime: bun
     depends_on: [ci-verdict, ci-corrections, await-fix-checks]
     trigger_rule: none_failed_min_one_success
     with:
       red_cause: { from: "$ci-corrections.output.red_cause", if_skipped: "" }
+    output_format:
+      type: object
+      properties:
+        attention: { type: boolean }
+        red_cause: { type: string }
+      required: [attention, red_cause]
 
   - id: ci-attention
     depends_on: [ci-attention-route]
@@ -524,8 +564,9 @@ nodes:
       nodes:
         - id: attention-ci-probe
           script: check-ci
-          runtime: uv
+          runtime: bun
           timeout: 180000
+          output_format: *ci_state
         - id: attention-ci-pause
           wait:
             attention: >-
@@ -614,31 +655,48 @@ nodes:
         printf '%s\n' "flip-ready: PR still reports draft after the ready flip" >&2
         exit 1
       fi
-      # This node's stdout is the delivered URL and nothing else; `outcome` reports
-      # the value verbatim.
-      if ! gh pr view "$PR_NUMBER" --repo "$ORIGIN_REPO" --json url --jq .url 2>/dev/null; then
+      # This node's stdout is its declared result and nothing else. gh's own --jq
+      # composes the document, so the URL never passes through shell quoting, and
+      # the schema below is what makes it a contract rather than a convention: a
+      # composing caller reads the pr_url field off this workflow's result, and the
+      # tail's own report reads the same field, neither re-deriving a URL from raw
+      # text.
+      if ! gh pr view "$PR_NUMBER" --repo "$ORIGIN_REPO" --json url --jq '{pr_url: .url}' 2>/dev/null; then
         printf '%s\n' "flip-ready: PR was flipped but its URL could not be read back." >&2
         exit 1
       fi
-    # Failure-cascade skips now block this join, so failed ancestors no longer
-    # need to be named directly. Keep the existing dependency list until the
-    # pack cleanup in #3127. Condition-skipped branches remain admissible, and
-    # ci-verdict supplies the required success. sync-pr-body orders the flip
-    # after the resync even when CI waits return immediately.
-    depends_on:
-      [await-checks, ci-verdict, ci-corrections, await-fix-checks, ci-attention-route,
-       ci-attention, sync-pr-body,
-       gate-validated, gate-ready, validate]
+    output_format:
+      type: object
+      properties:
+        pr_url: { type: string, minLength: 1 }
+      required: [pr_url]
+    # Failure-cascade skips block this join, so a failed ancestor no longer has to
+    # be named directly: the skip carries `upstream_failed` from the node that
+    # actually failed, across every hop. ci-verdict is the successful dependency
+    # the rule requires — a strict transitive reduction without it can leave a
+    # clean-review delivery with no success at all. sync-pr-body orders the flip
+    # after the resync even when the CI waits return immediately.
+    depends_on: [ci-verdict, ci-attention-route, ci-attention, sync-pr-body]
     trigger_rule: none_failed_min_one_success
 
-  # This tail's terminal report, like every other SDLC tail's (scripts/outcome.py).
+  # This tail's terminal report, like every other SDLC tail's (scripts/outcome.ts).
   # flip-ready owns the one irreversible public action and stops there; composing
   # the text its reader receives is separate work, and a named script keeps it out
-  # of a bash body that would otherwise need a python interpreter Windows hosts do
-  # not reliably have.
+  # of a bash body.
+  #
+  # No `outcome_field:` here, unlike the other tails. It would need a two-valued
+  # boolean on this workflow's `returns:` node, and delivery has none: flip-ready
+  # refuses rather than reporting a false verdict, so the field could only ever be
+  # a constant. The run's lifecycle status already carries that fact.
   - id: outcome
     script: outcome
-    runtime: uv
+    runtime: bun
     with:
-      pr_url: "$flip-ready.output"
+      pr_url: "$flip-ready.output.pr_url"
     depends_on: [flip-ready]
+    output_format:
+      type: object
+      properties:
+        pr_url: { type: string }
+        summary: { type: string }
+      required: [pr_url, summary]

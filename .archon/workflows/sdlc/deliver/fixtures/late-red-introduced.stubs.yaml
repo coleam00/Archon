@@ -56,8 +56,8 @@ ci-recheck__synthesize:
   action: none
   findings_summary: "stub: correction delta clean; no open Critical/Important"
 fix-ci-probe: '{"state":"concluded","detail":"all 9 required check(s) green"}'
-flip-ready: "https://github.com/example/repo/pull/9"
-outcome: "https://github.com/example/repo/pull/9"
+flip-ready: { pr_url: "https://github.com/example/repo/pull/9" }
+outcome: { pr_url: "https://github.com/example/repo/pull/9", summary: "https://github.com/example/repo/pull/9" }
 fixture:
   expect: completed
   reached: [review__synthesize, gate-validated, ci-verdict, ci-fix__assert-changed, gate-ci-fix, ci-recheck__synthesize, ci-recheck-action, ci-round-result, fix-ci-probe, ci-attention-route, flip-ready]

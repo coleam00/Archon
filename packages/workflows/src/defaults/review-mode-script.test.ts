@@ -12,27 +12,23 @@ const SCRIPT_PATH = join(
   'sdlc',
   'review',
   'scripts',
-  'resolve-review-mode.py'
+  'resolve-review-mode.ts'
 );
-const PYTHON_COMMAND = globalThis.process.platform === 'win32' ? 'python' : 'python3';
 const tempFiles: string[] = [];
 
 /**
- * Start the interpreter once, for one input.
+ * Start the runtime once, for one input.
  *
  * The script's PROCESS contract is the subject — stdout JSON, exit status, and the
- * stderr message a failing node reports — so a real interpreter start is what proves
- * it. Each case therefore gets its own test and its own start: three of them charged
- * to a single test's budget is what timed out on Windows CI (#2882). Hoisting the
- * starts into a shared `beforeAll` would put them back under one deadline (#2860), so
- * the split is the fix, not a shared setup hook.
+ * stderr message a failing node reports — so a real start is what proves it, under the
+ * exact argv the engine uses for a named packaged script.
  */
 async function runResolver(priorReport: string): Promise<{
   exitCode: number;
   stdout: string;
   stderr: string;
 }> {
-  const process = Bun.spawn([PYTHON_COMMAND, SCRIPT_PATH], {
+  const process = Bun.spawn(['bun', '--no-env-file', 'run', SCRIPT_PATH], {
     cwd: REPO_ROOT,
     env: { ...globalThis.process.env, INPUTS_PRIOR_REPORT: priorReport },
     stdout: 'pipe',

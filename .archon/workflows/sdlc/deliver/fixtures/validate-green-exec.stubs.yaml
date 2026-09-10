@@ -37,8 +37,8 @@ validate__validate:
 # (exec-code: true) and proves it passes on a green validate verdict.
 ci-probe: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
 ci-verdict: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
-flip-ready: "https://github.com/example/repo/pull/2"
-outcome: "https://github.com/example/repo/pull/2"
+flip-ready: { pr_url: "https://github.com/example/repo/pull/2" }
+outcome: { pr_url: "https://github.com/example/repo/pull/2", summary: "https://github.com/example/repo/pull/2" }
 classify:
   errors: false
   docs: false

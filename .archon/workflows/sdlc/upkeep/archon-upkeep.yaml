@@ -24,7 +24,12 @@ inputs:
     default: "auto"
     description: Silent-failure lens — auto, true, or false.
 
+# `delivered:false` is a valid completion: an assessment that finds the locked
+# version already current is a successful run that shipped nothing, and lifecycle
+# status and work outcome are separate facts. Both were reported as
+# `outcome: null` before the terminal script could certify its own result.
 returns: outcome
+outcome_field: delivered
 
 nodes:
   # The assessment stage is advisory and inline (not a composed package): the
@@ -96,16 +101,26 @@ nodes:
 
   # One return for every legitimate terminal result: a no_action assessment
   # completes with its report path; a delivered update is reported from the
-  # flip's verified URL the deliver branch returned (if_skipped binding, so a
-  # skipped flip arrives as null). A passed gate with no delivered output means delivery
-  # died mid-flight — outcome must never attribute that to the assessment.
+  # flip's certified URL the deliver branch returned (if_skipped binding, so a
+  # skipped flip arrives as null).
+  #
+  # The spend gate's output used to be bound here to tell "delivery started and
+  # died mid-flight" apart from an assessment that stopped. A failed delivery now
+  # cascades an `upstream_failed` skip that blocks this join outright, so that case
+  # never reaches this node and the run's terminal record names the node that
+  # actually failed.
   - id: outcome
     script: outcome
-    runtime: uv
+    runtime: bun
     depends_on: [assess, assert-intact, gate-update, deliver]
     trigger_rule: none_failed_min_one_success
     with:
       action: "$assess.output.action"
       summary: "$assess.output.summary"
-      delivered: { from: "$deliver.output", if_skipped: null }
-      gate_passed: { from: "$gate-update.output", if_skipped: null }
+      delivered: { from: "$deliver.output.pr_url", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        delivered: { type: boolean }
+        summary: { type: string }
+      required: [delivered, summary]

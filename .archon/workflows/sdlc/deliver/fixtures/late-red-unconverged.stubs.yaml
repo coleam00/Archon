@@ -52,8 +52,8 @@ ci-fix__implement:
   red_cause: ""
   summary: "stub: still red and no explanation recorded"
 ci-fix__assert-changed: "1 file changed"
-flip-ready: "https://github.com/example/repo/pull/11"
-outcome: "https://github.com/example/repo/pull/11"
+flip-ready: { pr_url: "https://github.com/example/repo/pull/11" }
+outcome: { pr_url: "https://github.com/example/repo/pull/11", summary: "https://github.com/example/repo/pull/11" }
 fixture:
   expect: failed
   # The gate fails inside the loop, so the failed set is the node AND its

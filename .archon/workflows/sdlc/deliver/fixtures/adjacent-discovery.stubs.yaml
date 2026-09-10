@@ -35,7 +35,7 @@ gate-validated: '{"gate":"green"}'
 ci-probe: '{"state":"concluded","detail":"no checks configured"}'
 ci-verdict: '{"state":"concluded","detail":"no checks configured"}'
 ci-attention-route: '{"attention":false,"red_cause":""}'
-flip-ready: "https://github.com/example/repo/pull/5"
-outcome: "https://github.com/example/repo/pull/5"
+flip-ready: { pr_url: "https://github.com/example/repo/pull/5" }
+outcome: { pr_url: "https://github.com/example/repo/pull/5", summary: "https://github.com/example/repo/pull/5" }
 fixture:
   expect: completed

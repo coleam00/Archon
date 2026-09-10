@@ -50,8 +50,8 @@ validate__validate:
 gate-validated: '{"gate":"green"}'
 ci-probe: '{"state":"concluded","detail":"all 2 check(s) green"}'
 ci-verdict: '{"state":"concluded","detail":"all 2 check(s) green"}'
-flip-ready: "https://github.com/example/repo/pull/1"
-outcome: "https://github.com/example/repo/pull/1"
+flip-ready: { pr_url: "https://github.com/example/repo/pull/1" }
+outcome: { pr_url: "https://github.com/example/repo/pull/1", summary: "https://github.com/example/repo/pull/1" }
 classify:
   errors: true
   docs: false

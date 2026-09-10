@@ -41,8 +41,8 @@ deliver__gate-validated: '{"gate":"green"}'
 deliver__impl__assert-changed: "2 files changed"
 deliver__gate-green: '{"gate":"green"}'
 deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
-deliver__flip-ready: "https://github.com/example/repo/pull/7"
-deliver__outcome: "https://github.com/example/repo/pull/7"
+deliver__flip-ready: { pr_url: "https://github.com/example/repo/pull/7" }
+deliver__outcome: { pr_url: "https://github.com/example/repo/pull/7", summary: "https://github.com/example/repo/pull/7" }
 deliver__pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 7, url: "https://github.com/example/repo/pull/7", head: "fixture-branch", base: "dev", is_draft: true }
 deliver__review__mode: '{"continuation":false}'
 deliver__review__scope: "PR diff in scope; head sha stubbed"

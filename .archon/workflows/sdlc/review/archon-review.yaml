@@ -51,9 +51,14 @@ outcome_field: ready
 nodes:
   - id: mode
     script: resolve-review-mode
-    runtime: uv
+    runtime: bun
     with:
       prior_report: "$INPUTS.prior_report"
+    output_format:
+      type: object
+      properties:
+        continuation: { type: boolean }
+      required: [continuation]
 
   - id: scope
     command: review-scope
