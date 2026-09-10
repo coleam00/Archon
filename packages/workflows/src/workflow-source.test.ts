@@ -345,6 +345,119 @@ describe('captureWorkflowSource', () => {
   });
 });
 
+describe('the bundled scope is hoisted out of the per-capture path', () => {
+  /**
+   * The bundled bytes are read once per process and written into every capture from
+   * memory, which is only safe while a later capture still sees an edit to the trees they
+   * were read from. In a source build those trees are the checkout's own
+   * `.archon/workflows` and `.archon/commands`, and a running Archon writes there itself:
+   * `PUT`/`DELETE /api/workflows/:name` land under `<cwd>/.archon/workflows`, which for a
+   * maintainer running Archon from source IS the checkout. Serving a memoized catalogue
+   * there would be a wrong answer, not a slow one.
+   *
+   * The mocked bundled root is this file's shared empty tree, so the file this writes into
+   * it is removed again before the test returns.
+   */
+  test('a later capture in the same process sees a bundled-scope edit', async () => {
+    const { source, runArtifacts, root } = await createSandbox();
+    const bundledFile = join(bundledDefaultsRoot, 'defaults', 'late-bundled-edit.yaml');
+    const capturedAt = (capture: { anchor: { root: string } }): string =>
+      join(capture.anchor.root, 'bundled', 'workflows', 'defaults', 'late-bundled-edit.yaml');
+    // The digests below are compared to each other, so the global scope has to be a tree
+    // this test owns rather than whatever `~/.archon` holds while the suite runs.
+    const previousHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = join(root, 'home');
+
+    try {
+      const before = await captureWorkflowSource({
+        sourceRoot: source,
+        captureRoot: captureRootIn(runArtifacts, 'before'),
+      });
+      await expect(readFile(capturedAt(before), 'utf-8')).rejects.toThrow();
+
+      // A file that did not exist when the first capture ran.
+      await writeFile(bundledFile, 'name: late-bundled-edit\n');
+      const added = await captureWorkflowSource({
+        sourceRoot: source,
+        captureRoot: captureRootIn(runArtifacts, 'added'),
+      });
+      expect(await readFile(capturedAt(added), 'utf-8')).toBe('name: late-bundled-edit\n');
+      expect(added.manifest.digest).not.toBe(before.manifest.digest);
+
+      // An edit in place: same path, new bytes. Size and mtime are what catch this.
+      await writeFile(bundledFile, 'name: late-bundled-edit\ndescription: edited\n');
+      const edited = await captureWorkflowSource({
+        sourceRoot: source,
+        captureRoot: captureRootIn(runArtifacts, 'edited'),
+      });
+      expect(await readFile(capturedAt(edited), 'utf-8')).toBe(
+        'name: late-bundled-edit\ndescription: edited\n'
+      );
+      expect(edited.manifest.digest).not.toBe(added.manifest.digest);
+
+      // And a removal.
+      await rm(bundledFile, { force: true });
+      const removed = await captureWorkflowSource({
+        sourceRoot: source,
+        captureRoot: captureRootIn(runArtifacts, 'removed'),
+      });
+      await expect(readFile(capturedAt(removed), 'utf-8')).rejects.toThrow();
+      expect(removed.manifest.digest).toBe(before.manifest.digest);
+    } finally {
+      await rm(bundledFile, { force: true });
+      if (previousHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = previousHome;
+    }
+  });
+
+  /**
+   * The digest is a PERSISTED value. A capture taken by an older build is re-verified by
+   * this one on every read, so any change to how per-file hashes are ordered or folded
+   * reads as tampering and refuses the resume of every paused run on disk.
+   *
+   * The fixture below is a capture as an older build wrote it, carrying the digest that
+   * build recorded. `pack-extra.yaml` beside the `pack/` directory is the case that makes
+   * ordering observable: `/` and the platform separator sort differently against `-`, so a
+   * fold that sorted normalized paths instead of platform ones would pass on POSIX and
+   * change every Windows digest.
+   */
+  test('a capture from an older build still verifies against its recorded digest', async () => {
+    const captureRoot = join(await createTempRoot(), 'runs', 'legacy-run');
+    const files: readonly (readonly [string, string])[] = [
+      ['project/.archon/workflows/alpha.yaml', 'name: alpha\n'],
+      ['project/.archon/workflows/pack-extra.yaml', 'name: pack-extra\n'],
+      ['project/.archon/workflows/pack/flow/beta.yaml', 'name: beta\n'],
+      ['project/.archon/commands/do.md', '# do\n'],
+      ['global/scripts/run.sh', 'echo hi\n'],
+      ['bundled/workflows/defaults/bundled.yaml', 'name: bundled\n'],
+      ['bundled/commands/defaults/bundled.md', '# bundled\n'],
+    ];
+    for (const [relPath, content] of files) {
+      const target = join(captureRoot, ...relPath.split('/'));
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, content);
+    }
+    const digest = '8622a93dc7846a9b6bb977235940555166e11d507839e84f74c35c7f17c0a03d';
+    await writeFile(
+      join(captureRoot, 'manifest.json'),
+      `${JSON.stringify({
+        version: 1,
+        engine_version: '0.0.0-legacy',
+        origin: '/somewhere/else',
+        captured_at: '2026-01-01T00:00:00.000Z',
+        digest,
+        file_count: files.length,
+        byte_count: 77,
+        scopes: ['project', 'global', 'bundled'],
+        source_config: DEFAULT_WORKFLOW_SOURCE_CONFIG,
+      })}\n`
+    );
+
+    const capture = await loadWorkflowSource(captureRoot, digest);
+    expect(capture.manifest.digest).toBe(digest);
+  });
+});
+
 describe('resolving against a capture instead of the target', () => {
   test('a command resolves from the source even though the target lacks it', async () => {
     const { source, target, runArtifacts } = await createSandbox();
