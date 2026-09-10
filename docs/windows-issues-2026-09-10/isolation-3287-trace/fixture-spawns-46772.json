@@ -1,0 +1,1277 @@
+{
+  "metadata": {
+    "format": 1,
+    "platform": "win32",
+    "bunVersion": "1.4.2",
+    "pid": 46772,
+    "date": "2026-09-10T14:28:56.514Z",
+    "selector": "exec-code isolation",
+    "traceGit": true,
+    "capturePhases": true
+  },
+  "elapsedMs": 3889.8775,
+  "events": [
+    {
+      "kind": "spawn",
+      "id": 1,
+      "section": "beforeAll",
+      "operation": "git init -q",
+      "atMs": 187.8311,
+      "durationMs": 68.04310000000001,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-1.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 2,
+      "section": "beforeAll",
+      "operation": "git add -A",
+      "atMs": 256.3345,
+      "durationMs": 58.97920000000005,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-2.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 3,
+      "section": "beforeAll",
+      "operation": "git commit-with-identity",
+      "atMs": 315.4304,
+      "durationMs": 106.58710000000002,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-3.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 4,
+      "section": "beforeAll",
+      "operation": "git init -q",
+      "atMs": 423.3678,
+      "durationMs": 68.05060000000003,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-4.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 5,
+      "section": "beforeAll",
+      "operation": "git add -A",
+      "atMs": 491.7993,
+      "durationMs": 67.92020000000002,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-5.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 6,
+      "section": "beforeAll",
+      "operation": "git commit-with-identity",
+      "atMs": 559.8103,
+      "durationMs": 114.87470000000008,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-6.jsonl"
+    },
+    {
+      "kind": "test-start",
+      "section": "test-1",
+      "atMs": 674.768
+    },
+    {
+      "kind": "capture",
+      "section": "test-1",
+      "atMs": 706.4855,
+      "durationMs": 10.072099999999978,
+      "totals": {
+        "scan": {
+          "ms": 0.49110000000007403,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "stage": {
+          "ms": 0.6404999999999745,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "walk": {
+          "ms": 1.0164000000000897,
+          "dirs": 3,
+          "files": 2,
+          "bytes": 0
+        },
+        "copy": {
+          "ms": 2.1802000000000135,
+          "dirs": 3,
+          "files": 2,
+          "bytes": 212
+        },
+        "bundled_read": {
+          "ms": 1.2594000000000278,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "bundled_write": {
+          "ms": 0.9563000000000557,
+          "dirs": 4,
+          "files": 0,
+          "bytes": 0
+        },
+        "digest": {
+          "ms": 1.8215999999999894,
+          "dirs": 0,
+          "files": 2,
+          "bytes": 212
+        },
+        "manifest": {
+          "ms": 0.36429999999995744,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "publish": {
+          "ms": 0.9364000000000487,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        }
+      }
+    },
+    {
+      "kind": "spawn",
+      "id": 7,
+      "section": "test-1",
+      "operation": "git rev-parse --show-toplevel",
+      "atMs": 718.1869,
+      "durationMs": 55.596900000000005,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-7.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 8,
+      "section": "test-1",
+      "operation": "git worktree add",
+      "atMs": 773.8921,
+      "durationMs": 115.39890000000003,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-8.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 9,
+      "section": "test-1",
+      "operation": "bash-child",
+      "atMs": 891.7902,
+      "durationMs": 87.24469999999997,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-9.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 10,
+      "section": "test-1",
+      "operation": "git worktree remove",
+      "atMs": 980.7249,
+      "durationMs": 63.32319999999993,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-10.jsonl"
+    },
+    {
+      "kind": "capture",
+      "section": "test-1",
+      "atMs": 1047.3456999999999,
+      "durationMs": 7.783800000000156,
+      "totals": {
+        "scan": {
+          "ms": 0.2658999999998741,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "stage": {
+          "ms": 0.24030000000016116,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "walk": {
+          "ms": 0.6936000000000604,
+          "dirs": 3,
+          "files": 2,
+          "bytes": 0
+        },
+        "copy": {
+          "ms": 1.751700000000028,
+          "dirs": 3,
+          "files": 2,
+          "bytes": 212
+        },
+        "bundled_read": {
+          "ms": 0.9703999999999269,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "bundled_write": {
+          "ms": 0.9259999999999309,
+          "dirs": 4,
+          "files": 0,
+          "bytes": 0
+        },
+        "digest": {
+          "ms": 1.7752000000000407,
+          "dirs": 0,
+          "files": 2,
+          "bytes": 212
+        },
+        "manifest": {
+          "ms": 0.2739999999998872,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "publish": {
+          "ms": 0.8211999999998625,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        }
+      }
+    },
+    {
+      "kind": "spawn",
+      "id": 11,
+      "section": "test-1",
+      "operation": "git rev-parse --show-toplevel",
+      "atMs": 1055.4638,
+      "durationMs": 57.26559999999995,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-11.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 12,
+      "section": "test-1",
+      "operation": "git worktree add",
+      "atMs": 1112.8345,
+      "durationMs": 111.30289999999991,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-12.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 13,
+      "section": "test-1",
+      "operation": "bash-child",
+      "atMs": 1225.1246999999998,
+      "durationMs": 93.07159999999999,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-13.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 14,
+      "section": "test-1",
+      "operation": "git worktree remove",
+      "atMs": 1318.7621,
+      "durationMs": 56.87729999999988,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-14.jsonl"
+    },
+    {
+      "kind": "test-end",
+      "section": "test-1",
+      "atMs": 1381.1371
+    },
+    {
+      "kind": "test-start",
+      "section": "test-2",
+      "atMs": 1381.1608999999999
+    },
+    {
+      "kind": "spawn",
+      "id": 15,
+      "section": "test-2",
+      "operation": "bash-child",
+      "atMs": 1381.6653,
+      "durationMs": 79.82870000000003,
+      "code": 1,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-15.jsonl"
+    },
+    {
+      "kind": "test-end",
+      "section": "test-2",
+      "atMs": 1461.7918
+    },
+    {
+      "kind": "test-start",
+      "section": "test-3",
+      "atMs": 1461.8039999999999
+    },
+    {
+      "kind": "capture",
+      "section": "test-3",
+      "atMs": 1481.7270999999998,
+      "durationMs": 7.3595000000000255,
+      "totals": {
+        "scan": {
+          "ms": 0.35990000000015243,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "stage": {
+          "ms": 0.2537000000002081,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "walk": {
+          "ms": 0.5675999999998567,
+          "dirs": 3,
+          "files": 2,
+          "bytes": 0
+        },
+        "copy": {
+          "ms": 1.7480000000000473,
+          "dirs": 3,
+          "files": 2,
+          "bytes": 176
+        },
+        "bundled_read": {
+          "ms": 0.7869000000000597,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "bundled_write": {
+          "ms": 0.9605000000001382,
+          "dirs": 4,
+          "files": 0,
+          "bytes": 0
+        },
+        "digest": {
+          "ms": 1.5036999999999807,
+          "dirs": 0,
+          "files": 2,
+          "bytes": 176
+        },
+        "manifest": {
+          "ms": 0.3041000000000622,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "publish": {
+          "ms": 0.8202000000001135,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        }
+      }
+    },
+    {
+      "kind": "spawn",
+      "id": 16,
+      "section": "test-3",
+      "operation": "git rev-parse --show-toplevel",
+      "atMs": 1489.3453,
+      "durationMs": 54.31770000000006,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-16.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 17,
+      "section": "test-3",
+      "operation": "git worktree add",
+      "atMs": 1543.7666,
+      "durationMs": 102.07019999999989,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-17.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 18,
+      "section": "test-3",
+      "operation": "bash-child",
+      "atMs": 1646.6878,
+      "durationMs": 31.77240000000006,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-18.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 19,
+      "section": "test-3",
+      "operation": "git worktree remove",
+      "atMs": 1679.0114999999998,
+      "durationMs": 56.72700000000009,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-19.jsonl"
+    },
+    {
+      "kind": "test-end",
+      "section": "test-3",
+      "atMs": 1741.2024
+    },
+    {
+      "kind": "test-start",
+      "section": "test-4",
+      "atMs": 1741.2170999999998
+    },
+    {
+      "kind": "capture",
+      "section": "test-4",
+      "atMs": 1760.6703,
+      "durationMs": 7.356399999999894,
+      "totals": {
+        "scan": {
+          "ms": 0.31549999999992906,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "stage": {
+          "ms": 0.22430000000008476,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "walk": {
+          "ms": 0.7179000000000997,
+          "dirs": 3,
+          "files": 2,
+          "bytes": 0
+        },
+        "copy": {
+          "ms": 1.8710000000000946,
+          "dirs": 3,
+          "files": 2,
+          "bytes": 290
+        },
+        "bundled_read": {
+          "ms": 0.7470000000000709,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "bundled_write": {
+          "ms": 0.866800000000012,
+          "dirs": 4,
+          "files": 0,
+          "bytes": 0
+        },
+        "digest": {
+          "ms": 1.4717000000000553,
+          "dirs": 0,
+          "files": 2,
+          "bytes": 290
+        },
+        "manifest": {
+          "ms": 0.25710000000003674,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "publish": {
+          "ms": 0.8048999999998614,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        }
+      }
+    },
+    {
+      "kind": "spawn",
+      "id": 20,
+      "section": "test-4",
+      "operation": "git rev-parse --show-toplevel",
+      "atMs": 1768.3083,
+      "durationMs": 55.0619999999999,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-20.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 21,
+      "section": "test-4",
+      "operation": "git worktree add",
+      "atMs": 1823.4938,
+      "durationMs": 108.85739999999987,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-21.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 22,
+      "section": "test-4",
+      "operation": "bun-child",
+      "atMs": 1933.3709,
+      "durationMs": 25.452099999999973,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-22.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 23,
+      "section": "test-4",
+      "operation": "git worktree remove",
+      "atMs": 1959.4181999999998,
+      "durationMs": 58.05040000000008,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-23.jsonl"
+    },
+    {
+      "kind": "test-end",
+      "section": "test-4",
+      "atMs": 2022.2296
+    },
+    {
+      "kind": "test-start",
+      "section": "test-5",
+      "atMs": 2022.2469999999998
+    },
+    {
+      "kind": "capture",
+      "section": "test-5",
+      "atMs": 2042.6120999999998,
+      "durationMs": 13.639999999999873,
+      "totals": {
+        "scan": {
+          "ms": 0.38779999999997017,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "stage": {
+          "ms": 0.24929999999994834,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "walk": {
+          "ms": 0.7959000000000742,
+          "dirs": 4,
+          "files": 3,
+          "bytes": 0
+        },
+        "copy": {
+          "ms": 2.512300000000778,
+          "dirs": 4,
+          "files": 3,
+          "bytes": 316
+        },
+        "bundled_read": {
+          "ms": 0.810399999999845,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "bundled_write": {
+          "ms": 1.0298999999999978,
+          "dirs": 4,
+          "files": 0,
+          "bytes": 0
+        },
+        "digest": {
+          "ms": 6.593499999999949,
+          "dirs": 0,
+          "files": 3,
+          "bytes": 316
+        },
+        "manifest": {
+          "ms": 0.28670000000010987,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "publish": {
+          "ms": 0.8692000000000917,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        }
+      }
+    },
+    {
+      "kind": "spawn",
+      "id": 24,
+      "section": "test-5",
+      "operation": "git rev-parse --show-toplevel",
+      "atMs": 2056.5625999999997,
+      "durationMs": 55.68610000000035,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-24.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 25,
+      "section": "test-5",
+      "operation": "git worktree add",
+      "atMs": 2112.354,
+      "durationMs": 103.23320000000012,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-25.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 26,
+      "section": "test-5",
+      "operation": "bun-child",
+      "atMs": 2221.2635999999998,
+      "durationMs": 25.26150000000007,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-26.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 27,
+      "section": "test-5",
+      "operation": "git worktree remove",
+      "atMs": 2247.0672999999997,
+      "durationMs": 57.5621000000001,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-27.jsonl"
+    },
+    {
+      "kind": "test-end",
+      "section": "test-5",
+      "atMs": 2309.509
+    },
+    {
+      "kind": "test-start",
+      "section": "test-6",
+      "atMs": 2309.5398
+    },
+    {
+      "kind": "capture",
+      "section": "test-6",
+      "atMs": 2329.6088999999997,
+      "durationMs": 13.456300000000283,
+      "totals": {
+        "scan": {
+          "ms": 0.21279999999978827,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "stage": {
+          "ms": 0.2076999999999316,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "walk": {
+          "ms": 0.9897000000000844,
+          "dirs": 4,
+          "files": 4,
+          "bytes": 0
+        },
+        "copy": {
+          "ms": 2.8268999999995685,
+          "dirs": 4,
+          "files": 4,
+          "bytes": 370
+        },
+        "bundled_read": {
+          "ms": 0.7618999999999687,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "bundled_write": {
+          "ms": 0.9453000000003158,
+          "dirs": 4,
+          "files": 0,
+          "bytes": 0
+        },
+        "digest": {
+          "ms": 6.339300000000094,
+          "dirs": 0,
+          "files": 4,
+          "bytes": 370
+        },
+        "manifest": {
+          "ms": 0.2743000000000393,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "publish": {
+          "ms": 0.8400000000001455,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        }
+      }
+    },
+    {
+      "kind": "spawn",
+      "id": 28,
+      "section": "test-6",
+      "operation": "git rev-parse --show-toplevel",
+      "atMs": 2343.3390999999997,
+      "durationMs": 53.79840000000013,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-28.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 29,
+      "section": "test-6",
+      "operation": "git worktree add",
+      "atMs": 2397.237,
+      "durationMs": 104.39489999999978,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-29.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 30,
+      "section": "test-6",
+      "operation": "bun-child",
+      "atMs": 2505.5944999999997,
+      "durationMs": 25.76050000000032,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-30.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 31,
+      "section": "test-6",
+      "operation": "git worktree remove",
+      "atMs": 2531.8905,
+      "durationMs": 56.58640000000014,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-31.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 32,
+      "section": "test-6",
+      "operation": "git rev-parse --show-toplevel",
+      "atMs": 2588.7922,
+      "durationMs": 53.13680000000022,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-32.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 33,
+      "section": "test-6",
+      "operation": "git worktree add",
+      "atMs": 2642.0359,
+      "durationMs": 109.59929999999986,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-33.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 34,
+      "section": "test-6",
+      "operation": "bun-child",
+      "atMs": 2754.8297,
+      "durationMs": 23.02300000000014,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-34.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 35,
+      "section": "test-6",
+      "operation": "git worktree remove",
+      "atMs": 2778.4755999999998,
+      "durationMs": 56.740099999999984,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-35.jsonl"
+    },
+    {
+      "kind": "test-end",
+      "section": "test-6",
+      "atMs": 2840.2505
+    },
+    {
+      "kind": "test-start",
+      "section": "test-7",
+      "atMs": 2840.2664
+    },
+    {
+      "kind": "spawn",
+      "id": 36,
+      "section": "test-7",
+      "operation": "git init -q",
+      "atMs": 2841.9035,
+      "durationMs": 63.44959999999992,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-36.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 37,
+      "section": "test-7",
+      "operation": "git add -A",
+      "atMs": 2905.7192,
+      "durationMs": 74.0592999999999,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-37.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 38,
+      "section": "test-7",
+      "operation": "git commit-with-identity",
+      "atMs": 2979.8914999999997,
+      "durationMs": 135.19800000000032,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-38.jsonl"
+    },
+    {
+      "kind": "capture",
+      "section": "test-7",
+      "atMs": 3117.2010999999998,
+      "durationMs": 9.354499999999916,
+      "totals": {
+        "scan": {
+          "ms": 0.3056000000001404,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "stage": {
+          "ms": 0.23999999999978172,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "walk": {
+          "ms": 0.8406999999997424,
+          "dirs": 4,
+          "files": 3,
+          "bytes": 0
+        },
+        "copy": {
+          "ms": 2.4694000000004053,
+          "dirs": 4,
+          "files": 3,
+          "bytes": 180
+        },
+        "bundled_read": {
+          "ms": 1.17450000000008,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "bundled_write": {
+          "ms": 0.9873999999999796,
+          "dirs": 4,
+          "files": 0,
+          "bytes": 0
+        },
+        "digest": {
+          "ms": 2.2291000000000167,
+          "dirs": 0,
+          "files": 3,
+          "bytes": 180
+        },
+        "manifest": {
+          "ms": 0.2694000000001324,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "publish": {
+          "ms": 0.7829000000001543,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        }
+      }
+    },
+    {
+      "kind": "spawn",
+      "id": 39,
+      "section": "test-7",
+      "operation": "git rev-parse --show-toplevel",
+      "atMs": 3126.8397,
+      "durationMs": 56.12869999999975,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-39.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 40,
+      "section": "test-7",
+      "operation": "git worktree add",
+      "atMs": 3183.0715,
+      "durationMs": 104.47199999999975,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-40.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 41,
+      "section": "test-7",
+      "operation": "bun-child",
+      "atMs": 3291.8392,
+      "durationMs": 23.875100000000202,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-41.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 42,
+      "section": "test-7",
+      "operation": "git worktree remove",
+      "atMs": 3316.3507,
+      "durationMs": 58.03909999999996,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-42.jsonl"
+    },
+    {
+      "kind": "test-end",
+      "section": "test-7",
+      "atMs": 3379.9501999999998
+    },
+    {
+      "kind": "test-start",
+      "section": "test-8",
+      "atMs": 3379.9651
+    },
+    {
+      "kind": "capture",
+      "section": "test-8",
+      "atMs": 3385.9851,
+      "durationMs": 9.2483000000002,
+      "totals": {
+        "scan": {
+          "ms": 0.47280000000000655,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "stage": {
+          "ms": 0.31999999999970896,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "walk": {
+          "ms": 0.9557999999992717,
+          "dirs": 4,
+          "files": 3,
+          "bytes": 0
+        },
+        "copy": {
+          "ms": 2.653899999999794,
+          "dirs": 4,
+          "files": 3,
+          "bytes": 179
+        },
+        "bundled_read": {
+          "ms": 0.7561999999998079,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "bundled_write": {
+          "ms": 0.9164999999998145,
+          "dirs": 4,
+          "files": 0,
+          "bytes": 0
+        },
+        "digest": {
+          "ms": 2.020299999999679,
+          "dirs": 0,
+          "files": 3,
+          "bytes": 179
+        },
+        "manifest": {
+          "ms": 0.23039999999991778,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "publish": {
+          "ms": 0.8411000000000968,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        }
+      }
+    },
+    {
+      "kind": "capture",
+      "section": "test-8",
+      "atMs": 3403.3860999999997,
+      "durationMs": 6.532100000000355,
+      "totals": {
+        "scan": {
+          "ms": 0.2664999999997235,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "stage": {
+          "ms": 0.22389999999950305,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "walk": {
+          "ms": 0.46499999999969077,
+          "dirs": 3,
+          "files": 2,
+          "bytes": 0
+        },
+        "copy": {
+          "ms": 1.6882999999997992,
+          "dirs": 3,
+          "files": 2,
+          "bytes": 163
+        },
+        "bundled_read": {
+          "ms": 0.632799999999861,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "bundled_write": {
+          "ms": 0.7080000000000837,
+          "dirs": 4,
+          "files": 0,
+          "bytes": 0
+        },
+        "digest": {
+          "ms": 1.410399999999754,
+          "dirs": 0,
+          "files": 2,
+          "bytes": 163
+        },
+        "manifest": {
+          "ms": 0.259900000000016,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "publish": {
+          "ms": 0.8398999999999432,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        }
+      }
+    },
+    {
+      "kind": "test-end",
+      "section": "test-8",
+      "atMs": 3416.3849
+    },
+    {
+      "kind": "test-start",
+      "section": "test-9",
+      "atMs": 3416.3976
+    },
+    {
+      "kind": "capture",
+      "section": "test-9",
+      "atMs": 3440.4150999999997,
+      "durationMs": 7.470700000000306,
+      "totals": {
+        "scan": {
+          "ms": 0.3202000000001135,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "stage": {
+          "ms": 0.3703000000004977,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "walk": {
+          "ms": 0.6545999999998457,
+          "dirs": 3,
+          "files": 2,
+          "bytes": 0
+        },
+        "copy": {
+          "ms": 1.7879999999995562,
+          "dirs": 3,
+          "files": 2,
+          "bytes": 212
+        },
+        "bundled_read": {
+          "ms": 0.824800000000323,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "bundled_write": {
+          "ms": 0.8488999999999578,
+          "dirs": 4,
+          "files": 0,
+          "bytes": 0
+        },
+        "digest": {
+          "ms": 1.552299999999832,
+          "dirs": 0,
+          "files": 2,
+          "bytes": 212
+        },
+        "manifest": {
+          "ms": 0.2748999999998887,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "publish": {
+          "ms": 0.79300000000012,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        }
+      }
+    },
+    {
+      "kind": "spawn",
+      "id": 43,
+      "section": "test-9",
+      "operation": "git rev-parse --show-toplevel",
+      "atMs": 3448.6902,
+      "durationMs": 55.53139999999985,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-43.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 44,
+      "section": "test-9",
+      "operation": "git worktree add",
+      "atMs": 3504.3922,
+      "durationMs": 105.02230000000009,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-44.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 45,
+      "section": "test-9",
+      "operation": "bash-child",
+      "atMs": 3610.6113,
+      "durationMs": 89.29279999999972,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-45.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 46,
+      "section": "test-9",
+      "operation": "git worktree remove",
+      "atMs": 3700.5083,
+      "durationMs": 55.58609999999999,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-46.jsonl"
+    },
+    {
+      "kind": "spawn",
+      "id": 47,
+      "section": "test-9",
+      "operation": "git worktree list",
+      "atMs": 3757.9926,
+      "durationMs": 52.446699999999964,
+      "code": 0,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-47.jsonl"
+    },
+    {
+      "kind": "test-end",
+      "section": "test-9",
+      "atMs": 3814.7632
+    },
+    {
+      "kind": "test-start",
+      "section": "test-10",
+      "atMs": 3814.7805
+    },
+    {
+      "kind": "capture",
+      "section": "test-10",
+      "atMs": 3818.1875999999997,
+      "durationMs": 7.846000000000004,
+      "totals": {
+        "scan": {
+          "ms": 0.21669999999994616,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "stage": {
+          "ms": 0.23030000000017026,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "walk": {
+          "ms": 0.509900000000016,
+          "dirs": 3,
+          "files": 2,
+          "bytes": 0
+        },
+        "copy": {
+          "ms": 2.018500000000131,
+          "dirs": 3,
+          "files": 2,
+          "bytes": 176
+        },
+        "bundled_read": {
+          "ms": 0.9905999999996311,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "bundled_write": {
+          "ms": 0.9454000000000633,
+          "dirs": 4,
+          "files": 0,
+          "bytes": 0
+        },
+        "digest": {
+          "ms": 1.7528999999999542,
+          "dirs": 0,
+          "files": 2,
+          "bytes": 176
+        },
+        "manifest": {
+          "ms": 0.2853999999997541,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        },
+        "publish": {
+          "ms": 0.8571000000001732,
+          "dirs": 0,
+          "files": 0,
+          "bytes": 0
+        }
+      }
+    },
+    {
+      "kind": "spawn",
+      "id": 48,
+      "section": "test-10",
+      "operation": "git rev-parse --show-toplevel",
+      "atMs": 3826.3934999999997,
+      "durationMs": 53.76120000000037,
+      "code": 128,
+      "tracePath": "C:/Users/Leex279/.archon/workspaces/coleam00/Archon/artifacts/windows-issues-20260910/isolation-3287-trace/git-trace-46772-48.jsonl"
+    },
+    {
+      "kind": "test-end",
+      "section": "test-10",
+      "atMs": 3882.3689999999997
+    }
+  ]
+}

@@ -1,0 +1,134 @@
+﻿bun test v1.4.2 (744846f84)
+bun.exe : 
+At line:4 char:1
++ & (Join-Path $artifactRoot 'runtime\bun-windows-x64\bun.exe') test ./ ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+src\bundle-live-selection.test.ts:
+{"level":30,"time":1789051393825,"pid":43120,"hostname":"Leex","module":"workflow.discovery","count":2,"msg":"app_default_workflows_loaded"}
+{"level":30,"time":1789051393827,"pid":43120,"hostname":"Leex","module":"workflow.discovery","count":1,"msg":"home_workflows_loaded"}
+{"level":30,"time":1789051393829,"pid":43120,"hostname":"Leex","module":"workflow.discovery","count":4,"errorCount":0,"msg":"workflows_discovery_completed"}
+73 | });
+74 | 
+75 | test('live source catalogs exclude unindexed bundled packs while retaining project and home packs', async () => {
+76 |   const result = await discoverWorkflows(project);
+77 |   expect(result.errors).toEqual([]);
+78 |   expect(result.workflows.map(entry => entry.workflow.name).sort()).toEqual([
+                                                                         ^
+error: expect(received).toEqual(expected)
+
+  [
++   "excluded-flow",
+    "home-flow",
+    "project-flow",
+    "shipped-flow",
+  ]
+
+- Expected  - 0
++ Received  + 1
+
+      at <anonymous> (C:\Users\Leex279\Documents\GitHub\dynamous\Archon\worktrees\windows-3294\packages\workflows\src\bundle-live-selection.test.ts:78:69)
+(fail) live source catalogs exclude unindexed bundled packs while retaining project and home packs [11.51ms]
+{"level":30,"time":1789051393830,"pid":43120,"hostname":"Leex","module":"workflow.script-discovery","count":1,"dir":"C:\\Users\\Leex279\\AppData\\Local\\Temp\\archon-live-bundle-hGyloU\\app\\workflows\\excluded\\flow\\scripts","msg":"scripts_discovery_completed"}
+{"level":30,"time":1789051393831,"pid":43120,"hostname":"Leex","module":"workflow.script-discovery","count":1,"dir":"C:\\Users\\Leex279\\AppData\\Local\\Temp\\archon-live-bundle-hGyloU\\app\\workflows\\shipped\\flow\\scripts","msg":"scripts_discovery_completed"}
+{"level":30,"time":1789051393831,"pid":43120,"hostname":"Leex","module":"workflow.script-discovery","count":0,"dir":"C:\\Users\\Leex279\\AppData\\Local\\Temp\\archon-live-bundle-hGyloU\\home\\scripts","msg":"scripts_discovery_completed"}
+{"level":30,"time":1789051393831,"pid":43120,"hostname":"Leex","module":"workflow.script-discovery","count":1,"dir":"C:\\Users\\Leex279\\AppData\\Local\\Temp\\archon-live-bundle-hGyloU\\home\\workflows\\home-only\\flow\\scripts","msg":"scripts_discovery_completed"}
+{"level":30,"time":1789051393831,"pid":43120,"hostname":"Leex","module":"workflow.script-discovery","count":0,"dir":"C:\\Users\\Leex279\\AppData\\Local\\Temp\\archon-live-bundle-hGyloU\\project\\.archon\\scripts","msg":"scripts_discovery_completed"}
+{"level":30,"time":1789051393831,"pid":43120,"hostname":"Leex","module":"workflow.script-discovery","count":1,"dir":"C:\\Users\\Leex279\\AppData\\Local\\Temp\\archon-live-bundle-hGyloU\\project\\.archon\\workflows\\project-only\\flow\\scripts","msg":"scripts_discovery_completed"}
+80 |   ]);
+81 | });
+82 | 
+83 | test('live script discovery uses the indexed bundle while retaining project and home scripts', async () => {
+84 |   const scripts = await discoverScriptsForCwd(project);
+85 |   expect([...scripts.keys()].sort()).toEqual([
+                                          ^
+error: expect(received).toEqual(expected)
+
+  [
++   "__archon_pack__bundled:excluded:flow::helper",
+    "__archon_pack__bundled:shipped:flow::helper",
+    "__archon_pack__global:home-only:flow::helper",
+    "__archon_pack__project:project-only:flow::helper",
+  ]
+
+- Expected  - 0
++ Received  + 1
+
+      at <anonymous> (C:\Users\Leex279\Documents\GitHub\dynamous\Archon\worktrees\windows-3294\packages\workflows\src\bundle-live-selection.test.ts:85:38)
+(fail) live script discovery uses the indexed bundle while retaining project and home scripts [2.13ms]
+91 | 
+92 | test('live bundled command execution and validation reject an unindexed owner', async () => {
+93 |   expect(await loadCommandPrompt(deps, project, packagedCommand('shipped'))).toEqual({
+94 |     success: true, content: 'shipped-flow command',
+95 |   });
+96 |   expect(await loadCommandPrompt(deps, project, packagedCommand('excluded'))).toMatchObject({
+                                                                                   ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "reason": "not_found",
+-   "success": false,
++   "content": "excluded-flow command",
++   "success": true,
+  }
+
+- Expected  - 2
++ Received  + 2
+
+      at <anonymous> (C:\Users\Leex279\Documents\GitHub\dynamous\Archon\worktrees\windows-3294\packages\workflows\src\bundle-live-selection.test.ts:96:79)
+(fail) live bundled command execution and validation reject an unindexed owner [0.87ms]
+100 | 
+101 | test('live validation rejects an unindexed bundled command owner', async () => {
+102 |   const parsed = parseWorkflow(`name: check\ndescription: fixture\nnodes:\n  - id: work\n    command: ${packagedCommand('excluded')}\n`, 'check.yaml');
+103 |   if (!parsed.workflow) throw new Error('Invalid test workflow');
+104 |   const issues = await validateWorkflowResources(parsed.workflow, project);
+105 |   expect(issues.some(issue => issue.level === 'error' && issue.field === 'command')).toBe(true);
+                                                                                           ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at <anonymous> (C:\Users\Leex279\Documents\GitHub\dynamous\Archon\worktrees\windows-3294\packages\workflows\src\bundle-live-selection.test.ts:105:86)
+(fail) live validation rejects an unindexed bundled command owner [2.62ms]
+106 | });
+107 | 
+108 | test('removing defaults from the index removes flat bundled commands from listing, validation and execution', async () => {
+109 |   expect(await discoverAvailableCommands(project)).toContain('flat-command');
+110 |   selectedPacks = ['shipped'];
+111 |   expect(await discoverAvailableCommands(project)).not.toContain('flat-command');
+                                                             ^
+error: expect(received).not.toContain(expected)
+
+Expected to not contain: "flat-command"
+Received: [ "flat-command" ]
+
+      at <anonymous> (C:\Users\Leex279\Documents\GitHub\dynamous\Archon\worktrees\windows-3294\packages\workflows\src\bundle-live-selection.test.ts:111:56)
+(fail) removing defaults from the index removes flat bundled commands from listing, validation and execution [0.90ms]
+{"level":30,"time":1789051393868,"pid":43120,"hostname":"Leex","module":"workflow.discovery","count":2,"msg":"app_default_workflows_loaded"}
+{"level":30,"time":1789051393869,"pid":43120,"hostname":"Leex","module":"workflow.discovery","count":1,"msg":"home_workflows_loaded"}
+{"level":30,"time":1789051393870,"pid":43120,"hostname":"Leex","module":"workflow.discovery","count":4,"errorCount":0,"msg":"workflows_discovery_completed"}
+{"level":30,"time":1789051393870,"pid":43120,"hostname":"Leex","module":"workflow.script-discovery","count":1,"dir":"C:\\Users\\Leex279\\AppData\\Local\\Temp\\archon-live-bundle-hGyloU\\capture\\bundled\\workflows\\excluded\\flow\\scripts","msg":"scripts_discovery_completed"}
+{"level":30,"time":1789051393871,"pid":43120,"hostname":"Leex","module":"workflow.script-discovery","count":1,"dir":"C:\\Users\\Leex279\\AppData\\Local\\Temp\\archon-live-bundle-hGyloU\\capture\\bundled\\workflows\\shipped\\flow\\scripts","msg":"scripts_discovery_completed"}
+{"level":30,"time":1789051393871,"pid":43120,"hostname":"Leex","module":"workflow.script-discovery","count":0,"dir":"C:\\Users\\Leex279\\AppData\\Local\\Temp\\archon-live-bundle-hGyloU\\capture\\global\\scripts","msg":"scripts_discovery_completed"}
+{"level":30,"time":1789051393871,"pid":43120,"hostname":"Leex","module":"workflow.script-discovery","count":1,"dir":"C:\\Users\\Leex279\\AppData\\Local\\Temp\\archon-live-bundle-hGyloU\\capture\\global\\workflows\\home-only\\flow\\scripts","msg":"scripts_discovery_completed"}
+{"level":30,"time":1789051393871,"pid":43120,"hostname":"Leex","module":"workflow.script-discovery","count":0,"dir":"C:\\Users\\Leex279\\AppData\\Local\\Temp\\archon-live-bundle-hGyloU\\capture\\project\\.archon\\scripts","msg":"scripts_discovery_completed"}
+{"level":30,"time":1789051393871,"pid":43120,"hostname":"Leex","module":"workflow.script-discovery","count":1,"dir":"C:\\Users\\Leex279\\AppData\\Local\\Temp\\archon-live-bundle-hGyloU\\capture\\project\\.archon\\workflows\\project-only\\flow\\scripts","msg":"scripts_discovery_completed"}
+(pass) a captured bundle retains formerly indexed resources without reading the live index [36.23ms]
+{"level":30,"time":1789051393875,"pid":43120,"hostname":"Leex","module":"workflow.discovery","count":2,"msg":"app_default_workflows_loaded"}
+{"level":30,"time":1789051393875,"pid":43120,"hostname":"Leex","module":"workflow.discovery","count":1,"msg":"home_workflows_loaded"}
+{"level":30,"time":1789051393876,"pid":43120,"hostname":"Leex","module":"workflow.discovery","count":4,"errorCount":0,"msg":"workflows_discovery_completed"}
+{"level":30,"time":1789051393877,"pid":43120,"hostname":"Leex","module":"workflow.script-discovery","count":1,"dir":"C:\\Users\\Leex279\\AppData\\Local\\Temp\\archon-live-bundle-hGyloU\\app\\workflows\\excluded\\flow\\scripts","msg":"scripts_discovery_completed"}
+{"level":30,"time":1789051393877,"pid":43120,"hostname":"Leex","module":"workflow.script-discovery","count":2,"dir":"C:\\Users\\Leex279\\AppData\\Local\\Temp\\archon-live-bundle-hGyloU\\app\\workflows\\shipped\\flow\\scripts","msg":"scripts_discovery_completed"}
+{"level":30,"time":1789051393877,"pid":43120,"hostname":"Leex","module":"workflow.script-discovery","count":0,"dir":"C:\\Users\\Leex279\\AppData\\Local\\Temp\\archon-live-bundle-hGyloU\\home\\scripts","msg":"scripts_discovery_completed"}
+{"level":30,"time":1789051393877,"pid":43120,"hostname":"Leex","module":"workflow.script-discovery","count":1,"dir":"C:\\Users\\Leex279\\AppData\\Local\\Temp\\archon-live-bundle-hGyloU\\home\\workflows\\home-only\\flow\\scripts","msg":"scripts_discovery_completed"}
+{"level":30,"time":1789051393877,"pid":43120,"hostname":"Leex","module":"workflow.script-discovery","count":0,"dir":"C:\\Users\\Leex279\\AppData\\Local\\Temp\\archon-live-bundle-hGyloU\\project\\.archon\\scripts","msg":"scripts_discovery_completed"}
+{"level":30,"time":1789051393878,"pid":43120,"hostname":"Leex","module":"workflow.script-discovery","count":1,"dir":"C:\\Users\\Leex279\\AppData\\Local\\Temp\\archon-live-bundle-hGyloU\\project\\.archon\\workflows\\project-only\\flow\\scripts","msg":"scripts_discovery_completed"}
+(pass) live indexed workflow and script additions are visible without regenerating the binary bundle [5.95ms]
+
+ 2 pass
+ 5 fail
+ 15 expect() calls
+Ran 7 tests across 1 file. [272.00ms]

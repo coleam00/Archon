@@ -1,0 +1,6 @@
+{
+    "exitCode":  1,
+    "mutation":  "inherited-pwd",
+    "selector":  "PWD and OLDPWD",
+    "expected":  "guard assertion failure"
+}

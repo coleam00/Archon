@@ -1,0 +1,6 @@
+{
+    "exitCode":  1,
+    "mutation":  "per-fixture-capture",
+    "selector":  "shares one capture",
+    "expected":  "guard assertion failure"
+}

@@ -1,0 +1,17 @@
+﻿import { Worker, isMainThread, workerData } from 'node:worker_threads';
+if (isMainThread) {
+  const deadline = Date.now() + 10000;
+  console.log(JSON.stringify({ event: 'bounded_cpu_load_started', pid: process.pid, workers: 8, deadline, utc: new Date().toISOString() }));
+  await Promise.all(Array.from({ length: 8 }, () => new Promise<void>((resolve, reject) => {
+    const worker = new Worker(new URL(import.meta.url), { workerData: { deadline } });
+    worker.on('exit', () => resolve());
+    worker.on('error', reject);
+  })));
+  console.log(JSON.stringify({ event: 'bounded_cpu_load_finished', pid: process.pid, utc: new Date().toISOString() }));
+} else {
+  let value = 0;
+  while (Date.now() < workerData.deadline) {
+    for (let index = 0; index < 10000; index++) value = Math.imul(value + index + 1, 1103515245);
+  }
+  if (value === 123456789) console.log(value);
+}

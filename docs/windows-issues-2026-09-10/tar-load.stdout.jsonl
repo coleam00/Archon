@@ -1,0 +1,2 @@
+{"event":"bounded_cpu_load_started","pid":44216,"workers":8,"deadline":1789050802724,"utc":"2026-09-10T14:33:12.724Z"}
+{"event":"bounded_cpu_load_finished","pid":44216,"utc":"2026-09-10T14:33:22.732Z"}

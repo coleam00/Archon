@@ -1,0 +1,129 @@
+﻿bun test v1.4.2 (744846f84)
+bun.exe : 
+At line:4 char:1
++ & (Join-Path $artifactRoot 'runtime\bun-windows-x64\bun.exe') test ./ ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+src\bundle-live-selection.test.ts:
+{"level":40,"time":1789051556176,"pid":20140,"hostname":"Leex","module":"workflow.loader","id":"adversarial-sprint","warning":"Node 'adversarial-sprint': the prose 'loop.until' completion signal is deprecated. Declare 'loop.until_bash' (deterministic check) or 'loop.until_field' (a declared boolean in output_format) instead (#2707 step 3). While supported, emit legacy signals as '<promise>SIGNAL</promise>' or a final standalone signal line.","msg":"node_loop_until_deprecated"}
+{"level":50,"time":1789051556177,"pid":20140,"hostname":"Leex","module":"workflow.discovery","filename":"archon-adversarial-dev.yaml","contentPreview":"name: archon-adversarial-dev\ndescription: |\n  Use when: User wants to build a complete application from scratch using adversarial development.\n  Triggers: \"adversarial dev\", \"adversarial development\",...","msg":"bundled_workflow_parse_failed"}
+{"level":50,"time":1789051556179,"pid":20140,"hostname":"Leex","module":"workflow.discovery","filename":"archon-architect.yaml","contentPreview":"name: archon-architect\ndescription: |\n  Use when: User wants an architectural sweep, complexity reduction, or codebase health improvement.\n  Triggers: \"architect\", \"simplify codebase\", \"reduce complex...","msg":"bundled_workflow_parse_failed"}
+{"level":50,"time":1789051556202,"pid":20140,"hostname":"Leex","module":"workflow.discovery","filename":"archon-feature-development.yaml","contentPreview":"name: archon-feature-development\ndescription: |\n  Use when: Implementing a feature from an existing plan.\n  Input: Path to a plan file ($ARTIFACTS_DIR/plan.md) or GitHub issue containing a plan.\n  Doe...","msg":"bundled_workflow_parse_failed"}
+{"level":50,"time":1789051556204,"pid":20140,"hostname":"Leex","module":"workflow.discovery","filename":"archon-fix-github-issue.yaml","contentPreview":"name: archon-fix-github-issue\ndescription: |\n  Use when: User wants to FIX, RESOLVE, or IMPLEMENT a solution for a GitHub issue.\n  Triggers: \"fix this issue\", \"implement issue #123\", \"resolve this bug...","msg":"bundled_workflow_parse_failed"}
+{"level":50,"time":1789051556204,"pid":20140,"hostname":"Leex","module":"workflow.discovery","filename":"archon-idea-to-pr.yaml","contentPreview":"name: archon-idea-to-pr\ndescription: |\n  Use when: You have a feature idea or description and want end-to-end development.\n  Input: Feature description in natural language, or path to a PRD file\n  Out...","msg":"bundled_workflow_parse_failed"}
+{"level":50,"time":1789051556206,"pid":20140,"hostname":"Leex","module":"workflow.discovery","filename":"archon-interactive-prd.yaml","contentPreview":"name: archon-interactive-prd\ndescription: |\n  Use when: User wants to create a PRD through guided conversation.\n  Triggers: \"create a prd\", \"new prd\", \"interactive prd\", \"plan a feature\",\n            ...","msg":"bundled_workflow_parse_failed"}
+{"level":40,"time":1789051556207,"pid":20140,"hostname":"Leex","module":"workflow.loader","id":"explore","warning":"Node 'explore': node-level loop 'interactive:' is deprecated. A future release re-expresses the interactive loop as a gate + loop_group composition (#2707 step 3). Continue using it for now.","msg":"node_loop_interactive_deprecated"}
+{"level":40,"time":1789051556207,"pid":20140,"hostname":"Leex","module":"workflow.loader","id":"explore","warning":"Node 'explore': the prose 'loop.until' completion signal is deprecated. Declare 'loop.until_bash' (deterministic check) or 'loop.until_field' (a declared boolean in output_format) instead (#2707 step 3). While supported, emit legacy signals as '<promise>SIGNAL</promise>' or a final standalone signal line.","msg":"node_loop_until_deprecated"}
+{"level":40,"time":1789051556207,"pid":20140,"hostname":"Leex","module":"workflow.loader","id":"refine-plan","warning":"Node 'refine-plan': node-level loop 'interactive:' is deprecated. A future release re-expresses the interactive loop as a gate + loop_group composition (#2707 step 3). Continue using it for now.","msg":"node_loop_interactive_deprecated"}
+{"level":40,"time":1789051556207,"pid":20140,"hostname":"Leex","module":"workflow.loader","id":"refine-plan","warning":"Node 'refine-plan': the prose 'loop.until' completion signal is deprecated. Declare 'loop.until_bash' (deterministic check) or 'loop.until_field' (a declared boolean in output_format) instead (#2707 step 3). While supported, emit legacy signals as '<promise>SIGNAL</promise>' or a final standalone signal line.","msg":"node_loop_until_deprecated"}
+{"level":40,"time":1789051556207,"pid":20140,"hostname":"Leex","module":"workflow.loader","id":"implement","warning":"Node 'implement': the prose 'loop.until' completion signal is deprecated. Declare 'loop.until_bash' (deterministic check) or 'loop.until_field' (a declared boolean in output_format) instead (#2707 step 3). While supported, emit legacy signals as '<promise>SIGNAL</promise>' or a final standalone signal line.","msg":"node_loop_until_deprecated"}
+{"level":40,"time":1789051556207,"pid":20140,"hostname":"Leex","module":"workflow.loader","id":"fix-feedback","warning":"Node 'fix-feedback': node-level loop 'interactive:' is deprecated. A future release re-expresses the interactive loop as a gate + loop_group composition (#2707 step 3). Continue using it for now.","msg":"node_loop_interactive_deprecated"}
+{"level":40,"time":1789051556207,"pid":20140,"hostname":"Leex","module":"workflow.loader","id":"fix-feedback","warning":"Node 'fix-feedback': the prose 'loop.until' completion signal is deprecated. Declare 'loop.until_bash' (deterministic check) or 'loop.until_field' (a declared boolean in output_format) instead (#2707 step 3). While supported, emit legacy signals as '<promise>SIGNAL</promise>' or a final standalone signal line.","msg":"node_loop_until_deprecated"}
+{"level":50,"time":1789051556207,"pid":20140,"hostname":"Leex","module":"workflow.discovery","filename":"archon-piv-loop.yaml","contentPreview":"name: archon-piv-loop\ndescription: |\n  Use when: User wants guided Plan-Implement-Validate development with human-in-the-loop.\n  Triggers: \"piv\", \"piv loop\", \"plan implement validate\", \"guided develop...","msg":"bundled_workflow_parse_failed"}
+{"level":50,"time":1789051556208,"pid":20140,"hostname":"Leex","module":"workflow.discovery","filename":"archon-plan-to-pr.yaml","contentPreview":"name: archon-plan-to-pr\ndescription: |\n  Use when: You have an existing implementation plan and want to execute it end-to-end.\n  Input: Path to a plan file ($ARTIFACTS_DIR/plan.md or .agents/plans/*.m...","msg":"bundled_workflow_parse_failed"}
+{"level":40,"time":1789051556209,"pid":20140,"hostname":"Leex","module":"workflow.loader","id":"implement","warning":"Node 'implement': the prose 'loop.until' completion signal is deprecated. Declare 'loop.until_bash' (deterministic check) or 'loop.until_field' (a declared boolean in output_format) instead (#2707 step 3). While supported, emit legacy signals as '<promise>SIGNAL</promise>' or a final standalone signal line.","msg":"node_loop_until_deprecated"}
+{"level":50,"time":1789051556209,"pid":20140,"hostname":"Leex","module":"workflow.discovery","filename":"archon-ralph-dag.yaml","contentPreview":"name: archon-ralph-dag\ndescription: |\n  Use when: User wants to run a Ralph implementation loop.\n  Triggers: \"ralph\", \"run ralph\", \"ralph dag\", \"run ralph dag\".\n\n  DAG workflow that:\n  1. Detects inpu...","msg":"bundled_workflow_parse_failed"}
+{"level":50,"time":1789051556210,"pid":20140,"hostname":"Leex","module":"workflow.discovery","filename":"archon-refactor-safely.yaml","contentPreview":"name: archon-refactor-safely\ndescription: |\n  Use when: User wants to refactor code safely with continuous validation and behavior preservation.\n  Triggers: \"refactor\", \"refactor safely\", \"split this ...","msg":"bundled_workflow_parse_failed"}
+{"level":40,"time":1789051556214,"pid":20140,"hostname":"Leex","module":"workflow.loader","id":"loop-counter","warning":"Node 'loop-counter': the prose 'loop.until' completion signal is deprecated. Declare 'loop.until_bash' (deterministic check) or 'loop.until_field' (a declared boolean in output_format) instead (#2707 step 3). While supported, emit legacy signals as '<promise>SIGNAL</promise>' or a final standalone signal line.","msg":"node_loop_until_deprecated"}
+{"level":50,"time":1789051556217,"pid":20140,"hostname":"Leex","module":"workflow.discovery","filename":"archon-validate-pr.yaml","contentPreview":"name: archon-validate-pr\ndescription: |\n  Use when: User wants a thorough PR validation that tests both main (bug present) and feature branch (bug fixed).\n  Triggers: \"validate PR\", \"validate pr #123\"...","msg":"bundled_workflow_parse_failed"}
+{"level":30,"time":1789051556218,"pid":20140,"hostname":"Leex","module":"workflow.discovery","count":21,"msg":"bundled_default_workflows_loaded"}
+{"level":30,"time":1789051556221,"pid":20140,"hostname":"Leex","module":"workflow.discovery","count":1,"msg":"home_workflows_loaded"}
+{"level":30,"time":1789051556234,"pid":20140,"hostname":"Leex","module":"workflow.script-discovery","count":0,"dir":"C:\\Users\\Leex279\\AppData\\Local\\Temp\\archon-live-bundle-LELhKd\\home\\scripts","msg":"scripts_discovery_completed"}
+{"level":30,"time":1789051556235,"pid":20140,"hostname":"Leex","module":"workflow.script-discovery","count":1,"dir":"C:\\Users\\Leex279\\AppData\\Local\\Temp\\archon-live-bundle-LELhKd\\home\\workflows\\home-only\\flow\\scripts","msg":"scripts_discovery_completed"}
+{"level":30,"time":1789051556235,"pid":20140,"hostname":"Leex","module":"workflow.script-discovery","count":0,"dir":"C:\\Users\\Leex279\\AppData\\Local\\Temp\\archon-live-bundle-LELhKd\\project\\.archon\\scripts","msg":"scripts_discovery_completed"}
+{"level":30,"time":1789051556235,"pid":20140,"hostname":"Leex","module":"workflow.script-discovery","count":1,"dir":"C:\\Users\\Leex279\\AppData\\Local\\Temp\\archon-live-bundle-LELhKd\\project\\.archon\\workflows\\project-only\\flow\\scripts","msg":"scripts_discovery_completed"}
+{"level":40,"time":1789051556252,"pid":20140,"hostname":"Leex","module":"workflow.include-expander","include":"review","target":"archon-review-block","droppedFields":["deprecated"],"msg":"include.workflow_level_fields_dropped"}
+{"level":30,"time":1789051556264,"pid":20140,"hostname":"Leex","module":"workflow.discovery","count":22,"errorCount":13,"msg":"workflows_discovery_completed"}
+158 |   Object.assign(paths, { [name]: `workflows/defaults/${name}.yml` });
+159 |   await write(join(project, '.archon', 'workflows', `${name}.yml`), yaml.replace('bundled version', 'project version'));
+160 |   binary.mockReturnValue(true);
+161 |   try {
+162 |     const result = await discoverWorkflows(project);
+163 |     expect(result.errors).toEqual([]);
+                                ^
+error: expect(received).toEqual(expected)
+
+- []
++ [
++   {
++     "error": "Unknown provider 'claude'. Registered: ",
++     "errorType": "validation_error",
++     "filename": "archon-adversarial-dev.yaml",
++   },
++   {
++     "error": "Unknown provider 'claude'. Registered: ",
++     "errorType": "validation_error",
++     "filename": "archon-architect.yaml",
++   },
++   {
++     "error": "Node 'implement': unknown provider 'claude'. Registered: ",
++     "errorType": "validation_error",
++     "filename": "archon-feature-development.yaml",
++   },
++   {
++     "error": "Unknown provider 'claude'. Registered: ",
++     "errorType": "validation_error",
++     "filename": "archon-fix-github-issue.yaml",
++   },
++   {
++     "error": "Node 'implement-tasks': unknown provider 'claude'. Registered: ",
++     "errorType": "validation_error",
++     "filename": "archon-idea-to-pr.yaml",
++   },
++   {
++     "error": "Unknown provider 'claude'. Registered: ",
++     "errorType": "validation_error",
++     "filename": "archon-interactive-prd.yaml",
++   },
++   {
++     "error": "Unknown provider 'claude'. Registered: ",
++     "errorType": "validation_error",
++     "filename": "archon-piv-loop.yaml",
++   },
++   {
++     "error": "Node 'implement-tasks': unknown provider 'claude'. Registered: ",
++     "errorType": "validation_error",
++     "filename": "archon-plan-to-pr.yaml",
++   },
++   {
++     "error": "Unknown provider 'claude'. Registered: ",
++     "errorType": "validation_error",
++     "filename": "archon-ralph-dag.yaml",
++   },
++   {
++     "error": "Unknown provider 'claude'. Registered: ",
++     "errorType": "validation_error",
++     "filename": "archon-refactor-safely.yaml",
++   },
++   {
++     "error": "Unknown provider 'claude'. Registered: ",
++     "errorType": "validation_error",
++     "filename": "archon-validate-pr.yaml",
++   },
++   {
++     "error": "Duplicate workflow name 'selection-yml-override' — also declared in selection-yml-override.yml. Workflow names must be unique; same-name files do not override 
+each other (overrides are by filename).",
++     "errorType": "validation_error",
++     "filename": "selection-yml-override.yaml",
++   },
++   {
++     "error": "Duplicate workflow name 'selection-yml-override' — also declared in selection-yml-override.yaml. Workflow names must be unique; same-name files do not override 
+each other (overrides are by filename).",
++     "errorType": "validation_error",
++     "filename": "selection-yml-override.yml",
++   },
++ ]
+
+- Expected  - 1
++ Received  + 67
+
+      at <anonymous> (C:\Users\Leex279\Documents\GitHub\dynamous\Archon\worktrees\windows-3294\packages\workflows\src\bundle-live-selection.test.ts:163:27)
+(fail) binary discovery preserves an authored yml filename when a project overrides it [93.71ms]
+
+ 0 pass
+ 7 filtered out
+ 1 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [303.00ms]

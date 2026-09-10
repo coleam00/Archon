@@ -1,0 +1,6 @@
+{
+    "exitCode":  1,
+    "mutation":  "head-script",
+    "selector":  "uncommitted script edit",
+    "expected":  "guard assertion failure"
+}

@@ -1,0 +1,3 @@
+﻿{"runnerPid":46752,"executable":"C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\runtime\\bun-windows-x64\\bun.exe","utc":"2026-09-10T14:31:18.9794374Z","maxWallMs":15000,"event":"runner_started","elapsedMs":13.5708,"runDir":"C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\tar-20260910-163118-964-repeat-1"}
+{"error":"Exception calling \"GetProcessById\" with \"1\" argument(s): \"Process with an Id of 34432 is not running.\"","utc":"2026-09-10T14:31:19.0900649Z","tarPid":34432,"event":"tar_handle_unavailable","elapsedMs":121.76750000000001}
+{"utc":"2026-09-10T14:31:19.0931081Z","event":"runner_finished","elapsedMs":124.2471,"exitCode":0,"hasExited":true,"runnerPid":46752}

@@ -1,0 +1,6 @@
+{
+    "exitCode":  1,
+    "mutation":  "default-command-folder",
+    "selector":  "command folder the source config",
+    "expected":  "guard assertion failure"
+}

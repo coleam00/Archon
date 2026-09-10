@@ -1,0 +1,300 @@
+[
+    {
+        "group":  0,
+        "selectors":  [
+                          "src/dag-executor.test.ts"
+                      ],
+        "pass":  786,
+        "fail":  0,
+        "skip":  0,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-00.log"
+    },
+    {
+        "group":  1,
+        "selectors":  [
+                          "src/loader.test.ts",
+                          "src/include-expander.test.ts",
+                          "src/fan-out-identity.test.ts"
+                      ],
+        "pass":  511,
+        "fail":  0,
+        "skip":  1,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-01.log"
+    },
+    {
+        "group":  2,
+        "selectors":  [
+                          "src/template-walker.test.ts"
+                      ],
+        "pass":  6,
+        "fail":  0,
+        "skip":  0,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-02.log"
+    },
+    {
+        "group":  3,
+        "selectors":  [
+                          "src/unbound-exec-inputs.test.ts"
+                      ],
+        "pass":  9,
+        "fail":  0,
+        "skip":  0,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-03.log"
+    },
+    {
+        "group":  4,
+        "selectors":  [
+                          "src/workflow-discovery-command-scan.test.ts"
+                      ],
+        "pass":  4,
+        "fail":  0,
+        "skip":  2,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-04.log"
+    },
+    {
+        "group":  5,
+        "selectors":  [
+                          "src/logger.test.ts",
+                          "src/terminal-status-write.test.ts",
+                          "src/node-event-write.test.ts",
+                          "src/wait-completion-events.test.ts"
+                      ],
+        "pass":  43,
+        "fail":  0,
+        "skip":  0,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-05.log"
+    },
+    {
+        "group":  6,
+        "selectors":  [
+                          "src/condition-evaluator.test.ts"
+                      ],
+        "pass":  100,
+        "fail":  0,
+        "skip":  0,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-06.log"
+    },
+    {
+        "group":  7,
+        "selectors":  [
+                          "src/output-ref.test.ts"
+                      ],
+        "pass":  52,
+        "fail":  0,
+        "skip":  0,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-07.log"
+    },
+    {
+        "group":  8,
+        "selectors":  [
+                          "src/event-emitter.test.ts"
+                      ],
+        "pass":  35,
+        "fail":  0,
+        "skip":  0,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-08.log"
+    },
+    {
+        "group":  9,
+        "selectors":  [
+                          "src/executor-shared.test.ts"
+                      ],
+        "pass":  122,
+        "fail":  0,
+        "skip":  0,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-09.log"
+    },
+    {
+        "group":  10,
+        "selectors":  [
+                          "src/load-command-prompt.test.ts"
+                      ],
+        "pass":  9,
+        "fail":  1,
+        "skip":  0,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-10.log"
+    },
+    {
+        "group":  11,
+        "selectors":  [
+                          "src/load-command-prompt-bundled.test.ts"
+                      ],
+        "pass":  1,
+        "fail":  0,
+        "skip":  0,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-11.log"
+    },
+    {
+        "group":  12,
+        "selectors":  [
+                          "src/executor.test.ts"
+                      ],
+        "pass":  152,
+        "fail":  0,
+        "skip":  0,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-12.log"
+    },
+    {
+        "group":  13,
+        "selectors":  [
+                          "src/subrun.test.ts"
+                      ],
+        "pass":  101,
+        "fail":  0,
+        "skip":  0,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-13.log"
+    },
+    {
+        "group":  14,
+        "selectors":  [
+                          "src/executor-preamble.test.ts"
+                      ],
+        "pass":  7,
+        "fail":  0,
+        "skip":  0,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-14.log"
+    },
+    {
+        "group":  15,
+        "selectors":  [
+                          "src/defaults/",
+                          "src/run-config.test.ts",
+                          "src/model-validation.test.ts",
+                          "src/router.test.ts",
+                          "src/utils/",
+                          "src/hooks.test.ts",
+                          "src/workflow-inputs.test.ts"
+                      ],
+        "pass":  310,
+        "fail":  0,
+        "skip":  6,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-15.log"
+    },
+    {
+        "group":  16,
+        "selectors":  [
+                          "src/schemas.test.ts",
+                          "src/deprecation.test.ts",
+                          "src/command-validation.test.ts",
+                          "src/packaged-workflow.test.ts"
+                      ],
+        "pass":  263,
+        "fail":  0,
+        "skip":  0,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-16.log"
+    },
+    {
+        "group":  17,
+        "selectors":  [
+                          "src/validator.test.ts"
+                      ],
+        "pass":  99,
+        "fail":  0,
+        "skip":  1,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-17.log"
+    },
+    {
+        "group":  18,
+        "selectors":  [
+                          "src/script-discovery.test.ts"
+                      ],
+        "pass":  21,
+        "fail":  0,
+        "skip":  0,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-18.log"
+    },
+    {
+        "group":  19,
+        "selectors":  [
+                          "src/bundle-live-selection.test.ts"
+                      ],
+        "pass":  12,
+        "fail":  0,
+        "skip":  0,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-19.log"
+    },
+    {
+        "group":  20,
+        "selectors":  [
+                          "src/bundle-conformance.test.ts"
+                      ],
+        "pass":  1,
+        "fail":  0,
+        "skip":  0,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-20.log"
+    },
+    {
+        "group":  21,
+        "selectors":  [
+                          "src/workflow-source.test.ts"
+                      ],
+        "pass":  37,
+        "fail":  2,
+        "skip":  0,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-21.log"
+    },
+    {
+        "group":  22,
+        "selectors":  [
+                          "src/workflow-source-binary.test.ts"
+                      ],
+        "pass":  5,
+        "fail":  0,
+        "skip":  0,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-22.log"
+    },
+    {
+        "group":  23,
+        "selectors":  [
+                          "src/bundled-script-materialization.test.ts"
+                      ],
+        "pass":  4,
+        "fail":  0,
+        "skip":  0,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-23.log"
+    },
+    {
+        "group":  24,
+        "selectors":  [
+                          "src/runtime-check.test.ts"
+                      ],
+        "pass":  6,
+        "fail":  0,
+        "skip":  0,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-24.log"
+    },
+    {
+        "group":  25,
+        "selectors":  [
+                          "src/script-node-deps.test.ts"
+                      ],
+        "pass":  7,
+        "fail":  0,
+        "skip":  0,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\script-node-deps-bundle-fixture-green.log"
+    },
+    {
+        "group":  26,
+        "selectors":  [
+                          "src/artifacts-index.test.ts",
+                          "src/artifact-pointer.test.ts",
+                          "src/terminal-record.test.ts"
+                      ],
+        "pass":  39,
+        "fail":  2,
+        "skip":  0,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-26.log"
+    },
+    {
+        "group":  27,
+        "selectors":  [
+                          "src/state-migration.test.ts",
+                          "src/dry-run.test.ts",
+                          "src/fixture-runner.test.ts"
+                      ],
+        "pass":  159,
+        "fail":  0,
+        "skip":  3,
+        "log":  "C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\workflow-final-group-27.log"
+    }
+]

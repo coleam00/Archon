@@ -1,0 +1,10 @@
+
+Algorithm Hash                                                             Path                                                                                                                   
+--------- ----                                                             ----                                                                                                                   
+SHA256    F1401914FF90EEFE4031A416FF79DCA987A1FE9EA182A1EBDD5F3C3309F38A7B C:\Users\Leex279\.archon\workspaces\coleam00\Archon\artifacts\windows-issues-20260910\capture-before.log               
+SHA256    4B14FCF8653CB39A470047441BDC3DB0EAF6E53F6DE0F40A4614F87CEEC813C8 C:\Users\Leex279\.archon\workspaces\coleam00\Archon\artifacts\windows-issues-20260910\capture-after.log                
+SHA256    55392EE9CDF89459A89602D7CCC97805FEF2A4E5432F82048AEBB2F89A52CC7D C:\Users\Leex279\.archon\workspaces\coleam00\Archon\artifacts\windows-issues-20260910\capture-cost-original.ts         
+SHA256    8BA1DE3B20D4653139F16FFF211C8DD06C52A4E12153EBC12F0FB92B325C3CAE C:\Users\Leex279\.archon\workspaces\coleam00\Archon\artifacts\windows-issues-20260910\workflow-source-after-profiled.ts
+
+
+

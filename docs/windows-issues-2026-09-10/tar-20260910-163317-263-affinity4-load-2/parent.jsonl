@@ -1,0 +1,11 @@
+{"event":"probe_started","utc":"2026-09-10T14:33:19.107Z","elapsedMs":124.36689999999999,"parentPid":19956,"bunVersion":"1.4.2","bunRevision":"744846f844374847c902b5e7fd59b4342a51ef99","execPath":"C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\runtime\\bun-windows-x64\\bun.exe","bytes":129,"sha256":"6f4ee851075bad6baf487fd61f067fae085ef28e4258ff1805923293633316b1","targetDir":"C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\tar-20260910-163317-263-affinity4-load-2\\target","testBudgetMs":5000,"productionBudgetMs":60000}
+{"event":"parent_heartbeat","utc":"2026-09-10T14:33:20.370Z","elapsedMs":1386.7966999999999,"parentPid":19956,"heartbeatCount":1}
+{"event":"parent_heartbeat","utc":"2026-09-10T14:33:20.655Z","elapsedMs":1671.9568,"parentPid":19956,"heartbeatCount":2}
+{"event":"spawn_enter","utc":"2026-09-10T14:33:20.776Z","elapsedMs":1792.6041,"parentPid":19956,"spawnCount":1,"command":["C:\\WINDOWS\\System32\\tar.exe","xzf","-","-C","C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\tar-20260910-163317-263-affinity4-load-2\\target.tmp","--strip-components=1"],"stdinIsBlob":true,"stdout":"default-pipe","stderr":"pipe"}
+{"event":"spawn_returned","utc":"2026-09-10T14:33:20.779Z","elapsedMs":1796.1451000000002,"parentPid":19956,"tarPid":21308,"spawnMs":3.5448999999998705}
+{"event":"parent_heartbeat","utc":"2026-09-10T14:33:20.780Z","elapsedMs":1796.6235000000001,"parentPid":19956,"heartbeatCount":3,"tarPid":21308,"exitCode":null,"signalCode":null}
+{"event":"parent_heartbeat","utc":"2026-09-10T14:33:20.916Z","elapsedMs":1932.8788,"parentPid":19956,"heartbeatCount":4,"tarPid":21308,"exitCode":null,"signalCode":null}
+{"event":"parent_heartbeat","utc":"2026-09-10T14:33:21.052Z","elapsedMs":2069.2974,"parentPid":19956,"heartbeatCount":5,"tarPid":21308,"exitCode":null,"signalCode":null}
+{"event":"observed_proc_exited","utc":"2026-09-10T14:33:21.054Z","elapsedMs":2070.7578,"parentPid":19956,"tarPid":21308,"exitCode":0,"signalCode":null}
+{"event":"extraction_verified","utc":"2026-09-10T14:33:21.056Z","elapsedMs":2073.1972,"parentPid":19956,"spawnCount":1}
+{"event":"probe_finally","utc":"2026-09-10T14:33:21.057Z","elapsedMs":2073.537,"parentPid":19956}

@@ -1,0 +1,6 @@
+{
+    "exitCode":  1,
+    "mutation":  "live-source",
+    "selector":  "captured copy of a named script",
+    "expected":  "guard assertion failure"
+}

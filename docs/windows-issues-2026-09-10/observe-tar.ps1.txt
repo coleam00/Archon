@@ -1,0 +1,93 @@
+param(
+  [string]$RunLabel = 'baseline',
+  [int]$MaxWallMs = 15000,
+  [long]$AffinityMask = 0
+)
+$ErrorActionPreference = 'Stop'
+$probeBase = Split-Path -Parent $MyInvocation.MyCommand.Path
+$runtimePath = Join-Path $probeBase 'runtime\bun-windows-x64\bun.exe'
+$probePath = Join-Path $probeBase 'tar-first.test.ts'
+$worktreeCli = 'C:\Users\Leex279\Documents\GitHub\dynamous\Archon\worktrees\windows-3294\packages\cli'
+if ($RunLabel -notmatch '^[a-zA-Z0-9_-]+$') { throw 'RunLabel must contain only letters, numbers, underscore or hyphen' }
+$runDir = Join-Path $probeBase ('tar-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '-' + $RunLabel)
+New-Item -ItemType Directory -Path $runDir | Out-Null
+$watchPath = Join-Path $runDir 'observer.jsonl'
+$parentPath = Join-Path $runDir 'parent.jsonl'
+$watch = [Diagnostics.Stopwatch]::StartNew()
+function Write-Observation([string]$eventName, [hashtable]$fields = @{}) {
+  $row = @{event=$eventName; utc=[DateTime]::UtcNow.ToString('o'); elapsedMs=$watch.Elapsed.TotalMilliseconds}
+  foreach ($key in $fields.Keys) { $row[$key] = $fields[$key] }
+  $row | ConvertTo-Json -Compress -Depth 7 | Add-Content -LiteralPath $watchPath -Encoding UTF8
+}
+$previousPath = $env:PATH
+$previousProbeDir = $env:ARCHON_TAR_PROBE_DIR
+$runnerProcess = $null
+$tarProcess = $null
+$tarExitObserved = $false
+$readLines = 0
+$lastSnapshotMs = -1000
+try {
+  $env:PATH = (Split-Path -Parent $runtimePath) + ';' + $previousPath
+  $env:ARCHON_TAR_PROBE_DIR = $runDir
+  $runnerProcess = Start-Process -FilePath $runtimePath -ArgumentList @('test', $probePath) -WorkingDirectory $worktreeCli -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $runDir 'stdout.log') -RedirectStandardError (Join-Path $runDir 'stderr.log')
+  if ($AffinityMask -gt 0) { $runnerProcess.ProcessorAffinity = [IntPtr]$AffinityMask }
+  $null = $runnerProcess.Handle
+  Write-Observation 'runner_started' @{runnerPid=$runnerProcess.Id; executable=$runtimePath; runDir=$runDir; maxWallMs=$MaxWallMs; affinityMask=$AffinityMask}
+  while ($watch.ElapsedMilliseconds -lt $MaxWallMs) {
+    if (Test-Path -LiteralPath $parentPath) {
+      $sharedFile = [IO.File]::Open($parentPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+      $sharedReader = New-Object IO.StreamReader($sharedFile)
+      try { $parentText = $sharedReader.ReadToEnd() } finally { $sharedReader.Dispose(); $sharedFile.Dispose() }
+      $lines = if ($parentText.Length -eq 0) { @() } else { @($parentText.TrimEnd([char[]]"`r`n") -split '\r?\n') }
+      while ($readLines -lt $lines.Length) {
+        try { $row = $lines[$readLines] | ConvertFrom-Json } catch { break }
+        $readLines++
+        if ($row.event -eq 'spawn_returned' -and $null -eq $tarProcess) {
+          try {
+            $tarProcess = [Diagnostics.Process]::GetProcessById([int]$row.tarPid)
+            $null = $tarProcess.Handle
+            Write-Observation 'tar_handle_opened' @{tarPid=$tarProcess.Id; actualImage=$tarProcess.MainModule.FileName; parentSpawnTimestamp=$row.utc}
+          } catch {
+            Write-Observation 'tar_handle_unavailable' @{tarPid=$row.tarPid; error=$_.Exception.Message}
+          }
+        }
+      }
+    }
+    if ($null -ne $tarProcess -and -not $tarExitObserved) {
+      $tarProcess.Refresh()
+      if ($tarProcess.HasExited) {
+        $tarExitObserved = $true
+        Write-Observation 'tar_os_exited' @{tarPid=$tarProcess.Id; exitCode=$tarProcess.ExitCode; exitTimeUtc=if ($null -ne $tarProcess.ExitTime) {$tarProcess.ExitTime.ToUniversalTime().ToString('o')} else {$null}}
+      } elseif ($watch.ElapsedMilliseconds - $lastSnapshotMs -ge 250) {
+        $lastSnapshotMs = $watch.ElapsedMilliseconds
+        try {
+          $threads = @($tarProcess.Threads | ForEach-Object {
+            $entry = @{threadId=$_.Id; state=$_.ThreadState.ToString()}
+            if ($_.ThreadState -eq [Diagnostics.ThreadState]::Wait) { $entry.waitReason=$_.WaitReason.ToString() }
+            $entry
+          })
+          Write-Observation 'tar_os_alive' @{tarPid=$tarProcess.Id; cpuMs=$tarProcess.TotalProcessorTime.TotalMilliseconds; threads=$threads; partialIndexExists=(Test-Path -LiteralPath (Join-Path $runDir 'target.tmp\index.html')); installedIndexExists=(Test-Path -LiteralPath (Join-Path $runDir 'target\index.html'))}
+        } catch { Write-Observation 'tar_snapshot_error' @{tarPid=$tarProcess.Id; error=$_.Exception.Message} }
+      }
+    }
+    $runnerProcess.Refresh()
+    if ($runnerProcess.HasExited -and ($null -eq $tarProcess -or $tarExitObserved)) { break }
+    Start-Sleep -Milliseconds 25
+  }
+  $runnerProcess.Refresh()
+  if ($null -ne $tarProcess) { $tarProcess.Refresh() }
+  $runnerStillAlive = -not $runnerProcess.HasExited
+  $tarStillAlive = $null -ne $tarProcess -and -not $tarProcess.HasExited
+  if ($runnerStillAlive -or $tarStillAlive) {
+    Write-Observation 'external_wall_bound_fired' @{runnerPid=$runnerProcess.Id; runnerStillAlive=$runnerStillAlive; tarStillAlive=$tarStillAlive}
+    if ($tarStillAlive) { $tarProcess.Kill(); Write-Observation 'external_killed_tar' @{tarPid=$tarProcess.Id} }
+    if ($runnerStillAlive) { $runnerProcess.Kill(); $runnerProcess.WaitForExit(2000) | Out-Null }
+  }
+  Write-Observation 'runner_finished' @{runnerPid=$runnerProcess.Id; hasExited=$runnerProcess.HasExited; exitCode=if ($runnerProcess.HasExited) {$runnerProcess.ExitCode} else {$null}}
+  Write-Output $runDir
+} finally {
+  $env:PATH = $previousPath
+  $env:ARCHON_TAR_PROBE_DIR = $previousProbeDir
+  if ($null -ne $tarProcess) { $tarProcess.Dispose() }
+  if ($null -ne $runnerProcess) { $runnerProcess.Dispose() }
+}

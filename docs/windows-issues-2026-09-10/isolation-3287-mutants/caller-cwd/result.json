@@ -1,0 +1,4 @@
+{
+    "exitCode":  1,
+    "expected":  "two guard assertion failures from executed caller writes"
+}

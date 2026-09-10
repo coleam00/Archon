@@ -1,0 +1,512 @@
+{
+  "metadata": {
+    "format": 1,
+    "platform": "win32",
+    "bunVersion": "1.4.2",
+    "pid": 7752,
+    "date": "2026-09-10T14:38:14.571Z",
+    "selector": "exec-code isolation",
+    "traceGit": false,
+    "capturePhases": false
+  },
+  "elapsedMs": 2320.155,
+  "events": [
+    {
+      "kind": "spawn",
+      "id": 1,
+      "section": "beforeAll",
+      "operation": "git init -q",
+      "atMs": 174.8339,
+      "durationMs": 42.44199999999998,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 2,
+      "section": "beforeAll",
+      "operation": "git add -A",
+      "atMs": 217.5955,
+      "durationMs": 31.60129999999998,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 3,
+      "section": "beforeAll",
+      "operation": "git commit-with-identity",
+      "atMs": 249.20859999999996,
+      "durationMs": 49.880700000000076,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 4,
+      "section": "beforeAll",
+      "operation": "git init -q",
+      "atMs": 300.3484,
+      "durationMs": 36.96800000000002,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 5,
+      "section": "beforeAll",
+      "operation": "git add -A",
+      "atMs": 337.60540000000003,
+      "durationMs": 39.02639999999997,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 6,
+      "section": "beforeAll",
+      "operation": "git commit-with-identity",
+      "atMs": 376.64000000000004,
+      "durationMs": 64.20889999999997,
+      "code": 0
+    },
+    {
+      "kind": "test-start",
+      "section": "test-1",
+      "atMs": 440.93350000000004
+    },
+    {
+      "kind": "spawn",
+      "id": 7,
+      "section": "test-1",
+      "operation": "git worktree add",
+      "atMs": 484.8281,
+      "durationMs": 53.670500000000004,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 8,
+      "section": "test-1",
+      "operation": "bash-child",
+      "atMs": 540.9192999999999,
+      "durationMs": 70.59130000000005,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 9,
+      "section": "test-1",
+      "operation": "git worktree remove",
+      "atMs": 613.0400999999999,
+      "durationMs": 31.372600000000034,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 10,
+      "section": "test-1",
+      "operation": "git worktree add",
+      "atMs": 654.3202,
+      "durationMs": 57.65039999999999,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 11,
+      "section": "test-1",
+      "operation": "bash-child",
+      "atMs": 712.8557,
+      "durationMs": 70.00570000000005,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 12,
+      "section": "test-1",
+      "operation": "git worktree remove",
+      "atMs": 783.4971999999999,
+      "durationMs": 34.194000000000074,
+      "code": 0
+    },
+    {
+      "kind": "test-end",
+      "section": "test-1",
+      "atMs": 823.3194
+    },
+    {
+      "kind": "test-start",
+      "section": "test-2",
+      "atMs": 823.3408
+    },
+    {
+      "kind": "spawn",
+      "id": 13,
+      "section": "test-2",
+      "operation": "bash-child",
+      "atMs": 823.8081,
+      "durationMs": 53.40129999999999,
+      "code": 1
+    },
+    {
+      "kind": "test-end",
+      "section": "test-2",
+      "atMs": 877.5131
+    },
+    {
+      "kind": "test-start",
+      "section": "test-3",
+      "atMs": 877.5246
+    },
+    {
+      "kind": "spawn",
+      "id": 14,
+      "section": "test-3",
+      "operation": "git worktree add",
+      "atMs": 905.3934999999999,
+      "durationMs": 52.76780000000008,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 15,
+      "section": "test-3",
+      "operation": "bash-child",
+      "atMs": 958.9121,
+      "durationMs": 31.954099999999926,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 16,
+      "section": "test-3",
+      "operation": "git worktree remove",
+      "atMs": 991.3449999999999,
+      "durationMs": 33.270000000000095,
+      "code": 0
+    },
+    {
+      "kind": "test-end",
+      "section": "test-3",
+      "atMs": 1029.9972
+    },
+    {
+      "kind": "test-start",
+      "section": "test-4",
+      "atMs": 1030.0172
+    },
+    {
+      "kind": "spawn",
+      "id": 17,
+      "section": "test-4",
+      "operation": "git worktree add",
+      "atMs": 1056.5873000000001,
+      "durationMs": 51.67049999999995,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 18,
+      "section": "test-4",
+      "operation": "bun-child",
+      "atMs": 1109.1974,
+      "durationMs": 23.870800000000145,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 19,
+      "section": "test-4",
+      "operation": "git worktree remove",
+      "atMs": 1133.5271,
+      "durationMs": 30.40840000000003,
+      "code": 0
+    },
+    {
+      "kind": "test-end",
+      "section": "test-4",
+      "atMs": 1168.8439
+    },
+    {
+      "kind": "test-start",
+      "section": "test-5",
+      "atMs": 1168.8623
+    },
+    {
+      "kind": "spawn",
+      "id": 20,
+      "section": "test-5",
+      "operation": "git worktree add",
+      "atMs": 1202.8135,
+      "durationMs": 55.67860000000019,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 21,
+      "section": "test-5",
+      "operation": "bun-child",
+      "atMs": 1264.3901,
+      "durationMs": 25.1253999999999,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 22,
+      "section": "test-5",
+      "operation": "git worktree remove",
+      "atMs": 1290.0232,
+      "durationMs": 31.671499999999924,
+      "code": 0
+    },
+    {
+      "kind": "test-end",
+      "section": "test-5",
+      "atMs": 1326.805
+    },
+    {
+      "kind": "test-start",
+      "section": "test-6",
+      "atMs": 1326.8225
+    },
+    {
+      "kind": "spawn",
+      "id": 23,
+      "section": "test-6",
+      "operation": "git worktree add",
+      "atMs": 1358.8222,
+      "durationMs": 52.40409999999997,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 24,
+      "section": "test-6",
+      "operation": "bun-child",
+      "atMs": 1414.5294000000001,
+      "durationMs": 25.329600000000028,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 25,
+      "section": "test-6",
+      "operation": "git worktree remove",
+      "atMs": 1440.3153,
+      "durationMs": 30.058300000000145,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 26,
+      "section": "test-6",
+      "operation": "git worktree add",
+      "atMs": 1470.6192,
+      "durationMs": 50.67840000000001,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 27,
+      "section": "test-6",
+      "operation": "bun-child",
+      "atMs": 1524.4217,
+      "durationMs": 21.624499999999898,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 28,
+      "section": "test-6",
+      "operation": "git worktree remove",
+      "atMs": 1546.5739,
+      "durationMs": 33.31979999999999,
+      "code": 0
+    },
+    {
+      "kind": "test-end",
+      "section": "test-6",
+      "atMs": 1584.7238
+    },
+    {
+      "kind": "test-start",
+      "section": "test-7",
+      "atMs": 1584.7378
+    },
+    {
+      "kind": "spawn",
+      "id": 29,
+      "section": "test-7",
+      "operation": "git init -q",
+      "atMs": 1586.3808000000001,
+      "durationMs": 38.81759999999986,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 30,
+      "section": "test-7",
+      "operation": "git add -A",
+      "atMs": 1625.4661,
+      "durationMs": 43.39339999999993,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 31,
+      "section": "test-7",
+      "operation": "git commit-with-identity",
+      "atMs": 1668.8694,
+      "durationMs": 69.39959999999996,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 32,
+      "section": "test-7",
+      "operation": "git worktree add",
+      "atMs": 1752.249,
+      "durationMs": 55.76130000000012,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 33,
+      "section": "test-7",
+      "operation": "bun-child",
+      "atMs": 1811.3509000000001,
+      "durationMs": 23.085000000000036,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 34,
+      "section": "test-7",
+      "operation": "git worktree remove",
+      "atMs": 1834.9728,
+      "durationMs": 33.40949999999998,
+      "code": 0
+    },
+    {
+      "kind": "test-end",
+      "section": "test-7",
+      "atMs": 1873.8014
+    },
+    {
+      "kind": "test-start",
+      "section": "test-8",
+      "atMs": 1873.8176
+    },
+    {
+      "kind": "test-end",
+      "section": "test-8",
+      "atMs": 1907.1106
+    },
+    {
+      "kind": "test-start",
+      "section": "test-9",
+      "atMs": 1907.1242
+    },
+    {
+      "kind": "spawn",
+      "id": 35,
+      "section": "test-9",
+      "operation": "git worktree add",
+      "atMs": 1939.1654,
+      "durationMs": 56.585399999999936,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 36,
+      "section": "test-9",
+      "operation": "bash-child",
+      "atMs": 1996.7485000000001,
+      "durationMs": 61.30479999999989,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 37,
+      "section": "test-9",
+      "operation": "git worktree remove",
+      "atMs": 2058.5344,
+      "durationMs": 33.29370000000017,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 38,
+      "section": "test-9",
+      "operation": "git worktree list",
+      "atMs": 2093.2777,
+      "durationMs": 29.553399999999783,
+      "code": 0
+    },
+    {
+      "kind": "test-end",
+      "section": "test-9",
+      "atMs": 2127.0028
+    },
+    {
+      "kind": "test-start",
+      "section": "test-10",
+      "atMs": 2127.018
+    },
+    {
+      "kind": "spawn",
+      "id": 39,
+      "section": "test-10",
+      "operation": "git worktree add",
+      "atMs": 2137.8221,
+      "durationMs": 29.4979000000003,
+      "code": 128
+    },
+    {
+      "kind": "spawn",
+      "id": 40,
+      "section": "test-10",
+      "operation": "git rev-parse --show-toplevel",
+      "atMs": 2167.3708,
+      "durationMs": 27.880299999999806,
+      "code": 128
+    },
+    {
+      "kind": "test-end",
+      "section": "test-10",
+      "atMs": 2197.4476
+    },
+    {
+      "kind": "test-start",
+      "section": "test-11",
+      "atMs": 2197.4716
+    },
+    {
+      "kind": "spawn",
+      "id": 41,
+      "section": "test-11",
+      "operation": "git init -q",
+      "atMs": 2198.8693000000003,
+      "durationMs": 40.4716999999996,
+      "code": 0
+    },
+    {
+      "kind": "spawn",
+      "id": 42,
+      "section": "test-11",
+      "operation": "git worktree add",
+      "atMs": 2247.7771000000002,
+      "durationMs": 29.21929999999975,
+      "code": 128
+    },
+    {
+      "kind": "spawn",
+      "id": 43,
+      "section": "test-11",
+      "operation": "git rev-parse --show-toplevel",
+      "atMs": 2277.0137,
+      "durationMs": 30.367299999999886,
+      "code": 0
+    },
+    {
+      "kind": "test-end",
+      "section": "test-11",
+      "atMs": 2311.4201000000003
+    }
+  ]
+}

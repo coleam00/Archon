@@ -1,0 +1,6 @@
+{
+    "exitCode":  1,
+    "mutation":  "skip-disposal",
+    "selector":  "disposes both",
+    "expected":  "guard assertion failure"
+}

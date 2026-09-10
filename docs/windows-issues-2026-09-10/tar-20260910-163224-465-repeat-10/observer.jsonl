@@ -1,0 +1,4 @@
+﻿{"runnerPid":38160,"executable":"C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\runtime\\bun-windows-x64\\bun.exe","utc":"2026-09-10T14:32:24.4705002Z","maxWallMs":15000,"event":"runner_started","elapsedMs":3.7501,"runDir":"C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\tar-20260910-163224-465-repeat-10"}
+{"parentSpawnTimestamp":"2026-09-10T14:32:24.561Z","actualImage":"C:\\WINDOWS\\System32\\tar.exe","utc":"2026-09-10T14:32:24.5679568Z","tarPid":44064,"event":"tar_handle_opened","elapsedMs":100.87700000000001}
+{"tarPid":44064,"exitTimeUtc":"2026-09-10T14:32:24.5669347Z","utc":"2026-09-10T14:32:24.5725282Z","event":"tar_os_exited","elapsedMs":105.65790000000001,"exitCode":0}
+{"utc":"2026-09-10T14:32:24.5740642Z","event":"runner_finished","elapsedMs":106.77890000000001,"exitCode":0,"hasExited":true,"runnerPid":38160}

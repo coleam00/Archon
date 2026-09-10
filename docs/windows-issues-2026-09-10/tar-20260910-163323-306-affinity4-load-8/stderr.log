@@ -1,0 +1,8 @@
+
+..\..\..\..\..\..\..\..\.archon\workspaces\coleam00\Archon\artifacts\windows-issues-20260910\tar-first.test.ts:
+(pass) observes the first real tar extraction with the normal 5000ms test budget [22.39ms]
+
+ 1 pass
+ 0 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [77.00ms]

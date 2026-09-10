@@ -1,0 +1,4 @@
+﻿{"runnerPid":39820,"executable":"C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\runtime\\bun-windows-x64\\bun.exe","utc":"2026-09-10T14:33:23.0747928Z","maxWallMs":15000,"event":"runner_started","elapsedMs":3.269,"affinityMask":15,"runDir":"C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\tar-20260910-163323-070-affinity4-load-6"}
+{"parentSpawnTimestamp":"2026-09-10T14:33:23.167Z","actualImage":"C:\\WINDOWS\\System32\\tar.exe","utc":"2026-09-10T14:33:23.1720755Z","tarPid":44944,"event":"tar_handle_opened","elapsedMs":100.0031}
+{"tarPid":44944,"exitTimeUtc":null,"utc":"2026-09-10T14:33:23.1736005Z","event":"tar_os_exited","elapsedMs":101.518,"exitCode":null}
+{"utc":"2026-09-10T14:33:23.1781768Z","event":"runner_finished","elapsedMs":105.8418,"exitCode":0,"hasExited":true,"runnerPid":39820}

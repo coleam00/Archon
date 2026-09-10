@@ -1,0 +1,46 @@
+[
+    {
+        "snapshot":  "before",
+        "load":  "idle",
+        "totalMedian":  613.6609000000003,
+        "bundleWriteMedian":  73.63760000000002,
+        "bundleReadMedian":  11.99040000000059,
+        "digestMedian":  395.4902000000002,
+        "cold":  1594.7394,
+        "min":  599.14800000000014,
+        "max":  694.37189999999919
+    },
+    {
+        "snapshot":  "before",
+        "load":  "under load (4 workers)",
+        "totalMedian":  2029.7623999999996,
+        "bundleWriteMedian":  301.95239999999467,
+        "bundleReadMedian":  43.20919999999751,
+        "digestMedian":  814.4248999999982,
+        "cold":  1734.3260999999984,
+        "min":  1481.9714999999997,
+        "max":  2768.4815999999955
+    },
+    {
+        "snapshot":  "after",
+        "load":  "idle",
+        "totalMedian":  534.9305999999997,
+        "bundleWriteMedian":  37.70310000000018,
+        "bundleReadMedian":  4.8015000000004875,
+        "digestMedian":  371.6331,
+        "cold":  989.3711,
+        "min":  531.5998,
+        "max":  540.45600000000013
+    },
+    {
+        "snapshot":  "after",
+        "load":  "under load (4 workers)",
+        "totalMedian":  1380.0589,
+        "bundleWriteMedian":  145.65750000000116,
+        "bundleReadMedian":  20.987699999997858,
+        "digestMedian":  803.9712,
+        "cold":  1261.3460000000014,
+        "min":  1247.7969999999989,
+        "max":  2758.7986999999994
+    }
+]

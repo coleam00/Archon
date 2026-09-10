@@ -1,0 +1,31 @@
+﻿/** Review sensitivity probes; changes source only in Bun's module loader. */
+const mutation = process.env.ARCHON_BUNDLE_REVIEW_MUTATION;
+if (mutation !== 'skip-link-dereference' && mutation !== 'broad-default-names') {
+  throw new Error('Expected one supported ARCHON_BUNDLE_REVIEW_MUTATION');
+}
+function replaceOnce(source: string, from: string, to: string): string {
+  if (source.split(from).length !== 2) throw new Error(`Mutation ${mutation} expected one exact source site`);
+  return source.replace(from, to);
+}
+Bun.plugin({
+  name: 'bundle-review-guard-sensitivity',
+  setup(build) {
+    build.onLoad({ filter: /[\\/]bundle-inventory\.ts$/ }, async args => {
+      let source = await Bun.file(args.path).text();
+      if (mutation === 'skip-link-dereference') {
+        source = replaceOnce(source,
+          'return entry.isSymbolicLink() ? await stat(join(directory, entry.name)) : entry;',
+          'return entry;');
+      } else {
+        const start = source.indexOf('function validateDefaultName(');
+        const end = source.indexOf('function runtime(', start);
+        if (start < 0 || end < 0) throw new Error('Strict validation function not found');
+        const original = source.slice(start, end);
+        source = replaceOnce(source, original,
+          'function validateDefaultName(name: string, path: string): void { validateName(name, path); }\n\n');
+      }
+      console.log(JSON.stringify({ event: 'review_mutation_loaded', mutation, path: args.path }));
+      return { contents: source, loader: 'ts' };
+    });
+  },
+});

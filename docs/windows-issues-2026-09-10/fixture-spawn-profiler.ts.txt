@@ -1,0 +1,98 @@
+﻿/** Throwaway Windows #3287 profiler. No source edits and no fabricated subprocess results. */
+import { afterAll, afterEach, beforeEach, mock } from 'bun:test';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+
+const artifactDir = process.env.ARCHON_PROFILE_OUTPUT;
+const repo = process.env.ARCHON_PROFILE_REPO;
+if (!artifactDir || !repo) throw new Error('ARCHON_PROFILE_OUTPUT and ARCHON_PROFILE_REPO are required');
+mkdirSync(artifactDir, { recursive: true });
+const events: unknown[] = [];
+const started = performance.now();
+let testIndex = 0;
+let section = 'beforeAll';
+let sequence = 0;
+const traceGit = process.env.ARCHON_PROFILE_GIT_TRACE === '1';
+const capturePhases = process.env.ARCHON_PROFILE_CAPTURE === '1';
+const stamp = () => performance.now() - started;
+const metadata = {
+  format: 1,
+  platform: process.platform,
+  bunVersion: Bun.version,
+  pid: process.pid,
+  date: new Date().toISOString(),
+  selector: process.env.ARCHON_PROFILE_SELECTOR ?? '(see test log)',
+  traceGit,
+  capturePhases,
+};
+
+beforeEach(() => {
+  section = `test-${++testIndex}`;
+  events.push({ kind: 'test-start', section, atMs: stamp() });
+});
+afterEach(() => {
+  events.push({ kind: 'test-end', section, atMs: stamp() });
+  section = `after-test-${testIndex}`;
+});
+
+const gitPath = resolve(repo, 'packages/git/src/index.ts');
+const realGit = await import(gitPath);
+const realExec = realGit.execFileAsync;
+mock.module(gitPath, () => ({
+  ...realGit,
+  execFileAsync: async (cmd: string, args: string[], options?: {
+    timeout?: number; cwd?: string; maxBuffer?: number;
+    env?: NodeJS.ProcessEnv; windowsHide?: boolean;
+  }) => {
+    const id = ++sequence;
+    const operation = cmd === 'git'
+      ? `git ${args[0] === '-c' ? 'commit-with-identity' : args.slice(0, 2).join(' ')}`
+      : /bash(?:\.exe)?$/i.test(cmd) ? 'bash-child' : cmd === 'bun' ? 'bun-child' : 'other-child';
+    const tracePath = traceGit
+      ? join(artifactDir, `git-trace-${process.pid}-${id}.jsonl`).replaceAll('\\', '/')
+      : undefined;
+    const effectiveOptions = tracePath ? {
+      ...options,
+      env: { ...process.env, ...options?.env, GIT_TRACE2_EVENT: tracePath },
+    } : options;
+    const atMs = stamp();
+    let code: unknown = 0;
+    try {
+      return await realExec(cmd, args, effectiveOptions);
+    } catch (error) {
+      code = error !== null && typeof error === 'object' && 'code' in error ? error.code : 'unknown';
+      throw error;
+    } finally {
+      events.push({ kind: 'spawn', id, section, operation, atMs, durationMs: stamp() - atMs, code,
+        ...(tracePath ? { tracePath } : {}) });
+    }
+  },
+}));
+
+if (capturePhases) {
+  const sourcePath = resolve(repo, 'packages/workflows/src/workflow-source.ts');
+  const source = await import(sourcePath);
+  const capture = source.captureWorkflowSource;
+  mock.module(sourcePath, () => ({
+    ...source,
+    captureWorkflowSource: async (options: Record<string, unknown>) => {
+      const { profiler, totals } = source.createCaptureProfiler();
+      const atMs = stamp();
+      try {
+        return await capture({ ...options, profiler });
+      } finally {
+        events.push({ kind: 'capture', section, atMs, durationMs: stamp() - atMs, totals });
+      }
+    },
+  }));
+}
+
+let saved = false;
+function save() {
+  if (saved) return;
+  saved = true;
+  writeFileSync(join(artifactDir!, `fixture-spawns-${process.pid}.json`),
+    JSON.stringify({ metadata, elapsedMs: stamp(), events }, null, 2) + '\n');
+}
+afterAll(save);
+process.on('exit', save);

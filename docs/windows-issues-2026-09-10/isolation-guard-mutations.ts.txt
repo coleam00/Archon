@@ -1,0 +1,51 @@
+﻿/** Throwaway in-memory guard mutations; never edits source files on disk. */
+const mutation = process.env.ARCHON_ISOLATION_MUTATION;
+if (!mutation) throw new Error('ARCHON_ISOLATION_MUTATION is required');
+function replaceOnce(source: string, from: string, to: string): string {
+  if (source.split(from).length !== 2) throw new Error(`Mutation ${mutation} expected one exact source site`);
+  return source.replace(from, to);
+}
+Bun.plugin({
+  name: 'isolation-guard-sensitivity',
+  setup(build) {
+    build.onLoad({ filter: /[\\/]fixture-runner\.ts$/ }, async args => {
+      let source = await Bun.file(args.path).text();
+      if (mutation === 'caller-cwd') {
+        source = replaceOnce(source, 'return await fn(workspace);', 'return await fn(cwd);');
+      } else if (mutation === 'live-source') {
+        source = replaceOnce(source, 'return await fn(capturedSourceRoots(capture.anchor));', 'return await fn(liveSourceRoots(cwd));');
+      } else if (mutation === 'per-fixture-capture') {
+        source = replaceOnce(source,
+          'const result = execCode ? await withExecWorkspace(options.cwd, run) : await run(options.cwd);',
+          'const result = execCode ? await withCapturedFixtureSource(options.cwd, options.sourceConfig, async fresh => { captured = fresh; return await withExecWorkspace(options.cwd, run); }) : await run(options.cwd);');
+      } else if (mutation === 'skip-disposal') {
+        source = replaceOnce(source, 'await disposeExecWorkspace(cwd, workspace);', '/* deliberately leave scratch workspace for the disposal guard */');
+        source = replaceOnce(source, 'await rm(captureRoot, { recursive: true, force: true })', 'await rm(`${captureRoot}-mutation-unused`, { recursive: true, force: true })');
+      } else if (mutation === 'skip-source-disposal') {
+        source = replaceOnce(source, 'await rm(captureRoot, { recursive: true, force: true })', 'await rm(`${captureRoot}-mutation-unused`, { recursive: true, force: true })');
+      } else if (mutation === 'default-command-folder') {
+        source = replaceOnce(source,
+          'const captureRoot = join(getArchonTempPath(), `fixture-source-${randomUUID()}`);',
+          'sourceConfig = { load_default_workflows: true, load_default_commands: true };\n  const captureRoot = join(getArchonTempPath(), `fixture-source-${randomUUID()}`);');
+      } else if (mutation === 'plain-workspace') {
+        source = replaceOnce(source,
+          "await execFileAsync('git', ['worktree', 'add', '--detach', workspace, 'HEAD'], { cwd });",
+          "await (await import('node:fs/promises')).mkdir(workspace, { recursive: true });");
+      }
+      return { contents: source, loader: 'ts' };
+    });
+    build.onLoad({ filter: /[\\/]dry-run\.ts$/ }, async args => {
+      let source = await Bun.file(args.path).text();
+      if (mutation === 'inherited-pwd') {
+        source = replaceOnce(source, '        PWD: ctx.execWorkspace,', '/* inherited PWD */');
+        source = replaceOnce(source, '        OLDPWD: ctx.execWorkspace,', '/* inherited OLDPWD */');
+      } else if (mutation === 'head-script') {
+        source = replaceOnce(source, "['--no-env-file', 'run', script.path]",
+          "['--no-env-file', 'run', join(ctx.execWorkspace, '.archon', 'scripts', 'greet-script.ts')]");
+      }
+      return { contents: source, loader: 'ts' };
+    });
+  },
+});
+
+

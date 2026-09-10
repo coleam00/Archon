@@ -1,0 +1,6 @@
+{
+    "exitCode":  1,
+    "mutation":  "plain-workspace",
+    "selector":  "clean and pre-dirtied|outside any git repository",
+    "expected":  "guard assertion failure"
+}

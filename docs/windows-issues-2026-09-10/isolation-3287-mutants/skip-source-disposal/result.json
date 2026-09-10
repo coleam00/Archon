@@ -1,0 +1,4 @@
+{
+    "exitCode":  1,
+    "expected":  "source capture leak assertion, scratch disposal still real"
+}

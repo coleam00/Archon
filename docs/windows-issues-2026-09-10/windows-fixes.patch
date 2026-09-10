@@ -1,0 +1,3203 @@
+diff --git a/package.json b/package.json
+index 75dd5594..2b00a3ac 100644
+--- a/package.json
++++ b/package.json
+@@ -29,7 +29,6 @@
+     "check:sqlite-vintages": "bun run scripts/generate-sqlite-vintages.ts --check",
+     "check:schema-upgrades": "bun run scripts/check-schema-upgrades.ts",
+     "lens-yield": "bun run scripts/lens-yield.ts",
+-    "bench:capture": "bun run scripts/capture-cost.ts",
+     "test:install": "bash scripts/test-install.sh",
+     "test": "bun run scripts/repo-tests.ts",
+     "test:watch": "bun --filter @archon/server test:watch",
+diff --git a/packages/workflows/package.json b/packages/workflows/package.json
+index 24be82ef..5ae24823 100644
+--- a/packages/workflows/package.json
++++ b/packages/workflows/package.json
+@@ -115,6 +115,12 @@
+     [
+       "src/script-discovery.test.ts"
+     ],
++    [
++      "src/bundle-live-selection.test.ts"
++    ],
++    [
++      "src/bundle-conformance.test.ts"
++    ],
+     [
+       "src/workflow-source.test.ts"
+     ],
+diff --git a/packages/workflows/src/bundle-conformance.test.ts b/packages/workflows/src/bundle-conformance.test.ts
+new file mode 100644
+index 00000000..1f70036d
+--- /dev/null
++++ b/packages/workflows/src/bundle-conformance.test.ts
+@@ -0,0 +1,54 @@
++import { afterAll, expect, spyOn, test } from 'bun:test';
++import { mkdtemp, mkdir, readdir, readFile } from 'node:fs/promises';
++import { tmpdir } from 'node:os';
++import { join } from 'node:path';
++import { removeTempTree } from '@archon/paths/test-utils';
++import * as defaults from './defaults/bundled-defaults';
++import { captureWorkflowSource } from './workflow-source';
++import { readBundleIndex } from './defaults/bundle-inventory';
++
++const root = await mkdtemp(join(tmpdir(), 'archon-bundle-conformance-'));
++const originalHome = process.env.ARCHON_HOME;
++process.env.ARCHON_HOME = join(root, 'home');
++afterAll(async () => {
++  if (originalHome === undefined) delete process.env.ARCHON_HOME;
++  else process.env.ARCHON_HOME = originalHome;
++  await removeTempTree(root);
++});
++
++async function files(root: string, prefix = ''): Promise<Record<string, string>> {
++  const result: Record<string, string> = {};
++  for (const entry of await readdir(join(root, prefix), { withFileTypes: true })) {
++    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
++    if (entry.isDirectory()) Object.assign(result, await files(root, relative));
++    else result[relative] = await readFile(join(root, relative), 'utf8');
++  }
++  return result;
++}
++
++test('source and binary captures contain exactly the same bundled files and bytes', async () => {
++  const project = join(root, 'project');
++  await mkdir(project);
++  const source = await captureWorkflowSource({
++    sourceRoot: project,
++    captureRoot: join(root, 'source'),
++  });
++  const binaryMode = spyOn(defaults, 'isBinaryBuild').mockReturnValue(true);
++  try {
++    const binary = await captureWorkflowSource({
++      sourceRoot: project,
++      captureRoot: join(root, 'binary'),
++    });
++    const sourceFiles = await files(join(source.anchor.root, 'bundled'));
++    const binaryFiles = await files(join(binary.anchor.root, 'bundled'));
++    expect(Object.keys(sourceFiles).sort()).toEqual(Object.keys(binaryFiles).sort());
++    expect(sourceFiles).toEqual(binaryFiles);
++    const workflowPaths = Object.keys(sourceFiles).filter(path => path.startsWith('workflows/'));
++    expect([...new Set(workflowPaths.map(path => path.split('/')[1]))].sort()).toEqual(
++      (await readBundleIndex()).sort()
++    );
++    expect(workflowPaths.some(path => path.includes('/fixtures/'))).toBe(false);
++  } finally {
++    binaryMode.mockRestore();
++  }
++});
+diff --git a/packages/workflows/src/bundle-live-selection.test.ts b/packages/workflows/src/bundle-live-selection.test.ts
+new file mode 100644
+index 00000000..edbcc835
+--- /dev/null
++++ b/packages/workflows/src/bundle-live-selection.test.ts
+@@ -0,0 +1,268 @@
++import { afterAll, beforeEach, expect, mock, spyOn, test } from 'bun:test';
++import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
++import { tmpdir } from 'node:os';
++import { dirname, join } from 'node:path';
++import { removeTempTree } from '@archon/paths/test-utils';
++import { registerBuiltinProviders } from '@archon/providers';
++import type { WorkflowDeps } from './deps';
++
++const root = await mkdtemp(join(tmpdir(), 'archon-live-bundle-'));
++let app = join(root, 'app');
++const project = join(root, 'project');
++const home = join(root, 'home');
++const originalHome = process.env.ARCHON_HOME;
++process.env.ARCHON_HOME = home;
++registerBuiltinProviders();
++const realPaths = await import('@archon/paths');
++mock.module('@archon/paths', () => ({
++  ...realPaths,
++  getDefaultWorkflowsPath: () => join(app, 'workflows', 'defaults'),
++  getDefaultCommandsPath: () => join(app, 'commands', 'defaults'),
++}));
++
++const inventory = await import('./defaults/bundle-inventory');
++const defaults = await import('./defaults/bundled-defaults');
++let selectedPacks = ['defaults', 'shipped'];
++const index = spyOn(inventory, 'readBundleIndex').mockImplementation(async () => selectedPacks);
++const binary = spyOn(defaults, 'isBinaryBuild').mockReturnValue(false);
++const { discoverWorkflows } = await import('./workflow-discovery');
++const { discoverScriptsForCwd } = await import('./script-discovery');
++const { loadCommandPrompt } = await import('./executor-shared');
++const { discoverAvailableCommands, validateWorkflowResources } = await import('./validator');
++const { captureWorkflowSource, capturedSourceRoots } = await import('./workflow-source');
++const { formatPackagedResourceReference } = await import('./packaged-workflow');
++const { parseWorkflow } = await import('./loader');
++
++const deps: Pick<WorkflowDeps, 'loadConfig'> = {
++  loadConfig: async () => ({
++    assistant: 'claude',
++    assistants: { claude: {}, codex: {} },
++    commands: {},
++  }),
++};
++
++async function write(path: string, content: string): Promise<void> {
++  await mkdir(dirname(path), { recursive: true });
++  await writeFile(path, content);
++}
++
++function packagedCommand(pack: string): string {
++  return formatPackagedResourceReference({ source: 'bundled', pack, workflow: 'flow' }, 'review');
++}
++
++async function pack(directory: string, packName: string, name: string): Promise<void> {
++  const path = join(directory, packName, 'flow');
++  await write(
++    join(path, `${name}.yml`),
++    `name: ${name}\ndescription: fixture\nnodes:\n  - id: work\n    command: review\n`
++  );
++  await write(join(path, 'commands', 'review.md'), `${name} command`);
++  await write(join(path, 'scripts', 'helper.ts'), `console.log('${name}')`);
++}
++
++await mkdir(join(app, 'workflows', 'defaults'), { recursive: true });
++await write(join(app, 'commands', 'defaults', 'flat-command.md'), 'flat command');
++await pack(join(app, 'workflows'), 'shipped', 'shipped-flow');
++await pack(join(app, 'workflows'), 'excluded', 'excluded-flow');
++await pack(join(project, '.archon', 'workflows'), 'project-only', 'project-flow');
++await pack(join(home, 'workflows'), 'home-only', 'home-flow');
++
++beforeEach(() => {
++  app = join(root, 'app');
++  selectedPacks = ['defaults', 'shipped'];
++  index.mockImplementation(async () => selectedPacks);
++  binary.mockReturnValue(false);
++});
++
++afterAll(async () => {
++  binary.mockRestore();
++  index.mockRestore();
++  if (originalHome === undefined) delete process.env.ARCHON_HOME;
++  else process.env.ARCHON_HOME = originalHome;
++  await removeTempTree(root);
++});
++
++test('live source catalogs exclude unindexed bundled packs while retaining project and home packs', async () => {
++  const result = await discoverWorkflows(project);
++  expect(result.errors).toEqual([]);
++  expect(result.workflows.map(entry => entry.workflow.name).sort()).toEqual([
++    'home-flow',
++    'project-flow',
++    'shipped-flow',
++  ]);
++});
++
++test('live script discovery uses the indexed bundle while retaining project and home scripts', async () => {
++  const scripts = await discoverScriptsForCwd(project);
++  expect([...scripts.keys()].sort()).toEqual([
++    '__archon_pack__bundled:shipped:flow::helper',
++    '__archon_pack__global:home-only:flow::helper',
++    '__archon_pack__project:project-only:flow::helper',
++  ]);
++});
++
++test('live bundled command execution rejects an unindexed owner', async () => {
++  expect(await loadCommandPrompt(deps, project, packagedCommand('shipped'))).toEqual({
++    success: true,
++    content: 'shipped-flow command',
++  });
++  expect(await loadCommandPrompt(deps, project, packagedCommand('excluded'))).toMatchObject({
++    success: false,
++    reason: 'not_found',
++  });
++});
++
++test('live validation rejects an unindexed bundled command owner', async () => {
++  const parsed = parseWorkflow(
++    `name: check\ndescription: fixture\nnodes:\n  - id: work\n    command: ${packagedCommand('excluded')}\n`,
++    'check.yaml'
++  );
++  if (!parsed.workflow) throw new Error('Invalid test workflow');
++  const issues = await validateWorkflowResources(parsed.workflow, project);
++  expect(issues.some(issue => issue.level === 'error' && issue.field === 'command')).toBe(true);
++});
++
++test('removing defaults from the index removes flat bundled commands from listing, validation and execution', async () => {
++  expect(await discoverAvailableCommands(project)).toContain('flat-command');
++  selectedPacks = ['shipped'];
++  expect(await discoverAvailableCommands(project)).not.toContain('flat-command');
++  expect(await loadCommandPrompt(deps, project, 'flat-command')).toMatchObject({
++    success: false,
++    reason: 'not_found',
++  });
++  const parsed = parseWorkflow(
++    'name: check\ndescription: fixture\nnodes:\n  - id: work\n    command: flat-command\n',
++    'check.yaml'
++  );
++  if (!parsed.workflow) throw new Error('Invalid test workflow');
++  const issues = await validateWorkflowResources(parsed.workflow, project);
++  expect(issues.some(issue => issue.level === 'error' && issue.field === 'command')).toBe(true);
++});
++
++test('a captured bundle retains formerly indexed resources without reading the live index', async () => {
++  selectedPacks = ['defaults', 'shipped', 'excluded'];
++  const capture = await captureWorkflowSource({
++    sourceRoot: project,
++    captureRoot: join(root, 'capture'),
++  });
++  const roots = capturedSourceRoots(capture.anchor);
++  index.mockImplementation(async () => {
++    throw new Error('Captured consumers must not read the live index');
++  });
++  const result = await discoverWorkflows(project, { sourceRoots: roots });
++  expect(result.errors).toEqual([]);
++  expect(result.workflows.map(entry => entry.workflow.name)).toContain('excluded-flow');
++  expect(
++    (await discoverScriptsForCwd(project, roots)).has(
++      '__archon_pack__bundled:excluded:flow::helper'
++    )
++  ).toBe(true);
++  expect(
++    await loadCommandPrompt(deps, project, packagedCommand('excluded'), undefined, roots)
++  ).toEqual({
++    success: true,
++    content: 'excluded-flow command',
++  });
++  expect(await loadCommandPrompt(deps, project, 'flat-command', undefined, roots)).toEqual({
++    success: true,
++    content: 'flat command',
++  });
++});
++
++test('live indexed workflow and script additions are visible without regenerating the binary bundle', async () => {
++  const yamlPath = join(app, 'workflows', 'shipped', 'flow', 'shipped-flow.yml');
++  const addedWorkflow = join(app, 'workflows', 'shipped', 'late-workflow');
++  const original = await readFile(yamlPath, 'utf8');
++  try {
++    await write(yamlPath, original.replace('description: fixture', 'description: edited live'));
++    await write(
++      join(addedWorkflow, 'late-workflow.yaml'),
++      'name: late-workflow\ndescription: added live\nnodes:\n  - id: work\n    prompt: work\n'
++    );
++    await write(
++      join(app, 'workflows', 'shipped', 'flow', 'scripts', 'late.ts'),
++      'console.log("late")'
++    );
++    const result = await discoverWorkflows(project);
++    expect(
++      result.workflows.find(entry => entry.workflow.name === 'shipped-flow')?.workflow.description
++    ).toBe('edited live');
++    expect(result.workflows.some(entry => entry.workflow.name === 'late-workflow')).toBe(true);
++    expect(
++      (await discoverScriptsForCwd(project)).has('__archon_pack__bundled:shipped:flow::late')
++    ).toBe(true);
++  } finally {
++    await write(yamlPath, original);
++    await removeTempTree(addedWorkflow);
++  }
++});
++
++test('binary discovery preserves an authored yml filename when a project overrides it', async () => {
++  const name = 'selection-yml-override';
++  const yaml = `name: ${name}\ndescription: bundled version\nnodes:\n  - id: work\n    prompt: work\n`;
++  const paths = defaults.BUNDLED_WORKFLOW_PATHS;
++  expect(Object.hasOwn(defaults.BUNDLED_WORKFLOWS, name)).toBe(false);
++  Object.assign(defaults.BUNDLED_WORKFLOWS, { [name]: yaml });
++  Object.assign(paths, { [name]: `workflows/defaults/${name}.yml` });
++  await write(
++    join(project, '.archon', 'workflows', `${name}.yml`),
++    yaml.replace('bundled version', 'project version')
++  );
++  binary.mockReturnValue(true);
++  index.mockImplementation(async () => {
++    throw new Error('A binary must not read the source index');
++  });
++  try {
++    const result = await discoverWorkflows(project);
++    expect(result.errors).toEqual([]);
++    const matches = result.workflows.filter(entry => entry.workflow.name === name);
++    expect(matches).toHaveLength(1);
++    expect(matches[0]?.workflow.description).toBe('project version');
++    const command = Object.entries(defaults.BUNDLED_COMMANDS).find(
++      ([key]) => !key.startsWith('__archon_pack__')
++    );
++    if (!command) throw new Error('The binary fixture needs a bundled flat command');
++    expect(await discoverAvailableCommands(project)).toContain(command[0]);
++    expect(await loadCommandPrompt(deps, project, command[0])).toEqual({
++      success: true,
++      content: command[1],
++    });
++  } finally {
++    Reflect.deleteProperty(defaults.BUNDLED_WORKFLOWS, name);
++    Reflect.deleteProperty(paths, name);
++  }
++});
++
++test('SDK discovery without an installed source tree retains project and home resources', async () => {
++  app = join(root, 'absent-app');
++  const result = await discoverWorkflows(project);
++  expect(result.errors).toEqual([]);
++  expect(result.workflows.some(entry => entry.source === 'bundled')).toBe(false);
++  const scripts = await discoverScriptsForCwd(project);
++  expect([...scripts.keys()].some(name => name.startsWith('__archon_pack__bundled:'))).toBe(false);
++  expect(scripts.has('__archon_pack__project:project-only:flow::helper')).toBe(true);
++});
++
++test('a partial source installation fails instead of appearing to have no bundled resources', async () => {
++  app = join(root, 'partial-app');
++  await write(join(app, 'commands', 'defaults', 'flat-command.md'), 'partial command');
++  const result = await discoverWorkflows(project);
++  expect(result.errors.some(error => error.error.includes('Indexed bundle pack'))).toBe(true);
++  await expect(discoverScriptsForCwd(project)).rejects.toThrow('Indexed bundle pack');
++});
++
++test('a missing index in an installed source tree remains a visible discovery error', async () => {
++  index.mockImplementation(async () => {
++    throw Object.assign(new Error('Missing installed bundle index'), { code: 'ENOENT' });
++  });
++  const result = await discoverWorkflows(project);
++  expect(result.errors.some(error => error.error === 'Missing installed bundle index')).toBe(true);
++});
++
++test('an existing non-directory bundle root is an invalid installation', async () => {
++  app = join(root, 'invalid-app');
++  await write(join(app, 'workflows'), 'not a directory');
++  const result = await discoverWorkflows(project);
++  expect(result.errors).toHaveLength(1);
++  await expect(discoverScriptsForCwd(project)).rejects.toThrow();
++});
+diff --git a/packages/workflows/src/bundled-script-materialization.test.ts b/packages/workflows/src/bundled-script-materialization.test.ts
+index b4645b3b..cc0768bb 100644
+--- a/packages/workflows/src/bundled-script-materialization.test.ts
++++ b/packages/workflows/src/bundled-script-materialization.test.ts
+@@ -1,4 +1,4 @@
+-import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
++import { afterEach, beforeEach, describe, expect, it, mock, spyOn, type Mock } from 'bun:test';
+ import * as fs from 'fs/promises';
+ import { mkdir, mkdtemp, readFile, readdir, stat, utimes, writeFile } from 'fs/promises';
+ import { tmpdir } from 'os';
+@@ -30,6 +30,7 @@ const fixture: BundledScriptPack = {
+ const packs: Record<string, BundledScriptPack> = { example: fixture };
+ let binary = true;
+ const actual = await import('./defaults/bundled-defaults');
++const bundleInventory = await import('./defaults/bundle-inventory');
+ mock.module('./defaults/bundled-defaults', () => ({
+   ...actual,
+   BUNDLED_SCRIPT_PACKS: packs,
+@@ -79,6 +80,7 @@ describe('pack shared modules across source and binary distributions (#3251)', (
+   let root: string;
+   let target: string;
+   let originalArchonHome: string | undefined;
++  let indexSpy: Mock<typeof bundleInventory.readBundleIndex>;
+   beforeEach(async () => {
+     root = await mkdtemp(join(tmpdir(), 'archon-bundled-script-'));
+     target = join(root, 'empty-target');
+@@ -87,8 +89,10 @@ describe('pack shared modules across source and binary distributions (#3251)', (
+     process.env.ARCHON_HOME = join(root, 'home');
+     packs.example = fixture;
+     binary = true;
++    indexSpy = spyOn(bundleInventory, 'readBundleIndex').mockResolvedValue(['example']);
+   });
+   afterEach(async () => {
++    indexSpy.mockRestore();
+     if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
+     else process.env.ARCHON_HOME = originalArchonHome;
+     await removeTempTree(root);
+@@ -96,7 +100,12 @@ describe('pack shared modules across source and binary distributions (#3251)', (
+ 
+   it('runs identical Bun and Python sources from project, global, bundled, cache and frozen roots', async () => {
+     const source = join(root, 'authoring');
+-    const roots = { ...liveSourceRoots(source), bundledWorkflows: join(root, 'bundled-source') };
++    const roots = {
++      ...liveSourceRoots(source),
++      bundledWorkflows: join(root, 'bundled-source'),
++      bundledCommands: join(root, 'bundled-commands', 'defaults'),
++    };
++    await mkdir(roots.bundledCommands, { recursive: true });
+     for (const workflows of [
+       join(source, '.archon', 'workflows'),
+       roots.globalWorkflows,
+@@ -107,6 +116,12 @@ describe('pack shared modules across source and binary distributions (#3251)', (
+         await mkdir(dirname(destination), { recursive: true });
+         await writeFile(destination, content);
+       }
++      for (const workflow of ['first', 'second']) {
++        await writeFile(
++          join(workflows, 'example', workflow, `${workflow}.yaml`),
++          `name: ${workflow}\ndescription: shared module fixture\nnodes:\n  - id: work\n    prompt: work\n`
++        );
++      }
+     }
+     const before = await treeContents(root);
+     binary = false;
+diff --git a/packages/workflows/src/defaults/bundle-index.json b/packages/workflows/src/defaults/bundle-index.json
+new file mode 100644
+index 00000000..b9e637cb
+--- /dev/null
++++ b/packages/workflows/src/defaults/bundle-index.json
+@@ -0,0 +1,4 @@
++{
++  "$comment": "Only listed packs ship. defaults remains during the #2781 deprecation window; remove its entry at the next release. sdlc is the maintained reference pack. Client, maintainer, experimental and test workflows are project content.",
++  "packs": ["defaults", "sdlc"]
++}
+diff --git a/packages/workflows/src/defaults/bundle-inventory.test.ts b/packages/workflows/src/defaults/bundle-inventory.test.ts
+new file mode 100644
+index 00000000..255ef640
+--- /dev/null
++++ b/packages/workflows/src/defaults/bundle-inventory.test.ts
+@@ -0,0 +1,87 @@
++import { expect, test } from 'bun:test';
++import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
++import { tmpdir } from 'node:os';
++import { dirname, join } from 'node:path';
++import { trackTempRoots } from '@archon/paths/test-utils';
++import { collectBundleSources, readBundleContent, readBundleIndex } from './bundle-inventory';
++
++const track = trackTempRoots();
++
++test.each(['workflows/defaults/__proto__.yaml', 'commands/defaults/Uppercase.md'])(
++  'retains the strict legacy default filename contract for %s',
++  async path => {
++    const root = track(await mkdtemp(join(tmpdir(), 'archon-bundle-name-')));
++    await mkdir(join(root, 'workflows/defaults'), { recursive: true });
++    await mkdir(join(root, 'commands/defaults'), { recursive: true });
++    await writeFile(join(root, path), 'invalid default');
++    await expect(
++      collectBundleSources(join(root, 'workflows'), join(root, 'commands'), ['defaults'])
++    ).rejects.toThrow('Names must be kebab-case');
++  }
++);
++
++test('dereferences a linked workflow directory instead of silently omitting its runtime files', async () => {
++  const root = track(await mkdtemp(join(tmpdir(), 'archon-bundle-link-')));
++  const target = join(root, 'authored-flow');
++  const pack = join(root, 'workflows', 'selected');
++  await mkdir(join(target, 'scripts'), { recursive: true });
++  await mkdir(pack, { recursive: true });
++  await writeFile(join(target, 'main.yaml'), 'name: main\n');
++  await writeFile(join(target, 'scripts/run.ts'), 'console.log(1);\n');
++  // A directory junction exercises Windows link traversal without administrator rights.
++  await symlink(target, join(pack, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
++  const selected = await collectBundleSources(join(root, 'workflows'), join(root, 'commands'), [
++    'selected',
++  ]);
++  expect(selected.map(file => file.relativePath)).toEqual([
++    'workflows/selected/linked/main.yaml',
++    'workflows/selected/linked/scripts/run.ts',
++  ]);
++});
++
++test('the index selects exact runtime files, preserving authored paths and excluding fixtures and unindexed packs', async () => {
++  const root = track(await mkdtemp(join(tmpdir(), 'archon-bundle-index-')));
++  const authored: Record<string, string> = {
++    'workflows/selected/flow/main.yml': 'name: main\r\n',
++    'workflows/selected/flow/commands/check.md': 'Check it.\r\n',
++    'workflows/selected/flow/scripts/run.ts': 'console.log(1);\r\n',
++    'workflows/selected/flow/scripts/helpers/tool.py': 'print(1)\n',
++    'workflows/selected/.shared/nested/helper.js': 'export const value = 1;\n',
++    'workflows/selected/.shared/__init__.py': '',
++    'workflows/selected/flow/fixtures/clean.stubs.yaml': 'fixture: true\n',
++    'workflows/selected/flow/README.md': 'documentation',
++    'workflows/selected/flow/scripts/helpers/deeper/ignored.ts': 'ignored',
++    'workflows/selected/.shared/data.json': '{}',
++    'workflows/selected/.shared/__pycache__/cached.pyc': 'bytecode',
++    'workflows/unselected/broken/first.yaml': 'not even a valid pack',
++    'workflows/unselected/broken/second.yaml': 'not inspected',
++  };
++  for (const [path, content] of Object.entries(authored)) {
++    await mkdir(dirname(join(root, path)), { recursive: true });
++    await writeFile(join(root, path), content);
++  }
++  const indexPath = join(root, 'index.json');
++  await writeFile(indexPath, JSON.stringify({ packs: ['selected'] }));
++  const selected = await collectBundleSources(
++    join(root, 'workflows'),
++    join(root, 'commands'),
++    await readBundleIndex(indexPath)
++  );
++  expect(selected.map(file => file.relativePath).sort()).toEqual([
++    'workflows/selected/.shared/__init__.py',
++    'workflows/selected/.shared/nested/helper.js',
++    'workflows/selected/flow/commands/check.md',
++    'workflows/selected/flow/main.yml',
++    'workflows/selected/flow/scripts/helpers/tool.py',
++    'workflows/selected/flow/scripts/run.ts',
++  ]);
++  for (const file of selected)
++    expect(await readBundleContent(file)).toBe(authored[file.relativePath].replace(/\r\n/g, '\n'));
++  await expect(
++    collectBundleSources(join(root, 'workflows'), join(root, 'commands'), ['missing'])
++  ).rejects.toThrow('Indexed bundle pack "missing" directory not found');
++  await writeFile(indexPath, JSON.stringify({ packs: ['selected', 'selected'] }));
++  await expect(readBundleIndex(indexPath)).rejects.toThrow('Duplicate bundle pack');
++  await writeFile(indexPath, JSON.stringify({ packs: ['../outside'] }));
++  await expect(readBundleIndex(indexPath)).rejects.toThrow('Invalid bundle pack name');
++});
+diff --git a/packages/workflows/src/defaults/bundle-inventory.ts b/packages/workflows/src/defaults/bundle-inventory.ts
+new file mode 100644
+index 00000000..de832da1
+--- /dev/null
++++ b/packages/workflows/src/defaults/bundle-inventory.ts
+@@ -0,0 +1,280 @@
++import { lstat, readFile, readdir, stat } from 'node:fs/promises';
++import type { Dirent } from 'node:fs';
++import { basename, extname, join, relative } from 'node:path';
++import { z } from 'zod';
++import {
++  formatPackagedResourceReference,
++  isValidWorkflowFolderSegment,
++  PACK_SHARED_DIRECTORY,
++  type WorkflowResourceOwner,
++} from '../packaged-workflow';
++import type { BundledScriptPack } from './bundled-script-pack';
++
++const indexSchema = z
++  .object({
++    $comment: z.string().optional(),
++    packs: z
++      .array(z.string().refine(isValidWorkflowFolderSegment, 'Invalid bundle pack name'))
++      .refine(packs => new Set(packs).size === packs.length, 'Duplicate bundle pack'),
++  })
++  .strict();
++
++/** The generator's fixture repos provide their own index; production uses this module's. */
++export async function readBundleIndex(
++  path = join(import.meta.dir, 'bundle-index.json')
++): Promise<string[]> {
++  return indexSchema.parse(JSON.parse(await readFile(path, 'utf8'))).packs;
++}
++
++type Owner = Pick<WorkflowResourceOwner, 'pack' | 'workflow'>;
++type Script = BundledScriptPack['scripts'][string];
++
++/** Selection is shared by generation and live capture. Reading bytes is a separate step so
++ * a warm capture can revalidate the selected files without reading them all again. */
++export type BundleSourceFile = {
++  readonly sourcePath: string;
++  /** Path beneath the capture's bundled scope, always using forward slashes. */
++  readonly relativePath: string;
++} & (
++  | { readonly kind: 'workflow'; readonly name: string; readonly owner?: Owner }
++  | { readonly kind: 'command'; readonly name: string }
++  | {
++      readonly kind: 'script';
++      readonly pack: string;
++      readonly packPath: string;
++      readonly entry?: { readonly name: string; readonly runtime: Script['runtime'] };
++    }
++);
++
++async function isDirectory(path: string): Promise<boolean> {
++  try {
++    return (await stat(path)).isDirectory();
++  } catch (error) {
++    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
++    throw error;
++  }
++}
++
++/** SDK consumers may have no installed source tree. Once either root exists, the
++ * complete indexed selection must be valid; a partial installation is an error. */
++export async function collectInstalledBundleSources(
++  workflowsRoot: string,
++  commandsRoot: string
++): Promise<BundleSourceFile[] | undefined> {
++  const [hasWorkflows, hasCommands] = await Promise.all([
++    installedRootExists(workflowsRoot),
++    installedRootExists(commandsRoot),
++  ]);
++  if (!hasWorkflows && !hasCommands) return undefined;
++  return collectBundleSources(workflowsRoot, commandsRoot, await readBundleIndex());
++}
++
++async function installedRootExists(path: string): Promise<boolean> {
++  try {
++    if (!(await stat(path)).isDirectory()) {
++      throw new Error(`Bundled source root is not a directory: ${path}`);
++    }
++    return true;
++  } catch (error) {
++    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
++    throw error;
++  }
++}
++
++function validateName(name: string, path: string): void {
++  if (!isValidWorkflowFolderSegment(name))
++    throw new Error(`Invalid bundled filename or directory "${path}".`);
++}
++
++function validateDefaultName(name: string, path: string): void {
++  if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) {
++    throw new Error(
++      `Bundled default has invalid filename "${path}". Names must be kebab-case (lowercase letters, digits, hyphens).`
++    );
++  }
++}
++
++function runtime(extension: string): Script['runtime'] | undefined {
++  if (extension === '.py') return 'uv';
++  if (extension === '.ts' || extension === '.js') return 'bun';
++  return undefined;
++}
++
++// Non-shared bundled sources have always dereferenced authored links. Dirent alone
++// describes the link, so using its isFile/isDirectory would silently omit those files.
++async function entryType(
++  directory: string,
++  entry: Dirent
++): Promise<Pick<Dirent, 'isFile' | 'isDirectory'>> {
++  return entry.isSymbolicLink() ? await stat(join(directory, entry.name)) : entry;
++}
++
++async function sharedModules(directory: string): Promise<string[]> {
++  if ((await lstat(directory)).isSymbolicLink()) {
++    throw new Error(`Shared module symlinks are not supported: ${directory}`);
++  }
++  const files: string[] = [];
++  for (const entry of await readdir(directory, { withFileTypes: true })) {
++    const path = join(directory, entry.name);
++    if (entry.isSymbolicLink())
++      throw new Error(`Shared module symlinks are not supported: ${path}`);
++    if (entry.isDirectory()) files.push(...(await sharedModules(path)));
++    else if (entry.isFile() && runtime(extname(entry.name))) files.push(path);
++  }
++  return files;
++}
++
++/** Only the indexed packs are inspected. Fixtures, prose and unrelated directories never
++ * enter the bundle merely because they live beside a workflow. A named missing pack fails. */
++export async function collectBundleSources(
++  workflowsRoot: string,
++  commandsRoot: string,
++  packs: readonly string[]
++): Promise<BundleSourceFile[]> {
++  const files: BundleSourceFile[] = [];
++  const workflowNames = new Set<string>();
++  const commandNames = new Set<string>();
++  const add = (file: BundleSourceFile): void => {
++    if (file.kind !== 'script') {
++      const names = file.kind === 'workflow' ? workflowNames : commandNames;
++      if (names.has(file.name))
++        throw new Error(`Bundled ${file.kind} filename collision: "${file.name}".`);
++      names.add(file.name);
++    }
++    files.push(file);
++  };
++  const workflowFile = (path: string, owner?: Owner): void => {
++    const name = basename(path, extname(path));
++    if (owner === undefined) validateDefaultName(name, path);
++    else validateName(name, path);
++    add({
++      kind: 'workflow',
++      name,
++      owner,
++      sourcePath: path,
++      relativePath: `workflows/${relative(workflowsRoot, path).replaceAll('\\', '/')}`,
++    });
++  };
++  const flatWorkflows = async (directory: string): Promise<void> => {
++    for (const entry of await readdir(directory, { withFileTypes: true })) {
++      if (
++        (await entryType(directory, entry)).isFile() &&
++        ['.yaml', '.yml'].includes(extname(entry.name))
++      )
++        workflowFile(join(directory, entry.name));
++    }
++  };
++  for (const pack of [...packs].sort()) {
++    validateName(pack, pack);
++    const packRoot = join(workflowsRoot, pack);
++    if (!(await isDirectory(packRoot)))
++      throw new Error(`Indexed bundle pack "${pack}" directory not found: ${packRoot}`);
++    if (pack === 'defaults') {
++      await flatWorkflows(packRoot);
++      if (await isDirectory(join(packRoot, 'legacy')))
++        await flatWorkflows(join(packRoot, 'legacy'));
++      const defaults = join(commandsRoot, 'defaults');
++      if (!(await isDirectory(defaults)))
++        throw new Error(`Commands defaults directory not found: ${defaults}`);
++      for (const entry of await readdir(defaults, { withFileTypes: true })) {
++        if (!(await entryType(defaults, entry)).isFile() || !entry.name.endsWith('.md')) continue;
++        const name = basename(entry.name, '.md');
++        validateDefaultName(name, entry.name);
++        add({
++          kind: 'command',
++          name,
++          sourcePath: join(defaults, entry.name),
++          relativePath: `commands/defaults/${entry.name}`,
++        });
++      }
++      continue;
++    }
++    const shared = join(packRoot, PACK_SHARED_DIRECTORY);
++    if (await isDirectory(shared)) {
++      for (const path of await sharedModules(shared)) {
++        const packPath = relative(packRoot, path).replaceAll('\\', '/');
++        add({
++          kind: 'script',
++          pack,
++          packPath,
++          sourcePath: path,
++          relativePath: `workflows/${pack}/${packPath}`,
++        });
++      }
++    }
++    for (const entry of await readdir(packRoot, { withFileTypes: true })) {
++      if (entry.name === PACK_SHARED_DIRECTORY || !(await entryType(packRoot, entry)).isDirectory())
++        continue;
++      const workflow = entry.name;
++      validateName(workflow, `${pack}/${workflow}`);
++      const directory = join(packRoot, workflow);
++      const yamlFiles = (await readdir(directory)).filter(name =>
++        ['.yaml', '.yml'].includes(extname(name))
++      );
++      if (yamlFiles.length !== 1)
++        throw new Error(
++          `Packaged workflow "${pack}/${workflow}" must contain exactly one .yaml or .yml file (found ${yamlFiles.length}).`
++        );
++      workflowFile(join(directory, yamlFiles[0]), { pack, workflow });
++      const owner = { source: 'bundled' as const, pack, workflow };
++      const commands = join(directory, 'commands');
++      if (await isDirectory(commands)) {
++        for (const entry of await readdir(commands, { withFileTypes: true })) {
++          if (!(await entryType(commands, entry)).isFile() || !entry.name.endsWith('.md')) continue;
++          const name = basename(entry.name, '.md');
++          validateName(name, entry.name);
++          add({
++            kind: 'command',
++            name: formatPackagedResourceReference(owner, name),
++            sourcePath: join(commands, entry.name),
++            relativePath: `workflows/${pack}/${workflow}/commands/${entry.name}`,
++          });
++        }
++      }
++      const scripts = join(directory, 'scripts');
++      if (await isDirectory(scripts)) {
++        const seen = new Set<string>();
++        for (const entry of await readdir(scripts, { withFileTypes: true })) {
++          const kind = await entryType(scripts, entry);
++          const candidates: string[] = [];
++          if (kind.isDirectory()) {
++            const directory = join(scripts, entry.name);
++            for (const child of await readdir(directory, { withFileTypes: true })) {
++              if ((await entryType(directory, child)).isFile())
++                candidates.push(`${entry.name}/${child.name}`);
++            }
++          } else if (kind.isFile()) candidates.push(entry.name);
++          for (const candidate of candidates) {
++            const extension = extname(candidate);
++            const scriptRuntime = runtime(extension);
++            if (scriptRuntime === undefined) continue;
++            const name = basename(candidate, extension);
++            validateName(name, candidate);
++            if (seen.has(name))
++              throw new Error(`Duplicate packaged script "${name}" in ${pack}/${workflow}.`);
++            seen.add(name);
++            const packPath = `${workflow}/scripts/${candidate}`;
++            add({
++              kind: 'script',
++              pack,
++              packPath,
++              sourcePath: join(packRoot, packPath),
++              relativePath: `workflows/${pack}/${packPath}`,
++              entry: { name: formatPackagedResourceReference(owner, name), runtime: scriptRuntime },
++            });
++          }
++        }
++      }
++    }
++  }
++  return files.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
++}
++
++export async function readBundleContent(file: BundleSourceFile): Promise<string> {
++  const content = (await readFile(file.sourcePath, 'utf8')).replace(/\r\n/g, '\n');
++  // Empty shared modules (e.g. Python __init__.py) are meaningful, unlike entry points.
++  if (!content.trim() && !(file.kind === 'script' && file.entry === undefined)) {
++    throw new Error(`Bundled default "${file.sourcePath}" is empty.`);
++  }
++  return content;
++}
+diff --git a/packages/workflows/src/defaults/bundled-defaults.generated.ts b/packages/workflows/src/defaults/bundled-defaults.generated.ts
+index f338831e..238317b8 100644
+--- a/packages/workflows/src/defaults/bundled-defaults.generated.ts
++++ b/packages/workflows/src/defaults/bundled-defaults.generated.ts
+@@ -4,12 +4,7 @@
+  * Regenerate with: bun run generate:bundled
+  * Verify up-to-date:  bun run check:bundled
+  *
+- * Source of truth:
+- *   .archon/commands/defaults/*.md (legacy)
+- *   .archon/workflows/defaults/*.{yaml,yml} (current)
+- *   .archon/workflows/defaults/legacy/*.{yaml,yml} (deprecated window)
+- *   .archon/workflows/<pack>/<workflow>/
+- *   .archon/workflows/<pack>/.shared/ (recursive .ts, .js, .py modules)
++ * Source of truth: bundle-index.json selects packs; bundle-inventory.ts selects files.
+  *
+  * Contents are inlined as plain string literals (JSON-escaped) so this
+  * module loads in both Bun and Node. Previous versions used
+@@ -17,11 +12,9 @@
+  */
+ 
+ import type { BundledScriptPack } from './bundled-script-pack';
++import type { WorkflowResourceOwner } from '../packaged-workflow';
+ 
+-export interface BundledWorkflowOwner {
+-  readonly pack: string;
+-  readonly workflow: string;
+-}
++export type BundledWorkflowOwner = Pick<WorkflowResourceOwner, 'pack' | 'workflow'>;
+ 
+ // Bundled commands (54 total)
+ export const BUNDLED_COMMANDS: Record<string, string> = {
+@@ -116,6 +109,41 @@ export const BUNDLED_WORKFLOWS: Record<string, string> = {
+   "archon-workflow-builder": "name: archon-workflow-builder\ndescription: |\n  Use when: User wants to create a new custom workflow for their project.\n  Triggers: \"build me a workflow\", \"create a workflow\", \"generate a workflow\",\n            \"new workflow\", \"make a workflow for\", \"workflow builder\".\n  Does: Scans codebase -> extracts intent (JSON) -> generates YAML -> validates -> saves.\n  NOT for: Editing existing workflows or creating non-workflow files.\n\n# Run in the live checkout, not in a fresh sub-worktree. Without this, every\n# archon-workflow-builder invocation creates an isolated sub-worktree and\n# writes the generated YAML there — the file never reaches the caller's\n# .archon/workflows/, so the run reports success while the user's repo gains\n# nothing. Closes #1220.\nworktree:\n  enabled: false\n\nnodes:\n  - id: scan-codebase\n    bash: |\n      echo \"=== Existing Commands ===\"\n      if [ -d \".archon/commands\" ]; then\n        find .archon/commands -type f -name \"*.md\" 2>/dev/null | head -30\n      else\n        echo \"(no .archon/commands/ directory)\"\n      fi\n\n      echo \"\"\n      echo \"=== Existing Workflows ===\"\n      if [ -d \".archon/workflows\" ]; then\n        find .archon/workflows -type f \\( -name \"*.yaml\" -o -name \"*.yml\" \\) 2>/dev/null | head -30\n      else\n        echo \"(no .archon/workflows/ directory)\"\n      fi\n\n      echo \"\"\n      echo \"=== Package Info ===\"\n      if [ -f \"package.json\" ]; then\n        grep -E '\"name\"|\"scripts\"' package.json | head -10\n      else\n        echo \"(no package.json)\"\n      fi\n\n      echo \"\"\n      echo \"=== Project Context (CLAUDE.md first 50 lines) ===\"\n      if [ -f \"CLAUDE.md\" ]; then\n        head -50 CLAUDE.md\n      else\n        echo \"(no CLAUDE.md)\"\n      fi\n\n  - id: extract-intent\n    prompt: |\n      You are a workflow design classifier. Given a user's description of what they want\n      a workflow to do, extract structured intent.\n\n      ## User's Request\n      $ARGUMENTS\n\n      ## Codebase Context\n      $scan-codebase.output\n\n      ## Instructions\n\n      Analyze the user's request and the existing codebase to determine:\n      1. A kebab-case workflow name (e.g., \"lint-and-test\", \"deploy-staging\")\n      2. A description following the Archon pattern (Use when / Triggers / Does / NOT for)\n      3. Trigger phrases the router should match\n      4. A list of proposed nodes with their types and purposes\n      5. Whether this should be a simple DAG or include a loop node\n\n      Be specific and concrete. Each proposed node should have a clear type\n      (bash, prompt, command, script, loop, loop_group, approval, or cancel) and\n      a one-line description of what it does.\n    model: small\n    allowed_tools: []\n    output_format:\n      type: object\n      properties:\n        workflow_name:\n          type: string\n        description:\n          type: string\n        trigger_phrases:\n          type: string\n        proposed_nodes:\n          type: string\n        execution_mode:\n          type: string\n          enum: [\"dag\", \"loop\"]\n      required: [workflow_name, description, trigger_phrases, proposed_nodes, execution_mode]\n    depends_on: [scan-codebase]\n\n  - id: generate-yaml\n    prompt: |\n      You are an Archon workflow author. Generate a complete, valid workflow YAML file\n      based on the structured intent provided.\n\n      ## Intent\n      - **Name**: $extract-intent.output.workflow_name\n      - **Description**: $extract-intent.output.description\n      - **Trigger Phrases**: $extract-intent.output.trigger_phrases\n      - **Proposed Nodes**: $extract-intent.output.proposed_nodes\n      - **Execution Mode**: $extract-intent.output.execution_mode\n\n      ## Original User Request\n      $ARGUMENTS\n\n      ## Archon Workflow YAML Schema Reference\n\n      A workflow YAML file has this structure:\n\n      ```yaml\n      name: workflow-name\n      description: |\n        Use when: ...\n        Triggers: ...\n        Does: ...\n        NOT for: ...\n\n      # Optional top-level settings:\n      # provider: claude    (or codex)\n      # model: medium       (or haiku, opus, etc.)\n      # interactive: true   (forces foreground execution in web UI)\n\n      nodes:\n        - id: node-id-kebab-case\n          # Choose ONE of: prompt, bash, command, script, loop, loop_group, approval, cancel\n\n          # --- prompt node (AI-executed) ---\n          prompt: |\n            Instructions for the AI...\n          # Optional: model, allowed_tools, denied_tools, output_format, context, idle_timeout\n\n          # --- bash node (shell script, no AI, stdout = $<nodeId>.output) ---\n          bash: |\n            #!/bin/bash\n            set -e\n            echo \"result\"\n\n          # --- command node (references a .archon/commands/ file) ---\n          command: command-name\n\n          # --- script node (TypeScript via bun, or Python via uv — no AI, stdout = $<nodeId>.output) ---\n          # Use for deterministic data transforms the shell would mangle (JSON parsing, etc.)\n          script: |\n            // JSON is valid JS expression syntax — assign directly (String.raw breaks on backticks)\n            const data = $<other-node>.output;\n            console.log(JSON.stringify({ count: data.items.length }));\n          runtime: bun                       # required: 'bun' (.ts/.js) or 'uv' (.py)\n          # deps: [requests]                 # uv only\n          # Or reference a named script in .archon/scripts/:\n          # script: extract-labels           # no extension; bun resolves .ts/.js, uv resolves .py\n\n          # --- loop node (iterative AI execution) ---\n          loop:\n            prompt: |\n              Instructions repeated each iteration...\n            until: COMPLETION_SIGNAL\n            max_iterations: 10\n            fresh_context: true  # optional: reset context each iteration\n\n          # --- loop_group node (iterate a multi-node sub-DAG until done) ---\n          loop_group:\n            until: COMPLETION_SIGNAL\n            max_iterations: 5\n            nodes:                             # sealed sub-DAG body, re-run each iteration\n              - id: body-step\n                prompt: |\n                  Do one unit of work. Emit COMPLETION_SIGNAL when finished.\n                depends_on: []\n\n          # --- approval node (human gate — pauses workflow) ---\n          approval:\n            message: \"Review the plan above. Approve to continue.\"\n            # capture_response: true         # store reviewer comment as $<nodeId>.output\n\n          # --- cancel node (terminate the run with a reason; no AI) ---\n          cancel: \"Reason the workflow was terminated\"\n\n          # Common options for all node types:\n          depends_on: [other-node-id]       # DAG edges\n          when: \"$<other-node>.output == 'value'\"  # conditional execution\n          trigger_rule: all_success          # all_success | one_success | all_done\n          timeout: 120000                    # ms, for bash and script nodes\n      ```\n\n      ## Variable Reference\n      - `$ARGUMENTS` — user's input text\n      - `$ARTIFACTS_DIR` — pre-created directory for workflow artifacts\n      - `$<nodeId>.output` — stdout from a bash/script node or AI response from a prompt node\n      - `$<nodeId>.output.field` — JSON field from a node with output_format\n      - `$BASE_BRANCH` — base git branch\n\n      ## Rules\n      1. The `name:` field MUST match: $extract-intent.output.workflow_name\n      2. The `description:` MUST follow the \"Use when / Triggers / Does / NOT for\" pattern\n      3. Every node MUST have a unique kebab-case `id`\n      4. Use `depends_on` to define execution order\n      5. Use `bash` nodes for deterministic shell operations (file checks, git commands, installs)\n      6. Use `script` nodes for typed data transforms (TypeScript JSON parsing, Python with deps)\n         — stdout is captured as output, stderr is forwarded as a warning.\n         `$<node-id>.output` is NOT shell-quoted in script bodies.\n         - **TypeScript/bun**: assign directly — `const data = $<node-id>.output;`\n           (JSON is valid JS expression syntax; avoid String.raw — it breaks on backticks)\n         - **Python/uv**: use json.loads — `import json; data = json.loads(\"\"\"$<node-id>.output\"\"\")`\n         Never interpolate into shell syntax.\n      7. Use `prompt` nodes for AI reasoning tasks\n      8. Use `approval` nodes to pause for human review at risky gates (plan→execute boundary, destructive actions)\n      9. Use `output_format` on prompt nodes when downstream nodes need structured data\n      10. Use `allowed_tools: []` on classification/analysis nodes that don't need tools\n      11. Use `denied_tools: [Edit, Bash]` when a node should only use Write (not edit existing files)\n      12. Prefer `model: small` for simple classification tasks to save cost\n\n      ## Output\n\n      Write the complete workflow YAML to: `$ARTIFACTS_DIR/generated-workflow.yaml`\n\n      Use the Write tool. Do NOT use Edit or Bash. The file must be valid YAML and follow\n      all the patterns above.\n    denied_tools: [Edit, Bash]\n    depends_on: [extract-intent]\n\n  - id: validate-yaml\n    bash: |\n      FILE=\"$ARTIFACTS_DIR/generated-workflow.yaml\"\n\n      if [ ! -f \"$FILE\" ]; then\n        echo \"ERROR: generated-workflow.yaml not found at $FILE\"\n        exit 1\n      fi\n\n      if [ ! -s \"$FILE\" ]; then\n        echo \"ERROR: generated-workflow.yaml is empty\"\n        exit 1\n      fi\n\n      if ! grep -q \"^name:\" \"$FILE\"; then\n        echo \"ERROR: missing 'name:' field\"\n        exit 1\n      fi\n\n      if ! grep -q \"^nodes:\" \"$FILE\"; then\n        echo \"ERROR: missing 'nodes:' field\"\n        exit 1\n      fi\n\n      echo \"VALID\"\n    depends_on: [generate-yaml]\n\n  - id: save-or-report\n    prompt: |\n      You are a workflow installer. Save the generated workflow and report to the user.\n\n      ## Workflow Details\n      - **Name**: $extract-intent.output.workflow_name\n      - **Trigger Phrases**: $extract-intent.output.trigger_phrases\n\n      ## Instructions\n\n      1. Read the generated workflow from `$ARTIFACTS_DIR/generated-workflow.yaml`\n      2. Create the directory `.archon/workflows/` if it doesn't exist (use Bash: `mkdir -p .archon/workflows/`)\n      3. Save the workflow to `.archon/workflows/$extract-intent.output.workflow_name.yaml`\n         Use the Write tool to write the file.\n      4. Report to the user:\n         - Workflow name and file location\n         - Trigger phrases that will invoke it\n         - How to run it: `bun run cli workflow run $extract-intent.output.workflow_name \"your input\"`\n         - How to test it: `bun run cli validate workflows $extract-intent.output.workflow_name`\n    depends_on: [validate-yaml]\n\n# Deprecated legacy default (#2781): announce removal in the run-start notice during this window.\ndeprecated:\n  message: Switch to the sdlc pack instead.\n",
+ };
+ 
++// Authored workflow paths beneath the bundled scope (31 total)
++export const BUNDLED_WORKFLOW_PATHS: Record<string, string> = {
++  "archon-adversarial-dev": "workflows/defaults/legacy/archon-adversarial-dev.yaml",
++  "archon-architect": "workflows/defaults/legacy/archon-architect.yaml",
++  "archon-assist": "workflows/defaults/archon-assist.yaml",
++  "archon-comprehensive-pr-review": "workflows/defaults/legacy/archon-comprehensive-pr-review.yaml",
++  "archon-create-issue": "workflows/defaults/legacy/archon-create-issue.yaml",
++  "archon-deliver": "workflows/sdlc/deliver/archon-deliver.yaml",
++  "archon-feature-development": "workflows/defaults/legacy/archon-feature-development.yaml",
++  "archon-fix-github-issue": "workflows/defaults/legacy/archon-fix-github-issue.yaml",
++  "archon-idea-to-pr": "workflows/defaults/legacy/archon-idea-to-pr.yaml",
++  "archon-implement": "workflows/sdlc/implement/archon-implement.yaml",
++  "archon-interactive-prd": "workflows/defaults/legacy/archon-interactive-prd.yaml",
++  "archon-investigate": "workflows/sdlc/investigate/archon-investigate.yaml",
++  "archon-issue-review-full": "workflows/defaults/legacy/archon-issue-review-full.yaml",
++  "archon-piv-loop": "workflows/defaults/legacy/archon-piv-loop.yaml",
++  "archon-plan": "workflows/sdlc/plan/archon-plan.yaml",
++  "archon-plan-to-pr": "workflows/defaults/legacy/archon-plan-to-pr.yaml",
++  "archon-pr": "workflows/sdlc/pr/archon-pr.yaml",
++  "archon-ralph-dag": "workflows/defaults/legacy/archon-ralph-dag.yaml",
++  "archon-refactor-safely": "workflows/defaults/legacy/archon-refactor-safely.yaml",
++  "archon-remotion-generate": "workflows/defaults/legacy/archon-remotion-generate.yaml",
++  "archon-resolve-conflicts": "workflows/defaults/legacy/archon-resolve-conflicts.yaml",
++  "archon-review": "workflows/sdlc/review/archon-review.yaml",
++  "archon-review-block": "workflows/defaults/legacy/archon-review-block.yaml",
++  "archon-ship": "workflows/sdlc/ship/archon-ship.yaml",
++  "archon-smart-pr-review": "workflows/defaults/legacy/archon-smart-pr-review.yaml",
++  "archon-test-loop-dag": "workflows/defaults/legacy/archon-test-loop-dag.yaml",
++  "archon-triage": "workflows/sdlc/triage/archon-triage.yaml",
++  "archon-upkeep": "workflows/sdlc/upkeep/archon-upkeep.yaml",
++  "archon-validate": "workflows/sdlc/validate/archon-validate.yaml",
++  "archon-validate-pr": "workflows/defaults/legacy/archon-validate-pr.yaml",
++  "archon-workflow-builder": "workflows/defaults/legacy/archon-workflow-builder.yaml",
++};
++
+ // Packaged workflow owners (10 total)
+ export const BUNDLED_WORKFLOW_OWNERS: Readonly<Partial<Record<keyof typeof BUNDLED_WORKFLOWS, BundledWorkflowOwner>>> = {
+   "archon-deliver": {"pack":"sdlc","workflow":"deliver"},
+diff --git a/packages/workflows/src/defaults/bundled-defaults.ts b/packages/workflows/src/defaults/bundled-defaults.ts
+index f2e85d85..df222e4e 100644
+--- a/packages/workflows/src/defaults/bundled-defaults.ts
++++ b/packages/workflows/src/defaults/bundled-defaults.ts
+@@ -2,8 +2,7 @@
+  * Bundled default commands and workflows for binary distribution.
+  *
+  * Content lives in `bundled-defaults.generated.ts`, which is regenerated from
+- * legacy `.archon/{commands,workflows}/defaults/` files plus packaged workflows
+- * under `.archon/workflows/<pack>/<workflow>/`. The generated data includes
++ * the files selected by `bundle-index.json` and `bundle-inventory.ts`. The generated data includes
+  * package ownership and packaged scripts. This file is the hand-written facade:
+  * it re-exports the records and defines the binary-detection helper.
+  *
+@@ -27,6 +26,7 @@ export {
+   BUNDLED_COMMANDS,
+   BUNDLED_SCRIPT_PACKS,
+   BUNDLED_WORKFLOWS,
++  BUNDLED_WORKFLOW_PATHS,
+   BUNDLED_WORKFLOW_OWNERS,
+ } from './bundled-defaults.generated';
+ export type { BundledWorkflowOwner } from './bundled-defaults.generated';
+diff --git a/packages/workflows/src/defaults/generate-bundled-defaults.test.ts b/packages/workflows/src/defaults/generate-bundled-defaults.test.ts
+index e2f3eb85..70f141c7 100644
+--- a/packages/workflows/src/defaults/generate-bundled-defaults.test.ts
++++ b/packages/workflows/src/defaults/generate-bundled-defaults.test.ts
+@@ -37,6 +37,7 @@ import { removeTempTree } from '@archon/paths/test-utils';
+ 
+ const SCRIPT = resolve(import.meta.dir, '../../../../scripts/generate-bundled-defaults.ts');
+ const OUTPUT_REL = 'packages/workflows/src/defaults/bundled-defaults.generated.ts';
++const INDEX_REL = 'packages/workflows/src/defaults/bundle-index.json';
+ const SENTINEL = '// sentinel — must not be overwritten when the guard trips\n';
+ 
+ function runGit(repoRoot: string, args: string[]): void {
+@@ -57,6 +58,7 @@ function createTemplateRepo(): string {
+     join(repoRoot, '.archon/workflows/defaults/tracked-workflow.yaml'),
+     'name: tracked-workflow\n'
+   );
++  writeFileSync(join(repoRoot, INDEX_REL), JSON.stringify({ packs: ['defaults'] }));
+   // Sentinel output file lets tests assert the bundle is untouched on failure.
+   writeFileSync(join(repoRoot, OUTPUT_REL), SENTINEL);
+   runGit(repoRoot, ['init']);
+@@ -91,9 +93,11 @@ afterAll(async () => {
+ });
+ 
+ /** Cheap in-process clone of the committed template repo (no git spawns). */
+-function createRepo(): string {
++function createRepo(packs: string[] = ['defaults']): string {
+   const repoRoot = mkdtempSync(join(tmpdir(), 'bundled-defaults-test-'));
+   cpSync(getTemplateRepo(), repoRoot, { recursive: true });
++  if (packs.length !== 1 || packs[0] !== 'defaults')
++    writeFileSync(join(repoRoot, INDEX_REL), JSON.stringify({ packs }));
+   return repoRoot;
+ }
+ 
+@@ -109,13 +113,35 @@ function runScript(repoRoot: string, args: string[] = []): { exitCode: number; s
+ }
+ 
+ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
++  it('ignores unindexed packs and fails without publishing when an indexed pack is missing', async () => {
++    const repoRoot = createRepo();
++    try {
++      const privatePack = join(repoRoot, '.archon/workflows/client/private');
++      mkdirSync(privatePack, { recursive: true });
++      writeFileSync(join(privatePack, 'client.yaml'), 'name: private-client-workflow\n');
++      // Unindexed content is not inspected, including its untracked status.
++      expect(runScript(repoRoot)).toEqual({ exitCode: 0, stderr: '' });
++      const output = readFileSync(join(repoRoot, OUTPUT_REL), 'utf8');
++      expect(output).not.toContain('private-client-workflow');
++      writeFileSync(
++        join(repoRoot, INDEX_REL),
++        JSON.stringify({ packs: ['defaults', 'missing-pack'] })
++      );
++      const missing = runScript(repoRoot);
++      expect(missing.exitCode).toBe(1);
++      expect(missing.stderr).toContain('Indexed bundle pack "missing-pack" directory not found');
++      expect(readFileSync(join(repoRoot, OUTPUT_REL), 'utf8')).toBe(output);
++    } finally {
++      await removeTempTree(repoRoot);
++    }
++  });
+   it('exits 0 for tracked defaults, staged-but-uncommitted defaults, and embedded packaged workflows (single amortized run)', async () => {
+     // One scenario covers what used to be three separate generator runs:
+     //   - all tracked legacy defaults (positive path)
+     //   - staged-but-uncommitted default (staged is not untracked)
+     //   - packaged workflow with commands + scripts + owner metadata
+     // Each set of assertions below is preserved verbatim from its origin case.
+-    const repoRoot = createRepo();
++    const repoRoot = createRepo(['defaults', 'author-pack']);
+     try {
+       // Staged-but-uncommitted default (previously its own case).
+       writeFileSync(
+@@ -127,7 +153,7 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
+       mkdirSync(join(packageDir, 'commands'), { recursive: true });
+       mkdirSync(join(packageDir, 'scripts/helpers'), { recursive: true });
+       writeFileSync(
+-        join(packageDir, 'release.yaml'),
++        join(packageDir, 'release.yml'),
+         'name: release\ndescription: release\nnodes:\n  - id: run\n    command: prepare\n'
+       );
+       writeFileSync(join(packageDir, 'commands/prepare.md'), '# Prepare the release\n');
+@@ -160,6 +186,9 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
+       expect(exitCode).toBe(0);
+       const packagedOutput = readFileSync(join(repoRoot, OUTPUT_REL), 'utf-8');
+       expect(packagedOutput).toContain('BUNDLED_WORKFLOW_OWNERS');
++      expect(packagedOutput).toContain(
++        '"release": "workflows/author-pack/release-flow/release.yml"'
++      );
+       expect(packagedOutput).toContain(
+         '"release": {"pack":"author-pack","workflow":"release-flow"}'
+       );
+@@ -222,7 +251,7 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
+       const legacyDir = join(repoRoot, '.archon/workflows/defaults/legacy');
+       mkdirSync(legacyDir, { recursive: true });
+       writeFileSync(
+-        join(legacyDir, 'tracked-legacy-workflow.yaml'),
++        join(legacyDir, 'tracked-legacy-workflow.yml'),
+         'name: tracked-legacy-workflow\ndeprecated:\n  message: Switch instead.\n'
+       );
+       runGit(repoRoot, ['add', '.archon/workflows/defaults/legacy']);
+@@ -234,25 +263,28 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
+       expect(exitCode).toBe(0);
+       const output = readFileSync(join(repoRoot, OUTPUT_REL), 'utf-8');
+       expect(output).toContain('"tracked-legacy-workflow"');
++      expect(output).toContain(
++        '"tracked-legacy-workflow": "workflows/defaults/legacy/tracked-legacy-workflow.yml"'
++      );
+     } finally {
+       await removeTempTree(repoRoot);
+     }
+   });
+ 
+   it('rejects an untracked file inside a packaged workflow', async () => {
+-    const repoRoot = createRepo();
++    const repoRoot = createRepo(['defaults', 'author-pack']);
+     try {
+       const packageDir = join(repoRoot, '.archon/workflows/author-pack/release-flow');
+       mkdirSync(packageDir, { recursive: true });
+       writeFileSync(
+-        join(packageDir, 'release.yaml'),
++        join(packageDir, 'release.yml'),
+         'name: release\ndescription: release\nnodes:\n  - id: run\n    prompt: hi\n'
+       );
+ 
+       const { exitCode, stderr } = runScript(repoRoot);
+       expect(exitCode).toBe(1);
+       expect(stderr).toContain('untracked files');
+-      expect(stderr).toContain('.archon/workflows/author-pack/release-flow/release.yaml');
++      expect(stderr).toContain('.archon/workflows/author-pack/release-flow/release.yml');
+       expect(readFileSync(join(repoRoot, OUTPUT_REL), 'utf-8')).toBe(SENTINEL);
+     } finally {
+       await removeTempTree(repoRoot);
+@@ -260,7 +292,7 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
+   });
+ 
+   it('includes tracked shared modules, excludes nonmodules and runnable keys, and checks helper-only drift', async () => {
+-    const repoRoot = createRepo();
++    const repoRoot = createRepo(['defaults', 'author-pack']);
+     try {
+       const pack = join(repoRoot, '.archon/workflows/author-pack');
+       mkdirSync(join(pack, '.shared/nested'), { recursive: true });
+@@ -300,7 +332,7 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
+   });
+ 
+   it('rejects an untracked shared module before writing the bundle', async () => {
+-    const repoRoot = createRepo();
++    const repoRoot = createRepo(['defaults', 'author-pack']);
+     try {
+       const shared = join(repoRoot, '.archon/workflows/author-pack/.shared/nested');
+       mkdirSync(shared, { recursive: true });
+@@ -318,7 +350,7 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
+   it.skipIf(process.platform === 'win32').each(['file', 'dir'] as const)(
+     'rejects a shared %s symlink instead of silently omitting it',
+     async kind => {
+-      const repoRoot = createRepo();
++      const repoRoot = createRepo(['defaults', 'author-pack']);
+       try {
+         const shared = join(repoRoot, '.archon/workflows/author-pack/.shared');
+         mkdirSync(shared, { recursive: true });
+diff --git a/packages/workflows/src/dry-run.test.ts b/packages/workflows/src/dry-run.test.ts
+index 9c662b45..fc8cbd42 100644
+--- a/packages/workflows/src/dry-run.test.ts
++++ b/packages/workflows/src/dry-run.test.ts
+@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+ import * as archonPaths from '@archon/paths';
+ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+ import { tmpdir } from 'node:os';
+-import { join, sep } from 'node:path';
++import { dirname, join, sep } from 'node:path';
+ import { makeTestComposedWorkflow, makeTestWorkflow } from './test-utils';
+ import {
+   createDryRunStubScaffold as createResolvedDryRunStubScaffold,
+@@ -18,12 +18,16 @@ import { resolveWorkflowModelScope } from './node-model-resolution';
+ import { expandWorkflowIncludes } from './include-expander';
+ import type { ResolvedWorkflow, WorkflowDefinition } from './schemas';
+ import { captureWorkflowSource, capturedSourceRoots, loadWorkflowSource } from './workflow-source';
++import { readBundleIndex } from './defaults/bundle-inventory';
+ 
+ // These fixtures read only project files. Avoid copying the repository's bundled
+ // defaults into every capture; the materialization suite covers bundled content.
+ async function captureProjectSource(options: Parameters<typeof captureWorkflowSource>[0]) {
+   const bundled = join(options.sourceRoot, 'empty-bundled', 'defaults');
+   mkdirSync(bundled, { recursive: true });
++  for (const pack of await readBundleIndex()) {
++    mkdirSync(join(dirname(bundled), pack), { recursive: true });
++  }
+   const workflows = spyOn(archonPaths, 'getDefaultWorkflowsPath').mockReturnValue(bundled);
+   const commands = spyOn(archonPaths, 'getDefaultCommandsPath').mockReturnValue(bundled);
+   try {
+diff --git a/packages/workflows/src/executor-shared.ts b/packages/workflows/src/executor-shared.ts
+index 596ca633..9a0922d1 100644
+--- a/packages/workflows/src/executor-shared.ts
++++ b/packages/workflows/src/executor-shared.ts
+@@ -16,6 +16,7 @@ import {
+   type WorkflowSourceRoots,
+ } from './workflow-source';
+ import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
++import { readBundleIndex } from './defaults/bundle-inventory';
+ import { createLogger } from '@archon/paths';
+ import { isValidCommandName } from './command-validation';
+ import type { LoadCommandResult } from './schemas';
+@@ -430,7 +431,13 @@ export async function loadCommandPrompt(
+   const packaged = parsePackagedResourceReference(commandName);
+   if (packaged !== null) {
+     if (packaged.owner.source === 'bundled') {
+-      if (!loadDefaultCommands) {
++      if (
++        !loadDefaultCommands ||
++        (roots.kind === 'live' &&
++          !isBinaryBuild() &&
++          (packaged.owner.pack === 'defaults' ||
++            !(await readBundleIndex()).includes(packaged.owner.pack)))
++      ) {
+         return {
+           success: false,
+           reason: 'not_found',
+@@ -579,12 +586,16 @@ export async function loadCommandPrompt(
+         return { success: true, content: bundledContent };
+       }
+       getLog().debug({ commandName }, 'command_bundled_not_found');
+-    } else {
+-      // Bun (or any captured run): load from the bundled-commands root, walking 1 level
+-      // deep so `defaults/archon-*.md` resolves.
++    } else if (roots.kind === 'captured' || (await readBundleIndex()).includes('defaults')) {
++      // Live defaults contain only the flat files the generator selects; old captures
++      // retain their original command layout independently of the current index.
+       const appDefaultsPath = roots.bundledCommands;
+       const entries = await archonPaths.findCommandFiles(appDefaultsPath);
+-      const match = entries.find(e => e.commandName === commandName);
++      const match = entries.find(
++        e =>
++          e.commandName === commandName &&
++          (roots.kind === 'captured' || e.relativePath === `${commandName}.md`)
++      );
+       if (match) {
+         const filePath = join(appDefaultsPath, match.relativePath);
+         try {
+diff --git a/packages/workflows/src/fixture-runner.test.ts b/packages/workflows/src/fixture-runner.test.ts
+index e9ccbd15..3668ded5 100644
+--- a/packages/workflows/src/fixture-runner.test.ts
++++ b/packages/workflows/src/fixture-runner.test.ts
+@@ -1,5 +1,5 @@
+ /** Tests for the declared-data dry-run fixture runner (#2772). */
+-import { describe, it, expect, beforeAll, afterAll, mock } from 'bun:test';
++import { describe, it, expect, beforeAll, afterAll, mock, spyOn } from 'bun:test';
+ import {
+   cpSync,
+   existsSync,
+@@ -15,22 +15,17 @@ import { mkdir } from 'node:fs/promises';
+ import { tmpdir } from 'node:os';
+ import { join } from 'node:path';
+ import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
++import { readBundleIndex } from './defaults/bundle-inventory';
+ 
+-// Capture-cost control, same lever and same reason as `subrun.test.ts` (#2882): every
+-// `runFixtures` call takes one source capture, and a capture copies and digests the
+-// repo's OWN bundled scope — `.archon/workflows` plus `.archon/commands`, ~178 files —
+-// alongside the handful of fixture files the test wrote. Thirty captures in this file
+-// is ~5,300 incidental file copies, and that bulk IO is what puts this suite at Bun's
+-// 5000ms budget on a contended Windows runner. No test here reads bundled CONTENT: the
+-// bundled SCOPE tests drive `sourceRoots.bundledWorkflows`, which is a discovery root
+-// this file already points at a temp directory. Pointing the two bundle getters at an
+-// owned EMPTY tree keeps the bundled scope's semantics intact — an existing directory
+-// is still scanned, still copied, still recorded in the manifest — while removing the
+-// file fan-out.
+-// NB: point these one level DEEP (`<root>/defaults`) — captureWorkflowSource copies
+-// dirname(getDefault*Path()), so the getter's PARENT must be the owned empty tree.
++// Every invocation captures bundled source, but these tests only exercise its scope:
++// cross-scope discovery supplies its own roots. Empty indexed directories preserve that
++// capture path without repeatedly copying this repository's actual bundled files (#2882).
++// Both getters sit under the owned root because capture resolves their parent directories.
+ const bundledDefaultsRoot = join(tmpdir(), `fixture-runner-test-empty-bundled-${process.pid}`);
+ await mkdir(join(bundledDefaultsRoot, 'defaults'), { recursive: true });
++for (const pack of await readBundleIndex()) {
++  await mkdir(join(bundledDefaultsRoot, pack), { recursive: true });
++}
+ afterAll(() => removeTempTree(bundledDefaultsRoot));
+ const realArchonPaths = await import('@archon/paths');
+ mock.module('@archon/paths', () => ({
+@@ -40,6 +35,7 @@ mock.module('@archon/paths', () => ({
+ }));
+ 
+ import { execFileAsync, resolveBashPath } from '@archon/git';
++import * as gitModule from '@archon/git';
+ import { parseWorkflow } from './loader';
+ import { expandWorkflowIncludes } from './include-expander';
+ import type { WorkflowWithSource } from './schemas/workflow';
+@@ -1138,15 +1134,31 @@ describe('runFixtures exec-code isolation (#2851)', () => {
+     const cwd = callerFrom(guardRepo);
+     const workflows = [workflowsOnDisk(cwd, ['test-wf'])[0]];
+ 
+-    const cleanReport = await runFixtures({ workflows, cwd });
+-    expect(cleanReport.failed).toBe(0);
+-
+-    // Exactly the operator-tree state the issue reports: one modified tracked file,
+-    // one untracked stray.
+-    writeFileSync(join(cwd, 'tracked.txt'), `${COMMITTED_YAML}edited\n`);
+-    writeFileSync(join(cwd, 'scratch.txt'), 'untracked stray\n');
+-    const dirtyReport = await runFixtures({ workflows, cwd });
+-    expect(dirtyReport.passed).toBe(1);
++    // Call through to real git and bash: the isolation remains the subject under test.
++    // Count its direct git calls to keep a redundant eligibility preflight from costing
++    // another Windows process per fixture (#3287).
++    const execSpy = spyOn(gitModule, 'execFileAsync');
++    try {
++      const cleanReport = await runFixtures({ workflows, cwd });
++      expect(cleanReport.failed).toBe(0);
++
++      // Exactly the operator-tree state the issue reports: one modified tracked file,
++      // one untracked stray.
++      writeFileSync(join(cwd, 'tracked.txt'), `${COMMITTED_YAML}edited\n`);
++      writeFileSync(join(cwd, 'scratch.txt'), 'untracked stray\n');
++      const dirtyReport = await runFixtures({ workflows, cwd });
++      expect(dirtyReport.passed).toBe(1);
++      expect(
++        execSpy.mock.calls.filter(([cmd]) => cmd === 'git').map(([, args]) => args.slice(0, 2))
++      ).toEqual([
++        ['worktree', 'add'],
++        ['worktree', 'remove'],
++        ['worktree', 'add'],
++        ['worktree', 'remove'],
++      ]);
++    } finally {
++      execSpy.mockRestore();
++    }
+   });
+ 
+   it('fails the guard when git cannot report status, rather than passing on its silence', async () => {
+@@ -1411,4 +1423,23 @@ describe('runFixtures exec-code isolation (#2851)', () => {
+     expect(report.failed).toBe(1);
+     expect(report.results[0].failureReason).toContain('not inside a git repository');
+   });
++
++  it('reports worktree creation failure for a git checkout without HEAD', async () => {
++    const { cwd } = writeTempProject({
++      workflowName: 'writer-wf',
++      workflowYaml: WRITER_YAML,
++      body: execFixtureBody,
++    });
++    await git(cwd, 'init', '-q');
++    const report = await runFixtures({
++      workflows: [workflowsOnDisk(cwd, ['writer-wf'])[0]],
++      cwd,
++    });
++    expect(report.failed).toBe(1);
++    expect(report.results[0].failureReason).toContain(
++      'could not create an isolated execution workspace from HEAD'
++    );
++    expect(report.results[0].failureReason).not.toContain('not inside a git repository');
++    expect(existsSync(join(cwd, 'leak.txt'))).toBe(false);
++  });
+ });
+diff --git a/packages/workflows/src/fixture-runner.ts b/packages/workflows/src/fixture-runner.ts
+index c06ea86b..6c5a5736 100644
+--- a/packages/workflows/src/fixture-runner.ts
++++ b/packages/workflows/src/fixture-runner.ts
+@@ -395,18 +395,21 @@ async function withExecWorkspace<T>(
+   cwd: string,
+   fn: (workspace: string) => Promise<T>
+ ): Promise<T> {
+-  try {
+-    await execFileAsync('git', ['rev-parse', '--show-toplevel'], { cwd });
+-  } catch {
+-    throw new Error(
+-      `Exec-code fixtures require a git checkout to isolate execution; '${cwd}' is not inside a git repository`
+-    );
+-  }
+   // git worktree add creates the workspace path's leading directories itself.
+   const workspace = join(getArchonTempPath(), `fixture-exec-${randomUUID()}`);
+   try {
+     await execFileAsync('git', ['worktree', 'add', '--detach', workspace, 'HEAD'], { cwd });
+   } catch (error) {
++    // Successful creation already proves checkout eligibility. Only diagnose a failure:
++    // a separate preflight adds a git process to every fixture, while interpreting git's
++    // error prose would make the distinction depend on its version or locale.
++    try {
++      await execFileAsync('git', ['rev-parse', '--show-toplevel'], { cwd });
++    } catch {
++      throw new Error(
++        `Exec-code fixtures require a git checkout to isolate execution; '${cwd}' is not inside a git repository`
++      );
++    }
+     throw new Error(
+       `Exec-code fixture could not create an isolated execution workspace from HEAD: ${(error as Error).message}`
+     );
+diff --git a/packages/workflows/src/loader.test.ts b/packages/workflows/src/loader.test.ts
+index 7d2b3065..5018f451 100644
+--- a/packages/workflows/src/loader.test.ts
++++ b/packages/workflows/src/loader.test.ts
+@@ -52,6 +52,7 @@ import type { WorkflowDefinition } from './schemas/workflow';
+ import type { DagNode, IncludeDirective, BindingDirective } from './schemas';
+ import type { JsonValue } from './output-ref';
+ import * as bundledDefaults from './defaults/bundled-defaults';
++import { readBundleIndex } from './defaults/bundle-inventory';
+ import { parsePackagedResourceReference } from './packaged-workflow';
+ import { discoverScriptsForCwd } from './script-discovery';
+ 
+@@ -6991,6 +6992,10 @@ nodes:
+       const tmp = await mkdtemp(join(tmpdir(), 'archon-legacy-'));
+       const defaultsDir = join(tmp, 'bundled', 'defaults', 'legacy');
+       await mkdir(defaultsDir, { recursive: true });
++      for (const pack of await readBundleIndex()) {
++        await mkdir(join(tmp, 'bundled', pack), { recursive: true });
++      }
++      await mkdir(join(tmp, 'bundled-commands', 'defaults'), { recursive: true });
+       await writeFile(
+         join(defaultsDir, 'legacy-wf.yaml'),
+         [
+@@ -7011,6 +7016,7 @@ nodes:
+       return {
+         ...roots,
+         bundledWorkflows: join(tmp, 'bundled'),
++        bundledCommands: join(tmp, 'bundled-commands', 'defaults'),
+         globalWorkflows: join(tmp, '.empty-global'),
+       };
+     };
+diff --git a/packages/workflows/src/script-discovery.test.ts b/packages/workflows/src/script-discovery.test.ts
+index c4d37d0a..21eeb27f 100644
+--- a/packages/workflows/src/script-discovery.test.ts
++++ b/packages/workflows/src/script-discovery.test.ts
+@@ -12,7 +12,12 @@ mock.module('fs/promises', () => ({
+   readdir: mockReaddir,
+   rename: mock(async () => undefined),
+   rm: mock(async () => undefined),
+-  stat: mockStat,
++  stat: async (path: string) => {
++    // These fixtures exercise user scopes; installed bundles have real filesystem coverage.
++    if (path.replaceAll('\\', '/').startsWith('/app/'))
++      throw Object.assign(new Error('No installed source tree'), { code: 'ENOENT' });
++    return mockStat(path);
++  },
+   writeFile: mock(async () => undefined),
+ }));
+ 
+@@ -31,6 +36,7 @@ mock.module('@archon/paths', () => ({
+   createLogger: mock(() => mockLogger),
+   getArchonHome: mock(() => '/home'),
+   getDefaultWorkflowsPath: mock(() => '/app/workflows/defaults'),
++  getDefaultCommandsPath: mock(() => '/app/commands/defaults'),
+   getHomeScriptsPath: mock(() => mockHomeScriptsPath),
+   getHomeWorkflowsPath: mock(() => mockHomeWorkflowsPath),
+ }));
+@@ -284,10 +290,14 @@ describe('discoverScriptsForCwd — merge repo + home with repo winning', () =>
+   test('tolerates an ENOENT race while scanning a packaged workflow', async () => {
+     mockReaddir.mockImplementation(async (path: string) => {
+       const p = norm(path);
+-      if (p === '/app/workflows') return ['removed-pack'];
++      if (p === '/home/workflows') return ['removed-pack'];
+       return [];
+     });
+-    mockStat.mockRejectedValueOnce(Object.assign(new Error('removed'), { code: 'ENOENT' }));
++    mockStat.mockImplementation(async (path: string) => {
++      if (norm(path) === '/home/workflows/removed-pack')
++        throw Object.assign(new Error('removed'), { code: 'ENOENT' });
++      return { isDirectory: () => false };
++    });
+ 
+     await expect(discoverScriptsForCwd('/repo')).resolves.toEqual(new Map());
+   });
+@@ -295,12 +305,14 @@ describe('discoverScriptsForCwd — merge repo + home with repo winning', () =>
+   test('surfaces permission failures while scanning packaged workflows', async () => {
+     mockReaddir.mockImplementation(async (path: string) => {
+       const p = norm(path);
+-      if (p === '/app/workflows') return ['private-pack'];
++      if (p === '/home/workflows') return ['private-pack'];
+       return [];
+     });
+-    mockStat.mockRejectedValueOnce(
+-      Object.assign(new Error('permission denied'), { code: 'EACCES' })
+-    );
++    mockStat.mockImplementation(async (path: string) => {
++      if (norm(path) === '/home/workflows/private-pack')
++        throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
++      return { isDirectory: () => false };
++    });
+ 
+     await expect(discoverScriptsForCwd('/repo')).rejects.toThrow(
+       'Failed to inspect packaged workflow pack'
+diff --git a/packages/workflows/src/script-discovery.ts b/packages/workflows/src/script-discovery.ts
+index 3305d395..a57c44c6 100644
+--- a/packages/workflows/src/script-discovery.ts
++++ b/packages/workflows/src/script-discovery.ts
+@@ -12,6 +12,7 @@ import { createHash, randomUUID } from 'crypto';
+ import { join, basename, dirname, extname } from 'path';
+ import { createLogger, getArchonHome } from '@archon/paths';
+ import { BUNDLED_SCRIPT_PACKS, isBinaryBuild } from './defaults/bundled-defaults';
++import { collectInstalledBundleSources } from './defaults/bundle-inventory';
+ import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
+ import {
+   formatPackagedResourceReference,
+@@ -275,9 +276,21 @@ async function discoverBundledPackagedScripts(
+ ): Promise<Map<string, ScriptDefinition>> {
+   // A captured run reads the bundled scripts IT froze — the capture materialized a
+   // binary's embedded ones to files, so the filesystem path serves both builds.
+-  return isBinaryBuild() && roots.kind === 'live'
+-    ? await materializeBundledScripts()
+-    : await discoverPackagedScripts(roots.bundledWorkflows, 'bundled');
++  if (roots.kind === 'captured') return discoverPackagedScripts(roots.bundledWorkflows, 'bundled');
++  if (isBinaryBuild()) return materializeBundledScripts();
++  const files =
++    (await collectInstalledBundleSources(roots.bundledWorkflows, dirname(roots.bundledCommands))) ??
++    [];
++  const scripts = new Map<string, ScriptDefinition>();
++  for (const file of files) {
++    if (file.kind !== 'script' || file.entry === undefined) continue;
++    scripts.set(file.entry.name, {
++      name: file.entry.name,
++      path: normalizeSep(file.sourcePath),
++      runtime: file.entry.runtime,
++    });
++  }
++  return scripts;
+ }
+ 
+ /**
+diff --git a/packages/workflows/src/script-node-deps.test.ts b/packages/workflows/src/script-node-deps.test.ts
+index 312815ad..d0be70de 100644
+--- a/packages/workflows/src/script-node-deps.test.ts
++++ b/packages/workflows/src/script-node-deps.test.ts
+@@ -25,6 +25,7 @@ mock.module('@archon/git', () => ({
+ // --- Mock logger (MUST come before module-under-test imports) ---
+ 
+ const mockLogFn = mock(() => {});
++let testDir: string;
+ const mockLogger = {
+   info: mockLogFn,
+   warn: mockLogFn,
+@@ -41,7 +42,9 @@ mock.module('@archon/paths', () => ({
+     if (folder) paths.unshift(folder);
+     return paths;
+   },
+-  getDefaultCommandsPath: () => '/nonexistent/defaults',
++  // This fixture has project scripts and no installed bundled source tree.
++  getDefaultCommandsPath: () => join(testDir, 'absent-bundle', 'commands', 'defaults'),
++  getDefaultWorkflowsPath: () => join(testDir, 'absent-bundle', 'workflows', 'defaults'),
+ }));
+ 
+ // --- Imports (after all mock.module calls) ---
+@@ -272,8 +275,6 @@ function dagOptions(overrides: DagOptionsOverrides): ExecuteDagWorkflowOptions {
+ }
+ 
+ describe('script node deps field — command construction', () => {
+-  let testDir: string;
+-
+   beforeEach(async () => {
+     testDir = join(
+       tmpdir(),
+diff --git a/packages/workflows/src/subrun.test.ts b/packages/workflows/src/subrun.test.ts
+index f8e85978..85bb934b 100644
+--- a/packages/workflows/src/subrun.test.ts
++++ b/packages/workflows/src/subrun.test.ts
+@@ -11,6 +11,7 @@
+  * NOT mock ./dag-executor, so it cannot share a process with executor.test.ts,
+  * which does (mock.module is process-global and irreversible).
+  */
++import { readBundleIndex } from './defaults/bundle-inventory';
+ import { describe, it, expect, beforeEach, afterEach, afterAll, mock } from 'bun:test';
+ import { mkdir, writeFile, rm, cp, readdir, readFile } from 'fs/promises';
+ import { removeTempTree } from '@archon/paths/test-utils';
+@@ -48,6 +49,8 @@ const mockLogger = {
+ // removing that file fan-out per capture per platform-multiplied runner.
+ const bundledDefaultsRoot = join(tmpdir(), `subrun-test-empty-bundled-${process.pid}`);
+ await mkdir(join(bundledDefaultsRoot, 'defaults'), { recursive: true });
++for (const pack of await readBundleIndex())
++  await mkdir(join(bundledDefaultsRoot, pack), { recursive: true });
+ afterAll(() => removeTempTree(bundledDefaultsRoot));
+ const realArchonPaths = await import('@archon/paths');
+ mock.module('@archon/paths', () => ({
+diff --git a/packages/workflows/src/validator.ts b/packages/workflows/src/validator.ts
+index c9a38569..ced99b52 100644
+--- a/packages/workflows/src/validator.ts
++++ b/packages/workflows/src/validator.ts
+@@ -22,6 +22,7 @@ import {
+ } from '@archon/paths';
+ import { execFileAsync } from '@archon/git';
+ import { BUNDLED_COMMANDS, BUNDLED_WORKFLOWS, isBinaryBuild } from './defaults/bundled-defaults';
++import { readBundleIndex } from './defaults/bundle-inventory';
+ import { isValidCommandName } from './command-validation';
+ import { levenshtein, findSimilar } from './utils/fuzzy-match';
+ import {
+@@ -178,11 +179,11 @@ export async function discoverAvailableCommands(
+       for (const name of Object.keys(BUNDLED_COMMANDS)) {
+         if (parsePackagedResourceReference(name) === null) names.add(name);
+       }
+-    } else {
++    } else if ((await readBundleIndex()).includes('defaults')) {
+       const defaultsPath = getDefaultCommandsPath();
+       const files = await findCommandFiles(defaultsPath);
+-      for (const { commandName } of files) {
+-        names.add(commandName);
++      for (const { commandName, relativePath } of files) {
++        if (relativePath === `${commandName}.md`) names.add(commandName);
+       }
+     }
+   }
+@@ -226,6 +227,11 @@ async function resolveCommand(
+       if (isBinaryBuild()) {
+         return commandName in BUNDLED_COMMANDS ? `[bundled:${commandName}]` : null;
+       }
++      if (
++        packaged.owner.pack === 'defaults' ||
++        !(await readBundleIndex()).includes(packaged.owner.pack)
++      )
++        return null;
+     }
+     let workflowsRoot: string;
+     if (packaged.owner.source === 'project') {
+@@ -280,9 +286,11 @@ async function resolveCommand(
+       if (commandName in BUNDLED_COMMANDS) {
+         return `[bundled:${commandName}]`;
+       }
+-    } else {
+-      const defaultsResolved = await resolveCommandInDir(getDefaultCommandsPath(), commandName);
+-      if (defaultsResolved) return defaultsResolved;
++    } else if ((await readBundleIndex()).includes('defaults')) {
++      const root = getDefaultCommandsPath();
++      const entries = await findCommandFiles(root);
++      const match = entries.find(entry => entry.relativePath === `${commandName}.md`);
++      if (match) return join(root, match.relativePath);
+     }
+   }
+ 
+diff --git a/packages/workflows/src/workflow-discovery.ts b/packages/workflows/src/workflow-discovery.ts
+index a9fc4df4..0cda1fcb 100644
+--- a/packages/workflows/src/workflow-discovery.ts
++++ b/packages/workflows/src/workflow-discovery.ts
+@@ -17,7 +17,7 @@
+  * Same-named files at a higher scope override those at lower scopes.
+  */
+ import { readFile, readdir, access, stat } from 'fs/promises';
+-import { basename, join } from 'path';
++import { basename, dirname, join } from 'path';
+ import type {
+   WorkflowDefinition,
+   WorkflowLoadError,
+@@ -43,8 +43,14 @@ import {
+   BUNDLED_WORKFLOWS,
+   BUNDLED_COMMANDS,
+   BUNDLED_WORKFLOW_OWNERS,
++  BUNDLED_WORKFLOW_PATHS,
+   isBinaryBuild,
+ } from './defaults/bundled-defaults';
++import {
++  collectInstalledBundleSources,
++  readBundleContent,
++  readBundleIndex,
++} from './defaults/bundle-inventory';
+ import { createLogger } from '@archon/paths';
+ import { isValidCommandName, MAX_DISCOVERY_DEPTH } from './command-validation';
+ import { parseWorkflow } from './loader';
+@@ -391,7 +397,9 @@ function loadBundledWorkflows(): DirLoadResult {
+   const errors: WorkflowLoadError[] = [];
+ 
+   for (const [name, content] of Object.entries(BUNDLED_WORKFLOWS)) {
+-    const filename = `${name}.yaml`;
++    const path = BUNDLED_WORKFLOW_PATHS[name];
++    if (path === undefined) throw new Error(`Bundled workflow "${name}" has no source path.`);
++    const filename = basename(path);
+     const result = parseWorkflow(content, filename);
+     if (result.workflow) {
+       const owner = BUNDLED_WORKFLOW_OWNERS[name];
+@@ -446,6 +454,12 @@ async function resolveCommandContentForScan(
+       // A captured run reads the bundled bytes IT froze; the capture materialized a
+       // binary's embedded constants to files.
+       if (isBinaryBuild() && roots.kind === 'live') return BUNDLED_COMMANDS[commandName] ?? null;
++      if (
++        roots.kind === 'live' &&
++        (packaged.owner.pack === 'defaults' ||
++          !(await readBundleIndex()).includes(packaged.owner.pack))
++      )
++        return null;
+     }
+ 
+     let workflowsRoot: string;
+@@ -508,6 +522,7 @@ async function resolveCommandContentForScan(
+   if (isBinaryBuild() && roots.kind === 'live') {
+     return BUNDLED_COMMANDS[commandName] ?? null;
+   }
++  if (roots.kind === 'live' && !(await readBundleIndex()).includes('defaults')) return null;
+   const defaultsDir = roots.bundledCommands;
+   let entries: Awaited<ReturnType<typeof archonPaths.findCommandFiles>>;
+   try {
+@@ -517,7 +532,11 @@ async function resolveCommandContentForScan(
+     if (err.code === 'ENOENT') return null;
+     return { path: defaultsDir, message: err.message, operation: 'inspect' };
+   }
+-  const match = entries.find(e => e.commandName === commandName);
++  const match = entries.find(
++    e =>
++      e.commandName === commandName &&
++      (roots.kind === 'captured' || e.relativePath === `${commandName}.md`)
++  );
+   if (!match) return null;
+   const commandPath = join(defaultsDir, match.relativePath);
+   try {
+@@ -850,11 +869,37 @@ export async function discoverWorkflows(
+       );
+       getLog().debug({ appWorkflowsPath }, 'loading_app_default_workflows');
+       try {
+-        await access(appWorkflowsPath);
+-        const appResult = mergeScopeResults(
+-          await loadWorkflowsFromDir(appDefaultsPath),
+-          await loadPackagedWorkflowsFromDir(appWorkflowsPath, 'bundled')
+-        );
++        let appResult: DirLoadResult;
++        if (roots.kind === 'live') {
++          appResult = { workflows: new Map(), errors: [] };
++          const files =
++            (await collectInstalledBundleSources(
++              appWorkflowsPath,
++              dirname(roots.bundledCommands)
++            )) ?? [];
++          for (const file of files) {
++            if (file.kind !== 'workflow') continue;
++            const filename = basename(file.sourcePath);
++            const parsed = parseWorkflow(await readBundleContent(file), filename);
++            if (!parsed.workflow) {
++              appResult.errors.push(parsed.error);
++              continue;
++            }
++            if (file.owner)
++              qualifyWorkflowResources(parsed.workflow, { source: 'bundled', ...file.owner });
++            appResult.workflows.set(filename, {
++              workflow: parsed.workflow,
++              parseWarnings: parsed.warnings,
++            });
++          }
++        } else {
++          // A capture's inventory belongs to that run, including packs no longer shipped.
++          await access(appWorkflowsPath);
++          appResult = mergeScopeResults(
++            await loadWorkflowsFromDir(appDefaultsPath),
++            await loadPackagedWorkflowsFromDir(appWorkflowsPath, 'bundled')
++          );
++        }
+         for (const [filename, parsed] of appResult.workflows) {
+           workflowsByFile.set(filename, { ...parsed, source: 'bundled' });
+         }
+@@ -868,8 +913,13 @@ export async function discoverWorkflows(
+         getLog().info({ count: appResult.workflows.size }, 'app_default_workflows_loaded');
+       } catch (error) {
+         const err = error as NodeJS.ErrnoException;
+-        if (err.code !== 'ENOENT') {
++        if (roots.kind === 'live' || err.code !== 'ENOENT') {
+           getLog().warn({ err, appWorkflowsPath }, 'app_defaults_access_error');
++          allErrors.push({
++            filename: appWorkflowsPath,
++            error: err.message,
++            errorType: 'read_error',
++          });
+         } else {
+           getLog().debug({ appWorkflowsPath }, 'app_defaults_directory_not_found');
+         }
+diff --git a/packages/workflows/src/workflow-source.test.ts b/packages/workflows/src/workflow-source.test.ts
+index caae7476..9f59a527 100644
+--- a/packages/workflows/src/workflow-source.test.ts
++++ b/packages/workflows/src/workflow-source.test.ts
+@@ -2,25 +2,18 @@
+  * Source capture: what a run freezes, and what it must keep resolving after the
+  * authoring checkout moves on.
+  */
++import { readBundleIndex } from './defaults/bundle-inventory';
+ import { describe, test, expect, afterAll, mock } from 'bun:test';
+ import { mkdtemp, mkdir, writeFile, rm, readFile, readdir, symlink, stat } from 'fs/promises';
+ import { tmpdir } from 'os';
+ import { dirname, join } from 'path';
+ 
+-// Capture-cost control, same lever and same reason as `subrun.test.ts` (#2882):
+-// every `captureWorkflowSource` call here copies and digests the repo's OWN bundled
+-// scope — `.archon/workflows` plus `.archon/commands`, ~178 files — on top of the
+-// handful of fixture files the test wrote. Twenty-five captures in this file is ~4,400
+-// incidental file copies, and that bulk IO is what puts this suite at Bun's 5000ms
+-// budget on a contended Windows runner. No test here reads bundled CONTENT: the
+-// assertions count the PROJECT scope (`countScopeFiles`) and resolve fixture-written
+-// commands. Pointing the two bundle getters at an owned EMPTY tree keeps the bundled
+-// scope's semantics intact — an existing directory is still scanned, still copied,
+-// still recorded in the manifest — while removing the file fan-out.
+-// NB: point these one level DEEP (`<root>/defaults`) — captureWorkflowSource copies
+-// dirname(getDefault*Path()), so the getter's PARENT must be the owned empty tree.
++// Empty indexed pack directories keep capture semantics while these tests exercise
++// fixture-owned project sources. Actual bundle bytes have their own conformance tests.
+ const bundledDefaultsRoot = join(tmpdir(), `workflow-source-test-empty-bundled-${process.pid}`);
+ await mkdir(join(bundledDefaultsRoot, 'defaults'), { recursive: true });
++for (const pack of await readBundleIndex())
++  await mkdir(join(bundledDefaultsRoot, pack), { recursive: true });
+ afterAll(async () => {
+   await rm(bundledDefaultsRoot, { recursive: true, force: true }).catch(() => {});
+ });
+@@ -34,8 +27,6 @@ mock.module('@archon/paths', () => ({
+ import {
+   captureWorkflowSource,
+   capturedSourceRoots,
+-  createCaptureProfiler,
+-  CAPTURE_PHASES,
+   assertWorkflowSourceIntegrity,
+   loadWorkflowSource,
+   recordSelectedWorkflow,
+@@ -460,67 +451,6 @@ describe('the bundled scope is hoisted out of the per-capture path', () => {
+   });
+ });
+ 
+-describe('measuring where a capture spends its time', () => {
+-  /**
+-   * The phase hook exists to find out what a capture costs on Windows (#3282), and that
+-   * answer is only worth anything if the capture being measured is the one an unmeasured
+-   * run takes. So: two captures of the same source, one profiled and one not, agree on
+-   * every byte — and the phases account for exactly the files the manifest recorded, or
+-   * the numbers describe some other work than the capture.
+-   *
+-   * The mocked bundled root is this file's shared empty tree, so the file written into it
+-   * here is removed again before the test returns.
+-   */
+-  test('profiling changes nothing, and the phase counts reconcile with the manifest', async () => {
+-    const { source, runArtifacts, root } = await createSandbox();
+-    const bundledFile = join(bundledDefaultsRoot, 'defaults', 'profiled-capture.yaml');
+-    // Both captures are compared to each other, so the global scope has to be a tree this
+-    // test owns rather than whatever `~/.archon` holds while the suite runs.
+-    const previousHome = process.env.ARCHON_HOME;
+-    process.env.ARCHON_HOME = join(root, 'home');
+-
+-    // Inside the try: a rejection between here and the cleanup would otherwise leave
+-    // ARCHON_HOME pointed at this test's sandbox for every test that follows.
+-    try {
+-      await writeFile(bundledFile, 'name: profiled-capture\n');
+-      const plain = await captureWorkflowSource({
+-        sourceRoot: source,
+-        captureRoot: captureRootIn(runArtifacts, 'plain'),
+-      });
+-      const { profiler, totals } = createCaptureProfiler();
+-      const profiled = await captureWorkflowSource({
+-        sourceRoot: source,
+-        captureRoot: captureRootIn(runArtifacts, 'profiled'),
+-        profiler,
+-      });
+-
+-      expect(profiled.manifest.digest).toBe(plain.manifest.digest);
+-      expect(profiled.manifest.file_count).toBe(plain.manifest.file_count);
+-      expect(profiled.manifest.byte_count).toBe(plain.manifest.byte_count);
+-
+-      // Every captured file is written by exactly one of the two write phases, which is
+-      // what makes "writes are the cost" a claim the numbers can support or refute.
+-      expect(totals.copy.files + totals.bundled_write.files).toBe(profiled.manifest.file_count);
+-      expect(totals.copy.bytes + totals.bundled_write.bytes).toBe(profiled.manifest.byte_count);
+-      // The bundled half is the one the digest does not read back, so it has to be present
+-      // and it has to be excluded — a zero here would make the identity above vacuous.
+-      expect(totals.bundled_write.files).toBeGreaterThan(0);
+-      expect(totals.digest.files).toBe(totals.copy.files);
+-      expect(totals.digest.bytes).toBe(totals.copy.bytes);
+-      // Every declared phase is actually wired to a range of the capture. A phase that is
+-      // named but never timed reports 0.00 forever, which reads as "free" rather than as
+-      // "unmeasured" — the one way this instrument can lie to whoever runs it.
+-      for (const phase of CAPTURE_PHASES) {
+-        expect(totals[phase].ms).toBeGreaterThan(0);
+-      }
+-    } finally {
+-      await rm(bundledFile, { force: true });
+-      if (previousHome === undefined) delete process.env.ARCHON_HOME;
+-      else process.env.ARCHON_HOME = previousHome;
+-    }
+-  });
+-});
+-
+ describe('resolving against a capture instead of the target', () => {
+   test('a command resolves from the source even though the target lacks it', async () => {
+     const { source, target, runArtifacts } = await createSandbox();
+diff --git a/packages/workflows/src/workflow-source.ts b/packages/workflows/src/workflow-source.ts
+index 8b16fc0c..7a62306b 100644
+--- a/packages/workflows/src/workflow-source.ts
++++ b/packages/workflows/src/workflow-source.ts
+@@ -30,10 +30,9 @@
+  * SCOPE: every source scope a static `include:` can reach is captured — project, global
+  * (`~/.archon/`), and, in source builds, the on-disk bundled defaults. Freezing only the
+  * project scope would leave a hole: a project workflow that includes a global one would
+- * still change shape across a resume. In a compiled binary the bundled defaults are
+- * embedded constants rather than files, so they cannot move under a run at all; the
+- * manifest records the engine version, which is what distinguishes one binary's bundled
+- * set from another's.
++ * still change shape across a resume. Bundled content is selected by the same inventory
++ * in source and binary builds, then written into the run's capture so an engine upgrade
++ * cannot replace its executable source.
+  *
+  * Runtime `workflow:` children are deliberately NOT part of the closure. A child is not a
+  * run until it starts and freezes its own source — see {@link resolveChildDiscoveryRoot}.
+@@ -61,9 +60,14 @@ import {
+   BUNDLED_COMMANDS,
+   BUNDLED_SCRIPT_PACKS,
+   BUNDLED_WORKFLOWS,
+-  BUNDLED_WORKFLOW_OWNERS,
++  BUNDLED_WORKFLOW_PATHS,
+   isBinaryBuild,
+ } from './defaults/bundled-defaults';
++import {
++  collectInstalledBundleSources,
++  readBundleContent,
++  type BundleSourceFile,
++} from './defaults/bundle-inventory';
+ import {
+   readWorkflowSourceState,
+   workflowSourceConfigSchema,
+@@ -420,35 +424,13 @@ interface BundledFile extends DigestEntry {
+ }
+ 
+ /**
+- * The bundled scope this process holds, ready to be written into a capture.
+- *
+- * Why it exists: `captureWorkflowSource` used to copy the whole bundled scope and then
+- * re-read every copied byte to hash it, on every capture — and `runChildWorkflow` captures
+- * once per child spawn. On this checkout that was 200 files read twice and hashed per
+- * spawn, none of it the workflow under test (#2924).
+- *
+- * The bytes still have to BE in each capture — that is what lets a run that statically
+- * included a bundled workflow prove on resume that it did not change under an Archon
+- * upgrade — so what is hoisted is reading and hashing them, never writing them. A binary
+- * already keeps its bundled set in memory as constants and writes it out per capture; this
+- * gives a source build the same shape, from one read of the two on-disk trees.
+- *
+- * Why the copy is rechecked instead of memoized for the life of the process: in a source
+- * build those two trees are the checkout's own `.archon/workflows` and `.archon/commands`,
+- * and a running Archon writes there itself — `PUT`/`DELETE /api/workflows/:name` write
+- * under `<cwd>/.archon/workflows`, which for a maintainer running Archon from source IS
+- * the checkout. A stale workflow catalogue is a wrong answer, not a slow one, so every
+- * reuse revalidates against the live trees first and any difference re-reads them. A
+- * binary's constants cannot move under the process and are read once.
++ * Selected bundled bytes held in this process and written into every run's own capture.
++ * Independent files let paused runs verify their source after an Archon upgrade; sharing
++ * a mutable file with another capture or the authoring tree would violate that contract.
+  *
+- * Deliberately NOT the content-addressed on-disk cache `script-discovery.ts` publishes
+- * bundled script packs into. That cache works because its input is already in memory, so
+- * hashing it is free, and because a script node executes from the cached path, which has
+- * to be stable and shared. Here the bytes must land inside each capture regardless, so a
+- * shared directory would be an extra hop rather than the destination — and on a source
+- * build a content key would have to read the whole tree to compute, which is the cost this
+- * removes. What it borrows is the principle: key on an identity that changes when the
+- * bytes do.
++ * Source builds reselect the indexed inventory and compare size/mtime on every capture,
++ * so additions, edits and deletions remain visible without rereading unchanged bytes.
++ * A binary's embedded constants cannot change and are read once.
+  */
+ interface BundledScope {
+   /** Identity of the build these bytes came from. */
+@@ -507,13 +489,10 @@ function readBundledConstants(): Omit<BundledScope, 'key' | 'stamp'> {
+   const { add: write, result } = bundledScopeBuilder();
+ 
+   for (const [name, content] of Object.entries(BUNDLED_WORKFLOWS)) {
+-    // A packaged bundled workflow lives under `<pack>/<workflow>/`; a bare one under
+-    // `defaults/`. The owners map is what distinguishes them, exactly as on disk.
+-    const owner = BUNDLED_WORKFLOW_OWNERS[name];
+-    const relative = owner
+-      ? join('workflows', owner.pack, owner.workflow, `${name}.yaml`)
+-      : join('workflows', 'defaults', `${name}.yaml`);
+-    write(relative, content);
++    // The generator owns authored extensions and legacy subfolders, too.
++    const path = BUNDLED_WORKFLOW_PATHS[name];
++    if (path === undefined) throw new Error(`Bundled workflow "${name}" has no source path.`);
++    write(path, content);
+   }
+ 
+   for (const [name, content] of Object.entries(BUNDLED_COMMANDS)) {
+@@ -539,17 +518,14 @@ function readBundledConstants(): Omit<BundledScope, 'key' | 'stamp'> {
+   return result();
+ }
+ 
+-/** Read a source build's on-disk bundled trees, hashing each file as it is read. */
+-async function readBundledTrees(
+-  listings: readonly { name: string; listing: TreeListing }[]
++/** Read only the generator's selected source files, using the same LF normalization. */
++async function readBundledSources(
++  files: readonly BundleSourceFile[]
+ ): Promise<Omit<BundledScope, 'key' | 'stamp'>> {
+   const { add, addDir, result } = bundledScopeBuilder();
+-
+-  for (const { name, listing } of listings) {
+-    for (const dir of listing.dirs) addDir(dir === '' ? name : join(name, dir));
+-    for (const file of listing.files) add(join(name, file.relPath), await readFile(file.absPath));
+-  }
+-
++  addDir('workflows');
++  addDir(join('commands', 'defaults'));
++  for (const file of files) add(file.relativePath, await readBundleContent(file));
+   return result();
+ }
+ 
+@@ -598,18 +574,23 @@ async function resolveBundledScope(): Promise<BundledScope | undefined> {
+   }
+ 
+   const roots = bundledSourceRoots();
+-  const listings: { name: string; listing: TreeListing }[] = [];
+-  for (const { name, from } of roots) {
+-    if (await isDirectory(from)) listings.push({ name, listing: await listTree(from) });
++  const sources = await collectInstalledBundleSources(roots[0].from, roots[1].from);
++  if (!sources) return undefined;
++  const files: TreeFile[] = [];
++  for (const file of sources) {
++    const info = await stat(file.sourcePath);
++    files.push({
++      relPath: file.relativePath,
++      absPath: file.sourcePath,
++      size: info.size,
++      mtimeMs: info.mtimeMs,
++    });
+   }
+-  // Nothing on disk means no bundled scope. An existing but EMPTY root still counts: it is
+-  // captured as an empty scope directory, which is what a resolver reading it expects.
+-  if (listings.length === 0) return undefined;
+ 
+   const key = `source\0${roots.map(r => r.from).join('\0')}`;
+-  const stamp = stampListings(listings);
++  const stamp = stampListings([{ name: 'bundled', listing: { dirs: [], files } }]);
+   if (bundledScope?.key !== key || bundledScope.stamp !== stamp) {
+-    bundledScope = { key, stamp, ...(await readBundledTrees(listings)) };
++    bundledScope = { key, stamp, ...(await readBundledSources(sources)) };
+   }
+   return bundledScope;
+ }
+@@ -657,17 +638,9 @@ function foldDigest(entries: readonly DigestEntry[]): string {
+  * `skipScope` names a top-level scope directory whose per-file digests the caller already
+  * holds — the bundled scope, written from bytes this process is still holding. Everything
+  * else is read here, which is what makes the digest a statement about bytes, not paths.
+- *
+- * `bytes` is what was actually read, not what the caller expected to be there. It is the
+- * only phase whose byte volume no other counter already holds, and a phase reporting zero
+- * bytes while reading a megabyte is the way a measurement lies to whoever reads it.
+  */
+-async function digestEntries(
+-  root: string,
+-  skipScope?: string
+-): Promise<{ entries: DigestEntry[]; bytes: number }> {
++async function digestEntries(root: string, skipScope?: string): Promise<DigestEntry[]> {
+   const entries: DigestEntry[] = [];
+-  let bytes = 0;
+ 
+   const walk = async (dir: string, rel: string): Promise<void> => {
+     let dirEntries;
+@@ -684,120 +657,24 @@ async function digestEntries(
+       } else if (entry.isFile()) {
+         if (relPath === MANIFEST_FILE) continue;
+         const content = await readFile(join(dir, entry.name));
+-        bytes += content.byteLength;
+         entries.push({ relPath, hash: createHash('sha256').update(content).digest('hex') });
+       }
+     }
+   };
+   await walk(root, '');
+ 
+-  return { entries, bytes };
++  return entries;
+ }
+ 
+ /** Content digest over every captured file. */
+ async function digestTree(root: string): Promise<string> {
+-  return foldDigest((await digestEntries(root)).entries);
++  return foldDigest(await digestEntries(root));
+ }
+ 
+ async function writeManifest(captureRoot: string, manifest: WorkflowSourceManifest): Promise<void> {
+   await writeFile(join(captureRoot, MANIFEST_FILE), `${JSON.stringify(manifest, null, 2)}\n`);
+ }
+ 
+-/**
+- * The contiguous blocks one capture spends its time in.
+- *
+- * Named here rather than in the measuring script because the names have to keep meaning
+- * the same thing as the code moves: a phase is a range of {@link captureWorkflowSource},
+- * and a reader comparing one platform's numbers with another's is comparing these ranges.
+- */
+-export const CAPTURE_PHASES = [
+-  /** Probe which mutable source directories exist and are worth capturing. */
+-  'scan',
+-  /** Clear and create the `.partial` staging root. */
+-  'stage',
+-  /** Walk each mutable source tree, listing its directories and files. */
+-  'walk',
+-  /** Recreate those directories in staging and copy every listed file into them. */
+-  'copy',
+-  /** Resolve this build's bundled bytes: revalidate the cached scope, or read it. */
+-  'bundled_read',
+-  /** Write those bytes into staging, one file at a time. */
+-  'bundled_write',
+-  /** Read back and hash every non-bundled captured file, then fold the capture digest. */
+-  'digest',
+-  /** Write `manifest.json`. */
+-  'manifest',
+-  /** Remove any prior capture at the destination and rename staging into place. */
+-  'publish',
+-] as const;
+-
+-export type CapturePhase = (typeof CAPTURE_PHASES)[number];
+-
+-/** What one phase spent, and what it spent it on. */
+-export interface CapturePhaseTotals {
+-  ms: number;
+-  /** Directories walked or created. */
+-  dirs: number;
+-  /** Files walked, copied, written, or hashed. */
+-  files: number;
+-  /** Bytes those files carry. */
+-  bytes: number;
+-}
+-
+-/**
+- * Measurement hook for one capture.
+- *
+- * Production callers pass nothing and get {@link NO_PROFILER}, which adds one function
+- * call per phase — nine per capture — and no clock reads, allocations, or syscalls. The
+- * only caller that passes a real one is `scripts/capture-cost.ts`, so a normal run never
+- * pays for a measurement nobody asked for.
+- */
+-export interface CaptureProfiler {
+-  time<T>(phase: CapturePhase, work: () => Promise<T>): Promise<T>;
+-  count(phase: CapturePhase, counts: Partial<Omit<CapturePhaseTotals, 'ms'>>): void;
+-}
+-
+-/** The profiler an unmeasured capture runs against. */
+-const NO_PROFILER: CaptureProfiler = {
+-  time: (_phase, work) => work(),
+-  count: () => undefined,
+-};
+-
+-/**
+- * A profiler and the totals it accumulates.
+- *
+- * `totals` is live: it is the same object the returned profiler writes into, so a caller
+- * reads it after the capture resolves rather than being handed a snapshot mid-flight.
+- */
+-export function createCaptureProfiler(): {
+-  profiler: CaptureProfiler;
+-  totals: Record<CapturePhase, CapturePhaseTotals>;
+-} {
+-  const totals = Object.fromEntries(
+-    CAPTURE_PHASES.map(phase => [phase, { ms: 0, dirs: 0, files: 0, bytes: 0 }])
+-  ) as Record<CapturePhase, CapturePhaseTotals>;
+-
+-  return {
+-    totals,
+-    profiler: {
+-      time: async <T>(phase: CapturePhase, work: () => Promise<T>): Promise<T> => {
+-        const started = performance.now();
+-        try {
+-          return await work();
+-        } finally {
+-          totals[phase].ms += performance.now() - started;
+-        }
+-      },
+-      count: (phase, counts): void => {
+-        const total = totals[phase];
+-        total.dirs += counts.dirs ?? 0;
+-        total.files += counts.files ?? 0;
+-        total.bytes += counts.bytes ?? 0;
+-      },
+-    },
+-  };
+-}
+-
+ /**
+  * Freeze `sourceRoot`'s executable source, plus every other statically reachable scope,
+  * into `captureRoot`.
+@@ -814,18 +691,12 @@ export async function captureWorkflowSource(opts: {
+   captureRoot: string;
+   commandFolder?: string;
+   sourceConfig?: WorkflowSourceConfig;
+-  /**
+-   * Measure where this capture spends its time. Off unless a caller asks — see
+-   * {@link CaptureProfiler}. Passing one changes nothing the capture produces.
+-   */
+-  profiler?: CaptureProfiler;
+ }): Promise<WorkflowSourceCapture> {
+   const {
+     sourceRoot,
+     captureRoot,
+     commandFolder,
+     sourceConfig = DEFAULT_WORKFLOW_SOURCE_CONFIG,
+-    profiler = NO_PROFILER,
+   } = opts;
+ 
+   // (relative destination, absolute origin) pairs, one per MUTABLE directory worth copying.
+@@ -833,41 +704,33 @@ export async function captureWorkflowSource(opts: {
+   // {@link BundledScope} and written from there.
+   const jobs: { dest: string; from: string; scope: 'project' | 'global' }[] = [];
+ 
+-  await profiler.time('scan', async () => {
+-    for (const dir of projectSourceDirs(commandFolder)) {
+-      const from = join(sourceRoot, dir);
+-      if (await isDirectory(from))
+-        jobs.push({ dest: join(PROJECT_SCOPE_DIR, dir), from, scope: 'project' });
+-    }
+-    for (const [name, from] of [
+-      ['workflows', archonPaths.getHomeWorkflowsPath()],
+-      ['commands', archonPaths.getHomeCommandsPath()],
+-      ['scripts', archonPaths.getHomeScriptsPath()],
+-    ] as const) {
+-      if (await isDirectory(from))
+-        jobs.push({ dest: join(GLOBAL_SCOPE_DIR, name), from, scope: 'global' });
+-    }
+-  });
++  for (const dir of projectSourceDirs(commandFolder)) {
++    const from = join(sourceRoot, dir);
++    if (await isDirectory(from))
++      jobs.push({ dest: join(PROJECT_SCOPE_DIR, dir), from, scope: 'project' });
++  }
++  for (const [name, from] of [
++    ['workflows', archonPaths.getHomeWorkflowsPath()],
++    ['commands', archonPaths.getHomeCommandsPath()],
++    ['scripts', archonPaths.getHomeScriptsPath()],
++  ] as const) {
++    if (await isDirectory(from))
++      jobs.push({ dest: join(GLOBAL_SCOPE_DIR, name), from, scope: 'global' });
++  }
+ 
+   const staging = `${captureRoot}.partial`;
+-  await profiler.time('stage', () => rm(staging, { recursive: true, force: true }));
++  await rm(staging, { recursive: true, force: true });
+ 
+   let fileCount = 0;
+   let byteCount = 0;
+   const scopesCaptured = new Set<'project' | 'global' | 'bundled'>(jobs.map(j => j.scope));
+   try {
+-    await profiler.time('stage', () => mkdir(staging, { recursive: true }));
++    await mkdir(staging, { recursive: true });
+     for (const job of jobs) {
+       const target = join(staging, job.dest);
+-      await profiler.time('copy', () => mkdir(dirname(target), { recursive: true }));
+-      const listing = await profiler.time('walk', () => listTree(job.from));
+-      profiler.count('walk', { dirs: listing.dirs.length, files: listing.files.length });
+-      const copied = await profiler.time('copy', () => copyListing(listing, target));
+-      profiler.count('copy', {
+-        dirs: listing.dirs.length,
+-        files: copied.files,
+-        bytes: copied.bytes,
+-      });
++      await mkdir(dirname(target), { recursive: true });
++      const listing = await listTree(job.from);
++      const copied = await copyListing(listing, target);
+       fileCount += copied.files;
+       byteCount += copied.bytes;
+     }
+@@ -875,14 +738,9 @@ export async function captureWorkflowSource(opts: {
+     // The run's own bundled bytes, written from what this process already holds. They have
+     // to be present, not referenced: that is what lets a run that statically included a
+     // bundled workflow prove on resume that it did not change under an Archon upgrade.
+-    const bundled = await profiler.time('bundled_read', () => resolveBundledScope());
++    const bundled = await resolveBundledScope();
+     if (bundled) {
+-      await profiler.time('bundled_write', () => writeBundledScope(bundled, staging));
+-      profiler.count('bundled_write', {
+-        dirs: bundled.dirs.length,
+-        files: bundled.files.length,
+-        bytes: bundled.byteCount,
+-      });
++      await writeBundledScope(bundled, staging);
+       fileCount += bundled.files.length;
+       byteCount += bundled.byteCount;
+       scopesCaptured.add('bundled');
+@@ -890,11 +748,8 @@ export async function captureWorkflowSource(opts: {
+ 
+     // The bundled files were written from bytes whose hashes are already known, so reading
+     // them back would restate what the scope already carries. Everything else is read.
+-    const digest = await profiler.time('digest', async () => {
+-      const read = await digestEntries(staging, bundled ? BUNDLED_SCOPE_DIR : undefined);
+-      profiler.count('digest', { files: read.entries.length, bytes: read.bytes });
+-      return foldDigest([...read.entries, ...(bundled?.files ?? [])]);
+-    });
++    const entries = await digestEntries(staging, bundled ? BUNDLED_SCOPE_DIR : undefined);
++    const digest = foldDigest([...entries, ...(bundled?.files ?? [])]);
+     const manifest: WorkflowSourceManifest = {
+       version: 1,
+       engine_version: BUNDLED_VERSION,
+@@ -906,15 +761,13 @@ export async function captureWorkflowSource(opts: {
+       scopes: [...scopesCaptured],
+       source_config: sourceConfig,
+     };
+-    await profiler.time('manifest', () => writeManifest(staging, manifest));
++    await writeManifest(staging, manifest);
+ 
+     // Replace rather than merge: a stale capture at this path would silently mix two
+     // vintages of source, which is the failure this module exists to prevent.
+-    await profiler.time('publish', async () => {
+-      await rm(captureRoot, { recursive: true, force: true });
+-      await mkdir(dirname(captureRoot), { recursive: true });
+-      await rename(staging, captureRoot);
+-    });
++    await rm(captureRoot, { recursive: true, force: true });
++    await mkdir(dirname(captureRoot), { recursive: true });
++    await rename(staging, captureRoot);
+ 
+     if (byteCount > CAPTURE_WARN_BYTES) {
+       getLog().warn(
+diff --git a/scripts/capture-cost.ts b/scripts/capture-cost.ts
+deleted file mode 100644
+index da49a407..00000000
+--- a/scripts/capture-cost.ts
++++ /dev/null
+@@ -1,469 +0,0 @@
+-/**
+- * Where a child-spawn source capture spends its time, and which write primitive it pays for.
+- *
+- * Every `workflow:` child freezes its own source (#2924), and the write half of that freeze
+- * is untouched: `captureWorkflowSource` copies every mutable source file and writes every
+- * bundled file into each capture. On Windows, file creation is what Defender interposes on,
+- * so writes are the suspected cost — but every number the project holds was measured on
+- * macOS, which does not exhibit the problem. Hard-linking, the obvious way to stop paying
+- * per-file write cost, measured 3x WORSE than copying on APFS; a hard link is a directory
+- * entry with no new content, which is plausibly the one thing Defender does not scan. The
+- * lever that looks worst here may be the best one there.
+- *
+- * So this harness measures rather than fixes. It answers four questions:
+- *
+- *   1. What fraction of a capture is copying versus digesting versus everything else?
+- *      Measured on the REAL `captureWorkflowSource`, through the phase hook it now accepts.
+- *   2. Does per-file cost scale with file COUNT or with total BYTES? Interposition predicts
+- *      count; ordinary I/O predicts bytes. Measured by holding total bytes fixed and moving
+- *      the file count.
+- *   3. Does a hard link avoid the per-file cost a copy pays? Measured as `copyFile` versus
+- *      `link` versus `writeFile` over one identical tree.
+- *   4. How much does a neighbouring workload change all of the above? Measured by repeating
+- *      everything with N background workers churning files.
+- *
+- * Questions 2-4 cannot run on the real capture: they need trees this harness controls. Those
+- * sections are explicitly synthetic and say so in their output. Section 1 is not — it calls
+- * `captureWorkflowSource` with the options `prepareWorkflowSource` builds for a child spawn
+- * (`packages/workflows/src/executor.ts`), against this checkout.
+- *
+- * Usage:
+- *
+- *   bun run bench:capture                  # everything, idle then under load
+- *   bun run bench:capture -- --help        # options
+- *
+- * `ARCHON_HOME` is pinned to a scratch directory for the duration, so the global source
+- * scope is empty and two machines measure the same tree. Nothing is written outside the OS
+- * temp directory, and the repository is only ever read.
+- */
+-import { mkdir, mkdtemp, writeFile, copyFile, link, readFile, readdir, rm } from 'node:fs/promises';
+-import { cpus, tmpdir, totalmem } from 'node:os';
+-import { join, resolve } from 'node:path';
+-import { setLogLevel } from '@archon/paths';
+-import { loadConfig } from '../packages/core/src/config/config-loader';
+-import {
+-  captureWorkflowSource,
+-  createCaptureProfiler,
+-  workflowSourceConfigFrom,
+-  CAPTURE_PHASES,
+-  type CapturePhase,
+-  type CapturePhaseTotals,
+-} from '../packages/workflows/src/workflow-source';
+-
+-const REPO_ROOT = resolve(import.meta.dir, '..');
+-
+-/** Attempts before a scratch tree that will not come free is reported rather than retried. */
+-const CLEANUP_ATTEMPTS = 10;
+-const CLEANUP_DELAY_MS = 50;
+-
+-interface Options {
+-  /** Captures and repetitions per measurement. */
+-  runs: number;
+-  /** Background worker processes for the loaded pass. Zero skips that pass. */
+-  load: number;
+-  /** Files in the synthetic tree the write-primitive sections use. */
+-  files: number;
+-  /** Bytes per file in that tree. */
+-  bytes: number;
+-  json: boolean;
+-}
+-
+-const DEFAULTS: Options = { runs: 7, load: 4, files: 200, bytes: 8192, json: false };
+-
+-const USAGE = `Measure what a child-spawn source capture costs, and which write primitive it pays for.
+-
+-  bun run bench:capture [-- options]
+-
+-Options:
+-  --runs N     captures and repetitions per measurement (default ${DEFAULTS.runs})
+-  --load N     background worker processes for the loaded pass, 0 to skip (default ${DEFAULTS.load})
+-  --files N    files in the synthetic write-primitive tree (default ${DEFAULTS.files})
+-  --bytes N    bytes per file in that tree (default ${DEFAULTS.bytes})
+-  --json       also print the whole result as one JSON object
+-  --help       this text
+-
+-Report the full output. On Windows, run it with real-time protection on — that is the
+-condition under measurement — and say in the report whether the repository sits on an
+-excluded path.`;
+-
+-function parseOptions(argv: readonly string[]): Options | 'help' {
+-  const options = { ...DEFAULTS };
+-  for (let i = 0; i < argv.length; i++) {
+-    const flag = argv[i];
+-    if (flag === '--help' || flag === '-h') return 'help';
+-    if (flag === '--json') {
+-      options.json = true;
+-      continue;
+-    }
+-    const key = flag.startsWith('--') ? flag.slice(2) : '';
+-    if (key !== 'runs' && key !== 'load' && key !== 'files' && key !== 'bytes') {
+-      throw new Error(`Unknown option ${flag}. Run with --help.`);
+-    }
+-    const raw = argv[++i];
+-    const value = Number(raw);
+-    if (!Number.isInteger(value) || value < 0) {
+-      throw new Error(`${flag} needs a non-negative integer, got ${raw}.`);
+-    }
+-    if (value === 0 && key !== 'load') throw new Error(`${flag} must be at least 1.`);
+-    options[key] = value;
+-  }
+-  return options;
+-}
+-
+-/** Remove a scratch tree, retrying while the OS still holds a handle inside it. */
+-async function removeScratchTree(path: string): Promise<void> {
+-  // Written out rather than delegated to `rm`'s own `maxRetries`, which Bun accepts and
+-  // ignores, and duplicated from `@archon/paths/test-utils` rather than imported because
+-  // that module pulls in `bun:test`. See its comment for the measurement.
+-  for (let attempt = 1; ; attempt++) {
+-    try {
+-      await rm(path, { recursive: true, force: true });
+-      return;
+-    } catch (error) {
+-      if (attempt >= CLEANUP_ATTEMPTS) {
+-        console.warn(`scratch cleanup failed for ${path}: ${String(error)}`);
+-        return;
+-      }
+-      await Bun.sleep(CLEANUP_DELAY_MS);
+-    }
+-  }
+-}
+-
+-function median(values: readonly number[]): number {
+-  const sorted = [...values].sort((a, b) => a - b);
+-  const middle = Math.floor(sorted.length / 2);
+-  return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
+-}
+-
+-const ms = (value: number): string => value.toFixed(2);
+-
+-// ---------------------------------------------------------------------------
+-// Background load
+-// ---------------------------------------------------------------------------
+-
+-/**
+- * One background worker: churn small files forever, in its own directory.
+- *
+- * File churn rather than pure CPU because contention on macOS moved an identical capture
+- * from 33.6 ms to 395.2 ms with byte-identical operation counts, and the suspected Windows
+- * cost is in the filesystem path too. Workers run as separate processes because the load
+- * that produces the flake class is `bun --filter --parallel`, which is processes (#2306).
+- */
+-async function runLoadWorker(dir: string): Promise<never> {
+-  await mkdir(dir, { recursive: true });
+-  const payload = Buffer.alloc(16 * 1024, 7);
+-  for (let round = 0; ; round++) {
+-    const roundDir = join(dir, `r${String(round % 4)}`);
+-    await mkdir(roundDir, { recursive: true });
+-    for (let i = 0; i < 32; i++) await writeFile(join(roundDir, `f${String(i)}`), payload);
+-    for (const entry of await readdir(roundDir)) await readFile(join(roundDir, entry));
+-    await rm(roundDir, { recursive: true, force: true });
+-  }
+-}
+-
+-interface LoadHandle {
+-  /**
+-   * Kill every worker and wait for it to be gone.
+-   *
+-   * Awaited rather than fire-and-forget because the scratch tree is removed next, and a
+-   * worker still writing inside it makes that removal fail — on Windows, the platform this
+-   * tool exists for, with a lock error rather than a clean one.
+-   */
+-  stop: () => Promise<void>;
+-}
+-
+-async function startLoad(count: number, dir: string): Promise<LoadHandle> {
+-  const children = Array.from({ length: count }, (_unused, i) =>
+-    Bun.spawn([process.execPath, import.meta.path, '--load-worker', join(dir, `w${String(i)}`)], {
+-      stdout: 'ignore',
+-      // Inherited, not dropped: a worker that dies says why, and the next block turns its
+-      // silence into a failure rather than into a quietly lighter measurement.
+-      stderr: 'inherit',
+-    })
+-  );
+-  const stop = async (): Promise<void> => {
+-    for (const child of children) child.kill();
+-    await Promise.all(children.map(child => child.exited));
+-  };
+-
+-  // Let the workers reach steady state before anything is timed against them.
+-  await Bun.sleep(500);
+-  const exited = children.filter(child => child.exitCode !== null).length;
+-  if (exited > 0) {
+-    await stop();
+-    throw new Error(
+-      `${String(exited)} of ${String(count)} load workers exited during startup. The loaded ` +
+-        'pass would report contention it never ran under, so it is not run at all.'
+-    );
+-  }
+-  return { stop };
+-}
+-
+-// ---------------------------------------------------------------------------
+-// Section 1: the real capture
+-// ---------------------------------------------------------------------------
+-
+-interface CaptureSample {
+-  totalMs: number;
+-  phases: Record<CapturePhase, CapturePhaseTotals>;
+-}
+-
+-interface CaptureResult {
+-  /** The first capture in the process, which reads the bundled trees rather than revalidating. */
+-  cold: CaptureSample;
+-  /** Every capture after it — the shape a run's second and later children pay. */
+-  warm: CaptureSample[];
+-  fileCount: number;
+-  byteCount: number;
+-  digest: string;
+-  scopes: string[];
+-}
+-
+-async function measureCapture(scratch: string, options: Options): Promise<CaptureResult> {
+-  const config = workflowSourceConfigFrom(await loadConfig(REPO_ROOT));
+-
+-  const samples: CaptureSample[] = [];
+-  let fileCount = 0;
+-  let byteCount = 0;
+-  let digest = '';
+-  let scopes: string[] = [];
+-
+-  for (let run = 0; run <= options.runs; run++) {
+-    const captureRoot = join(scratch, 'captures', `run-${String(run)}`);
+-    const { profiler, totals } = createCaptureProfiler();
+-    const started = performance.now();
+-    const capture = await captureWorkflowSource({
+-      sourceRoot: REPO_ROOT,
+-      captureRoot,
+-      commandFolder: config.command_folder,
+-      sourceConfig: config,
+-      profiler,
+-    });
+-    samples.push({ totalMs: performance.now() - started, phases: totals });
+-    ({ file_count: fileCount, byte_count: byteCount, digest } = capture.manifest);
+-    scopes = capture.manifest.scopes;
+-    await removeScratchTree(captureRoot);
+-  }
+-
+-  return { cold: samples[0], warm: samples.slice(1), fileCount, byteCount, digest, scopes };
+-}
+-
+-function printCapture(result: CaptureResult): void {
+-  const warmTotal = median(result.warm.map(s => s.totalMs));
+-  console.log(
+-    `capture of ${REPO_ROOT}\n` +
+-      `  scopes ${result.scopes.join('+')}, ${String(result.fileCount)} files, ` +
+-      `${String(result.byteCount)} bytes, digest ${result.digest.slice(0, 12)}\n` +
+-      `  first capture (reads the bundled trees) ${ms(result.cold.totalMs)} ms\n` +
+-      `  median of ${String(result.warm.length)} later captures ${ms(warmTotal)} ms`
+-  );
+-  console.log(
+-    `  ${'phase'.padEnd(14)}${'median ms'.padStart(10)}${'%'.padStart(7)}` +
+-      `${'cold ms'.padStart(10)}${'dirs'.padStart(7)}${'files'.padStart(7)}${'bytes'.padStart(11)}`
+-  );
+-  for (const phase of CAPTURE_PHASES) {
+-    const warm = median(result.warm.map(s => s.phases[phase].ms));
+-    const counts = result.warm[result.warm.length - 1].phases[phase];
+-    console.log(
+-      `  ${phase.padEnd(14)}${ms(warm).padStart(10)}` +
+-        ((warm / warmTotal) * 100).toFixed(1).padStart(7) +
+-        ms(result.cold.phases[phase].ms).padStart(10) +
+-        `${String(counts.dirs).padStart(7)}${String(counts.files).padStart(7)}` +
+-        String(counts.bytes).padStart(11)
+-    );
+-  }
+-  // Whatever the phases do not cover: loop bookkeeping, building the manifest, the call
+-  // itself. Printed so "everything else" is a measured number rather than a subtraction
+-  // the reader has to do and cannot check.
+-  const unphased = (sample: CaptureSample): number =>
+-    sample.totalMs - CAPTURE_PHASES.reduce((sum, phase) => sum + sample.phases[phase].ms, 0);
+-  const warmUnphased = median(result.warm.map(unphased));
+-  console.log(
+-    `  ${'(unphased)'.padEnd(14)}${ms(warmUnphased).padStart(10)}` +
+-      ((warmUnphased / warmTotal) * 100).toFixed(1).padStart(7) +
+-      ms(unphased(result.cold)).padStart(10)
+-  );
+-}
+-
+-// ---------------------------------------------------------------------------
+-// Sections 2 and 3: write primitives, and what their cost scales with
+-// ---------------------------------------------------------------------------
+-
+-const WRITE_MODES = ['copyFile', 'link', 'writeFile'] as const;
+-type WriteMode = (typeof WRITE_MODES)[number];
+-
+-interface WriteSample {
+-  files: number;
+-  bytes: number;
+-  /** Median ms for one full pass over the tree, per mode. */
+-  perMode: Record<WriteMode, number>;
+-}
+-
+-/** A flat tree of `files` identical files, plus the buffer `writeFile` writes from. */
+-async function makeTree(
+-  root: string,
+-  files: number,
+-  bytes: number
+-): Promise<{ paths: string[]; payload: Buffer }> {
+-  await mkdir(root, { recursive: true });
+-  const payload = Buffer.alloc(bytes, 42);
+-  const paths: string[] = [];
+-  for (let i = 0; i < files; i++) {
+-    const path = join(root, `f${String(i)}.txt`);
+-    await writeFile(path, payload);
+-    paths.push(path);
+-  }
+-  return { paths, payload };
+-}
+-
+-async function measureWriteModes(
+-  scratch: string,
+-  files: number,
+-  bytes: number,
+-  runs: number
+-): Promise<WriteSample> {
+-  const source = join(scratch, `src-${String(files)}x${String(bytes)}`);
+-  const { paths, payload } = await makeTree(source, files, bytes);
+-  const perMode = {} as Record<WriteMode, number>;
+-
+-  for (const mode of WRITE_MODES) {
+-    const timings: number[] = [];
+-    for (let run = 0; run < runs; run++) {
+-      const dest = join(scratch, `dest-${mode}-${String(files)}-${String(run)}`);
+-      await mkdir(dest, { recursive: true });
+-      const started = performance.now();
+-      for (let i = 0; i < paths.length; i++) {
+-        const target = join(dest, `f${String(i)}.txt`);
+-        if (mode === 'copyFile') await copyFile(paths[i], target);
+-        else if (mode === 'link') await link(paths[i], target);
+-        else await writeFile(target, payload);
+-      }
+-      timings.push(performance.now() - started);
+-      await removeScratchTree(dest);
+-    }
+-    perMode[mode] = median(timings);
+-  }
+-
+-  await removeScratchTree(source);
+-  return { files, bytes, perMode };
+-}
+-
+-/** File counts to sweep at a fixed total size, centred on the configured tree. */
+-function scalingPoints(files: number, bytes: number): { files: number; bytes: number }[] {
+-  const total = files * bytes;
+-  return [4, 2, 1, 0.5, 0.25]
+-    .map(factor => Math.round(files * factor))
+-    .filter(count => count >= 1 && total % count === 0)
+-    .map(count => ({ files: count, bytes: total / count }));
+-}
+-
+-function printWriteModes(samples: readonly WriteSample[]): void {
+-  const total = samples[0].files * samples[0].bytes;
+-  console.log(
+-    `write primitives, synthetic flat tree, ${String(total)} bytes total in every row\n` +
+-      '  a per-file cost shows as ms rising with the file count; a per-byte cost stays flat'
+-  );
+-  console.log(
+-    `  ${'files'.padStart(7)}${'bytes/file'.padStart(12)}` +
+-      WRITE_MODES.map(m => `${m} ms`.padStart(16)).join('') +
+-      'us/file copy'.padStart(14)
+-  );
+-  for (const sample of samples) {
+-    console.log(
+-      `  ${String(sample.files).padStart(7)}${String(sample.bytes).padStart(12)}` +
+-        WRITE_MODES.map(m => ms(sample.perMode[m]).padStart(16)).join('') +
+-        ((sample.perMode.copyFile / sample.files) * 1000).toFixed(1).padStart(14)
+-    );
+-  }
+-}
+-
+-// ---------------------------------------------------------------------------
+-// Passes
+-// ---------------------------------------------------------------------------
+-
+-interface Pass {
+-  label: string;
+-  capture: CaptureResult;
+-  writes: WriteSample[];
+-}
+-
+-async function runPass(label: string, scratch: string, options: Options): Promise<Pass> {
+-  const capture = await measureCapture(scratch, options);
+-  const writes: WriteSample[] = [];
+-  for (const point of scalingPoints(options.files, options.bytes)) {
+-    writes.push(await measureWriteModes(scratch, point.files, point.bytes, options.runs));
+-  }
+-  return { label, capture, writes };
+-}
+-
+-function printPass(pass: Pass): void {
+-  console.log(`\n=== ${pass.label} ===\n`);
+-  printCapture(pass.capture);
+-  console.log('');
+-  printWriteModes(pass.writes);
+-}
+-
+-async function main(): Promise<number> {
+-  const argv = process.argv.slice(2);
+-  if (argv[0] === '--load-worker') {
+-    const dir = argv[1];
+-    if (dir === undefined) throw new Error('--load-worker needs a directory.');
+-    await runLoadWorker(dir);
+-  }
+-
+-  let options: Options | 'help';
+-  try {
+-    options = parseOptions(argv);
+-  } catch (error) {
+-    console.error((error as Error).message);
+-    return 1;
+-  }
+-  if (options === 'help') {
+-    console.log(USAGE);
+-    return 0;
+-  }
+-
+-  const scratch = await mkdtemp(join(tmpdir(), 'archon-capture-cost-'));
+-  // Pin the global source scope to an empty directory so the capture under measurement is
+-  // this checkout's project and bundled scopes, and nothing a particular machine happens to
+-  // keep in its real Archon home.
+-  process.env.ARCHON_HOME = join(scratch, 'home');
+-  // Keep the report readable while leaving real warnings — an oversized capture is one —
+-  // visible. Set here rather than through LOG_LEVEL because the root logger is built when
+-  // this file's imports are evaluated, long before main runs; an explicit LOG_LEVEL wins.
+-  if (process.env.LOG_LEVEL === undefined) setLogLevel('warn');
+-
+-  console.log(
+-    'archon capture cost\n' +
+-      `  ${process.platform}/${process.arch}, ${String(cpus().length)} cpus, ` +
+-      `${String(Math.round(totalmem() / 2 ** 30))} GiB, bun ${Bun.version}\n` +
+-      `  repo ${REPO_ROOT}\n` +
+-      `  scratch ${scratch} (ARCHON_HOME pinned there; global scope empty)\n` +
+-      `  runs ${String(options.runs)}, load workers ${String(options.load)}`
+-  );
+-
+-  const passes: Pass[] = [];
+-  try {
+-    passes.push(await runPass('idle', scratch, options));
+-    if (options.load > 0) {
+-      const loadDir = join(scratch, 'load');
+-      const load = await startLoad(options.load, loadDir);
+-      try {
+-        passes.push(
+-          await runPass(`under load (${String(options.load)} workers)`, scratch, options)
+-        );
+-      } finally {
+-        await load.stop();
+-      }
+-    }
+-    for (const pass of passes) printPass(pass);
+-    if (options.json) {
+-      console.log(`\n${JSON.stringify({ platform: process.platform, options, passes }, null, 2)}`);
+-    }
+-  } finally {
+-    await removeScratchTree(scratch);
+-  }
+-  return 0;
+-}
+-
+-process.exit(await main());
+diff --git a/scripts/generate-bundled-defaults.ts b/scripts/generate-bundled-defaults.ts
+index 78bf5711..5a27dddb 100644
+--- a/scripts/generate-bundled-defaults.ts
++++ b/scripts/generate-bundled-defaults.ts
+@@ -1,8 +1,8 @@
+ #!/usr/bin/env bun
+ /**
+  * Regenerates packages/workflows/src/defaults/bundled-defaults.generated.ts from
+- * the on-disk legacy defaults and packaged workflows under
+- * .archon/workflows/<pack>/<workflow>/.
++ * the packs selected by packages/workflows/src/defaults/bundle-index.json.
++ * bundle-inventory.ts owns the file selection for this script and live source capture.
+  *
+  * Emits inline string literals (via JSON.stringify) rather than Bun's
+  * `import X from '...' with { type: 'text' }` attributes so the module loads
+@@ -23,16 +23,17 @@
+  *   1  unexpected error (missing dir, unreadable source, invalid filename, etc.)
+  *   2  --check was passed and the file would change
+  */
+-import { access, lstat, readFile, readdir, stat, writeFile } from 'fs/promises';
+-import { basename, extname, join, relative, resolve } from 'path';
++import { readFile, writeFile } from 'fs/promises';
++import { join, relative, resolve } from 'path';
+ import { execFileAsync } from '@archon/git';
+ import {
+-  PACK_SHARED_DIRECTORY,
+-  formatPackagedResourceReference,
+-  isValidWorkflowFolderSegment,
+-} from '../packages/workflows/src/packaged-workflow';
++  collectBundleSources,
++  readBundleContent,
++  readBundleIndex,
++} from '../packages/workflows/src/defaults/bundle-inventory';
+ 
+ import type { BundledScriptPack } from '../packages/workflows/src/defaults/bundled-script-pack';
++import type { WorkflowResourceOwner } from '../packages/workflows/src/packaged-workflow';
+ 
+ // BUNDLED_DEFAULTS_REPO_ROOT is a test seam: the integration tests point the
+ // script at a throwaway git repo (see
+@@ -43,8 +44,6 @@ const REPO_ROOT = process.env.BUNDLED_DEFAULTS_REPO_ROOT
+ const COMMANDS_REL = '.archon/commands/defaults';
+ const WORKFLOWS_REL = '.archon/workflows/defaults';
+ const WORKFLOWS_ROOT_REL = '.archon/workflows';
+-const COMMANDS_DIR = join(REPO_ROOT, COMMANDS_REL);
+-const WORKFLOWS_DIR = join(REPO_ROOT, WORKFLOWS_REL);
+ const WORKFLOWS_ROOT = join(REPO_ROOT, WORKFLOWS_ROOT_REL);
+ const OUTPUT_PATH = join(
+   REPO_ROOT,
+@@ -58,100 +57,14 @@ interface BundledFile {
+   content: string;
+ }
+ 
+-interface BundledWorkflowOwner {
+-  pack: string;
+-  workflow: string;
+-}
+-
+-type BundledScriptKind =
+-  | { extension: '.py'; runtime: 'uv' }
+-  | { extension: '.js' | '.ts'; runtime: 'bun' };
+-
+-interface PackagedDefaults {
+-  workflows: BundledFile[];
+-  workflowOwners: Map<string, BundledWorkflowOwner>;
+-  commands: BundledFile[];
+-  scriptPacks: Map<string, BundledScriptPack>;
+-  sourcePaths: string[];
+-}
+-
+-interface PackagedScriptFile {
+-  kind: BundledScriptKind;
+-  localName: string;
+-  path: string;
+-  relativePath: string;
+-}
+-
+-function getBundledScriptKind(extension: string): BundledScriptKind | null {
+-  if (extension === '.py') return { extension, runtime: 'uv' };
+-  if (extension === '.ts' || extension === '.js') return { extension, runtime: 'bun' };
+-  return null;
+-}
+-
+-async function listPackagedScriptFiles(scriptPath: string): Promise<PackagedScriptFile[]> {
+-  const files: PackagedScriptFile[] = [];
+-  for (const entry of (await readdir(scriptPath)).sort((a, b) => a.localeCompare(b))) {
+-    const entryPath = join(scriptPath, entry);
+-    const entryStat = await stat(entryPath);
+-    const candidates = entryStat.isDirectory()
+-      ? (await readdir(entryPath))
+-          .sort((a, b) => a.localeCompare(b))
+-          .map(child => ({ path: join(entryPath, child), relativePath: `${entry}/${child}` }))
+-      : [{ path: entryPath, relativePath: entry }];
+-
+-    for (const candidate of candidates) {
+-      if (!(await stat(candidate.path)).isFile()) continue;
+-      const kind = getBundledScriptKind(extname(candidate.path));
+-      if (kind === null) continue;
+-      files.push({
+-        kind,
+-        localName: basename(candidate.path, kind.extension),
+-        path: candidate.path,
+-        relativePath: candidate.relativePath,
+-      });
+-    }
+-  }
+-  return files;
+-}
+-
+-// Shared inventory contains regular modules only: symlinks cannot be silently
+-// dropped or dereferenced differently between source and binary distributions.
+-async function listSharedModuleFiles(directory: string): Promise<string[]> {
+-  if ((await lstat(directory)).isSymbolicLink()) {
+-    throw new Error(`Shared module symlinks are not supported: ${directory}`);
+-  }
+-  const files: string[] = [];
+-  for (const entry of (await readdir(directory, { withFileTypes: true })).sort((a, b) =>
+-    a.name.localeCompare(b.name)
+-  )) {
+-    const path = join(directory, entry.name);
+-    if (entry.isSymbolicLink()) {
+-      throw new Error(`Shared module symlinks are not supported: ${path}`);
+-    }
+-    if (entry.isDirectory()) files.push(...(await listSharedModuleFiles(path)));
+-    else if (entry.isFile() && getBundledScriptKind(extname(entry.name)) !== null) files.push(path);
+-  }
+-  return files;
+-}
+-
+-async function ensureDir(dir: string, label: string): Promise<void> {
+-  try {
+-    await access(dir);
+-  } catch {
+-    throw new Error(
+-      `${label} directory not found: ${dir}\n` +
+-        `Run this script from the repo root (cwd was ${process.cwd()}), ` +
+-        'or verify the .archon/ tree exists.'
+-    );
+-  }
+-}
++type BundledWorkflowOwner = Pick<WorkflowResourceOwner, 'pack' | 'workflow'>;
+ 
+ /**
+  * Refuse to embed files that git does not track (#1578). An untracked file in
+  * defaults/ would silently ship inside locally built binaries while being
+  * absent from every other checkout and from CI builds — fail loudly instead.
+  *
+- * Intentionally stricter than collectFiles(): `git ls-files` recurses into
++ * Intentionally stricter than the selected inventory: `git ls-files` recurses into
+  * subdirectories and reports every untracked path, while the embedder only
+  * reads top-level files with matching extensions. The asymmetry is deliberate
+  * — anything untracked under defaults/ is a mistake worth flagging, even if
+@@ -210,178 +123,6 @@ async function assertTrackedPackagedFiles(paths: readonly string[]): Promise<voi
+   }
+ }
+ 
+-async function collectFiles(dir: string, extensions: readonly string[]): Promise<BundledFile[]> {
+-  const entries = await readdir(dir);
+-  const matched = entries
+-    .map(entry => {
+-      const ext = extensions.find(e => entry.endsWith(e));
+-      return ext ? { entry, ext } : undefined;
+-    })
+-    .filter((m): m is { entry: string; ext: string } => m !== undefined)
+-    .sort((a, b) => a.entry.localeCompare(b.entry));
+-
+-  const files: BundledFile[] = [];
+-  const seen = new Set<string>();
+-  for (const { entry, ext } of matched) {
+-    const name = entry.slice(0, -ext.length);
+-    if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) {
+-      throw new Error(
+-        `Bundled default has invalid filename "${entry}" in ${dir}. ` +
+-          'Names must be kebab-case (lowercase letters, digits, hyphens).'
+-      );
+-    }
+-    if (seen.has(name)) {
+-      throw new Error(
+-        `Bundled default name collision: "${name}" appears with multiple extensions in ${dir}. ` +
+-          'Keep a single file per name (remove either the .yaml or .yml variant).'
+-      );
+-    }
+-    seen.add(name);
+-    const raw = await readFile(join(dir, entry), 'utf-8');
+-    // Normalize to LF so output is identical regardless of the checkout's
+-    // line-ending policy (e.g. Windows `core.autocrlf=true` yields CRLF).
+-    const content = raw.replace(/\r\n/g, '\n');
+-    if (!content.trim()) {
+-      throw new Error(`Bundled default "${entry}" in ${dir} is empty.`);
+-    }
+-    files.push({ name, content });
+-  }
+-  return files;
+-}
+-
+-async function readBundledContent(path: string): Promise<string> {
+-  const content = (await readFile(path, 'utf-8')).replace(/\r\n/g, '\n');
+-  if (!content.trim()) throw new Error(`Bundled default "${path}" is empty.`);
+-  return content;
+-}
+-
+-async function isDirectory(path: string): Promise<boolean> {
+-  try {
+-    return (await stat(path)).isDirectory();
+-  } catch (error) {
+-    const err = error as NodeJS.ErrnoException;
+-    if (err.code === 'ENOENT') return false;
+-    throw new Error(`Failed to inspect packaged workflow path "${path}": ${err.message}`, {
+-      cause: err,
+-    });
+-  }
+-}
+-
+-async function collectPackagedDefaults(root: string): Promise<PackagedDefaults> {
+-  const workflows: BundledFile[] = [];
+-  const workflowOwners = new Map<string, BundledWorkflowOwner>();
+-  const commands: BundledFile[] = [];
+-  const scriptPacks = new Map<string, BundledScriptPack>();
+-  const sourcePaths: string[] = [];
+-
+-  for (const pack of (await readdir(root)).sort((a, b) => a.localeCompare(b))) {
+-    const packPath = join(root, pack);
+-    if (!(await isDirectory(packPath))) continue;
+-    // `defaults` is the flat-bundled-defaults convention, not a pack — including
+-    // its `legacy/` subfolder during the #2781 deprecation window. It is scanned
+-    // separately via collectFiles; treating it as a pack would fail here with
+-    // "must contain exactly one .yaml" for every legacy default.
+-    if (pack === 'defaults') continue;
+-    if (!isValidWorkflowFolderSegment(pack)) {
+-      throw new Error(`Invalid packaged workflow pack directory "${pack}".`);
+-    }
+-
+-    const files: Record<string, string> = {};
+-    const scripts: Record<string, BundledScriptPack['scripts'][string]> = {};
+-    const sharedPath = join(packPath, PACK_SHARED_DIRECTORY);
+-    if (await isDirectory(sharedPath)) {
+-      for (const path of await listSharedModuleFiles(sharedPath)) {
+-        files[relative(packPath, path).replaceAll('\\', '/')] = (
+-          await readFile(path, 'utf-8')
+-        ).replace(/\r\n/g, '\n');
+-        sourcePaths.push(path);
+-      }
+-    }
+-
+-    for (const workflow of (await readdir(packPath)).sort((a, b) => a.localeCompare(b))) {
+-      if (workflow === PACK_SHARED_DIRECTORY) continue;
+-      const workflowPath = join(packPath, workflow);
+-      if (!(await isDirectory(workflowPath))) continue;
+-      if (!isValidWorkflowFolderSegment(workflow)) {
+-        throw new Error(`Invalid packaged workflow directory "${pack}/${workflow}".`);
+-      }
+-
+-      const owner = { source: 'bundled' as const, pack, workflow };
+-      const entries = (await readdir(workflowPath)).sort((a, b) => a.localeCompare(b));
+-      const yamlEntries = entries.filter(entry => /\.ya?ml$/.test(entry));
+-      if (yamlEntries.length !== 1) {
+-        throw new Error(
+-          `Packaged workflow "${pack}/${workflow}" must contain exactly one .yaml or .yml file (found ${yamlEntries.length}).`
+-        );
+-      }
+-
+-      const yamlEntry = yamlEntries[0];
+-      const workflowName = yamlEntry.replace(/\.ya?ml$/, '');
+-      if (!isValidWorkflowFolderSegment(workflowName)) {
+-        throw new Error(`Bundled packaged workflow has invalid filename "${yamlEntry}".`);
+-      }
+-      if (workflowOwners.has(workflowName)) {
+-        throw new Error(`Bundled workflow filename collision: "${workflowName}".`);
+-      }
+-      const yamlPath = join(workflowPath, yamlEntry);
+-      workflows.push({ name: workflowName, content: await readBundledContent(yamlPath) });
+-      workflowOwners.set(workflowName, { pack, workflow });
+-      sourcePaths.push(yamlPath);
+-
+-      const commandPath = join(workflowPath, 'commands');
+-      if (await isDirectory(commandPath)) {
+-        const seen = new Set<string>();
+-        for (const entry of (await readdir(commandPath)).sort((a, b) => a.localeCompare(b))) {
+-          if (!entry.endsWith('.md')) continue;
+-          const localName = entry.slice(0, -'.md'.length);
+-          if (!isValidWorkflowFolderSegment(localName)) {
+-            throw new Error(
+-              `Invalid packaged command filename "${pack}/${workflow}/commands/${entry}".`
+-            );
+-          }
+-          if (seen.has(localName)) {
+-            throw new Error(`Duplicate packaged command "${localName}" in ${pack}/${workflow}.`);
+-          }
+-          seen.add(localName);
+-          const path = join(commandPath, entry);
+-          commands.push({
+-            name: formatPackagedResourceReference(owner, localName),
+-            content: await readBundledContent(path),
+-          });
+-          sourcePaths.push(path);
+-        }
+-      }
+-
+-      const scriptPath = join(workflowPath, 'scripts');
+-      if (await isDirectory(scriptPath)) {
+-        const seen = new Set<string>();
+-        for (const script of await listPackagedScriptFiles(scriptPath)) {
+-          const { kind, localName, path, relativePath } = script;
+-          if (!isValidWorkflowFolderSegment(localName)) {
+-            throw new Error(
+-              `Invalid packaged script filename "${pack}/${workflow}/scripts/${relativePath}".`
+-            );
+-          }
+-          if (seen.has(localName)) {
+-            throw new Error(`Duplicate packaged script "${localName}" in ${pack}/${workflow}.`);
+-          }
+-          seen.add(localName);
+-          const key = formatPackagedResourceReference(owner, localName);
+-          const packRelativePath = `${workflow}/scripts/${relativePath}`;
+-          files[packRelativePath] = await readBundledContent(path);
+-          scripts[key] = { path: packRelativePath, runtime: kind.runtime };
+-          sourcePaths.push(path);
+-        }
+-      }
+-    }
+-    if (Object.keys(files).length > 0) scriptPacks.set(pack, { files, scripts });
+-  }
+-
+-  workflows.sort((a, b) => a.name.localeCompare(b.name));
+-  commands.sort((a, b) => a.name.localeCompare(b.name));
+-  return { workflows, workflowOwners, commands, scriptPacks, sourcePaths };
+-}
+-
+ function renderRecord(comment: string, exportName: string, files: BundledFile[]): string {
+   const entries = files
+     .map(f => `  ${JSON.stringify(f.name)}: ${JSON.stringify(f.content)},`)
+@@ -417,7 +158,8 @@ function renderFile(
+   commands: BundledFile[],
+   workflows: BundledFile[],
+   workflowOwners: ReadonlyMap<string, BundledWorkflowOwner>,
+-  scriptPacks: ReadonlyMap<string, BundledScriptPack>
++  scriptPacks: ReadonlyMap<string, BundledScriptPack>,
++  workflowPaths: ReadonlyMap<string, string>
+ ): string {
+   const header = [
+     '/**',
+@@ -426,12 +168,7 @@ function renderFile(
+     ' * Regenerate with: bun run generate:bundled',
+     ' * Verify up-to-date:  bun run check:bundled',
+     ' *',
+-    ' * Source of truth:',
+-    ' *   .archon/commands/defaults/*.md (legacy)',
+-    ' *   .archon/workflows/defaults/*.{yaml,yml} (current)',
+-    ' *   .archon/workflows/defaults/legacy/*.{yaml,yml} (deprecated window)',
+-    ' *   .archon/workflows/<pack>/<workflow>/',
+-    ' *   .archon/workflows/<pack>/.shared/ (recursive .ts, .js, .py modules)',
++    ' * Source of truth: bundle-index.json selects packs; bundle-inventory.ts selects files.',
+     ' *',
+     ' * Contents are inlined as plain string literals (JSON-escaped) so this',
+     ' * module loads in both Bun and Node. Previous versions used',
+@@ -443,16 +180,21 @@ function renderFile(
+   return [
+     header,
+     "import type { BundledScriptPack } from './bundled-script-pack';",
++    "import type { WorkflowResourceOwner } from '../packaged-workflow';",
+     '',
+-    'export interface BundledWorkflowOwner {',
+-    '  readonly pack: string;',
+-    '  readonly workflow: string;',
+-    '}',
++    "export type BundledWorkflowOwner = Pick<WorkflowResourceOwner, 'pack' | 'workflow'>;",
+     '',
+     renderRecord('Bundled commands', 'BUNDLED_COMMANDS', commands),
+     '',
+     renderRecord('Bundled workflows', 'BUNDLED_WORKFLOWS', workflows),
+     '',
++    renderMapRecord(
++      'Authored workflow paths beneath the bundled scope',
++      'BUNDLED_WORKFLOW_PATHS',
++      'string',
++      workflowPaths
++    ),
++    '',
+     renderMapRecord(
+       'Packaged workflow owners',
+       'BUNDLED_WORKFLOW_OWNERS',
+@@ -472,75 +214,71 @@ function renderFile(
+ }
+ 
+ async function main(): Promise<void> {
+-  await Promise.all([
+-    ensureDir(COMMANDS_DIR, 'Commands defaults'),
+-    ensureDir(WORKFLOWS_DIR, 'Workflows defaults'),
+-  ]);
+-
+-  // Runs after ensureDir (a missing directory still wins) and before
+-  // collectFiles (untracked files abort before being read into the bundle).
+-  await Promise.all([
+-    assertNoUntrackedFiles(
+-      COMMANDS_REL,
+-      'Commands defaults (.archon/commands/defaults/)',
+-      '.archon/commands/ (project-scope) or ~/.archon/commands/ (home-scope)'
+-    ),
+-    assertNoUntrackedFiles(
+-      WORKFLOWS_REL,
+-      'Workflows defaults (.archon/workflows/defaults/)',
+-      '.archon/workflows/ (project-scope) or ~/.archon/workflows/ (home-scope)'
+-    ),
+-  ]);
+-
+-  const [legacyCommands, packaged] = await Promise.all([
+-    collectFiles(COMMANDS_DIR, ['.md']),
+-    collectPackagedDefaults(WORKFLOWS_ROOT),
+-  ]);
+-  // Legacy defaults live flat in `defaults/` and — since #2781's deprecation
+-  // window — under `defaults/legacy/`, one subfolder within the discovery depth
+-  // cap. The test fixtures built by generate-bundled-defaults.test.ts predate
+-  // the folder, so its absence is tolerated.
+-  const legacyWorkflows = [
+-    ...(await collectFiles(WORKFLOWS_DIR, ['.yaml', '.yml'])),
+-    ...((await isDirectory(join(WORKFLOWS_DIR, 'legacy')))
+-      ? await collectFiles(join(WORKFLOWS_DIR, 'legacy'), ['.yaml', '.yml'])
+-      : []),
+-  ];
+-  await assertTrackedPackagedFiles(packaged.sourcePaths);
+-
+-  // collectFiles only sees one directory at a time, so a name present in both
+-  // the flat defaults/ and defaults/legacy/ would slip through as a duplicate
+-  // bundle entry. Catch it here, plus the pre-existing packaged collision below.
+-  const legacyWorkflowNames = new Set<string>();
+-  for (const workflow of legacyWorkflows) {
+-    if (legacyWorkflowNames.has(workflow.name)) {
+-      throw new Error(
+-        `Bundled workflow filename collision: "${workflow.name}" exists in both .archon/workflows/defaults/ and its legacy/ subfolder.`
+-      );
+-    }
+-    legacyWorkflowNames.add(workflow.name);
+-  }
+-  for (const workflow of packaged.workflows) {
+-    if (legacyWorkflowNames.has(workflow.name)) {
+-      throw new Error(
+-        `Bundled workflow filename collision: "${workflow.name}" exists in both the legacy defaults directory and a packaged workflow folder.`
+-      );
+-    }
+-  }
+-  const commands = [...legacyCommands, ...packaged.commands].sort((a, b) =>
+-    a.name.localeCompare(b.name)
++  const packs = await readBundleIndex(
++    join(REPO_ROOT, 'packages/workflows/src/defaults/bundle-index.json')
+   );
+-  const workflows = [...legacyWorkflows, ...packaged.workflows].sort((a, b) =>
+-    a.name.localeCompare(b.name)
++  const files = await collectBundleSources(
++    WORKFLOWS_ROOT,
++    join(REPO_ROOT, '.archon/commands'),
++    packs
++  );
++  if (packs.includes('defaults')) {
++    await Promise.all([
++      assertNoUntrackedFiles(
++        COMMANDS_REL,
++        'Commands defaults (.archon/commands/defaults/)',
++        '.archon/commands/ (project-scope) or ~/.archon/commands/ (home-scope)'
++      ),
++      assertNoUntrackedFiles(
++        WORKFLOWS_REL,
++        'Workflows defaults (.archon/workflows/defaults/)',
++        '.archon/workflows/ (project-scope) or ~/.archon/workflows/ (home-scope)'
++      ),
++    ]);
++  }
++  await assertTrackedPackagedFiles(
++    files
++      .filter(
++        file =>
++          !file.relativePath.startsWith('workflows/defaults/') &&
++          !file.relativePath.startsWith('commands/defaults/')
++      )
++      .map(file => file.sourcePath)
+   );
+ 
+-  const contents = renderFile(commands, workflows, packaged.workflowOwners, packaged.scriptPacks);
+-
++  const commands: BundledFile[] = [];
++  const workflows: BundledFile[] = [];
++  const workflowOwners = new Map<string, BundledWorkflowOwner>();
++  const workflowPaths = new Map<string, string>();
++  const scriptPacks = new Map<string, BundledScriptPack>();
++  for (const file of files) {
++    const content = await readBundleContent(file);
++    if (file.kind === 'command') commands.push({ name: file.name, content });
++    else if (file.kind === 'workflow') {
++      workflows.push({ name: file.name, content });
++      workflowPaths.set(file.name, file.relativePath);
++      if (file.owner) workflowOwners.set(file.name, file.owner);
++    } else {
++      const prior = scriptPacks.get(file.pack) ?? { files: {}, scripts: {} };
++      scriptPacks.set(file.pack, {
++        files: { ...prior.files, [file.packPath]: content },
++        scripts: file.entry
++          ? {
++              ...prior.scripts,
++              [file.entry.name]: { path: file.packPath, runtime: file.entry.runtime },
++            }
++          : prior.scripts,
++      });
++    }
++  }
++  commands.sort((a, b) => a.name.localeCompare(b.name));
++  workflows.sort((a, b) => a.name.localeCompare(b.name));
++  const contents = renderFile(commands, workflows, workflowOwners, scriptPacks, workflowPaths);
+   if (CHECK_ONLY) {
+     let existing = '';
+     try {
+       const raw = await readFile(OUTPUT_PATH, 'utf-8');
+-      // Same LF normalization as collectFiles — the .ts itself may be
++      // Same LF normalization as the bundled contents — the .ts itself may be
+       // checked out with CRLF line endings on Windows.
+       existing = raw.replace(/\r\n/g, '\n');
+     } catch (e) {
+@@ -552,14 +290,14 @@ async function main(): Promise<void> {
+       process.exit(2);
+     }
+     console.log(
+-      `bundled-defaults.generated.ts is up to date (${commands.length} commands, ${workflows.length} workflows, ${packaged.scriptPacks.size} script packs).`
++      `bundled-defaults.generated.ts is up to date (${commands.length} commands, ${workflows.length} workflows, ${scriptPacks.size} script packs).`
+     );
+     return;
+   }
+ 
+   await writeFile(OUTPUT_PATH, contents, 'utf-8');
+   console.log(
+-    `Wrote ${OUTPUT_PATH}\n  ${commands.length} commands, ${workflows.length} workflows, ${packaged.scriptPacks.size} script packs.`
++    `Wrote ${OUTPUT_PATH}\n  ${commands.length} commands, ${workflows.length} workflows, ${scriptPacks.size} script packs.`
+   );
+ }
+ 

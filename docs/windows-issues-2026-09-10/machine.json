@@ -1,0 +1,23 @@
+{
+    "timestampUtc":  "2026-09-10T14:23:54.5419052Z",
+    "checkout":  "C:\\Users\\Leex279\\Documents\\GitHub\\dynamous\\Archon\\worktrees\\windows-3294",
+    "temp":  "C:\\Users\\Leex279\\AppData\\Local\\Temp",
+    "defender":  {
+                     "AntivirusEnabled":  true,
+                     "RealTimeProtectionEnabled":  true,
+                     "AMRunningMode":  "Normal"
+                 },
+    "exclusions":  [
+                       "N/A: Must be an administrator to view exclusions"
+                   ],
+    "os":  {
+               "Caption":  "Microsoft Windows 11 Pro",
+               "Version":  "10.0.26200",
+               "BuildNumber":  "26200"
+           },
+    "cpu":  {
+                "Name":  "AMD Ryzen 9 9950X 16-Core Processor            ",
+                "NumberOfCores":  16,
+                "NumberOfLogicalProcessors":  32
+            }
+}

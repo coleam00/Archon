@@ -1,0 +1,14 @@
+bun test v1.4.2 (744846f84)
+{"level":30,"time":1789050795051,"pid":20932,"hostname":"Leex","module":"cli.serve","version":"9.9.9","targetDir":"C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\tar-20260910-163313-209-affinity4-load-1\\target","msg":"web_dist.download_started"}
+Web UI not found locally — downloading from release v9.9.9...
+{"level":30,"time":1789050795054,"pid":20932,"hostname":"Leex","module":"cli.serve","source":"embedded","msg":"web_dist.checksum_resolved"}
+Downloading https://github.com/coleam00/Archon/releases/download/v9.9.9/archon-web.tar.gz...
+Checksum verified.
+{"level":30,"time":1789050795059,"pid":20932,"hostname":"Leex","module":"cli.serve","durationMs":7,"msg":"web_dist.tarball_verified"}
+{"level":30,"time":1789050796672,"pid":20932,"hostname":"Leex","module":"cli.serve","tarballPath":"C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\tar-20260910-163313-209-affinity4-load-1\\target.tmp.tar.gz","bytes":129,"durationMs":1613,"msg":"web_dist.archive_staged"}
+{"level":30,"time":1789050796677,"pid":20932,"hostname":"Leex","module":"cli.serve","tarPid":40680,"durationMs":5,"msg":"web_dist.extract_spawned"}
+{"level":30,"time":1789050796950,"pid":20932,"hostname":"Leex","module":"cli.serve","tarPid":40680,"durationMs":274,"msg":"web_dist.extract_stderr_drained"}
+{"level":30,"time":1789050796998,"pid":20932,"hostname":"Leex","module":"cli.serve","tarPid":40680,"exitCode":0,"durationMs":321,"msg":"web_dist.extract_process_exited"}
+{"level":30,"time":1789050796998,"pid":20932,"hostname":"Leex","module":"cli.serve","exitCode":0,"signalCode":null,"durationMs":321,"msg":"web_dist.extract_exited"}
+{"level":30,"time":1789050796999,"pid":20932,"hostname":"Leex","module":"cli.serve","targetDir":"C:\\Users\\Leex279\\.archon\\workspaces\\coleam00\\Archon\\artifacts\\windows-issues-20260910\\tar-20260910-163313-209-affinity4-load-1\\target","durationMs":1,"msg":"web_dist.installed"}
+Extracted to C:\Users\Leex279\.archon\workspaces\coleam00\Archon\artifacts\windows-issues-20260910\tar-20260910-163313-209-affinity4-load-1\target

@@ -1,0 +1,4 @@
+{
+    "exitCode":  1,
+    "expected":  "red: redundant git rev-parse calls"
+}
