@@ -30,12 +30,8 @@ export async function persistNodeEvent(
   }
 }
 
-/**
- * The node a state fact is about. Usually the authored node, whose kind and source
- * name it in the transcript; a step the executor synthesizes (a loop finalized from a
- * gate signal) has only an id.
- */
-export type NodeStateSubject = DagNode | Pick<DagNode, 'id'>;
+/** The authored node a state fact is about; its kind and source name it in the transcript. */
+export type NodeStateSubject = DagNode;
 
 /**
  * What the run resolved for an AI node's execution. It is a fact about this run, not
@@ -54,20 +50,17 @@ export interface ResolvedExecution {
  * and the in-process emitter. `logDir` is required because a site without a transcript
  * is exactly the silently dropped sink #3255 removes.
  */
-export interface NodeStateSinks {
-  store: WorkflowDeps['store'];
+export interface DerivedNodeStateSinks {
   logDir: string;
   emitter?: Pick<ReturnType<typeof getWorkflowEventEmitter>, 'emit'>;
 }
 
-function isAuthoredNode(node: NodeStateSubject): node is DagNode {
-  return 'kind' in node;
+export interface NodeStateSinks extends DerivedNodeStateSinks {
+  store: WorkflowDeps['store'];
 }
 
 function commandNameOf(node: NodeStateSubject): string | undefined {
-  return isAuthoredNode(node) && node.kind === 'agent' && node.source.kind === 'command'
-    ? node.source.name
-    : undefined;
+  return node.kind === 'agent' && node.source.kind === 'command' ? node.source.name : undefined;
 }
 
 export function getNodeName(node: NodeStateSubject): string {
@@ -76,10 +69,8 @@ export function getNodeName(node: NodeStateSubject): string {
 
 function transcriptContent(node: NodeStateSubject, event: NodeStateEventInput): string {
   if (typeof event.data?.command === 'string') return event.data.command;
-  if (isAuthoredNode(node)) {
-    if (node.kind === 'agent') return commandNameOf(node) ?? '<inline>';
-    if (node.kind === 'exec') return node.runtime === 'sh' ? '<bash>' : '<script>';
-  }
+  if (node.kind === 'agent') return commandNameOf(node) ?? '<inline>';
+  if (node.kind === 'exec') return node.runtime === 'sh' ? '<bash>' : '<script>';
   if (typeof event.data?.type === 'string') return `<${event.data.type}>`;
   return node.id;
 }
@@ -207,21 +198,21 @@ export function deriveEmitterEvent(
 }
 
 /**
- * Write one node-state fact to every sink. The durable row goes first and is awaited:
- * its rejection is a NodeEventWriteError that must reach the run failure boundary. The
- * transcript and the emitter derive from the same value. Each already isolates its own
- * I/O: `logWorkflowEvent` logs an append failure, and the emitter catches listener
- * errors. Nothing here catches, so a throw past the row is a derivation defect and
- * surfaces as one instead of degrading to a warning.
+ * Write the two sinks that derive from a node-state row: the JSONL transcript and the
+ * in-process emitter. Each already isolates its own I/O (`logWorkflowEvent` logs an
+ * append failure; the emitter catches listener errors), so nothing here catches, and a
+ * throw is a derivation defect that surfaces instead of degrading to a warning.
+ *
+ * Call this directly only when the store wrote the row itself, atomically with another
+ * operation, and handed it back; `clearWorkflowWaitContext` is that case. Every other
+ * site goes through `recordNodeState`.
  */
-export async function recordNodeState(
-  sinks: NodeStateSinks,
+export async function recordDerivedNodeState(
+  sinks: DerivedNodeStateSinks,
   node: NodeStateSubject,
   event: NodeStateEventInput,
   execution?: ResolvedExecution
 ): Promise<void> {
-  await persistNodeEvent(sinks.store, event);
-
   const transcript = deriveTranscriptEvent(node, event);
   if (transcript) {
     await logWorkflowEvent(sinks.logDir, event.workflow_run_id, transcript);
@@ -231,4 +222,19 @@ export async function recordNodeState(
   if (emitted) {
     (sinks.emitter ?? getWorkflowEventEmitter()).emit(emitted);
   }
+}
+
+/**
+ * Write one node-state fact to every sink. The durable row goes first and is awaited:
+ * its rejection is a NodeEventWriteError that must reach the run failure boundary. The
+ * transcript and the emitter then derive from the same value.
+ */
+export async function recordNodeState(
+  sinks: NodeStateSinks,
+  node: NodeStateSubject,
+  event: NodeStateEventInput,
+  execution?: ResolvedExecution
+): Promise<void> {
+  await persistNodeEvent(sinks.store, event);
+  await recordDerivedNodeState(sinks, node, event, execution);
 }

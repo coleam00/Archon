@@ -331,7 +331,11 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve({ failed: false });
   };
 
-  clearWorkflowWaitContext: IWorkflowStore['clearWorkflowWaitContext'] = (id, waitContext) => {
+  clearWorkflowWaitContext: IWorkflowStore['clearWorkflowWaitContext'] = (
+    id,
+    waitContext,
+    completion
+  ) => {
     const r = this.runs.get(id);
     const wait = r?.metadata.wait as WorkflowWaitContext | undefined;
     const cursorMatches =
@@ -343,7 +347,15 @@ class InMemoryStore implements IWorkflowStore {
     if (r?.status === 'running' && wait?.nodeId === waitContext.nodeId && cursorMatches) {
       const { wait: _wait, ...metadata } = r.metadata;
       r.metadata = metadata;
-      return Promise.resolve({ cleared: true });
+      return Promise.resolve({
+        cleared: true,
+        nodeEvent: {
+          workflow_run_id: id,
+          event_type: 'node_completed',
+          step_name: completion.stepName,
+          data: { type: 'wait', duration_ms: completion.result.waited_ms },
+        },
+      });
     }
     return Promise.resolve({ cleared: false });
   };

@@ -230,20 +230,6 @@ export async function logWorkflowComplete(
   });
 }
 
-/** Log DAG node start */
-export async function logNodeStart(
-  logDir: string,
-  workflowRunId: string,
-  nodeId: string,
-  commandName: string
-): Promise<void> {
-  await logWorkflowEvent(logDir, workflowRunId, {
-    type: 'node_start',
-    step: nodeId,
-    content: commandName,
-  });
-}
-
 /** Log DAG node completion */
 export async function logNodeComplete(
   logDir: string,
@@ -258,47 +244,6 @@ export async function logNodeComplete(
     step: nodeId,
     content: commandName,
     ...(durationMs !== undefined ? { duration_ms: durationMs } : {}),
-    // Spread whole: the caller already omitted every unreported axis, and a guard here
-    // would have to re-decide that per field — which is how `0` becomes absent.
-    ...usage,
-  });
-}
-
-/** Log DAG node skipped (when: false or trigger_rule not met) */
-export async function logNodeSkip(
-  logDir: string,
-  workflowRunId: string,
-  nodeId: string,
-  reason: string,
-  cause?: SkipCause
-): Promise<void> {
-  await logWorkflowEvent(logDir, workflowRunId, {
-    type: 'node_skipped',
-    step: nodeId,
-    content: reason,
-    ...(cause !== undefined ? { cause } : {}),
-  });
-}
-
-/**
- * Log DAG node error, with what the node spent before it failed.
- *
- * A node that fails mid-stream keeps the usage it already burned, so the failure row
- * carries spend for the same reason the completion row does (#2693). Callers whose
- * failure happens before any provider call — a missing command file, a substitution
- * error, a bash exit code — pass nothing, and the absent keys mean exactly that.
- */
-export async function logNodeError(
-  logDir: string,
-  workflowRunId: string,
-  nodeId: string,
-  error: string,
-  usage?: WorkflowUsage
-): Promise<void> {
-  await logWorkflowEvent(logDir, workflowRunId, {
-    type: 'node_error',
-    step: nodeId,
-    error,
     // Spread whole: the caller already omitted every unreported axis, and a guard here
     // would have to re-decide that per field — which is how `0` becomes absent.
     ...usage,

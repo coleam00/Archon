@@ -5,7 +5,7 @@
  * Independent nodes within the same layer run concurrently via Promise.allSettled.
  * Captures all assistant output regardless of streaming mode for $node_id.output substitution.
  */
-import { NodeEventWriteError, recordNodeState } from './node-event-write';
+import { NodeEventWriteError, recordDerivedNodeState, recordNodeState } from './node-event-write';
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { basename, isAbsolute, join as joinPath, resolve as resolvePath, sep } from 'path';
@@ -4428,7 +4428,7 @@ async function finalizeLoopFromSignal(
   platform: IWorkflowPlatform,
   conversationId: string,
   workflowRun: WorkflowRun,
-  nodeId: string,
+  node: LoopNode | LoopGroupNode,
   stepName: string,
   nodeLabel: string,
   finalizeOutput: string,
@@ -4436,6 +4436,7 @@ async function finalizeLoopFromSignal(
   finalizeStructuredOutput: unknown,
   logDir: string
 ): Promise<void> {
+  const nodeId = node.id;
   // Impossible by construction today (the gate writes signaledOutput whenever
   // completionSignaled is true) — this warn guards a future decoupling so a
   // finalize that silently loses the iteration output is diagnosable.
@@ -4451,24 +4452,20 @@ async function finalizeLoopFromSignal(
     `${nodeLabel} '${nodeId}' accepted after a completion condition was met (no re-run)`,
     { workflowId: workflowRun.id, nodeName: nodeId }
   );
-  await recordNodeState(
-    { store: deps.store, logDir },
-    { id: nodeId },
-    {
-      workflow_run_id: workflowRun.id,
-      event_type: 'node_completed',
-      step_name: stepName,
-      data: {
-        duration_ms: 0,
-        node_output: finalizeOutput,
-        ...(finalizeStructuredOutput !== undefined
-          ? { structured_output: finalizeStructuredOutput }
-          : {}),
-        ...(finalizeUsage?.costUsd !== undefined ? { cost_usd: finalizeUsage.costUsd } : {}),
-        ...(finalizeUsage?.tokens !== undefined ? { tokens: finalizeUsage.tokens } : {}),
-      },
-    }
-  );
+  await recordNodeState({ store: deps.store, logDir }, node, {
+    workflow_run_id: workflowRun.id,
+    event_type: 'node_completed',
+    step_name: stepName,
+    data: {
+      duration_ms: 0,
+      node_output: finalizeOutput,
+      ...(finalizeStructuredOutput !== undefined
+        ? { structured_output: finalizeStructuredOutput }
+        : {}),
+      ...(finalizeUsage?.costUsd !== undefined ? { cost_usd: finalizeUsage.costUsd } : {}),
+      ...(finalizeUsage?.tokens !== undefined ? { tokens: finalizeUsage.tokens } : {}),
+    },
+  });
 }
 
 /**
@@ -4617,7 +4614,7 @@ async function executeLoopGroupNode(
       platform,
       conversationId,
       workflowRun,
-      node.id,
+      node,
       stepName,
       'Loop-group node',
       finalizeOutput,
@@ -5708,7 +5705,7 @@ async function executeLoopNode(
       platform,
       conversationId,
       workflowRun,
-      node.id,
+      node,
       stepName,
       'Loop node',
       finalizeOutput,
@@ -7304,27 +7301,16 @@ async function executeWaitNode(
   const output = JSON.stringify(result);
   const stepName = stepNamePrefix + node.id;
   if (persisted !== undefined) {
-    const { cleared } = await deps.store.clearWorkflowWaitContext(workflowRun.id, context, {
+    const outcome = await deps.store.clearWorkflowWaitContext(workflowRun.id, context, {
       stepName,
       result,
     });
-    if (!cleared) {
+    if (!outcome.cleared) {
       throw new Error(`Wait node '${node.id}' lost ownership of its persisted wait cursor`);
     }
-    if (logDir) {
-      await logNodeComplete(logDir, workflowRun.id, node.id, node.id, {
-        durationMs: result.waited_ms,
-      }).catch((err: Error) => {
-        getLog().warn({ err, nodeId: node.id }, 'dag.wait_transcript_log_failed');
-      });
-    }
-    getWorkflowEventEmitter().emit({
-      type: 'node_completed',
-      runId: workflowRun.id,
-      nodeId: node.id,
-      nodeName: node.id,
-      duration: result.waited_ms,
-    });
+    // The store wrote the node_completed row inside the cursor-clearing transaction and
+    // handed it back; the transcript and emitter derive from that row, not a rebuilt one.
+    await recordDerivedNodeState({ logDir }, node, outcome.nodeEvent);
   } else {
     await deps.store.createWorkflowEvent({
       workflow_run_id: workflowRun.id,

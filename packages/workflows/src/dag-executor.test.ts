@@ -245,7 +245,15 @@ function createMockStore(): MockWorkflowStore {
       async (_id, _waitContext, _error) => ({ failed: true })
     ),
     clearWorkflowWaitContext: mock<IWorkflowStore['clearWorkflowWaitContext']>(
-      async (_id, _waitContext) => ({ cleared: true })
+      async (id, _waitContext, completion) => ({
+        cleared: true,
+        nodeEvent: {
+          workflow_run_id: id,
+          event_type: 'node_completed',
+          step_name: completion.stepName,
+          data: { type: 'wait', duration_ms: completion.result.waited_ms },
+        },
+      })
     ),
     rewriteApprovalContext: mock<IWorkflowStore['rewriteApprovalContext']>(
       async (_id, _approvalContext) => ({ resolved: true })

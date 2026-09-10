@@ -9,9 +9,12 @@ import {
   NodeEventWriteError,
 } from './node-event-write';
 import type { NodeStateEventInput } from './store';
-import type { SkipCause } from './schemas';
+import type { ExecNode, SkipCause } from './schemas';
 import type { WorkflowEmitterEvent } from './event-emitter';
 import { getWorkflowEventEmitter } from './event-emitter';
+
+/** A minimal authored node; node-state facts are always about a real node. */
+const step = (id: string): ExecNode => ({ id, kind: 'exec', runtime: 'sh', script: ':' });
 
 describe('node-event-write', () => {
   let testLogDir: string;
@@ -63,7 +66,7 @@ describe('node-event-write', () => {
         },
       };
 
-      await recordNodeState({ store, logDir: testLogDir, emitter }, { id: 'test-node' }, event);
+      await recordNodeState({ store, logDir: testLogDir, emitter }, step('test-node'), event);
 
       // Sink 1: DB sink
       expect(store.persistWorkflowEvent).toHaveBeenCalledTimes(1);
@@ -97,11 +100,11 @@ describe('node-event-write', () => {
       } as any;
       const emitter = { emit: mock(() => {}) };
 
-      await recordNodeState(
-        { store, logDir: testLogDir, emitter },
-        { id: 'node-1' },
-        { workflow_run_id: 'run-db', event_type: 'node_started', step_name: 'node-1' }
-      );
+      await recordNodeState({ store, logDir: testLogDir, emitter }, step('node-1'), {
+        workflow_run_id: 'run-db',
+        event_type: 'node_started',
+        step_name: 'node-1',
+      });
 
       // If DB sink was dropped, this expectation fails
       expect(store.persistWorkflowEvent).toHaveBeenCalledTimes(1);
@@ -111,16 +114,12 @@ describe('node-event-write', () => {
       const store = { persistWorkflowEvent: mock(async () => {}) } as any;
       const emitter = { emit: mock(() => {}) };
 
-      await recordNodeState(
-        { store, logDir: testLogDir, emitter },
-        { id: 'node-tr' },
-        {
-          workflow_run_id: 'run-tr',
-          event_type: 'node_completed',
-          step_name: 'node-tr',
-          data: { duration_ms: 10 },
-        }
-      );
+      await recordNodeState({ store, logDir: testLogDir, emitter }, step('node-tr'), {
+        workflow_run_id: 'run-tr',
+        event_type: 'node_completed',
+        step_name: 'node-tr',
+        data: { duration_ms: 10 },
+      });
 
       const rows = await readTranscriptRows('run-tr');
       // If transcript write was dropped, rows would be empty and this expectation fails
@@ -132,16 +131,12 @@ describe('node-event-write', () => {
       const store = { persistWorkflowEvent: mock(async () => {}) } as any;
       const emitter = { emit: mock(() => {}) };
 
-      await recordNodeState(
-        { store, logDir: testLogDir, emitter },
-        { id: 'node-em' },
-        {
-          workflow_run_id: 'run-em',
-          event_type: 'node_failed',
-          step_name: 'node-em',
-          data: { error: 'boom' },
-        }
-      );
+      await recordNodeState({ store, logDir: testLogDir, emitter }, step('node-em'), {
+        workflow_run_id: 'run-em',
+        event_type: 'node_failed',
+        step_name: 'node-em',
+        data: { error: 'boom' },
+      });
 
       // If emitter sink was dropped, this expectation fails
       expect(emitter.emit).toHaveBeenCalledTimes(1);
@@ -169,7 +164,7 @@ describe('node-event-write', () => {
 
       const recordPromise = recordNodeState(
         { store, logDir: testLogDir, emitter },
-        { id: 'failing-node' },
+        step('failing-node'),
         event
       );
 
@@ -193,11 +188,11 @@ describe('node-event-write', () => {
       const invalidLogDir = '/dev/null/impossible-path';
 
       await expect(
-        recordNodeState(
-          { store, logDir: invalidLogDir, emitter },
-          { id: 'node-tr-fail' },
-          { workflow_run_id: 'run-fail', event_type: 'node_completed', step_name: 'node-tr-fail' }
-        )
+        recordNodeState({ store, logDir: invalidLogDir, emitter }, step('node-tr-fail'), {
+          workflow_run_id: 'run-fail',
+          event_type: 'node_completed',
+          step_name: 'node-tr-fail',
+        })
       ).resolves.toBeUndefined();
 
       // DB and emitter still succeeded
@@ -213,15 +208,11 @@ describe('node-event-write', () => {
       });
       try {
         await expect(
-          recordNodeState(
-            { store, logDir: testLogDir, emitter },
-            { id: 'node-emit-fail' },
-            {
-              workflow_run_id: 'run-emit',
-              event_type: 'node_completed',
-              step_name: 'node-emit-fail',
-            }
-          )
+          recordNodeState({ store, logDir: testLogDir, emitter }, step('node-emit-fail'), {
+            workflow_run_id: 'run-emit',
+            event_type: 'node_completed',
+            step_name: 'node-emit-fail',
+          })
         ).resolves.toBeUndefined();
       } finally {
         unsubscribe();
@@ -235,15 +226,11 @@ describe('node-event-write', () => {
       const emitter = { emit: mock(() => {}) };
 
       await expect(
-        recordNodeState(
-          { store, logDir: testLogDir, emitter },
-          { id: 'node-bogus' },
-          {
-            workflow_run_id: 'run-bogus',
-            event_type: 'not_a_node_state' as never,
-            step_name: 'node-bogus',
-          }
-        )
+        recordNodeState({ store, logDir: testLogDir, emitter }, step('node-bogus'), {
+          workflow_run_id: 'run-bogus',
+          event_type: 'not_a_node_state' as never,
+          step_name: 'node-bogus',
+        })
       ).rejects.toThrow(/Unhandled NodeStateEventType/);
 
       expect(emitter.emit).not.toHaveBeenCalled();
@@ -266,7 +253,7 @@ describe('node-event-write', () => {
         data: { reason: 'trigger_rule', cause },
       };
 
-      await recordNodeState({ store, logDir: testLogDir, emitter }, { id: 'step-b' }, event);
+      await recordNodeState({ store, logDir: testLogDir, emitter }, step('step-b'), event);
 
       // Verify transcript has cause
       const rows = await readTranscriptRows('run-skip');
@@ -298,14 +285,14 @@ describe('node-event-write', () => {
         data: { reason: 'prior_success' },
       };
 
-      const transcript = deriveTranscriptEvent({ id: 'cached-step' }, event);
+      const transcript = deriveTranscriptEvent(step('cached-step'), event);
       expect(transcript).toEqual({
         type: 'node_skipped',
         step: 'cached-step',
         content: 'prior_success',
       });
 
-      const emitter = deriveEmitterEvent({ id: 'cached-step' }, event);
+      const emitter = deriveEmitterEvent(step('cached-step'), event);
       expect(emitter).toEqual({
         type: 'node_skipped',
         runId: 'run-prior',
@@ -322,16 +309,16 @@ describe('node-event-write', () => {
         step_name: 'step-inv',
         data: { reason: 'stale_dependency' },
       };
-      expect(deriveTranscriptEvent({ id: 'step-inv' }, invalidated)).toBeUndefined();
-      expect(deriveEmitterEvent({ id: 'step-inv' }, invalidated)).toBeUndefined();
+      expect(deriveTranscriptEvent(step('step-inv'), invalidated)).toBeUndefined();
+      expect(deriveEmitterEvent(step('step-inv'), invalidated)).toBeUndefined();
 
       const alwaysRun: NodeStateEventInput = {
         workflow_run_id: 'run-ar',
         event_type: 'node_always_run_reset',
         step_name: 'step-ar',
       };
-      expect(deriveTranscriptEvent({ id: 'step-ar' }, alwaysRun)).toBeUndefined();
-      expect(deriveEmitterEvent({ id: 'step-ar' }, alwaysRun)).toBeUndefined();
+      expect(deriveTranscriptEvent(step('step-ar'), alwaysRun)).toBeUndefined();
+      expect(deriveEmitterEvent(step('step-ar'), alwaysRun)).toBeUndefined();
     });
 
     it('node_started derives provider, model, tier, and effort', () => {
@@ -342,7 +329,7 @@ describe('node-event-write', () => {
         data: { command: 'implement.md' },
       };
 
-      const node = { id: 'step-start' };
+      const node = step('step-start');
       const execution = {
         provider: 'claude',
         model: 'claude-3-7-sonnet',
@@ -366,6 +353,33 @@ describe('node-event-write', () => {
         tier: 'medium',
         effort: 'high',
       });
+    });
+  });
+
+  describe('spend on a failure row (#2693)', () => {
+    const failed = (data: Record<string, unknown>): NodeStateEventInput => ({
+      workflow_run_id: 'run-spend',
+      event_type: 'node_failed',
+      step_name: 'step-f',
+      data: { error: 'boom', ...data },
+    });
+
+    it('keeps a reported zero cost distinct from an unreported one', () => {
+      const zero = deriveTranscriptEvent(step('step-f'), failed({ cost_usd: 0 }));
+      const absent = deriveTranscriptEvent(
+        step('step-f'),
+        failed({ tokens: { input: 5, output: 1 } })
+      );
+      expect(zero).toMatchObject({ type: 'node_error', cost_usd: 0 });
+      expect(absent !== undefined && 'cost_usd' in absent).toBe(false);
+      expect(absent).toMatchObject({ tokens: { input: 5, output: 1 } });
+    });
+
+    it('writes no usage keys for a failure that could not have spent anything', () => {
+      const bare = deriveTranscriptEvent(step('step-f'), failed({}));
+      expect(bare).toMatchObject({ type: 'node_error', error: 'boom' });
+      expect(bare !== undefined && 'cost_usd' in bare).toBe(false);
+      expect(bare !== undefined && 'tokens' in bare).toBe(false);
     });
   });
 
