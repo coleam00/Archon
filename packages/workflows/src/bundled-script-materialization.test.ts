@@ -65,7 +65,13 @@ async function execute(script: ScriptDefinition, target: string): Promise<string
     new Response(child.stderr).text(),
     child.exited,
   ]);
-  expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: '' });
+  // The exit code and the exact stdout every caller asserts already pin the behavior
+  // under test. `uv` owns its own stderr and reports interpreter provisioning there when
+  // the machine has no suitable Python, so requiring it to be empty would tie this test
+  // to a vendor's diagnostic channel rather than to a result. Bun's stderr stays strict:
+  // that invocation is this repository's own.
+  expect(exitCode).toBe(0);
+  if (script.runtime === 'bun') expect(stderr).toBe('');
   return stdout.trim();
 }
 
