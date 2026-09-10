@@ -478,9 +478,11 @@ describe('measuring where a capture spends its time', () => {
     // test owns rather than whatever `~/.archon` holds while the suite runs.
     const previousHome = process.env.ARCHON_HOME;
     process.env.ARCHON_HOME = join(root, 'home');
-    await writeFile(bundledFile, 'name: profiled-capture\n');
 
+    // Inside the try: a rejection between here and the cleanup would otherwise leave
+    // ARCHON_HOME pointed at this test's sandbox for every test that follows.
     try {
+      await writeFile(bundledFile, 'name: profiled-capture\n');
       const plain = await captureWorkflowSource({
         sourceRoot: source,
         captureRoot: captureRootIn(runArtifacts, 'plain'),
@@ -504,6 +506,7 @@ describe('measuring where a capture spends its time', () => {
       // and it has to be excluded — a zero here would make the identity above vacuous.
       expect(totals.bundled_write.files).toBeGreaterThan(0);
       expect(totals.digest.files).toBe(totals.copy.files);
+      expect(totals.digest.bytes).toBe(totals.copy.bytes);
       // Every declared phase is actually wired to a range of the capture. A phase that is
       // named but never timed reports 0.00 forever, which reads as "free" rather than as
       // "unmeasured" — the one way this instrument can lie to whoever runs it.

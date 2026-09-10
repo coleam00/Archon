@@ -162,23 +162,41 @@ async function runLoadWorker(dir: string): Promise<never> {
 }
 
 interface LoadHandle {
-  stop: () => void;
+  /**
+   * Kill every worker and wait for it to be gone.
+   *
+   * Awaited rather than fire-and-forget because the scratch tree is removed next, and a
+   * worker still writing inside it makes that removal fail — on Windows, the platform this
+   * tool exists for, with a lock error rather than a clean one.
+   */
+  stop: () => Promise<void>;
 }
 
 async function startLoad(count: number, dir: string): Promise<LoadHandle> {
   const children = Array.from({ length: count }, (_unused, i) =>
     Bun.spawn([process.execPath, import.meta.path, '--load-worker', join(dir, `w${String(i)}`)], {
       stdout: 'ignore',
-      stderr: 'ignore',
+      // Inherited, not dropped: a worker that dies says why, and the next block turns its
+      // silence into a failure rather than into a quietly lighter measurement.
+      stderr: 'inherit',
     })
   );
+  const stop = async (): Promise<void> => {
+    for (const child of children) child.kill();
+    await Promise.all(children.map(child => child.exited));
+  };
+
   // Let the workers reach steady state before anything is timed against them.
   await Bun.sleep(500);
-  return {
-    stop: (): void => {
-      for (const child of children) child.kill();
-    },
-  };
+  const exited = children.filter(child => child.exitCode !== null).length;
+  if (exited > 0) {
+    await stop();
+    throw new Error(
+      `${String(exited)} of ${String(count)} load workers exited during startup. The loaded ` +
+        'pass would report contention it never ran under, so it is not run at all.'
+    );
+  }
+  return { stop };
 }
 
 // ---------------------------------------------------------------------------
@@ -435,7 +453,7 @@ async function main(): Promise<number> {
           await runPass(`under load (${String(options.load)} workers)`, scratch, options)
         );
       } finally {
-        load.stop();
+        await load.stop();
       }
     }
     for (const pass of passes) printPass(pass);

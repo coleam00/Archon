@@ -657,9 +657,17 @@ function foldDigest(entries: readonly DigestEntry[]): string {
  * `skipScope` names a top-level scope directory whose per-file digests the caller already
  * holds — the bundled scope, written from bytes this process is still holding. Everything
  * else is read here, which is what makes the digest a statement about bytes, not paths.
+ *
+ * `bytes` is what was actually read, not what the caller expected to be there. It is the
+ * only phase whose byte volume no other counter already holds, and a phase reporting zero
+ * bytes while reading a megabyte is the way a measurement lies to whoever reads it.
  */
-async function digestEntries(root: string, skipScope?: string): Promise<DigestEntry[]> {
+async function digestEntries(
+  root: string,
+  skipScope?: string
+): Promise<{ entries: DigestEntry[]; bytes: number }> {
   const entries: DigestEntry[] = [];
+  let bytes = 0;
 
   const walk = async (dir: string, rel: string): Promise<void> => {
     let dirEntries;
@@ -676,18 +684,19 @@ async function digestEntries(root: string, skipScope?: string): Promise<DigestEn
       } else if (entry.isFile()) {
         if (relPath === MANIFEST_FILE) continue;
         const content = await readFile(join(dir, entry.name));
+        bytes += content.byteLength;
         entries.push({ relPath, hash: createHash('sha256').update(content).digest('hex') });
       }
     }
   };
   await walk(root, '');
 
-  return entries;
+  return { entries, bytes };
 }
 
 /** Content digest over every captured file. */
 async function digestTree(root: string): Promise<string> {
-  return foldDigest(await digestEntries(root));
+  return foldDigest((await digestEntries(root)).entries);
 }
 
 async function writeManifest(captureRoot: string, manifest: WorkflowSourceManifest): Promise<void> {
@@ -883,8 +892,8 @@ export async function captureWorkflowSource(opts: {
     // them back would restate what the scope already carries. Everything else is read.
     const digest = await profiler.time('digest', async () => {
       const read = await digestEntries(staging, bundled ? BUNDLED_SCOPE_DIR : undefined);
-      profiler.count('digest', { files: read.length });
-      return foldDigest([...read, ...(bundled?.files ?? [])]);
+      profiler.count('digest', { files: read.entries.length, bytes: read.bytes });
+      return foldDigest([...read.entries, ...(bundled?.files ?? [])]);
     });
     const manifest: WorkflowSourceManifest = {
       version: 1,
