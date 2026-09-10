@@ -1,0 +1,4 @@
+{
+  "$comment": "Only listed packs ship. defaults remains during the #2781 deprecation window; remove its entry at the next release. sdlc is the maintained reference pack. Client, maintainer, experimental and test workflows are project content.",
+  "packs": ["defaults", "sdlc"]
+}

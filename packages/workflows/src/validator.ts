@@ -22,6 +22,7 @@ import {
 } from '@archon/paths';
 import { execFileAsync } from '@archon/git';
 import { BUNDLED_COMMANDS, BUNDLED_WORKFLOWS, isBinaryBuild } from './defaults/bundled-defaults';
+import { readBundleIndex } from './defaults/bundle-inventory';
 import { isValidCommandName } from './command-validation';
 import { levenshtein, findSimilar } from './utils/fuzzy-match';
 import {
@@ -178,11 +179,11 @@ export async function discoverAvailableCommands(
       for (const name of Object.keys(BUNDLED_COMMANDS)) {
         if (parsePackagedResourceReference(name) === null) names.add(name);
       }
-    } else {
+    } else if ((await readBundleIndex()).includes('defaults')) {
       const defaultsPath = getDefaultCommandsPath();
       const files = await findCommandFiles(defaultsPath);
-      for (const { commandName } of files) {
-        names.add(commandName);
+      for (const { commandName, relativePath } of files) {
+        if (relativePath === `${commandName}.md`) names.add(commandName);
       }
     }
   }
@@ -226,6 +227,11 @@ async function resolveCommand(
       if (isBinaryBuild()) {
         return commandName in BUNDLED_COMMANDS ? `[bundled:${commandName}]` : null;
       }
+      if (
+        packaged.owner.pack === 'defaults' ||
+        !(await readBundleIndex()).includes(packaged.owner.pack)
+      )
+        return null;
     }
     let workflowsRoot: string;
     if (packaged.owner.source === 'project') {
@@ -280,9 +286,11 @@ async function resolveCommand(
       if (commandName in BUNDLED_COMMANDS) {
         return `[bundled:${commandName}]`;
       }
-    } else {
-      const defaultsResolved = await resolveCommandInDir(getDefaultCommandsPath(), commandName);
-      if (defaultsResolved) return defaultsResolved;
+    } else if ((await readBundleIndex()).includes('defaults')) {
+      const root = getDefaultCommandsPath();
+      const entries = await findCommandFiles(root);
+      const match = entries.find(entry => entry.relativePath === `${commandName}.md`);
+      if (match) return join(root, match.relativePath);
     }
   }
 

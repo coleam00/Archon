@@ -12,6 +12,7 @@ import { createHash, randomUUID } from 'crypto';
 import { join, basename, dirname, extname } from 'path';
 import { createLogger, getArchonHome } from '@archon/paths';
 import { BUNDLED_SCRIPT_PACKS, isBinaryBuild } from './defaults/bundled-defaults';
+import { collectInstalledBundleSources } from './defaults/bundle-inventory';
 import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
 import {
   formatPackagedResourceReference,
@@ -275,9 +276,21 @@ async function discoverBundledPackagedScripts(
 ): Promise<Map<string, ScriptDefinition>> {
   // A captured run reads the bundled scripts IT froze — the capture materialized a
   // binary's embedded ones to files, so the filesystem path serves both builds.
-  return isBinaryBuild() && roots.kind === 'live'
-    ? await materializeBundledScripts()
-    : await discoverPackagedScripts(roots.bundledWorkflows, 'bundled');
+  if (roots.kind === 'captured') return discoverPackagedScripts(roots.bundledWorkflows, 'bundled');
+  if (isBinaryBuild()) return materializeBundledScripts();
+  const files =
+    (await collectInstalledBundleSources(roots.bundledWorkflows, dirname(roots.bundledCommands))) ??
+    [];
+  const scripts = new Map<string, ScriptDefinition>();
+  for (const file of files) {
+    if (file.kind !== 'script' || file.entry === undefined) continue;
+    scripts.set(file.entry.name, {
+      name: file.entry.name,
+      path: normalizeSep(file.sourcePath),
+      runtime: file.entry.runtime,
+    });
+  }
+  return scripts;
 }
 
 /**

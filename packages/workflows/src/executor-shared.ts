@@ -16,6 +16,7 @@ import {
   type WorkflowSourceRoots,
 } from './workflow-source';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
+import { readBundleIndex } from './defaults/bundle-inventory';
 import { createLogger } from '@archon/paths';
 import { isValidCommandName } from './command-validation';
 import type { LoadCommandResult } from './schemas';
@@ -430,7 +431,13 @@ export async function loadCommandPrompt(
   const packaged = parsePackagedResourceReference(commandName);
   if (packaged !== null) {
     if (packaged.owner.source === 'bundled') {
-      if (!loadDefaultCommands) {
+      if (
+        !loadDefaultCommands ||
+        (roots.kind === 'live' &&
+          !isBinaryBuild() &&
+          (packaged.owner.pack === 'defaults' ||
+            !(await readBundleIndex()).includes(packaged.owner.pack)))
+      ) {
         return {
           success: false,
           reason: 'not_found',
@@ -579,12 +586,16 @@ export async function loadCommandPrompt(
         return { success: true, content: bundledContent };
       }
       getLog().debug({ commandName }, 'command_bundled_not_found');
-    } else {
-      // Bun (or any captured run): load from the bundled-commands root, walking 1 level
-      // deep so `defaults/archon-*.md` resolves.
+    } else if (roots.kind === 'captured' || (await readBundleIndex()).includes('defaults')) {
+      // Live defaults contain only the flat files the generator selects; old captures
+      // retain their original command layout independently of the current index.
       const appDefaultsPath = roots.bundledCommands;
       const entries = await archonPaths.findCommandFiles(appDefaultsPath);
-      const match = entries.find(e => e.commandName === commandName);
+      const match = entries.find(
+        e =>
+          e.commandName === commandName &&
+          (roots.kind === 'captured' || e.relativePath === `${commandName}.md`)
+      );
       if (match) {
         const filePath = join(appDefaultsPath, match.relativePath);
         try {

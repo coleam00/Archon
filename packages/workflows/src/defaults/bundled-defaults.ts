@@ -2,8 +2,7 @@
  * Bundled default commands and workflows for binary distribution.
  *
  * Content lives in `bundled-defaults.generated.ts`, which is regenerated from
- * legacy `.archon/{commands,workflows}/defaults/` files plus packaged workflows
- * under `.archon/workflows/<pack>/<workflow>/`. The generated data includes
+ * the files selected by `bundle-index.json` and `bundle-inventory.ts`. The generated data includes
  * package ownership and packaged scripts. This file is the hand-written facade:
  * it re-exports the records and defines the binary-detection helper.
  *
@@ -27,6 +26,7 @@ export {
   BUNDLED_COMMANDS,
   BUNDLED_SCRIPT_PACKS,
   BUNDLED_WORKFLOWS,
+  BUNDLED_WORKFLOW_PATHS,
   BUNDLED_WORKFLOW_OWNERS,
 } from './bundled-defaults.generated';
 export type { BundledWorkflowOwner } from './bundled-defaults.generated';
