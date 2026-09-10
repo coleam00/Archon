@@ -33,23 +33,22 @@ const mockLogger = {
   isLevelEnabled: mock(() => true),
   level: 'info',
 };
-// Capture-cost control: captureWorkflowSource copies the BUNDLED defaults scope
-// (the repo's .archon/workflows/defaults + .archon/commands/defaults, ~58 files /
-// ~660KB) into EVERY staged source capture, on every executeWorkflow level of
-// every run in this file — e2e timing evidence (#2121 Phase 2 CI) shows that
-// uncontrolled per-run fs fan-out is what pushed the specimen test past Bun's
-// default 5000ms budget on Windows CI. No test here exercises bundled default
-// CONTENT: every discovery call opts out of loading them (`loadDefaults: false`)
-// and every workflow under test is written to the tmp cwd. Pointing the two
-// bundle path getters at a dedicated EMPTY directory (outside ARCHON_HOME) keeps
-// the capture's bundled-scope semantics (an existing-but-empty tree is scanned,
-// recorded in the manifest with 0 files) while removing ~58 file writes per
-// capture per platform-multiplied runner.
+// Capture-cost control: captureWorkflowSource writes the BUNDLED defaults scope
+// (the repo's own .archon/workflows + .archon/commands) into EVERY staged source
+// capture, on every executeWorkflow level of every run in this file — e2e timing
+// evidence (#2121 Phase 2 CI) shows that uncontrolled per-run fs fan-out is what
+// pushed the specimen test past Bun's default 5000ms budget on Windows CI. #2924
+// hoisted the READ and the hash of that scope out of the per-capture path, but
+// the bytes still have to land in each capture, so the writes remain and so does
+// this lever. No test here exercises bundled default CONTENT: every discovery call
+// opts out of loading them (`loadDefaults: false`) and every workflow under test is
+// written to the tmp cwd. Pointing the two bundle path getters at a dedicated EMPTY
+// directory (outside ARCHON_HOME) keeps the capture's bundled-scope semantics (an
+// existing-but-empty tree is scanned, recorded in the manifest with 0 files) while
+// removing that file fan-out per capture per platform-multiplied runner.
 const bundledDefaultsRoot = join(tmpdir(), `subrun-test-empty-bundled-${process.pid}`);
 await mkdir(join(bundledDefaultsRoot, 'defaults'), { recursive: true });
-afterAll(() => {
-  void rm(bundledDefaultsRoot, { recursive: true, force: true }).catch(() => {});
-});
+afterAll(() => removeTempTree(bundledDefaultsRoot));
 const realArchonPaths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
   ...realArchonPaths,
@@ -4328,8 +4327,12 @@ nodes:
     process.env.ARCHON_HOME = join(cwd, 'home');
   });
 
+  // `ARCHON_HOME` points inside `cwd`, so this hook removes the staged captures a run
+  // still holds open when a test times out. A raw recursive `rm` gives up the moment
+  // Windows answers EPERM/EBUSY for one of those handles; `removeTempTree` retries until
+  // they close, and reports rather than throwing if they never do (#2924).
   afterEach(async () => {
-    await rm(cwd, { recursive: true, force: true }).catch(() => {});
+    await removeTempTree(cwd);
     if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = originalArchonHome;
   });
