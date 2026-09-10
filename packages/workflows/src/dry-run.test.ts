@@ -1593,6 +1593,39 @@ describe('dryRunWorkflow', () => {
     expect(paused.unusedStubs).toEqual(['after']);
   });
 
+  test('a gate inside a loop_group body pauses the whole run', async () => {
+    // simulateLoopGroup gives the body a scope of its own. It must do that on the
+    // caller's context, not a copy: `halted` is written by the nested simulation, so a
+    // copied context swallows the pause and the run continues past the gate and ends
+    // failed. The fixture corpus catches this too, in a job outside `bun run validate`.
+    const workflow = makeTestWorkflow({
+      name: 'gate-in-loop-group',
+      nodes: [
+        {
+          id: 'group',
+          loop_group: {
+            until_bash: 'exit 0',
+            max_iterations: 2,
+            nodes: [
+              { id: 'work', prompt: 'p' },
+              { id: 'gate', approval: { message: 'ok?' }, depends_on: ['work'] },
+            ],
+          },
+        },
+      ],
+    });
+
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { work: 'done' },
+      pauseAtGates: true,
+    });
+
+    expect(result.outcome).toBe('paused');
+  });
+
   test('reports a durable wait as a pause without AI resolution', async () => {
     const workflow = makeTestWorkflow({
       name: 'wait',

@@ -967,21 +967,29 @@ async function simulateLoopGroup(
   // where the inherited model came from travel with it, or a body node would be
   // attributed to a tier it did not resolve through.
   const groupResolution = resolveNodeModel(node, ctx.scope, ctx.assistantModels, ctx.aiProfile);
-  const bodyCtx: DryRunContext = {
-    ...ctx,
-    scope: {
-      ...ctx.scope,
-      provider: groupResolution.provider,
-      model: groupResolution.model,
-      preset: groupResolution.preset,
-      tier: groupResolution.tier,
-      providerOrigin: groupResolution.providerOrigin,
-    },
+  const bodyScope: WorkflowModelScope = {
+    ...ctx.scope,
+    provider: groupResolution.provider,
+    model: groupResolution.model,
+    preset: groupResolution.preset,
+    tier: groupResolution.tier,
+    providerOrigin: groupResolution.providerOrigin,
   };
+  // Swap the scope on the context the body is given rather than handing it a copy.
+  // `halted` is the one scalar a nested simulation writes back — a gate inside the body
+  // sets it — so a spread copy would swallow a pause and let the run continue past it.
+  // Restoring in `finally` keeps the group's own trace entry on the enclosing scope and
+  // nests correctly when a body contains another loop_group.
+  const outerScope = ctx.scope;
   let lastOutput = '';
   for (let current = 1; current <= node.loop_group.max_iterations; current++) {
     const bodyOutputs = new Map(outputs);
-    await simulateNodes(bodyPlan, bodyOutputs, bodyCtx, current);
+    ctx.scope = bodyScope;
+    try {
+      await simulateNodes(bodyPlan, bodyOutputs, ctx, current);
+    } finally {
+      ctx.scope = outerScope;
+    }
     lastOutput =
       bodyPlan.sinks
         .map(bodyId => bodyOutputs.get(bodyId))
