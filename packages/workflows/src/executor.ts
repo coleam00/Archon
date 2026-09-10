@@ -1,6 +1,7 @@
 /**
  * Workflow Executor - runs DAG-based workflows
  */
+import { RUN_GRAPH_METADATA_KEY, runGraphSchema } from './schemas/terminal-record';
 import { mkdir, readdir, rename, rm, stat, writeFile } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
@@ -1201,10 +1202,8 @@ async function runChildWorkflow(
     inputs,
   } = args;
 
-  // Every failure below returns a `{ status: 'failed' }` outcome; `childRunId` defaults
-  // to '' for failures before a child row exists. The one throw is
-  // `resolveChildDiscoveryRoot` refusing an unreadable or missing authoring record, which
-  // the `workflow:` node catches into the same failed outcome.
+  // Ordinary refusals return a failed outcome; failures before a child row exists
+  // carry an empty childRunId. Terminal-write rejection escapes to the run owner.
   const failOutcome = (error: string, childRunId = ''): ChildWorkflowOutcome => {
     // Reclaim the child's staged capture. Several ordinary refusals happen between
     // capturing and creating the child row — an unknown name, a cycle, the depth cap, a
@@ -1542,10 +1541,8 @@ async function runChildWorkflow(
   } catch (err) {
     if (err instanceof TerminalStatusWriteError) throw err;
 
-    // Honor the never-throws contract: executeWorkflow can throw from its early
-    // setup (before its own failWorkflowRun catch-all), and the read-back can
-    // throw on a DB error — both must surface as a failed node outcome, not an
-    // exception unwinding the parent's DAG.
+    // Ordinary setup/read-back failures become failed child outcomes after cleanup.
+    // A terminal write rejection escapes instead: cleanup may not have released the lock.
     //
     // Wedge guard (symmetric to maybeResumeParentRun's post-CAS handler): a throw in
     // executeWorkflow's EARLY setup (config load, getCodebaseEnvVars, token
@@ -1555,8 +1552,9 @@ async function runChildWorkflow(
     // failWorkflowRun, whose `WHERE status='running'` would miss the 'pending' case)
     // flips any non-terminal child to 'cancelled' and no-ops on a child that reached
     // completed/cancelled on its own. childRunId is always assigned once step 3 ran.
-    await deps.store.cancelWorkflowRun(childRunId).catch((cancelErr: unknown) => {
-      getLog().error({ err: cancelErr as Error, childRunId }, 'workflow.child_setup_cancel_failed');
+    await requireTerminalStatusWrite(deps.store.cancelWorkflowRun(childRunId), {
+      workflowRunId: childRunId,
+      site: 'executor.child_setup_cancel',
     });
     return failOutcome(
       `Sub-run '${childWorkflowName}' errored: ${(err as Error).message}`,
@@ -2331,18 +2329,6 @@ export async function executeWorkflow(
             ...(pathLockExclude.length > 0 ? { excludeRunIds: pathLockExclude } : {}),
           });
       if (activeWorkflow) {
-        // The lock query found another active row that wins the older-wins
-        // tiebreaker. Mark our own row terminal so it falls out of the
-        // active set immediately — without this, our row sits as
-        // pending/running and blocks the path until the 5-min stale window
-        // (or never, if we'd already promoted it to running via resume).
-        await deps.store.cancelWorkflowRun(workflowRun.id).catch((cleanupErr: Error) => {
-          getLog().warn(
-            { err: cleanupErr, workflowRunId: workflowRun?.id, cwd },
-            'workflow.guard_self_cancel_failed'
-          );
-        });
-
         const elapsedMs = Date.now() - parseDbTimestamp(activeWorkflow.started_at);
         const duration = formatDuration(elapsedMs);
         const shortId = activeWorkflow.id.slice(0, 8);
@@ -2373,34 +2359,36 @@ export async function executeWorkflow(
           `❌ **This worktree is in use** by \`${activeWorkflow.workflow_name}\` ` +
             `(${stateLine}).\n${actionLines}`
         );
+        // The notification explains the block; it does not prove cleanup succeeded.
+        // Release our lock token, preserving a rejected write instead of returning.
+        await requireTerminalStatusWrite(deps.store.cancelWorkflowRun(workflowRun.id), {
+          workflowRunId: workflowRun.id,
+          site: 'executor.guard_self_cancel',
+        });
+
         return {
           success: false,
           error: `Workflow already active on this path (${activeWorkflow.status}): ${activeWorkflow.workflow_name}`,
         };
       }
     } catch (error) {
+      if (error instanceof TerminalStatusWriteError) throw error;
       const err = error as Error;
       getLog().error(
         { err, conversationId, cwd, pendingRunId: workflowRun.id },
         'db_active_workflow_check_failed'
       );
-      // Release the lock token. workflowRun is finalized at this point
-      // (pre-created or resumed or freshly created) and would otherwise sit
-      // as pending/running, blocking the path. For pending the 5-min stale
-      // window would clear it eventually; for a row already promoted to
-      // running (e.g., resumed), nothing would clear it without manual
-      // intervention.
-      await deps.store.cancelWorkflowRun(workflowRun.id).catch((cleanupErr: Error) => {
-        getLog().warn(
-          { err: cleanupErr, workflowRunId: workflowRun?.id },
-          'workflow.guard_query_failure_cleanup_failed'
-        );
-      });
       await sendCriticalMessage(
         platform,
         conversationId,
         '❌ **Workflow blocked**: Unable to verify if another workflow is running (database error). Please try again in a moment.'
       );
+      // Even if notification delivery failed, release this run's lock token.
+      // A rejected cleanup must escape rather than become an ordinary guard result.
+      await requireTerminalStatusWrite(deps.store.cancelWorkflowRun(workflowRun.id), {
+        workflowRunId: workflowRun.id,
+        site: 'executor.guard_query_failure_cleanup',
+      });
       return { success: false, error: 'Database error checking for active workflow' };
     }
   }
@@ -2856,6 +2844,16 @@ export async function executeWorkflow(
   // failed would either fail again or mask the real error.
   let terminalStatusWriteFailed = false;
   try {
+    // Capture the loaded graph on both fresh execution and resume before any node runs.
+    const graph = runGraphSchema.parse({
+      node_ids: workflow.nodes.map(node => node.id),
+      ...(workflow.returns !== undefined ? { returns: workflow.returns } : {}),
+    });
+    await deps.store.updateWorkflowRun(workflowRun.id, {
+      metadata: { [RUN_GRAPH_METADATA_KEY]: graph },
+    });
+    workflowRun.metadata = { ...workflowRun.metadata, [RUN_GRAPH_METADATA_KEY]: graph };
+
     getLog().info(
       {
         workflowName: workflow.name,

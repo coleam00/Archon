@@ -48,22 +48,12 @@ import { createLogger } from './logger';
 /** Bumped when the captured property set changes (documented in README). */
 export const TELEMETRY_SCHEMA_VERSION = 6;
 
-// Minimal shape of posthog-node's `fetch` option — copied from @posthog/core
-// (a transitive dep) to avoid pulling it in as a direct dependency.
-interface PostHogFetchOptions {
-  method: 'GET' | 'POST' | 'PUT' | 'PATCH';
-  mode?: 'no-cors';
-  credentials?: 'omit';
-  headers: Record<string, string>;
-  body?: string | Blob;
-  signal?: AbortSignal;
-}
-interface PostHogFetchResponse {
-  status: number;
-  text: () => Promise<string>;
-  json: () => Promise<unknown>;
-  headers?: { get(name: string): string | null };
-}
+type PostHogFetch = NonNullable<NonNullable<ConstructorParameters<typeof PostHog>[1]>['fetch']>;
+type PostHogFetchOptions = Parameters<PostHogFetch>[1];
+type PostHogFetchResponse = Awaited<ReturnType<PostHogFetch>>;
+
+// Leave room for warm CLI startup within the 150 ms help budget.
+const TELEMETRY_SHUTDOWN_TIMEOUT_MS = 75;
 
 /**
  * Embedded write-only PostHog project key. Safe to ship in source: `phc_*`
@@ -412,15 +402,15 @@ function maybeShowFirstRunNotice(): void {
 
 /**
  * Lazy singleton. `undefined` = not yet initialized; `null` = disabled or
- * init failed; `PostHog` = live client. Init runs once per process.
+ * init failed; otherwise the live client and its transport cancellation owner.
  */
-let clientInit: Promise<PostHog | null> | undefined;
+let clientInit: ReturnType<typeof initClient> | undefined;
 
 async function getClient(): Promise<PostHog | null> {
   if (clientInit === undefined) {
     clientInit = initClient();
   }
-  return clientInit;
+  return (await clientInit)?.client ?? null;
 }
 
 /**
@@ -465,7 +455,7 @@ async function silentFetch(
   options: PostHogFetchOptions
 ): Promise<PostHogFetchResponse> {
   try {
-    const res = await fetch(url, options as RequestInit);
+    const res = await fetch(url, options);
     if (res.status < 200 || res.status >= 400) {
       logFetchFailure({ status: res.status }, 'telemetry.http_non_2xx_suppressed');
       return FAKE_OK_RESPONSE;
@@ -477,18 +467,25 @@ async function silentFetch(
   }
 }
 
-async function initClient(): Promise<PostHog | null> {
+async function initClient(): Promise<{ client: PostHog; abortController: AbortController } | null> {
   if (isTelemetryDisabled()) return null;
   const apiKey = getApiKey();
   if (apiKey === null) return null;
   try {
     const posthogModule = await import('posthog-node');
+    const abortController = new AbortController();
     const client = new posthogModule.PostHog(apiKey, {
       host: getHost(),
       flushAt: 20,
       flushInterval: 10000,
       disableGeoip: true,
-      fetch: silentFetch,
+      fetch: (url, options): Promise<PostHogFetchResponse> =>
+        silentFetch(url, {
+          ...options,
+          signal: options.signal
+            ? AbortSignal.any([options.signal, abortController.signal])
+            : abortController.signal,
+        }),
     });
     // Defensive: also hook the client-level error channel in case a future
     // posthog-node version routes errors there instead of (or in addition to)
@@ -504,7 +501,7 @@ async function initClient(): Promise<PostHog | null> {
     } catch (error) {
       getLog().debug({ err: error as Error }, 'telemetry.register_failed');
     }
-    return client;
+    return { client, abortController };
   } catch (error) {
     getLog().debug({ err: error as Error }, 'telemetry.init_failed');
     return null;
@@ -907,16 +904,20 @@ export function captureWorkflowCompleted(props: WorkflowCompletedProperties): vo
 }
 
 /**
- * Flush queued events and close the PostHog client. Call on process exit
- * (server SIGTERM, end of CLI command) so buffered events aren't lost.
- * Safe to call when telemetry was never initialized.
+ * Best-effort exit flush. Slow ingestion drops pending events after 75 ms;
+ * telemetry must not hold up CLI exit or server shutdown.
  */
 export async function shutdownTelemetry(): Promise<void> {
   if (clientInit === undefined) return;
   try {
-    const client = await clientInit;
-    if (client) {
-      await client.shutdown();
+    const initialized = await clientInit;
+    if (initialized) {
+      try {
+        await initialized.client.shutdown(TELEMETRY_SHUTDOWN_TIMEOUT_MS);
+      } finally {
+        // The SDK deadline only races its flush; it leaves fetch running.
+        initialized.abortController.abort();
+      }
     }
   } catch (error) {
     getLog().debug({ err: error as Error }, 'telemetry.shutdown_failed');

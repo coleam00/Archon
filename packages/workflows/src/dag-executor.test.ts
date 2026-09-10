@@ -1,3 +1,7 @@
+import { TerminalStatusWriteError } from './terminal-status-write';
+import { NodeEventWriteError } from './node-event-write';
+import { buildTerminalRecord } from './terminal-record';
+import { RUN_GRAPH_METADATA_KEY } from './schemas/terminal-record';
 import {
   describe,
   it,
@@ -174,11 +178,16 @@ function composeInnerStep(
 
 // --- Mock helpers ---
 
+// This fixture's createWorkflowEvent mock collects both durable and best-effort writes.
+// The production IWorkflowStore interface separately restricts the best-effort route.
+type MockWorkflowEventCollector = Mock<IWorkflowStore['persistWorkflowEvent']>;
 type MockWorkflowStore = {
-  [K in keyof IWorkflowStore]: IWorkflowStore[K] extends (...args: infer Args) => infer Result
+  [K in Exclude<keyof IWorkflowStore, 'createWorkflowEvent'>]: IWorkflowStore[K] extends (
+    ...args: infer Args
+  ) => infer Result
     ? Mock<(...args: Args) => Result>
     : IWorkflowStore[K];
-};
+} & { createWorkflowEvent: MockWorkflowEventCollector };
 
 function mockWorkflowRun(id = 'mock-run-id'): WorkflowRun {
   return {
@@ -203,7 +212,7 @@ function mockWorkflowRun(id = 'mock-run-id'): WorkflowRun {
 }
 
 function createMockStore(): MockWorkflowStore {
-  const createWorkflowEvent = mock<IWorkflowStore['createWorkflowEvent']>(async _data => {});
+  const createWorkflowEvent = mock<IWorkflowStore['persistWorkflowEvent']>(async _data => {});
   return {
     createWorkflowRun: mock<IWorkflowStore['createWorkflowRun']>(async _data => mockWorkflowRun()),
     getWorkflowRun: mock<IWorkflowStore['getWorkflowRun']>(async _id => null),
@@ -786,7 +795,7 @@ describe('resolvedBodyNodes', () => {
 });
 
 describe('checkTriggerRule', () => {
-  it('returns skip provenance for every rule without changing eligibility', () => {
+  it('returns eligibility and skip provenance for every rule', () => {
     const completed = makeOutput('completed');
     const failed = makeOutput('failed');
     const conditionSkipped: NodeOutput = {
@@ -863,7 +872,7 @@ describe('checkTriggerRule', () => {
           ['left', completed],
           ['right', failureSkipped],
         ]),
-        expected: { decision: 'run' },
+        expected: { decision: 'skip', cause: { kind: 'upstream_failed', origin: 'validate' } },
       },
       {
         current: node('join', ['left', 'right'], {
@@ -14019,6 +14028,12 @@ describe('executeDagWorkflow -- cancel node', () => {
     // Track whether cancelWorkflowRun has been called to simulate status transition
     let cancelled = false;
     store.cancelWorkflowRun.mockImplementation(async _id => {
+      expect(
+        store.persistWorkflowEvent.mock.calls
+          .map(([event]) => event)
+          .filter(event => event.step_name === 'stop')
+          .map(event => event.event_type)
+      ).toEqual(['node_started']);
       cancelled = true;
       return { cancelled: true };
     });
@@ -14168,7 +14183,7 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     );
 
     // node_failed (not node_completed) must have been stored
-    const eventCalls = (store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>)
+    const eventCalls = (store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>)
       .mock.calls;
     const events = eventCalls.map((c: unknown[]) => (c[0] as { event_type: string }).event_type);
     expect(events).toContain('node_failed');
@@ -14659,6 +14674,12 @@ describe('executeDagWorkflow -- durable wait node', () => {
     const platform = createMockPlatform();
     let pauseAttempted = false;
     store.pauseWorkflowRunForWait = mock(async () => {
+      expect(
+        store.persistWorkflowEvent.mock.calls
+          .map(([event]) => event)
+          .filter(event => event.step_name === 'delay')
+          .map(event => event.event_type)
+      ).toEqual(['node_started']);
       pauseAttempted = true;
       throw new Error('Workflow run not found or not in running state');
     });
@@ -14952,68 +14973,85 @@ describe('executeDagWorkflow -- approval node', () => {
     expect(completedStepNames.filter((n: unknown) => n === 'review:on_reject').length).toBe(1);
   });
 
-  it('on_reject cancels when max_attempts exhausted', async () => {
-    const store = createMockStore();
-    const mockDeps = createMockDeps(store);
-    const platform = createMockPlatform();
+  it.each([false, true])(
+    'preserves exhausted approval cancellation result (rollback=%s)',
+    async rollback => {
+      const store = createMockStore();
+      if (rollback)
+        store.cancelWorkflowRun = mock(async () => {
+          throw new Error('approval cancellation rolled back');
+        });
+      const mockDeps = createMockDeps(store);
+      const platform = createMockPlatform();
 
-    // rejection_count already at max_attempts
-    const workflowRun = makeWorkflowRun('reject-exhausted-run', {
-      metadata: {
-        approval: {
-          type: 'approval',
-          nodeId: 'review',
-          message: 'Approve this plan?',
-          onRejectPrompt: 'Fix based on: $REJECTION_REASON',
-          onRejectMaxAttempts: 3,
+      // rejection_count already at max_attempts
+      const workflowRun = makeWorkflowRun('reject-exhausted-run', {
+        metadata: {
+          approval: {
+            type: 'approval',
+            nodeId: 'review',
+            message: 'Approve this plan?',
+            onRejectPrompt: 'Fix based on: $REJECTION_REASON',
+            onRejectMaxAttempts: 3,
+          },
+          rejection_reason: 'Still not right',
+          rejection_count: 3,
         },
-        rejection_reason: 'Still not right',
-        rejection_count: 3,
-      },
-    });
+      });
 
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        conversationId: 'conv-approval',
-        cwd: testDir,
-        workflow: {
-          name: 'approval-exhausted',
-          nodes: [
-            {
-              id: 'review',
-              kind: 'gate',
-              message: 'Approve this plan?',
-              decisions: [
-                { id: 'approve' },
-                { id: 'reject', rework: { prompt: 'Fix: $REJECTION_REASON', maxAttempts: 3 } },
-              ],
-              captureResponse: false,
-              decisionsAuthored: false,
-            },
-          ],
-        },
-        workflowRun,
-      })
-    );
+      const execution = executeDagWorkflow(
+        dagOptions({
+          deps: mockDeps,
+          platform,
+          conversationId: 'conv-approval',
+          cwd: testDir,
+          workflow: {
+            name: 'approval-exhausted',
+            nodes: [
+              {
+                id: 'review',
+                kind: 'gate',
+                message: 'Approve this plan?',
+                decisions: [
+                  { id: 'approve' },
+                  { id: 'reject', rework: { prompt: 'Fix: $REJECTION_REASON', maxAttempts: 3 } },
+                ],
+                captureResponse: false,
+                decisionsAuthored: false,
+              },
+            ],
+          },
+          workflowRun,
+        })
+      );
 
-    // AI should NOT have been called (max attempts reached, straight to cancel)
-    expect(mockSendQueryDag.mock.calls.length).toBe(0);
+      if (rollback) {
+        await expect(execution).rejects.toThrow(
+          'Failed to persist terminal workflow status: approval cancellation rolled back'
+        );
+        expect(store.failWorkflowRun).not.toHaveBeenCalled();
+        expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+        return;
+      }
+      await execution;
 
-    // cancelWorkflowRun should have been called
-    const cancelCalls = store.cancelWorkflowRun.mock.calls;
-    expect(cancelCalls.length).toBe(1);
-    expect(store.cancelWorkflowRun).toHaveBeenCalledWith(workflowRun.id, {
-      step_name: 'review',
-      reason: 'max_attempts (3) exhausted',
-    });
+      // AI should NOT have been called (max attempts reached, straight to cancel)
+      expect(mockSendQueryDag.mock.calls.length).toBe(0);
 
-    // pauseWorkflowRun should NOT have been called
-    const pauseCalls = (store.pauseWorkflowRun as Mock<IWorkflowStore['pauseWorkflowRun']>).mock
-      .calls;
-    expect(pauseCalls.length).toBe(0);
-  });
+      // cancelWorkflowRun should have been called
+      const cancelCalls = store.cancelWorkflowRun.mock.calls;
+      expect(cancelCalls.length).toBe(1);
+      expect(store.cancelWorkflowRun).toHaveBeenCalledWith(workflowRun.id, {
+        step_name: 'review',
+        reason: 'max_attempts (3) exhausted',
+      });
+
+      // pauseWorkflowRun should NOT have been called
+      const pauseCalls = (store.pauseWorkflowRun as Mock<IWorkflowStore['pauseWorkflowRun']>).mock
+        .calls;
+      expect(pauseCalls.length).toBe(0);
+    }
+  );
 
   it('on_reject with max_attempts: 1 cancels on first rejection', async () => {
     const store = createMockStore();
@@ -15158,7 +15196,7 @@ describe('executeDagWorkflow -- approval node', () => {
 
     // (b) The persisted approval_requested workflow event's data.message must be substituted.
     const approvalRequestedEvents = (
-      store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>
+      store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
     ).mock.calls.filter(
       (c: unknown[]) => (c[0] as { event_type: string }).event_type === 'approval_requested'
     );
@@ -16434,10 +16472,10 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
     // node_completed write so the run is unambiguously past accumulation and the
     // during-streaming cancel check never tears the node down mid-stream.
     let nodeFinished = false;
-    const realCreateEvent = store.createWorkflowEvent;
-    store.createWorkflowEvent = mock<IWorkflowStore['createWorkflowEvent']>(data => {
+    const realPersistEvent = store.persistWorkflowEvent;
+    store.persistWorkflowEvent = mock<IWorkflowStore['persistWorkflowEvent']>(data => {
       if (data.event_type === 'node_completed') nodeFinished = true;
-      return realCreateEvent(data);
+      return realPersistEvent(data);
     });
     store.getWorkflowRunStatus = mock(() =>
       Promise.resolve(nodeFinished ? ('cancelled' as const) : ('running' as const))
@@ -16661,13 +16699,13 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
     const nodeFinishedSignal = new Promise<void>(resolve => {
       announceNodeFinished = resolve;
     });
-    const realCreateEvent = store.createWorkflowEvent;
-    store.createWorkflowEvent = mock<IWorkflowStore['createWorkflowEvent']>(data => {
+    const realPersistEvent = store.persistWorkflowEvent;
+    store.persistWorkflowEvent = mock<IWorkflowStore['persistWorkflowEvent']>(data => {
       if (data.event_type === 'node_completed') {
         nodeFinished = true;
         announceNodeFinished?.();
       }
-      return realCreateEvent(data);
+      return realPersistEvent(data);
     });
 
     // Ordering is the real discriminator. The unwind catch runs AFTER runLayers throws, so
@@ -17787,8 +17825,8 @@ describe('executeDagWorkflow -- exec timeout outcomes', () => {
         id: 'consumer',
         script: 'console.log(process.env.INPUTS_VALUE)',
         runtime: 'bun',
-        depends_on: ['slow'],
-        trigger_rule: 'all_done',
+        depends_on: ['slow', 'ready'],
+        trigger_rule: 'none_failed_min_one_success',
         with: { value: { from: '$slow.output', if_skipped: 'fallback' } },
       });
 
@@ -17800,7 +17838,11 @@ describe('executeDagWorkflow -- exec timeout outcomes', () => {
             workflowRun,
             workflow: {
               name: `exec-timeout-${kind}`,
-              nodes: [dagNodeSchema.parse(producerInput), consumer],
+              nodes: [
+                dagNodeSchema.parse({ id: 'ready', bash: 'echo ready' }),
+                dagNodeSchema.parse(producerInput),
+                consumer,
+              ],
             },
           })
         );
@@ -21103,6 +21145,16 @@ describe('executeDagWorkflow -- loop_group node', () => {
       })
     );
 
+    expect(mockDeps.store.persistWorkflowEvent).toHaveBeenCalledWith({
+      workflow_run_id: workflowRun.id,
+      event_type: 'node_failed',
+      step_name: 'fixer',
+      data: expect.objectContaining({
+        type: 'loop_group',
+        aggregate: true,
+        error: expect.stringContaining("Loop-group node 'fixer' exceeded max iterations (2)"),
+      }),
+    });
     // The negated prose does not complete the group, so it exhausts max_iterations.
     expect(callCount).toBe(2);
     expect(result).toBeUndefined();
@@ -25980,6 +26032,140 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
     });
   });
 
+  it.each(['failed', 'condition'] as const)(
+    '#3156: honors %s skip provenance through direct joins, include boundaries, and resume',
+    async mode => {
+      const deliver = {
+        ...buildWf('deliver-block', [
+          {
+            id: 'gate-validated',
+            bash: 'exit 1',
+            ...(mode === 'condition' ? { when: 'false' } : {}),
+          },
+          { id: 'checks', bash: 'echo checks', depends_on: ['gate-validated'] },
+          { id: 'result', bash: 'echo delivered', depends_on: ['checks'] },
+        ]),
+        returns: 'result',
+      };
+      const action = buildWf('action-block', [
+        { id: 'entry', bash: 'echo entry' },
+        { id: 'tail', bash: 'echo tail', depends_on: ['entry'], trigger_rule: 'all_done' },
+      ]);
+      const parent = buildWf('direct-joins', [
+        { id: 'pr', bash: 'printf ready' },
+        { id: 'deliver', include: 'deliver-block', depends_on: ['pr'] },
+        {
+          id: 'flip-ready',
+          script: 'console.log(process.env.INPUTS_DELIVERED)',
+          runtime: 'bun',
+          depends_on: ['pr', 'deliver'],
+          trigger_rule: 'none_failed_min_one_success',
+          with: { delivered: { from: '$deliver.output', if_skipped: 'fallback' } },
+        },
+        {
+          id: 'action',
+          include: 'action-block',
+          depends_on: ['pr', 'deliver'],
+          trigger_rule: 'none_failed_min_one_success',
+        },
+        {
+          id: 'report',
+          script: 'console.log(process.env.INPUTS_DELIVERED)',
+          runtime: 'bun',
+          depends_on: ['pr', 'deliver'],
+          trigger_rule: 'all_done',
+          with: { delivered: { from: '$deliver.output', if_skipped: 'fallback' } },
+        },
+      ]);
+      const expanded = expandWorkflowIncludes(
+        new Map([
+          ['deliver-block', deliver],
+          ['action-block', action],
+          ['direct-joins', parent],
+        ])
+      );
+      expect(expanded.errors).toEqual([]);
+      const workflow = expanded.workflows.get('direct-joins');
+      if (!workflow) throw new Error('direct-joins did not expand');
+      const nodes = [...workflow.nodes];
+      const initial = await executeExpanded(nodes, `direct-joins-${mode}`);
+      const resumed = await executeExpanded(
+        nodes,
+        `direct-joins-${mode}-resumed`,
+        new Map([['pr', { output: 'ready' }]])
+      );
+      const dryRun = await dryRunWorkflow({
+        workflow,
+        userMessage: '',
+        cwd: testDir,
+        stubs: {
+          pr: 'ready',
+          'flip-ready': 'fallback',
+          report: 'fallback',
+          action__entry: 'entry',
+          action__tail: 'tail',
+        },
+      });
+      const cause = {
+        kind: mode === 'failed' ? 'upstream_failed' : 'upstream_skipped',
+        origin: 'deliver__gate-validated',
+      };
+      const runs = [initial, resumed];
+      if (mode === 'failed') {
+        runs.push(
+          await executeExpanded(
+            nodes,
+            'direct-joins-cached-before-upgrade',
+            new Map([
+              ['pr', { output: 'ready' }],
+              ['flip-ready', { output: 'previously flipped' }],
+              ['action__entry', { output: 'entry' }],
+              ['action__tail', { output: 'tail' }],
+            ])
+          )
+        );
+      }
+      for (const run of runs) {
+        for (const id of ['deliver__checks', 'deliver__result']) {
+          expect(
+            run.events.find(event => event.step_name === id && event.event_type === 'node_skipped')
+              ?.data?.cause
+          ).toEqual(cause);
+        }
+        for (const id of ['flip-ready', 'action__entry', 'action__tail']) {
+          if (mode === 'failed') {
+            expect(
+              run.events.find(
+                event => event.step_name === id && event.event_type === 'node_skipped'
+              )?.data?.cause
+            ).toEqual(cause);
+            expect(
+              run.events.some(
+                event => event.step_name === id && event.event_type === 'node_started'
+              )
+            ).toBe(false);
+          } else {
+            expect(
+              run.events.some(
+                event => event.step_name === id && event.event_type === 'node_completed'
+              )
+            ).toBe(true);
+          }
+        }
+        expect(
+          run.events.find(
+            event => event.step_name === 'report' && event.event_type === 'node_completed'
+          )?.data?.node_output
+        ).toContain('fallback');
+      }
+      for (const id of ['flip-ready', 'action__entry', 'action__tail']) {
+        expect(dryRun.trace.find(entry => entry.nodeId === id)).toMatchObject(
+          mode === 'failed' ? { state: 'skipped', cause } : { state: 'stubbed' }
+        );
+      }
+    }
+  );
+
   it('recomputes the same skip provenance on resume', async () => {
     const nodes = expandedGatedParentNodes('skipped-dependency');
     const initial = await executeExpanded(nodes, 'inc-resume-cause-initial');
@@ -26707,7 +26893,7 @@ describe('subprocess credential redaction', () => {
       expect(rejection?.spawnargs.join(' ')).toContain('BASE_BRANCH=main');
 
       const durableEventText = JSON.stringify(
-        (store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>).mock.calls
+        (store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>).mock.calls
       );
       const durableMessageText = JSON.stringify(platform.sendMessage.mock.calls);
       const durableLogText = await readFile(join(logDir, `${workflowRun.id}.jsonl`), 'utf-8');
@@ -26798,7 +26984,7 @@ describe('subprocess credential redaction', () => {
       expect(rejectionText).not.toContain(ambientDatabaseUrl);
 
       const durableEventText = JSON.stringify(
-        (store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>).mock.calls
+        (store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>).mock.calls
       );
       const durableMessageText = JSON.stringify(platform.sendMessage.mock.calls);
       const durableLogText = await readFile(join(logDir, `${workflowRun.id}.jsonl`), 'utf-8');
@@ -27026,7 +27212,7 @@ describe('subprocess credential redaction', () => {
     expect(stderrMessage).toBe("Bash node 'leaky' stderr:\n```\n[REDACTED]\n```");
 
     const consumerEvent = (
-      store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>
+      store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
     ).mock.calls.find(
       ([event]) => event.event_type === 'node_completed' && event.step_name === 'consumer'
     );
@@ -27175,7 +27361,7 @@ describe('retained exec output', () => {
     // The value channel is untouched: the downstream consumer measured the WHOLE
     // 40,008-character output, not the 2000-char evidence tail nor a 32KB preview.
     const consumerEvent = (
-      store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>
+      store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
     ).mock.calls.find(
       ([event]) => event.event_type === 'node_completed' && event.step_name === 'consumer'
     );
@@ -27857,7 +28043,7 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     // The lost CAS must NOT cascade into a node failure or any terminal write —
     // the external transition owns the run's final state.
     const events = (
-      store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>
+      store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
     ).mock.calls.map((c: unknown[]) => (c[0] as { event_type: string }).event_type);
     expect(events).not.toContain('node_failed');
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
@@ -27913,7 +28099,7 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
 
     expect(emitted).not.toContain('approval_pending');
     const events = (
-      store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>
+      store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
     ).mock.calls.map((c: unknown[]) => (c[0] as { event_type: string }).event_type);
     expect(events).not.toContain('node_failed');
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
@@ -27978,7 +28164,7 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     const sentMessages = platform.sendMessage.mock.calls.map(([, message]) => message);
     expect(sentMessages.some(message => message.includes('Blocked on sub-run'))).toBe(false);
     const events = (
-      store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>
+      store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
     ).mock.calls.map((c: unknown[]) => (c[0] as { event_type: string }).event_type);
     expect(events).not.toContain('node_failed');
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
@@ -28019,7 +28205,7 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     );
 
     const events = (
-      store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>
+      store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
     ).mock.calls.map((c: unknown[]) => (c[0] as { event_type: string }).event_type);
     expect(events).toContain('node_failed');
     expect(store.failWorkflowRun).toHaveBeenCalled();
@@ -29462,6 +29648,61 @@ describe('value transport (#2637): persistence, resume, and node-local bindings'
     );
     return { events, store };
   }
+
+  it.each([false, true])(
+    'preserves incomplete resumed output provenance (structured=%s)',
+    async structured => {
+      const preview = 'x'.repeat(32_768);
+      const spillPath = join(testDir, 'missing-original-spill.txt');
+      const resumed = await runDag(
+        {
+          name: 'incomplete-replay',
+          description: 'resume preview',
+          returns: 'producer',
+          nodes: [dagNodeSchema.parse({ id: 'producer', bash: 'echo should-not-run' })],
+        },
+        'incomplete-replay',
+        new Map([
+          [
+            'producer',
+            {
+              output: preview,
+              outputTruncation: { originalBytes: 40_000, spillPath },
+              ...(structured ? { structuredOutput: { answer: 42 } } : {}),
+            },
+          ],
+        ])
+      );
+      const replay = resumed.events.find(
+        event => event.event_type === 'node_skipped_prior_success'
+      );
+      expect(replay?.data).toMatchObject({
+        node_output: preview,
+        node_output_truncated: true,
+        node_output_original_bytes: 40_000,
+        node_output_spill_path: spillPath,
+      });
+      if (structured) expect(replay?.data?.structured_output).toEqual({ answer: 42 });
+      expect(resumed.events.some(event => event.event_type === 'node_started')).toBe(false);
+      const record = await buildTerminalRecord({
+        run: makeWorkflowRun('incomplete-replay', {
+          status: 'completed',
+          metadata: { [RUN_GRAPH_METADATA_KEY]: { node_ids: ['producer'], returns: 'producer' } },
+        }),
+        events: resumed.events.map(event => ({ ...event, data: event.data ?? {} })),
+      });
+      expect(record.returns).toEqual(
+        structured
+          ? { availability: 'available', node_id: 'producer', value: { answer: 42 } }
+          : {
+              availability: 'truncated',
+              node_id: 'producer',
+              original_bytes: 40_000,
+              spill_path: spillPath,
+            }
+      );
+    }
+  );
 
   function producerConsumerWorkflow(): WorkflowDefinition {
     return {
@@ -31838,7 +32079,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     ).toBe(1);
 
     const completedEvents = (
-      store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>
+      store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
     ).mock.calls
       .map(call => call[0])
       .filter(data => data.event_type === 'node_completed' && data.step_name === 'grp');
@@ -32157,7 +32398,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
   };
 
   const eventsOf = (store: ReturnType<typeof createMockStore>) =>
-    (store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>).mock.calls.map(
+    (store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>).mock.calls.map(
       call => ({
         event_type: call[0].event_type,
         step_name: call[0].step_name ?? '',
@@ -32347,14 +32588,255 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     expect(wrapper?.data.structured_output).toEqual(['chosen-a']);
   });
 
+  it.each(['node', 'terminal'] as const)(
+    'mixed child fan-out rejections preserve the %s write failure',
+    async kind => {
+      await writeBlock(
+        'name: child-workflow\ndescription: child\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: "echo done"',
+        'child-workflow'
+      );
+      const store = createMockStore();
+      const ordinary = new Error('source read failed');
+      const cause = new Error('write rejected');
+      const primary =
+        kind === 'terminal'
+          ? new TerminalStatusWriteError(cause)
+          : new NodeEventWriteError(
+              { workflow_run_id: 'child', event_type: 'node_completed', step_name: 'work' },
+              cause
+            );
+      let siblingSettled = false;
+      mockLogFn.mockClear();
+      const runChildWorkflow = mock<RunChildWorkflowFn>(async args => {
+        if (args.childIndex === 0) throw ordinary;
+        await new Promise(resolve => setTimeout(resolve, args.childIndex === 1 ? 5 : 10));
+        if (args.childIndex === 1) throw primary;
+        siblingSettled = true;
+        return { childRunId: 'completed-sibling', status: 'completed', output: 'done' };
+      });
+      const pending = executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          runChildWorkflow,
+          workflow: {
+            name: 'mixed-child',
+            nodes: [
+              {
+                id: 'fan',
+                kind: 'workflow',
+                workflow: 'child-workflow',
+                fan_out: { items: '["a","b","c"]', max_parallel: 3, join: 'all_done' },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('mixed-child'),
+        })
+      );
+      await expect(pending).rejects.toBe(primary);
+      expect(runChildWorkflow).toHaveBeenCalledTimes(3);
+      expect(siblingSettled).toBe(true);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      expect(mockLogFn).toHaveBeenCalledWith(
+        { err: ordinary, workflowRunId: 'mixed-child' },
+        'dag.join_secondary_failure'
+      );
+    }
+  );
+
+  it('mixed composed rejections preserve terminal rollback after claimed work settles', async () => {
+    await writeBlock(
+      'name: compose-blk\ndescription: body\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: "echo done"\n  - id: stop\n    cancel: stop\n    depends_on: [work]'
+    );
+    const store = createMockStore();
+    const cause = new Error('cancel record failed');
+    const nodeFailure = new Error('node storage offline');
+    let workStarts = 0;
+    let cancellationSettled = false;
+    store.cancelWorkflowRun = mock(async () => {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      cancellationSettled = true;
+      throw cause;
+    });
+    store.persistWorkflowEvent = mock(async event => {
+      if (
+        event.event_type === 'node_started' &&
+        event.step_name?.endsWith('__work') &&
+        ++workStarts === 1
+      )
+        throw nodeFailure;
+      await store.createWorkflowEvent(event);
+    });
+    mockLogFn.mockClear();
+    const pending = executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: {
+          name: 'mixed-composed',
+          nodes: [
+            {
+              id: 'fan',
+              kind: 'compose_fan_out',
+              include: 'compose-blk',
+              fan_out: { items: '["a","b"]', as: 'item', max_parallel: 2, join: 'all_done' },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('mixed-composed'),
+      })
+    );
+    await expect(pending).rejects.toMatchObject({ name: 'TerminalStatusWriteError', cause });
+    expect(workStarts).toBe(2);
+    expect(cancellationSettled).toBe(true);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(mockLogFn).toHaveBeenCalledWith(
+      { err: expect.objectContaining({ cause: nodeFailure }), workflowRunId: 'mixed-composed' },
+      'dag.join_secondary_failure'
+    );
+  });
+
+  it.each([false, true])(
+    'rejects composed all_done after inner storage rejection (cancellation=%s)',
+    async cancellation => {
+      await writeBlock(
+        `name: compose-blk\ndescription: body\nmutates_checkout: false\nnodes:\n  - id: work\n    ${cancellation ? 'cancel: stop' : 'bash: "echo done"'}`
+      );
+      const store = createMockStore();
+      const cause = new Error('inner storage failed');
+      if (cancellation)
+        store.cancelWorkflowRun = mock(async () => {
+          throw cause;
+        });
+      store.persistWorkflowEvent = mock(async event => {
+        if (
+          !cancellation &&
+          event.event_type === 'node_completed' &&
+          event.step_name?.endsWith('__work')
+        ) {
+          throw cause;
+        }
+        await store.createWorkflowEvent(event);
+      });
+      const error: unknown = await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow: {
+            name: 'composed-write-failure',
+            nodes: [
+              {
+                id: 'fan',
+                kind: 'compose_fan_out',
+                include: 'compose-blk',
+                fan_out: { items: '["a"]', as: 'item', max_parallel: 1, join: 'all_done' },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('composed-write-failure'),
+        })
+      ).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      expect(error).toBeInstanceOf(cancellation ? TerminalStatusWriteError : NodeEventWriteError);
+      if (!(error instanceof Error)) throw new Error('Expected storage rejection');
+      expect(error.cause).toBe(cause);
+      expect(
+        eventsOf(store).some(
+          event => event.event_type === 'node_completed' && event.step_name === 'fan'
+        )
+      ).toBe(false);
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
+
+  it('propagates child-result persistence rejection through workflow outcome handling', async () => {
+    await writeBlock(
+      'name: child-workflow\ndescription: child\nnodes:\n  - id: work\n    bash: "echo done"',
+      'child-workflow'
+    );
+    const store = createMockStore();
+    store.persistWorkflowEvent = mock(async event => {
+      if (event.event_type === 'node_completed' && event.step_name === 'child') {
+        throw new Error('child result storage rejected');
+      }
+      await store.createWorkflowEvent(event);
+    });
+    const runChildWorkflow = mock<RunChildWorkflowFn>(async () => ({
+      childRunId: 'completed-child',
+      status: 'completed',
+      output: 'done',
+    }));
+    await expect(
+      executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          runChildWorkflow,
+          workflow: {
+            name: 'child-result-write',
+            nodes: [{ id: 'child', kind: 'workflow', workflow: 'child-workflow' }],
+          },
+          workflowRun: makeWorkflowRun('child-result-write'),
+        })
+      )
+    ).rejects.toThrow('Could not persist node_completed for child: child result storage rejected');
+    expect(eventsOf(store).some(event => event.event_type === 'node_failed')).toBe(false);
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('stops new siblings when a paused child cancellation rolls back', async () => {
+    await writeBlock(
+      'name: child-workflow\ndescription: child\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: "echo done"',
+      'child-workflow'
+    );
+    const store = createMockStore();
+    store.cancelFanOutRun = mock(async () => {
+      throw new Error('child cancellation rolled back');
+    });
+    const runChildWorkflow = mock<RunChildWorkflowFn>(async () => ({
+      childRunId: 'paused-child',
+      status: 'paused',
+    }));
+    await expect(
+      executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          runChildWorkflow,
+          workflow: {
+            name: 'paused-cancel-failure',
+            nodes: [
+              {
+                id: 'fan',
+                kind: 'workflow',
+                workflow: 'child-workflow',
+                fan_out: { items: '["a", "b"]', max_parallel: 1, join: 'all_done' },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('paused-cancel-failure'),
+        })
+      )
+    ).rejects.toThrow('child cancellation rolled back');
+    expect(runChildWorkflow).toHaveBeenCalledTimes(1);
+    expect(store.cancelFanOutRun).toHaveBeenCalledTimes(1);
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+  });
+
   it('persists the instance snapshot before scheduling any body work', async () => {
     await writeBlock(
       'name: compose-blk\ndescription: test block\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: "echo spent"'
     );
     const store = createMockStore();
-    (store.persistWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>).mockRejectedValue(
-      new Error('disk full')
-    );
+    store.persistWorkflowEvent = mock(async event => {
+      if (event.event_type === 'fan_out_instances') throw new Error('disk full');
+      await store.createWorkflowEvent(event);
+    });
 
     await executeDagWorkflow(
       dagOptions({
@@ -32612,12 +33094,19 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
       'name: child-workflow\ndescription: child\ninputs:\n  item: { required: true }\nnodes:\n  - id: work\n    bash: "echo child-$INPUTS.item"',
       'child-workflow'
     );
-    const runChildWorkflow = mock<RunChildWorkflowFn>(async args => ({
-      childRunId: `child-${args.nodeId}`,
-      status: 'completed',
-      output: `child-${String(args.inputs?.item)}`,
-    }));
     const store = createMockStore();
+    const runChildWorkflow = mock<RunChildWorkflowFn>(async args => {
+      expect(
+        eventsOf(store)
+          .filter(event => event.step_name === args.nodeId)
+          .map(event => event.event_type)
+      ).toEqual(['node_started']);
+      return {
+        childRunId: `child-${args.nodeId}`,
+        status: 'completed',
+        output: `child-${String(args.inputs?.item)}`,
+      };
+    });
 
     await executeDagWorkflow(
       dagOptions({
@@ -32908,7 +33397,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     const store = createMockStore();
     let parentPaused = false;
     let claimCount = 0;
-    (store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>).mockImplementation(
+    (store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>).mockImplementation(
       async data => {
         if (data.event_type === 'node_completed' && data.step_name?.endsWith('__first')) {
           parentPaused = true;
@@ -32998,7 +33487,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     let parentPaused = false;
     let pauseOnInnerList = true;
     let claimCount = 0;
-    (store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>).mockImplementation(
+    (store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>).mockImplementation(
       async data => {
         if (
           pauseOnInnerList &&
@@ -33093,7 +33582,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     parentPaused = false;
     pauseOnInnerList = false;
     claimCount = 0;
-    (store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>).mockClear();
+    (store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>).mockClear();
 
     await executeDagWorkflow(
       dagOptions({
@@ -33147,7 +33636,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     const store = createMockStore();
     let parentPaused = false;
     let claimCount = 0;
-    (store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>).mockImplementation(
+    (store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>).mockImplementation(
       async data => {
         if (data.event_type === 'node_completed' && data.step_name?.endsWith('.first')) {
           parentPaused = true;
@@ -33239,7 +33728,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     );
     const store = createMockStore();
     let runStatus: WorkflowRunStatus = 'running';
-    (store.createWorkflowEvent as Mock<IWorkflowStore['createWorkflowEvent']>).mockImplementation(
+    (store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>).mockImplementation(
       async data => {
         if (data.event_type === 'node_completed' && data.step_name?.endsWith('__leaf-first')) {
           runStatus = 'cancelled';
@@ -34040,7 +34529,7 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
   async function run(
     store: MockWorkflowStore,
     platform: MockWorkflowPlatform,
-    nodes: ExecNode[],
+    nodes: DagNode[],
     emitted: string[]
   ): Promise<unknown> {
     const workflowRun = makeWorkflowRun('terminal-order-run');
@@ -34062,6 +34551,135 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
       unsubscribe();
     }
   }
+
+  it('mixed layer rejections preserve terminal rollback after successful siblings settle', async () => {
+    const store = createMockStore();
+    const cause = new Error('cancel record failed');
+    const nodeFailure = new Error('node storage offline');
+    let siblingSettled = false;
+    store.cancelWorkflowRun = mock(async () => {
+      throw cause;
+    });
+    store.persistWorkflowEvent = mock(async event => {
+      if (event.event_type === 'node_started' && event.step_name === 'ok') throw nodeFailure;
+      if (event.event_type === 'node_completed' && event.step_name === 'sibling') {
+        await new Promise(resolve => setTimeout(resolve, 5));
+        siblingSettled = true;
+      }
+      await store.createWorkflowEvent(event);
+    });
+    mockLogFn.mockClear();
+    await expect(
+      run(
+        store,
+        createMockPlatform(),
+        [okNode, { id: 'stop', kind: 'halt', reason: 'stop' }, { ...okNode, id: 'sibling' }],
+        []
+      )
+    ).rejects.toMatchObject({ name: 'TerminalStatusWriteError', cause });
+    expect(siblingSettled).toBe(true);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(mockLogFn).toHaveBeenCalledWith(
+      { err: expect.objectContaining({ cause: nodeFailure }), workflowRunId: 'terminal-order-run' },
+      'dag.join_secondary_failure'
+    );
+  });
+
+  it('propagates halt cancellation rollback without a compensating failure', async () => {
+    const store = createMockStore();
+    store.cancelWorkflowRun = mock(async () => {
+      throw new Error('cancel record failed');
+    });
+    await expect(
+      run(store, createMockPlatform(), [{ id: 'stop', kind: 'halt', reason: 'stop' }], [])
+    ).rejects.toThrow('Failed to persist terminal workflow status: cancel record failed');
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('awaits committed node lifecycle before the run terminal write', async () => {
+    const store = createMockStore();
+    const committed: string[] = [];
+    store.persistWorkflowEvent = mock(async event => {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      committed.push(event.event_type);
+    });
+    store.completeWorkflowRun = mock(async () => {
+      expect(committed).toEqual(['node_started', 'node_completed']);
+    });
+    await run(store, createMockPlatform(), [okNode], []);
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry or report success when node completion cannot be stored', async () => {
+    const store = createMockStore();
+    store.persistWorkflowEvent = mock(async event => {
+      if (event.event_type === 'node_completed') throw new Error('storage offline');
+    });
+    const emitted: string[] = [];
+    await expect(
+      run(
+        store,
+        createMockPlatform(),
+        [{ ...okNode, retry: { max_attempts: 2, on_error: 'all', delay_ms: 1 } }],
+        emitted
+      )
+    ).rejects.toThrow('Could not persist node_completed for ok: storage offline');
+    expect(
+      store.persistWorkflowEvent.mock.calls.filter(([event]) => event.event_type === 'node_started')
+    ).toHaveLength(1);
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    expect(emitted).not.toContain('node_completed');
+  });
+
+  it.each(['agent', 'script'] as const)(
+    'does not retry successful %s work when its completion write rejects',
+    async kind => {
+      const store = createMockStore();
+      const cause = new Error('completion storage rejected');
+      store.persistWorkflowEvent = mock(async event => {
+        if (event.event_type === 'node_completed') throw cause;
+        await store.createWorkflowEvent(event);
+      });
+      mockSendQueryDag.mockClear();
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'assistant', content: 'done' };
+        yield { type: 'result', sessionId: 'completion-test' };
+      });
+      mockGetAgentProviderDag.mockImplementation(() => ({
+        sendQuery: mockSendQueryDag,
+        getType: () => 'claude',
+        getCapabilities: mockClaudeCapabilities,
+      }));
+      const retry = { max_attempts: 2, on_error: 'all' as const, delay_ms: 1 };
+      const node: DagNode =
+        kind === 'agent'
+          ? { id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'finish once' }, retry }
+          : {
+              id: 'work',
+              kind: 'exec',
+              runtime: 'bun',
+              script:
+                'import { appendFileSync } from "node:fs"; appendFileSync("workload-count", "x"); console.log("done");',
+              retry,
+            };
+      const emitted: string[] = [];
+      await expect(run(store, createMockPlatform(), [node], emitted)).rejects.toMatchObject({
+        name: 'NodeEventWriteError',
+        cause,
+      });
+      if (kind === 'agent') expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      else expect(await readFile(join(testDir, 'workload-count'), 'utf8')).toBe('x');
+      expect(
+        store.persistWorkflowEvent.mock.calls.filter(
+          ([event]) => event.event_type === 'node_failed'
+        )
+      ).toHaveLength(0);
+      expect(emitted).not.toContain('node_completed');
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
 
   it('still emits workflow_completed and telemetry when the completion write rejects', async () => {
     const store = createMockStore();

@@ -1141,14 +1141,8 @@ async function main(): Promise<number> {
     if (command === 'workflow' && subcommand === 'test') {
       const target = positionals[2];
       try {
-        const [git, { workflowTestCommand }] = await Promise.all([
-          import('@archon/git'),
-          loadRoute(() => import('./commands/workflow')),
-        ]);
-        // Resolve to the repo root like the git gate below does, so project
-        // workflow discovery reads the repository, not a subdirectory of it.
-        const testCwd = requiresGitRepo ? ((await git.findRepoRoot(cwd)) ?? cwd) : cwd;
-        return await workflowTestCommand(testCwd, target, { json: jsonFlag, targetCwd: cwd });
+        const { workflowTestCommand } = await loadRoute(() => import('./commands/workflow'));
+        return await workflowTestCommand(cwd, target, { json: jsonFlag });
       } catch (error) {
         const err = error as Error;
         if (jsonFlag) {

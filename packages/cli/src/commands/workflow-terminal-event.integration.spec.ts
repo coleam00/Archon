@@ -1,6 +1,7 @@
+import { terminalRecordSchema } from '@archon/workflows/schemas/terminal-record';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { canonicalizeProjectPath } from '@archon/paths';
@@ -113,7 +114,7 @@ function readTerminalEvents(
 
 describe('detached workflow terminal database events', () => {
   test('persists one matching event before successful and failed owners exit', async () => {
-    const fixtureRoot = mkdtempSync(join(tmpdir(), 'archon-terminal-event-'));
+    const fixtureRoot = realpathSync(mkdtempSync(join(tmpdir(), 'archon-terminal-event-')));
     cleanupPaths.push(fixtureRoot);
     const archonHome = join(fixtureRoot, 'home');
     const projectRoot = join(fixtureRoot, 'project');
@@ -125,7 +126,27 @@ describe('detached workflow terminal database events', () => {
     );
     writeFileSync(
       join(workflowsDir, 'terminal-failure.yaml'),
-      'name: terminal-failure\ndescription: Detached terminal failure fixture.\nnodes:\n  - id: fail\n    bash: "echo failed >&2; exit 42"\n'
+      `name: terminal-failure
+description: Discoveries survive failure before reporting.
+returns: discover
+nodes:
+  - id: discover
+    bash: |
+      mkdir -p "$ARTIFACTS_DIR/discoveries"
+      echo finding > "$ARTIFACTS_DIR/discoveries/finding.md"
+      echo '{"found":true}'
+    output_format:
+      type: object
+      properties:
+        found: { type: boolean }
+      required: [found]
+  - id: fail
+    depends_on: [discover]
+    bash: "echo failed >&2; exit 42"
+  - id: report
+    depends_on: [fail]
+    bash: "echo should-not-run"
+`
     );
 
     const cliPath = resolve(import.meta.dir, '..', 'cli.ts');
@@ -218,6 +239,48 @@ describe('detached workflow terminal database events', () => {
       const data = JSON.parse(events[0]?.data ?? '{}') as Record<string, unknown>;
       if (fixture.status === 'completed') expect(data.duration_ms).toBeNumber();
       else expect(data.error).toContain('fail');
+      const record = terminalRecordSchema.parse(data.terminal_record);
+      expect(record.status).toBe(fixture.status);
+      expect(record.run_id).toBe(terminal.id);
+      if (fixture.status === 'failed') {
+        expect(record.first_failed_node).toBe('fail');
+        expect(record.nodes).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              node_id: 'report',
+              state: 'skipped',
+              cause: expect.any(Object),
+            }),
+          ])
+        );
+        expect(record.returns).toEqual({
+          availability: 'available',
+          node_id: 'discover',
+          value: { found: true },
+        });
+        expect(record.artifacts.files).toEqual(
+          expect.arrayContaining([expect.objectContaining({ path: 'discoveries/finding.md' })])
+        );
+        if (!record.artifacts.root) throw new Error('Expected recorded artifact root');
+        await removeTempTree(record.artifacts.root);
+      }
+      const detail = Bun.spawn(
+        [process.execPath, cliPath, 'workflow', 'get', terminal.id, '--json'],
+        {
+          cwd: projectRoot,
+          env: { ...process.env, ARCHON_HOME: archonHome },
+          stdout: 'pipe',
+          stderr: 'pipe',
+        }
+      );
+      const [detailCode, detailOut, detailErr] = await Promise.all([
+        detail.exited,
+        new Response(detail.stdout).text(),
+        new Response(detail.stderr).text(),
+      ]);
+      if (detailCode !== 0) throw new Error(`CLI get failed: ${detailErr || detailOut}`);
+      const result = JSON.parse(detailOut.trim()) as { terminal_record: unknown };
+      expect(result.terminal_record).toEqual(record);
     }
   }, 40_000);
 });

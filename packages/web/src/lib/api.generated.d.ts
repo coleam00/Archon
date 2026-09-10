@@ -4070,6 +4070,111 @@ export interface components {
         worker_platform_id?: string;
         parent_platform_id?: string;
         conversation_platform_id: string | null;
+        terminal_record: {
+          run_id: string;
+          /** @enum {string} */
+          status: 'completed' | 'failed' | 'cancelled';
+          /** @enum {string|null} */
+          outcome: 'succeeded' | 'failed' | null;
+          error: string | null;
+          first_failed_node: string | null;
+          nodes: {
+            node_id: string;
+            /** @enum {string} */
+            state: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+            error?: string;
+            /** @enum {string} */
+            reason?:
+              | 'prior_success'
+              | 'when_condition'
+              | 'when_condition_parse_error'
+              | 'trigger_rule'
+              | 'timeout';
+            cause?:
+              | {
+                  /** @enum {string} */
+                  kind: 'condition';
+                  expr: string;
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'condition_parse_error';
+                  expr: string;
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'timeout';
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'upstream_failed';
+                  origin: string;
+                }
+              | {
+                  /** @enum {string} */
+                  kind: 'upstream_skipped';
+                  origin: string;
+                };
+          }[];
+          returns:
+            | {
+                /** @enum {string} */
+                availability: 'available';
+                node_id: string;
+                value?: unknown;
+              }
+            | {
+                /** @enum {string} */
+                availability: 'unavailable';
+                node_id: string | null;
+                /** @enum {string} */
+                reason:
+                  | 'not_declared'
+                  | 'graph_unavailable'
+                  | 'node_not_completed'
+                  | 'output_not_persisted';
+              }
+            | {
+                /** @enum {string} */
+                availability: 'truncated';
+                node_id: string;
+                spill_path: string | null;
+                original_bytes: number | null;
+              };
+          artifacts: {
+            root: string | null;
+            files: {
+              path: string;
+              size: number;
+              metadata?: {
+                nodeId: string;
+                outputType: string;
+                loopGroupPath?: {
+                  groupId: string;
+                  iteration: number;
+                }[];
+                path: string;
+                runId: string;
+                /** Format: date-time */
+                producedAt: string;
+                size: number;
+                sessionId?: string;
+              };
+            }[];
+            limitations: {
+              path: string;
+              /** @enum {string} */
+              kind:
+                | 'missing'
+                | 'unreadable'
+                | 'invalid_metadata'
+                | 'link_excluded'
+                | 'unsupported_entry'
+                | 'root_unavailable';
+              code?: string;
+            }[];
+          };
+        } | null;
       };
       events: components['schemas']['WorkflowEvent'][];
     };

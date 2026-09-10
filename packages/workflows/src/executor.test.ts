@@ -3,6 +3,7 @@
  * Covers concurrent-run guards, model/provider resolution, and resume logic
  * that the inner dag-executor.test.ts cannot reach.
  */
+import { NodeEventWriteError } from './node-event-write';
 import { describe, it, expect, mock, beforeEach, spyOn } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -299,6 +300,30 @@ describe('executeWorkflow', () => {
     mockGetDefaultBranch.mockClear();
     mockGetDefaultBranch.mockImplementation(async () => 'main');
     mockExecuteDagWorkflow.mockImplementation(async () => undefined);
+  });
+
+  it.each([false, true])('persists loaded graph before DAG execution (resume=%s)', async resume => {
+    const store = makeStore();
+    const workflow = makeWorkflow({ returns: 'node1' });
+    mockExecuteDagWorkflow.mockImplementationOnce(async () => {
+      expect(store.updateWorkflowRun).toHaveBeenCalledWith(expect.any(String), {
+        metadata: {
+          terminal_graph: { node_ids: workflow.nodes.map(node => node.id), returns: 'node1' },
+        },
+      });
+      return undefined;
+    });
+    await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      workflow,
+      'msg',
+      'db-conv-1',
+      resume ? { preCreatedRun: makeRun(), priorCompletedNodes: new Map() } : {}
+    );
+    expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a structurally valid but semantically invalid outcome declaration before side effects', async () => {
@@ -1131,36 +1156,87 @@ describe('executeWorkflow', () => {
       expect(result.error).toContain('already active');
     });
 
-    it('still returns failure when guard self-cancel update throws (best-effort)', async () => {
-      const selfRun = makeRun({ id: 'self-run', status: 'pending' });
-      const otherRun = makeRun({ id: 'other-run', status: 'running' });
-      const updateSpy = mock(async (id: string) => {
-        // Self-cancel attempt fails — must not crash, must still surface
-        // the "in use" failure to the user.
-        if (id === 'self-run') throw new Error('Update failed');
-      });
-      const store = makeStore({
-        createWorkflowRun: mock(async () => selfRun),
-        getActiveWorkflowRunByPath: mock(async () => otherRun),
-        updateWorkflowRun: updateSpy,
-      });
-      const deps = makeDeps(store);
-
-      const result = await executeWorkflow(
-        deps,
-        makePlatform(),
-        'conv-1',
-        '/tmp',
-        makeWorkflow(),
-        'test',
-        'db-conv-1'
-      );
-
-      // Cleanup failure must not mask the "in use" outcome.
-      expect(result.success).toBe(false);
-      if (result.success) throw new Error('Expected checkout-lock rejection');
-      expect(result.error).toContain('already active');
-    });
+    it.each([false, true])(
+      'propagates self-cancellation rollback (lock query fails=%s)',
+      async queryFails => {
+        const selfRun = makeRun({ id: 'self-run', status: 'pending' });
+        const cause = new Error('self cancellation rolled back');
+        const order: string[] = [];
+        const messages: string[] = [];
+        const platform = makePlatform();
+        platform.sendMessage = mock(async (_conversationId, message) => {
+          messages.push(message);
+          order.push('notify');
+        });
+        const store = makeStore({
+          createWorkflowRun: mock(async () => selfRun),
+          getActiveWorkflowRunByPath: mock(async () => {
+            if (queryFails) throw new Error('lock lookup failed');
+            return makeRun({ id: 'other-run', status: 'running' });
+          }),
+          cancelWorkflowRun: mock(async () => {
+            order.push('cancel');
+            throw cause;
+          }),
+        });
+        const error: unknown = await executeWorkflow(
+          makeDeps(store),
+          platform,
+          'conv-1',
+          '/tmp',
+          makeWorkflow(),
+          'test',
+          'db-conv-1'
+        ).then(
+          () => undefined,
+          (error: unknown) => error
+        );
+        expect(error).toBeInstanceOf(TerminalStatusWriteError);
+        if (!(error instanceof TerminalStatusWriteError))
+          throw new Error('Expected terminal write rejection');
+        expect(error.cause).toBe(cause);
+        expect(order).toEqual(['notify', 'cancel']);
+        expect(messages[0]).toContain(
+          queryFails ? 'Unable to verify if another workflow is running' : 'This worktree is in use'
+        );
+        expect(store.cancelWorkflowRun).toHaveBeenCalledTimes(1);
+        expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      }
+    );
+    it.each([false, true])(
+      'still cancels after notification fails (lock query fails=%s)',
+      async queryFails => {
+        const order: string[] = [];
+        const store = makeStore({
+          getActiveWorkflowRunByPath: mock(async () => {
+            if (queryFails) throw new Error('lock lookup failed');
+            return makeRun({ id: 'other-run', status: 'running' });
+          }),
+          cancelWorkflowRun: mock(async () => {
+            order.push('cancel');
+            return { cancelled: true };
+          }),
+        });
+        const platform = makePlatform();
+        platform.sendMessage = mock(async () => {
+          order.push('notify');
+          throw new Error('unauthorized');
+        });
+        const result = await executeWorkflow(
+          makeDeps(store),
+          platform,
+          'conv-1',
+          '/tmp',
+          makeWorkflow(),
+          'test',
+          'db-conv-1'
+        );
+        expect(result.success).toBe(false);
+        expect(order).toEqual(['notify', 'cancel']);
+        expect(store.cancelWorkflowRun).toHaveBeenCalledTimes(1);
+        expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      }
+    );
   });
 
   // -------------------------------------------------------------------------
@@ -3635,6 +3711,34 @@ describe('telemetry wiring', () => {
     expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
     expect(store.createWorkflowEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'workflow_failed' })
+    );
+  });
+
+  it('records a run failure when durable node evidence cannot be stored', async () => {
+    mockExecuteDagWorkflow.mockRejectedValueOnce(
+      new NodeEventWriteError(
+        {
+          workflow_run_id: 'run-1',
+          event_type: 'node_failed',
+          step_name: 'build',
+          data: { error: 'build exited 3' },
+        },
+        new Error('storage unavailable')
+      )
+    );
+    const store = makeStore();
+    await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-1',
+      '/tmp',
+      makeWorkflow(),
+      'msg',
+      'db-conv-1'
+    );
+    expect(store.failWorkflowRun).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining('storage unavailable; original node failure: build exited 3')
     );
   });
 

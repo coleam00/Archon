@@ -617,18 +617,11 @@ nodes:
         printf '%s\n' "flip-ready: PR was flipped but its URL could not be read back." >&2
         exit 1
       fi
-    # Every failable ancestor is a DIRECT dependency, deliberately: the
-    # engine's default rule turns a failed ancestor into a skipped dependent
-    # at the very next hop, so a join that only names the tail of a chain
-    # never sees the chain's gates fail. Naming every gate ancestor here —
-    # await-checks, the convergence loop, the re-wait, gate-validated,
-    # gate-ready, and validate — is what makes their failures block the flip
-    # instead of skipping past it. The trigger rule lets the green path's
-    # SKIPPED nodes pass — the convergence pass and its re-wait, and a resync
-    # skipped because the initial review was ready — while a FAILED one still
-    # blocks. ci-verdict always runs, anchoring the rule's one required
-    # success. sync-pr-body stays named for the no-CI repo, where the waits
-    # return immediately and the flip could otherwise beat the resync.
+    # Failure-cascade skips now block this join, so failed ancestors no longer
+    # need to be named directly. Keep the existing dependency list until the
+    # pack cleanup in #3127. Condition-skipped branches remain admissible, and
+    # ci-verdict supplies the required success. sync-pr-body orders the flip
+    # after the resync even when CI waits return immediately.
     depends_on:
       [await-checks, ci-verdict, ci-corrections, await-fix-checks, ci-attention-route,
        ci-attention, sync-pr-body,
