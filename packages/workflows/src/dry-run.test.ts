@@ -2515,6 +2515,30 @@ describe('dryRunWorkflow — effective provider/model per node', () => {
     });
   });
 
+  test('reports a loop_group body node against the group own resolved model', async () => {
+    // The executor builds the body's context from the group's resolved provider and
+    // model, so a body node declaring neither inherits the GROUP's, not the enclosing
+    // workflow's. A dry run that reported the workflow's would name a model the run
+    // never uses.
+    const byId = await trace([
+      {
+        id: 'group',
+        model: 'large',
+        loop_group: {
+          until_bash: 'exit 0',
+          max_iterations: 1,
+          nodes: [{ id: 'body', prompt: 'p' }],
+        },
+      },
+    ]);
+
+    const group = byId.get('group');
+    const body = byId.get('body');
+    expect(body).toBeDefined();
+    expect(body?.model).toBe(group?.model);
+    expect(body?.provider).toBe(group?.provider);
+  });
+
   test('reports a provider/model conflict the real run would warn about', async () => {
     // The node names one provider while its tier ref resolves to another. A real run warns
     // and uses the resolved one; the dry run reports the outcome AND the reason.
