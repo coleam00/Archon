@@ -717,6 +717,7 @@ async function executeCodeNode(
       timeout: node.timeout ?? 300_000,
       env: {
         ...process.env,
+        PYTHONDONTWRITEBYTECODE: '1',
         PWD: ctx.execWorkspace,
         OLDPWD: ctx.execWorkspace,
         ...inputEnv,

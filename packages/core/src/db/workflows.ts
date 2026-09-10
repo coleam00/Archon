@@ -36,6 +36,7 @@ import type {
   WorkflowResumeCursor,
   WorkflowWaitCompletion,
   WorkflowWaitPause,
+  NodeStateEventInput,
 } from '@archon/workflows/store';
 import { FAN_OUT_CANCEL_REASONS } from '@archon/workflows/store';
 
@@ -1525,7 +1526,7 @@ export async function clearWorkflowWaitContext(
   id: string,
   waitContext: WorkflowWaitContext,
   completion: WorkflowWaitCompletion
-): Promise<{ cleared: boolean }> {
+): Promise<{ cleared: false } | { cleared: true; nodeEvent: NodeStateEventInput }> {
   const nodeExpr =
     getDatabaseType() === 'postgresql'
       ? "metadata->'wait'->>'nodeId'"
@@ -1552,7 +1553,7 @@ export async function clearWorkflowWaitContext(
         step_name: completion.stepName,
         data: completion.result,
       });
-      await insertWorkflowEvent(query, {
+      const nodeEvent: NodeStateEventInput = {
         workflow_run_id: id,
         event_type: 'node_completed',
         step_name: completion.stepName,
@@ -1562,8 +1563,9 @@ export async function clearWorkflowWaitContext(
           node_output: JSON.stringify(completion.result),
           structured_output: completion.result,
         },
-      });
-      return { cleared: true };
+      };
+      await insertWorkflowEvent(query, nodeEvent);
+      return { cleared: true, nodeEvent };
     });
   } catch (error) {
     const err = error as Error;

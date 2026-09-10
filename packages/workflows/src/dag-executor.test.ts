@@ -245,7 +245,15 @@ function createMockStore(): MockWorkflowStore {
       async (_id, _waitContext, _error) => ({ failed: true })
     ),
     clearWorkflowWaitContext: mock<IWorkflowStore['clearWorkflowWaitContext']>(
-      async (_id, _waitContext) => ({ cleared: true })
+      async (id, _waitContext, completion) => ({
+        cleared: true,
+        nodeEvent: {
+          workflow_run_id: id,
+          event_type: 'node_completed',
+          step_name: completion.stepName,
+          data: { type: 'wait', duration_ms: completion.result.waited_ms },
+        },
+      })
     ),
     rewriteApprovalContext: mock<IWorkflowStore['rewriteApprovalContext']>(
       async (_id, _approvalContext) => ({ resolved: true })
@@ -34715,5 +34723,313 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
     expect(emitted).toContain('workflow_failed');
     const sent = platform.sendMessage.mock.calls.map(c => c[1]);
     expect(sent.some(m => m.includes('completed with failures'))).toBe(true);
+  });
+});
+
+describe('executeDagWorkflow -- unified node-state sinks (#3255)', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-unified-sinks-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await removeTempTree(testDir);
+  });
+
+  it('retains cause on trigger_rule skip in the transcript', async () => {
+    const store = createMockStore();
+    const logDir = join(testDir, 'trigger-rule-logs');
+    const workflowRun = makeWorkflowRun('trigger-rule-run');
+
+    const failingNode: DagNode = {
+      id: 'step1',
+      kind: 'exec',
+      runtime: 'sh',
+      script: 'exit 1',
+    };
+    const dependentNode: DagNode = {
+      id: 'step2',
+      kind: 'exec',
+      runtime: 'sh',
+      script: 'echo done',
+      depends_on: ['step1'],
+      trigger_rule: 'all_success',
+    };
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflowRun,
+        logDir,
+        workflow: {
+          name: 'trigger-rule-workflow',
+          nodes: [failingNode, dependentNode],
+        },
+      })
+    );
+
+    const rows = await readTranscript(logDir, workflowRun.id);
+    const skipRow = rows.find(r => r.type === 'node_skipped' && r.step === 'step2');
+    expect(skipRow).toBeDefined();
+    expect(skipRow?.content).toBe('trigger_rule');
+    expect(skipRow?.cause).toEqual({ kind: 'upstream_failed', origin: 'step1' });
+  });
+
+  it('the seven functions emit transcript rows: child workflow, fan-out, loop group, durable wait produce completions in transcript', async () => {
+    await mkdir(join(testDir, '.archon', 'workflows'), { recursive: true });
+    await writeFile(
+      join(testDir, '.archon', 'workflows', 'dummy-child-fanout.yaml'),
+      'name: dummy-child-fanout\ndescription: dummy child\nmutates_checkout: false\nnodes:\n  - id: inner\n    bash: echo child\n'
+    );
+
+    const store = createMockStore();
+    const logDir = join(testDir, 'four-completions-logs');
+    const persistedWait = {
+      owner: 'node' as const,
+      nodeId: 'wait-node',
+      kind: 'attention' as const,
+      message: 'continue',
+      waitingSince: '2026-08-23T00:00:00.000Z',
+    };
+    const workflowRun = makeWorkflowRun('four-completions-run', {
+      metadata: { wait: persistedWait },
+    });
+
+    const waitNode: DagNode = {
+      id: 'wait-node',
+      kind: 'wait',
+      wait: { attention: 'continue' },
+    };
+    const childNode: DagNode = {
+      id: 'child-node',
+      kind: 'workflow',
+      workflow: 'dummy-child',
+      depends_on: ['wait-node'],
+    };
+    const fanOutNode: DagNode = {
+      id: 'fanout-node',
+      kind: 'workflow',
+      workflow: 'dummy-child-fanout',
+      depends_on: ['child-node'],
+      fan_out: {
+        items: '["item1", "item2"]',
+        max_parallel: 2,
+        join: 'all_success',
+      },
+    };
+    const loopGroupNode: DagNode = {
+      id: 'loop-group-node',
+      kind: 'loop_group',
+      depends_on: ['fanout-node'],
+      loop_group: {
+        max_iterations: 1,
+        fresh_context: true,
+        until: 'DONE',
+        nodes: [
+          {
+            id: 'inner',
+            kind: 'exec',
+            runtime: 'sh',
+            script: 'echo DONE',
+          },
+        ],
+      },
+    };
+
+    const runChildWorkflow = mock(async (args: any) => ({
+      status: 'completed' as const,
+      output: 'child-output',
+      childRunId: `subrun-${args.nodeId ?? 'child'}`,
+    }));
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflowRun,
+        logDir,
+        runChildWorkflow,
+        workflow: {
+          name: 'all-four-completions',
+          nodes: [waitNode, childNode, fanOutNode, loopGroupNode],
+        },
+      })
+    );
+
+    const rows = await readTranscript(logDir, workflowRun.id);
+    const completeSteps = rows.filter(r => r.type === 'node_complete').map(r => r.step);
+
+    expect(completeSteps).toContain('wait-node');
+    expect(completeSteps).toContain('child-node');
+    expect(completeSteps).toContain('fanout-node');
+    expect(completeSteps).toContain('loop-group-node');
+  });
+
+  it('assertCheckoutUntouched writes node_error transcript row on mutates_checkout failure', async () => {
+    await git.execFileAsync('git', ['init', '-q'], { cwd: testDir });
+    await git.execFileAsync(
+      'git',
+      ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'init', '--allow-empty'],
+      { cwd: testDir }
+    );
+
+    const store = createMockStore();
+    const logDir = join(testDir, 'untouched-logs');
+    const workflowRun = makeWorkflowRun('untouched-run');
+
+    const violatingNode: DagNode = {
+      id: 'violator',
+      kind: 'exec',
+      runtime: 'sh',
+      script: 'touch modified-file.txt',
+      mutates_checkout: false,
+    };
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflowRun,
+        logDir,
+        workflow: {
+          name: 'violator-workflow',
+          nodes: [violatingNode],
+        },
+      })
+    );
+
+    const rows = await readTranscript(logDir, workflowRun.id);
+    const errorRow = rows.find(r => r.type === 'node_error' && r.step === 'violator');
+    expect(errorRow).toBeDefined();
+    expect(String(errorRow?.error)).toContain(
+      'declared `mutates_checkout: false` but modified the working tree'
+    );
+  });
+
+  it('executeWorkflowNode writes node_error to transcript on failure', async () => {
+    const store = createMockStore();
+    const logDir = join(testDir, 'sub-fail-logs');
+    const workflowRun = makeWorkflowRun('sub-fail-run');
+
+    const failingChildNode: DagNode = {
+      id: 'failing-sub',
+      kind: 'workflow',
+      workflow: 'bad-child',
+    };
+
+    const runChildWorkflow = mock(async () => ({
+      status: 'failed' as const,
+      output: '',
+      error: 'child failed deliberately',
+      childRunId: 'subrun-fail',
+    }));
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflowRun,
+        logDir,
+        runChildWorkflow,
+        workflow: {
+          name: 'failing-sub-workflow',
+          nodes: [failingChildNode],
+        },
+      })
+    );
+
+    const rows = await readTranscript(logDir, workflowRun.id);
+    const errorRow = rows.find(r => r.type === 'node_error' && r.step === 'failing-sub');
+    expect(errorRow).toBeDefined();
+    expect(errorRow?.error).toBe('child failed deliberately');
+  });
+
+  it('persisted data payloads are unchanged and rebuild identical node state across resume', async () => {
+    const store = createMockStore();
+    const logDir = join(testDir, 'resume-fixture-logs');
+    const workflowRun = makeWorkflowRun('resume-fixture-run');
+
+    const node1: DagNode = {
+      id: 'producer',
+      kind: 'exec',
+      runtime: 'sh',
+      script: 'echo producer-output',
+    };
+    const node2: DagNode = {
+      id: 'consumer',
+      kind: 'exec',
+      runtime: 'sh',
+      script: 'echo consumer-output',
+      depends_on: ['producer'],
+    };
+
+    // Run first pass
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflowRun,
+        logDir,
+        workflow: {
+          name: 'resume-fixture-wf',
+          nodes: [node1, node2],
+        },
+      })
+    );
+
+    // Collect persisted node_completed event for producer
+    const producerEvent = store.persistWorkflowEvent.mock.calls
+      .map(([event]) => event)
+      .find(e => e.event_type === 'node_completed' && e.step_name === 'producer');
+
+    expect(producerEvent).toBeDefined();
+    expect(producerEvent?.data).toMatchObject({
+      type: 'bash',
+      node_output: 'producer-output',
+    });
+
+    // Simulate resume using the exact persisted data
+    const snapshotStore = createMockStore();
+    (
+      snapshotStore.getDagResumeSnapshot as Mock<IWorkflowStore['getDagResumeSnapshot']>
+    ).mockResolvedValue({
+      completedNodeOutputs: new Map([
+        ['producer', { output: producerEvent!.data!.node_output as string }],
+      ]),
+      fanOutSnapshots: new Map(),
+      unresolvedNodeStarts: new Set(),
+      costUsd: 0,
+    });
+
+    const resumedRun = makeWorkflowRun('resume-fixture-run-resumed');
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(snapshotStore),
+        cwd: testDir,
+        workflowRun: resumedRun,
+        logDir: join(testDir, 'resume-fixture-logs-2'),
+        priorCompletedNodes: new Map([
+          ['producer', { output: producerEvent!.data!.node_output as string }],
+        ]),
+        workflow: {
+          name: 'resume-fixture-wf',
+          nodes: [node1, node2],
+        },
+      })
+    );
+
+    // Producer was skipped due to prior success, consumer completed
+    const resumedEvents = snapshotStore.persistWorkflowEvent.mock.calls.map(([e]) => e);
+    const priorSuccess = resumedEvents.find(
+      e => e.event_type === 'node_skipped_prior_success' && e.step_name === 'producer'
+    );
+    expect(priorSuccess).toBeDefined();
+    expect(priorSuccess?.data?.reason).toBe('prior_success');
   });
 });

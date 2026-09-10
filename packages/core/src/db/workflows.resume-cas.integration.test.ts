@@ -987,7 +987,7 @@ describe('durable wait continuation races — real SQLite', () => {
         stepName: 'rerun-ci',
         result: { status: 'satisfied', waited_ms: 1000 },
       })
-    ).resolves.toEqual({ cleared: true });
+    ).resolves.toMatchObject({ cleared: true });
 
     const attentionB = {
       ...attentionA,

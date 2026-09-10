@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import * as archonPaths from '@archon/paths';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
@@ -16,7 +17,22 @@ import { buildAiProfile } from './model-validation';
 import { resolveWorkflowModelScope } from './node-model-resolution';
 import { expandWorkflowIncludes } from './include-expander';
 import type { ResolvedWorkflow, WorkflowDefinition } from './schemas';
-import { captureWorkflowSource, capturedSourceRoots } from './workflow-source';
+import { captureWorkflowSource, capturedSourceRoots, loadWorkflowSource } from './workflow-source';
+
+// These fixtures read only project files. Avoid copying the repository's bundled
+// defaults into every capture; the materialization suite covers bundled content.
+async function captureProjectSource(options: Parameters<typeof captureWorkflowSource>[0]) {
+  const bundled = join(options.sourceRoot, 'empty-bundled', 'defaults');
+  mkdirSync(bundled, { recursive: true });
+  const workflows = spyOn(archonPaths, 'getDefaultWorkflowsPath').mockReturnValue(bundled);
+  const commands = spyOn(archonPaths, 'getDefaultCommandsPath').mockReturnValue(bundled);
+  try {
+    return await captureWorkflowSource(options);
+  } finally {
+    workflows.mockRestore();
+    commands.mockRestore();
+  }
+}
 
 function asResolvedWorkflow(workflow: WorkflowDefinition | ResolvedWorkflow): ResolvedWorkflow {
   return 'plan' in workflow ? workflow : resolveWorkflow(workflow);
@@ -511,7 +527,7 @@ describe('dryRunWorkflow', () => {
     temporaryDirectories.push(cwd);
     mkdirSync(join(cwd, '.archon', 'commands'), { recursive: true });
     writeFileSync(join(cwd, '.archon', 'commands', 'inspect.md'), 'original');
-    const capture = await captureWorkflowSource({
+    const capture = await captureProjectSource({
       sourceRoot: cwd,
       captureRoot: join(cwd, 'capture'),
     });
@@ -546,7 +562,7 @@ describe('dryRunWorkflow', () => {
     temporaryDirectories.push(cwd);
     mkdirSync(join(cwd, '.archon', 'commands'), { recursive: true });
     writeFileSync(join(cwd, '.archon', 'commands', 'unused.md'), 'original');
-    const capture = await captureWorkflowSource({
+    const capture = await captureProjectSource({
       sourceRoot: cwd,
       captureRoot: join(cwd, 'capture'),
     });
@@ -569,13 +585,52 @@ describe('dryRunWorkflow', () => {
     expect(result.outcome).toBe('completed');
   });
 
+  test('Python shared imports leave the frozen source unchanged in executable fixtures', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'archon-dry-run-python-shared-'));
+    temporaryDirectories.push(cwd);
+    const pack = join(cwd, '.archon', 'workflows', 'test-pack');
+    mkdirSync(join(pack, '.shared'), { recursive: true });
+    mkdirSync(join(pack, 'flow', 'scripts'), { recursive: true });
+    writeFileSync(join(pack, '.shared', 'value.py'), 'value = "shared-ok"\n');
+    writeFileSync(
+      join(pack, 'flow', 'scripts', 'read.py'),
+      [
+        'from pathlib import Path',
+        'import sys',
+        'sys.path.insert(0, str(Path(__file__).resolve().parents[2] / ".shared"))',
+        'from value import value',
+        'sys.stdout.write(value)',
+      ].join('\n')
+    );
+    const capture = await captureProjectSource({
+      sourceRoot: cwd,
+      captureRoot: join(cwd, 'capture'),
+    });
+    const script = '__archon_pack__project:test-pack:flow::read';
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'shared-import',
+        nodes: [{ id: 'read', script, runtime: 'uv' }],
+      }),
+      userMessage: '',
+      cwd,
+      sourceRoots: capturedSourceRoots(capture.anchor),
+      execCode: true,
+    });
+    expect(result.outcome).toBe('completed');
+    expect(result.trace.find(entry => entry.nodeId === 'read')?.output).toBe('shared-ok');
+    await expect(
+      loadWorkflowSource(capture.anchor.root, capture.manifest.digest)
+    ).resolves.toBeDefined();
+  });
+
   test('rechecks a named script after an earlier node changes the capture', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'archon-dry-run-capture-'));
     temporaryDirectories.push(cwd);
     const scriptDir = join(cwd, '.archon', 'scripts');
     mkdirSync(scriptDir, { recursive: true });
     writeFileSync(join(scriptDir, 'inspect.ts'), 'console.log("original")');
-    const capture = await captureWorkflowSource({
+    const capture = await captureProjectSource({
       sourceRoot: cwd,
       captureRoot: join(cwd, 'capture'),
     });
@@ -616,7 +671,7 @@ describe('dryRunWorkflow', () => {
       const commandDir = join(cwd, '.archon', 'commands');
       mkdirSync(commandDir, { recursive: true });
       writeFileSync(join(commandDir, 'inspect.md'), 'original');
-      const capture = await captureWorkflowSource({
+      const capture = await captureProjectSource({
         sourceRoot: cwd,
         captureRoot: join(cwd, 'capture'),
       });

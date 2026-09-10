@@ -91,6 +91,9 @@ nodes:
   # reviewer judges the prior report and correction delta.
   - id: classify
     command: classify-review-scope
+    # This workflow declares no top-level model, so every AI node here names its
+    # own tier. Choosing between two booleans off a diff is small-tier work.
+    model: small
     depends_on: [pr]
     mutates_checkout: false
     output_type: review-scope

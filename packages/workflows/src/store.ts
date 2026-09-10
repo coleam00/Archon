@@ -353,12 +353,17 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
     waitContext: WorkflowAttentionWaitContext,
     error: string
   ): Promise<{ failed: boolean }>;
-  /** Consume the exact wait cursor and persist its completion snapshot atomically. */
+  /**
+   * Consume the exact wait cursor and persist its completion snapshot atomically. The
+   * node's `node_completed` row is written inside that transaction, so the store hands
+   * it back: the caller derives the transcript and emitter from the row that exists
+   * rather than rebuilding it (#3255).
+   */
   clearWorkflowWaitContext(
     id: string,
     waitContext: WorkflowWaitContext,
     completion: WorkflowWaitCompletion
-  ): Promise<{ cleared: boolean }>;
+  ): Promise<{ cleared: false } | { cleared: true; nodeEvent: NodeStateEventInput }>;
   /**
    * Rewrite the approval context of an ALREADY-paused, still-open gate — unlike
    * `pauseWorkflowRun`, which requires the run to currently be `'running'` and so
