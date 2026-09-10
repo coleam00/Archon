@@ -9,7 +9,8 @@
  * left out of here, each with its reason.
  *
  * Checks run in declaration order and the run stops at the first failure, so the list is ordered
- * roughly cheapest first: a type error surfaces in seconds rather than after the test suite.
+ * roughly cheapest first: a type error surfaces in seconds rather than after the test suite. The
+ * two exceptions are the last two entries, and their comment says why they sit there.
  */
 import { resolve } from 'node:path';
 
@@ -76,16 +77,6 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
     command: ['bun', 'run', 'format:check'],
   },
   {
-    id: 'workflow-fixtures',
-    label: 'Every workflow fixture reaches its expected outcome under dry-run',
-    command: ['bun', 'run', 'cli', 'workflow', 'test'],
-  },
-  {
-    id: 'docs-build',
-    label: 'The docs site builds',
-    command: ['bun', 'run', 'build:docs'],
-  },
-  {
     id: 'installer',
     label: 'Install script, against a mocked download',
     command: ['bun', 'run', 'test:install'],
@@ -97,6 +88,24 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
     id: 'tests',
     label: 'Test suite, per-package isolation preserved',
     command: ['bun', 'run', 'test'],
+  },
+  // The two heavy filesystem checks run LAST, after the suite, and that ordering is
+  // load-bearing on Windows. Running them first put 48 workflow captures (a tree created and
+  // deleted each) and an Astro build immediately before a suite whose own slowest tests copy
+  // trees in %TEMP% and spawn `bun`/`git`: the suite stayed the same speed overall (median
+  // 0.87x of the same run on dev, 2612 tests compared) but its tail blew Bun's 5s per-test
+  // budget — one timeout in each of two runs, on tests that cost 350ms on dev, against zero
+  // timeouts in six dev runs. Put them back in front only with Windows evidence that the tail
+  // holds.
+  {
+    id: 'workflow-fixtures',
+    label: 'Every workflow fixture reaches its expected outcome under dry-run',
+    command: ['bun', 'run', 'cli', 'workflow', 'test'],
+  },
+  {
+    id: 'docs-build',
+    label: 'The docs site builds',
+    command: ['bun', 'run', 'build:docs'],
   },
 ];
 
