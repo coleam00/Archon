@@ -55,6 +55,30 @@ above have not happened either, and both are worth their few lines. The question
 whether the guard is protecting *this node's own action*, or restating something
 that was already true when the node started.
 
+## Deterministic scripts
+
+Every `script:` node here is TypeScript on Bun, under its own component's
+`scripts/` directory. Logic more than one of them needs lives once in
+[`.shared/`](.shared), imported by relative path with the extension written
+(`../../.shared/report.ts`). That directory is reserved for modules: nothing in it
+is a workflow or a named script target, and a node that names one fails at load.
+
+The repository validates them where they live. `.archon/workflows/tsconfig.json`
+is the owning configuration — `bun run type-check` compiles that project, and both
+`eslint.config.mjs` and `scripts/lint.ts` derive their globs from its `include`
+rather than restating them. A script placed outside those globs fails
+`pack-scripts.test.ts` rather than going quietly unchecked.
+
+Two rules the runtime imposes:
+
+- **Never call `process.exit()`.** Bun leaves without draining stdout — a 500 KB
+  write to a pipe arrives as 131072 bytes, silently. Set `process.exitCode` and
+  return; `.shared/io.ts` is the only place that should need to know this.
+- **Nothing the target project provides is available.** No `package.json`, no
+  `node_modules`, no `tsconfig.json`, no npm dependency. Relative imports within
+  the pack and the standard library are the whole surface, which is what keeps
+  these workflows runnable against a project in any language.
+
 ## Evidence never carries credentials
 
 The engine retains what every exec node prints, so a node's output is the record

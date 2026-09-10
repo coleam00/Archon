@@ -3,6 +3,6 @@
 plan:
   ready: false
   summary: "stub: blocked on missing intent — the plan names the owner's open question"
-assert-intact: '{"intact":"true"}'
+  report: { type: archon_artifact, run_id: "fixture-run", path: "plan.md" }
 fixture:
   expect: completed

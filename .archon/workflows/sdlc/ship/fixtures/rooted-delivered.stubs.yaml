@@ -14,11 +14,11 @@
 triage__triage:
   route: investigate
   summary: "stub: current evidence leaves the causal chain unresolved"
-triage__assert-intact: '{"intact":"true"}'
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
 inv__investigate:
   rooted: true
   summary: "stub: cause established — report at investigation.md"
-inv__assert-intact: '{"intact":"true"}'
+  report: { type: archon_artifact, run_id: "fixture-run", path: "investigation.md" }
 gate-rooted: '{"gate":"rooted"}'
 deliver__gate-validated: '{"gate":"green"}'
 deliver__impl__record-start: '{"start":"recorded"}'

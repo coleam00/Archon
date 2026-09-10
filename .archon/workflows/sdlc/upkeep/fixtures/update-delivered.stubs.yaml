@@ -10,8 +10,7 @@
 assess:
   action: update
   summary: "stub: locked 1.2.3, target 1.2.9 admitted by the constraint, two usage sites, no breaking changes apply"
-assert-intact: '{"intact":"true"}'
-gate-update: '{"gate":"update"}'
+  report: { type: archon_artifact, run_id: "fixture-run", path: "upkeep-assessment.md" }
 deliver__impl__implement:
   done: true
   green: true

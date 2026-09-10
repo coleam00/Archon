@@ -47,18 +47,15 @@ nodes:
           type: boolean
         summary:
           type: string
-      required: [ready, summary]
-
-  # Deterministic on both promises: a pleasant summary is not a plan, and an
-  # advisory run must not mutate the checkout (advisory agents resetting user
-  # work is a lived failure mode, not a hypothetical).
-  - id: assert-intact
-    bash: |
-      # Tree-intactness is engine-enforced via mutates_checkout: false above;
-      # what remains is the evidence contract.
-      if [ ! -s "$ARTIFACTS_DIR/plan.md" ]; then
-        echo "assert-intact: the run completed but wrote no plan.md — a summary is not a plan." >&2
-        exit 1
-      fi
-      echo '{"intact":"true"}'
-    depends_on: [plan]
+        report:
+          # The evidence contract, enforced by the engine at this node. A pointer
+          # that names a file this run did not write is refused here, so a verdict
+          # can no longer arrive without the report behind it. Four copies of a
+          # `test -s` node used to check this one hop later.
+          type: object
+          properties:
+            type: { type: string, enum: [archon_artifact] }
+            run_id: { type: string }
+            path: { type: string, enum: [plan.md] }
+          required: [type, run_id, path]
+      required: [ready, summary, report]

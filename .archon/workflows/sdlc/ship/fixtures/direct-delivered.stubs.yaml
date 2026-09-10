@@ -11,6 +11,7 @@
 triage__triage:
   route: deliver
   summary: "stub: current code confirms a complete work order"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
 gate-direct: '{"gate":"direct"}'
 deliver__impl__implement:
   done: true
@@ -37,7 +38,6 @@ fixture:
   resolved-text-contains:
     triage__triage: "target):\n\n\n\nThe operator's request"
 exec-code: true
-triage__assert-intact: '{"intact":"true"}'
 deliver__gate-ready: '{"gate":"ready"}'
 deliver__impl__record-start: '{"start":"recorded"}'
 deliver__gate-validated: '{"gate":"green"}'

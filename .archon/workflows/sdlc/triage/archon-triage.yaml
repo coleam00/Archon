@@ -38,16 +38,15 @@ nodes:
           enum: [investigate, plan, deliver, no_action]
         summary:
           type: string
-      required: [route, summary]
-
-  - id: assert-intact
-    bash: |
-      # Tree-intactness is engine-enforced via mutates_checkout: false above;
-      # what remains here is the evidence contract: a route without a written
-      # triage.md is not a triage.
-      if [ ! -s "$ARTIFACTS_DIR/triage.md" ]; then
-        echo "assert-intact: the run completed but wrote no triage.md — a route without evidence is not a triage." >&2
-        exit 1
-      fi
-      echo '{"intact":"true"}'
-    depends_on: [triage]
+        report:
+          # The evidence contract, enforced by the engine at this node. A pointer
+          # that names a file this run did not write is refused here, so a verdict
+          # can no longer arrive without the report behind it. Four copies of a
+          # `test -s` node used to check this one hop later.
+          type: object
+          properties:
+            type: { type: string, enum: [archon_artifact] }
+            run_id: { type: string }
+            path: { type: string, enum: [triage.md] }
+          required: [type, run_id, path]
+      required: [route, summary, report]

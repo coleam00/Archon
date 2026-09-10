@@ -43,8 +43,8 @@ if (action === undefined) {
   });
 } else if (delivered === 'null') {
   refuse(
-    "outcome: the assessment chose 'update' but the spend gate never " +
-      'passed — see the assessment stage.' +
+    "outcome: the assessment chose 'update' but delivery never ran — " +
+      "see the run's terminal record for the node it stopped at." +
       caveats(artifacts, { failed: true })
   );
 } else {
