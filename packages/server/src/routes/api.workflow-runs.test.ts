@@ -1,3 +1,4 @@
+import { terminalRecordSchema } from '@archon/workflows/schemas/terminal-record';
 import { describe, test, expect, mock, beforeAll, beforeEach, afterEach } from 'bun:test';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -1391,6 +1392,60 @@ describe('GET /api/workflows/runs/:runId', () => {
     expect(body.events.length).toBe(3);
     expect(body.events[0]?.event_type).toBe('step_started');
     expect(body.events[2]?.event_type).toBe('tool_called');
+  });
+
+  test('exposes the persisted terminal record and suppresses it during resumed execution', async () => {
+    const terminalRecord = terminalRecordSchema.parse({
+      run_id: MOCK_FAILED_RUN.id,
+      status: 'failed',
+      outcome: null,
+      error: 'producer failed',
+      first_failed_node: 'producer',
+      nodes: [{ node_id: 'producer', state: 'failed', error: 'producer failed' }],
+      returns: { availability: 'unavailable', node_id: 'producer', reason: 'node_not_completed' },
+      artifacts: {
+        root: '/deleted/artifacts',
+        files: [{ path: 'discoveries/finding.md', size: 7 }],
+        limitations: [],
+      },
+    });
+    for (const status of ['failed', 'running'] as const) {
+      mockGetWorkflowRun.mockImplementationOnce(async () => ({ ...MOCK_FAILED_RUN, status }));
+      mockListWorkflowEvents.mockImplementationOnce(async () => [
+        {
+          id: 'terminal-event',
+          workflow_run_id: MOCK_FAILED_RUN.id,
+          event_type: 'workflow_failed',
+          step_index: null,
+          step_name: null,
+          data: { terminal_record: terminalRecord },
+          created_at: new Date().toISOString(),
+        },
+      ]);
+      const { app } = makeApp();
+      const response = await app.request(`/api/workflows/runs/${MOCK_FAILED_RUN.id}`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { run: { terminal_record: unknown } };
+      expect(body.run.terminal_record).toEqual(status === 'failed' ? terminalRecord : null);
+    }
+  });
+
+  test('historical terminal runs have no fabricated record', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_FAILED_RUN);
+    mockListWorkflowEvents.mockImplementationOnce(async () => []);
+    const { app } = makeApp();
+    const response = await app.request(`/api/workflows/runs/${MOCK_FAILED_RUN.id}`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { run: { terminal_record: unknown } };
+    expect(body.run.terminal_record).toBeNull();
+  });
+
+  test('does not disguise an event query failure as an absent terminal record', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_FAILED_RUN);
+    mockListWorkflowEvents.mockRejectedValueOnce(new Error('storage unavailable'));
+    const { app } = makeApp();
+    const response = await app.request(`/api/workflows/runs/${MOCK_FAILED_RUN.id}`);
+    expect(response.status).toBe(500);
   });
 
   test('returns 404 when run not found', async () => {

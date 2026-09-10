@@ -10,15 +10,27 @@
  * Runs in its own `bun test` invocation (see package.json) — it mock.module's
  * ./connection with a real adapter, conflicting with workflows.test.ts's fake.
  */
-import { describe, test, expect, mock } from 'bun:test';
+import { describe, test, expect, mock, afterEach } from 'bun:test';
+import { mkdtemp, mkdir, writeFile, realpath } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { getRunArtifactsDirForRoot } from '@archon/paths/archon-paths';
+import { trackTempRoots, removeTempTree } from '@archon/paths/test-utils';
+import {
+  terminalRecordSchema,
+  RUN_GRAPH_METADATA_KEY,
+} from '@archon/workflows/schemas/terminal-record';
+import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import type { TokenUsage } from '@archon/providers/types';
 import { isWorkflowWaitContext } from '@archon/workflows/schemas/workflow-run';
 import type { GateResolutionEvent } from './workflows';
 
+const workflowWarnings = mock((_context: unknown, _message: string) => {});
+
 mock.module('@archon/paths', () => ({
   createLogger: () => ({
     info() {},
-    warn() {},
+    warn: workflowWarnings,
     error() {},
     debug() {},
     trace() {},
@@ -30,6 +42,12 @@ mock.module('@archon/paths', () => ({
 
 const { SqliteAdapter, sqliteDialect } = await import('./adapters/sqlite');
 const db = new SqliteAdapter(':memory:');
+const trackTempRoot = trackTempRoots();
+const initialArchonHome = process.env.ARCHON_HOME;
+afterEach(() => {
+  if (initialArchonHome === undefined) delete process.env.ARCHON_HOME;
+  else process.env.ARCHON_HOME = initialArchonHome;
+});
 
 mock.module('./connection', () => ({
   pool: db,
@@ -253,6 +271,8 @@ describe('cancelResumableRunsForConversation — real SQLite', () => {
       []
     );
     expect(events.rows).toEqual([{ workflow_run_id: 'reset-a' }, { workflow_run_id: 'reset-c' }]);
+    expect((await terminalRecord('reset-a')).status).toBe('cancelled');
+    expect((await terminalRecord('reset-c')).status).toBe('cancelled');
   });
 
   test('rolls back every cancellation when an event cannot be stored', async () => {
@@ -594,6 +614,7 @@ describe('gate reject staging — real SQLite end-to-end (#2075)', () => {
     // row, so a consumer reading the event log missed the cancellation entirely.
     expect(await countEvents('gate-cancel', 'approval_received')).toBe(1);
     expect(await countEvents('gate-cancel', 'workflow_cancelled')).toBe(1);
+    expect((await terminalRecord('gate-cancel')).status).toBe('cancelled');
     const cancelled = await db.query<{ step_name: string | null; data: string }>(
       `SELECT step_name, data FROM remote_agent_workflow_events
        WHERE workflow_run_id = $1 AND event_type = 'workflow_cancelled'`,
@@ -602,7 +623,9 @@ describe('gate reject staging — real SQLite end-to-end (#2075)', () => {
     expect(cancelled.rows[0]?.step_name).toBe('review');
     // A stable token, not the user's rejection prose (that stays on the
     // approval_received row).
-    expect(JSON.parse(cancelled.rows[0]?.data ?? '{}')).toEqual({ reason: 'approval_rejected' });
+    expect(JSON.parse(cancelled.rows[0]?.data ?? '{}')).toMatchObject({
+      reason: 'approval_rejected',
+    });
   });
 });
 
@@ -634,19 +657,78 @@ async function countEvents(runId: string, eventType: string): Promise<number> {
 }
 
 describe('terminal workflow transitions — real SQLite', () => {
+  test.each(['completed', 'cancelled'] as const)(
+    'malformed metadata does not prevent %s without a metadata merge',
+    async status => {
+      const runId = `terminal-malformed-${status}`;
+      const rawMetadata = '{"private":"must-not-be-logged"';
+      await seed(runId, 'running', "datetime('now')");
+      await db.query('UPDATE remote_agent_workflow_runs SET metadata = $1 WHERE id = $2', [
+        rawMetadata,
+        runId,
+      ]);
+      expect((await getWorkflowRun(runId))?.metadata).toEqual({});
+      if (status === 'completed') await completeWorkflowRun(runId, { duration_ms: 5 });
+      else await expect(cancelWorkflowRun(runId)).resolves.toEqual({ cancelled: true });
+      expect((await getWorkflowRun(runId))?.status).toBe(status);
+      const record = await terminalRecord(runId);
+      expect(record.status).toBe(status);
+      expect(record.returns).toEqual({
+        availability: 'unavailable',
+        node_id: null,
+        reason: 'graph_unavailable',
+      });
+      const stored = await db.query<{ metadata: string }>(
+        'SELECT metadata FROM remote_agent_workflow_runs WHERE id = $1',
+        [runId]
+      );
+      expect(stored.rows[0]?.metadata).toBe(rawMetadata);
+      expect(workflowWarnings).toHaveBeenCalledWith(
+        { workflowRunId: runId, errorType: 'SyntaxError' },
+        'db.workflow_run_metadata_parse_failed'
+      );
+      expect(JSON.stringify(workflowWarnings.mock.calls)).not.toContain('must-not-be-logged');
+    }
+  );
+
+  test.each([
+    { label: 'object', raw: '{"kept":true}', expected: { kept: true } },
+    { label: 'JSON null', raw: 'null', expected: null },
+    { label: 'SQL null', raw: null, expected: null },
+  ])('preserves $label metadata when reading and terminating', async ({ label, raw, expected }) => {
+    const runId = `terminal-valid-${label}`;
+    await seed(runId, 'running', "datetime('now')");
+    await db.query('UPDATE remote_agent_workflow_runs SET metadata = $1 WHERE id = $2', [
+      raw,
+      runId,
+    ]);
+    const metadataBefore: unknown = (await getWorkflowRun(runId))?.metadata;
+    expect(metadataBefore).toEqual(expected);
+    await cancelWorkflowRun(runId);
+    const metadataAfter: unknown = (await getWorkflowRun(runId))?.metadata;
+    expect(metadataAfter).toEqual(expected);
+    expect((await terminalRecord(runId)).status).toBe('cancelled');
+    const stored = await db.query<{ metadata: string | null }>(
+      'SELECT metadata FROM remote_agent_workflow_runs WHERE id = $1',
+      [runId]
+    );
+    expect(stored.rows[0]?.metadata).toBe(raw);
+  });
+
   test('commits completion and its matching event together', async () => {
     await seed('terminal-complete', 'running', "datetime('now')");
 
     await completeWorkflowRun('terminal-complete', { duration_ms: 321 });
 
     expect((await getWorkflowRun('terminal-complete'))?.status).toBe('completed');
+    expect((await terminalRecord('terminal-complete')).status).toBe('completed');
     expect(await countEvents('terminal-complete', 'workflow_completed')).toBe(1);
     const event = await db.query<{ data: string }>(
       `SELECT data FROM remote_agent_workflow_events
        WHERE workflow_run_id = $1 AND event_type = 'workflow_completed'`,
       ['terminal-complete']
     );
-    expect(JSON.parse(event.rows[0]?.data ?? '{}')).toEqual({ duration_ms: 321 });
+    expect(JSON.parse(event.rows[0]?.data ?? '{}')).toMatchObject({ duration_ms: 321 });
   });
 
   test('commits failure and its matching event together', async () => {
@@ -655,13 +737,18 @@ describe('terminal workflow transitions — real SQLite', () => {
     await failWorkflowRun('terminal-fail', 'node exploded');
 
     expect((await getWorkflowRun('terminal-fail'))?.status).toBe('failed');
+    expect(await terminalRecord('terminal-fail')).toMatchObject({
+      status: 'failed',
+      error: 'node exploded',
+      nodes: [],
+    });
     expect(await countEvents('terminal-fail', 'workflow_failed')).toBe(1);
     const event = await db.query<{ data: string }>(
       `SELECT data FROM remote_agent_workflow_events
        WHERE workflow_run_id = $1 AND event_type = 'workflow_failed'`,
       ['terminal-fail']
     );
-    expect(JSON.parse(event.rows[0]?.data ?? '{}')).toEqual({ error: 'node exploded' });
+    expect(JSON.parse(event.rows[0]?.data ?? '{}')).toMatchObject({ error: 'node exploded' });
   });
 
   test('only the winning terminal transition inserts an event', async () => {
@@ -716,6 +803,7 @@ describe('workflow cancellation — real SQLite', () => {
     ).resolves.toEqual({ cancelled: true });
 
     expect((await getWorkflowRun('cancelled-with-event'))?.status).toBe('cancelled');
+    expect((await terminalRecord('cancelled-with-event')).status).toBe('cancelled');
     expect(await countEvents('cancelled-with-event', 'workflow_cancelled')).toBe(1);
     const event = await db.query<{ step_name: string; data: string }>(
       `SELECT step_name, data FROM remote_agent_workflow_events
@@ -723,7 +811,9 @@ describe('workflow cancellation — real SQLite', () => {
       ['cancelled-with-event']
     );
     expect(event.rows[0]?.step_name).toBe('stop');
-    expect(JSON.parse(event.rows[0]?.data ?? '{}')).toEqual({ reason: 'requested by operator' });
+    expect(JSON.parse(event.rows[0]?.data ?? '{}')).toMatchObject({
+      reason: 'requested by operator',
+    });
   });
 
   test('rolls back cancellation when its event cannot be stored', async () => {
@@ -757,12 +847,13 @@ describe('fan-out cancellation recovery — real SQLite', () => {
     expect(cancelled?.completed_at).not.toBeNull();
     expect(cancelled?.metadata).toEqual({ existing: true, cancelled_reason: 'fan_out_gate' });
     expect(await countEvents('fan-out-cancel', 'workflow_cancelled')).toBe(1);
+    expect((await terminalRecord('fan-out-cancel')).status).toBe('cancelled');
     const event = await db.query<{ data: string }>(
       `SELECT data FROM remote_agent_workflow_events
        WHERE workflow_run_id = $1 AND event_type = 'workflow_cancelled'`,
       ['fan-out-cancel']
     );
-    expect(JSON.parse(event.rows[0]?.data ?? '{}')).toEqual({ reason: 'fan_out_gate' });
+    expect(JSON.parse(event.rows[0]?.data ?? '{}')).toMatchObject({ reason: 'fan_out_gate' });
   });
 
   test('claims an engine-cancelled child and removes its obsolete terminal event', async () => {
@@ -943,6 +1034,7 @@ describe('durable wait continuation races — real SQLite', () => {
       error: 'action-required notification was not delivered',
     });
     expect(await countEvents('attention-notification-failed', 'workflow_failed')).toBe(1);
+    expect((await terminalRecord('attention-notification-failed')).status).toBe('failed');
 
     await expect(
       failPausedAttentionWait(
@@ -952,6 +1044,7 @@ describe('durable wait continuation races — real SQLite', () => {
       )
     ).resolves.toEqual({ failed: false });
     expect(await countEvents('attention-notification-failed', 'workflow_failed')).toBe(1);
+    expect((await terminalRecord('attention-notification-failed')).status).toBe('failed');
   });
 
   test('rejects a stale signal after the same event advances to a later occurrence', async () => {
@@ -1316,5 +1409,171 @@ describe('resolveAndCancelApprovalGate — atomic reject+cancel CAS (#2113)', ()
     );
     expect(approveOutcome.resolved).toBe(false);
     expect((await getWorkflowRun('rc-vs-approve'))?.status).toBe('cancelled');
+  });
+});
+
+async function terminalRecord(runId: string) {
+  const rows = await db.query<{ data: string }>(
+    `SELECT data FROM remote_agent_workflow_events WHERE workflow_run_id = $1
+     AND event_type IN ('workflow_completed', 'workflow_failed', 'workflow_cancelled')
+     ORDER BY event_order DESC`,
+    [runId]
+  );
+  const data: unknown = JSON.parse(rows.rows[0]?.data ?? '{}');
+  expect(data).toHaveProperty('terminal_record');
+  return terminalRecordSchema.parse(
+    typeof data === 'object' && data !== null && 'terminal_record' in data
+      ? data.terminal_record
+      : undefined
+  );
+}
+
+async function seedNodeEvent(
+  runId: string,
+  nodeId: string,
+  eventType: string,
+  data: Record<string, unknown>
+): Promise<void> {
+  await db.query(
+    `INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, step_name, data)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [crypto.randomUUID(), runId, eventType, nodeId, JSON.stringify(data)]
+  );
+}
+
+describe('terminal records retain durable run evidence', () => {
+  test('failure before flip keeps discoveries, authored result and cascade provenance after files disappear', async () => {
+    const root = trackTempRoot(await realpath(await mkdtemp(join(tmpdir(), 'terminal-record-'))));
+    process.env.ARCHON_HOME = root;
+    const runId = 'delivery-died-before-flip';
+    await seed(runId, 'running', "datetime('now')", {
+      [RUN_GRAPH_METADATA_KEY]: {
+        node_ids: ['discover', 'pr', 'validate', 'deliver', 'flip', 'report'],
+        returns: 'pr',
+      },
+    });
+    await db.query(
+      "UPDATE remote_agent_workflow_runs SET output_root = $2, outcome = 'succeeded' WHERE id = $1",
+      [runId, root]
+    );
+    const artifactsDir = getRunArtifactsDirForRoot(root, runId);
+    await mkdir(join(artifactsDir, 'discoveries'), { recursive: true });
+    await writeFile(
+      join(artifactsDir, 'discoveries', 'implement.json'),
+      '{"title":"Found a defect"}'
+    );
+    await mkdir(join(artifactsDir, 'nodes'));
+    await writeFile(join(artifactsDir, 'nodes', 'discover.md'), 'Discovery details');
+    await writeFile(
+      join(artifactsDir, 'nodes', 'discover.meta.json'),
+      JSON.stringify({
+        nodeId: 'discover',
+        outputType: 'discovery',
+        path: 'nodes/discover.md',
+        runId,
+        producedAt: '2026-09-09T10:00:00.000Z',
+        size: 17,
+      })
+    );
+    await seedNodeEvent(runId, 'discover', 'node_completed', { node_output: 'Discovery details' });
+    const authoredValue = { pr: 123, ready: true };
+    await seedNodeEvent(runId, 'pr', 'node_completed', {
+      node_output: JSON.stringify(authoredValue),
+      structured_output: authoredValue,
+    });
+    await seedNodeEvent(runId, 'validate', 'node_failed', { error: 'tests failed' });
+    for (const nodeId of ['deliver', 'flip', 'report']) {
+      await seedNodeEvent(runId, nodeId, 'node_skipped', {
+        reason: 'trigger_rule',
+        cause: { kind: 'upstream_failed', origin: 'validate' },
+      });
+    }
+
+    await failWorkflowRun(runId, 'Delivery failed: tests failed');
+    const record = await terminalRecord(runId);
+    expect(record).toMatchObject({
+      run_id: runId,
+      status: 'failed',
+      outcome: 'succeeded',
+      error: 'Delivery failed: tests failed',
+      first_failed_node: 'validate',
+      returns: { availability: 'available', node_id: 'pr', value: authoredValue },
+    });
+    expect(record.nodes).toContainEqual(
+      expect.objectContaining({
+        node_id: 'report',
+        state: 'skipped',
+        cause: { kind: 'upstream_failed', origin: 'validate' },
+      })
+    );
+    expect(record.artifacts.files).toContainEqual(
+      expect.objectContaining({
+        path: 'discoveries/implement.json',
+      })
+    );
+    expect(record.artifacts.files).toContainEqual(
+      expect.objectContaining({
+        path: 'nodes/discover.md',
+        metadata: expect.objectContaining({ outputType: 'discovery' }),
+      })
+    );
+    await removeTempTree(root);
+    expect(await terminalRecord(runId)).toEqual(record);
+  });
+
+  test('cancellation preserves an in-flight state instead of inventing a terminal node result', async () => {
+    const runId = 'terminal-in-flight';
+    await seed(runId, 'running', "datetime('now')", {
+      [RUN_GRAPH_METADATA_KEY]: { node_ids: ['working', 'later'], returns: 'later' },
+    });
+    await seedNodeEvent(runId, 'working', 'node_started', {});
+    await cancelWorkflowRun(runId);
+    expect((await terminalRecord(runId)).nodes).toEqual([
+      { node_id: 'working', state: 'running' },
+      { node_id: 'later', state: 'pending' },
+    ]);
+  });
+
+  test('event insertion rejection rolls status back even after projection reads succeed', async () => {
+    const runId = 'terminal-insert-rejected';
+    await seed(runId, 'running', "datetime('now')");
+    await db.query(
+      `CREATE TRIGGER reject_terminal_record BEFORE INSERT ON remote_agent_workflow_events
+      WHEN NEW.workflow_run_id = '${runId}'
+      BEGIN SELECT RAISE(ABORT, 'record insertion denied'); END`,
+      []
+    );
+    try {
+      await expect(failWorkflowRun(runId, 'original failure')).rejects.toThrow(
+        'record insertion denied'
+      );
+    } finally {
+      await db.query('DROP TRIGGER reject_terminal_record', []);
+    }
+    expect((await getWorkflowRun(runId))?.status).toBe('running');
+    expect(await countEvents(runId, 'workflow_failed')).toBe(0);
+  });
+
+  test('a resumed run hides its old record, and a later cancellation records the new observation', async () => {
+    const runId = 'terminal-record-resume';
+    await seed(runId, 'running', "datetime('now')");
+    await failWorkflowRun(runId, 'first attempt failed');
+    const original = await terminalRecord(runId);
+    await resumeWorkflowRun(runId);
+    const events = await db.query<{ event_type: string; step_name: string | null; data: string }>(
+      'SELECT event_type, step_name, data FROM remote_agent_workflow_events WHERE workflow_run_id = $1 ORDER BY event_order',
+      [runId]
+    );
+    expect(
+      getTerminalRecord(
+        'running',
+        events.rows.map(event => ({ ...event, data: JSON.parse(event.data) }))
+      )
+    ).toBeNull();
+    await cancelWorkflowRun(runId);
+    expect((await terminalRecord(runId)).status).toBe('cancelled');
+    expect(original.status).toBe('failed');
+    expect(await countEvents(runId, 'workflow_failed')).toBe(1);
+    expect(await countEvents(runId, 'workflow_cancelled')).toBe(1);
   });
 });

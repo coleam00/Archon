@@ -36,6 +36,9 @@ export interface PersistedNodeOutput {
   output: string;
   structuredOutput?: unknown;
   declaredFields?: readonly string[];
+  /** Present only when resume recovered a preview rather than the full text.
+   * Replay must retain this original provenance instead of certifying the preview. */
+  outputTruncation?: { originalBytes: number | null; spillPath: string | null };
 }
 
 export interface DagResumeSnapshot {
@@ -80,6 +83,22 @@ export const NODE_LIFECYCLE_EVENT_TYPES = [
 
 export type NodeLifecycleEventType = (typeof NODE_LIFECYCLE_EVENT_TYPES)[number];
 
+/** Node state writes must remain durable, including resume-cache invalidations. */
+export const NODE_STATE_EVENT_TYPES = [
+  ...NODE_LIFECYCLE_EVENT_TYPES,
+  // #2402 — written when a cached prior-success node is invalidated because a
+  // dependency re-executed during the current resume (e.g. an `always_run: true`
+  // upstream, or any dep that re-ran with fresh output). `data.prior_output` is the
+  // stale cached value being thrown away; `data.invalidating_deps` lists the
+  // upstream node ids whose current output no longer matches the prior snapshot.
+  // The audit counterpart to the resume cache invalidation; absence never implies
+  // the cache was honored — a skipped node only writes `node_skipped_prior_success`.
+  'node_prior_cache_invalidated',
+  'node_always_run_reset',
+] as const;
+
+export type NodeStateEventType = (typeof NODE_STATE_EVENT_TYPES)[number];
+
 export const WORKFLOW_EVENT_TYPES = [
   'workflow_started',
   'workflow_completed',
@@ -93,16 +112,7 @@ export const WORKFLOW_EVENT_TYPES = [
   // Between-run continuation (#2747) — written on the ADOPTING run's log when it
   // starts with `--adopt`/`--supersedes`, so the chain renders from events alone.
   'workflow.run_adopted',
-  ...NODE_LIFECYCLE_EVENT_TYPES,
-  // #2402 — written when a cached prior-success node is invalidated because a
-  // dependency re-executed during the current resume (e.g. an `always_run: true`
-  // upstream, or any dep that re-ran with fresh output). `data.prior_output` is the
-  // stale cached value being thrown away; `data.invalidating_deps` lists the
-  // upstream node ids whose current output no longer matches the prior snapshot.
-  // The audit counterpart to the resume cache invalidation; absence never implies
-  // the cache was honored — a skipped node only writes `node_skipped_prior_success`.
-  'node_prior_cache_invalidated',
-  'node_always_run_reset',
+  ...NODE_STATE_EVENT_TYPES,
   'loop_iteration_started',
   'loop_iteration_completed',
   'loop_iteration_failed',
@@ -163,6 +173,24 @@ export const WORKFLOW_EVENT_TYPES = [
 ] as const;
 
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];
+
+export function isNodeStateEventType(value: WorkflowEventType): value is NodeStateEventType {
+  return NODE_STATE_EVENT_TYPES.some(eventType => eventType === value);
+}
+
+/** The column payload shared by every workflow-event writer. */
+export interface WorkflowEventInput<EventType extends WorkflowEventType = WorkflowEventType> {
+  workflow_run_id: string;
+  event_type: EventType;
+  step_index?: number;
+  step_name?: string;
+  data?: Record<string, unknown>;
+}
+
+export type NodeStateEventInput = WorkflowEventInput<NodeStateEventType>;
+export type ObservabilityEventInput = WorkflowEventInput<
+  Exclude<WorkflowEventType, NodeStateEventType>
+>;
 
 export const FAN_OUT_CANCEL_REASONS = [
   'fan_out_gate',
@@ -375,39 +403,21 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
    * internally and log them. Callers treat this as observable-only: workflow
    * execution continues regardless of whether event persistence succeeds.
    */
-  createWorkflowEvent(data: {
-    workflow_run_id: string;
-    event_type: WorkflowEventType;
-    step_index?: number;
-    step_name?: string;
-    data?: Record<string, unknown>;
-  }): Promise<void>;
+  createWorkflowEvent(data: ObservabilityEventInput): Promise<void>;
 
   /**
    * Persist a correctness-critical workflow event and propagate any storage failure.
    * Use only when execution must not proceed without the row; ordinary observability
    * belongs on `createWorkflowEvent`.
    */
-  persistWorkflowEvent(data: {
-    workflow_run_id: string;
-    event_type: WorkflowEventType;
-    step_index?: number;
-    step_name?: string;
-    data?: Record<string, unknown>;
-  }): Promise<void>;
+  persistWorkflowEvent(data: WorkflowEventInput): Promise<void>;
 
   /**
    * Atomically persist a correctness-critical event while the run is running. Claimed
    * deterministic work may explicitly extend that claim through a parent pause.
    */
   persistWorkflowEventIfRunning(
-    data: {
-      workflow_run_id: string;
-      event_type: WorkflowEventType;
-      step_index?: number;
-      step_name?: string;
-      data?: Record<string, unknown>;
-    },
+    data: WorkflowEventInput,
     options?: { allowPaused?: boolean }
   ): Promise<{ persisted: boolean }>;
 
