@@ -727,6 +727,14 @@ describe('SlackWorkflowBridge', () => {
       nodeId: 'plan',
       nodeName: 'plan',
     });
+
+    // The replay alone must repaint the live message, so wait past the status-update
+    // debounce before any terminal event can mask a missing repaint.
+    await new Promise(resolve => setTimeout(resolve, 600));
+    const live = JSON.stringify(updated[updated.length - 1]);
+    expect(live).toContain(':white_check_mark: `plan`');
+    expect(live).not.toContain(':fast_forward: `plan`');
+
     await dispatchEvent({
       type: 'workflow_completed',
       runId: 'r1',
