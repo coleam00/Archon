@@ -506,7 +506,7 @@ Dev binary:   /Users/rasmus/.bun/bin/archon (unchanged)
       Found 0 workflow(s):
 
   [SKIP]  Test 3  SDK test skipped because Test 2 failed
-  [SKIP]  Test 4  env-leak gate test skipped because Test 2 failed
+  [SKIP]  Test 4  env-leak guard test skipped because Test 2 failed
   [PASS]  Test 5  isolation list executed without errors
   [PASS]  Cleanup VPS binary removed
 
