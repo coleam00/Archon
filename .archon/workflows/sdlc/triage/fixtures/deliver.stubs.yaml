@@ -1,7 +1,19 @@
-# Dry-run fixture: current evidence says the target is implementation-ready.
+# Dry-run fixture: the contract is ready and current evidence says the target is
+# implementation-ready. The real verdict script runs (publish is off, so it writes
+# nothing) and must accept the tuple.
 triage:
+  contract: READY
   route: deliver
-  summary: "stub: current code confirms the work order; no material decision remains"
+  design_first: false
+  complexity: small
+  item: { repository: "", number: 0 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+  summary: "stub: current code confirms the work order; no material decision remains"
 fixture:
   expect: completed
+  reached: [verdict]
+exec-code: true

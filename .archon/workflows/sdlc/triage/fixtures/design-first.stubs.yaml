@@ -1,0 +1,19 @@
+# Dry-run fixture: a ready contract whose engineering shape must be settled
+# before implementation. design_first requires the plan route; the real verdict
+# script accepts it and derives the design-first label.
+triage:
+  contract: READY
+  route: plan
+  design_first: true
+  complexity: large
+  item: { repository: "", number: 0 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+  summary: "stub: outcome is clear; owning module and compatibility boundary undecided"
+fixture:
+  expect: completed
+  reached: [verdict]
+exec-code: true
