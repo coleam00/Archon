@@ -102,7 +102,15 @@ test('the generator bound kills a stalled child, names the timeout, and unstages
     options: Parameters<typeof Bun.spawn>[1]
   ) => {
     stagedStdin = options?.stdin;
-    return realSpawn([process.execPath, '-e', 'await new Promise(() => {})'], options);
+    // The child sleeps rather than spinning on a never-resolving promise. Its own 30s
+    // bound is a backstop, not part of the assertion: the 250ms kill is what ends it on
+    // every passing run, and anything past 250ms reads as "never exits" here. The backstop
+    // matters when the runner is killed before that kill lands — the child is orphaned, and
+    // a never-resolving promise would then hold a core at 100% until reboot (oven-sh/bun#14951).
+    return realSpawn(
+      [process.execPath, '-e', 'await new Promise(resolve => setTimeout(resolve, 30_000))'],
+      options
+    );
   }) as unknown as typeof Bun.spawn);
 
   try {
