@@ -301,7 +301,7 @@ Quickly verify the resolver fails loud when nothing is configured:
 
 If you *do* have `claudeBinaryPath` set globally, skip this test or temporarily rename `~/.archon/config.yaml`.
 
-### Test 4 — Env-leak gate refuses a leaky .env (optional, for releases including #1036/#1038/#983)
+### Test 4 — Env-leak guard strips sensitive keys from .env
 
 Create a second throwaway repo with a fake sensitive key:
 
@@ -475,7 +475,7 @@ Dev binary:   /Users/rasmus/.bun/bin/archon → ../install/.../cli.ts (unchanged
   [PASS]  Test 1  version reports 0.3.1, Build: binary, commit abc1234
   [PASS]  Test 2  workflow list returned 21 bundled workflows
   [PASS]  Test 3  workflow run assist produced output
-  [PASS]  Test 4  env-leak gate refused leaky .env with context-aware error
+  [PASS]  Test 4  env-leak guard stripped exactly the planted key
   [PASS]  Test 5  isolation list executed without errors
   [PASS]  Cleanup brew uninstall + untap clean, dev binary unchanged
 
