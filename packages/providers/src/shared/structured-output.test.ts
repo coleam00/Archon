@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   augmentPromptForJsonSchema,
   compileOutputSchema,
+  findRequiredPropertyGaps,
   formatSchemaErrors,
   hasOpenAdditionalProperties,
   normalizeJsonSchemaForOpenAiStrict,
@@ -429,5 +430,98 @@ describe('hasOpenAdditionalProperties', () => {
     // normalizer's rule, so the normalizer would NOT rewrite it. The predicate
     // must match that and stay silent.
     expect(hasOpenAdditionalProperties({ additionalProperties: { type: 'string' } })).toBe(false);
+  });
+});
+
+describe('findRequiredPropertyGaps', () => {
+  test('returns empty when required fully covers properties', () => {
+    const schema = {
+      type: 'object',
+      properties: { a: { type: 'string' }, b: { type: 'number' } },
+      required: ['a', 'b'],
+    };
+    expect(findRequiredPropertyGaps(schema, 'output_format')).toEqual([]);
+  });
+
+  test('reports a declared property missing from required', () => {
+    const schema = {
+      type: 'object',
+      properties: { a: { type: 'string' }, b: { type: 'number' } },
+      required: ['a'],
+    };
+    expect(findRequiredPropertyGaps(schema, 'output_format')).toEqual([
+      { schemaPath: 'output_format', missing: ['b'] },
+    ]);
+  });
+
+  test('reports multiple missing keys', () => {
+    const schema = {
+      type: 'object',
+      properties: { x: {}, y: {}, z: {} },
+      required: ['x'],
+    };
+    const result = findRequiredPropertyGaps(schema, 'out');
+    expect(result).toHaveLength(1);
+    expect(result[0].missing.sort()).toEqual(['y', 'z']);
+  });
+
+  test('recurses into nested objects', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        inner: {
+          type: 'object',
+          properties: { a: { type: 'string' }, b: { type: 'number' } },
+          required: ['a'],
+        },
+      },
+      required: ['inner'],
+    };
+    expect(findRequiredPropertyGaps(schema, 'output_format')).toEqual([
+      { schemaPath: 'output_format.properties.inner', missing: ['b'] },
+    ]);
+  });
+
+  test('skips nodes without properties (primitive leafs)', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        tags: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['name', 'tags'],
+    };
+    expect(findRequiredPropertyGaps(schema, 'o')).toEqual([]);
+  });
+
+  test('missing required key means all properties are missing from required', () => {
+    const schema = {
+      type: 'object',
+      properties: { a: { type: 'string' } },
+    };
+    expect(findRequiredPropertyGaps(schema, 'o')).toEqual([{ schemaPath: 'o', missing: ['a'] }]);
+  });
+
+  test('no crash on null', () => {
+    expect(findRequiredPropertyGaps(null, 'x')).toEqual([]);
+  });
+
+  test('no crash on arrays', () => {
+    expect(
+      findRequiredPropertyGaps([{ type: 'object', properties: { a: {} }, required: [] }], 'x')
+    ).toEqual([{ schemaPath: 'x[0]', missing: ['a'] }]);
+  });
+
+  test('no crash on primitive values', () => {
+    expect(findRequiredPropertyGaps('string', 'x')).toEqual([]);
+    expect(findRequiredPropertyGaps(42, 'x')).toEqual([]);
+    expect(findRequiredPropertyGaps(true, 'x')).toEqual([]);
+  });
+
+  test('basePath is prepended for meaningful root-relative paths', () => {
+    const schema = { type: 'object', properties: { f: {} } };
+    expect(findRequiredPropertyGaps(schema, 'output_format')).toEqual([
+      { schemaPath: 'output_format', missing: ['f'] },
+    ]);
   });
 });

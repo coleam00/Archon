@@ -232,6 +232,53 @@ export function hasOpenAdditionalProperties(schema: unknown): boolean {
   return Object.values(node).some(hasOpenAdditionalProperties);
 }
 
+// ─── Strict-mode required-coverage detection ──────────────────────────────────
+
+/**
+ * A single object schema node whose `properties` keys are not fully covered by
+ * its `required` array. `schemaPath` is a dotted path from the schema root
+ * (e.g. `"output_format.properties.status"`).
+ */
+export interface RequiredPropertyGap {
+  /** Dotted path from the schema root */
+  schemaPath: string;
+  /** Property keys declared in `properties` but absent from `required` */
+  missing: string[];
+}
+
+/**
+ * Find every object schema node, at any depth, whose `properties` keys are not
+ * fully covered by its `required` array. Only object nodes with a `properties`
+ * map are checked (OpenAI strict-mode's target).
+ *
+ * `basePath` is prepended to every gap path so callers get meaningful
+ * schema-root-relative locations (e.g. pass `'output_format'`).
+ */
+export function findRequiredPropertyGaps(schema: unknown, basePath: string): RequiredPropertyGap[] {
+  return collectGaps(schema, basePath);
+}
+
+function collectGaps(
+  schema: unknown,
+  path: string,
+  out: RequiredPropertyGap[] = []
+): RequiredPropertyGap[] {
+  if (schema === null || typeof schema !== 'object') return out;
+  if (Array.isArray(schema)) {
+    schema.forEach((item, i) => collectGaps(item, `${path}[${i}]`, out));
+    return out;
+  }
+  const record = schema as Record<string, unknown>;
+  const properties = record.properties;
+  if (properties !== null && typeof properties === 'object' && !Array.isArray(properties)) {
+    const required = new Set(Array.isArray(record.required) ? (record.required as string[]) : []);
+    const missing = Object.keys(properties).filter(key => !required.has(key));
+    if (missing.length > 0) out.push({ schemaPath: path, missing });
+  }
+  for (const [key, value] of Object.entries(record)) collectGaps(value, `${path}.${key}`, out);
+  return out;
+}
+
 // ─── Schema validation (ajv) ─────────────────────────────────────────────────
 
 /**
