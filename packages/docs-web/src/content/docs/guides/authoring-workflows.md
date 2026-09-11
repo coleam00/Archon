@@ -582,6 +582,8 @@ status=$emit.output.status
 Use `output_format` to enforce JSON output from an AI node. For Claude, the schema is passed via the SDK's `outputFormat` option and `structured_output` is used directly. For Codex (v0.116.0+), the schema is passed via `TurnOptions.outputSchema` and the agent's inline JSON response is used. Both ensure clean JSON for `when:` conditions and `$nodeId.output` substitution:
 
 > **Codex strict-mode normalization.** OpenAI's Structured Outputs validator rejects any object schema that doesn't set `additionalProperties: false`. Archon normalizes Codex schemas before sending them, injecting `additionalProperties: false` on every object node automatically — so write portable schemas and you won't notice. One caveat: an open-record `additionalProperties: { type: 'string' }` (or `additionalProperties: true`) is **replaced** with `false`, closing the object. OpenAI would reject the open form regardless, but the rewrite is logged (`codex.output_format_open_record_closed`) so it isn't silent. Open-record maps aren't supported for Codex structured output.
+>
+> **Codex strict-mode `required` coverage.** OpenAI's Structured Outputs validator also rejects any object schema where a key declared in `properties` is absent from `required`. Unlike `additionalProperties`, Archon does NOT normalize this for you — doing so would silently change an optional field into a required one. Instead, the launch preflight and `archon validate workflows` report the violation before any run starts. Include every property key in `required`. To express an *optional* field, give its type an absent-value form: a `["string","null"]` union, or an enum with a sentinel like `"none"` — the field is then always "present" in the output, carrying the sentinel when not applicable.
 
 ```yaml
 nodes:
@@ -596,7 +598,7 @@ nodes:
         severity:
           type: string
           enum: [low, medium, high]
-      required: [type]
+      required: [type, severity]
 ```
 
 - The output is captured as a JSON string and available via `$classify.output` (full JSON) or `$classify.output.type` (field access)

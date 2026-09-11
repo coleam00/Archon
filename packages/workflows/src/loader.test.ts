@@ -6522,6 +6522,7 @@ nodes:
           settingSources: false,
           nativeTools: false,
           containerExec: false,
+          requiresAllPropertiesRequired: false,
         },
         factory: () => ({
           getType: () => 'no-resume-skip-test',
@@ -6541,6 +6542,7 @@ nodes:
             settingSources: false,
             nativeTools: false,
             containerExec: false,
+            requiresAllPropertiesRequired: false,
           }),
           // eslint-disable-next-line require-yield
           async *sendQuery() {
@@ -6588,6 +6590,7 @@ nodes:
           settingSources: false,
           nativeTools: false,
           containerExec: false,
+          requiresAllPropertiesRequired: false,
         },
         factory: () => ({
           getType: () => 'no-resume-test',
@@ -6607,6 +6610,7 @@ nodes:
             settingSources: false,
             nativeTools: false,
             containerExec: false,
+            requiresAllPropertiesRequired: false,
           }),
           // eslint-disable-next-line require-yield
           async *sendQuery() {

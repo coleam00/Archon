@@ -58,6 +58,7 @@ export const CLAUDE_CAPABILITIES: ProviderCapabilities = {
   knownToolNames: CLAUDE_KNOWN_TOOL_NAMES,
   renamedTools: CLAUDE_RENAMED_TOOLS,
   structuredOutput: 'enforced', // SDK output_config.format grammar-constrains decoding
+  requiresAllPropertiesRequired: false, // Claude accepts optional-by-omission (no strict-mode required-coverage rule)
   envInjection: true,
   costControl: true,
   effortControl: true,

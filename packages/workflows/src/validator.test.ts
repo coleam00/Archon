@@ -1597,3 +1597,112 @@ describe('validateWorkflowResources — output_format compiles', () => {
     expect(issues.filter(i => i.field === 'output_format')).toHaveLength(0);
   });
 });
+
+describe('validateWorkflowResources — strict-schema required coverage (#2945)', () => {
+  const looseSchema = {
+    type: 'object',
+    properties: { ready: { type: 'boolean' }, note: { type: 'string' } },
+    required: ['ready'],
+  };
+
+  function makeAgent(id: string, extra: Partial<DagNode> = {}): DagNode {
+    return {
+      id,
+      kind: 'agent',
+      source: { kind: 'inline', prompt: `do ${id}` },
+      ...extra,
+    } as DagNode;
+  }
+
+  test('Codex-routed agent node with optional-by-omission reports error', async () => {
+    const workflow = makeWorkflow('test', [makeAgent('plan', { output_format: looseSchema })]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'codex');
+    const errs = issues.filter(i => i.field === 'output_format' && i.level === 'error');
+    expect(errs).toHaveLength(1);
+    expect(errs[0].nodeId).toBe('plan');
+    expect(errs[0].message).toContain('note');
+    expect(errs[0].message).toContain('required');
+  });
+
+  test('Claude-routed same schema reports nothing', async () => {
+    const workflow = makeWorkflow('test', [makeAgent('plan', { output_format: looseSchema })]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'claude');
+    const errs = issues.filter(i => i.field === 'output_format' && i.level === 'error');
+    expect(errs).toHaveLength(0);
+  });
+
+  test('loop_group body agent under Codex reports error', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'group',
+        kind: 'loop_group',
+        loop_group: {
+          until_bash: 'exit 0',
+          max_iterations: 1,
+          nodes: [makeAgent('body', { output_format: looseSchema })],
+        },
+      } as unknown as DagNode,
+    ]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'codex');
+    const errs = issues.filter(i => i.field === 'output_format' && i.level === 'error');
+    expect(errs).toHaveLength(1);
+    expect(errs[0].nodeId).toBe('body');
+  });
+
+  test('loop_group inert schema under Codex is skipped', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'group',
+        kind: 'loop_group',
+        output_format: looseSchema,
+        loop_group: {
+          until_bash: 'exit 0',
+          max_iterations: 1,
+          nodes: [{ id: 'work', kind: 'exec', runtime: 'sh', script: 'echo done' }],
+        },
+      } as unknown as DagNode,
+    ]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'codex');
+    const errs = issues.filter(i => i.field === 'output_format' && i.level === 'error');
+    expect(errs).toHaveLength(0);
+  });
+
+  test('workflow: node with loose schema under Codex does not double-report', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'sub',
+        kind: 'workflow',
+        workflow: 'child',
+        output_format: looseSchema,
+      } as DagNode,
+    ]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'codex');
+    const outputFormatIssues = issues.filter(
+      i => i.field === 'output_format' && i.level === 'error'
+    );
+    // Ownership error fires; strict-schema error must NOT also fire.
+    expect(outputFormatIssues).toHaveLength(1);
+    expect(outputFormatIssues[0].message).toContain('returns:');
+  });
+
+  test('bash node with output_format + gap under Codex is not flagged', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'run',
+        kind: 'exec',
+        runtime: 'sh',
+        script: 'echo {}',
+        output_format: looseSchema,
+      } as unknown as DagNode,
+    ]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'codex');
+    const errs = issues.filter(i => i.field === 'output_format' && i.level === 'error');
+    expect(errs).toHaveLength(0);
+  });
+});

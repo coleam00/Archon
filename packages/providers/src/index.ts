@@ -45,6 +45,8 @@ export {
   compileOutputSchema,
   validateStructuredOutput,
   formatSchemaErrors,
+  findRequiredPropertyGaps,
+  type RequiredPropertyGap,
   type StructuredValidationResult,
 } from './shared/structured-output';
 

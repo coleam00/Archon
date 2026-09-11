@@ -33,6 +33,7 @@ import {
   claudeSkillSearchRoots,
   compileOutputSchema,
   findInstalledSkillNames,
+  findRequiredPropertyGaps,
   getProviderCapabilities,
   isRegisteredProvider,
   skillSearchRoots,
@@ -51,6 +52,7 @@ import {
   isLoopGroupNode,
   isIncludeDirective,
   isOutputFormatEnforced,
+  isWaitNode,
   isWorkflowNode,
 } from './schemas';
 import { parseWorkflow, workflowNodeOutputFormatError } from './loader';
@@ -526,6 +528,34 @@ export async function validateWorkflowResources(
     );
     const providerCaps =
       provider && isRegisteredProvider(provider) ? getProviderCapabilities(provider) : undefined;
+
+    // --- Strict-schema required coverage (#2945) ---
+    // A schema whose declared properties are not fully covered by 'required' is
+    // rejected by a provider that enforces OpenAI strict mode (Codex) at the
+    // first turn with HTTP 400 invalid_json_schema. Report it at validation time
+    // so `archon validate workflows` catches it before a live run burns setup
+    // costs. The set of provider-invoking kinds is the same one the launch
+    // preflight uses: every node kind that both enforces output_format
+    // (isOutputFormatEnforced) AND sends the schema to a provider (agent and
+    // loop; not exec/bash/script, and not a wait's engine-injected schema).
+    if (
+      ownershipError === null &&
+      !isExecNode(node) &&
+      !isWaitNode(node) &&
+      isOutputFormatEnforced(node) &&
+      node.output_format !== undefined &&
+      providerCaps?.requiresAllPropertiesRequired
+    ) {
+      for (const gap of findRequiredPropertyGaps(node.output_format, 'output_format')) {
+        issues.push({
+          level: 'error',
+          nodeId: node.id,
+          field: 'output_format',
+          message: `Node '${node.id}' declares properties not in 'required' at '${gap.schemaPath}': ${gap.missing.join(', ')}. Provider '${provider}' enforces OpenAI strict mode and will reject this schema (HTTP 400 invalid_json_schema).`,
+          hint: 'List every property key in the required array. Express optionality inside the type (e.g. a ["string","null"] union or an enum sentinel like "none").',
+        });
+      }
+    }
 
     if (requiresPortableModelRefs && 'model' in node && node.model?.startsWith('@')) {
       issues.push({
