@@ -520,21 +520,58 @@ export interface AgentRequestOptions {
 }
 
 /**
+ * One property on a native tool's input object. `kind` is the discriminant the
+ * provider converters switch on; each variant maps to exactly one SDK schema
+ * form. `values` is a non-empty tuple, so an enum with no options is a compile
+ * error rather than a provider-side runtime throw.
+ */
+export type NativeToolProperty =
+  | { kind: 'string'; description?: string }
+  | { kind: 'enum'; values: readonly [string, ...string[]]; description?: string }
+  | { kind: 'boolean'; description?: string };
+
+/**
+ * The closed input shape a native tool may declare: a flat object of string /
+ * string-enum / boolean properties, plus the names of the required ones. Every
+ * provider maps this to its SDK's schema form, so the supported subset lives
+ * here once instead of being re-derived by each converter.
+ */
+export interface NativeToolInputSchema {
+  properties: Record<string, NativeToolProperty>;
+  required: readonly string[];
+}
+
+/**
+ * Build a NativeToolInputSchema while tying `required` to the property keys: a
+ * name that is not a declared property is a compile error, where the erased
+ * interface alone would accept any string. Returns the erased shape so
+ * `NativeTool` stays non-generic — a `keyof P` constraint on the interface
+ * itself would make the schema invariant in `P` and break assignment to
+ * `SendQueryOptions.nativeTools`.
+ */
+export function defineNativeToolInputSchema<P extends Record<string, NativeToolProperty>>(input: {
+  properties: P;
+  required: readonly (keyof P & string)[];
+}): NativeToolInputSchema {
+  return input;
+}
+
+/**
  * A provider-neutral in-process tool. The handler runs in the host process and
  * closes over whatever live context it needs (DB, operations, conversation), so
  * `@archon/providers` never imports `@archon/core` — the tool crosses the
  * boundary as data + a function on the request options.
  *
- * `inputSchema` is canonical JSON Schema (object). Each provider converts it to
- * its SDK's schema form. The handler is expected to return a text result rather
- * than throw — provider adapters add no safety net, so an uncaught throw would
+ * `inputSchema` is the closed typed shape each provider maps to its SDK's
+ * schema form. The handler is expected to return a text result rather than
+ * throw — provider adapters add no safety net, so an uncaught throw would
  * surface into the agent loop. (core's `buildManageRunTool` guarantees this with
  * an outer try/catch around its dispatch.)
  */
 export interface NativeTool {
   name: string;
   description: string;
-  inputSchema: Record<string, unknown>;
+  inputSchema: NativeToolInputSchema;
   handler: (input: Record<string, unknown>) => Promise<string>;
 }
 
