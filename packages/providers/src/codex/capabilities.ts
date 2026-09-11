@@ -12,6 +12,7 @@ export const CODEX_CAPABILITIES: ProviderCapabilities = {
   agents: false,
   toolRestrictions: false,
   structuredOutput: 'enforced', // SDK outputSchema grammar-constrains decoding
+  requiresAllPropertiesRequired: true, // OpenAI strict-mode: every key in properties must appear in required
   envInjection: true,
   costControl: false,
   // Codex reads the node-level `effort:` field like every other effort-capable
