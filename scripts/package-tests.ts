@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { bunTestCommand } from './bun-test-command';
 
 /**
  * Runs one package's tests, from that package's directory.
@@ -30,7 +31,7 @@ if (!Array.isArray(groups) || groups.length === 0) {
 }
 
 const run = async (args: string[]): Promise<number> => {
-  const child = Bun.spawn(['bun', 'test', ...args], {
+  const child = Bun.spawn(bunTestCommand(args), {
     cwd: packageDir,
     stdio: ['inherit', 'inherit', 'inherit'],
   });
