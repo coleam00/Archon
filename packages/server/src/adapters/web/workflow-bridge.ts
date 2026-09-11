@@ -6,13 +6,12 @@ import {
 import {
   nodeSkipReasonSchema,
   skipCauseSchema,
+  type NodeSkipReason,
   type SkipCause,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowEventRow } from '@archon/core/db/workflow-events';
 import { SSETransport } from './transport';
 import type { DagNodeSseEvent } from './workflow-event.schemas';
-
-type NodeSkipReason = Extract<WorkflowEmitterEvent, { type: 'node_skipped' }>['reason'];
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -115,14 +114,24 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         duration: event.type === 'node_completed' ? event.duration : undefined,
         error: event.type === 'node_failed' ? event.error : undefined,
         reason: event.type === 'node_skipped' ? event.reason : undefined,
-        cause:
-          event.type === 'node_skipped' && event.reason !== 'prior_success'
-            ? event.cause
-            : undefined,
+        cause: event.type === 'node_skipped' ? event.cause : undefined,
         timestamp: Date.now(),
       };
       return JSON.stringify(payload);
     }
+
+    // The dashboard's live store reconciles from the REST refetch, so the prior-success
+    // replay keeps the `skipped` status it already had; #2978 only changes how Slack renders it.
+    case 'node_skipped_prior_success':
+      return JSON.stringify({
+        type: 'dag_node',
+        runId: event.runId,
+        nodeId: event.nodeId,
+        name: event.nodeName,
+        status: 'skipped',
+        reason: 'prior_success',
+        timestamp: Date.now(),
+      } satisfies DagNodeSseEvent);
 
     case 'tool_started':
       return JSON.stringify({

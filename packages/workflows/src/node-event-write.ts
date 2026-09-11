@@ -163,11 +163,10 @@ export function deriveEmitterEvent(
     case 'node_skipped':
       if (event.data?.reason === 'prior_success') {
         return {
-          type: 'node_skipped',
+          type: 'node_skipped_prior_success',
           runId: event.workflow_run_id,
           nodeId: node.id,
           nodeName,
-          reason: 'prior_success',
         };
       }
       return {
@@ -181,11 +180,10 @@ export function deriveEmitterEvent(
       };
     case 'node_skipped_prior_success':
       return {
-        type: 'node_skipped',
+        type: 'node_skipped_prior_success',
         runId: event.workflow_run_id,
         nodeId: node.id,
         nodeName,
-        reason: 'prior_success',
       };
     case 'node_prior_cache_invalidated':
     case 'node_always_run_reset':

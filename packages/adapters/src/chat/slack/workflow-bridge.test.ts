@@ -670,6 +670,108 @@ describe('SlackWorkflowBridge', () => {
     expect(header?.text?.text).toContain('*Authored outcome:* `succeeded`');
   });
 
+  test('keeps a completed node completed when a resumed pass replays it as prior-success', async () => {
+    const { adapter, updated, triggerMap } = makeFakeAdapter();
+    triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
+    mockGetConversationId.mockReturnValue('C1:111.0');
+
+    new SlackWorkflowBridge(adapter as never).attach();
+    await dispatchEvent({
+      type: 'workflow_started',
+      runId: 'r1',
+      workflowName: 'assist',
+      conversationId: 'conv-db-uuid',
+      transcriptPath: '/logs/r1.jsonl',
+    });
+    await dispatchEvent({
+      type: 'node_completed',
+      runId: 'r1',
+      nodeId: 'plan',
+      nodeName: 'plan',
+      duration: 900,
+    });
+    await dispatchEvent({
+      type: 'node_skipped_prior_success',
+      runId: 'r1',
+      nodeId: 'plan',
+      nodeName: 'plan',
+    });
+    await dispatchEvent({
+      type: 'workflow_completed',
+      runId: 'r1',
+      workflowName: 'assist',
+      duration: 1234,
+    });
+
+    const rendered = JSON.stringify(updated[updated.length - 1]);
+    expect(rendered).toContain(':white_check_mark: `plan` · 900ms');
+    expect(rendered).not.toContain(':fast_forward: `plan`');
+  });
+
+  test('reports a prior-success replay as completed when the resumed run has no prior entry', async () => {
+    const { adapter, updated, triggerMap } = makeFakeAdapter();
+    triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
+    mockGetConversationId.mockReturnValue('C1:111.0');
+
+    new SlackWorkflowBridge(adapter as never).attach();
+    await dispatchEvent({
+      type: 'workflow_started',
+      runId: 'r1',
+      workflowName: 'assist',
+      conversationId: 'conv-db-uuid',
+      transcriptPath: '/logs/r1.jsonl',
+    });
+    await dispatchEvent({
+      type: 'node_skipped_prior_success',
+      runId: 'r1',
+      nodeId: 'plan',
+      nodeName: 'plan',
+    });
+    await dispatchEvent({
+      type: 'workflow_completed',
+      runId: 'r1',
+      workflowName: 'assist',
+      duration: 1234,
+    });
+
+    const rendered = JSON.stringify(updated[updated.length - 1]);
+    expect(rendered).toContain(':white_check_mark: `plan`');
+    expect(rendered).not.toContain(':fast_forward: `plan`');
+  });
+
+  test('still reports a genuine when_condition skip as skipped', async () => {
+    const { adapter, updated, triggerMap } = makeFakeAdapter();
+    triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
+    mockGetConversationId.mockReturnValue('C1:111.0');
+
+    new SlackWorkflowBridge(adapter as never).attach();
+    await dispatchEvent({
+      type: 'workflow_started',
+      runId: 'r1',
+      workflowName: 'assist',
+      conversationId: 'conv-db-uuid',
+      transcriptPath: '/logs/r1.jsonl',
+    });
+    await dispatchEvent({
+      type: 'node_skipped',
+      runId: 'r1',
+      nodeId: 'plan',
+      nodeName: 'plan',
+      reason: 'when_condition',
+      cause: { kind: 'condition', expr: '$route.output == true' },
+    });
+    await dispatchEvent({
+      type: 'workflow_completed',
+      runId: 'r1',
+      workflowName: 'assist',
+      duration: 1234,
+    });
+
+    const rendered = JSON.stringify(updated[updated.length - 1]);
+    expect(rendered).toContain(':fast_forward: `plan`');
+    expect(rendered).not.toContain(':white_check_mark: `plan`');
+  });
+
   test('completed run with failed authored outcome shows both reactions and both labels', async () => {
     const { adapter, updated, reactionsAdded, triggerMap } = makeFakeAdapter();
     triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
