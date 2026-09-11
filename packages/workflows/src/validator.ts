@@ -22,7 +22,11 @@ import {
 } from '@archon/paths';
 import { execFileAsync } from '@archon/git';
 import { BUNDLED_COMMANDS, BUNDLED_WORKFLOWS, isBinaryBuild } from './defaults/bundled-defaults';
-import { readBundleIndex } from './defaults/bundle-inventory';
+import {
+  bundledDefaultCommandPath,
+  bundlesPackagedResources,
+  listBundledDefaultCommands,
+} from './defaults/bundle-inventory';
 import { isValidCommandName } from './command-validation';
 import { levenshtein, findSimilar } from './utils/fuzzy-match';
 import {
@@ -179,11 +183,9 @@ export async function discoverAvailableCommands(
       for (const name of Object.keys(BUNDLED_COMMANDS)) {
         if (parsePackagedResourceReference(name) === null) names.add(name);
       }
-    } else if ((await readBundleIndex()).includes('defaults')) {
-      const defaultsPath = getDefaultCommandsPath();
-      const files = await findCommandFiles(defaultsPath);
-      for (const { commandName, relativePath } of files) {
-        if (relativePath === `${commandName}.md`) names.add(commandName);
+    } else {
+      for (const name of await listBundledDefaultCommands(getDefaultCommandsPath())) {
+        names.add(name);
       }
     }
   }
@@ -227,11 +229,7 @@ async function resolveCommand(
       if (isBinaryBuild()) {
         return commandName in BUNDLED_COMMANDS ? `[bundled:${commandName}]` : null;
       }
-      if (
-        packaged.owner.pack === 'defaults' ||
-        !(await readBundleIndex()).includes(packaged.owner.pack)
-      )
-        return null;
+      if (!(await bundlesPackagedResources(packaged.owner.pack))) return null;
     }
     let workflowsRoot: string;
     if (packaged.owner.source === 'project') {
@@ -286,11 +284,22 @@ async function resolveCommand(
       if (commandName in BUNDLED_COMMANDS) {
         return `[bundled:${commandName}]`;
       }
-    } else if ((await readBundleIndex()).includes('defaults')) {
-      const root = getDefaultCommandsPath();
-      const entries = await findCommandFiles(root);
-      const match = entries.find(entry => entry.relativePath === `${commandName}.md`);
-      if (match) return join(root, match.relativePath);
+    } else {
+      const path = await bundledDefaultCommandPath(getDefaultCommandsPath(), commandName);
+      // A miss is ENOENT; any other stat failure belongs to the caller, not to a silent null.
+      if (path !== null) {
+        try {
+          if ((await stat(path)).isFile()) return path;
+        } catch (error) {
+          const err = error as NodeJS.ErrnoException;
+          if (err.code !== 'ENOENT') {
+            getLog().error({ err, path, commandName }, 'bundled_default_command_inspection_failed');
+            throw new Error(`Cannot inspect bundled default '${commandName}': ${err.message}`, {
+              cause: err,
+            });
+          }
+        }
+      }
     }
   }
 

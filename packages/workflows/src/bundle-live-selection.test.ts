@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, expect, mock, spyOn, test } from 'bun:test';
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -137,6 +137,46 @@ test('removing defaults from the index removes flat bundled commands from listin
   if (!parsed.workflow) throw new Error('Invalid test workflow');
   const issues = await validateWorkflowResources(parsed.workflow, project);
   expect(issues.some(issue => issue.level === 'error' && issue.field === 'command')).toBe(true);
+});
+
+test('a same-named nested file does not hide a flat bundled default command', async () => {
+  // `aaa-group` sorts before `flat-command.md`, so a 1-deep basename-deduped walk hands
+  // the name's slot to the nested file and drops the root entry from its results
+  // entirely. The flat scope is a direct path lookup, so the root command still resolves.
+  const shadow = join(app, 'commands', 'defaults', 'aaa-group');
+  const block = join(app, 'workflows', 'defaults', 'shadow-block.yml');
+  const parent = join(app, 'workflows', 'defaults', 'shadow-parent.yml');
+  await write(join(shadow, 'flat-command.md'), 'nested command');
+  await write(
+    block,
+    'name: shadow-block\ndescription: fixture\nnodes:\n  - id: work\n    command: flat-command\n'
+  );
+  await write(
+    parent,
+    'name: shadow-parent\ndescription: fixture\nnodes:\n  - id: block\n    include: shadow-block\n'
+  );
+  try {
+    expect(await discoverAvailableCommands(project)).toContain('flat-command');
+    expect(await loadCommandPrompt(deps, project, 'flat-command')).toEqual({
+      success: true,
+      content: 'flat command',
+    });
+    const parsed = parseWorkflow(
+      'name: check\ndescription: fixture\nnodes:\n  - id: work\n    command: flat-command\n',
+      'check.yaml'
+    );
+    if (!parsed.workflow) throw new Error('Invalid test workflow');
+    const issues = await validateWorkflowResources(parsed.workflow, project);
+    expect(issues.some(issue => issue.level === 'error' && issue.field === 'command')).toBe(false);
+    // The include expander compiles a block's command body through the same scope.
+    const result = await discoverWorkflows(project);
+    expect(result.errors).toEqual([]);
+    expect(result.workflows.some(entry => entry.workflow.name === 'shadow-parent')).toBe(true);
+  } finally {
+    await removeTempTree(shadow);
+    await rm(block);
+    await rm(parent);
+  }
 });
 
 test('a captured bundle retains formerly indexed resources without reading the live index', async () => {

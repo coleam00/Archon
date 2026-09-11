@@ -47,9 +47,10 @@ import {
   isBinaryBuild,
 } from './defaults/bundled-defaults';
 import {
+  bundledDefaultCommandPath,
+  bundlesPackagedResources,
   collectInstalledBundleSources,
   readBundleContent,
-  readBundleIndex,
 } from './defaults/bundle-inventory';
 import { createLogger } from '@archon/paths';
 import { isValidCommandName, MAX_DISCOVERY_DEPTH } from './command-validation';
@@ -454,11 +455,7 @@ async function resolveCommandContentForScan(
       // A captured run reads the bundled bytes IT froze; the capture materialized a
       // binary's embedded constants to files.
       if (isBinaryBuild() && roots.kind === 'live') return BUNDLED_COMMANDS[commandName] ?? null;
-      if (
-        roots.kind === 'live' &&
-        (packaged.owner.pack === 'defaults' ||
-          !(await readBundleIndex()).includes(packaged.owner.pack))
-      )
+      if (roots.kind === 'live' && !(await bundlesPackagedResources(packaged.owner.pack)))
         return null;
     }
 
@@ -522,27 +519,31 @@ async function resolveCommandContentForScan(
   if (isBinaryBuild() && roots.kind === 'live') {
     return BUNDLED_COMMANDS[commandName] ?? null;
   }
-  if (roots.kind === 'live' && !(await readBundleIndex()).includes('defaults')) return null;
+  // Live defaults are the flat files the index selects, so they resolve by direct path.
+  // A capture keeps whatever command layout it froze and keeps the basename walk.
   const defaultsDir = roots.bundledCommands;
-  let entries: Awaited<ReturnType<typeof archonPaths.findCommandFiles>>;
-  try {
-    entries = await archonPaths.findCommandFiles(defaultsDir);
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    if (err.code === 'ENOENT') return null;
-    return { path: defaultsDir, message: err.message, operation: 'inspect' };
+  let commandPath: string | null;
+  if (roots.kind === 'captured') {
+    let entries: Awaited<ReturnType<typeof archonPaths.findCommandFiles>>;
+    try {
+      entries = await archonPaths.findCommandFiles(defaultsDir);
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === 'ENOENT') return null;
+      return { path: defaultsDir, message: err.message, operation: 'inspect' };
+    }
+    const match = entries.find(e => e.commandName === commandName);
+    commandPath = match ? join(defaultsDir, match.relativePath) : null;
+  } else {
+    commandPath = await bundledDefaultCommandPath(defaultsDir, commandName);
   }
-  const match = entries.find(
-    e =>
-      e.commandName === commandName &&
-      (roots.kind === 'captured' || e.relativePath === `${commandName}.md`)
-  );
-  if (!match) return null;
-  const commandPath = join(defaultsDir, match.relativePath);
+  if (commandPath === null) return null;
   try {
     return await readFile(commandPath, 'utf-8');
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
+    // The direct path is a candidate, not a hit: an absent file is an ordinary miss.
+    if (err.code === 'ENOENT') return null;
     return { path: commandPath, message: err.message, operation: 'read' };
   }
 }

@@ -26,6 +26,45 @@ export async function readBundleIndex(
   return indexSchema.parse(JSON.parse(await readFile(path, 'utf8'))).packs;
 }
 
+/**
+ * Whether a bundled `pack/workflow` reference can resolve from live source. A pack the
+ * index no longer names has stopped shipping, and `defaults` ships flat workflows and
+ * commands rather than packaged resources, so it never owns one.
+ */
+export async function bundlesPackagedResources(pack: string): Promise<boolean> {
+  return pack !== 'defaults' && (await readBundleIndex()).includes(pack);
+}
+
+/**
+ * Where a live bundled default command lives, or null when the index no longer ships
+ * `defaults`. The scope is exactly the flat files `defaultCommandFiles` selects, so a
+ * command resolves by direct path. Routing it through a recursive, basename-deduped walk
+ * instead lets a same-named file one folder deeper take the name's slot, which drops the
+ * root command from the walk and turns it into a bare "not found".
+ *
+ * The path is not proof the file exists. The caller reads or stats it and owns that error.
+ */
+export async function bundledDefaultCommandPath(
+  commandsDefaultsRoot: string,
+  commandName: string
+): Promise<string | null> {
+  return (await readBundleIndex()).includes('defaults')
+    ? join(commandsDefaultsRoot, `${commandName}.md`)
+    : null;
+}
+
+/** The live bundled default command names — the same flat selection, listed. Empty when
+ * the index no longer ships `defaults` or the directory is absent. */
+export async function listBundledDefaultCommands(commandsDefaultsRoot: string): Promise<string[]> {
+  if (!(await readBundleIndex()).includes('defaults')) return [];
+  try {
+    return (await defaultCommandFiles(commandsDefaultsRoot)).map(file => file.name);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
 type Owner = Pick<WorkflowResourceOwner, 'pack' | 'workflow'>;
 type Script = BundledScriptPack['scripts'][string];
 
@@ -109,6 +148,20 @@ async function entryType(
   return entry.isSymbolicLink() ? await stat(join(directory, entry.name)) : entry;
 }
 
+/** The bundled `defaults` command scope: the flat `.md` files directly under the commands
+ * defaults root. Selection and live resolution read the scope through this one walk, so a
+ * file a capture would never carry can never resolve as a command either. */
+async function defaultCommandFiles(
+  directory: string
+): Promise<{ name: string; fileName: string }[]> {
+  const files: { name: string; fileName: string }[] = [];
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (!entry.name.endsWith('.md') || !(await entryType(directory, entry)).isFile()) continue;
+    files.push({ name: basename(entry.name, '.md'), fileName: entry.name });
+  }
+  return files;
+}
+
 async function sharedModules(directory: string): Promise<string[]> {
   if ((await lstat(directory)).isSymbolicLink()) {
     throw new Error(`Shared module symlinks are not supported: ${directory}`);
@@ -176,15 +229,13 @@ export async function collectBundleSources(
       const defaults = join(commandsRoot, 'defaults');
       if (!(await isDirectory(defaults)))
         throw new Error(`Commands defaults directory not found: ${defaults}`);
-      for (const entry of await readdir(defaults, { withFileTypes: true })) {
-        if (!(await entryType(defaults, entry)).isFile() || !entry.name.endsWith('.md')) continue;
-        const name = basename(entry.name, '.md');
-        validateDefaultName(name, entry.name);
+      for (const { name, fileName } of await defaultCommandFiles(defaults)) {
+        validateDefaultName(name, fileName);
         add({
           kind: 'command',
           name,
-          sourcePath: join(defaults, entry.name),
-          relativePath: `commands/defaults/${entry.name}`,
+          sourcePath: join(defaults, fileName),
+          relativePath: `commands/defaults/${fileName}`,
         });
       }
       continue;

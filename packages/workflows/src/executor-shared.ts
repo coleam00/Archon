@@ -16,7 +16,7 @@ import {
   type WorkflowSourceRoots,
 } from './workflow-source';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
-import { readBundleIndex } from './defaults/bundle-inventory';
+import { bundledDefaultCommandPath, bundlesPackagedResources } from './defaults/bundle-inventory';
 import { createLogger } from '@archon/paths';
 import { isValidCommandName } from './command-validation';
 import type { LoadCommandResult } from './schemas';
@@ -435,8 +435,7 @@ export async function loadCommandPrompt(
         !loadDefaultCommands ||
         (roots.kind === 'live' &&
           !isBinaryBuild() &&
-          (packaged.owner.pack === 'defaults' ||
-            !(await readBundleIndex()).includes(packaged.owner.pack)))
+          !(await bundlesPackagedResources(packaged.owner.pack)))
       ) {
         return {
           success: false,
@@ -586,18 +585,20 @@ export async function loadCommandPrompt(
         return { success: true, content: bundledContent };
       }
       getLog().debug({ commandName }, 'command_bundled_not_found');
-    } else if (roots.kind === 'captured' || (await readBundleIndex()).includes('defaults')) {
-      // Live defaults contain only the flat files the generator selects; old captures
-      // retain their original command layout independently of the current index.
+    } else {
+      // Live defaults are the flat files the index selects, so they resolve by direct
+      // path. Old captures retain whatever command layout they froze — subfolders
+      // included — so they keep the basename walk, independently of the current index.
       const appDefaultsPath = roots.bundledCommands;
-      const entries = await archonPaths.findCommandFiles(appDefaultsPath);
-      const match = entries.find(
-        e =>
-          e.commandName === commandName &&
-          (roots.kind === 'captured' || e.relativePath === `${commandName}.md`)
-      );
-      if (match) {
-        const filePath = join(appDefaultsPath, match.relativePath);
+      let filePath: string | null;
+      if (roots.kind === 'captured') {
+        const entries = await archonPaths.findCommandFiles(appDefaultsPath);
+        const match = entries.find(e => e.commandName === commandName);
+        filePath = match ? join(appDefaultsPath, match.relativePath) : null;
+      } else {
+        filePath = await bundledDefaultCommandPath(appDefaultsPath, commandName);
+      }
+      if (filePath !== null) {
         try {
           const content = await readFile(filePath, 'utf-8');
           if (!content.trim()) {
