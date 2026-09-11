@@ -44,5 +44,7 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # A declared exclusion from `bun run validate` (scripts/validate-ci-parity.test.ts):
+      # the gate must run on a Bun-only checkout, and this build needs the Node setup above.
       - name: Build docs
         run: bun run build:docs

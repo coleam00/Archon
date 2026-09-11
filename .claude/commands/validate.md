@@ -105,9 +105,10 @@ bun --filter @archon/workflows test
 bun run validate
 ```
 
-Equivalent to: `bun run type-check && bun run lint --max-warnings 0 && bun run format:check && bun run test`
+`scripts/validate.ts` lists what this runs; the levels above are a subset of it.
 
-This is the exact command CI runs. If this passes locally, CI will pass.
+This is the command CI runs. If it passes locally, CI will pass — except for the
+PostgreSQL and Docker jobs, which CONTRIBUTING.md lists with how to run each one.
 
 ---
 

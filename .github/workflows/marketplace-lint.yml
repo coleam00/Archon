@@ -23,5 +23,10 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # Deliberately outside `bun run validate`: this makes 9 unauthenticated github.com
+      # API calls per run against a 60/hour per-IP quota, so putting it in the gate every
+      # contributor runs turns that gate red with HTTP 403s that say nothing about the
+      # change. scripts/validate-ci-parity.test.ts records the exclusion; CONTRIBUTING.md
+      # tells contributors touching marketplace.ts to run this command themselves.
       - name: Run marketplace lint
         run: bun packages/docs-web/scripts/lint-marketplace.ts

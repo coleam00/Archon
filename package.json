@@ -41,7 +41,7 @@
     "build:web": "bun --filter @archon/web build",
     "dev:docs": "bun --filter @archon/docs-web dev",
     "build:docs": "bun --filter @archon/docs-web build",
-    "validate": "bun run check:cli-import-boundary && bun run check:bundled && bun run check:bundled-skill && bun run check:bundled-schema && bun run check:pi-vendor-map && bun run check:capability-matrix && bun run check:api-types && bun run type-check && bun run lint --max-warnings 0 && bun run format:check && bun run test:install && bun run test",
+    "validate": "bun run scripts/validate.ts",
     "prepare": "husky",
     "setup-auth": "bun --filter @archon/server setup-auth",
     "check:cli-import-boundary": "bun run scripts/check-cli-import-boundary.ts"
