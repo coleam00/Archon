@@ -61,6 +61,23 @@ describe('native tool input schema conformance', () => {
     expect(schema.properties.confirm).toMatchObject({ type: 'boolean', description: 'guard' });
   });
 
+  test('Claude still emits per-property descriptions into the JSON Schema', () => {
+    // Descriptions are invisible to `safeParse`, so only the emitted schema can
+    // catch a dropped `.describe()`. `.optional()` sits between the getter and
+    // the caller, so read the description through `z.toJSONSchema`.
+    const schema = z.toJSONSchema(z.object(nativeToolInputToZodShape(SCHEMA))) as {
+      properties: Record<string, unknown>;
+    };
+    expect(schema.properties.action).toMatchObject({
+      enum: ['list', 'get'],
+      description: 'the action',
+    });
+    expect(schema.properties.confirm).toMatchObject({
+      type: 'boolean',
+      description: 'guard',
+    });
+  });
+
   test('both builders accept a NativeTool carrying the typed schema', () => {
     const tool: NativeTool = {
       name: 'manage_run',
