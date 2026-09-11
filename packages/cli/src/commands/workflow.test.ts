@@ -37,6 +37,7 @@ import {
   resolveRunStorageRoot as resolveRunStorageRootReal,
 } from '@archon/paths/archon-paths';
 import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
+import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import type * as WorkflowDiscovery from '@archon/workflows/workflow-discovery';
 import type * as WorkflowExecutor from '@archon/workflows/executor';
 import type * as DetachedRunControl from '../utils/detached-run-control';
@@ -70,6 +71,7 @@ import {
   resolveDetachedRunEncryptionEnv,
   maybePrintTierNotice,
   resolveContainerBackendConfig,
+  pendingDurableWait,
   hasUnresolvedWriteback,
   buildNodeSummaries,
   resolveCliExitCode,
@@ -7771,6 +7773,79 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
         conversationId: 'cli-123',
       })
     ).rejects.toThrow(/cannot find the run 'run-vanished'/);
+  });
+});
+
+describe('pendingDurableWait — which pauses this process owns', () => {
+  const run = (status: WorkflowRunStatus, metadata: Record<string, unknown>): WorkflowRun =>
+    ({ id: 'run-wait', status, metadata }) as unknown as WorkflowRun;
+
+  it('reads the cursor for a time wait', () => {
+    expect(
+      pendingDurableWait(
+        run('paused', {
+          wait: {
+            owner: 'node',
+            kind: 'time',
+            nodeId: 'cooldown',
+            waitingSince: '2026-01-01T00:00:00.000Z',
+            resumeAt: '2026-01-01T00:01:00.000Z',
+          },
+        })
+      )
+    ).toEqual({
+      kind: 'time',
+      stepName: 'cooldown',
+      resumeAt: '2026-01-01T00:01:00.000Z',
+      signaled: false,
+    });
+  });
+
+  it('marks a signaled event wait and names a loop-owned body wait', () => {
+    expect(
+      pendingDurableWait(
+        run('paused', {
+          wait: {
+            owner: 'loop_group',
+            nodeId: 'poll',
+            bodyWaitId: 'checks',
+            iteration: 2,
+            sessionId: null,
+            sessionProvider: null,
+            kind: 'event',
+            event: 'checks.complete',
+            waitingSince: '2026-01-01T00:00:00.000Z',
+            resumeAt: '2026-01-01T00:05:00.000Z',
+            signaledAt: '2026-01-01T00:00:30.000Z',
+          },
+        })
+      )
+    ).toEqual({
+      kind: 'event',
+      stepName: 'poll.checks',
+      resumeAt: '2026-01-01T00:05:00.000Z',
+      signaled: true,
+    });
+  });
+
+  it('returns nothing for a running run, an attention wait, or an approval gate', () => {
+    expect(pendingDurableWait(run('running', {}))).toBeUndefined();
+    expect(
+      pendingDurableWait(
+        run('paused', {
+          wait: {
+            owner: 'node',
+            kind: 'attention',
+            nodeId: 'await-operator',
+            waitingSince: '2026-01-01T00:00:00.000Z',
+            message: 'Do the outside action',
+          },
+        })
+      )
+    ).toBeUndefined();
+    expect(
+      pendingDurableWait(run('paused', { approval: { nodeId: 'gate', message: 'ok?' } }))
+    ).toBeUndefined();
   });
 });
 

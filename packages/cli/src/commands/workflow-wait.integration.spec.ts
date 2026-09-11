@@ -348,6 +348,45 @@ function readRunStatus(archonHome: string, runId: string): string | undefined {
 }
 
 /**
+ * One node's persisted completion output, read straight from the events table.
+ *
+ * A wait node's fixed `{ status, waited_ms }` contract is the engine's own record of
+ * what happened, so it proves more than wall-clock timing: `waited_ms` shows the
+ * deadline was genuinely waited instead of short-circuited, and `status` distinguishes
+ * a satisfied wait from an expired one.
+ */
+function readNodeCompletedOutput(
+  archonHome: string,
+  runId: string,
+  nodeId: string
+): Record<string, unknown> | undefined {
+  const databasePath = join(archonHome, 'archon.db');
+  if (!existsSync(databasePath)) return undefined;
+  const database = new Database(databasePath, { readonly: true });
+  try {
+    const row = database
+      .query<{ data: string }, [string, string]>(
+        `SELECT data FROM remote_agent_workflow_events
+         WHERE workflow_run_id = ? AND step_name = ? AND event_type = 'node_completed'
+         ORDER BY created_at DESC LIMIT 1`
+      )
+      .get(runId, nodeId);
+    if (!row) return undefined;
+    const data = JSON.parse(row.data) as { structured_output?: unknown; node_output?: unknown };
+    const output = data.structured_output ?? data.node_output;
+    const parsed = typeof output === 'string' ? (JSON.parse(output) as unknown) : output;
+    if (typeof parsed !== 'object' || parsed === null) return undefined;
+    return parsed as Record<string, unknown>;
+  } catch {
+    // The owner creates archon.db before applying the schema and Windows can widen
+    // the commit window (#2306); the caller polls, so a transient read is not a result.
+    return undefined;
+  } finally {
+    database.close();
+  }
+}
+
+/**
  * Poll `read` until it produces a value, naming `what` if it never does.
  *
  * The catch is load bearing, not defensive: an owner process creates `archon.db`
@@ -734,4 +773,147 @@ describe('archon workflow wait against a detached run', () => {
     expectWaitExit({ exitCode, payload }, 1);
     expect(payload).toMatchObject({ ok: false, action: 'wait', error: 'not_found' });
   }, 60_000);
+});
+
+/**
+ * #3312: with no `archon serve` anywhere in this block, the process that owns a run
+ * enforces its own durable wait deadline. On a build where the `--detach` child exits
+ * at the pause, every case here leaves the run `paused` forever and fails.
+ */
+describe('a durable wait deadline is enforced by the owning process', () => {
+  const DURATION_WAIT =
+    'name: wait-duration\ndescription: Durable duration wait fixture.\n' +
+    'nodes:\n' +
+    '  - id: warmup\n    bash: "echo ready"\n' +
+    '  - id: cooldown\n    depends_on: [warmup]\n    wait:\n      duration_ms: 3000\n';
+  const EVENT_WAIT =
+    'name: wait-event\ndescription: Durable event wait fixture.\n' +
+    'nodes:\n' +
+    '  - id: warmup\n    bash: "echo ready"\n' +
+    '  - id: checks\n    depends_on: [warmup]\n    wait:\n      event: checks.complete\n      deadline_ms: 1500\n';
+  const ATTENTION_WAIT =
+    'name: wait-attention\ndescription: Durable attention wait fixture.\n' +
+    'nodes:\n' +
+    '  - id: await-operator\n    wait:\n      attention: "Do the outside action, then resume."\n';
+  // Longer than the owner's 5 s poll cadence, so a concurrent release lands while
+  // the owner is still asleep and has to be noticed on its next read.
+  const LONG_WAIT =
+    'name: wait-long\ndescription: Long durable wait fixture.\n' +
+    'nodes:\n' +
+    '  - id: cooldown\n    wait:\n      duration_ms: 8000\n';
+
+  test('resumes a duration wait at its deadline and finishes the run', async () => {
+    const fixture = makeFixture('archon-wait-duration-', { 'wait-duration': DURATION_WAIT });
+    const { runId } = await launchDetached(fixture, 'wait-duration');
+
+    const completed = await waitFor(
+      'the duration wait to resume and complete the run',
+      () => (readRunStatus(fixture.archonHome, runId) === 'completed' ? 'completed' : undefined),
+      60_000
+    );
+    activeRunIds.delete(runId);
+    expect(completed).toBe('completed');
+
+    const output = await waitFor(
+      'the duration wait node completion',
+      () => readNodeCompletedOutput(fixture.archonHome, runId, 'cooldown'),
+      10_000
+    );
+    expect(output).toMatchObject({ status: 'satisfied' });
+    // The engine's own record of the wait: the deadline was genuinely waited, and
+    // only then did the owner resume the run.
+    expect(Number(output.waited_ms)).toBeGreaterThanOrEqual(3000);
+  }, 120_000);
+
+  test('expires an event wait by its deadline and finishes the run', async () => {
+    const fixture = makeFixture('archon-wait-event-', { 'wait-event': EVENT_WAIT });
+    const { runId } = await launchDetached(fixture, 'wait-event');
+
+    const completed = await waitFor(
+      'the event wait to expire and complete the run',
+      () => (readRunStatus(fixture.archonHome, runId) === 'completed' ? 'completed' : undefined),
+      60_000
+    );
+    activeRunIds.delete(runId);
+    expect(completed).toBe('completed');
+
+    const output = await waitFor(
+      'the event wait node completion',
+      () => readNodeCompletedOutput(fixture.archonHome, runId, 'checks'),
+      10_000
+    );
+    expect(output).toMatchObject({ status: 'expired', event: 'checks.complete' });
+    expect(Number(output.waited_ms)).toBeGreaterThanOrEqual(1500);
+  }, 120_000);
+
+  test('workflow wait returns at the run terminal, not at the wait', async () => {
+    const fixture = makeFixture('archon-wait-continuation-', { 'wait-duration': DURATION_WAIT });
+    const { runId } = await launchDetached(fixture, 'wait-duration');
+
+    // Attach only once the run is parked on its wait, so the waiter is watching the
+    // resumed execution rather than racing the first pass.
+    await waitFor(
+      'the duration-wait run to park',
+      () => (readRunStatus(fixture.archonHome, runId) === 'paused' ? 'paused' : undefined),
+      30_000
+    );
+    const waiter = startWait(fixture, runId, 30);
+    expect(await waiter.attached()).toEqual({ observedStatus: 'paused' });
+
+    const settled = await waiter.settled();
+    activeRunIds.delete(runId);
+    // A wait that returned at the pause would carry its own kind, not the run's
+    // terminal transition.
+    expectWaitExit(settled, 0);
+    expect(settled.payload).toMatchObject({
+      result: 'attention',
+      attention: { kind: 'terminal', runId, status: 'completed' },
+    });
+  }, 120_000);
+
+  test('leaves an attention wait for the operator and releases its owner', async () => {
+    const fixture = makeFixture('archon-wait-attention-', { 'wait-attention': ATTENTION_WAIT });
+    const { runId } = await launchDetached(fixture, 'wait-attention');
+
+    // An attention wait has no deadline, so its owner must exit rather than sleep.
+    // With the endpoint gone nothing in this process can advance the run, which is
+    // the difference that keeps a human decision out of the continuation loop.
+    const ownerGone = await waitFor(
+      'the attention owner to release its endpoint',
+      async () => {
+        try {
+          const target = await requestDetachedRunStop(runId);
+          target.release();
+          return undefined;
+        } catch {
+          return 'gone';
+        }
+      },
+      30_000
+    );
+    expect(ownerGone).toBe('gone');
+    expect(readRunStatus(fixture.archonHome, runId)).toBe('paused');
+  }, 90_000);
+
+  test('does not resume a wait another process released', async () => {
+    const fixture = makeFixture('archon-wait-released-', { 'wait-long': LONG_WAIT });
+    const { runId } = await launchDetached(fixture, 'wait-long');
+    await waitFor(
+      'the long-wait run to park',
+      () => (readRunStatus(fixture.archonHome, runId) === 'paused' ? 'paused' : undefined),
+      30_000
+    );
+
+    const abandoned = await runCli(fixture, ['workflow', 'abandon', runId]);
+    if (abandoned.exitCode !== 0) {
+      throw new Error(`abandon failed: ${abandoned.stderr || abandoned.stdout}`);
+    }
+    activeRunIds.delete(runId);
+
+    // The owner is asleep on its own timer here. Whether it notices on the next poll
+    // or loses the resume's compare-and-swap, the released run must stay cancelled —
+    // an owner that resurrects another process's terminal state is the defect.
+    await Bun.sleep(9_000);
+    expect(readRunStatus(fixture.archonHome, runId)).toBe('cancelled');
+  }, 120_000);
 });

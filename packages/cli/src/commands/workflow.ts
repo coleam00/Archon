@@ -69,7 +69,10 @@ import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-chec
 import { reclaimContainerEnv } from '@archon/core/services/cleanup-service';
 import { waitForRunAttention } from '@archon/core/services/run-attention-watch';
 import type { RunWaitResult } from '@archon/core/services/run-attention-watch';
-import { startRunLiveOwner } from '@archon/core/services/run-live-owner';
+import {
+  startRunLiveOwner,
+  RunLiveOwnerAlreadyOwnedError,
+} from '@archon/core/services/run-live-owner';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import {
@@ -120,6 +123,7 @@ import {
   workflowRunStatusSchema,
   isApprovalContext,
   isWorkflowWaitContext,
+  workflowWaitStepName,
   isScheduledWorkflowResume,
   skipCauseSchema,
   SUBRUN_METADATA_KEYS,
@@ -1503,11 +1507,9 @@ async function runWorkflowWithOwnedSource(
   cwd: string,
   workflowName: string,
   userMessage: string,
-  options: WorkflowRunOptions = {}
-): Promise<void> {
-  const detachedProcessOwner = process.env[DETACHED_RUN_OWNER_ENV] === '1';
-  if (detachedProcessOwner) Reflect.deleteProperty(process.env, DETACHED_RUN_OWNER_ENV);
-  if (detachedProcessOwner) assertDetachedRunProcessOwner();
+  options: WorkflowRunOptions = {},
+  detachedProcessOwner: boolean
+): Promise<PendingWaitContinuation | undefined> {
   const effectiveDiscoveryCwd = options.discoveryCwd ?? cwd;
   const modelOverrides = options.modelAssignments
     ? parseRunModelAssignments(options.modelAssignments)
@@ -1856,7 +1858,7 @@ async function runWorkflowWithOwnedSource(
           `Created dry-run stub scaffold for ${workflow.name}: ${stubsInitPath} (${String(nodeCount)} nodes)\n`
         );
       }
-      return;
+      return undefined;
     }
     const stubs = await loadDryRunStubs(stubsPath);
     // The install's config + AI profile are what make the per-node provider/model report
@@ -1928,7 +1930,7 @@ async function runWorkflowWithOwnedSource(
           : 'Dry-run failed. See the trace for details.'
       );
     }
-    return;
+    return undefined;
   }
 
   // Validate mutually exclusive flags (defensive — cli.ts checks these for UX, but
@@ -2367,7 +2369,7 @@ async function runWorkflowWithOwnedSource(
         console.warn('Warning: could not open a log file — child output will not be captured.');
       }
     }
-    return;
+    return undefined;
   }
 
   console.log(`Running workflow: ${workflowName}`);
@@ -3136,7 +3138,8 @@ async function runWorkflowWithOwnedSource(
           'cli.workflow_hydrate_resume_failed'
         );
         throw new Error(
-          `Cannot resume workflow '${workflowName}': failed to load prior run state — ${err.message}`
+          `Cannot resume workflow '${workflowName}': failed to load prior run state — ${err.message}`,
+          { cause: err }
         );
       }
       if (!prepared) {
@@ -3400,6 +3403,17 @@ async function runWorkflowWithOwnedSource(
 
   // Check result and exit appropriately
   if (result.success && 'paused' in result && result.paused) {
+    // A durable `time`/`event` wait is this process's own cursor to wake; a gate or
+    // `attention` pause has no deadline and stays with whoever resolves it.
+    const pausedRun = await workflowDb.getWorkflowRun(result.workflowRunId);
+    const wait = pausedRun === null ? undefined : pendingDurableWait(pausedRun);
+    if (pausedRun !== null && wait !== undefined) {
+      console.log(
+        `\nWorkflow paused — waiting for '${wait.stepName}' until ${wait.resumeAt}; ` +
+          'this process resumes the run at its deadline.'
+      );
+      return { run: pausedRun, wait };
+    }
     if (!presentRunFacts('\nWorkflow paused — waiting for approval.', 'paused')) {
       console.log('\nWorkflow paused — waiting for approval.');
     }
@@ -3427,6 +3441,129 @@ async function runWorkflowWithOwnedSource(
     presentRunFacts('\nWorkflow finished.', 'failed');
     throw new WorkflowRunFailedError(result.error, detachedProcessOwner);
   }
+  return undefined;
+}
+
+/**
+ * The durable cursor of a wait that this run's own process must wake. `attention`
+ * waits are excluded at the source: they are a decision, not a deadline.
+ */
+export interface DurableWaitCursor {
+  kind: 'time' | 'event';
+  stepName: string;
+  resumeAt: string;
+  signaled: boolean;
+}
+
+/** A run this process should resume itself once its wait's deadline arrives. */
+export interface PendingWaitContinuation {
+  run: WorkflowRun;
+  wait: DurableWaitCursor;
+}
+
+/**
+ * Read the wait this process owns off a run row, if any.
+ *
+ * `undefined` means the run is not paused on a `time`/`event` wait — a terminal
+ * run, a gate, or an `attention` wait, none of which has a deadline to enforce.
+ */
+export function pendingDurableWait(run: WorkflowRun): DurableWaitCursor | undefined {
+  if (run.status !== 'paused') return undefined;
+  const wait = run.metadata.wait;
+  if (!isWorkflowWaitContext(wait) || wait.kind === 'attention') return undefined;
+  return {
+    kind: wait.kind,
+    stepName: workflowWaitStepName(wait),
+    resumeAt: wait.resumeAt,
+    signaled: wait.kind === 'event' && wait.signaledAt !== undefined,
+  };
+}
+
+/** How soon a sleeping owner notices that another host moved or released its run. */
+const WAIT_CONTINUATION_POLL_MS = 5_000;
+
+/**
+ * Sleep until this run's wait is due, then let the caller resume it.
+ *
+ * The row is re-read every poll rather than trusting the cursor copied at pause
+ * time: `archon serve`'s scan, an operator's `resume`/`resignal`/`abandon`, or a
+ * crash can move or end the wait. A superseded cursor stops the loop instead of
+ * executing a run this process no longer owns; the resume's own compare-and-swap
+ * is the final guard.
+ */
+async function awaitDurableWaitDeadline(
+  runId: string,
+  wait: DurableWaitCursor
+): Promise<'resume' | 'stop'> {
+  let cursor = wait;
+  for (;;) {
+    if (cursor.signaled) return 'resume';
+    const remainingMs = Date.parse(cursor.resumeAt) - Date.now();
+    if (remainingMs <= 0) return 'resume';
+    await new Promise<void>(resolve =>
+      setTimeout(resolve, Math.min(remainingMs, WAIT_CONTINUATION_POLL_MS))
+    );
+    const latest = await workflowDb.getWorkflowRun(runId);
+    const next = latest === null ? undefined : pendingDurableWait(latest);
+    if (next?.stepName !== cursor.stepName || next.resumeAt !== cursor.resumeAt) {
+      return 'stop';
+    }
+    cursor = next;
+  }
+}
+
+/** The invocation parameters of one continuation attempt, in `workflowRunCommand`'s shape. */
+interface WaitResumeAttempt {
+  cwd: string;
+  workflowName: string;
+  userMessage: string;
+  options: WorkflowRunOptions;
+}
+
+/** Mirror `workflowResumeCommand`'s continuation options for a run this process owns. */
+async function buildWaitResumeAttempt(run: WorkflowRun): Promise<WaitResumeAttempt> {
+  if (!run.working_path) {
+    throw new Error(
+      `Workflow run '${run.id}' has no working path recorded.\n` +
+        'Cannot determine where to resume. The run may be too old.'
+    );
+  }
+  const discoveryCwd = run.codebase_id
+    ? await resolveDiscoveryCwdForCodebase(run.id, run.codebase_id, 'resume')
+    : undefined;
+  return {
+    cwd: run.working_path,
+    workflowName: run.workflow_name,
+    userMessage: run.user_message ?? '',
+    options: {
+      continuationRun: run,
+      resume: true,
+      codebaseId: run.codebase_id ?? undefined,
+      discoveryCwd,
+    },
+  };
+}
+
+/**
+ * True when a resume attempt lost the run to another owner rather than failing.
+ *
+ * Both signals mean the row already moved — another host claimed it (the
+ * compare-and-swap) or still holds its endpoint — so the winner finishes it and
+ * this process should stop quietly instead of reporting a failure.
+ */
+function isResumeSuperseded(error: unknown): boolean {
+  const MAX_CAUSE_DEPTH = 5;
+  for (let current: unknown = error, depth = 0; current instanceof Error; depth += 1) {
+    if (
+      current instanceof workflowDb.WorkflowNotResumableError ||
+      current instanceof RunLiveOwnerAlreadyOwnedError
+    ) {
+      return true;
+    }
+    if (depth >= MAX_CAUSE_DEPTH) return false;
+    current = current.cause;
+  }
+  return false;
 }
 
 /**
@@ -3436,6 +3573,13 @@ async function runWorkflowWithOwnedSource(
  * the capture is either adopted by a run or reclaimed. The implementation has a dozen
  * ordinary ways out — unknown workflow, refused inputs, flag conflicts, a detached
  * dispatch — and asking each to remember a disposal call is how most of them did not.
+ *
+ * When the attempt pauses on a durable `time`/`event` wait, this command owns the
+ * run's deadline: it sleeps until `metadata.wait.resumeAt` and re-executes through
+ * the same continuation path `archon workflow resume` uses. That is what makes a
+ * CLI-only install able to finish a wait without `archon serve`. The pause itself is
+ * unchanged — the row stays `paused` and the live owner is released between segments
+ * — so another host can still take the run and this loop then stops.
  */
 export async function workflowRunCommand(
   cwd: string,
@@ -3443,13 +3587,43 @@ export async function workflowRunCommand(
   userMessage: string,
   options: WorkflowRunOptions = {}
 ): Promise<void> {
-  try {
-    await withCapturedSource(owner =>
-      runWorkflowWithOwnedSource(owner, cwd, workflowName, userMessage, options)
-    );
-  } catch (error) {
-    await recordDetachedChildStartupFailure(options.detachedRunId, error as Error);
-    throw error;
+  // Read the marker once, before any provider or bash subprocess can inherit it: every
+  // attempt in this process is the detached owner, and a resumed segment must keep its
+  // active-stop lease (`archon workflow cancel`) and detached failure exit code.
+  const detachedProcessOwner = process.env[DETACHED_RUN_OWNER_ENV] === '1';
+  if (detachedProcessOwner) Reflect.deleteProperty(process.env, DETACHED_RUN_OWNER_ENV);
+
+  let attempt: WaitResumeAttempt = { cwd, workflowName, userMessage, options };
+  for (;;) {
+    let pending: PendingWaitContinuation | undefined;
+    try {
+      // Inside the try so a refused process-group claim still records the `pending` row
+      // the launcher handed over (#2872) instead of stranding it.
+      if (detachedProcessOwner) assertDetachedRunProcessOwner();
+      pending = await withCapturedSource(owner =>
+        runWorkflowWithOwnedSource(
+          owner,
+          attempt.cwd,
+          attempt.workflowName,
+          attempt.userMessage,
+          attempt.options,
+          detachedProcessOwner
+        )
+      );
+    } catch (error) {
+      await recordDetachedChildStartupFailure(options.detachedRunId, error as Error);
+      if (isResumeSuperseded(error)) {
+        getLog().info(
+          { runId: attempt.options.continuationRun?.id, workflowName: attempt.workflowName },
+          'cli.wait_continuation_superseded'
+        );
+        return;
+      }
+      throw error;
+    }
+    if (pending === undefined) return;
+    if ((await awaitDurableWaitDeadline(pending.run.id, pending.wait)) === 'stop') return;
+    attempt = await buildWaitResumeAttempt(pending.run);
   }
 }
 
