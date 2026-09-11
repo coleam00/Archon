@@ -686,6 +686,18 @@ function parseDagNode(
       f => (raw as Record<string, unknown>)[f] !== undefined
     );
     if (presentAiFields.length > 0) {
+      const fieldList = presentAiFields.map(f => `'${f}'`).join(', ');
+      const verb = presentAiFields.length === 1 ? 'is' : 'are';
+      // An include is the case that reads as enforced when it is not (#3216): the
+      // directive attaches a sub-graph and never reconfigures it, so a restriction
+      // written there has no node to land on. Say so, and say where it belongs.
+      const reason =
+        nonAiNode.type === 'include'
+          ? 'an include attaches a sub-graph and does not reconfigure it; declare the field on the included nodes instead'
+          : `a ${nonAiNode.type} node does not use it`;
+      warnings.push(
+        `Node '${id}': ${fieldList} ${verb} ignored and will have no effect (${reason})`
+      );
       getLog().warn(
         { id: node.id, fields: presentAiFields },
         `${nonAiNode.type}_node_ai_fields_ignored`
