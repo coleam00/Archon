@@ -1,4 +1,5 @@
 import { Type, type TObject, type TSchema } from '@sinclair/typebox';
+import { StringEnum } from '@earendil-works/pi-ai';
 import { defineTool, type ToolDefinition } from '@earendil-works/pi-coding-agent';
 import type { NativeTool } from '../../types';
 
@@ -33,7 +34,7 @@ function jsonSchemaToTypeBox(schema: Record<string, unknown>): TObject {
       if (values.length === 0) {
         throw new Error(`native tool schema: enum for '${key}' must be non-empty strings`);
       }
-      field = Type.Union(values.map(v => Type.Literal(v)));
+      field = StringEnum(values as [string, ...string[]]) as unknown as TSchema;
     } else if (prop.type === 'string') {
       field = Type.String();
     } else if (prop.type === 'boolean') {
