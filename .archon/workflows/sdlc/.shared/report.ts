@@ -182,9 +182,16 @@ function redCauses(artifacts: string): string {
   // Sidecars carry when they were written; the gates ran in that order, and the
   // reader should meet the reds in it, not in the order of a filename digest.
   const gates: { producedAt: string; meta: Record<string, unknown> }[] = [];
+  const unreadable: string[] = [];
   for (const name of names) {
-    const meta = readJson(join(directory, name));
-    if (meta === undefined || 'error' in meta) continue;
+    const metaPath = join(directory, name);
+    const meta = readJson(metaPath);
+    if (meta === undefined || 'error' in meta) {
+      // The sidecar is the only route to a gate's red_cause; a sidecar the
+      // report cannot read must show up as a pointer, not vanish.
+      unreadable.push(`- ${metaPath}: could not read this node's record. Open it directly.`);
+      continue;
+    }
     const record = records([meta.value])[0];
     if (record?.outputType !== 'green-gate') continue;
     gates.push({ producedAt: display(record.producedAt), meta: record });
@@ -192,7 +199,6 @@ function redCauses(artifacts: string): string {
   gates.sort((a, b) => a.producedAt.localeCompare(b.producedAt));
 
   const lines: string[] = [];
-  const unreadable: string[] = [];
   for (const { meta } of gates) {
     const outputPath = join(artifacts, display(meta.path));
     const gate = readJson(outputPath);

@@ -93,6 +93,15 @@ describe("the terminal report reads passed reds from the gates' typed artifacts"
     expect(text).toContain(join(dir, 'nodes', 'gate-green.md'));
   });
 
+  it('names a sidecar it cannot read, since the sidecar is the only route to the gate', () => {
+    const dir = artifactsDir();
+    writeFileSync(join(dir, 'nodes', 'gate-green.md'), JSON.stringify({ gate: 'green' }));
+    writeFileSync(join(dir, 'nodes', 'gate-green.meta.json'), 'not json');
+    const text = caveats(dir, { failed: false });
+    expect(text).toContain("could not read this node's record");
+    expect(text).toContain(join(dir, 'nodes', 'gate-green.meta.json'));
+  });
+
   it('ignores typed artifacts of other kinds', () => {
     const dir = artifactsDir();
     writeFileSync(join(dir, 'nodes', 'triage.md'), 'a report');
