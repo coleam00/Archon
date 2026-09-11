@@ -95,7 +95,7 @@ Do not investigate the full causal chain, choose the implementation design, impl
 - `route` — exactly one of `investigate`, `plan`, `deliver`, or `no_action`; anything but `no_action` requires `contract: READY`.
 - `design_first` — true only for a `READY` item routed to `plan` because its engineering shape must be settled before implementation.
 - `complexity` — exactly one of `small`, `risky`, or `large`.
-- `item` — `{ "repository": "owner/repo", "number": N }` when the target is a tracker issue, otherwise `null`.
+- `item` — `{ "repository": "owner/repo", "number": N }` when the target is a tracker issue, otherwise `{ "repository": "", "number": 0 }`: the empty repository is how you say the target is not a tracker item, and the fields are always present.
 - `area_labels` — the repository's existing area labels this item touches, possibly empty.
 - `proposed_edits` — `{ "title": "...", "body": "..." }`, both non-empty only for `NEEDS_CONTRACT_WORK` and both empty otherwise.
 - `blocked_reason` — what a `BLOCKED` item waits on; empty for every other verdict.
