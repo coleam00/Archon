@@ -780,7 +780,7 @@ export async function rejectWorkflow(
     }
   }
 
-  const rejectReason = reason ?? 'Rejected';
+  const rejectReason = reason && reason.length > 0 ? reason : 'Rejected';
   const currentCount = (run.metadata.rejection_count as number | undefined) ?? 0;
   const maxAttempts = approval?.onRejectMaxAttempts ?? 3;
   // `!= null` (not `!== undefined`): "no on_reject" reaches this read in two stored
@@ -833,7 +833,7 @@ export async function rejectWorkflow(
   // losing the audit trail (#2146).
   let won: boolean;
   if (willResolveNewMode && approval) {
-    const structuredOutput = { decision: 'reject', text: reason ?? '' };
+    const structuredOutput = { decision: 'reject', text: rejectReason };
     const nodeCompletedEvent: workflowDb.GateResolutionEvent = {
       event_type: 'node_completed',
       step_name: resolvedNodeCompletedStepName(approval),
