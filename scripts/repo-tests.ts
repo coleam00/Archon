@@ -157,7 +157,7 @@ async function runRequested(requested: string[]): Promise<number> {
   }
 
   for (const { owner, args } of runs) {
-    const code = await run(['bun', 'test', ...args], owner.cwd);
+    const code = await run(bunTestCommand(args), owner.cwd);
     if (code !== 0) return code;
   }
 

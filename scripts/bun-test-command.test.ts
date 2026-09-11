@@ -25,3 +25,19 @@ describe('bunTestCommand', () => {
     ]);
   });
 });
+
+describe('every runner assembles its command through bunTestCommand', () => {
+  it('no runner script spells out a bun test command by hand', async () => {
+    const { readdir, readFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const offenders: string[] = [];
+    for (const entry of await readdir(import.meta.dir)) {
+      if (!entry.endsWith('.ts') || entry.endsWith('.test.ts') || entry === 'bun-test-command.ts')
+        continue;
+      const source = await readFile(join(import.meta.dir, entry), 'utf8');
+      if (/\[\s*'bun'\s*,\s*'test'/.test(source)) offenders.push(entry);
+    }
+    // A hand-built command on any runner path silently drops the Windows budget for that path.
+    expect(offenders).toEqual([]);
+  });
+});
