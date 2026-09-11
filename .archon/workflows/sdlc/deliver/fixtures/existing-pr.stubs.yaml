@@ -1,0 +1,73 @@
+# Dry-run fixture: the run was launched on an existing pull request's branch and
+# the work is that pull request's findings. The pr node resolves the open PR for
+# the branch (an existing, non-draft number) instead of creating one, the initial
+# review finds a blocker, one correction runs green, its continuation review is
+# ready, and the run flips that same PR. `resolved-text-contains` proves the work
+# order names the pull request in implement's resolved prompt; the stubbed pr
+# identity proves an existing non-draft PR flows through review scope, the
+# correction round, and the flip unchanged. Reuse itself is prompt guidance in
+# pr.md that dry-run cannot exercise; a real repair run is the proof for that.
+impl__record-start: '{"start":"recorded"}'
+impl__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: findings on PR #42 addressed on its branch"
+impl__assert-changed: "2 files changed"
+gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
+pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 42, url: "https://github.com/example/repo/pull/42", head: "feat/existing-42", base: "dev", is_draft: false }
+review__mode: '{"continuation":false}'
+review__scope:
+  # PR #42 diff in scope; head sha stubbed
+  docs: false
+review__code: "1 finding (Important)"
+review__seams: "0 findings"
+review__simplify: "0 findings"
+review__tests: "0 findings"
+review__synthesize:
+  ready: false
+  action: correct
+  findings_summary: "stub: 1 Important finding open"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+ci-note: "CI state for this pull request (head abc123def456): No concluded failures."
+fix__record-start: '{"start":"recorded"}'
+fix__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: finding fixed, pushed to feat/existing-42"
+fix__assert-changed: "1 file changed"
+gate-correction-green: '{"gate":"green","red_cause":"","stage":"The correction","summary":""}'
+recheck__mode: '{"continuation":true}'
+recheck__scope:
+  # light mode; delta since cursor
+  docs: false
+recheck__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: no open Critical/Important"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+sync-pr-body: "body resynced against the corrected diff"
+validate__validate:
+  green: true
+  red_cause: ""
+  summary: "stub: full gate green"
+gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":""}'
+ci-probe: '{"state":"concluded","detail":"all 2 check(s) green"}'
+ci-verdict: '{"state":"concluded","detail":"all 2 check(s) green"}'
+flip-ready: { pr_url: "https://github.com/example/repo/pull/42" }
+outcome: { pr_url: "https://github.com/example/repo/pull/42", summary: "https://github.com/example/repo/pull/42" }
+classify:
+  errors: false
+  docs: false
+  reasons:
+    errors: "stub: no new failure paths"
+    docs: "stub: no doc-facing changes"
+fixture:
+  expect: completed
+  inputs:
+    work: "Repair pull request #42 on its branch: address the Important finding from the review report."
+  reached: [fix__implement, recheck__synthesize, flip-ready]
+  resolved-text-contains:
+    impl__implement: "pull request #42"
+exec-code: true

@@ -22,8 +22,10 @@ inputs:
   work:
     default: ""
     description: >-
-      What to deliver — a plan path, findings, or a description. Empty means
-      the run's trigger message is the work.
+      What to deliver — a plan path, findings, a description, or the repair of
+      an existing pull request when this run was launched on its branch
+      (`--adopt`, or from the pull request). Empty means the run's trigger
+      message is the work.
   prior_report:
     default: ""
     description: >-

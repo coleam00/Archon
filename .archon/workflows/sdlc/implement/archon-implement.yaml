@@ -15,8 +15,9 @@ inputs:
   work:
     default: ""
     description: >-
-      What to implement — a plan path, review findings, a CI failure, or a plain
-      description. When empty, the run's trigger message is the work.
+      What to implement — a plan path, review findings, a CI failure, a plain
+      description, or the repair of an existing pull request when this run was
+      launched on its branch. When empty, the run's trigger message is the work.
 
 returns: implement
 outcome_field: green
