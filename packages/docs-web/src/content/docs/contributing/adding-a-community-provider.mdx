@@ -3,6 +3,9 @@ title: Adding a Community Provider
 description: Step-by-step guide to adding a new AI agent provider under packages/providers/src/community/.
 ---
 
+import { Code } from '@astrojs/starlight/components';
+import capabilitiesTemplate from '../../../../../providers/src/community/_template/capabilities.ts?raw';
+
 Archon's provider registry (Phase 2, [#1195](https://github.com/coleam00/Archon/pull/1195)) is designed so community providers can be added with changes localized to a single directory. This guide walks through the pattern using the Pi provider as the reference implementation (`packages/providers/src/community/pi/`).
 
 ## The contract
@@ -52,24 +55,9 @@ Each file has one job. Optional files only exist when the translation surface is
 
 Declare only what you've actually wired. The dag-executor emits a warning to the user when a workflow node uses a feature your provider doesn't support — under-declaration is self-correcting via those warnings; over-declaration means Archon silently drops configuration.
 
-```typescript
-// capabilities.ts
-import type { ProviderCapabilities } from '../../types';
+`capabilities.ts` (rendered from `packages/providers/src/community/_template/capabilities.ts`, which `bun run type-check` keeps complete):
 
-export const YOUR_CAPABILITIES: ProviderCapabilities = {
-  sessionResume: false,
-  mcp: false,
-  hooks: false,
-  skills: false,
-  toolRestrictions: false,
-  structuredOutput: false,
-  envInjection: false,
-  costControl: false,
-  effortControl: false,
-  fallbackModel: false,
-  sandbox: false,
-};
-```
+<Code code={capabilitiesTemplate} lang="typescript" />
 
 Start everything at `false`. Flip to `true` one at a time as you wire each translation, and add a test per flip.
 
