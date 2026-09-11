@@ -52,6 +52,7 @@ import {
   isLoopGroupNode,
   isIncludeDirective,
   isOutputFormatEnforced,
+  isWaitNode,
   isWorkflowNode,
 } from './schemas';
 import { parseWorkflow, workflowNodeOutputFormatError } from './loader';
@@ -533,11 +534,15 @@ export async function validateWorkflowResources(
     // rejected by a provider that enforces OpenAI strict mode (Codex) at the
     // first turn with HTTP 400 invalid_json_schema. Report it at validation time
     // so `archon validate workflows` catches it before a live run burns setup
-    // costs. Agent and loop nodes are the only kinds that both enforce
-    // output_format AND send the schema to a provider.
+    // costs. The set of provider-invoking kinds is the same one the launch
+    // preflight uses: every node kind that both enforces output_format
+    // (isOutputFormatEnforced) AND sends the schema to a provider (agent and
+    // loop; not exec/bash/script, and not a wait's engine-injected schema).
     if (
       ownershipError === null &&
-      (node.kind === 'agent' || node.kind === 'loop') &&
+      !isExecNode(node) &&
+      !isWaitNode(node) &&
+      isOutputFormatEnforced(node) &&
       node.output_format !== undefined &&
       providerCaps?.requiresAllPropertiesRequired
     ) {

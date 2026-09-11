@@ -3620,6 +3620,7 @@ describe('executeDagWorkflow -- output_format structured output', () => {
             run_code_review: { type: 'string', enum: ['true', 'false'] },
             run_tests: { type: 'string', enum: ['true', 'false'] },
           },
+          required: ['run_code_review', 'run_tests'],
         },
       },
       {
@@ -3684,7 +3685,11 @@ describe('executeDagWorkflow -- output_format structured output', () => {
         id: 'check',
         kind: 'agent',
         source: { kind: 'command', name: 'classify' },
-        output_format: { type: 'object', properties: { status: { type: 'string' } } },
+        output_format: {
+          type: 'object',
+          properties: { status: { type: 'string' } },
+          required: ['status'],
+        },
       },
     ];
 

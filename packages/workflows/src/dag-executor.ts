@@ -88,6 +88,7 @@ import {
   isHaltNode,
   isIncludeDirective,
   isOutputFormatEnforced,
+  isWaitNode,
   isPersistableNode,
   readSubrunMetadata,
   isApprovalContext,
@@ -10796,7 +10797,8 @@ function visitProviderInvokingNodes(
   const resolve = (node: DagNode): string =>
     resolveNodeProviderForPreflight(node, workflowProvider, aiProfile);
   for (const node of nodes) {
-    if (isIncludeDirective(node) || isExecNode(node) || isHaltNode(node)) continue;
+    if (isIncludeDirective(node) || isExecNode(node) || isHaltNode(node) || isWaitNode(node))
+      continue;
     if (isLoopGroupNode(node)) {
       visit(node, resolve(node));
       visitProviderInvokingNodes(node.loop_group.nodes, workflowProvider, aiProfile, visit);
