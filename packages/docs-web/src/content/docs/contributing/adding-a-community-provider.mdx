@@ -59,7 +59,7 @@ Declare only what you've actually wired. The dag-executor emits a warning to the
 
 <Code code={capabilitiesTemplate} lang="typescript" />
 
-Start everything at `false`. Flip to `true` one at a time as you wire each translation, and add a test per flip.
+Start every boolean axis at `false` and flip it to `true` one at a time as you wire each translation, adding a test per flip. `structuredOutput` is not a boolean: leave it `false`, or set it to `'enforced'` or `'best-effort'` once you support structured output.
 
 ### 2. Provider class
 
