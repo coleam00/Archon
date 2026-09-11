@@ -5,9 +5,35 @@
  * with BUNDLED_IS_BINARY=true, which conflicts with other test files.
  */
 import { describe, test, expect, mock, beforeEach, afterAll, spyOn } from 'bun:test';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { mkdtempSync, symlinkSync, unlinkSync } from 'node:fs';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { createMockLogger } from '../test/mocks/logger';
+
+// Windows only permits symlink creation for an elevated process or with Developer
+// Mode enabled, so the broken-symlink case below is a capability question, not a
+// platform question. Probe by attempting the real operation: a
+// `process.platform === 'win32'` guard would ALSO skip on the CI windows-latest
+// runner, which CAN create symlinks and currently covers this test.
+const canSymlink = (() => {
+  // Cleaned up with a non-recursive unlink on a single path: a module-scope probe runs
+  // before any test, so it cannot use trackTempRoots (which registers an afterEach), and
+  // a recursive rmSync is what the cleanup-drift guard exists to refuse.
+  const link = join(tmpdir(), `archon-symlink-probe-${process.pid}-${Date.now()}`);
+  try {
+    symlinkSync(join(tmpdir(), 'archon-symlink-probe-target'), link);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try {
+      unlinkSync(link);
+    } catch {
+      // The symlink was never created — nothing to remove.
+    }
+  }
+})();
 
 const mockLogger = createMockLogger();
 
@@ -297,6 +323,8 @@ describe('resolveClaudeBinaryPath (binary mode)', () => {
 });
 
 describe('pathKind', () => {
+  const trackTempRoot = trackTempRoots();
+
   test('returns "file" for a real file', async () => {
     const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
@@ -325,19 +353,13 @@ describe('pathKind', () => {
     expect(resolver.pathKind('/definitely/does/not/exist/anywhere/12345')).toBe('missing');
   });
 
-  test('returns "missing" for a broken symlink without throwing', async () => {
+  test.skipIf(!canSymlink)('returns "missing" for a broken symlink without throwing', () => {
     // statSync follows symlinks by default — broken targets raise ENOENT,
     // which must be caught and reported as 'missing' so the resolver's
     // "file does not exist" path fires instead of an uncaught exception.
-    const { mkdtempSync, symlinkSync, rmSync } = await import('node:fs');
-    const { tmpdir } = await import('node:os');
-    const dir = mkdtempSync(join(tmpdir(), 'archon-pathkind-'));
+    const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-pathkind-')));
     const link = join(dir, 'broken-link');
-    try {
-      symlinkSync(join(dir, 'nonexistent-target'), link);
-      expect(resolver.pathKind(link)).toBe('missing');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    symlinkSync(join(dir, 'nonexistent-target'), link);
+    expect(resolver.pathKind(link)).toBe('missing');
   });
 });
