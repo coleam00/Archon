@@ -11,6 +11,7 @@
  * NOT mock ./dag-executor, so it cannot share a process with executor.test.ts,
  * which does (mock.module is process-global and irreversible).
  */
+import { readBundleIndex } from './defaults/bundle-inventory';
 import { describe, it, expect, beforeEach, afterEach, afterAll, mock } from 'bun:test';
 import { mkdir, writeFile, rm, cp, readdir, readFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -48,6 +49,8 @@ const mockLogger = {
 // removing that file fan-out per capture per platform-multiplied runner.
 const bundledDefaultsRoot = join(tmpdir(), `subrun-test-empty-bundled-${process.pid}`);
 await mkdir(join(bundledDefaultsRoot, 'defaults'), { recursive: true });
+for (const pack of await readBundleIndex())
+  await mkdir(join(bundledDefaultsRoot, pack), { recursive: true });
 afterAll(() => removeTempTree(bundledDefaultsRoot));
 const realArchonPaths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({

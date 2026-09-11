@@ -22,6 +22,11 @@ import {
 } from '@archon/paths';
 import { execFileAsync } from '@archon/git';
 import { BUNDLED_COMMANDS, BUNDLED_WORKFLOWS, isBinaryBuild } from './defaults/bundled-defaults';
+import {
+  bundledDefaultCommandPath,
+  bundlesPackagedResources,
+  listBundledDefaultCommands,
+} from './defaults/bundle-inventory';
 import { isValidCommandName } from './command-validation';
 import { levenshtein, findSimilar } from './utils/fuzzy-match';
 import {
@@ -179,10 +184,8 @@ export async function discoverAvailableCommands(
         if (parsePackagedResourceReference(name) === null) names.add(name);
       }
     } else {
-      const defaultsPath = getDefaultCommandsPath();
-      const files = await findCommandFiles(defaultsPath);
-      for (const { commandName } of files) {
-        names.add(commandName);
+      for (const name of await listBundledDefaultCommands(getDefaultCommandsPath())) {
+        names.add(name);
       }
     }
   }
@@ -226,6 +229,7 @@ async function resolveCommand(
       if (isBinaryBuild()) {
         return commandName in BUNDLED_COMMANDS ? `[bundled:${commandName}]` : null;
       }
+      if (!(await bundlesPackagedResources(packaged.owner.pack))) return null;
     }
     let workflowsRoot: string;
     if (packaged.owner.source === 'project') {
@@ -281,8 +285,21 @@ async function resolveCommand(
         return `[bundled:${commandName}]`;
       }
     } else {
-      const defaultsResolved = await resolveCommandInDir(getDefaultCommandsPath(), commandName);
-      if (defaultsResolved) return defaultsResolved;
+      const path = await bundledDefaultCommandPath(getDefaultCommandsPath(), commandName);
+      // A miss is ENOENT; any other stat failure belongs to the caller, not to a silent null.
+      if (path !== null) {
+        try {
+          if ((await stat(path)).isFile()) return path;
+        } catch (error) {
+          const err = error as NodeJS.ErrnoException;
+          if (err.code !== 'ENOENT') {
+            getLog().error({ err, path, commandName }, 'bundled_default_command_inspection_failed');
+            throw new Error(`Cannot inspect bundled default '${commandName}': ${err.message}`, {
+              cause: err,
+            });
+          }
+        }
+      }
     }
   }
 

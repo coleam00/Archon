@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import * as archonPaths from '@archon/paths';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, sep } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { makeTestComposedWorkflow, makeTestWorkflow } from './test-utils';
 import {
   createDryRunStubScaffold as createResolvedDryRunStubScaffold,
@@ -18,12 +18,16 @@ import { resolveWorkflowModelScope } from './node-model-resolution';
 import { expandWorkflowIncludes } from './include-expander';
 import type { ResolvedWorkflow, WorkflowDefinition } from './schemas';
 import { captureWorkflowSource, capturedSourceRoots, loadWorkflowSource } from './workflow-source';
+import { readBundleIndex } from './defaults/bundle-inventory';
 
 // These fixtures read only project files. Avoid copying the repository's bundled
 // defaults into every capture; the materialization suite covers bundled content.
 async function captureProjectSource(options: Parameters<typeof captureWorkflowSource>[0]) {
   const bundled = join(options.sourceRoot, 'empty-bundled', 'defaults');
   mkdirSync(bundled, { recursive: true });
+  for (const pack of await readBundleIndex()) {
+    mkdirSync(join(dirname(bundled), pack), { recursive: true });
+  }
   const workflows = spyOn(archonPaths, 'getDefaultWorkflowsPath').mockReturnValue(bundled);
   const commands = spyOn(archonPaths, 'getDefaultCommandsPath').mockReturnValue(bundled);
   try {
