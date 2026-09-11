@@ -31,9 +31,20 @@ afterEach(async () => {
   }
 });
 
+/**
+ * How long the detached workflow's observable state may take to catch up with what the
+ * fixture was launched to do: write its run row, record its checkout, release the control
+ * endpoint, and commit the terminal status and event.
+ *
+ * This was the default on `waitFor`. Every site below waits on the same detached run, so
+ * one window covers them; naming it and removing the default means a wait with a
+ * different need has to state its own deadline instead of inheriting this one.
+ */
+const DETACHED_RUN_DEADLINE_MS = 15_000;
+
 async function waitFor<T>(
   read: () => T | undefined | Promise<T | undefined>,
-  timeoutMs = 15_000
+  timeoutMs: number
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
@@ -48,6 +59,13 @@ async function waitFor<T>(
   }
   const detail = lastError instanceof Error ? `: ${lastError.message}` : '';
   throw new Error(`Timed out waiting for detached workflow${detail}`);
+}
+
+/** Wait for the detached workflow under test to reach the state `read` describes. */
+async function waitForDetachedRun<T>(
+  read: () => T | undefined | Promise<T | undefined>
+): Promise<T> {
+  return waitFor(read, DETACHED_RUN_DEADLINE_MS);
 }
 
 function readRun(
@@ -193,7 +211,7 @@ nodes:
       if (typeof ackRunId !== 'string') throw new Error(`ack carried no run id: ${stdout}`);
       expect(readRunById(databasePath, ackRunId)?.id).toBe(ackRunId);
 
-      const created = await waitFor(() => readRun(databasePath, fixture.workflow));
+      const created = await waitForDetachedRun(() => readRun(databasePath, fixture.workflow));
       activeRunIds.add(created.id);
       expect(created.id).toBe(ackRunId);
       // The child fills in the checkout the parent could not know at fork time.
@@ -202,7 +220,7 @@ nodes:
       // `working_path` is whatever that function returned — a different realpath
       // variant here disagrees with it on Windows (#2927).
       const resolvedProjectRoot = await canonicalizeProjectPath(projectRoot);
-      await waitFor(() =>
+      await waitForDetachedRun(() =>
         readRunById(databasePath, created.id)?.working_path === resolvedProjectRoot
           ? true
           : undefined
@@ -212,12 +230,12 @@ nodes:
       // the loop past that. Returning from this wait is the assertion that the owner
       // released its endpoint; re-asserting the same reading on the next line could only
       // turn one such misread into a failure, which is how it failed on Windows.
-      await waitFor(async () =>
+      await waitForDetachedRun(async () =>
         (await canConnectToRunLiveOwner(runLiveOwnerPath(created.id))) ? undefined : true
       );
       activeRunIds.delete(created.id);
 
-      const terminal = await waitFor(() => {
+      const terminal = await waitForDetachedRun(() => {
         const run = readRun(databasePath, fixture.workflow);
         return run?.status === fixture.status ? run : undefined;
       });
@@ -231,7 +249,7 @@ nodes:
       // contention, and the count stays exact: the event was committed atomically with
       // the status already observed above, and the owner's endpoint is unreachable, so
       // nothing can append a second row after the first read succeeds.
-      const events = await waitFor(() => {
+      const events = await waitForDetachedRun(() => {
         const rows = readTerminalEvents(databasePath, terminal.id, fixture.event);
         return rows.length > 0 ? rows : undefined;
       });
