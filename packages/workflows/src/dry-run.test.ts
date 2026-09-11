@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import * as archonPaths from '@archon/paths';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, sep } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { makeTestComposedWorkflow, makeTestWorkflow } from './test-utils';
 import {
   createDryRunStubScaffold as createResolvedDryRunStubScaffold,
@@ -18,12 +18,16 @@ import { resolveWorkflowModelScope } from './node-model-resolution';
 import { expandWorkflowIncludes } from './include-expander';
 import type { ResolvedWorkflow, WorkflowDefinition } from './schemas';
 import { captureWorkflowSource, capturedSourceRoots, loadWorkflowSource } from './workflow-source';
+import { readBundleIndex } from './defaults/bundle-inventory';
 
 // These fixtures read only project files. Avoid copying the repository's bundled
 // defaults into every capture; the materialization suite covers bundled content.
 async function captureProjectSource(options: Parameters<typeof captureWorkflowSource>[0]) {
   const bundled = join(options.sourceRoot, 'empty-bundled', 'defaults');
   mkdirSync(bundled, { recursive: true });
+  for (const pack of await readBundleIndex()) {
+    mkdirSync(join(dirname(bundled), pack), { recursive: true });
+  }
   const workflows = spyOn(archonPaths, 'getDefaultWorkflowsPath').mockReturnValue(bundled);
   const commands = spyOn(archonPaths, 'getDefaultCommandsPath').mockReturnValue(bundled);
   try {
@@ -386,6 +390,64 @@ describe('dry-run stub scaffolding and sparse defaults (#2624)', () => {
       state: 'failed',
       reason: expect.stringContaining('asynchronous output_format schemas are unsupported'),
     });
+  });
+
+  test('holds an authored stub to the contract it stands in for', async () => {
+    // A fixture's stub replaces a node's real output, so a schema the real output
+    // must satisfy is one the stub must satisfy too. The generated-scaffold route
+    // has always checked this; the authored route reached `completedOutput`
+    // unexamined, which let a fixture keep passing while the contract it stands in
+    // for moved underneath it.
+    const workflow = makeTestWorkflow({
+      name: 'stub-contract',
+      nodes: [
+        {
+          id: 'certified',
+          bash: 'echo hi',
+          output_format: {
+            type: 'object',
+            properties: { pr_url: { type: 'string' } },
+            required: ['pr_url'],
+          },
+        },
+      ],
+    });
+
+    const missingField = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { certified: { url: 'https://example.test/pull/1' } },
+    });
+    expect(missingField.outcome).toBe('failed');
+    expect(missingField.trace[0]).toMatchObject({
+      nodeId: 'certified',
+      state: 'failed',
+      reason: expect.stringContaining('does not satisfy its output_format'),
+    });
+
+    // A string stub stands in for what the node PRINTS, so it is parsed first — the
+    // same order certification uses on real stdout.
+    const notJson = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { certified: 'https://example.test/pull/1' },
+    });
+    expect(notJson.outcome).toBe('failed');
+    expect(notJson.trace[0]).toMatchObject({
+      nodeId: 'certified',
+      state: 'failed',
+      reason: expect.stringContaining('is not one JSON document'),
+    });
+
+    const printed = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { certified: '{"pr_url":"https://example.test/pull/1"}' },
+    });
+    expect(printed.outcome).toBe('completed');
   });
 
   test('completes a 36-node composition with only three load-bearing overrides', async () => {
@@ -795,7 +857,11 @@ describe('dryRunWorkflow', () => {
     }
   );
 
-  test('leaves authored outcome null when the structured result violates its schema', async () => {
+  test('refuses a structured result that violates its schema, and authors no outcome', async () => {
+    // The invariant is that a value which does not satisfy its schema never becomes an
+    // authored outcome. It used to hold by `resolveDryRunAuthoredOutcome` declining to
+    // read one; it holds earlier and louder now, because such a stub cannot stand in
+    // for a node's output at all — the same refusal a real run makes at certification.
     const result = await dryRunWorkflow({
       workflow: makeTestWorkflow({
         name: 'invalid-authored-outcome',
@@ -821,7 +887,12 @@ describe('dryRunWorkflow', () => {
       stubs: { verdict: { green: false } },
     });
 
-    expect(result).toMatchObject({ outcome: 'completed', authoredOutcome: null });
+    expect(result).toMatchObject({ outcome: 'failed', authoredOutcome: null });
+    expect(result.trace[0]).toMatchObject({
+      nodeId: 'verdict',
+      state: 'failed',
+      reason: expect.stringContaining('does not satisfy its output_format'),
+    });
   });
 
   test('leaves authored outcome null when the declared result is not reached', async () => {

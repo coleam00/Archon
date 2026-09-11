@@ -4,7 +4,7 @@
 assess:
   action: no_action
   summary: "stub: the locked version already satisfies the advisory's fixed range"
-assert-intact: '{"intact":"true"}'
+  report: { type: archon_artifact, run_id: "fixture-run", path: "upkeep-assessment.md" }
 fixture:
   expect: completed
 exec-code: true

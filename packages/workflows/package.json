@@ -64,7 +64,8 @@
     [
       "src/logger.test.ts",
       "src/terminal-status-write.test.ts",
-      "src/node-event-write.test.ts"
+      "src/node-event-write.test.ts",
+      "src/wait-completion-events.test.ts"
     ],
     [
       "src/condition-evaluator.test.ts"
@@ -113,6 +114,12 @@
     ],
     [
       "src/script-discovery.test.ts"
+    ],
+    [
+      "src/bundle-live-selection.test.ts"
+    ],
+    [
+      "src/bundle-conformance.test.ts"
     ],
     [
       "src/workflow-source.test.ts"

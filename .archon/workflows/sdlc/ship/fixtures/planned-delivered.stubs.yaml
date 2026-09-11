@@ -10,20 +10,24 @@
 triage__triage:
   route: plan
   summary: "stub: desired outcome is current; implementation shape needs a decision"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
 planned__plan:
   ready: true
   summary: "stub: approach chosen and plan ready"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "plan.md" }
 deliver__impl__implement:
   done: true
   green: true
+  red_cause: ""
   summary: "stub: planned work implemented and green"
 deliver__review__synthesize:
   ready: true
   action: none
   findings_summary: "stub: no open findings"
-deliver__review-action: '{"ready":true,"action":"none"}'
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 deliver__validate__validate:
   green: true
+  red_cause: ""
   summary: "stub: project gate green"
 ci-probe: '{"state":"concluded","detail":"all checks green"}'
 deliver__classify:
@@ -40,20 +44,20 @@ fixture:
   resolved-text-contains:
     triage__triage: "target):\n\nissue #3031\n\nThe operator's request"
 exec-code: true
-triage__assert-intact: '{"intact":"true"}'
-planned__assert-intact: '{"intact":"true"}'
 deliver__gate-ready: '{"gate":"ready"}'
 deliver__impl__record-start: '{"start":"recorded"}'
-deliver__gate-validated: '{"gate":"green"}'
+deliver__gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":""}'
 deliver__impl__assert-changed: "2 files changed"
-deliver__gate-green: '{"gate":"green"}'
+deliver__gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
 deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
-deliver__flip-ready: "https://github.com/example/repo/pull/3"
-deliver__outcome: "https://github.com/example/repo/pull/3"
+deliver__flip-ready: { pr_url: "https://github.com/example/repo/pull/3" }
+deliver__outcome: { pr_url: "https://github.com/example/repo/pull/3", summary: "https://github.com/example/repo/pull/3" }
 gate-planned: '{"gate":"planned"}'
 deliver__pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 3, url: "https://github.com/example/repo/pull/3", head: "fixture-branch", base: "dev", is_draft: true }
 deliver__review__mode: '{"continuation":false}'
-deliver__review__scope: "PR diff in scope; head sha stubbed"
+deliver__review__scope:
+  # PR diff in scope; head sha stubbed
+  docs: false
 deliver__review__code: "0 findings"
 deliver__review__seams: "0 findings"
 deliver__review__simplify: "0 findings"

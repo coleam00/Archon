@@ -395,18 +395,21 @@ async function withExecWorkspace<T>(
   cwd: string,
   fn: (workspace: string) => Promise<T>
 ): Promise<T> {
-  try {
-    await execFileAsync('git', ['rev-parse', '--show-toplevel'], { cwd });
-  } catch {
-    throw new Error(
-      `Exec-code fixtures require a git checkout to isolate execution; '${cwd}' is not inside a git repository`
-    );
-  }
   // git worktree add creates the workspace path's leading directories itself.
   const workspace = join(getArchonTempPath(), `fixture-exec-${randomUUID()}`);
   try {
     await execFileAsync('git', ['worktree', 'add', '--detach', workspace, 'HEAD'], { cwd });
   } catch (error) {
+    // Successful creation already proves checkout eligibility. Only diagnose a failure:
+    // a separate preflight adds a git process to every fixture, while interpreting git's
+    // error prose would make the distinction depend on its version or locale.
+    try {
+      await execFileAsync('git', ['rev-parse', '--show-toplevel'], { cwd });
+    } catch {
+      throw new Error(
+        `Exec-code fixtures require a git checkout to isolate execution; '${cwd}' is not inside a git repository`
+      );
+    }
     throw new Error(
       `Exec-code fixture could not create an isolated execution workspace from HEAD: ${(error as Error).message}`
     );

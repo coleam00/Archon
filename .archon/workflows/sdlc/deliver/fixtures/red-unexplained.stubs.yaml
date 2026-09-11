@@ -6,6 +6,7 @@ impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: false
+  red_cause: ""
   summary: "stub: checks are red and the implementation never said why"
 impl__assert-changed: "3 files changed"
 # gate-green is deliberately unstubbed: the real script must refuse.
