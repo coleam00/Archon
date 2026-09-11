@@ -716,7 +716,9 @@ curl -X POST http://localhost:3090/api/workflows/runs/<run-id>/signal \
   -d '{"event":"checks.complete","resumeAt":"<metadata.wait.resumeAt>","payload":{"conclusion":"success"}}'
 ```
 
-Use a Better Auth session cookie instead of `X-Archon-User` when browser authentication is enabled. The header is only for a trusted reverse proxy or loopback client; an auth-disabled local install can omit it. The event name must match the run's open wait. The signal and its audit event are committed together; duplicate or wrong-run signals do nothing. The server must be running for scheduled or event-driven continuation. If it is offline when a deadline passes, the persisted run resumes on the next scan after startup.
+Use a Better Auth session cookie instead of `X-Archon-User` when browser authentication is enabled. The header is only for a trusted reverse proxy or loopback client; an auth-disabled local install can omit it. The event name must match the run's open wait. The signal and its audit event are committed together; duplicate or wrong-run signals do nothing.
+
+The process that owns the run enforces a `duration_ms`/`until`/`event` deadline itself: a foreground `archon workflow run` and the child started by `--detach` stay alive through the wait and re-execute the run when its deadline arrives, so a CLI-only install needs no server. `archon serve`'s continuation scan additionally resumes due waits for runs whose owner is gone — one dispatched by the server, or one whose process died mid-wait. A run can always be advanced by hand with `archon workflow resume <run-id>`; the `/signal` endpoint above still requires the server.
 
 Read `metadata.wait.resumeAt` from the run before sending the signal and pass it back unchanged. It identifies the open wait occurrence, so a delayed retry from an earlier loop iteration cannot satisfy a later wait for the same event.
 
