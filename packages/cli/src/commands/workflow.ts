@@ -1013,11 +1013,12 @@ function renderWorkflowEvent(event: WorkflowEmitterEvent, verbose: boolean): voi
     case 'node_failed':
       process.stderr.write(`[${event.nodeName}] Failed: ${event.error}\n`);
       break;
-    case 'node_skipped': {
-      const detail = 'cause' in event ? formatSkipCause(event.cause) : event.reason;
-      process.stderr.write(`[${event.nodeName}] Skipped (${detail})\n`);
+    case 'node_skipped':
+      process.stderr.write(`[${event.nodeName}] Skipped (${formatSkipCause(event.cause)})\n`);
       break;
-    }
+    case 'node_skipped_prior_success':
+      process.stderr.write(`[${event.nodeName}] Skipped (prior_success)\n`);
+      break;
     case 'approval_pending':
       process.stderr.write(`[${event.nodeId}] Waiting for approval: ${event.message}\n`);
       break;

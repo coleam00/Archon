@@ -10512,6 +10512,27 @@ describe('workflowRunCommand — progress rendering', () => {
     );
   });
 
+  it('should render a prior-success replay as a prior_success skip', async () => {
+    setupWorkflowMocks();
+
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
+      if (capturedSubscribeHandler) {
+        capturedSubscribeHandler({
+          type: 'node_skipped_prior_success',
+          runId: 'run-1',
+          nodeId: 'plan',
+          nodeName: 'plan',
+        });
+      }
+      return { success: true, workflowRunId: 'run-1' };
+    });
+
+    await workflowRunCommand('/test/path', 'plan', 'hello', {});
+
+    expect(stderrSpy).toHaveBeenCalledWith('[plan] Skipped (prior_success)\n');
+  });
+
   it('should render a timeout node_skipped event to stderr', async () => {
     setupWorkflowMocks();
 

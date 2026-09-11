@@ -110,21 +110,26 @@ interface NodeFailedEvent {
   error: string;
 }
 
-interface NodeSkippedEventBase {
+interface NodeSkippedEvent {
   type: 'node_skipped';
   runId: string;
   nodeId: string;
   nodeName: string;
+  reason: Exclude<NodeSkipReason, 'prior_success'>;
+  cause: SkipCause;
 }
 
-type NodeSkippedEvent = NodeSkippedEventBase &
-  (
-    | { reason: 'prior_success' }
-    | {
-        reason: Exclude<NodeSkipReason, 'prior_success'>;
-        cause: SkipCause;
-      }
-  );
+/**
+ * A resumed pass declined to re-run a node an earlier pass completed. Mirrors the
+ * persisted `node_skipped_prior_success` event_type so a consumer switching on
+ * `type` cannot fold prior success into a genuine skip.
+ */
+interface NodeSkippedPriorSuccessEvent {
+  type: 'node_skipped_prior_success';
+  runId: string;
+  nodeId: string;
+  nodeName: string;
+}
 
 interface ToolStartedEvent {
   type: 'tool_started';
@@ -231,6 +236,7 @@ export type WorkflowEmitterEvent =
   | NodeCompletedEvent
   | NodeFailedEvent
   | NodeSkippedEvent
+  | NodeSkippedPriorSuccessEvent
   | WorkflowArtifactEvent
   | ToolStartedEvent
   | ToolCompletedEvent

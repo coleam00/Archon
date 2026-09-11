@@ -151,6 +151,10 @@ export class SlackWorkflowBridge {
           this.upsertNode(event.runId, event.nodeId, event.nodeName, 'skipped');
           this.scheduleStatusUpdate(event.runId);
           break;
+        case 'node_skipped_prior_success':
+          this.upsertPriorSuccessNode(event.runId, event.nodeId, event.nodeName);
+          this.scheduleStatusUpdate(event.runId);
+          break;
         case 'approval_pending':
           await this.onApprovalPending(event);
           break;
@@ -404,6 +408,19 @@ export class SlackWorkflowBridge {
       durationMs: extra.durationMs,
       error: extra.error,
     });
+  }
+
+  /**
+   * A prior-success replay is evidence the node already ran and succeeded, never a
+   * skip (#2978). Keep an existing entry untouched so its duration and error survive;
+   * the resume path starts from an empty run state, so a replay with no entry still
+   * records the completed node rather than dropping it.
+   */
+  private upsertPriorSuccessNode(runId: string, nodeId: string, nodeName: string): void {
+    const run = this.runs.get(runId);
+    if (!run || run.nodes.has(nodeId)) return;
+    run.nodeOrder.push(nodeId);
+    run.nodes.set(nodeId, { nodeId, nodeName, state: 'completed' });
   }
 
   private scheduleStatusUpdate(runId: string): void {
