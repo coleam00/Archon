@@ -674,7 +674,7 @@ This will:
 - Verify the binary reports the correct version and `Build: binary`
 - Verify bundled workflows load
 - Verify the SDK spawn path works (a minimal assist workflow)
-- Verify the env-leak gate is active (if shipped in this release)
+- Verify the env-leak guard strips sensitive keys from a leaky .env (Test 4)
 - Uninstall cleanly
 - Produce a PASS/FAIL report
 
