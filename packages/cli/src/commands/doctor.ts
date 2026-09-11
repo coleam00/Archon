@@ -5,10 +5,15 @@
  * return value so a doctor failure does not abort setup (the env file was
  * already written successfully).
  */
-import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
+import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { execFileAsync } from '@archon/git';
+import {
+  inspectPiAuthJson,
+  formatExpiryDate,
+  probePiCredential,
+} from '../utils/credential-validity';
 import {
   BUNDLED_IS_BINARY,
   getArchonHome,
@@ -24,7 +29,12 @@ import {
   resolveClaudeBinaryWithSource,
   type ClaudeBinaryResolution,
 } from '@archon/providers/claude/binary-resolver';
-import type { Codebase, MergedConfig, SchemaVersionInfo } from '@archon/core';
+import type {
+  Codebase,
+  MergedConfig,
+  SchemaVersionInfo,
+  StoredCredentialInspection,
+} from '@archon/core';
 
 // Vendor-canonical credential id for Codex (since #1955 credentials are keyed
 // by vendor, not agent). A connected `openai` key signals Codex intent even
@@ -376,7 +386,29 @@ export function probeAuthJsonExists(path: string): boolean {
   return existsSync(path);
 }
 
-export async function checkPi(env: NodeJS.ProcessEnv): Promise<CheckResult> {
+/**
+ * Thin wrapper around `readFileSync` so tests can spy on it by name.
+ */
+export function readAuthJson(path: string): string | null {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+export interface PiDeps {
+  authJsonPath?: string;
+  probeAuthJsonExists?: (path: string) => boolean;
+  readAuthJson?: (path: string) => string | null;
+  probeCredential?: (provider: string) => Promise<'ready' | 'invalid' | 'unreachable'>;
+  now?: number;
+}
+
+export async function checkPi(
+  env: NodeJS.ProcessEnv = process.env,
+  deps?: PiDeps
+): Promise<CheckResult> {
   const label = 'Pi provider';
   const isDefault = env.DEFAULT_AI_ASSISTANT === 'pi';
 
@@ -388,9 +420,65 @@ export async function checkPi(env: NodeJS.ProcessEnv): Promise<CheckResult> {
 
   // Pi reads OAuth credentials from ~/.pi/agent/auth.json (written by `pi /login`)
   // or API key env vars; either path is sufficient.
-  const authJsonPath = join(homedir(), '.pi', 'agent', 'auth.json');
-  if (probeAuthJsonExists(authJsonPath)) {
-    return { label, status: 'pass', message: '~/.pi/agent/auth.json found' };
+  const authJsonPath =
+    deps?.authJsonPath ?? env.ARCHON_PI_AUTH_PATH ?? join(homedir(), '.pi', 'agent', 'auth.json');
+  const probeExists = deps?.probeAuthJsonExists ?? probeAuthJsonExists;
+  const readAuth = deps?.readAuthJson ?? readAuthJson;
+  const probeCred = deps?.probeCredential ?? probePiCredential;
+  const now = deps?.now ?? Date.now();
+
+  if (probeExists(authJsonPath)) {
+    const result = await inspectPiAuthJson(authJsonPath, now, readAuth, probeCred);
+    if (result.error) {
+      return {
+        label,
+        status: 'fail',
+        message: `failed to read ~/.pi/agent/auth.json: ${result.error}`,
+      };
+    }
+    if (result.entries.length > 0) {
+      const expired = result.entries.filter(e => e.status === 'expired');
+      if (expired.length > 0) {
+        const details = expired
+          .map(
+            e =>
+              `${e.provider} credential expired${e.expires !== undefined ? ` ${formatExpiryDate(e.expires)}` : ''}`
+          )
+          .join(', ');
+        return { label, status: 'fail', message: details };
+      }
+
+      const invalid = result.entries.filter(e => e.status === 'invalid');
+      if (invalid.length > 0) {
+        const details = invalid
+          .map(e => `${e.provider} credential invalid${e.message ? `: ${e.message}` : ''}`)
+          .join(', ');
+        return { label, status: 'fail', message: details };
+      }
+
+      const unreachable = result.entries.filter(e => e.status === 'unreachable');
+      const valid = result.entries.filter(e => e.status === 'valid');
+      if (valid.length > 0) {
+        const validSummary = valid.map(e => e.provider).join(', ');
+        const unreachSuffix =
+          unreachable.length > 0
+            ? ` (${unreachable.map(e => `${e.provider} unreachable`).join(', ')})`
+            : '';
+        return {
+          label,
+          status: 'pass',
+          message: `~/.pi/agent/auth.json valid (${validSummary})${unreachSuffix}`,
+        };
+      }
+
+      if (unreachable.length > 0) {
+        return {
+          label,
+          status: 'skip',
+          message: `provider unreachable: ${unreachable.map(e => `${e.provider} (${e.message ?? 'network error'})`).join(', ')}`,
+        };
+      }
+    }
   }
 
   const foundKey = PI_API_KEY_VARS.find(v => (env[v] ?? '').trim().length > 0);
@@ -553,13 +641,31 @@ export interface ProviderDeps {
     id: string,
     name: string
   ) => Promise<{ id: string }>;
+  /**
+   * Core's own credential inspector. Not re-derived here: a second
+   * decrypt-and-compare would be one rotated blob away from disagreeing with the
+   * one the run uses.
+   */
+  inspectStoredProviderCredential: (
+    userId: string,
+    provider: string
+  ) => Promise<StoredCredentialInspection>;
 }
 
 /**
- * Report how many AI-provider credentials the current CLI user has connected,
- * plus how to connect when none are. Skip (never fail) on any error — credential
- * status is informational, and a missing CLI identity or DB hiccup shouldn't make
- * `archon doctor` exit non-zero.
+ * Report the AI-provider credentials the current CLI user has connected, and whether
+ * each one still works. A count is not a validity check (#3274), so every row is
+ * inspected and the three outcomes are reported apart:
+ *
+ * - expired → `fail`, naming the provider and the date it lapsed.
+ * - undetermined (corrupt row, rotated `TOKEN_ENCRYPTION_KEY`, DB error) → `skip`,
+ *   naming what could not be verified. It must never be folded into "connected":
+ *   reporting an unverifiable credential as fine is the defect this check exists for.
+ * - otherwise → `pass` with the connected list.
+ *
+ * `skip` rather than `fail` for the undetermined case keeps a missing CLI identity or a
+ * DB hiccup from making `archon doctor` exit non-zero, which the rest of this check
+ * already promises.
  */
 export async function checkConnectedProviders(
   env: NodeJS.ProcessEnv = process.env,
@@ -591,6 +697,33 @@ export async function checkConnectedProviders(
         message: 'none connected — run: archon ai login <vendor>  or  archon ai key set <vendor>',
       };
     }
+
+    const expired: string[] = [];
+    const unverified: string[] = [];
+    for (const row of rows) {
+      let inspection: StoredCredentialInspection;
+      try {
+        inspection = await deps.inspectStoredProviderCredential(user.id, row.provider);
+      } catch (err) {
+        inspection = { status: 'undetermined', reason: (err as Error).message };
+      }
+      if (inspection.status === 'expired') {
+        expired.push(`${row.provider} credential expired ${formatExpiryDate(inspection.expires)}`);
+      } else if (inspection.status === 'undetermined') {
+        unverified.push(`${row.provider} (${inspection.reason})`);
+      }
+    }
+    if (expired.length > 0) {
+      return { label, status: 'fail', message: expired.join(', ') };
+    }
+    if (unverified.length > 0) {
+      return {
+        label,
+        status: 'skip',
+        message: `could not verify: ${unverified.join(', ')}`,
+      };
+    }
+
     const summary = rows.map(r => `${r.provider}(${r.kind})`).join(', ');
     return { label, status: 'pass', message: `${rows.length} connected: ${summary}` };
   } catch (err) {
@@ -604,11 +737,13 @@ export async function checkConnectedProviders(
 
 async function defaultLoadProviderDeps(): Promise<ProviderDeps> {
   // Lazy imports for the same reason as defaultLoadDatabaseDeps.
-  const { listUserProviderKeys } = await import('@archon/core');
+  const { listUserProviderKeys, inspectStoredProviderCredential } = await import('@archon/core');
   const userDb = await import('@archon/core/db/users');
   return {
     listUserProviderKeys,
     findOrCreateUserByPlatformIdentity: userDb.findOrCreateUserByPlatformIdentity,
+    inspectStoredProviderCredential: (userId, provider) =>
+      inspectStoredProviderCredential(userId, provider),
   };
 }
 

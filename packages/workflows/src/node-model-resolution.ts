@@ -13,7 +13,14 @@
  */
 import { isLiteralSpec, resolveModelSpec, isTierName } from './model-validation';
 import type { ModelAliasPreset, ResolvedAiProfile, TierName } from './model-validation';
-import type { DagNode, EffortLevel } from './schemas';
+import {
+  isAgentNode,
+  isGateNode,
+  isIncludeDirective,
+  isLoopGroupNode,
+  isLoopNode,
+} from './schemas';
+import type { DagNode, EffortLevel, IncludeDirective } from './schemas';
 import { readComposedMeta } from './compiled-command';
 
 /**
@@ -228,4 +235,83 @@ export function assistantModelDefaults(config: {
     if (typeof model === 'string') models[provider] = model;
   }
   return models;
+}
+
+/** One provider/model pair an AI turn in a workflow will run on. */
+export interface NodeModelBinding {
+  provider: string;
+  model: string | undefined;
+}
+
+/**
+ * Every provider/model pair an AI turn in these nodes will actually run on, resolved
+ * through {@link resolveNodeModel} — the same chain the executor and the dry run use,
+ * so no pre-flight check can disagree with what the run does. Deduplicated; order is
+ * first appearance.
+ *
+ * Only the node kinds that open a provider session are counted: `agent` (both
+ * `prompt:` and `command:` sources — they dispatch through the same executor path),
+ * `loop`, a `loop_group` (whose own `provider:`/`model:` forward to un-overridden body
+ * nodes), and a `gate` whose decisions carry a `rework` reprompt, the one AI turn an
+ * approval can spawn. `exec`, `halt`, `wait`, child-`workflow` and `compose_fan_out`
+ * nodes never call `sendQuery`; a child run resolves its own bindings when it launches.
+ */
+export function collectNodeModelBindings(
+  nodes: readonly (DagNode | IncludeDirective)[],
+  scope: WorkflowModelScope,
+  assistantModels: Readonly<Record<string, string | undefined>>,
+  aiProfile?: ResolvedAiProfile
+): NodeModelBinding[] {
+  const bindings = new Map<string, NodeModelBinding>();
+  const add = (b: NodeModelBinding): NodeModelBinding => {
+    bindings.set(`${b.provider} ${b.model ?? ''}`, b);
+    return b;
+  };
+  const bindingOf = (node: DagNode, inherited: WorkflowModelScope): NodeModelBinding => {
+    const { provider, model } = resolveNodeModel(node, inherited, assistantModels, aiProfile);
+    return { provider, model };
+  };
+  const visit = (
+    ns: readonly (DagNode | IncludeDirective)[],
+    inherited: WorkflowModelScope
+  ): void => {
+    for (const node of ns) {
+      if (isIncludeDirective(node)) continue;
+      if (isLoopGroupNode(node)) {
+        const group = add(bindingOf(node, inherited));
+        // A group's provider/model forward to body nodes that don't override them
+        // (LOOP_GROUP_NODE_AI_FIELDS), so the body resolves against the GROUP. Resolving
+        // it against the workflow instead would name a binding no body node runs on.
+        visit(node.loop_group.nodes, {
+          ...inherited,
+          provider: group.provider,
+          model: group.model,
+        });
+        continue;
+      }
+      if (isGateNode(node)) {
+        if (node.decisions.some(d => d.rework !== undefined)) add(bindingOf(node, inherited));
+        continue;
+      }
+      if (isAgentNode(node) || isLoopNode(node)) add(bindingOf(node, inherited));
+    }
+  };
+  visit(nodes, scope);
+  return [...bindings.values()];
+}
+
+/**
+ * A {@link WorkflowModelScope} carrying nothing but the workflow-level provider — for
+ * a caller that has resolved that provider already and reads only the provider half of
+ * the result, where the model-side fallbacks cannot change the answer.
+ */
+export function providerOnlyScope(provider: string): WorkflowModelScope {
+  return {
+    provider,
+    model: undefined,
+    preset: undefined,
+    tier: undefined,
+    effort: undefined,
+    providerOrigin: 'workflow',
+  };
 }

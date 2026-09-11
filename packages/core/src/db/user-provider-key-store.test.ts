@@ -53,6 +53,7 @@ import {
   deleteUserProviderKey,
   getDecryptedProviderCredential,
   listDecryptedUserProviderCredentials,
+  inspectStoredProviderCredential,
 } from './user-provider-key-store';
 import type { UserProviderKeyRow } from '../schemas/user-provider-key-row';
 
@@ -473,6 +474,75 @@ describe('user-provider-key-store', () => {
         expect.anything(),
         expect.stringContaining('partial_decrypt_failure')
       );
+    });
+  });
+
+  describe('inspectStoredProviderCredential', () => {
+    const NOW = 1_780_000_000_000;
+
+    test('reports no row as missing rather than valid', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      expect(await inspectStoredProviderCredential('user-1', 'anthropic', NOW)).toEqual({
+        status: 'missing',
+      });
+    });
+
+    test('reports an unexpired subscription as valid with its expiry', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()]));
+      expect(await inspectStoredProviderCredential('user-1', 'claude', NOW)).toEqual({
+        status: 'valid',
+        expires: OAUTH_BLOB_EXPIRES,
+      });
+    });
+
+    test('reports a lapsed subscription as expired, naming the instant', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()]));
+      expect(await inspectStoredProviderCredential('user-1', 'claude', OAUTH_BLOB_EXPIRES)).toEqual(
+        { status: 'expired', expires: OAUTH_BLOB_EXPIRES }
+      );
+    });
+
+    test('refuses to call a malformed expiry valid', async () => {
+      // The guard `resolveOAuthCredential` documents: a missing or non-numeric expiry
+      // makes every comparison silently false and serves a stale token as success.
+      const key = getEncryptionKey();
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          oauthRow({
+            oauth_creds_encrypted: encryptToken(JSON.stringify({ access: 'bearer' }), key),
+          }),
+        ])
+      );
+      const result = await inspectStoredProviderCredential('user-1', 'claude', NOW);
+      expect(result.status).toBe('undetermined');
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: 'claude' }),
+        'user_provider_key.oauth_malformed_expires'
+      );
+    });
+
+    test('refuses to call an undecryptable subscription valid', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([oauthRow({ oauth_creds_encrypted: 'not-ciphertext' })])
+      );
+      expect((await inspectStoredProviderCredential('user-1', 'claude', NOW)).status).toBe(
+        'undetermined'
+      );
+    });
+
+    test('reports a database failure as undetermined, not as a verdict', async () => {
+      mockQuery.mockRejectedValueOnce(new Error('db down'));
+      expect(await inspectStoredProviderCredential('user-1', 'claude', NOW)).toEqual({
+        status: 'undetermined',
+        reason: 'db down',
+      });
+    });
+
+    test('never returns any part of the credential', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([apiKeyRow()]));
+      const result = await inspectStoredProviderCredential('user-1', 'openrouter', NOW);
+      expect(JSON.stringify(result)).not.toContain('sk-or-test');
+      expect(result.status).toBe('valid');
     });
   });
 });

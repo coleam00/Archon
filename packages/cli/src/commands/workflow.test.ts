@@ -248,7 +248,16 @@ mock.module('@archon/core', () => ({
       alreadyExisted: false,
     })
   ),
-  loadConfig: mock(() => Promise.resolve({ defaults: {} })),
+  // `assistant`/`assistants` are what every real `loadConfig` returns, and what provider
+  // resolution (dry-run report, credential pre-flight) reads. A mock without them is a
+  // shape no install produces.
+  loadConfig: mock(() =>
+    Promise.resolve({ defaults: {}, assistant: 'claude', assistants: { claude: {}, codex: {} } })
+  ),
+  // The credential pre-flight gate asks this before every launch. Left unmocked it opens
+  // the real credential database; 'missing' is the shape of an install with nothing
+  // connected, which is what these tests are about.
+  inspectStoredProviderCredential: mock(() => Promise.resolve({ status: 'missing' as const })),
   generateAndSetTitle: mock(() => Promise.resolve()),
   loadRepoConfig: mock(() => Promise.resolve(null)),
   getUserAiPrefs: mock(() => Promise.resolve({})),
@@ -657,9 +666,12 @@ async function finishStartupWindow(
   spawnSpy: ReturnType<typeof spyOn>,
   expectedSpawnCount = 1
 ): Promise<void> {
+  // The budget is generous because the pre-fork gates (requirements, credentials) await
+  // dynamic imports, each of which costs several microtask turns. It only has to be
+  // finite: a spawn that never happens still fails on the assertion below.
   for (
     let attempt = 0;
-    attempt < 20 && spawnSpy.mock.calls.length < expectedSpawnCount;
+    attempt < 500 && spawnSpy.mock.calls.length < expectedSpawnCount;
     attempt++
   ) {
     await Promise.resolve();
@@ -1290,6 +1302,7 @@ describe('workflowRunCommand — dry-run', () => {
       const dryRun = await import('@archon/workflows/dry-run');
       (core.loadConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
         assistant: 'claude',
+        assistants: {},
         tiers: {},
         aliases: {},
       });
@@ -1736,6 +1749,192 @@ describe('workflowRunCommand — requires: [github] gate', () => {
     ).rejects.toThrow(/connected github identity/i);
 
     expect(executeWorkflow).not.toHaveBeenCalled();
+  });
+});
+
+describe('workflowRunCommand — credential pre-flight gate (#3274)', () => {
+  let consoleSpy: ReturnType<typeof spyOn>;
+  let tempAuthDir: string | undefined;
+  let savedAuthPath: string | undefined;
+  let savedAntKey: string | undefined;
+  let savedOrKey: string | undefined;
+
+  beforeEach(async () => {
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    savedAuthPath = process.env.ARCHON_PI_AUTH_PATH;
+    savedAntKey = process.env.ANTHROPIC_API_KEY;
+    savedOrKey = process.env.OPENROUTER_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
+
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockClear();
+  });
+
+  afterEach(async () => {
+    consoleSpy.mockRestore();
+    if (savedAuthPath !== undefined) process.env.ARCHON_PI_AUTH_PATH = savedAuthPath;
+    else delete process.env.ARCHON_PI_AUTH_PATH;
+    if (savedAntKey !== undefined) process.env.ANTHROPIC_API_KEY = savedAntKey;
+    else delete process.env.ANTHROPIC_API_KEY;
+    if (savedOrKey !== undefined) process.env.OPENROUTER_API_KEY = savedOrKey;
+    else delete process.env.OPENROUTER_API_KEY;
+
+    if (tempAuthDir) {
+      await removeTempTree(tempAuthDir);
+      tempAuthDir = undefined;
+    }
+  });
+
+  it('fails before worktree creation when configured provider has an expired credential', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const isolation = await import('@archon/isolation');
+
+    tempAuthDir = mkdtempSync(join(tmpdir(), 'archon-preflight-auth-'));
+    const authPath = join(tempAuthDir, 'auth.json');
+    writeFileSync(
+      authPath,
+      JSON.stringify({
+        anthropic: {
+          type: 'oauth',
+          access: 'sk-ant-oat01-test',
+          refresh: 'sk-ant-ort01-test',
+          expires: 1717804800000, // 8 June 2024
+        },
+      })
+    );
+    process.env.ARCHON_PI_AUTH_PATH = authPath;
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [
+        makeTestWorkflowWithSource({
+          name: 'anthropic-wf',
+          nodes: [
+            {
+              id: 'ai-step',
+              prompt: 'analyze code',
+              provider: 'pi',
+              model: 'anthropic/claude-3-5-sonnet',
+            },
+          ],
+        }),
+      ],
+      errors: [],
+    });
+
+    await expect(workflowRunCommand('/repo/root', 'anthropic-wf', 'go', {})).rejects.toThrow(
+      /anthropic credential expired 8 June 2024/
+    );
+
+    // Hard-blocked before worktree creation and before executeWorkflow
+    expect(executeWorkflow).not.toHaveBeenCalled();
+    const provider = isolation.getIsolationProvider();
+    expect(provider.create).not.toHaveBeenCalled();
+  });
+
+  it('allows a run configured for provider A when provider B has an expired credential (#3273)', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const conversationDb = await import('@archon/core/db/conversations');
+
+    tempAuthDir = mkdtempSync(join(tmpdir(), 'archon-preflight-auth-'));
+    const authPath = join(tempAuthDir, 'auth.json');
+    writeFileSync(
+      authPath,
+      JSON.stringify({
+        anthropic: {
+          type: 'oauth',
+          access: 'sk-ant-oat01-test',
+          refresh: 'sk-ant-ort01-test',
+          expires: 1717804800000, // expired!
+        },
+        openrouter: {
+          type: 'api_key',
+          key: 'sk-or-valid-key',
+        },
+      })
+    );
+    process.env.ARCHON_PI_AUTH_PATH = authPath;
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [
+        makeTestWorkflowWithSource({
+          name: 'or-wf',
+          nodes: [
+            {
+              id: 'ai-step',
+              prompt: 'analyze code',
+              provider: 'pi',
+              model: 'openrouter/qwen/qwen3',
+            },
+          ],
+        }),
+      ],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-ok',
+    });
+
+    await workflowRunCommand('/repo/root', 'or-wf', 'go', { noWorktree: true });
+
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows a workflow with no AI nodes to run even with an expired credential', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const conversationDb = await import('@archon/core/db/conversations');
+
+    tempAuthDir = mkdtempSync(join(tmpdir(), 'archon-preflight-auth-'));
+    const authPath = join(tempAuthDir, 'auth.json');
+    writeFileSync(
+      authPath,
+      JSON.stringify({
+        anthropic: {
+          type: 'oauth',
+          access: 'sk-ant-oat01-test',
+          refresh: 'sk-ant-ort01-test',
+          expires: 1717804800000, // expired!
+        },
+      })
+    );
+    process.env.ARCHON_PI_AUTH_PATH = authPath;
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [
+        makeTestWorkflowWithSource({
+          name: 'bash-wf',
+          nodes: [
+            {
+              id: 'shell-step',
+              bash: 'echo hello',
+            },
+          ],
+        }),
+      ],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
+    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      success: true,
+      workflowRunId: 'run-ok',
+    });
+
+    await workflowRunCommand('/repo/root', 'bash-wf', 'go', { noWorktree: true });
+
+    expect(executeWorkflow).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -7397,7 +7596,7 @@ describe('workflowRunCommand — detach', () => {
 
     try {
       const commandPromise = workflowRunCommand('/test/path', 'assist', 'hello', { detach: true });
-      for (let attempt = 0; attempt < 20 && spawnSpy.mock.calls.length === 0; attempt++) {
+      for (let attempt = 0; attempt < 500 && spawnSpy.mock.calls.length === 0; attempt++) {
         await Promise.resolve();
       }
       expect(spawnSpy).toHaveBeenCalledTimes(1);
@@ -7436,7 +7635,7 @@ describe('workflowRunCommand — detach', () => {
 
     try {
       const commandPromise = workflowRunCommand('/test/path', 'assist', 'hello', { detach: true });
-      for (let attempt = 0; attempt < 20 && spawnSpy.mock.calls.length === 0; attempt++) {
+      for (let attempt = 0; attempt < 500 && spawnSpy.mock.calls.length === 0; attempt++) {
         await Promise.resolve();
       }
       expect(spawnSpy).toHaveBeenCalledTimes(1);
@@ -7479,7 +7678,7 @@ describe('workflowRunCommand — detach', () => {
         json: true,
         conversationId,
       });
-      for (let attempt = 0; attempt < 20 && spawnSpy.mock.calls.length === 0; attempt++) {
+      for (let attempt = 0; attempt < 500 && spawnSpy.mock.calls.length === 0; attempt++) {
         await Promise.resolve();
       }
       expect(spawnSpy).toHaveBeenCalledTimes(1);
@@ -8089,7 +8288,7 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
 
     try {
       const commandPromise = workflowApproveCommand('run-123', undefined, true, undefined, true);
-      for (let attempt = 0; attempt < 20 && spawnSpy.mock.calls.length === 0; attempt++) {
+      for (let attempt = 0; attempt < 500 && spawnSpy.mock.calls.length === 0; attempt++) {
         await Promise.resolve();
       }
       expect(spawnSpy).toHaveBeenCalledTimes(1);
@@ -11102,6 +11301,7 @@ describe('maybePrintTierNotice', () => {
       defaults: {},
       tiers: {},
       assistant: 'claude',
+      assistants: {},
     });
     (getUserAiPrefs as ReturnType<typeof mock>).mockResolvedValue({});
   });
@@ -11135,6 +11335,7 @@ describe('maybePrintTierNotice', () => {
     (loadConfig as ReturnType<typeof mock>).mockResolvedValue({
       defaults: {},
       tiers: { large: { provider: 'claude', model: 'opus' } },
+      assistants: {},
     });
     const workflow = makeTierWorkflow('large');
     await maybePrintTierNotice(workflow, '/cwd', undefined, false);
@@ -11166,6 +11367,7 @@ describe('maybePrintTierNotice', () => {
       defaults: {},
       tiers: {},
       assistant: 'pi',
+      assistants: {},
     });
     const workflow = makeTierWorkflow('large');
     await maybePrintTierNotice(workflow, '/cwd', undefined, false);
