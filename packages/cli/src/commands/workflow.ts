@@ -1586,8 +1586,9 @@ async function runWorkflowWithOwnedSource(
   // The flag names a run row this process will execute AS, so three things are checked.
   // Be precise about which one carries the weight, because it is not the first.
   //
-  // The owner marker plus `assertDetachedRunProcessOwner` (above) raise the bar, they do
-  // not prove provenance: a plain scripted process is not its own process-group leader,
+  // The owner marker plus `assertDetachedRunProcessOwner` (called by `workflowRunCommand`
+  // before it reaches this function) raise the bar, they do not prove provenance: a plain
+  // scripted process is not its own process-group leader,
   // so cron, CI, and wrapper scripts are blocked — but a foreground command under a real
   // pseudo-tty IS one by default, so a person setting the env var at their own terminal
   // satisfies it. Treat it as a barrier to automated misuse, not as proof that an Archon
@@ -3412,7 +3413,7 @@ async function runWorkflowWithOwnedSource(
         `\nWorkflow paused — waiting for '${wait.stepName}' until ${wait.resumeAt}; ` +
           'this process resumes the run at its deadline.'
       );
-      return { run: pausedRun, wait };
+      return { run: pausedRun, wait, platformConversationId: conversationId };
     }
     if (!presentRunFacts('\nWorkflow paused — waiting for approval.', 'paused')) {
       console.log('\nWorkflow paused — waiting for approval.');
@@ -3449,7 +3450,6 @@ async function runWorkflowWithOwnedSource(
  * waits are excluded at the source: they are a decision, not a deadline.
  */
 export interface DurableWaitCursor {
-  kind: 'time' | 'event';
   stepName: string;
   resumeAt: string;
   signaled: boolean;
@@ -3459,6 +3459,12 @@ export interface DurableWaitCursor {
 export interface PendingWaitContinuation {
   run: WorkflowRun;
   wait: DurableWaitCursor;
+  /**
+   * The platform conversation the first attempt ran under. Threaded into every
+   * continuation so the resumed segment's dispatch and result card stay in the run's
+   * original thread instead of generating a second conversation.
+   */
+  platformConversationId: string;
 }
 
 /**
@@ -3472,7 +3478,6 @@ export function pendingDurableWait(run: WorkflowRun): DurableWaitCursor | undefi
   const wait = run.metadata.wait;
   if (!isWorkflowWaitContext(wait) || wait.kind === 'attention') return undefined;
   return {
-    kind: wait.kind,
     stepName: workflowWaitStepName(wait),
     resumeAt: wait.resumeAt,
     signaled: wait.kind === 'event' && wait.signaledAt !== undefined,
@@ -3521,7 +3526,10 @@ interface WaitResumeAttempt {
 }
 
 /** Mirror `workflowResumeCommand`'s continuation options for a run this process owns. */
-async function buildWaitResumeAttempt(run: WorkflowRun): Promise<WaitResumeAttempt> {
+async function buildWaitResumeAttempt(
+  run: WorkflowRun,
+  platformConversationId: string
+): Promise<WaitResumeAttempt> {
   if (!run.working_path) {
     throw new Error(
       `Workflow run '${run.id}' has no working path recorded.\n` +
@@ -3539,6 +3547,7 @@ async function buildWaitResumeAttempt(run: WorkflowRun): Promise<WaitResumeAttem
       continuationRun: run,
       resume: true,
       codebaseId: run.codebase_id ?? undefined,
+      conversationId: platformConversationId,
       discoveryCwd,
     },
   };
@@ -3623,7 +3632,7 @@ export async function workflowRunCommand(
     }
     if (pending === undefined) return;
     if ((await awaitDurableWaitDeadline(pending.run.id, pending.wait)) === 'stop') return;
-    attempt = await buildWaitResumeAttempt(pending.run);
+    attempt = await buildWaitResumeAttempt(pending.run, pending.platformConversationId);
   }
 }
 

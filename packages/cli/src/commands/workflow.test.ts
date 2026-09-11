@@ -7794,7 +7794,6 @@ describe('pendingDurableWait — which pauses this process owns', () => {
         })
       )
     ).toEqual({
-      kind: 'time',
       stepName: 'cooldown',
       resumeAt: '2026-01-01T00:01:00.000Z',
       signaled: false,
@@ -7821,7 +7820,6 @@ describe('pendingDurableWait — which pauses this process owns', () => {
         })
       )
     ).toEqual({
-      kind: 'event',
       stepName: 'poll.checks',
       resumeAt: '2026-01-01T00:05:00.000Z',
       signaled: true,
