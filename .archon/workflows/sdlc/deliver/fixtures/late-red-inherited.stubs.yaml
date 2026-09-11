@@ -22,7 +22,9 @@ classify:
     docs: "stub: no doc-facing changes"
 resolve-scope: '{"errors":"false"}'
 review__mode: '{"continuation":false}'
-review__scope: "PR diff in scope; head sha stubbed"
+review__scope:
+  # PR diff in scope; head sha stubbed
+  docs: false
 review__code: "0 findings"
 review__seams: "0 findings"
 review__simplify: "0 findings"
@@ -31,6 +33,7 @@ review__synthesize:
   ready: true
   action: none
   findings_summary: "stub: clean on initial review; CI still running"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 validate__validate:
   green: true
   red_cause: ""
@@ -48,16 +51,19 @@ ci-fix__implement:
   red_cause: inherited
   summary: "stub: e2e-smoke is red at the run's starting commit on a surface this diff never touches; no edit to make"
 ci-recheck__mode: '{"continuation":true}'
-ci-recheck__scope: "light mode; zero delta"
+ci-recheck__scope:
+  # light mode; zero delta
+  docs: false
 ci-recheck__synthesize:
   ready: true
   action: none
   findings_summary: "stub: no delta; prior report stands"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 fix-ci-probe: '{"state":"red","detail":"e2e-smoke (fail)"}'
 attention-ci-probe: '{"state":"red","detail":"e2e-smoke (fail)"}'
 fixture:
   expect: paused
-  reached: [review__synthesize, gate-validated, ci-verdict, ci-fix__assert-changed, gate-ci-fix, ci-recheck__synthesize, ci-recheck-action, ci-round-result, fix-ci-probe, ci-attention-route, attention-ci-probe]
+  reached: [review__synthesize, gate-validated, ci-verdict, ci-fix__assert-changed, gate-ci-fix, ci-recheck__synthesize, ci-round-result, fix-ci-probe, ci-attention-route, attention-ci-probe]
   resolved-text-contains:
     attention-ci-pause: "pull request #10 after Archon classified the failure as inherited: e2e-smoke (fail) Re-run the failing check, then resume this run."
 exec-code: true

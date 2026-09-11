@@ -5,15 +5,16 @@
 triage__triage:
   route: deliver
   summary: "stub: current code confirms a complete work order"
-triage__assert-intact: '{"intact":"true"}'
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
 gate-direct: '{"gate":"direct"}'
 deliver__impl__record-start: '{"start":"recorded"}'
 deliver__impl__implement:
   done: true
   green: true
+  red_cause: ""
   summary: "stub: direct work implemented and green"
 deliver__impl__assert-changed: "2 files changed"
-deliver__gate-green: '{"gate":"green"}'
+deliver__gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
 deliver__pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 6, url: "https://github.com/example/repo/pull/6", head: "fixture-branch", base: "dev", is_draft: true }
 deliver__classify:
   errors: false
@@ -23,7 +24,9 @@ deliver__classify:
     docs: "stub: no doc-facing changes"
 deliver__resolve-scope: '{"errors":"false"}'
 deliver__review__mode: '{"continuation":false}'
-deliver__review__scope: "PR diff in scope; head sha stubbed"
+deliver__review__scope:
+  # PR diff in scope; head sha stubbed
+  docs: false
 deliver__review__code: "0 findings"
 deliver__review__seams: "0 findings"
 deliver__review__simplify: "0 findings"
@@ -33,7 +36,7 @@ deliver__review__synthesize:
   ready: true
   action: none
   findings_summary: "stub: no open findings"
-deliver__review-action: '{"ready":true,"action":"none"}'
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 deliver__gate-ready: '{"gate":"ready"}'
 deliver__validate__validate:
   green: false

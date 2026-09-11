@@ -31843,7 +31843,10 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
         return {
           ...node,
           runtime: 'sh' as const,
-          script: `printf '%s' flipped > ${JSON.stringify(flipMarkerPath)}; printf '%s' 'https://github.com/example/repo/pull/3115'`,
+          // Both stand-ins print the shape their real node declares: the flip and the
+          // terminal report certify their own stdout, so a bare URL here would fail
+          // certification rather than the node under test.
+          script: `printf '%s' flipped > ${JSON.stringify(flipMarkerPath)}; printf '%s' '{"pr_url":"https://github.com/example/repo/pull/3115"}'`,
           deps: undefined,
           with: undefined,
         };
@@ -31852,7 +31855,8 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
         return {
           ...node,
           runtime: 'sh' as const,
-          script: "printf '%s' delivered",
+          script:
+            'printf \'%s\' \'{"pr_url":"https://github.com/example/repo/pull/3115","summary":"delivered"}\'',
           deps: undefined,
           with: undefined,
         };

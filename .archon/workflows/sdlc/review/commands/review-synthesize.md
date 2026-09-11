@@ -106,4 +106,5 @@ Confirm both report files and `findings.json` exist, that `findings.json` parses
 
 - `ready`: the verdict above.
 - `action`: exactly `none`, `correct`, or `replan`.
+- `report`: exactly `{"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "review/report.md"}`. The engine refuses the verdict if that file is missing or empty.
 - `findings_summary`: start with `Review report: $ARTIFACTS_DIR/review/report.md.` Then give 2-4 sentences with counts by severity, the dominant causal theme if one exists, and what blocks readiness or that nothing does.

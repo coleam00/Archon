@@ -4,11 +4,12 @@
 triage__triage:
   route: deliver
   summary: "stub: current code confirms a complete work order"
-triage__assert-intact: '{"intact":"true"}'
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
 deliver__impl__record-start: '{"start":"recorded"}'
 deliver__impl__implement:
   done: true
   green: false
+  red_cause: ""
   summary: "stub: full validate red on one spec this change does not touch"
 deliver__impl__assert-changed: "2 files changed"
 # deliver__gate-green is deliberately unstubbed: the real gate must refuse.

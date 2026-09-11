@@ -4,6 +4,6 @@
 investigate:
   rooted: true
   summary: "stub: cause established — full report at investigation.md"
-assert-intact: '{"intact":"true"}'
+  report: { type: archon_artifact, run_id: "fixture-run", path: "investigation.md" }
 fixture:
   expect: completed

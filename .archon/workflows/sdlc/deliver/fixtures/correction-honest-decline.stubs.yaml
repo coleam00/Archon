@@ -28,7 +28,9 @@ classify:
     docs: "stub: no doc-facing changes"
 resolve-scope: '{"errors":"false"}'
 review__mode: '{"continuation":false}'
-review__scope: "PR diff in scope; head sha stubbed"
+review__scope:
+  # PR diff in scope; head sha stubbed
+  docs: false
 review__code: "1 finding (Important)"
 review__seams: "0 findings"
 review__simplify: "0 findings"
@@ -37,6 +39,7 @@ review__synthesize:
   ready: false
   action: correct
   findings_summary: "stub: 1 Important finding open"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 ci-note: "CI state for this pull request (head abc123def456): Concluded non-green checks:\n- test (windows-latest) (fail)"
 fix__implement:
   done: true
@@ -44,11 +47,14 @@ fix__implement:
   red_cause: inherited
   summary: "stub: the finding is already satisfied on the branch and needed no edit; lint is red only for a violation present at the reviewed starting commit, in a file this diff never touches"
 recheck__mode: '{"continuation":true}'
-recheck__scope: "light mode; delta since cursor"
+recheck__scope:
+  # light mode; delta since cursor
+  docs: false
 recheck__synthesize:
   ready: true
   action: none
   findings_summary: "stub: no open Critical/Important"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 sync-pr-body: "body resynced: the correction round changed nothing, so the body's claims still hold"
 validate__validate:
   green: false

@@ -5,12 +5,15 @@ impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true
+  red_cause: ""
   summary: "stub: implemented and green"
 impl__assert-changed: "3 files changed"
-gate-green: '{"gate":"green"}'
+gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
 pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true }
 review__mode: '{"continuation":false}'
-review__scope: "PR diff in scope; head sha stubbed"
+review__scope:
+  # PR diff in scope; head sha stubbed
+  docs: false
 review__code: "0 findings"
 review__seams: "0 findings"
 review__simplify: "0 findings"
@@ -20,17 +23,18 @@ review__synthesize:
   ready: true
   action: none
   findings_summary: "stub: clean on initial review"
-review-action: '{"ready":true,"action":"none"}'
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 gate-ready: '{"ready":"true"}'
 validate__validate:
   green: true
+  red_cause: ""
   summary: "stub: full gate green"
-gate-validated: '{"gate":"green"}'
+gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":""}'
 ci-probe: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
 ci-verdict: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
 ci-attention-route: '{"attention":false,"red_cause":""}'
-flip-ready: "https://github.com/example/repo/pull/2"
-outcome: "https://github.com/example/repo/pull/2"
+flip-ready: { pr_url: "https://github.com/example/repo/pull/2" }
+outcome: { pr_url: "https://github.com/example/repo/pull/2", summary: "https://github.com/example/repo/pull/2" }
 classify:
   errors: false
   docs: false
