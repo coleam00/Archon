@@ -24,7 +24,12 @@ inputs:
     default: "auto"
     description: Silent-failure lens — auto, true, or false.
 
+# `delivered:false` is a valid completion: an honest "no work is owed" is a
+# successful run that shipped nothing, and lifecycle status and work outcome are
+# separate facts. Both were reported as `outcome: null` before the terminal
+# script could certify its own result.
 returns: outcome
+outcome_field: delivered
 
 nodes:
   # The source is history, not a work order. Triage checks it against current
@@ -56,7 +61,7 @@ nodes:
   - id: gate-rooted
     bash: echo '{"gate":"rooted"}'
     depends_on: [inv]
-    when: "$inv.output.rooted == 'true'"
+    when: "$inv.output.rooted == true"
 
   - id: planned
     include: archon-plan
@@ -71,7 +76,7 @@ nodes:
   - id: gate-planned
     bash: echo '{"gate":"planned"}'
     depends_on: [planned]
-    when: "$planned.output.ready == 'true'"
+    when: "$planned.output.ready == true"
 
   - id: deliver
     include: archon-deliver
@@ -88,20 +93,31 @@ nodes:
 
   # One return for every legitimate terminal result. Negative advisory verdicts
   # complete with the report that explains them; delivery is reported from the
-  # flip's verified URL the deliver branch returned (bound with if_skipped, so a
-  # skipped flip arrives as null) — see scripts/outcome.py.
+  # flip's certified URL the deliver branch returned (bound with if_skipped, so a
+  # skipped flip arrives as null) — see scripts/outcome.ts.
+  #
+  # Two dependencies carry the whole graph. `deliver` depends on all three spend
+  # gates, which depend on triage, inv and planned in turn, so nothing this node
+  # reports on can settle after it. `triage` is named because
+  # none_failed_min_one_success needs one completed dependency, and on the no_action
+  # route `deliver` is the skipped one.
+  #
+  # The gates' outputs used to be bound here to tell "delivery started and died
+  # mid-flight" apart from an advisory stop. A failed delivery now cascades an
+  # `upstream_failed` skip that blocks this join outright, so that case never
+  # reaches this node and the run's terminal record names the node that failed.
   - id: outcome
     script: outcome
-    runtime: uv
-    depends_on: [triage, inv, planned, gate-direct, gate-rooted, gate-planned, deliver]
+    runtime: bun
+    depends_on: [triage, deliver]
     trigger_rule: none_failed_min_one_success
     with:
       route: "$triage.output.route"
       summary: "$triage.output.summary"
-      delivered: { from: "$deliver.output", if_skipped: null }
-      # A passed spend gate with no delivered output means delivery STARTED and
-      # died mid-flight — a different fact from an advisory stop, and the report
-      # must not claim the advisory refused.
-      gate_passed_direct: { from: "$gate-direct.output", if_skipped: null }
-      gate_passed_rooted: { from: "$gate-rooted.output", if_skipped: null }
-      gate_passed_planned: { from: "$gate-planned.output", if_skipped: null }
+      delivered: { from: "$deliver.output.pr_url", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        delivered: { type: boolean }
+        summary: { type: string }
+      required: [delivered, summary]

@@ -2,6 +2,6 @@
 triage:
   route: deliver
   summary: "stub: current code confirms the work order; no material decision remains"
-assert-intact: '{"intact":"true"}'
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
 fixture:
   expect: completed

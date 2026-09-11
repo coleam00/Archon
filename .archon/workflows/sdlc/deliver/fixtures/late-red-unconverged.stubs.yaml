@@ -30,7 +30,9 @@ classify:
     docs: "stub: no doc-facing changes"
 resolve-scope: '{"errors":"false"}'
 review__mode: '{"continuation":false}'
-review__scope: "PR diff in scope; head sha stubbed"
+review__scope:
+  # PR diff in scope; head sha stubbed
+  docs: false
 review__code: "0 findings"
 review__seams: "0 findings"
 review__simplify: "0 findings"
@@ -39,6 +41,7 @@ review__synthesize:
   ready: true
   action: none
   findings_summary: "stub: clean on initial review; CI still running"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 validate__validate:
   green: true
   red_cause: ""
@@ -52,8 +55,8 @@ ci-fix__implement:
   red_cause: ""
   summary: "stub: still red and no explanation recorded"
 ci-fix__assert-changed: "1 file changed"
-flip-ready: "https://github.com/example/repo/pull/11"
-outcome: "https://github.com/example/repo/pull/11"
+flip-ready: { pr_url: "https://github.com/example/repo/pull/11" }
+outcome: { pr_url: "https://github.com/example/repo/pull/11", summary: "https://github.com/example/repo/pull/11" }
 fixture:
   expect: failed
   # The gate fails inside the loop, so the failed set is the node AND its

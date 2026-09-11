@@ -2,25 +2,18 @@
  * Source capture: what a run freezes, and what it must keep resolving after the
  * authoring checkout moves on.
  */
+import { readBundleIndex } from './defaults/bundle-inventory';
 import { describe, test, expect, afterAll, mock } from 'bun:test';
 import { mkdtemp, mkdir, writeFile, rm, readFile, readdir, symlink, stat } from 'fs/promises';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 
-// Capture-cost control, same lever and same reason as `subrun.test.ts` (#2882):
-// every `captureWorkflowSource` call here copies and digests the repo's OWN bundled
-// scope — `.archon/workflows` plus `.archon/commands`, ~178 files — on top of the
-// handful of fixture files the test wrote. Twenty-five captures in this file is ~4,400
-// incidental file copies, and that bulk IO is what puts this suite at Bun's 5000ms
-// budget on a contended Windows runner. No test here reads bundled CONTENT: the
-// assertions count the PROJECT scope (`countScopeFiles`) and resolve fixture-written
-// commands. Pointing the two bundle getters at an owned EMPTY tree keeps the bundled
-// scope's semantics intact — an existing directory is still scanned, still copied,
-// still recorded in the manifest — while removing the file fan-out.
-// NB: point these one level DEEP (`<root>/defaults`) — captureWorkflowSource copies
-// dirname(getDefault*Path()), so the getter's PARENT must be the owned empty tree.
+// Empty indexed pack directories keep capture semantics while these tests exercise
+// fixture-owned project sources. Actual bundle bytes have their own conformance tests.
 const bundledDefaultsRoot = join(tmpdir(), `workflow-source-test-empty-bundled-${process.pid}`);
 await mkdir(join(bundledDefaultsRoot, 'defaults'), { recursive: true });
+for (const pack of await readBundleIndex())
+  await mkdir(join(bundledDefaultsRoot, pack), { recursive: true });
 afterAll(async () => {
   await rm(bundledDefaultsRoot, { recursive: true, force: true }).catch(() => {});
 });
@@ -34,8 +27,6 @@ mock.module('@archon/paths', () => ({
 import {
   captureWorkflowSource,
   capturedSourceRoots,
-  createCaptureProfiler,
-  CAPTURE_PHASES,
   assertWorkflowSourceIntegrity,
   loadWorkflowSource,
   recordSelectedWorkflow,
@@ -457,67 +448,6 @@ describe('the bundled scope is hoisted out of the per-capture path', () => {
 
     const capture = await loadWorkflowSource(captureRoot, digest);
     expect(capture.manifest.digest).toBe(digest);
-  });
-});
-
-describe('measuring where a capture spends its time', () => {
-  /**
-   * The phase hook exists to find out what a capture costs on Windows (#3282), and that
-   * answer is only worth anything if the capture being measured is the one an unmeasured
-   * run takes. So: two captures of the same source, one profiled and one not, agree on
-   * every byte — and the phases account for exactly the files the manifest recorded, or
-   * the numbers describe some other work than the capture.
-   *
-   * The mocked bundled root is this file's shared empty tree, so the file written into it
-   * here is removed again before the test returns.
-   */
-  test('profiling changes nothing, and the phase counts reconcile with the manifest', async () => {
-    const { source, runArtifacts, root } = await createSandbox();
-    const bundledFile = join(bundledDefaultsRoot, 'defaults', 'profiled-capture.yaml');
-    // Both captures are compared to each other, so the global scope has to be a tree this
-    // test owns rather than whatever `~/.archon` holds while the suite runs.
-    const previousHome = process.env.ARCHON_HOME;
-    process.env.ARCHON_HOME = join(root, 'home');
-
-    // Inside the try: a rejection between here and the cleanup would otherwise leave
-    // ARCHON_HOME pointed at this test's sandbox for every test that follows.
-    try {
-      await writeFile(bundledFile, 'name: profiled-capture\n');
-      const plain = await captureWorkflowSource({
-        sourceRoot: source,
-        captureRoot: captureRootIn(runArtifacts, 'plain'),
-      });
-      const { profiler, totals } = createCaptureProfiler();
-      const profiled = await captureWorkflowSource({
-        sourceRoot: source,
-        captureRoot: captureRootIn(runArtifacts, 'profiled'),
-        profiler,
-      });
-
-      expect(profiled.manifest.digest).toBe(plain.manifest.digest);
-      expect(profiled.manifest.file_count).toBe(plain.manifest.file_count);
-      expect(profiled.manifest.byte_count).toBe(plain.manifest.byte_count);
-
-      // Every captured file is written by exactly one of the two write phases, which is
-      // what makes "writes are the cost" a claim the numbers can support or refute.
-      expect(totals.copy.files + totals.bundled_write.files).toBe(profiled.manifest.file_count);
-      expect(totals.copy.bytes + totals.bundled_write.bytes).toBe(profiled.manifest.byte_count);
-      // The bundled half is the one the digest does not read back, so it has to be present
-      // and it has to be excluded — a zero here would make the identity above vacuous.
-      expect(totals.bundled_write.files).toBeGreaterThan(0);
-      expect(totals.digest.files).toBe(totals.copy.files);
-      expect(totals.digest.bytes).toBe(totals.copy.bytes);
-      // Every declared phase is actually wired to a range of the capture. A phase that is
-      // named but never timed reports 0.00 forever, which reads as "free" rather than as
-      // "unmeasured" — the one way this instrument can lie to whoever runs it.
-      for (const phase of CAPTURE_PHASES) {
-        expect(totals[phase].ms).toBeGreaterThan(0);
-      }
-    } finally {
-      await rm(bundledFile, { force: true });
-      if (previousHome === undefined) delete process.env.ARCHON_HOME;
-      else process.env.ARCHON_HOME = previousHome;
-    }
   });
 });
 

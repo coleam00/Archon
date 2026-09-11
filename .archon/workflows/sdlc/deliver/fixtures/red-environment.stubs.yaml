@@ -10,6 +10,7 @@ impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true
+  red_cause: ""
   summary: "stub: implemented and green"
 impl__assert-changed: "3 files changed"
 pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 7, url: "https://github.com/example/repo/pull/7", head: "fixture-branch", base: "dev", is_draft: true }
@@ -21,7 +22,9 @@ classify:
     docs: "stub: no doc-facing changes"
 resolve-scope: '{"errors":"false"}'
 review__mode: '{"continuation":false}'
-review__scope: "PR diff in scope; head sha stubbed"
+review__scope:
+  # PR diff in scope; head sha stubbed
+  docs: false
 review__code: "1 Important finding"
 review__seams: "0 findings"
 review__simplify: "0 findings"
@@ -30,6 +33,7 @@ review__synthesize:
   ready: false
   action: correct
   findings_summary: "stub: one Important finding open"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 ci-note: "CI state for this pull request (head abc123def456): No concluded failures."
 fix__record-start: '{"start":"recorded"}'
 fix__implement:
@@ -41,20 +45,24 @@ fix__assert-changed: "1 file changed"
 # gate-green and gate-correction-green are deliberately unstubbed: the real script
 # takes the green route at the first and the passed-red route at the second.
 recheck__mode: '{"continuation":true}'
-recheck__scope: "light mode; delta since cursor"
+recheck__scope:
+  # light mode; delta since cursor
+  docs: false
 recheck__synthesize:
   ready: true
   action: none
   findings_summary: "stub: the correction closed the finding"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 sync-pr-body: "body resynced, and the environment red disclosed"
 validate__validate:
   green: true
+  red_cause: ""
   summary: "stub: the contention cleared; full gate green"
-gate-validated: '{"gate":"green"}'
+gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":""}'
 ci-probe: '{"state":"concluded","detail":"all checks green"}'
 ci-verdict: '{"state":"concluded","detail":"all checks green"}'
-flip-ready: "https://github.com/example/repo/pull/7"
-outcome: "https://github.com/example/repo/pull/7"
+flip-ready: { pr_url: "https://github.com/example/repo/pull/7" }
+outcome: { pr_url: "https://github.com/example/repo/pull/7", summary: "https://github.com/example/repo/pull/7" }
 fixture:
   expect: completed
   reached: [gate-correction-green, flip-ready]
