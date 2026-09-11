@@ -8,7 +8,7 @@
   },
   "scripts": {
     "cli": "bun src/cli.ts",
-    "test": "bun test src/commands/version.test.ts src/commands/setup.test.ts src/commands/skill.test.ts src/commands/doctor.test.ts src/commands/telemetry.test.ts && bun test src/commands/workflow.test.ts && bun test src/commands/isolation.test.ts && bun test src/commands/chat.test.ts && bun test src/commands/serve.test.ts && bun test src/commands/ai.test.ts && bun test src/commands/validate.test.ts && bun test src/cli.test.ts src/help.test.ts src/default-cwd-canonicalization.test.ts src/utils/stdout.test.ts src/utils/safe-console.test.ts && bun test src/utils/detached-run-control.test.ts && bun test src/utils/detached-run-control.integration.spec.ts && bun test src/telemetry-exit.integration.spec.ts && bun test src/commands/workflow-terminal-event.integration.spec.ts && bun test src/commands/workflow-continuation-provider.integration.spec.ts && bun test src/commands/workflow-wait.integration.spec.ts && bun test src/commands/workflow-transcript.integration.spec.ts && bun test src/commands/workflow-node-summaries.spec.ts && bun test src/adapters/cli-adapter.test.ts",
+    "test": "bun run ../../scripts/package-tests.ts",
     "test:integration": "bun test src/utils/detached-run-control.integration.spec.ts && bun test src/telemetry-exit.integration.spec.ts && bun test src/commands/workflow-terminal-event.integration.spec.ts && bun test src/commands/workflow-continuation-provider.integration.spec.ts && bun test src/commands/workflow-wait.integration.spec.ts && bun test src/commands/workflow-transcript.integration.spec.ts",
     "type-check": "bun x tsc --noEmit"
   },
@@ -26,5 +26,66 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0"
-  }
+  },
+  "testGroups": [
+    [
+      "src/commands/version.test.ts",
+      "src/commands/setup.test.ts",
+      "src/commands/skill.test.ts",
+      "src/commands/doctor.test.ts",
+      "src/commands/telemetry.test.ts"
+    ],
+    [
+      "src/commands/workflow.test.ts"
+    ],
+    [
+      "src/commands/isolation.test.ts"
+    ],
+    [
+      "src/commands/chat.test.ts"
+    ],
+    [
+      "src/commands/serve.test.ts"
+    ],
+    [
+      "src/commands/ai.test.ts"
+    ],
+    [
+      "src/commands/validate.test.ts"
+    ],
+    [
+      "src/cli.test.ts",
+      "src/help.test.ts",
+      "src/default-cwd-canonicalization.test.ts",
+      "src/utils/stdout.test.ts",
+      "src/utils/safe-console.test.ts"
+    ],
+    [
+      "src/utils/detached-run-control.test.ts"
+    ],
+    [
+      "src/utils/detached-run-control.integration.spec.ts"
+    ],
+    [
+      "src/telemetry-exit.integration.spec.ts"
+    ],
+    [
+      "src/commands/workflow-terminal-event.integration.spec.ts"
+    ],
+    [
+      "src/commands/workflow-continuation-provider.integration.spec.ts"
+    ],
+    [
+      "src/commands/workflow-wait.integration.spec.ts"
+    ],
+    [
+      "src/commands/workflow-transcript.integration.spec.ts"
+    ],
+    [
+      "src/commands/workflow-node-summaries.spec.ts"
+    ],
+    [
+      "src/adapters/cli-adapter.test.ts"
+    ]
+  ]
 }

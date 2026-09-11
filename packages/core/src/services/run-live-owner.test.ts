@@ -13,12 +13,31 @@ import {
   type RunLiveOwnerWatchEvent,
 } from './run-live-owner';
 
-async function waitFor(check: () => boolean, timeoutMs = 3_000): Promise<void> {
+/**
+ * How long an in-process live-owner transition may take to become observable.
+ *
+ * Every wait in this file polls for a state this same process reaches, because the owner
+ * and its watchers run in-process, so one deadline covers them all. It is a setup deadline,
+ * not a test budget: it bounds how long a wait retries before reporting that the
+ * transition never happened, and says nothing about what the assertions may cost.
+ *
+ * This was the default on `waitFor`, which let every site share the number without
+ * naming it. `waitFor` no longer defaults, so a wait that needs a different deadline has
+ * to state one and say why rather than inherit this.
+ */
+const LIVE_OWNER_EVENT_DEADLINE_MS = 3_000;
+
+async function waitFor(check: () => boolean, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!check()) {
     if (Date.now() >= deadline) throw new Error('Timed out waiting for live-owner event');
     await Bun.sleep(5);
   }
+}
+
+/** Wait for an in-process live-owner event at the deadline this file owns. */
+async function waitForOwnerEvent(check: () => boolean): Promise<void> {
+  await waitFor(check, LIVE_OWNER_EVENT_DEADLINE_MS);
 }
 
 async function listen(server: Server, path: string): Promise<void> {
@@ -85,7 +104,7 @@ describe('run live owner', () => {
     expect(secondWatch).not.toBeNull();
 
     await owner.close();
-    await waitFor(() => first.length === 1 && second.length === 1);
+    await waitForOwnerEvent(() => first.length === 1 && second.length === 1);
 
     expect(first).toEqual(['attention']);
     expect(second).toEqual(['attention']);
@@ -109,7 +128,7 @@ describe('run live owner', () => {
     }
 
     expect(rejection).toBe(executionError);
-    await waitFor(() => events.length === 1);
+    await waitForOwnerEvent(() => events.length === 1);
     expect(events).toEqual(['attention']);
     expect(await canConnectToRunLiveOwner(path)).toBe(false);
   });
@@ -138,13 +157,13 @@ describe('run live owner', () => {
       expect(lease.pid).toBe(process.pid);
       expect(owner.isStopRequested()).toBe(true);
       await lease.commit();
-      await waitFor(() => events.includes('control_handoff'));
+      await waitForOwnerEvent(() => events.includes('control_handoff'));
       expect(events).toEqual(['control_handoff']);
     } finally {
       lease.release();
       await owner.close();
     }
-    await waitFor(() => events.includes('attention'));
+    await waitForOwnerEvent(() => events.includes('attention'));
     expect(events).toEqual(['control_handoff', 'attention']);
   });
 
@@ -159,7 +178,7 @@ describe('run live owner', () => {
       client.connect(path);
     });
     client.write('stop\n');
-    await waitFor(() => owner.isStopRequested());
+    await waitForOwnerEvent(() => owner.isStopRequested());
 
     const closing = owner.close();
     expect(await canConnectToRunLiveOwner(path)).toBe(true);
@@ -237,7 +256,7 @@ describe('run live owner', () => {
     try {
       const watch = await watchRunLiveOwner(runId, event => events.push(event));
       expect(watch).not.toBeNull();
-      await waitFor(() => events.length > 0);
+      await waitForOwnerEvent(() => events.length > 0);
       expect(events).toEqual(['disconnected']);
     } finally {
       await close(server);
