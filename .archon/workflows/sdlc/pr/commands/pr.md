@@ -14,6 +14,8 @@ Record `HEAD_BRANCH=$(git branch --show-current)` before doing anything public; 
 
 Determine the base branch from evidence, in order: an existing PR for that exact branch in `REPO_PATH` (read it back by explicit number); the repository's documented development flow (steering files, CONTRIBUTING); branch ancestry against likely integration branches (`dev`, `development`, the remote default). Never assume `main`. Use the same resolved base for every diff and command.
 
+When an open PR already exists for this work, it is the pull request: never create another. Find it by `HEAD_BRANCH` for a same-repository branch. For a pull request from a fork the run sits on a review branch at the PR's head, so find it by the number the run's context names and confirm `HEAD` descends from its `headRefOid`. Read `isCrossRepository`, `maintainerCanModify`, `headRepositoryOwner`, `headRepository`, `headRefName`, and `headRefOid` once and record them; the descent check above and the read-back in step 5 both need that SHA. Push to it in step 4, read that number back in step 5, and leave its draft state as you found it rather than applying `$INPUTS.draft`. If the head lives in a fork and `maintainerCanModify` is false, this run cannot publish to it: stop and report, and do not open a replacement.
+
 ## 2. Verify the work is ready
 
 - Confirm the branch is not the base and has commits ahead of it. If intended work sits uncommitted, commit it first following the repository's conventions — staged by name, one coherent outcome per commit, human-sounding message, no AI attribution. Never sweep unrelated changes; if intended and unrelated changes cannot be separated safely, stop and say so.
@@ -31,11 +33,11 @@ Determine the base branch from evidence, in order: an existing PR for that exact
 
 ## 4. Push and create
 
-Push the recorded branch with upstream tracking (`git push -u origin "$HEAD_BRANCH"`). If the push is rejected or the remote diverged, stop and report — never rebase or force-push here. Create the PR against the resolved base, honoring draft mode, and pass `--head "$HEAD_BRANCH"` explicitly. Pin every PR command to the recorded origin repository with `--repo "$REPO_PATH"` — in a clone of a fork, the CLI's default resolution targets the fork's upstream parent, publishing the diff against a repository the author never chose.
+Push the recorded branch with upstream tracking (`git push -u origin "$HEAD_BRANCH"`). For an existing fork PR whose author allowed maintainer edits, push to the fork instead, by explicit URL and ref: `git push "https://github.com/<headRepositoryOwner>/<headRepository>.git" "HEAD:refs/heads/<headRefName>"`. If the push is rejected or the remote diverged, stop and report — never rebase or force-push here. Unless step 1 found an existing PR, create the PR against the resolved base, honoring draft mode, and pass `--head "$HEAD_BRANCH"` explicitly. Pin every PR command to the recorded origin repository with `--repo "$REPO_PATH"` — in a clone of a fork, the CLI's default resolution targets the fork's upstream parent, publishing the diff against a repository the author never chose.
 
 ## 5. Verify by reading back
 
-Read the created PR back from GitHub by its explicit number and `--repo "$REPO_PATH"`: confirm the repository identity, number, URL, title, base, head, and draft state match what you intended. The read-back head must equal `HEAD_BRANCH`; a repository or branch mismatch is a hard failure. Not done until the read-back agrees.
+Read the created or existing PR back from GitHub by its explicit number and `--repo "$REPO_PATH"`: confirm the repository identity, number, URL, title, base, head, and draft state match what you intended. The read-back head must equal `HEAD_BRANCH`, or for a fork PR the recorded `headRefName` with its head SHA equal to what you pushed; a repository or branch mismatch is a hard failure. Not done until the read-back agrees.
 
 Write `$ARTIFACTS_DIR/pr-action.md` with `REPO_HOST`, `REPO_PATH`, the recorded branch, the explicit push target, the PR number, and the create/read-back results. Do not put credentials or the raw origin URL in it. This is the durable action evidence; the node's typed output preserves the verified PR identity.
 
