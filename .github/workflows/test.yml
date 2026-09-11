@@ -80,12 +80,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # `validate` builds the docs site, and Astro's CLI runs under Node rather than
-      # Bun — keep this matched to docs-build.yml and deploy-docs.yml.
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:

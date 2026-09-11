@@ -16,7 +16,7 @@ Thank you for your interest in contributing to Archon!
 
 `bun run validate` is the gate. Run it before opening a pull request: it runs every
 check that gates a pull request except the four listed below, so a green run means CI's
-`test`, `workflow-fixtures` and `docs-build` jobs will pass. It needs no network and no
+`test` and `workflow-fixtures` jobs will pass. It needs no network and no
 services, takes a couple of minutes, and prints what each check cost so you can see
 where the time goes.
 
@@ -43,10 +43,11 @@ If you touched what they cover, run them yourself.
 | `schema-upgrade` | a live PostgreSQL; the SQLite half also reads every release tag | `bun run check:schema-upgrades` (`PGHOST`/`PGUSER`/… or `DATABASE_URL`) and `bun run check:sqlite-vintages` |
 | `postgres-parity` | a live PostgreSQL | `ARCHON_TEST_PG_URL=postgres://… bun test packages/core/src/db/isolation-environments.live-run.postgres.integration.test.ts` |
 | `docker-build` | a Docker daemon, and ~14GB of free disk for the image | `docker build .` |
-| `marketplace-lint` | 9 unauthenticated github.com API calls against a 60/hour per-IP quota, which six `validate` runs an hour would exhaust | `bun packages/docs-web/scripts/lint-marketplace.ts` — run it when you change `packages/docs-web/src/data/marketplace.ts` |
+| `docs-build` | Node (Astro's CLI does not run under Bun); path-filtered to `packages/docs-web/` | `bun run build:docs` — run it when you change the docs site |
+| `marketplace-lint` | 9 unauthenticated github.com API calls against a 60/hour per-IP quota, which seven `validate` runs an hour would exhaust | `bun packages/docs-web/scripts/lint-marketplace.ts` — run it when you change `packages/docs-web/src/data/marketplace.ts` |
 
-**Schema changes**: run `bun run check:schema-upgrades` yourself if you touched
-`migrations/000_combined.sql`. A statement that applies cleanly to a fresh install can
+**Schema changes**: run `bun run check:schema-upgrades` and `bun run check:sqlite-vintages`
+yourself if you touched `migrations/000_combined.sql`. A statement that applies cleanly to a fresh install can
 abort the whole apply on an upgrade, and nothing before that job catches it.
 
 `scripts/validate-ci-parity.test.ts` holds the same exclusions as a machine-checked list,

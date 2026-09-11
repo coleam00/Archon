@@ -52,10 +52,16 @@ const NOT_IN_VALIDATE: readonly { command: string; reason: string }[] = [
     reason: 'Exercises the Postgres dialect against a live PostgreSQL service.',
   },
   {
+    command: 'bun run build:docs',
+    reason:
+      "Astro's CLI runs under Node, not Bun, so a checkout with only Bun cannot build the docs " +
+      'site; docs-build.yml runs it with a Node setup, path-filtered to the docs site.',
+  },
+  {
     command: 'bun packages/docs-web/scripts/lint-marketplace.ts',
     reason:
       'Spends 9 unauthenticated github.com API calls per run against a 60/hour per-IP quota, so ' +
-      'six validate runs an hour turn the gate red with HTTP 403s that say nothing about the change.',
+      'seven validate runs an hour turn the gate red with HTTP 403s that say nothing about the change.',
   },
 ];
 
@@ -68,14 +74,15 @@ interface WorkflowCommand {
 function pullRequestWorkflows(): { name: string; content: string }[] {
   return (
     readdirSync(WORKFLOW_DIR)
-      .filter(name => name.endsWith('.yml'))
+      .filter(name => name.endsWith('.yml') || name.endsWith('.yaml'))
       .map(name => ({
         name,
         content: readFileSync(resolve(WORKFLOW_DIR, name), 'utf8').replace(/\r\n/g, '\n'),
       }))
-      // Matches the block form these workflows use and an inline `pull_request: {…}` alike, so a
-      // future workflow cannot slip past this test by writing its trigger in flow style.
-      .filter(({ content }) => /^ {2}pull_request(?![_A-Za-z])/m.test(content))
+      // Matches the key at any indentation and inside a flow list (`on: [push, pull_request]`),
+      // so a future workflow cannot slip past this test by writing its trigger another way. A
+      // comment line starts with `#`, so prose mentioning the trigger does not match.
+      .filter(({ content }) => /(?:^\s*|[[,]\s*)pull_request(?![_A-Za-z])/m.test(content))
   );
 }
 
@@ -111,14 +118,15 @@ function runSteps(workflow: string): string[] {
 
 /**
  * Bun invocations inside one step body. `bun` is matched as a command word so command
- * substitution (`x=$(bun …)`) counts, and shell comment lines are dropped so the prose in
- * these workflows cannot register as a command.
+ * substitution (`x=$(bun …)`) counts, a command ends at a shell separator so `a && bun b`
+ * and `bun a && bun b` each yield their own entry, and shell comment lines are dropped so
+ * the prose in these workflows cannot register as a command.
  */
 function bunCommands(step: string): string[] {
   return step
     .split('\n')
     .filter(line => !line.trimStart().startsWith('#'))
-    .flatMap(line => [...line.matchAll(/(?:^|[\s;&|($])bun\s+(?:[^\n]*)/g)])
+    .flatMap(line => [...line.matchAll(/(?:^|[\s;&|($])bun\s+[^;&|)\n]*/g)])
     .map(match => match[0].replace(/^[\s;&|($]+/, '').trim());
 }
 

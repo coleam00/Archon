@@ -1,5 +1,5 @@
 /**
- * CI selects checks by id (`bun run validate --only docs-build`), so a mistyped or removed id
+ * CI selects checks by id (`bun run validate --only workflow-fixtures`), so a mistyped or removed id
  * must fail loudly. Selecting nothing and exiting 0 would leave a job that reports green while
  * running no check at all.
  */

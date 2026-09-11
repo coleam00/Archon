@@ -10,7 +10,7 @@
  *
  * Checks run in declaration order and the run stops at the first failure, so the list is ordered
  * roughly cheapest first: a type error surfaces in seconds rather than after the test suite. The
- * two exceptions are the last two entries, and their comment says why they sit there.
+ * one exception is the last entry, and its comment says why it sits there.
  */
 import { resolve } from 'node:path';
 
@@ -89,23 +89,21 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
     label: 'Test suite, per-package isolation preserved',
     command: ['bun', 'run', 'test'],
   },
-  // The two heavy filesystem checks run LAST, after the suite, and that ordering is
-  // load-bearing on Windows. Running them first put 48 workflow captures (a tree created and
-  // deleted each) and an Astro build immediately before a suite whose own slowest tests copy
-  // trees in %TEMP% and spawn `bun`/`git`: the suite stayed the same speed overall (median
-  // 0.87x of the same run on dev, 2612 tests compared) but its tail blew Bun's 5s per-test
-  // budget — one timeout in each of two runs, on tests that cost 350ms on dev, against zero
-  // timeouts in six dev runs. Put them back in front only with Windows evidence that the tail
-  // holds.
+  // The fixture check runs LAST, after the suite, and that ordering is load-bearing on
+  // Windows. Running it first put 48 workflow captures (a tree created and deleted each)
+  // immediately before a suite whose own slowest tests copy trees in %TEMP% and spawn
+  // `bun`/`git`: the suite stayed the same speed overall (median 0.87x of the same run on
+  // dev, 2612 tests compared) but its tail blew Bun's 5s per-test budget — one timeout in
+  // each of two runs, on tests that cost 350ms on dev, against zero timeouts in six dev runs.
+  // Put it back in front only with Windows evidence that the tail holds.
+  //
+  // The docs build is not here on purpose: Astro's CLI runs under Node, and this gate must
+  // run on a checkout that has only Bun. It stays a declared exclusion with its own CI job,
+  // path-filtered to the docs site — see NOT_IN_VALIDATE in validate-ci-parity.test.ts.
   {
     id: 'workflow-fixtures',
     label: 'Every workflow fixture reaches its expected outcome under dry-run',
     command: ['bun', 'run', 'cli', 'workflow', 'test'],
-  },
-  {
-    id: 'docs-build',
-    label: 'The docs site builds',
-    command: ['bun', 'run', 'build:docs'],
   },
 ];
 
