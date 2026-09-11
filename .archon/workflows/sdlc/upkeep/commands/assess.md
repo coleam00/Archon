@@ -49,3 +49,12 @@ Before declaring, re-read your assessment against the checkout: every version nu
 
 - `action` — `update` or `no_action`
 - `summary` — two or three sentences: what you found and why the action follows
+- `report` — a pointer to the report you just wrote, copied exactly:
+
+  ```json
+  {"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "upkeep-assessment.md"}
+  ```
+
+  This node is refused if that file does not exist, so write the report before you
+  declare. `run_id` is the value above verbatim, and `path` is relative to
+  `$ARTIFACTS_DIR`.

@@ -10,8 +10,8 @@ triage:
   proposed_edits: { title: "stub: proposed title", body: "stub: proposed body" }
   blocked_reason: ""
   blocked_by: []
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
   summary: "stub: an illegal pair the boundary must catch"
-assert-intact: '{"intact":"true"}'
 fixture:
   expect: failed
   fail-node: verdict

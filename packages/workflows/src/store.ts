@@ -192,6 +192,39 @@ export type ObservabilityEventInput = WorkflowEventInput<
   Exclude<WorkflowEventType, NodeStateEventType>
 >;
 
+/**
+ * The two rows a wait's completion produces: the wait outcome for observability and
+ * the node's own completed state. A wait completes on one of two paths, in the same
+ * tick inside the executor or on resume inside the store's cursor-clearing
+ * transaction, and both paths must write the same rows for the same result. This is
+ * the only place that knows their shape.
+ */
+export function waitCompletionEvents(
+  workflowRunId: string,
+  completion: WorkflowWaitCompletion
+): { outcome: ObservabilityEventInput; node: NodeStateEventInput } {
+  const { stepName, result } = completion;
+  return {
+    outcome: {
+      workflow_run_id: workflowRunId,
+      event_type: result.status === 'expired' ? 'wait_expired' : 'wait_completed',
+      step_name: stepName,
+      data: result,
+    },
+    node: {
+      workflow_run_id: workflowRunId,
+      event_type: 'node_completed',
+      step_name: stepName,
+      data: {
+        type: 'wait',
+        duration_ms: result.waited_ms,
+        node_output: JSON.stringify(result),
+        structured_output: result,
+      },
+    },
+  };
+}
+
 export const FAN_OUT_CANCEL_REASONS = [
   'fan_out_gate',
   'fan_out_sibling',
@@ -353,12 +386,17 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
     waitContext: WorkflowAttentionWaitContext,
     error: string
   ): Promise<{ failed: boolean }>;
-  /** Consume the exact wait cursor and persist its completion snapshot atomically. */
+  /**
+   * Consume the exact wait cursor and persist its completion snapshot atomically. Both
+   * rows come from `waitCompletionEvents`, and the node's `node_completed` row is
+   * handed back so the caller derives the transcript and emitter from the row that
+   * exists rather than rebuilding it (#3255).
+   */
   clearWorkflowWaitContext(
     id: string,
     waitContext: WorkflowWaitContext,
     completion: WorkflowWaitCompletion
-  ): Promise<{ cleared: boolean }>;
+  ): Promise<{ cleared: false } | { cleared: true; nodeEvent: NodeStateEventInput }>;
   /**
    * Rewrite the approval context of an ALREADY-paused, still-open gate — unlike
    * `pauseWorkflowRun`, which requires the run to currently be `'running'` and so

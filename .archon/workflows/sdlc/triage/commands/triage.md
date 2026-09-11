@@ -101,5 +101,14 @@ Do not investigate the full causal chain, choose the implementation design, impl
 - `blocked_reason` — what a `BLOCKED` item waits on; empty for every other verdict.
 - `blocked_by` — fully qualified URLs of the items a `BLOCKED` item waits on, possibly empty; empty for every other verdict.
 - `summary` — a few sentences naming the verdict, the current truth that decided the route, and pointing to `$ARTIFACTS_DIR/triage.md`.
+- `report` — a pointer to the report you just wrote, copied exactly:
+
+  ```json
+  {"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "triage.md"}
+  ```
+
+  This node is refused if that file does not exist or is empty, so write the report
+  before you declare. `run_id` is the value above verbatim, and `path` is relative to
+  `$ARTIFACTS_DIR`.
 
 Before declaring, re-read the assessment. Confirm every decisive claim has evidence from this run, the requested outcome is separated from suggested implementation, you stopped at the routing boundary, and `git status` matches what you started with.

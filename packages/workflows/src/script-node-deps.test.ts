@@ -25,6 +25,7 @@ mock.module('@archon/git', () => ({
 // --- Mock logger (MUST come before module-under-test imports) ---
 
 const mockLogFn = mock(() => {});
+let testDir: string;
 const mockLogger = {
   info: mockLogFn,
   warn: mockLogFn,
@@ -41,7 +42,9 @@ mock.module('@archon/paths', () => ({
     if (folder) paths.unshift(folder);
     return paths;
   },
-  getDefaultCommandsPath: () => '/nonexistent/defaults',
+  // This fixture has project scripts and no installed bundled source tree.
+  getDefaultCommandsPath: () => join(testDir, 'absent-bundle', 'commands', 'defaults'),
+  getDefaultWorkflowsPath: () => join(testDir, 'absent-bundle', 'workflows', 'defaults'),
 }));
 
 // --- Imports (after all mock.module calls) ---
@@ -111,7 +114,16 @@ function createMockStore(): IWorkflowStore {
     pauseWorkflowRun: mock(() => Promise.resolve()),
     pauseWorkflowRunForWait: mock(() => Promise.resolve()),
     failPausedAttentionWait: mock(() => Promise.resolve({ failed: true })),
-    clearWorkflowWaitContext: mock(() => Promise.resolve({ cleared: true })),
+    clearWorkflowWaitContext: mock((id: string, _wait: unknown, completion: { stepName: string }) =>
+      Promise.resolve({
+        cleared: true as const,
+        nodeEvent: {
+          workflow_run_id: id,
+          event_type: 'node_completed' as const,
+          step_name: completion.stepName,
+        },
+      })
+    ),
     rewriteApprovalContext: mock(() => Promise.resolve({ resolved: true })),
     claimWriteback: mock(() => Promise.resolve({ claimed: true })),
     releaseWritebackClaim: mock(() => Promise.resolve()),
@@ -263,8 +275,6 @@ function dagOptions(overrides: DagOptionsOverrides): ExecuteDagWorkflowOptions {
 }
 
 describe('script node deps field — command construction', () => {
-  let testDir: string;
-
   beforeEach(async () => {
     testDir = join(
       tmpdir(),

@@ -11,11 +11,12 @@
  * NOT mock ./dag-executor, so it cannot share a process with executor.test.ts,
  * which does (mock.module is process-global and irreversible).
  */
+import { readBundleIndex } from './defaults/bundle-inventory';
 import { describe, it, expect, beforeEach, afterEach, afterAll, mock } from 'bun:test';
 import { mkdir, writeFile, rm, cp, readdir, readFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { existsSync } from 'fs';
-import { join, sep } from 'path';
+import { dirname, join, sep } from 'path';
 import { tmpdir } from 'os';
 
 // --- Mock logger + telemetry (passthrough real path utilities like loader.test.ts) ---
@@ -33,23 +34,24 @@ const mockLogger = {
   isLevelEnabled: mock(() => true),
   level: 'info',
 };
-// Capture-cost control: captureWorkflowSource copies the BUNDLED defaults scope
-// (the repo's .archon/workflows/defaults + .archon/commands/defaults, ~58 files /
-// ~660KB) into EVERY staged source capture, on every executeWorkflow level of
-// every run in this file — e2e timing evidence (#2121 Phase 2 CI) shows that
-// uncontrolled per-run fs fan-out is what pushed the specimen test past Bun's
-// default 5000ms budget on Windows CI. No test here exercises bundled default
-// CONTENT: every discovery call opts out of loading them (`loadDefaults: false`)
-// and every workflow under test is written to the tmp cwd. Pointing the two
-// bundle path getters at a dedicated EMPTY directory (outside ARCHON_HOME) keeps
-// the capture's bundled-scope semantics (an existing-but-empty tree is scanned,
-// recorded in the manifest with 0 files) while removing ~58 file writes per
-// capture per platform-multiplied runner.
+// Capture-cost control: captureWorkflowSource writes the BUNDLED defaults scope
+// (the repo's own .archon/workflows + .archon/commands) into EVERY staged source
+// capture, on every executeWorkflow level of every run in this file — e2e timing
+// evidence (#2121 Phase 2 CI) shows that uncontrolled per-run fs fan-out is what
+// pushed the specimen test past Bun's default 5000ms budget on Windows CI. #2924
+// hoisted the READ and the hash of that scope out of the per-capture path, but
+// the bytes still have to land in each capture, so the writes remain and so does
+// this lever. No test here exercises bundled default CONTENT: every discovery call
+// opts out of loading them (`loadDefaults: false`) and every workflow under test is
+// written to the tmp cwd. Pointing the two bundle path getters at a dedicated EMPTY
+// directory (outside ARCHON_HOME) keeps the capture's bundled-scope semantics (an
+// existing-but-empty tree is scanned, recorded in the manifest with 0 files) while
+// removing that file fan-out per capture per platform-multiplied runner.
 const bundledDefaultsRoot = join(tmpdir(), `subrun-test-empty-bundled-${process.pid}`);
 await mkdir(join(bundledDefaultsRoot, 'defaults'), { recursive: true });
-afterAll(() => {
-  void rm(bundledDefaultsRoot, { recursive: true, force: true }).catch(() => {});
-});
+for (const pack of await readBundleIndex())
+  await mkdir(join(bundledDefaultsRoot, pack), { recursive: true });
+afterAll(() => removeTempTree(bundledDefaultsRoot));
 const realArchonPaths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
   ...realArchonPaths,
@@ -69,13 +71,14 @@ mock.module('@archon/git', () => ({
   toRepoPath: mock((p: string) => p),
 }));
 
-// --- Mock fs/promises.rename so a single test can force the rename the recursive
+// --- Filesystem controls keep source removal pending or force the rename the recursive
 //     executeWorkflow performs (moving the staged capture under the child's
 //     artifacts directory) to throw. The wrap's `finally` is the only thing that
 //     can reclaim that staged capture when the rename fails — without the fix
 //     in runChildWorkflow, the staged tree leaks until the hourly age-based
-//     sweep reaps it (review R1). Every other fs/promises function delegates
-//     to the real implementation so other tests are unaffected.
+//     sweep reaps it (review R1). Removal gates only target existing, finalized
+//     roots under the current test staging directory; preparation and other cleanup
+//     delegate to the real filesystem.
 //
 //     The forced failure targets ONLY the move-out-of-staging rename: source
 //     lives under `staged-source/`, destination does NOT. `captureWorkflowSource`
@@ -91,9 +94,57 @@ mock.module('@archon/git', () => ({
 const realFsPromises = await import('fs/promises');
 let forceRenameFailure = false;
 const passthroughRename = realFsPromises.rename;
+const passthroughRemove = realFsPromises.rm;
+let removeSource: typeof passthroughRemove | undefined;
+
+function holdSourceRemoval(
+  stagedDir: string,
+  removalError?: Error
+): {
+  started: Promise<string>;
+  release: () => void;
+  finish: () => Promise<void>;
+} {
+  let signalStarted!: (root: string) => void;
+  let release!: () => void;
+  let activeRemoval: Promise<void> = Promise.resolve();
+  const started = new Promise<string>(resolve => {
+    signalStarted = resolve;
+  });
+  const released = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  removeSource = (path, options) => {
+    if (
+      typeof path !== 'string' ||
+      dirname(path) !== stagedDir ||
+      path.endsWith('.partial') ||
+      !existsSync(path)
+    ) {
+      return passthroughRemove(path, options);
+    }
+    signalStarted(path);
+    activeRemoval = released.then(async () => {
+      if (removalError) throw removalError;
+      await passthroughRemove(path, options);
+    });
+    return activeRemoval;
+  };
+  return {
+    started,
+    release,
+    finish: async () => {
+      release();
+      await activeRemoval.catch(() => {});
+      removeSource = undefined;
+    },
+  };
+}
 const stagedSourcePathSep = `staged-source${sep}`;
 mock.module('fs/promises', () => ({
   ...realFsPromises,
+  rm: (...args: Parameters<typeof passthroughRemove>): Promise<void> =>
+    (removeSource ?? passthroughRemove)(...args),
   rename: async (src: string, dst: string): Promise<void> => {
     if (
       forceRenameFailure &&
@@ -117,6 +168,7 @@ import { discoverWorkflows } from './workflow-discovery';
 import { validateWorkflowResources } from './validator';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
+import { waitCompletionEvents } from './store';
 import type { WorkflowRun, WorkflowWaitContext } from './schemas/workflow-run';
 import type { ResolvedWorkflow } from './schemas/workflow';
 import type { WorkflowRunConfigMetadata } from './schemas/run-config';
@@ -331,7 +383,11 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve({ failed: false });
   };
 
-  clearWorkflowWaitContext: IWorkflowStore['clearWorkflowWaitContext'] = (id, waitContext) => {
+  clearWorkflowWaitContext: IWorkflowStore['clearWorkflowWaitContext'] = (
+    id,
+    waitContext,
+    completion
+  ) => {
     const r = this.runs.get(id);
     const wait = r?.metadata.wait as WorkflowWaitContext | undefined;
     const cursorMatches =
@@ -343,7 +399,11 @@ class InMemoryStore implements IWorkflowStore {
     if (r?.status === 'running' && wait?.nodeId === waitContext.nodeId && cursorMatches) {
       const { wait: _wait, ...metadata } = r.metadata;
       r.metadata = metadata;
-      return Promise.resolve({ cleared: true });
+      // Mirror the real store: both rows land in the same transaction as the cursor
+      // clear, and the node row is handed back so the caller derives its sinks from it.
+      const rows = waitCompletionEvents(id, completion);
+      this.events.push(rows.outcome, rows.node);
+      return Promise.resolve({ cleared: true, nodeEvent: rows.node });
     }
     return Promise.resolve({ cleared: false });
   };
@@ -1816,42 +1876,81 @@ nodes:
     expect(childEventsAfter).toBe(childEventsBefore); // child was NOT re-driven
   });
 
-  it('fails cleanly with "Unknown sub-run workflow" on a typo\'d target (S5)', async () => {
-    await writeWorkflow(
-      'parent-typo',
-      `
+  it.each([false, true])(
+    'awaits source disposal without hiding an unknown target (cleanup failure=%s)',
+    async cleanupFails => {
+      await writeWorkflow(
+        'parent-typo',
+        `
 name: parent-typo
 description: references a non-existent sub-run
 nodes:
   - id: sub
     workflow: does-not-exist-typo
 `
-    );
+      );
 
-    const store = new InMemoryStore();
-    const deps = makeDeps(store);
-    const parent = await discover('parent-typo');
-    const result = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      'conv-db'
-    );
+      const store = new InMemoryStore();
+      const deps = makeDeps(store);
+      const parent = await discover('parent-typo');
+      const cleanupError = cleanupFails ? new Error('source removal rejected') : undefined;
+      const gate = holdSourceRemoval(join(cwd, 'home', 'staged-source'), cleanupError);
+      const execution = executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        parent,
+        'goal',
+        'conv-db'
+      );
 
-    expect(result.success).toBe(false);
-    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-typo');
-    expect(parentRun?.status).toBe('failed');
-    // The node_failed event carries the authoring-friendly reason.
-    const nodeFailed = store.events.find(
-      e => e.event_type === 'node_failed' && e.step_name === 'sub'
-    );
-    expect(String(nodeFailed?.data?.error)).toContain('Unknown sub-run workflow');
-    // No child run was created for a target that doesn't resolve.
-    expect([...store.runs.values()].filter(r => r.parent_run_id !== null)).toHaveLength(0);
-  });
+      try {
+        const root = await Promise.race([
+          gate.started,
+          execution.then(() => {
+            throw new Error('Execution returned without reaching source disposal');
+          }),
+        ]);
+        let settled = false;
+        void execution.then(
+          () => {
+            settled = true;
+          },
+          () => {
+            settled = true;
+          }
+        );
+        // Let an incorrectly detached refusal continue while removal remains held.
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(settled).toBe(false);
+        expect(existsSync(root)).toBe(true);
+        gate.release();
+        const result = await execution;
+        expect(existsSync(root)).toBe(cleanupFails);
+        if (cleanupError) {
+          expect(mockLogger.warn).toHaveBeenCalledWith(
+            { err: cleanupError, captureRoot: root },
+            'workflow.source_capture_dispose_failed'
+          );
+        }
+        expect(result.success).toBe(false);
+        const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-typo');
+        expect(parentRun?.status).toBe('failed');
+        // The node_failed event carries the authoring-friendly reason.
+        const nodeFailed = store.events.find(
+          e => e.event_type === 'node_failed' && e.step_name === 'sub'
+        );
+        expect(String(nodeFailed?.data?.error)).toContain('Unknown sub-run workflow');
+        // No child run was created for a target that doesn't resolve.
+        expect([...store.runs.values()].filter(r => r.parent_run_id !== null)).toHaveLength(0);
+      } finally {
+        gate.release();
+        await execution.catch(() => {});
+        await gate.finish();
+      }
+    }
+  );
 
   // --- slice 2, PR-A: per-child worktree isolation ------------------------------
 
@@ -3386,6 +3485,27 @@ nodes:
     expect(tracker.max).toBe(2);
   });
 
+  function makeAccountingDeps(store: IWorkflowStore): WorkflowDeps {
+    const paidProvider = makeProvider();
+    const provider = {
+      ...paidProvider,
+      sendQuery: mock(function* (prompt: string) {
+        if (prompt.includes('CHECK_SPEND')) {
+          if (prompt.includes('doomed')) throw new Error('failed after paid work');
+          // The check adds no usage to the preceding paid node's accounting.
+          yield { type: 'assistant', content: 'check passed' };
+          yield { type: 'result', sessionId: 'check' };
+          return;
+        }
+        yield* paidProvider.sendQuery();
+      }),
+    };
+    return {
+      ...makeDeps(store),
+      getAgentProvider: mock(() => provider) as unknown as WorkflowDeps['getAgentProvider'],
+    };
+  }
+
   it('rolls up child cost onto the fan-out node (Σ child costs → parent total)', async () => {
     await writeWorkflow(
       'fan-child-cost',
@@ -3404,14 +3524,10 @@ nodes:
 name: fan-cost
 description: three AI children, cost rolls up
 nodes:
-  - id: plan
-    bash: |
-      printf '%s' '["a","b","c"]'
   - id: work
     workflow: fan-child-cost
-    depends_on: [plan]
     fan_out:
-      items: "$plan.output"
+      items: '["a","b","c"]'
 `
     );
 
@@ -3430,7 +3546,7 @@ nodes:
 
     expect(result.success).toBe(true);
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'fan-cost');
-    // 3 children × 0.01 each = 0.03 rolled up to the parent (plan is bash → 0 cost).
+    // 3 children × 0.01 each = 0.03 rolled up to the parent (the parent has no other paid nodes).
     expect((parentRun?.metadata as Record<string, unknown>).total_cost_usd).toBeCloseTo(0.03, 5);
 
     // Usage must be PERSISTED on the node_completed event, not merely computed. These
@@ -3460,8 +3576,7 @@ nodes:
     prompt: "work on $ARGUMENTS"
   - id: fail
     depends_on: [think]
-    bash: |
-      exit 1
+    prompt: "CHECK_SPEND doomed"
 `
     );
     await writeWorkflow(
@@ -3477,7 +3592,7 @@ nodes:
     );
 
     const store = new InMemoryStore();
-    const deps = makeDeps(store);
+    const deps = makeAccountingDeps(store);
     const parent = await discover('solo-parent');
     await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', 'conv-db');
 
@@ -3515,8 +3630,7 @@ nodes:
     prompt: "work on $ARGUMENTS"
   - id: check
     depends_on: [think]
-    bash: |
-      test "$ARGUMENTS" != "doomed"
+    prompt: "CHECK_SPEND $ARGUMENTS"
 `
     );
     await writeWorkflow(
@@ -3525,19 +3639,15 @@ nodes:
 name: fan-partial
 description: three children, one fails AFTER its AI node already spent tokens
 nodes:
-  - id: plan
-    bash: |
-      printf '%s' '["a","doomed","c"]'
   - id: work
     workflow: fan-child-partial
-    depends_on: [plan]
     fan_out:
-      items: "$plan.output"
+      items: '["a","doomed","c"]'
 `
     );
 
     const store = new InMemoryStore();
-    const deps = makeDeps(store);
+    const deps = makeAccountingDeps(store);
     const parent = await discover('fan-partial');
     const result = await executeWorkflow(
       deps,
@@ -3555,6 +3665,16 @@ nodes:
     expect(children).toHaveLength(3);
     const failedChild = children.find(r => r.status === 'failed');
     expect(failedChild).toBeDefined();
+    expect(children.filter(child => child.status === 'completed')).toHaveLength(2);
+    expect(children.filter(child => child.status === 'failed')).toHaveLength(1);
+    expect(
+      store.events.filter(
+        event =>
+          event.workflow_run_id === failedChild?.id &&
+          event.event_type === 'node_completed' &&
+          event.step_name === 'think'
+      )
+    ).toHaveLength(1);
 
     // The failed child's OWN row carries what it spent. This is the assertion that
     // fails on the pre-fix engine: failWorkflowRun wrote only { error }.
@@ -4328,8 +4448,12 @@ nodes:
     process.env.ARCHON_HOME = join(cwd, 'home');
   });
 
+  // `ARCHON_HOME` points inside `cwd`, so this hook removes the staged captures a run
+  // still holds open when a test times out. A raw recursive `rm` gives up the moment
+  // Windows answers EPERM/EBUSY for one of those handles; `removeTempTree` retries until
+  // they close, and reports rather than throwing if they never do (#2924).
   afterEach(async () => {
-    await rm(cwd, { recursive: true, force: true }).catch(() => {});
+    await removeTempTree(cwd);
     if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = originalArchonHome;
   });

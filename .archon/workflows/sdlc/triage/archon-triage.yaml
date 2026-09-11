@@ -34,10 +34,10 @@ outcome_field: ready
 nodes:
   - id: triage
     command: triage
-    # Triage is advisory: the engine fails this node with the touched paths
-    # named if it modifies the working tree. Replaced the
-    # record-state/assert-intact snapshot pair the pack carried before the
-    # engine could enforce this itself.
+    # Triage is advisory on both counts, and the engine holds both. It fails this
+    # node with the touched paths named if the checkout is modified, and it
+    # refuses the artifact pointer below if the report it names does not exist —
+    # so a route with no evidence behind it never leaves here.
     mutates_checkout: false
     output_type: work-triage
     output_format:
@@ -86,6 +86,16 @@ nodes:
             type: string
         summary:
           type: string
+        report:
+          # The evidence contract, enforced by the engine at this node: a pointer at a
+          # file this run's artifacts do not hold, or an empty one, is refused before
+          # the node completes, so a verdict cannot arrive without its report.
+          type: object
+          properties:
+            type: { type: string, enum: [archon_artifact] }
+            run_id: { type: string }
+            path: { type: string, enum: [triage.md] }
+          required: [type, run_id, path]
       required:
         - contract
         - route
@@ -97,30 +107,20 @@ nodes:
         - blocked_reason
         - blocked_by
         - summary
+        - report
 
-  - id: assert-intact
-    bash: |
-      # Tree-intactness is engine-enforced via mutates_checkout: false above;
-      # what remains here is the evidence contract: a route without a written
-      # triage.md is not a triage.
-      if [ ! -s "$ARTIFACTS_DIR/triage.md" ]; then
-        echo "assert-intact: the run completed but wrote no triage.md — a route without evidence is not a triage." >&2
-        exit 1
-      fi
-      echo '{"intact":"true"}'
-    depends_on: [triage]
-
-  # The prompt judges; this boundary verifies. Only a READY contract carries an
-  # engineering route, design-first is a READY item routed to plan, only
-  # NEEDS_CONTRACT_WORK proposes edits, only BLOCKED names blockers, and the
-  # pack's labels are derived here rather than chosen by the model: one state
-  # label, plus a size label while the item can still be worked. Labels are
-  # written only under publish, after the item's identity is verified on the
-  # tracker, and read back before the node reports them.
+  # The prompt judges; this boundary verifies what a schema cannot: the relations
+  # between fields. Only a READY contract carries an engineering route, design-first
+  # is a READY item routed to plan, only NEEDS_CONTRACT_WORK proposes edits, only
+  # BLOCKED names blockers, and the pack's labels are derived here rather than
+  # chosen by the model: one state label, plus a size label while the item can
+  # still be worked. Each field's own type and vocabulary were certified on the
+  # node above. Labels are written only under publish, after the item's identity
+  # is verified on the tracker, and read back before the node reports them.
   - id: verdict
     script: verdict
-    runtime: uv
-    depends_on: [triage, assert-intact]
+    runtime: bun
+    depends_on: [triage]
     with:
       contract: "$triage.output.contract"
       route: "$triage.output.route"
@@ -132,6 +132,7 @@ nodes:
       blocked_reason: "$triage.output.blocked_reason"
       blocked_by: { from: "$triage.output.blocked_by" }
       summary: "$triage.output.summary"
+      report: { from: "$triage.output.report" }
       publish: "$INPUTS.publish"
     output_format:
       type: object
@@ -171,6 +172,15 @@ nodes:
             type: string
         summary:
           type: string
+        # The same pointer, so a composing caller resolves to a verdict that still
+        # carries its evidence; the engine checks it again here.
+        report:
+          type: object
+          properties:
+            type: { type: string, enum: [archon_artifact] }
+            run_id: { type: string }
+            path: { type: string, enum: [triage.md] }
+          required: [type, run_id, path]
       required:
         - contract
         - route
@@ -183,3 +193,4 @@ nodes:
         - blocked_reason
         - blocked_by
         - summary
+        - report

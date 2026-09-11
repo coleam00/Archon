@@ -11,8 +11,8 @@ triage:
   proposed_edits: { title: "stub: proposed title", body: "stub: proposed body" }
   blocked_reason: ""
   blocked_by: []
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
   summary: "stub: no acceptance stated; proposed contract in triage.md"
-assert-intact: '{"intact":"true"}'
 fixture:
   expect: completed
   reached: [verdict]

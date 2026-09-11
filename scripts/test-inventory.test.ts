@@ -12,14 +12,15 @@
  * Keep the batches explicit. The package-script guard below verifies that every
  * TypeScript test is selected by a file or directory argument and that selected
  * paths still exist. The repository guard combines those selectors with the root
- * test targets and workspace declaration so tracked tests cannot sit outside every
+ * test plan and workspace declaration so tracked tests cannot sit outside every
  * command. The compiler guard separately protects normal package projects from
- * excluding their tests again. `bun run test` discovers all three through its
- * explicit `bun test ./scripts/` invocation.
+ * excluding their tests again. `bun run test` discovers all three because the root
+ * plan tests `./scripts/` directly.
  */
 import { describe, test } from 'bun:test';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
+import { ROOT_TEST_PLAN } from './repo-tests';
 
 interface InventoryMismatch {
   packageName: string;
@@ -38,6 +39,8 @@ const REPO_ROOT = join(import.meta.dir, '..');
 const PACKAGES_DIR = join(REPO_ROOT, 'packages');
 /** Every workspace sits at `packages/<name>`, so the runner path is the same for all of them. */
 const PACKAGE_TEST_RUNNER = 'bun run ../../scripts/package-tests.ts';
+/** The root script must be the runner that walks `ROOT_TEST_PLAN`, or this guard reads a plan nothing executes. */
+const ROOT_TEST_RUNNER = 'bun run scripts/repo-tests.ts';
 const TEST_FILE_PATTERN = /\.(?:test|spec)\.tsx?$/;
 const TRACKED_TEST_PATTERNS = ['*.test.ts', '*.spec.ts', '*.test.tsx', '*.spec.tsx'];
 
@@ -88,15 +91,17 @@ function readPackageManifest(manifestPath: string): {
   };
 }
 
-function readRootTestConfig(): { testScript: string; workspaces: string[] } {
+function readRootWorkspaces(): string[] {
   const manifest = readPackageManifest(join(REPO_ROOT, 'package.json'));
-  if (manifest.testScript === undefined) {
-    throw new Error('The root package.json does not define scripts.test');
+  if (manifest.testScript?.trim() !== ROOT_TEST_RUNNER) {
+    throw new Error(
+      `The root package.json must set scripts.test to "${ROOT_TEST_RUNNER}" so ROOT_TEST_PLAN is what runs`
+    );
   }
   if (manifest.workspaces === undefined) {
     throw new Error('The root package.json does not define string-array workspaces');
   }
-  return { testScript: manifest.testScript, workspaces: manifest.workspaces };
+  return manifest.workspaces;
 }
 
 function sourceSelectors(testScript: string | undefined): SelectorParseResult {
@@ -181,27 +186,13 @@ function packageTestSelectors(manifest: {
   return sourceSelectors(manifest.testScript);
 }
 
-function directTestSelectors(testScript: string): string[] {
-  return testScript.split('&&').flatMap((command): string[] => {
-    const tokens = command.trim().split(/\s+/);
-    return tokens[0] === 'bun' && tokens[1] === 'test'
-      ? tokens.slice(2).filter((token): boolean => !token.startsWith('-'))
-      : [];
-  });
-}
-
-function runsAllWorkspaceTests(testScript: string): boolean {
-  return testScript.split('&&').some((command): boolean => {
-    const tokens = command.trim().split(/\s+/);
-    const filterIndex = tokens.indexOf('--filter');
-    return (
-      tokens[0] === 'bun' &&
-      filterIndex !== -1 &&
-      tokens[filterIndex + 1] === "'*'" &&
-      tokens.at(-1) === 'test'
-    );
-  });
-}
+/** Paths the root plan tests itself, rather than delegating to a workspace. */
+const ROOT_TEST_SELECTORS = ROOT_TEST_PLAN.flatMap((step): string[] =>
+  step.kind === 'root' ? step.selectors : []
+);
+const ROOT_PLAN_RUNS_WORKSPACE_TESTS = ROOT_TEST_PLAN.some(
+  (step): boolean => step.kind === 'workspaces'
+);
 
 function selectorCollects(selector: string, testPath: string, baseDirectory: string): boolean {
   const selectorPath = normalizePath(
@@ -366,12 +357,15 @@ describe('package test inventory', () => {
 
 describe('repository test inventory', () => {
   test('every tracked TypeScript test is selected by bun run test', () => {
-    const { testScript, workspaces } = readRootTestConfig();
-    const rootSelectors = directTestSelectors(testScript);
-    const workspaceTestsRun = runsAllWorkspaceTests(testScript);
+    const workspaces = readRootWorkspaces();
     const uncollectedTests = trackedTests().filter(
       (testPath): boolean =>
-        !isCollectedByRepositoryTest(testPath, rootSelectors, workspaces, workspaceTestsRun)
+        !isCollectedByRepositoryTest(
+          testPath,
+          ROOT_TEST_SELECTORS,
+          workspaces,
+          ROOT_PLAN_RUNS_WORKSPACE_TESTS
+        )
     );
 
     if (uncollectedTests.length > 0) {

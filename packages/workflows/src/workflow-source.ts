@@ -30,10 +30,9 @@
  * SCOPE: every source scope a static `include:` can reach is captured — project, global
  * (`~/.archon/`), and, in source builds, the on-disk bundled defaults. Freezing only the
  * project scope would leave a hole: a project workflow that includes a global one would
- * still change shape across a resume. In a compiled binary the bundled defaults are
- * embedded constants rather than files, so they cannot move under a run at all; the
- * manifest records the engine version, which is what distinguishes one binary's bundled
- * set from another's.
+ * still change shape across a resume. Bundled content is selected by the same inventory
+ * in source and binary builds, then written into the run's capture so an engine upgrade
+ * cannot replace its executable source.
  *
  * Runtime `workflow:` children are deliberately NOT part of the closure. A child is not a
  * run until it starts and freezes its own source — see {@link resolveChildDiscoveryRoot}.
@@ -52,18 +51,23 @@ import {
 } from 'fs/promises';
 import { createHash } from 'crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { dirname, join, relative, sep } from 'path';
+import { dirname, join, sep } from 'path';
 import { z } from '@hono/zod-openapi';
 import { createLogger } from '@archon/paths';
 import * as archonPaths from '@archon/paths';
 import { BUNDLED_VERSION } from '@archon/paths/bundled-build';
 import {
   BUNDLED_COMMANDS,
-  BUNDLED_SCRIPTS,
+  BUNDLED_SCRIPT_PACKS,
   BUNDLED_WORKFLOWS,
-  BUNDLED_WORKFLOW_OWNERS,
+  BUNDLED_WORKFLOW_PATHS,
   isBinaryBuild,
 } from './defaults/bundled-defaults';
+import {
+  collectInstalledBundleSources,
+  readBundleContent,
+  type BundleSourceFile,
+} from './defaults/bundle-inventory';
 import {
   readWorkflowSourceState,
   workflowSourceConfigSchema,
@@ -302,102 +306,193 @@ async function isDirectory(path: string): Promise<boolean> {
   }
 }
 
-/**
- * Recursively copy `from` into `to`, skipping cache directories. Returns files+bytes copied.
- *
- * `ancestors` holds the canonical (symlink-resolved) path of every directory currently open
- * above this one. Because directory symlinks are followed rather than preserved, a link
- * pointing at one of its own ancestors would otherwise re-enter the same tree: the walk only
- * stops when the kernel refuses the path with ELOOP, by which point the same files have been
- * copied a dozen-plus times. Comparing canonical paths cuts the cycle at the first repeat.
- */
-async function copyTree(
-  from: string,
-  to: string,
-  ancestors: ReadonlySet<string> = new Set()
-): Promise<{ files: number; bytes: number }> {
-  let files = 0;
-  let bytes = 0;
-
-  const entries = await readdir(from, { withFileTypes: true });
-  await mkdir(to, { recursive: true });
-
-  for (const entry of entries) {
-    const src = join(from, entry.name);
-    const dest = join(to, entry.name);
-
-    // Symlinks are DEREFERENCED into ordinary files. Preserving the link would keep a
-    // live reference to a path outside the capture, which is the exact mutability this
-    // module exists to remove. `stat` (not `lstat`) resolves the target; a dangling
-    // link throws and is skipped below rather than failing the whole capture.
-    let info;
-    try {
-      info = await stat(src);
-    } catch (error) {
-      getLog().warn({ err: error as Error, path: src }, 'workflow.source_capture_entry_skipped');
-      continue;
-    }
-
-    if (info.isDirectory()) {
-      if (SKIP_DIRECTORIES.has(entry.name)) continue;
-      let canonical: string;
-      try {
-        canonical = await realpath(src);
-      } catch (error) {
-        getLog().warn({ err: error as Error, path: src }, 'workflow.source_capture_entry_skipped');
-        continue;
-      }
-      if (ancestors.has(canonical)) {
-        // A link back into a directory we are already inside. Copying it would duplicate
-        // that subtree under itself, so record it and move on.
-        getLog().warn({ path: src, canonical }, 'workflow.source_capture_cycle_skipped');
-        continue;
-      }
-      const sub = await copyTree(src, dest, new Set([...ancestors, canonical]));
-      files += sub.files;
-      bytes += sub.bytes;
-      continue;
-    }
-
-    if (!info.isFile()) continue; // sockets, fifos, devices — nothing a workflow reads
-
-    await copyFile(src, dest);
-    files += 1;
-    bytes += info.size;
-  }
-
-  return { files, bytes };
+/** A file found while walking a live source tree. */
+interface TreeFile {
+  /** Path relative to the walked root, platform separator. */
+  readonly relPath: string;
+  readonly absPath: string;
+  readonly size: number;
+  readonly mtimeMs: number;
 }
 
 /**
- * Write a binary's embedded bundled defaults into a capture, in the same layout a source
- * build produces on disk.
+ * One live source tree, walked once.
+ *
+ * Listing before acting is what lets the bundled scope be checked for change and copied by
+ * the same walk: the copy consumes the listing, and the cache compares two listings.
+ */
+interface TreeListing {
+  /** Every directory in the tree, relative to the root, `''` for the root itself. */
+  readonly dirs: readonly string[];
+  readonly files: readonly TreeFile[];
+}
+
+/**
+ * Recursively list `root`, skipping cache directories.
+ *
+ * Directory symlinks are followed rather than preserved, so a link pointing at one of its
+ * own ancestors would otherwise re-enter the same tree: the walk only stops when the kernel
+ * refuses the path with ELOOP, by which point the same files have been visited a dozen-plus
+ * times. `ancestors` holds the canonical (symlink-resolved) path of every directory open
+ * above the current one, which cuts the cycle at the first repeat.
+ */
+async function listTree(root: string): Promise<TreeListing> {
+  const dirs: string[] = [];
+  const files: TreeFile[] = [];
+
+  const walk = async (dir: string, rel: string, ancestors: ReadonlySet<string>): Promise<void> => {
+    dirs.push(rel);
+    const entries = await readdir(dir, { withFileTypes: true });
+
+    for (const entry of entries) {
+      const absPath = join(dir, entry.name);
+      const relPath = rel === '' ? entry.name : join(rel, entry.name);
+
+      // Symlinks are DEREFERENCED into ordinary files. Preserving the link would keep a
+      // live reference to a path outside the capture, which is the exact mutability this
+      // module exists to remove. `stat` (not `lstat`) resolves the target; a dangling
+      // link throws and is skipped below rather than failing the whole capture.
+      let info;
+      try {
+        info = await stat(absPath);
+      } catch (error) {
+        getLog().warn(
+          { err: error as Error, path: absPath },
+          'workflow.source_capture_entry_skipped'
+        );
+        continue;
+      }
+
+      if (info.isDirectory()) {
+        if (SKIP_DIRECTORIES.has(entry.name)) continue;
+        let canonical: string;
+        try {
+          canonical = await realpath(absPath);
+        } catch (error) {
+          getLog().warn(
+            { err: error as Error, path: absPath },
+            'workflow.source_capture_entry_skipped'
+          );
+          continue;
+        }
+        if (ancestors.has(canonical)) {
+          // A link back into a directory we are already inside. Copying it would duplicate
+          // that subtree under itself, so record it and move on.
+          getLog().warn({ path: absPath, canonical }, 'workflow.source_capture_cycle_skipped');
+          continue;
+        }
+        await walk(absPath, relPath, new Set([...ancestors, canonical]));
+        continue;
+      }
+
+      if (!info.isFile()) continue; // sockets, fifos, devices — nothing a workflow reads
+
+      files.push({ relPath, absPath, size: info.size, mtimeMs: info.mtimeMs });
+    }
+  };
+
+  // Seed the cycle guard with this root's canonical path so a link straight back to the
+  // top of the tree is caught at depth one.
+  const rootCanonical = await realpath(root).catch(() => root);
+  await walk(root, '', new Set([rootCanonical]));
+  return { dirs, files };
+}
+
+/** Copy a listed tree into `to`. Empty directories are recreated too. */
+async function copyListing(
+  listing: TreeListing,
+  to: string
+): Promise<{ files: number; bytes: number }> {
+  for (const dir of listing.dirs) await mkdir(join(to, dir), { recursive: true });
+  let bytes = 0;
+  for (const file of listing.files) {
+    await copyFile(file.absPath, join(to, file.relPath));
+    bytes += file.size;
+  }
+  return { files: listing.files.length, bytes };
+}
+
+/**
+ * One bundled file, held ready to be written into a capture.
+ *
+ * It IS its own digest entry: `relPath` is already capture-relative, under the `bundled`
+ * scope directory, so the scope can be folded into a capture's digest without a second
+ * pass over what was just written.
+ */
+interface BundledFile extends DigestEntry {
+  readonly content: string | Buffer;
+}
+
+/**
+ * Selected bundled bytes held in this process and written into every run's own capture.
+ * Independent files let paused runs verify their source after an Archon upgrade; sharing
+ * a mutable file with another capture or the authoring tree would violate that contract.
+ *
+ * Source builds reselect the indexed inventory and compare size/mtime on every capture,
+ * so additions, edits and deletions remain visible without rereading unchanged bytes.
+ * A binary's embedded constants cannot change and are read once.
+ */
+interface BundledScope {
+  /** Identity of the build these bytes came from. */
+  readonly key: string;
+  /** Fingerprint of the live trees they were read from; empty for a binary's constants. */
+  readonly stamp: string;
+  /** Capture-relative directories, including ones with no files of their own. */
+  readonly dirs: readonly string[];
+  readonly files: readonly BundledFile[];
+  readonly byteCount: number;
+}
+
+/** Accumulator shared by both branches that build a {@link BundledScope}. */
+function bundledScopeBuilder(): {
+  add: (relPath: string, content: string | Buffer) => void;
+  addDir: (relPath: string) => void;
+  result: () => Omit<BundledScope, 'key' | 'stamp'>;
+} {
+  const dirs: string[] = [];
+  const files: BundledFile[] = [];
+  let byteCount = 0;
+
+  const seen = new Set<string>();
+  const addDir = (relPath: string): void => {
+    const scoped = join(BUNDLED_SCOPE_DIR, relPath);
+    if (seen.has(scoped)) return;
+    seen.add(scoped);
+    dirs.push(scoped);
+  };
+
+  return {
+    addDir,
+    add: (relPath, content): void => {
+      addDir(dirname(relPath));
+      files.push({
+        relPath: join(BUNDLED_SCOPE_DIR, relPath),
+        content,
+        hash: createHash('sha256').update(content).digest('hex'),
+      });
+      byteCount += Buffer.byteLength(content);
+    },
+    result: () => ({ dirs, files, byteCount }),
+  };
+}
+
+/**
+ * Read a binary's embedded bundled defaults, in the same layout a source build keeps them
+ * in on disk.
  *
  * Mirroring the on-disk shape is the whole trick: every resolver already knows how to read
  * bundled workflows, commands, and scripts from a directory, so once the constants are
  * files under the capture's roots, the ordinary filesystem path serves a binary too and no
  * resolver needs a second way to find them.
- *
- * Returns the number of files written.
  */
-async function materializeBundledDefaults(bundledRoot: string): Promise<number> {
-  let written = 0;
-
-  const write = async (relative: string, content: string): Promise<void> => {
-    const target = join(bundledRoot, relative);
-    await mkdir(dirname(target), { recursive: true });
-    await writeFile(target, content);
-    written += 1;
-  };
+function readBundledConstants(): Omit<BundledScope, 'key' | 'stamp'> {
+  const { add: write, result } = bundledScopeBuilder();
 
   for (const [name, content] of Object.entries(BUNDLED_WORKFLOWS)) {
-    // A packaged bundled workflow lives under `<pack>/<workflow>/`; a bare one under
-    // `defaults/`. The owners map is what distinguishes them, exactly as on disk.
-    const owner = BUNDLED_WORKFLOW_OWNERS[name];
-    const relative = owner
-      ? join('workflows', owner.pack, owner.workflow, `${name}.yaml`)
-      : join('workflows', 'defaults', `${name}.yaml`);
-    await write(relative, content);
+    // The generator owns authored extensions and legacy subfolders, too.
+    const path = BUNDLED_WORKFLOW_PATHS[name];
+    if (path === undefined) throw new Error(`Bundled workflow "${name}" has no source path.`);
+    write(path, content);
   }
 
   for (const [name, content] of Object.entries(BUNDLED_COMMANDS)) {
@@ -411,39 +506,143 @@ async function materializeBundledDefaults(bundledRoot: string): Promise<number> 
           `${packaged.name}.md`
         )
       : join('commands', 'defaults', `${name}.md`);
-    await write(relative, content);
+    write(relative, content);
   }
 
-  for (const [name, script] of Object.entries(BUNDLED_SCRIPTS)) {
-    const packaged = parsePackagedResourceReference(name);
-    const relative = packaged
-      ? join(
-          'workflows',
-          packaged.owner.pack,
-          packaged.owner.workflow,
-          'scripts',
-          `${packaged.name}${script.extension}`
-        )
-      : join('scripts', `${name}${script.extension}`);
-    await write(relative, script.content);
+  for (const [pack, bundled] of Object.entries(BUNDLED_SCRIPT_PACKS)) {
+    for (const [relativePath, content] of Object.entries(bundled.files)) {
+      write(join('workflows', pack, relativePath), content);
+    }
   }
 
-  return written;
+  return result();
+}
+
+/** Read only the generator's selected source files, using the same LF normalization. */
+async function readBundledSources(
+  files: readonly BundleSourceFile[]
+): Promise<Omit<BundledScope, 'key' | 'stamp'>> {
+  const { add, addDir, result } = bundledScopeBuilder();
+  addDir('workflows');
+  addDir(join('commands', 'defaults'));
+  for (const file of files) add(file.relativePath, await readBundleContent(file));
+  return result();
+}
+
+let bundledScope: BundledScope | undefined;
+
+/** The two on-disk roots a source build keeps its bundled defaults under. */
+function bundledSourceRoots(): { name: string; from: string }[] {
+  return [
+    { name: 'workflows', from: dirname(archonPaths.getDefaultWorkflowsPath()) },
+    { name: 'commands', from: dirname(archonPaths.getDefaultCommandsPath()) },
+  ];
 }
 
 /**
- * Content digest over every captured file.
+ * Identity of the live bundled trees: their shape plus every file's size and mtime.
+ *
+ * Size and mtime is the freshness signal incremental build tools run on. It cannot see an
+ * edit that preserves both, which re-reading every byte would — but re-reading every byte
+ * is the cost being removed here, and every capture is still digest-verified against the
+ * bytes it actually contains before anything executes from it.
+ */
+function stampListings(listings: readonly { name: string; listing: TreeListing }[]): string {
+  const hash = createHash('sha256');
+  for (const { name, listing } of listings) {
+    hash.update(`scope\0${name}\n`);
+    for (const dir of listing.dirs) hash.update(`d\0${dir}\n`);
+    for (const file of listing.files) {
+      hash.update(`f\0${file.relPath}\0${String(file.size)}\0${String(file.mtimeMs)}\n`);
+    }
+  }
+  return hash.digest('hex');
+}
+
+/** This build's bundled bytes, read or revalidated as the build requires. */
+async function resolveBundledScope(): Promise<BundledScope | undefined> {
+  if (isBinaryBuild()) {
+    const key = `binary\0${BUNDLED_VERSION}`;
+    if (bundledScope?.key !== key) {
+      const read = readBundledConstants();
+      // A binary with no embedded bundled set has no bundled scope to capture, exactly as
+      // a source build with no bundled directories on disk has none.
+      if (read.files.length === 0) return undefined;
+      bundledScope = { key, stamp: '', ...read };
+    }
+    return bundledScope;
+  }
+
+  const roots = bundledSourceRoots();
+  const sources = await collectInstalledBundleSources(roots[0].from, roots[1].from);
+  if (!sources) return undefined;
+  const files: TreeFile[] = [];
+  for (const file of sources) {
+    const info = await stat(file.sourcePath);
+    files.push({
+      relPath: file.relativePath,
+      absPath: file.sourcePath,
+      size: info.size,
+      mtimeMs: info.mtimeMs,
+    });
+  }
+
+  const key = `source\0${roots.map(r => r.from).join('\0')}`;
+  const stamp = stampListings([{ name: 'bundled', listing: { dirs: [], files } }]);
+  if (bundledScope?.key !== key || bundledScope.stamp !== stamp) {
+    bundledScope = { key, stamp, ...(await readBundledSources(sources)) };
+  }
+  return bundledScope;
+}
+
+/** Write this build's bundled bytes into a staged capture. */
+async function writeBundledScope(scope: BundledScope, staging: string): Promise<void> {
+  for (const dir of scope.dirs) await mkdir(join(staging, dir), { recursive: true });
+  for (const file of scope.files) await writeFile(join(staging, file.relPath), file.content);
+}
+
+/** One captured file's contribution to the capture digest. */
+interface DigestEntry {
+  /** Capture-relative path, platform separator. */
+  readonly relPath: string;
+  /** sha256 of the file's bytes, hex. */
+  readonly hash: string;
+}
+
+/**
+ * Fold per-file digests into the capture's digest.
  *
  * Path-and-bytes, sorted, so the value depends only on what was captured and never on
- * walk order or timestamps. The manifest is excluded because it carries this value.
+ * walk order or timestamps. The sort compares the platform-separated path and the hash
+ * takes the `/`-normalized one; both halves are load-bearing for compatibility, because a
+ * capture written by an older build is re-verified by this function and any change to
+ * either would read as tampering. The manifest is excluded because it carries this value.
  */
-async function digestTree(root: string): Promise<{ digest: string; files: number; bytes: number }> {
+function foldDigest(entries: readonly DigestEntry[]): string {
   const hash = createHash('sha256');
-  let files = 0;
-  let bytes = 0;
-  const entries: string[] = [];
+  const sorted = [...entries].sort((a, b) =>
+    a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0
+  );
+  for (const entry of sorted) {
+    hash.update(entry.relPath.split(sep).join('/'));
+    hash.update('\0');
+    hash.update(entry.hash);
+    hash.update('\n');
+  }
+  return hash.digest('hex');
+}
 
-  const walk = async (dir: string): Promise<void> => {
+/**
+ * Hash every file under `root`, reading each one.
+ *
+ * `skipScope` names a top-level scope directory whose per-file digests the caller already
+ * holds — the bundled scope, written from bytes this process is still holding. Everything
+ * else is read here, which is what makes the digest a statement about bytes, not paths.
+ */
+async function digestEntries(root: string, skipScope?: string): Promise<DigestEntry[]> {
+  const entries: DigestEntry[] = [];
+
+  const walk = async (dir: string, rel: string): Promise<void> => {
     let dirEntries;
     try {
       dirEntries = await readdir(dir, { withFileTypes: true });
@@ -451,29 +650,25 @@ async function digestTree(root: string): Promise<{ digest: string; files: number
       return;
     }
     for (const entry of dirEntries) {
-      const full = join(dir, entry.name);
+      const relPath = rel === '' ? entry.name : join(rel, entry.name);
       if (entry.isDirectory()) {
-        await walk(full);
+        if (rel === '' && entry.name === skipScope) continue;
+        await walk(join(dir, entry.name), relPath);
       } else if (entry.isFile()) {
-        entries.push(full);
+        if (relPath === MANIFEST_FILE) continue;
+        const content = await readFile(join(dir, entry.name));
+        entries.push({ relPath, hash: createHash('sha256').update(content).digest('hex') });
       }
     }
   };
-  await walk(root);
+  await walk(root, '');
 
-  for (const file of entries.sort()) {
-    const rel = relative(root, file).split(sep).join('/');
-    if (rel === MANIFEST_FILE) continue;
-    const content = await readFile(file);
-    files += 1;
-    bytes += content.byteLength;
-    hash.update(rel);
-    hash.update('\0');
-    hash.update(createHash('sha256').update(content).digest('hex'));
-    hash.update('\n');
-  }
+  return entries;
+}
 
-  return { digest: hash.digest('hex'), files, bytes };
+/** Content digest over every captured file. */
+async function digestTree(root: string): Promise<string> {
+  return foldDigest(await digestEntries(root));
 }
 
 async function writeManifest(captureRoot: string, manifest: WorkflowSourceManifest): Promise<void> {
@@ -504,8 +699,10 @@ export async function captureWorkflowSource(opts: {
     sourceConfig = DEFAULT_WORKFLOW_SOURCE_CONFIG,
   } = opts;
 
-  // (relative destination, absolute origin) pairs, one per directory worth copying.
-  const jobs: { dest: string; from: string; scope: 'project' | 'global' | 'bundled' }[] = [];
+  // (relative destination, absolute origin) pairs, one per MUTABLE directory worth copying.
+  // The bundled scope is not among them: it is this build's own, read once into a
+  // {@link BundledScope} and written from there.
+  const jobs: { dest: string; from: string; scope: 'project' | 'global' }[] = [];
 
   for (const dir of projectSourceDirs(commandFolder)) {
     const from = join(sourceRoot, dir);
@@ -520,52 +717,39 @@ export async function captureWorkflowSource(opts: {
     if (await isDirectory(from))
       jobs.push({ dest: join(GLOBAL_SCOPE_DIR, name), from, scope: 'global' });
   }
-  // Bundled defaults, from wherever this build keeps them. A source build copies the two
-  // on-disk trees; a binary WRITES its embedded constants out below. Either way the run
-  // ends up with bundled bytes it owns, which is what lets it resume across an upgrade.
-  if (!isBinaryBuild()) {
-    for (const [name, from] of [
-      ['workflows', dirname(archonPaths.getDefaultWorkflowsPath())],
-      ['commands', dirname(archonPaths.getDefaultCommandsPath())],
-    ] as const) {
-      if (await isDirectory(from))
-        jobs.push({ dest: join(BUNDLED_SCOPE_DIR, name), from, scope: 'bundled' });
-    }
-  }
 
   const staging = `${captureRoot}.partial`;
   await rm(staging, { recursive: true, force: true });
 
   let fileCount = 0;
   let byteCount = 0;
-  const scopesCaptured = new Set(jobs.map(j => j.scope));
+  const scopesCaptured = new Set<'project' | 'global' | 'bundled'>(jobs.map(j => j.scope));
   try {
     await mkdir(staging, { recursive: true });
     for (const job of jobs) {
       const target = join(staging, job.dest);
       await mkdir(dirname(target), { recursive: true });
-      // Seed the cycle guard with this root's canonical path so a link straight back to
-      // the top of the tree is caught at depth one.
-      const rootCanonical = await realpath(job.from).catch(() => job.from);
-      const copied = await copyTree(job.from, target, new Set([rootCanonical]));
+      const listing = await listTree(job.from);
+      const copied = await copyListing(listing, target);
       fileCount += copied.files;
       byteCount += copied.bytes;
     }
 
-    // A compiled binary keeps its bundled set as constants rather than files, so there is
-    // nothing to copy — write them out instead. Without this a binary's capture cannot
-    // include the bundled scope at all, and a run that statically included a bundled
-    // workflow would have no way to prove, on resume, that it had not changed under an
-    // upgrade. Materializing turns that unprovable case into an ordinary digest check.
-    if (isBinaryBuild()) {
-      const written = await materializeBundledDefaults(join(staging, BUNDLED_SCOPE_DIR));
-      if (written > 0) {
-        fileCount += written;
-        scopesCaptured.add('bundled');
-      }
+    // The run's own bundled bytes, written from what this process already holds. They have
+    // to be present, not referenced: that is what lets a run that statically included a
+    // bundled workflow prove on resume that it did not change under an Archon upgrade.
+    const bundled = await resolveBundledScope();
+    if (bundled) {
+      await writeBundledScope(bundled, staging);
+      fileCount += bundled.files.length;
+      byteCount += bundled.byteCount;
+      scopesCaptured.add('bundled');
     }
 
-    const { digest } = await digestTree(staging);
+    // The bundled files were written from bytes whose hashes are already known, so reading
+    // them back would restate what the scope already carries. Everything else is read.
+    const entries = await digestEntries(staging, bundled ? BUNDLED_SCOPE_DIR : undefined);
+    const digest = foldDigest([...entries, ...(bundled?.files ?? [])]);
     const manifest: WorkflowSourceManifest = {
       version: 1,
       engine_version: BUNDLED_VERSION,
@@ -691,7 +875,7 @@ export async function loadWorkflowSource(
         'run recorded. The capture manifest has changed.'
     );
   }
-  const { digest } = await digestTree(captureRoot);
+  const digest = await digestTree(captureRoot);
   if (digest !== manifest.digest) {
     throw new WorkflowSourceIntegrityError(
       `Workflow source capture at ${captureRoot} does not match its recorded digest ` +

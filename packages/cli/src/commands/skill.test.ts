@@ -2,9 +2,10 @@
  * Tests for skill install command
  */
 import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { BUNDLED_SKILL_FILES } from '../bundled-skill';
 import { copyArchonSkill, skillInstallCommand } from './skill';
 
@@ -15,64 +16,48 @@ describe('copyArchonSkill', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'archon-skill-test-'));
   });
 
-  afterEach(() => {
-    rmSync(tempDir, { recursive: true, force: true });
+  afterEach(async () => {
+    await removeTempTree(tempDir);
   });
 
-  it('writes every bundled skill file under .claude/skills/archon-cli/', async () => {
-    await copyArchonSkill(tempDir);
+  it('creates missing parents and writes exact bundled content in both destinations', async () => {
+    const target = join(tempDir, 'missing-parent', 'project');
+    expect(existsSync(target)).toBe(false);
+    await copyArchonSkill(target);
 
-    const skillRoot = join(tempDir, '.claude', 'skills', 'archon-cli');
-    for (const [relativePath, content] of Object.entries(BUNDLED_SKILL_FILES)) {
-      const dest = join(skillRoot, relativePath);
-      expect(existsSync(dest)).toBe(true);
-      expect(readFileSync(dest, 'utf-8')).toBe(content);
+    for (const root of ['.claude', '.agents']) {
+      const skillRoot = join(target, root, 'skills', 'archon-cli');
+      for (const [relativePath, content] of Object.entries(BUNDLED_SKILL_FILES)) {
+        expect(readFileSync(join(skillRoot, relativePath), 'utf-8')).toBe(content);
+      }
     }
   });
 
-  it('writes every bundled skill file under .agents/skills/archon-cli/ (Codex path)', async () => {
-    await copyArchonSkill(tempDir);
-
-    const skillRoot = join(tempDir, '.agents', 'skills', 'archon-cli');
-    for (const [relativePath, content] of Object.entries(BUNDLED_SKILL_FILES)) {
-      const dest = join(skillRoot, relativePath);
-      expect(existsSync(dest)).toBe(true);
-      expect(readFileSync(dest, 'utf-8')).toBe(content);
-    }
+  it('bundles active cancel guidance without the obsolete abandon mapping', () => {
+    const content = BUNDLED_SKILL_FILES['manage-run/manage-runs.md'];
+    expect(content).toContain('archon workflow cancel <run-id>');
+    expect(content).toContain('archon workflow abandon <run-id>');
+    expect(content).toContain('archon workflow respond <run-id>');
+    expect(content).not.toContain('there is no `archon workflow cancel` CLI subcommand');
+    expect(content).not.toContain('There is no separate `cancel` verb');
+    expect(content).not.toContain('cancel via reject');
+    expect(content).not.toContain('Reject (cancels the workflow)');
   });
 
-  it('installs active cancel guidance without the obsolete abandon mapping', async () => {
-    await copyArchonSkill(tempDir);
-
-    const guidance = [
-      join(tempDir, '.claude', 'skills', 'archon-cli', 'manage-run', 'manage-runs.md'),
-      join(tempDir, '.agents', 'skills', 'archon-cli', 'manage-run', 'manage-runs.md'),
-    ].map(path => readFileSync(path, 'utf-8'));
-
-    for (const content of guidance) {
-      expect(content).toContain('archon workflow cancel <run-id>');
-      expect(content).toContain('archon workflow abandon <run-id>');
-      expect(content).toContain('archon workflow respond <run-id>');
-      expect(content).not.toContain('there is no `archon workflow cancel` CLI subcommand');
-      expect(content).not.toContain('There is no separate `cancel` verb');
-      expect(content).not.toContain('cancel via reject');
-      expect(content).not.toContain('Reject (cancels the workflow)');
+  it('overwrites pre-existing skill files with bundled content in both destinations', async () => {
+    for (const root of ['.claude', '.agents']) {
+      const skillRoot = join(tempDir, root, 'skills', 'archon-cli');
+      mkdirSync(skillRoot, { recursive: true });
+      writeFileSync(join(skillRoot, 'SKILL.md'), 'STALE');
     }
-    expect(guidance[0]).toContain('archon workflow abandon <run-id>');
-    expect(guidance[0]).toContain('archon workflow respond <run-id>');
-  });
-
-  it('overwrites pre-existing skill files with bundled content', async () => {
-    const skillRoot = join(tempDir, '.claude', 'skills', 'archon-cli');
-    const skillMdPath = join(skillRoot, 'SKILL.md');
-
-    // Pre-seed with stale content; copyArchonSkill must overwrite it.
-    await copyArchonSkill(tempDir);
-    writeFileSync(skillMdPath, 'STALE');
-    expect(readFileSync(skillMdPath, 'utf-8')).toBe('STALE');
 
     await copyArchonSkill(tempDir);
-    expect(readFileSync(skillMdPath, 'utf-8')).toBe(BUNDLED_SKILL_FILES['SKILL.md']);
+
+    for (const root of ['.claude', '.agents']) {
+      expect(readFileSync(join(tempDir, root, 'skills', 'archon-cli', 'SKILL.md'), 'utf-8')).toBe(
+        BUNDLED_SKILL_FILES['SKILL.md']
+      );
+    }
   });
 
   it('removes obsolete skills from both supported skill roots during upgrades', async () => {
@@ -107,8 +92,8 @@ describe('skillInstallCommand', () => {
     errSpy = spyOn(console, 'error').mockImplementation(() => {});
   });
 
-  afterEach(() => {
-    rmSync(tempDir, { recursive: true, force: true });
+  afterEach(async () => {
+    await removeTempTree(tempDir);
     logSpy.mockRestore();
     errSpy.mockRestore();
   });

@@ -46,9 +46,11 @@ inputs:
 # The deliberate cost: when the flip itself FAILS, the composing tail's
 # terminal node is blocked, so its caveat and discovery surfacing is skipped
 # along with the false delivery claim — the operator gets the flip's own
-# error, which names the recovery. Truthful failure beats a lying report;
-# surfacing caveats on every failure path is terminal-result ownership the
-# engine is growing toward, not something each tail should hand-roll.
+# error, which names the recovery. Truthful failure beats a lying report. The
+# engine's terminal record does not close that gap: it is assembled when the run
+# reaches a terminal status and read back from outside, so no node of this run
+# can compose from it, and it carries no discoveries or red causes of its own.
+# What it does supply the operator is the node that actually failed.
 returns: flip-ready
 
 nodes:
@@ -61,10 +63,21 @@ nodes:
   # before anything public happens. Strict field access: a missing field fails
   # the node rather than passing the gate. It fails on red the change introduced
   # and passes red the change cannot have caused, recording that caveat for every
-  # downstream reader — see scripts/gate-green.py for why that trade is safe.
+  # downstream reader — see scripts/gate-green.ts for why that trade is safe.
   - id: gate-green
     script: gate-green
-    runtime: uv
+    runtime: bun
+    # Every gate that passes red leaves the cause as its own typed artifact;
+    # readers find them by type under nodes/, never through one shared file.
+    output_type: green-gate
+    output_format: &green_gate
+      type: object
+      properties:
+        gate: { type: string, enum: [green] }
+        red_cause: { type: string }
+        stage: { type: string }
+        summary: { type: string }
+      required: [gate, red_cause, stage, summary]
     depends_on: [impl]
     with:
       green: "$impl.output.green"
@@ -91,6 +104,9 @@ nodes:
   # reviewer judges the prior report and correction delta.
   - id: classify
     command: classify-review-scope
+    # This workflow declares no top-level model, so every AI node here names its
+    # own tier. Choosing between two booleans off a diff is small-tier work.
+    model: small
     depends_on: [pr]
     mutates_checkout: false
     output_type: review-scope
@@ -112,10 +128,15 @@ nodes:
   # lens gates compare against.
   - id: resolve-scope
     script: resolve-review-scope
-    runtime: uv
+    runtime: bun
     with:
       c_errors: "$classify.output.errors"
     depends_on: [classify]
+    output_format:
+      type: object
+      properties:
+        errors: { type: string, enum: ['true', 'false'] }
+      required: [errors]
 
   - id: review
     include: archon-review
@@ -131,14 +152,6 @@ nodes:
 
   # Validate the authored verdict before it controls a costly branch. `ready`
   # remains the review outcome; `action` says what delivery may do about it.
-  - id: review-action
-    script: validate-review-action
-    runtime: uv
-    with:
-      ready: "$review.output.ready"
-      action: "$review.output.action"
-    depends_on: [review]
-
   # A ready initial review skips this block. Otherwise each iteration corrects
   # the current canonical findings, proves the correction is green, then runs a
   # fresh continuation review over the report and delta, never an unreviewed
@@ -158,14 +171,18 @@ nodes:
   # check can prove is cheapest to fix here, in the round that caused it, not
   # an hour later at the terminal wait. The loop itself never waits on CI, and
   # await-checks below remains the authority on the flip.
+  # The review's verdict is certified at its producer: `action` is an enum the
+  # engine enforces on synthesize, so it routes here unvalidated. A verdict that
+  # contradicts itself (`ready: true` with `correct`) cannot mislead this graph,
+  # which reads only `action`.
   - id: corrections
-    depends_on: [review-action]
-    when: "$review-action.output.action == 'correct'"
+    depends_on: [review]
+    when: "$review.output.action == 'correct'"
     loop_group:
       # `none` converged and `replan` must stop correction. gate-ready below
       # accepts only `none`; a replan outcome leaves the PR draft and fails with
       # the canonical report intact instead of spending another correction.
-      until_bash: test $recheck-action.output.action != "correct"
+      until_bash: test $recheck.output.action != "correct"
       max_iterations: 5
       fresh_context: true
       nodes:
@@ -267,7 +284,11 @@ nodes:
         # correction refused for a red it did not cause wastes the whole round.
         - id: gate-correction-green
           script: gate-green
-          runtime: uv
+          runtime: bun
+          # Every gate that passes red leaves the cause as its own typed artifact;
+          # readers find them by type under nodes/, never through one shared file.
+          output_type: green-gate
+          output_format: *green_gate
           depends_on: [fix]
           with:
             green: "$fix.output.green"
@@ -287,14 +308,6 @@ nodes:
             docs: "$classify.output.docs"
           depends_on: [gate-correction-green]
 
-        - id: recheck-action
-          script: validate-review-action
-          runtime: uv
-          with:
-            ready: "$recheck.output.ready"
-            action: "$recheck.output.action"
-          depends_on: [recheck]
-
   # none_failed_min_one_success joins the mutually exclusive paths as bound
   # values: the
   # initial review's verdict directly, and the correction loop's final verdict
@@ -305,13 +318,11 @@ nodes:
   # covers only skipped/pending producers, never failed ones.
   - id: gate-ready
     script: gate-ready
-    runtime: uv
-    depends_on: [review-action, corrections]
+    runtime: bun
+    depends_on: [review, corrections]
     trigger_rule: none_failed_min_one_success
     with:
-      review_ready: { from: "$review-action.output.ready", if_skipped: false }
-      review_action: { from: "$review-action.output.action", if_skipped: null }
-      correction_ready: { from: "$corrections.output.ready", if_skipped: false }
+      review_action: "$review.output.action"
       correction_action: { from: "$corrections.output.action", if_skipped: null }
 
   # Correction rounds change the diff after `pr` wrote the description, so
@@ -326,8 +337,11 @@ nodes:
     with:
       pr_number: "$pr.output.number"
       pr_head: "$pr.output.head"
-    depends_on: [gate-ready]
-    when: "$review.output.ready == 'false'"
+    # After the project gate, not beside it: the gates record the red they let
+    # through as typed artifacts, and the body must disclose every one of them,
+    # so this reads once all of them exist instead of racing the last writer.
+    depends_on: [gate-validated]
+    when: "$review.output.action != 'none'"
 
   # Final local gate, ALWAYS run: the project's own checks via the validate
   # package. Uniform on every path — and when CI is maintainer-gated (fork
@@ -345,7 +359,11 @@ nodes:
   # explicit operator action before any ready flip can run.
   - id: gate-validated
     script: gate-green
-    runtime: uv
+    runtime: bun
+    # Every gate that passes red leaves the cause as its own typed artifact;
+    # readers find them by type under nodes/, never through one shared file.
+    output_type: green-gate
+    output_format: *green_gate
     depends_on: [validate]
     with:
       green: "$validate.output.green"
@@ -367,20 +385,30 @@ nodes:
   - id: await-checks
     loop_group:
       max_iterations: 13
-      # Completion computed EXTERNALLY (gh state), never from body-node output
-      # substitution: the resumed-wait completion recheck does not evaluate
-      # until_bash against the iteration's outputs (seen flipping a PR
-      # with CI still running). Red counts as done here; ci-verdict below is
-      # the node that classifies a concluded red — never flip-ready first —
-      # and flip-ready's preflight refuses any non-green state regardless.
-      until_bash: '! gh pr checks --json bucket --jq ".[].bucket" 2>/dev/null | grep -q "^pending$"'
+      # Completion reads the probe's own certified field. It once shelled out to
+      # `gh` instead, because a resumed wait looked like it could not see the
+      # iteration's outputs — investigated and disproven: the incident was a
+      # quoting error in this predicate, where a second layer of quotes around an
+      # already shell-quoted substitution corrupted the comparison. Write the
+      # reference bare, as below. Red counts as done here; ci-verdict is the node
+      # that classifies a concluded red — never flip-ready first — and
+      # flip-ready's preflight refuses any non-green state regardless.
+      until_bash: test $ci-probe.output.state != "pending"
       nodes:
         - id: ci-probe
           script: check-ci
-          runtime: uv
+          runtime: bun
+          with:
+            pr_url: "$pr.output.url"
           # The probe's only in-process wait is the single 60 s registration
           # grace; headroom over the 120 s script default keeps that honest.
           timeout: 180000
+          output_format: &ci_state
+            type: object
+            properties:
+              state: { type: string, enum: [pending, concluded, red] }
+              detail: { type: string }
+            required: [state, detail]
         - id: ci-pause
           wait:
             event: checks.complete
@@ -398,9 +426,12 @@ nodes:
   # no back-edges.
   - id: ci-verdict
     script: check-ci
-    runtime: uv
+    runtime: bun
+    with:
+      pr_url: "$pr.output.url"
     timeout: 180000
     depends_on: [await-checks]
+    output_format: *ci_state
 
   # One round, expressed natively: max_iterations bounds the pass, and the
   # loop converges only on a `none` verdict. The terminal result carries both
@@ -442,7 +473,11 @@ nodes:
         # wait below.
         - id: gate-ci-fix
           script: gate-green
-          runtime: uv
+          runtime: bun
+          # Every gate that passes red leaves the cause as its own typed artifact;
+          # readers find them by type under nodes/, never through one shared file.
+          output_type: green-gate
+          output_format: *green_gate
           depends_on: [ci-fix]
           with:
             green: "$ci-fix.output.green"
@@ -462,22 +497,24 @@ nodes:
             docs: "$classify.output.docs"
           depends_on: [gate-ci-fix]
 
-        - id: ci-recheck-action
-          script: validate-review-action
-          runtime: uv
-          with:
-            ready: "$ci-recheck.output.ready"
-            action: "$ci-recheck.output.action"
-          depends_on: [ci-recheck]
-
+        # The loop's output is its last node's, and the tail below needs both
+        # the recheck's action and the fix's red cause, which live on two
+        # producers. This joins them; both values were certified where they
+        # were produced.
         - id: ci-round-result
           script: ci-round-result
-          runtime: uv
+          runtime: bun
           with:
-            ready: "$ci-recheck-action.output.ready"
-            action: "$ci-recheck-action.output.action"
+            action: "$ci-recheck.output.action"
             red_cause: "$ci-fix.output.red_cause"
-          depends_on: [ci-recheck-action]
+          depends_on: [ci-recheck]
+          # Shape only: which actions exist is synthesize's enum, certified there.
+          output_format:
+            type: object
+            properties:
+              action: { type: string }
+              red_cause: { type: string }
+            required: [action, red_cause]
 
   # The re-wait after a pushed correction: same probe, webhook wake-up,
   # five-minute deadline fallback, and ceiling as await-checks. On an inherited
@@ -487,12 +524,15 @@ nodes:
   - id: await-fix-checks
     loop_group:
       max_iterations: 13
-      until_bash: '! gh pr checks --json bucket --jq ".[].bucket" 2>/dev/null | grep -q "^pending$"'
+      until_bash: test $fix-ci-probe.output.state != "pending"
       nodes:
         - id: fix-ci-probe
           script: check-ci
-          runtime: uv
+          runtime: bun
+          with:
+            pr_url: "$pr.output.url"
           timeout: 180000
+          output_format: *ci_state
         - id: fix-ci-pause
           wait:
             event: checks.complete
@@ -506,23 +546,32 @@ nodes:
   # then probe once per explicit resume until the operator has rerun the check.
   - id: ci-attention-route
     script: ci-attention-route
-    runtime: uv
+    runtime: bun
     depends_on: [ci-verdict, ci-corrections, await-fix-checks]
     trigger_rule: none_failed_min_one_success
     with:
       red_cause: { from: "$ci-corrections.output.red_cause", if_skipped: "" }
+    output_format:
+      type: object
+      properties:
+        attention: { type: boolean }
+        red_cause: { type: string }
+      required: [attention, red_cause]
 
   - id: ci-attention
     depends_on: [ci-attention-route]
-    when: "$ci-attention-route.output.attention == 'true'"
+    when: "$ci-attention-route.output.attention == true"
     loop_group:
       max_iterations: 13
       until_bash: test $attention-ci-probe.output.state = "concluded"
       nodes:
         - id: attention-ci-probe
           script: check-ci
-          runtime: uv
+          runtime: bun
+          with:
+            pr_url: "$pr.output.url"
           timeout: 180000
+          output_format: *ci_state
         - id: attention-ci-pause
           wait:
             attention: >-
@@ -611,31 +660,48 @@ nodes:
         printf '%s\n' "flip-ready: PR still reports draft after the ready flip" >&2
         exit 1
       fi
-      # This node's stdout is the delivered URL and nothing else; `outcome` reports
-      # the value verbatim.
-      if ! gh pr view "$PR_NUMBER" --repo "$ORIGIN_REPO" --json url --jq .url 2>/dev/null; then
+      # This node's stdout is its declared result and nothing else. gh's own --jq
+      # composes the document, so the URL never passes through shell quoting, and
+      # the schema below is what makes it a contract rather than a convention: a
+      # composing caller reads the pr_url field off this workflow's result, and the
+      # tail's own report reads the same field, neither re-deriving a URL from raw
+      # text.
+      if ! gh pr view "$PR_NUMBER" --repo "$ORIGIN_REPO" --json url --jq '{pr_url: .url}' 2>/dev/null; then
         printf '%s\n' "flip-ready: PR was flipped but its URL could not be read back." >&2
         exit 1
       fi
-    # Failure-cascade skips now block this join, so failed ancestors no longer
-    # need to be named directly. Keep the existing dependency list until the
-    # pack cleanup in #3127. Condition-skipped branches remain admissible, and
-    # ci-verdict supplies the required success. sync-pr-body orders the flip
-    # after the resync even when CI waits return immediately.
-    depends_on:
-      [await-checks, ci-verdict, ci-corrections, await-fix-checks, ci-attention-route,
-       ci-attention, sync-pr-body,
-       gate-validated, gate-ready, validate]
+    output_format:
+      type: object
+      properties:
+        pr_url: { type: string, minLength: 1 }
+      required: [pr_url]
+    # Failure-cascade skips block this join, so a failed ancestor no longer has to
+    # be named directly: the skip carries `upstream_failed` from the node that
+    # actually failed, across every hop. ci-verdict is the successful dependency
+    # the rule requires — a strict transitive reduction without it can leave a
+    # clean-review delivery with no success at all. sync-pr-body orders the flip
+    # after the resync even when the CI waits return immediately.
+    depends_on: [ci-verdict, ci-attention-route, ci-attention, sync-pr-body]
     trigger_rule: none_failed_min_one_success
 
-  # This tail's terminal report, like every other SDLC tail's (scripts/outcome.py).
+  # This tail's terminal report, like every other SDLC tail's (scripts/outcome.ts).
   # flip-ready owns the one irreversible public action and stops there; composing
   # the text its reader receives is separate work, and a named script keeps it out
-  # of a bash body that would otherwise need a python interpreter Windows hosts do
-  # not reliably have.
+  # of a bash body.
+  #
+  # No `outcome_field:` here, unlike the other tails. It would need a two-valued
+  # boolean on this workflow's `returns:` node, and delivery has none: flip-ready
+  # refuses rather than reporting a false verdict, so the field could only ever be
+  # a constant. The run's lifecycle status already carries that fact.
   - id: outcome
     script: outcome
-    runtime: uv
+    runtime: bun
     with:
-      pr_url: "$flip-ready.output"
+      pr_url: "$flip-ready.output.pr_url"
     depends_on: [flip-ready]
+    output_format:
+      type: object
+      properties:
+        pr_url: { type: string }
+        summary: { type: string }
+      required: [pr_url, summary]

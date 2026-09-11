@@ -10,8 +10,8 @@ triage:
   proposed_edits: { title: "", body: "" }
   blocked_reason: ""
   blocked_by: []
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
   summary: "stub: the requested outcome is already present on the current branch"
-assert-intact: '{"intact":"true"}'
 fixture:
   expect: completed
   reached: [verdict]

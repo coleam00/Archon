@@ -12,11 +12,11 @@ triage__triage:
   blocked_reason: ""
   blocked_by: []
   summary: "stub: reported failure still needs a proven cause"
-triage__assert-intact: '{"intact":"true"}'
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
 inv__investigate:
   rooted: false
   summary: "stub: two hypotheses survive — not proven"
-inv__assert-intact: '{"intact":"true"}'
+  report: { type: archon_artifact, run_id: "fixture-run", path: "investigation.md" }
 fixture:
   expect: completed
 exec-code: true

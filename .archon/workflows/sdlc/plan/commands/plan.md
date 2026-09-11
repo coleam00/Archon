@@ -53,5 +53,14 @@ Do not implement, modify source files, commit, branch, push, or open or comment 
 
 - `ready` — true only when the plan is complete enough to execute without questions. False when missing intent blocked it — the plan is still written up to the block, with the gap named.
 - `summary` — a few sentences: the chosen approach (or the blocking gap), and that the full plan is at `$ARTIFACTS_DIR/plan.md`.
+- `report` — a pointer to the report you just wrote, copied exactly:
+
+  ```json
+  {"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "plan.md"}
+  ```
+
+  This node is refused if that file does not exist, so write the report before you
+  declare. `run_id` is the value above verbatim, and `path` is relative to
+  `$ARTIFACTS_DIR`.
 
 Before declaring, re-read the plan: confirm every named anchor exists in the current code, every decision has its why, and `git status` matches what you started with.

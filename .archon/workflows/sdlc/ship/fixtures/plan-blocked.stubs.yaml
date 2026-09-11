@@ -12,11 +12,11 @@ triage__triage:
   blocked_reason: ""
   blocked_by: []
   summary: "stub: material product shape remains undecided"
-triage__assert-intact: '{"intact":"true"}'
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
 planned__plan:
   ready: false
   summary: "stub: owner decision required before implementation"
-planned__assert-intact: '{"intact":"true"}'
+  report: { type: archon_artifact, run_id: "fixture-run", path: "plan.md" }
 fixture:
   expect: completed
 exec-code: true

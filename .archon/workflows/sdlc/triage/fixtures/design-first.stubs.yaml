@@ -11,8 +11,8 @@ triage:
   proposed_edits: { title: "", body: "" }
   blocked_reason: ""
   blocked_by: []
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
   summary: "stub: outcome is clear; owning module and compatibility boundary undecided"
-assert-intact: '{"intact":"true"}'
 fixture:
   expect: completed
   reached: [verdict]
