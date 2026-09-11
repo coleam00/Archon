@@ -387,6 +387,31 @@ function readNodeCompletedOutput(
 }
 
 /**
+ * Every CLI platform conversation the fixture's database holds.
+ *
+ * An automatic resume that drops the run's conversation id generates a fresh one, so
+ * the resumed segment's dispatch and result land in a second row while the run row
+ * still points at the first. The set is the observable proof that did not happen.
+ */
+function readCliConversationPlatformIds(archonHome: string): string[] {
+  const databasePath = join(archonHome, 'archon.db');
+  if (!existsSync(databasePath)) return [];
+  const database = new Database(databasePath, { readonly: true });
+  try {
+    return database
+      .query<{ platform_conversation_id: string }, []>(
+        "SELECT platform_conversation_id FROM remote_agent_conversations WHERE platform_type = 'cli'"
+      )
+      .all()
+      .map(row => row.platform_conversation_id);
+  } catch {
+    return [];
+  } finally {
+    database.close();
+  }
+}
+
+/**
  * Poll `read` until it produces a value, naming `what` if it never does.
  *
  * The catch is load bearing, not defensive: an owner process creates `archon.db`
@@ -801,10 +826,17 @@ describe('a durable wait deadline is enforced by the owning process', () => {
     'name: wait-long\ndescription: Long durable wait fixture.\n' +
     'nodes:\n' +
     '  - id: cooldown\n    wait:\n      duration_ms: 8000\n';
+  // Two sequential waits: one owner has to carry the run through both, so a loop
+  // that resumes once and stops leaves the run parked at `wait-two`.
+  const TWO_WAITS =
+    'name: wait-twice\ndescription: Two sequential durable waits.\n' +
+    'nodes:\n' +
+    '  - id: wait-one\n    wait:\n      duration_ms: 1500\n' +
+    '  - id: wait-two\n    depends_on: [wait-one]\n    wait:\n      duration_ms: 1500\n';
 
   test('resumes a duration wait at its deadline and finishes the run', async () => {
     const fixture = makeFixture('archon-wait-duration-', { 'wait-duration': DURATION_WAIT });
-    const { runId } = await launchDetached(fixture, 'wait-duration');
+    const { runId, conversationId } = await launchDetached(fixture, 'wait-duration');
 
     const completed = await waitFor(
       'the duration wait to resume and complete the run',
@@ -823,6 +855,35 @@ describe('a durable wait deadline is enforced by the owning process', () => {
     // The engine's own record of the wait: the deadline was genuinely waited, and
     // only then did the owner resume the run.
     expect(Number(output.waited_ms)).toBeGreaterThanOrEqual(3000);
+    // The resumed segment continues the run's original conversation instead of
+    // generating a second one for its dispatch and result card.
+    expect(readCliConversationPlatformIds(fixture.archonHome)).toEqual([conversationId]);
+  }, 120_000);
+
+  test('carries one owner through two sequential waits', async () => {
+    const fixture = makeFixture('archon-wait-twice-', { 'wait-twice': TWO_WAITS });
+    const { runId } = await launchDetached(fixture, 'wait-twice');
+
+    const completed = await waitFor(
+      'both waits to resume and complete the run',
+      () => (readRunStatus(fixture.archonHome, runId) === 'completed' ? 'completed' : undefined),
+      60_000
+    );
+    activeRunIds.delete(runId);
+    expect(completed).toBe('completed');
+
+    const first = await waitFor(
+      'the first wait node completion',
+      () => readNodeCompletedOutput(fixture.archonHome, runId, 'wait-one'),
+      10_000
+    );
+    const second = await waitFor(
+      'the second wait node completion',
+      () => readNodeCompletedOutput(fixture.archonHome, runId, 'wait-two'),
+      10_000
+    );
+    expect(first).toMatchObject({ status: 'satisfied' });
+    expect(second).toMatchObject({ status: 'satisfied' });
   }, 120_000);
 
   test('expires an event wait by its deadline and finishes the run', async () => {
@@ -874,6 +935,15 @@ describe('a durable wait deadline is enforced by the owning process', () => {
   test('leaves an attention wait for the operator and releases its owner', async () => {
     const fixture = makeFixture('archon-wait-attention-', { 'wait-attention': ATTENTION_WAIT });
     const { runId } = await launchDetached(fixture, 'wait-attention');
+
+    // Park first. The control endpoint does not exist until the owner starts, so a
+    // probe before the run is paused would read a not-yet-started owner as a released
+    // one and assert on a `pending` row.
+    await waitFor(
+      'the attention run to park',
+      () => (readRunStatus(fixture.archonHome, runId) === 'paused' ? 'paused' : undefined),
+      30_000
+    );
 
     // An attention wait has no deadline, so its owner must exit rather than sleep.
     // With the endpoint gone nothing in this process can advance the run, which is
