@@ -52,7 +52,11 @@ describe('buildPiNativeToolDefinitions (Pi JSON-Schema → TypeBox)', () => {
 
   test('enum fields produce StringEnum shape (Google/Vertex compatible)', () => {
     const defs = buildPiNativeToolDefinitions([
-      spec({ type: 'object', properties: { action: { type: 'string', enum: ['list', 'get'] } }, required: ['action'] }),
+      spec({
+        type: 'object',
+        properties: { action: { type: 'string', enum: ['list', 'get'] } },
+        required: ['action'],
+      }),
     ]);
     const params = (defs[0] as unknown as { parameters: Record<string, unknown> }).parameters;
     const props = params.properties as Record<string, Record<string, unknown>>;
