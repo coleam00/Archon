@@ -29,6 +29,11 @@ inputs:
       "true" lets triage write its proposed label set to the resolved GitHub
       issue. "false" stays advisory; other values are rejected. Forwarded
       unchanged to triage.
+  validation_scope:
+    default: ""
+    description: >-
+      Optional package, directory, or named-check scope forwarded to delivery.
+      Empty keeps the project's full applicable gate.
 
 returns: outcome
 
@@ -84,6 +89,7 @@ nodes:
     include: archon-deliver
     with:
       errors: "$INPUTS.errors"
+      validation_scope: "$INPUTS.validation_scope"
       work: >-
         Deliver the work prepared by this run. Read $ARTIFACTS_DIR/triage.md
         first. When present, plan.md or investigation.md is the detailed work

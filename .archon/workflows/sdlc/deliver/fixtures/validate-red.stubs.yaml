@@ -30,6 +30,7 @@ review__synthesize:
   findings_summary: "stub: clean on initial review"
 # gate-ready is deliberately unstubbed: under --exec-code the real script runs,
 # proving the review_ready binding and the corrections if_skipped default.
+validate__applicability: { fingerprint: fixture, scope: "", generation: 1, reason: fixture, nonce: fixture }
 validate__validate:
   green: false
   summary: "stub: tests failed — 3 red"
@@ -41,6 +42,7 @@ classify:
   reasons:
     errors: "stub: the diff adds a retry and a fallback"
     docs: "stub: no doc-facing changes"
+validate__record-evidence: '{"recorded":true}'
 fixture:
   expect: failed
   fail-node: gate-validated

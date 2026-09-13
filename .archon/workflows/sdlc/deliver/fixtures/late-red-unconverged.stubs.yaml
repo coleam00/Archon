@@ -39,6 +39,7 @@ review__synthesize:
   ready: true
   action: none
   findings_summary: "stub: clean on initial review; CI still running"
+validate__applicability: { fingerprint: fixture, scope: "", generation: 1, reason: fixture, nonce: fixture }
 validate__validate:
   green: true
   red_cause: ""
@@ -54,6 +55,7 @@ ci-fix__implement:
 ci-fix__assert-changed: "1 file changed"
 flip-ready: "https://github.com/example/repo/pull/11"
 outcome: "https://github.com/example/repo/pull/11"
+validate__record-evidence: '{"recorded":true}'
 fixture:
   expect: failed
   # The gate fails inside the loop, so the failed set is the node AND its

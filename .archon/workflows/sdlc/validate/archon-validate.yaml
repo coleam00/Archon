@@ -22,10 +22,30 @@ returns: validate
 outcome_field: green
 
 nodes:
-  - id: validate
-    command: validate
+  - id: applicability
+    script: validation-evidence
+    runtime: bun
     always_run: true
     mutates_checkout: false
+    with:
+      action: check
+      scope: "$INPUTS.scope"
+    output_format:
+      type: object
+      properties:
+        fingerprint: { type: string }
+        scope: { type: string }
+        generation: { type: integer }
+        reason: { type: string }
+        nonce: { type: string }
+      required: [fingerprint, scope, generation, reason, nonce]
+
+  - id: validate
+    command: validate
+    depends_on: [applicability]
+    mutates_checkout: false
+    with:
+      scope: "$INPUTS.scope"
     output_type: validation
     output_format:
       type: object
@@ -44,3 +64,13 @@ nodes:
         summary:
           type: string
       required: [green, checks_performed, red_cause, summary]
+
+  - id: record-evidence
+    script: validation-evidence
+    runtime: bun
+    mutates_checkout: false
+    depends_on: [applicability, validate]
+    with:
+      action: record
+      applicability: "$applicability.output"
+      verdict: "$validate.output"

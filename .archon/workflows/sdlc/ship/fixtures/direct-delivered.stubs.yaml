@@ -35,6 +35,7 @@ deliver__review__synthesize:
   action: none
   findings_summary: "stub: no open findings"
 deliver__review-action: '{"ready":true,"action":"none"}'
+deliver__validate__applicability: { fingerprint: fixture, scope: "", generation: 1, reason: fixture, nonce: fixture }
 deliver__validate__validate:
   green: true
   summary: "stub: project gate green"
@@ -46,6 +47,7 @@ deliver__classify:
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
 deliver__resolve-scope: '{"errors":"false"}'
+deliver__validate__record-evidence: '{"recorded":true}'
 fixture:
   expect: completed
   resolved-text-contains:

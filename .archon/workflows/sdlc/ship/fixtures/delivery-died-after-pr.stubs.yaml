@@ -56,6 +56,7 @@ deliver__review__synthesize:
   findings_summary: "stub: no open findings"
 deliver__review-action: '{"ready":true,"action":"none"}'
 deliver__gate-ready: '{"gate":"ready"}'
+deliver__validate__applicability: { fingerprint: fixture, scope: "", generation: 1, reason: fixture, nonce: fixture }
 deliver__validate__validate:
   green: false
   red_cause: introduced
@@ -63,6 +64,7 @@ deliver__validate__validate:
 # deliver__gate-validated is deliberately unstubbed: the real gate must refuse
 # introduced red.
 outcome: "outcome: delivery started but did not complete"
+deliver__validate__record-evidence: '{"recorded":true}'
 fixture:
   expect: failed
   fail-node: deliver__gate-validated

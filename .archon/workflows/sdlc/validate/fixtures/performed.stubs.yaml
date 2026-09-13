@@ -1,7 +1,9 @@
+applicability: { fingerprint: fixture, scope: "", generation: 1, reason: fixture, nonce: fixture }
 validate:
   green: true
   checks_performed: true
   red_cause: ""
   summary: "stub: ordinary project checks passed"
+record-evidence: '{"recorded":true}'
 fixture:
   expect: completed

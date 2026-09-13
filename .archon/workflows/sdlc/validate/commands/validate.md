@@ -33,6 +33,10 @@ Do not modify source files, fix failures, commit, push, or touch pull requests. 
 
 ## Report
 
+The workflow records the resulting verdict, validation scope, and tracked-tree
+fingerprint in `$ARTIFACTS_DIR/validation-evidence.json`. Do not create or edit
+that file yourself.
+
 Write `$ARTIFACTS_DIR/validation.md`: each command run, its outcome, and for failures the decisive output tail — enough for a fixer to act without re-running everything. Concise and factual. No one is watching the run — this file and your declared fields are the only record the checks ever ran.
 
 ## Declare the verdict

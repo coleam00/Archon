@@ -34,6 +34,7 @@ recheck__synthesize:
   action: none
   findings_summary: "stub: no open Critical/Important"
 sync-pr-body: "body resynced: corrected the claims the correction round falsified"
+validate__applicability: { fingerprint: fixture, scope: "", generation: 1, reason: fixture, nonce: fixture }
 validate__validate:
   green: true
   summary: "stub: full gate green"
@@ -48,6 +49,7 @@ classify:
   reasons:
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
+validate__record-evidence: '{"recorded":true}'
 fixture:
   expect: completed
   reached: [review__code, ci-note, fix__implement, recheck__synthesize]

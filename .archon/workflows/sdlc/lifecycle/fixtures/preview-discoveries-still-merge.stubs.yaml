@@ -57,11 +57,13 @@ ship__deliver__review__synthesize:
   findings_summary: "stub: clean"
 ship__deliver__review-action: '{"ready":"true","action":"none"}'
 ship__deliver__gate-ready: "ready"
+ship__deliver__validate__applicability: { fingerprint: fixture, scope: "", generation: 1, reason: fixture, nonce: fixture }
 ship__deliver__validate__validate:
   green: true
   red_cause: ""
   summary: "stub: checks green"
 ship__deliver__gate-validated: "green"
+ci-probe: '{"state":"concluded","detail":"stub: no checks configured"}'
 ship__deliver__await-checks: "concluded"
 ship__deliver__ci-verdict: '{"state":"green","detail":""}'
 ship__deliver__ci-attention-route: '{"attention":"false","red_cause":""}'
@@ -123,6 +125,7 @@ merge__merge:
   merged: true
   urls: ["https://github.com/example/app/pull/7"]
   summary: "stub: merged"
+ship__deliver__validate__record-evidence: '{"recorded":true}'
 fixture:
   expect: completed
   reached: [merge__assess, merge__merge]

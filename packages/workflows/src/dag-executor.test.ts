@@ -11548,6 +11548,89 @@ describe('executeDagWorkflow -- always_run resume opt-out', () => {
     expect(cachedSkipped).toBeDefined();
   });
 
+  it('approval continuation reruns only applicability when validation evidence is unchanged', async () => {
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+    const applicability = '{"fingerprint":"same","scope":"","generation":1}';
+    const validation = JSON.stringify({
+      green: true,
+      checks_performed: true,
+      red_cause: '',
+      summary: 'passed',
+    });
+    const priorCompletedNodes = new Map([
+      ['ship__deliver__validate__applicability', { output: applicability }],
+      ['ship__deliver__validate__validate', { output: validation }],
+      ['ship__deliver__validate__record-evidence', { output: '{"recorded":true}' }],
+    ]);
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        platform,
+        conversationId: 'conv-validation-approval-continuation',
+        cwd: testDir,
+        workflow: {
+          name: 'expanded-lifecycle-validation-continuation',
+          nodes: [
+            {
+              id: 'ship__deliver__validate__applicability',
+              kind: 'exec',
+              runtime: 'sh',
+              script: `printf '%s\\n' '${applicability}'`,
+              always_run: true,
+            },
+            {
+              id: 'ship__deliver__validate__validate',
+              kind: 'agent',
+              source: { kind: 'command', name: 'producer' },
+              depends_on: ['ship__deliver__validate__applicability'],
+            },
+            {
+              id: 'ship__deliver__validate__record-evidence',
+              kind: 'exec',
+              runtime: 'sh',
+              script: 'exit 99',
+              depends_on: [
+                'ship__deliver__validate__applicability',
+                'ship__deliver__validate__validate',
+              ],
+            },
+          ],
+        },
+        workflowRun,
+        priorCompletedNodes,
+      })
+    );
+
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    expect(
+      eventCalls.some(
+        (call: unknown[]) =>
+          (call[0] as { event_type: string }).event_type === 'node_always_run_reset' &&
+          (call[0] as { step_name: string }).step_name === 'ship__deliver__validate__applicability'
+      )
+    ).toBe(true);
+    expect(
+      eventCalls.some(
+        (call: unknown[]) =>
+          (call[0] as { event_type: string }).event_type === 'node_skipped_prior_success' &&
+          (call[0] as { step_name: string }).step_name === 'ship__deliver__validate__validate'
+      )
+    ).toBe(true);
+    expect(
+      eventCalls.some(
+        (call: unknown[]) =>
+          (call[0] as { event_type: string }).event_type === 'node_skipped_prior_success' &&
+          (call[0] as { step_name: string }).step_name ===
+            'ship__deliver__validate__record-evidence'
+      )
+    ).toBe(true);
+  });
+
   it('downstream consumer reads fresh producer output (not the pre-populated cached value)', async () => {
     const store = createMockStore();
     const mockDeps = createMockDeps(store);

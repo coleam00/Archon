@@ -29,6 +29,11 @@ inputs:
   discovery_publication:
     default: preview
     description: preview, approve, or auto for discovered adjacent work.
+  validation_scope:
+    default: ''
+    description: >-
+      Optional package, directory, or named-check scope forwarded through ship
+      and any repair delivery. Empty keeps the project's full applicable gate.
   deploy:
     default: ''
     description: >-
@@ -66,6 +71,7 @@ nodes:
     with:
       target: "$intake.output.target"
       publish: "$INPUTS.publish"
+      validation_scope: "$INPUTS.validation_scope"
 
   - id: candidate
     command: bind-delivered-pr
@@ -119,6 +125,7 @@ nodes:
     depends_on: [qualify]
     when: "$qualify.output.repair == true"
     with:
+      validation_scope: "$INPUTS.validation_scope"
       work: >-
         Repair the existing PR on this same branch using the concrete runtime
         findings in $qualify.output.evidence. Preserve the original work order in
