@@ -21,6 +21,7 @@ import { parsePiConfig, resolvePiExtensionSettings } from './config';
 import { parsePiModelRef } from './model-ref';
 import { buildCustomProviderModelsPath } from './request-auth';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
+import { InvalidProviderRunConfigError } from '../../errors';
 
 // IMPORTANT: Do NOT add static `import { ... } from '@earendil-works/*'` here,
 // and do NOT statically import sibling modules that themselves import runtime
@@ -293,6 +294,14 @@ export class PiProvider implements IAgentProvider {
     resumeSessionId?: string,
     requestOptions?: SendQueryOptions
   ): AsyncGenerator<MessageChunk> {
+    if (requestOptions?.hostTools !== undefined && requestOptions.nativeTools?.length) {
+      throw new InvalidProviderRunConfigError(
+        'hostTools',
+        'hostTools cannot combine with additive nativeTools'
+      );
+    }
+    requestOptions?.abortSignal?.throwIfAborted();
+
     // Install the PI_PACKAGE_DIR shim BEFORE the dynamic imports below: Pi's
     // config.js runs `readFileSync(getPackageJsonPath())` at its own module
     // init, and getPackageJsonPath() checks process.env.PI_PACKAGE_DIR first.
@@ -322,6 +331,7 @@ export class PiProvider implements IAgentProvider {
       { resolvePiSession },
       { createArchonUIBridge, createArchonUIContext },
       { buildPiNativeToolDefinitions },
+      { createPiHostToolSet },
     ] = await Promise.all([
       import('@earendil-works/pi-coding-agent'),
       import('./event-bridge'),
@@ -330,6 +340,7 @@ export class PiProvider implements IAgentProvider {
       import('./session-resolver'),
       import('./ui-context-stub'),
       import('./native-tools'),
+      import('./host-tools'),
     ]);
     const { createAgentSession } = piCodingAgent;
 
@@ -836,8 +847,14 @@ export class PiProvider implements IAgentProvider {
     const baseTools =
       filteredTools ??
       (nativeToolDefs.length > 0 ? buildDefaultPiTools(cwd, requestOptions?.env) : undefined);
+    const hostTools = requestOptions?.hostTools;
+    const hostToolSet = hostTools !== undefined ? createPiHostToolSet(hostTools) : undefined;
     const piCustomTools =
-      nativeToolDefs.length > 0 ? [...(baseTools ?? []), ...nativeToolDefs] : filteredTools;
+      hostToolSet !== undefined
+        ? hostToolSet.definitions
+        : nativeToolDefs.length > 0
+          ? [...(baseTools ?? []), ...nativeToolDefs]
+          : filteredTools;
 
     const { session, modelFallbackMessage } = await createAgentSession({
       cwd,
@@ -871,6 +888,7 @@ export class PiProvider implements IAgentProvider {
       ...(piCustomTools !== undefined
         ? { customTools: piCustomTools, noTools: 'builtin' as const }
         : {}),
+      ...(hostTools !== undefined ? { tools: hostTools.map(tool => tool.name) } : {}),
     });
 
     // Extension models aren't in the static catalog — skip the fallback warning.
@@ -923,6 +941,8 @@ export class PiProvider implements IAgentProvider {
       }
     }
 
+    hostToolSet?.bind(session);
+
     // 5. Structured output (best-effort). Pi has no SDK-level JSON schema
     //    mode the way Claude and Codex do, so we implement it via prompt
     //    engineering: append the schema + "JSON only, no fences" instruction,
@@ -960,13 +980,12 @@ export class PiProvider implements IAgentProvider {
     }
     try {
       yield* withResumedOutcome(
-        bridgeSession(
-          session,
-          effectivePrompt,
-          requestOptions?.abortSignal,
-          outputFormat?.schema,
-          uiBridge
-        ),
+        bridgeSession(session, effectivePrompt, {
+          abortSignal: requestOptions?.abortSignal,
+          jsonSchema: outputFormat?.schema,
+          uiBridge,
+          hostOwnedTools: hostTools !== undefined,
+        }),
         resumedOutcome(resumeSessionId, !resumeFailed)
       );
       getLog().info({ piProvider: parsed.provider }, 'pi.prompt_completed');

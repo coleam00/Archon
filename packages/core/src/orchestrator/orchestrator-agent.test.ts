@@ -336,6 +336,10 @@ const DEFAULT_PROVIDER_CAPS: ProviderCapabilities = {
   containerExec: false,
 };
 
+const mockGetProviderCapabilities = mock(
+  (): ProviderCapabilities => ({ ...DEFAULT_PROVIDER_CAPS })
+);
+
 mock.module('@archon/providers', () => ({
   getAgentProvider: mock(() => ({
     sendQuery: mockSendQuery,
@@ -346,7 +350,7 @@ mock.module('@archon/providers', () => ({
   // `isRegisteredProvider` gates that lookup — both read by
   // `validEffortsForProvider` (@archon/workflows/model-validation, #2556).
   // Omitting either lets the REAL implementation run against an empty registry.
-  getProviderCapabilities: mock(() => ({ ...DEFAULT_PROVIDER_CAPS })),
+  getProviderCapabilities: mockGetProviderCapabilities,
   isRegisteredProvider: mock(() => true),
   getRegisteredProviders: mock(() => []),
   // Vendor → env-var map consumed by credentials/delivery (#1955). A realistic
@@ -1763,6 +1767,91 @@ describe('discoverAllWorkflows — remote sync', () => {
       expect(Array.isArray(requestOptions.nativeTools)).toBe(true);
     } finally {
       capsMock.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS });
+    }
+  });
+
+  test('refuses a host-owned turn when the selected provider cannot enforce it', async () => {
+    const platform = makePlatform();
+    const context = { issueContext: 'Host-owned conversation', hostTools: [] };
+    await handleMessage(platform, 'conv-1', 'Edit the protected file.', context);
+    expect(mockSendQuery).not.toHaveBeenCalled();
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('host-owned tools')
+    );
+  });
+
+  test('a host-owned conversation does not synchronize the project outside its tools', async () => {
+    mockGetProviderCapabilities.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS, hostTools: true });
+    const codebase = makeCodebaseForSync();
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ codebase_id: codebase.id }))
+    );
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
+    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
+    try {
+      await handleMessage(makePlatform(), 'conv-1', 'Inspect the project.', { hostTools: [] });
+      expect(mockSyncWorkspace).not.toHaveBeenCalled();
+    } finally {
+      mockGetProviderCapabilities.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS });
+    }
+  });
+
+  test('a host-owned conversation treats inbound slash commands as user text', async () => {
+    mockGetProviderCapabilities.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS, hostTools: true });
+    mockHandleCommand.mockClear();
+    try {
+      const platform = makePlatform();
+      await handleMessage(platform, 'conv-1', '/help', { hostTools: [] });
+      expect(mockHandleCommand).not.toHaveBeenCalled();
+      expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', 'test response');
+    } finally {
+      mockGetProviderCapabilities.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS });
+    }
+  });
+
+  test.each(['batch', 'stream'] as const)(
+    'a host-owned %s conversation never executes commands from model text',
+    async mode => {
+      mockGetProviderCapabilities.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS, hostTools: true });
+      mockCreateCodebase.mockClear();
+      mockParseCommand.mockReturnValue({
+        command: 'register-project',
+        args: ['ExampleProject', '/.archon/workspaces/owner/repo/source'],
+      });
+      const commandText =
+        '/register-project ExampleProject "/.archon/workspaces/owner/repo/source"';
+      mockSendQuery.mockImplementationOnce(async function* () {
+        yield { type: 'assistant', content: commandText };
+        yield { type: 'assistant', content: '\nThis is quoted text.' };
+        yield { type: 'result', sessionId: 'host-session' };
+      });
+      try {
+        const platform = makePlatform();
+        platform.getStreamingMode.mockReturnValue(mode);
+        await handleMessage(platform, 'conv-1', 'Quote a command.', { hostTools: [] });
+        expect(mockCreateCodebase).not.toHaveBeenCalled();
+        const rendered = platform.sendMessage.mock.calls.map(call => call[1]).join('');
+        expect(rendered).toContain(commandText);
+        expect(rendered).toContain('This is quoted text.');
+      } finally {
+        mockGetProviderCapabilities.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS });
+        mockParseCommand.mockReturnValue({ command: 'help', args: [] });
+      }
+    }
+  );
+
+  test('a host-owned turn does not start an auxiliary title agent', async () => {
+    mockGetProviderCapabilities.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS, hostTools: true });
+    mockGenerateAndSetTitle.mockClear();
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ title: null }))
+    );
+    try {
+      await handleMessage(makePlatform(), 'conv-1', 'Inspect the project.', { hostTools: [] });
+      expect(mockGenerateAndSetTitle).not.toHaveBeenCalled();
+    } finally {
+      mockGetProviderCapabilities.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS });
     }
   });
 });
@@ -3943,6 +4032,19 @@ describe('paused approval gate routing', () => {
     expect(prompt.indexOf('## Paused Approval Gate')).toBeLessThan(
       prompt.indexOf('## User Message')
     );
+  });
+
+  test('host-owned turns exclude unavailable workflow-gate instructions', async () => {
+    const gateMessage = 'Review the pending release policy';
+    arrangeGatedChat({
+      metadata: { approval: { nodeId: 'gate-host', message: gateMessage } },
+    });
+    capsMock.mockReturnValue({ ...DEFAULT_PROVIDER_CAPS, nativeTools: true, hostTools: true });
+
+    await handleMessage(makePlatform(), 'conv-1', 'Inspect only this project.', { hostTools: [] });
+
+    expect(lastPrompt()).toContain('Inspect only this project.');
+    expect(lastPrompt()).not.toContain(gateMessage);
   });
 
   test('no paused run means no gate section', async () => {

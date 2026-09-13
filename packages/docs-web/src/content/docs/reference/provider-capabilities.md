@@ -52,6 +52,7 @@ unsupported provider at load time and an implicitly resolved one at runtime.
 | Sandbox (`sandbox`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Setting sources (`settingSources`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | In-process native tools | ✅ | ❌ | ❌ | ✅ | ❌ |
+| Exclusive host-owned tools (embedding interface) | ❌ | ❌ | ❌ | ✅ | ❌ |
 | Container exec (folder-project container backend) | ✅ | ❌ | ❌ | ❌ | ❌ |
 
 ## Caveats

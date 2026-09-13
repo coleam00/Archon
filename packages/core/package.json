@@ -166,6 +166,9 @@
       "src/orchestrator/orchestrator.test.ts"
     ],
     [
+      "src/orchestrator/host-tools.integration.test.ts"
+    ],
+    [
       "src/orchestrator/orchestrator-agent.test.ts"
     ],
     [

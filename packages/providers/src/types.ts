@@ -284,8 +284,18 @@ export type MessageChunk =
       toolCallId?: string;
     }
   | {
+      type: 'tool_update';
+      toolName: string;
+      toolCallId: string;
+      /** Unserialized progress from the host executor. */
+      toolResult: HostToolResult;
+    }
+  | {
       type: 'tool_result';
       toolName: string;
+      /** Unserialized content, details and authoritative error state for host-owned tools. */
+      toolResult?: HostToolResult;
+      /** Display text; host integrations consume toolResult without parsing this field. */
       toolOutput: string;
       /** Matching ID for the originating `tool` chunk. See `tool` variant above. */
       toolCallId?: string;
@@ -517,6 +527,14 @@ export interface AgentRequestOptions {
    * `nativeTools` capability.
    */
   nativeTools?: NativeTool[];
+  /**
+   * Exclusive model-visible tool set owned by an embedding host. An empty array
+   * disables all tools. Unlike additive nativeTools, provider built-ins and
+   * extension tools must not execute instead of these handlers.
+   * Callers must require the hostTools capability; unsupported requests fail
+   * before inference rather than falling back to provider-owned execution.
+   */
+  hostTools?: readonly HostTool[];
 }
 
 /**
@@ -536,6 +554,37 @@ export interface NativeTool {
   description: string;
   inputSchema: Record<string, unknown>;
   handler: (input: Record<string, unknown>) => Promise<string>;
+}
+
+/** Model-facing content; details stay with the host and provider event stream. */
+export interface HostToolResult {
+  content: ({ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string })[];
+  details?: unknown;
+  /** A host failure remains an error even if native hooks modify its presentation. */
+  isError?: boolean;
+}
+
+export interface HostToolInvocation {
+  /** Provider-assigned call identity, stable through this turn's result. */
+  toolCallId: string;
+  signal?: AbortSignal;
+  onUpdate?: (result: HostToolResult) => void;
+}
+
+/**
+ * A host owns approval and execution; the provider retains its inference loop.
+ * Schemas are canonical JSON Schema, not the narrow native-tool vocabulary.
+ * The handler must await approval before effects. Request-scoped identity and
+ * duplicate-execution policy belong to the host, not to a second agent loop.
+ */
+export interface HostTool {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  handler: (
+    input: Record<string, unknown>,
+    invocation: HostToolInvocation
+  ) => Promise<HostToolResult>;
 }
 
 /**
@@ -695,6 +744,8 @@ export interface ProviderCapabilities {
   settingSources: boolean;
   /** Whether the provider can register in-process `NativeTool`s for a turn. */
   nativeTools: boolean;
+  /** Exclusive host execution with canonical schemas and call identity. Omission means unsupported. */
+  hostTools?: boolean;
   /**
    * Whether the provider can execute inside the folder-project container backend
    * (`execContext.kind === 'container'`) — i.e. it knows how to spawn its CLI via

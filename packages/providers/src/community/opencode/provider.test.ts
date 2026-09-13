@@ -1,3 +1,4 @@
+import { UnsupportedHostToolsError } from '../../errors';
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -174,6 +175,20 @@ describe('OpencodeProvider', () => {
   afterEach(async () => {
     await Promise.all(Array.from(tempDirs, dir => rm(dir, { recursive: true, force: true })));
     tempDirs.clear();
+  });
+
+  test('rejects host-owned tools before SDK execution', async () => {
+    const turn = new OpencodeProvider().sendQuery('Do not execute.', '/tmp', undefined, {
+      hostTools: [],
+      abortSignal: AbortSignal.abort(),
+      assistantConfig: TEST_MODEL,
+    });
+    try {
+      await expect(turn.next()).rejects.toThrow(UnsupportedHostToolsError);
+      expect(mockCreateOpencode).not.toHaveBeenCalled();
+    } finally {
+      await turn.return(undefined);
+    }
   });
 
   test('basic text streaming yields assistant chunks', async () => {

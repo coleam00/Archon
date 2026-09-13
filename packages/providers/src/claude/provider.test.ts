@@ -1,3 +1,4 @@
+import { UnsupportedHostToolsError } from '../errors';
 import { describe, test, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -85,6 +86,19 @@ describe('ClaudeProvider', () => {
     mockLogger.warn.mockClear();
     mockLogger.error.mockClear();
     mockLogger.debug.mockClear();
+  });
+
+  test('rejects host-owned tools before SDK execution', async () => {
+    const turn = client.sendQuery('Do not execute.', '/tmp', undefined, {
+      hostTools: [],
+      abortSignal: AbortSignal.abort(),
+    });
+    try {
+      await expect(turn.next()).rejects.toThrow(UnsupportedHostToolsError);
+      expect(mockQuery).not.toHaveBeenCalled();
+    } finally {
+      await turn.return(undefined);
+    }
   });
 
   describe('constructor', () => {

@@ -11,6 +11,7 @@ import type {
 
 import { getOrderedAgents } from './agent-config';
 import { OPENCODE_CAPABILITIES } from './capabilities';
+import { UnsupportedHostToolsError } from '../../errors';
 import { parseModelRef, parseOpencodeConfig } from './config';
 import { classifyOpencodeError, enrichOpencodeError } from './errors';
 import { materializeAgents } from './agent-fs';
@@ -53,6 +54,9 @@ export class OpencodeProvider implements IAgentProvider {
     resumeSessionId?: string,
     requestOptions?: SendQueryOptions
   ): AsyncGenerator<MessageChunk> {
+    if (requestOptions?.hostTools !== undefined) {
+      throw new UnsupportedHostToolsError('opencode');
+    }
     const assistantConfig = parseOpencodeConfig(requestOptions?.assistantConfig ?? {});
     const modelRef = requestOptions?.model ?? assistantConfig.model;
     const parsedModelOrNull = modelRef ? parseModelRef(modelRef) : undefined;

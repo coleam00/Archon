@@ -46,6 +46,7 @@ import type {
   NodeConfig,
 } from '../types';
 import { parseClaudeConfig } from './config';
+import { UnsupportedHostToolsError } from '../errors';
 import { CLAUDE_CAPABILITIES } from './capabilities';
 import { buildContainerSpawn } from './container-spawn';
 import { resolveClaudeBinaryPath, pathKind } from './binary-resolver';
@@ -1426,6 +1427,9 @@ export class ClaudeProvider implements IAgentProvider {
     resumeSessionId?: string,
     requestOptions?: SendQueryOptions
   ): AsyncGenerator<MessageChunk> {
+    if (requestOptions?.hostTools !== undefined) {
+      throw new UnsupportedHostToolsError('claude');
+    }
     let lastError: Error | undefined;
     const assistantDefaults = parseClaudeConfig(requestOptions?.assistantConfig ?? {});
 

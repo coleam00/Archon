@@ -357,9 +357,56 @@ export type MessageChunk =
     }
   | { type: 'rate_limit'; rateLimitInfo: Record<string, unknown> }
   | { type: 'tool'; toolName: string; toolInput?: Record<string, unknown>; toolCallId?: string }
-  | { type: 'tool_result'; toolName: string; toolOutput: string; toolCallId?: string }
+  | { type: 'tool_update'; toolName: string; toolCallId: string; toolResult: HostToolResult }
+  | {
+      type: 'tool_result';
+      toolName: string;
+      toolResult?: HostToolResult;
+      toolOutput: string;
+      toolCallId?: string;
+      toolOutcome?: 'success' | 'error' | 'interrupted' | 'unknown';
+      exitCode?: number;
+    }
   | { type: 'workflow_dispatch'; workerConversationId: string; workflowName: string };
 ```
+
+### Embedding a host-owned tool executor
+
+An embedding application can supply `HandleMessageContext.hostTools` to `handleMessage`.
+The provider equivalent is `SendQueryOptions.hostTools`. These are **exclusive** tools,
+not additive `nativeTools`: an empty array means no tools, including on a resumed session.
+Combining host tools with non-empty `nativeTools` is rejected.
+
+Each `HostTool` supplies a name, description, canonical JSON Schema, and an asynchronous
+`handler(input, invocation)`. The provider retains its inference loop; the host owns
+approval, execution, and presentation. The invocation carries the provider's `toolCallId`,
+an abort signal, and an `onUpdate` callback. Host updates become `tool_update` chunks;
+final `tool_result` chunks include a typed `toolResult`. Both preserve text/image content
+and structured `details` without JSON parsing, and reach streaming and batch adapters
+through `sendStructuredEvent`. Final `toolOutput` is a text-only display projection.
+Host-owned turns do not emit duplicate provider-formatted tool-call chat messages.
+Return `isError: true` for a structured failure. Native result hooks may alter presentation,
+but cannot turn a host failure into success. Tool events retain the originating call ID,
+and final events report `toolOutcome`.
+
+Hosts must await approval before any protected effect and observe cancellation while
+waiting or executing. Pass `HandleMessageContext.abortSignal` to cancel the turn.
+Deduplication belongs to the host: scope call IDs to their turn and retain the original
+pending/completed result. This interface does not provide crash-proof exactly-once effects.
+
+Host-owned conversations do not interpret inbound or model-emitted slash commands,
+discover workflows, synchronize project source implicitly, inject `manage_run`, add
+paused-gate resolution instructions, or launch a title agent. Ordinary conversations
+retain those behaviors. Workspace configuration
+and native provider settings, guidance, and authentication remain in place. Pi extensions
+still load as configured, but their
+registered tools cannot replace or widen the host's tool set. This is not an execution
+sandbox for trusted extension code itself.
+
+Check `getProviderCapabilities(provider).hostTools` before requesting this mode.
+Pi supports it; the other maintained providers reject it with `UnsupportedHostToolsError`
+before SDK execution. Omission of the capability means unsupported, never permission to
+fall back to provider-owned tools or a different provider.
 
 ### Implementation Guide
 
@@ -369,6 +416,7 @@ export type MessageChunk =
 
 ```typescript
 import type { IAgentProvider, MessageChunk, ProviderCapabilities, SendQueryOptions } from '../types';
+import { UnsupportedHostToolsError } from '../errors';
 
 export class YourAssistantProvider implements IAgentProvider {
   async *sendQuery(
@@ -377,6 +425,10 @@ export class YourAssistantProvider implements IAgentProvider {
     resumeSessionId?: string,
     options?: SendQueryOptions,
   ): AsyncGenerator<MessageChunk> {
+    if (options?.hostTools !== undefined) {
+      throw new UnsupportedHostToolsError('your-assistant');
+    }
+
     // Initialize or resume session
     const session = resumeSessionId
       ? await this.resumeSession(resumeSessionId)

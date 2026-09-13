@@ -23,3 +23,11 @@ export class InvalidProviderRunConfigError extends Error {
     this.name = 'InvalidProviderRunConfigError';
   }
 }
+
+/** The selected provider cannot delegate its complete tool set to a host. */
+export class UnsupportedHostToolsError extends Error {
+  constructor(public readonly provider: string) {
+    super(`Provider '${provider}' does not support host-owned tools`);
+    this.name = 'UnsupportedHostToolsError';
+  }
+}

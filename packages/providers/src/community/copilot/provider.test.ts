@@ -1,3 +1,4 @@
+import { UnsupportedHostToolsError } from '../../errors';
 /**
  * CopilotProvider end-to-end test with a fully mocked @github/copilot-sdk.
  *
@@ -160,6 +161,22 @@ describe('CopilotProvider.sendQuery', () => {
     resumeSessionSpy.mockClear();
     approveAllStub.mockClear();
     lastClientOpts = undefined;
+  });
+
+  test('rejects host-owned tools before SDK execution', async () => {
+    const session = makeFakeSession('host-refusal');
+    session.resolveSend();
+    nextCreateSessionResult = session;
+    const turn = new CopilotProvider().sendQuery('Do not execute.', '/tmp', undefined, {
+      hostTools: [],
+      abortSignal: AbortSignal.abort(),
+    });
+    try {
+      await expect(turn.next()).rejects.toThrow(UnsupportedHostToolsError);
+      expect(createSessionSpy).not.toHaveBeenCalled();
+    } finally {
+      await turn.return(undefined);
+    }
   });
 
   test('defaults to model="auto" when none is configured', async () => {
