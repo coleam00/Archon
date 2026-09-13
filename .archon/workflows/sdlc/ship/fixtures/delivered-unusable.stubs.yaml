@@ -56,7 +56,11 @@ deliver__review__synthesize:
   findings_summary: "stub: no open findings"
 deliver__review-action: '{"ready":true,"action":"none"}'
 deliver__gate-ready: '{"gate":"ready"}'
+deliver__validate__applicability: { fingerprint: fixture, scope: "", context: "", validator: fixture, generation: 1, reason: fixture, nonce: fixture, reuse: false }
 deliver__validate__validate:
+  green: true
+  summary: "stub: project gate green"
+deliver__validate__selected-verdict:
   green: true
   summary: "stub: project gate green"
 deliver__gate-validated: '{"gate":"green"}'
@@ -65,6 +69,7 @@ ci-probe: '{"state":"concluded","detail":"all checks green"}'
 deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
 deliver__flip-ready: "flip printed something that is not a pull request URL"
 deliver__outcome: "https://github.com/example/repo/pull/5"
+deliver__validate__record-evidence: '{"recorded":true}'
 fixture:
   expect: failed
   fail-node: outcome

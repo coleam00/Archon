@@ -1,7 +1,14 @@
+applicability: { fingerprint: fixture, scope: "", context: "", validator: fixture, generation: 1, reason: fixture, nonce: fixture, reuse: false }
 validate:
   green: true
   checks_performed: false
   red_cause: ""
   summary: "stub: no ordinary checks defined"
+selected-verdict:
+  green: true
+  checks_performed: false
+  red_cause: ""
+  summary: "stub: no ordinary checks defined"
+record-evidence: '{"recorded":true}'
 fixture:
   expect: completed

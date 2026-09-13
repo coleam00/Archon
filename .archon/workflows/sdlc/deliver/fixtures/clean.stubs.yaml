@@ -22,7 +22,11 @@ review__synthesize:
   findings_summary: "stub: clean on initial review"
 review-action: '{"ready":true,"action":"none"}'
 gate-ready: '{"ready":"true"}'
+validate__applicability: { fingerprint: fixture, scope: "", context: "", validator: fixture, generation: 1, reason: fixture, nonce: fixture, reuse: false }
 validate__validate:
+  green: true
+  summary: "stub: full gate green"
+validate__selected-verdict:
   green: true
   summary: "stub: full gate green"
 gate-validated: '{"gate":"green"}'
@@ -38,5 +42,6 @@ classify:
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
 resolve-scope: '{"errors":"false"}'
+validate__record-evidence: '{"recorded":true}'
 fixture:
   expect: completed

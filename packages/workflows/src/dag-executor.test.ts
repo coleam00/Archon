@@ -127,7 +127,7 @@ import {
   skipCauseSchema,
   workflowDefinitionSchema,
 } from './schemas';
-import { discoverWorkflows } from './workflow-discovery';
+import { discoverWorkflows, liveSourceRoots } from './workflow-discovery';
 import { parseWorkflow } from './loader';
 import { expandWorkflowIncludes } from './include-expander';
 import {
@@ -11546,6 +11546,143 @@ describe('executeDagWorkflow -- always_run resume opt-out', () => {
         (call[0] as { step_name: string }).step_name === 'cached'
     );
     expect(cachedSkipped).toBeDefined();
+  });
+
+  it('reuses the packaged validator evidence through a native approval continuation', async () => {
+    const repoRoot = join(import.meta.dir, '..', '..', '..');
+    await writeFile(join(testDir, 'source.ts'), 'export const fixture = true;\n');
+    await git.execFileAsync('git', ['init', '-q'], { cwd: testDir });
+    await git.execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: testDir });
+    await git.execFileAsync('git', ['config', 'user.name', 'Archon Test'], { cwd: testDir });
+    await git.execFileAsync('git', ['add', 'source.ts'], { cwd: testDir });
+    await git.execFileAsync('git', ['commit', '-qm', 'fixture'], { cwd: testDir });
+
+    const discovered = await discoverWorkflows(repoRoot, {
+      loadDefaults: false,
+      loadDefaultCommands: false,
+    });
+    const packaged = discovered.workflows.find(entry => entry.workflow.name === 'archon-validate');
+    if (!packaged) throw new Error('archon-validate was not discovered');
+    const selected = packaged.workflow.nodes.find(node => node.id === 'selected-verdict');
+    if (!selected) throw new Error('archon-validate has no selected-verdict node');
+    const workflow = resolveWorkflow({
+      ...packaged.workflow,
+      name: 'packaged-validation-approval-continuation',
+      interactive: true,
+      nodes: [
+        ...packaged.workflow.nodes,
+        {
+          id: 'approval',
+          kind: 'gate',
+          message: 'Continue with this validated candidate?',
+          decisions: [{ id: 'approve' }, { id: 'reject' }],
+          captureResponse: false,
+          decisionsAuthored: false,
+          depends_on: [selected.id],
+        },
+      ],
+    });
+    const validation = {
+      green: true,
+      checks_performed: true,
+      red_cause: '',
+      summary: 'fixture check passed',
+    };
+    mockSendQueryDag.mockImplementation(async function* () {
+      await writeFile(join(testDir, 'artifacts', 'validation.md'), 'fixture check: passed\n');
+      yield { type: 'assistant', content: JSON.stringify(validation) };
+      yield { type: 'result', sessionId: 'validation-session', structuredOutput: validation };
+    });
+
+    const firstStore = createMockStore();
+    const firstRun = makeWorkflowRun('packaged-validation-run', {
+      workflow_name: workflow.name,
+      metadata: { inputs: { scope: '', context: '' } },
+    });
+    const sourceRoots = liveSourceRoots(repoRoot, {
+      load_default_workflows: false,
+      load_default_commands: false,
+    });
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(firstStore),
+        conversationId: 'conv-validation-approval-continuation',
+        cwd: testDir,
+        workflow,
+        workflowRun: firstRun,
+        workflowSourceRoots: sourceRoots,
+      })
+    );
+
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    expect(firstStore.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+    const priorCompletedNodes = new Map<string, PersistedNodeOutput>();
+    for (const [event] of firstStore.createWorkflowEvent.mock.calls) {
+      const data = event.data;
+      if (
+        event.event_type === 'node_completed' &&
+        typeof event.step_name === 'string' &&
+        data !== undefined &&
+        typeof data.node_output === 'string'
+      ) {
+        priorCompletedNodes.set(event.step_name, {
+          output: data.node_output,
+          ...(data.structured_output !== undefined
+            ? { structuredOutput: data.structured_output }
+            : {}),
+        });
+      }
+    }
+    priorCompletedNodes.set('approval', { output: '' });
+
+    await writeFile(join(testDir, 'source.ts'), 'export const fixture = "repaired";\n');
+    const repairStore = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(repairStore),
+        conversationId: 'conv-validation-repair',
+        cwd: testDir,
+        workflow,
+        workflowRun: makeWorkflowRun('packaged-validation-repair', {
+          workflow_name: workflow.name,
+          metadata: { inputs: { scope: '', context: '' } },
+        }),
+        workflowSourceRoots: sourceRoots,
+      })
+    );
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(2);
+    expect(repairStore.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+
+    const resumedStore = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(resumedStore),
+        conversationId: 'conv-validation-approval-continuation',
+        cwd: testDir,
+        workflow,
+        workflowRun: makeWorkflowRun(firstRun.id, {
+          workflow_name: workflow.name,
+          metadata: {
+            inputs: { scope: '', context: '' },
+            approval: {
+              type: 'approval',
+              nodeId: 'approval',
+              message: 'Continue with this validated candidate?',
+            },
+          },
+        }),
+        priorCompletedNodes,
+        workflowSourceRoots: sourceRoots,
+      })
+    );
+
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(2);
+    expect(resumedStore.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    const evidence = JSON.parse(
+      await readFile(join(testDir, 'artifacts', 'validation-evidence.json'), 'utf8')
+    ) as { report: { content: string } };
+    expect(evidence.report.content).toBe('fixture check: passed\n');
   });
 
   it('downstream consumer reads fresh producer output (not the pre-populated cached value)', async () => {

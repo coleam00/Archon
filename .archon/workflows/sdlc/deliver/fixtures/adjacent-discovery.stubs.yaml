@@ -28,7 +28,11 @@ review__synthesize:
   findings_summary: "stub: no blockers; one adjacent discovery preserved"
 review-action: '{"ready":true,"action":"none"}'
 gate-ready: '{"ready":"true"}'
+validate__applicability: { fingerprint: fixture, scope: "", context: "", validator: fixture, generation: 1, reason: fixture, nonce: fixture, reuse: false }
 validate__validate:
+  green: true
+  summary: "stub: full gate green"
+validate__selected-verdict:
   green: true
   summary: "stub: full gate green"
 gate-validated: '{"gate":"green"}'
@@ -37,5 +41,6 @@ ci-verdict: '{"state":"concluded","detail":"no checks configured"}'
 ci-attention-route: '{"attention":false,"red_cause":""}'
 flip-ready: "https://github.com/example/repo/pull/5"
 outcome: "https://github.com/example/repo/pull/5"
+validate__record-evidence: '{"recorded":true}'
 fixture:
   expect: completed

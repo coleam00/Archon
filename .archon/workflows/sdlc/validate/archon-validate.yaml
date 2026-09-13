@@ -18,14 +18,45 @@ inputs:
       Optional narrowing — a package, directory, or named check to focus on.
       Empty means the project's full applicable gate.
 
-returns: validate
+  context:
+    default: ""
+    description: >-
+      Optional nonsecret identity for external validation state that the tracked
+      tree cannot measure. Changing it requires fresh validation.
+
+returns: selected-verdict
 outcome_field: green
 
 nodes:
-  - id: validate
-    command: validate
+  - id: applicability
+    script: validation-evidence
+    runtime: bun
     always_run: true
     mutates_checkout: false
+    with:
+      action: check
+      scope: "$INPUTS.scope"
+      context: "$INPUTS.context"
+    output_format:
+      type: object
+      properties:
+        fingerprint: { type: string }
+        scope: { type: string }
+        context: { type: string }
+        validator: { type: string }
+        generation: { type: integer }
+        reason: { type: string }
+        nonce: { type: string }
+        reuse: { type: boolean }
+      required: [fingerprint, scope, context, validator, generation, reason, nonce, reuse]
+
+  - id: validate
+    command: validate
+    depends_on: [applicability]
+    when: "$applicability.output.reuse == false"
+    mutates_checkout: false
+    with:
+      scope: "$INPUTS.scope"
     output_type: validation
     output_format:
       type: object
@@ -43,4 +74,39 @@ nodes:
           enum: [introduced, inherited, environment, ""]
         summary:
           type: string
+      required: [green, checks_performed, red_cause, summary]
+
+  - id: record-evidence
+    script: validation-evidence
+    runtime: bun
+    mutates_checkout: false
+    depends_on: [applicability, validate]
+    when: "$applicability.output.reuse == false"
+    with:
+      action: record
+      applicability: "$applicability.output"
+      verdict: "$validate.output"
+
+  - id: selected-verdict
+    script: validation-evidence
+    runtime: bun
+    mutates_checkout: false
+    depends_on: [applicability, validate, record-evidence]
+    trigger_rule: none_failed_min_one_success
+    with:
+      action: select
+      scope: "$INPUTS.scope"
+      context: "$INPUTS.context"
+      applicability: "$applicability.output"
+      verdict: { from: "$validate.output", if_skipped: null }
+    output_type: validation
+    output_format:
+      type: object
+      properties:
+        green: { type: boolean }
+        checks_performed: { type: boolean }
+        red_cause:
+          type: string
+          enum: [introduced, inherited, environment, ""]
+        summary: { type: string }
       required: [green, checks_performed, red_cause, summary]

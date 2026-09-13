@@ -44,7 +44,11 @@ recheck__synthesize:
 # gate-ready is deliberately unstubbed: under --exec-code the real script runs,
 # proving the $corrections.output whole-ref binding on a completed loop_group.
 sync-pr-body: "body resynced: corrected the claims the correction round falsified"
+validate__applicability: { fingerprint: fixture, scope: "", context: "", validator: fixture, generation: 1, reason: fixture, nonce: fixture, reuse: false }
 validate__validate:
+  green: true
+  summary: "stub: full gate green"
+validate__selected-verdict:
   green: true
   summary: "stub: full gate green"
 gate-validated: '{"gate":"green"}'
@@ -58,6 +62,7 @@ classify:
   reasons:
     errors: "stub: the diff adds a retry and a fallback"
     docs: "stub: no doc-facing changes"
+validate__record-evidence: '{"recorded":true}'
 fixture:
   expect: completed
   reached: [review__errors, ci-note]

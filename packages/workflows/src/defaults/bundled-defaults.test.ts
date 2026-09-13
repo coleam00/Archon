@@ -577,15 +577,58 @@ describe('bundled-defaults', () => {
       }
     });
 
-    it('archon-validate marks the validate node as always_run (#3092)', () => {
+    it('archon-validate makes applicability cheap and resumable without caching stale validation', () => {
       const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-validate'], 'archon-validate.yaml');
       if (parsed.workflow === null) throw new Error(parsed.error.error);
 
+      const applicability = parsed.workflow.nodes.find(node => node.id === 'applicability');
       const validateNode = parsed.workflow.nodes.find(node => node.id === 'validate');
-      if (validateNode === undefined || !('always_run' in validateNode)) {
-        throw new Error('archon-validate has no executable validate node carrying always_run');
-      }
-      expect(validateNode.always_run).toBe(true);
+      const evidence = parsed.workflow.nodes.find(node => node.id === 'record-evidence');
+      const selected = parsed.workflow.nodes.find(node => node.id === 'selected-verdict');
+      expect(applicability).toMatchObject({
+        kind: 'exec',
+        runtime: 'bun',
+        script: 'validation-evidence',
+        always_run: true,
+        with: {
+          action: 'check',
+          scope: '$INPUTS.scope',
+          context: '$INPUTS.context',
+        },
+      });
+      expect(validateNode).toMatchObject({
+        kind: 'agent',
+        depends_on: ['applicability'],
+        when: '$applicability.output.reuse == false',
+        source: { with: { scope: '$INPUTS.scope' } },
+      });
+      expect(validateNode).not.toHaveProperty('always_run');
+      expect(evidence).toMatchObject({
+        kind: 'exec',
+        runtime: 'bun',
+        depends_on: ['applicability', 'validate'],
+        when: '$applicability.output.reuse == false',
+      });
+      expect(selected).toMatchObject({
+        kind: 'exec',
+        runtime: 'bun',
+        depends_on: ['applicability', 'validate', 'record-evidence'],
+        with: { action: 'select', context: '$INPUTS.context' },
+      });
+    });
+
+    it('carries validation scope and context through delivery, ship, lifecycle, and repair', () => {
+      const deliver = BUNDLED_WORKFLOWS['archon-deliver'];
+      const ship = BUNDLED_WORKFLOWS['archon-ship'];
+      const lifecycle = BUNDLED_WORKFLOWS['archon-lifecycle'];
+      expect(deliver).toContain('scope: "$INPUTS.validation_scope"');
+      expect(ship).toContain('validation_scope: "$INPUTS.validation_scope"');
+      expect(lifecycle.match(/validation_scope: "\$INPUTS\.validation_scope"/g)).toHaveLength(2);
+      expect(deliver).toContain('context: "$INPUTS.validation_context"');
+      expect(ship).toContain('validation_context: "$INPUTS.validation_context"');
+      expect(lifecycle.match(/validation_context: "\$INPUTS\.validation_context"/g)).toHaveLength(
+        2
+      );
     });
   });
 
