@@ -26,8 +26,12 @@ review__synthesize:
   ready: true
   action: none
   findings_summary: "stub: clean on initial review"
-validate__applicability: { fingerprint: fixture, scope: "", generation: 1, reason: fixture, nonce: fixture }
+validate__applicability: { fingerprint: fixture, scope: "", context: "", validator: fixture, generation: 1, reason: fixture, nonce: fixture, reuse: false }
 validate__validate:
+  green: false
+  red_cause: environment
+  summary: ""
+validate__selected-verdict:
   green: false
   red_cause: environment
   summary: ""

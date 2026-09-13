@@ -36,8 +36,12 @@ review__synthesize:
   ready: true
   action: none
   findings_summary: "stub: clean on initial review; CI still running"
-validate__applicability: { fingerprint: fixture, scope: "", generation: 1, reason: fixture, nonce: fixture }
+validate__applicability: { fingerprint: fixture, scope: "", context: "", validator: fixture, generation: 1, reason: fixture, nonce: fixture, reuse: false }
 validate__validate:
+  green: true
+  red_cause: ""
+  summary: "stub: full gate green"
+validate__selected-verdict:
   green: true
   red_cause: ""
   summary: "stub: full gate green"

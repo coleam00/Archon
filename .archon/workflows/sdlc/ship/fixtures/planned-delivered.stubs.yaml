@@ -36,8 +36,11 @@ deliver__review__synthesize:
   action: none
   findings_summary: "stub: no open findings"
 deliver__review-action: '{"ready":true,"action":"none"}'
-deliver__validate__applicability: { fingerprint: fixture, scope: "", generation: 1, reason: fixture, nonce: fixture }
+deliver__validate__applicability: { fingerprint: fixture, scope: "", context: "", validator: fixture, generation: 1, reason: fixture, nonce: fixture, reuse: false }
 deliver__validate__validate:
+  green: true
+  summary: "stub: project gate green"
+deliver__validate__selected-verdict:
   green: true
   summary: "stub: project gate green"
 ci-probe: '{"state":"concluded","detail":"all checks green"}'

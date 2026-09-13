@@ -30,8 +30,11 @@ review__synthesize:
   findings_summary: "stub: clean on initial review"
 # gate-ready is deliberately unstubbed: under --exec-code the real script runs,
 # proving the review_ready binding and the corrections if_skipped default.
-validate__applicability: { fingerprint: fixture, scope: "", generation: 1, reason: fixture, nonce: fixture }
+validate__applicability: { fingerprint: fixture, scope: "", context: "", validator: fixture, generation: 1, reason: fixture, nonce: fixture, reuse: false }
 validate__validate:
+  green: false
+  summary: "stub: tests failed — 3 red"
+validate__selected-verdict:
   green: false
   summary: "stub: tests failed — 3 red"
 ci-probe: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'

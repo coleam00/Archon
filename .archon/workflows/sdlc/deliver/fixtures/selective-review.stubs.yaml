@@ -31,8 +31,11 @@ review__synthesize:
   findings_summary: "stub: selected review is clean"
 review-action: '{"ready":true,"action":"none"}'
 gate-ready: '{"ready":"true"}'
-validate__applicability: { fingerprint: fixture, scope: "", generation: 1, reason: fixture, nonce: fixture }
+validate__applicability: { fingerprint: fixture, scope: "", context: "", validator: fixture, generation: 1, reason: fixture, nonce: fixture, reuse: false }
 validate__validate:
+  green: true
+  summary: "stub: full gate green"
+validate__selected-verdict:
   green: true
   summary: "stub: full gate green"
 gate-validated: '{"gate":"green"}'

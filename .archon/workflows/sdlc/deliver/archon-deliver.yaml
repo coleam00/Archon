@@ -40,6 +40,11 @@ inputs:
     description: >-
       Optional package, directory, or named-check scope for the final project
       validation. Empty keeps the project's full applicable gate.
+  validation_context:
+    default: ""
+    description: >-
+      Optional nonsecret identity for external validation state. Changing it
+      requires a fresh final project validation.
 
 # The returns node is what a composed dependency on this workflow resolves to,
 # and what a caller's binding of this workflow's output reads. Both must mean
@@ -343,6 +348,7 @@ nodes:
     depends_on: [gate-ready]
     with:
       scope: "$INPUTS.validation_scope"
+      context: "$INPUTS.validation_context"
 
   # The third gate on the same script, for the same reason: a local gate that
   # refuses every red refuses red the change did not cause, and the base break

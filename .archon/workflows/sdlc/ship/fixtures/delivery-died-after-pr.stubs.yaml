@@ -56,8 +56,12 @@ deliver__review__synthesize:
   findings_summary: "stub: no open findings"
 deliver__review-action: '{"ready":true,"action":"none"}'
 deliver__gate-ready: '{"gate":"ready"}'
-deliver__validate__applicability: { fingerprint: fixture, scope: "", generation: 1, reason: fixture, nonce: fixture }
+deliver__validate__applicability: { fingerprint: fixture, scope: "", context: "", validator: fixture, generation: 1, reason: fixture, nonce: fixture, reuse: false }
 deliver__validate__validate:
+  green: false
+  red_cause: introduced
+  summary: "stub: the change broke one spec in the project gate"
+deliver__validate__selected-verdict:
   green: false
   red_cause: introduced
   summary: "stub: the change broke one spec in the project gate"

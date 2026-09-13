@@ -27,8 +27,12 @@ review__synthesize:
   findings_summary: "stub: clean on initial review"
 review-action: '{"ready":true,"action":"none"}'
 gate-ready: '{"ready":"true"}'
-validate__applicability: { fingerprint: fixture, scope: "", generation: 1, reason: fixture, nonce: fixture }
+validate__applicability: { fingerprint: fixture, scope: "", context: "", validator: fixture, generation: 1, reason: fixture, nonce: fixture, reuse: false }
 validate__validate:
+  green: true
+  red_cause: ""
+  summary: "stub: full gate green — the tree was corrected"
+validate__selected-verdict:
   green: true
   red_cause: ""
   summary: "stub: full gate green — the tree was corrected"

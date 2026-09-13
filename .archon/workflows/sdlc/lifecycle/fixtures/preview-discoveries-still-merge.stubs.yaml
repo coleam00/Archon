@@ -57,8 +57,12 @@ ship__deliver__review__synthesize:
   findings_summary: "stub: clean"
 ship__deliver__review-action: '{"ready":"true","action":"none"}'
 ship__deliver__gate-ready: "ready"
-ship__deliver__validate__applicability: { fingerprint: fixture, scope: "", generation: 1, reason: fixture, nonce: fixture }
+ship__deliver__validate__applicability: { fingerprint: fixture, scope: "", context: "", validator: fixture, generation: 1, reason: fixture, nonce: fixture, reuse: false }
 ship__deliver__validate__validate:
+  green: true
+  red_cause: ""
+  summary: "stub: checks green"
+ship__deliver__validate__selected-verdict:
   green: true
   red_cause: ""
   summary: "stub: checks green"

@@ -34,6 +34,10 @@ inputs:
     description: >-
       Optional package, directory, or named-check scope forwarded to delivery.
       Empty keeps the project's full applicable gate.
+  validation_context:
+    default: ""
+    description: >-
+      Optional nonsecret external-state identity forwarded to delivery.
 
 returns: outcome
 
@@ -90,6 +94,7 @@ nodes:
     with:
       errors: "$INPUTS.errors"
       validation_scope: "$INPUTS.validation_scope"
+      validation_context: "$INPUTS.validation_context"
       work: >-
         Deliver the work prepared by this run. Read $ARTIFACTS_DIR/triage.md
         first. When present, plan.md or investigation.md is the detailed work

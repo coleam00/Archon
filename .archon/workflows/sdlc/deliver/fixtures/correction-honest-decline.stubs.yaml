@@ -50,8 +50,12 @@ recheck__synthesize:
   action: none
   findings_summary: "stub: no open Critical/Important"
 sync-pr-body: "body resynced: the correction round changed nothing, so the body's claims still hold"
-validate__applicability: { fingerprint: fixture, scope: "", generation: 1, reason: fixture, nonce: fixture }
+validate__applicability: { fingerprint: fixture, scope: "", context: "", validator: fixture, generation: 1, reason: fixture, nonce: fixture, reuse: false }
 validate__validate:
+  green: false
+  red_cause: inherited
+  summary: "stub: the same inherited lint break, still red on the base"
+validate__selected-verdict:
   green: false
   red_cause: inherited
   summary: "stub: the same inherited lint break, still red on the base"

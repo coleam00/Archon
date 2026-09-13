@@ -47,8 +47,11 @@ recheck__synthesize:
   action: none
   findings_summary: "stub: the correction closed the finding"
 sync-pr-body: "body resynced, and the environment red disclosed"
-validate__applicability: { fingerprint: fixture, scope: "", generation: 1, reason: fixture, nonce: fixture }
+validate__applicability: { fingerprint: fixture, scope: "", context: "", validator: fixture, generation: 1, reason: fixture, nonce: fixture, reuse: false }
 validate__validate:
+  green: true
+  summary: "stub: the contention cleared; full gate green"
+validate__selected-verdict:
   green: true
   summary: "stub: the contention cleared; full gate green"
 gate-validated: '{"gate":"green"}'
