@@ -11781,6 +11781,117 @@ describe('executeDagWorkflow -- always_run resume opt-out', () => {
     expect(evidence.report.content).toBe('fixture check: passed\n');
   });
 
+  it('resumes packaged merge approval without repeating semantic qualification', async () => {
+    const repoRoot = join(import.meta.dir, '..', '..', '..');
+    const discovered = await discoverWorkflows(repoRoot, {
+      loadDefaults: false,
+      loadDefaultCommands: false,
+    });
+    const merge = discovered.workflows.find(
+      entry => entry.workflow.name === 'archon-merge-queue'
+    )?.workflow;
+    if (merge === undefined) throw new Error('merge workflow missing');
+    const nodes = merge.nodes.map(current => {
+      if (current.id !== 'merge') return current;
+      if (current.kind !== 'exec') throw new Error('merge executor missing');
+      // Transport/executor integrity is exercised in qualified-evidence.test.ts;
+      // this boundary probe observes the native graph's persisted input routing.
+      return {
+        ...current,
+        script:
+          'console.log(JSON.stringify({merged:false,urls:[],queued:[],summary:process.env.INPUTS_APPROVAL,holds:[]}))',
+      };
+    });
+    const workflow = resolveWorkflow({ ...merge, nodes });
+    const references = [{ path: '/artifacts/qualified.json', sha256: 'a'.repeat(64) }];
+    const priorCompletedNodes = new Map<string, PersistedNodeOutput>();
+    for (const current of nodes) {
+      if (current.id === 'approval' || current.id === 'merge') continue;
+      priorCompletedNodes.set(current.id, { output: '{}' });
+    }
+    priorCompletedNodes.set('qualification-input', {
+      output: JSON.stringify({
+        available: true,
+        input: references[0],
+        report_path: '/artifacts/qualification.md',
+        summary: 'external report',
+        references: [],
+      }),
+    });
+    priorCompletedNodes.set('qualified', {
+      output: JSON.stringify({
+        ready: true,
+        repair: false,
+        evidence: '/artifacts/qualification.md',
+        summary: 'qualified',
+        holds: [],
+        references,
+      }),
+    });
+    priorCompletedNodes.set('plan', {
+      output: JSON.stringify({
+        ready: true,
+        summary: 'qualified',
+        method: 'merge',
+        holds: [],
+        plan_reference: 'approved.json',
+        plan_digest: 'digest',
+      }),
+    });
+    const inputs = {
+      prs: '["https://github.com/owner/repo/pull/42"]',
+      evidence: '/artifacts/external.md',
+      scenario: '',
+      holdout: '',
+      mode: 'approve',
+      merge_method: 'merge',
+      validation_scope: '',
+      validation_context: '',
+    };
+    const sourceRoots = liveSourceRoots(repoRoot, {
+      load_default_workflows: false,
+      load_default_commands: false,
+    });
+    const firstStore = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(firstStore),
+        cwd: testDir,
+        workflow,
+        workflowRun: makeWorkflowRun('lifecycle-resume', { metadata: { inputs } }),
+        priorCompletedNodes,
+        workflowSourceRoots: sourceRoots,
+      })
+    );
+    expect(firstStore.failWorkflowRun.mock.calls).toEqual([]);
+    expect(firstStore.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+    const pause = firstStore.pauseWorkflowRun.mock.calls[0]?.[1];
+    expect(pause?.nodeId).toBe('approval');
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+    priorCompletedNodes.set('approval', {
+      output: JSON.stringify({ decision: 'approve', text: '' }),
+      structuredOutput: { decision: 'approve', text: '' },
+    });
+    const resumedStore = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(resumedStore),
+        cwd: testDir,
+        workflow,
+        workflowRun: makeWorkflowRun('lifecycle-resume', { metadata: { inputs, approval: pause } }),
+        priorCompletedNodes,
+        workflowSourceRoots: sourceRoots,
+      })
+    );
+    expect(resumedStore.failWorkflowRun).not.toHaveBeenCalled();
+    expect(resumedStore.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+    const merged = resumedStore.createWorkflowEvent.mock.calls.find(
+      ([event]) => event.step_name === 'merge' && event.event_type === 'node_completed'
+    );
+    expect(merged?.[0].data?.node_output).toContain('approve');
+  });
+
   it('downstream consumer reads fresh producer output (not the pre-populated cached value)', async () => {
     const store = createMockStore();
     const mockDeps = createMockDeps(store);

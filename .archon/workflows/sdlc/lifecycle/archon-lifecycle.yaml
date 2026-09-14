@@ -113,23 +113,105 @@ nodes:
     with:
       scenario: "$INPUTS.holdout"
 
-  - id: qualify
-    command: qualify-runtime
-    context: fresh
+  - id: qualification-input
+    script: qualification
+    runtime: bun
     mutates_checkout: false
     depends_on: [candidate, runtime, holdout]
     trigger_rule: none_failed_min_one_success
     with:
+      action: prepare
       candidate: "$candidate.output"
       runtime: { from: "$runtime.output", if_skipped: null }
       holdout: { from: "$holdout.output", if_skipped: null }
-    output_format:
+      <<: &qualification-requirements
+        scope: "$INPUTS.validation_scope"
+        context: "$INPUTS.validation_context"
+        runtime_scenario: "$INPUTS.scenario"
+        holdout_scenario: "$INPUTS.holdout"
+    output_format: &prepared-format
+      type: object
+      properties:
+        available: { type: boolean }
+        input:
+          type: [object, 'null']
+          properties:
+            path: { type: string }
+            sha256: { type: string }
+          required: [path, sha256]
+        report_path: { type: string }
+        summary: { type: string }
+        references:
+          type: array
+          items:
+            type: object
+            properties: { path: { type: string }, sha256: { type: string } }
+            required: [path, sha256]
+      required: [available, input, report_path, summary, references]
+
+  - id: judge
+    command: qualify-runtime
+    context: fresh
+    mutates_checkout: false
+    depends_on: [qualification-input]
+    when: "$qualification-input.output.available == true"
+    with:
+      prepared: "$qualification-input.output"
+      merge_method: "$INPUTS.merge_method"
+    output_format: &decision-format
+      type: object
+      properties:
+        ready: { type: boolean }
+        repair: { type: boolean }
+        summary: { type: string }
+        evidence: { type: string }
+        supporting_evidence:
+          type: array
+          items:
+            type: object
+            properties: { path: { type: string }, sha256: { type: string } }
+            required: [path, sha256]
+        method: { type: string, enum: [merge, squash, rebase, ''] }
+        method_source: { type: string, enum: [caller, project, ''] }
+        method_conflict: { type: string }
+        holds: &qualification-holds
+          type: array
+          items:
+            type: object
+            properties:
+              kind: { type: string, enum: [code, policy, checks, evidence, stale, authorization] }
+              reason: { type: string }
+            required: [kind, reason]
+      required: [ready, repair, summary, evidence, supporting_evidence, method, method_source, method_conflict, holds]
+
+  - id: qualify
+    script: qualification
+    runtime: bun
+    mutates_checkout: false
+    depends_on: [qualification-input, judge]
+    trigger_rule: none_failed_min_one_success
+    with:
+      action: seal
+      prepared: "$qualification-input.output"
+      decision: { from: "$judge.output", if_skipped: null }
+      <<: *qualification-requirements
+    output_format: &qualification-format
       type: object
       properties:
         ready: { type: boolean }
         repair: { type: boolean }
         evidence: { type: string }
-      required: [ready, repair, evidence]
+        summary: { type: string }
+        references: &qualified-references
+          type: array
+          items:
+            type: object
+            properties:
+              path: { type: string }
+              sha256: { type: string }
+            required: [path, sha256]
+        holds: *qualification-holds
+      required: [ready, repair, evidence, summary, references, holds]
 
   - id: repair
     include: archon-deliver
@@ -174,28 +256,49 @@ nodes:
     with:
       scenario: "$INPUTS.holdout"
 
-  - id: qualify-retry
-    command: qualify-runtime
-    context: fresh
+  - id: qualification-input-retry
+    script: qualification
+    runtime: bun
     mutates_checkout: false
     depends_on: [repaired-candidate, runtime-retry, holdout-retry]
     trigger_rule: none_failed_min_one_success
     when: "$qualify.output.repair == true"
     with:
+      action: prepare
       candidate: "$repaired-candidate.output"
       runtime: { from: "$runtime-retry.output", if_skipped: null }
       holdout: { from: "$holdout-retry.output", if_skipped: null }
-    output_format:
-      type: object
-      properties:
-        ready: { type: boolean }
-        repair: { type: boolean }
-        evidence: { type: string }
-      required: [ready, repair, evidence]
+      <<: *qualification-requirements
+    output_format: *prepared-format
+
+  - id: judge-retry
+    command: qualify-runtime
+    context: fresh
+    mutates_checkout: false
+    depends_on: [qualification-input-retry]
+    when: "$qualification-input-retry.output.available == true"
+    with:
+      prepared: "$qualification-input-retry.output"
+      merge_method: "$INPUTS.merge_method"
+    output_format: *decision-format
+
+  - id: qualify-retry
+    script: qualification
+    runtime: bun
+    mutates_checkout: false
+    depends_on: [qualification-input-retry, judge-retry]
+    trigger_rule: none_failed_min_one_success
+    when: "$qualify.output.repair == true"
+    with:
+      action: seal
+      prepared: "$qualification-input-retry.output"
+      decision: { from: "$judge-retry.output", if_skipped: null }
+      <<: *qualification-requirements
+    output_format: *qualification-format
 
   - id: selected
     script: select-qualified
-    runtime: uv
+    runtime: bun
     depends_on: [candidate, qualify, qualify-retry]
     trigger_rule: none_failed_min_one_success
     with:
@@ -209,7 +312,8 @@ nodes:
         ready: { type: boolean }
         prs: { type: array, items: { type: string } }
         evidence: { type: string }
-      required: [ready, prs, evidence]
+        references: *qualified-references
+      required: [ready, prs, evidence, references]
 
   - id: discoveries
     include: archon-discoveries
@@ -233,7 +337,11 @@ nodes:
       prs: "$selected.output.prs"
       mode: "$INPUTS.merge_mode"
       merge_method: "$INPUTS.merge_method"
-      evidence: "$selected.output.evidence"
+      evidence: "$selected.output.references"
+      scenario: "$INPUTS.scenario"
+      holdout: "$INPUTS.holdout"
+      validation_scope: "$INPUTS.validation_scope"
+      validation_context: "$INPUTS.validation_context"
 
   # Merging is not shipping. With deployment inputs set, a confirmed merge rolls
   # the default branch onto the running service and reads the revision back.

@@ -27,4 +27,25 @@ verification holds the handoff. The loop is bounded and visible in the graph.
 
 No factory stage dispatcher, provider subprocess, forge extension or native
 scheduler is required. Scheduling invokes this whole workflow externally.
-No tests or live runs were performed on this new composition.
+
+Ordinary validation keeps its existing applicability receipt. Runtime and holdout
+return their exact report, capture and evaluator references. `qualification-input`
+checks these roles and snapshots source/review facts; a fresh `judge` compares the
+actual cited observations once; `qualify` rechecks and seals that judgment. The
+merge include receives only explicit sealed references. Changed source, scope,
+context, scenarios, evaluator files, reports, captures or reviews invalidate them.
+
+Runtime `candidate` identifies the probed instance and may be opaque; `checkout`
+is Git HEAD. Qualification must inspect captured source-revision evidence linking
+each instance to the delivered commit. It never substitutes Git HEAD for a live
+target probe. Runtime and holdout must have distinct fresh producer nodes and
+attempts and separate scenarios. External environment ownership and the agent's
+semantic assessment remain required; hashes alone prove neither isolation nor
+application correctness.
+
+The lifecycle fixtures exercise composition and joins. Production receipt and
+qualification tests cover tampering, distinct roles, opaque target identities,
+standalone ordinary evidence and merge applicability. Native DAG tests cover
+approval continuation without repeating validation or semantic qualification.
+These tests use scratch data and fake provider/GitHub transports; they do not
+replace a separately authorized live-provider acceptance run.

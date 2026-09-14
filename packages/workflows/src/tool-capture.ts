@@ -8,7 +8,7 @@ const MAX_RESULT_BYTES = 1024 * 1024;
 const MAX_CAPTURE_BYTES = 16 * MAX_RESULT_BYTES;
 const MAX_CALLS = 256;
 
-const producerSchema = z
+export const captureProducerSchema = z
   .object({
     runId: z.string().min(1),
     nodeId: z.string().min(1),
@@ -26,7 +26,7 @@ const fileSchema = z
 export const toolReceiptSchema = z
   .object({
     version: z.literal(1),
-    producer: producerSchema,
+    producer: captureProducerSchema,
     callId: z.string().min(1),
     tool: z.string().min(1),
     outcome: z.enum(['success', 'error', 'interrupted', 'unknown']),
@@ -43,7 +43,7 @@ export const toolCaptureManifestSchema = z
   .object({
     version: z.literal(1),
     directory: z.string().min(1),
-    producer: producerSchema,
+    producer: captureProducerSchema,
     complete: z.boolean(),
     receipts: z.array(fileSchema).max(MAX_CALLS),
   })

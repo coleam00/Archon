@@ -71,7 +71,8 @@ All reports and evidence remain in run artifacts for review.
 
 The returned fields are `verified`, `verdict`, `candidate`, `checkout`, `summary`
 and `evidence`. Evidence carries exact report/capture paths and hashes, producer
-run/node/iteration/attempt, scenario path/hash and checker path/hash. These references
+run/node/iteration/attempt, scenario path/hash and hashes of the checker, workflow,
+commands and packaged scripts. These references
 travel through includes; consumers must use them instead of searching provider sessions.
 Only `verified: true` authors a succeeded outcome; failed/inconclusive
 author failed outcomes while the workflow lifecycle can complete normally.
@@ -105,8 +106,9 @@ native screenshot paths and tools with no returned output are unsupported eviden
 request a supported tool result instead. Full means the representation returned by
 the provider, not unlimited tool-internal output or proof of application behavior.
 
-`scripts/check-evidence.js` is generated from `src/check-evidence.ts` and the owning
-engine receipt schema by `bun run generate:bundled`. It includes its dependencies
+`src/check-evidence.ts` invokes the implementation in the workflows package's
+`src/defaults/sdlc/runtime-evidence.ts`, beside the owning receipt schema and Zod
+dependency. `bun run generate:bundled` builds `scripts/check-evidence.js` with its dependencies
 so frozen workflow sources and binary installations need no monorepo imports.
 
 `mutates_checkout: false` and prompt instructions are not a filesystem sandbox;

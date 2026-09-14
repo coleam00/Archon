@@ -6,8 +6,8 @@ import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
   collectMergeFacts,
-  createMergePlan,
-  executeMergePlan,
+  createMergePlan as createPolicyPlan,
+  executeMergePlan as executePolicyPlan,
   mergePlanDigest,
   mergeArguments,
   type GitHubAdapter,
@@ -19,12 +19,33 @@ import {
   type MergePlan,
   type PullRequestFacts,
   type SemanticAssessment,
-} from '../../../../.archon/workflows/sdlc/merge-queue/scripts/merge-queue';
+} from '../../../../.archon/workflows/sdlc/merge-queue/src/merge-queue';
 
 const URL = 'https://github.com/owner/repo/pull/42';
 const HEAD = 'a'.repeat(40);
 const BASE = 'b'.repeat(40);
 const trackTempRoot = trackTempRoots();
+
+const qualificationFixture = {
+  references: [{ path: '/qualified.json', sha256: 'c'.repeat(64) }],
+  requirements: { scope: '', context: '', scenario: '/scenario.json', holdout: '/holdout.json' },
+};
+
+function createMergePlan(facts: MergeFacts, assessment: SemanticAssessment, method: string) {
+  return createPolicyPlan(facts, assessment, method, qualificationFixture);
+}
+
+// These fixtures isolate GitHub policy. qualified-evidence.test.ts exercises the
+// production file verifier and the same executor without this substitution.
+function executeMergePlan(
+  plan: MergePlan,
+  mode: string,
+  approval: unknown,
+  adapter: GitHubAdapter,
+  digest?: string
+) {
+  return executePolicyPlan(plan, mode, approval, adapter, digest, async () => qualified());
+}
 
 async function runCli(env: Record<string, string>): Promise<{ exitCode: number; stdout: string }> {
   const child = Bun.spawn(
@@ -32,11 +53,21 @@ async function runCli(env: Record<string, string>): Promise<{ exitCode: number; 
       process.execPath,
       join(
         import.meta.dir,
-        '../../../../.archon/workflows/sdlc/merge-queue/scripts/merge-queue.ts'
+        '../../../../.archon/workflows/sdlc/merge-queue/scripts/merge-queue.js'
       ),
     ],
     {
-      env: { ...process.env, ...env },
+      env: {
+        ...process.env,
+        INPUTS_EVIDENCE: '[]',
+        INPUTS_QUALIFICATION_HOLDS: '[]',
+        INPUTS_METHOD: '',
+        INPUTS_SCOPE: qualificationFixture.requirements.scope,
+        INPUTS_CONTEXT: qualificationFixture.requirements.context,
+        INPUTS_RUNTIME_SCENARIO: qualificationFixture.requirements.scenario,
+        INPUTS_HOLDOUT_SCENARIO: qualificationFixture.requirements.holdout,
+        ...env,
+      },
       stdout: 'pipe',
       stderr: 'pipe',
     }
@@ -672,7 +703,10 @@ describe('merge queue contract', () => {
       summary: string;
       holds: Hold[];
     };
-    expect(heldPlanOutput).toMatchObject({ ready: false, holds: [{ kind: 'checks' }] });
+    expect(heldPlanOutput.ready).toBe(false);
+    expect(heldPlanOutput.holds).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: 'checks' })])
+    );
     const held = await runCli({
       INPUTS_ACTION: 'execute',
       INPUTS_READY: String(heldPlanOutput.ready),
@@ -681,7 +715,7 @@ describe('merge queue contract', () => {
       ARTIFACTS_DIR: heldArtifacts,
     });
     expect(held.exitCode).toBe(0);
-    expect(JSON.parse(held.stdout)).toMatchObject({ merged: false, holds: [{ kind: 'checks' }] });
+    expect(JSON.parse(held.stdout)).toMatchObject({ merged: false });
     expect(await readFile(join(heldArtifacts, 'merge-result.md'), 'utf8')).toContain(
       'required checks are pending'
     );
@@ -695,7 +729,7 @@ describe('merge queue contract', () => {
     });
     expect(reassessed.exitCode).toBe(0);
     const feedback = await readFile(join(heldArtifacts, 'merge-hold.md'), 'utf8');
-    expect(feedback).toContain('No active holds');
+    expect(feedback).toContain('qualified');
     expect(feedback).not.toContain('required checks are pending');
 
     const previewArtifacts = await artifactsDir();
@@ -711,12 +745,17 @@ describe('merge queue contract', () => {
       ready: boolean;
       plan_reference: string;
       plan_digest: string;
+      summary: string;
+      holds: Hold[];
     };
+    expect(readyPlanOutput.ready).toBe(false);
     const preview = await runCli({
       INPUTS_ACTION: 'execute',
       INPUTS_READY: String(readyPlanOutput.ready),
       INPUTS_PLAN_REFERENCE: readyPlanOutput.plan_reference,
       INPUTS_PLAN_DIGEST: readyPlanOutput.plan_digest,
+      INPUTS_PLAN_SUMMARY: readyPlanOutput.summary,
+      INPUTS_PLAN_HOLDS: JSON.stringify(readyPlanOutput.holds),
       INPUTS_MODE: 'preview',
       INPUTS_APPROVAL: 'null',
       ARTIFACTS_DIR: previewArtifacts,
@@ -724,11 +763,10 @@ describe('merge queue contract', () => {
     expect(preview.exitCode).toBe(0);
     expect(JSON.parse(preview.stdout)).toMatchObject({
       merged: false,
-      summary: 'the batch is not authorized',
     });
   });
 
-  it('rejects malformed facts and assessment at the production action boundary', async () => {
+  it('rejects malformed facts and raw ready claims at the production action boundary', async () => {
     const artifacts = await artifactsDir();
     const malformedFacts = facts();
     delete (malformedFacts.pullRequests[0] as Partial<PullRequestFacts>).reviewEvidence;
@@ -750,7 +788,7 @@ describe('merge queue contract', () => {
         await runCli({
           INPUTS_ACTION: 'plan',
           INPUTS_FACTS: JSON.stringify(facts()),
-          INPUTS_ASSESSMENT: JSON.stringify(malformedAssessment),
+          INPUTS_EVIDENCE: JSON.stringify(malformedAssessment),
           INPUTS_METHOD: 'merge',
           ARTIFACTS_DIR: artifacts,
         })

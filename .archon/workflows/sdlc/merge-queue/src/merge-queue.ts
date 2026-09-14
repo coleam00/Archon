@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { evidenceReferenceSchema, qualificationRequirementsSchema, qualificationRequirementsFromEnv, inspectQualifications, type EvidenceReference, type QualificationRequirements } from '../../../../../packages/workflows/src/defaults/sdlc/qualified-evidence';
 
 export const MERGE_METHODS = ['merge', 'squash', 'rebase'] as const;
 export type MergeMethod = (typeof MERGE_METHODS)[number];
@@ -88,6 +89,8 @@ export interface MergePlan {
   methodSource: 'caller' | 'project' | 'repository';
   factsFingerprint: string;
   evidence: SemanticAssessment['evidence'];
+  qualifications: EvidenceReference[];
+  requirements: QualificationRequirements;
   pullRequests: Array<{
     number: number;
     url: string;
@@ -667,9 +670,11 @@ export async function collectMergeFacts(
 export function createMergePlan(
   facts: MergeFacts,
   assessment: SemanticAssessment,
-  requestedMethod: string
+  requestedMethod: string,
+  qualification: { references: EvidenceReference[]; requirements: QualificationRequirements }
 ): PlanResult {
   const holds = [...facts.holds, ...assessment.holds];
+  if (qualification.references.length === 0) holds.push({ kind: 'evidence', reason: 'qualified records are required' });
   if (!assessment.ready && assessment.holds.length === 0) {
     holds.push({ kind: 'evidence', reason: 'semantic assessment is not ready and supplies no classified reasons' });
   }
@@ -731,6 +736,8 @@ export function createMergePlan(
     methodSource,
     factsFingerprint: facts.fingerprint,
     evidence: assessment.evidence,
+    qualifications: qualification.references,
+    requirements: qualification.requirements,
     pullRequests: facts.pullRequests.map(pr => ({
       number: pr.number,
       url: pr.url,
@@ -757,15 +764,18 @@ export async function executeMergePlan(
   mode: string,
   approval: unknown,
   adapter: GitHubAdapter,
-  expectedDigest = mergePlanDigest(plan)
+  expectedDigest = mergePlanDigest(plan),
+  verifyEvidence = inspectQualifications,
+  currentRequirements = plan.requirements,
+  currentMethod: string = plan.method
 ): Promise<MergeResult> {
-  if (mergePlanDigest(plan) !== expectedDigest) {
+  if (mergePlanDigest(plan) !== expectedDigest || (currentMethod !== '' && currentMethod !== plan.method)) {
     return {
       merged: false,
       urls: [],
       queued: [],
-      summary: 'the approved merge plan digest does not match',
-      holds: [{ kind: 'authorization', reason: 'the approved merge plan digest does not match' }],
+      summary: 'the approved merge plan digest or requested method does not match',
+      holds: [{ kind: 'authorization', reason: 'the approved merge plan digest or requested method does not match' }],
     };
   }
   if (!authorized(mode, approval)) {
@@ -780,6 +790,7 @@ export async function executeMergePlan(
   const urls = plan.pullRequests.map(pr => pr.url);
   const current = await collectMergeFacts(urls, adapter);
   const holds = [...current.holds];
+  holds.push(...(await verifyEvidence(plan.qualifications, currentRequirements, current)).holds);
   if (current.fingerprint !== plan.factsFingerprint) {
     holds.push({ kind: 'stale', reason: 'GitHub facts changed after approval' });
   }
@@ -811,6 +822,8 @@ export async function executeMergePlan(
     const actual = before.pullRequests[0];
     const prior = current.pullRequests.find(pr => pr.number === approved.number);
     const stepHolds = [...before.holds];
+    const immediateFacts = { ...current, pullRequests: current.pullRequests.map(pull => pull.url === actual?.url ? actual : pull) };
+    stepHolds.push(...(await verifyEvidence(plan.qualifications, currentRequirements, immediateFacts)).holds);
     if (actual?.headSha !== approved.headSha) {
       stepHolds.push({ kind: 'stale', reason: `${approved.url} head changed before merge` });
     }
@@ -1013,16 +1026,6 @@ function isEvidence(value: unknown): value is SemanticAssessment['evidence'] {
     typeof candidate.fingerprint === 'string' && isStringArray(candidate.references);
 }
 
-function isAssessment(value: unknown): value is SemanticAssessment {
-  const candidate = record(value);
-  return candidate !== undefined && typeof candidate.ready === 'boolean' &&
-    typeof candidate.summary === 'string' &&
-    Array.isArray(candidate.holds) && candidate.holds.every(isHold) &&
-    [...MERGE_METHODS, ''].includes(candidate.method as MergeMethod | '') &&
-    ['caller', 'project', ''].includes(string(candidate.method_source)) &&
-    typeof candidate.method_conflict === 'string' && isEvidence(candidate.evidence);
-}
-
 function isRequiredCheck(value: unknown): value is RequiredCheck {
   const candidate = record(value);
   return candidate !== undefined && typeof candidate.context === 'string' && candidate.context !== '' &&
@@ -1048,7 +1051,7 @@ function isPullRequestFacts(value: unknown): value is PullRequestFacts {
     Array.isArray(candidate.holds) && candidate.holds.every(isHold);
 }
 
-function isFacts(value: unknown): value is MergeFacts {
+export function isFacts(value: unknown): value is MergeFacts {
   const candidate = record(value);
   return candidate !== undefined && typeof candidate.repository === 'string' &&
     Array.isArray(candidate.enabledMethods) &&
@@ -1070,6 +1073,8 @@ function isPlan(value: unknown): value is MergePlan {
     ['caller', 'project', 'repository'].includes(string(candidate.methodSource)) &&
     typeof candidate.factsFingerprint === 'string' && candidate.factsFingerprint !== '' &&
     isEvidence(candidate.evidence) && candidate.evidence.state === 'qualified' &&
+    evidenceReferenceSchema.array().min(1).max(5).safeParse(candidate.qualifications).success &&
+    qualificationRequirementsSchema.safeParse(candidate.requirements).success &&
     Array.isArray(pullRequests) && pullRequests.length > 0 && pullRequests.every(value => {
       const pull = record(value);
       return pull !== undefined && integer(pull.number) !== undefined &&
@@ -1103,10 +1108,15 @@ async function main(): Promise<void> {
   }
   if (action === 'plan') {
     const facts = JSON.parse(requiredEnv('INPUTS_FACTS')) as unknown;
-    const assessment = JSON.parse(requiredEnv('INPUTS_ASSESSMENT')) as unknown;
     if (!isFacts(facts)) throw new Error('merge-queue: facts are malformed');
-    if (!isAssessment(assessment)) throw new Error('merge-queue: assessment is malformed');
-    const result = createMergePlan(facts, assessment, requiredEnv('INPUTS_METHOD'));
+    const references = evidenceReferenceSchema.array().max(5).parse(JSON.parse(requiredEnv('INPUTS_EVIDENCE')) as unknown);
+    const requirements = qualificationRequirementsFromEnv();
+    const assessment = await inspectQualifications(references, requirements, facts);
+    const qualificationHolds: unknown = JSON.parse(requiredEnv('INPUTS_QUALIFICATION_HOLDS'));
+    if (!Array.isArray(qualificationHolds) || !qualificationHolds.every(isHold)) throw new Error('merge-queue: qualification holds are malformed');
+    assessment.holds.push(...qualificationHolds);
+    if (qualificationHolds.length) assessment.ready = false;
+    const result = createMergePlan(facts, assessment, requiredEnv('INPUTS_METHOD'), { references, requirements });
     let planReference = '';
     let planDigest = '';
     await mkdir(artifactsDir, { recursive: true });
@@ -1164,7 +1174,10 @@ async function main(): Promise<void> {
       requiredEnv('INPUTS_MODE'),
       JSON.parse(requiredEnv('INPUTS_APPROVAL')) as unknown,
       adapter,
-      planDigest
+      planDigest,
+      undefined,
+      qualificationRequirementsFromEnv(),
+      requiredEnv('INPUTS_METHOD')
     );
     await writeMergeResult(artifactsDir, result);
     console.log(JSON.stringify(result));

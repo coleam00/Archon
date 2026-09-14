@@ -1,12 +1,12 @@
 import { expect, it } from 'bun:test';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import type { MessageChunk } from '@archon/providers/types';
 import { captureToolResult } from '../../../providers/src/shared/tool-capture';
 import { ToolCaptureSession } from '../tool-capture';
-import { assessRuntime } from '../../../../.archon/workflows/sdlc/verify-runtime/src/check-evidence';
+import { assessRuntime } from './sdlc/runtime-evidence';
 import { validateStructuredOutput } from '@archon/providers/structured-output';
 import { parseWorkflow } from '../loader';
 
@@ -120,16 +120,11 @@ it('rejects incomplete captures and textual screenshot claims without attachment
 it('runs the generated checker outside the checkout without source dependencies', async () => {
   const { input, capture, root } = await fixture();
   await retain(capture, 'false 0');
-  const script = join(root, 'check-evidence.js');
-  await writeFile(
-    script,
-    await readFile(
-      join(
-        import.meta.dir,
-        '../../../../.archon/workflows/sdlc/verify-runtime/scripts/check-evidence.js'
-      )
-    )
-  );
+  const pack = join(root, 'verify-runtime');
+  await cp(join(import.meta.dir, '../../../../.archon/workflows/sdlc/verify-runtime'), pack, {
+    recursive: true,
+  });
+  const script = join(pack, 'scripts/check-evidence.js');
   const child = Bun.spawn([process.execPath, script], {
     cwd: root,
     env: {

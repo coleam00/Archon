@@ -100,6 +100,7 @@ check-evidence:
     scenario_sha256: fixture
     evaluator_path: /frozen/check-evidence.js
     evaluator_sha256: fixture
+    evaluator_sources: []
 teardown-run: '{"ok":true}'
 finish-attempt:
   status: verified
@@ -119,14 +120,34 @@ runtime__gate-verified:
   checkout: "0123456789abcdef0123456789abcdef01234567"
   summary: "stub"
   evidence: *runtime-evidence
+qualification-input:
+  available: true
+  input: {path: /artifacts/qualification-input.json, sha256: fixture}
+  report_path: /artifacts/runtime-qualification.md
+  summary: fixture
+  references: []
+judge:
+  ready: true
+  repair: false
+  summary: fixture
+  evidence: /artifacts/runtime-qualification.md
+  supporting_evidence: []
+  method: merge
+  method_source: project
+  method_conflict: ''
+  holds: []
 qualify:
   ready: true
   repair: false
   evidence: "/artifacts/runtime-qualification.md"
+  references: &qualified-references [{path: /artifacts/qualified.json, sha256: fixture}]
+  summary: fixture
+  holds: []
 selected:
   ready: true
   prs: ["https://github.com/example/app/pull/7"]
   evidence: "/artifacts/runtime-qualification.md"
+  references: *qualified-references
 discoveries__resolve-input:
   count: 0
   forge_available: true
@@ -143,17 +164,19 @@ discoveries__render:
   update_existing_count: 0
   new_count: 0
 merge__facts: '{"repository":"example/app","enabledMethods":["merge"],"pullRequests":[],"holds":[],"fingerprint":"fixture"}'
-merge__assess:
+merge__qualification-input:
+  available: false
+  input: null
+  report_path: ''
+  summary: fixture
+  references: *qualified-references
+merge__qualified:
   ready: true
-  summary: "stub: batch eligible"
+  repair: false
+  evidence: ''
+  references: *qualified-references
+  summary: fixture
   holds: []
-  method: merge
-  method_source: project
-  method_conflict: ""
-  evidence:
-    state: qualified
-    fingerprint: fixture
-    references: ["/artifacts/runtime-qualification.md"]
 merge__plan:
   ready: true
   summary: "stub: plan recorded"
@@ -170,7 +193,7 @@ merge__merge:
 ship__deliver__validate__record-evidence: '{"recorded":true}'
 fixture:
   expect: completed
-  reached: [merge__facts, merge__assess, merge__plan, merge__merge]
+  reached: [qualification-input, judge, qualify, selected, merge__facts, merge__qualification-input, merge__qualified, merge__plan, merge__merge]
   inputs:
     target: "https://github.com/example/app/issues/1"
     scenario: "/private/scenario.json"

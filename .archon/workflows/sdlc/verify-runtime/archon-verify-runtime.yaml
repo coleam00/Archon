@@ -87,6 +87,7 @@ nodes:
 
         - id: verify
           command: verify-runtime
+          context: fresh
           capture_tools: '$prepare-attempt.output.directory/captures'
           depends_on: [start-run]
           when: '$start-run.output.ok == true'
@@ -146,7 +147,13 @@ nodes:
                   scenario_sha256: { type: string }
                   evaluator_path: { type: string }
                   evaluator_sha256: { type: string }
-                required: [report_path, report_sha256, capture_directory, capture_manifest_sha256, producer, scenario_path, scenario_sha256, evaluator_path, evaluator_sha256]
+                  evaluator_sources:
+                    type: array
+                    items:
+                      type: object
+                      properties: { path: { type: string }, sha256: { type: string } }
+                      required: [path, sha256]
+                required: [report_path, report_sha256, capture_directory, capture_manifest_sha256, producer, scenario_path, scenario_sha256, evaluator_path, evaluator_sha256, evaluator_sources]
             required: [status, reason, candidate, evidence]
 
         # Not finally cleanup: cancellation and some node errors can skip this node.

@@ -1,11 +1,19 @@
 # Merge queue
 
-`archon-merge-queue` accepts `prs` (1-5 explicit PR URLs), optional `evidence`,
+`archon-merge-queue` accepts `prs` (1-5 explicit PR URLs), required `evidence`,
 `merge_method=merge|squash|rebase`, and `mode=preview|approve|auto`. An empty
 method is resolved only by mandatory project guidance or a repository with one
-enabled method. A deterministic TypeScript collector reads GitHub policy and live
-state, one agent judges review and supplied evidence, and a typed plan/executor
-surround the native approval node.
+enabled method. Supply evidence as an external ordinary validation/review report
+path, or a JSON array of qualified record references `{path, sha256}`. An external
+report is judged once and sealed before planning. Already qualified references
+skip that agent. Neither a nonempty file nor `ready=true` qualifies on its own.
+
+Ordinary code/docs PRs need no runtime scenario. A runtime contract supplies both
+`scenario` and `holdout`, and requires lifecycle records with those independent
+roles. Forward the same `validation_scope` and `validation_context` used by the
+producer. The schema rejects missing roles and changed inputs. External reports
+must identify the exact PR heads/base, applicable checks and independent review;
+additional files used by the judge are retained as explicit hashes.
 
 Effective required-check policy, current check results, and applicable validation
 evidence are independent facts. A repository with no required hosted CI may
@@ -46,6 +54,15 @@ add an engine API. GitHub branch protection owns atomic server-side merge checks
 The returned `merged` value is confirmed by read-back and a queued request remains
 `merged=false`.
 
-The evidence qualification record is deliberately narrow in Stage A: semantic
-state, fingerprint, and references. Later capture/handoff work can supply durable
-provenance through those references without changing the merge plan contract.
+Records live under the run's `qualified-evidence/<attempt>/` directory. The plan
+binds their paths/hashes, source checkout, relevant validation inputs, PR heads,
+base, review content, evaluator files and semantic report. Execution checks those
+bytes after native approval and again immediately before each write, while
+refreshing volatile GitHub facts. Approval alone does not restart qualification.
+The checkout must remain clean; all evidence artifacts belong outside it.
+
+The TypeScript implementation is compiled into self-contained packaged scripts
+by `bun run generate:bundled`. Captured sources and binary installs use those
+scripts without monorepo imports. `qualified-evidence.test.ts` exercises real
+validation/capture producers through the production merge executor with a fake
+GitHub transport; `merge-queue.test.ts` covers policy and held CLI paths.
