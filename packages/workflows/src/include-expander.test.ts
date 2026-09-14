@@ -100,6 +100,29 @@ function blockWorkflow(): WorkflowDefinition {
 // Namespacing + edge rewiring
 // ---------------------------------------------------------------------------
 
+test('namespaces capture paths through includes and loop-group bodies', () => {
+  const block = wf('capture-block', [
+    { id: 'prepare', bash: 'echo directory' },
+    {
+      id: 'attempts',
+      depends_on: ['prepare'],
+      loop_group: {
+        max_iterations: 1,
+        until: 'done',
+        nodes: [
+          { id: 'verify', prompt: 'verify', capture_tools: '$prepare.output.directory/captures' },
+        ],
+      },
+    },
+  ]);
+  const parent = wf('capture-parent', [{ id: 'runtime', include: 'capture-block' }]);
+  const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+  expect(errors).toEqual([]);
+  expect(
+    loopGroupNodes(nodeById(workflows.get('capture-parent')!, 'runtime__attempts'))?.[0]
+  ).toHaveProperty('capture_tools', '$runtime__prepare.output.directory/captures');
+});
+
 describe('expandWorkflowIncludes — composed fan-out deferral (#2512)', () => {
   test('leaves an include+fan_out node unexpanded but validates the target exists', () => {
     const parent = wf('parent', [

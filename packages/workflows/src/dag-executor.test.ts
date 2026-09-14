@@ -16,6 +16,7 @@ import { join, normalize, sep } from 'path';
 import { tmpdir } from 'os';
 import * as git from '@archon/git';
 import { RATE_LIMIT_MAX_RETRIES } from './executor-shared';
+import { readToolCaptures } from './tool-capture';
 
 // --- Mock logger (MUST come before imports of modules under test) ---
 
@@ -4507,6 +4508,101 @@ describe('executeDagWorkflow -- tool_completed event emission', () => {
       tool_outcome: 'unknown',
     });
   });
+
+  it.each(['agent', 'loop'] as const)(
+    'captures actual %s tool output before node completion',
+    async kind => {
+      const store = createMockStore();
+      const artifacts = join(testDir, `capture-${kind}`);
+      await mkdir(artifacts, { recursive: true });
+      const captureDirectory = join(artifacts, 'observations');
+      mockSendQueryDag.mockImplementation(async function* (_prompt, _cwd, _resume, options) {
+        expect(options?.captureToolOutput).toBe(true);
+        yield { type: 'tool', toolName: 'shell', toolCallId: 'capture-call' };
+        yield {
+          type: 'tool_result',
+          toolName: 'shell',
+          toolCallId: 'capture-call',
+          toolOutput: 'display',
+          toolOutcome: 'error',
+          exitCode: 1,
+          capture: { text: 'false 0', format: 'text', completeness: 'full', attachments: [] },
+        };
+        yield { type: 'assistant', content: 'Done. <promise>COMPLETE</promise>' };
+        yield { type: 'result' };
+      });
+      const captureNode: DagNode =
+        kind === 'agent'
+          ? node('verify', undefined, {
+              source: { kind: 'inline', prompt: 'verify' },
+              capture_tools: captureDirectory,
+            })
+          : {
+              id: 'verify',
+              kind: 'loop',
+              capture_tools: captureDirectory,
+              loop: { prompt: 'verify', until: 'COMPLETE', max_iterations: 1, fresh_context: true },
+            };
+      const run = makeWorkflowRun(`capture-${kind}`);
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          artifactsDir: artifacts,
+          workflowRun: run,
+          workflow: { name: 'capture-test', nodes: [captureNode] },
+        })
+      );
+      expect(store.failWorkflowRun.mock.calls).toEqual([]);
+      expect(
+        JSON.parse(await readFile(join(captureDirectory, 'manifest.json'), 'utf8'))
+      ).toMatchObject({ complete: true, producer: { runId: run.id } });
+      const captured = await readToolCaptures(captureDirectory, run.id);
+      expect(captured.receipts[0]?.receipt).toMatchObject({
+        outcome: 'error',
+        exitCode: 1,
+        completeness: 'full',
+      });
+      expect(
+        await readFile(join(captureDirectory, captured.receipts[0]!.receipt.output.path), 'utf8')
+      ).toBe('false 0');
+    }
+  );
+
+  it.each(['agent', 'loop'] as const)(
+    'fails %s execution when its required capture directory cannot be written',
+    async kind => {
+      const store = createMockStore();
+      const artifacts = join(testDir, `unwritable-${kind}`);
+      await mkdir(artifacts, { recursive: true });
+      const captureDirectory = join(artifacts, 'file');
+      await writeFile(captureDirectory, 'occupied');
+      const captureNode: DagNode =
+        kind === 'agent'
+          ? node('verify', undefined, {
+              source: { kind: 'inline', prompt: 'verify' },
+              capture_tools: captureDirectory,
+            })
+          : {
+              id: 'verify',
+              kind: 'loop',
+              capture_tools: captureDirectory,
+              loop: { prompt: 'verify', until: 'COMPLETE', max_iterations: 1, fresh_context: true },
+            };
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          artifactsDir: artifacts,
+          workflowRun: makeWorkflowRun(`unwritable-${kind}`),
+          workflow: { name: 'capture-failure', nodes: [captureNode] },
+        })
+      );
+      expect(store.failWorkflowRun).toHaveBeenCalled();
+    }
+  );
 
   it('emits a DAG tool_completed duration at tool_result, excluding later assistant time', async () => {
     const mockStore = createMockStore();

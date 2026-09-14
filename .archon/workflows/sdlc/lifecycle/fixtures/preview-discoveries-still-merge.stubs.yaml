@@ -86,9 +86,28 @@ setup-run: '{"ok":true}'
 start-run: '{"ok":true}'
 verify: "stub: report written"
 identity-run: '{"ok":true}'
-check-evidence: '{"status":"verified","reason":"stub","candidate":"c"}'
+check-evidence:
+  status: verified
+  reason: stub
+  candidate: c
+  evidence: &runtime-evidence
+    report_path: /artifacts/attempt-1/report.json
+    report_sha256: fixture
+    capture_directory: /artifacts/attempt-1/captures
+    capture_manifest_sha256: fixture
+    producer: {runId: fixture, nodeId: verify, attempt: fixture, iteration: null}
+    scenario_path: /private/scenario.json
+    scenario_sha256: fixture
+    evaluator_path: /frozen/check-evidence.js
+    evaluator_sha256: fixture
 teardown-run: '{"ok":true}'
-finish-attempt: '{"status":"verified","reason":"stub","candidate":"c","done":true,"checkout":"0123456789abcdef0123456789abcdef01234567"}'
+finish-attempt:
+  status: verified
+  reason: stub
+  candidate: c
+  done: true
+  checkout: "0123456789abcdef0123456789abcdef01234567"
+  evidence: *runtime-evidence
 # The runtime gate is stubbed as not verified so the holdout instance (whose loop
 # body shares these bare stub ids and cannot be stubbed a second time in a dry
 # run) is skipped by its when:. qualify joins on none_failed and is itself a stub;
@@ -99,6 +118,7 @@ runtime__gate-verified:
   candidate: "c"
   checkout: "0123456789abcdef0123456789abcdef01234567"
   summary: "stub"
+  evidence: *runtime-evidence
 qualify:
   ready: true
   repair: false

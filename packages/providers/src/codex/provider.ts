@@ -2,6 +2,7 @@
  * Codex SDK wrapper
  * Provides async generator interface for streaming Codex responses
  */
+import { captureToolResult } from '../shared/tool-capture';
 import {
   Codex,
   type CodexOptions,
@@ -461,7 +462,8 @@ async function* streamCodexEvents(
   hasOutputFormat: boolean,
   threadId: string | null | undefined,
   abortSignal?: AbortSignal,
-  surfaceMcpClientErrors = false
+  surfaceMcpClientErrors = false,
+  capture = false
 ): AsyncGenerator<MessageChunk> {
   const state: CodexStreamState = {
     startedToolItemIds: new Set<string>(),
@@ -636,6 +638,7 @@ async function* streamCodexEvents(
               type: 'tool_result',
               toolName: cmd,
               toolOutput: ((item.aggregated_output as string) ?? '') + exitSuffix,
+              ...(capture ? { capture: captureToolResult(item.aggregated_output) } : {}),
               toolCallId: itemId,
               toolOutcome,
               ...(exitCode != null ? { exitCode } : {}),
@@ -746,6 +749,7 @@ async function* streamCodexEvents(
               type: 'tool_result',
               toolName: mcpToolName,
               toolOutput: errMsg,
+              ...(capture ? { capture: captureToolResult(mcpError?.message) } : {}),
               toolCallId: itemId,
               toolOutcome: 'error',
             };
@@ -771,6 +775,7 @@ async function* streamCodexEvents(
               type: 'tool_result',
               toolName: mcpToolName,
               toolOutput,
+              ...(capture ? { capture: captureToolResult(mcpResult?.content) } : {}),
               toolCallId: itemId,
               toolOutcome: 'success',
             };
@@ -1073,7 +1078,8 @@ export class CodexProvider implements IAgentProvider {
                   hasOutputFormat,
                   thread.id,
                   attemptController.signal,
-                  Boolean(requestOptions?.nodeConfig?.mcp)
+                  Boolean(requestOptions?.nodeConfig?.mcp),
+                  requestOptions?.captureToolOutput === true
                 ),
                 // Stamp from the attempt that produced the result: any retry
                 // (attempt > 0) re-runs on a fresh startThread (cold), so the prior

@@ -3,6 +3,7 @@ import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-
 import type { AssistantMessage, Usage } from '@earendil-works/pi-ai';
 
 import type { MessageChunk, TokenUsage } from '../../types';
+import { captureToolResult } from '../../shared/tool-capture';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -216,7 +217,7 @@ export { tryParseStructuredOutput };
  *  - queue_update (single-prompt sessions only)
  *  - auto_retry_end (retry_start communicates the retry sufficiently)
  */
-export function mapPiEvent(event: AgentSessionEvent): MessageChunk[] {
+export function mapPiEvent(event: AgentSessionEvent, capture = false): MessageChunk[] {
   switch (event.type) {
     case 'message_update': {
       const amEvent = event.assistantMessageEvent;
@@ -242,6 +243,24 @@ export function mapPiEvent(event: AgentSessionEvent): MessageChunk[] {
       ];
     case 'tool_execution_end': {
       const chunks: MessageChunk[] = [];
+      const captured = capture ? captureToolResult(event.result) : undefined;
+      const result: unknown = event.result;
+      const details: unknown =
+        result !== null && typeof result === 'object' && 'details' in result
+          ? result.details
+          : undefined;
+      const truncation: unknown =
+        details !== null && typeof details === 'object' && 'truncation' in details
+          ? details.truncation
+          : undefined;
+      if (
+        captured?.completeness === 'full' &&
+        truncation !== null &&
+        typeof truncation === 'object' &&
+        'truncated' in truncation &&
+        truncation.truncated === true
+      )
+        captured.completeness = 'truncated';
       if (event.isError) {
         chunks.push({
           type: 'system',
@@ -252,6 +271,7 @@ export function mapPiEvent(event: AgentSessionEvent): MessageChunk[] {
         type: 'tool_result',
         toolName: event.toolName,
         toolOutput: serializeToolResult(event.result),
+        ...(captured === undefined ? {} : { capture: captured }),
         toolCallId: event.toolCallId,
         toolOutcome: event.isError ? 'error' : 'success',
       });
@@ -302,7 +322,8 @@ export async function* bridgeSession(
   prompt: string,
   abortSignal?: AbortSignal,
   jsonSchema?: Record<string, unknown>,
-  uiBridge?: BridgeNotifier
+  uiBridge?: BridgeNotifier,
+  capture = false
 ): AsyncGenerator<MessageChunk> {
   const queue = new AsyncQueue<BridgeQueueItem>();
 
@@ -357,7 +378,7 @@ export async function* bridgeSession(
       if (event.type === 'agent_end') {
         finalAssembledText = extractLastAssistantText(event.messages);
       }
-      for (const chunk of mapPiEvent(event)) {
+      for (const chunk of mapPiEvent(event, capture)) {
         if (chunk.type === 'assistant') {
           // Coalesce char-level deltas; hold them until a boundary flush so the
           // executor receives one block-level chunk instead of dozens of tiny

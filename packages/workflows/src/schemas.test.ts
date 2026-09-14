@@ -1276,6 +1276,35 @@ describe('dagNodeSchema — ExecNode', () => {
 // SCRIPT_NODE_AI_FIELDS constant
 // ---------------------------------------------------------------------------
 
+describe('capture_tools', () => {
+  test('retains capture paths only on nodes that invoke a provider', () => {
+    for (const body of [
+      { prompt: 'verify' },
+      { loop: { prompt: 'verify', until: 'done', max_iterations: 1 } },
+    ]) {
+      expect(
+        dagNodeSchema.parse({
+          id: 'verify',
+          ...body,
+          capture_tools: '$prepare.output.directory/captures',
+        })
+      ).toHaveProperty('capture_tools', '$prepare.output.directory/captures');
+    }
+    for (const body of [
+      { bash: 'echo hi' },
+      { approval: { message: 'approve?' } },
+      { wait: { duration_ms: 1 } },
+    ]) {
+      expect(
+        dagNodeSchema.safeParse({ id: 'invalid', ...body, capture_tools: '/captures' }).success
+      ).toBe(false);
+    }
+    expect(
+      dagNodeSchema.safeParse({ id: 'empty', prompt: 'verify', capture_tools: ' ' }).success
+    ).toBe(false);
+  });
+});
+
 describe('SCRIPT_NODE_AI_FIELDS', () => {
   test('contains provider and model fields', () => {
     expect(SCRIPT_NODE_AI_FIELDS).toContain('provider');

@@ -257,6 +257,7 @@ export const dagNodeBaseSchema = z.object({
   // as ignored on wait and workflow (sub-run) nodes, whose execution is not a
   // single checkout-scoped payload. Absent means no enforcement.
   mutates_checkout: z.boolean().optional(),
+  capture_tools: z.string().trim().min(1).optional(),
   // Persist this node's provider session ID across workflow re-runs in the same
   // scope (typically the conversation). On the next run with the same scope, the
   // executor loads the stored session and passes it as resumeSessionId. Requires
@@ -1180,6 +1181,18 @@ export const KNOWN_DAG_NODE_KEYS: ReadonlySet<string> = new Set(
 export const dagNodeSchema = z
   .preprocess(rejectRetiredThinking, dagNodeFlatSchema)
   .superRefine((data, ctx) => {
+    if (
+      data.capture_tools !== undefined &&
+      data.command === undefined &&
+      data.prompt === undefined &&
+      data.loop === undefined
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['capture_tools'],
+        message: 'capture_tools requires an agent or loop node',
+      });
+    }
     const id = data.id.trim();
     const addSchemaIssues = (
       issues: readonly { message: string; path?: readonly PropertyKey[] }[]
@@ -1752,6 +1765,7 @@ export const dagNodeSchema = z
       ...(data.idle_timeout !== undefined ? { idle_timeout: data.idle_timeout } : {}),
       ...(data.always_run !== undefined ? { always_run: data.always_run } : {}),
       ...(data.mutates_checkout !== undefined ? { mutates_checkout: data.mutates_checkout } : {}),
+      ...(data.capture_tools !== undefined ? { capture_tools: data.capture_tools } : {}),
       ...(data.output_type !== undefined ? { output_type: data.output_type } : {}),
     };
 

@@ -33,6 +33,7 @@ const STRING_FIELD_CLASSIFICATIONS = {
   description: { kind: 'literal', reason: 'Node documentation is not execution input' },
   'depends_on.*': { kind: 'literal', reason: 'Dependency entries are node identifiers' },
   when: { kind: 'template', slots: ['when'] },
+  capture_tools: { kind: 'template', slots: ['capture_tools'] },
   trigger_rule: { kind: 'literal', reason: 'Trigger rule is a scheduling policy enum' },
   model: { kind: 'literal', reason: 'Model is a provider model identifier' },
   provider: { kind: 'literal', reason: 'Provider is an integration identifier' },

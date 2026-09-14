@@ -965,7 +965,8 @@ export class PiProvider implements IAgentProvider {
           effectivePrompt,
           requestOptions?.abortSignal,
           outputFormat?.schema,
-          uiBridge
+          uiBridge,
+          requestOptions?.captureToolOutput === true
         ),
         resumedOutcome(resumeSessionId, !resumeFailed)
       );

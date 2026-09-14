@@ -3790,6 +3790,7 @@ export interface components {
       };
       always_run?: boolean;
       mutates_checkout?: boolean;
+      capture_tools?: string;
       persist_session?: boolean;
       output_type?: string;
       command?: string;

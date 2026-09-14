@@ -52,6 +52,43 @@ function evt<T extends SessionEvent['type']>(type: T, data: unknown): SessionEve
   } as unknown as SessionEvent;
 }
 
+test('opt-in capture preserves native images, full output, empty failures and incomplete fallback', () => {
+  const ctx = { ...makeCtx(), captureToolOutput: true };
+  const image = Buffer.from('image bytes');
+  const captured = (data: unknown) =>
+    mapCopilotEvent(evt('tool.execution_complete', data), ctx).find(
+      chunk => chunk.type === 'tool_result'
+    );
+  expect(
+    captured({
+      toolCallId: 'a',
+      success: true,
+      result: { content: 'short', detailedContent: 'false 0' },
+    })
+  ).toMatchObject({ capture: { text: 'false 0', completeness: 'full' } });
+  expect(captured({ toolCallId: 'a', success: true, result: { content: 'short' } })).toMatchObject({
+    capture: { completeness: 'truncated' },
+  });
+  expect(
+    captured({ toolCallId: 'a', success: false, result: { content: '', detailedContent: '' } })
+  ).toMatchObject({ toolOutcome: 'error', capture: { text: '', completeness: 'full' } });
+  expect(captured({ toolCallId: 'a', success: false })).toMatchObject({
+    capture: { completeness: 'unavailable' },
+  });
+  expect(
+    captured({
+      toolCallId: 'a',
+      success: true,
+      result: {
+        content: 'image',
+        contents: [{ type: 'image', data: image.toString('base64'), mimeType: 'image/png' }],
+      },
+    })
+  ).toMatchObject({
+    capture: { completeness: 'full', attachments: [{ data: image, mediaType: 'image/png' }] },
+  });
+});
+
 describe('AsyncQueue', () => {
   test('delivers items pushed before iteration starts', async () => {
     const q = new AsyncQueue<number>();
