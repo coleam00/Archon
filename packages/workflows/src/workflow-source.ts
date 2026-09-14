@@ -44,7 +44,6 @@ import {
   rm,
   rename,
   stat,
-  lstat,
   realpath,
   readFile,
   writeFile,
@@ -297,10 +296,17 @@ function dedupeNestedDirs(dirs: readonly string[]): string[] {
   );
 }
 
-/** True when `path` exists and is a directory. */
+/**
+ * True when `path` exists and is a directory.
+ *
+ * `stat`, not `lstat`: a scope root is routinely a symlink — the dotfiles layout the
+ * global-workflows guide recommends makes `~/.archon/workflows` one — and dropping it
+ * here would silently omit that whole scope from the capture. This matches `copyTree`
+ * below, which dereferences symlinks on purpose.
+ */
 async function isDirectory(path: string): Promise<boolean> {
   try {
-    return (await lstat(path)).isDirectory();
+    return (await stat(path)).isDirectory();
   } catch {
     return false;
   }
