@@ -57,6 +57,25 @@ test('node skip projection preserves the live skip cause', () => {
   });
 });
 
+test('prior-success replay projects as a skipped dag_node carrying prior_success', () => {
+  const event: WorkflowEmitterEvent = {
+    type: 'node_skipped_prior_success',
+    runId: 'run-1',
+    nodeId: 'publish',
+    nodeName: 'Publish',
+  };
+
+  const payload = JSON.parse(mapWorkflowEvent(event) ?? '{}') as Record<string, unknown>;
+  expect(payload).toMatchObject({
+    type: 'dag_node',
+    runId: 'run-1',
+    nodeId: 'publish',
+    status: 'skipped',
+    reason: 'prior_success',
+  });
+  expect(payload).not.toHaveProperty('cause');
+});
+
 test('timeout skip projection preserves the live timeout cause', () => {
   const event: WorkflowEmitterEvent = {
     type: 'node_skipped',
