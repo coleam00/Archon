@@ -11,7 +11,6 @@ import {
 import { errorMessage } from './errors';
 import type { OpencodeClientLike } from './runtime';
 import { normalizeTokens } from './tokens';
-import { captureOpencodeResult } from './tool-capture';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 
@@ -220,9 +219,6 @@ export async function* streamOpencodeSession(
                 toolOutput: typeof state?.output === 'string' ? state.output : '',
                 ...(callId ? { toolCallId: callId } : {}),
                 toolOutcome: 'success',
-                ...(requestOptions?.captureToolOutput
-                  ? { capture: captureOpencodeResult(state) }
-                  : {}),
               };
             } else if (status === 'error') {
               completedToolCalls.add(callId);
@@ -232,9 +228,6 @@ export async function* streamOpencodeSession(
                 toolOutput: typeof state?.error === 'string' ? state.error : 'Tool failed',
                 ...(callId ? { toolCallId: callId } : {}),
                 toolOutcome: 'error',
-                ...(requestOptions?.captureToolOutput
-                  ? { capture: captureOpencodeResult(state) }
-                  : {}),
               };
             }
           }

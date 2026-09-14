@@ -1,7 +1,8 @@
 name: archon-merge-queue
 description: >-
-  Check qualified evidence for an explicit bounded list of GitHub PRs, then
-  merge eligible changes using current GitHub facts and native approval.
+  Assess an explicit bounded list of GitHub PRs, then merge eligible changes
+  sequentially using gh and GitHub branch protection. Agents inspect current
+  review and CI evidence; no forge engine extension is required.
 model: medium
 interactive: true
 mutates_checkout: false
@@ -13,154 +14,28 @@ inputs:
     default: approve
     description: preview only assesses; approve waits for a human; auto authorizes this batch.
   evidence:
-    required: true
-    description: External ordinary validation/review report path, or array of qualified references {path, sha256}.
-  scenario:
     default: ''
-    description: Current runtime scenario path; must match every qualified record.
-  holdout:
-    default: ''
-    description: Current independent holdout scenario path.
-  validation_scope:
-    default: ''
-    description: Current ordinary validation scope.
-  validation_context:
-    default: ''
-    description: Current nonsecret external-state identity.
-  merge_method:
-    default: ''
-    description: >-
-      Required merge strategy: merge, squash, or rebase. Empty is accepted only
-      when project guidance or the repository's sole enabled method resolves it.
+    description: Optional runtime/review report paths or structured evidence for this batch.
 returns: merge
 nodes:
-  - id: facts
-    script: merge-queue
-    runtime: bun
-    with:
-      action: facts
-      prs: "$INPUTS.prs"
-      <<: &requirements
-        scope: "$INPUTS.validation_scope"
-        context: "$INPUTS.validation_context"
-        runtime_scenario: "$INPUTS.scenario"
-        holdout_scenario: "$INPUTS.holdout"
-
-  - id: qualification-input
-    script: qualification
-    runtime: bun
-    depends_on: [facts]
-    with:
-      action: prepare-merge
-      facts: "$facts.output"
-      evidence: "$INPUTS.evidence"
-      <<: *requirements
-    output_format:
-      type: object
-      properties:
-        available: { type: boolean }
-        input:
-          type: [object, 'null']
-          properties: { path: { type: string }, sha256: { type: string } }
-          required: [path, sha256]
-        report_path: { type: string }
-        summary: { type: string }
-        references: &references
-          type: array
-          items:
-            type: object
-            properties: { path: { type: string }, sha256: { type: string } }
-            required: [path, sha256]
-      required: [available, input, report_path, summary, references]
-
-  - id: judge
-    command: qualify-evidence
+  - id: assess
+    command: assess-merge-queue
     context: fresh
-    mutates_checkout: false
-    depends_on: [qualification-input]
-    when: "$qualification-input.output.available == true"
     with:
-      prepared: "$qualification-input.output"
-      merge_method: "$INPUTS.merge_method"
-    output_format:
-      type: object
-      properties:
-        ready: { type: boolean }
-        repair: { type: boolean }
-        summary: { type: string }
-        evidence: { type: string }
-        supporting_evidence: *references
-        method: { type: string, enum: [merge, squash, rebase, ''] }
-        method_source: { type: string, enum: [caller, project, ''] }
-        method_conflict: { type: string }
-        holds: &holds
-          type: array
-          items:
-            type: object
-            properties:
-              kind: { type: string, enum: [code, policy, checks, evidence, stale, authorization] }
-              reason: { type: string }
-            required: [kind, reason]
-      required: [ready, repair, summary, evidence, supporting_evidence, method, method_source, method_conflict, holds]
-
-  - id: qualified
-    script: qualification
-    runtime: bun
-    depends_on: [qualification-input, judge]
-    trigger_rule: none_failed_min_one_success
-    with:
-      action: seal
-      <<: *requirements
-      prepared: "$qualification-input.output"
-      decision: { from: "$judge.output", if_skipped: null }
-    output_format:
-      type: object
-      properties:
-        ready: { type: boolean }
-        repair: { type: boolean }
-        evidence: { type: string }
-        summary: { type: string }
-        references: *references
-        holds: *holds
-      required: [ready, repair, evidence, summary, references, holds]
-
-  - id: plan
-    script: merge-queue
-    runtime: bun
-    depends_on: [facts, qualified]
-    with:
-      action: plan
-      facts: "$facts.output"
-      evidence: "$qualified.output.references"
-      qualification_holds: "$qualified.output.holds"
-      <<: *requirements
-      method: "$INPUTS.merge_method"
+      prs: "$INPUTS.prs"
+      evidence: "$INPUTS.evidence"
     output_format:
       type: object
       properties:
         ready: { type: boolean }
         summary: { type: string }
-        method: { type: string, enum: [merge, squash, rebase, ''] }
-        holds:
-          type: array
-          items:
-            type: object
-            properties:
-              kind: { type: string }
-              reason: { type: string }
-            required: [kind, reason]
-        plan_reference: { type: string }
-        plan_digest: { type: string }
-      required: [ready, summary, method, holds, plan_reference, plan_digest]
+      required: [ready, summary]
 
   - id: approval
-    depends_on: [plan]
-    when: "$plan.output.ready == true && $INPUTS.mode == 'approve'"
+    depends_on: [assess]
+    when: "$assess.output.ready == true && $INPUTS.mode == 'approve'"
     approval:
-      message: >-
-        Approve the PRs, pinned heads, evidence and $plan.output.method method in
-        $ARTIFACTS_DIR/$plan.output.plan_reference (digest
-        $plan.output.plan_digest)? $plan.output.summary
+      message: "Approve the PRs and pinned heads in $ARTIFACTS_DIR/merge-plan.json? $assess.output.summary"
       decisions:
         - id: approve
           label: Merge eligible PRs
@@ -168,19 +43,12 @@ nodes:
           label: Hold batch
 
   - id: merge
-    script: merge-queue
-    runtime: bun
-    depends_on: [plan, approval]
+    command: merge-approved-prs
+    context: fresh
+    depends_on: [assess, approval]
     trigger_rule: none_failed_min_one_success
     with:
-      action: execute
-      method: "$INPUTS.merge_method"
-      <<: *requirements
-      ready: "$plan.output.ready"
-      plan_summary: "$plan.output.summary"
-      plan_holds: "$plan.output.holds"
-      plan_reference: "$plan.output.plan_reference"
-      plan_digest: "$plan.output.plan_digest"
+      ready: "$assess.output.ready"
       mode: "$INPUTS.mode"
       approval: { from: "$approval.output", if_skipped: null }
     output_format:
@@ -188,14 +56,5 @@ nodes:
       properties:
         merged: { type: boolean }
         urls: { type: array, items: { type: string } }
-        queued: { type: array, items: { type: string } }
         summary: { type: string }
-        holds:
-          type: array
-          items:
-            type: object
-            properties:
-              kind: { type: string }
-              reason: { type: string }
-            required: [kind, reason]
-      required: [merged, urls, queued, summary, holds]
+      required: [merged, urls, summary]

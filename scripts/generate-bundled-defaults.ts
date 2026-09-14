@@ -26,7 +26,6 @@
 import { access, readFile, readdir, stat, writeFile } from 'fs/promises';
 import { basename, extname, join, relative, resolve } from 'path';
 import { execFileAsync } from '@archon/git';
-import { generateEvidenceScripts } from './generate-evidence-scripts';
 import {
   formatPackagedResourceReference,
   isValidWorkflowFolderSegment,
@@ -442,7 +441,6 @@ function renderFile(
 }
 
 async function main(): Promise<void> {
-  await generateEvidenceScripts(REPO_ROOT, CHECK_ONLY);
   await Promise.all([
     ensureDir(COMMANDS_DIR, 'Commands defaults'),
     ensureDir(WORKFLOWS_DIR, 'Workflows defaults'),

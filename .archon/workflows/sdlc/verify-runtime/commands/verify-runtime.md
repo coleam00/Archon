@@ -26,9 +26,8 @@ Missing instructions, an unreachable target, and checks you cannot perform are
 inconclusive. A failed assertion requires observed product behavior that violates
 the scenario. Preserve literal measurements, including boolean true or false.
 
-The engine retains returned tool output and supported image attachments under this
-attempt directory. Read its captures/manifest.json to identify completed tool calls
-and their receipts; do not create, edit or reconstruct receipts or captured outputs:
+Capture the commands/tools used and their actual output in new evidence files
+inside this attempt directory:
 
 $prepare-attempt.output.directory
 
@@ -49,19 +48,13 @@ Preserve the raw command output in evidence. Each assertion entry contains:
 - `expected` and `observed`: the expected and measured JSON values; use null for
   an unavailable measurement.
 - `reason`: explain the comparison or why assessment was impossible.
-- `evidence`: a nonempty array of `{ "pass": "attempt-uuid", "call_id": "provider-call-id" }`
-  references from the manifest. Use the enclosing pass's `producer.attempt`; call IDs
-  are unique only within that pass. For image evidence add `"attachment": 0`, the
-  attachment index in that receipt. A tool's prose claim to have saved an image is insufficient.
-  Use only full captures with success or error outcomes. Empty captured output and
-  nonzero command exits are valid observations when they support the assertion.
+- `evidence_path`: exactly one existing nonempty file, relative to the attempt
+  directory or absolute inside it, containing this turn's tool output or diagnostic.
+  Never put a comma-separated list of filenames in this string. If an assertion
+  needs multiple outputs, combine their actual tool output into one file and name it.
 
-The downstream script checks coverage, producer ownership, captured-byte hashes,
-completeness and target identity. It cannot prove application behavior or that your
-comparison is correct. Inspect the actual retained observations against each
-expectation; irrelevant output cannot support a passed assertion. Truncated,
-redacted or unavailable captures require a fresh focused probe, not manual recovery
-from a provider session or a PowerShell transcript. Each result is limited to 1 MiB;
-the node retains at most 16 MiB and 256 calls.
+The downstream script checks structure, coverage, file presence, and identity.
+It cannot prove that model-authored evidence is truthful or that your comparison
+is correct. Record actual tool execution so a reviewer can audit those judgments.
 Your final chat reply is not parsed; normal engine node completion hands the
 report to the checker, including when the report is missing or malformed.

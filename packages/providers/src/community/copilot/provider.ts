@@ -581,8 +581,7 @@ export class CopilotProvider implements IAgentProvider {
         session,
         effectivePrompt,
         requestOptions?.abortSignal,
-        wantsStructured ? outputFormat.schema : undefined,
-        requestOptions?.captureToolOutput === true
+        wantsStructured ? outputFormat.schema : undefined
       );
       log.info({ sessionId: session.sessionId }, 'copilot.prompt_completed');
     } catch (err) {

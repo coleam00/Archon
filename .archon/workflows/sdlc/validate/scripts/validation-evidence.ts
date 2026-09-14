@@ -20,17 +20,16 @@ interface ValidationVerdict {
   summary: string;
 }
 
-export interface StoredEvidence {
+interface StoredEvidence {
   applicability: Applicability;
   verdict: ValidationVerdict;
   report: { sha256: string; content: string };
-  producer: { runId: string; attempt: string };
-  sources: { path: string; sha256: string }[];
 }
 
-const statePath = (): string => join(requiredEnv('ARTIFACTS_DIR'), '.validation-applicability.json');
-const evidencePath = (): string => join(requiredEnv('ARTIFACTS_DIR'), 'validation-evidence.json');
-const reportPath = (): string => join(requiredEnv('ARTIFACTS_DIR'), 'validation.md');
+const artifactsDir = requiredEnv('ARTIFACTS_DIR');
+const statePath = join(artifactsDir, '.validation-applicability.json');
+const evidencePath = join(artifactsDir, 'validation-evidence.json');
+const reportPath = join(artifactsDir, 'validation.md');
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -70,22 +69,18 @@ function isVerdict(value: unknown): value is ValidationVerdict {
   );
 }
 
-export function isValidationEvidence(value: unknown): value is StoredEvidence {
+function isEvidence(value: unknown): value is StoredEvidence {
   if (value === null || typeof value !== 'object') return false;
   const candidate = value as Partial<StoredEvidence>;
   const report = candidate.report;
   return (
     isApplicability(candidate.applicability) &&
     isVerdict(candidate.verdict) &&
-    report !== undefined && report !== null && typeof report === 'object' &&
+    report !== undefined &&
     typeof report.sha256 === 'string' &&
     typeof report.content === 'string' &&
     report.content.trim().length > 0 &&
-    hash(report.content) === report.sha256 &&
-    candidate.producer !== undefined && candidate.producer !== null && typeof candidate.producer === 'object' && typeof candidate.producer.runId === 'string' && candidate.producer.runId !== '' &&
-    candidate.producer.attempt === candidate.applicability.nonce &&
-    Array.isArray(candidate.sources) && candidate.sources.length === validatorPaths().length &&
-    candidate.sources.every(source => source !== null && typeof source === 'object' && typeof source.path === 'string' && typeof source.sha256 === 'string')
+    hash(report.content) === report.sha256
   );
 }
 
@@ -99,7 +94,7 @@ async function readJson(path: string): Promise<unknown | undefined> {
 
 async function readReport(): Promise<string | undefined> {
   try {
-    const content = await readFile(reportPath(), 'utf8');
+    const content = await readFile(reportPath, 'utf8');
     return content.trim().length > 0 ? content : undefined;
   } catch {
     return undefined;
@@ -111,9 +106,9 @@ async function writeJson(path: string, value: unknown): Promise<void> {
   await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
-function git(cwd: string, ...args: string[]): string {
+function git(...args: string[]): string {
   const result = Bun.spawnSync(['git', ...args], {
-    cwd,
+    cwd: process.cwd(),
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -124,32 +119,27 @@ function git(cwd: string, ...args: string[]): string {
   return result.stdout.toString();
 }
 
-export function validationFingerprint(cwd = process.cwd()): string {
-  const head = git(cwd, 'rev-parse', '--verify', 'HEAD').trim();
-  const trackedDelta = git(cwd, 'diff', '--binary', '--no-ext-diff', 'HEAD', '--');
+function fingerprint(): string {
+  const head = git('rev-parse', '--verify', 'HEAD').trim();
+  const trackedDelta = git('diff', '--binary', '--no-ext-diff', 'HEAD', '--');
   return hash(JSON.stringify({ head, trackedDelta }));
 }
 
-function validatorPaths(): string[] {
-  const workflowDir = dirname(dirname(import.meta.path));
-  return [import.meta.path, join(workflowDir, 'commands', 'validate.md'), join(workflowDir, 'archon-validate.yaml')];
-}
-
 async function validatorIdentity(): Promise<string> {
-  const sources = await Promise.all(validatorPaths().map(path => readFile(path, 'utf8')));
+  const workflowDir = dirname(dirname(import.meta.path));
+  const sources = await Promise.all([
+    readFile(import.meta.path, 'utf8'),
+    readFile(join(workflowDir, 'commands', 'validate.md'), 'utf8'),
+    readFile(join(workflowDir, 'archon-validate.yaml'), 'utf8'),
+  ]);
   return hash(JSON.stringify(sources));
-}
-
-async function validatorSources(): Promise<StoredEvidence['sources']> {
-  return Promise.all(validatorPaths()
-    .map(async path => ({ path, sha256: hash(await readFile(path, 'utf8')) })));
 }
 
 async function currentIdentity(): Promise<
   Pick<Applicability, 'fingerprint' | 'scope' | 'context' | 'validator'>
 > {
   return {
-    fingerprint: validationFingerprint(),
+    fingerprint: fingerprint(),
     scope: process.env.INPUTS_SCOPE ?? '',
     context: process.env.INPUTS_CONTEXT ?? '',
     validator: await validatorIdentity(),
@@ -178,10 +168,10 @@ function evidenceApplies(
 
 async function check(): Promise<void> {
   const current = await currentIdentity();
-  const storedState = await readJson(statePath());
+  const storedState = await readJson(statePath);
   const prior = isApplicability(storedState) ? storedState : undefined;
-  const storedEvidence = await readJson(evidencePath());
-  const evidence = isValidationEvidence(storedEvidence) ? storedEvidence : undefined;
+  const storedEvidence = await readJson(evidencePath);
+  const evidence = isEvidence(storedEvidence) ? storedEvidence : undefined;
   const report = await readReport();
 
   if (evidence !== undefined && evidenceApplies(evidence, current, report)) {
@@ -190,7 +180,7 @@ async function check(): Promise<void> {
       reason: 'applicable evidence',
       reuse: true,
     };
-    await writeJson(statePath(), reusable);
+    await writeJson(statePath, reusable);
     console.log(JSON.stringify(reusable));
     return;
   }
@@ -222,7 +212,7 @@ async function check(): Promise<void> {
     nonce: randomUUID(),
     reuse: false,
   };
-  await writeJson(statePath(), applicability);
+  await writeJson(statePath, applicability);
   console.log(JSON.stringify(applicability));
 }
 
@@ -235,20 +225,17 @@ async function record(): Promise<void> {
   if (!isVerdict(verdictValue)) {
     throw new Error('validation-evidence: verdict input is malformed');
   }
-  if (validationFingerprint() !== applicabilityValue.fingerprint) {
+  if (fingerprint() !== applicabilityValue.fingerprint) {
     throw new Error('validation-evidence: tracked tree changed while validation was running');
   }
-  if (await validatorIdentity() !== applicabilityValue.validator) throw new Error('validation-evidence: validator changed while validation was running');
   const report = await readReport();
   if (report === undefined) {
     throw new Error('validation-evidence: validation.md is missing or empty');
   }
-  await writeJson(evidencePath(), {
+  await writeJson(evidencePath, {
     applicability: applicabilityValue,
     verdict: verdictValue,
     report: { sha256: hash(report), content: report },
-    producer: { runId: requiredEnv('WORKFLOW_ID'), attempt: applicabilityValue.nonce },
-    sources: await validatorSources(),
   } satisfies StoredEvidence);
   console.log(JSON.stringify({ recorded: true, reason: applicabilityValue.reason }));
 }
@@ -266,15 +253,14 @@ async function select(): Promise<void> {
     console.log(JSON.stringify(verdictValue));
     return;
   }
-  const evidence = await readJson(evidencePath());
+  const evidence = await readJson(evidencePath);
   const report = await readReport();
-  if (!isValidationEvidence(evidence) || !evidenceApplies(evidence, await currentIdentity(), report)) {
+  if (!isEvidence(evidence) || !evidenceApplies(evidence, await currentIdentity(), report)) {
     throw new Error('validation-evidence: reusable evidence is no longer applicable');
   }
   console.log(JSON.stringify(evidence.verdict));
 }
 
-if (import.meta.main) {
 const action = requiredEnv('INPUTS_ACTION');
 await (action === 'check'
   ? check()
@@ -283,4 +269,3 @@ await (action === 'check'
     : action === 'select'
       ? select()
       : Promise.reject(new Error(`validation-evidence: unsupported action ${action}`)));
-}
