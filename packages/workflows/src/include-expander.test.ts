@@ -2414,6 +2414,51 @@ describe('expandWorkflowIncludes — composed-node metadata survives nesting', (
       },
     ]);
   });
+
+  test('loop_group body boundaries are renamed when the enclosing block is included again', () => {
+    // Regression: lifecycle → ship → deliver. deliver's corrections loop body carried
+    // ship-level boundary ids ('gate-direct'); including ship into lifecycle renamed the
+    // top-level nodes to 'ship__gate-direct' but left the body's boundary untouched, so
+    // the first correction iteration was skipped as "upstream failed: gate-direct".
+    const leaf = wf('leaf', [
+      { id: 'seed', bash: 'echo seed' },
+      {
+        id: 'loop',
+        depends_on: ['seed'],
+        loop_group: {
+          until_bash: 'test 1 = 1',
+          max_iterations: 1,
+          nodes: [{ id: 'body', bash: 'echo body' }],
+        },
+      },
+    ]);
+    const middle = wf('middle', [
+      { id: 'm-gate', bash: 'echo m' },
+      {
+        id: 'inner',
+        include: 'leaf',
+        depends_on: ['m-gate'],
+        trigger_rule: 'none_failed_min_one_success',
+      },
+    ]);
+    const top = wf('top', [
+      { id: 't-gate', bash: 'echo t' },
+      { id: 'outer', include: 'middle', depends_on: ['t-gate'] },
+    ]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(leaf, middle, top));
+    expect(errors).toHaveLength(0);
+    const loop = nodeById(workflows.get('top')!, 'outer__inner__loop');
+    const body = loopGroupNodes(loop)?.find(node => node.id === 'body');
+    expect(composedBoundaries(body)?.map(boundary => boundary.dependsOn)).toEqual([
+      ['t-gate'],
+      ['outer__m-gate'],
+    ]);
+    expect(composedBoundaries(body)?.map(boundary => boundary.entryTriggerRules)).toEqual([
+      ['all_success'],
+      ['none_failed_min_one_success'],
+    ]);
+  });
 });
 
 describe('expandWorkflowIncludes — systemPrompt/agents are node-ref surfaces (#2476)', () => {
