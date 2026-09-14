@@ -33,6 +33,7 @@ import { loadMcpConfig } from '../../mcp/config';
 import { resolveSkillDirectories } from '../../shared/skills';
 import { augmentPromptForJsonSchema } from '../../shared/structured-output';
 import { COPILOT_CAPABILITIES } from './capabilities';
+import { UnsupportedHostToolsError } from '../../errors';
 import { COPILOT_EFFORTS, parseCopilotConfig, type CopilotProviderDefaults } from './config';
 import { clampEffort } from '@archon/paths/effort';
 import { resolveCopilotBinaryPath } from './binary-resolver';
@@ -418,6 +419,9 @@ export class CopilotProvider implements IAgentProvider {
     resumeSessionId?: string,
     requestOptions?: SendQueryOptions
   ): AsyncGenerator<MessageChunk> {
+    if (requestOptions?.hostTools !== undefined) {
+      throw new UnsupportedHostToolsError('copilot');
+    }
     const log = getLog();
 
     // forkSession / persistSession are boolean flags the executor may set in

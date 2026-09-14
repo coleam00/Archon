@@ -844,7 +844,7 @@ describe('streaming tail completion', () => {
 
     const chunks: MessageChunk[] = [];
     const schema = { type: 'object' };
-    for await (const chunk of bridgeSession(mockSession, 'prompt', undefined, schema)) {
+    for await (const chunk of bridgeSession(mockSession, 'prompt', { jsonSchema: schema })) {
       chunks.push(chunk);
     }
 

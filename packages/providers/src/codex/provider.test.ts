@@ -1,3 +1,4 @@
+import { UnsupportedHostToolsError } from '../errors';
 import { describe, test, expect, mock, beforeEach, type Mock } from 'bun:test';
 import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -81,6 +82,19 @@ describe('CodexProvider', () => {
     // Setup default mock thread
     mockStartThread.mockReturnValue(createMockThread('new-thread-id'));
     mockResumeThread.mockReturnValue(createMockThread('resumed-thread-id'));
+  });
+
+  test('rejects host-owned tools before SDK execution', async () => {
+    const turn = client.sendQuery('Do not execute.', '/tmp', undefined, {
+      hostTools: [],
+      abortSignal: AbortSignal.abort(),
+    });
+    try {
+      await expect(turn.next()).rejects.toThrow(UnsupportedHostToolsError);
+      expect(mockStartThread).not.toHaveBeenCalled();
+    } finally {
+      await turn.return(undefined);
+    }
   });
 
   describe('getType', () => {

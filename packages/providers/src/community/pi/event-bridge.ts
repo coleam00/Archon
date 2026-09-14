@@ -1,11 +1,16 @@
 import { createLogger } from '@archon/paths';
-import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-agent';
+import type { Logger } from '@archon/paths';
+import type {
+  AgentSession,
+  AgentSessionEvent,
+  AgentToolResult,
+} from '@earendil-works/pi-coding-agent';
 import type { AssistantMessage, Usage } from '@earendil-works/pi-ai';
 
 import type { MessageChunk, TokenUsage } from '../../types';
 
-let cachedLog: ReturnType<typeof createLogger> | undefined;
-function getLog(): ReturnType<typeof createLogger> {
+let cachedLog: Logger | undefined;
+function getLog(): Logger {
   if (!cachedLog) cachedLog = createLogger('provider.pi.event-bridge');
   return cachedLog;
 }
@@ -208,6 +213,8 @@ export { tryParseStructuredOutput };
  * Most Pi events map 1:1 or are skipped. Tool execution is split across
  * `tool_execution_start` / `tool_execution_end`; the start yields `tool` with
  * `toolCallId`, the end yields `tool_result` matched by the same id.
+ * SDK tool events erase result payloads to any. Host-owned events restore the
+ * AgentToolResult content/details contract without rebuilding those payloads.
  *
  * Events deliberately skipped in v1:
  *  - turn_start / turn_end, message_start / message_end (redundant with deltas)
@@ -216,7 +223,7 @@ export { tryParseStructuredOutput };
  *  - queue_update (single-prompt sessions only)
  *  - auto_retry_end (retry_start communicates the retry sufficiently)
  */
-export function mapPiEvent(event: AgentSessionEvent): MessageChunk[] {
+export function mapPiEvent(event: AgentSessionEvent, hostOwnedTools = false): MessageChunk[] {
   switch (event.type) {
     case 'message_update': {
       const amEvent = event.assistantMessageEvent;
@@ -240,6 +247,17 @@ export function mapPiEvent(event: AgentSessionEvent): MessageChunk[] {
           toolCallId: event.toolCallId,
         },
       ];
+    case 'tool_execution_update':
+      return hostOwnedTools
+        ? [
+            {
+              type: 'tool_update',
+              toolName: event.toolName,
+              toolCallId: event.toolCallId,
+              toolResult: event.partialResult as AgentToolResult<unknown>,
+            },
+          ]
+        : [];
     case 'tool_execution_end': {
       const chunks: MessageChunk[] = [];
       if (event.isError) {
@@ -248,13 +266,28 @@ export function mapPiEvent(event: AgentSessionEvent): MessageChunk[] {
           content: `⚠️ Tool ${event.toolName} failed`,
         });
       }
-      chunks.push({
+      const chunk: MessageChunk = {
         type: 'tool_result',
         toolName: event.toolName,
-        toolOutput: serializeToolResult(event.result),
+        toolOutput: hostOwnedTools ? '' : serializeToolResult(event.result),
         toolCallId: event.toolCallId,
         toolOutcome: event.isError ? 'error' : 'success',
-      });
+      };
+      if (hostOwnedTools) {
+        const result = event.result as AgentToolResult<unknown>;
+        let separator = '';
+        for (const part of result.content) {
+          if (part.type !== 'text') continue;
+          chunk.toolOutput += `${separator}${part.text}`;
+          separator = '\n';
+        }
+        chunk.toolResult = {
+          content: result.content,
+          details: result.details,
+          isError: event.isError,
+        };
+      }
+      chunks.push(chunk);
       return chunks;
     }
     case 'agent_end':
@@ -286,6 +319,13 @@ export interface BridgeNotifier {
   setEmitter(fn: ((chunk: MessageChunk) => void) | undefined): void;
 }
 
+export interface BridgeSessionOptions {
+  abortSignal?: AbortSignal;
+  jsonSchema?: Record<string, unknown>;
+  uiBridge?: BridgeNotifier;
+  hostOwnedTools?: boolean;
+}
+
 /**
  * Bridge a Pi `AgentSession` into Archon's `AsyncGenerator<MessageChunk>` contract.
  *
@@ -300,10 +340,9 @@ export interface BridgeNotifier {
 export async function* bridgeSession(
   session: AgentSession,
   prompt: string,
-  abortSignal?: AbortSignal,
-  jsonSchema?: Record<string, unknown>,
-  uiBridge?: BridgeNotifier
+  options: BridgeSessionOptions = {}
 ): AsyncGenerator<MessageChunk> {
+  const { abortSignal, jsonSchema, uiBridge, hostOwnedTools = false } = options;
   const queue = new AsyncQueue<BridgeQueueItem>();
 
   // ── Assistant-chunk coalescing (#1814) ─────────────────────────────────
@@ -357,7 +396,7 @@ export async function* bridgeSession(
       if (event.type === 'agent_end') {
         finalAssembledText = extractLastAssistantText(event.messages);
       }
-      for (const chunk of mapPiEvent(event)) {
+      for (const chunk of mapPiEvent(event, hostOwnedTools)) {
         if (chunk.type === 'assistant') {
           // Coalesce char-level deltas; hold them until a boundary flush so the
           // executor receives one block-level chunk instead of dozens of tiny
@@ -398,7 +437,15 @@ export async function* bridgeSession(
     }
   }
 
-  const promptPromise = session.prompt(prompt).then(
+  const promptPromise = (
+    abortSignal?.aborted
+      ? Promise.reject(
+          abortSignal.reason instanceof Error
+            ? abortSignal.reason
+            : new DOMException('Pi sendQuery aborted before start', 'AbortError')
+        )
+      : session.prompt(prompt)
+  ).then(
     () => {
       queue.push({ kind: 'done' });
     },

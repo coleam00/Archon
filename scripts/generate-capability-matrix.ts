@@ -65,6 +65,7 @@ const AXES: readonly { key: keyof ProviderCapabilities; label: string }[] = [
   { key: 'sandbox', label: 'Sandbox (`sandbox`)' },
   { key: 'settingSources', label: 'Setting sources (`settingSources`)' },
   { key: 'nativeTools', label: 'In-process native tools' },
+  { key: 'hostTools', label: 'Exclusive host-owned tools (embedding interface)' },
   { key: 'containerExec', label: 'Container exec (folder-project container backend)' },
 ];
 

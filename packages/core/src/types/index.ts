@@ -7,7 +7,7 @@ import type { RunModelOverrides } from '@archon/workflows/model-validation';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 
 // MessageChunk + TokenUsage are used by IPlatformAdapter below.
-import type { MessageChunk, TokenUsage } from '@archon/providers/types';
+import type { HostTool, MessageChunk, TokenUsage } from '@archon/providers/types';
 
 // Re-export schema-derived types so existing imports from '@archon/core/types' keep working.
 export type {
@@ -44,6 +44,15 @@ export interface AttachedFile {
 }
 
 export interface HandleMessageContext {
+  /**
+   * Host-owned model tool execution for this conversation turn.
+   * No command dispatch, workflow discovery, gate-resolution instructions,
+   * implicit source sync, or additive tools.
+   * An empty array is an explicitly tool-free turn.
+   */
+  readonly hostTools?: readonly HostTool[];
+  /** Cancels inference and an in-flight tool invocation for this turn. */
+  readonly abortSignal?: AbortSignal;
   readonly issueContext?: string;
   readonly threadContext?: string;
   readonly parentConversationId?: string;

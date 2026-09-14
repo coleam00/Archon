@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `none_failed_min_one_success` now blocks dependencies skipped because of an upstream failure (`upstream_failed`), even when another dependency succeeded. This fix applies by default, including across chains and includes; there is no opt-in. Joins previously admitted after a failure now skip and retain the original failed node in their skip cause. Condition skips and optional timeout skips (`on_timeout: skip`) remain admissible with a successful dependency. `all_success`, `one_success`, `all_done`, and `if_skipped` binding behavior are unchanged. (#3156)
 
+### Added
+
+- Embedding hosts can supply an exclusive `hostTools` set through `handleMessage` and the provider request contract. Pi preserves canonical schemas, tool-call IDs, cancellation, typed progress and text/image results, and host-reported errors while the host owns approval and execution. Unsupported providers reject the mode before inference; ordinary Archon turns and additive `nativeTools` are unchanged.
+
+### Fixed
+
+- Pi requests with an already-aborted signal stop before session initialization or inference.
+
 ## [0.10.1] - 2026-08-30
 
 **This patch release contains a breaking change.** Built-in model tiers now ship for `claude` and `codex` only. If your install runs `pi`, `copilot`, or `opencode` and you have never configured `tiers:`, bundled workflows will refuse to load until you set them — read the Breaking section before upgrading. Everyone else gets a smaller review bill and four fixes.

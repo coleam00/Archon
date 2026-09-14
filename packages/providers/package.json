@@ -114,6 +114,9 @@
       "src/community/pi/model-store.integration.test.ts"
     ],
     [
+      "src/community/pi/host-tools.integration.test.ts"
+    ],
+    [
       "src/community/pi/provider.test.ts"
     ],
     [

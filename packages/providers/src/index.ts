@@ -3,6 +3,9 @@ export type {
   IAgentProvider,
   AgentRequestOptions,
   SendQueryOptions,
+  HostTool,
+  HostToolInvocation,
+  HostToolResult,
   NodeConfig,
   ProviderDefaults,
   ProviderDefaultsMap,
@@ -37,7 +40,11 @@ export {
 } from './registry';
 
 // Error
-export { InvalidProviderRunConfigError, UnknownProviderError } from './errors';
+export {
+  InvalidProviderRunConfigError,
+  UnknownProviderError,
+  UnsupportedHostToolsError,
+} from './errors';
 
 // Shared structured-output helpers (cross-provider; the dag-executor validates
 // every provider's output_format result against the declared schema).

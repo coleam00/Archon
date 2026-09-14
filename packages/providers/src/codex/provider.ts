@@ -22,6 +22,7 @@ import type {
 import { clampEffort } from '@archon/paths/effort';
 import { CODEX_EFFORTS, parseCodexConfig } from './config';
 import { CODEX_CAPABILITIES } from './capabilities';
+import { UnsupportedHostToolsError } from '../errors';
 import { resolveCodexBinaryPath } from './binary-resolver';
 import { createLogger } from '@archon/paths';
 import { loadMcpConfig } from '../mcp/config';
@@ -923,6 +924,9 @@ export class CodexProvider implements IAgentProvider {
     resumeSessionId?: string,
     requestOptions?: SendQueryOptions
   ): AsyncGenerator<MessageChunk> {
+    if (requestOptions?.hostTools !== undefined) {
+      throw new UnsupportedHostToolsError('codex');
+    }
     const assistantConfig = requestOptions?.assistantConfig ?? {};
     const codexConfig = parseCodexConfig(assistantConfig);
     const providerWarnings: ProviderWarning[] = [];

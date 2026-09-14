@@ -16,7 +16,12 @@ import type {
   Codebase,
   AttachedFile,
 } from '../types';
-import type { SendQueryOptions, TokenUsage } from '@archon/providers/types';
+import type {
+  IAgentProvider,
+  SendQueryOptions,
+  SystemPromptInput,
+  TokenUsage,
+} from '@archon/providers/types';
 import { ConversationNotFoundError, isWebAdapter } from '../types';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
@@ -27,6 +32,7 @@ import { classifyAndFormatError } from '../utils/error-formatter';
 import { toError } from '../utils/error';
 import { safeDeactivateSession } from '../state/session-transitions';
 import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
+import { UnsupportedHostToolsError } from '@archon/providers/errors';
 import { buildManageRunTool } from './manage-run-tool';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { resolveWorkflowSourceRoot } from '../utils/workflow-source-root';
@@ -1974,6 +1980,7 @@ export async function handleMessage(
     attachedFiles,
     userId,
   } = context ?? {};
+  const hostOwnedTurn = context?.hostTools !== undefined;
   // Anchor "is this a slash command" at the true start of the message —
   // leading whitespace (e.g. from a platform that doesn't pre-trim after
   // stripping a bot mention) must not let a command masquerade as a plain
@@ -2003,7 +2010,7 @@ export async function handleMessage(
     );
 
     // 2. Check for deterministic commands
-    if (trimmedMessage.startsWith('/')) {
+    if (!hostOwnedTurn && trimmedMessage.startsWith('/')) {
       const { command } = commandHandler.parseCommand(message);
       const deterministicCommands = [
         'help',
@@ -2243,7 +2250,9 @@ export async function handleMessage(
       config: discoveredConfig,
       codebase: discoveredCodebase,
       remote: syncRemote,
-    } = await discoverAllWorkflows(conversation);
+    }: DiscoverResult = hostOwnedTurn
+      ? { workflows: [], errors: [] }
+      : await discoverAllWorkflows(conversation);
     const workflows: readonly ResolvedWorkflow[] = workflowsWithSource.map(ws => ws.workflow);
     if (workflowErrors.length > 0) {
       getLog().warn(
@@ -2320,7 +2329,10 @@ export async function handleMessage(
     // resolves it (or doesn't) through the explicit approve/reject verbs it
     // already has. Best-effort: getPausedWorkflowRun swallows DB errors and
     // returns null, and a missing section only means the agent isn't told.
-    const pausedGateRun = await workflowDb.getPausedWorkflowRun(conversation.id);
+    // Host-owned turns have no engine run-management controls to resolve these gates.
+    const pausedGateRun = hostOwnedTurn
+      ? null
+      : await workflowDb.getPausedWorkflowRun(conversation.id);
     const pausedGateContext = pausedGateRun
       ? formatPausedGateSection({
           run: pausedGateRun,
@@ -2376,8 +2388,8 @@ export async function handleMessage(
     }
 
     // Reuse the config already loaded during workflow discovery (avoids a second disk read).
-    // Fall back to loadConfig only when no codebase is scoped (discoveredConfig is undefined).
-    const config = discoveredConfig ?? (await loadConfig());
+    // Host-owned turns skip discovery but still load the selected workspace's configuration.
+    const config = discoveredConfig ?? (await loadConfig(hostOwnedTurn ? cwd : undefined));
     // Execution identity: the message sender when the adapter resolved one,
     // else the conversation creator (solo installs / legacy rows / surfaces
     // without auth). Sender-first mirrors the workflow executor, which
@@ -2465,6 +2477,9 @@ export async function handleMessage(
       }
     }
     const providerKey = chatRequest.provider;
+    if (hostOwnedTurn && !getProviderCapabilities(providerKey).hostTools) {
+      throw new UnsupportedHostToolsError(providerKey);
+    }
     let dbEnvVars: Record<string, string> = {};
     if (conversation.codebase_id) {
       try {
@@ -2500,28 +2515,24 @@ export async function handleMessage(
       }
     }
 
-    // Claude supports the preset object for prompt caching; other providers
-    // need a plain string (Pi coerces non-string to undefined, Codex ignores it).
-    let systemAppend = buildOrchestratorSystemAppend(conversation, codebases, workflows);
-    // Capabilities are only consulted for project-scoped chats (both the native tool
-    // and the CLI pointer are scoped features), so look them up lazily — this also
-    // avoids a registry lookup (and a throw for an unregistered provider) on the
-    // unscoped path.
+    // Run-management capabilities are only relevant to ordinary project-scoped turns.
     const scopedCaps =
-      conversation.codebase_id !== null ? getProviderCapabilities(providerKey) : null;
-    // Providers WITHOUT the in-process manage_run tool (Codex/OpenCode/Copilot) get a
-    // system-prompt pointer to the `archon workflow …` CLI so they can still manage this
-    // project's runs over bash. Claude/Pi get the native tool below and are nudged to it
-    // — adding the CLI pointer there would be redundant and steer them onto a bash path
-    // that needs `archon` on PATH. Project-scoped only: the CLI commands require a
-    // git-repo cwd, which unscoped chats (cwd ~/.archon/workspaces) don't have.
-    if (scopedCaps !== null && !scopedCaps.nativeTools) {
-      systemAppend += `\n\n${buildRunManagementSection()}`;
+      !hostOwnedTurn && conversation.codebase_id !== null
+        ? getProviderCapabilities(providerKey)
+        : null;
+    let systemPrompt: SystemPromptInput | undefined;
+    if (!hostOwnedTurn) {
+      let systemAppend = buildOrchestratorSystemAppend(conversation, codebases, workflows);
+      // Providers without manage_run need a CLI pointer; unscoped turns have no project cwd.
+      if (scopedCaps !== null && !scopedCaps.nativeTools) {
+        systemAppend += `\n\n${buildRunManagementSection()}`;
+      }
+      // Claude supports the preset object for prompt caching; other providers need a string.
+      systemPrompt =
+        providerKey === 'claude'
+          ? { type: 'preset', preset: 'claude_code', append: systemAppend }
+          : systemAppend;
     }
-    const systemPrompt =
-      providerKey === 'claude'
-        ? { type: 'preset' as const, preset: 'claude_code' as const, append: systemAppend }
-        : systemAppend;
 
     const requestOptions: SendQueryOptions = {
       assistantConfig: { ...(config.assistants[providerKey] ?? {}) },
@@ -2529,12 +2540,14 @@ export async function handleMessage(
       protectedEnvKeys: protectedEnvKeys.length > 0 ? protectedEnvKeys : undefined,
       model: chatRequest.model,
       systemPrompt,
+      hostTools: context?.hostTools,
+      abortSignal: context?.abortSignal,
     };
     if (chatRequest.preset) {
       applyPresetToRequestOptions(providerKey, chatRequest.preset, requestOptions);
     }
 
-    if (!conversation.title && !trimmedMessage.startsWith('/')) {
+    if (!hostOwnedTurn && !conversation.title && !trimmedMessage.startsWith('/')) {
       const titleRequest = resolveModelRequest(aiProfile, 'small', configuredProviderKey);
       const titleOptions: SendQueryOptions = {
         model: titleRequest.model,
@@ -2580,7 +2593,7 @@ export async function handleMessage(
     // the provider supports in-process native tools (Claude, Pi). The explicit
     // codebase_id check (redundant with scopedCaps !== null) narrows it to string
     // for the block below.
-    if (conversation.codebase_id !== null && scopedCaps?.nativeTools) {
+    if (!hostOwnedTurn && conversation.codebase_id !== null && scopedCaps?.nativeTools) {
       const scopedCodebaseId = conversation.codebase_id;
       requestOptions.nativeTools = [
         buildManageRunTool({
@@ -2733,7 +2746,7 @@ async function handleStreamMode(
   originalMessage: string,
   codebases: readonly Codebase[],
   workflows: readonly WorkflowWithSource[],
-  aiClient: ReturnType<typeof getAgentProvider>,
+  aiClient: IAgentProvider,
   fullPrompt: string,
   cwd: string,
   session: { id: string; assistant_session_id: string | null },
@@ -2744,6 +2757,7 @@ async function handleStreamMode(
   userId?: string
 ): Promise<void> {
   const turnStartedAt = Date.now();
+  const hostOwnedTurn = requestOptions?.hostTools !== undefined;
   const allMessages: string[] = [];
   let newSessionId: string | undefined;
   let commandDetected = false;
@@ -2763,7 +2777,9 @@ async function handleStreamMode(
       if (!commandFullyParsed) {
         allMessages.push(msg.content);
       }
-      if (!commandDetected) {
+      if (hostOwnedTurn) {
+        await platform.sendMessage(conversationId, msg.content);
+      } else if (!commandDetected) {
         // Check for orchestrator commands BEFORE streaming to frontend.
         // If detected, suppress this chunk and all future chunks — the full
         // response will be parsed post-loop and the command dispatched there.
@@ -2792,15 +2808,17 @@ async function handleStreamMode(
       }
     } else if (msg.type === 'tool' && msg.toolName) {
       if (!commandDetected) {
-        const toolMessage = formatToolCall(msg.toolName, msg.toolInput);
-        await platform.sendMessage(conversationId, toolMessage, {
-          category: 'tool_call_formatted',
-        });
+        if (!hostOwnedTurn) {
+          const toolMessage = formatToolCall(msg.toolName, msg.toolInput);
+          await platform.sendMessage(conversationId, toolMessage, {
+            category: 'tool_call_formatted',
+          });
+        }
         if (platform.sendStructuredEvent) {
           await platform.sendStructuredEvent(conversationId, msg);
         }
       }
-    } else if (msg.type === 'tool_result' && msg.toolName) {
+    } else if ((msg.type === 'tool_result' || msg.type === 'tool_update') && msg.toolName) {
       if (!commandDetected && platform.sendStructuredEvent) {
         await platform.sendStructuredEvent(conversationId, msg);
       }
@@ -2880,13 +2898,15 @@ async function handleStreamMode(
   }
 
   const fullResponse = allMessages.join('');
-  const commands = parseOrchestratorCommands(
-    fullResponse,
-    codebases,
-    workflows.map(ws => ws.workflow)
-  );
+  const commands = !hostOwnedTurn
+    ? parseOrchestratorCommands(
+        fullResponse,
+        codebases,
+        workflows.map(ws => ws.workflow)
+      )
+    : undefined;
 
-  if (commands.workflowInvocation) {
+  if (commands?.workflowInvocation) {
     // Retract streamed text — workflow dispatch replaces it
     if (platform.emitRetract) {
       await platform.emitRetract(conversationId);
@@ -2906,7 +2926,7 @@ async function handleStreamMode(
     return;
   }
 
-  if (commands.projectRegistration) {
+  if (commands?.projectRegistration) {
     if (platform.emitRetract) {
       await platform.emitRetract(conversationId);
     }
@@ -2963,7 +2983,7 @@ async function handleBatchMode(
   originalMessage: string,
   codebases: readonly Codebase[],
   workflows: readonly WorkflowWithSource[],
-  aiClient: ReturnType<typeof getAgentProvider>,
+  aiClient: IAgentProvider,
   fullPrompt: string,
   cwd: string,
   session: { id: string; assistant_session_id: string | null },
@@ -2974,6 +2994,7 @@ async function handleBatchMode(
   userId?: string
 ): Promise<void> {
   const turnStartedAt = Date.now();
+  const hostOwnedTurn = requestOptions?.hostTools !== undefined;
   const allChunks: { type: string; content: string }[] = [];
   const assistantMessages: string[] = [];
   let assistantChunksTruncated = false;
@@ -3014,7 +3035,7 @@ async function handleBatchMode(
         assistantChunksTruncated = true;
       }
 
-      if (!commandDetected) {
+      if (!hostOwnedTurn && !commandDetected) {
         const accumulated = assistantMessages.join('');
         const normalizedAccumulated = normalizeCommandText(accumulated);
         if (
@@ -3026,7 +3047,7 @@ async function handleBatchMode(
             commandFullyParsed = true;
           }
         }
-      } else if (!commandFullyParsed) {
+      } else if (commandDetected && !commandFullyParsed) {
         const accumulated = assistantMessages.join('');
         if (isCommandFullyParsed(accumulated)) {
           commandFullyParsed = true;
@@ -3034,9 +3055,17 @@ async function handleBatchMode(
       }
     } else if (msg.type === 'tool' && msg.toolName) {
       if (!commandDetected) {
-        const toolMessage = formatToolCall(msg.toolName, msg.toolInput);
-        allChunks.push({ type: 'tool', content: toolMessage });
+        if (hostOwnedTurn) {
+          await platform.sendStructuredEvent?.(conversationId, msg);
+        } else {
+          const toolMessage = formatToolCall(msg.toolName, msg.toolInput);
+          allChunks.push({ type: 'tool', content: toolMessage });
+        }
         getLog().debug({ toolName: msg.toolName }, 'tool_call');
+      }
+    } else if ((msg.type === 'tool_result' || msg.type === 'tool_update') && msg.toolName) {
+      if (hostOwnedTurn && !commandDetected) {
+        await platform.sendStructuredEvent?.(conversationId, msg);
       }
     } else if (msg.type === 'result') {
       if (msg.isError && msg.errorSubtype === 'error_during_execution') {
@@ -3142,13 +3171,15 @@ async function handleBatchMode(
   // separator lines that break multi-chunk command text (name and path appear on
   // separate lines from '/register-project'). Raw join preserves the command as a
   // contiguous string. User-visible output still comes from filterToolIndicators.
-  const commands = parseOrchestratorCommands(
-    assistantMessages.join(''),
-    codebases,
-    workflows.map(ws => ws.workflow)
-  );
+  const commands = !hostOwnedTurn
+    ? parseOrchestratorCommands(
+        assistantMessages.join(''),
+        codebases,
+        workflows.map(ws => ws.workflow)
+      )
+    : undefined;
 
-  if (commands.workflowInvocation) {
+  if (commands?.workflowInvocation) {
     if (platform.emitRetract) {
       await platform.emitRetract(conversationId);
     }
@@ -3167,7 +3198,7 @@ async function handleBatchMode(
     return;
   }
 
-  if (commands.projectRegistration) {
+  if (commands?.projectRegistration) {
     if (platform.emitRetract) {
       await platform.emitRetract(conversationId);
     }

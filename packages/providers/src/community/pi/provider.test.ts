@@ -2183,21 +2183,6 @@ describe('PiProvider', () => {
     expect(mockDispose).toHaveBeenCalledTimes(1);
   });
 
-  test('pre-aborted signal triggers session.abort before any yielding', async () => {
-    process.env.GEMINI_API_KEY = 'sk-test';
-    resetScript(scriptedAgentEnd());
-    const controller = new AbortController();
-    controller.abort();
-
-    await consume(
-      new PiProvider().sendQuery('hi', '/tmp', undefined, {
-        model: 'google/gemini-2.5-pro',
-        abortSignal: controller.signal,
-      })
-    );
-    expect(mockAbort).toHaveBeenCalled();
-  });
-
   test('abort signal mid-stream calls session.abort', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     const controller = new AbortController();
