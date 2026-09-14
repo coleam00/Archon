@@ -38,9 +38,12 @@ invalid fields, absent evidence, or report/probe identity disagreement trigger
 one retry with fresh agent context and another setup/start cycle. Native
 `LOOP_PREV` carries the checker's rejection reason through `prepare-attempt` into
 the retry command as report feedback, never as a prior product observation. It is
-empty on the first attempt. Each `evidence_path` names exactly one existing
-nonempty file; combine multiple actual tool outputs into one file per assertion
-when needed, never a comma-separated filename list. The second
+empty on the first attempt. Each assertion's `evidence` array names engine-captured
+calls as `{ "pass": "attempt-uuid", "call_id": "id" }`; add `"attachment": 0`
+for an image attachment. The pass is the matching `passes[].producer.attempt` from
+the capture manifest, so provider call IDs may repeat across reasks and retries.
+Read these IDs from the attempt's `captures/manifest.json`. Arbitrary text files
+and textual screenshot claims cannot satisfy capture provenance. The second
 malformed attempt explicitly completes as inconclusive before the engine's loop
 limit. `max_iterations` and the final-attempt bound share one YAML anchor.
 Unrecovered provider, subprocess, or engine node errors fail the run operationally
@@ -60,30 +63,55 @@ A requested-candidate mismatch or failed identity probe is inconclusive, without
 retry. An empty `candidate` input checks report/probe consistency only. Probe
 correctness is project-owned.
 
-The checker validates exact coverage, field structure, evidence file presence
-inside the current attempt, and target identity. It does not parse observation
-prose or prove truth from a nonempty file. The agent owns the expected/observed
+The checker validates exact coverage, field structure, receipt ownership and
+hashes, full output availability, attachments and target identity. It does not
+parse observation prose or prove application behavior from captured output. The agent owns the expected/observed
 comparison and per-assertion outcome. A complete observed product failure is
 `failed` and is never retried. Missing instructions or unavailable measurements
 are `inconclusive`. If any assertion is inconclusive, the overall result is too.
 All reports and evidence remain in run artifacts for review.
 
-The returned fields are `verified`, `verdict`, `candidate`, `checkout`, and
-`summary`. Only `verified: true` authors a succeeded outcome; failed/inconclusive
+The returned fields are `verified`, `verdict`, `candidate`, `checkout`, `summary`
+and `evidence`. Evidence carries exact report/capture paths and hashes, producer
+run/node/iteration/attempt, scenario path/hash and hashes of the checker, workflow,
+commands and packaged scripts. These references
+travel through includes; consumers must use them instead of searching provider sessions.
+Only `verified: true` authors a succeeded outcome; failed/inconclusive
 author failed outcomes while the workflow lifecycle can complete normally.
 Consumers must inspect the verdict, not equate lifecycle completion with success.
 
-Tests in `packages/workflows/src/dag-executor.test.ts` run this YAML through the
-real executor with a local HTTP process and a simulated provider. They exercise
-tool requests and deterministic nodes, but do not prove live agent behavior.
-Run them from `packages/workflows` with
-`bun test src/dag-executor.test.ts --test-name-pattern 'archon-verify-runtime live target contract'`.
-They cover LF/CRLF command output and reports, single-attempt product failures,
-identity mismatches, malformed-report retries, and environment cleanup boundaries.
+Tests in `packages/workflows/src/defaults/runtime-capture.test.ts` exercise the
+actual checker and its standalone generated artifact. `src/tool-capture.test.ts`
+covers retention failures, completeness and attachment integrity; the capture tests
+in `src/dag-executor.test.ts` exercise actual agent and loop dispatch. Run through
+the workflows package test script, which preserves module isolation.
 Consumers validating a provider integration must also run a native provider
 against a disposable target and inspect rendered inputs, tool execution, report
 fidelity, and candidate binding. Dry-run fixtures cannot establish those
 properties or this loop's `until_bash` decisions.
+
+Capture is opt-in on the verification node. Each result retains at most 1 MiB,
+with 16 MiB and 256 calls per authored capture directory across all provider passes.
+Known injected and secret-named environment values are redacted before writing; this
+is not comprehensive secret detection. Redacted/truncated/unavailable output cannot
+support a verified assertion. Failed commands and empty output remain valid
+observations; interrupted/unknown command outcomes cannot support verification.
+
+Claude, Codex, Pi, Copilot and OpenCode expose returned text/JSON before Archon
+display truncation. Codex stdout/stderr remain merged. Pi and OpenCode truncation
+metadata remains explicit; native session files are never read. Copilot retains
+native content blocks or detailed output; its potentially shortened content-only
+fallback is incomplete. OpenCode attachment URLs are unavailable because they do
+not carry owned bytes. Standard returned base64 image blocks from the other
+providers are retained as attachments with hashes. Other binary shapes,
+native screenshot paths and tools with no returned output are unsupported evidence;
+request a supported tool result instead. Full means the representation returned by
+the provider, not unlimited tool-internal output or proof of application behavior.
+
+`src/check-evidence.ts` invokes the implementation in the workflows package's
+`src/defaults/sdlc/runtime-evidence.ts`, beside the owning receipt schema and Zod
+dependency. `bun run generate:bundled` builds `scripts/check-evidence.js` with its dependencies
+so frozen workflow sources and binary installations need no monorepo imports.
 
 `mutates_checkout: false` and prompt instructions are not a filesystem sandbox;
 they do not prevent source edits or protect secrets. Scenario secrecy from a

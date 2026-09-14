@@ -471,6 +471,38 @@ describe('CodexProvider', () => {
       });
     });
 
+    test('opt-in capture retains merged output before presentation suffixes', async () => {
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield {
+            type: 'item.completed',
+            item: {
+              id: 'captured',
+              type: 'command_execution',
+              command: 'probe',
+              aggregated_output: 'false 0',
+              exit_code: 1,
+            },
+          };
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace', undefined, {
+        captureToolOutput: true,
+      }))
+        chunks.push(chunk);
+      const result = chunks.find(chunk => chunk.type === 'tool_result');
+      expect(result?.capture).toEqual({
+        text: 'false 0',
+        format: 'text',
+        completeness: 'full',
+        attachments: [],
+      });
+      expect(result?.exitCode).toBe(1);
+      expect(result?.toolOutput).toBe('false 0\n[exit code: 1]');
+    });
+
     test('marks command execution with a missing exit code as unknown', async () => {
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {

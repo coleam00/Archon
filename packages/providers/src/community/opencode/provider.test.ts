@@ -272,6 +272,47 @@ describe('OpencodeProvider', () => {
     ]);
   });
 
+  test('opt-in capture retains returned output and rejects inaccessible attachments', async () => {
+    for (const [output, extra, completeness] of [
+      ['', {}, 'full'],
+      ['false 0', {}, 'full'],
+      ['partial', { metadata: { truncated: true } }, 'truncated'],
+      ['image at URL', { attachments: [{ url: 'file:///private/screenshot.png' }] }, 'unavailable'],
+      [undefined, {}, 'unavailable'],
+    ] as const) {
+      scriptedEvents = [
+        {
+          type: 'message.part.updated',
+          properties: {
+            part: {
+              sessionID: 'session-1',
+              type: 'tool',
+              tool: 'read',
+              callID: 'call',
+              state: { status: 'completed', output, ...extra },
+            },
+          },
+        },
+        { type: 'session.idle', properties: { sessionID: 'session-1' } },
+      ];
+      const { chunks, error } = await consume(
+        new OpencodeProvider().sendQuery('verify', '/tmp', undefined, {
+          assistantConfig: TEST_MODEL,
+          captureToolOutput: true,
+        })
+      );
+      expect(error).toBeUndefined();
+      expect(chunks).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'tool_result',
+            capture: expect.objectContaining({ text: output ?? '', completeness }),
+          }),
+        ])
+      );
+    }
+  });
+
   test('tool errors preserve a structured error outcome', async () => {
     scriptedEvents = [
       {
@@ -351,6 +392,7 @@ describe('OpencodeProvider', () => {
 
     const { chunks, error } = await consume(
       new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        captureToolOutput: true,
         assistantConfig: TEST_MODEL,
         nodeConfig: {
           nodeId: 'research',
@@ -369,11 +411,13 @@ describe('OpencodeProvider', () => {
           type: 'tool_result',
           toolCallId: 'scout:call-1',
           toolOutcome: 'success',
+          capture: expect.objectContaining({ text: 'contents', completeness: 'full' }),
         }),
         expect.objectContaining({
           type: 'tool_result',
           toolCallId: 'reviewer:call-1',
           toolOutcome: 'error',
+          capture: expect.objectContaining({ text: 'command failed', completeness: 'full' }),
         }),
       ])
     );

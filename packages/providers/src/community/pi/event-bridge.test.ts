@@ -98,6 +98,46 @@ describe('AsyncQueue', () => {
 // ─── serializeToolResult ───────────────────────────────────────────────────
 
 describe('serializeToolResult', () => {
+  test('capture honors native truncation metadata without reading Pi private output files', () => {
+    const chunks = mapPiEvent(
+      {
+        type: 'tool_execution_end',
+        toolName: 'bash',
+        toolCallId: 'cut',
+        isError: false,
+        result: {
+          content: [{ type: 'text', text: 'tail' }],
+          details: { truncation: { truncated: true }, fullOutputPath: '/private/native-output' },
+        },
+      },
+      true
+    );
+    expect(chunks.find(chunk => chunk.type === 'tool_result')?.capture?.completeness).toBe(
+      'truncated'
+    );
+  });
+  test('opt-in event capture keeps binary attachments separate from returned text', () => {
+    const bytes = Buffer.from('image fixture');
+    const chunks = mapPiEvent(
+      {
+        type: 'tool_execution_end',
+        toolName: 'browser',
+        toolCallId: 'image',
+        isError: false,
+        result: {
+          content: [
+            { type: 'text', text: 'false 0' },
+            { type: 'image', data: bytes.toString('base64'), mimeType: 'image/png' },
+          ],
+        },
+      },
+      true
+    );
+    const result = chunks.find(chunk => chunk.type === 'tool_result');
+    expect(result?.capture?.completeness).toBe('full');
+    expect(result?.capture?.text).toContain('false 0');
+    expect(result?.capture?.attachments).toEqual([{ data: bytes, mediaType: 'image/png' }]);
+  });
   test('returns strings verbatim', () => {
     expect(serializeToolResult('hello')).toBe('hello');
   });

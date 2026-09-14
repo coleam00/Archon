@@ -34,6 +34,7 @@ export type TemplateSurface =
 
 export type TemplateSlotName =
   | 'when'
+  | 'capture_tools'
   | 'systemPrompt'
   | 'agents.*.prompt'
   | 'agents.*.description'
@@ -77,6 +78,7 @@ interface SlotDefinition {
 export const SLOT_SPEC = {
   when: { surface: 'condition', outputReference: true },
   systemPrompt: { surface: 'prompt', outputReference: true },
+  capture_tools: { surface: 'value', outputReference: true },
   'agents.*.prompt': { surface: 'prompt', outputReference: true },
   'agents.*.description': { surface: 'prompt', outputReference: true },
   'agent.prompt': { surface: 'prompt', outputReference: true },
@@ -204,6 +206,13 @@ function walk(
   };
 
   if (node.when !== undefined) slot('when', 'when', node.when, value => (node.when = value));
+  if (node.capture_tools !== undefined)
+    slot(
+      'capture_tools',
+      'capture_tools',
+      node.capture_tools,
+      value => (node.capture_tools = value)
+    );
   if (node.systemPrompt !== undefined)
     slot('systemPrompt', 'systemPrompt', node.systemPrompt, value => (node.systemPrompt = value));
   for (const [id, agent] of Object.entries(node.agents ?? {})) {

@@ -86,9 +86,29 @@ setup-run: '{"ok":true}'
 start-run: '{"ok":true}'
 verify: "stub: report written"
 identity-run: '{"ok":true}'
-check-evidence: '{"status":"verified","reason":"stub","candidate":"c"}'
+check-evidence:
+  status: verified
+  reason: stub
+  candidate: c
+  evidence: &runtime-evidence
+    report_path: /artifacts/attempt-1/report.json
+    report_sha256: fixture
+    capture_directory: /artifacts/attempt-1/captures
+    capture_manifest_sha256: fixture
+    producer: {runId: fixture, nodeId: verify, attempt: fixture, iteration: null}
+    scenario_path: /private/scenario.json
+    scenario_sha256: fixture
+    evaluator_path: /frozen/check-evidence.js
+    evaluator_sha256: fixture
+    evaluator_sources: []
 teardown-run: '{"ok":true}'
-finish-attempt: '{"status":"verified","reason":"stub","candidate":"c","done":true,"checkout":"0123456789abcdef0123456789abcdef01234567"}'
+finish-attempt:
+  status: verified
+  reason: stub
+  candidate: c
+  done: true
+  checkout: "0123456789abcdef0123456789abcdef01234567"
+  evidence: *runtime-evidence
 # The runtime gate is stubbed as not verified so the holdout instance (whose loop
 # body shares these bare stub ids and cannot be stubbed a second time in a dry
 # run) is skipped by its when:. qualify joins on none_failed and is itself a stub;
@@ -99,14 +119,35 @@ runtime__gate-verified:
   candidate: "c"
   checkout: "0123456789abcdef0123456789abcdef01234567"
   summary: "stub"
+  evidence: *runtime-evidence
+qualification-input:
+  available: true
+  input: {path: /artifacts/qualification-input.json, sha256: fixture}
+  report_path: /artifacts/runtime-qualification.md
+  summary: fixture
+  references: []
+judge:
+  ready: true
+  repair: false
+  summary: fixture
+  evidence: /artifacts/runtime-qualification.md
+  supporting_evidence: []
+  method: merge
+  method_source: project
+  method_conflict: ''
+  holds: []
 qualify:
   ready: true
   repair: false
   evidence: "/artifacts/runtime-qualification.md"
+  references: &qualified-references [{path: /artifacts/qualified.json, sha256: fixture}]
+  summary: fixture
+  holds: []
 selected:
   ready: true
   prs: ["https://github.com/example/app/pull/7"]
   evidence: "/artifacts/runtime-qualification.md"
+  references: *qualified-references
 discoveries__resolve-input:
   count: 0
   forge_available: true
@@ -122,17 +163,37 @@ discoveries__render:
   duplicate_count: 0
   update_existing_count: 0
   new_count: 0
-merge__assess:
+merge__facts: '{"repository":"example/app","enabledMethods":["merge"],"pullRequests":[],"holds":[],"fingerprint":"fixture"}'
+merge__qualification-input:
+  available: false
+  input: null
+  report_path: ''
+  summary: fixture
+  references: *qualified-references
+merge__qualified:
   ready: true
-  summary: "stub: batch eligible"
+  repair: false
+  evidence: ''
+  references: *qualified-references
+  summary: fixture
+  holds: []
+merge__plan:
+  ready: true
+  summary: "stub: plan recorded"
+  method: merge
+  holds: []
+  plan_reference: merge-plan-fixture.json
+  plan_digest: fixture
 merge__merge:
   merged: true
   urls: ["https://github.com/example/app/pull/7"]
+  queued: []
   summary: "stub: merged"
+  holds: []
 ship__deliver__validate__record-evidence: '{"recorded":true}'
 fixture:
   expect: completed
-  reached: [merge__assess, merge__merge]
+  reached: [qualification-input, judge, qualify, selected, merge__facts, merge__qualification-input, merge__qualified, merge__plan, merge__merge]
   inputs:
     target: "https://github.com/example/app/issues/1"
     scenario: "/private/scenario.json"

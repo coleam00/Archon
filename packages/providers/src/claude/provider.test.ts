@@ -2295,6 +2295,31 @@ describe('sendQuery decomposition behaviors', () => {
     ]);
   });
 
+  test('opt-in capture preserves the hook output beyond the display limit', async () => {
+    const output = 'x'.repeat(12_000) + ' false 0';
+    mockQuery.mockImplementation(async function* (args) {
+      await args.options?.hooks?.PostToolUse?.[0]?.hooks?.[0]?.(
+        { tool_name: 'Bash', tool_use_id: 'full', tool_response: output } as never,
+        'full',
+        { signal: new AbortController().signal }
+      );
+      yield { type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } };
+    });
+    const chunks = [];
+    for await (const chunk of client.sendQuery('test', '/workspace', undefined, {
+      captureToolOutput: true,
+    }))
+      chunks.push(chunk);
+    const captured = chunks.find(chunk => chunk.type === 'tool_result');
+    expect(captured?.capture).toEqual({
+      text: output,
+      format: 'text',
+      completeness: 'full',
+      attachments: [],
+    });
+    expect(captured?.toolOutput.length).toBe(10_003);
+  });
+
   test('terminal tool result queue drain preserves hook outcome', async () => {
     mockQuery.mockImplementation(async function* (args) {
       yield { type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } };

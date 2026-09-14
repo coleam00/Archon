@@ -623,11 +623,11 @@ describe('bundled-defaults', () => {
       const lifecycle = BUNDLED_WORKFLOWS['archon-lifecycle'];
       expect(deliver).toContain('scope: "$INPUTS.validation_scope"');
       expect(ship).toContain('validation_scope: "$INPUTS.validation_scope"');
-      expect(lifecycle.match(/validation_scope: "\$INPUTS\.validation_scope"/g)).toHaveLength(2);
+      expect(lifecycle.match(/validation_scope: "\$INPUTS\.validation_scope"/g)).toHaveLength(3);
       expect(deliver).toContain('context: "$INPUTS.validation_context"');
       expect(ship).toContain('validation_context: "$INPUTS.validation_context"');
       expect(lifecycle.match(/validation_context: "\$INPUTS\.validation_context"/g)).toHaveLength(
-        2
+        3
       );
     });
   });

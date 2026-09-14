@@ -20,8 +20,9 @@
 import { createLogger } from '@archon/paths';
 import type { AssistantMessageEvent, CopilotSession, SessionEvent } from '@github/copilot-sdk';
 
-import type { MessageChunk, TokenUsage } from '../../types';
+import type { MessageChunk, TokenUsage, ToolResultCapture } from '../../types';
 import { tryParseStructuredOutput } from '../../shared/structured-output';
+import { captureToolResult } from '../../shared/tool-capture';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -141,12 +142,26 @@ export function normalizeCopilotUsage(raw?: {
  *     housekeeping, no user-facing chunk
  */
 export interface EventMapperContext {
+  captureToolOutput?: boolean;
   /** Populated by tool.execution_start, read by tool.execution_complete. */
   toolCallIdToName: Map<string, string>;
   /** Called when assistant.usage arrives; undefined for non-usage events. */
   captureUsage: (usage: TokenUsage) => void;
   /** Flagged on session.error; consumer decides whether to promote to isError on the terminal result. */
   markErrored: (errorMsg: string) => void;
+}
+
+function captureCopilotResult(
+  data: Extract<SessionEvent, { type: 'tool.execution_complete' }>['data']
+): ToolResultCapture {
+  if (data.result?.contents !== undefined) return captureToolResult(data.result.contents);
+  if (data.result?.detailedContent !== undefined)
+    return captureToolResult(data.result.detailedContent);
+  if (data.error !== undefined) return captureToolResult(data.error);
+  return {
+    ...captureToolResult(data.result?.content),
+    completeness: data.result === undefined ? 'unavailable' : 'truncated',
+  };
 }
 
 /**
@@ -190,6 +205,8 @@ export function mapCopilotEvent(event: SessionEvent, ctx: EventMapperContext): M
       const toolName = ctx.toolCallIdToName.get(toolCallId) ?? 'unknown';
       // Prefer detailedContent (full output) over content (truncated for LLM).
       const rawOutput = result?.detailedContent ?? result?.content ?? '';
+      const terminal = result?.contents?.filter(block => block.type === 'terminal');
+      const exitCode = terminal?.length === 1 ? terminal[0]?.exitCode : undefined;
       const chunks: MessageChunk[] = [];
       if (!success) {
         chunks.push({
@@ -203,6 +220,8 @@ export function mapCopilotEvent(event: SessionEvent, ctx: EventMapperContext): M
         toolOutput: success ? rawOutput : `❌ ${rawOutput}`,
         toolCallId,
         toolOutcome: success ? 'success' : 'error',
+        ...(exitCode === undefined ? {} : { exitCode }),
+        ...(ctx.captureToolOutput ? { capture: captureCopilotResult(event.data) } : {}),
       });
       return chunks;
     }
@@ -273,7 +292,8 @@ export async function* bridgeSession(
   session: CopilotSession,
   prompt: string,
   abortSignal?: AbortSignal,
-  jsonSchema?: Record<string, unknown>
+  jsonSchema?: Record<string, unknown>,
+  captureToolOutput = false
 ): AsyncGenerator<MessageChunk> {
   const log = getLog();
   const queue = new AsyncQueue<BridgeQueueItem>();
@@ -287,6 +307,7 @@ export async function* bridgeSession(
   let assistantBuffer = '';
 
   const ctx: EventMapperContext = {
+    captureToolOutput,
     toolCallIdToName,
     captureUsage: (u: TokenUsage): void => {
       capturedTokens = u;
