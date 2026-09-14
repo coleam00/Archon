@@ -351,6 +351,37 @@ describe('merge action boundary', () => {
     }
   });
 
+  test('allows an authorized GitHub-only plan with empty evidence', async () => {
+    const fixture = await mergeFixture();
+    fixture.plan.evidence = [];
+    const content = `${JSON.stringify(fixture.plan)}\n`;
+    await writeFile(join(fixture.artifacts, 'merge-plan.json'), content);
+    const ghLog = join(fixture.artifacts, 'gh.jsonl');
+    const result = run(mergeScript, {
+      ARTIFACTS_DIR: fixture.artifacts,
+      INPUTS_ACTION: 'execute',
+      INPUTS_GATE: JSON.stringify({ ...assessment(content), ready: true }),
+      INPUTS_MODE: 'auto',
+      INPUTS_APPROVAL: '',
+      INPUTS_REQUEST: JSON.stringify({
+        authorized: true,
+        repository: 'owner/repo',
+        number: 17,
+        head_sha: 'head-17',
+        method: 'squash',
+        summary: 'fresh GitHub facts pass',
+      }),
+      INPUTS_PREVIOUS: '',
+      INPUTS_MERGE_METHOD: 'squash',
+      GH_LOG: ghLog,
+      PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ''}`,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(stdout(result))).toMatchObject({ merged: true });
+    expect(await Bun.file(ghLog).exists()).toBe(true);
+  });
+
   test('returns the live base between PRs and preserves it through the next iteration', async () => {
     const fixture = await mergeFixture();
     (fixture.plan.pull_requests as Array<Record<string, unknown>>).push({

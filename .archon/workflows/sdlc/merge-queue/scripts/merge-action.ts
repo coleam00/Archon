@@ -93,7 +93,7 @@ function validPlan(value: JsonObject): boolean {
 }
 
 function evidenceReasons(value: JsonObject): string[] {
-  if (!Array.isArray(value.evidence) || value.evidence.length === 0) {
+  if (!Array.isArray(value.evidence)) {
     return ['merge plan evidence bindings are missing or invalid'];
   }
   const reasons: string[] = [];
