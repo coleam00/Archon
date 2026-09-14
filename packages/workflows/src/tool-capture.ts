@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, rename, rmdir, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import type { MessageChunk } from '@archon/providers/types';
@@ -7,6 +7,7 @@ import type { MessageChunk } from '@archon/providers/types';
 const MAX_RESULT_BYTES = 1024 * 1024;
 const MAX_CAPTURE_BYTES = 16 * MAX_RESULT_BYTES;
 const MAX_CALLS = 256;
+const SESSION_LOCK = '.capture-session.lock';
 
 export const captureProducerSchema = z
   .object({
@@ -196,38 +197,52 @@ export class ToolCaptureSession {
     await mkdir(target, { recursive: true });
     const canonical = await realpath(target);
     if (!inside(owner, canonical)) throw new Error('capture directory escapes run artifacts');
-    let manifest: ToolCaptureManifest;
-    let retainedBytes = 0;
-    let completedCalls = 0;
+    const lock = join(canonical, SESSION_LOCK);
     try {
-      const captured = await readToolCaptures(canonical, runId);
-      manifest = captured.manifest;
-      if (manifest.owner.nodeId !== nodeId)
-        throw new Error('capture directory belongs to another node');
-      completedCalls = captured.receipts.length;
-      retainedBytes = captured.receipts.reduce(
-        (total, entry) =>
-          total +
-          entry.receipt.output.bytes +
-          entry.receipt.attachments.reduce((sum, file) => sum + file.bytes, 0),
-        0
-      );
+      await mkdir(lock);
     } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
-      manifest = { version: 2, directory: canonical, owner: { runId, nodeId }, passes: [] };
+      if (error instanceof Error && 'code' in error && error.code === 'EEXIST') {
+        throw new Error('capture directory already has an active session');
+      }
+      throw error;
     }
-    if (manifest.passes.length >= MAX_CALLS) throw new Error('tool capture pass limit exceeded');
-    const producer = { runId, nodeId, attempt: randomUUID(), iteration: iteration ?? null };
-    const session = new ToolCaptureSession(
-      canonical,
-      manifest,
-      producer,
-      retainedBytes,
-      completedCalls
-    );
-    await mkdir(join(canonical, producer.attempt));
-    await session.saveManifest();
-    return session;
+    try {
+      let manifest: ToolCaptureManifest;
+      let retainedBytes = 0;
+      let completedCalls = 0;
+      try {
+        const captured = await readToolCaptures(canonical, runId);
+        manifest = captured.manifest;
+        if (manifest.owner.nodeId !== nodeId)
+          throw new Error('capture directory belongs to another node');
+        completedCalls = captured.receipts.length;
+        retainedBytes = captured.receipts.reduce(
+          (total, entry) =>
+            total +
+            entry.receipt.output.bytes +
+            entry.receipt.attachments.reduce((sum, file) => sum + file.bytes, 0),
+          0
+        );
+      } catch (error) {
+        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+        manifest = { version: 2, directory: canonical, owner: { runId, nodeId }, passes: [] };
+      }
+      if (manifest.passes.length >= MAX_CALLS) throw new Error('tool capture pass limit exceeded');
+      const producer = { runId, nodeId, attempt: randomUUID(), iteration: iteration ?? null };
+      const session = new ToolCaptureSession(
+        canonical,
+        manifest,
+        producer,
+        retainedBytes,
+        completedCalls
+      );
+      await mkdir(join(canonical, producer.attempt));
+      await session.saveManifest();
+      return session;
+    } catch (error) {
+      await rmdir(lock);
+      throw error;
+    }
   }
 
   private async atomic(path: string, bytes: Uint8Array): Promise<void> {
@@ -381,7 +396,11 @@ export class ToolCaptureSession {
         } else yield message;
       }
     } finally {
-      if (!result) await finish(false);
+      try {
+        if (!result) await finish(false);
+      } finally {
+        await rmdir(join(this.directory, SESSION_LOCK));
+      }
     }
   }
 }

@@ -4665,6 +4665,67 @@ describe('executeDagWorkflow -- tool_completed event emission', () => {
     }
   );
 
+  it('rejects parallel nodes that resolve to the same capture directory', async () => {
+    const store = createMockStore();
+    const artifacts = join(testDir, 'capture-parallel-overlap');
+    const captureDirectory = join(artifacts, 'observations');
+    await rm(artifacts, { recursive: true, force: true });
+    await mkdir(artifacts, { recursive: true });
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'tool', toolName: 'shell', toolCallId: 'parallel-call' };
+      yield {
+        type: 'tool_result',
+        toolName: 'shell',
+        toolCallId: 'parallel-call',
+        toolOutput: 'display',
+        capture: {
+          text: 'parallel output',
+          format: 'text',
+          completeness: 'full',
+          attachments: [],
+        },
+      };
+      yield { type: 'result' };
+    });
+    const run = makeWorkflowRun('capture-parallel-overlap');
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        cwd: testDir,
+        artifactsDir: artifacts,
+        workflowRun: run,
+        workflow: {
+          name: 'capture-parallel-overlap',
+          nodes: [
+            node('verify-a', undefined, {
+              source: { kind: 'inline', prompt: 'verify a' },
+              capture_tools: captureDirectory,
+              retry: { max_attempts: 0 },
+            }),
+            node('verify-b', undefined, {
+              source: { kind: 'inline', prompt: 'verify b' },
+              capture_tools: captureDirectory,
+              retry: { max_attempts: 0 },
+            }),
+          ],
+        },
+      })
+    );
+
+    expect(store.failWorkflowRun).toHaveBeenCalled();
+    const captured = await readToolCaptures(captureDirectory, run.id);
+    expect(captured.manifest.passes).toHaveLength(1);
+    expect(captured.receipts).toHaveLength(1);
+    const overlapFailures = store.createWorkflowEvent.mock.calls.filter(
+      ([event]) =>
+        event.event_type === 'node_failed' &&
+        String(event.data?.error).includes('already has an active session')
+    );
+    expect(overlapFailures.length).toBeGreaterThanOrEqual(1);
+  });
+
   it.each(['agent', 'loop'] as const)(
     'fails %s execution when its required capture directory cannot be written',
     async kind => {

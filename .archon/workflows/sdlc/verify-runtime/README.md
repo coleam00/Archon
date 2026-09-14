@@ -91,11 +91,11 @@ fidelity, and candidate binding. Dry-run fixtures cannot establish those
 properties or this loop's `until_bash` decisions.
 
 Capture is opt-in on the verification node. Each result retains at most 1 MiB,
-with 16 MiB and 256 calls per provider invocation. Known injected and secret-named
-environment values are redacted before writing; this is not comprehensive secret
-detection. Redacted/truncated/unavailable output cannot support a verified assertion.
-Failed commands and empty output remain valid observations; interrupted/unknown
-command outcomes cannot support verification.
+with 16 MiB and 256 calls per authored capture directory across all provider passes.
+Known injected and secret-named environment values are redacted before writing; this
+is not comprehensive secret detection. Redacted/truncated/unavailable output cannot
+support a verified assertion. Failed commands and empty output remain valid
+observations; interrupted/unknown command outcomes cannot support verification.
 
 Claude, Codex, Pi, Copilot and OpenCode expose returned text/JSON before Archon
 display truncation. Codex stdout/stderr remain merged. Pi and OpenCode truncation

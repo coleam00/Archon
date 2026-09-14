@@ -265,6 +265,49 @@ describe('durable provider tool captures', () => {
     ).rejects.toThrow('another node');
   });
 
+  it.each([
+    ['the same owner', 'verify'],
+    ['an incompatible owner', 'other-node'],
+  ] as const)('rejects an overlapping session from %s', async (_description, secondNodeId) => {
+    const artifacts = await root();
+    const directory = join(artifacts, 'capture');
+    const first = await ToolCaptureSession.create(artifacts, directory, 'run', 'verify');
+
+    await expect(
+      ToolCaptureSession.create(artifacts, directory, 'run', secondNodeId)
+    ).rejects.toThrow('already has an active session');
+
+    await drain(first.retain(stream(events('first pass')), []));
+    const next = await ToolCaptureSession.create(artifacts, directory, 'run', 'verify');
+    await drain(next.retain(stream(events('second pass')), []));
+    expect((await readToolCaptures(directory, 'run')).manifest.passes).toHaveLength(2);
+  });
+
+  it('fails closed on a crash-left session lock', async () => {
+    const artifacts = await root();
+    const directory = join(artifacts, 'capture');
+    await mkdir(join(directory, '.capture-session.lock'), { recursive: true });
+
+    await expect(ToolCaptureSession.create(artifacts, directory, 'run', 'verify')).rejects.toThrow(
+      'already has an active session'
+    );
+  });
+
+  it('releases session ownership after a provider exception', async () => {
+    const artifacts = await root();
+    const directory = join(artifacts, 'capture');
+    const failed = await ToolCaptureSession.create(artifacts, directory, 'run', 'verify');
+    async function* disconnect(): AsyncGenerator<MessageChunk> {
+      yield { type: 'tool', toolName: 'shell', toolCallId: 'first' };
+      throw new Error('provider disconnected');
+    }
+    await expect(drain(failed.retain(disconnect(), []))).rejects.toThrow('provider disconnected');
+
+    const retry = await ToolCaptureSession.create(artifacts, directory, 'run', 'verify');
+    await drain(retry.retain(stream(events('retry')), []));
+    expect((await readToolCaptures(directory, 'run')).manifest.passes).toHaveLength(2);
+  });
+
   it('enforces the byte budget across passes in one authored directory', async () => {
     const artifacts = await root();
     const directory = join(artifacts, 'capture');
