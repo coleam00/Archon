@@ -2505,6 +2505,54 @@ nodes:
       );
       expect(aiFieldWarnings).toHaveLength(0);
     });
+
+    it("warns, operator-visibly, that an include's denied_tools is dropped rather than enforced", async () => {
+      // The real bug behind #3196: a caller sandboxing a block it did not write got no
+      // signal that its restriction never attached. A log line only an operator tailing
+      // server output can see is not enough; this must land in `parseWarnings`, the
+      // channel the workflow's actual author reads via `/api/workflows` and `/workflow
+      // list` (#2213).
+      await writeWorkflowFile(
+        testDir,
+        'block.yaml',
+        `
+name: block
+description: An included building block
+nodes:
+  - id: build
+    prompt: "do the work"
+`
+      );
+      await writeWorkflowFile(
+        testDir,
+        'include-denied-tools.yaml',
+        `
+name: include-denied-tools
+description: A caller trying to sandbox a block it did not write
+nodes:
+  - id: use
+    include: block
+    denied_tools: ["Bash(rm:*)"]
+`
+      );
+
+      mockLogger.warn.mockClear();
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+
+      const parent = result.workflows.find(w => w.workflow.name === 'include-denied-tools');
+      const pw = parent?.parseWarnings ?? [];
+      expect(pw.some(w => w.includes("Node 'use'") && w.includes("'denied_tools'"))).toBe(true);
+
+      // The included block's own node is unrestricted: the caller's denial never applied.
+      const expandedNode = (parent?.workflow.nodes as DagNode[]).find(n => n.id === 'use__build');
+      expect(expandedNode?.denied_tools).toBeUndefined();
+
+      const aiFieldWarnings = mockLogger.warn.mock.calls.filter(
+        call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
+      );
+      expect(aiFieldWarnings.length).toBeGreaterThan(0);
+    });
   });
 
   describe('DAG output ref validation', () => {
