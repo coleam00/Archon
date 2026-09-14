@@ -1,0 +1,604 @@
+import { describe, expect, it } from 'bun:test';
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import {
+  collectMergeFacts,
+  createMergePlan,
+  executeMergePlan,
+  mergePlanDigest,
+  mergeArguments,
+  type GitHubAdapter,
+  type Hold,
+  GhAdapter,
+  type CommandRunner,
+  type MergeFacts,
+  type MergeMethod,
+  type MergePlan,
+  type PullRequestFacts,
+  type SemanticAssessment,
+} from '../../../../.archon/workflows/sdlc/merge-queue/scripts/merge-queue';
+
+const URL = 'https://github.com/owner/repo/pull/42';
+const HEAD = 'a'.repeat(40);
+const BASE = 'b'.repeat(40);
+const trackTempRoot = trackTempRoots();
+
+async function runCli(env: Record<string, string>): Promise<{ exitCode: number; stdout: string }> {
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      join(
+        import.meta.dir,
+        '../../../../.archon/workflows/sdlc/merge-queue/scripts/merge-queue.ts'
+      ),
+    ],
+    {
+      env: { ...process.env, ...env },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    }
+  );
+  const [exitCode, stdout] = await Promise.all([child.exited, new Response(child.stdout).text()]);
+  return { exitCode, stdout };
+}
+
+async function artifactsDir(): Promise<string> {
+  const path = join(tmpdir(), `archon-merge-queue-${randomUUID()}`);
+  await mkdir(path, { recursive: true });
+  return trackTempRoot(path);
+}
+
+class FakeGitHub implements GitHubAdapter {
+  readonly merges: Array<{
+    repository: string;
+    number: number;
+    method: MergeMethod;
+    head: string;
+  }> = [];
+  policy: unknown = [];
+  classicPolicy: unknown = { contexts: [], checks: [] };
+  checkRuns: unknown = { check_runs: [] };
+  statuses: unknown = [];
+  head = HEAD;
+  base = BASE;
+  reviewBody = 'ready';
+  enabled: MergeMethod[] = ['merge', 'squash', 'rebase'];
+  mergedAt = '';
+  queued = false;
+  failEndpoint = '';
+
+  async api(endpoint: string): Promise<unknown> {
+    if (endpoint.includes(this.failEndpoint) && this.failEndpoint !== '') {
+      throw new Error(`unavailable: ${endpoint}`);
+    }
+    if (endpoint === 'repos/owner/repo') {
+      return {
+        allow_merge_commit: this.enabled.includes('merge'),
+        allow_squash_merge: this.enabled.includes('squash'),
+        allow_rebase_merge: this.enabled.includes('rebase'),
+      };
+    }
+    if (endpoint === 'repos/owner/repo/pulls/42') {
+      return {
+        state: this.mergedAt === '' ? 'open' : 'closed',
+        draft: false,
+        mergeable: true,
+        merged_at: this.mergedAt,
+        auto_merge: this.queued ? { enabled_by: { login: 'operator' } } : null,
+        review_decision: 'APPROVED',
+        head: { sha: this.head, repo: { full_name: 'owner/repo' } },
+        base: { ref: 'dev' },
+      };
+    }
+    if (endpoint === 'repos/owner/repo/branches/dev') {
+      return { protected: this.classicPolicy !== null, commit: { sha: this.base } };
+    }
+    if (endpoint.endsWith('/protection/required_status_checks')) return this.classicPolicy;
+    if (endpoint.startsWith('repos/owner/repo/rules/branches/dev')) return this.policy;
+    if (endpoint.includes('/check-runs')) return this.checkRuns;
+    if (endpoint.includes('/statuses')) return this.statuses;
+    if (endpoint.includes('/reviews')) return [{ id: 1, body: this.reviewBody }];
+    if (endpoint.includes('/issues/42/comments')) return [{ id: 2, body: this.reviewBody }];
+    if (endpoint.includes('/pulls/42/comments')) return [];
+    throw new Error(`unexpected endpoint ${endpoint}`);
+  }
+
+  async graphql(): Promise<unknown> {
+    if (this.failEndpoint === 'graphql') throw new Error('graphql pagination failed');
+    return {
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              nodes: [],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      },
+    };
+  }
+
+  async checkoutRepository(): Promise<string> {
+    return 'owner/repo';
+  }
+
+  async merge(
+    repository: string,
+    number: number,
+    method: MergeMethod,
+    head: string
+  ): Promise<void> {
+    this.merges.push({ repository, number, method, head });
+    this.mergedAt = '2026-09-13T00:00:00Z';
+    this.base = 'c'.repeat(40);
+  }
+}
+
+function qualified(method: MergeMethod | '' = 'merge'): SemanticAssessment {
+  return {
+    ready: true,
+    summary: 'qualified',
+    method,
+    method_source: method === '' ? '' : 'caller',
+    method_conflict: '',
+    evidence: { state: 'qualified', fingerprint: 'evidence-v1', references: ['validation.md'] },
+  };
+}
+
+function facts(overrides: Partial<MergeFacts> = {}): MergeFacts {
+  return {
+    repository: 'owner/repo',
+    enabledMethods: ['merge', 'squash', 'rebase'],
+    pullRequests: [
+      {
+        url: URL,
+        repository: 'owner/repo',
+        number: 42,
+        state: 'open',
+        draft: false,
+        headSha: HEAD,
+        headRepository: 'owner/repo',
+        base: 'dev',
+        liveBaseSha: BASE,
+        mergeable: true,
+        reviewDecision: 'APPROVED',
+        reviewFingerprint: 'review-v1',
+        reviewEvidence: { reviews: [], issueComments: [], lineComments: [], threads: [] },
+        requiredPolicy: 'none',
+        requiredChecks: [],
+        checkState: 'passing',
+        holds: [],
+      },
+    ],
+    holds: [],
+    fingerprint: 'facts-v1',
+    ...overrides,
+  };
+}
+
+function plan(method: MergeMethod = 'merge'): MergePlan {
+  return createMergePlan(facts(), qualified(method), method).plan!;
+}
+
+describe('merge queue contract', () => {
+  it('maps each method to the sole matching gh flag and pins the approved head', () => {
+    for (const method of ['merge', 'squash', 'rebase'] as const) {
+      const args = mergeArguments('owner/repo', 42, method, HEAD);
+      expect(args).toEqual([
+        'gh',
+        'pr',
+        'merge',
+        '42',
+        '--repo',
+        'owner/repo',
+        `--${method}`,
+        '--match-head-commit',
+        HEAD,
+      ]);
+      expect(args.filter(arg => ['--merge', '--squash', '--rebase'].includes(arg))).toEqual([
+        `--${method}`,
+      ]);
+    }
+  });
+
+  it('holds missing, conflicting, unsupported, and disabled methods before a write', () => {
+    expect(createMergePlan(facts(), qualified(''), '').ready).toBe(false);
+    expect(createMergePlan(facts(), qualified('squash'), 'merge').ready).toBe(false);
+    expect(createMergePlan(facts(), qualified(''), 'octopus').ready).toBe(false);
+    expect(
+      createMergePlan(facts({ enabledMethods: ['squash'] }), qualified('merge'), 'merge').ready
+    ).toBe(false);
+  });
+
+  it('uses the sole repository method when the caller and project are silent', () => {
+    const result = createMergePlan(facts({ enabledMethods: ['rebase'] }), qualified(''), '');
+    expect(result.ready).toBe(true);
+    expect(result.plan?.method).toBe('rebase');
+    expect(result.plan?.methodSource).toBe('repository');
+  });
+
+  it('allows no required hosted CI only with qualified evidence', () => {
+    expect(createMergePlan(facts(), qualified('merge'), 'merge').ready).toBe(true);
+    for (const state of ['missing', 'stale', 'rejected'] as const) {
+      const assessment = qualified('merge');
+      assessment.evidence.state = state;
+      expect(createMergePlan(facts(), assessment, 'merge').ready).toBe(false);
+    }
+  });
+
+  it('classifies check runs and commit statuses against known requirements', async () => {
+    const github = new FakeGitHub();
+    github.policy = [
+      {
+        type: 'required_status_checks',
+        parameters: {
+          required_status_checks: [{ context: 'build', integration_id: 7 }, { context: 'legacy' }],
+        },
+      },
+    ];
+    github.checkRuns = {
+      check_runs: [
+        { id: 10, name: 'build', status: 'completed', conclusion: 'success', app: { id: 7 } },
+      ],
+    };
+    github.statuses = [{ id: 10, context: 'legacy', state: 'success' }];
+    expect((await collectMergeFacts([URL], github)).pullRequests[0]?.checkState).toBe('passing');
+
+    github.statuses = [{ id: 11, context: 'legacy', state: 'pending' }];
+    expect((await collectMergeFacts([URL], github)).pullRequests[0]?.checkState).toBe('pending');
+    github.statuses = [{ id: 12, context: 'legacy', state: 'failure' }];
+    expect((await collectMergeFacts([URL], github)).pullRequests[0]?.checkState).toBe('failing');
+    github.statuses = [];
+    expect((await collectMergeFacts([URL], github)).pullRequests[0]?.checkState).toBe('missing');
+  });
+
+  it('combines classic protection and paginated ruleset requirements', async () => {
+    const github = new FakeGitHub();
+    github.classicPolicy = {
+      contexts: ['legacy'],
+      checks: [{ context: 'build', app_id: 7 }],
+    };
+    github.policy = [
+      [{ type: 'required_status_checks', parameters: { required_status_checks: [] } }],
+      [
+        {
+          type: 'required_status_checks',
+          parameters: { required_status_checks: [{ context: 'security', integration_id: 9 }] },
+        },
+      ],
+    ];
+    github.checkRuns = [
+      {
+        total_count: 2,
+        check_runs: [
+          { id: 30, name: 'build', status: 'completed', conclusion: 'success', app: { id: 7 } },
+        ],
+      },
+      {
+        total_count: 2,
+        check_runs: [
+          { id: 31, name: 'security', status: 'completed', conclusion: 'success', app: { id: 9 } },
+        ],
+      },
+    ];
+    github.statuses = [[{ id: 20, context: 'legacy', state: 'success' }], []];
+    const result = await collectMergeFacts([URL], github);
+    expect(result.pullRequests[0]).toMatchObject({
+      requiredPolicy: 'known',
+      checkState: 'passing',
+    });
+    expect(result.pullRequests[0]?.requiredChecks).toHaveLength(3);
+  });
+
+  it('requires distinct status and app-bound check obligations', async () => {
+    const github = new FakeGitHub();
+    github.classicPolicy = {
+      contexts: ['build'],
+      checks: [{ context: 'build', app_id: 7 }],
+    };
+    github.checkRuns = {
+      check_runs: [
+        { id: 20, name: 'build', status: 'completed', conclusion: 'success', app: { id: 8 } },
+      ],
+    };
+    github.statuses = [{ id: 20, context: 'build', state: 'success' }];
+    expect((await collectMergeFacts([URL], github)).pullRequests[0]?.checkState).toBe('missing');
+
+    github.checkRuns = {
+      check_runs: [
+        { id: 21, name: 'build', status: 'completed', conclusion: 'success', app: { id: 7 } },
+      ],
+    };
+    github.statuses = [{ id: 21, context: 'build', state: 'failure' }];
+    expect((await collectMergeFacts([URL], github)).pullRequests[0]?.checkState).toBe('failing');
+  });
+
+  it('uses only the latest status and check-run attempt', async () => {
+    const github = new FakeGitHub();
+    github.classicPolicy = { contexts: ['legacy'], checks: [{ context: 'build', app_id: 7 }] };
+    github.checkRuns = {
+      check_runs: [
+        { id: 10, name: 'build', status: 'completed', conclusion: 'success', app: { id: 7 } },
+        { id: 11, name: 'build', status: 'in_progress', conclusion: null, app: { id: 7 } },
+      ],
+    };
+    github.statuses = [
+      { id: 10, context: 'legacy', state: 'success' },
+      { id: 11, context: 'legacy', state: 'failure' },
+    ];
+    expect((await collectMergeFacts([URL], github)).pullRequests[0]?.checkState).toBe('failing');
+    github.statuses = [{ id: 12, context: 'legacy', state: 'success' }];
+    expect((await collectMergeFacts([URL], github)).pullRequests[0]?.checkState).toBe('pending');
+    github.checkRuns = {
+      check_runs: [
+        { id: 13, name: 'build', status: 'completed', conclusion: 'cancelled', app: { id: 7 } },
+      ],
+    };
+    expect((await collectMergeFacts([URL], github)).pullRequests[0]?.checkState).toBe('failing');
+  });
+
+  it('treats malformed pages, classic-policy failures, and origin mismatch as unknown policy', async () => {
+    const malformed = new FakeGitHub();
+    malformed.policy = [[{ type: 'required_status_checks', parameters: {} }]];
+    expect((await collectMergeFacts([URL], malformed)).pullRequests[0]?.requiredPolicy).toBe(
+      'unknown'
+    );
+
+    const classicFailure = new FakeGitHub();
+    classicFailure.classicPolicy = { contexts: ['build'], checks: [] };
+    classicFailure.failEndpoint = 'protection/required_status_checks';
+    expect((await collectMergeFacts([URL], classicFailure)).pullRequests[0]?.requiredPolicy).toBe(
+      'unknown'
+    );
+
+    const wrongOrigin = new FakeGitHub();
+    wrongOrigin.checkoutRepository = async () => 'other/repo';
+    expect(
+      (await collectMergeFacts([URL], wrongOrigin)).holds.some(hold =>
+        hold.reason.includes('checkout origin')
+      )
+    ).toBe(true);
+  });
+
+  it('holds unknown policy and incomplete or unauthorized reads as unknown', async () => {
+    for (const endpoint of ['rules/branches', 'check-runs', 'statuses', 'reviews', 'graphql']) {
+      const github = new FakeGitHub();
+      github.policy = [
+        {
+          type: 'required_status_checks',
+          parameters: { required_status_checks: [{ context: 'build' }] },
+        },
+      ];
+      github.failEndpoint = endpoint;
+      const result = await collectMergeFacts([URL], github);
+      expect(result.holds.length).toBeGreaterThan(0);
+      expect(
+        result.pullRequests[0]?.requiredPolicy === 'unknown' ||
+          result.pullRequests[0]?.checkState === 'unknown' ||
+          result.pullRequests[0]?.holds.some(hold => hold.reason.includes('review'))
+      ).toBe(true);
+    }
+  });
+
+  it('executes the approved method and reports a confirmed merge', async () => {
+    const github = new FakeGitHub();
+    const current = await collectMergeFacts([URL], github);
+    const approved = createMergePlan(current, qualified('squash'), 'squash').plan!;
+    const result = await executeMergePlan(approved, 'auto', null, github);
+    expect(result.merged).toBe(true);
+    expect(result.urls).toEqual([URL]);
+    expect(github.merges).toEqual([
+      { repository: 'owner/repo', number: 42, method: 'squash', head: HEAD },
+    ]);
+  });
+
+  it('makes no write when authorization, head, base, review, checks, or method changes', async () => {
+    const cases: Array<(github: FakeGitHub) => void> = [
+      github => {
+        github.head = 'd'.repeat(40);
+      },
+      github => {
+        github.base = 'd'.repeat(40);
+      },
+      github => {
+        github.reviewBody = 'changed';
+      },
+      github => {
+        github.policy = [
+          {
+            type: 'required_status_checks',
+            parameters: { required_status_checks: [{ context: 'build' }] },
+          },
+        ];
+      },
+      github => {
+        github.enabled = ['squash'];
+      },
+    ];
+    for (const mutate of cases) {
+      const github = new FakeGitHub();
+      const current = await collectMergeFacts([URL], github);
+      const approved = createMergePlan(current, qualified('merge'), 'merge').plan!;
+      mutate(github);
+      expect((await executeMergePlan(approved, 'auto', null, github)).merged).toBe(false);
+      expect(github.merges).toHaveLength(0);
+    }
+    const github = new FakeGitHub();
+    expect((await executeMergePlan(plan(), 'approve', { decision: 'hold' }, github)).merged).toBe(
+      false
+    );
+    expect(github.merges).toHaveLength(0);
+  });
+
+  it('rechecks review content in the final facts read before the write', async () => {
+    const github = new FakeGitHub();
+    const current = await collectMergeFacts([URL], github);
+    const approved = createMergePlan(current, qualified('merge'), 'merge').plan!;
+    let reviewReads = 0;
+    const originalApi = github.api.bind(github);
+    github.api = async endpoint => {
+      if (endpoint.includes('/reviews')) {
+        reviewReads += 1;
+        if (reviewReads === 2) github.reviewBody = 'changed immediately before write';
+      }
+      return originalApi(endpoint);
+    };
+    expect((await executeMergePlan(approved, 'auto', null, github)).merged).toBe(false);
+    expect(github.merges).toHaveLength(0);
+  });
+
+  it('rechecks required checks in the final facts read before the write', async () => {
+    const github = new FakeGitHub();
+    const current = await collectMergeFacts([URL], github);
+    const approved = createMergePlan(current, qualified('merge'), 'merge').plan!;
+    let policyReads = 0;
+    const originalApi = github.api.bind(github);
+    github.api = async endpoint => {
+      if (endpoint.includes('/rules/branches/')) {
+        policyReads += 1;
+        if (policyReads === 2) {
+          github.policy = [
+            {
+              type: 'required_status_checks',
+              parameters: { required_status_checks: [{ context: 'new-check' }] },
+            },
+          ];
+        }
+      }
+      return originalApi(endpoint);
+    };
+    const result = await executeMergePlan(approved, 'auto', null, github);
+    expect(result.merged).toBe(false);
+    expect(result.holds.some(hold => hold.reason.includes('required checks'))).toBe(true);
+    expect(github.merges).toHaveLength(0);
+  });
+
+  it('binds execution to the approved plan digest', async () => {
+    const github = new FakeGitHub();
+    const approved = plan();
+    expect((await executeMergePlan(approved, 'auto', null, github, 'wrong')).holds[0]?.kind).toBe(
+      'authorization'
+    );
+    expect(mergePlanDigest(approved)).toHaveLength(64);
+    expect(github.merges).toHaveLength(0);
+  });
+
+  it('reports a successful queue request as queued, not merged', async () => {
+    const github = new FakeGitHub();
+    github.merge = async (repository, number, method, head): Promise<void> => {
+      github.merges.push({ repository, number, method, head });
+      github.queued = true;
+    };
+    const current = await collectMergeFacts([URL], github);
+    const approved = createMergePlan(current, qualified('merge'), 'merge').plan!;
+    const result = await executeMergePlan(approved, 'auto', null, github);
+    expect(result).toMatchObject({ merged: false, urls: [], queued: [URL] });
+  });
+
+  it('uses the production command adapter with exact merge argv', async () => {
+    const calls: string[][] = [];
+    const runner: CommandRunner = {
+      run(argv) {
+        calls.push([...argv]);
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+    };
+    await new GhAdapter(runner).merge('owner/repo', 42, 'rebase', HEAD);
+    expect(calls).toEqual([mergeArguments('owner/repo', 42, 'rebase', HEAD)]);
+  });
+
+  it('returns typed holds from production CLI held and preview paths without GitHub access', async () => {
+    const heldArtifacts = await artifactsDir();
+    const heldPlan = await runCli({
+      INPUTS_ACTION: 'plan',
+      INPUTS_FACTS: JSON.stringify(
+        facts({ holds: [{ kind: 'checks', reason: 'required checks are pending' }] })
+      ),
+      INPUTS_ASSESSMENT: JSON.stringify(qualified('merge')),
+      INPUTS_METHOD: 'merge',
+      ARTIFACTS_DIR: heldArtifacts,
+    });
+    expect(heldPlan.exitCode).toBe(0);
+    const heldPlanOutput = JSON.parse(heldPlan.stdout) as {
+      ready: boolean;
+      summary: string;
+      holds: Hold[];
+    };
+    expect(heldPlanOutput).toMatchObject({ ready: false, holds: [{ kind: 'checks' }] });
+    const held = await runCli({
+      INPUTS_ACTION: 'execute',
+      INPUTS_READY: String(heldPlanOutput.ready),
+      INPUTS_PLAN_SUMMARY: heldPlanOutput.summary,
+      INPUTS_PLAN_HOLDS: JSON.stringify(heldPlanOutput.holds),
+      ARTIFACTS_DIR: heldArtifacts,
+    });
+    expect(held.exitCode).toBe(0);
+    expect(JSON.parse(held.stdout)).toMatchObject({ merged: false, holds: [{ kind: 'checks' }] });
+    expect(await readFile(join(heldArtifacts, 'merge-result.md'), 'utf8')).toContain(
+      'required checks are pending'
+    );
+
+    const previewArtifacts = await artifactsDir();
+    const readyPlan = await runCli({
+      INPUTS_ACTION: 'plan',
+      INPUTS_FACTS: JSON.stringify(facts()),
+      INPUTS_ASSESSMENT: JSON.stringify(qualified('merge')),
+      INPUTS_METHOD: 'merge',
+      ARTIFACTS_DIR: previewArtifacts,
+    });
+    expect(readyPlan.exitCode).toBe(0);
+    const readyPlanOutput = JSON.parse(readyPlan.stdout) as {
+      ready: boolean;
+      plan_reference: string;
+      plan_digest: string;
+    };
+    const preview = await runCli({
+      INPUTS_ACTION: 'execute',
+      INPUTS_READY: String(readyPlanOutput.ready),
+      INPUTS_PLAN_REFERENCE: readyPlanOutput.plan_reference,
+      INPUTS_PLAN_DIGEST: readyPlanOutput.plan_digest,
+      INPUTS_MODE: 'preview',
+      INPUTS_APPROVAL: 'null',
+      ARTIFACTS_DIR: previewArtifacts,
+    });
+    expect(preview.exitCode).toBe(0);
+    expect(JSON.parse(preview.stdout)).toMatchObject({
+      merged: false,
+      summary: 'the batch is not authorized',
+    });
+  });
+
+  it('rejects malformed facts and assessment at the production action boundary', async () => {
+    const artifacts = await artifactsDir();
+    const malformedFacts = facts();
+    delete (malformedFacts.pullRequests[0] as Partial<PullRequestFacts>).reviewEvidence;
+    expect(
+      (
+        await runCli({
+          INPUTS_ACTION: 'plan',
+          INPUTS_FACTS: JSON.stringify(malformedFacts),
+          INPUTS_ASSESSMENT: JSON.stringify(qualified('merge')),
+          INPUTS_METHOD: 'merge',
+          ARTIFACTS_DIR: artifacts,
+        })
+      ).exitCode
+    ).not.toBe(0);
+
+    const malformedAssessment = { ...qualified('merge'), evidence: { state: 'qualified' } };
+    expect(
+      (
+        await runCli({
+          INPUTS_ACTION: 'plan',
+          INPUTS_FACTS: JSON.stringify(facts()),
+          INPUTS_ASSESSMENT: JSON.stringify(malformedAssessment),
+          INPUTS_METHOD: 'merge',
+          ARTIFACTS_DIR: artifacts,
+        })
+      ).exitCode
+    ).not.toBe(0);
+  });
+});

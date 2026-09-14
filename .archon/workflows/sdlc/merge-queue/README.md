@@ -1,26 +1,38 @@
 # Merge queue
 
 `archon-merge-queue` accepts `prs` (1-5 explicit PR URLs), optional `evidence`,
-and `mode=preview|approve|auto`. It uses two medium command agents with a native
-approval node between them. GitHub operations and CI inspection use gh inside
-those nodes, with explicit repository and expected head identity.
+`merge_method=merge|squash|rebase`, and `mode=preview|approve|auto`. An empty
+method is resolved only by mandatory project guidance or a repository with one
+enabled method. A deterministic TypeScript collector reads GitHub policy and live
+state, one agent judges review and supplied evidence, and a typed plan/executor
+surround the native approval node.
 
-Approval covers the recorded batch. Auto explicitly authorizes that batch without
-a human pause, subject to repository guidance. Processing is sequential. Changed
-heads, unrelated base movement, stale validation after an earlier merge, unresolved
-findings, conflicts and pending checks hold the remaining work. GitHub-native
-queues remain queued until read-back confirms merging. No admin bypass is used.
+Effective required-check policy, current check results, and applicable validation
+evidence are independent facts. A repository with no required hosted CI may
+proceed with qualified evidence. Unknown policy, missing or stale evidence, and
+required checks that are pending, failing, missing, or unreadable hold the batch.
+Classic branch protection and applicable rulesets are combined. Their check-run,
+commit-status, review and comment reads are paged; an API or permission failure
+remains unknown.
 
-A hold a PR's own next commit can fix is published on that PR as one comment
-beginning `<!-- archon-merge-hold -->` (edited in place, cleared when the PR
-becomes eligible); the shared review reads it as a claim to settle when a delivery
-is re-driven on the branch. Transient holds (pending checks, base movement) stay in
-the run's merge-plan.md.
+Approval covers the recorded batch, evidence fingerprint, method, reviews, base,
+and heads. Auto explicitly authorizes that batch without a human pause, subject to
+repository guidance. Processing is sequential. The exact approved method becomes
+the sole `gh` method flag and every request uses the approved head through
+`--match-head-commit`. Changed heads, base or review material, disabled methods,
+stale validation after an earlier merge, unresolved findings, conflicts and
+pending checks hold the remaining work. GitHub-native queues remain queued until
+read-back confirms merging. No admin bypass is used. Live-base reads detect
+movement but are not an atomic base lock; GitHub protection remains authoritative.
 
-This replaces the custom forge-backed candidate composer and automatic-policy
-follow-up. It does not locally synthesize multi-PR commits, alter worktree ownership,
-or add an engine API. GitHub branch protection owns atomic server-side merge checks.
-The returned `merged` value is a business result, not an inferred engine status.
+Held and preview runs make no GitHub write. Their typed result and
+`merge-hold.md` preserve the reasons for the caller.
 
-No tests or agent runs were performed for this simplification. In particular,
-live merge behavior and prompt compliance remain unverified.
+This workflow does not synthesize multi-PR commits, alter worktree ownership, or
+add an engine API. GitHub branch protection owns atomic server-side merge checks.
+The returned `merged` value is confirmed by read-back and a queued request remains
+`merged=false`.
+
+The evidence qualification record is deliberately narrow in Stage A: semantic
+state, fingerprint, and references. Later capture/handoff work can supply durable
+provenance through those references without changing the merge plan contract.

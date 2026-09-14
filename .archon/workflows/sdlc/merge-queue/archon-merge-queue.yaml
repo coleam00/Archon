@@ -16,26 +16,80 @@ inputs:
   evidence:
     default: ''
     description: Optional runtime/review report paths or structured evidence for this batch.
+  merge_method:
+    default: ''
+    description: >-
+      Required merge strategy: merge, squash, or rebase. Empty is accepted only
+      when project guidance or the repository's sole enabled method resolves it.
 returns: merge
 nodes:
+  - id: facts
+    script: merge-queue
+    runtime: bun
+    with:
+      action: facts
+      prs: "$INPUTS.prs"
+
   - id: assess
     command: assess-merge-queue
     context: fresh
+    depends_on: [facts]
     with:
-      prs: "$INPUTS.prs"
+      facts: "$facts.output"
       evidence: "$INPUTS.evidence"
+      merge_method: "$INPUTS.merge_method"
     output_format:
       type: object
       properties:
         ready: { type: boolean }
         summary: { type: string }
-      required: [ready, summary]
+        method: { type: string, enum: [merge, squash, rebase, ''] }
+        method_source: { type: string, enum: [caller, project, ''] }
+        method_conflict: { type: string }
+        evidence:
+          type: object
+          properties:
+            state: { type: string, enum: [qualified, rejected, missing, stale] }
+            fingerprint: { type: string }
+            references: { type: array, items: { type: string } }
+          required: [state, fingerprint, references]
+      required: [ready, summary, method, method_source, method_conflict, evidence]
+
+  - id: plan
+    script: merge-queue
+    runtime: bun
+    depends_on: [facts, assess]
+    with:
+      action: plan
+      facts: "$facts.output"
+      assessment: "$assess.output"
+      method: "$INPUTS.merge_method"
+    output_format:
+      type: object
+      properties:
+        ready: { type: boolean }
+        summary: { type: string }
+        method: { type: string, enum: [merge, squash, rebase, ''] }
+        holds:
+          type: array
+          items:
+            type: object
+            properties:
+              kind: { type: string }
+              reason: { type: string }
+            required: [kind, reason]
+        plan_reference: { type: string }
+        plan_digest: { type: string }
+      required: [ready, summary, method, holds, plan_reference, plan_digest]
 
   - id: approval
-    depends_on: [assess]
-    when: "$assess.output.ready == true && $INPUTS.mode == 'approve'"
+    depends_on: [plan]
+    when: "$plan.output.ready == true && $INPUTS.mode == 'approve'"
     approval:
-      message: "Approve the PRs and pinned heads in $ARTIFACTS_DIR/merge-plan.json? $assess.output.summary"
+      message: >-
+        Approve the PRs, pinned heads, evidence and $plan.output.method method in
+        $ARTIFACTS_DIR/$plan.output.plan_reference (digest
+        $plan.output.plan_digest)? $plan.output.summary
       decisions:
         - id: approve
           label: Merge eligible PRs
@@ -43,12 +97,17 @@ nodes:
           label: Hold batch
 
   - id: merge
-    command: merge-approved-prs
-    context: fresh
-    depends_on: [assess, approval]
+    script: merge-queue
+    runtime: bun
+    depends_on: [plan, approval]
     trigger_rule: none_failed_min_one_success
     with:
-      ready: "$assess.output.ready"
+      action: execute
+      ready: "$plan.output.ready"
+      plan_summary: "$plan.output.summary"
+      plan_holds: "$plan.output.holds"
+      plan_reference: "$plan.output.plan_reference"
+      plan_digest: "$plan.output.plan_digest"
       mode: "$INPUTS.mode"
       approval: { from: "$approval.output", if_skipped: null }
     output_format:
@@ -56,5 +115,14 @@ nodes:
       properties:
         merged: { type: boolean }
         urls: { type: array, items: { type: string } }
+        queued: { type: array, items: { type: string } }
         summary: { type: string }
-      required: [merged, urls, summary]
+        holds:
+          type: array
+          items:
+            type: object
+            properties:
+              kind: { type: string }
+              reason: { type: string }
+            required: [kind, reason]
+      required: [merged, urls, queued, summary, holds]

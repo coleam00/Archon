@@ -122,17 +122,34 @@ discoveries__render:
   duplicate_count: 0
   update_existing_count: 0
   new_count: 0
+merge__facts: '{"repository":"example/app","enabledMethods":["merge"],"pullRequests":[],"holds":[],"fingerprint":"fixture"}'
 merge__assess:
   ready: true
   summary: "stub: batch eligible"
+  method: merge
+  method_source: project
+  method_conflict: ""
+  evidence:
+    state: qualified
+    fingerprint: fixture
+    references: ["/artifacts/runtime-qualification.md"]
+merge__plan:
+  ready: true
+  summary: "stub: plan recorded"
+  method: merge
+  holds: []
+  plan_reference: merge-plan-fixture.json
+  plan_digest: fixture
 merge__merge:
   merged: true
   urls: ["https://github.com/example/app/pull/7"]
+  queued: []
   summary: "stub: merged"
+  holds: []
 ship__deliver__validate__record-evidence: '{"recorded":true}'
 fixture:
   expect: completed
-  reached: [merge__assess, merge__merge]
+  reached: [merge__facts, merge__assess, merge__plan, merge__merge]
   inputs:
     target: "https://github.com/example/app/issues/1"
     scenario: "/private/scenario.json"

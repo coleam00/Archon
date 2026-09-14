@@ -26,6 +26,11 @@ inputs:
   merge_mode:
     default: approve
     description: preview, approve, or auto for the shared merge workflow.
+  merge_method:
+    default: ''
+    description: >-
+      merge, squash, or rebase. Empty requires a project rule or a repository
+      with exactly one enabled method.
   discovery_publication:
     default: preview
     description: preview, approve, or auto for discovered adjacent work.
@@ -227,6 +232,7 @@ nodes:
     with:
       prs: "$selected.output.prs"
       mode: "$INPUTS.merge_mode"
+      merge_method: "$INPUTS.merge_method"
       evidence: "$selected.output.evidence"
 
   # Merging is not shipping. With deployment inputs set, a confirmed merge rolls

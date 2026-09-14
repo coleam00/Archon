@@ -31,7 +31,6 @@ $ARGUMENTS
 - When `work_order` is non-empty, read it in full. It is the accepted contract implementation received. Preserve its required outcome, explicit non-goals, and boundaries as prose; do not parse it with scripts, regexes, or keyword extraction.
 - When `work_order` is empty and the target is a PR, use the PR body's problem/outcome and explicit scope or non-goals as the standalone review contract. Do not infer a broader promise from the changed files.
 - When neither supplies an explicit boundary, state that the review is using the requested scope and repository contracts without inventing a non-goal.
-- When the target PR carries a comment whose first line is `<!-- archon-merge-hold -->`, read it: the shared merge queue held this PR and wrote down why. Its reasons are claims about the head it names, to be settled against the code by the reviewers that follow — never accepted on the merge queue's word and never dropped. Record them verbatim under **Merge hold** in scope.md with the head the comment names; when the diff since that head has plainly addressed a reason, say so beside it.
 
 ## Select docs review
 

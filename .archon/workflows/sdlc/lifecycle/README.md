@@ -3,10 +3,12 @@
 `archon-lifecycle` composes the existing shared ship (including independent review,
 validation and delivery correction loops), runtime verification, a fresh holdout,
 discoveries, merge queue and, optionally, deployment. Inputs are `target`, absolute
-`scenario` and `holdout` paths, `merge_mode`, `discovery_publication`, `publish`,
+`scenario` and `holdout` paths, `merge_mode`, `merge_method`, `discovery_publication`, `publish`,
 and the optional `deploy`/`health`/`identity` commands forwarded to `archon-deploy`
 after a confirmed merge. Modes default to approval and preview; select auto
-explicitly for unattended publication/merge.
+explicitly for unattended publication/merge. Set `merge_method` to `merge`,
+`squash`, or `rebase`; leaving it empty requires mandatory project guidance or
+exactly one method enabled by the repository.
 
 **Backlog intake.** An empty `target` makes the first node select the oldest open
 issue in the origin repository that no earlier run has touched: no `archon-*`

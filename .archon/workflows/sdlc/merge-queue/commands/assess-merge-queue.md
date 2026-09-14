@@ -1,15 +1,16 @@
 # Assess a merge batch
 
-Requested PR URLs: $INPUTS.prs
+Mechanical GitHub facts: $INPUTS.facts
 Additional evidence: $INPUTS.evidence
-Keep the checkout unchanged; the only GitHub write here is the hold comment
-described below. Read project guidance and use gh with an explicit repository. Require 1-5 distinct same-repository PRs targeting one base.
-Reject ambiguous identity, forks, drafts, closed PRs, conflicts, unknown checks,
-or unresolved review findings. Read PR bodies, review comments, status checks and
-required CI for the current head; pending is not passing. Require independent
-review and actual validation evidence, including project-required runtime checks.
-No checks is not evidence of validation. Read the supplied reports in full and
-verify their source/head matches; a prose assertion that tests passed is insufficient.
+Requested merge method: $INPUTS.merge_method
+Keep the checkout and GitHub unchanged. The supplied facts are the mechanical authority for repository
+identity, enabled methods, current heads and bases, effective required-check policy,
+check results and review material. Do not replace an unknown policy with an
+inference. Require independent review and applicable validation evidence, including
+project-required runtime checks. Read supplied reports in full and verify their
+source/head matches; a prose assertion that tests passed is insufficient. No
+required hosted CI is valid only when the facts say none and the validation
+evidence is qualified.
 
 Independent review means a reviewer other than the implementer, not a different
 GitHub login. In a single-account factory the same identity pushes the branch and
@@ -21,27 +22,15 @@ the canonical report is missing, not ready, or describes an older head.
 
 Read dependencies and diffs to select an order. Hold if the requested PRs have an
 unresolved dependency or incompatible changes; do not silently add PRs to the batch.
-Write merge-plan.json under $ARTIFACTS_DIR with repository, base, base_sha,
-ordered PR number/url/head_sha entries, evidence references and reasons. `base_sha`
-is the base branch's live head as read from GitHub during this assessment
-(`gh api repos/<owner>/<repo>/branches/<base> --jq .commit.sha`), not a PR's
-merge base and not a PR record's `base.sha`, which is a snapshot: the merge node
-compares the live head against it to detect movement between assessment and
-merge. If a PR's validation predates the live base
-head, judge that here (GitHub's mergeability and the checks on the current PR head)
-rather than recording the older base. Record holds in merge-plan.md. Return ready only when the entire requested batch is
-eligible. No code changes, branch switches, custom worktrees, or agent subprocesses.
+Return the exact requested method with source=caller. When the caller left it
+empty, return a mandatory method from project guidance with source=project, or
+leave it unresolved; the deterministic plan step may select the repository's sole
+enabled method. Report a conflict instead of substituting a method. Return evidence
+state, a content/applicability fingerprint, and direct references. Stage A accepts
+the existing qualified evidence form; it does not invent provenance for prose.
+Return ready only when the entire batch is semantically eligible. The next typed
+script owns the digest-named merge plan and all GitHub merge mechanics. No code changes,
+branch switches, custom worktrees, or agent subprocesses.
 
-A hold recorded only under this run's artifacts is a hold nobody sees, and in an
-unattended factory the PR then sits open forever. When a PR is held for a reason
-its own next commit can fix — an acceptance criterion or runtime contract the diff
-does not meet, a canonical review that is missing, not ready, or stale, a conflict
-with its base — publish the hold on that PR as one issue comment whose first line
-is `<!-- archon-merge-hold -->`, naming the head SHA assessed and each reason with
-the evidence that proves it (the criterion quoted, the code that misses it). Search
-the PR's comments for that marker first and edit the existing comment in place;
-never append a second. When a PR carrying the marker is now eligible, edit the
-comment to say the hold cleared at the new head. A transient hold — checks still
-pending, the base moved — is not published; a later run resolves it without a code
-change. The shared review workflow reads this comment when a delivery is re-driven
-on the branch, which is how the hold becomes a finding that gets fixed.
+Return every hold in the structured assessment. Assessment and preview are
+read-only; do not publish comments, edit pull requests, or perform any merge action.
