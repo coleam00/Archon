@@ -11,5 +11,7 @@ print(json.dumps({
     "verdict": verdict,
     "candidate": os.environ["INPUTS_CANDIDATE"],
     "checkout": os.environ["INPUTS_CHECKOUT"],
+    "directory": os.environ["INPUTS_DIRECTORY"],
+    "report_path": os.environ["INPUTS_REPORT_PATH"],
     "summary": os.environ["INPUTS_REASON"],
 }))

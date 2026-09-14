@@ -18,5 +18,10 @@ elif (
         status="inconclusive",
         reason=f"malformed report after exhausting the retry budget: {result['reason']}",
     )
-result.update(done=result["status"] != "malformed", checkout=os.environ["INPUTS_CHECKOUT"])
+result.update(
+    done=result["status"] != "malformed",
+    checkout=os.environ["INPUTS_CHECKOUT"],
+    directory=os.environ["INPUTS_DIRECTORY"],
+    report_path=os.environ["INPUTS_REPORT_PATH"],
+)
 print(json.dumps(result))

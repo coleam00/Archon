@@ -85,9 +85,21 @@ nodes:
             fi
           output_format: *command-result
 
+        - id: capture-helper
+          script: capture-command
+          runtime: bun
+          depends_on: [start-run]
+          with:
+            action: locate
+          output_format:
+            type: object
+            properties:
+              path: { type: string }
+            required: [path]
+
         - id: verify
           command: verify-runtime
-          depends_on: [start-run]
+          depends_on: [capture-helper]
           when: '$start-run.output.ok == true'
           mutates_checkout: false
 
@@ -149,13 +161,17 @@ nodes:
             attempt: '$prepare-attempt.output.attempt'
             attempt_limit: *attempt-limit
             checkout: '$prepare-attempt.output.checkout'
+            directory: '$prepare-attempt.output.directory'
+            report_path: '$prepare-attempt.output.report_path'
           output_format:
             type: object
             properties:
               <<: *assessment-properties
               done: { type: boolean }
               checkout: { type: string }
-            required: [status, reason, candidate, done, checkout]
+              directory: { type: string }
+              report_path: { type: string }
+            required: [status, reason, candidate, done, checkout, directory, report_path]
 
   - id: gate-verified
     script: gate-verified
@@ -166,6 +182,8 @@ nodes:
       reason: '$verify-loop.output.reason'
       candidate: '$verify-loop.output.candidate'
       checkout: '$verify-loop.output.checkout'
+      directory: '$verify-loop.output.directory'
+      report_path: '$verify-loop.output.report_path'
     output_format:
       type: object
       properties:
@@ -174,4 +192,6 @@ nodes:
         candidate: { type: string }
         checkout: { type: string }
         summary: { type: string }
-      required: [verified, verdict, candidate, checkout, summary]
+        directory: { type: string }
+        report_path: { type: string }
+      required: [verified, verdict, candidate, checkout, summary, directory, report_path]

@@ -3,7 +3,8 @@
 Candidate: $INPUTS.candidate
 Runtime: $INPUTS.runtime
 Independent holdout: $INPUTS.holdout
-Read the referenced reports, assertions and target identity evidence in full.
+Read the returned directory and report_path references for both results, then read
+the referenced reports, assertions and target identity evidence in full.
 Require both actual verified=true results, independent fresh environments, and
 proof that each target ran the delivered candidate revision. Re-read git HEAD and
 the PR head with gh; both must still equal the candidate. Missing, inconclusive,

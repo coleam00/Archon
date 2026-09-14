@@ -26,10 +26,24 @@ Missing instructions, an unreachable target, and checks you cannot perform are
 inconclusive. A failed assertion requires observed product behavior that violates
 the scenario. Preserve literal measurements, including boolean true or false.
 
-Capture the commands/tools used and their actual output in new evidence files
+Capture the commands/tools used and their actual output bytes directly from the
+invocation in new evidence files
 inside this attempt directory:
 
 $prepare-attempt.output.directory
+
+For shell commands, redirect stdout and stderr to files in that directory in the
+same shell invocation and save the numeric exit status beside them. The packaged
+helper at `$capture-helper.output.path` does this without interpreting a shell:
+run it with `bun`, an evidence path prefix, `--`, and the command plus arguments. It
+writes `.stdout`, `.stderr`, and `.exit.json` files and returns the command's exit
+status. For HTTP
+clients, use their native output/header file options. For browser and screenshot
+tools, use their native file output. Then read the saved file and cite what you
+actually observed. Do not use Start-Transcript, provider/session transcripts,
+chat prose, or a copied tool response as evidence. If a tool cannot export usable
+evidence, mark the assertion inconclusive. A nonzero exit may be the expected
+negative observation; preserve it instead of converting the command to success.
 
 Write a JSON report at this exact path:
 

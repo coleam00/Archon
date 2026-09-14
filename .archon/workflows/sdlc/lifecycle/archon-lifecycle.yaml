@@ -26,6 +26,9 @@ inputs:
   merge_mode:
     default: approve
     description: preview, approve, or auto for the shared merge workflow.
+  merge_method:
+    default: ''
+    description: 'Required merge strategy: merge, squash, or rebase.'
   discovery_publication:
     default: preview
     description: preview, approve, or auto for discovered adjacent work.
@@ -100,6 +103,7 @@ nodes:
     when: "$candidate.output.delivered == true"
     with:
       scenario: "$INPUTS.scenario"
+      candidate: "$candidate.output.head"
 
   - id: holdout
     include: archon-verify-runtime
@@ -107,6 +111,7 @@ nodes:
     when: "$runtime.output.verified == true"
     with:
       scenario: "$INPUTS.holdout"
+      candidate: "$candidate.output.head"
 
   - id: qualify
     command: qualify-runtime
@@ -161,6 +166,7 @@ nodes:
     when: "$repaired-candidate.output.delivered == true"
     with:
       scenario: "$INPUTS.scenario"
+      candidate: "$repaired-candidate.output.head"
 
   - id: holdout-retry
     include: archon-verify-runtime
@@ -168,6 +174,7 @@ nodes:
     when: "$runtime-retry.output.verified == true"
     with:
       scenario: "$INPUTS.holdout"
+      candidate: "$repaired-candidate.output.head"
 
   - id: qualify-retry
     command: qualify-runtime
@@ -227,6 +234,7 @@ nodes:
     with:
       prs: "$selected.output.prs"
       mode: "$INPUTS.merge_mode"
+      merge_method: "$INPUTS.merge_method"
       evidence: "$selected.output.evidence"
 
   # Merging is not shipping. With deployment inputs set, a confirmed merge rolls

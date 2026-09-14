@@ -16,6 +16,9 @@ inputs:
   evidence:
     default: ''
     description: Optional runtime/review report paths or structured evidence for this batch.
+  merge_method:
+    default: ''
+    description: 'Requested merge strategy: merge, squash, or rebase. Ambiguous or conflicting intent holds.'
 returns: merge
 nodes:
   - id: assess
@@ -24,18 +27,42 @@ nodes:
     with:
       prs: "$INPUTS.prs"
       evidence: "$INPUTS.evidence"
+      merge_method: "$INPUTS.merge_method"
     output_format:
+      type: object
+      properties:
+        summary: { type: string }
+        method: { type: string, enum: [merge, squash, rebase, ''] }
+        ci_requirement: { type: string, enum: [none, required, unknown] }
+        checks_state: { type: string, enum: [passing, failing, pending, missing, not_applicable] }
+        validation_verified: { type: boolean }
+        review_verified: { type: boolean }
+        plan_digest: { type: string }
+      required: [summary, method, ci_requirement, checks_state, validation_verified, review_verified, plan_digest]
+
+  - id: gate
+    script: merge-action
+    runtime: bun
+    depends_on: [assess]
+    with:
+      action: gate
+      assessment: "$assess.output"
+    output_format: &gate-result
       type: object
       properties:
         ready: { type: boolean }
         summary: { type: string }
-      required: [ready, summary]
+        method: { type: string, enum: [merge, squash, rebase, ''] }
+        plan_digest: { type: string }
+      required: [ready, summary, method, plan_digest]
 
   - id: approval
-    depends_on: [assess]
-    when: "$assess.output.ready == true && $INPUTS.mode == 'approve'"
+    depends_on: [gate]
+    when: "$gate.output.ready == true && $INPUTS.mode == 'approve'"
     approval:
-      message: "Approve the PRs and pinned heads in $ARTIFACTS_DIR/merge-plan.json? $assess.output.summary"
+      message: >-
+        Approve the PRs, pinned heads, evidence and $gate.output.method method in
+        $ARTIFACTS_DIR/merge-plan.json (digest $gate.output.plan_digest)? $gate.output.summary
       decisions:
         - id: approve
           label: Merge eligible PRs
@@ -43,18 +70,44 @@ nodes:
           label: Hold batch
 
   - id: merge
-    command: merge-approved-prs
-    context: fresh
-    depends_on: [assess, approval]
+    depends_on: [gate, approval]
     trigger_rule: none_failed_min_one_success
-    with:
-      ready: "$assess.output.ready"
-      mode: "$INPUTS.mode"
-      approval: { from: "$approval.output", if_skipped: null }
-    output_format:
-      type: object
-      properties:
-        merged: { type: boolean }
-        urls: { type: array, items: { type: string } }
-        summary: { type: string }
-      required: [merged, urls, summary]
+    loop_group:
+      until_bash: test $execute.output.done = true
+      max_iterations: 5
+      fresh_context: true
+      nodes:
+        - id: refresh
+          command: merge-approved-prs
+          context: fresh
+          output_format:
+            type: object
+            properties:
+              authorized: { type: boolean }
+              repository: { type: string }
+              number: { type: integer }
+              head_sha: { type: string }
+              method: { type: string, enum: [merge, squash, rebase, ''] }
+              summary: { type: string }
+            required: [authorized, repository, number, head_sha, method, summary]
+
+        - id: execute
+          script: merge-action
+          runtime: bun
+          depends_on: [refresh]
+          with:
+            action: execute
+            gate: "$gate.output"
+            mode: "$INPUTS.mode"
+            approval: { from: "$approval.output", if_skipped: null }
+            request: "$refresh.output"
+            previous: "$LOOP_PREV.execute.output"
+          output_format:
+            type: object
+            properties:
+              done: { type: boolean }
+              merged: { type: boolean }
+              urls: { type: array, items: { type: string } }
+              queued: { type: array, items: { type: string } }
+              summary: { type: string }
+            required: [done, merged, urls, queued, summary]
