@@ -681,6 +681,18 @@ export interface ProviderCapabilities {
    *  - `false`         — the provider cannot produce structured output at all.
    */
   structuredOutput: 'enforced' | 'best-effort' | false;
+  /**
+   * Whether the provider enforces OpenAI Structured Outputs strict-mode's
+   * required-coverage rule: every key declared in `properties` MUST also
+   * appear in `required`. A schema that violates this rule is rejected by the
+   * provider's API with HTTP 400 `invalid_json_schema` before any work starts.
+   *
+   * Only relevant when `structuredOutput` is `'enforced'`. Among enforced
+   * providers, only Codex (OpenAI) enforces this rule; Claude accepts
+   * optional-by-omission. Best-effort providers never reject schemas at the
+   * API level and declare `false`.
+   */
+  requiresAllPropertiesRequired: boolean;
   envInjection: boolean;
   costControl: boolean;
   effortControl: boolean;

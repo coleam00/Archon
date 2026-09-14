@@ -97,6 +97,7 @@ import {
   applyLoopPrevToBodyNode,
   executeDagWorkflow,
   collectContainerIncompatibleProviders,
+  collectStrictSchemaViolations,
   containerCommandName,
   buildSubprocessDockerArgs,
   childOutcomeFromRun,
@@ -345,6 +346,7 @@ const mockClaudeCapabilities = () => ({
   settingSources: true,
   nativeTools: true,
   containerExec: true,
+  requiresAllPropertiesRequired: false,
 });
 /** Canonical capabilities for Codex-backed test nodes. */
 const mockCodexCapabilities = (): ReturnType<typeof getProviderCapabilities> =>
@@ -3618,6 +3620,7 @@ describe('executeDagWorkflow -- output_format structured output', () => {
             run_code_review: { type: 'string', enum: ['true', 'false'] },
             run_tests: { type: 'string', enum: ['true', 'false'] },
           },
+          required: ['run_code_review', 'run_tests'],
         },
       },
       {
@@ -3682,7 +3685,11 @@ describe('executeDagWorkflow -- output_format structured output', () => {
         id: 'check',
         kind: 'agent',
         source: { kind: 'command', name: 'classify' },
-        output_format: { type: 'object', properties: { status: { type: 'string' } } },
+        output_format: {
+          type: 'object',
+          properties: { status: { type: 'string' } },
+          required: ['status'],
+        },
       },
     ];
 
@@ -26773,6 +26780,98 @@ describe('collectContainerIncompatibleProviders', () => {
     } as unknown as DagNode;
     const bad = collectContainerIncompatibleProviders([group], 'claude');
     expect([...bad]).toEqual(['codex']);
+  });
+});
+
+describe('collectStrictSchemaViolations', () => {
+  const agentNode = (id: string, extra: Partial<DagNode> = {}): DagNode =>
+    ({
+      id,
+      kind: 'agent',
+      source: { kind: 'inline', prompt: `do ${id}` },
+      ...extra,
+    }) as unknown as DagNode;
+
+  const looseSchema = {
+    type: 'object',
+    properties: { ready: { type: 'boolean' }, note: { type: 'string' } },
+    required: ['ready'],
+  };
+
+  it('flags an agent under Codex workflow-level provider with loose schema', () => {
+    const violations = collectStrictSchemaViolations(
+      [agentNode('a', { output_format: looseSchema })],
+      'codex'
+    );
+    expect(violations).toHaveLength(1);
+    expect(violations[0].provider).toBe('codex');
+    expect(violations[0].nodeId).toBe('a');
+    expect(violations[0].missing).toEqual(['note']);
+  });
+
+  it('is empty under Claude workflow-level provider', () => {
+    const violations = collectStrictSchemaViolations(
+      [agentNode('a', { output_format: looseSchema })],
+      'claude'
+    );
+    expect(violations).toEqual([]);
+  });
+
+  it('is empty when node pins provider: claude under Codex workflow', () => {
+    const violations = collectStrictSchemaViolations(
+      [agentNode('a', { output_format: looseSchema, provider: 'claude' })],
+      'codex'
+    );
+    expect(violations).toEqual([]);
+  });
+
+  it('flags loop_group body agent under Codex', () => {
+    const group = {
+      id: 'g',
+      kind: 'loop_group',
+      loop_group: {
+        max_iterations: 1,
+        nodes: [agentNode('inner', { output_format: looseSchema })],
+      },
+    } as unknown as DagNode;
+    const violations = collectStrictSchemaViolations([group], 'codex');
+    expect(violations).toHaveLength(1);
+    expect(violations[0].nodeId).toBe('inner');
+  });
+
+  it('skips loop_group inert output_format', () => {
+    const group = {
+      id: 'g',
+      kind: 'loop_group',
+      output_format: looseSchema,
+      loop_group: { max_iterations: 1, nodes: [] },
+    } as unknown as DagNode;
+    const violations = collectStrictSchemaViolations([group], 'codex');
+    expect(violations).toEqual([]);
+  });
+
+  it('skips gate nodes with output_format (inert)', () => {
+    const gate = {
+      id: 'gate',
+      kind: 'gate',
+      decisions: [{ rework: 'reassess' }],
+      output_format: looseSchema,
+    } as unknown as DagNode;
+    const violations = collectStrictSchemaViolations([gate], 'codex');
+    expect(violations).toEqual([]);
+  });
+
+  it('skips unknown provider gracefully', () => {
+    const node = agentNode('a', {
+      output_format: looseSchema,
+      provider: 'unknown-provider',
+    });
+    expect(() => collectStrictSchemaViolations([node], 'unknown-provider')).not.toThrow();
+  });
+
+  it('skips node without output_format entirely', () => {
+    const violations = collectStrictSchemaViolations([agentNode('a')], 'codex');
+    expect(violations).toEqual([]);
   });
 });
 

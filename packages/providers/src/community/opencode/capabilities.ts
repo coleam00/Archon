@@ -30,6 +30,7 @@ export const OPENCODE_CAPABILITIES: ProviderCapabilities = {
   agents: true,
   toolRestrictions: true,
   structuredOutput: 'enforced', // sends format:{json_schema}; reads info.structured_output
+  requiresAllPropertiesRequired: false, // OpenCode does not enforce the required-coverage rule
   envInjection: true,
   costControl: false,
   effortControl: false,

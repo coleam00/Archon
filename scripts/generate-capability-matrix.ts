@@ -66,6 +66,10 @@ const AXES: readonly { key: keyof ProviderCapabilities; label: string }[] = [
   { key: 'settingSources', label: 'Setting sources (`settingSources`)' },
   { key: 'nativeTools', label: 'In-process native tools' },
   { key: 'containerExec', label: 'Container exec (folder-project container backend)' },
+  {
+    key: 'requiresAllPropertiesRequired',
+    label: 'Strict-mode `required` coverage (every key in `properties` MUST appear in `required`)',
+  },
 ];
 
 /**

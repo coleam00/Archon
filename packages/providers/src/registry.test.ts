@@ -30,6 +30,7 @@ function makeMockProvider(id: string): IAgentProvider {
       agents: false,
       toolRestrictions: false,
       structuredOutput: false,
+      requiresAllPropertiesRequired: false,
       envInjection: false,
       costControl: false,
       effortControl: false,
