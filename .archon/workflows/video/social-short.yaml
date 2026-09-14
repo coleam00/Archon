@@ -1,0 +1,161 @@
+# Social short — general-interest, insight-driven vertical video.
+#
+#   archon workflow run social-short "Why cities can feel lonelier than small towns"
+name: social-short
+description: "Topic -> insight-driven 1080x1920 short with narration, captions and post copy. Stores the file; does not publish."
+
+worktree:
+  enabled: false
+
+nodes:
+  # The playbook the quality-review loop maintains. Absent on the first run.
+  # Two playbooks, deliberately: rules that are universal (caption legibility,
+  # audio levels, footage repetition) live in strategy-common.md, while rules
+  # specific to this kind live in its own file. A single shared playbook would
+  # let a lesson learned from a product ad silently rewrite the UGC rules, and
+  # those two have opposite instructions for hook, pacing and claims.
+  - id: read-strategy
+    bash: |
+      common="$STATE_DIR/content/strategy-common.md"
+      mine="$STATE_DIR/content/strategy-social-short.md"
+      found=0
+      if [ -f "$common" ]; then echo "## Universal craft rules"; cat "$common"; echo; found=1; fi
+      if [ -f "$mine" ]; then echo "## Rules for this video kind (social-short)"; cat "$mine"; found=1; fi
+      if [ "$found" -eq 0 ]; then
+        echo "(No playbook yet for social-short — this is the first run. Use your own judgement.)"
+      fi
+
+  # The script is the highest-leverage output in the pack, so it gets the
+  # top tier. Tiers (not literal model strings) keep this portable: another
+  # install maps `large` to whatever it actually has.
+  - id: gen-brief
+    model: large
+    depends_on: [read-strategy]
+    prompt: |
+      Write a script for a 35-45 second vertical short about:
+
+      $ARGUMENTS
+
+      Follow the current house playbook:
+      ---
+      $read-strategy.output
+      ---
+
+      Requirements for the narration:
+      - 85-110 words. It will be read aloud at roughly 150 wpm.
+      - Open with a hook in the first sentence that creates an open loop —
+        a question, a contradiction, or a surprising claim. No throat-clearing
+        ("In this video...", "Have you ever wondered...").
+      - Plain spoken English. Short sentences. No markdown, no emoji, no stage
+        directions, no speaker labels — every character gets read aloud.
+      - Write out numbers and symbols as words ("ninety percent", not "90%").
+      - End on a resonant closing line, not a call to action.
+
+      Requirements for the keywords — these are the single biggest lever on how
+      the video looks, because they are fed verbatim to a stock footage search:
+      - 6 to 8 keywords, each 1-3 words.
+      - Every one must be a CONCRETE, FILMABLE scene: "waves crashing rocks",
+        "person typing laptop night", "city traffic timelapse".
+      - Never abstract concepts: not "innovation", "success", "the future" —
+        those return generic, lifeless corporate stock.
+      - They should track the narrative in order, so the visuals follow the story.
+    output_format:
+      type: object
+      properties:
+        title: { type: string }
+        hook: { type: string }
+        narration: { type: string }
+        keywords:
+          type: array
+          items: { type: string }
+        visual_notes: { type: string }
+      # Every property must be listed: OpenAI-backed providers reject a
+      # structured-output schema whose `required` omits any key in `properties`,
+      # so a partially-required schema works on Claude and 400s on Codex.
+      required: [title, hook, narration, keywords, visual_notes]
+
+  # Named script nodes do NOT get output substitution (only inline ones do), so
+  # the brief is persisted once here and every script reads it from disk.
+  - id: write-brief
+    depends_on: [gen-brief]
+    bash: |
+      set -euo pipefail
+      mkdir -p "$ARTIFACTS_DIR"
+      # The engine shell-quotes upstream output refs (and may spill large ones
+      # to a cat subshell), so a ref must be consumed as a shell WORD. Pasting
+      # one into a heredoc writes the surrounding quotes into the file.
+      # NB: node refs are matched inside comments too — don't spell one here.
+      brief=$gen-brief.output
+      printf '%s' "$brief" > "$ARTIFACTS_DIR/brief.json"
+      python3 -c "import json,os;d=json.load(open(os.environ['ARTIFACTS_DIR']+'/brief.json'));print('brief ok —',len(d['narration'].split()),'words,',len(d['keywords']),'keywords')"
+
+  # Copy follows tight rules against a script that already exists — it does
+  # not need the tier that writes the script. Pinned rather than inherited.
+  - id: write-copy
+    model: medium
+    depends_on: [gen-brief]
+    prompt: |
+      Write the social copy for this finished short.
+
+      TITLE: $gen-brief.output.title
+      NARRATION: $gen-brief.output.narration
+
+      The single hardest rule: **only promise what the narration delivers.**
+      A description offering "5 ways to fix it" for a video containing no five
+      ways is a lie that costs you the retention it buys. If the narration is
+      reflective rather than practical, sell the *insight*, not a checklist.
+
+      Within that constraint, write for search and for a reason to care:
+      - Lead with the value or the tension, not a summary.
+      - Use the words a person would actually type into a search box.
+      - No engagement-bait ("comment below!", "you won't believe").
+
+      Per platform:
+      - youtube_title: <=70 chars, searchable, no punctuation spam.
+      - youtube_description: 2-3 short paragraphs. The first line carries the
+        hook because it is all that shows before "more". End with 3-5 plain-text
+        search phrases on their own lines.
+      - youtube_tags: 8-12 lowercase tags, no "#".
+      - tiktok_caption: <=150 chars including hashtags, conversational.
+      - instagram_caption: 1-2 sentences plus a line of hashtags.
+      - hashtags: 6-10, mixed broad and niche, no "#" prefix in the values.
+      - search_keywords: 6-10 phrases someone would literally type. These are
+        model-derived, NOT validated against real search volume — never invent
+        volume numbers for them.
+      - alt_text: one sentence describing the visuals for accessibility.
+    output_format:
+      type: object
+      properties:
+        youtube_title: { type: string }
+        youtube_description: { type: string }
+        youtube_tags:
+          type: array
+          items: { type: string }
+        tiktok_caption: { type: string }
+        instagram_caption: { type: string }
+        hashtags:
+          type: array
+          items: { type: string }
+        search_keywords:
+          type: array
+          items: { type: string }
+        alt_text: { type: string }
+      required:
+        [youtube_title, youtube_description, youtube_tags, tiktok_caption,
+         instagram_caption, hashtags, search_keywords, alt_text]
+
+  - id: save-copy
+    depends_on: [write-copy]
+    bash: |
+      set -euo pipefail
+      mkdir -p "$ARTIFACTS_DIR"
+      copy=$write-copy.output
+      printf '%s' "$copy" > "$ARTIFACTS_DIR/copy.json"
+      python3 -c "import json,os;d=json.load(open(os.environ['ARTIFACTS_DIR']+'/copy.json'));print('copy ok —',d['youtube_title'])"
+
+  - id: render
+    depends_on: [write-brief, save-copy]
+    trigger_rule: all_success
+    include: video-render-block
+    with:
+      kind: social-short

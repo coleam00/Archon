@@ -1,0 +1,113 @@
+# Shared render block — included by every video workflow in this pack.
+#
+# Everything here is MECHANICAL: footage, narration, captions, encode, QC,
+# store. Nothing in it makes an editorial decision, which is why all three
+# video kinds can share it unchanged.
+#
+# It deliberately holds NO references to the including workflow's nodes. It
+# reads `brief.json` and `copy.json` from $ARTIFACTS_DIR, which the parent
+# wrote. That keeps the block provider-agnostic and immune to the node
+# renaming that include-time namespacing applies (`<includeId>__<nodeId>`).
+#
+# Not run directly. Pull it in with:
+#   - id: render
+#     depends_on: [save-copy]
+#     include: video-render-block
+#     with:
+#       kind: social-short
+name: video-render-block
+description: "Building block — footage, narration, captions, encode, QC, store. Included by the video workflows; not run on its own."
+
+# No workflow-level keys here: include-time expansion drops them (the including
+# workflow owns isolation policy), and the engine warns when it has to.
+
+nodes:
+  # Footage and narration are independent, so they share a topological layer
+  # and the executor runs them concurrently.
+  - id: fetch-clips
+    script: fetch-clips
+    runtime: uv
+    deps: [requests]
+    timeout: 420000
+
+  - id: narrate
+    script: tts-narrate
+    runtime: uv
+    deps: [requests]
+    timeout: 300000
+
+  - id: captions
+    script: build-captions
+    runtime: uv
+    timeout: 60000
+    depends_on: [narrate]
+
+  # Media nodes must set `timeout:` — the subprocess default is 2 minutes,
+  # which a 1080x1920 encode will blow straight through.
+  - id: compose
+    script: compose-video
+    runtime: uv
+    timeout: 900000
+    depends_on: [fetch-clips, captions]
+    trigger_rule: all_success
+
+  - id: qc
+    script: quality-check
+    runtime: uv
+    timeout: 300000
+    depends_on: [compose]
+
+  - id: store
+    depends_on: [qc]
+    bash: |
+      set -euo pipefail
+      # WORKFLOW_ID is a substitution variable, not an env var: it interpolates
+      # into this text but is absent from os.environ, so export it for python.
+      export RUN_ID="$WORKFLOW_ID"
+      export VIDEO_KIND="$INPUTS.kind"
+      mkdir -p "$STATE_DIR/content"
+      final="$STATE_DIR/content/videos/$RUN_ID"
+      # Stage into a temp dir and move into place, so a failure part-way through
+      # cannot leave a half-populated directory that looks stored.
+      dest="$final.partial"
+      rm -rf "$dest"; mkdir -p "$dest"
+      cp "$ARTIFACTS_DIR/video.mp4" "$dest/"
+      cp "$ARTIFACTS_DIR/quality.json" "$dest/"
+      cp "$ARTIFACTS_DIR/brief.json" "$dest/"
+      cp "$ARTIFACTS_DIR/copy.json" "$dest/"
+      cp -R "$ARTIFACTS_DIR/frames" "$dest/frames"
+      printf '{"kind": "%s", "run_id": "%s"}\n' "$VIDEO_KIND" "$RUN_ID" > "$dest/meta.json"
+      rm -rf "$final"; mv "$dest" "$final"
+      ln -sfn "$final" "$STATE_DIR/content/latest"
+      python3 - <<'__ARCHON_LEDGER__'
+      import json, os, pathlib, datetime
+      state = pathlib.Path(os.environ["STATE_DIR"]) / "content"
+      dest = state / "videos" / os.environ["RUN_ID"]
+      brief = json.loads((dest / "brief.json").read_text())
+      qc = json.loads((dest / "quality.json").read_text())
+      copy = json.loads((dest / "copy.json").read_text())
+      kind = os.environ["VIDEO_KIND"]
+      version = "none"
+      strategy = state / f"strategy-{kind}.md"
+      if strategy.exists():
+          first = strategy.read_text().splitlines()[0]
+          version = first.strip("# ").strip() or "unversioned"
+      row = {
+          "run_id": os.environ["RUN_ID"],
+          "kind": kind,
+          "created_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+          "title": brief.get("title", ""),
+          "hook": brief.get("hook", ""),
+          "keywords": brief.get("keywords", []),
+          "youtube_title": copy.get("youtube_title", ""),
+          "hashtags": copy.get("hashtags", []),
+          "search_keywords": copy.get("search_keywords", []),
+          "duration": qc.get("duration"),
+          "qc_passed": qc.get("passed"),
+          "strategy_version": version,
+          "path": str(dest / "video.mp4"),
+      }
+      with (state / "library.jsonl").open("a") as fh:
+          fh.write(json.dumps(row) + "\n")
+      print(f"stored [{row['kind']}] {row['title']!r} -> {row['path']}")
+      __ARCHON_LEDGER__

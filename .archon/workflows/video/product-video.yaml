@@ -1,0 +1,171 @@
+# Product marketing video — benefit-led, names the product, CTA allowed.
+#
+#   archon workflow run product-video "Archon — a self-hostable engine that runs
+#   AI coding agents against your repos with approval gates and full audit trails.
+#   For engineering leads who won't let an agent merge unreviewed."
+#
+# Give it: what it is, who it's for, and the one benefit that matters. The more
+# specific the input, the less the model has to invent — and invented product
+# claims are the failure mode this workflow is most exposed to.
+name: product-video
+description: "Product description -> benefit-led marketing 1080x1920 short with narration, captions and post copy. Stores the file; does not publish."
+
+worktree:
+  enabled: false
+
+nodes:
+  # Two playbooks, deliberately: rules that are universal (caption legibility,
+  # audio levels, footage repetition) live in strategy-common.md, while rules
+  # specific to this kind live in its own file. A single shared playbook would
+  # let a lesson learned from a product ad silently rewrite the UGC rules, and
+  # those two have opposite instructions for hook, pacing and claims.
+  - id: read-strategy
+    bash: |
+      common="$STATE_DIR/content/strategy-common.md"
+      mine="$STATE_DIR/content/strategy-product.md"
+      found=0
+      if [ -f "$common" ]; then echo "## Universal craft rules"; cat "$common"; echo; found=1; fi
+      if [ -f "$mine" ]; then echo "## Rules for this video kind (product)"; cat "$mine"; found=1; fi
+      if [ "$found" -eq 0 ]; then
+        echo "(No playbook yet for product — this is the first run. Use your own judgement.)"
+      fi
+
+  # The script is the highest-leverage output in the pack, so it gets the
+  # top tier. Tiers (not literal model strings) keep this portable: another
+  # install maps `large` to whatever it actually has.
+  - id: gen-brief
+    model: large
+    depends_on: [read-strategy]
+    prompt: |
+      Write a script for a 30-40 second vertical product marketing video.
+
+      THE PRODUCT (everything you are allowed to claim comes from here):
+
+      $ARGUMENTS
+
+      Follow the current house playbook:
+      ---
+      $read-strategy.output
+      ---
+
+      **Invent nothing.** No statistics, awards, customer counts, pricing, or
+      capabilities that are not in the product description above. If you want a
+      number and were not given one, write the sentence without it. A fabricated
+      product claim is not a style problem, it is a false advertisement.
+
+      Requirements for the narration:
+      - 75-100 words. Read aloud at roughly 150 wpm.
+      - Open on the PROBLEM the viewer already feels, not the product. Earn the
+        product's entrance — name it only once the pain is on the table.
+      - One core benefit, developed properly. A list of five features is a
+        thirty-second video nobody remembers.
+      - Concrete over abstract. Name a specific moment in the viewer's actual
+        week that gets better, in your own words — not vague benefit-speak like
+        "streamline your workflow". Do not reuse any example phrasing from these
+        instructions; write the moment yourself or the line will sound canned.
+      - Name the product at least once, naturally.
+      - Write out numbers and symbols as words ("ninety percent", not "90%").
+      - No superlatives ("the best", "revolutionary") and no hype verbs
+        ("unlock", "supercharge", "transform").
+      - End with ONE clear, low-friction call to action. This is the one video
+        kind in this pack where a CTA belongs.
+
+      Requirements for the keywords — fed verbatim to a stock footage search:
+      - 6 to 8 keywords, each 1-3 words.
+      - Show the CONTEXT the product lives in, since stock footage will not
+        contain your actual product: "developer at laptop", "team standup
+        meeting", "server room racks".
+      - Concrete and filmable. Never abstract concepts.
+      - Track the narrative in order: problem scenes first, resolution later.
+    output_format:
+      type: object
+      properties:
+        title: { type: string }
+        hook: { type: string }
+        narration: { type: string }
+        keywords:
+          type: array
+          items: { type: string }
+        visual_notes: { type: string }
+      required: [title, hook, narration, keywords, visual_notes]
+
+  - id: write-brief
+    depends_on: [gen-brief]
+    bash: |
+      set -euo pipefail
+      mkdir -p "$ARTIFACTS_DIR"
+      # Output refs are shell-quoted by the engine — consume as a shell word.
+      brief=$gen-brief.output
+      printf '%s' "$brief" > "$ARTIFACTS_DIR/brief.json"
+      python3 -c "import json,os;d=json.load(open(os.environ['ARTIFACTS_DIR']+'/brief.json'));print('brief ok —',len(d['narration'].split()),'words,',len(d['keywords']),'keywords')"
+
+  # Copy follows tight rules against a script that already exists — it does
+  # not need the tier that writes the script. Pinned rather than inherited.
+  - id: write-copy
+    model: medium
+    depends_on: [gen-brief]
+    prompt: |
+      Write the marketing copy for this product short.
+
+      TITLE: $gen-brief.output.title
+      NARRATION: $gen-brief.output.narration
+
+      **Claim only what the narration claims.** Do not add features, numbers,
+      integrations, or pricing that the script did not state. If the script
+      hedged, the copy hedges too.
+
+      Write for someone evaluating a solution, not browsing:
+      - Lead with the problem or the outcome, not the product category.
+      - Use the words a buyer would search, including comparison and
+        alternative-seeking forms.
+      - One CTA, plain and specific. No "link in bio" (this pack does not publish).
+
+      Per platform:
+      - youtube_title: <=70 chars, benefit-led and searchable, product named.
+      - youtube_description: 2-3 short paragraphs. First line carries the hook.
+        State the core benefit plainly, then who it is for. End with 3-5
+        plain-text search phrases on their own lines.
+      - youtube_tags: 8-12 lowercase tags, no "#".
+      - tiktok_caption: <=150 chars including hashtags, plain-spoken not salesy.
+      - instagram_caption: 1-2 sentences plus a line of hashtags.
+      - hashtags: 6-10, mixed broad and niche, no "#" prefix in the values.
+      - search_keywords: 6-10 phrases a buyer would literally type, including
+        intent forms ("<category> with approval gates", "self-hosted <category>").
+        Model-derived, NOT volume-validated — never invent numbers.
+      - alt_text: one sentence describing the visuals for accessibility.
+    output_format:
+      type: object
+      properties:
+        youtube_title: { type: string }
+        youtube_description: { type: string }
+        youtube_tags:
+          type: array
+          items: { type: string }
+        tiktok_caption: { type: string }
+        instagram_caption: { type: string }
+        hashtags:
+          type: array
+          items: { type: string }
+        search_keywords:
+          type: array
+          items: { type: string }
+        alt_text: { type: string }
+      required:
+        [youtube_title, youtube_description, youtube_tags, tiktok_caption,
+         instagram_caption, hashtags, search_keywords, alt_text]
+
+  - id: save-copy
+    depends_on: [write-copy]
+    bash: |
+      set -euo pipefail
+      mkdir -p "$ARTIFACTS_DIR"
+      copy=$write-copy.output
+      printf '%s' "$copy" > "$ARTIFACTS_DIR/copy.json"
+      python3 -c "import json,os;d=json.load(open(os.environ['ARTIFACTS_DIR']+'/copy.json'));print('copy ok —',d['youtube_title'])"
+
+  - id: render
+    depends_on: [write-brief, save-copy]
+    trigger_rule: all_success
+    include: video-render-block
+    with:
+      kind: product
