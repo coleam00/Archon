@@ -671,7 +671,7 @@ Both sources coexist — inline agents and on-disk agents are both available to 
 
 ## Durable waits
 
-A `wait:` node records its condition in the workflow run, changes the run to `paused`, and returns the worker slot. Time and event waits carry an absolute deadline; the server resumes them through the ordinary DAG resume path. An action-required wait has no deadline and resumes only when an operator explicitly resumes the run. Restarting Archon preserves either kind.
+A `wait:` node records its condition in the workflow run, changes the run to `paused`, and returns the worker slot. Time and event waits carry an absolute deadline and resume through the ordinary DAG resume path when it arrives, enforced by the process that owns the run (see below). An action-required wait has no deadline and resumes only when an operator explicitly resumes the run. Restarting Archon preserves either kind.
 
 Declare exactly one condition:
 
