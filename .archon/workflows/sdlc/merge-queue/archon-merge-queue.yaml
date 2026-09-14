@@ -32,13 +32,14 @@ nodes:
       type: object
       properties:
         summary: { type: string }
+        eligible: { type: boolean }
         method: { type: string, enum: [merge, squash, rebase, ''] }
         ci_requirement: { type: string, enum: [none, required, unknown] }
         checks_state: { type: string, enum: [passing, failing, pending, missing, not_applicable] }
         validation_verified: { type: boolean }
         review_verified: { type: boolean }
         plan_digest: { type: string }
-      required: [summary, method, ci_requirement, checks_state, validation_verified, review_verified, plan_digest]
+      required: [summary, eligible, method, ci_requirement, checks_state, validation_verified, review_verified, plan_digest]
 
   - id: gate
     script: merge-action
@@ -47,6 +48,7 @@ nodes:
     with:
       action: gate
       assessment: "$assess.output"
+      merge_method: "$INPUTS.merge_method"
     output_format: &gate-result
       type: object
       properties:
@@ -102,6 +104,7 @@ nodes:
             approval: { from: "$approval.output", if_skipped: null }
             request: "$refresh.output"
             previous: "$LOOP_PREV.execute.output"
+            merge_method: "$INPUTS.merge_method"
           output_format:
             type: object
             properties:
@@ -109,5 +112,6 @@ nodes:
               merged: { type: boolean }
               urls: { type: array, items: { type: string } }
               queued: { type: array, items: { type: string } }
+              prior_base_sha: { type: string }
               summary: { type: string }
-            required: [done, merged, urls, queued, summary]
+            required: [done, merged, urls, queued, prior_base_sha, summary]

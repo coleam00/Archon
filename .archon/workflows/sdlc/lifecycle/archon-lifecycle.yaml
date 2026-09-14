@@ -103,7 +103,6 @@ nodes:
     when: "$candidate.output.delivered == true"
     with:
       scenario: "$INPUTS.scenario"
-      candidate: "$candidate.output.head"
 
   - id: holdout
     include: archon-verify-runtime
@@ -111,7 +110,6 @@ nodes:
     when: "$runtime.output.verified == true"
     with:
       scenario: "$INPUTS.holdout"
-      candidate: "$candidate.output.head"
 
   - id: qualify
     command: qualify-runtime
@@ -166,7 +164,6 @@ nodes:
     when: "$repaired-candidate.output.delivered == true"
     with:
       scenario: "$INPUTS.scenario"
-      candidate: "$repaired-candidate.output.head"
 
   - id: holdout-retry
     include: archon-verify-runtime
@@ -174,7 +171,6 @@ nodes:
     when: "$runtime-retry.output.verified == true"
     with:
       scenario: "$INPUTS.holdout"
-      candidate: "$repaired-candidate.output.head"
 
   - id: qualify-retry
     command: qualify-runtime

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { chmod, mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -29,8 +29,14 @@ beforeAll(async () => {
 const args = process.argv.slice(2);
 appendFileSync(process.env.GH_LOG!, JSON.stringify(args) + '\\n');
 if (args[0] === 'pr' && args[1] === 'view') {
+  if (process.env.GH_VIEW_MODE === 'failed') process.exit(1);
+  if (process.env.GH_VIEW_MODE === 'malformed') {
+    console.log('{');
+    process.exit(0);
+  }
   console.log(JSON.stringify({state:'MERGED', mergedAt:'2026-09-14T00:00:00Z', mergeCommit:{oid:'abc'}, url:'https://example.test/pr/1'}));
 }
+if (args[0] === 'api') console.log(process.env.GH_BASE_SHA ?? 'base-after-merge');
 `
   );
   const built = Bun.spawnSync(['bun', 'build', source, '--compile', '--outfile', fakeGhOutput], {
@@ -79,6 +85,9 @@ async function mergeFixture(method = 'squash'): Promise<{
   plan: Record<string, unknown>;
 }> {
   const artifacts = await mkdtemp(join(root, 'merge-'));
+  const evidencePath = join(artifacts, 'review.md');
+  const evidenceContent = 'reviewed evidence\n';
+  await writeFile(evidencePath, evidenceContent);
   const plan = {
     repository: 'owner/repo',
     base: 'dev',
@@ -87,6 +96,7 @@ async function mergeFixture(method = 'squash'): Promise<{
     pull_requests: [
       { number: 17, url: 'https://github.test/owner/repo/pull/17', head_sha: 'head-17' },
     ],
+    evidence: [{ path: evidencePath, sha256: digest(evidenceContent) }],
   };
   const content = `${JSON.stringify(plan)}\n`;
   await writeFile(join(artifacts, 'merge-plan.json'), content);
@@ -99,6 +109,7 @@ function assessment(
 ): Record<string, unknown> {
   return {
     summary: 'eligible',
+    eligible: true,
     method: 'squash',
     ci_requirement: 'none',
     checks_state: 'not_applicable',
@@ -117,6 +128,7 @@ describe('merge action boundary', () => {
         ARTIFACTS_DIR: artifacts,
         INPUTS_ACTION: 'gate',
         INPUTS_ASSESSMENT: JSON.stringify(assessment(content, overrides)),
+        INPUTS_MERGE_METHOD: 'squash',
       });
       expect(result.exitCode).toBe(0);
       return JSON.parse(stdout(result)) as Record<string, unknown>;
@@ -139,27 +151,103 @@ describe('merge action boundary', () => {
       ready: false,
       summary: expect.stringContaining('merge method is missing'),
     });
+    expect(invoke({ eligible: false })).toMatchObject({
+      ready: false,
+      summary: expect.stringContaining('assessed batch is not eligible'),
+    });
+  });
+
+  test('holds an invalid plan, changed evidence, and explicit method mismatch at the gate', async () => {
+    const invalid = await mergeFixture();
+    delete invalid.plan.pull_requests;
+    const invalidContent = `${JSON.stringify(invalid.plan)}\n`;
+    await writeFile(join(invalid.artifacts, 'merge-plan.json'), invalidContent);
+    const invalidResult = run(mergeScript, {
+      ARTIFACTS_DIR: invalid.artifacts,
+      INPUTS_ACTION: 'gate',
+      INPUTS_ASSESSMENT: JSON.stringify(assessment(invalidContent)),
+      INPUTS_MERGE_METHOD: 'squash',
+    });
+    expect(JSON.parse(stdout(invalidResult))).toMatchObject({
+      ready: false,
+      summary: expect.stringContaining('plan entries are missing or invalid'),
+    });
+
+    const changed = await mergeFixture();
+    const evidence = (changed.plan.evidence as Array<{ path: string }>)[0];
+    await writeFile(evidence.path, 'changed evidence\n');
+    const changedResult = run(mergeScript, {
+      ARTIFACTS_DIR: changed.artifacts,
+      INPUTS_ACTION: 'gate',
+      INPUTS_ASSESSMENT: JSON.stringify(assessment(changed.content)),
+      INPUTS_MERGE_METHOD: 'squash',
+    });
+    expect(JSON.parse(stdout(changedResult))).toMatchObject({
+      ready: false,
+      summary: expect.stringContaining('approved evidence changed'),
+    });
+
+    const missing = await mergeFixture();
+    const missingEvidence = (missing.plan.evidence as Array<{ path: string }>)[0];
+    await unlink(missingEvidence.path);
+    const missingResult = run(mergeScript, {
+      ARTIFACTS_DIR: missing.artifacts,
+      INPUTS_ACTION: 'gate',
+      INPUTS_ASSESSMENT: JSON.stringify(assessment(missing.content)),
+      INPUTS_MERGE_METHOD: 'squash',
+    });
+    expect(JSON.parse(stdout(missingResult))).toMatchObject({
+      ready: false,
+      summary: expect.stringContaining('approved evidence is unavailable'),
+    });
+
+    const mismatch = await mergeFixture();
+    const mismatchResult = run(mergeScript, {
+      ARTIFACTS_DIR: mismatch.artifacts,
+      INPUTS_ACTION: 'gate',
+      INPUTS_ASSESSMENT: JSON.stringify(assessment(mismatch.content)),
+      INPUTS_MERGE_METHOD: 'rebase',
+    });
+    expect(JSON.parse(stdout(mismatchResult))).toMatchObject({
+      ready: false,
+      summary: expect.stringContaining('requested merge method does not match'),
+    });
   });
 
   test('holds missing, conflicting, and changed approvals without invoking gh', async () => {
     const { artifacts, content } = await mergeFixture();
     const gate = assessment(content);
-    for (const changed of [
+    for (const [index, changed] of [
       { gate: { ...gate, ready: false }, mode: 'auto', approval: null },
       { gate: { ...gate, ready: true }, mode: 'approve', approval: { decision: 'hold' } },
       { gate: { ...gate, ready: true }, mode: 'approve', approval: null },
-    ]) {
+    ].entries()) {
+      const ghLog = join(artifacts, `unauthorized-${index}.jsonl`);
       const result = run(mergeScript, {
         ARTIFACTS_DIR: artifacts,
         INPUTS_ACTION: 'execute',
         INPUTS_GATE: JSON.stringify(changed.gate),
         INPUTS_MODE: changed.mode,
         INPUTS_APPROVAL: JSON.stringify(changed.approval),
-        INPUTS_REQUEST: '{}',
+        INPUTS_REQUEST: JSON.stringify({
+          authorized: true,
+          repository: 'owner/repo',
+          number: 17,
+          head_sha: 'head-17',
+          method: 'squash',
+          summary: 'fresh facts pass',
+        }),
         INPUTS_PREVIOUS: '',
+        INPUTS_MERGE_METHOD: 'squash',
+        GH_LOG: ghLog,
         PATH: fakeBin,
       });
-      expect(JSON.parse(stdout(result))).toMatchObject({ done: true, merged: false });
+      expect(JSON.parse(stdout(result))).toMatchObject({
+        done: true,
+        merged: false,
+        summary: 'merge is not authorized',
+      });
+      expect(await Bun.file(ghLog).exists()).toBe(false);
     }
 
     const approvedGate = { ...gate, ready: true };
@@ -172,6 +260,7 @@ describe('merge action boundary', () => {
       INPUTS_APPROVAL: '',
       INPUTS_REQUEST: '{}',
       INPUTS_PREVIOUS: '',
+      INPUTS_MERGE_METHOD: 'squash',
       PATH: fakeBin,
     });
     expect(JSON.parse(stdout(changedPlan))).toMatchObject({
@@ -203,11 +292,15 @@ describe('merge action boundary', () => {
           summary: 'fresh facts pass',
         }),
         INPUTS_PREVIOUS: '',
+        INPUTS_MERGE_METHOD: method,
         GH_LOG: ghLog,
         PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ''}`,
       });
       expect(result.exitCode).toBe(0);
-      expect(JSON.parse(stdout(result))).toMatchObject({ merged: true });
+      expect(JSON.parse(stdout(result))).toMatchObject({
+        merged: true,
+        prior_base_sha: 'base-after-merge',
+      });
       const calls = (await readFile(ghLog, 'utf8'))
         .trim()
         .split('\n')
@@ -222,6 +315,135 @@ describe('merge action boundary', () => {
         '--match-head-commit',
         'head-17',
       ]);
+      expect(calls[2]).toEqual(['api', 'repos/owner/repo/branches/dev', '--jq', '.commit.sha']);
+    }
+  });
+
+  test('rechecks evidence and requested method before an authorized write', async () => {
+    for (const failure of ['evidence', 'method'] as const) {
+      const { artifacts, content, plan } = await mergeFixture();
+      const ghLog = join(artifacts, `${failure}.jsonl`);
+      if (failure === 'evidence') {
+        const evidence = (plan.evidence as Array<{ path: string }>)[0];
+        await writeFile(evidence.path, 'mutated after approval\n');
+      }
+      const result = run(mergeScript, {
+        ARTIFACTS_DIR: artifacts,
+        INPUTS_ACTION: 'execute',
+        INPUTS_GATE: JSON.stringify({ ...assessment(content), ready: true }),
+        INPUTS_MODE: 'auto',
+        INPUTS_APPROVAL: '',
+        INPUTS_REQUEST: JSON.stringify({
+          authorized: true,
+          repository: 'owner/repo',
+          number: 17,
+          head_sha: 'head-17',
+          method: 'squash',
+          summary: 'fresh facts pass',
+        }),
+        INPUTS_PREVIOUS: '',
+        INPUTS_MERGE_METHOD: failure === 'method' ? 'rebase' : 'squash',
+        GH_LOG: ghLog,
+        PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ''}`,
+      });
+      expect(JSON.parse(stdout(result))).toMatchObject({ done: true, merged: false });
+      expect(await Bun.file(ghLog).exists()).toBe(false);
+    }
+  });
+
+  test('returns the live base between PRs and preserves it through the next iteration', async () => {
+    const fixture = await mergeFixture();
+    (fixture.plan.pull_requests as Array<Record<string, unknown>>).push({
+      number: 18,
+      url: 'https://github.test/owner/repo/pull/18',
+      head_sha: 'head-18',
+    });
+    const content = `${JSON.stringify(fixture.plan)}\n`;
+    await writeFile(join(fixture.artifacts, 'merge-plan.json'), content);
+    const execute = (request: Record<string, unknown>, previous: unknown, baseSha: string) =>
+      run(mergeScript, {
+        ARTIFACTS_DIR: fixture.artifacts,
+        INPUTS_ACTION: 'execute',
+        INPUTS_GATE: JSON.stringify({ ...assessment(content), ready: true }),
+        INPUTS_MODE: 'auto',
+        INPUTS_APPROVAL: '',
+        INPUTS_REQUEST: JSON.stringify(request),
+        INPUTS_PREVIOUS: previous === null ? '' : JSON.stringify(previous),
+        INPUTS_MERGE_METHOD: 'squash',
+        GH_BASE_SHA: baseSha,
+        GH_LOG: join(fixture.artifacts, 'continuity.jsonl'),
+        PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ''}`,
+      });
+    const first = JSON.parse(
+      stdout(
+        execute(
+          {
+            authorized: true,
+            repository: 'owner/repo',
+            number: 17,
+            head_sha: 'head-17',
+            method: 'squash',
+          },
+          null,
+          'base-after-17'
+        )
+      )
+    ) as Record<string, unknown>;
+    expect(first).toMatchObject({
+      done: false,
+      urls: ['https://github.test/owner/repo/pull/17'],
+      prior_base_sha: 'base-after-17',
+    });
+    const second = JSON.parse(
+      stdout(
+        execute(
+          {
+            authorized: true,
+            repository: 'owner/repo',
+            number: 18,
+            head_sha: 'head-18',
+            method: 'squash',
+          },
+          first,
+          'base-after-18'
+        )
+      )
+    );
+    expect(second).toMatchObject({
+      done: true,
+      merged: true,
+      prior_base_sha: 'base-after-18',
+    });
+  });
+
+  test('holds failed or malformed GitHub readback as unclear, not queued', async () => {
+    for (const mode of ['failed', 'malformed']) {
+      const { artifacts, content } = await mergeFixture();
+      const result = run(mergeScript, {
+        ARTIFACTS_DIR: artifacts,
+        INPUTS_ACTION: 'execute',
+        INPUTS_GATE: JSON.stringify({ ...assessment(content), ready: true }),
+        INPUTS_MODE: 'auto',
+        INPUTS_APPROVAL: '',
+        INPUTS_REQUEST: JSON.stringify({
+          authorized: true,
+          repository: 'owner/repo',
+          number: 17,
+          head_sha: 'head-17',
+          method: 'squash',
+        }),
+        INPUTS_PREVIOUS: '',
+        INPUTS_MERGE_METHOD: 'squash',
+        GH_VIEW_MODE: mode,
+        GH_LOG: join(artifacts, `${mode}.jsonl`),
+        PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ''}`,
+      });
+      expect(JSON.parse(stdout(result))).toMatchObject({
+        done: true,
+        merged: false,
+        queued: [],
+        summary: expect.stringContaining('state is unclear'),
+      });
     }
   });
 });
@@ -323,6 +545,47 @@ describe('runtime evidence handoff', () => {
     expect(JSON.parse(checked.stdout.toString())).toMatchObject({
       status: 'malformed',
       reason: expect.stringContaining('evidence is missing or empty'),
+    });
+  });
+
+  test('accepts an opaque target identity when no explicit target candidate is supplied', async () => {
+    const directory = await mkdtemp(join(root, 'opaque-identity-'));
+    const reportPath = join(directory, 'report.json');
+    const target = 'factory-v1:0123456789abcdef';
+    await writeFile(join(directory, 'target.txt'), `${target}\n`);
+    await writeFile(join(directory, 'healthy.stdout'), '{"source_revision":"git-head"}\n');
+    await writeFile(
+      reportPath,
+      JSON.stringify({
+        candidate: target,
+        assertions: [
+          {
+            id: 'healthy',
+            outcome: 'passed',
+            expected: true,
+            observed: { source_revision: 'git-head' },
+            reason: 'source revision matches',
+            evidence_path: 'healthy.stdout',
+          },
+        ],
+      })
+    );
+    const checked = Bun.spawnSync(['uv', 'run', '--no-project', checkScript], {
+      env: {
+        ...process.env,
+        INPUTS_START_OK: 'true',
+        INPUTS_IDENTITY_OK: 'true',
+        INPUTS_DIRECTORY: directory,
+        INPUTS_REPORT_PATH: reportPath,
+        INPUTS_REQUIRED_IDS: JSON.stringify(['healthy']),
+        INPUTS_EXPECTED_CANDIDATE: '',
+      },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    expect(JSON.parse(checked.stdout.toString())).toMatchObject({
+      status: 'verified',
+      candidate: target,
     });
   });
 });

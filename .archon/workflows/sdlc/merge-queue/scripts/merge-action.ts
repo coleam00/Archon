@@ -10,6 +10,7 @@ interface MergeResult {
   merged: boolean;
   urls: string[];
   queued: string[];
+  prior_base_sha: string;
   summary: string;
 }
 
@@ -52,13 +53,83 @@ function plan(): { value: JsonObject; digest: string } {
   };
 }
 
+function requestedMethodMatches(method: unknown): boolean {
+  const requested = process.env.INPUTS_MERGE_METHOD ?? '';
+  return requested === '' || (isMethod(requested) && requested === method);
+}
+
+function validPlan(value: JsonObject): boolean {
+  const entries = value.pull_requests;
+  const numbers = new Set<number>();
+  const heads = new Set<string>();
+  return (
+    typeof value.repository === 'string' &&
+    value.repository !== '' &&
+    typeof value.base === 'string' &&
+    value.base !== '' &&
+    typeof value.base_sha === 'string' &&
+    value.base_sha !== '' &&
+    isMethod(value.method) &&
+    Array.isArray(entries) &&
+    entries.length > 0 &&
+    entries.length <= 5 &&
+    entries.every((item) => {
+      const entry = object(item);
+      const valid =
+        Number.isInteger(entry.number) &&
+        typeof entry.url === 'string' &&
+        entry.url !== '' &&
+        typeof entry.head_sha === 'string' &&
+        entry.head_sha !== '';
+      if (!valid) return false;
+      const number = entry.number as number;
+      const head = entry.head_sha as string;
+      if (numbers.has(number) || heads.has(head)) return false;
+      numbers.add(number);
+      heads.add(head);
+      return true;
+    })
+  );
+}
+
+function evidenceReasons(value: JsonObject): string[] {
+  if (!Array.isArray(value.evidence) || value.evidence.length === 0) {
+    return ['merge plan evidence bindings are missing or invalid'];
+  }
+  const reasons: string[] = [];
+  for (const item of value.evidence) {
+    const evidence = object(item);
+    if (
+      typeof evidence.path !== 'string' ||
+      evidence.path === '' ||
+      typeof evidence.sha256 !== 'string' ||
+      !/^[0-9a-f]{64}$/.test(evidence.sha256)
+    ) {
+      reasons.push('merge plan evidence bindings are missing or invalid');
+      continue;
+    }
+    try {
+      const actual = createHash('sha256').update(readFileSync(evidence.path)).digest('hex');
+      if (actual !== evidence.sha256) reasons.push(`approved evidence changed: ${evidence.path}`);
+    } catch {
+      reasons.push(`approved evidence is unavailable: ${evidence.path}`);
+    }
+  }
+  return reasons;
+}
+
 function gate(): void {
   const assessment = object(input('assessment'));
   const current = plan();
   const method = assessment.method;
   const reasons: string[] = [];
+  if (assessment.eligible !== true) reasons.push('the assessed batch is not eligible');
+  if (!validPlan(current.value)) reasons.push('merge plan entries are missing or invalid');
   if (!isMethod(method) || current.value.method !== method) {
     reasons.push('merge method is missing, conflicting, or unsupported');
+  }
+  if (!requestedMethodMatches(method)) {
+    reasons.push('requested merge method does not match the assessed plan');
   }
   if (assessment.plan_digest !== current.digest) {
     reasons.push('merge plan digest does not match the assessed file');
@@ -74,6 +145,7 @@ function gate(): void {
   }
   if (assessment.validation_verified !== true) reasons.push('independent validation is not verified');
   if (assessment.review_verified !== true) reasons.push('independent review is not verified');
+  reasons.push(...evidenceReasons(current.value));
   console.log(
     JSON.stringify({
       ready: reasons.length === 0,
@@ -98,8 +170,13 @@ function finish(result: MergeResult): void {
   console.log(JSON.stringify(result));
 }
 
-function stop(urls: string[], queued: string[], summary: string): void {
-  finish({ done: true, merged: false, urls, queued, summary });
+function stop(
+  urls: string[],
+  queued: string[],
+  priorBaseSha: string,
+  summary: string
+): void {
+  finish({ done: true, merged: false, urls, queued, prior_base_sha: priorBaseSha, summary });
 }
 
 function runGh(args: string[]): ReturnType<typeof Bun.spawnSync> {
@@ -112,23 +189,36 @@ function execute(): void {
   const request = object(input('request'));
   const urls = strings(previous.urls);
   const queued = strings(previous.queued);
+  const priorBaseSha = typeof previous.prior_base_sha === 'string' ? previous.prior_base_sha : '';
   if (!authorized(gated, process.env.INPUTS_MODE ?? '', input('approval'))) {
-    stop(urls, queued, 'merge is not authorized');
+    stop(urls, queued, priorBaseSha, 'merge is not authorized');
     return;
   }
 
   const current = plan();
   if (gated.plan_digest !== current.digest) {
-    stop(urls, queued, 'approved merge plan changed');
+    stop(urls, queued, priorBaseSha, 'approved merge plan changed');
+    return;
+  }
+  const evidenceFailures = evidenceReasons(current.value);
+  if (evidenceFailures.length > 0) {
+    stop(urls, queued, priorBaseSha, evidenceFailures.join('; '));
     return;
   }
   const entries = current.value.pull_requests;
-  if (!Array.isArray(entries) || entries.length === 0 || entries.length > 5) {
-    stop(urls, queued, 'merge plan entries are missing or invalid');
+  if (!validPlan(current.value) || !Array.isArray(entries)) {
+    stop(urls, queued, priorBaseSha, 'merge plan entries are missing or invalid');
     return;
   }
   if (urls.length >= entries.length) {
-    finish({ done: true, merged: true, urls, queued, summary: 'all planned pull requests are merged' });
+    finish({
+      done: true,
+      merged: true,
+      urls,
+      queued,
+      prior_base_sha: priorBaseSha,
+      summary: 'all planned pull requests are merged',
+    });
     return;
   }
 
@@ -146,14 +236,19 @@ function execute(): void {
     stop(
       urls,
       queued,
+      priorBaseSha,
       typeof request.summary === 'string' && request.summary !== ''
         ? request.summary
         : 'fresh merge checks did not authorize a write'
     );
     return;
   }
+  if (!requestedMethodMatches(method)) {
+    stop(urls, queued, priorBaseSha, 'requested merge method does not match the approved plan');
+    return;
+  }
   if (typeof repository !== 'string' || !Number.isInteger(number) || typeof head !== 'string') {
-    stop(urls, queued, 'planned pull request identity is malformed');
+    stop(urls, queued, priorBaseSha, 'planned pull request identity is malformed');
     return;
   }
 
@@ -192,22 +287,39 @@ function execute(): void {
     object(state.mergeCommit).oid !== undefined
   ) {
     const completed = [...urls, url];
+    const base = current.value.base;
+    const baseReadback =
+      typeof base === 'string'
+        ? runGh(['api', `repos/${repository}/branches/${encodeURIComponent(base)}`, '--jq', '.commit.sha'])
+        : undefined;
+    const nextBaseSha =
+      baseReadback?.exitCode === 0 ? (baseReadback.stdout?.toString() ?? '').trim() : '';
+    if (nextBaseSha === '') {
+      stop(
+        completed,
+        queued,
+        priorBaseSha,
+        'merge was confirmed but the live base readback is unclear'
+      );
+      return;
+    }
     const done = completed.length === entries.length;
     finish({
       done,
       merged: done,
       urls: completed,
       queued,
+      prior_base_sha: nextBaseSha,
       summary: done
         ? 'all planned pull requests are merged'
         : 'merge confirmed; refreshing the next planned pull request',
     });
   } else if (merge.exitCode === 0) {
-    stop(urls, [...queued, url], 'GitHub accepted the request but did not confirm a merge; reported as queued');
+    stop(urls, queued, priorBaseSha, 'GitHub accepted the request but merge or queue state is unclear');
   } else {
     const detail =
       merge.stderr?.toString().trim() || merge.stdout?.toString().trim() || 'gh pr merge failed';
-    stop(urls, queued, detail);
+    stop(urls, queued, priorBaseSha, detail);
   }
 }
 

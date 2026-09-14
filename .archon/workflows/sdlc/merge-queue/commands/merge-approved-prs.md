@@ -11,7 +11,7 @@ Use gh with the explicit repository. Before EACH merge, re-read the PR, its head
 base, review and CI. Require the recorded head SHA and target base, a non-draft
 open same-repository PR, resolved review findings, and passing required checks.
 Compare the live base SHA with the plan before the first merge and with the
-previous merge's read-back thereafter. The live base SHA is the branch reference
+previous result's exact `prior_base_sha` thereafter. The live base SHA is the branch reference
 itself: `gh api repos/<owner>/<repo>/branches/<base> --jq .commit.sha` (or
 `git ls-remote origin <base>`). A pull request record's `base.sha`, `baseRefOid`
 or `mergeBaseOid` is a snapshot of where the PR branched or was last updated,
@@ -24,8 +24,9 @@ treat old CI as validation of a new composition.
 Return only the next ordered plan entry as repository, number, head_sha and method,
 with authorized=true after those fresh checks pass. The script validates those
 values against the approved plan and invokes gh with the exact method and pinned
-head. If GitHub requires its native merge queue, the script reports queued, not
-merged. Stop at the first failure, changed identity, pending queue or unclear result.
+head. If GitHub requires its native merge queue, report it only when structured
+GitHub readback proves queue membership. Otherwise hold the result as unclear. Stop
+at the first failure, changed identity, pending queue or unclear result.
 
 This uses GitHub's protection/merge contract. It does not promise an atomic
 multi-PR transaction or an exact-base compare-and-swap that gh does not provide.

@@ -29,8 +29,10 @@ unresolved dependency or incompatible changes; do not silently add PRs to the ba
 Resolve the requested merge method from the named input and project/repository
 policy. It must be exactly merge, squash or rebase. Missing or ambiguous intent,
 conflicting sources, and unclear native-queue compatibility return method="" and
-hold. Write merge-plan.json under $ARTIFACTS_DIR with repository, base, base_sha,
-method, ordered PR number/url/head_sha entries, exact evidence references and reasons. `base_sha`
+hold. Write merge-plan.json under $ARTIFACTS_DIR with this exact shape:
+`{"repository":"owner/repo","base":"branch","base_sha":"<sha>","method":"squash","pull_requests":[{"number":123,"url":"https://github.com/owner/repo/pull/123","head_sha":"<sha>"}],"evidence":[{"path":"<exact file path>","sha256":"<sha256 of exact bytes>"}],"reasons":[]}`.
+Include every file-backed runtime, validation and review reference relied upon in
+`evidence`; missing or unreadable evidence holds. `base_sha`
 is the base branch's live head as read from GitHub during this assessment
 (`gh api repos/<owner>/<repo>/branches/<base> --jq .commit.sha`), not a PR's
 merge base and not a PR record's `base.sha`, which is a snapshot: the merge node
@@ -40,7 +42,8 @@ head, judge that here (GitHub's mergeability and the checks on the current PR he
 rather than recording the older base. Record holds in merge-plan.md. Return ready only when the entire requested batch is
 eligible. Compute the SHA-256 of the exact merge-plan.json bytes and return it as
 plan_digest. Also return the typed CI requirement/check state and whether ordinary
-validation and independent review were verified. The deterministic gate, not a
+validation and independent review were verified. Return `eligible=true` only when
+every whole-batch eligibility condition above passes. The deterministic gate, not a
 lone ready claim, decides eligibility. No code changes, branch switches, custom
 worktrees, or agent subprocesses.
 
