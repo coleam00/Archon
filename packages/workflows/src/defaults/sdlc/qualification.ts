@@ -193,7 +193,9 @@ export async function runQualification(
       try {
         await checkRuntime(parsed.data, await realpath(scenario), candidate.head);
         if (
-          parsed.data.evidence.producer.runId === process.env.WORKFLOW_ID &&
+          parsed.data.evidence.producers.some(
+            producer => producer.runId === process.env.WORKFLOW_ID
+          ) &&
           cleanQualificationHead(process.cwd()) === candidate.head &&
           facts.pullRequests.length === 1 &&
           facts.pullRequests[0]?.headSha === candidate.head

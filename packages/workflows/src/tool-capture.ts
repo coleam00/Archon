@@ -16,6 +16,7 @@ export const captureProducerSchema = z
     iteration: z.number().int().positive().nullable(),
   })
   .strict();
+export const captureOwnerSchema = captureProducerSchema.pick({ runId: true, nodeId: true });
 const fileSchema = z
   .object({
     path: z.string().min(1),
@@ -41,11 +42,20 @@ export const toolReceiptSchema = z
   .strict();
 export const toolCaptureManifestSchema = z
   .object({
-    version: z.literal(1),
+    version: z.literal(2),
     directory: z.string().min(1),
-    producer: captureProducerSchema,
-    complete: z.boolean(),
-    receipts: z.array(fileSchema).max(MAX_CALLS),
+    owner: captureOwnerSchema,
+    passes: z
+      .array(
+        z
+          .object({
+            producer: captureProducerSchema,
+            complete: z.boolean(),
+            receipts: z.array(fileSchema).max(MAX_CALLS),
+          })
+          .strict()
+      )
+      .max(MAX_CALLS),
   })
   .strict();
 export type ToolReceipt = z.infer<typeof toolReceiptSchema>;
@@ -83,33 +93,54 @@ export async function readToolCaptures(
 ): Promise<{
   manifest: ToolCaptureManifest;
   manifestFile: CaptureFile;
-  receipts: { reference: CaptureFile; receipt: ToolReceipt }[];
+  receipts: {
+    pass: ToolCaptureManifest['passes'][number];
+    reference: CaptureFile;
+    receipt: ToolReceipt;
+  }[];
 }> {
   const root = await realpath(directory);
   if (!inside(root, await realpath(join(root, 'manifest.json'))))
     throw new Error('capture manifest escapes its owner');
   const bytes = await readFile(join(root, 'manifest.json'));
   const manifest = toolCaptureManifestSchema.parse(JSON.parse(bytes.toString()) as unknown);
-  if (manifest.directory !== root || manifest.producer.runId !== runId || !manifest.complete) {
-    throw new Error('capture manifest has the wrong owner or an incomplete stream');
+  if (manifest.directory !== root || manifest.owner.runId !== runId) {
+    throw new Error('capture manifest has the wrong owner');
   }
   const receipts = [];
-  const callIds = new Set<string>();
-  for (const reference of manifest.receipts) {
-    const receipt = toolReceiptSchema.parse(
-      JSON.parse((await readCaptureFile(root, reference)).toString()) as unknown
-    );
+  let retainedBytes = 0;
+  for (const pass of manifest.passes) {
     if (
-      JSON.stringify(receipt.producer) !== JSON.stringify(manifest.producer) ||
-      callIds.has(receipt.callId)
+      pass.producer.runId !== manifest.owner.runId ||
+      pass.producer.nodeId !== manifest.owner.nodeId
     ) {
-      throw new Error('capture receipt has the wrong producer or duplicate call');
+      throw new Error('capture pass has the wrong owner');
     }
-    callIds.add(receipt.callId);
-    await readCaptureFile(root, receipt.output);
-    for (const attachment of receipt.attachments) await readCaptureFile(root, attachment);
-    receipts.push({ reference, receipt });
+    const callIds = new Set<string>();
+    for (const reference of pass.receipts) {
+      const receipt = toolReceiptSchema.parse(
+        JSON.parse((await readCaptureFile(root, reference)).toString()) as unknown
+      );
+      if (
+        JSON.stringify(receipt.producer) !== JSON.stringify(pass.producer) ||
+        callIds.has(receipt.callId)
+      ) {
+        throw new Error('capture receipt has the wrong producer or duplicate call within a pass');
+      }
+      callIds.add(receipt.callId);
+      await readCaptureFile(root, receipt.output);
+      for (const attachment of receipt.attachments) await readCaptureFile(root, attachment);
+      const resultBytes =
+        receipt.output.bytes + receipt.attachments.reduce((sum, file) => sum + file.bytes, 0);
+      if (resultBytes > MAX_RESULT_BYTES)
+        throw new Error('tool capture result exceeds its byte limit');
+      retainedBytes += resultBytes;
+      receipts.push({ pass, reference, receipt });
+    }
   }
+  if (receipts.length > MAX_CALLS) throw new Error('tool capture call limit exceeded');
+  if (retainedBytes > MAX_CAPTURE_BYTES)
+    throw new Error('tool capture directory exceeds its byte limit');
   return {
     manifest,
     receipts,
@@ -126,26 +157,18 @@ export class ToolCaptureSession {
   private sequence = 0;
   private readonly pending = new Map<string, string>();
   private readonly completed = new Set<string>();
-  private readonly manifest: ToolCaptureManifest;
+  private readonly pass: ToolCaptureManifest['passes'][number];
 
   private constructor(
     private readonly directory: string,
-    runId: string,
-    nodeId: string,
-    iteration?: number
+    private readonly manifest: ToolCaptureManifest,
+    readonly producer: z.infer<typeof captureProducerSchema>,
+    retainedBytes: number,
+    private readonly retainedCallCount: number
   ) {
-    this.manifest = {
-      version: 1,
-      directory,
-      producer: {
-        runId,
-        nodeId,
-        attempt: randomUUID(),
-        iteration: iteration ?? null,
-      },
-      complete: false,
-      receipts: [],
-    };
+    this.retainedBytes = retainedBytes;
+    this.pass = { producer: this.producer, complete: false, receipts: [] };
+    this.manifest.passes.push(this.pass);
   }
 
   static async create(
@@ -173,8 +196,36 @@ export class ToolCaptureSession {
     await mkdir(target, { recursive: true });
     const canonical = await realpath(target);
     if (!inside(owner, canonical)) throw new Error('capture directory escapes run artifacts');
-    const session = new ToolCaptureSession(canonical, runId, nodeId, iteration);
-    await mkdir(join(canonical, session.manifest.producer.attempt));
+    let manifest: ToolCaptureManifest;
+    let retainedBytes = 0;
+    let completedCalls = 0;
+    try {
+      const captured = await readToolCaptures(canonical, runId);
+      manifest = captured.manifest;
+      if (manifest.owner.nodeId !== nodeId)
+        throw new Error('capture directory belongs to another node');
+      completedCalls = captured.receipts.length;
+      retainedBytes = captured.receipts.reduce(
+        (total, entry) =>
+          total +
+          entry.receipt.output.bytes +
+          entry.receipt.attachments.reduce((sum, file) => sum + file.bytes, 0),
+        0
+      );
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+      manifest = { version: 2, directory: canonical, owner: { runId, nodeId }, passes: [] };
+    }
+    if (manifest.passes.length >= MAX_CALLS) throw new Error('tool capture pass limit exceeded');
+    const producer = { runId, nodeId, attempt: randomUUID(), iteration: iteration ?? null };
+    const session = new ToolCaptureSession(
+      canonical,
+      manifest,
+      producer,
+      retainedBytes,
+      completedCalls
+    );
+    await mkdir(join(canonical, producer.attempt));
     await session.saveManifest();
     return session;
   }
@@ -193,7 +244,7 @@ export class ToolCaptureSession {
   }
 
   private async file(name: string, bytes: Uint8Array): Promise<CaptureFile> {
-    const path = `${this.manifest.producer.attempt}/${name}`;
+    const path = `${this.pass.producer.attempt}/${name}`;
     await this.atomic(join(this.directory, path), bytes);
     return { path, bytes: bytes.byteLength, sha256: captureHash(bytes) };
   }
@@ -209,7 +260,8 @@ export class ToolCaptureSession {
     }
     this.pending.delete(id);
     this.completed.add(id);
-    if (this.completed.size > MAX_CALLS) throw new Error('tool capture call limit exceeded');
+    if (this.retainedCallCount + this.completed.size > MAX_CALLS)
+      throw new Error('tool capture call limit exceeded');
     const capture = message.capture;
     let text = capture?.text ?? '';
     let tool = message.toolName;
@@ -230,7 +282,7 @@ export class ToolCaptureSession {
     let truncated = retained.length !== raw.length || capture?.completeness === 'truncated';
     this.retainedBytes += retained.length;
     let resultBytes = retained.length;
-    const serial = String(this.completed.size);
+    const serial = String(this.retainedCallCount + this.completed.size);
     const attachments: ToolReceipt['attachments'] = [];
     for (const attachment of capture?.attachments ?? []) {
       if (
@@ -258,7 +310,7 @@ export class ToolCaptureSession {
     }
     const receipt: ToolReceipt = {
       version: 1,
-      producer: this.manifest.producer,
+      producer: this.pass.producer,
       callId: id,
       tool,
       outcome: message.toolOutcome ?? 'unknown',
@@ -277,7 +329,7 @@ export class ToolCaptureSession {
       output: await this.file(`${serial}.output`, retained),
       attachments,
     };
-    this.manifest.receipts.push(
+    this.pass.receipts.push(
       await this.file(`${serial}.json`, Buffer.from(JSON.stringify(receipt)))
     );
     await this.saveManifest();
@@ -302,7 +354,7 @@ export class ToolCaptureSession {
           secrets
         );
       }
-      this.manifest.complete = terminal && !missing;
+      this.pass.complete = terminal && !missing;
       await this.saveManifest();
     };
     try {
@@ -311,7 +363,7 @@ export class ToolCaptureSession {
           const id = message.toolCallId ?? `anonymous-${++this.sequence}`;
           if (this.pending.has(id) || this.completed.has(id))
             throw new Error('duplicate capture call id');
-          if (this.pending.size + this.completed.size >= MAX_CALLS)
+          if (this.retainedCallCount + this.pending.size + this.completed.size >= MAX_CALLS)
             throw new Error('tool capture call limit exceeded');
           this.pending.set(id, message.toolName);
         } else if (message.type === 'tool_result') {

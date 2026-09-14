@@ -3819,6 +3819,19 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
     let callCount = 0;
     mockSendQueryDag.mockImplementation(async function* () {
       callCount++;
+      yield { type: 'tool', toolName: 'shell', toolCallId: 'retry-call' };
+      yield {
+        type: 'tool_result',
+        toolName: 'shell',
+        toolCallId: 'retry-call',
+        toolOutput: 'display',
+        capture: {
+          text: `attempt-${callCount}`,
+          format: 'text',
+          completeness: 'full',
+          attachments: [],
+        },
+      };
       if (callCount === 1) {
         yield {
           type: 'result',
@@ -3843,12 +3856,16 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun('dag-retry-succeed-run');
+    const artifacts = join(testDir, 'artifacts');
+    const captureDirectory = join(artifacts, 'retry-captures');
+    await mkdir(artifacts, { recursive: true });
 
     const nodes: DagNode[] = [
       {
         id: 'my-node',
         kind: 'agent',
         source: { kind: 'command', name: 'my-cmd' },
+        capture_tools: captureDirectory,
         retry: { max_attempts: 2, delay_ms: 1 },
       },
     ];
@@ -3859,6 +3876,7 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
         platform,
         conversationId: 'conv-dag-retry-succeed',
         cwd: testDir,
+        artifactsDir: artifacts,
         workflow: { name: 'dag-retry-succeed', nodes },
         workflowRun,
       })
@@ -3866,6 +3884,12 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
 
     // Node was called at least twice (first fails transiently, second succeeds)
     expect(callCount).toBeGreaterThanOrEqual(2);
+    const captured = await readToolCaptures(captureDirectory, workflowRun.id);
+    expect(captured.manifest.passes.map(pass => pass.complete)).toEqual([false, true]);
+    expect(captured.receipts.map(entry => entry.receipt.callId)).toEqual([
+      'retry-call',
+      'retry-call',
+    ]);
     expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).not.toHaveBeenCalled();
     expect(runUsageWrites(mockDeps.store)).toEqual([
       {
@@ -4557,7 +4581,7 @@ describe('executeDagWorkflow -- tool_completed event emission', () => {
       expect(store.failWorkflowRun.mock.calls).toEqual([]);
       expect(
         JSON.parse(await readFile(join(captureDirectory, 'manifest.json'), 'utf8'))
-      ).toMatchObject({ complete: true, producer: { runId: run.id } });
+      ).toMatchObject({ owner: { runId: run.id }, passes: [{ complete: true }] });
       const captured = await readToolCaptures(captureDirectory, run.id);
       expect(captured.receipts[0]?.receipt).toMatchObject({
         outcome: 'error',
@@ -4567,6 +4591,77 @@ describe('executeDagWorkflow -- tool_completed event emission', () => {
       expect(
         await readFile(join(captureDirectory, captured.receipts[0]!.receipt.output.path), 'utf8')
       ).toBe('false 0');
+    }
+  );
+
+  it.each(['agent', 'loop'] as const)(
+    'retains every %s provider pass when call ids repeat across reasks and iterations',
+    async kind => {
+      const store = createMockStore();
+      const artifacts = join(testDir, `capture-repeated-${kind}`);
+      const captureDirectory = join(artifacts, 'observations');
+      await mkdir(artifacts, { recursive: true });
+      let calls = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        calls += 1;
+        yield { type: 'tool', toolName: 'shell', toolCallId: 'reused-call' };
+        yield {
+          type: 'tool_result',
+          toolName: 'shell',
+          toolCallId: 'reused-call',
+          toolOutput: 'display',
+          capture: { text: `pass-${calls}`, format: 'text', completeness: 'full', attachments: [] },
+        };
+        const structuredOutput = calls === 1 ? {} : { done: kind === 'agent' || calls === 3 };
+        yield { type: 'result', structuredOutput };
+      });
+      const outputFormat = {
+        type: 'object',
+        properties: { done: { type: 'boolean' } },
+        required: ['done'],
+      };
+      const captureNode: DagNode =
+        kind === 'agent'
+          ? node('verify', undefined, {
+              provider: 'pi',
+              source: { kind: 'inline', prompt: 'verify' },
+              capture_tools: captureDirectory,
+              output_format: outputFormat,
+            })
+          : {
+              id: 'verify',
+              kind: 'loop',
+              provider: 'pi',
+              capture_tools: captureDirectory,
+              output_format: outputFormat,
+              loop: {
+                prompt: 'verify',
+                until_field: 'done',
+                max_iterations: 2,
+                fresh_context: true,
+              },
+            };
+      const run = makeWorkflowRun(`capture-repeated-${kind}`);
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          artifactsDir: artifacts,
+          workflowRun: run,
+          workflowProvider: 'pi',
+          config: { ...minimalConfig, assistant: 'pi' },
+          workflow: { name: 'capture-repeated', nodes: [captureNode] },
+        })
+      );
+      const captured = await readToolCaptures(captureDirectory, run.id);
+      expect(captured.manifest.passes).toHaveLength(kind === 'agent' ? 2 : 3);
+      expect(captured.receipts.map(entry => entry.receipt.callId)).toEqual(
+        Array.from({ length: kind === 'agent' ? 2 : 3 }, () => 'reused-call')
+      );
+      expect(captured.manifest.passes.map(pass => pass.producer.iteration)).toEqual(
+        kind === 'agent' ? [null, null] : [1, 1, 2]
+      );
     }
   );
 

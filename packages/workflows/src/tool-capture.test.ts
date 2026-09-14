@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { mkdir, mkdtemp, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -40,7 +40,11 @@ describe('durable provider tool captures', () => {
     const capture = await ToolCaptureSession.create(artifacts, directory, 'run', 'verify', 2);
     await drain(capture.retain(stream(events()), []));
     const { receipts, manifest } = await readToolCaptures(directory, 'run');
-    expect(manifest.producer).toMatchObject({ runId: 'run', nodeId: 'verify', iteration: 2 });
+    expect(manifest.passes[0]?.producer).toMatchObject({
+      runId: 'run',
+      nodeId: 'verify',
+      iteration: 2,
+    });
     expect(receipts[0]?.receipt).toMatchObject({
       completeness: 'full',
       outcome: 'error',
@@ -107,12 +111,12 @@ describe('durable provider tool captures', () => {
         []
       )
     );
-    await expect(readToolCaptures(directory, 'run')).rejects.toThrow('incomplete stream');
+    expect((await readToolCaptures(directory, 'run')).manifest.passes[0]?.complete).toBe(false);
     const manifest = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8')) as {
-      receipts: Array<{ path: string }>;
+      passes: Array<{ receipts: Array<{ path: string }> }>;
     };
     expect(
-      JSON.parse(await readFile(join(directory, manifest.receipts[0]!.path), 'utf8'))
+      JSON.parse(await readFile(join(directory, manifest.passes[0]!.receipts[0]!.path), 'utf8'))
     ).toMatchObject({ completeness: 'unavailable', outcome: 'unknown' });
   });
 
@@ -125,7 +129,7 @@ describe('durable provider tool captures', () => {
       throw new Error('provider disconnected');
     }
     await expect(drain(capture.retain(failing(), []))).rejects.toThrow('provider disconnected');
-    await expect(readToolCaptures(directory, 'run')).rejects.toThrow('incomplete');
+    expect((await readToolCaptures(directory, 'run')).manifest.passes[0]?.complete).toBe(false);
   });
 
   it('does not certify a failed terminal result even after tool output was retained', async () => {
@@ -138,7 +142,7 @@ describe('durable provider tool captures', () => {
         []
       )
     );
-    await expect(readToolCaptures(directory, 'run')).rejects.toThrow('incomplete stream');
+    expect((await readToolCaptures(directory, 'run')).manifest.passes[0]?.complete).toBe(false);
   });
 
   it('does not accept unrelated files, wrong owners, changed output or path escapes', async () => {
@@ -191,6 +195,94 @@ describe('durable provider tool captures', () => {
     await expect(readToolCaptures(directory, 'run')).rejects.toThrow('do not match');
   });
 
+  it('rejects protected credential bytes before writing a binary attachment', async () => {
+    const artifacts = await root();
+    const directory = join(artifacts, 'capture');
+    const capture = await ToolCaptureSession.create(artifacts, directory, 'run', 'verify');
+    const secret = 'protected-binary-secret';
+    await drain(
+      capture.retain(
+        stream([
+          { type: 'tool', toolName: 'browser', toolCallId: '1' },
+          {
+            type: 'tool_result',
+            toolName: 'browser',
+            toolCallId: '1',
+            toolOutput: 'display',
+            capture: {
+              ...captureToolResult('clean text'),
+              attachments: [
+                { data: Buffer.from(`prefix-${secret}-suffix`), mediaType: 'image/png' },
+              ],
+            },
+          },
+          { type: 'result' },
+        ]),
+        [secret]
+      )
+    );
+    const receipt = (await readToolCaptures(directory, 'run')).receipts[0]!.receipt;
+    expect(receipt).toMatchObject({ completeness: 'redacted', redacted: true, attachments: [] });
+    for (const entry of await readdir(directory, { recursive: true, withFileTypes: true })) {
+      if (entry.isFile())
+        expect(await readFile(join(entry.parentPath, entry.name), 'utf8')).not.toContain(secret);
+    }
+  });
+
+  it('retains incomplete and successful passes with repeated provider call ids', async () => {
+    const artifacts = await root();
+    const directory = join(artifacts, 'capture');
+    const interrupted = await ToolCaptureSession.create(artifacts, directory, 'run', 'verify', 1);
+    async function* disconnect(): AsyncGenerator<MessageChunk> {
+      yield { type: 'tool', toolName: 'shell', toolCallId: 'same-id' };
+      throw new Error('disconnected');
+    }
+    await expect(drain(interrupted.retain(disconnect(), []))).rejects.toThrow('disconnected');
+    const successful = await ToolCaptureSession.create(artifacts, directory, 'run', 'verify', 2);
+    await drain(
+      successful.retain(
+        stream(
+          events('second pass').map(message =>
+            message.type === 'tool' || message.type === 'tool_result'
+              ? { ...message, toolCallId: 'same-id' }
+              : message
+          )
+        ),
+        []
+      )
+    );
+    const captured = await readToolCaptures(directory, 'run');
+    expect(captured.manifest.passes.map(pass => pass.complete)).toEqual([false, true]);
+    expect(
+      captured.receipts.map(entry => [entry.pass.producer.iteration, entry.receipt.callId])
+    ).toEqual([
+      [1, 'same-id'],
+      [2, 'same-id'],
+    ]);
+    expect(captured.receipts.map(entry => entry.receipt.output.path)).toHaveLength(2);
+    await expect(
+      ToolCaptureSession.create(artifacts, directory, 'run', 'other-node')
+    ).rejects.toThrow('another node');
+  });
+
+  it('enforces the byte budget across passes in one authored directory', async () => {
+    const artifacts = await root();
+    const directory = join(artifacts, 'capture');
+    const megabyte = 'x'.repeat(1024 * 1024);
+    for (let pass = 1; pass <= 17; pass += 1) {
+      const capture = await ToolCaptureSession.create(artifacts, directory, 'run', 'verify', pass);
+      await drain(capture.retain(stream(events(megabyte)), []));
+    }
+    const captured = await readToolCaptures(directory, 'run');
+    expect(captured.receipts.reduce((sum, entry) => sum + entry.receipt.output.bytes, 0)).toBe(
+      16 * 1024 * 1024
+    );
+    expect(captured.receipts.at(-1)?.receipt).toMatchObject({
+      completeness: 'truncated',
+      output: { bytes: 0 },
+    });
+  });
+
   it('fails the producer when capture persistence fails', async () => {
     const artifacts = await root();
     const directory = join(artifacts, 'attempt');
@@ -206,10 +298,12 @@ describe('durable provider tool captures', () => {
     );
     const manifest = JSON.parse(
       await readFile(join(artifacts, 'valid', 'manifest.json'), 'utf8')
-    ) as { producer: { attempt: string } };
-    await mkdir(join(artifacts, 'valid', manifest.producer.attempt, '1.output'));
+    ) as { passes: Array<{ producer: { attempt: string } }> };
+    await mkdir(join(artifacts, 'valid', manifest.passes[0]!.producer.attempt, '1.output'));
     await expect(drain(capture.retain(stream(events('output')), []))).rejects.toThrow();
-    await expect(readToolCaptures(join(artifacts, 'valid'), 'run')).rejects.toThrow('incomplete');
+    expect(
+      (await readToolCaptures(join(artifacts, 'valid'), 'run')).manifest.passes[0]?.complete
+    ).toBe(false);
   });
 
   it('withholds terminal completion if the final manifest cannot be committed', async () => {
@@ -241,7 +335,11 @@ describe('durable provider tool captures', () => {
       JSON.stringify({ ...receipt, producer: { ...receipt.producer, nodeId: 'developer' } })
     );
     await writeFile(join(directory, reference.path), bytes);
-    manifest.receipts[0] = { ...reference, bytes: bytes.length, sha256: captureHash(bytes) };
+    manifest.passes[0]!.receipts[0] = {
+      ...reference,
+      bytes: bytes.length,
+      sha256: captureHash(bytes),
+    };
     await writeFile(join(directory, 'manifest.json'), JSON.stringify(manifest));
     await expect(readToolCaptures(directory, 'run')).rejects.toThrow('wrong producer');
   });

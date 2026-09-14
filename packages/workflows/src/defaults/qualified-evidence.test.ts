@@ -224,7 +224,7 @@ async function fixture() {
             expected: { value: false, source_revision: head },
             observed: { value: outcome === 'failed', source_revision: head },
             reason: 'zero observed on described source revision',
-            evidence: [{ call_id: 'call' }],
+            evidence: [{ pass: capture.producer.attempt, call_id: 'call' }],
           },
         ],
       })
@@ -716,7 +716,8 @@ it('checks capture integrity again immediately before the merge write', async ()
 
 it('requires fresh holdout roles and does not seal semantic rejection or raw ready claims', async () => {
   const value = await fixture();
-  value.holdoutResult.evidence.producer.nodeId = value.runtimeResult.evidence.producer.nodeId;
+  value.holdoutResult.evidence.producers[0]!.nodeId =
+    value.runtimeResult.evidence.producers[0]!.nodeId;
   await expect(value.prepare()).rejects.toThrow('distinct fresh producer');
   const rejected = {
     ...value.decision,

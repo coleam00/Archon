@@ -49,9 +49,10 @@ Preserve the raw command output in evidence. Each assertion entry contains:
 - `expected` and `observed`: the expected and measured JSON values; use null for
   an unavailable measurement.
 - `reason`: explain the comparison or why assessment was impossible.
-- `evidence`: a nonempty array of `{ "call_id": "provider-call-id" }` references
-  from the manifest. For image evidence add `"attachment": 0` (the attachment index
-  in that receipt). A tool's prose claim to have saved an image is insufficient.
+- `evidence`: a nonempty array of `{ "pass": "attempt-uuid", "call_id": "provider-call-id" }`
+  references from the manifest. Use the enclosing pass's `producer.attempt`; call IDs
+  are unique only within that pass. For image evidence add `"attachment": 0`, the
+  attachment index in that receipt. A tool's prose claim to have saved an image is insufficient.
   Use only full captures with success or error outcomes. Empty captured output and
   nonzero command exits are valid observations when they support the assertion.
 

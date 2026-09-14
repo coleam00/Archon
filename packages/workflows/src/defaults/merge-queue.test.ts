@@ -4,12 +4,15 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { parseWorkflow } from '../loader';
+import { QUALIFICATION_METHODS } from './sdlc/qualified-evidence';
 import {
   collectMergeFacts,
   createMergePlan as createPolicyPlan,
   executeMergePlan as executePolicyPlan,
   mergePlanDigest,
   mergeArguments,
+  MERGE_METHODS,
   type GitHubAdapter,
   type Hold,
   GhAdapter,
@@ -82,6 +85,12 @@ async function artifactsDir(): Promise<string> {
   return trackTempRoot(path);
 }
 
+function object(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value))
+    : undefined;
+}
+
 class FakeGitHub implements GitHubAdapter {
   readonly merges: Array<{
     repository: string;
@@ -91,6 +100,7 @@ class FakeGitHub implements GitHubAdapter {
   }> = [];
   policy: unknown = [];
   classicPolicy: unknown = { contexts: [], checks: [] };
+  linearHistory: unknown = { enabled: false };
   checkRuns: unknown = { check_runs: [] };
   statuses: unknown = [];
   head = HEAD;
@@ -127,7 +137,11 @@ class FakeGitHub implements GitHubAdapter {
     if (endpoint === 'repos/owner/repo/branches/dev') {
       return { protected: this.classicPolicy !== null, commit: { sha: this.base } };
     }
-    if (endpoint.endsWith('/protection')) return { required_status_checks: this.classicPolicy };
+    if (endpoint.endsWith('/protection'))
+      return {
+        required_status_checks: this.classicPolicy,
+        required_linear_history: this.linearHistory,
+      };
     if (endpoint.startsWith('repos/owner/repo/rules/branches/dev')) return this.policy;
     if (endpoint.includes('/check-runs')) return this.checkRuns;
     if (endpoint.includes('/statuses')) return this.statuses;
@@ -193,7 +207,6 @@ function qualified(method: MergeMethod | '' = 'merge'): SemanticAssessment {
     method,
     method_source: method === '' ? '' : 'caller',
     method_conflict: '',
-    evidence: { state: 'qualified', fingerprint: 'evidence-v1', references: ['validation.md'] },
   };
 }
 
@@ -218,6 +231,11 @@ function facts(overrides: Partial<MergeFacts> = {}): MergeFacts {
         reviewEvidence: { reviews: [], issueComments: [], lineComments: [], threads: [] },
         requiredPolicy: 'none',
         requiredChecks: [],
+        methodPolicy: {
+          state: 'known',
+          allowedMethods: ['merge', 'squash', 'rebase'],
+          queueMethod: null,
+        },
         checkState: 'passing',
         holds: [],
       },
@@ -233,8 +251,26 @@ function plan(method: MergeMethod = 'merge'): MergePlan {
 }
 
 describe('merge queue contract', () => {
+  it('keeps every authored merge-method output schema aligned with the runtime owner', async () => {
+    for (const [relativePath, nodeIds] of [
+      ['../../../../.archon/workflows/sdlc/merge-queue/archon-merge-queue.yaml', ['judge', 'plan']],
+      ['../../../../.archon/workflows/sdlc/lifecycle/archon-lifecycle.yaml', ['judge']],
+    ] as const) {
+      const path = join(import.meta.dir, relativePath);
+      const parsed = parseWorkflow(await readFile(path, 'utf8'), path);
+      if (parsed.workflow === null) throw new Error(parsed.error.error);
+      for (const id of nodeIds) {
+        const node = parsed.workflow.nodes.find(candidate => candidate.id === id);
+        const format =
+          node !== undefined && 'output_format' in node ? node.output_format : undefined;
+        const properties = object(format?.properties);
+        expect(object(properties?.method)?.enum).toEqual([...QUALIFICATION_METHODS]);
+      }
+    }
+  });
+
   it('maps each method to the sole matching gh flag and pins the approved head', () => {
-    for (const method of ['merge', 'squash', 'rebase'] as const) {
+    for (const method of MERGE_METHODS) {
       const args = mergeArguments('owner/repo', 42, method, HEAD);
       expect(args).toEqual([
         'gh',
@@ -269,13 +305,14 @@ describe('merge queue contract', () => {
     expect(result.plan?.methodSource).toBe('repository');
   });
 
-  it('allows no required hosted CI only with qualified evidence', () => {
+  it('allows no required hosted CI only with qualified references', () => {
     expect(createMergePlan(facts(), qualified('merge'), 'merge').ready).toBe(true);
-    for (const state of ['missing', 'stale', 'rejected'] as const) {
-      const assessment = qualified('merge');
-      assessment.evidence.state = state;
-      expect(createMergePlan(facts(), assessment, 'merge').ready).toBe(false);
-    }
+    expect(
+      createPolicyPlan(facts(), qualified('merge'), 'merge', {
+        ...qualificationFixture,
+        references: [],
+      }).ready
+    ).toBe(false);
   });
 
   it('preserves classified semantic holds without inventing code defects', () => {
@@ -362,6 +399,49 @@ describe('merge queue contract', () => {
     expect(result.pullRequests[0]?.requiredChecks).toHaveLength(3);
   });
 
+  it('reduces repository, pull-request, linear-history and queue method policy', async () => {
+    const github = new FakeGitHub();
+    github.policy = [
+      { type: 'pull_request', parameters: { allowed_merge_methods: ['squash', 'rebase'] } },
+      { type: 'required_linear_history' },
+      { type: 'merge_queue', parameters: { merge_method: 'SQUASH' } },
+    ];
+    const current = await collectMergeFacts([URL], github);
+    expect(current.pullRequests[0]?.methodPolicy).toEqual({
+      state: 'known',
+      allowedMethods: ['squash', 'rebase'],
+      queueMethod: 'squash',
+    });
+    expect(createMergePlan(current, qualified('squash'), 'squash').ready).toBe(true);
+    expect(createMergePlan(current, qualified('rebase'), 'rebase')).toMatchObject({
+      ready: false,
+      holds: [{ kind: 'policy' }],
+    });
+
+    github.policy = [];
+    github.linearHistory = { enabled: true };
+    const classic = await collectMergeFacts([URL], github);
+    expect(classic.pullRequests[0]?.methodPolicy.allowedMethods).toEqual(['squash', 'rebase']);
+    expect(createMergePlan(classic, qualified('merge'), 'merge').ready).toBe(false);
+  });
+
+  it('holds malformed, conflicting, or unreadable effective method policy', async () => {
+    for (const policy of [
+      [{ type: 'pull_request', parameters: { allowed_merge_methods: ['octopus'] } }],
+      [
+        { type: 'merge_queue', parameters: { merge_method: 'SQUASH' } },
+        { type: 'merge_queue', parameters: { merge_method: 'REBASE' } },
+      ],
+      [{ type: 'merge_queue', parameters: {} }],
+    ]) {
+      const github = new FakeGitHub();
+      github.policy = policy;
+      const current = await collectMergeFacts([URL], github);
+      expect(current.pullRequests[0]?.methodPolicy.state).toBe('unknown');
+      expect(createMergePlan(current, qualified('squash'), 'squash').ready).toBe(false);
+    }
+  });
+
   it('requires distinct status and app-bound check obligations', async () => {
     const github = new FakeGitHub();
     github.classicPolicy = {
@@ -418,6 +498,7 @@ describe('merge queue contract', () => {
       endpoint.endsWith('/protection')
         ? {
             required_status_checks: null,
+            required_linear_history: { enabled: false },
             required_pull_request_reviews: { required_approving_review_count: 1 },
           }
         : api(endpoint);
@@ -592,6 +673,9 @@ describe('merge queue contract', () => {
       },
       github => {
         github.enabled = ['squash'];
+      },
+      github => {
+        github.policy = [{ type: 'merge_queue', parameters: { merge_method: 'SQUASH' } }];
       },
     ];
     for (const mutate of cases) {

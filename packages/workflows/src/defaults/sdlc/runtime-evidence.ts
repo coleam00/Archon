@@ -9,7 +9,7 @@ export const runtimeEvidenceSchema = z
     report_sha256: z.string(),
     capture_directory: z.string(),
     capture_manifest_sha256: z.string(),
-    producer: captureProducerSchema.nullable(),
+    producers: z.array(captureProducerSchema),
     scenario_path: z.string(),
     scenario_sha256: z.string(),
     evaluator_path: z.string(),
@@ -40,6 +40,7 @@ export const runtimeReportSchema = z
               .array(
                 z
                   .object({
+                    pass: z.uuid(),
                     call_id: z.string().min(1),
                     attachment: z.number().int().nonnegative().optional(),
                   })
@@ -95,7 +96,7 @@ export async function assessRuntime(input: RuntimeAssessmentInput): Promise<Runt
     report_sha256: '',
     capture_directory: join(input.directory, 'captures'),
     capture_manifest_sha256: '',
-    producer: null,
+    producers: [],
     scenario_path: input.scenario,
     scenario_sha256: '',
     evaluator_path: import.meta.path,
@@ -130,26 +131,32 @@ export async function assessRuntime(input: RuntimeAssessmentInput): Promise<Runt
       throw new Error('reported candidate does not match the target probe');
     const captured = await readToolCaptures(evidence.capture_directory, input.runId);
     const seen = new Set<string>();
+    const selectedPasses = new Map<string, z.infer<typeof captureProducerSchema>>();
     for (const assertion of report.assertions) {
       if (!input.requiredIds.includes(assertion.id) || seen.has(assertion.id))
         throw new Error('assertion ids must match the scenario exactly');
       seen.add(assertion.id);
       for (const ref of assertion.evidence) {
         const receipt = captured.receipts.find(
-          entry => entry.receipt.callId === ref.call_id
-        )?.receipt;
+          entry => entry.pass.producer.attempt === ref.pass && entry.receipt.callId === ref.call_id
+        );
         if (
-          receipt?.completeness !== 'full' ||
-          receipt.truncated ||
-          receipt.redacted ||
-          receipt.outcome === 'interrupted' ||
-          receipt.outcome === 'unknown'
+          receipt?.pass.complete !== true ||
+          receipt.receipt.completeness !== 'full' ||
+          receipt.receipt.truncated ||
+          receipt.receipt.redacted ||
+          receipt.receipt.outcome === 'interrupted' ||
+          receipt.receipt.outcome === 'unknown'
         ) {
           throw new Error(
             `assertion ${assertion.id} references unavailable or incomplete execution`
           );
         }
-        if (ref.attachment !== undefined && receipt.attachments[ref.attachment] === undefined) {
+        selectedPasses.set(receipt.pass.producer.attempt, receipt.pass.producer);
+        if (
+          ref.attachment !== undefined &&
+          receipt.receipt.attachments[ref.attachment] === undefined
+        ) {
           throw new Error(`assertion ${assertion.id} has no captured attachment`);
         }
       }
@@ -158,7 +165,7 @@ export async function assessRuntime(input: RuntimeAssessmentInput): Promise<Runt
       throw new Error('report is missing required assertion coverage');
     evidence.report_sha256 = captureHash(bytes);
     evidence.capture_manifest_sha256 = captured.manifestFile.sha256;
-    evidence.producer = captured.manifest.producer;
+    evidence.producers = [...selectedPasses.values()];
     evidence.scenario_sha256 = captureHash(await readFile(input.scenario));
     evidence.evaluator_sha256 = captureHash(await readFile(import.meta.path));
     const status = report.assertions.some(assertion => assertion.outcome === 'inconclusive')

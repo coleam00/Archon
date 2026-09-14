@@ -135,14 +135,16 @@ nodes:
                   report_sha256: { type: string }
                   capture_directory: { type: string }
                   capture_manifest_sha256: { type: string }
-                  producer:
-                    type: [object, 'null']
-                    properties:
-                      runId: { type: string }
-                      nodeId: { type: string }
-                      attempt: { type: string }
-                      iteration: { type: [integer, 'null'] }
-                    required: [runId, nodeId, attempt, iteration]
+                  producers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        runId: { type: string }
+                        nodeId: { type: string }
+                        attempt: { type: string }
+                        iteration: { type: [integer, 'null'] }
+                      required: [runId, nodeId, attempt, iteration]
                   scenario_path: { type: string }
                   scenario_sha256: { type: string }
                   evaluator_path: { type: string }
@@ -153,7 +155,7 @@ nodes:
                       type: object
                       properties: { path: { type: string }, sha256: { type: string } }
                       required: [path, sha256]
-                required: [report_path, report_sha256, capture_directory, capture_manifest_sha256, producer, scenario_path, scenario_sha256, evaluator_path, evaluator_sha256, evaluator_sources]
+                required: [report_path, report_sha256, capture_directory, capture_manifest_sha256, producers, scenario_path, scenario_sha256, evaluator_path, evaluator_sha256, evaluator_sources]
             required: [status, reason, candidate, evidence]
 
         # Not finally cleanup: cancellation and some node errors can skip this node.

@@ -34,7 +34,7 @@ async function fixture() {
         observed: false,
         expected: 0,
         reason: 'semantic assessment owns interpretation',
-        evidence: [{ call_id: 'call' }],
+        evidence: [{ pass: capture.producer.attempt, call_id: 'call' }],
       },
     ],
   };
@@ -92,23 +92,61 @@ it('preserves false/zero measurements and expected failed commands with direct h
   await retain(capture, 'false 0');
   const result = await assessRuntime(input);
   expect(result.status).toBe('verified');
-  expect(result.evidence.producer).toMatchObject({ runId: 'run', nodeId: 'verify', iteration: 1 });
+  expect(result.evidence.producers[0]).toMatchObject({
+    runId: 'run',
+    nodeId: 'verify',
+    iteration: 1,
+  });
   expect(result.evidence.report_path).toBe(input.reportPath);
   expect(result.evidence.report_sha256).toHaveLength(64);
   expect(result.evidence.capture_manifest_sha256).toHaveLength(64);
 });
 
+it('selects a complete pass when an earlier pass reused the same provider call id and was interrupted', async () => {
+  const { input, capture, report } = await fixture();
+  async function* interrupted(): AsyncGenerator<MessageChunk> {
+    yield { type: 'tool', toolName: 'probe', toolCallId: 'call' };
+    throw new Error('provider disconnected');
+  }
+  await expect(retainInterrupted(capture, interrupted())).rejects.toThrow('provider disconnected');
+  const retry = await ToolCaptureSession.create(
+    input.directory,
+    join(input.directory, 'captures'),
+    'run',
+    'verify',
+    1
+  );
+  report.assertions[0]!.evidence = [{ pass: retry.producer.attempt, call_id: 'call' }];
+  await writeFile(input.reportPath, JSON.stringify(report));
+  await retain(retry, 'retry output');
+  const result = await assessRuntime(input);
+  expect(result.status).toBe('verified');
+  expect(result.evidence.producers).toEqual([retry.producer]);
+});
+
+async function retainInterrupted(
+  capture: ToolCaptureSession,
+  messages: AsyncIterable<MessageChunk>
+): Promise<void> {
+  for await (const message of capture.retain(messages, [])) void message;
+}
+
 it('rejects incomplete captures and textual screenshot claims without attachments', async () => {
   const { input, capture, report } = await fixture();
   await retain(capture, 'saved image at screenshot.png');
-  report.assertions[0]!.evidence = [{ call_id: 'missing' }];
+  report.assertions[0]!.evidence = [{ pass: capture.producer.attempt, call_id: 'missing' }];
   await writeFile(input.reportPath, JSON.stringify(report));
   expect((await assessRuntime(input)).status).toBe('malformed');
   await writeFile(
     input.reportPath,
     JSON.stringify({
       ...report,
-      assertions: [{ ...report.assertions[0], evidence: [{ call_id: 'call', attachment: 0 }] }],
+      assertions: [
+        {
+          ...report.assertions[0],
+          evidence: [{ pass: capture.producer.attempt, call_id: 'call', attachment: 0 }],
+        },
+      ],
     })
   );
   expect((await assessRuntime(input)).status).toBe('malformed');

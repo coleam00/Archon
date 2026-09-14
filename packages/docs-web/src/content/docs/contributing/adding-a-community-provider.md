@@ -107,6 +107,14 @@ export class YourProvider implements IAgentProvider {
 }
 ```
 
+Providers that can expose returned tool values should also honor
+`options.captureToolOutput`. On each `tool_result`, attach a `ToolResultCapture`
+containing the SDK result before display truncation, with honest completeness and
+owned binary attachment bytes. Do not read native session archives. A provider
+that omits `capture` remains valid, but workflows using `capture_tools` receive
+unavailable evidence from that provider. Tests should cover both the opt-in and
+the provider's incomplete/unavailable cases.
+
 See `packages/providers/src/community/pi/provider.ts` for a full reference with retry, fail-fast auth validation, and resume fallback.
 
 ### 3. Registration
@@ -140,7 +148,7 @@ export function registerCommunityProviders(): void {
 }
 ```
 
-**That is the entire cross-cutting change.** No entrypoint edits, no config-type edits. The aggregator is already called from the CLI, server, and config-loader bootstrap paths.
+**That is the entire registration change.** No entrypoint edits or config-type edits are needed. The aggregator is already called from the CLI, server, and config-loader bootstrap paths.
 
 ### 4. Tests
 

@@ -51,7 +51,7 @@ export const runtimeResultSchema = z
         report_sha256: sha,
         capture_directory: z.string().min(1),
         capture_manifest_sha256: sha,
-        producer: captureProducerSchema,
+        producers: z.array(captureProducerSchema).min(1),
         scenario_path: z.string().min(1),
         scenario_sha256: sha,
         evaluator_path: z.string().min(1),
@@ -106,6 +106,9 @@ export const qualificationBundleSchema = z
   })
   .strict();
 export type QualificationBundle = z.infer<typeof qualificationBundleSchema>;
+export const MERGE_METHODS = ['merge', 'squash', 'rebase'] as const;
+export const QUALIFICATION_METHODS = [...MERGE_METHODS, ''] as const;
+export type MergeMethod = (typeof MERGE_METHODS)[number];
 export const qualificationDecisionSchema = z
   .object({
     ready: z.boolean(),
@@ -121,7 +124,7 @@ export const qualificationDecisionSchema = z
         })
         .strict()
     ),
-    method: z.enum(['merge', 'squash', 'rebase', '']),
+    method: z.enum(QUALIFICATION_METHODS),
     method_source: z.enum(['caller', 'project', '']),
     method_conflict: z.string(),
   })
@@ -199,10 +202,17 @@ export async function checkRuntime(
     JSON.stringify(evidence.evaluator_sources)
   )
     throw new Error('runtime evaluator sources changed');
-  const captures = await readToolCaptures(evidence.capture_directory, evidence.producer.runId);
+  const producer = evidence.producers[0];
+  if (producer === undefined) throw new Error('runtime capture producer is missing');
+  const captures = await readToolCaptures(evidence.capture_directory, producer.runId);
   if (
     captures.manifestFile.sha256 !== evidence.capture_manifest_sha256 ||
-    JSON.stringify(captures.manifest.producer) !== JSON.stringify(evidence.producer)
+    evidence.producers.some(
+      expected =>
+        !captures.manifest.passes.some(
+          pass => pass.complete && JSON.stringify(pass.producer) === JSON.stringify(expected)
+        )
+    )
   )
     throw new Error('runtime capture producer or manifest changed');
   const declared = z
@@ -215,7 +225,7 @@ export async function checkRuntime(
     expectedCandidate: runtime.candidate,
     startOk: true,
     identityOk: true,
-    runId: evidence.producer.runId,
+    runId: producer.runId,
     scenario,
   });
   if (
@@ -286,9 +296,11 @@ export async function verifyQualificationBundle(
   for (const source of ordinary.sources) await readEvidence(source);
   if (bundle.requirements.scenario === bundle.requirements.holdout)
     throw new Error('independent holdout requires its own scenario');
-  const runtimeProducer = roles.runtime.evidence.producer;
-  const holdoutProducer = roles.holdout.evidence.producer;
+  const runtimeProducer = roles.runtime.evidence.producers[0];
+  const holdoutProducer = roles.holdout.evidence.producers[0];
   if (
+    runtimeProducer === undefined ||
+    holdoutProducer === undefined ||
     runtimeProducer.runId !== bundle.producer.runId ||
     holdoutProducer.runId !== bundle.producer.runId ||
     runtimeProducer.nodeId === holdoutProducer.nodeId ||
@@ -446,10 +458,5 @@ export async function inspectQualifications(
     method: first?.method ?? '',
     method_source: first?.method_source ?? '',
     method_conflict: conflict ? 'qualified records disagree on merge method' : '',
-    evidence: {
-      state: holds.length === 0 ? 'qualified' : 'stale',
-      fingerprint: captureHash(JSON.stringify(references)),
-      references: references.map(reference => reference.path),
-    },
   };
 }

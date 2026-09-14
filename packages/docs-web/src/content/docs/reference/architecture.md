@@ -357,9 +357,24 @@ export type MessageChunk =
     }
   | { type: 'rate_limit'; rateLimitInfo: Record<string, unknown> }
   | { type: 'tool'; toolName: string; toolInput?: Record<string, unknown>; toolCallId?: string }
-  | { type: 'tool_result'; toolName: string; toolOutput: string; toolCallId?: string }
+  | {
+      type: 'tool_result';
+      toolName: string;
+      toolOutput: string;
+      toolCallId?: string;
+      capture?: ToolResultCapture;
+    }
   | { type: 'workflow_dispatch'; workerConversationId: string; workflowName: string };
 ```
+
+`ToolResultCapture` is the provider's returned tool result before presentation
+formatting or truncation. It contains `text`, `format` (`text` or `json`), an
+explicit `completeness` state, and owned binary `attachments` as
+`{ data: Uint8Array, mediaType: string }`. When `options.captureToolOutput` is
+true, emit this payload on every `tool_result`. Do not recover it from display
+text or private session archives. If the SDK does not expose a complete returned
+value, mark it `truncated`, `redacted`, or `unavailable`; absence is treated as
+unavailable by evidence consumers.
 
 ### Implementation Guide
 
@@ -392,6 +407,16 @@ export class YourAssistantProvider implements IAgentProvider {
           toolName: event.tool,
           toolInput: event.parameters,
           toolCallId: event.id,
+        };
+      } else if (event.type === 'tool_result') {
+        yield {
+          type: 'tool_result',
+          toolName: event.tool,
+          toolOutput: event.displayText,
+          toolCallId: event.id,
+          ...(options?.captureToolOutput
+            ? { capture: captureReturnedToolResult(event) }
+            : {}),
         };
       } else if (event.type === 'thinking') {
         yield { type: 'thinking', content: event.reasoning };

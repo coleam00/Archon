@@ -39,7 +39,9 @@ one retry with fresh agent context and another setup/start cycle. Native
 `LOOP_PREV` carries the checker's rejection reason through `prepare-attempt` into
 the retry command as report feedback, never as a prior product observation. It is
 empty on the first attempt. Each assertion's `evidence` array names engine-captured
-calls as `{ "call_id": "id" }`; add `"attachment": 0` for an image attachment.
+calls as `{ "pass": "attempt-uuid", "call_id": "id" }`; add `"attachment": 0`
+for an image attachment. The pass is the matching `passes[].producer.attempt` from
+the capture manifest, so provider call IDs may repeat across reasks and retries.
 Read these IDs from the attempt's `captures/manifest.json`. Arbitrary text files
 and textual screenshot claims cannot satisfy capture provenance. The second
 malformed attempt explicitly completes as inconclusive before the engine's loop

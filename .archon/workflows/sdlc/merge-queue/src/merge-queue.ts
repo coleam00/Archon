@@ -1,10 +1,9 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { evidenceReferenceSchema, qualificationRequirementsSchema, qualificationRequirementsFromEnv, inspectQualifications, type EvidenceReference, type QualificationRequirements } from '../../../../../packages/workflows/src/defaults/sdlc/qualified-evidence';
+import { evidenceReferenceSchema, MERGE_METHODS, qualificationRequirementsSchema, qualificationRequirementsFromEnv, inspectQualifications, type EvidenceReference, type MergeMethod, type QualificationRequirements } from '../../../../../packages/workflows/src/defaults/sdlc/qualified-evidence';
 
-export const MERGE_METHODS = ['merge', 'squash', 'rebase'] as const;
-export type MergeMethod = (typeof MERGE_METHODS)[number];
+export { MERGE_METHODS, type MergeMethod };
 
 type HoldKind = 'code' | 'policy' | 'checks' | 'evidence' | 'stale' | 'authorization';
 
@@ -17,6 +16,12 @@ interface RequiredCheck {
   context: string;
   source: 'run' | 'status' | 'either';
   integrationId?: number;
+}
+
+interface MethodPolicy {
+  state: 'known' | 'unknown';
+  allowedMethods: MergeMethod[];
+  queueMethod: MergeMethod | null;
 }
 
 interface CheckRun {
@@ -54,6 +59,7 @@ export interface PullRequestFacts {
   };
   requiredPolicy: 'none' | 'known' | 'unknown';
   requiredChecks: RequiredCheck[];
+  methodPolicy: MethodPolicy;
   checkState: 'passing' | 'failing' | 'pending' | 'missing' | 'unknown';
   holds: Hold[];
 }
@@ -73,11 +79,6 @@ export interface SemanticAssessment {
   method: MergeMethod | '';
   method_source: 'caller' | 'project' | '';
   method_conflict: string;
-  evidence: {
-    state: 'qualified' | 'rejected' | 'missing' | 'stale';
-    fingerprint: string;
-    references: string[];
-  };
 }
 
 export interface MergePlan {
@@ -88,7 +89,6 @@ export interface MergePlan {
   method: MergeMethod;
   methodSource: 'caller' | 'project' | 'repository';
   factsFingerprint: string;
-  evidence: SemanticAssessment['evidence'];
   qualifications: EvidenceReference[];
   requirements: QualificationRequirements;
   pullRequests: Array<{
@@ -199,29 +199,61 @@ function enabledMethods(repository: Record<string, unknown>): MergeMethod[] {
   });
 }
 
-function rulesetChecks(rules: unknown): RequiredCheck[] | undefined {
+interface RulesetPolicy {
+  checks: RequiredCheck[];
+  allowedMethods: MergeMethod[];
+  queueMethod: MergeMethod | null;
+}
+
+function rulesetPolicy(rules: unknown): RulesetPolicy | undefined {
   if (isFailure(rules)) return undefined;
   const ruleRecords = recordPages(rules);
   if (ruleRecords === undefined) return undefined;
   const checks = new Map<string, RequiredCheck>();
+  let allowedMethods = [...MERGE_METHODS];
+  let queueMethod: MergeMethod | null = null;
   for (const rule of ruleRecords) {
-    if (rule.type !== 'required_status_checks') continue;
-    const parameters = record(rule.parameters);
-    const candidates = recordPages(parameters?.required_status_checks);
-    if (parameters === undefined || candidates === undefined) return undefined;
-    for (const candidate of candidates) {
-      const context = string(candidate.context);
-      if (context === '') return undefined;
-      const integrationId = integer(candidate.integration_id);
-      if (candidate.integration_id !== undefined && integrationId === undefined) return undefined;
-      checks.set(`either:${context}:${String(integrationId ?? '')}`, {
-        context,
-        source: 'either',
-        ...(integrationId === undefined ? {} : { integrationId }),
-      });
+    if (rule.type === 'required_status_checks') {
+      const parameters = record(rule.parameters);
+      const candidates = recordPages(parameters?.required_status_checks);
+      if (parameters === undefined || candidates === undefined) return undefined;
+      for (const candidate of candidates) {
+        const context = string(candidate.context);
+        if (context === '') return undefined;
+        const integrationId = integer(candidate.integration_id);
+        if (candidate.integration_id !== undefined && integrationId === undefined) return undefined;
+        checks.set(`either:${context}:${String(integrationId ?? '')}`, {
+          context,
+          source: 'either',
+          ...(integrationId === undefined ? {} : { integrationId }),
+        });
+      }
+    } else if (rule.type === 'pull_request') {
+      const candidates = record(rule.parameters)?.allowed_merge_methods;
+      if (!Array.isArray(candidates) || candidates.length === 0 ||
+        !candidates.every(candidate => MERGE_METHODS.includes(candidate as MergeMethod))) return undefined;
+      allowedMethods = allowedMethods.filter(method => candidates.includes(method));
+    } else if (rule.type === 'required_linear_history') {
+      allowedMethods = allowedMethods.filter(method => method !== 'merge');
+    } else if (rule.type === 'merge_queue') {
+      const configured = string(record(rule.parameters)?.merge_method).toLowerCase();
+      const method = MERGE_METHODS.find(candidate => candidate === configured);
+      if (method === undefined || (queueMethod !== null && queueMethod !== method)) return undefined;
+      queueMethod = method;
     }
   }
-  return [...checks.values()];
+  if (allowedMethods.length === 0) return undefined;
+  return { checks: [...checks.values()], allowedMethods, queueMethod };
+}
+
+function classicLinearHistory(branch: unknown, protection: unknown): boolean | undefined {
+  if (isFailure(branch)) return undefined;
+  const branchRecord = record(branch);
+  if (branchRecord === undefined || typeof branchRecord.protected !== 'boolean') return undefined;
+  if (!branchRecord.protected) return false;
+  if (isFailure(protection)) return undefined;
+  const enabled = record(record(protection)?.required_linear_history)?.enabled;
+  return typeof enabled === 'boolean' ? enabled : undefined;
 }
 
 function classicChecks(branch: unknown, protection: unknown): RequiredCheck[] | undefined {
@@ -383,7 +415,17 @@ function factsHolds(pr: Omit<PullRequestFacts, 'holds'>): Hold[] {
   } else if (pr.checkState !== 'passing') {
     holds.push({ kind: 'checks', reason: `${pr.url} required checks are ${pr.checkState}` });
   }
+  if (pr.methodPolicy.state === 'unknown') {
+    holds.push({ kind: 'policy', reason: `${pr.url} effective merge-method policy is unknown` });
+  } else if (pr.methodPolicy.allowedMethods.length === 0) {
+    holds.push({ kind: 'policy', reason: `${pr.url} effective merge-method policy allows no repository method` });
+  }
   return holds;
+}
+
+function methodPolicyAllows(policy: MethodPolicy, method: MergeMethod): boolean {
+  return policy.state === 'known' && policy.allowedMethods.includes(method) &&
+    (policy.queueMethod === null || policy.queueMethod === method);
 }
 
 async function safeApi(adapter: GitHubAdapter, endpoint: string): Promise<unknown | ApiFailure> {
@@ -399,7 +441,7 @@ async function collectGraphqlPolicy(
   repository: string,
   branch: string,
   baseSha: string
-): Promise<{ classic?: RequiredCheck[]; ruleset?: RequiredCheck[] }> {
+): Promise<{ classic?: RequiredCheck[]; ruleset?: RequiredCheck[]; classicLinear?: boolean }> {
   const [owner, name] = repository.split('/');
   let response: unknown;
   try {
@@ -410,7 +452,7 @@ async function collectGraphqlPolicy(
           ref(qualifiedName:$ref) {
             name target { oid }
             branchProtectionRule {
-              requiresStatusChecks requiredStatusCheckContexts
+              requiresStatusChecks requiresLinearHistory requiredStatusCheckContexts
               requiredStatusChecks { context app { databaseId } }
             }
           }
@@ -433,7 +475,10 @@ async function collectGraphqlPolicy(
     baseSha === '' || record(ref.target)?.oid !== baseSha) return {};
 
   let classic: RequiredCheck[] | undefined;
+  let classicLinear: boolean | undefined;
   const protection = record(ref.branchProtectionRule);
+  if (ref.branchProtectionRule === null) classicLinear = false;
+  else if (typeof protection?.requiresLinearHistory === 'boolean') classicLinear = protection.requiresLinearHistory;
   if (ref.branchProtectionRule === null || protection?.requiresStatusChecks === false) {
     classic = [];
   } else if (protection?.requiresStatusChecks === true) {
@@ -455,6 +500,7 @@ async function collectGraphqlPolicy(
   return {
     ...(classic === undefined ? {} : { classic }),
     ...(noRulesets ? { ruleset: [] } : {}),
+    ...(classicLinear === undefined ? {} : { classicLinear }),
   };
 }
 
@@ -583,6 +629,7 @@ export async function collectMergeFacts(
         reviewEvidence: { reviews: [], issueComments: [], lineComments: [], threads: [] },
         requiredPolicy: 'unknown',
         requiredChecks: [],
+        methodPolicy: { state: 'unknown', allowedMethods: [], queueMethod: null },
         checkState: 'unknown',
         holds: [hold],
       });
@@ -613,14 +660,30 @@ export async function collectMergeFacts(
         collectReviewThreads(adapter, repository, identity.number),
       ]);
     const classic = classicChecks(branchValue, protectionValue);
-    const ruleset = rulesetChecks(rulesValue);
+    const ruleset = rulesetPolicy(rulesValue);
+    const classicLinear = classicLinearHistory(branchValue, protectionValue);
     // Permissions differ between GitHub APIs. Only a complete independent read can
     // resolve an unknown REST policy; error text is never evidence of no protection.
-    const fallback = classic === undefined || ruleset === undefined
+    const fallback = classic === undefined || ruleset === undefined || classicLinear === undefined
       ? await collectGraphqlPolicy(adapter, repository, baseName,
           string(record(record(branchValue)?.commit)?.sha))
       : {};
-    const requirements = combineRequirements(classic ?? fallback.classic, ruleset ?? fallback.ruleset);
+    const requirements = combineRequirements(classic ?? fallback.classic, ruleset?.checks ?? fallback.ruleset);
+    const effectiveClassicLinear = classicLinear ?? fallback.classicLinear;
+    const effectiveRuleset = ruleset ?? (fallback.ruleset === undefined ? undefined : {
+      checks: fallback.ruleset,
+      allowedMethods: [...MERGE_METHODS],
+      queueMethod: null,
+    });
+    const methodPolicy: MethodPolicy = effectiveRuleset === undefined || effectiveClassicLinear === undefined
+      ? { state: 'unknown', allowedMethods: [], queueMethod: null }
+      : {
+          state: 'known',
+          allowedMethods: methods.filter(method =>
+            effectiveRuleset.allowedMethods.includes(method) && (!effectiveClassicLinear || method !== 'merge')
+          ),
+          queueMethod: effectiveRuleset.queueMethod,
+        };
     const runs = readCheckRuns(runsValue);
     const statuses = readStatuses(statusesValue);
     const reviewMaterial = [pull.review_decision, reviewsValue, commentsValue, linesValue, threadsValue];
@@ -645,6 +708,7 @@ export async function collectMergeFacts(
       },
       requiredPolicy: requirements === undefined ? 'unknown' : requirements.length === 0 ? 'none' : 'known',
       requiredChecks: requirements ?? [],
+      methodPolicy,
       checkState: requirements === undefined ? 'unknown' : classifyChecks(requirements, runs, statuses),
     } satisfies Omit<PullRequestFacts, 'holds'>;
     const holds = factsHolds(partial);
@@ -678,12 +742,6 @@ export function createMergePlan(
   if (!assessment.ready && assessment.holds.length === 0) {
     holds.push({ kind: 'evidence', reason: 'semantic assessment is not ready and supplies no classified reasons' });
   }
-  if (assessment.evidence.state !== 'qualified' || assessment.evidence.fingerprint === '') {
-    holds.push({
-      kind: 'evidence',
-      reason: `applicable validation evidence is ${assessment.evidence.state}`,
-    });
-  }
   if (assessment.method_conflict !== '') {
     holds.push({ kind: 'policy', reason: assessment.method_conflict });
   }
@@ -715,6 +773,13 @@ export function createMergePlan(
   if (method !== undefined && !facts.enabledMethods.includes(method)) {
     holds.push({ kind: 'policy', reason: `merge method ${method} is disabled in the repository` });
   }
+  if (method !== undefined) {
+    for (const pull of facts.pullRequests) {
+      if (!methodPolicyAllows(pull.methodPolicy, method)) {
+        holds.push({ kind: 'policy', reason: `${pull.url} effective policy does not permit merge method ${method}` });
+      }
+    }
+  }
   const bases = new Set(facts.pullRequests.map(pr => `${pr.base}:${pr.liveBaseSha}`));
   if (bases.size !== 1) holds.push({ kind: 'stale', reason: 'pull requests do not share one live base identity' });
 
@@ -735,7 +800,6 @@ export function createMergePlan(
     method,
     methodSource,
     factsFingerprint: facts.fingerprint,
-    evidence: assessment.evidence,
     qualifications: qualification.references,
     requirements: qualification.requirements,
     pullRequests: facts.pullRequests.map(pr => ({
@@ -797,6 +861,11 @@ export async function executeMergePlan(
   if (!current.enabledMethods.includes(plan.method)) {
     holds.push({ kind: 'policy', reason: `approved merge method ${plan.method} is no longer enabled` });
   }
+  for (const pull of current.pullRequests) {
+    if (!methodPolicyAllows(pull.methodPolicy, plan.method)) {
+      holds.push({ kind: 'policy', reason: `${pull.url} no longer permits approved merge method ${plan.method}` });
+    }
+  }
   for (const approved of plan.pullRequests) {
     const actual = current.pullRequests.find(pr => pr.number === approved.number);
     if (actual?.headSha !== approved.headSha) {
@@ -836,10 +905,13 @@ export async function executeMergePlan(
     if (!before.enabledMethods.includes(plan.method)) {
       stepHolds.push({ kind: 'policy', reason: `approved merge method ${plan.method} is no longer enabled` });
     }
+    if (actual !== undefined && !methodPolicyAllows(actual.methodPolicy, plan.method)) {
+      stepHolds.push({ kind: 'policy', reason: `${approved.url} no longer permits approved merge method ${plan.method}` });
+    }
     if (
       prior === undefined || actual === undefined ||
-      hash([actual.requiredPolicy, actual.requiredChecks, actual.checkState]) !==
-        hash([prior.requiredPolicy, prior.requiredChecks, prior.checkState])
+      hash([actual.requiredPolicy, actual.requiredChecks, actual.checkState, actual.methodPolicy]) !==
+        hash([prior.requiredPolicy, prior.requiredChecks, prior.checkState, prior.methodPolicy])
     ) {
       stepHolds.push({ kind: 'stale', reason: `${approved.url} required checks changed before merge` });
     }
@@ -1009,21 +1081,10 @@ const HOLD_KINDS: readonly HoldKind[] = [
   'code', 'policy', 'checks', 'evidence', 'stale', 'authorization',
 ];
 
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every(item => typeof item === 'string');
-}
-
 function isHold(value: unknown): value is Hold {
   const candidate = record(value);
   return candidate !== undefined && HOLD_KINDS.includes(candidate.kind as HoldKind) &&
     typeof candidate.reason === 'string';
-}
-
-function isEvidence(value: unknown): value is SemanticAssessment['evidence'] {
-  const candidate = record(value);
-  return candidate !== undefined &&
-    ['qualified', 'rejected', 'missing', 'stale'].includes(string(candidate.state)) &&
-    typeof candidate.fingerprint === 'string' && isStringArray(candidate.references);
 }
 
 function isRequiredCheck(value: unknown): value is RequiredCheck {
@@ -1031,6 +1092,14 @@ function isRequiredCheck(value: unknown): value is RequiredCheck {
   return candidate !== undefined && typeof candidate.context === 'string' && candidate.context !== '' &&
     ['run', 'status', 'either'].includes(string(candidate.source)) &&
     (candidate.integrationId === undefined || integer(candidate.integrationId) !== undefined);
+}
+
+function isMethodPolicy(value: unknown): value is MethodPolicy {
+  const candidate = record(value);
+  return candidate !== undefined && ['known', 'unknown'].includes(string(candidate.state)) &&
+    Array.isArray(candidate.allowedMethods) &&
+    candidate.allowedMethods.every(method => MERGE_METHODS.includes(method as MergeMethod)) &&
+    (candidate.queueMethod === null || MERGE_METHODS.includes(candidate.queueMethod as MergeMethod));
 }
 
 function isPullRequestFacts(value: unknown): value is PullRequestFacts {
@@ -1047,6 +1116,7 @@ function isPullRequestFacts(value: unknown): value is PullRequestFacts {
     'lineComments' in review && 'threads' in review &&
     ['none', 'known', 'unknown'].includes(string(candidate.requiredPolicy)) &&
     Array.isArray(candidate.requiredChecks) && candidate.requiredChecks.every(isRequiredCheck) &&
+    isMethodPolicy(candidate.methodPolicy) &&
     ['passing', 'failing', 'pending', 'missing', 'unknown'].includes(string(candidate.checkState)) &&
     Array.isArray(candidate.holds) && candidate.holds.every(isHold);
 }
@@ -1072,7 +1142,6 @@ function isPlan(value: unknown): value is MergePlan {
     MERGE_METHODS.includes(candidate.method as MergeMethod) &&
     ['caller', 'project', 'repository'].includes(string(candidate.methodSource)) &&
     typeof candidate.factsFingerprint === 'string' && candidate.factsFingerprint !== '' &&
-    isEvidence(candidate.evidence) && candidate.evidence.state === 'qualified' &&
     evidenceReferenceSchema.array().min(1).max(5).safeParse(candidate.qualifications).success &&
     qualificationRequirementsSchema.safeParse(candidate.requirements).success &&
     Array.isArray(pullRequests) && pullRequests.length > 0 && pullRequests.every(value => {
