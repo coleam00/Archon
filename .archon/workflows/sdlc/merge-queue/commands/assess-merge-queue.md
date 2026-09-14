@@ -32,5 +32,16 @@ Return ready only when the entire batch is semantically eligible. The next typed
 script owns the digest-named merge plan and all GitHub merge mechanics. No code changes,
 branch switches, custom worktrees, or agent subprocesses.
 
-Return every hold in the structured assessment. Assessment and preview are
+Return every hold as `{kind, reason}` in `holds`; use code only for a concrete
+implementation defect, evidence for inadequate observations, stale for changed
+identities, policy for unknown or conflicting rules, checks for hosted CI, and
+authorization for missing authorization. Ready requires an empty holds array.
+
+Read existing `<!-- archon-merge-hold -->` PR comments in the supplied review
+material. Treat them as prior claims: check their named head and whether their
+reasons still apply. Record resolved or superseded reasons in the assessment
+summary; do not carry an old hold forward solely because the comment exists.
+An unclassified historical comment needs judgment, not automatic code-defect routing.
+
+Assessment and preview are
 read-only; do not publish comments, edit pull requests, or perform any merge action.

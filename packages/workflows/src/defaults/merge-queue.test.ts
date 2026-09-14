@@ -96,7 +96,7 @@ class FakeGitHub implements GitHubAdapter {
     if (endpoint === 'repos/owner/repo/branches/dev') {
       return { protected: this.classicPolicy !== null, commit: { sha: this.base } };
     }
-    if (endpoint.endsWith('/protection/required_status_checks')) return this.classicPolicy;
+    if (endpoint.endsWith('/protection')) return { required_status_checks: this.classicPolicy };
     if (endpoint.startsWith('repos/owner/repo/rules/branches/dev')) return this.policy;
     if (endpoint.includes('/check-runs')) return this.checkRuns;
     if (endpoint.includes('/statuses')) return this.statuses;
@@ -106,7 +106,10 @@ class FakeGitHub implements GitHubAdapter {
     throw new Error(`unexpected endpoint ${endpoint}`);
   }
 
-  async graphql(): Promise<unknown> {
+  async graphql(
+    _query: string,
+    _variables: Readonly<Record<string, string | number>>
+  ): Promise<unknown> {
     if (this.failEndpoint === 'graphql') throw new Error('graphql pagination failed');
     return {
       data: {
@@ -138,10 +141,24 @@ class FakeGitHub implements GitHubAdapter {
   }
 }
 
+function policyResponse(overrides: Record<string, unknown> = {}) {
+  return {
+    data: {
+      repository: {
+        nameWithOwner: 'owner/repo',
+        ref: { name: 'dev', target: { oid: BASE }, branchProtectionRule: null },
+        rulesets: { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false } },
+        ...overrides,
+      },
+    },
+  };
+}
+
 function qualified(method: MergeMethod | '' = 'merge'): SemanticAssessment {
   return {
     ready: true,
     summary: 'qualified',
+    holds: [],
     method,
     method_source: method === '' ? '' : 'caller',
     method_conflict: '',
@@ -228,6 +245,26 @@ describe('merge queue contract', () => {
       assessment.evidence.state = state;
       expect(createMergePlan(facts(), assessment, 'merge').ready).toBe(false);
     }
+  });
+
+  it('preserves classified semantic holds without inventing code defects', () => {
+    for (const kind of ['policy', 'checks', 'evidence', 'stale', 'authorization'] as const) {
+      const assessment = { ...qualified(), ready: false, holds: [{ kind, reason: 'blocked' }] };
+      expect(createMergePlan(facts(), assessment, 'merge').holds).toEqual(assessment.holds);
+    }
+    expect(createMergePlan(facts(), { ...qualified(), ready: false }, 'merge').holds).toEqual([
+      {
+        kind: 'evidence',
+        reason: 'semantic assessment is not ready and supplies no classified reasons',
+      },
+    ]);
+    expect(
+      createMergePlan(
+        facts(),
+        { ...qualified(), holds: [{ kind: 'code', reason: 'defect' }] },
+        'merge'
+      ).ready
+    ).toBe(false);
   });
 
   it('classifies check runs and commit statuses against known requirements', async () => {
@@ -317,6 +354,113 @@ describe('merge queue contract', () => {
     expect((await collectMergeFacts([URL], github)).pullRequests[0]?.checkState).toBe('failing');
   });
 
+  it('does not invent a status channel from overlapping classic policy fields', async () => {
+    const github = new FakeGitHub();
+    github.classicPolicy = { contexts: ['build'], checks: [{ context: 'build', app_id: 123 }] };
+    github.checkRuns = {
+      check_runs: [
+        { id: 1, name: 'build', status: 'completed', conclusion: 'success', app: { id: 123 } },
+      ],
+    };
+    const facts = await collectMergeFacts([URL], github);
+    expect(facts.pullRequests[0]?.requiredChecks).toHaveLength(1);
+    expect(facts.pullRequests[0]?.checkState).toBe('passing');
+    expect(createMergePlan(facts, qualified(), 'merge').ready).toBe(true);
+  });
+
+  it('requires both observed channels for an unbound context', async () => {
+    const github = new FakeGitHub();
+    github.classicPolicy = { contexts: ['build'], checks: [{ context: 'build', app_id: null }] };
+    github.checkRuns = {
+      check_runs: [{ id: 1, name: 'build', status: 'completed', conclusion: 'success' }],
+    };
+    github.statuses = [{ id: 1, context: 'build', state: 'pending' }];
+    expect((await collectMergeFacts([URL], github)).pullRequests[0]?.checkState).toBe('pending');
+    github.statuses = [{ id: 2, context: 'build', state: 'failure' }];
+    expect((await collectMergeFacts([URL], github)).pullRequests[0]?.checkState).toBe('failing');
+  });
+
+  it('accepts protected branches whose full protection explicitly requires no CI', async () => {
+    const github = new FakeGitHub();
+    const api = github.api.bind(github);
+    github.api = async endpoint =>
+      endpoint.endsWith('/protection')
+        ? {
+            required_status_checks: null,
+            required_pull_request_reviews: { required_approving_review_count: 1 },
+          }
+        : api(endpoint);
+    const facts = await collectMergeFacts([URL], github);
+    expect(facts.pullRequests[0]?.requiredPolicy).toBe('none');
+    expect(createMergePlan(facts, qualified(), 'merge').ready).toBe(true);
+  });
+
+  it('resolves unavailable REST policy with an exact-ref complete GraphQL read', async () => {
+    const github = new FakeGitHub();
+    github.failEndpoint = 'rules/branches';
+    const graphql = github.graphql.bind(github);
+    github.graphql = async (query, variables) => {
+      if (!query.includes('includeParents:true')) return graphql(query, variables);
+      expect(variables).toEqual({ owner: 'owner', name: 'repo', ref: 'refs/heads/dev' });
+      return policyResponse();
+    };
+    const current = await collectMergeFacts([URL], github);
+    expect(current.pullRequests[0]?.requiredPolicy).toBe('none');
+    expect(createMergePlan(current, qualified(), 'merge').ready).toBe(true);
+  });
+
+  it('keeps partial, wrong-ref, and uninspected GraphQL policy unknown', async () => {
+    for (const response of [
+      { ...policyResponse(), errors: [{ message: 'partial data' }] },
+      policyResponse({ ref: null }),
+      policyResponse({ nameWithOwner: 'other/repo' }),
+      policyResponse({ ref: { name: 'other', target: { oid: BASE }, branchProtectionRule: null } }),
+      policyResponse({ ref: { name: 'dev', target: { oid: HEAD }, branchProtectionRule: null } }),
+      policyResponse({
+        rulesets: { totalCount: 1, nodes: [{ id: 'rule' }], pageInfo: { hasNextPage: false } },
+      }),
+      policyResponse({ rulesets: { totalCount: 0, nodes: [], pageInfo: { hasNextPage: true } } }),
+      policyResponse({ rulesets: { nodes: [], pageInfo: { hasNextPage: false } } }),
+    ]) {
+      const github = new FakeGitHub();
+      github.failEndpoint = 'rules/branches';
+      const graphql = github.graphql.bind(github);
+      github.graphql = async (query, variables) =>
+        query.includes('includeParents:true') ? response : graphql(query, variables);
+      const facts = await collectMergeFacts([URL], github);
+      expect(facts.pullRequests[0]?.requiredPolicy).toBe('unknown');
+      expect(createMergePlan(facts, qualified(), 'merge').ready).toBe(false);
+      expect(github.merges).toHaveLength(0);
+    }
+  });
+
+  it('reads classic app requirements via GraphQL when full REST protection is unavailable', async () => {
+    const github = new FakeGitHub();
+    github.failEndpoint = '/protection';
+    const graphql = github.graphql.bind(github);
+    github.graphql = async (query, variables) =>
+      query.includes('includeParents:true')
+        ? policyResponse({
+            ref: {
+              name: 'dev',
+              target: { oid: BASE },
+              branchProtectionRule: {
+                requiresStatusChecks: true,
+                requiredStatusCheckContexts: ['build'],
+                requiredStatusChecks: [{ context: 'build', app: { databaseId: 123 } }],
+              },
+            },
+          })
+        : graphql(query, variables);
+    expect((await collectMergeFacts([URL], github)).pullRequests[0]?.checkState).toBe('missing');
+    github.checkRuns = {
+      check_runs: [
+        { id: 1, name: 'build', status: 'completed', conclusion: 'success', app: { id: 123 } },
+      ],
+    };
+    expect((await collectMergeFacts([URL], github)).pullRequests[0]?.checkState).toBe('passing');
+  });
+
   it('uses only the latest status and check-run attempt', async () => {
     const github = new FakeGitHub();
     github.classicPolicy = { contexts: ['legacy'], checks: [{ context: 'build', app_id: 7 }] };
@@ -350,7 +494,7 @@ describe('merge queue contract', () => {
 
     const classicFailure = new FakeGitHub();
     classicFailure.classicPolicy = { contexts: ['build'], checks: [] };
-    classicFailure.failEndpoint = 'protection/required_status_checks';
+    classicFailure.failEndpoint = '/protection';
     expect((await collectMergeFacts([URL], classicFailure)).pullRequests[0]?.requiredPolicy).toBe(
       'unknown'
     );
@@ -541,6 +685,18 @@ describe('merge queue contract', () => {
     expect(await readFile(join(heldArtifacts, 'merge-result.md'), 'utf8')).toContain(
       'required checks are pending'
     );
+    expect(await readFile(join(heldArtifacts, 'merge-hold.md'), 'utf8')).toContain(HEAD);
+    const reassessed = await runCli({
+      INPUTS_ACTION: 'plan',
+      INPUTS_FACTS: JSON.stringify(facts()),
+      INPUTS_ASSESSMENT: JSON.stringify(qualified()),
+      INPUTS_METHOD: 'merge',
+      ARTIFACTS_DIR: heldArtifacts,
+    });
+    expect(reassessed.exitCode).toBe(0);
+    const feedback = await readFile(join(heldArtifacts, 'merge-hold.md'), 'utf8');
+    expect(feedback).toContain('No active holds');
+    expect(feedback).not.toContain('required checks are pending');
 
     const previewArtifacts = await artifactsDir();
     const readyPlan = await runCli({

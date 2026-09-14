@@ -68,6 +68,7 @@ export interface MergeFacts {
 export interface SemanticAssessment {
   ready: boolean;
   summary: string;
+  holds: Hold[];
   method: MergeMethod | '';
   method_source: 'caller' | 'project' | '';
   method_conflict: string;
@@ -226,7 +227,13 @@ function classicChecks(branch: unknown, protection: unknown): RequiredCheck[] | 
   if (branchRecord === undefined || typeof branchRecord.protected !== 'boolean') return undefined;
   if (!branchRecord.protected) return [];
   if (isFailure(protection)) return undefined;
-  const value = record(protection);
+  const protectionRecord = record(protection);
+  if (protectionRecord?.required_status_checks === null) return [];
+  return classicRequirements(protectionRecord?.required_status_checks);
+}
+
+function classicRequirements(policy: unknown): RequiredCheck[] | undefined {
+  const value = record(policy);
   if (value === undefined) return undefined;
   const contexts = value.contexts;
   const checksValue = value.checks;
@@ -238,15 +245,17 @@ function classicChecks(branch: unknown, protection: unknown): RequiredCheck[] | 
   const required = new Map<string, RequiredCheck>();
   for (const context of contexts) {
     if (context === '') return undefined;
-    required.set(`status:${context}:`, { context, source: 'status' });
+    if (!checks.some(check => check.context === context)) {
+      required.set(`either:${context}:`, { context, source: 'either' });
+    }
   }
   for (const check of checks) {
     const context = string(check.context);
-    const integrationId = integer(check.app_id);
-    if (context === '' || (check.app_id !== null && integrationId === undefined)) return undefined;
-    required.set(`run:${context}:${String(integrationId ?? '')}`, {
+    const integrationId = check.app_id === -1 ? undefined : integer(check.app_id);
+    if (context === '' || (check.app_id !== null && check.app_id !== -1 && integrationId === undefined)) return undefined;
+    required.set(`either:${context}:${String(integrationId ?? '')}`, {
       context,
-      source: 'run',
+      source: 'either',
       ...(integrationId === undefined ? {} : { integrationId }),
     });
   }
@@ -326,27 +335,27 @@ function classifyChecks(
       .filter(status => status.context === requirement.context)
       .sort((left, right) => right.id - left.id)
       .slice(0, 1);
+    if (requirement.integrationId !== undefined && matchingRuns.length === 0) {
+      sawMissing = true;
+    }
     const candidates = [
       ...(requirement.source === 'status' ? [] : matchingRuns.map(run => ({
         success: run.status === 'completed' && SUCCESSFUL_CONCLUSIONS.has(run.conclusion ?? ''),
         failure: run.status === 'completed' && !SUCCESSFUL_CONCLUSIONS.has(run.conclusion ?? ''),
         pending: run.status !== 'completed',
       }))),
-      ...(requirement.source === 'run' || requirement.integrationId !== undefined ? [] : matchingStatuses.map(status => ({
+      ...(requirement.source === 'run' ? [] : matchingStatuses.map(status => ({
         success: status.state === 'success',
         failure: ['failure', 'error'].includes(status.state),
         pending: status.state === 'pending',
       }))),
     ];
-    if (candidates.some(candidate => candidate.success)) {
-      continue;
-    }
     if (candidates.some(candidate => candidate.failure)) {
       return 'failing';
     }
     if (candidates.some(candidate => candidate.pending)) {
       sawPending = true;
-    } else {
+    } else if (candidates.length === 0 || candidates.some(candidate => !candidate.success)) {
       sawMissing = true;
     }
   }
@@ -380,6 +389,70 @@ async function safeApi(adapter: GitHubAdapter, endpoint: string): Promise<unknow
   } catch (error) {
     return { failure: error instanceof Error ? error.message : String(error) };
   }
+}
+
+async function collectGraphqlPolicy(
+  adapter: GitHubAdapter,
+  repository: string,
+  branch: string,
+  baseSha: string
+): Promise<{ classic?: RequiredCheck[]; ruleset?: RequiredCheck[] }> {
+  const [owner, name] = repository.split('/');
+  let response: unknown;
+  try {
+    response = await adapter.graphql(
+      `query($owner:String!,$name:String!,$ref:String!) {
+        repository(owner:$owner,name:$name) {
+          nameWithOwner
+          ref(qualifiedName:$ref) {
+            name target { oid }
+            branchProtectionRule {
+              requiresStatusChecks requiredStatusCheckContexts
+              requiredStatusChecks { context app { databaseId } }
+            }
+          }
+          rulesets(first:100,includeParents:true) {
+            totalCount nodes { id } pageInfo { hasNextPage }
+          }
+        }
+      }`,
+      { owner: owner!, name: name!, ref: `refs/heads/${branch}` }
+    );
+  } catch {
+    return {};
+  }
+  const envelope = record(response);
+  if (envelope === undefined || (envelope.errors !== undefined &&
+    (!Array.isArray(envelope.errors) || envelope.errors.length !== 0))) return {};
+  const repo = record(record(envelope.data)?.repository);
+  const ref = record(repo?.ref);
+  if (repo?.nameWithOwner !== repository || ref?.name !== branch ||
+    baseSha === '' || record(ref.target)?.oid !== baseSha) return {};
+
+  let classic: RequiredCheck[] | undefined;
+  const protection = record(ref.branchProtectionRule);
+  if (ref.branchProtectionRule === null || protection?.requiresStatusChecks === false) {
+    classic = [];
+  } else if (protection?.requiresStatusChecks === true) {
+    const checks = recordPages(protection.requiredStatusChecks);
+    if (checks !== undefined) {
+      classic = classicRequirements({
+        contexts: protection.requiredStatusCheckContexts,
+        checks: checks.map(check => ({
+          context: check.context,
+          app_id: check.app === null ? null : record(check.app)?.databaseId,
+        })),
+      });
+    }
+  }
+  const rulesets = record(repo.rulesets);
+  // Nonempty GraphQL rulesets need effective REST rules; listing is not applicability.
+  const noRulesets = rulesets?.totalCount === 0 && Array.isArray(rulesets.nodes) &&
+    rulesets.nodes.length === 0 && record(rulesets.pageInfo)?.hasNextPage === false;
+  return {
+    ...(classic === undefined ? {} : { classic }),
+    ...(noRulesets ? { ruleset: [] } : {}),
+  };
 }
 
 async function collectReviewThreads(
@@ -523,7 +596,7 @@ export async function collectMergeFacts(
     const protectionValue = record(branchValue)?.protected === true
       ? await safeApi(
           adapter,
-          `repos/${repository}/branches/${encodeURIComponent(baseName)}/protection/required_status_checks`
+          `repos/${repository}/branches/${encodeURIComponent(baseName)}/protection`
         )
       : null;
     const [rulesValue, runsValue, statusesValue, reviewsValue, commentsValue, linesValue, threadsValue] =
@@ -536,10 +609,15 @@ export async function collectMergeFacts(
         safeApi(adapter, `repos/${repository}/pulls/${String(identity.number)}/comments?per_page=100`),
         collectReviewThreads(adapter, repository, identity.number),
       ]);
-    const requirements = combineRequirements(
-      classicChecks(branchValue, protectionValue),
-      rulesetChecks(rulesValue)
-    );
+    const classic = classicChecks(branchValue, protectionValue);
+    const ruleset = rulesetChecks(rulesValue);
+    // Permissions differ between GitHub APIs. Only a complete independent read can
+    // resolve an unknown REST policy; error text is never evidence of no protection.
+    const fallback = classic === undefined || ruleset === undefined
+      ? await collectGraphqlPolicy(adapter, repository, baseName,
+          string(record(record(branchValue)?.commit)?.sha))
+      : {};
+    const requirements = combineRequirements(classic ?? fallback.classic, ruleset ?? fallback.ruleset);
     const runs = readCheckRuns(runsValue);
     const statuses = readStatuses(statusesValue);
     const reviewMaterial = [pull.review_decision, reviewsValue, commentsValue, linesValue, threadsValue];
@@ -591,8 +669,10 @@ export function createMergePlan(
   assessment: SemanticAssessment,
   requestedMethod: string
 ): PlanResult {
-  const holds = [...facts.holds];
-  if (!assessment.ready) holds.push({ kind: 'code', reason: assessment.summary });
+  const holds = [...facts.holds, ...assessment.holds];
+  if (!assessment.ready && assessment.holds.length === 0) {
+    holds.push({ kind: 'evidence', reason: 'semantic assessment is not ready and supplies no classified reasons' });
+  }
   if (assessment.evidence.state !== 'qualified' || assessment.evidence.fingerprint === '') {
     holds.push({
       kind: 'evidence',
@@ -937,6 +1017,7 @@ function isAssessment(value: unknown): value is SemanticAssessment {
   const candidate = record(value);
   return candidate !== undefined && typeof candidate.ready === 'boolean' &&
     typeof candidate.summary === 'string' &&
+    Array.isArray(candidate.holds) && candidate.holds.every(isHold) &&
     [...MERGE_METHODS, ''].includes(candidate.method as MergeMethod | '') &&
     ['caller', 'project', ''].includes(string(candidate.method_source)) &&
     typeof candidate.method_conflict === 'string' && isEvidence(candidate.evidence);
@@ -1028,17 +1109,20 @@ async function main(): Promise<void> {
     const result = createMergePlan(facts, assessment, requiredEnv('INPUTS_METHOD'));
     let planReference = '';
     let planDigest = '';
+    await mkdir(artifactsDir, { recursive: true });
+    await writeFile(
+      join(artifactsDir, 'merge-hold.md'),
+      `# Merge hold\n\n${facts.pullRequests.map(pr => `${pr.url} at ${pr.headSha}`).join('\n')}\n\n${
+        result.holds.length === 0
+          ? 'No active holds for this assessment.'
+          : result.holds.map(hold => `- **${hold.kind}:** ${hold.reason}`).join('\n')
+      }\n\n${assessment.summary}\n`,
+      'utf8'
+    );
     if (result.plan !== undefined) {
       planDigest = mergePlanDigest(result.plan);
       planReference = `merge-plan-${planDigest}.json`;
       await writeJson(join(artifactsDir, planReference), result.plan);
-    } else {
-      await mkdir(artifactsDir, { recursive: true });
-      await writeFile(
-        join(artifactsDir, 'merge-hold.md'),
-        `# Merge hold\n\n${result.holds.map(hold => `- **${hold.kind}:** ${hold.reason}`).join('\n')}\n`,
-        'utf8'
-      );
     }
     console.log(JSON.stringify({
       ready: result.ready,

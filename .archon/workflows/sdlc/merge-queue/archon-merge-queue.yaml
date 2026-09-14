@@ -43,6 +43,14 @@ nodes:
       properties:
         ready: { type: boolean }
         summary: { type: string }
+        holds:
+          type: array
+          items:
+            type: object
+            properties:
+              kind: { type: string, enum: [code, policy, checks, evidence, stale, authorization] }
+              reason: { type: string }
+            required: [kind, reason]
         method: { type: string, enum: [merge, squash, rebase, ''] }
         method_source: { type: string, enum: [caller, project, ''] }
         method_conflict: { type: string }
@@ -53,7 +61,7 @@ nodes:
             fingerprint: { type: string }
             references: { type: array, items: { type: string } }
           required: [state, fingerprint, references]
-      required: [ready, summary, method, method_source, method_conflict, evidence]
+      required: [ready, summary, holds, method, method_source, method_conflict, evidence]
 
   - id: plan
     script: merge-queue

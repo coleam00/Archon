@@ -126,6 +126,7 @@ merge__facts: '{"repository":"example/app","enabledMethods":["merge"],"pullReque
 merge__assess:
   ready: true
   summary: "stub: batch eligible"
+  holds: []
   method: merge
   method_source: project
   method_conflict: ""

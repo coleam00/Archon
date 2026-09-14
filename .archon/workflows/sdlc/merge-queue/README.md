@@ -11,9 +11,17 @@ Effective required-check policy, current check results, and applicable validatio
 evidence are independent facts. A repository with no required hosted CI may
 proceed with qualified evidence. Unknown policy, missing or stale evidence, and
 required checks that are pending, failing, missing, or unreadable hold the batch.
-Classic branch protection and applicable rulesets are combined. Their check-run,
-commit-status, review and comment reads are paged; an API or permission failure
-remains unknown.
+Classic branch protection and applicable rulesets are combined. Full protection
+can explicitly require reviews without CI. The legacy contexts and richer app-bound
+checks describe overlapping requirements; they do not imply separate channels.
+When both a check run and commit status exist for a required name, both must pass.
+App-bound requirements still need a run from that app.
+
+If REST policy is unavailable, a complete GraphQL read of the exact branch ref
+and inherited rulesets can resolve it. The ref must match the live base commit.
+Nonempty GraphQL rulesets still require effective REST rules; an uninspected list,
+partial response, pagination gap or unknown policy holds. Check-run, commit-status,
+review and comment reads are paged.
 
 Approval covers the recorded batch, evidence fingerprint, method, reviews, base,
 and heads. Auto explicitly authorizes that batch without a human pause, subject to
@@ -26,7 +34,12 @@ read-back confirms merging. No admin bypass is used. Live-base reads detect
 movement but are not an atomic base lock; GitHub protection remains authoritative.
 
 Held and preview runs make no GitHub write. Their typed result and
-`merge-hold.md` preserve the reasons for the caller.
+`merge-hold.md` preserve classified reasons and assessed heads for the caller.
+A new assessment replaces this local feedback, including clearing resolved holds.
+Review and assessment still read historical `archon-merge-hold` PR comments and
+check whether their reasons apply to the current head. Assessment no longer
+publishes or edits those comments; the typed return and local report own current
+feedback, so an old comment cannot perpetually block a resolved condition.
 
 This workflow does not synthesize multi-PR commits, alter worktree ownership, or
 add an engine API. GitHub branch protection owns atomic server-side merge checks.
