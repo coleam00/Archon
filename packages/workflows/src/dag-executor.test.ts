@@ -16,7 +16,6 @@ import { join, normalize, sep } from 'path';
 import { tmpdir } from 'os';
 import * as git from '@archon/git';
 import { RATE_LIMIT_MAX_RETRIES } from './executor-shared';
-import { readToolCaptures } from './tool-capture';
 
 // --- Mock logger (MUST come before imports of modules under test) ---
 
@@ -3819,19 +3818,6 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
     let callCount = 0;
     mockSendQueryDag.mockImplementation(async function* () {
       callCount++;
-      yield { type: 'tool', toolName: 'shell', toolCallId: 'retry-call' };
-      yield {
-        type: 'tool_result',
-        toolName: 'shell',
-        toolCallId: 'retry-call',
-        toolOutput: 'display',
-        capture: {
-          text: `attempt-${callCount}`,
-          format: 'text',
-          completeness: 'full',
-          attachments: [],
-        },
-      };
       if (callCount === 1) {
         yield {
           type: 'result',
@@ -3856,16 +3842,12 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun('dag-retry-succeed-run');
-    const artifacts = join(testDir, 'artifacts');
-    const captureDirectory = join(artifacts, 'retry-captures');
-    await mkdir(artifacts, { recursive: true });
 
     const nodes: DagNode[] = [
       {
         id: 'my-node',
         kind: 'agent',
         source: { kind: 'command', name: 'my-cmd' },
-        capture_tools: captureDirectory,
         retry: { max_attempts: 2, delay_ms: 1 },
       },
     ];
@@ -3876,7 +3858,6 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
         platform,
         conversationId: 'conv-dag-retry-succeed',
         cwd: testDir,
-        artifactsDir: artifacts,
         workflow: { name: 'dag-retry-succeed', nodes },
         workflowRun,
       })
@@ -3884,12 +3865,6 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
 
     // Node was called at least twice (first fails transiently, second succeeds)
     expect(callCount).toBeGreaterThanOrEqual(2);
-    const captured = await readToolCaptures(captureDirectory, workflowRun.id);
-    expect(captured.manifest.passes.map(pass => pass.complete)).toEqual([false, true]);
-    expect(captured.receipts.map(entry => entry.receipt.callId)).toEqual([
-      'retry-call',
-      'retry-call',
-    ]);
     expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).not.toHaveBeenCalled();
     expect(runUsageWrites(mockDeps.store)).toEqual([
       {
@@ -4532,233 +4507,6 @@ describe('executeDagWorkflow -- tool_completed event emission', () => {
       tool_outcome: 'unknown',
     });
   });
-
-  it.each(['agent', 'loop'] as const)(
-    'captures actual %s tool output before node completion',
-    async kind => {
-      const store = createMockStore();
-      const artifacts = join(testDir, `capture-${kind}`);
-      await mkdir(artifacts, { recursive: true });
-      const captureDirectory = join(artifacts, 'observations');
-      mockSendQueryDag.mockImplementation(async function* (_prompt, _cwd, _resume, options) {
-        expect(options?.captureToolOutput).toBe(true);
-        yield { type: 'tool', toolName: 'shell', toolCallId: 'capture-call' };
-        yield {
-          type: 'tool_result',
-          toolName: 'shell',
-          toolCallId: 'capture-call',
-          toolOutput: 'display',
-          toolOutcome: 'error',
-          exitCode: 1,
-          capture: { text: 'false 0', format: 'text', completeness: 'full', attachments: [] },
-        };
-        yield { type: 'assistant', content: 'Done. <promise>COMPLETE</promise>' };
-        yield { type: 'result' };
-      });
-      const captureNode: DagNode =
-        kind === 'agent'
-          ? node('verify', undefined, {
-              source: { kind: 'inline', prompt: 'verify' },
-              capture_tools: captureDirectory,
-            })
-          : {
-              id: 'verify',
-              kind: 'loop',
-              capture_tools: captureDirectory,
-              loop: { prompt: 'verify', until: 'COMPLETE', max_iterations: 1, fresh_context: true },
-            };
-      const run = makeWorkflowRun(`capture-${kind}`);
-      await executeDagWorkflow(
-        dagOptions({
-          deps: createMockDeps(store),
-          platform: createMockPlatform(),
-          cwd: testDir,
-          artifactsDir: artifacts,
-          workflowRun: run,
-          workflow: { name: 'capture-test', nodes: [captureNode] },
-        })
-      );
-      expect(store.failWorkflowRun.mock.calls).toEqual([]);
-      expect(
-        JSON.parse(await readFile(join(captureDirectory, 'manifest.json'), 'utf8'))
-      ).toMatchObject({ owner: { runId: run.id }, passes: [{ complete: true }] });
-      const captured = await readToolCaptures(captureDirectory, run.id);
-      expect(captured.receipts[0]?.receipt).toMatchObject({
-        outcome: 'error',
-        exitCode: 1,
-        completeness: 'full',
-      });
-      expect(
-        await readFile(join(captureDirectory, captured.receipts[0]!.receipt.output.path), 'utf8')
-      ).toBe('false 0');
-    }
-  );
-
-  it.each(['agent', 'loop'] as const)(
-    'retains every %s provider pass when call ids repeat across reasks and iterations',
-    async kind => {
-      const store = createMockStore();
-      const artifacts = join(testDir, `capture-repeated-${kind}`);
-      const captureDirectory = join(artifacts, 'observations');
-      await mkdir(artifacts, { recursive: true });
-      let calls = 0;
-      mockSendQueryDag.mockImplementation(async function* () {
-        calls += 1;
-        yield { type: 'tool', toolName: 'shell', toolCallId: 'reused-call' };
-        yield {
-          type: 'tool_result',
-          toolName: 'shell',
-          toolCallId: 'reused-call',
-          toolOutput: 'display',
-          capture: { text: `pass-${calls}`, format: 'text', completeness: 'full', attachments: [] },
-        };
-        const structuredOutput = calls === 1 ? {} : { done: kind === 'agent' || calls === 3 };
-        yield { type: 'result', structuredOutput };
-      });
-      const outputFormat = {
-        type: 'object',
-        properties: { done: { type: 'boolean' } },
-        required: ['done'],
-      };
-      const captureNode: DagNode =
-        kind === 'agent'
-          ? node('verify', undefined, {
-              provider: 'pi',
-              source: { kind: 'inline', prompt: 'verify' },
-              capture_tools: captureDirectory,
-              output_format: outputFormat,
-            })
-          : {
-              id: 'verify',
-              kind: 'loop',
-              provider: 'pi',
-              capture_tools: captureDirectory,
-              output_format: outputFormat,
-              loop: {
-                prompt: 'verify',
-                until_field: 'done',
-                max_iterations: 2,
-                fresh_context: true,
-              },
-            };
-      const run = makeWorkflowRun(`capture-repeated-${kind}`);
-      await executeDagWorkflow(
-        dagOptions({
-          deps: createMockDeps(store),
-          platform: createMockPlatform(),
-          cwd: testDir,
-          artifactsDir: artifacts,
-          workflowRun: run,
-          workflowProvider: 'pi',
-          config: { ...minimalConfig, assistant: 'pi' },
-          workflow: { name: 'capture-repeated', nodes: [captureNode] },
-        })
-      );
-      const captured = await readToolCaptures(captureDirectory, run.id);
-      expect(captured.manifest.passes).toHaveLength(kind === 'agent' ? 2 : 3);
-      expect(captured.receipts.map(entry => entry.receipt.callId)).toEqual(
-        Array.from({ length: kind === 'agent' ? 2 : 3 }, () => 'reused-call')
-      );
-      expect(captured.manifest.passes.map(pass => pass.producer.iteration)).toEqual(
-        kind === 'agent' ? [null, null] : [1, 1, 2]
-      );
-    }
-  );
-
-  it('rejects parallel nodes that resolve to the same capture directory', async () => {
-    const store = createMockStore();
-    const artifacts = join(testDir, 'capture-parallel-overlap');
-    const captureDirectory = join(artifacts, 'observations');
-    await rm(artifacts, { recursive: true, force: true });
-    await mkdir(artifacts, { recursive: true });
-    mockSendQueryDag.mockImplementation(async function* () {
-      yield { type: 'tool', toolName: 'shell', toolCallId: 'parallel-call' };
-      yield {
-        type: 'tool_result',
-        toolName: 'shell',
-        toolCallId: 'parallel-call',
-        toolOutput: 'display',
-        capture: {
-          text: 'parallel output',
-          format: 'text',
-          completeness: 'full',
-          attachments: [],
-        },
-      };
-      yield { type: 'result' };
-    });
-    const run = makeWorkflowRun('capture-parallel-overlap');
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(store),
-        platform: createMockPlatform(),
-        cwd: testDir,
-        artifactsDir: artifacts,
-        workflowRun: run,
-        workflow: {
-          name: 'capture-parallel-overlap',
-          nodes: [
-            node('verify-a', undefined, {
-              source: { kind: 'inline', prompt: 'verify a' },
-              capture_tools: captureDirectory,
-              retry: { max_attempts: 0 },
-            }),
-            node('verify-b', undefined, {
-              source: { kind: 'inline', prompt: 'verify b' },
-              capture_tools: captureDirectory,
-              retry: { max_attempts: 0 },
-            }),
-          ],
-        },
-      })
-    );
-
-    expect(store.failWorkflowRun).toHaveBeenCalled();
-    const captured = await readToolCaptures(captureDirectory, run.id);
-    expect(captured.manifest.passes).toHaveLength(1);
-    expect(captured.receipts).toHaveLength(1);
-    const overlapFailures = store.createWorkflowEvent.mock.calls.filter(
-      ([event]) =>
-        event.event_type === 'node_failed' &&
-        String(event.data?.error).includes('already has an active session')
-    );
-    expect(overlapFailures.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it.each(['agent', 'loop'] as const)(
-    'fails %s execution when its required capture directory cannot be written',
-    async kind => {
-      const store = createMockStore();
-      const artifacts = join(testDir, `unwritable-${kind}`);
-      await mkdir(artifacts, { recursive: true });
-      const captureDirectory = join(artifacts, 'file');
-      await writeFile(captureDirectory, 'occupied');
-      const captureNode: DagNode =
-        kind === 'agent'
-          ? node('verify', undefined, {
-              source: { kind: 'inline', prompt: 'verify' },
-              capture_tools: captureDirectory,
-            })
-          : {
-              id: 'verify',
-              kind: 'loop',
-              capture_tools: captureDirectory,
-              loop: { prompt: 'verify', until: 'COMPLETE', max_iterations: 1, fresh_context: true },
-            };
-      await executeDagWorkflow(
-        dagOptions({
-          deps: createMockDeps(store),
-          platform: createMockPlatform(),
-          cwd: testDir,
-          artifactsDir: artifacts,
-          workflowRun: makeWorkflowRun(`unwritable-${kind}`),
-          workflow: { name: 'capture-failure', nodes: [captureNode] },
-        })
-      );
-      expect(store.failWorkflowRun).toHaveBeenCalled();
-    }
-  );
 
   it('emits a DAG tool_completed duration at tool_result, excluding later assistant time', async () => {
     const mockStore = createMockStore();
@@ -11935,117 +11683,6 @@ describe('executeDagWorkflow -- always_run resume opt-out', () => {
       await readFile(join(testDir, 'artifacts', 'validation-evidence.json'), 'utf8')
     ) as { report: { content: string } };
     expect(evidence.report.content).toBe('fixture check: passed\n');
-  });
-
-  it('resumes packaged merge approval without repeating semantic qualification', async () => {
-    const repoRoot = join(import.meta.dir, '..', '..', '..');
-    const discovered = await discoverWorkflows(repoRoot, {
-      loadDefaults: false,
-      loadDefaultCommands: false,
-    });
-    const merge = discovered.workflows.find(
-      entry => entry.workflow.name === 'archon-merge-queue'
-    )?.workflow;
-    if (merge === undefined) throw new Error('merge workflow missing');
-    const nodes = merge.nodes.map(current => {
-      if (current.id !== 'merge') return current;
-      if (current.kind !== 'exec') throw new Error('merge executor missing');
-      // Transport/executor integrity is exercised in qualified-evidence.test.ts;
-      // this boundary probe observes the native graph's persisted input routing.
-      return {
-        ...current,
-        script:
-          'console.log(JSON.stringify({merged:false,urls:[],queued:[],summary:process.env.INPUTS_APPROVAL,holds:[]}))',
-      };
-    });
-    const workflow = resolveWorkflow({ ...merge, nodes });
-    const references = [{ path: '/artifacts/qualified.json', sha256: 'a'.repeat(64) }];
-    const priorCompletedNodes = new Map<string, PersistedNodeOutput>();
-    for (const current of nodes) {
-      if (current.id === 'approval' || current.id === 'merge') continue;
-      priorCompletedNodes.set(current.id, { output: '{}' });
-    }
-    priorCompletedNodes.set('qualification-input', {
-      output: JSON.stringify({
-        available: true,
-        input: references[0],
-        report_path: '/artifacts/qualification.md',
-        summary: 'external report',
-        references: [],
-      }),
-    });
-    priorCompletedNodes.set('qualified', {
-      output: JSON.stringify({
-        ready: true,
-        repair: false,
-        evidence: '/artifacts/qualification.md',
-        summary: 'qualified',
-        holds: [],
-        references,
-      }),
-    });
-    priorCompletedNodes.set('plan', {
-      output: JSON.stringify({
-        ready: true,
-        summary: 'qualified',
-        method: 'merge',
-        holds: [],
-        plan_reference: 'approved.json',
-        plan_digest: 'digest',
-      }),
-    });
-    const inputs = {
-      prs: '["https://github.com/owner/repo/pull/42"]',
-      evidence: '/artifacts/external.md',
-      scenario: '',
-      holdout: '',
-      mode: 'approve',
-      merge_method: 'merge',
-      validation_scope: '',
-      validation_context: '',
-    };
-    const sourceRoots = liveSourceRoots(repoRoot, {
-      load_default_workflows: false,
-      load_default_commands: false,
-    });
-    const firstStore = createMockStore();
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(firstStore),
-        cwd: testDir,
-        workflow,
-        workflowRun: makeWorkflowRun('lifecycle-resume', { metadata: { inputs } }),
-        priorCompletedNodes,
-        workflowSourceRoots: sourceRoots,
-      })
-    );
-    expect(firstStore.failWorkflowRun.mock.calls).toEqual([]);
-    expect(firstStore.pauseWorkflowRun).toHaveBeenCalledTimes(1);
-    const pause = firstStore.pauseWorkflowRun.mock.calls[0]?.[1];
-    expect(pause?.nodeId).toBe('approval');
-    expect(mockSendQueryDag).not.toHaveBeenCalled();
-    priorCompletedNodes.set('approval', {
-      output: JSON.stringify({ decision: 'approve', text: '' }),
-      structuredOutput: { decision: 'approve', text: '' },
-    });
-    const resumedStore = createMockStore();
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(resumedStore),
-        cwd: testDir,
-        workflow,
-        workflowRun: makeWorkflowRun('lifecycle-resume', { metadata: { inputs, approval: pause } }),
-        priorCompletedNodes,
-        workflowSourceRoots: sourceRoots,
-      })
-    );
-    expect(resumedStore.failWorkflowRun).not.toHaveBeenCalled();
-    expect(resumedStore.completeWorkflowRun).toHaveBeenCalledTimes(1);
-    expect(mockSendQueryDag).not.toHaveBeenCalled();
-    const merged = resumedStore.createWorkflowEvent.mock.calls.find(
-      ([event]) => event.step_name === 'merge' && event.event_type === 'node_completed'
-    );
-    expect(merged?.[0].data?.node_output).toContain('approve');
   });
 
   it('downstream consumer reads fresh producer output (not the pre-populated cached value)', async () => {

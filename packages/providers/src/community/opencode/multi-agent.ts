@@ -12,7 +12,6 @@ import {
   resolveSessionId,
 } from './session';
 import { normalizeTokens } from './tokens';
-import { captureOpencodeResult } from './tool-capture';
 
 interface ProviderModel {
   providerID: string;
@@ -280,9 +279,6 @@ export async function* streamMultiAgentOpencodeSession(
                 toolOutput: typeof stateRecord?.output === 'string' ? stateRecord.output : '',
                 toolCallId: scopedCallId,
                 toolOutcome: 'success',
-                ...(requestOptions?.captureToolOutput
-                  ? { capture: captureOpencodeResult(stateRecord) }
-                  : {}),
               });
             } else if (status === 'error') {
               completedToolCalls.add(scopedCallId);
@@ -293,9 +289,6 @@ export async function* streamMultiAgentOpencodeSession(
                   typeof stateRecord?.error === 'string' ? stateRecord.error : 'Tool failed',
                 toolCallId: scopedCallId,
                 toolOutcome: 'error',
-                ...(requestOptions?.captureToolOutput
-                  ? { capture: captureOpencodeResult(stateRecord) }
-                  : {}),
               });
             }
           }

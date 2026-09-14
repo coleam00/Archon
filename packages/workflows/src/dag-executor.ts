@@ -11,7 +11,6 @@ import { basename, isAbsolute, join as joinPath, resolve as resolvePath, sep } f
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import { isEffortRung } from '@archon/paths/effort';
 import { discoverScriptsForCwd } from './script-discovery';
-import { ToolCaptureSession } from './tool-capture';
 import { discoverWorkflowsWithConfig, resolveWorkflowCommandContents } from './workflow-discovery';
 import {
   assertWorkflowSourceIntegrity,
@@ -2345,7 +2344,6 @@ async function executeNodeInternal(
   const shouldForkSession = resumeSessionId !== undefined;
   const nodeOptionsWithAbort: SendQueryOptions | undefined = {
     ...nodeOptions,
-    ...(node.capture_tools === undefined ? {} : { captureToolOutput: true }),
     abortSignal: nodeAbortController.signal,
     ...(shouldForkSession ? { forkSession: true } : {}),
   };
@@ -2393,15 +2391,8 @@ async function executeNodeInternal(
     watchdogResetLog = Promise.resolve();
     backgroundTasksIncomplete = [];
     const backgroundTasks = createBackgroundTaskTracker();
-    const stream = await retainProviderTools(
-      ctx,
-      node,
-      stepName,
-      aiClient.sendQuery(attemptPrompt, cwd, attemptResumeId, nodeOptionsWithAbort),
-      iteration
-    );
     for await (const msg of withIdleTimeout(
-      stream,
+      aiClient.sendQuery(attemptPrompt, cwd, attemptResumeId, nodeOptionsWithAbort),
       effectiveIdleTimeout,
       () => {
         nodeIdleTimedOut = true;
@@ -3377,43 +3368,6 @@ function isSubprocessTimeout(error: RawSubprocessRejection): boolean {
 }
 
 const CREDENTIAL_ENV_KEY_SUFFIX = /(?:TOKEN|KEY|SECRET|PASSWORD)$/i;
-
-async function retainProviderTools(
-  ctx: RunLayersContext,
-  node: AgentNode | LoopNode,
-  stepName: string,
-  stream: AsyncGenerator<MessageChunk>,
-  iteration?: number
-): Promise<AsyncGenerator<MessageChunk>> {
-  if (node.capture_tools === undefined) return stream;
-  const { prompt } = substituteWorkflowVariables(
-    node.capture_tools,
-    ctx.workflowRun.id,
-    ctx.workflowRun.user_message,
-    ctx.artifactsDir,
-    ctx.baseBranch,
-    ctx.docsDir,
-    ctx.issueContext,
-    undefined,
-    undefined,
-    undefined,
-    { stateDir: ctx.stateDir, inputs: resolveRunInputs(ctx.workflowRun) }
-  );
-  const directory = substituteNodeOutputRefs(prompt, ctx.nodeOutputs);
-  const capture = await ToolCaptureSession.create(
-    ctx.artifactsDir,
-    directory,
-    ctx.workflowRun.id,
-    stepName,
-    iteration
-  );
-  const secrets = collectSubprocessCredentialValues(
-    { ...process.env, ...ctx.config.envVars },
-    ctx.config.protectedEnvKeys,
-    ctx.config.protectedCredentialValues
-  );
-  return capture.retain(stream, secrets);
-}
 const CREDENTIAL_ENV_KEYS = new Set(['DATABASE_URL']);
 
 function collectSubprocessCredentialValues(
@@ -6377,23 +6331,16 @@ async function executeLoopNode(
 
           const iterationOptions: SendQueryOptions | undefined = {
             ...resolvedOptions,
-            ...(node.capture_tools === undefined ? {} : { captureToolOutput: true }),
             abortSignal: iterationAbortController.signal,
           };
 
           // Reask attempts start a FRESH session (mirrors runStreamPass in
           // executeNodeInternal) so an invalid turn is not carried forward as context.
-          const generator = await retainProviderTools(
-            ctx,
-            node,
-            stepName,
-            aiClient.sendQuery(
-              finalPrompt,
-              cwd,
-              reaskAttempt === 0 ? resumeSessionId : undefined,
-              iterationOptions
-            ),
-            i
+          const generator = aiClient.sendQuery(
+            finalPrompt,
+            cwd,
+            reaskAttempt === 0 ? resumeSessionId : undefined,
+            iterationOptions
           );
           const runningTools = new Map<string, RunningTool>();
           let anonymousToolSequence = 0;

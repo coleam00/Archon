@@ -28,7 +28,6 @@
  *   the SDK switched to native binaries in the 0.2.x series. See
  *   `shouldPassNoEnvFile` for the implications on the `--no-env-file` flag.
  */
-import { captureToolResult } from '../shared/tool-capture';
 import {
   query,
   type Options,
@@ -728,7 +727,6 @@ async function applyNodeConfig(
 interface ToolResultEntry {
   toolName: string;
   toolOutput: string;
-  capture?: ReturnType<typeof captureToolResult>;
   toolCallId?: string;
   toolOutcome: 'success' | 'error' | 'interrupted';
 }
@@ -845,7 +843,7 @@ function buildBaseClaudeOptions(
     // enables (`hook_progress`) falls through — it is only emitted for
     // async hooks, which Archon does not register today.
     includeHookEvents: true,
-    hooks: buildToolCaptureHooks(toolResultQueue, requestOptions?.captureToolOutput === true),
+    hooks: buildToolCaptureHooks(toolResultQueue),
     stderr: (data: string): void => {
       const output = data.trim();
       if (!output) return;
@@ -877,10 +875,7 @@ function buildBaseClaudeOptions(
  * Build SDK hooks that capture tool use results into a shared queue.
  * The queue is drained during stream normalization.
  */
-function buildToolCaptureHooks(
-  toolResultQueue: ToolResultEntry[],
-  capture = false
-): Options['hooks'] {
+function buildToolCaptureHooks(toolResultQueue: ToolResultEntry[]): Options['hooks'] {
   return {
     PostToolUse: [
       {
@@ -898,7 +893,6 @@ function buildToolCaptureHooks(
               toolResultQueue.push({
                 toolName,
                 toolOutput: output.length > maxLen ? output.slice(0, maxLen) + '...' : output,
-                ...(capture ? { capture: captureToolResult(toolResponse) } : {}),
                 ...(toolUseId !== undefined ? { toolCallId: toolUseId } : {}),
                 toolOutcome: 'success',
               });
@@ -927,7 +921,6 @@ function buildToolCaptureHooks(
               toolResultQueue.push({
                 toolName,
                 toolOutput: `${prefix}: ${errorText}`,
-                ...(capture ? { capture: captureToolResult(rawError) } : {}),
                 ...(toolUseId !== undefined ? { toolCallId: toolUseId } : {}),
                 toolOutcome: isInterrupt ? 'interrupted' : 'error',
               });
@@ -970,7 +963,6 @@ async function* streamClaudeMessages(
           type: 'tool_result',
           toolName: tr.toolName,
           toolOutput: tr.toolOutput,
-          ...(tr.capture === undefined ? {} : { capture: tr.capture }),
           ...(tr.toolCallId !== undefined ? { toolCallId: tr.toolCallId } : {}),
           toolOutcome: tr.toolOutcome,
         };
@@ -1279,7 +1271,6 @@ async function* streamClaudeMessages(
         type: 'tool_result',
         toolName: tr.toolName,
         toolOutput: tr.toolOutput,
-        ...(tr.capture === undefined ? {} : { capture: tr.capture }),
         ...(tr.toolCallId !== undefined ? { toolCallId: tr.toolCallId } : {}),
         toolOutcome: tr.toolOutcome,
       };

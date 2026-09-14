@@ -42,7 +42,6 @@ async function run(
     env: {
       ...process.env,
       ARTIFACTS_DIR: artifacts,
-      WORKFLOW_ID: 'validation-run',
       ...Object.fromEntries(
         Object.entries(inputs).map(([key, value]) => [`INPUTS_${key.toUpperCase()}`, value])
       ),
@@ -127,8 +126,6 @@ describe('validation evidence applicability', () => {
           sha256: 'e37e1de5075ca27a66d373e77b39d038ca27d54ee9b93e7ff53ba64bfc88c7da',
           content: 'bun run validate: passed\n',
         },
-        producer: { runId: 'validation-run', attempt: first.nonce },
-        sources: expect.arrayContaining([expect.objectContaining({ path: script })]),
       }
     );
 

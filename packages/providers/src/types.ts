@@ -231,14 +231,6 @@ export interface ResolvedModel {
   id: string;
 }
 
-/** Completeness describes the returned representation, not private tool-internal output. */
-export interface ToolResultCapture {
-  text: string;
-  format: 'text' | 'json';
-  completeness: 'full' | 'truncated' | 'redacted' | 'unavailable';
-  attachments: { data: Uint8Array; mediaType: string }[];
-}
-
 /**
  * Message chunk from AI assistant.
  * Discriminated union with per-type required fields for type safety.
@@ -295,8 +287,6 @@ export type MessageChunk =
       type: 'tool_result';
       toolName: string;
       toolOutput: string;
-      /** Original provider result before presentation formatting. Absent means unavailable. */
-      capture?: ToolResultCapture;
       /** Matching ID for the originating `tool` chunk. See `tool` variant above. */
       toolCallId?: string;
       /**
@@ -630,8 +620,6 @@ export interface NodeConfig {
  * The workflow path additionally passes nodeConfig and assistantConfig.
  */
 export interface SendQueryOptions extends AgentRequestOptions {
-  /** Expose original tool results to the engine's opt-in retention boundary. */
-  captureToolOutput?: boolean;
   /** Raw YAML node config — provider translates internally to SDK-specific options. */
   nodeConfig?: NodeConfig;
   /** Per-provider defaults from .archon/config.yaml assistants section. */

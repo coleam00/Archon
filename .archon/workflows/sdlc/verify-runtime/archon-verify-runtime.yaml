@@ -85,11 +85,21 @@ nodes:
             fi
           output_format: *command-result
 
+        - id: capture-helper
+          script: capture-command
+          runtime: bun
+          depends_on: [start-run]
+          with:
+            action: locate
+          output_format:
+            type: object
+            properties:
+              path: { type: string }
+            required: [path]
+
         - id: verify
           command: verify-runtime
-          context: fresh
-          capture_tools: '$prepare-attempt.output.directory/captures'
-          depends_on: [start-run]
+          depends_on: [capture-helper]
           when: '$start-run.output.ok == true'
           mutates_checkout: false
 
@@ -112,7 +122,7 @@ nodes:
 
         - id: check-evidence
           script: check-evidence
-          runtime: bun
+          runtime: uv
           depends_on: [identity-run]
           with:
             start_ok: '$start-run.output.ok'
@@ -121,42 +131,13 @@ nodes:
             report_path: '$prepare-attempt.output.report_path'
             required_ids: '$read-scenario.output.assertion_ids'
             expected_candidate: '$INPUTS.candidate'
-            scenario: '$INPUTS.scenario'
           output_format:
             type: object
             properties: &assessment-properties
               status: { type: string, enum: [verified, failed, inconclusive, malformed] }
               reason: { type: string }
               candidate: { type: string }
-              evidence: &runtime-evidence
-                type: object
-                properties:
-                  report_path: { type: string }
-                  report_sha256: { type: string }
-                  capture_directory: { type: string }
-                  capture_manifest_sha256: { type: string }
-                  producers:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        runId: { type: string }
-                        nodeId: { type: string }
-                        attempt: { type: string }
-                        iteration: { type: [integer, 'null'] }
-                      required: [runId, nodeId, attempt, iteration]
-                  scenario_path: { type: string }
-                  scenario_sha256: { type: string }
-                  evaluator_path: { type: string }
-                  evaluator_sha256: { type: string }
-                  evaluator_sources:
-                    type: array
-                    items:
-                      type: object
-                      properties: { path: { type: string }, sha256: { type: string } }
-                      required: [path, sha256]
-                required: [report_path, report_sha256, capture_directory, capture_manifest_sha256, producers, scenario_path, scenario_sha256, evaluator_path, evaluator_sha256, evaluator_sources]
-            required: [status, reason, candidate, evidence]
+            required: [status, reason, candidate]
 
         # Not finally cleanup: cancellation and some node errors can skip this node.
         - id: teardown-run
@@ -172,7 +153,7 @@ nodes:
 
         - id: finish-attempt
           script: finish-attempt
-          runtime: bun
+          runtime: uv
           depends_on: [teardown-run]
           with:
             assessment: '$check-evidence.output'
@@ -180,20 +161,29 @@ nodes:
             attempt: '$prepare-attempt.output.attempt'
             attempt_limit: *attempt-limit
             checkout: '$prepare-attempt.output.checkout'
+            directory: '$prepare-attempt.output.directory'
+            report_path: '$prepare-attempt.output.report_path'
           output_format:
             type: object
             properties:
               <<: *assessment-properties
               done: { type: boolean }
               checkout: { type: string }
-            required: [status, reason, candidate, evidence, done, checkout]
+              directory: { type: string }
+              report_path: { type: string }
+            required: [status, reason, candidate, done, checkout, directory, report_path]
 
   - id: gate-verified
     script: gate-verified
-    runtime: bun
+    runtime: uv
     depends_on: [verify-loop]
     with:
-      result: '$verify-loop.output'
+      status: '$verify-loop.output.status'
+      reason: '$verify-loop.output.reason'
+      candidate: '$verify-loop.output.candidate'
+      checkout: '$verify-loop.output.checkout'
+      directory: '$verify-loop.output.directory'
+      report_path: '$verify-loop.output.report_path'
     output_format:
       type: object
       properties:
@@ -202,5 +192,6 @@ nodes:
         candidate: { type: string }
         checkout: { type: string }
         summary: { type: string }
-        evidence: *runtime-evidence
-      required: [verified, verdict, candidate, checkout, summary, evidence]
+        directory: { type: string }
+        report_path: { type: string }
+      required: [verified, verdict, candidate, checkout, summary, directory, report_path]
