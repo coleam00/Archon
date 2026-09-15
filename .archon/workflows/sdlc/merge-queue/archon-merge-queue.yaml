@@ -19,6 +19,11 @@ inputs:
   merge_method:
     default: ''
     description: 'Requested merge strategy: merge, squash, or rebase. Ambiguous or conflicting intent holds.'
+  publish_holds:
+    default: 'false'
+    description: >-
+      In approve or auto mode, "true" publishes evidence-backed hold comments.
+      Preview is always read-only. This does not authorize merging.
 returns: merge
 nodes:
   - id: assess
@@ -28,6 +33,8 @@ nodes:
       prs: "$INPUTS.prs"
       evidence: "$INPUTS.evidence"
       merge_method: "$INPUTS.merge_method"
+      mode: "$INPUTS.mode"
+      publish_holds: "$INPUTS.publish_holds"
     output_format:
       type: object
       properties:
@@ -39,12 +46,39 @@ nodes:
         validation_verified: { type: boolean }
         review_verified: { type: boolean }
         plan_digest: { type: string }
-      required: [summary, eligible, method, ci_requirement, checks_state, validation_verified, review_verified, plan_digest]
+        holds:
+          type: array
+          items:
+            type: object
+            properties:
+              pr_url: { type: string }
+              head_sha: { type: string }
+              action: { type: string, enum: [hold, clear] }
+              reasons: { type: array, items: { type: string } }
+            required: [pr_url, head_sha, action, reasons]
+      required: [summary, eligible, method, ci_requirement, checks_state, validation_verified, review_verified, plan_digest, holds]
+
+  - id: publish-holds
+    script: publish-holds
+    runtime: bun
+    depends_on: [assess]
+    with:
+      prs: "$INPUTS.prs"
+      holds: "$assess.output.holds"
+      mode: "$INPUTS.mode"
+      publish_holds: "$INPUTS.publish_holds"
+    output_format:
+      type: object
+      properties:
+        published: { type: boolean }
+        updated: { type: array, items: { type: string } }
+        summary: { type: string }
+      required: [published, updated, summary]
 
   - id: gate
     script: merge-action
     runtime: bun
-    depends_on: [assess]
+    depends_on: [assess, publish-holds]
     with:
       action: gate
       assessment: "$assess.output"

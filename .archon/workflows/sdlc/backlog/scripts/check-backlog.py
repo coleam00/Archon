@@ -1,7 +1,7 @@
 """Validate the slice before anything is published, and render it for review.
 
 Shape, unique keys, dependencies that point only backwards, the bound, and the
-factory's one structural rule (the first ticket depends on nothing) are checked
+structural rule that the first ticket depends on nothing are checked
 here deterministically. Whether the tickets are good is the planner's judgment
 and the reader's; this script only refuses a slice no publisher should act on.
 """

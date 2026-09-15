@@ -4,6 +4,21 @@ Conventions for this pack specifically. Project-wide judgment lives in
 [`AGENTS.md`](../../../AGENTS.md); the YAML surface is governed by
 [`.archon/workflow-language-constitution.md`](../../workflow-language-constitution.md).
 
+## Building blocks and lifecycle
+
+Backlog, triage, ship, validation, runtime verification, discoveries, and merge
+queue are independently adoptable reference blocks. They read the target
+project's native guidance for its requirements instead of assuming a service,
+runtime host, label namespace, or review-report format.
+
+`archon-lifecycle` is the optional opinionated composition that connects those
+blocks with runtime and fresh holdout evidence. Callers own its state labels via
+the `state_labels` JSON mapping. An empty or partial mapping is valid for explicit
+targets; automatic intake requires every state so it can reliably identify all
+previously touched issues.
+Merge hold comments are separately opt-in through `publish_holds=true`, remain
+disabled in preview mode, and never authorize merging.
+
 ## Guards
 
 A guard here must protect an action the node it lives in takes.

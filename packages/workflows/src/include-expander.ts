@@ -495,7 +495,7 @@ function rewriteNodeOutputRefs(
       if (boundary.when !== undefined) boundary.when = whenExpr(boundary.when);
     }
     if (isLoopGroupNode(target)) {
-      for (const body of target.loop_group.nodes) rewriteBoundaries(body);
+      for (const body of resolvedBodyNodes(target.loop_group)) rewriteBoundaries(body);
     }
   };
   rewriteBoundaries(node);
