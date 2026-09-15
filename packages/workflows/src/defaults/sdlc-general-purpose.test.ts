@@ -179,7 +179,7 @@ describe('caller-owned triage state labels', () => {
       INPUTS_PUBLISH: 'false',
     });
     expect(result.exitCode).toBe(1);
-    expect(result.stderr.toString()).toContain('labels must not contain duplicates');
+    expect(result.stderr?.toString()).toContain('labels must not contain duplicates');
   });
 
   test('rejects ambiguous and malformed mappings before publication', async () => {
