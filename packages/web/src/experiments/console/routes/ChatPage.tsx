@@ -10,6 +10,7 @@ import { StreamContextProvider } from '../lib/stream-context';
 import { useConversationSSE } from '../lib/sse';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
+import { useFollowTail } from '../hooks/useFollowTail';
 import * as skill from '../skills';
 import type { Project } from '../primitives/project';
 import type { Message } from '../primitives/message';
@@ -25,10 +26,6 @@ const SETTLE_MS = 6000;
 // Hard cap so a turn that never produces a reply (server error, etc.) can't
 // disable the composer forever.
 const MAX_WAIT_MS = 300_000;
-// Distance from the bottom (px) within which we treat the scroll as "at bottom"
-// — drives both auto-scroll stickiness and the jump-to-bottom button's visibility.
-const NEAR_BOTTOM_PX = 120;
-
 /**
  * Project-scoped agent chat. A tab peer of the runs view under a project.
  *
@@ -184,37 +181,10 @@ export function ChatPage(): ReactElement {
     })();
   };
 
-  // Inline auto-scroll: stick to bottom on new messages if already near it.
-  // Mirrors RunDetailPage's variant.
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const lastBottomRef = useRef(true);
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el === null) return;
-    lastBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
-  });
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el === null || !lastBottomRef.current) return;
-    el.scrollTop = el.scrollHeight;
-  }, [messages?.length]);
-
-  // Jump-to-bottom affordance: `atBottom` (state) drives the button's visibility;
-  // `lastBottomRef` (above) drives the auto-scroll stickiness. Keep them in sync.
-  const [atBottom, setAtBottom] = useState(true);
-  const handleScroll = useCallback((): void => {
-    const el = scrollRef.current;
-    if (el === null) return;
-    const near = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
-    lastBottomRef.current = near;
-    setAtBottom(near);
-  }, []);
-  const scrollToBottom = useCallback((): void => {
-    const el = scrollRef.current;
-    if (el === null) return;
-    el.scrollTop = el.scrollHeight;
-    setAtBottom(true);
-  }, []);
+  // Follow the tail by observed height, not by message count: a streaming reply,
+  // late markdown/code highlighting and expanding tool cards all grow an existing
+  // row without adding one, and a count-keyed effect never sees them.
+  const { scrollRef, contentRef, atBottom, scrollToBottom, handleScroll } = useFollowTail();
 
   if (projectId === undefined) {
     return <EmptyState title="No project selected." />;
@@ -262,7 +232,7 @@ export function ChatPage(): ReactElement {
           className="h-full overflow-y-auto px-[30px] pt-[26px] pb-[18px]"
         >
           {/* Match the composer's centered 940px column (design: .stream-inner) */}
-          <div className="mx-auto max-w-[940px]">
+          <div ref={contentRef} className="mx-auto max-w-[940px]">
             {messageList.length === 0 && !busy ? (
               <EmptyState
                 title="No messages yet."
