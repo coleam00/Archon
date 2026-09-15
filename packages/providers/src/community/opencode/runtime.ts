@@ -9,6 +9,22 @@ function generateRandomPassword(): string {
   return randomBytes(32).toString('hex');
 }
 
+// Workflow nodes run unattended: nobody is present to answer an OpenCode
+// `ask` permission prompt. Pre-authorize the categories the embedded server
+// can gate (see `Config['permission']` in @opencode-ai/sdk) so a headless
+// turn never blocks on one. This does not widen capability beyond what a
+// node's own `tools`/`disallowedTools` map (agent-config.ts) already
+// allows — it only stops the SDK's own default `ask` policy from stalling
+// the run (see issue #3332). Per-agent `tools: {name: boolean}` remains the
+// mechanism for denying an action outright.
+const EMBEDDED_PERMISSION_POLICY = {
+  edit: 'allow',
+  bash: 'allow',
+  webfetch: 'allow',
+  doom_loop: 'allow',
+  external_directory: 'allow',
+} as const;
+
 function buildEmbeddedServerConfig(startupPort: number): Record<string, unknown> {
   return {
     server: {
@@ -16,6 +32,7 @@ function buildEmbeddedServerConfig(startupPort: number): Record<string, unknown>
       port: startupPort,
       password: generateRandomPassword(),
     },
+    permission: EMBEDDED_PERMISSION_POLICY,
   };
 }
 

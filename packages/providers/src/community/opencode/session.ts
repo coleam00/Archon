@@ -8,7 +8,7 @@ import {
   selectSingleAgent,
   type NamedAgentConfig,
 } from './agent-config';
-import { errorMessage } from './errors';
+import { errorMessage, pendingPermissionError } from './errors';
 import type { OpencodeClientLike } from './runtime';
 import { normalizeTokens } from './tokens';
 
@@ -244,6 +244,23 @@ export async function* streamOpencodeSession(
         const err = new Error(errorMessage(rawError));
         err.cause = rawError;
         throw err;
+      }
+
+      // The embedded runtime's permission policy (runtime.ts) pre-authorizes
+      // the categories OpenCode gates, so this event is not expected in
+      // normal operation. It remains a safety net: workflow nodes run
+      // unattended, so an unresolved `ask` permission (e.g. from a future
+      // OpenCode default, or a category the policy omits) must fail the node
+      // fast rather than hang forever waiting for a `session.idle` that will
+      // never arrive while the session is permission-blocked (issue #3332).
+      // `properties` for this event *is* the `Permission` object itself
+      // (unlike `session.error`, whose `sessionID` sits inside `properties`).
+      if (event.type === 'permission.updated') {
+        const eventSessionId =
+          typeof properties.sessionID === 'string' ? properties.sessionID : undefined;
+        if (eventSessionId && eventSessionId !== sessionId) continue;
+
+        throw pendingPermissionError(properties);
       }
 
       if (event.type === 'session.idle') {
