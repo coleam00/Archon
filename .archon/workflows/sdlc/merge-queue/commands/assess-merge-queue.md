@@ -3,8 +3,10 @@
 Requested PR URLs: $INPUTS.prs
 Additional evidence: $INPUTS.evidence
 Requested merge method: $INPUTS.merge_method
-Keep the checkout unchanged; the only GitHub write here is the hold comment
-described below. Read project guidance and use gh with an explicit repository. Require 1-5 distinct same-repository PRs targeting one base.
+Mode: $INPUTS.mode
+Hold-comment publication requested: $INPUTS.publish_holds
+Keep the checkout and GitHub unchanged. A later deterministic node owns any hold
+comment publication. Read project guidance and use gh with an explicit repository. Require 1-5 distinct same-repository PRs targeting one base.
 Reject ambiguous identity, forks, drafts, closed PRs, conflicts, unknown checks,
 or unresolved review findings. Read PR bodies, review comments, status checks and
 required CI for the current head; pending is not passing. Distinguish a known
@@ -16,13 +18,14 @@ review and actual validation evidence, including project-required runtime checks
 No checks is not evidence of validation. Read the supplied reports in full and
 verify their source/head matches; a prose assertion that tests passed is insufficient.
 
-Independent review means a reviewer other than the implementer, not a different
-GitHub login. In a single-account factory the same identity pushes the branch and
-posts the shared review workflow's canonical report: an issue comment on the PR
-beginning with `<!-- archon-review-report -->`. Accept that report as the
-independent review when its verdict is ready with no open blocking findings and it
-names the PR's current head; a submitted GitHub review is not required. Hold when
-the canonical report is missing, not ready, or describes an older head.
+Independent review means review judgment produced independently from the
+implementation. Accept a credible approving GitHub review from someone other than
+the implementer, a current external review report in a format the project's
+guidance approves, or Archon's canonical report comment beginning with
+`<!-- archon-review-report -->`. For any format, require a ready verdict, no open
+blocking findings, and evidence bound to the PR's current head. The Archon marker
+is one supported format, never a universal requirement. Hold when the available
+review is missing, not credible under project guidance, not ready, or stale.
 
 Read dependencies and diffs to select an order. Hold if the requested PRs have an
 unresolved dependency or incompatible changes; do not silently add PRs to the batch.
@@ -47,16 +50,13 @@ every whole-batch eligibility condition above passes. The deterministic gate, no
 lone ready claim, decides eligibility. No code changes, branch switches, custom
 worktrees, or agent subprocesses.
 
-A hold recorded only under this run's artifacts is a hold nobody sees, and in an
-unattended factory the PR then sits open forever. When a PR is held for a reason
-its own next commit can fix — an acceptance criterion or runtime contract the diff
-does not meet, a canonical review that is missing, not ready, or stale, a conflict
-with its base — publish the hold on that PR as one issue comment whose first line
-is `<!-- archon-merge-hold -->`, naming the head SHA assessed and each reason with
-the evidence that proves it (the criterion quoted, the code that misses it). Search
-the PR's comments for that marker first and edit the existing comment in place;
-never append a second. When a PR carrying the marker is now eligible, edit the
-comment to say the hold cleared at the new head. A transient hold — checks still
-pending, the base moved — is not published; a later run resolves it without a code
-change. The shared review workflow reads this comment when a delivery is re-driven
-on the branch, which is how the hold becomes a finding that gets fixed.
+Return one `holds` entry for every requested PR. Use `action=hold` only for a
+reason the PR's next commit can fix — an unmet acceptance or project runtime
+requirement, stale or blocking review, or a base conflict — and include each
+evidence-backed reason. Use `action=clear` when an existing
+`<!-- archon-merge-hold -->` comment is now cleared at the current head. Use
+`action=none` with no reasons for transient holds such as pending checks or base
+movement, and when there is no comment to update. The later publisher validates
+the requested PR identities, mode, and explicit publication choice. Preview is
+read-only even when publication was requested; approve and auto publish only when
+`publish_holds=true`. Hold publication never authorizes a merge.

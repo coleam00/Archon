@@ -5,7 +5,7 @@ triage: &judgment
   design_first: false
   complexity: "small_bounded"
   proposed_edits: {"title":"","body":""}
-  labels: ["archon-close"]
+  labels: []
   blocked_by: []
   issue_repo: ""
   issue_number: 0

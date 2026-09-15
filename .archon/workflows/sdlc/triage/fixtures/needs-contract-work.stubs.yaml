@@ -5,7 +5,7 @@ triage: &judgment
   design_first: false
   complexity: "small_bounded"
   proposed_edits: {"title":"Add acceptance criteria and invariants to issue #123","body":"Proposed missing sections: Acceptance (bulleted, checkable) and Invariants (what must remain true)."}
-  labels: ["archon-needs-contract"]
+  labels: []
   blocked_by: []
   issue_repo: "example/repo"
   issue_number: 123

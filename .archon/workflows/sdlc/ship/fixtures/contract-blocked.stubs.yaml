@@ -5,7 +5,7 @@ triage__triage: &judgment
   design_first: false
   complexity: "risky"
   proposed_edits: {"title":"","body":""}
-  labels: ["archon-blocked"]
+  labels: []
   blocked_by: ["https://github.com/example/dependency/issues/45"]
   issue_repo: "example/repo"
   issue_number: 100

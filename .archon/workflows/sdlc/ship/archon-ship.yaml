@@ -29,6 +29,11 @@ inputs:
       "true" lets triage write its proposed label set to the resolved GitHub
       issue. "false" stays advisory; other values are rejected. Forwarded
       unchanged to triage.
+  state_labels:
+    default: "{}"
+    description: >-
+      Optional caller-owned JSON state-label mapping forwarded unchanged to
+      triage. Empty leaves triage state unlabeled.
   validation_scope:
     default: ""
     description: >-
@@ -49,6 +54,7 @@ nodes:
     with:
       target: "$INPUTS.target"
       publish: "$INPUTS.publish"
+      state_labels: "$INPUTS.state_labels"
 
   - id: inv
     include: archon-investigate
