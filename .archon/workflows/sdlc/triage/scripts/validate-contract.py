@@ -89,7 +89,8 @@ def validate(triage: dict, artifacts: str, state_labels: dict[str, str]) -> None
     labels = triage.get("labels")
     require(isinstance(labels, list) and all(isinstance(v, str) and v.strip() for v in labels),
             "labels must be an array of non-empty strings")
-    require(len(labels) == len(set(labels)), "labels must not contain duplicates")
+    folded_labels = [label.casefold() for label in labels]
+    require(len(folded_labels) == len(set(folded_labels)), "labels must not contain duplicates")
     owned = {label.casefold() for label in state_labels.values()}
     require(not any(label.casefold() in owned for label in labels),
             "the triage agent must not propose caller-owned state labels")
@@ -138,13 +139,14 @@ def publish(triage: dict, state_labels: dict[str, str]) -> dict:
     pages = gh(["api", "--hostname", "github.com", f"repos/{repo}/labels?per_page=100", "--paginate", "--slurp"])
     require(isinstance(pages, list), "forge label pages must be an array")
     existing = set().union(*(label_names(page) for page in pages))
-    existing_folded = {name.casefold() for name in existing}
+    existing_by_folded = {name.casefold(): name for name in existing}
     for state, name in state_labels.items():
         color, description = STATE_LABEL_METADATA[state]
-        if name.casefold() not in existing_folded:
+        if name.casefold() not in existing_by_folded:
             gh(["api", "--hostname", "github.com", f"repos/{repo}/labels", "--method", "POST", "--input", "-"],
                {"name": name, "color": color, "description": description})
-    accepted = [label for label in triage["labels"] if label in existing]
+    accepted = [existing_by_folded[label.casefold()] for label in triage["labels"]
+                if label.casefold() in existing_by_folded]
     state_label = state_labels.get(selected_state(triage))
     if state_label is not None:
         accepted.append(state_label)
@@ -167,7 +169,8 @@ def publish(triage: dict, state_labels: dict[str, str]) -> dict:
             and {label.casefold() for label in actual if label.casefold() in owned} == desired_owned,
             "label read-back mismatch: proposed or unrelated labels missing, or stale owned labels remain; writes may have completed")
     return {"published": True, "applied_labels": accepted,
-            "skipped_labels": [label for label in triage["labels"] if label not in accepted]}
+            "skipped_labels": [label for label in triage["labels"]
+                               if label.casefold() not in existing_by_folded]}
 
 
 def main() -> int:

@@ -4,7 +4,8 @@
 `merge_method` (`merge|squash|rebase`), `mode=preview|approve|auto`, and
 `publish_holds=false|true`. Evidence
 may be an empty array when validation and review are GitHub-only; file-backed
-entries bind an exact path and SHA-256 and are rechecked before any write. It uses two medium command agents with a native
+entries bind an exact path and SHA-256 and are rechecked before merge authorization.
+Authorized hold comments use the assessment-time evidence snapshot. It uses two medium command agents with a native
 approval node between them. GitHub operations and CI inspection use gh inside
 those nodes, with explicit repository and expected head identity.
 

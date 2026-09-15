@@ -50,13 +50,14 @@ every whole-batch eligibility condition above passes. The deterministic gate, no
 lone ready claim, decides eligibility. No code changes, branch switches, custom
 worktrees, or agent subprocesses.
 
-Return one `holds` entry for every requested PR. Use `action=hold` only for a
+Return a unique subset of requested PRs in `holds`, or an empty list when no
+comment should change. Use `action=hold` only for a
 reason the PR's next commit can fix — an unmet acceptance or project runtime
 requirement, stale or blocking review, or a base conflict — and include each
 evidence-backed reason. Use `action=clear` when an existing
-`<!-- archon-merge-hold -->` comment is now cleared at the current head. Use
-`action=none` with no reasons for transient holds such as pending checks or base
-movement, and when there is no comment to update. The later publisher validates
+`<!-- archon-merge-hold -->` comment is now cleared at the current head. Use no
+entry for transient holds such as pending checks or base movement, and when there
+is no comment to update. The later publisher validates
 the requested PR identities, mode, and explicit publication choice. Preview is
 read-only even when publication was requested; approve and auto publish only when
 `publish_holds=true`. Hold publication never authorizes a merge.

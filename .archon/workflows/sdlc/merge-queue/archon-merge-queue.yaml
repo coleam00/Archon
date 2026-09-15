@@ -53,7 +53,7 @@ nodes:
             properties:
               pr_url: { type: string }
               head_sha: { type: string }
-              action: { type: string, enum: [hold, clear, none] }
+              action: { type: string, enum: [hold, clear] }
               reasons: { type: array, items: { type: string } }
             required: [pr_url, head_sha, action, reasons]
       required: [summary, eligible, method, ci_requirement, checks_state, validation_verified, review_verified, plan_digest, holds]

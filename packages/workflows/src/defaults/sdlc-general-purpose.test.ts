@@ -45,11 +45,12 @@ else if (args[0] === 'api') {
     writeFileSync(statePath, JSON.stringify(state));
   } else if (endpoint.endsWith('/labels?per_page=100')) console.log(JSON.stringify([state.available.map((name:string) => ({name}))]));
   else if (endpoint.endsWith('/labels') && method === 'POST' && Array.isArray(payload.labels)) {
-    state.labels = [...new Set([...state.labels,...payload.labels])]; writeFileSync(statePath, JSON.stringify(state));
+    const canonical = payload.labels.map((label:string) => state.available.find((name:string) => name.toLowerCase() === label.toLowerCase()) ?? label);
+    state.labels = [...new Map([...state.labels,...canonical].map((label:string) => [label.toLowerCase(),label])).values()]; writeFileSync(statePath, JSON.stringify(state));
   } else if (endpoint.endsWith('/labels') && method === 'POST') {
     state.available = [...new Set([...state.available,payload.name])]; writeFileSync(statePath, JSON.stringify(state));
   } else if (endpoint.includes('/labels/') && method === 'DELETE') {
-    const name = decodeURIComponent(endpoint.split('/').at(-1)); state.labels = state.labels.filter((label:string) => label !== name); writeFileSync(statePath, JSON.stringify(state));
+    const name = decodeURIComponent(endpoint.split('/').at(-1)); state.labels = state.labels.filter((label:string) => label.toLowerCase() !== name.toLowerCase()); writeFileSync(statePath, JSON.stringify(state));
   } else if (/\\/issues\\/\\d+$/.test(endpoint)) console.log(JSON.stringify({number:7,html_url:'https://github.com/owner/repo/issues/7',labels:state.labels.map((name:string) => ({name}))}));
 }
 `
@@ -131,8 +132,8 @@ describe('caller-owned triage state labels', () => {
     await writeFile(
       statePath,
       JSON.stringify({
-        labels: ['area-ui', 'team-blocked', 'archon-noise'],
-        available: ['area-ui', 'team-blocked'],
+        labels: ['Area-UI', 'Team-Blocked', 'archon-noise'],
+        available: ['Area-UI', 'Team-Blocked', 'Team-Ready'],
         comments: [],
       })
     );
@@ -147,13 +148,38 @@ describe('caller-owned triage state labels', () => {
     expect(result.exitCode).toBe(0);
     expect(JSON.parse(stdout(result))).toMatchObject({
       labels: ['area-ui', 'team-ready'],
-      publication: { published: true, applied_labels: ['area-ui', 'team-ready'] },
+      publication: { published: true, applied_labels: ['Area-UI', 'team-ready'] },
     });
     expect(JSON.parse(await readFile(statePath, 'utf8')).labels.sort()).toEqual([
+      'Area-UI',
+      'Team-Ready',
       'archon-noise',
-      'area-ui',
-      'team-ready',
     ]);
+    const calls = (await readFile(log, 'utf8'))
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as { args: string[] });
+    expect(
+      calls.some(
+        call => call.args.includes('repos/owner/repo/labels') && call.args.includes('POST')
+      )
+    ).toBe(false);
+    expect(calls.filter(call => call.args.includes('DELETE'))).toHaveLength(1);
+    expect(calls.find(call => call.args.includes('DELETE'))?.args.join(' ')).toContain(
+      'Team-Blocked'
+    );
+  });
+
+  test('rejects proposed labels that differ only by case', async () => {
+    const fixture = await triageFixture(['area-ui', 'Area-UI']);
+    const result = runPython(triageScript, {
+      ARTIFACTS_DIR: fixture.artifacts,
+      INPUTS_TRIAGE: fixture.triage,
+      INPUTS_STATE_LABELS: '{}',
+      INPUTS_PUBLISH: 'false',
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain('labels must not contain duplicates');
   });
 
   test('rejects ambiguous and malformed mappings before publication', async () => {
@@ -171,6 +197,28 @@ describe('caller-owned triage state labels', () => {
 });
 
 describe('lifecycle intake state ownership', () => {
+  test('uses the same state key domain as triage publication', () => {
+    const extract = (script: string, assignment: string): string[] => {
+      const program = `import ast,json,sys\nfrom pathlib import Path\nnode=next(n for n in ast.parse(Path(sys.argv[1]).read_text()).body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id==sys.argv[2] for t in n.targets))\nvalues=[k.value for k in (node.value.keys if isinstance(node.value,ast.Dict) else node.value.elts)]\nprint(json.dumps(sorted(values)))`;
+      const result = Bun.spawnSync(
+        ['uv', 'run', '--no-project', 'python', '-c', program, script, assignment],
+        { stdout: 'pipe', stderr: 'pipe' }
+      );
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+      return JSON.parse(stdout(result)) as string[];
+    };
+    const publicationStates = extract(triageScript, 'STATE_LABEL_METADATA');
+    const intakeStates = extract(intakeScript, 'STATES');
+    expect(intakeStates).toEqual(publicationStates);
+    expect(intakeStates).toEqual([
+      'BLOCKED',
+      'DESIGN_FIRST',
+      'NEEDS_CONTRACT_WORK',
+      'NO_ACTION',
+      'READY',
+    ]);
+  });
+
   test('allows explicit targets with no mapping and safely stops automatic intake', () => {
     const explicit = runPython(intakeScript, {
       INPUTS_TARGET: 'work order',
@@ -204,7 +252,7 @@ describe('lifecycle intake state ownership', () => {
         {
           number: 2,
           url: 'https://github.com/owner/repo/issues/2',
-          labels: [{ name: 'team-ready' }],
+          labels: [{ name: 'Team-Ready' }],
           createdAt: '2026-01-02',
         },
       ]),
@@ -322,5 +370,33 @@ describe('hold-comment write boundary', () => {
     };
     expect(state.comments).toHaveLength(1);
     expect(state.comments[0].body).toContain('Hold cleared at `head-8`.');
+  });
+
+  test('accepts an empty sparse plan and rejects duplicate entries', () => {
+    const empty = Bun.spawnSync([process.execPath, holdsScript], {
+      env: env({
+        INPUTS_PRS: prs,
+        INPUTS_HOLDS: '[]',
+        INPUTS_MODE: 'auto',
+        INPUTS_PUBLISH_HOLDS: 'true',
+      }),
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    expect(empty.exitCode, empty.stderr.toString()).toBe(0);
+    expect(JSON.parse(empty.stdout.toString())).toMatchObject({ published: false, updated: [] });
+
+    const duplicate = Bun.spawnSync([process.execPath, holdsScript], {
+      env: env({
+        INPUTS_PRS: prs,
+        INPUTS_HOLDS: JSON.stringify([...JSON.parse(holds), ...JSON.parse(holds)]),
+        INPUTS_MODE: 'auto',
+        INPUTS_PUBLISH_HOLDS: 'true',
+      }),
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    expect(duplicate.exitCode).toBe(1);
+    expect(duplicate.stderr.toString()).toContain('holds must not contain duplicate PRs');
   });
 });

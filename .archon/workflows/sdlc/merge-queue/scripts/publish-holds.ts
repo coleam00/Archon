@@ -72,7 +72,7 @@ const holds = rawHolds.map(value => {
     !requestedUrls.has(hold.pr_url) ||
     typeof hold.head_sha !== 'string' ||
     hold.head_sha === '' ||
-    !['hold', 'clear', 'none'].includes(String(hold.action)) ||
+    !['hold', 'clear'].includes(String(hold.action)) ||
     !Array.isArray(hold.reasons) ||
     !hold.reasons.every(reason => typeof reason === 'string' && reason.trim() !== '')
   ) {
@@ -87,12 +87,12 @@ const holds = rawHolds.map(value => {
   return hold as {
     pr_url: string;
     head_sha: string;
-    action: 'hold' | 'clear' | 'none';
+    action: 'hold' | 'clear';
     reasons: string[];
   };
 });
-if (holds.length !== requestedUrls.size || new Set(holds.map(hold => hold.pr_url)).size !== holds.length) {
-  throw new Error('publish-holds: holds must contain one entry per requested PR');
+if (new Set(holds.map(hold => hold.pr_url)).size !== holds.length) {
+  throw new Error('publish-holds: holds must not contain duplicate PRs');
 }
 
 if (mode === 'preview' || publish === 'false') {
@@ -102,7 +102,6 @@ if (mode === 'preview' || publish === 'false') {
 
 const updated: string[] = [];
 for (const hold of holds) {
-  if (hold.action === 'none') continue;
   const { repository, number } = prIdentity(hold.pr_url);
   const listed = runGh([
     'api',
