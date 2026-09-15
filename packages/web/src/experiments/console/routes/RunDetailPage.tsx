@@ -22,6 +22,7 @@ import { StreamContextProvider } from '../lib/stream-context';
 import { useRunStreamSSE } from '../lib/sse';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
+import { useFollowTail } from '../hooks/useFollowTail';
 import * as skill from '../skills';
 import { runMessageConversationId, type Run } from '../primitives/run';
 import { foldNodeRuns, type RunEvent } from '../primitives/event';
@@ -55,8 +56,6 @@ const TOGGLE_KEYS = {
   view: 'archon.console.detailView',
   node: 'archon.console.runNodeFilter',
 } as const;
-
-const NEAR_BOTTOM_PX = 120;
 
 function readToggle(key: string, defaultOn: boolean): boolean {
   try {
@@ -233,58 +232,43 @@ export function RunDetailPage(): ReactElement {
 
   // Follow intent belongs to user navigation, not post-render geometry. Content
   // growth can make a pinned viewport look detached before an effect measures it.
-  const lastBottomRef = useRef(true);
-  const [atBottom, setAtBottom] = useState(true);
+  // A Graph-selected node takes precedence over the mount's normal tail position
+  // and keeps follow disabled until its reveal settles.
   const pendingNodeIdRef = useRef<string | null>(null);
+  const setFollowingRef = useRef<((following: boolean) => void) | null>(null);
 
   const finishNodeReveal = useCallback((nodeId: string): void => {
     if (pendingNodeIdRef.current !== nodeId) return;
     pendingNodeIdRef.current = null;
-    lastBottomRef.current = false;
-    setAtBottom(false);
+    setFollowingRef.current?.(false);
   }, []);
 
-  // Bind the observer to the conditional content node so it survives loading and
-  // Log remounts. A Graph-selected node takes precedence over the mount's normal
-  // tail position and keeps follow disabled until its reveal settles.
-  const contentRef = useCallback(
-    (node: HTMLDivElement | null): (() => void) | undefined => {
-      if (node === null) return undefined;
+  const followOnMount = useCallback((): boolean => pendingNodeIdRef.current === null, []);
 
-      const pendingNodeId = pendingNodeIdRef.current;
-      const followTail = pendingNodeId === null;
-      lastBottomRef.current = followTail;
-      setAtBottom(followTail);
+  const onContentMount = useCallback((): void => {
+    const pendingNodeId = pendingNodeIdRef.current;
+    if (pendingNodeId === null) return;
+    requestAnimationFrame(() => {
+      if (pendingNodeIdRef.current !== pendingNodeId) return;
+      if (!scrollToNode(pendingNodeId)) finishNodeReveal(pendingNodeId);
+    });
+  }, [finishNodeReveal, scrollToNode]);
 
-      const observer = new ResizeObserver(() => {
-        if (!lastBottomRef.current) return;
-        const el = scrollRef.current;
-        if (el !== null) el.scrollTop = el.scrollHeight;
-      });
-      observer.observe(node);
+  const isScrollSuppressed = useCallback((): boolean => pendingNodeIdRef.current !== null, []);
 
-      if (pendingNodeId !== null) {
-        requestAnimationFrame(() => {
-          if (pendingNodeIdRef.current !== pendingNodeId) return;
-          if (!scrollToNode(pendingNodeId)) finishNodeReveal(pendingNodeId);
-        });
-      }
-
-      return () => {
-        observer.disconnect();
-      };
-    },
-    [finishNodeReveal, scrollToNode]
-  );
-
-  const handleScroll = useCallback((): void => {
-    if (pendingNodeIdRef.current !== null) return;
-    const el = scrollRef.current;
-    if (el === null) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
-    lastBottomRef.current = nearBottom;
-    setAtBottom(nearBottom);
-  }, []);
+  const {
+    contentRef,
+    atBottom,
+    scrollToBottom: pinToBottom,
+    setFollowing,
+    handleScroll,
+  } = useFollowTail({
+    scrollRef,
+    followOnMount,
+    onContentMount,
+    isScrollSuppressed,
+  });
+  setFollowingRef.current = setFollowing;
 
   const handleScrollEnd = useCallback((): void => {
     const pendingNodeId = pendingNodeIdRef.current;
@@ -292,13 +276,9 @@ export function RunDetailPage(): ReactElement {
   }, [finishNodeReveal]);
 
   const scrollToBottom = useCallback((): void => {
-    const el = scrollRef.current;
-    if (el === null) return;
     pendingNodeIdRef.current = null;
-    lastBottomRef.current = true;
-    setAtBottom(true);
-    el.scrollTop = el.scrollHeight;
-  }, []);
+    pinToBottom();
+  }, [pinToBottom]);
 
   // Keymap bindings: hoisted above early returns so the hook order is stable
   // across all render paths (loading, error, ready).
