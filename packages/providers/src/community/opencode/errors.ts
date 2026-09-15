@@ -97,3 +97,32 @@ export function enrichOpencodeError(error: unknown, errorClass: RetryableErrorCl
   if (error instanceof Error) err.cause = error;
   return err;
 }
+
+/**
+ * Raised when the OpenCode server emits a `permission.updated` event that the
+ * embedded runtime's `permission` policy (see `runtime.ts`) did not resolve.
+ * Workflow nodes run unattended, so there is nobody to answer an `ask`
+ * prompt: this fails the node fast, naming the pending permission, instead
+ * of hanging forever waiting for `session.idle` (issue #3332).
+ */
+export function pendingPermissionError(permission: {
+  id?: unknown;
+  type?: unknown;
+  pattern?: unknown;
+}): Error {
+  const id = typeof permission.id === 'string' ? permission.id : 'unknown';
+  const type = typeof permission.type === 'string' ? permission.type : 'unknown';
+  const pattern =
+    typeof permission.pattern === 'string'
+      ? permission.pattern
+      : Array.isArray(permission.pattern)
+        ? permission.pattern.join(', ')
+        : undefined;
+
+  return new Error(
+    `OpenCode requested permission '${id}' for '${type}'${pattern ? ` (pattern: ${pattern})` : ''} ` +
+      'and no policy resolved it. Workflow nodes run unattended and cannot answer an ' +
+      "'ask' permission prompt; configure the embedded runtime's permission policy to " +
+      'allow this action, or adjust the node/agent tools configuration.'
+  );
+}

@@ -313,6 +313,149 @@ describe('OpencodeProvider', () => {
     });
   });
 
+  test('permission.updated with no following session.idle fails fast instead of hanging (#3332)', async () => {
+    scriptedEvents = [
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: { sessionID: 'session-1', type: 'text' },
+          delta: 'partial answer',
+        },
+      },
+      {
+        type: 'permission.updated',
+        properties: {
+          id: 'perm-1',
+          type: 'bash',
+          pattern: 'rm -rf *',
+          sessionID: 'session-1',
+          messageID: 'msg-1',
+          title: 'Run a destructive command',
+          metadata: {},
+          time: { created: Date.now() },
+        },
+      },
+      // Deliberately no session.idle after this — the permission is never
+      // answered, matching the hang scenario from issue #3332.
+    ];
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, { assistantConfig: TEST_MODEL })
+    );
+
+    expect(chunks).toEqual([{ type: 'assistant', content: 'partial answer' }]);
+    expect(error).toBeInstanceOf(Error);
+    expect(error?.message).toContain('perm-1');
+    expect(error?.message).toContain('bash');
+  });
+
+  test('permission.updated for a different session is ignored', async () => {
+    scriptedEvents = [
+      {
+        type: 'permission.updated',
+        properties: {
+          id: 'perm-other',
+          type: 'bash',
+          sessionID: 'some-other-session',
+          messageID: 'msg-1',
+          title: 'Unrelated session',
+          metadata: {},
+          time: { created: Date.now() },
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: 'session-1' } },
+    ];
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, { assistantConfig: TEST_MODEL })
+    );
+
+    expect(error).toBeUndefined();
+    expect(chunks).toEqual([{ type: 'result', sessionId: 'session-1' }]);
+  });
+
+  test('multi-agent permission.updated fails fast naming the pending permission (#3332)', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    const runtime = makeRuntime({
+      sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+    });
+    runtimeQueue.push(runtime);
+    scriptedEvents = [
+      {
+        type: 'permission.updated',
+        properties: {
+          id: 'perm-2',
+          type: 'edit',
+          sessionID: 'scout-session',
+          messageID: 'msg-1',
+          title: 'Edit a file',
+          metadata: {},
+          time: { created: Date.now() },
+        },
+      },
+      // No session.idle for either child session follows.
+    ];
+
+    const { error } = await consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+      })
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error?.message).toContain('perm-2');
+    expect(error?.message).toContain('edit');
+    expect(runtime.client.session.abort).toHaveBeenCalled();
+  });
+
+  test('multi-agent permission.updated for an unrecognized session is ignored', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    const runtime = makeRuntime({
+      sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+    });
+    runtimeQueue.push(runtime);
+    scriptedEvents = [
+      {
+        type: 'permission.updated',
+        properties: {
+          id: 'perm-3',
+          type: 'edit',
+          sessionID: 'not-a-child-session',
+          messageID: 'msg-1',
+          title: 'Unrelated session',
+          metadata: {},
+          time: { created: Date.now() },
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: 'scout-session' } },
+      { type: 'session.idle', properties: { sessionID: 'reviewer-session' } },
+    ];
+
+    const { error } = await consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+      })
+    );
+
+    expect(error).toBeUndefined();
+  });
+
   test('multi-agent tool results retain scoped IDs and factual outcomes', async () => {
     const cwd = await createTempProjectDir();
     const sessionIds = ['scout-session', 'reviewer-session'];
@@ -901,6 +1044,31 @@ describe('OpencodeProvider', () => {
     const startupPort = (mockCreateOpencode.mock.calls[0] as Array<{ port?: number }>)[0]?.port;
     expect(typeof startupPort).toBe('number');
     expect(startupPort).toBeGreaterThan(0);
+  });
+
+  test('embedded runtime config pre-authorizes ask-gated permission categories (#3332)', async () => {
+    const runtime = makeRuntime({ close: mock(() => undefined) });
+    runtimeQueue.push(runtime);
+    scriptedEvents = [{ type: 'session.idle', properties: { sessionID: 'session-1' } }];
+
+    const { error } = await consume(
+      new OpencodeProvider().sendQuery('one', '/tmp', undefined, { assistantConfig: TEST_MODEL })
+    );
+
+    expect(error).toBeUndefined();
+    expect(mockCreateOpencode).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          permission: expect.objectContaining({
+            edit: 'allow',
+            bash: 'allow',
+            webfetch: 'allow',
+            doom_loop: 'allow',
+            external_directory: 'allow',
+          }),
+        }),
+      })
+    );
   });
 
   test('embedded runtime retries startup on port conflict and succeeds', async () => {

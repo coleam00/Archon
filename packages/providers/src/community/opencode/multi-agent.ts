@@ -3,7 +3,7 @@ import { createLogger } from '@archon/paths';
 import { mergeTokenUsage } from '../../types';
 import type { MessageChunk, SendQueryOptions, TokenUsage } from '../../types';
 import { getOrderedAgents, type NamedAgentConfig } from './agent-config';
-import { errorMessage } from './errors';
+import { errorMessage, pendingPermissionError } from './errors';
 import type { OpencodeClientLike } from './runtime';
 import {
   abortableStream,
@@ -306,6 +306,21 @@ export async function* streamMultiAgentOpencodeSession(
         const err = new Error(`[${state.agent.key}] ${errorMessage(rawError)}`);
         err.cause = rawError;
         throw err;
+      }
+
+      // Same safety net as session.ts: the embedded runtime's permission
+      // policy (runtime.ts) is expected to pre-authorize gated actions for
+      // every child session, so this should not fire in normal operation.
+      // `properties` for this event is the `Permission` object itself, whose
+      // `sessionID` field scopes it to one child agent's session the same
+      // way `message.updated`/`message.part.updated` demux above (issue #3332).
+      if (event.type === 'permission.updated') {
+        const sessionId =
+          typeof properties.sessionID === 'string' ? properties.sessionID : undefined;
+        const state = sessionId ? sessionToAgent.get(sessionId) : undefined;
+        if (!state) continue;
+        await abortAll();
+        throw pendingPermissionError(properties);
       }
 
       if (event.type === 'session.idle') {
