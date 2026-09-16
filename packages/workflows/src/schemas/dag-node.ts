@@ -1016,15 +1016,33 @@ export const SCRIPT_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS;
  * the workflow level. `pi` is excluded because the portable per-node Pi posture
  * (#2133) IS threaded into each iteration's sendQuery — the loop is the very
  * node whose extension posture users need to scope (plannotator planning-mode
- * leak, #2073). `output_format` is excluded for the same class of reason (#2563):
+ * leak, #2073). `allowed_tools`/`denied_tools` are excluded for the same reason
+ * (#3324): a `loop:` node builds its own `nodeConfig` and the provider translates
+ * the restriction (Claude `disallowedTools`, Copilot `excludedTools`, Pi's tool
+ * set), so the scoping applies to every iteration. They must never be listed here
+ * again — an accepted-then-dropped tool restriction is fail-open, and a loop node
+ * has no workflow-level restriction to fall back on.
+ * `output_format` is excluded for the same class of reason (#2563):
  * a `loop:` node makes its own sendQuery, so the schema reaches the provider, each
  * iteration's payload is validated against it, and `loop.until_field` can terminate
  * on a declared boolean. It stays listed for `loop_group`, which never calls
  * sendQuery — its body nodes carry their own. (Since #2453 `output_format` is no
  * longer in the base list either, so nothing has to be filtered out here for it.)
+ *
+ * Every exclusion here is a claim about the transform below: a field absent from
+ * this list MUST survive the loop branch, and a field present in it MUST be
+ * dropped. `schemas.test.ts` enforces that pairing field-by-field rather than
+ * leaving the two declarations to agree by convention.
  */
 export const LOOP_NODE_AI_FIELDS: readonly string[] = [
-  ...BASH_NODE_AI_FIELDS.filter(f => f !== 'model' && f !== 'provider' && f !== 'pi'),
+  ...BASH_NODE_AI_FIELDS.filter(
+    f =>
+      f !== 'model' &&
+      f !== 'provider' &&
+      f !== 'pi' &&
+      f !== 'allowed_tools' &&
+      f !== 'denied_tools'
+  ),
   // The tree-integrity assertion (#2771) is enforced only on exec/agent nodes; on a
   // loop it would have to cover every iteration's body, which no execution path does.
   'mutates_checkout',
@@ -1965,6 +1983,14 @@ export const dagNodeSchema = z
       ...base,
       kind: 'loop',
       ...(data.pi !== undefined ? { pi: data.pi } : {}),
+      // Tool scoping is kept for the same reason as `pi` (#3324), and matters more:
+      // dropping it here silently REMOVED a restriction the author declared, and a
+      // loop node has no workflow-level allowed_tools/denied_tools to fall back on,
+      // so the iterations ran unrestricted. `resolveNodeProviderAndModel` copies both
+      // into the nodeConfig it builds for this node, and each iteration's sendQuery
+      // carries that nodeConfig, so the provider applies the scoping per iteration.
+      ...(data.allowed_tools !== undefined ? { allowed_tools: data.allowed_tools } : {}),
+      ...(data.denied_tools !== undefined ? { denied_tools: data.denied_tools } : {}),
       // Kept for the same reason as `pi`: a loop: node runs its own sendQuery, so
       // the schema reaches the provider and each iteration's payload is validated
       // against it (#2563). `loop.until_field` then terminates on a declared
