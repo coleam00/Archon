@@ -10,13 +10,20 @@ inputs:
     default: ''
     description: >-
       One issue or work order. Empty selects the oldest open issue in the
-      origin repository that no earlier run has touched (no archon-* label and
-      no open PR naming it); nothing found completes the run with nothing to do.
+      origin repository that has no configured state label and no open PR
+      naming it. Automatic intake requires all state_labels; an explicit target
+      works without them.
   publish:
     default: 'false'
     description: >-
       Forwarded to triage. "true" writes the proposed state label to the issue,
       which is what marks it as touched for backlog intake.
+  state_labels:
+    default: '{}'
+    description: >-
+      Caller-owned JSON mapping of workflow states to GitHub labels, forwarded
+      through ship. Automatic intake requires every state to be mapped and
+      treats only mapped labels as previously touched.
   scenario:
     required: true
     description: Absolute path to a project runtime scenario JSON.
@@ -29,6 +36,11 @@ inputs:
   merge_method:
     default: ''
     description: 'Required merge strategy: merge, squash, or rebase.'
+  publish_holds:
+    default: 'false'
+    description: >-
+      Forwarded to the merge queue. In approve or auto mode, "true" publishes
+      hold comments; preview remains read-only and merging remains separately gated.
   discovery_publication:
     default: preview
     description: preview, approve, or auto for discovered adjacent work.
@@ -63,6 +75,7 @@ nodes:
     mutates_checkout: false
     with:
       target: "$INPUTS.target"
+      state_labels: "$INPUTS.state_labels"
     output_format:
       type: object
       properties:
@@ -79,6 +92,7 @@ nodes:
     with:
       target: "$intake.output.target"
       publish: "$INPUTS.publish"
+      state_labels: "$INPUTS.state_labels"
       validation_scope: "$INPUTS.validation_scope"
       validation_context: "$INPUTS.validation_context"
 
@@ -231,6 +245,7 @@ nodes:
       prs: "$selected.output.prs"
       mode: "$INPUTS.merge_mode"
       merge_method: "$INPUTS.merge_method"
+      publish_holds: "$INPUTS.publish_holds"
       evidence: "$selected.output.evidence"
 
   # Merging is not shipping. With deployment inputs set, a confirmed merge rolls

@@ -7,9 +7,9 @@ Read the returned directory and report_path references for both results, then re
 the referenced reports, assertions and target identity evidence in full.
 Require both actual verified=true results, independent fresh environments, and
 proof from each scenario's saved runtime metadata that the target ran the
-delivered candidate source revision. The factory host reports this provenance
-as `source_revision`; other existing adapters may provide equivalent genuine
-runtime build/source provenance. The runtime result's `candidate` remains the
+delivered candidate source revision. Existing adapters may provide
+`source_revision` or equivalent genuine runtime build/source provenance. The
+runtime result's `candidate` remains the
 opaque target-probe identity and need not equal a Git SHA.
 Re-read git HEAD and the PR head with gh; both must still equal the candidate head. Missing, inconclusive,
 stale or mismatched evidence holds merging. Write runtime-qualification.md under

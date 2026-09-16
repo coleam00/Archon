@@ -4,11 +4,11 @@ Product document: $read-prd.output.path
 Ticket bound: $read-prd.output.max_issues
 Operator context (may be empty): $ARGUMENTS
 
-Read the document in full. Read `MISSION.md` if it exists: it is the product
-compressed to what must and must never be built, and it wins over the document
-where they disagree. Read the repository's guidance files and enough of the
-current code to know what already exists. An empty repository is a normal
-starting point.
+Read the document in full, then read the repository's guidance and the project
+requirements those files declare. Read enough of the current code to know what
+already exists. An empty repository is a normal starting point. Do not invent a
+required product document or give an undeclared document precedence over the
+input.
 
 Decompose the way a good engineering lead does. Each implementation phase in the
 document is a group of tickets; each user story becomes one ticket, or more when it
@@ -28,30 +28,20 @@ be built. Each ticket is an object with:
 - `depends_on`: keys of earlier tickets this one needs; usually empty or one.
 - `size`: `small_bounded`, `risky`, or `large`.
 
-Rules that make the backlog buildable by a factory rather than by a person:
+Rules that make the backlog buildable in dependency order:
 
-1. **The first ticket makes the product runnable end to end.** The smallest real
-   version of the core path, and what every later verification needs: the app starts
-   from one command, answers a health check, reports what it was built from on a
-   build-identity endpoint (read the installed `factory/RUNTIME_HOST.md` when present
-   for the exact expectation; otherwise `GET /build-id` returning the
-   `FACTORY_RUNTIME_CANDIDATE` environment variable when set, else the git commit), has
-   a test command, and has a CI check that runs it on every pull request. When the
-   repository already declares an ordinary gate (a factory's `harness/ci.py` reading
-   `harness/harness.config.json`, a `validate` script, a Makefile target), the first
-   ticket makes that declared gate pass rather than inventing a parallel one. Say all
-   of that in the ticket body, and say plainly that this ticket establishes the
-   project's checks: it adds tests and the CI workflow and loosens nothing, which is
-   the side of a "do not modify the judge" invariant that is always allowed. Name
-   in that ticket the exact start command as an argv line with a port placeholder
-   (for example `python3 app.py --port <port>`), the health path and the build-id
-   path, and where the app keeps its state (a path or environment variable): the
-   operator wires runtime verification from those words before the ticket is built,
-   and the implementer honors them. In an existing codebase that already has these,
-   the first ticket is simply the first story.
+1. **The first ticket is the smallest runnable, testable product increment.** It
+   establishes the core path appropriate to this project: a library can expose and
+   test its first useful API, a CLI can execute one real command, a desktop app can
+   open one working flow, and a service can serve one useful request. Use the
+   project's declared build, test, CI, runtime, and evidence requirements. Do not
+   invent a server, port, health endpoint, build identity, persistence layer, or CI
+   system when the product and project guidance do not require one. In an existing
+   codebase, the first ticket is the first unmet story that leaves declared checks
+   passing.
 2. **Each ticket is one reviewable change** that leaves the product working.
-3. **Nothing from the mission's out-of-scope list**, and nothing that contradicts an
-   invariant. If the document asks for such a thing, leave it out and say so.
+3. **Honor declared scope and invariants.** If the document conflicts with current
+   project guidance, leave the conflicting work out and say so.
 4. **Order by dependency, then by value.** Earlier tickets never depend on later ones.
 5. **Stop at the bound.** When the document holds more than the bound, keep the
    tickets that build the core path and the most valuable capabilities, and end the

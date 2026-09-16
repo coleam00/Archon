@@ -5,7 +5,8 @@ description: |
   stale assumptions, and explicit direction; then routes to investigate, plan,
   deliver, or no action, and judges whether the item is a usable contract
   (READY, NEEDS_CONTRACT_WORK, BLOCKED, NO_ACTION) beside the route. Proposes
-  labels and, for NEEDS_CONTRACT_WORK, the edits that would make it ready.
+  caller-owned state labels and, for NEEDS_CONTRACT_WORK, the edits that would
+  make it ready.
   Advisory: it leaves the checkout unchanged and never writes to the tracker
   unless `publish` is explicitly set.
 
@@ -26,9 +27,15 @@ inputs:
   publish:
     default: "false"
     description: >-
-      "true" writes the proposed label set to the resolved GitHub issue
-      (creating any of the five pack labels that do not already exist) and
-      reads them back. "false" stays advisory; other values are rejected.
+      "true" writes configured state labels and proposed existing area labels
+      to the resolved GitHub issue and reads them back. "false" stays advisory;
+      other values are rejected.
+  state_labels:
+    default: "{}"
+    description: >-
+      JSON object mapping any of READY, DESIGN_FIRST, NEEDS_CONTRACT_WORK,
+      BLOCKED, and NO_ACTION to caller-owned GitHub label names. Empty means no
+      state label. Values must be distinct; malformed mappings are rejected.
 
 returns: validate-contract
 
@@ -109,3 +116,4 @@ nodes:
     with:
       triage: "$triage.output"
       publish: "$INPUTS.publish"
+      state_labels: "$INPUTS.state_labels"

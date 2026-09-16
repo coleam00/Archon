@@ -310,11 +310,15 @@ describe('bundled-defaults', () => {
       const triage = parsed.workflow.nodes.find(node => node.id === 'triage');
       expect(triage?.kind).toBe('include');
       if (triage?.kind !== 'include') throw new Error('triage is not an include');
-      expect(triage.with).toEqual({ target: '$INPUTS.target' });
+      expect(triage.with).toEqual({
+        target: '$INPUTS.target',
+        publish: '$INPUTS.publish',
+        state_labels: '$INPUTS.state_labels',
+      });
 
       const triageCommand = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:triage::triage'];
       expect(triageCommand).toContain('Write `$ARTIFACTS_DIR/triage.md`');
-      expect(triageCommand).toContain('**Source and outcome** — what was requested');
+      expect(triageCommand).toContain('**Source and outcome** - what was requested');
 
       const downstreamBindings = [
         { id: 'inv', input: 'target' },
@@ -333,6 +337,44 @@ describe('bundled-defaults', () => {
       }
 
       expect(content).not.toContain('Original work item:');
+    });
+
+    it('propagates caller-owned state labels and hold publication through lifecycle composition', () => {
+      const lifecycle = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-lifecycle'],
+        'archon-lifecycle.yaml'
+      );
+      if (lifecycle.workflow === null) throw new Error(lifecycle.error.error);
+      expect(lifecycle.workflow.inputs?.state_labels?.default).toBe('{}');
+      expect(lifecycle.workflow.inputs?.publish_holds?.default).toBe('false');
+
+      const intake = lifecycle.workflow.nodes.find(node => node.id === 'intake');
+      expect(intake?.kind).toBe('exec');
+      if (intake?.kind !== 'exec') throw new Error('intake is not an exec node');
+      expect(intake?.with).toMatchObject({ state_labels: '$INPUTS.state_labels' });
+      const ship = lifecycle.workflow.nodes.find(node => node.id === 'ship');
+      expect(ship?.kind).toBe('include');
+      if (ship?.kind !== 'include') throw new Error('ship is not an include');
+      expect(ship?.with).toMatchObject({ state_labels: '$INPUTS.state_labels' });
+      const merge = lifecycle.workflow.nodes.find(node => node.id === 'merge');
+      expect(merge?.kind).toBe('include');
+      if (merge?.kind !== 'include') throw new Error('merge is not an include');
+      expect(merge?.with).toMatchObject({ publish_holds: '$INPUTS.publish_holds' });
+
+      const mergeQueue = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-merge-queue'],
+        'archon-merge-queue.yaml'
+      );
+      if (mergeQueue.workflow === null) throw new Error(mergeQueue.error.error);
+      const assessment = mergeQueue.workflow.nodes.find(node => node.id === 'assess');
+      expect(assessment?.kind).toBe('agent');
+      if (assessment?.kind !== 'agent' || assessment.source.kind !== 'command') {
+        throw new Error('assessment is not a command agent');
+      }
+      expect(assessment.source.with).toMatchObject({
+        mode: '$INPUTS.mode',
+        publish_holds: '$INPUTS.publish_holds',
+      });
     });
 
     it('archon-deliver preserves the conditional-lens bindings', () => {

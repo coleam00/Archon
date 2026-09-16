@@ -1,9 +1,4 @@
-"""Validate the judgment, then optionally publish and verify labels.
-
-One standalone script owns the tuple and pack labels because bundled scripts
-are materialized independently. gh is the interim boundary permitted by #3212;
-the forthcoming forge work-item operation should absorb publication.
-"""
+"""Validate the judgment, then optionally map, publish, and verify labels."""
 
 import json
 import os
@@ -14,16 +9,15 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 
-STATE_LABELS = {
-    "READY": ("archon-ready", "0e8a16", "Archon: contract is ready for engineering"),
-    "NEEDS_CONTRACT_WORK": ("archon-needs-contract", "d93f0b", "Archon: contract needs work"),
-    "DESIGN_FIRST": ("archon-design-first", "fbca04", "Archon: engineering shape needs design"),
-    "BLOCKED": ("archon-blocked", "b60205", "Archon: unresolved dependency or decision"),
-    "NO_ACTION": ("archon-close", "cfd3d7", "Archon: a human should consider closing"),
+STATE_LABEL_METADATA = {
+    "READY": ("0e8a16", "Contract is ready for engineering"),
+    "NEEDS_CONTRACT_WORK": ("d93f0b", "Contract needs work"),
+    "DESIGN_FIRST": ("fbca04", "Engineering shape needs design"),
+    "BLOCKED": ("b60205", "Unresolved dependency or decision"),
+    "NO_ACTION": ("cfd3d7", "A human should consider closing"),
 }
-PACK_LABELS = {entry[0] for entry in STATE_LABELS.values()}
 ROUTES = ("investigate", "plan", "deliver", "no_action")
-CONTRACTS = tuple(key for key in STATE_LABELS if key != "DESIGN_FIRST")
+CONTRACTS = tuple(key for key in STATE_LABEL_METADATA if key != "DESIGN_FIRST")
 COMPLEXITIES = ("small_bounded", "risky", "large")
 
 
@@ -39,7 +33,25 @@ def qualified_url(value) -> bool:
     return url.scheme in ("http", "https") and bool(url.hostname) and not url.username and not url.password
 
 
-def validate(triage: dict, artifacts: str) -> None:
+def parse_state_labels(raw: str) -> dict[str, str]:
+    value = json.loads(raw)
+    require(isinstance(value, dict), "state_labels must be a JSON object")
+    require(all(key in STATE_LABEL_METADATA for key in value),
+            "state_labels contains an unsupported state")
+    require(all(isinstance(label, str) and label.strip() == label and 0 < len(label) <= 50
+                and not any(ord(char) < 32 for char in label) for label in value.values()),
+            "state_labels values must be non-empty GitHub label names")
+    folded = [label.casefold() for label in value.values()]
+    require(len(folded) == len(set(folded)),
+            "state_labels must not map multiple states to the same label")
+    return value
+
+
+def selected_state(triage: dict) -> str:
+    return "DESIGN_FIRST" if triage.get("design_first") else triage["contract"]
+
+
+def validate(triage: dict, artifacts: str, state_labels: dict[str, str]) -> None:
     report = Path(artifacts) / "triage.md"
     require(report.is_file() and bool(report.read_text(encoding="utf-8").strip()),
             "no triage.md evidence: a route without evidence is not a triage")
@@ -77,10 +89,11 @@ def validate(triage: dict, artifacts: str) -> None:
     labels = triage.get("labels")
     require(isinstance(labels, list) and all(isinstance(v, str) and v.strip() for v in labels),
             "labels must be an array of non-empty strings")
-    require(len(labels) == len(set(labels)), "labels must not contain duplicates")
-    expected = STATE_LABELS["DESIGN_FIRST" if design_first else contract][0]
-    require([label for label in labels if label in PACK_LABELS] == [expected],
-            f"labels must contain exactly the pack label {expected!r}")
+    folded_labels = [label.casefold() for label in labels]
+    require(len(folded_labels) == len(set(folded_labels)), "labels must not contain duplicates")
+    owned = {label.casefold() for label in state_labels.values()}
+    require(not any(label.casefold() in owned for label in labels),
+            "the triage agent must not propose caller-owned state labels")
     repo, number, url = triage["issue_repo"], triage.get("issue_number"), triage["issue_url"]
     require(type(number) is int and number >= 0, "issue_number must be a non-negative integer")
     if repo or number or url:
@@ -115,7 +128,7 @@ def read_issue(endpoint: str, triage: dict) -> set[str]:
     return label_names(issue.get("labels"))
 
 
-def publish(triage: dict) -> dict:
+def publish(triage: dict, state_labels: dict[str, str]) -> dict:
     repo, number = triage["issue_repo"], triage["issue_number"]
     result = {"published": False, "applied_labels": [], "skipped_labels": []}
     # Prose, unsupported trackers and refused multi-item input have no write target.
@@ -126,24 +139,38 @@ def publish(triage: dict) -> dict:
     pages = gh(["api", "--hostname", "github.com", f"repos/{repo}/labels?per_page=100", "--paginate", "--slurp"])
     require(isinstance(pages, list), "forge label pages must be an array")
     existing = set().union(*(label_names(page) for page in pages))
-    for name, color, description in STATE_LABELS.values():
-        if name not in existing:
+    existing_by_folded = {name.casefold(): name for name in existing}
+    for state, name in state_labels.items():
+        color, description = STATE_LABEL_METADATA[state]
+        if name.casefold() not in existing_by_folded:
             gh(["api", "--hostname", "github.com", f"repos/{repo}/labels", "--method", "POST", "--input", "-"],
                {"name": name, "color": color, "description": description})
-    accepted = [label for label in triage["labels"] if label in PACK_LABELS or label in existing]
-    target = (current - PACK_LABELS) | set(accepted)
-    additions = set(accepted) - current
+    accepted = [existing_by_folded[label.casefold()] for label in triage["labels"]
+                if label.casefold() in existing_by_folded]
+    state_label = state_labels.get(selected_state(triage))
+    if state_label is not None:
+        accepted.append(state_label)
+    owned = {label.casefold() for label in state_labels.values()}
+    current_folded = {label.casefold() for label in current}
+    additions = {label for label in accepted if label.casefold() not in current_folded}
     if additions:
         # Narrow mutations preserve unrelated labels added since the read.
         gh(["api", "--hostname", "github.com", f"{endpoint}/labels", "--method", "POST", "--input", "-"],
            {"labels": sorted(additions)})
-    for label in sorted((current & PACK_LABELS) - set(accepted)):
+    desired_owned = set() if state_label is None else {state_label.casefold()}
+    for label in sorted(label for label in current
+                        if label.casefold() in owned and label.casefold() not in desired_owned):
         gh(["api", "--hostname", "github.com", f"{endpoint}/labels/{quote(label, safe='')}", "--method", "DELETE"])
     actual = read_issue(endpoint, triage)
-    require(target <= actual and actual & PACK_LABELS == target & PACK_LABELS,
-            "label read-back mismatch: proposed or unrelated labels missing, or stale pack labels remain; writes may have completed")
+    actual_folded = {label.casefold() for label in actual}
+    unrelated = {label.casefold() for label in current if label.casefold() not in owned}
+    require(unrelated <= actual_folded
+            and {label.casefold() for label in accepted} <= actual_folded
+            and {label.casefold() for label in actual if label.casefold() in owned} == desired_owned,
+            "label read-back mismatch: proposed or unrelated labels missing, or stale owned labels remain; writes may have completed")
     return {"published": True, "applied_labels": accepted,
-            "skipped_labels": [label for label in triage["labels"] if label not in accepted]}
+            "skipped_labels": [label for label in triage["labels"]
+                               if label.casefold() not in existing_by_folded]}
 
 
 def main() -> int:
@@ -151,11 +178,15 @@ def main() -> int:
     sys.stderr.reconfigure(encoding="utf-8", newline="\n")
     try:
         triage = json.loads(os.environ["INPUTS_TRIAGE"])
-        validate(triage, os.environ["ARTIFACTS_DIR"])
+        state_labels = parse_state_labels(os.environ.get("INPUTS_STATE_LABELS", "{}"))
+        validate(triage, os.environ["ARTIFACTS_DIR"], state_labels)
         enabled = os.environ.get("INPUTS_PUBLISH", "false")
         require(enabled in ("true", "false"), "publish must be true or false")
-        triage["publication"] = (publish(triage) if enabled == "true" else
+        triage["publication"] = (publish(triage, state_labels) if enabled == "true" else
                                  {"published": False, "applied_labels": [], "skipped_labels": []})
+        mapped = state_labels.get(selected_state(triage))
+        if mapped is not None:
+            triage["labels"].append(mapped)
         print(json.dumps(triage, separators=(",", ":")))
         return 0
     except (ValueError, KeyError, OSError, subprocess.TimeoutExpired) as error:

@@ -17,11 +17,15 @@ $ARGUMENTS
 3. Run what applies, in the project's own order where one is documented: type checks, lint, tests, build. Honor any documented aggregate gate (a `validate`/`check` script) over reassembling its pieces by hand.
 4. Capture each command and its outcome as you go.
 
-Only run ordinary project checks. Inspect aggregate scripts and their delegates
-before execution: never invoke a factory gate, agentcheck runner, provider agent,
-or workflow launcher from validation. Use the project's declared ordinary check
-commands directly when an aggregate includes those operations. If no ordinary
-check can be separated, report the gate as unavailable, not healthy.
+Run the project's applicable declared checks, including bounded AI integration
+tests when the project genuinely includes them. Do not recursively launch this
+validation workflow, its enclosing delivery workflow, or another command whose
+purpose is to re-enter the same validation/delivery orchestration. Inspect
+aggregate scripts and their delegates before execution; if an aggregate would
+re-enter this orchestration, run its separable project checks directly. If no
+applicable check can be separated, report the gate as unavailable, not healthy.
+Caller guidance and `scope` may exclude expensive project-specific stages, but
+never silently bypass a check that remains in the declared validation scope.
 
 ## The object under validation is the tracked tree
 

@@ -5,7 +5,7 @@ triage: &judgment
   design_first: true
   complexity: "large"
   proposed_edits: {"title":"","body":""}
-  labels: ["archon-design-first"]
+  labels: []
   blocked_by: []
   issue_repo: ""
   issue_number: 0

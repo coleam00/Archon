@@ -25,7 +25,7 @@ If the target names or implies more than one distinct work item - several issue
 numbers, a batch request, "triage these" - refuse to pick a route or a contract
 verdict for any of them. Set `route` to `no_action` and `contract` to
 `NO_ACTION`, leave `design_first` false, `proposed_edits` to `{"title":"","body":""}`, `blocked_by` to `[]`,
-`blocked_reason` to an empty string, `labels` to `["archon-close"]`, and `issue_repo`/`issue_url` empty and `issue_number` to `0`.
+`blocked_reason` to an empty string, `labels` to `[]`, and `issue_repo`/`issue_url` empty and `issue_number` to `0`.
 Write which items you found and that this run declines to choose among them to
 `triage.md`, and say so in `summary`. A sweep over many items is a later slice,
 not this run improvising one.
@@ -117,20 +117,13 @@ honest best estimate even when the contract is not yet `READY`.
 
 ## Propose labels
 
-Propose exactly one pack state label from this table, plus matching existing area labels:
-
-| `contract` | `design_first` | label |
-|---|---|---|
-| `READY` | `false` | `archon-ready` |
-| `READY` | `true` | `archon-design-first` |
-| `NEEDS_CONTRACT_WORK` | - | `archon-needs-contract` |
-| `BLOCKED` | - | `archon-blocked` |
-| `NO_ACTION` | - | `archon-close` |
-
 Add any of the repository's existing area labels that plainly match this item.
 Read the labels the repository already has and reuse them; never invent one or
-propose creating an area label. Ordering and applying labels is a later
-deterministic step - you only propose the set.
+propose creating an area label. Do not choose or propose a workflow state label:
+the deterministic owner maps your contract and `design_first` judgments through
+the caller's optional `state_labels` input. With no mapping, the result has no
+state label. Ordering and applying labels is a later deterministic step - you
+only propose the area-label set.
 
 When `contract` is `BLOCKED`, explain the unresolved dependency or external
 decision in `blocked_reason`. Put verified, fully qualified blocker URLs in

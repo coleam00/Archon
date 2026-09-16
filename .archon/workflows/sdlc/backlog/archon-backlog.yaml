@@ -4,8 +4,8 @@ description: >-
   slices the PRD into tickets that each pass triage's contract test, with the
   first ticket making the product runnable end to end; a deterministic check
   validates the slice; publication uses gh with a dedup marker so re-running
-  never creates a duplicate issue. This is how a factory starts from nothing:
-  the PRD is the only input.
+  never creates a duplicate issue. The product document and project guidance
+  supply the requirements.
 model: large
 interactive: true
 mutates_checkout: false
