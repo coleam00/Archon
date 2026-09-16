@@ -679,15 +679,28 @@ function parseDagNode(
     getLog().warn({ id: node.id }, 'node_on_timeout_ignored');
   }
 
-  // Warn about AI-specific fields on non-AI nodes (runtime behavior, not schema errors)
+  // Warn about AI-specific fields the node's kind drops (runtime behavior, not schema
+  // errors). This goes through `warnings` and not only the log: until #3324 the drop was
+  // announced by a pino line alone, which `archon validate workflows` and `archon
+  // workflow list` never render — so an author who declared `denied_tools:` on a `loop:`
+  // node saw a clean validation and ran unrestricted. Every other ignored-field notice in
+  // this function already uses both channels; this one is now the same.
   const nonAiNode = ignoredFieldsForNode(node);
   if (nonAiNode) {
     const presentAiFields = nonAiNode.fields.filter(
       f => (raw as Record<string, unknown>)[f] !== undefined
     );
     if (presentAiFields.length > 0) {
+      const quoted = presentAiFields.map(f => `'${f}'`).join(', ');
+      const plural = presentAiFields.length > 1;
+      const message =
+        `Node '${id}': ${quoted} ${plural ? 'are' : 'is'} not supported on this node type ` +
+        `(${nonAiNode.type}) — ${plural ? 'they are' : 'it is'} ignored at run time.`;
+      warnings.push(message);
+      // Keep `fields` structured for log consumers, and carry the prose the way
+      // `pushUnknownKeyWarning` does so the run path (#2213) reports the same text.
       getLog().warn(
-        { id: node.id, fields: presentAiFields },
+        { id: node.id, fields: presentAiFields, warning: message },
         `${nonAiNode.type}_node_ai_fields_ignored`
       );
     }

@@ -8803,6 +8803,53 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(options.outputFormat).toEqual({ type: 'json_schema', schema: untilFieldSchema });
     });
 
+    it("applies a loop node's tool restrictions to every iteration (#3324)", async () => {
+      // The whole chain, not the executor alone: the authored YAML shape goes through
+      // the same `dagNodeSchema` transform the loader uses, because that transform is
+      // where the restriction used to be discarded. The provider receives the node
+      // config on each iteration's sendQuery and translates it (Claude
+      // `disallowedTools`, Copilot `excludedTools`, Pi's tool set).
+      let iterations = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        iterations += 1;
+        yield {
+          type: 'assistant',
+          content: iterations === 1 ? 'Still working.' : 'Done. <promise>COMPLETE</promise>',
+        };
+        yield { type: 'result', sessionId: `loop-tools-sess-${String(iterations)}` };
+      });
+
+      const loopNode = dagNodeSchema.parse({
+        id: 'my-loop',
+        denied_tools: ['WebFetch', 'WebSearch'],
+        allowed_tools: ['Read', 'Grep'],
+        loop: {
+          fresh_context: false,
+          prompt: 'Do a task. When done, output <promise>COMPLETE</promise>.',
+          until: 'COMPLETE',
+          max_iterations: 4,
+        },
+      }) as DagNode;
+
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: { name: 'dag-loop-denied-tools', nodes: [loopNode] },
+          workflowRun: makeWorkflowRun('loop-denied-tools-run'),
+        })
+      );
+
+      expect(iterations).toBe(2);
+      expect(mockSendQueryDag.mock.calls).toHaveLength(2);
+      for (const call of mockSendQueryDag.mock.calls) {
+        const iterationOptions = call[3] as SendQueryOptions;
+        expect(iterationOptions.nodeConfig?.denied_tools).toEqual(['WebFetch', 'WebSearch']);
+        expect(iterationOptions.nodeConfig?.allowed_tools).toEqual(['Read', 'Grep']);
+      }
+    });
+
     it('fails rather than degrading when a payload never satisfies the schema', async () => {
       // A string "true" is not a boolean: ajv rejects it, so this is a validation
       // miss, NOT a quiet "not complete yet" that would burn max_iterations.
