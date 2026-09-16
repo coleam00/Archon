@@ -455,6 +455,52 @@ function generateConversationId(): string {
 }
 
 /**
+ * The conversation this invocation writes to.
+ *
+ * A caller that already knows the thread passes it (approve, respond, and the owner's
+ * automatic wait-resume all do). A continuation that does not — `workflow resume <id>`
+ * and `run <name> --resume` — inherits the one its run already has (#3328): the run
+ * row's `conversation_id` is the single record of which thread the run belongs to, and
+ * it is written once at creation, so minting a fresh conversation here does not move
+ * the run. It only sends the resumed segment somewhere the run never references, and
+ * the run's own thread stops at the pause.
+ *
+ * The row holds a database id; `getOrCreateConversation` keys on the platform id, which
+ * is why this resolves through the conversation rather than using the field directly.
+ *
+ * A run whose conversation cannot be read falls through to a generated id, because a
+ * resume that still runs in a new thread beats a resume that refuses to run.
+ */
+async function resolveRunConversationId(
+  options: WorkflowRunOptions,
+  continuationRun: WorkflowRun | undefined
+): Promise<string> {
+  if (options.conversationId !== undefined) return options.conversationId;
+  if (continuationRun !== undefined) {
+    try {
+      const conversation = await conversationDb.getConversationById(
+        continuationRun.conversation_id
+      );
+      if (conversation) return conversation.platform_conversation_id;
+      getLog().info(
+        { runId: continuationRun.id, conversationId: continuationRun.conversation_id },
+        'cli.workflow_continuation_conversation_not_found'
+      );
+    } catch (error) {
+      getLog().warn(
+        {
+          err: error as Error,
+          runId: continuationRun.id,
+          conversationId: continuationRun.conversation_id,
+        },
+        'cli.workflow_continuation_conversation_lookup_failed'
+      );
+    }
+  }
+  return generateConversationId();
+}
+
+/**
  * Build the argv for the detached re-invoke. Pure (no spawn / no process reads)
  * so both the dev (bun + entry script) and compiled-binary (execPath only)
  * branches are unit-testable — the binary branch is otherwise unreachable in
@@ -2109,7 +2155,7 @@ async function runWorkflowWithOwnedSource(
       assertComposedGateDriveable(workflow.nodes);
     }
 
-    const childConversationId = options.conversationId ?? generateConversationId();
+    const childConversationId = await resolveRunConversationId(options, continuationRun);
     const extraArgs: string[] = [];
     let pinnedBranch: string | undefined;
 
@@ -2266,7 +2312,8 @@ async function runWorkflowWithOwnedSource(
       pinnedBranch = `${workflowName}-${String(Date.now())}`;
       extraArgs.push('--branch', pinnedBranch);
     }
-    // Pin the conversation id only when generated (an explicit one is already in argv).
+    // Pin the conversation id this process resolved — generated, or inherited from the
+    // run being continued. An explicit one is already in argv, so it needs no pin.
     if (options.conversationId === undefined) {
       extraArgs.push('--conversation-id', childConversationId);
     }
@@ -2380,8 +2427,8 @@ async function runWorkflowWithOwnedSource(
   // Create CLI adapter
   const adapter = new CLIAdapter();
 
-  // Generate conversation ID
-  const conversationId = options.conversationId ?? generateConversationId();
+  // The caller's thread, the continued run's own thread, or a new one — in that order.
+  const conversationId = await resolveRunConversationId(options, continuationRun);
 
   // Get or create conversation in database
   let conversation;
