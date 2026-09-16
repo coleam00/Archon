@@ -31,9 +31,13 @@ interface Fixture {
   archonHome: string;
 }
 
-/** `settle` succeeds and `boom` fails, which is what leaves a run that can be resumed. */
 const WORKFLOW_NAME = 'resume-thread';
 
+/**
+ * A repo, a scratch `ARCHON_HOME`, and a workflow where `settle` succeeds and `boom`
+ * fails. A run with no completed node is refused for an unrelated reason, so the pair
+ * is what leaves a run a resume can actually continue.
+ */
 function makeFixture(): Fixture {
   const root = mkdtempSync(join(tmpdir(), 'archon-resume-conversation-'));
   cleanupPaths.push(root);
