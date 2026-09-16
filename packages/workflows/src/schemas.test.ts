@@ -1391,10 +1391,12 @@ describe('LOOP_NODE_AI_FIELDS', () => {
 //
 // LOOP_NODE_AI_FIELDS and the transform's loop branch are two declarations that
 // have to agree: the list is what the loader tells the author is dropped, the
-// branch is what actually survives. #3324 is what disagreement costs — a
-// declared `denied_tools:` was dropped at parse, so four production loop nodes
-// ran unrestricted for two months. These tests bind the pair field-by-field so
-// the next field added to either side cannot quietly mean two things.
+// branch is what actually survives. A tool restriction dropped at parse is
+// fail-open — the iterations run unscoped, and a loop node has no workflow-level
+// restriction to fall back on (#3324). `allowed_tools: []` on a loop node is an
+// authored pattern in this repo, and it means "no tools", so dropping it is the
+// widest possible failure. These tests bind the pair field-by-field so the next
+// field added to either side cannot quietly mean two things.
 // ---------------------------------------------------------------------------
 
 describe('dagNodeSchema — LoopNode AI-field survival', () => {
