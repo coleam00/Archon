@@ -98,6 +98,20 @@ interface ThreadState {
 }
 
 /**
+ * Open the fixture database for reading, willing to wait out a writer.
+ *
+ * The detached case reads while its child is still running, so a bare open raced the
+ * child's own writes and failed with `SQLITE_BUSY` on a loaded CI runner. The timeout
+ * is what makes these reads observations of a live database rather than a gamble on
+ * landing between two transactions.
+ */
+function openDatabase(fixture: Fixture): Database {
+  const database = new Database(join(fixture.archonHome, 'archon.db'), { readonly: true });
+  database.exec('PRAGMA busy_timeout = 15000');
+  return database;
+}
+
+/**
  * The run's thread as the database records it.
  *
  * Reads every conversation row, not just the run's, because the defect is an EXTRA
@@ -105,8 +119,7 @@ interface ThreadState {
  * second thread collected the resumed output.
  */
 function readThreadState(fixture: Fixture): ThreadState {
-  // No concurrent writer: each CLI invocation above is a finished synchronous child.
-  const database = new Database(join(fixture.archonHome, 'archon.db'), { readonly: true });
+  const database = openDatabase(fixture);
   try {
     const run = database
       .query<
@@ -145,7 +158,7 @@ function readThreadState(fixture: Fixture): ThreadState {
  * ack both speak the platform id, so comparing the two needs this hop.
  */
 function readPlatformConversationId(fixture: Fixture, conversationId: string): string {
-  const database = new Database(join(fixture.archonHome, 'archon.db'), { readonly: true });
+  const database = openDatabase(fixture);
   try {
     const row = database
       .query<
@@ -193,16 +206,27 @@ function seedFailedRun(fixture: Fixture): ThreadState {
  * waiting on the run's own thread would turn the defect into a timeout, which reads as
  * a flaky test rather than as a wrong thread.
  */
-async function waitForDetachedDispatch(fixture: Fixture): Promise<void> {
+async function waitForDetachedDispatch(fixture: Fixture): Promise<ThreadState> {
   const deadline = Date.now() + 60_000;
+  let lastError: unknown;
   for (;;) {
-    const state = readThreadState(fixture);
-    if (state.dispatchMessagesAnywhere >= 2) return;
+    let state: ThreadState | undefined;
+    try {
+      state = readThreadState(fixture);
+      if (state.dispatchMessagesAnywhere >= 2) return state;
+    } catch (error) {
+      // The child owns the database while it runs. `busy_timeout` waits out a held
+      // lock, but this loop is already a retry, so a read that still gives up is a
+      // reason to look again rather than to fail the test.
+      lastError = error;
+    }
     if (Date.now() > deadline) {
       throw new Error(
-        `the detached child never announced its resume: run status ${state.runStatus}, ` +
-          `${String(state.dispatchMessagesAnywhere)} dispatch message(s) across ` +
-          `${String(state.conversationIds.length)} conversation(s)`
+        state
+          ? `the detached child never announced its resume: run status ${state.runStatus}, ` +
+              `${String(state.dispatchMessagesAnywhere)} dispatch message(s) across ` +
+              `${String(state.conversationIds.length)} conversation(s)`
+          : `the fixture database stayed unreadable: ${String(lastError)}`
       );
     }
     await Bun.sleep(100);
@@ -217,8 +241,7 @@ async function waitForDetachedDispatch(fixture: Fixture): Promise<void> {
  * the run's own thread is the positive evidence that the output landed there rather
  * than merely that no extra row appeared.
  */
-function expectResumedInPlace(fixture: Fixture, before: ThreadState): void {
-  const after = readThreadState(fixture);
+function expectResumedInPlace(after: ThreadState, before: ThreadState): void {
   expect(after.runId).toBe(before.runId);
   expect(after.runConversationId).toBe(before.runConversationId);
   expect(after.conversationIds).toEqual(before.conversationIds);
@@ -235,7 +258,7 @@ describe('resumed runs keep one conversation', () => {
     // same state it started in and the only thing under test is where the output went.
     expect(resumed.output).toContain("Bash node 'boom' failed");
 
-    expectResumedInPlace(fixture, before);
+    expectResumedInPlace(readThreadState(fixture), before);
   }, 120_000);
 
   test('workflow run <name> --resume continues the run existing thread', async () => {
@@ -253,7 +276,7 @@ describe('resumed runs keep one conversation', () => {
     ]);
     expect(resumed.output).toContain("Bash node 'boom' failed");
 
-    expectResumedInPlace(fixture, before);
+    expectResumedInPlace(readThreadState(fixture), before);
   }, 120_000);
 
   // The detached launch is the one form where the id is not used in this process: the
@@ -262,6 +285,9 @@ describe('resumed runs keep one conversation', () => {
   test('workflow run <name> --resume --detach hands the child the run existing thread', async () => {
     const fixture = makeFixture();
     const before = seedFailedRun(fixture);
+    // Read before the launch: nothing is writing yet, and the thread the ack must name
+    // is already decided.
+    const platformConversationId = readPlatformConversationId(fixture, before.runConversationId);
 
     const launched = runCli(fixture, [
       'workflow',
@@ -280,9 +306,10 @@ describe('resumed runs keep one conversation', () => {
     // The ack is the launch's public contract: it tells an automation which run and which
     // thread the background work belongs to, so both must name what already exists.
     expect(ack.runId).toBe(before.runId);
-    expect(ack.conversationId).toBe(readPlatformConversationId(fixture, before.runConversationId));
+    expect(ack.conversationId).toBe(platformConversationId);
 
-    await waitForDetachedDispatch(fixture);
-    expectResumedInPlace(fixture, before);
+    // The snapshot the wait already took: at that point the conversation rows are final,
+    // so asserting on it beats a second read that would race the child to its exit.
+    expectResumedInPlace(await waitForDetachedDispatch(fixture), before);
   }, 120_000);
 });
