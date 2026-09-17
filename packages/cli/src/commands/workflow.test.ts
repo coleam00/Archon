@@ -10835,6 +10835,7 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
 
     const workflowsDb = require('@archon/core/db/workflows');
     (workflowsDb.failWorkflowRun as ReturnType<typeof mock>).mockClear();
+    (workflowsDb.cancelWorkflowRun as ReturnType<typeof mock>).mockClear();
     (workflowsDb.getActiveWorkflowRun as ReturnType<typeof mock>).mockClear();
     (workflowsDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockReset();
     (workflowsDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValue(null);
@@ -10906,10 +10907,11 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
 
     // Paused-at-gate is an external transition the signal handler must respect.
     expect(workflowsDb.failWorkflowRun).not.toHaveBeenCalled();
+    expect(workflowsDb.cancelWorkflowRun).not.toHaveBeenCalled();
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
-  it('still fails the run on a genuine mid-run interrupt (legacy behavior)', async () => {
+  it('cancels (not fails) the run on a genuine mid-run interrupt — an operator stop is not an execution failure', async () => {
     const workflowsDb = require('@archon/core/db/workflows');
     (workflowsDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValue('running');
     const shutdownOrder: string[] = [];
@@ -10942,11 +10944,47 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
       'Workflow failed'
     );
 
-    expect(workflowsDb.failWorkflowRun).toHaveBeenCalledWith(
-      'test-run-id',
-      'Process terminated (SIGTERM)'
-    );
+    expect(workflowsDb.cancelWorkflowRun).toHaveBeenCalledWith('test-run-id', {
+      reason: 'Process terminated (SIGTERM)',
+    });
+    expect(workflowsDb.failWorkflowRun).not.toHaveBeenCalled();
     expect(shutdownOrder).toEqual(['owner-close', 'exit']);
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('is a no-op and does not throw when cancel is signalled twice (double Ctrl-C)', async () => {
+    const workflowsDb = require('@archon/core/db/workflows');
+    (workflowsDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValue('running');
+
+    const sigtermBefore = process.listeners('SIGTERM');
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
+      capturedSubscribeHandler?.({
+        type: 'workflow_started',
+        runId: 'run-1',
+        workflowName: 'plan',
+        conversationId: 'conv-1',
+        transcriptPath: '/logs/run-1.jsonl',
+      });
+      const [handler] = addedSigtermListeners(sigtermBefore);
+      expect(handler).toBeDefined();
+      // Double-signal: the CLI's own `terminating` guard makes the second
+      // invocation a no-op before it ever reaches the database — and even if
+      // that guard were bypassed, cancelWorkflowRun is idempotent and would
+      // return { cancelled: false } instead of throwing a CAS miss.
+      handler();
+      handler();
+      await settleCleanup();
+      return { success: false, workflowRunId: 'run-1', error: 'interrupted' };
+    });
+
+    setupWorkflowMocks();
+    await expect(workflowRunCommand('/test/path', 'plan', 'hello', {})).rejects.toThrow(
+      'Workflow failed'
+    );
+
+    expect(workflowsDb.cancelWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(workflowsDb.failWorkflowRun).not.toHaveBeenCalled();
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
@@ -11027,10 +11065,10 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
     setupWorkflowMocks();
     await workflowRunCommand('/test/path', 'plan', 'hello', {});
 
-    expect(workflowsDb.failWorkflowRun).toHaveBeenCalledWith(
-      'test-run-id',
-      'Process terminated (SIGTERM)'
-    );
+    expect(workflowsDb.cancelWorkflowRun).toHaveBeenCalledWith('test-run-id', {
+      reason: 'Process terminated (SIGTERM)',
+    });
+    expect(workflowsDb.failWorkflowRun).not.toHaveBeenCalled();
     expect(workflowsDb.getActiveWorkflowRun).not.toHaveBeenCalled();
     expect(exitSpy).toHaveBeenCalledWith(1);
   });

@@ -3008,11 +3008,17 @@ async function runWorkflowWithOwnedSource(
         );
         return;
       }
-      // Genuine interrupt of the run this process is driving. failWorkflowRun's
-      // own status='running' CAS closes the read-then-write window: if the
-      // executor commits a gate pause between the read above and this write,
-      // the CAS misses and throws (caught below) — the run stays paused.
-      await workflowDb.failWorkflowRun(interruptedRunId, `Process terminated (${signal})`);
+      // Genuine interrupt of the run this process is driving. An operator
+      // stopping a run is not an execution failure, so it is recorded as
+      // 'cancelled'. cancelWorkflowRun's `status NOT IN ('completed',
+      // 'cancelled')` guard also closes the read-then-write window above
+      // idempotently: a second signal (SIGINT then SIGTERM), or the executor
+      // committing a gate pause between the read and this write, is a safe
+      // no-op returning { cancelled: false } rather than a thrown CAS miss.
+      // failWorkflowRun stays reserved for genuine execution failures.
+      await workflowDb.cancelWorkflowRun(interruptedRunId, {
+        reason: `Process terminated (${signal})`,
+      });
     })()
       .catch((err: unknown) => {
         const e = err as Error;
