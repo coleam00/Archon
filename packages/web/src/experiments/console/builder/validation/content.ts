@@ -1,8 +1,19 @@
 /**
  * Content validation: scan text bodies for `$<nodeId>.output` references that
  * point outside the node's transitive upstream set, and verify each `when:`
- * expression parses and references only upstream nodes. Code spans are stripped
- * first so referenced ids inside fenced/inline code are not flagged.
+ * expression parses and references only upstream nodes.
+ *
+ * Bodies are scanned RAW, backticks included. The engine substitutes every
+ * reference verbatim and fails the load on an unknown one wherever it sits
+ * (`validateDagStructure` in packages/workflows/src/loader.ts: "runtime
+ * substitution is syntax-agnostic, so this scan checks each text slot
+ * verbatim"). So a ref inside a fence, inside inline backticks, or inside a
+ * `script:` body's JavaScript template literal is live, and earns the same
+ * diagnostic as one in prose.
+ *
+ * Stripping code spans first is the tempting alternative, and it is wrong: it
+ * reads a ref the runtime will substitute as documentation, and buys the author
+ * silence here in exchange for a hard load error at save (#2632).
  *
  * `content.var.unknown` is a deliberately conservative heuristic: it requires
  * the referenced node to be reachable via explicit `depends_on` edges. A
@@ -19,11 +30,6 @@ import { findOutputRefs } from '@/lib/node-ref';
 import type { BuilderNode, BuilderWorkflow, Issue } from '../types';
 import { makeIssue } from './make-issue';
 import { parse } from './when-grammar';
-
-/** Strip fenced code blocks and inline code spans, replacing them with spaces. */
-function stripCode(text: string): string {
-  return text.replace(/```[\s\S]*?```/g, ' ').replace(/`[^`]*`/g, ' ');
-}
 
 /**
  * Base-field text bodies — valid on every variant, so they are collected outside the
@@ -118,7 +124,7 @@ export function validateContent(workflow: BuilderWorkflow): Issue[] {
 
     // Output-reference scan over the node's text bodies.
     for (const body of [...baseTextBodies(node), ...variantTextBodies(node)]) {
-      for (const refId of findOutputRefs(stripCode(body))) {
+      for (const refId of findOutputRefs(body)) {
         if (!upstream.has(refId)) {
           issues.push(
             makeIssue({
