@@ -300,7 +300,7 @@ describe('node-event-write', () => {
     it('a crashing emitter listener does not propagate to the caller', async () => {
       const store = { persistWorkflowEvent: mock(async () => {}) } as any;
       const emitter = getWorkflowEventEmitter();
-      const unsubscribe = emitter.subscribeAll(() => {
+      const unsubscribe = emitter.subscribe(() => {
         throw new Error('listener crashed');
       });
       try {

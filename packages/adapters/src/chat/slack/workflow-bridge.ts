@@ -92,7 +92,7 @@ export class SlackWorkflowBridge {
   attach(): void {
     this.registerActionHandlers();
     const emitter = getWorkflowEventEmitter();
-    this.unsubscribeEvents = emitter.subscribeAll(event => {
+    this.unsubscribeEvents = emitter.subscribe(event => {
       void this.handleEvent(event);
     });
     getLog().info('slack.bridge_attached');

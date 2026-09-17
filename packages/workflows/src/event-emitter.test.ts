@@ -124,7 +124,7 @@ describe('WorkflowEventEmitter', () => {
     it('new instance after reset has no prior subscribers', () => {
       const emitter = getWorkflowEventEmitter();
       const listener = mock((_event: WorkflowEmitterEvent) => {});
-      emitter.subscribeAll(listener);
+      emitter.subscribe(listener);
 
       resetWorkflowEventEmitter();
       const freshEmitter = getWorkflowEventEmitter();
@@ -143,7 +143,7 @@ describe('WorkflowEventEmitter', () => {
       const emitter = getWorkflowEventEmitter();
       const listener = mock((_event: WorkflowEmitterEvent) => {});
 
-      emitter.subscribeAll(listener);
+      emitter.subscribe(listener);
       emitter.emit(makeWorkflowStartedEvent());
 
       expect(listener).toHaveBeenCalledTimes(1);
@@ -155,7 +155,7 @@ describe('WorkflowEventEmitter', () => {
 
     it('returns an unsubscribe function', () => {
       const emitter = getWorkflowEventEmitter();
-      const unsubscribe = emitter.subscribeAll(mock(() => {}));
+      const unsubscribe = emitter.subscribe(mock(() => {}));
       expect(typeof unsubscribe).toBe('function');
     });
 
@@ -163,7 +163,7 @@ describe('WorkflowEventEmitter', () => {
       const emitter = getWorkflowEventEmitter();
       const listener = mock((_event: WorkflowEmitterEvent) => {});
 
-      const unsubscribe = emitter.subscribeAll(listener);
+      const unsubscribe = emitter.subscribe(listener);
       emitter.emit(makeWorkflowStartedEvent());
       expect(listener).toHaveBeenCalledTimes(1);
 
@@ -178,8 +178,8 @@ describe('WorkflowEventEmitter', () => {
       const listenerA = mock((_event: WorkflowEmitterEvent) => {});
       const listenerB = mock((_event: WorkflowEmitterEvent) => {});
 
-      const unsubscribeA = emitter.subscribeAll(listenerA);
-      emitter.subscribeAll(listenerB);
+      const unsubscribeA = emitter.subscribe(listenerA);
+      emitter.subscribe(listenerB);
 
       emitter.emit(makeNodeStartedEvent());
       expect(listenerA).toHaveBeenCalledTimes(1);
@@ -197,7 +197,7 @@ describe('WorkflowEventEmitter', () => {
       const emitter = getWorkflowEventEmitter();
       const listener = mock((_event: WorkflowEmitterEvent) => {});
 
-      const unsubscribe = emitter.subscribeAll(listener);
+      const unsubscribe = emitter.subscribe(listener);
       unsubscribe();
       // Second call should not throw
       expect(() => unsubscribe()).not.toThrow();
@@ -215,7 +215,7 @@ describe('WorkflowEventEmitter', () => {
     it('delivers event to all current subscribers', () => {
       const emitter = getWorkflowEventEmitter();
       const listeners = Array.from({ length: 5 }, () => mock((_event: WorkflowEmitterEvent) => {}));
-      listeners.forEach(l => emitter.subscribeAll(l));
+      listeners.forEach(l => emitter.subscribe(l));
 
       const event = makeNodeStartedEvent();
       emitter.emit(event);
@@ -234,7 +234,7 @@ describe('WorkflowEventEmitter', () => {
     it('delivers multiple sequential events in order', () => {
       const emitter = getWorkflowEventEmitter();
       const received: string[] = [];
-      emitter.subscribeAll(event => received.push(event.type));
+      emitter.subscribe(event => received.push(event.type));
 
       emitter.emit(makeWorkflowStartedEvent());
       emitter.emit(makeNodeStartedEvent());
@@ -252,7 +252,7 @@ describe('WorkflowEventEmitter', () => {
     it('passes the exact event object to each subscriber', () => {
       const emitter = getWorkflowEventEmitter();
       const captured: WorkflowEmitterEvent[] = [];
-      emitter.subscribeAll(event => captured.push(event));
+      emitter.subscribe(event => captured.push(event));
 
       const artifact = makeArtifactEvent();
       emitter.emit(artifact);
@@ -264,7 +264,7 @@ describe('WorkflowEventEmitter', () => {
     it('delivers all WorkflowEmitterEvent variants without error', () => {
       const emitter = getWorkflowEventEmitter();
       const received: string[] = [];
-      emitter.subscribeAll(e => received.push(e.type));
+      emitter.subscribe(e => received.push(e.type));
 
       const events: WorkflowEmitterEvent[] = [
         makeWorkflowStartedEvent(),
@@ -363,9 +363,9 @@ describe('WorkflowEventEmitter', () => {
       });
       const goodListenerAfter = mock((_event: WorkflowEmitterEvent) => {});
 
-      emitter.subscribeAll(goodListenerBefore);
-      emitter.subscribeAll(throwingListener);
-      emitter.subscribeAll(goodListenerAfter);
+      emitter.subscribe(goodListenerBefore);
+      emitter.subscribe(throwingListener);
+      emitter.subscribe(goodListenerAfter);
 
       // emit() itself must not throw even when a subscriber throws
       expect(() => emitter.emit(makeWorkflowStartedEvent())).not.toThrow();
@@ -378,7 +378,7 @@ describe('WorkflowEventEmitter', () => {
     it('logs listener errors via the internal logger', () => {
       const emitter = getWorkflowEventEmitter();
       const error = new Error('listener boom');
-      emitter.subscribeAll(() => {
+      emitter.subscribe(() => {
         throw error;
       });
 
@@ -393,11 +393,11 @@ describe('WorkflowEventEmitter', () => {
       const emitter = getWorkflowEventEmitter();
       const good = mock((_event: WorkflowEmitterEvent) => {});
 
-      emitter.subscribeAll(() => {
+      emitter.subscribe(() => {
         throw new Error('first');
       });
-      emitter.subscribeAll(good);
-      emitter.subscribeAll(() => {
+      emitter.subscribe(good);
+      emitter.subscribe(() => {
         throw new Error('second');
       });
 
@@ -549,7 +549,7 @@ describe('WorkflowEventEmitter', () => {
       const globalListener = mock((_event: WorkflowEmitterEvent) => {});
       const convListener = mock((_event: WorkflowEmitterEvent) => {});
 
-      emitter.subscribeAll(globalListener);
+      emitter.subscribe(globalListener);
       emitter.subscribeForConversation('conv-1', convListener);
 
       emitter.emit(makeWorkflowStartedEvent('run-1'));
@@ -594,7 +594,7 @@ describe('WorkflowEventEmitter', () => {
       const allEvents: WorkflowEmitterEvent[] = [];
       const convEvents: WorkflowEmitterEvent[] = [];
 
-      emitter.subscribeAll(e => allEvents.push(e));
+      emitter.subscribe(e => allEvents.push(e));
       emitter.subscribeForConversation(conversationId, e => convEvents.push(e));
 
       // Emit a realistic DAG workflow sequence
@@ -671,7 +671,7 @@ describe('WorkflowEventEmitter', () => {
     it('passes through an event with no provider/model/tier/effort (bash/script-like)', () => {
       const emitter = getWorkflowEventEmitter();
       const received: WorkflowEmitterEvent[] = [];
-      emitter.subscribeAll(e => received.push(e));
+      emitter.subscribe(e => received.push(e));
 
       emitter.emit({ type: 'node_started', runId: 'run-1', nodeId: 'build', nodeName: 'build' });
 
@@ -686,7 +686,7 @@ describe('WorkflowEventEmitter', () => {
     it('passes through provider/model/tier for tier-resolved AI nodes', () => {
       const emitter = getWorkflowEventEmitter();
       const received: WorkflowEmitterEvent[] = [];
-      emitter.subscribeAll(e => received.push(e));
+      emitter.subscribe(e => received.push(e));
 
       emitter.emit({
         type: 'node_started',
@@ -709,7 +709,7 @@ describe('WorkflowEventEmitter', () => {
     it('passes through provider/model without tier for literal-model AI nodes', () => {
       const emitter = getWorkflowEventEmitter();
       const received: WorkflowEmitterEvent[] = [];
-      emitter.subscribeAll(e => received.push(e));
+      emitter.subscribe(e => received.push(e));
 
       emitter.emit({
         type: 'node_started',

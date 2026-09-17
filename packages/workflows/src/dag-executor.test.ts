@@ -17886,7 +17886,7 @@ describe('executeDagWorkflow -- exec timeout outcomes', () => {
       const store = createMockStore();
       const workflowRun = makeWorkflowRun(`exec-timeout-${kind}`);
       const emitted: WorkflowEmitterEvent[] = [];
-      const unsubscribe = getWorkflowEventEmitter().subscribeAll(event => {
+      const unsubscribe = getWorkflowEventEmitter().subscribe(event => {
         if (event.runId === workflowRun.id) emitted.push(event);
       });
       const consumer = dagNodeSchema.parse({
@@ -24626,7 +24626,7 @@ describe('executeDagWorkflow -- loop_group body step_name namespacing (#2090)', 
     const workflowRun = makeWorkflowRun('lg-emit-raw');
 
     const captured: WorkflowEmitterEvent[] = [];
-    const unsubscribe = getWorkflowEventEmitter().subscribeAll(e => {
+    const unsubscribe = getWorkflowEventEmitter().subscribe(e => {
       if (e.runId === workflowRun.id) captured.push(e);
     });
 
@@ -26311,7 +26311,7 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
   it('emits the executor skip causes to live subscribers', async () => {
     const workflowRun = makeWorkflowRun('skip-cause-live');
     const emitted: Array<{ nodeId: string; cause: SkipCause }> = [];
-    const unsubscribe = getWorkflowEventEmitter().subscribeAll(event => {
+    const unsubscribe = getWorkflowEventEmitter().subscribe(event => {
       if (
         event.type === 'node_skipped' &&
         event.reason !== 'prior_success' &&
@@ -28074,7 +28074,7 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     const workflowRun = makeWorkflowRun();
 
     const emitted: string[] = [];
-    const unsubscribe = getWorkflowEventEmitter().subscribeAll((event: WorkflowEmitterEvent) => {
+    const unsubscribe = getWorkflowEventEmitter().subscribe((event: WorkflowEmitterEvent) => {
       if ('runId' in event && event.runId === workflowRun.id) emitted.push(event.type);
     });
 
@@ -28130,7 +28130,7 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     const workflowRun = makeWorkflowRun();
 
     const emitted: string[] = [];
-    const unsubscribe = getWorkflowEventEmitter().subscribeAll((event: WorkflowEmitterEvent) => {
+    const unsubscribe = getWorkflowEventEmitter().subscribe((event: WorkflowEmitterEvent) => {
       if ('runId' in event && event.runId === workflowRun.id) emitted.push(event.type);
     });
 
@@ -28196,7 +28196,7 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     const workflowRun = makeWorkflowRun();
 
     const emitted: string[] = [];
-    const unsubscribe = getWorkflowEventEmitter().subscribeAll((event: WorkflowEmitterEvent) => {
+    const unsubscribe = getWorkflowEventEmitter().subscribe((event: WorkflowEmitterEvent) => {
       if ('runId' in event && event.runId === workflowRun.id) emitted.push(event.type);
     });
 
@@ -34605,7 +34605,7 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
     emitted: string[]
   ): Promise<unknown> {
     const workflowRun = makeWorkflowRun('terminal-order-run');
-    const unsubscribe = getWorkflowEventEmitter().subscribeAll((event: WorkflowEmitterEvent) => {
+    const unsubscribe = getWorkflowEventEmitter().subscribe((event: WorkflowEmitterEvent) => {
       if ('runId' in event && event.runId === workflowRun.id) emitted.push(event.type);
     });
     try {

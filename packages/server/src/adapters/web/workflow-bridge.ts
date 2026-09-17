@@ -390,7 +390,7 @@ export class WorkflowEventBridge {
    */
   start(): void {
     const emitter = getWorkflowEventEmitter();
-    this.unsubscribeWorkflowEvents = emitter.subscribeAll((event: WorkflowEmitterEvent) => {
+    this.unsubscribeWorkflowEvents = emitter.subscribe((event: WorkflowEmitterEvent) => {
       const conversationId = emitter.getConversationId(event.runId);
       const sseEvent = mapWorkflowEvent(event);
       if (sseEvent) {
