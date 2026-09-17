@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Grok community provider** (`provider: grok`): drives the official Grok Build CLI in headless `streaming-json` mode with SuperGrok / grok.com OAuth. Registered `builtIn: false` next to Pi, OpenCode, and Copilot. This is not Pi's `xai/...` HTTP backend and not an API-key path — the child is spawned with `--oauth`, API-key env vars stripped, and `GROK_DISABLE_API_KEY_AUTH=1`.
+
 ### Breaking
 
 - `none_failed_min_one_success` now blocks dependencies skipped because of an upstream failure (`upstream_failed`), even when another dependency succeeded. This fix applies by default, including across chains and includes; there is no opt-in. Joins previously admitted after a failure now skip and retain the original failed node in their skip cause. Condition skips and optional timeout skips (`on_timeout: skip`) remain admissible with a successful dependency. `all_success`, `one_success`, `all_done`, and `if_skipped` binding behavior are unchanged. (#3156)

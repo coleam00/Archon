@@ -19,6 +19,7 @@
     "./community/pi": "./src/community/pi/index.ts",
     "./community/copilot": "./src/community/copilot/index.ts",
     "./community/copilot/binary-resolver": "./src/community/copilot/binary-resolver.ts",
+    "./community/grok": "./src/community/grok/index.ts",
     "./community/opencode/runtime": "./src/community/opencode/runtime.ts",
     "./errors": "./src/errors.ts",
     "./registry": "./src/registry.ts"
@@ -142,6 +143,18 @@
     ],
     [
       "src/community/copilot/provider-hardening.test.ts"
+    ],
+    [
+      "src/community/grok/stream.test.ts",
+      "src/community/grok/config.test.ts",
+      "src/community/grok/env.test.ts",
+      "src/community/grok/argv.test.ts"
+    ],
+    [
+      "src/community/grok/provider.test.ts"
+    ],
+    [
+      "src/community/grok/binary-resolver.test.ts"
     ],
     [
       "src/community/opencode/provider.test.ts"

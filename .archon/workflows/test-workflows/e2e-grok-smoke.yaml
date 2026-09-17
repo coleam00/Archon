@@ -1,0 +1,38 @@
+# E2E smoke test — Grok community provider
+# Verifies: provider: grok is registered, official grok CLI spawn
+#   (streaming-json + OAuth), sendQuery yields a result, $nodeId.output refs.
+# Design: one prompt + assert. No tools, no structured output, no worktree.
+#   YAML skills:/mcp:/allowed_tools: are not translated in v1 (capabilities
+#   honest-false); the prompt tells the model not to use tools.
+# Auth: grok login (OIDC in ~/.grok/auth.json). Not an API-key path.
+name: e2e-grok-smoke
+description: 'Smoke test for Grok community provider. Verifies prompt response via sendQuery.'
+provider: grok
+model: grok-4.6
+
+nodes:
+  - id: simple
+    prompt: |
+      Reply with exactly the single character 4 and nothing else.
+      Do not call tools. Do not explain. This is an unattended pipeline invocation.
+    effort: low
+    timeout: 300000
+    idle_timeout: 120000
+
+  - id: assert
+    timeout: 30000
+    bash: |
+      set -uo pipefail
+      output="$simple.output"
+      printf '%s\n' "$output" > "$ARTIFACTS_DIR/grok-smoke-output.txt"
+      if [ -z "$output" ]; then
+        echo "FAIL: simple node returned empty output"
+        exit 1
+      fi
+      printf '%s' "$output" | grep -q '4' || {
+        echo "FAIL: simple output missing 4"
+        echo "output=$output"
+        exit 1
+      }
+      echo "PASS: simple=$output"
+    depends_on: [simple]

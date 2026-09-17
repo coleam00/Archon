@@ -80,6 +80,22 @@ export interface CopilotProviderDefaults {
 }
 
 /**
+ * Community provider defaults for Grok Build (official `grok` CLI).
+ */
+export interface GrokProviderDefaults {
+  [key: string]: unknown;
+  /** Default model id, e.g. 'grok-4.6'. */
+  model?: string;
+  /** Absolute path to the Grok CLI binary. Overrides GROK_BIN_PATH and autodetect. */
+  grokBinaryPath?: string;
+  /**
+   * Default `--reasoning-effort` when a node does not set `effort:`.
+   * Clamped to Grok's vocabulary (minimal|low|medium|high|xhigh|max).
+   */
+  modelReasoningEffort?: EffortRung;
+}
+
+/**
  * Community provider defaults for Pi (@earendil-works/pi-coding-agent).
  * v1 minimal shape; extend as capabilities are wired in.
  */
