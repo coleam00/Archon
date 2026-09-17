@@ -107,7 +107,8 @@
       "src/router.test.ts",
       "src/utils/",
       "src/hooks.test.ts",
-      "src/workflow-inputs.test.ts"
+      "src/workflow-inputs.test.ts",
+      "src/run-subscription-membership.test.ts"
     ],
     [
       "src/schemas.test.ts",
