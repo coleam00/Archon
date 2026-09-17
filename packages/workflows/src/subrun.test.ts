@@ -221,6 +221,11 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve(orders.length > 0 ? Math.max(...orders) : 0);
   };
 
+  getGlobalMaxEventOrder: IWorkflowStore['getGlobalMaxEventOrder'] = () => {
+    const orders = this.events.map(e => e.event_order ?? 0);
+    return Promise.resolve(orders.length > 0 ? Math.max(...orders) : 0);
+  };
+
   listWorkflowEventsAfter: IWorkflowStore['listWorkflowEventsAfter'] = (afterEventOrder, limit) => {
     const rows = this.events
       .filter(e => (e.event_order ?? 0) > afterEventOrder)

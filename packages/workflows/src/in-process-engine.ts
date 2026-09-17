@@ -141,7 +141,17 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
     }
     // Hydration succeeded and execution is about to start — the fast/slow
     // boundary `opts.onAccepted` exists for (see engine-port.ts's doc comment).
-    opts?.onAccepted?.();
+    // The run row is already claimed (`running`) at this point, so a throwing
+    // callback must never block `executeWorkflow` from starting — that would
+    // leave the claimed run stuck with no active execution. Log and continue.
+    try {
+      opts?.onAccepted?.();
+    } catch (error) {
+      getLog().error(
+        { err: error as Error, runId: run.id },
+        'in_process_engine.on_accepted_failed'
+      );
+    }
     return executeWorkflow(
       deps,
       platform,
@@ -177,22 +187,31 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
    * in `event_order` order (#3334 M6). Descendant-inclusion is a per-event
    * ancestry walk-UP (`isRunInSubscriptionScope`), not a descendant walk-down —
    * see that helper's doc comment for why. Implemented purely through
-   * `IWorkflowStore`'s event-read methods (`getMaxEventOrder`,
+   * `IWorkflowStore`'s event-read methods (`getGlobalMaxEventOrder`,
    * `listWorkflowEventsAfter`), never a direct DB query.
    *
-   * Anchoring: reads `runId`'s current max `event_order` once at subscribe time
-   * and only ever delivers events with a strictly greater `event_order` — a new
+   * Anchoring: fires `getGlobalMaxEventOrder()` synchronously, before this method
+   * returns — NOT lazily on the first poll tick — so a synchronous caller that
+   * `subscribe()`s and then immediately triggers execution (the CLI/orchestrator's
+   * own ordering) cannot race an event write ahead of the anchor read. The anchor
+   * is the TRUE global max, not `getMaxEventOrder(runId)`: a per-run max
+   * understates the watermark whenever a descendant sub-run already has older
+   * events with a higher global order than `runId`'s own latest event (e.g. on
+   * resume, when a sub-run started in an earlier attempt) — using it would let
+   * those pre-existing events look new and get replayed. Only events with a
+   * strictly greater `event_order` than the anchor are ever delivered, so a new
    * subscription never replays history. Because `event_order` is a single
-   * globally-monotonic counter shared across every run (not scoped per run —
-   * see `listWorkflowEventsAfter`'s doc comment in `store.ts`), one poll loop
-   * with one cursor sees every descendant's events too, including ones from
-   * sub-runs that do not exist yet at subscribe time.
+   * globally-monotonic counter shared across every run (not scoped per run — see
+   * `listWorkflowEventsAfter`'s doc comment in `store.ts`), one poll loop with one
+   * cursor sees every descendant's events too, including ones from sub-runs that
+   * do not exist yet at subscribe time.
    *
    * A `RunAncestryDepthExceededError` (or any other ancestry-walk failure) from
    * `getRunAncestry` is a real invariant violation — a truncated ancestry would
    * silently mis-scope events, exactly the bug #3334 M5 fixed — so it is never
    * swallowed: it is logged at ERROR and the subscription stops polling rather
-   * than risk delivering wrongly-scoped events forever after.
+   * than risk delivering wrongly-scoped events forever after. The same applies to
+   * a failed anchor read itself.
    */
   subscribe(
     runId: string,
@@ -208,14 +227,18 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
     }
 
     let stopped = false;
-    let cursor: number | undefined;
     let polling = false;
+    // Kicked off synchronously, right now — not deferred behind the first
+    // `setInterval` tick — so the anchor is captured before any event this
+    // subscription's own caller is about to trigger can be written.
+    const cursorReady = store.getGlobalMaxEventOrder();
+    let cursor: number | undefined;
 
     const poll = async (): Promise<void> => {
       if (stopped || polling) return;
       polling = true;
       try {
-        cursor ??= await store.getMaxEventOrder(runId);
+        cursor ??= await cursorReady;
         const rows = await store.listWorkflowEventsAfter(cursor, SUBSCRIBE_DRAIN_LIMIT);
         for (const row of rows) {
           if (stopped) return;

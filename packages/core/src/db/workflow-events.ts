@@ -284,6 +284,26 @@ export async function getMaxEventOrder(workflowRunId: string): Promise<number> {
 }
 
 /**
+ * Current max `event_order` across ALL workflow runs (0 if the table is empty).
+ * The true global watermark `IWorkflowEngine.subscribe()` (#3334 M6) anchors on
+ * at subscribe time — see `IWorkflowEventReader.getGlobalMaxEventOrder`'s doc
+ * comment for why this, and not the per-run `getMaxEventOrder` above, is the
+ * correct anchor.
+ */
+export async function getGlobalMaxEventOrder(): Promise<number> {
+  try {
+    const result = await pool.query<{ max_order: number | string | null }>(
+      'SELECT MAX(event_order) AS max_order FROM remote_agent_workflow_events'
+    );
+    const raw = result.rows[0]?.max_order;
+    return raw == null ? 0 : Number(raw);
+  } catch (error) {
+    getLog().error({ err: error as Error }, 'db.workflow_events_global_max_order_failed');
+    throw new Error(`Failed to read global max event_order: ${(error as Error).message}`);
+  }
+}
+
+/**
  * List events across ALL workflow runs with `event_order` strictly greater than
  * `afterEventOrder`, oldest first, capped at `limit`. Backs
  * `IWorkflowEngine.subscribe()` (#3334 M6): `event_order` is a single

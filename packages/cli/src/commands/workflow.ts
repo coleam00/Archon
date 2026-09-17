@@ -3288,16 +3288,16 @@ async function runWorkflowWithOwnedSource(
           // when IT creates the row, and this row already carries them.
           ...(detachedPreCreatedRun ? { preCreatedRun: detachedPreCreatedRun } : {}),
         };
-    result = await executeWorkflow(
+    result = await new InProcessWorkflowEngine().submit({
       deps,
-      adapter,
+      platform: adapter,
       conversationId,
-      workingCwd,
+      cwd: workingCwd,
       workflow,
       userMessage,
-      conversation.id,
-      opts
-    );
+      conversationDbId: conversation.id,
+      options: opts,
+    });
   } finally {
     await closeRunLiveOwner();
     unsubscribe();

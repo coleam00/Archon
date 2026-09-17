@@ -427,6 +427,33 @@ mock.module('@archon/workflows/event-emitter', () => ({
 
 mock.module('@archon/workflows/in-process-engine', () => ({
   InProcessWorkflowEngine: class {
+    // Mirrors the real InProcessWorkflowEngine.submit()'s 1:1 delegation to
+    // executeWorkflow (#3334 M1), routed through the same `@archon/workflows/executor`
+    // mock below so existing executeWorkflow-return-value/call-count assertions
+    // keep working unchanged after the CLI switched from calling executeWorkflow
+    // directly to going through the engine.
+    async submit(input: {
+      deps: unknown;
+      platform: unknown;
+      conversationId: string;
+      cwd: string;
+      workflow: unknown;
+      userMessage: string;
+      conversationDbId: string;
+      options?: unknown;
+    }): Promise<unknown> {
+      const executor = require('@archon/workflows/executor');
+      return executor.executeWorkflow(
+        input.deps,
+        input.platform,
+        input.conversationId,
+        input.cwd,
+        input.workflow,
+        input.userMessage,
+        input.conversationDbId,
+        input.options
+      );
+    }
     subscribe(_runId: string, handler: (event: WorkflowEmitterEvent) => void): () => void {
       capturedSubscribeHandler = handler;
       return mockUnsubscribe;

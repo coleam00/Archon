@@ -154,6 +154,10 @@ function makeFakeStore(ancestry: Map<string, string[]> = new Map()): {
         .map(e => e.event_order);
       return orders.length > 0 ? Math.max(...orders) : 0;
     },
+    getGlobalMaxEventOrder: async (): Promise<number> => {
+      const orders = events.map(e => e.event_order);
+      return orders.length > 0 ? Math.max(...orders) : 0;
+    },
     listWorkflowEventsAfter: async (afterEventOrder: number, limit: number) =>
       events
         .filter(e => e.event_order > afterEventOrder)
@@ -283,6 +287,68 @@ describe('InProcessWorkflowEngine.subscribe', () => {
 
     expect(received).toHaveLength(0);
   });
+
+  test(
+    "does not replay a descendant sub-run's pre-existing events, even though they " +
+      "out-rank the subscribed run's own max event_order",
+    async () => {
+      const parentRunId = 'run-parent-2';
+      const childRunId = 'run-child-2';
+      const { store, push } = makeFakeStore(new Map([[childRunId, [parentRunId]]]));
+
+      // The child run already has history (e.g. from an earlier attempt) with a
+      // HIGHER event_order than anything the parent run has ever written (the
+      // parent has written nothing yet) — `getMaxEventOrder(parentRunId)` would
+      // return 0 and wrongly treat this pre-existing child event as new.
+      push({
+        workflow_run_id: childRunId,
+        event_type: 'node_started',
+        step_name: 'old-child-node',
+      });
+
+      const received: WorkflowEvent[] = [];
+      const unsubscribe = new InProcessWorkflowEngine(store).subscribe(
+        parentRunId,
+        event => received.push(event),
+        5
+      );
+      unsubscribes.push(unsubscribe);
+
+      await sleep(40);
+
+      expect(received).toHaveLength(0);
+    }
+  );
+
+  test(
+    'anchors the cursor before subscribe() returns, so an event published ' +
+      'immediately afterward (before the first poll tick) is still delivered',
+    async () => {
+      const runId = 'run-immediate';
+      const { store, push } = makeFakeStore();
+
+      const received: WorkflowEvent[] = [];
+      const unsubscribe = new InProcessWorkflowEngine(store).subscribe(
+        runId,
+        event => received.push(event),
+        5
+      );
+      unsubscribes.push(unsubscribe);
+
+      // No `await sleep()` here on purpose: this event is pushed synchronously
+      // right after `subscribe()` returns, before the first 5ms interval tick.
+      push({ workflow_run_id: runId, event_type: 'node_started', step_name: 'immediate-node' });
+
+      await sleep(40);
+
+      const nodeIds = received
+        .filter(
+          (e): e is Extract<WorkflowEvent, { type: 'node_started' }> => e.type === 'node_started'
+        )
+        .map(e => e.nodeId);
+      expect(nodeIds).toContain('immediate-node');
+    }
+  );
 });
 
 // ---------------------------------------------------------------------------

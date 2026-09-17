@@ -309,6 +309,17 @@ export interface IWorkflowEventReader {
    */
   getMaxEventOrder(workflowRunId: string): Promise<number>;
   /**
+   * The current max `event_order` across ALL workflow runs (0 if the table is
+   * empty), i.e. the true forward-looking watermark for `listWorkflowEventsAfter`'s
+   * global cursor. `IWorkflowEngine.subscribe()` anchors on THIS, not on
+   * `getMaxEventOrder(runId)` — a per-run max understates the watermark whenever
+   * a descendant sub-run already has older events with a higher global order than
+   * the subscribed-to run's own latest event (e.g. on resume, when a sub-run
+   * started in an earlier attempt), which would otherwise make those pre-existing
+   * events look new and get replayed.
+   */
+  getGlobalMaxEventOrder(): Promise<number>;
+  /**
    * List events across ALL workflow runs with `event_order` strictly greater than
    * `afterEventOrder`, oldest first, capped at `limit`. Because `event_order` is
    * global (see `getMaxEventOrder`), this single cursor sees every run's events —
