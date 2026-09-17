@@ -111,3 +111,10 @@ export {
   resolveCopilotBinaryPath,
   fileExists as copilotFileExists,
 } from './community/copilot/binary-resolver';
+export {
+  GrokProvider,
+  parseGrokConfig,
+  registerGrokProvider,
+  type GrokProviderDefaults,
+} from './community/grok';
+export { resolveGrokBinaryPath } from './community/grok/binary-resolver';

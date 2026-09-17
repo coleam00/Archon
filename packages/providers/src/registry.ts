@@ -20,6 +20,7 @@ import { parseCodexRunConfig } from './codex/config';
 import { CLAUDE_CAPABILITIES } from './claude/capabilities';
 import { CODEX_CAPABILITIES } from './codex/capabilities';
 import { registerCopilotProvider } from './community/copilot/registration';
+import { registerGrokProvider } from './community/grok/registration';
 import { registerOpencodeProvider } from './community/opencode/registration';
 import { registerPiProvider } from './community/pi/registration';
 import { InvalidProviderRunConfigError, UnknownProviderError } from './errors';
@@ -202,6 +203,7 @@ export function registerCommunityProviders(): void {
   registerOpencodeProvider();
   registerPiProvider();
   registerCopilotProvider();
+  registerGrokProvider();
 }
 
 /** @internal Test-only — clears the registry. Not for production use. */

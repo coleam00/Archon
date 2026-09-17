@@ -1,6 +1,6 @@
 ---
 title: AI Assistants
-description: Configure Claude Code, Codex, OpenCode, GitHub Copilot, and Pi as AI assistants for Archon.
+description: Configure Claude Code, Codex, OpenCode, GitHub Copilot, Pi, and Grok as AI assistants for Archon.
 category: getting-started
 area: clients
 audience: [user]
@@ -9,7 +9,7 @@ sidebar:
   order: 4
 ---
 
-You must configure **at least one** AI assistant. All five can be configured and mixed within workflows.
+You must configure **at least one** AI assistant. All six can be configured and mixed within workflows.
 
 For a canonical, at-a-glance comparison of which per-node features each provider supports, see the [Provider Capability Matrix](/reference/provider-capabilities/) — it is generated directly from the providers' capability declarations, so it never drifts from runtime behavior. The per-provider sections below add the field-level YAML syntax and caveats.
 
@@ -19,7 +19,7 @@ When a workflow node sets `output_format`, the guarantee level depends on the pr
 
 | Provider | Tier | How it works | On a validation miss |
 |----------|------|--------------|----------------------|
-| Claude, Codex, OpenCode | **enforced** | The SDK/backend grammar-constrains decoding (`output_config.format` / `outputSchema` / `format:{json_schema}`). | The node **fails** — a refusal or `max_tokens` truncation can still bypass grammar enforcement, so the parsed output is validated post-parse for these too. No reask (a failure here is a genuine edge). |
+| Claude, Codex, OpenCode, Grok | **enforced** | The SDK/backend grammar-constrains decoding (`output_config.format` / `outputSchema` / `format:{json_schema}` / Grok `--json-schema`). | The node **fails** — a refusal or `max_tokens` truncation can still bypass grammar enforcement, so the parsed output is validated post-parse for these too. No reask (a failure here is a genuine edge). |
 | Pi, Copilot | **best-effort** | The schema is appended to the prompt; JSON is extracted from the response and structurally repaired (trailing commas, single quotes, truncated tails). | The executor re-asks (prompt + the schema errors) up to **3×**; if still invalid, the node **fails loudly**. |
 
 In all cases the parsed output is **validated against your `output_format` schema** before downstream nodes see it, and a node that declares `output_format` but produces no schema-valid output **fails** rather than silently degrading. See [Authoring Workflows → `output_format`](/guides/authoring-workflows/#output_format-for-structured-json) for field-access (`$node.output.field`) semantics.
@@ -679,6 +679,82 @@ Unsupported YAML fields trigger a visible warning from the dag-executor when the
 - [Adding a Community Provider](../contributing/adding-a-community-provider/) — the contributor-facing guide for extending Archon with your own provider.
 - [Pi documentation](https://pi.dev) — official Pi docs (extensions, model registry, settings).
 - [Pi on GitHub](https://github.com/earendil-works/pi) — upstream project.
+
+## Grok (Community Provider)
+
+**Use a Grok Build (SuperGrok / grok.com) subscription inside Archon workflows.** Drives the official `grok` CLI in headless mode (`--prompt-json`, `--output-format streaming-json`). Archon does not bundle Grok.
+
+Grok is registered as `builtIn: false` — a bundled community provider, like Copilot and Pi.
+
+This is **not** Pi's `xai/...` HTTP backend and **not** an API-key path. Login is `grok login` (OAuth into `~/.grok/auth.json`). `archon doctor` may say Grok is not configured; the spawned CLI reads that file and never consults Archon's credential vault.
+
+### Install
+
+```bash
+curl -fsSL https://x.ai/cli/install.sh | bash
+grok login
+grok --version
+```
+
+Point Archon at the binary if it is not on PATH:
+
+```ini
+GROK_BIN_PATH=/absolute/path/to/grok
+```
+
+```yaml
+# .archon/config.yaml
+assistants:
+  grok:
+    model: grok-4.6
+    grokBinaryPath: /absolute/path/to/grok
+```
+
+Or place the binary at `~/.archon/vendor/grok/grok`.
+
+### Authentication
+
+```bash
+grok login
+```
+
+That writes `${GROK_HOME:-$HOME/.grok}/auth.json` with `auth_mode` `oidc`. Never set `XAI_API_KEY` or `GROK_CODE_XAI_API_KEY` for Archon workflow nodes — the provider strips those variables and passes `--oauth` so runs bill the subscription.
+
+Archon spawns the CLI with `--permission-mode bypassPermissions` — the same always-approve policy the Claude adapter uses for DAG nodes. `dontAsk` would deny writes and shell unless you pre-allow them. The `--yolo` alias is not passed; Grok deny rules and hooks still apply. Node `systemPrompt` is delivered as `--rules` (appended to Grok's agent prompt), not `--system-prompt-override`.
+
+### Usage in workflows
+
+```yaml
+name: my-workflow
+provider: grok
+model: grok-4.6
+
+nodes:
+  - id: implement
+    prompt: "Implement the next task. Invoke /ce-code-review if you need a review skill."
+    effort: high
+```
+
+YAML `skills:` is ignored (`skills: false`). Put `/skill-name` in the prompt; Grok discovers SKILL.md from `.grok/skills`, `.agents/skills`, and `.claude/skills`. MCP and `maxBudgetUsd` are not translated in v1.
+
+### Supported Archon Features
+
+| Feature | Support | Notes |
+|---|---|---|
+| Session resume | ✅ | `--resume` with a native session UUID from the previous `end.sessionId` |
+| Reasoning control | ✅ | `effort:` → `--reasoning-effort` (`minimal`–`max`; `ultra`/`persistent` clamp to `max`) |
+| Structured output | ✅ | `--json-schema` from `output_format` |
+| Codebase env vars | ✅ | merged into the child; API-key vars stripped |
+| Skills YAML list | ❌ | use `/skill-name` in the prompt |
+| MCP | ❌ | v1 |
+| Inline agents | ❌ | |
+| Cost caps | ❌ | Grok has no `maxBudgetUsd` |
+| Sandbox field | ❌ | v1 does not map `sandbox:` |
+
+### See also
+
+- [Adding a Community Provider](../contributing/adding-a-community-provider/)
+- [Grok Build docs](https://docs.x.ai/build/overview)
 
 ## GitHub Copilot (Community Provider)
 

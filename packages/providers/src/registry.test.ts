@@ -13,6 +13,7 @@ import {
 } from './registry';
 import { registerPiProvider } from './community/pi/registration';
 import { registerCopilotProvider } from './community/copilot/registration';
+import { registerGrokProvider } from './community/grok/registration';
 import { registerOpencodeProvider } from './community/opencode/registration';
 import { UnknownProviderError } from './errors';
 import type { ProviderRegistration, IAgentProvider } from './types';
@@ -279,6 +280,7 @@ describe('registry', () => {
       expect(isRegisteredProvider('opencode')).toBe(true);
       expect(isRegisteredProvider('pi')).toBe(true);
       expect(isRegisteredProvider('copilot')).toBe(true);
+      expect(isRegisteredProvider('grok')).toBe(true);
     });
 
     test('is idempotent', () => {
@@ -287,9 +289,11 @@ describe('registry', () => {
       const opencodeCount = getRegisteredProviders().filter(p => p.id === 'opencode').length;
       const piCount = getRegisteredProviders().filter(p => p.id === 'pi').length;
       const copilotCount = getRegisteredProviders().filter(p => p.id === 'copilot').length;
+      const grokCount = getRegisteredProviders().filter(p => p.id === 'grok').length;
       expect(opencodeCount).toBe(1);
       expect(piCount).toBe(1);
       expect(copilotCount).toBe(1);
+      expect(grokCount).toBe(1);
     });
   });
 
@@ -442,6 +446,62 @@ describe('registry', () => {
         .map(p => p.id)
         .sort();
       expect(ids).toEqual(['claude', 'codex', 'copilot']);
+    });
+  });
+
+  describe('registerGrokProvider (community provider)', () => {
+    test('registers grok with builtIn: false', () => {
+      registerGrokProvider();
+      const reg = getRegistration('grok');
+      expect(reg.id).toBe('grok');
+      expect(reg.displayName).toBe('Grok (xAI)');
+      expect(reg.builtIn).toBe(false);
+    });
+
+    test('is idempotent', () => {
+      registerGrokProvider();
+      expect(() => registerGrokProvider()).not.toThrow();
+      const entries = getRegisteredProviders().filter(p => p.id === 'grok');
+      expect(entries).toHaveLength(1);
+    });
+
+    test('declares honest v1 capabilities', () => {
+      registerGrokProvider();
+      const caps = getProviderCapabilities('grok');
+      expect(caps.sessionResume).toBe(true);
+      expect(caps.envInjection).toBe(true);
+      expect(caps.effortControl).toBe(true);
+      expect(caps.structuredOutput).toBe('enforced');
+      expect(caps.mcp).toBe(false);
+      expect(caps.skills).toBe(false);
+      expect(caps.hooks).toBe(false);
+      expect(caps.agents).toBe(false);
+      expect(caps.costControl).toBe(false);
+      expect(caps.sandbox).toBe(false);
+    });
+
+    test('subscription credential only', () => {
+      registerGrokProvider();
+      const reg = getRegistration('grok');
+      expect(reg.credentials).toEqual({
+        kind: 'static',
+        specs: [{ vendor: 'xai', displayName: 'xAI', kinds: ['subscription'] }],
+      });
+    });
+
+    test('appears in getProviderInfoList with builtIn: false', () => {
+      registerGrokProvider();
+      const info = getProviderInfoList().find(p => p.id === 'grok');
+      expect(info).toBeDefined();
+      expect(info?.builtIn).toBe(false);
+    });
+
+    test('does not collide with built-ins', () => {
+      registerGrokProvider();
+      const ids = getRegisteredProviders()
+        .map(p => p.id)
+        .sort();
+      expect(ids).toEqual(['claude', 'codex', 'grok']);
     });
   });
 });
