@@ -290,6 +290,10 @@ mock.module('@archon/workflows/executor', () => ({
   withCapturedSource: mock((body: Parameters<typeof withObservableCapturedSource>[1]) =>
     withObservableCapturedSource(capturedSourceOwnerCalls, body)
   ),
+  // Statically imported (transitively, via `InProcessWorkflowEngine`) by the dispatch
+  // path since #3334 M3; a named import must link even when these tests never exercise
+  // the resume path.
+  hydrateResumableRun: mock(() => Promise.resolve(null)),
 }));
 mock.module('@archon/workflows/router', () => ({
   findWorkflow: mock(() => undefined),

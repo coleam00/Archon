@@ -167,7 +167,7 @@ import { captureWorkflowSource, resolveRunSourceCapture } from './workflow-sourc
 import { discoverWorkflows } from './workflow-discovery';
 import { validateWorkflowResources } from './validator';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
-import type { IWorkflowStore } from './store';
+import type { IWorkflowStore, WorkflowEventType } from './store';
 import { waitCompletionEvents } from './store';
 import type { WorkflowRun, WorkflowWaitContext } from './schemas/workflow-run';
 import type { ResolvedWorkflow } from './schemas/workflow';
@@ -195,12 +195,48 @@ interface StoreEvent {
   event_type: string;
   step_name?: string;
   data?: Record<string, unknown>;
+  /** Assigned by `pushEvent` — mirrors the real store's global monotonic counter. */
+  event_order?: number;
 }
 
 class InMemoryStore implements IWorkflowStore {
   runs = new Map<string, WorkflowRun>();
   events: StoreEvent[] = [];
   private seq = 0;
+  private eventOrderSeq = 0;
+
+  /** Push one or more events, assigning each the next global `event_order` — mirrors
+   *  the real store's shared-sequence/trigger behavior (`getMaxEventOrder` /
+   *  `listWorkflowEventsAfter` rely on this being monotonic across every run). */
+  private pushEvent(...rows: StoreEvent[]): void {
+    for (const row of rows) {
+      this.events.push({ ...row, event_order: ++this.eventOrderSeq });
+    }
+  }
+
+  getMaxEventOrder: IWorkflowStore['getMaxEventOrder'] = workflowRunId => {
+    const orders = this.events
+      .filter(e => e.workflow_run_id === workflowRunId)
+      .map(e => e.event_order ?? 0);
+    return Promise.resolve(orders.length > 0 ? Math.max(...orders) : 0);
+  };
+
+  listWorkflowEventsAfter: IWorkflowStore['listWorkflowEventsAfter'] = (afterEventOrder, limit) => {
+    const rows = this.events
+      .filter(e => (e.event_order ?? 0) > afterEventOrder)
+      .sort((a, b) => (a.event_order ?? 0) - (b.event_order ?? 0))
+      .slice(0, limit)
+      .map(e => ({
+        id: `evt-${String(e.event_order ?? 0)}`,
+        workflow_run_id: e.workflow_run_id,
+        event_type: e.event_type as WorkflowEventType,
+        step_name: e.step_name ?? null,
+        data: e.data ?? {},
+        event_order: e.event_order ?? 0,
+        created_at: new Date().toISOString(),
+      }));
+    return Promise.resolve(rows);
+  };
 
   private clone(r: WorkflowRun): WorkflowRun {
     return { ...r, metadata: { ...r.metadata } };
@@ -402,7 +438,7 @@ class InMemoryStore implements IWorkflowStore {
       // Mirror the real store: both rows land in the same transaction as the cursor
       // clear, and the node row is handed back so the caller derives its sinks from it.
       const rows = waitCompletionEvents(id, completion);
-      this.events.push(rows.outcome, rows.node);
+      this.pushEvent(rows.outcome, rows.node);
       return Promise.resolve({ cleared: true, nodeEvent: rows.node });
     }
     return Promise.resolve({ cleared: false });
@@ -445,7 +481,7 @@ class InMemoryStore implements IWorkflowStore {
   };
 
   private recordWorkflowEvent: IWorkflowStore['persistWorkflowEvent'] = data => {
-    this.events.push(data);
+    this.pushEvent(data);
     return Promise.resolve();
   };
 
@@ -458,7 +494,7 @@ class InMemoryStore implements IWorkflowStore {
   persistWorkflowEventIfRunning: IWorkflowStore['persistWorkflowEventIfRunning'] = data => {
     const run = this.runs.get(data.workflow_run_id);
     if (run?.status !== 'running') return Promise.resolve({ persisted: false });
-    this.events.push(data);
+    this.pushEvent(data);
     return Promise.resolve({ persisted: true });
   };
 
@@ -544,7 +580,7 @@ class InMemoryStore implements IWorkflowStore {
     if (!r) throw new Error(`no run ${runId}`);
     const approval = r.metadata.approval as Record<string, unknown> | undefined;
     const nodeId = approval?.nodeId as string;
-    this.events.push({
+    this.pushEvent({
       workflow_run_id: runId,
       event_type: 'node_completed',
       step_name: nodeId,

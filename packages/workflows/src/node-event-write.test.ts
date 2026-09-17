@@ -40,6 +40,103 @@ describe('node-event-write', () => {
     }
   };
 
+  describe('command/node_id persistence (#3334 M4)', () => {
+    /** A minimal command-sourced agent node — `getNodeName` resolves it to its command. */
+    const commandNode: import('./schemas').AgentNode = {
+      id: 'review',
+      kind: 'agent',
+      source: { kind: 'command', name: 'code-review' },
+    };
+
+    it('persists command and node_id on node_completed for a command-sourced node', async () => {
+      const persistedEvents: NodeStateEventInput[] = [];
+      const store = {
+        persistWorkflowEvent: mock(async (event: NodeStateEventInput) => {
+          persistedEvents.push(event);
+        }),
+      } as any;
+
+      await recordNodeState(
+        { store, logDir: testLogDir, emitter: { emit: mock(() => {}) } },
+        commandNode,
+        {
+          workflow_run_id: 'run-cmd',
+          event_type: 'node_completed',
+          step_name: 'review',
+          data: { duration_ms: 5, node_output: 'ok' },
+        }
+      );
+
+      expect(persistedEvents[0].data).toMatchObject({ command: 'code-review', node_id: 'review' });
+    });
+
+    it('persists command and node_id on node_failed for a command-sourced node', async () => {
+      const persistedEvents: NodeStateEventInput[] = [];
+      const store = {
+        persistWorkflowEvent: mock(async (event: NodeStateEventInput) => {
+          persistedEvents.push(event);
+        }),
+      } as any;
+
+      await recordNodeState(
+        { store, logDir: testLogDir, emitter: { emit: mock(() => {}) } },
+        commandNode,
+        {
+          workflow_run_id: 'run-cmd-fail',
+          event_type: 'node_failed',
+          step_name: 'review',
+          data: { error: 'boom' },
+        }
+      );
+
+      expect(persistedEvents[0].data).toMatchObject({ command: 'code-review', node_id: 'review' });
+    });
+
+    it('persists node_id with a null command for a non-command (exec) node', async () => {
+      const persistedEvents: NodeStateEventInput[] = [];
+      const store = {
+        persistWorkflowEvent: mock(async (event: NodeStateEventInput) => {
+          persistedEvents.push(event);
+        }),
+      } as any;
+
+      await recordNodeState(
+        { store, logDir: testLogDir, emitter: { emit: mock(() => {}) } },
+        step('build'),
+        {
+          workflow_run_id: 'run-exec',
+          event_type: 'node_completed',
+          step_name: 'build',
+          data: { duration_ms: 5 },
+        }
+      );
+
+      expect(persistedEvents[0].data).toMatchObject({ command: null, node_id: 'build' });
+    });
+
+    it('leaves node_started untouched (no node_id added there)', async () => {
+      const persistedEvents: NodeStateEventInput[] = [];
+      const store = {
+        persistWorkflowEvent: mock(async (event: NodeStateEventInput) => {
+          persistedEvents.push(event);
+        }),
+      } as any;
+
+      await recordNodeState(
+        { store, logDir: testLogDir, emitter: { emit: mock(() => {}) } },
+        commandNode,
+        {
+          workflow_run_id: 'run-start',
+          event_type: 'node_started',
+          step_name: 'review',
+          data: { command: 'code-review' },
+        }
+      );
+
+      expect(persistedEvents[0].data).toEqual({ command: 'code-review' });
+    });
+  });
+
   describe('sink mutation tests (proving no sink can be silently dropped)', () => {
     it('writes to all three sinks for node_completed', async () => {
       const persistedEvents: NodeStateEventInput[] = [];
@@ -203,7 +300,7 @@ describe('node-event-write', () => {
     it('a crashing emitter listener does not propagate to the caller', async () => {
       const store = { persistWorkflowEvent: mock(async () => {}) } as any;
       const emitter = getWorkflowEventEmitter();
-      const unsubscribe = emitter.subscribe(() => {
+      const unsubscribe = emitter.subscribeAll(() => {
         throw new Error('listener crashed');
       });
       try {

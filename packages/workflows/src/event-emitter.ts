@@ -290,9 +290,12 @@ class WorkflowEventEmitter {
   }
 
   /**
-   * Subscribe to all workflow events. Returns an unsubscribe function.
+   * Subscribe to all workflow events, across every run. Returns an unsubscribe function.
+   *
+   * Named distinctly from the future per-run `IWorkflowEngine.subscribe(runId, listener)`
+   * (M6) so the two APIs never collide.
    */
-  subscribe(listener: Listener): () => void {
+  subscribeAll(listener: Listener): () => void {
     // Wrap listener to catch errors - listener failures must not propagate
     const safeListener = (event: WorkflowEmitterEvent): void => {
       try {
@@ -312,7 +315,7 @@ class WorkflowEventEmitter {
    * Subscribe to events for a specific conversation only. Returns unsubscribe function.
    */
   subscribeForConversation(conversationId: string, listener: Listener): () => void {
-    return this.subscribe((event: WorkflowEmitterEvent) => {
+    return this.subscribeAll((event: WorkflowEmitterEvent) => {
       const eventConversationId = this.conversationMap.get(event.runId);
       if (eventConversationId === conversationId) {
         listener(event);

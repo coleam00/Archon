@@ -25,7 +25,7 @@ const mockSubscribe = mock((listener: (event: WorkflowEmitterEvent) => void) => 
 
 mock.module('@archon/workflows/event-emitter', () => ({
   getWorkflowEventEmitter: () => ({
-    subscribe: mockSubscribe,
+    subscribeAll: mockSubscribe,
     getConversationId: mockGetConversationId,
     registerRun: mock(() => {}),
     unregisterRun: mock(() => {}),

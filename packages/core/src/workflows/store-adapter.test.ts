@@ -59,6 +59,8 @@ mock.module('../db/workflows', () => ({
 const mockCreateWorkflowEvent = mock(() => Promise.resolve());
 const mockPersistWorkflowEvent = mock(() => Promise.resolve());
 const mockPersistWorkflowEventIfRunning = mock(() => Promise.resolve({ persisted: true }));
+const mockGetMaxEventOrder = mock(() => Promise.resolve(0));
+const mockListWorkflowEventsAfter = mock(() => Promise.resolve([]));
 const mockGetDagResumeSnapshot = mock<(_id: string) => Promise<DagResumeSnapshot>>(() =>
   Promise.resolve({
     completedNodeOutputs: new Map(),
@@ -72,6 +74,8 @@ mock.module('../db/workflow-events', () => ({
   createWorkflowEvent: mockCreateWorkflowEvent,
   persistWorkflowEvent: mockPersistWorkflowEvent,
   persistWorkflowEventIfRunning: mockPersistWorkflowEventIfRunning,
+  getMaxEventOrder: mockGetMaxEventOrder,
+  listWorkflowEventsAfter: mockListWorkflowEventsAfter,
   getDagResumeSnapshot: mockGetDagResumeSnapshot,
 }));
 
@@ -192,6 +196,8 @@ describe('createWorkflowStore', () => {
       'createWorkflowEvent',
       'persistWorkflowEvent',
       'persistWorkflowEventIfRunning',
+      'getMaxEventOrder',
+      'listWorkflowEventsAfter',
       'getDagResumeSnapshot',
       'getCodebase',
       'getCodebaseEnvVars',

@@ -56,6 +56,12 @@ export interface DagResumeSnapshot {
 export interface WorkflowWaitCompletion {
   stepName: string;
   result: WorkflowWaitResult;
+  /**
+   * `command`/`node_id` for the completed node's own `node_completed` row — see
+   * `nodeIdentityData` in `node-event-write.ts`. This function has no `DagNode` to
+   * derive them from, so the caller (which does) supplies them.
+   */
+  nodeIdentity: { command: string | null; node_id: string };
 }
 
 export type WorkflowWaitPause = { kind: 'started'; stepName: string } | { kind: 'continued' };
@@ -203,7 +209,7 @@ export function waitCompletionEvents(
   workflowRunId: string,
   completion: WorkflowWaitCompletion
 ): { outcome: ObservabilityEventInput; node: NodeStateEventInput } {
-  const { stepName, result } = completion;
+  const { stepName, result, nodeIdentity } = completion;
   return {
     outcome: {
       workflow_run_id: workflowRunId,
@@ -216,6 +222,7 @@ export function waitCompletionEvents(
       event_type: 'node_completed',
       step_name: stepName,
       data: {
+        ...nodeIdentity,
         type: 'wait',
         duration_ms: result.waited_ms,
         node_output: JSON.stringify(result),
@@ -269,7 +276,56 @@ export interface IWorkflowRunNodeSessionStore {
   }): Promise<void>;
 }
 
-export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionStore {
+/**
+ * One persisted `workflow_events` row, as read back for `IWorkflowEngine.subscribe()`
+ * (#3334 M6). `event_order` is never null here — see `listWorkflowEventsAfter`.
+ */
+export interface PersistedWorkflowEvent {
+  id: string;
+  workflow_run_id: string;
+  event_type: WorkflowEventType;
+  step_name: string | null;
+  data: Record<string, unknown>;
+  event_order: number;
+  created_at: string;
+}
+
+/**
+ * Read side of the events table (#3334 M6) — a narrow, distinct concern from the
+ * writers below, kept out of the fat `IWorkflowStore` per the project's ISP rule
+ * the same way `IRunTreeStore` is. `IWorkflowStore` extends it so existing
+ * consumers don't churn.
+ */
+export interface IWorkflowEventReader {
+  /**
+   * The current max `event_order` among `workflowRunId`'s own events (0 if it has
+   * none yet). `IWorkflowEngine.subscribe()` reads this once at subscribe time as
+   * its forward anchor: only events with a strictly greater `event_order` are
+   * delivered, so a subscriber never replays history. `event_order` is a single
+   * globally-monotonic counter shared across every run's events (a DB sequence on
+   * Postgres, a global `MAX(event_order)+1` trigger on SQLite) — NOT scoped per
+   * run — which is what lets `listWorkflowEventsAfter` tail every run with one
+   * cursor.
+   */
+  getMaxEventOrder(workflowRunId: string): Promise<number>;
+  /**
+   * List events across ALL workflow runs with `event_order` strictly greater than
+   * `afterEventOrder`, oldest first, capped at `limit`. Because `event_order` is
+   * global (see `getMaxEventOrder`), this single cursor sees every run's events —
+   * `IWorkflowEngine.subscribe()` combines it with `isRunInSubscriptionScope` to
+   * find a target run's descendant sub-run events without a query per descendant.
+   * A row with a NULL `event_order` can never satisfy `event_order > afterEventOrder`
+   * in SQL, so this can never return one — legacy rows written before `event_order`
+   * existed are excluded structurally, not by a runtime check.
+   */
+  listWorkflowEventsAfter(
+    afterEventOrder: number,
+    limit: number
+  ): Promise<readonly PersistedWorkflowEvent[]>;
+}
+
+export interface IWorkflowStore
+  extends IRunTreeStore, IWorkflowRunNodeSessionStore, IWorkflowEventReader {
   // Run lifecycle
   createWorkflowRun(data: {
     /**

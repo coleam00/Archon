@@ -3,9 +3,12 @@ import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { waitCompletionEvents } from './store';
 
+const nodeIdentity = { command: null, node_id: 'await-ci' };
+
 const satisfied = {
   stepName: 'await-ci',
   result: { status: 'satisfied', waited_ms: 4200 } as const,
+  nodeIdentity,
 };
 
 describe('waitCompletionEvents', () => {
@@ -22,6 +25,7 @@ describe('waitCompletionEvents', () => {
       event_type: 'node_completed',
       step_name: 'await-ci',
       data: {
+        ...nodeIdentity,
         type: 'wait',
         duration_ms: 4200,
         node_output: JSON.stringify(satisfied.result),
@@ -34,6 +38,7 @@ describe('waitCompletionEvents', () => {
     const rows = waitCompletionEvents('run-2', {
       stepName: 'await-signal',
       result: { status: 'expired', waited_ms: 60000, event: 'ci.concluded' },
+      nodeIdentity: { command: null, node_id: 'await-signal' },
     });
     expect(rows.outcome.event_type).toBe('wait_expired');
     expect(rows.node.event_type).toBe('node_completed');
