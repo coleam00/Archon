@@ -148,12 +148,6 @@ function makeFakeStore(ancestry: Map<string, string[]> = new Map()): {
     });
   };
   const store: Partial<IWorkflowStore> = {
-    getMaxEventOrder: async (workflowRunId: string): Promise<number> => {
-      const orders = events
-        .filter(e => e.workflow_run_id === workflowRunId)
-        .map(e => e.event_order);
-      return orders.length > 0 ? Math.max(...orders) : 0;
-    },
     getGlobalMaxEventOrder: async (): Promise<number> => {
       const orders = events.map(e => e.event_order);
       return orders.length > 0 ? Math.max(...orders) : 0;
@@ -298,7 +292,7 @@ describe('InProcessWorkflowEngine.subscribe', () => {
 
       // The child run already has history (e.g. from an earlier attempt) with a
       // HIGHER event_order than anything the parent run has ever written (the
-      // parent has written nothing yet) — `getMaxEventOrder(parentRunId)` would
+      // parent has written nothing yet) — a per-run max for the parent would
       // return 0 and wrongly treat this pre-existing child event as new.
       push({
         workflow_run_id: childRunId,

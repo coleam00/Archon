@@ -206,20 +206,13 @@ class InMemoryStore implements IWorkflowStore {
   private eventOrderSeq = 0;
 
   /** Push one or more events, assigning each the next global `event_order` — mirrors
-   *  the real store's shared-sequence/trigger behavior (`getMaxEventOrder` /
+   *  the real store's shared-sequence/trigger behavior (`getGlobalMaxEventOrder` /
    *  `listWorkflowEventsAfter` rely on this being monotonic across every run). */
   private pushEvent(...rows: StoreEvent[]): void {
     for (const row of rows) {
       this.events.push({ ...row, event_order: ++this.eventOrderSeq });
     }
   }
-
-  getMaxEventOrder: IWorkflowStore['getMaxEventOrder'] = workflowRunId => {
-    const orders = this.events
-      .filter(e => e.workflow_run_id === workflowRunId)
-      .map(e => e.event_order ?? 0);
-    return Promise.resolve(orders.length > 0 ? Math.max(...orders) : 0);
-  };
 
   getGlobalMaxEventOrder: IWorkflowStore['getGlobalMaxEventOrder'] = () => {
     const orders = this.events.map(e => e.event_order ?? 0);

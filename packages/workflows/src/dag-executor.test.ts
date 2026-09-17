@@ -272,7 +272,6 @@ function createMockStore(): MockWorkflowStore {
         return { persisted: true };
       }
     ),
-    getMaxEventOrder: mock<IWorkflowStore['getMaxEventOrder']>(async _workflowRunId => 0),
     getGlobalMaxEventOrder: mock<IWorkflowStore['getGlobalMaxEventOrder']>(async () => 0),
     listWorkflowEventsAfter: mock<IWorkflowStore['listWorkflowEventsAfter']>(
       async (_afterEventOrder, _limit) => []

@@ -194,7 +194,7 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
    * returns — NOT lazily on the first poll tick — so a synchronous caller that
    * `subscribe()`s and then immediately triggers execution (the CLI/orchestrator's
    * own ordering) cannot race an event write ahead of the anchor read. The anchor
-   * is the TRUE global max, not `getMaxEventOrder(runId)`: a per-run max
+   * is the TRUE global max, not a per-run maximum: a per-run max
    * understates the watermark whenever a descendant sub-run already has older
    * events with a higher global order than `runId`'s own latest event (e.g. on
    * resume, when a sub-run started in an earlier attempt) — using it would let

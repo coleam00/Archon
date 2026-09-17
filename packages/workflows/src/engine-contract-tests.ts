@@ -100,7 +100,6 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     createWorkflowEvent: noop,
     persistWorkflowEvent: noop,
     persistWorkflowEventIfRunning: async () => ({ persisted: true }),
-    getMaxEventOrder: async () => 0,
     getGlobalMaxEventOrder: async () => 0,
     listWorkflowEventsAfter: async () => [],
     findResumableRun: async () => null,

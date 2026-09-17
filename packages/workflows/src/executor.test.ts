@@ -199,7 +199,6 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     createWorkflowEvent: mock(async () => {}),
     persistWorkflowEvent: mock(async () => {}),
     persistWorkflowEventIfRunning: mock(async () => ({ persisted: true })),
-    getMaxEventOrder: mock(async () => 0),
     getGlobalMaxEventOrder: mock(async () => 0),
     listWorkflowEventsAfter: mock(async () => []),
     findResumableRun: mock(async () => null),

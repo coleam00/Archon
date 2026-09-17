@@ -298,31 +298,20 @@ export interface PersistedWorkflowEvent {
  */
 export interface IWorkflowEventReader {
   /**
-   * The current max `event_order` among `workflowRunId`'s own events (0 if it has
-   * none yet). `IWorkflowEngine.subscribe()` reads this once at subscribe time as
-   * its forward anchor: only events with a strictly greater `event_order` are
-   * delivered, so a subscriber never replays history. `event_order` is a single
-   * globally-monotonic counter shared across every run's events (a DB sequence on
-   * Postgres, a global `MAX(event_order)+1` trigger on SQLite) — NOT scoped per
-   * run — which is what lets `listWorkflowEventsAfter` tail every run with one
-   * cursor.
-   */
-  getMaxEventOrder(workflowRunId: string): Promise<number>;
-  /**
    * The current max `event_order` across ALL workflow runs (0 if the table is
    * empty), i.e. the true forward-looking watermark for `listWorkflowEventsAfter`'s
-   * global cursor. `IWorkflowEngine.subscribe()` anchors on THIS, not on
-   * `getMaxEventOrder(runId)` — a per-run max understates the watermark whenever
+   * global cursor. `IWorkflowEngine.subscribe()` anchors on this global watermark
+   * rather than a per-run maximum, which would understate the watermark whenever
    * a descendant sub-run already has older events with a higher global order than
    * the subscribed-to run's own latest event (e.g. on resume, when a sub-run
-   * started in an earlier attempt), which would otherwise make those pre-existing
-   * events look new and get replayed.
+   * started in an earlier attempt), making those pre-existing events look new and
+   * get replayed.
    */
   getGlobalMaxEventOrder(): Promise<number>;
   /**
    * List events across ALL workflow runs with `event_order` strictly greater than
    * `afterEventOrder`, oldest first, capped at `limit`. Because `event_order` is
-   * global (see `getMaxEventOrder`), this single cursor sees every run's events —
+   * global (see `getGlobalMaxEventOrder`), this single cursor sees every run's events —
    * `IWorkflowEngine.subscribe()` combines it with `isRunInSubscriptionScope` to
    * find a target run's descendant sub-run events without a query per descendant.
    * A row with a NULL `event_order` can never satisfy `event_order > afterEventOrder`
