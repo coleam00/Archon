@@ -82,6 +82,7 @@
       "src/db/isolation-environments.test.ts",
       "src/db/messages.test.ts",
       "src/db/sessions.test.ts",
+      "src/db/timestamps.test.ts",
       "src/db/users.test.ts",
       "src/db/workflow-node-sessions.test.ts",
       "src/db/workflows.test.ts",
