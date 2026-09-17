@@ -45,6 +45,7 @@ import {
   cancelFanOutRun,
   findChildRuns,
   getRunAncestry,
+  RunAncestryDepthExceededError,
   listWorkflowRuns,
   listDashboardRuns,
   findOpenWorkRuns,
@@ -1711,6 +1712,22 @@ describe('workflows database', () => {
       const result = await getRunAncestry('child');
 
       expect(result).toEqual([]);
+    });
+
+    test('throws RunAncestryDepthExceededError instead of silently truncating a chain deeper than the cap', async () => {
+      // MAX_RUN_ANCESTRY_DEPTH is 32 — build a chain of 34 runs (run0 -> run1 -> ... -> run33)
+      // so the walk from 'run33' still has an unresolved parent once the cap is hit.
+      const chainLength = 34;
+      const idFor = (i: number): string => `run${i}`;
+      // getWorkflowRun('run33') first, then each subsequent parent lookup.
+      for (let i = chainLength - 1; i >= 0; i--) {
+        const parentId = i === 0 ? null : idFor(i - 1);
+        mockQuery.mockResolvedValueOnce(createQueryResult([runRow(idFor(i), parentId)]));
+      }
+
+      await expect(getRunAncestry(idFor(chainLength - 1))).rejects.toThrow(
+        RunAncestryDepthExceededError
+      );
     });
   });
 
