@@ -42,7 +42,6 @@ import type { WorkspaceSyncResult } from '@archon/git';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { findWorkflow, resolveWorkflowName } from '@archon/workflows/router';
 import {
-  executeWorkflow,
   resolveContinuationWorkflow,
   withCapturedSource,
   type CapturedSourceOwner,
@@ -52,6 +51,7 @@ import {
   recordSelectedWorkflow,
   type PreparedWorkflowSource,
 } from '@archon/workflows/executor';
+import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
 import { liveSourceRoots } from '@archon/workflows/workflow-discovery';
 import {
@@ -1202,6 +1202,7 @@ async function dispatchOrchestratorWorkflowOwned(
     // gate) — surface that to the user and fall through to a fresh run on
     // the same worktree rather than silently restarting.
     const deps = createWorkflowDeps();
+    const engine = new InProcessWorkflowEngine(deps.store);
     const resumeOwner = await startRunLiveOwner(resumableRun.id);
     let resumeOwnerClosed = false;
     try {
@@ -1290,15 +1291,15 @@ async function dispatchOrchestratorWorkflowOwned(
         // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
         // executor adopts for us there (see #2690). Until then a rename failure leaves
         // the staged directory un-adopted so the wrap reclaims it on the way out.
-        await executeWorkflow(
+        await engine.submit({
           deps,
           platform,
           conversationId,
-          resumableWorkingPath,
+          cwd: resumableWorkingPath,
           workflow,
           userMessage,
-          conversation.id,
-          {
+          conversationDbId: conversation.id,
+          options: {
             codebaseId: codebase.id,
             parentConversationId: conversation.id,
             userId,
@@ -1309,8 +1310,8 @@ async function dispatchOrchestratorWorkflowOwned(
             resolveChildIsolation,
             capturedSourceOwner: owner,
             ...prepared,
-          }
-        );
+          },
+        });
       } else {
         await resumeOwner.close();
         resumeOwnerClosed = true;
@@ -1344,15 +1345,15 @@ async function dispatchOrchestratorWorkflowOwned(
         // the helper has already run `owner.hold`, which is the only thing the wrap
         // needs to know to reclaim if the rename fails.
         await withRunLiveOwner(captured.preparedSource.runId, {}, async () => {
-          await executeWorkflow(
+          await engine.submit({
             deps,
             platform,
             conversationId,
-            resumableWorkingPath,
+            cwd: resumableWorkingPath,
             workflow,
             userMessage,
-            conversation.id,
-            {
+            conversationDbId: conversation.id,
+            options: {
               codebaseId: codebase.id,
               parentConversationId: conversation.id,
               userId,
@@ -1374,8 +1375,8 @@ async function dispatchOrchestratorWorkflowOwned(
                   }
                 : {}),
               ...(options?.runConfig ? { runConfig: options.runConfig } : {}),
-            }
-          );
+            },
+          });
         });
       }
     } finally {
@@ -1437,19 +1438,21 @@ async function dispatchOrchestratorWorkflowOwned(
         'orchestrator invariant violated: fresh-foreground dispatch reached without a captured source'
       );
     }
+    const freshDeps = createWorkflowDeps();
+    const freshEngine = new InProcessWorkflowEngine(freshDeps.store);
     // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
     // executor adopts for us there (see #2690). `freshCaptured` proves the prior
     // `captureFreshSource` call already ran `owner.hold`.
     await withRunLiveOwner(freshCaptured.preparedSource.runId, {}, async () => {
-      await executeWorkflow(
-        createWorkflowDeps(),
+      await freshEngine.submit({
+        deps: freshDeps,
         platform,
         conversationId,
         cwd,
         workflow,
         userMessage,
-        conversation.id,
-        {
+        conversationDbId: conversation.id,
+        options: {
           codebaseId: codebase.id,
           parentConversationId: conversation.id,
           userId,
@@ -1474,8 +1477,8 @@ async function dispatchOrchestratorWorkflowOwned(
               }
             : {}),
           ...(options?.runConfig ? { runConfig: options.runConfig } : {}),
-        }
-      );
+        },
+      });
     });
   }
 }

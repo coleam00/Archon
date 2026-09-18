@@ -433,6 +433,17 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
     id: string,
     event?: WorkflowCancellationEventDetails
   ): Promise<{ cancelled: boolean }>;
+  /**
+   * Cancel a run only while it is still 'running'. Narrower sibling of
+   * `cancelWorkflowRun` for callers that read the status and then write: the
+   * running-only predicate closes that read-then-write window, so a gate pause
+   * or a failure committed in between is left untouched. A miss is an
+   * idempotent `{ cancelled: false }`, never a throw.
+   */
+  cancelRunningWorkflowRun(
+    id: string,
+    event?: WorkflowCancellationEventDetails
+  ): Promise<{ cancelled: boolean }>;
   /** Atomically identify and cancel a fan-out child owned by the engine. */
   cancelFanOutRun(id: string, reason: FanOutCancelReason): Promise<{ cancelled: boolean }>;
 

@@ -26,6 +26,9 @@
     "./utils/workflow-requirements": "./src/utils/workflow-requirements.ts",
     "./workflow-inputs": "./src/workflow-inputs.ts",
     "./fixture-runner": "./src/fixture-runner.ts",
+    "./engine-port": "./src/engine-port.ts",
+    "./in-process-engine": "./src/in-process-engine.ts",
+    "./engine-contract-tests": "./src/engine-contract-tests.ts",
     "./fan-out-identity": "./src/fan-out-identity.ts",
     "./test-utils": "./src/test-utils.ts"
   },
@@ -87,6 +90,9 @@
     ],
     [
       "src/executor.test.ts"
+    ],
+    [
+      "src/in-process-engine.test.ts"
     ],
     [
       "src/subrun.test.ts"

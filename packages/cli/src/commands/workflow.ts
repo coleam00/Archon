@@ -110,6 +110,7 @@ import {
   getWorkflowEventEmitter,
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
+import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import type {
   DeclaredWorkflowConfig,
   WorkflowDefinition,
@@ -3119,6 +3120,7 @@ async function runWorkflowWithOwnedSource(
   // The lookup-by-(workflowName, cwd) was already done above for worktree-path
   // resolution; reuse that result rather than querying twice.
   const deps = createWorkflowDeps();
+  const engine = new InProcessWorkflowEngine(deps.store);
   let result: Awaited<ReturnType<typeof executeWorkflow>> | undefined;
   // A genuine container-teardown failure captured in the finally, rethrown AFTER
   // the finally when the run itself succeeded — so a leaked privileged container
@@ -3241,16 +3243,16 @@ async function runWorkflowWithOwnedSource(
           // when IT creates the row, and this row already carries them.
           ...(detachedPreCreatedRun ? { preCreatedRun: detachedPreCreatedRun } : {}),
         };
-    result = await executeWorkflow(
+    result = await engine.submit({
       deps,
-      adapter,
+      platform: adapter,
       conversationId,
-      workingCwd,
+      cwd: workingCwd,
       workflow,
       userMessage,
-      conversation.id,
-      opts
-    );
+      conversationDbId: conversation.id,
+      options: opts,
+    });
   } finally {
     await closeRunLiveOwner();
     unsubscribe();

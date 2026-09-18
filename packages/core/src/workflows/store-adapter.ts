@@ -86,6 +86,7 @@ export function createWorkflowStore(): IWorkflowStore {
     claimWriteback: workflowDb.claimWriteback,
     releaseWritebackClaim: workflowDb.releaseWritebackClaim,
     cancelWorkflowRun: workflowDb.cancelWorkflowRun,
+    cancelRunningWorkflowRun: workflowDb.cancelRunningWorkflowRun,
     cancelFanOutRun: workflowDb.cancelFanOutRun,
     createWorkflowEvent: async (data): Promise<void> => {
       try {
