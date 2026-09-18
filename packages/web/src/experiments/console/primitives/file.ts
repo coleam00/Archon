@@ -70,3 +70,40 @@ export function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${String(Math.round(bytes / 1024))} KB`;
   return `${String(Math.round(bytes / (1024 * 1024)))} MB`;
 }
+
+/**
+ * True when a drag carries files.
+ *
+ * `DataTransfer.types` reports `'Files'` for a file drag, while dragging a text
+ * selection out of the composer's own textarea reports `'text/plain'` only.
+ * Distinguishing them keeps a text drag from lighting up the drop zone and from
+ * being swallowed by the drop handler's `preventDefault`.
+ *
+ * Reads through `Array.from` because Safari hands back a `DOMStringList` rather
+ * than a real array.
+ */
+export function dragHasFiles(types: DataTransfer['types']): boolean {
+  return Array.from(types).includes('Files');
+}
+
+/**
+ * The image files on a clipboard payload.
+ *
+ * A copied screenshot rides the clipboard as an `image/*` item rather than as a
+ * path, so reading the items is the only way to see it. Everything else is left
+ * alone — an ordinary text copy carries `text/plain` and `text/html` items and
+ * must keep pasting as text.
+ *
+ * Reads through `Array.from` because `DataTransferItemList` is array-like
+ * rather than an array.
+ */
+export function imagesFromClipboard(items: DataTransferItemList): File[] {
+  const images: File[] = [];
+  for (const item of Array.from(items)) {
+    if (!item.type.startsWith('image/')) continue;
+    // Null when the item is not really a file despite its MIME type.
+    const file = item.getAsFile();
+    if (file !== null) images.push(file);
+  }
+  return images;
+}
