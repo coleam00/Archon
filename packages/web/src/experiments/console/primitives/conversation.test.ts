@@ -3,6 +3,8 @@ import {
   byMostRecent,
   colorToken,
   conversationLabel,
+  conversationMonogram,
+  matchesFilter,
   parseConversationColor,
   UNTITLED_CHAT,
   type ConversationSummary,
@@ -83,5 +85,48 @@ describe('colorToken', () => {
 
   test('no color maps to no token', () => {
     expect(colorToken(null)).toBeNull();
+  });
+});
+
+describe('conversationMonogram', () => {
+  test('uses the initials of the first two words', () => {
+    expect(conversationMonogram(conv({ title: 'Debug the migration' }))).toBe('DT');
+    expect(conversationMonogram(conv({ title: 'Console chat rail' }))).toBe('CC');
+  });
+
+  test('uses the first two letters of a single word', () => {
+    expect(conversationMonogram(conv({ title: 'Migration' }))).toBe('MI');
+  });
+
+  test('an untitled chat still gets a tile', () => {
+    // A blank tile reads as a loading state that never resolves.
+    // "Untitled chat" is two words, so it takes their initials like any other.
+    expect(conversationMonogram(conv({ title: null }))).toBe('UC');
+  });
+
+  test('falls back rather than rendering an empty tile', () => {
+    expect(conversationMonogram(conv({ title: '!!! ???' }))).toBe('??');
+  });
+});
+
+describe('matchesFilter', () => {
+  test('matches on any part of the title, ignoring case', () => {
+    const c = conv({ title: 'Debug the migration' });
+    expect(matchesFilter(c, 'migration')).toBe(true);
+    expect(matchesFilter(c, 'MIGRA')).toBe(true);
+    expect(matchesFilter(c, 'debug')).toBe(true);
+  });
+
+  test('an empty query matches everything, so clearing the box restores the list', () => {
+    expect(matchesFilter(conv(), '')).toBe(true);
+    expect(matchesFilter(conv(), '   ')).toBe(true);
+  });
+
+  test('a non-match is excluded', () => {
+    expect(matchesFilter(conv({ title: 'Debug the migration' }), 'deploy')).toBe(false);
+  });
+
+  test('an untitled chat is findable by its fallback label', () => {
+    expect(matchesFilter(conv({ title: null }), 'untitled')).toBe(true);
   });
 });

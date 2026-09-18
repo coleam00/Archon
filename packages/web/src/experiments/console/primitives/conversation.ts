@@ -90,3 +90,34 @@ export function byMostRecent(a: ConversationSummary, b: ConversationSummary): nu
   if (bt === '') return -1;
   return at < bt ? 1 : -1;
 }
+
+/**
+ * Two-letter monogram for a chat's tile, mirroring the project rail's rows.
+ *
+ * Initials of the first two words when there are two, otherwise the first two
+ * letters. Falls back to `??` rather than rendering an empty tile, which reads
+ * as a loading state that never resolves.
+ */
+export function conversationMonogram(c: ConversationSummary): string {
+  const label = conversationLabel(c);
+  const words = label.split(/\s+/).filter(w => /[a-z0-9]/i.test(w));
+  if (words.length >= 2) {
+    const a = words[0]?.[0] ?? '';
+    const b = words[1]?.[0] ?? '';
+    const pair = `${a}${b}`.toUpperCase();
+    if (pair.length === 2) return pair;
+  }
+  const letters = label.replace(/[^a-z0-9]/gi, '');
+  return letters.length > 0 ? letters.slice(0, 2).toUpperCase() : '??';
+}
+
+/**
+ * Case-insensitive substring match on the title, for the rail's filter box.
+ * An empty query matches everything, so clearing the box restores the list
+ * rather than emptying it.
+ */
+export function matchesFilter(c: ConversationSummary, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (q.length === 0) return true;
+  return conversationLabel(c).toLowerCase().includes(q);
+}
