@@ -62,6 +62,7 @@ function makeConversation(overrides: Partial<Conversation> = {}): Conversation {
     isolation_env_id: null,
     ai_assistant_type: 'claude',
     title: null,
+    color: null,
     hidden: false,
     deleted_at: null,
     last_activity_at: null,

@@ -89,6 +89,7 @@ describe('buildOrchestratorSystemAppend', () => {
     isolation_env_id: null,
     ai_assistant_type: 'claude',
     title: null,
+    color: null,
     hidden: false,
     deleted_at: null,
     user_id: null,
