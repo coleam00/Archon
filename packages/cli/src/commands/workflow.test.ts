@@ -458,17 +458,6 @@ mock.module('@archon/workflows/in-process-engine', () => ({
         input.options
       );
     }
-    // Mirrors the real InProcessWorkflowEngine.cancel()'s 1:1 delegation to
-    // store.cancelRunningWorkflowRun so CLI-level SIGINT/SIGTERM tests can
-    // assert against the same `@archon/core/db/workflows` mock they already use
-    // for failWorkflowRun.
-    async cancel(runId: string, reason?: string): Promise<{ cancelled: boolean }> {
-      const workflowsDb = require('@archon/core/db/workflows');
-      return workflowsDb.cancelRunningWorkflowRun(
-        runId,
-        reason === undefined ? undefined : { reason }
-      );
-    }
   },
 }));
 
@@ -574,7 +563,6 @@ mock.module('@archon/core/db/workflows', () => ({
   getWorkflowRunStatus: mock(() => Promise.resolve(null)),
   failWorkflowRun: mock(() => Promise.resolve()),
   cancelWorkflowRun: mock(() => Promise.resolve({ cancelled: true })),
-  cancelRunningWorkflowRun: mock(() => Promise.resolve({ cancelled: true })),
   findChildRuns: mock(() => Promise.resolve([])),
   findResumableRun: mock(() => Promise.resolve(null)),
   resumeWorkflowRun: mock(() => Promise.resolve(null)),
@@ -10879,11 +10867,6 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
 
     const workflowsDb = require('@archon/core/db/workflows');
     (workflowsDb.failWorkflowRun as ReturnType<typeof mock>).mockClear();
-    (workflowsDb.cancelWorkflowRun as ReturnType<typeof mock>).mockClear();
-    (workflowsDb.cancelRunningWorkflowRun as ReturnType<typeof mock>).mockReset();
-    (workflowsDb.cancelRunningWorkflowRun as ReturnType<typeof mock>).mockResolvedValue({
-      cancelled: true,
-    });
     (workflowsDb.getActiveWorkflowRun as ReturnType<typeof mock>).mockClear();
     (workflowsDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockReset();
     (workflowsDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValue(null);
@@ -10955,11 +10938,10 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
 
     // Paused-at-gate is an external transition the signal handler must respect.
     expect(workflowsDb.failWorkflowRun).not.toHaveBeenCalled();
-    expect(workflowsDb.cancelRunningWorkflowRun).not.toHaveBeenCalled();
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
-  it('cancels (not fails) the run on a genuine mid-run interrupt — an operator stop is not an execution failure', async () => {
+  it('still fails the run on a genuine mid-run interrupt (legacy behavior)', async () => {
     const workflowsDb = require('@archon/core/db/workflows');
     (workflowsDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValue('running');
     const shutdownOrder: string[] = [];
@@ -10992,18 +10974,15 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
       'Workflow failed'
     );
 
-    // Ctrl-C/SIGTERM records status='cancelled' through engine.cancel()'s
-    // running-only path, never status='failed' via failWorkflowRun — an
-    // operator-initiated stop is not an execution failure.
-    expect(workflowsDb.cancelRunningWorkflowRun).toHaveBeenCalledWith('test-run-id', {
-      reason: 'Process terminated (SIGTERM)',
-    });
-    expect(workflowsDb.failWorkflowRun).not.toHaveBeenCalled();
+    expect(workflowsDb.failWorkflowRun).toHaveBeenCalledWith(
+      'test-run-id',
+      'Process terminated (SIGTERM)'
+    );
     expect(shutdownOrder).toEqual(['owner-close', 'exit']);
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
-  it('is a no-op and does not throw when cancel is signalled twice (double Ctrl-C)', async () => {
+  it('is a no-op and does not throw when the signal arrives twice (double Ctrl-C)', async () => {
     const workflowsDb = require('@archon/core/db/workflows');
     (workflowsDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValue('running');
 
@@ -11020,9 +10999,8 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
       const [handler] = addedSigtermListeners(sigtermBefore);
       expect(handler).toBeDefined();
       // Double-signal: the CLI's own `terminating` guard makes the second
-      // invocation a no-op before it ever reaches the database — and even if
-      // that guard were bypassed, cancelRunningWorkflowRun is idempotent and
-      // would return { cancelled: false } instead of throwing.
+      // invocation a no-op before it ever reaches the database, so the run is
+      // only ever failed once.
       handler();
       handler();
       await settleCleanup();
@@ -11035,54 +11013,14 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
     );
 
     // The CLI-level `terminating` guard suppresses the second signal entirely,
-    // so the cancel is observed exactly once here.
-    expect(workflowsDb.cancelRunningWorkflowRun).toHaveBeenCalledTimes(1);
-    expect(workflowsDb.failWorkflowRun).not.toHaveBeenCalled();
+    // so the write is observed exactly once here.
+    expect(workflowsDb.failWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(workflowsDb.failWorkflowRun).toHaveBeenCalledWith(
+      'test-run-id',
+      'Process terminated (SIGTERM)'
+    );
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
-
-  // The status read says 'running', but the executor commits a different state
-  // before the cancel lands. The `status = 'running'` predicate must absorb it:
-  // the update matches nothing, the handler neither throws nor falls back to
-  // failWorkflowRun, and the committed state survives.
-  for (const racedState of ['paused', 'failed'] as const) {
-    it(`leaves a ${racedState} run committed between the status read and the cancel untouched`, async () => {
-      const workflowsDb = require('@archon/core/db/workflows');
-      (workflowsDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValue('running');
-      (workflowsDb.cancelRunningWorkflowRun as ReturnType<typeof mock>).mockResolvedValue({
-        cancelled: false,
-      });
-
-      const sigtermBefore = process.listeners('SIGTERM');
-      const { executeWorkflow } = require('@archon/workflows/executor');
-      (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
-        capturedSubscribeHandler?.({
-          type: 'workflow_started',
-          runId: 'run-1',
-          workflowName: 'plan',
-          conversationId: 'conv-1',
-          transcriptPath: '/logs/run-1.jsonl',
-        });
-        const [handler] = addedSigtermListeners(sigtermBefore);
-        expect(handler).toBeDefined();
-        handler();
-        await settleCleanup();
-        return { success: false, workflowRunId: 'run-1', error: 'interrupted' };
-      });
-
-      setupWorkflowMocks();
-      await expect(workflowRunCommand('/test/path', 'plan', 'hello', {})).rejects.toThrow(
-        'Workflow failed'
-      );
-
-      expect(workflowsDb.cancelRunningWorkflowRun).toHaveBeenCalledWith('test-run-id', {
-        reason: 'Process terminated (SIGTERM)',
-      });
-      expect(workflowsDb.cancelWorkflowRun).not.toHaveBeenCalled();
-      expect(workflowsDb.failWorkflowRun).not.toHaveBeenCalled();
-      expect(exitSpy).toHaveBeenCalledWith(1);
-    });
-  }
 
   it('lets an exact-run cancel controller own the lifecycle transition', async () => {
     const workflowsDb = require('@archon/core/db/workflows');
@@ -11161,10 +11099,10 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
     setupWorkflowMocks();
     await workflowRunCommand('/test/path', 'plan', 'hello', {});
 
-    expect(workflowsDb.cancelRunningWorkflowRun).toHaveBeenCalledWith('test-run-id', {
-      reason: 'Process terminated (SIGTERM)',
-    });
-    expect(workflowsDb.failWorkflowRun).not.toHaveBeenCalled();
+    expect(workflowsDb.failWorkflowRun).toHaveBeenCalledWith(
+      'test-run-id',
+      'Process terminated (SIGTERM)'
+    );
     expect(workflowsDb.getActiveWorkflowRun).not.toHaveBeenCalled();
     expect(exitSpy).toHaveBeenCalledWith(1);
   });

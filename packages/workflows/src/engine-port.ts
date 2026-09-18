@@ -107,6 +107,16 @@ export interface IWorkflowEngine {
    * that is a different operation, owned by `abandonWorkflow`
    * (`@archon/core`'s workflow operations), which also performs cascade and
    * container reclaim.
+   *
+   * NOTE: this method currently has no in-repo production caller; it is part of
+   * the port's contract and is covered by the engine contract tests. The CLI
+   * interrupt handler is the obvious candidate, but it deliberately still
+   * records `failed`, because `resumableStatusClause`
+   * (`packages/core/src/db/workflows.ts`) treats `failed` and `paused` as
+   * resumable and excludes `cancelled` — routing Ctrl-C through `cancel()`
+   * would silently discard every completed node of the interrupted run.
+   * Moving that call site here requires deciding what resumability should mean
+   * for a cancelled run first.
    */
   cancel(runId: string, reason?: string): Promise<{ cancelled: boolean }>;
 }

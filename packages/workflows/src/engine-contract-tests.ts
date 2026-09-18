@@ -133,9 +133,11 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
   } as IWorkflowStore;
 }
 
-function makePlatform(): IWorkflowPlatform {
+function makePlatform(onSendMessage?: (conversationId: string) => void): IWorkflowPlatform {
   return {
-    sendMessage: async (): Promise<void> => undefined,
+    sendMessage: async (conversationId: string): Promise<void> => {
+      onSendMessage?.(conversationId);
+    },
     getPlatformType: () => 'test' as const,
   } as unknown as IWorkflowPlatform;
 }
@@ -218,6 +220,177 @@ export function runWorkflowEngineContractTests(makeEngine: () => IWorkflowEngine
       } else {
         throw new Error('expected a paused result, got a plain success/failure result');
       }
+    });
+
+    it('submit() routes every input field to its own destination', async () => {
+      // Every field gets a distinct sentinel: `conversationId` (the PLATFORM
+      // conversation) and `conversationDbId` (the DB row id) are both plain
+      // `string`, so swapping them inside an implementation's delegation is
+      // invisible to the type system. This test is what makes that swap fail.
+      const engine = makeEngine();
+      const createdRuns: Record<string, unknown>[] = [];
+      const pathLockLookups: string[] = [];
+      const messagedConversations: string[] = [];
+      const store = makeStore({
+        createWorkflowRun: async (input: Record<string, unknown>) => {
+          createdRuns.push(input);
+          return makeRun();
+        },
+        // Returning an active run short-circuits into the path-lock guard,
+        // which is the one deterministic branch that pushes a message at the
+        // PLATFORM conversation id — that is the only place `conversationId`
+        // is observable, and it is the field most easily confused with
+        // `conversationDbId`.
+        getActiveWorkflowRunByPath: async (cwd: string) => {
+          pathLockLookups.push(cwd);
+          return makeRun({ id: 'other-run', workflow_name: 'other-workflow', status: 'running' });
+        },
+        cancelWorkflowRun: async () => ({ cancelled: true }),
+      } as unknown as Partial<IWorkflowStore>);
+
+      await engine.submit({
+        deps: makeDeps(store),
+        platform: makePlatform(id => messagedConversations.push(id)),
+        conversationId: 'sentinel-platform-conversation',
+        cwd: '/sentinel/cwd',
+        workflow: makeWorkflow({ name: 'sentinel-workflow' }),
+        userMessage: 'sentinel-user-message',
+        conversationDbId: 'sentinel-db-conversation-row',
+      });
+
+      expect(createdRuns).toHaveLength(1);
+      const created = createdRuns[0];
+      // The DB row id — NOT the platform conversation id — is what the run row
+      // stores as `conversation_id`.
+      expect(created.conversation_id).toBe('sentinel-db-conversation-row');
+      expect(created.working_path).toBe('/sentinel/cwd');
+      expect(created.user_message).toBe('sentinel-user-message');
+      expect(created.workflow_name).toBe('sentinel-workflow');
+      // `cwd` is also what the path lock is keyed on.
+      expect(pathLockLookups).toEqual(['/sentinel/cwd']);
+      // …while the platform conversation id is what messages are addressed to.
+      expect(messagedConversations).toEqual(['sentinel-platform-conversation']);
+    });
+
+    it('resume() fires onAccepted before execution completes', async () => {
+      const engine = makeEngine();
+      const order: string[] = [];
+      const candidate = makeRun({ id: 'accepted-run', status: 'paused' });
+      const resumed = makeRun({ id: 'accepted-run', status: 'running' });
+      const store = makeStore({
+        getDagResumeSnapshot: async () => ({
+          ...emptyDagResumeSnapshot(),
+          completedNodeOutputs: new Map([['node1', { output: 'out1' }]]),
+        }),
+        resumeWorkflowRun: async () => {
+          order.push('claimed');
+          return resumed;
+        },
+        // Read by executeWorkflow only after the DAG loop has run, so seeing it
+        // AFTER 'accepted' proves onAccepted fired at the hydrate/execute
+        // boundary rather than once the whole run had finished.
+        getWorkflowRun: async () => {
+          order.push('executed');
+          return { ...resumed, status: 'completed' as const };
+        },
+      });
+
+      const pending = engine.resume(
+        {
+          deps: makeDeps(store),
+          platform: makePlatform(),
+          conversationId: 'conv-1',
+          cwd: '/tmp/ops',
+          workflow: makeWorkflow(),
+          userMessage: 'hello',
+          conversationDbId: 'db-conv-1',
+          run: candidate,
+        },
+        { onAccepted: () => order.push('accepted') }
+      );
+      const result = await pending;
+      order.push('settled');
+
+      expect(result.success).toBe(true);
+      expect(order.indexOf('accepted')).toBeGreaterThan(order.indexOf('claimed'));
+      expect(order.indexOf('accepted')).toBeLessThan(order.indexOf('executed'));
+      expect(order[order.length - 1]).toBe('settled');
+    });
+
+    it('resume() does not fire onAccepted when there is nothing to resume', async () => {
+      // The default fixture snapshot has no completed nodes and no wait/gate
+      // state, so hydration yields null and execution must never start —
+      // therefore nothing was ever "accepted".
+      const engine = makeEngine();
+      let accepted = 0;
+      const candidate = makeRun({ id: 'empty-run', status: 'paused' });
+      let claimed = 0;
+      const store = makeStore({
+        resumeWorkflowRun: async () => {
+          claimed += 1;
+          return makeRun({ id: 'empty-run', status: 'running' });
+        },
+      });
+
+      const result = await engine.resume(
+        {
+          deps: makeDeps(store),
+          platform: makePlatform(),
+          conversationId: 'conv-1',
+          cwd: '/tmp/ops',
+          workflow: makeWorkflow(),
+          userMessage: 'hello',
+          conversationDbId: 'db-conv-1',
+          run: candidate,
+        },
+        { onAccepted: () => (accepted += 1) }
+      );
+
+      expect(result.success).toBe(false);
+      expect(accepted).toBe(0);
+      expect(claimed).toBe(0);
+    });
+
+    it('resume() starts execution even when onAccepted throws', async () => {
+      // The run row is already claimed by the time onAccepted runs, so a
+      // throwing callback must not be allowed to abort the start — that would
+      // strand a `running` row with no execution behind it.
+      const engine = makeEngine();
+      let executed = 0;
+      const candidate = makeRun({ id: 'throwing-run', status: 'paused' });
+      const resumed = makeRun({ id: 'throwing-run', status: 'running' });
+      const store = makeStore({
+        getDagResumeSnapshot: async () => ({
+          ...emptyDagResumeSnapshot(),
+          completedNodeOutputs: new Map([['node1', { output: 'out1' }]]),
+        }),
+        resumeWorkflowRun: async () => resumed,
+        getWorkflowRun: async () => {
+          executed += 1;
+          return { ...resumed, status: 'completed' as const };
+        },
+      });
+
+      const result = await engine.resume(
+        {
+          deps: makeDeps(store),
+          platform: makePlatform(),
+          conversationId: 'conv-1',
+          cwd: '/tmp/ops',
+          workflow: makeWorkflow(),
+          userMessage: 'hello',
+          conversationDbId: 'db-conv-1',
+          run: candidate,
+        },
+        {
+          onAccepted: () => {
+            throw new Error('onAccepted blew up');
+          },
+        }
+      );
+
+      expect(result.success).toBe(true);
+      expect(executed).toBeGreaterThan(0);
     });
 
     it('resume() surfaces a lost CAS race as an unwrapped WorkflowNotResumableError', async () => {

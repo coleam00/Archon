@@ -2950,15 +2950,6 @@ async function runWorkflowWithOwnedSource(
     }
   })();
 
-  // One engine and ONE store for this command: the termination handler below
-  // cancels through the engine, and the run itself is submitted through it
-  // further down with these same `deps`. `deps` is built here rather than at
-  // the submit site so the engine exists before the signal handlers are
-  // registered, and so `engine` and `submit`'s `deps` cannot diverge into two
-  // independently created stores.
-  const deps = createWorkflowDeps();
-  const engine = new InProcessWorkflowEngine(deps.store);
-
   // Register cleanup handlers for graceful termination.
   //
   // Guard rails (#1123): a signal must only ever fail THE run this process is
@@ -3018,18 +3009,11 @@ async function runWorkflowWithOwnedSource(
         );
         return;
       }
-      // Genuine interrupt of the run this process is driving. `cancel()` only
-      // applies while the run is still 'running' — the status read above and
-      // this write are not one atomic step, so the executor can commit a gate
-      // pause in between; the port's running-only predicate leaves that pause
-      // (and any other transition) untouched and reports `{cancelled: false}`
-      // instead of throwing, which also makes a repeated signal safe. An
-      // operator-initiated stop is not an execution failure: it records
-      // `status='cancelled'`, not `status='failed'` — that behavior change is
-      // owned by the sibling CLI-interrupt fix; this call site only routes it
-      // through the port. failWorkflowRun remains reserved for genuine
-      // execution failures elsewhere in this file.
-      await engine.cancel(interruptedRunId, `Process terminated (${signal})`);
+      // Genuine interrupt of the run this process is driving. failWorkflowRun's
+      // own status='running' CAS closes the read-then-write window: if the
+      // executor commits a gate pause between the read above and this write,
+      // the CAS misses and throws (caught below) — the run stays paused.
+      await workflowDb.failWorkflowRun(interruptedRunId, `Process terminated (${signal})`);
     })()
       .catch((err: unknown) => {
         const e = err as Error;
@@ -3135,6 +3119,8 @@ async function runWorkflowWithOwnedSource(
   // to executeWorkflow. Otherwise this is a fresh run and prepared stays null.
   // The lookup-by-(workflowName, cwd) was already done above for worktree-path
   // resolution; reuse that result rather than querying twice.
+  const deps = createWorkflowDeps();
+  const engine = new InProcessWorkflowEngine(deps.store);
   let result: Awaited<ReturnType<typeof executeWorkflow>> | undefined;
   // A genuine container-teardown failure captured in the finally, rethrown AFTER
   // the finally when the run itself succeeded — so a leaked privileged container
