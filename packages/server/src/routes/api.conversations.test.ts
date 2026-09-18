@@ -1,4 +1,7 @@
-import { describe, test, expect, mock } from 'bun:test';
+import { describe, test, expect, mock, beforeAll, afterAll } from 'bun:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
@@ -658,5 +661,102 @@ describe('PATCH /api/conversations/:id — forge platform IDs with encoded slash
       body: JSON.stringify({ title: 'New Title' }),
     });
     expect(response.status).toBe(404);
+  });
+});
+
+describe('POST /api/conversations with file attachments', () => {
+  const mockLockManager = {
+    acquireLock: mock(async (_convId: string, fn: () => Promise<void>) => {
+      await fn();
+      return { status: 'started' as const };
+    }),
+  } as unknown as ConversationLockManager;
+
+  const mockWebAdapter = {
+    setConversationDbId: mock((_platformId: string, _dbId: string) => {}),
+    emitLockEvent: mock((_convId: string, _locked: boolean) => {}),
+    emitSSE: mock(async (_convId: string, _data: string) => {}),
+  } as unknown as WebAdapter;
+
+  // Uploads are written under getArchonHome(), which reads the environment.
+  // Point it at a temp directory so the suite never touches a real ARCHON_HOME.
+  const prevHome = process.env.ARCHON_HOME;
+  const prevDocker = process.env.ARCHON_DOCKER;
+  let tmpHome = '';
+
+  beforeAll(async () => {
+    tmpHome = await mkdtemp(join(tmpdir(), 'archon-upload-test-'));
+    process.env.ARCHON_HOME = tmpHome;
+    delete process.env.ARCHON_DOCKER;
+  });
+
+  afterAll(async () => {
+    if (prevHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = prevHome;
+    if (prevDocker !== undefined) process.env.ARCHON_DOCKER = prevDocker;
+    await rm(tmpHome, { recursive: true, force: true });
+  });
+
+  test('attaches an uploaded file to the first message of a new conversation', async () => {
+    const app = new OpenAPIHono({ defaultHook: validationErrorHook });
+    registerApiRoutes(app, mockWebAdapter, mockLockManager);
+
+    const form = new FormData();
+    form.append('message', 'look at this');
+    form.append('files', new File(['hello'], 'notes.md', { type: 'text/markdown' }), 'notes.md');
+
+    const response = await app.request('/api/conversations', { method: 'POST', body: form });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { conversationId: string; dispatched: boolean };
+    expect(body.dispatched).toBe(true);
+
+    // The attachment is recorded on the user message, which is what lets the
+    // console render a chip for it.
+    const lastCall = mockAddMessage.mock.calls.at(-1) as unknown as unknown[];
+    expect(lastCall[2]).toBe('look at this');
+    expect(lastCall[3]).toEqual({
+      files: [{ name: 'notes.md', mimeType: 'text/markdown', size: 5 }],
+    });
+  });
+
+  test('refuses files with no message to attach them to', async () => {
+    const app = new OpenAPIHono({ defaultHook: validationErrorHook });
+    registerApiRoutes(app, mockWebAdapter, mockLockManager);
+
+    const form = new FormData();
+    form.append('files', new File(['hello'], 'notes.md', { type: 'text/markdown' }), 'notes.md');
+
+    const response = await app.request('/api/conversations', { method: 'POST', body: form });
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { detail?: string };
+    expect(body.detail).toContain('message is required');
+  });
+
+  test('refuses an unsupported file type before writing anything', async () => {
+    const app = new OpenAPIHono({ defaultHook: validationErrorHook });
+    registerApiRoutes(app, mockWebAdapter, mockLockManager);
+
+    const form = new FormData();
+    form.append('message', 'run this');
+    form.append('files', new File(['MZ'], 'payload.exe', { type: 'application/x-msdownload' }));
+
+    const response = await app.request('/api/conversations', { method: 'POST', body: form });
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('unsupported type');
+  });
+
+  test('a multipart create with no files still works', async () => {
+    const app = new OpenAPIHono({ defaultHook: validationErrorHook });
+    registerApiRoutes(app, mockWebAdapter, mockLockManager);
+
+    const form = new FormData();
+    form.append('message', 'plain multipart');
+
+    const response = await app.request('/api/conversations', { method: 'POST', body: form });
+    expect(response.status).toBe(200);
   });
 });

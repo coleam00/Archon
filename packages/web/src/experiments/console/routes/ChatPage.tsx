@@ -74,7 +74,6 @@ export function ChatPage(): ReactElement {
   const [error, setError] = useState<string | null>(null);
   // Non-error advisory (distinct channel from `error` so it doesn't read as a
   // send failure) — e.g. files dropped from a first message.
-  const [notice, setNotice] = useState<string | null>(null);
 
   // Turn-completion state. The settle timer (below) is the correctness floor — it
   // works even when SSE is absent. The SSE lock event is a fast-path on top of it.
@@ -154,24 +153,14 @@ export function ChatPage(): ReactElement {
   const onSend = (text: string, files?: File[]): void => {
     if (projectId === undefined) return;
     setError(null);
-    setNotice(null);
     setBusy(true); // optimistic: disable the composer immediately
     void (async (): Promise<void> => {
       try {
         if (activeConvId === null) {
-          const conv = await skill.createConversation(projectId, text);
+          const conv = await skill.createConversation(projectId, text, files);
           setActiveConvId(conv.conversationId);
           invalidate(K.conversations(projectId));
           invalidate(K.messages(conv.conversationId));
-          // createConversation is JSON-only — files can't ride the first message.
-          // Surface it as a non-error notice (not silently dropped); phrased so
-          // it's actionable once the agent replies (the composer is locked while
-          // `busy`), not "now".
-          if (files !== undefined && files.length > 0) {
-            setNotice(
-              "Files aren't attached to the first message of a new chat — re-attach and send them once the chat has started."
-            );
-          }
         } else {
           await skill.sendMessage(activeConvId, text, files);
           invalidate(K.messages(activeConvId));
@@ -298,12 +287,6 @@ export function ChatPage(): ReactElement {
       </div>
 
       <WorkflowDock projectId={projectId} />
-
-      {notice !== null ? (
-        <div className="shrink-0 border-t border-warning/30 bg-warning/[0.06] px-6 py-2 font-mono text-[11px] text-warning">
-          {notice}
-        </div>
-      ) : null}
 
       {error !== null || loadError !== undefined ? (
         <div className="shrink-0 border-t border-error/30 bg-error/[0.06] px-6 py-2 font-mono text-[11px] text-error">
