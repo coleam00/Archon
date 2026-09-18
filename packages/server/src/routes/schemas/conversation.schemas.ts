@@ -23,6 +23,9 @@ export const listConversationsQuerySchema = z.object({
   // conversations when an identity resolves. Default lists everything. Enum
   // makes the boolean contract explicit (the handler treats only 'true' as on).
   mine: z.enum(['true', 'false']).optional(),
+  // Which archived state to list. Omitted behaves exactly as before, so every
+  // existing caller keeps seeing active conversations only.
+  archived: z.enum(['active', 'archived', 'all']).optional(),
 });
 
 /** GET /api/conversations response. */
@@ -62,6 +65,9 @@ export const updateConversationBodySchema = z
   .object({
     title: z.string().min(1).optional(),
     color: conversationColorSchema.nullable().optional(),
+    // true archives, false restores. Omitted leaves the state alone, so a
+    // rename cannot accidentally resurrect an archived chat.
+    archived: z.boolean().optional(),
   })
   .openapi('UpdateConversationBody');
 

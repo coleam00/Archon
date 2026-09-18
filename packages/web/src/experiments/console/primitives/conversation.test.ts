@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import {
+  toConversationSummary,
   byMostRecent,
   colorToken,
   conversationLabel,
@@ -16,6 +17,7 @@ const conv = (over: Partial<ConversationSummary> = {}): ConversationSummary => (
   platformType: 'web',
   lastActivityAt: '2026-06-05T10:00:00Z',
   color: null,
+  archived: false,
   ...over,
 });
 
@@ -128,5 +130,27 @@ describe('matchesFilter', () => {
 
   test('an untitled chat is findable by its fallback label', () => {
     expect(matchesFilter(conv({ title: null }), 'untitled')).toBe(true);
+  });
+});
+
+describe('toConversationSummary — archived', () => {
+  const raw = (over: Record<string, unknown> = {}) => ({
+    id: 'db-1',
+    platform_conversation_id: 'web-1',
+    platform_type: 'web',
+    title: 'Refund reconciliation',
+    last_activity_at: '2026-06-05T10:00:00Z',
+    color: null,
+    ...over,
+  });
+
+  test('a soft-deleted conversation reads as archived', () => {
+    expect(toConversationSummary(raw({ deleted_at: '2026-06-06T10:00:00Z' })).archived).toBe(true);
+  });
+
+  test('a live conversation is not archived', () => {
+    expect(toConversationSummary(raw({ deleted_at: null })).archived).toBe(false);
+    // Older payloads omit the field entirely rather than sending null.
+    expect(toConversationSummary(raw()).archived).toBe(false);
   });
 });

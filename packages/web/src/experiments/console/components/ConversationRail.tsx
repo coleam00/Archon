@@ -11,6 +11,15 @@ import {
 } from '../primitives/conversation';
 import { relativeTime } from '../lib/format';
 
+/** Which archived state the rail is showing. */
+export type ArchiveScope = 'active' | 'archived' | 'all';
+
+const SCOPES: readonly { value: ArchiveScope; label: string }[] = [
+  { value: 'active', label: 'Active' },
+  { value: 'archived', label: 'Archived' },
+  { value: 'all', label: 'All' },
+];
+
 interface ConversationRailProps {
   conversations: ConversationSummary[];
   /** `null` while a new chat is pending — it exists only once the first message is sent. */
@@ -18,6 +27,11 @@ interface ConversationRailProps {
   onSelect: (id: string | null) => void;
   onRename: (id: string, title: string) => void;
   onRecolor: (ids: string[], color: ConversationColor | null) => void;
+  onArchive: (ids: string[], archived: boolean) => void;
+  /** Which archived state the list is showing; the rail does not fetch. */
+  scope: ArchiveScope;
+  onScopeChange: (scope: ArchiveScope) => void;
+  archivedCount: number;
   /** True while a reply is in flight, which freezes actions that would move the user. */
   busy: boolean;
 }
@@ -39,6 +53,10 @@ export function ConversationRail({
   onSelect,
   onRename,
   onRecolor,
+  onArchive,
+  scope,
+  onScopeChange,
+  archivedCount,
   busy,
 }: ConversationRailProps): ReactElement {
   const [query, setQuery] = useState('');
@@ -147,6 +165,29 @@ export function ConversationRail({
         />
       </div>
 
+      <div className="flex gap-1.5 px-3 pb-2.5">
+        {SCOPES.map(({ value, label }) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => {
+              onScopeChange(value);
+            }}
+            aria-pressed={scope === value}
+            className={`rounded-full border px-2.5 py-[3px] font-mono text-[10px] tracking-[0.08em] transition-colors ${
+              scope === value ? 'text-text-primary' : 'text-text-tertiary hover:text-text-secondary'
+            }`}
+            style={{
+              borderColor: scope === value ? 'var(--border-bright)' : 'var(--border)',
+              background: scope === value ? 'var(--surface-elevated)' : 'transparent',
+            }}
+          >
+            {label}
+            {value === 'archived' && archivedCount > 0 ? ` ${String(archivedCount)}` : ''}
+          </button>
+        ))}
+      </div>
+
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
         {visible.length === 0 ? (
           <p className="px-2 py-3 text-[12px] text-text-tertiary">
@@ -162,6 +203,8 @@ export function ConversationRail({
             <div
               key={c.id}
               className={`group relative mb-0.5 flex items-start gap-2.5 rounded-[10px] border px-2.5 py-2 transition-colors ${
+                c.archived ? 'opacity-55 hover:opacity-100 ' : ''
+              }${
                 isSelected
                   ? 'bg-[color:color-mix(in_oklch,var(--brand-magenta),transparent_92%)]'
                   : isActive
@@ -288,6 +331,18 @@ export function ConversationRail({
                   >
                     Rename…
                   </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      onArchive(recolorTargets(c.id), !c.archived);
+                      setSelected(new Set());
+                      setMenuFor(null);
+                    }}
+                    className="w-full rounded-lg px-2.5 py-1.5 text-left text-[12.5px] text-text-secondary hover:bg-surface-elevated hover:text-text-primary"
+                  >
+                    {c.archived ? 'Restore' : 'Archive'}
+                  </button>
                   <div className="my-1 h-px bg-border" />
                   <div className="px-2.5 pb-1 font-mono text-[9.5px] tracking-[0.14em] text-text-tertiary">
                     COLOR
@@ -360,9 +415,29 @@ export function ConversationRail({
             <button
               type="button"
               onClick={() => {
+                // Restore when every selected chat is already archived,
+                // otherwise archive — one button that always does the
+                // non-destructive thing for the current selection.
+                const ids = [...selected];
+                const allArchived = ids.every(
+                  id => conversations.find(c => c.id === id)?.archived === true
+                );
+                onArchive(ids, !allArchived);
                 setSelected(new Set());
               }}
               className="ml-1 rounded-[7px] border px-2 py-1 text-[11px] text-text-secondary hover:text-text-primary"
+              style={{ borderColor: 'var(--border-bright)' }}
+            >
+              {[...selected].every(id => conversations.find(c => c.id === id)?.archived === true)
+                ? 'Restore'
+                : 'Archive'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSelected(new Set());
+              }}
+              className="rounded-[7px] border px-2 py-1 text-[11px] text-text-secondary hover:text-text-primary"
               style={{ borderColor: 'var(--border-bright)' }}
             >
               Clear

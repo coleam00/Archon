@@ -224,11 +224,22 @@ export async function listConversations(
    * Non-enforcing "mine" filter: when set, restrict to conversations attributed
    * to this user (`user_id = $N`). Absent → all (default visibility stays open).
    */
-  userId?: string
+  userId?: string,
+  /**
+   * Which archived state to return. `active` (the default) preserves the
+   * historic behaviour exactly; `archived` returns only soft-deleted rows so
+   * they can be listed and restored; `all` returns both.
+   */
+  archived: 'active' | 'archived' | 'all' = 'active'
 ): Promise<readonly Conversation[]> {
   const params: unknown[] = [];
-  let sql =
-    'SELECT * FROM remote_agent_conversations WHERE deleted_at IS NULL AND (hidden IS NULL OR hidden = false)';
+  const archivedClause =
+    archived === 'active'
+      ? 'deleted_at IS NULL'
+      : archived === 'archived'
+        ? 'deleted_at IS NOT NULL'
+        : '1 = 1';
+  let sql = `SELECT * FROM remote_agent_conversations WHERE ${archivedClause} AND (hidden IS NULL OR hidden = false)`;
 
   if (excludeEmpty) {
     sql +=
@@ -277,6 +288,24 @@ export async function updateConversationTitle(id: string, title: string): Promis
   const result = await pool.query(
     `UPDATE remote_agent_conversations SET title = $1, updated_at = ${dialect.now()} WHERE id = $2`,
     [title, id]
+  );
+  if (result.rowCount === 0) {
+    throw new ConversationNotFoundError(id);
+  }
+}
+
+/**
+ * Archive or restore a conversation.
+ *
+ * Archiving is the same soft delete `softDeleteConversation` performs; this
+ * exists so the two directions are one symmetric call, because an archive the
+ * user cannot undo is a delete wearing a friendlier word.
+ */
+export async function setConversationArchived(id: string, archived: boolean): Promise<void> {
+  const dialect = getDialect();
+  const result = await pool.query(
+    `UPDATE remote_agent_conversations SET deleted_at = ${archived ? dialect.now() : 'NULL'}, updated_at = ${dialect.now()} WHERE id = $1`,
+    [id]
   );
   if (result.rowCount === 0) {
     throw new ConversationNotFoundError(id);

@@ -3,7 +3,7 @@ import { useParams } from 'react-router';
 import { ChatStream } from '../components/ChatStream';
 import { ChatComposer } from '../components/ChatComposer';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
-import { ConversationRail } from '../components/ConversationRail';
+import { ConversationRail, type ArchiveScope } from '../components/ConversationRail';
 import type { ConversationColor } from '../primitives/conversation';
 import { WorkingIndicator } from '../components/WorkingIndicator';
 import { WorkflowDock } from '../components/WorkflowDock';
@@ -50,9 +50,21 @@ export function ChatPage(): ReactElement {
     () => (projectId !== undefined ? skill.getProject(projectId) : Promise.resolve(null))
   );
 
+  // Which archived state the rail is showing. Part of the cache key, or
+  // switching scope would render the previous scope's list.
+  const [scope, setScope] = useState<ArchiveScope>('active');
   const { data: conversations, error: conversationsError } = useEntity<ConversationSummary[]>(
-    projectId !== undefined ? K.conversations(projectId) : 'noop:no-project-convs',
-    () => (projectId !== undefined ? skill.listConversations(projectId) : Promise.resolve([]))
+    projectId !== undefined ? `${K.conversations(projectId)}:${scope}` : 'noop:no-project-convs',
+    () =>
+      projectId !== undefined ? skill.listConversations(projectId, scope) : Promise.resolve([])
+  );
+
+  // Counting archived chats needs its own read: the active list cannot know
+  // how many it is leaving out.
+  const { data: archivedList } = useEntity<ConversationSummary[]>(
+    projectId !== undefined ? `${K.conversations(projectId)}:archived-count` : 'noop:no-archived',
+    () =>
+      projectId !== undefined ? skill.listConversations(projectId, 'archived') : Promise.resolve([])
   );
 
   // Active conversation: most-recent web conversation, else null until first send.
@@ -73,6 +85,32 @@ export function ChatPage(): ReactElement {
     setActiveConvId(id);
   };
 
+  const invalidateConversations = (): void => {
+    if (projectId === undefined) return;
+    invalidate(`${K.conversations(projectId)}:${scope}`);
+    invalidate(`${K.conversations(projectId)}:archived-count`);
+    invalidate(K.conversations(projectId));
+  };
+
+  const archiveConversations = (ids: string[], archived: boolean): void => {
+    void (async (): Promise<void> => {
+      try {
+        for (const id of ids) {
+          await skill.setConversationArchived(id, archived);
+        }
+        // Archiving the chat you are reading would leave the page showing a
+        // conversation the rail no longer lists, so step out of it.
+        if (archived && activeConvId !== null && ids.includes(activeConvId)) {
+          setActiveConvId(null);
+          setStartingNew(true);
+        }
+        invalidateConversations();
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : 'Could not change the archive state.');
+      }
+    })();
+  };
+
   const recolorConversations = (ids: string[], color: ConversationColor | null): void => {
     void (async (): Promise<void> => {
       try {
@@ -81,7 +119,7 @@ export function ChatPage(): ReactElement {
         for (const id of ids) {
           await skill.setConversationColor(id, color);
         }
-        if (projectId !== undefined) invalidate(K.conversations(projectId));
+        invalidateConversations();
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : 'Could not change the color.');
       }
@@ -92,7 +130,7 @@ export function ChatPage(): ReactElement {
     void (async (): Promise<void> => {
       try {
         await skill.renameConversation(id, title);
-        if (projectId !== undefined) invalidate(K.conversations(projectId));
+        invalidateConversations();
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : 'Rename failed.');
       }
@@ -288,6 +326,10 @@ export function ChatPage(): ReactElement {
         onSelect={selectConversation}
         onRename={renameConversation}
         onRecolor={recolorConversations}
+        onArchive={archiveConversations}
+        scope={scope}
+        onScopeChange={setScope}
+        archivedCount={archivedList?.length ?? 0}
         busy={busy}
       />
       <div className="flex min-w-0 flex-1 flex-col">

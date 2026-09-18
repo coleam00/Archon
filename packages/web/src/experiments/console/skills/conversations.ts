@@ -46,11 +46,28 @@ export async function createConversation(
   });
 }
 
-export async function listConversations(projectId: string): Promise<ConversationSummary[]> {
+export async function listConversations(
+  projectId: string,
+  archived: 'active' | 'archived' | 'all' = 'active'
+): Promise<ConversationSummary[]> {
   const raw = await requestJson<Parameters<typeof toConversationSummary>[0][]>(
-    `/api/conversations?codebaseId=${encodeURIComponent(projectId)}&mine=true`
+    `/api/conversations?codebaseId=${encodeURIComponent(projectId)}&mine=true&archived=${archived}`
   );
   return raw.map(toConversationSummary);
+}
+
+/**
+ * Archive or restore a conversation. Symmetric by design — an archive the user
+ * cannot undo is a delete wearing a friendlier word.
+ */
+export async function setConversationArchived(
+  conversationPlatformId: string,
+  archived: boolean
+): Promise<void> {
+  await requestJson<{ success: boolean }>(
+    `/api/conversations/${encodeURIComponent(conversationPlatformId)}`,
+    { method: 'PATCH', body: JSON.stringify({ archived }) }
+  );
 }
 
 export async function sendMessage(

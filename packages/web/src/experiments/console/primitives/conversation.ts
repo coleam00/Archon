@@ -30,6 +30,8 @@ export interface ConversationSummary {
   lastActivityAt: string | null;
   /** User-chosen color label, or null for none. */
   color: ConversationColor | null;
+  /** Archived chats are hidden from the default list but are never destroyed. */
+  archived: boolean;
 }
 
 interface RawConversation {
@@ -39,6 +41,7 @@ interface RawConversation {
   title: string | null;
   last_activity_at: string | null;
   color: string | null;
+  deleted_at?: string | null;
 }
 
 export function toConversationSummary(raw: RawConversation): ConversationSummary {
@@ -48,6 +51,8 @@ export function toConversationSummary(raw: RawConversation): ConversationSummary
     platformType: raw.platform_type,
     lastActivityAt: raw.last_activity_at,
     color: parseConversationColor(raw.color),
+    // Archiving is a soft delete, so the timestamp's presence is the state.
+    archived: raw.deleted_at != null,
   };
 }
 
