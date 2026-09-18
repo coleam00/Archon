@@ -113,21 +113,21 @@ import type { IWorkflowStore } from './store';
 // The contract suite drives submit/resume only; those take their store through
 // the per-call `deps`, so the constructor-bound store is never reached here.
 const contractStore: Partial<IWorkflowStore> = {
-  cancelWorkflowRun: async () => ({ cancelled: false }),
+  cancelRunningWorkflowRun: async () => ({ cancelled: false }),
 };
 runWorkflowEngineContractTests(() => new InProcessWorkflowEngine(contractStore as IWorkflowStore));
 
 import { describe, test, expect } from 'bun:test';
 
 // ---------------------------------------------------------------------------
-// cancel() — real implementation (#3334)
+// cancel() — real implementation
 // ---------------------------------------------------------------------------
 
 describe('InProcessWorkflowEngine.cancel', () => {
-  test('delegates 1:1 to store.cancelWorkflowRun, returning its {cancelled} verbatim', async () => {
+  test('delegates 1:1 to store.cancelRunningWorkflowRun, returning its {cancelled} verbatim', async () => {
     const calls: { id: string; event?: { reason?: string } }[] = [];
     const store: Partial<IWorkflowStore> = {
-      cancelWorkflowRun: async (id, event) => {
+      cancelRunningWorkflowRun: async (id, event) => {
         calls.push({ id, event });
         return { cancelled: true };
       },
@@ -142,13 +142,34 @@ describe('InProcessWorkflowEngine.cancel', () => {
     expect(calls).toEqual([{ id: 'run-42', event: { reason: 'operator stop' } }]);
   });
 
-  test('is a no-op (never throws) on a second call once the run is already terminal', async () => {
-    // Mirrors @archon/core's real cancelWorkflowRun: idempotent, guards
-    // status NOT IN ('completed', 'cancelled') — a double-cancel returns
-    // {cancelled: false} rather than throwing.
-    let calls = 0;
+  test('never reaches the unconditional cancelWorkflowRun, so a gate pause survives', async () => {
+    // The port's contract is running-only: a run that paused at a gate between
+    // a caller's status read and this call must be left alone. Routing through
+    // the unconditional store method would overwrite `paused` with `cancelled`.
+    let unconditionalCalls = 0;
     const store: Partial<IWorkflowStore> = {
       cancelWorkflowRun: async () => {
+        unconditionalCalls += 1;
+        return { cancelled: true };
+      },
+      // Mirrors @archon/core's cancelRunningWorkflowRun against a paused row:
+      // the `status = 'running'` predicate matches nothing.
+      cancelRunningWorkflowRun: async () => ({ cancelled: false }),
+    };
+
+    const result = await new InProcessWorkflowEngine(store as IWorkflowStore).cancel('run-paused');
+
+    expect(result).toEqual({ cancelled: false });
+    expect(unconditionalCalls).toBe(0);
+  });
+
+  test('is a no-op (never throws) on a second call once the run is no longer running', async () => {
+    // Mirrors @archon/core's real cancelRunningWorkflowRun: idempotent, guards
+    // status = 'running' — a second call returns {cancelled: false} rather
+    // than throwing.
+    let calls = 0;
+    const store: Partial<IWorkflowStore> = {
+      cancelRunningWorkflowRun: async () => {
         calls += 1;
         return { cancelled: calls === 1 };
       },
@@ -165,7 +186,7 @@ describe('InProcessWorkflowEngine.cancel', () => {
   test('omits the event arg entirely when no reason is given', async () => {
     let received: unknown = 'unset';
     const store: Partial<IWorkflowStore> = {
-      cancelWorkflowRun: async (_id, event) => {
+      cancelRunningWorkflowRun: async (_id, event) => {
         received = event;
         return { cancelled: true };
       },

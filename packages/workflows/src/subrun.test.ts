@@ -433,6 +433,16 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve({ cancelled: false });
   };
 
+  cancelRunningWorkflowRun = (id: string): Promise<{ cancelled: boolean }> => {
+    const r = this.runs.get(id);
+    if (r && r.status === 'running') {
+      r.status = 'cancelled';
+      r.completed_at = new Date();
+      return Promise.resolve({ cancelled: true });
+    }
+    return Promise.resolve({ cancelled: false });
+  };
+
   cancelFanOutRun: IWorkflowStore['cancelFanOutRun'] = (id, reason) => {
     const r = this.runs.get(id);
     if (r && r.status !== 'completed' && r.status !== 'cancelled') {

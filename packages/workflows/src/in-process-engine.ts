@@ -4,9 +4,10 @@
  * re-shaping wrapper: they delegate 1:1 to the `executeWorkflow` /
  * `hydrateResumableRun` call path, with no behavior changes.
  *
- * `cancel()` delegates to `IWorkflowStore.cancelWorkflowRun`, which is backed
- * by `@archon/core`'s idempotent `cancelWorkflowRun` (guards `status NOT IN
- * ('completed', 'cancelled')`, never throws on a double-cancel).
+ * `cancel()` delegates to `IWorkflowStore.cancelRunningWorkflowRun`, which is
+ * backed by `@archon/core`'s `cancelRunningWorkflowRun` (guards `status =
+ * 'running'`, and reports an idempotent `{ cancelled: false }` rather than
+ * throwing when the run has already moved on).
  * `@archon/workflows` cannot import `@archon/core` directly (core depends on
  * workflows, not the reverse), so the store arrives through the constructor:
  * `new InProcessWorkflowEngine(deps.store)`.
@@ -51,7 +52,9 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
    * The engine is bound to a store at construction because `cancel()` has no
    * per-call `deps` parameter (the `IWorkflowEngine` port fixes its signature
    * to `(runId, reason)`). `submit`/`resume` still take their own `deps` per
-   * call, mirroring `executeWorkflow`.
+   * call, mirroring `executeWorkflow`. Callers should pass the very store
+   * carried by those `deps` (`new InProcessWorkflowEngine(deps.store)`) so a
+   * cancel and the run it targets cannot address different backing stores.
    */
   constructor(private readonly store: IWorkflowStore) {}
 
@@ -153,11 +156,17 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
   }
 
   async cancel(runId: string, reason?: string): Promise<{ cancelled: boolean }> {
-    // Delegates 1:1 to the store's idempotent cancelWorkflowRun (see class doc
-    // comment above) — this is a cooperative request only (see engine-port.ts's
-    // doc comment on IWorkflowEngine.cancel): the DAG loop observes it on its
-    // own poll throttle, so a resolved `{ cancelled: true }` means "recorded",
-    // not "execution has already stopped".
-    return this.store.cancelWorkflowRun(runId, reason === undefined ? undefined : { reason });
+    // Cooperative request against a run that is still `running` (see
+    // engine-port.ts's doc comment on IWorkflowEngine.cancel): the DAG loop
+    // observes it on its own poll throttle, so `{ cancelled: true }` means
+    // "recorded", not "execution has already stopped". The running-only
+    // predicate is what keeps a caller that read the status a moment earlier
+    // from overwriting a gate pause the executor committed in between; a miss
+    // is an idempotent `{ cancelled: false }`, never a throw. Discarding a
+    // non-running run belongs to `abandonWorkflow`, not to this port.
+    return this.store.cancelRunningWorkflowRun(
+      runId,
+      reason === undefined ? undefined : { reason }
+    );
   }
 }

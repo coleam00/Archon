@@ -2950,9 +2950,14 @@ async function runWorkflowWithOwnedSource(
     }
   })();
 
-  // One engine for this command: the termination handler below cancels through
-  // it, and the run itself is submitted through it further down.
-  const engine = new InProcessWorkflowEngine(createWorkflowStore());
+  // One engine and ONE store for this command: the termination handler below
+  // cancels through the engine, and the run itself is submitted through it
+  // further down with these same `deps`. `deps` is built here rather than at
+  // the submit site so the engine exists before the signal handlers are
+  // registered, and so `engine` and `submit`'s `deps` cannot diverge into two
+  // independently created stores.
+  const deps = createWorkflowDeps();
+  const engine = new InProcessWorkflowEngine(deps.store);
 
   // Register cleanup handlers for graceful termination.
   //
@@ -3013,16 +3018,17 @@ async function runWorkflowWithOwnedSource(
         );
         return;
       }
-      // Genuine interrupt of the run this process is driving. `cancel()` is
-      // backed by @archon/core's idempotent cancelWorkflowRun (status NOT IN
-      // ('completed','cancelled') guard) — unlike failWorkflowRun's CAS, a
-      // double call or a race with the executor committing a gate pause is a
-      // safe no-op (`{cancelled: false}`), not a thrown error. An
+      // Genuine interrupt of the run this process is driving. `cancel()` only
+      // applies while the run is still 'running' — the status read above and
+      // this write are not one atomic step, so the executor can commit a gate
+      // pause in between; the port's running-only predicate leaves that pause
+      // (and any other transition) untouched and reports `{cancelled: false}`
+      // instead of throwing, which also makes a repeated signal safe. An
       // operator-initiated stop is not an execution failure: it records
       // `status='cancelled'`, not `status='failed'` — that behavior change is
-      // owned by #3351; this call site only routes it through the port.
-      // failWorkflowRun remains reserved for genuine execution failures
-      // elsewhere in this file.
+      // owned by the sibling CLI-interrupt fix; this call site only routes it
+      // through the port. failWorkflowRun remains reserved for genuine
+      // execution failures elsewhere in this file.
       await engine.cancel(interruptedRunId, `Process terminated (${signal})`);
     })()
       .catch((err: unknown) => {
@@ -3129,7 +3135,6 @@ async function runWorkflowWithOwnedSource(
   // to executeWorkflow. Otherwise this is a fresh run and prepared stays null.
   // The lookup-by-(workflowName, cwd) was already done above for worktree-path
   // resolution; reuse that result rather than querying twice.
-  const deps = createWorkflowDeps();
   let result: Awaited<ReturnType<typeof executeWorkflow>> | undefined;
   // A genuine container-teardown failure captured in the finally, rethrown AFTER
   // the finally when the run itself succeeded — so a leaked privileged container

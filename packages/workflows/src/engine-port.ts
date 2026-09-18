@@ -97,6 +97,16 @@ export interface IWorkflowEngine {
    * status on a throttle (`CANCEL_CHECK_INTERVAL_MS`, currently 10s, in
    * `dag-executor.ts`), so a resolved `{ cancelled: true }` means the request
    * was recorded, not that execution has already stopped.
+   *
+   * It applies ONLY to a run still in `running`. When the run has already moved
+   * on — terminal, paused at a gate, or already cancelled — this resolves
+   * `{ cancelled: false }` and never throws, which is what makes a repeated
+   * signal (or a signal racing the executor committing a gate pause) safe.
+   *
+   * Discarding a run that is NOT running is deliberately not this port's job:
+   * that is a different operation, owned by `abandonWorkflow`
+   * (`@archon/core`'s workflow operations), which also performs cascade and
+   * container reclaim.
    */
   cancel(runId: string, reason?: string): Promise<{ cancelled: boolean }>;
 }
