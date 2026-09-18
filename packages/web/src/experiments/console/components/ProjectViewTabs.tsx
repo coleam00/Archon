@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react';
 import { Link } from 'react-router';
+import { writeProjectView } from '../lib/project-view';
 
 interface ProjectViewTabsProps {
   projectId: string;
@@ -15,6 +16,10 @@ const TABS: readonly { key: 'runs' | 'chat'; label: string; suffix: string }[] =
  * Runs | Chat tab control under a project. Active styling mirrors FilterChips
  * (brand-bar underline). Only meaningful when a project is scoped — chat is
  * project-scoped, so this is never rendered on the All-projects view.
+ *
+ * Picking a tab records it as this project's view, so returning to the project
+ * later lands on the same one. The write happens on click, before navigation,
+ * so choosing Runs is seen as a choice rather than bounced back to Chat.
  */
 export function ProjectViewTabs({ projectId, active }: ProjectViewTabsProps): ReactElement {
   return (
@@ -25,6 +30,9 @@ export function ProjectViewTabs({ projectId, active }: ProjectViewTabsProps): Re
           <Link
             key={key}
             to={`/console/p/${projectId}${suffix}`}
+            onClick={() => {
+              writeProjectView(projectId, key);
+            }}
             aria-current={isActive ? 'page' : undefined}
             className={`relative rounded px-2 py-1 text-[11px] font-medium uppercase tracking-wider transition-colors ${
               isActive
