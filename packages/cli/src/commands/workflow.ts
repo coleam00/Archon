@@ -2950,6 +2950,10 @@ async function runWorkflowWithOwnedSource(
     }
   })();
 
+  // One engine for this command: the termination handler below cancels through
+  // it, and the run itself is submitted through it further down.
+  const engine = new InProcessWorkflowEngine(createWorkflowStore());
+
   // Register cleanup handlers for graceful termination.
   //
   // Guard rails (#1123): a signal must only ever fail THE run this process is
@@ -3018,10 +3022,7 @@ async function runWorkflowWithOwnedSource(
       // `status='cancelled'`, not `status='failed'` (#3334 M7) — the run
       // stays failed-free for this signal path; failWorkflowRun remains
       // reserved for genuine execution failures elsewhere in this file.
-      await new InProcessWorkflowEngine(createWorkflowStore()).cancel(
-        interruptedRunId,
-        `Process terminated (${signal})`
-      );
+      await engine.cancel(interruptedRunId, `Process terminated (${signal})`);
     })()
       .catch((err: unknown) => {
         const e = err as Error;
@@ -3250,7 +3251,7 @@ async function runWorkflowWithOwnedSource(
           // when IT creates the row, and this row already carries them.
           ...(detachedPreCreatedRun ? { preCreatedRun: detachedPreCreatedRun } : {}),
         };
-    result = await new InProcessWorkflowEngine().submit({
+    result = await engine.submit({
       deps,
       platform: adapter,
       conversationId,

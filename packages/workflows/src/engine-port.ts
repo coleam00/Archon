@@ -4,10 +4,9 @@
  * methods, id-first params, Result-object returns, narrow traits composed via
  * `extends`.
  *
- * This is a pure type addition (issue #3334, M0). Nothing in the package imports
- * it yet; `executeWorkflow` / `hydrateResumableRun` remain the only call path
- * until a later milestone wires an `InProcessWorkflowEngine` implementation
- * behind this port.
+ * `InProcessWorkflowEngine` (`./in-process-engine`) implements it by delegating
+ * to `executeWorkflow` / `hydrateResumableRun`, and `./engine-contract-tests`
+ * exercises any implementation against the port's contract.
  *
  * `WorkflowEngineSubmitInput` / `WorkflowResumeInput` are thin re-shapings of the
  * existing `executeWorkflow` positional args + `ExecuteWorkflowOptions`, and of
@@ -21,8 +20,8 @@
  *   replay, because Archon resume is a DB compare-and-swap over a persisted run
  *   row (`IWorkflowStore.resumeWorkflowRun`), not event-sourced replay.
  * - `submit()` returns `Promise<WorkflowExecutionResult>` rather than being
- *   fire-and-forget `void`, because the current CLI/orchestrator foreground
- *   callers already `await` `executeWorkflow`'s result and must keep doing so.
+ *   fire-and-forget `void`, because the CLI/orchestrator foreground callers
+ *   already await a run's result and must keep doing so.
  */
 import type { WorkflowDeps, IWorkflowPlatform } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';
@@ -54,10 +53,10 @@ export interface WorkflowEngineSubmitInput extends WorkflowEngineCallBase {
 
 /**
  * Input to {@link IWorkflowEngine.resume}. `run` and `cursor` are exactly
- * `hydrateResumableRun`'s `candidate` and `cursor` params; an implementation
+ * `hydrateResumableRun`'s `candidate` and `cursor` params; the implementation
  * hydrates them (`hydrateResumableRun(deps, run, cursor)`) and spreads the
- * result into `options` before calling `executeWorkflow`, same as today's call
- * sites do manually.
+ * result into `options` before calling `executeWorkflow`, which is what the
+ * resume call sites used to do by hand.
  */
 export interface WorkflowResumeInput extends WorkflowEngineCallBase {
   run: WorkflowRun;

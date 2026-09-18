@@ -519,6 +519,7 @@ async function dispatchBackgroundWorkflowOwned(
   }
 
   const workflowDeps = createWorkflowDeps();
+  const engine = new InProcessWorkflowEngine(workflowDeps.store);
 
   // Freeze this run's executable source, then re-resolve the workflow FROM the frozen
   // copy so the definition executed and the commands and scripts beside it are one
@@ -631,7 +632,7 @@ async function dispatchBackgroundWorkflowOwned(
         // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
         // executor adopts for us there (see #2690). Until then a rename failure leaves
         // the staged directory un-adopted so the wrap reclaims it on the way out.
-        const result = await new InProcessWorkflowEngine().submit({
+        const result = await engine.submit({
           deps: workflowDeps,
           platform: ctx.platform,
           conversationId: workerPlatformId,

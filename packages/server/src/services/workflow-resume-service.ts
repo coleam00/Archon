@@ -169,7 +169,7 @@ export async function resumeWorkflowRunFromServer(
       // failure). Once accepted, the engine promise's own completion is
       // handled detached (`void ...`), exactly like the pre-M2 fire-and-forget
       // `execution.then(...)` path.
-      const engine = new InProcessWorkflowEngine();
+      const engine = new InProcessWorkflowEngine(deps.store);
       let resolveAccepted!: () => void;
       const acceptedSignal = new Promise<void>(resolve => {
         resolveAccepted = resolve;

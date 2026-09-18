@@ -1,16 +1,15 @@
 /**
- * InProcessWorkflowEngine — the first `IWorkflowEngine` implementation
- * (issue #3334, M1). `submit`/`resume` are a thin re-shaping wrapper: they
- * delegate 1:1 to today's `executeWorkflow` / `hydrateResumableRun` call
- * path, with no behavior changes. `cancel` is out of this milestone's scope
- * (M7) and throws an explicit not-implemented error — nothing calls it yet.
+ * InProcessWorkflowEngine — the `IWorkflowEngine` implementation that runs
+ * workflows inside the calling process. `submit`/`resume` are a thin
+ * re-shaping wrapper: they delegate 1:1 to the `executeWorkflow` /
+ * `hydrateResumableRun` call path, with no behavior changes.
  *
- * `cancel()` (#3334 M7) is also real: it delegates to `IWorkflowStore.cancelWorkflowRun`,
- * which is backed by `@archon/core`'s idempotent `cancelWorkflowRun` (guards
- * `status NOT IN ('completed', 'cancelled')`, never throws on a double-cancel).
+ * `cancel()` delegates to `IWorkflowStore.cancelWorkflowRun`, which is backed
+ * by `@archon/core`'s idempotent `cancelWorkflowRun` (guards `status NOT IN
+ * ('completed', 'cancelled')`, never throws on a double-cancel).
  * `@archon/workflows` cannot import `@archon/core` directly (core depends on
- * workflows, not the reverse), so `cancel()` requires a
- * store-bound engine instance: `new InProcessWorkflowEngine(deps.store)`.
+ * workflows, not the reverse), so the store arrives through the constructor:
+ * `new InProcessWorkflowEngine(deps.store)`.
  */
 import { executeWorkflow, hydrateResumableRun } from './executor';
 import type {
@@ -38,7 +37,7 @@ function getLog(): ReturnType<typeof createLogger> {
  * same generic `Error` class either way. `cause` carries the original error
  * for logging; callers that need to react differently to a hydration-phase
  * failure should check `instanceof WorkflowResumeHydrationError` before
- * falling back to their generic-error handling (#3334 M2).
+ * falling back to their generic-error handling (#3334).
  */
 export class WorkflowResumeHydrationError extends Error {
   constructor(public readonly cause: unknown) {
@@ -49,14 +48,12 @@ export class WorkflowResumeHydrationError extends Error {
 
 export class InProcessWorkflowEngine implements IWorkflowEngine {
   /**
-   * `store` is optional so every existing `new InProcessWorkflowEngine()` call
-   * site (which passes `deps`/`store` per-call to `submit`/`resume` instead)
-   * keeps working unchanged. `cancel()` has no such per-call parameter (the
-   * `IWorkflowEngine` port fixes its signature to `(runId, reason)`), so a
-   * caller that needs it must construct the engine with a store:
-   * `new InProcessWorkflowEngine(deps.store)`.
+   * The engine is bound to a store at construction because `cancel()` has no
+   * per-call `deps` parameter (the `IWorkflowEngine` port fixes its signature
+   * to `(runId, reason)`). `submit`/`resume` still take their own `deps` per
+   * call, mirroring `executeWorkflow`.
    */
-  constructor(private readonly store?: IWorkflowStore) {}
+  constructor(private readonly store: IWorkflowStore) {}
 
   async submit(input: WorkflowEngineSubmitInput): Promise<WorkflowExecutionResult> {
     const {
@@ -156,12 +153,6 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
   }
 
   async cancel(runId: string, reason?: string): Promise<{ cancelled: boolean }> {
-    if (!this.store) {
-      throw new Error(
-        'IWorkflowEngine.cancel requires a store-bound engine instance — ' +
-          'construct with `new InProcessWorkflowEngine(deps.store)`'
-      );
-    }
     // Delegates 1:1 to the store's idempotent cancelWorkflowRun (see class doc
     // comment above) — this is a cooperative request only (see engine-port.ts's
     // doc comment on IWorkflowEngine.cancel): the DAG loop observes it on its

@@ -108,21 +108,22 @@ registerCommunityProviders();
 import { InProcessWorkflowEngine } from './in-process-engine';
 import { runWorkflowEngineContractTests } from './engine-contract-tests';
 
-runWorkflowEngineContractTests(() => new InProcessWorkflowEngine());
-
-import { describe, test, expect } from 'bun:test';
 import type { IWorkflowStore } from './store';
 
+// The contract suite drives submit/resume only; those take their store through
+// the per-call `deps`, so the constructor-bound store is never reached here.
+const contractStore: Partial<IWorkflowStore> = {
+  cancelWorkflowRun: async () => ({ cancelled: false }),
+};
+runWorkflowEngineContractTests(() => new InProcessWorkflowEngine(contractStore as IWorkflowStore));
+
+import { describe, test, expect } from 'bun:test';
+
 // ---------------------------------------------------------------------------
-// cancel() — real implementation (#3334 M7)
+// cancel() — real implementation (#3334)
 // ---------------------------------------------------------------------------
 
 describe('InProcessWorkflowEngine.cancel', () => {
-  test('requires a store-bound engine instance', async () => {
-    const engine = new InProcessWorkflowEngine();
-    await expect(engine.cancel('run-1')).rejects.toThrow(/store-bound engine instance/);
-  });
-
   test('delegates 1:1 to store.cancelWorkflowRun, returning its {cancelled} verbatim', async () => {
     const calls: { id: string; event?: { reason?: string } }[] = [];
     const store: Partial<IWorkflowStore> = {
