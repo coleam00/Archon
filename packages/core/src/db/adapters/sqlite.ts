@@ -325,6 +325,9 @@ export class SqliteAdapter implements IDatabase {
       if (!colNames.has('title')) {
         this.db.run('ALTER TABLE remote_agent_conversations ADD COLUMN title TEXT');
       }
+      if (!colNames.has('color')) {
+        this.db.run('ALTER TABLE remote_agent_conversations ADD COLUMN color TEXT');
+      }
       if (!colNames.has('deleted_at')) {
         this.db.run('ALTER TABLE remote_agent_conversations ADD COLUMN deleted_at TEXT');
       }
@@ -699,6 +702,7 @@ export class SqliteAdapter implements IDatabase {
         cwd TEXT,
         isolation_env_id TEXT,
         title TEXT,
+        color TEXT,
         deleted_at TEXT,
         hidden INTEGER DEFAULT 0,
         user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL,

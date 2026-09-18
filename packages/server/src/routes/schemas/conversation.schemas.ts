@@ -2,7 +2,7 @@
  * Zod schemas for conversation and message API endpoints.
  */
 import { z } from '@hono/zod-openapi';
-import { conversationRowSchema } from '@archon/core/schemas/conversation';
+import { conversationColorSchema, conversationRowSchema } from '@archon/core/schemas/conversation';
 import { messageRowSchema } from '@archon/core/schemas/message';
 
 /** A conversation record (wire shape with ISO string dates). */
@@ -23,6 +23,9 @@ export const listConversationsQuerySchema = z.object({
   // conversations when an identity resolves. Default lists everything. Enum
   // makes the boolean contract explicit (the handler treats only 'true' as on).
   mine: z.enum(['true', 'false']).optional(),
+  // Which archived state to list. Omitted behaves exactly as before, so every
+  // existing caller keeps seeing active conversations only.
+  archived: z.enum(['active', 'archived', 'all']).optional(),
 });
 
 /** GET /api/conversations response. */
@@ -51,9 +54,21 @@ export const createConversationResponseSchema = z
   })
   .openapi('CreateConversationResponse');
 
-/** PATCH /api/conversations/:id request body. */
+/**
+ * PATCH /api/conversations/:id request body.
+ *
+ * `color: null` clears the color — distinct from omitting the field, which
+ * leaves it untouched. Without that distinction a color could be set but never
+ * removed.
+ */
 export const updateConversationBodySchema = z
-  .object({ title: z.string().min(1).optional() })
+  .object({
+    title: z.string().min(1).optional(),
+    color: conversationColorSchema.nullable().optional(),
+    // true archives, false restores. Omitted leaves the state alone, so a
+    // rename cannot accidentally resurrect an archived chat.
+    archived: z.boolean().optional(),
+  })
   .openapi('UpdateConversationBody');
 
 /** Generic success response. */
