@@ -1,5 +1,9 @@
 import { requestJson, HttpError } from '../lib/http';
-import { toConversationSummary, type ConversationSummary } from '../primitives/conversation';
+import {
+  toConversationSummary,
+  type ConversationColor,
+  type ConversationSummary,
+} from '../primitives/conversation';
 
 /**
  * Conversation verbs for the project-scoped agent chat.
@@ -14,6 +18,8 @@ import { toConversationSummary, type ConversationSummary } from '../primitives/c
  *     platform id used by every other conversation route.
  *   - renameConversation: PATCH /api/conversations/:id — sets the title,
  *     replacing the server's auto-generated one.
+ *   - setConversationColor: PATCH /api/conversations/:id — sets or clears the
+ *     colour label. An explicit null clears it; omitting it leaves it alone.
  *   - listConversations:  GET /api/conversations?codebaseId=<id>&mine=true
  *     (JSON array). `mine=true` is non-enforcing: it narrows to the signed-in
  *     user's conversations when an identity resolves (Better Auth cookie or
@@ -95,5 +101,19 @@ export async function renameConversation(
   await requestJson<{ success: boolean }>(
     `/api/conversations/${encodeURIComponent(conversationPlatformId)}`,
     { method: 'PATCH', body: JSON.stringify({ title }) }
+  );
+}
+
+/**
+ * Set or clear a conversation's colour label. `null` clears it — the server
+ * distinguishes an explicit null from an omitted field.
+ */
+export async function setConversationColor(
+  conversationPlatformId: string,
+  color: ConversationColor | null
+): Promise<void> {
+  await requestJson<{ success: boolean }>(
+    `/api/conversations/${encodeURIComponent(conversationPlatformId)}`,
+    { method: 'PATCH', body: JSON.stringify({ color }) }
   );
 }

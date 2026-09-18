@@ -12,6 +12,18 @@ export type { IdentityPlatform } from './user';
 // Conversation
 // ---------------------------------------------------------------------------
 
+/**
+ * The colours a conversation may be labelled with. Names, not hex values, so the
+ * UI owns the rendering and a theme change never has to rewrite stored rows.
+ *
+ * `null` means no colour, which is every conversation's default. The server
+ * never interprets a colour; it is a visual label for scanning a chat list.
+ */
+export const CONVERSATION_COLORS = ['magenta', 'violet', 'teal', 'green', 'amber', 'red'] as const;
+
+export const conversationColorSchema = z.enum(CONVERSATION_COLORS);
+export type ConversationColor = z.infer<typeof conversationColorSchema>;
+
 export const conversationRowSchema = z.object({
   id: z.string(),
   platform_type: z.string(),
@@ -21,6 +33,7 @@ export const conversationRowSchema = z.object({
   isolation_env_id: z.string().nullable(),
   ai_assistant_type: z.string(),
   title: z.string().nullable(),
+  color: z.string().nullable(),
   hidden: z.boolean(),
   deleted_at: z.date().nullable(),
   last_activity_at: z.date().nullable(),

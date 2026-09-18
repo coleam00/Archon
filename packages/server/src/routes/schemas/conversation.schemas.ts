@@ -2,7 +2,7 @@
  * Zod schemas for conversation and message API endpoints.
  */
 import { z } from '@hono/zod-openapi';
-import { conversationRowSchema } from '@archon/core/schemas/conversation';
+import { conversationColorSchema, conversationRowSchema } from '@archon/core/schemas/conversation';
 import { messageRowSchema } from '@archon/core/schemas/message';
 
 /** A conversation record (wire shape with ISO string dates). */
@@ -51,9 +51,18 @@ export const createConversationResponseSchema = z
   })
   .openapi('CreateConversationResponse');
 
-/** PATCH /api/conversations/:id request body. */
+/**
+ * PATCH /api/conversations/:id request body.
+ *
+ * `color: null` clears the colour — distinct from omitting the field, which
+ * leaves it untouched. Without that distinction a colour could be set but never
+ * removed.
+ */
 export const updateConversationBodySchema = z
-  .object({ title: z.string().min(1).optional() })
+  .object({
+    title: z.string().min(1).optional(),
+    color: conversationColorSchema.nullable().optional(),
+  })
   .openapi('UpdateConversationBody');
 
 /** Generic success response. */

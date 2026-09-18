@@ -284,6 +284,23 @@ export async function updateConversationTitle(id: string, title: string): Promis
 }
 
 /**
+ * Set or clear a conversation's colour label.
+ *
+ * `null` clears it. The value is validated at the API boundary against
+ * CONVERSATION_COLORS; this layer stores whatever it is handed.
+ */
+export async function updateConversationColor(id: string, color: string | null): Promise<void> {
+  const dialect = getDialect();
+  const result = await pool.query(
+    `UPDATE remote_agent_conversations SET color = $1, updated_at = ${dialect.now()} WHERE id = $2`,
+    [color, id]
+  );
+  if (result.rowCount === 0) {
+    throw new ConversationNotFoundError(id);
+  }
+}
+
+/**
  * Soft delete a conversation (sets deleted_at timestamp)
  */
 export async function softDeleteConversation(id: string): Promise<void> {

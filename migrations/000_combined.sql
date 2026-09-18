@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_conversations (
   ai_assistant_type VARCHAR(20) DEFAULT 'claude',
   isolation_env_id UUID,  -- FK added after isolation_environments table exists
   title VARCHAR(255),
+  color VARCHAR(20),
   deleted_at TIMESTAMP WITH TIME ZONE,
   hidden BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMP DEFAULT NOW(),
@@ -315,6 +316,10 @@ ALTER TABLE remote_agent_conversations
   ADD COLUMN IF NOT EXISTS title VARCHAR(255);
 ALTER TABLE remote_agent_conversations
   ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE;
+
+-- User-chosen colour label on a conversation (visual only; never interpreted).
+ALTER TABLE remote_agent_conversations
+  ADD COLUMN IF NOT EXISTS color VARCHAR(20);
 
 -- From migration 015: parent_conversation_id + hidden
 ALTER TABLE remote_agent_workflow_runs

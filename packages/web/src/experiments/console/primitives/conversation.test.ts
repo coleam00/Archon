@@ -1,7 +1,9 @@
 import { describe, test, expect } from 'bun:test';
 import {
   byMostRecent,
+  colorToken,
   conversationLabel,
+  parseConversationColor,
   UNTITLED_CHAT,
   type ConversationSummary,
 } from './conversation';
@@ -11,6 +13,7 @@ const conv = (over: Partial<ConversationSummary> = {}): ConversationSummary => (
   title: 'Debug the migration',
   platformType: 'web',
   lastActivityAt: '2026-06-05T10:00:00Z',
+  color: null,
   ...over,
 });
 
@@ -48,5 +51,37 @@ describe('byMostRecent', () => {
 
   test('treats equal timestamps as equal', () => {
     expect(byMostRecent(conv({ id: 'a' }), conv({ id: 'b' }))).toBe(0);
+  });
+});
+
+describe('parseConversationColor', () => {
+  test('accepts every colour in the palette', () => {
+    expect(parseConversationColor('magenta')).toBe('magenta');
+    expect(parseConversationColor('teal')).toBe('teal');
+    expect(parseConversationColor('red')).toBe('red');
+  });
+
+  test('no colour is the default', () => {
+    expect(parseConversationColor(null)).toBeNull();
+    expect(parseConversationColor(undefined)).toBeNull();
+  });
+
+  test('an unrecognised value reads as no colour rather than a blank swatch', () => {
+    // A value written by a newer build, or hand-edited, must not render an
+    // empty circle or reach the style attribute.
+    expect(parseConversationColor('chartreuse')).toBeNull();
+    expect(parseConversationColor('')).toBeNull();
+    expect(parseConversationColor('MAGENTA')).toBeNull();
+  });
+});
+
+describe('colorToken', () => {
+  test('maps a colour to a design token, never a raw hex', () => {
+    expect(colorToken('magenta')).toBe('var(--brand-magenta)');
+    expect(colorToken('green')).toBe('var(--success)');
+  });
+
+  test('no colour maps to no token', () => {
+    expect(colorToken(null)).toBeNull();
   });
 });

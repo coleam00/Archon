@@ -2792,10 +2792,10 @@ export function registerApiRoutes(
     }
   });
 
-  // PATCH /api/conversations/:id - Update conversation (title)
+  // PATCH /api/conversations/:id - Update conversation (title, colour)
   registerOpenApiRoute(updateConversationRoute, async c => {
     const platformId = c.req.param('id') ?? '';
-    const { title } = getValidatedBody(c, updateConversationBodySchema);
+    const { title, color } = getValidatedBody(c, updateConversationBodySchema);
     try {
       const conv = await conversationDb.findConversationByPlatformId(platformId);
       if (!conv) {
@@ -2803,6 +2803,11 @@ export function registerApiRoutes(
       }
       if (title !== undefined) {
         await conversationDb.updateConversationTitle(conv.id, title.slice(0, 255));
+      }
+      // `undefined` leaves the colour alone; an explicit `null` clears it. The
+      // schema already constrained any non-null value to CONVERSATION_COLORS.
+      if (color !== undefined) {
+        await conversationDb.updateConversationColor(conv.id, color);
       }
       return c.json({ success: true });
     } catch (error) {

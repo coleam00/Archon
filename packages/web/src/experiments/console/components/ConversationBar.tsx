@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactElement } from 'react';
 import {
   byMostRecent,
+  colorToken,
   conversationLabel,
+  CONVERSATION_COLORS,
+  type ConversationColor,
   type ConversationSummary,
 } from '../primitives/conversation';
 
@@ -11,6 +14,7 @@ interface ConversationBarProps {
   activeConvId: string | null;
   onSelect: (id: string | null) => void;
   onRename: (id: string, title: string) => void;
+  onRecolor: (id: string, color: ConversationColor | null) => void;
   disabled: boolean;
 }
 
@@ -29,6 +33,7 @@ export function ConversationBar({
   activeConvId,
   onSelect,
   onRename,
+  onRecolor,
   disabled,
 }: ConversationBarProps): ReactElement {
   const [renaming, setRenaming] = useState(false);
@@ -64,8 +69,18 @@ export function ConversationBar({
     }
   };
 
+  const activeToken = colorToken(active?.color ?? null);
+
   return (
     <div className="flex items-center gap-[8px]">
+      <span
+        aria-hidden
+        className="h-[10px] w-[10px] shrink-0 rounded-full border"
+        style={{
+          background: activeToken ?? 'transparent',
+          borderColor: activeToken ?? 'var(--border-bright)',
+        }}
+      />
       {renaming && active !== null ? (
         <input
           ref={inputRef}
@@ -127,6 +142,38 @@ export function ConversationBar({
       >
         + New chat
       </button>
+
+      {/*
+        Colour is never the only channel: each swatch carries its name as its
+        accessible label and its tooltip, so the label survives colour blindness
+        and screen readers.
+      */}
+      <div className="flex shrink-0 items-center gap-[4px]" role="group" aria-label="Chat colour">
+        {CONVERSATION_COLORS.map(({ value, label, token }) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => {
+              if (active === null) return;
+              // Clicking the current colour clears it, so the picker is its own
+              // undo and needs no separate "none" control.
+              onRecolor(active.id, active.color === value ? null : value);
+            }}
+            disabled={active === null}
+            aria-label={label}
+            aria-pressed={active?.color === value}
+            title={active?.color === value ? `${label} — click to clear` : label}
+            className="h-[14px] w-[14px] rounded-full border transition-transform hover:scale-110 disabled:cursor-default disabled:opacity-40"
+            style={{
+              background: token,
+              borderColor:
+                active?.color === value
+                  ? 'var(--text-primary)'
+                  : 'color-mix(in oklch, black, transparent 70%)',
+            }}
+          />
+        ))}
+      </div>
     </div>
   );
 }

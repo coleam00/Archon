@@ -4,6 +4,7 @@ import { ChatStream } from '../components/ChatStream';
 import { ChatComposer } from '../components/ChatComposer';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
 import { ConversationBar } from '../components/ConversationBar';
+import type { ConversationColor } from '../primitives/conversation';
 import { WorkingIndicator } from '../components/WorkingIndicator';
 import { WorkflowDock } from '../components/WorkflowDock';
 import { EmptyState } from '../components/EmptyState';
@@ -70,6 +71,17 @@ export function ChatPage(): ReactElement {
     setError(null);
     setStartingNew(id === null);
     setActiveConvId(id);
+  };
+
+  const recolorConversation = (id: string, color: ConversationColor | null): void => {
+    void (async (): Promise<void> => {
+      try {
+        await skill.setConversationColor(id, color);
+        if (projectId !== undefined) invalidate(K.conversations(projectId));
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : 'Could not change the colour.');
+      }
+    })();
   };
 
   const renameConversation = (id: string, title: string): void => {
@@ -281,6 +293,7 @@ export function ChatPage(): ReactElement {
           activeConvId={activeConvId}
           onSelect={selectConversation}
           onRename={renameConversation}
+          onRecolor={recolorConversation}
           disabled={busy}
         />
       </header>
