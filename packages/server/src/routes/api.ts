@@ -126,6 +126,21 @@ interface RawWorkflowFile {
   filename: string;
   packaged: boolean;
   parsed: ReturnType<typeof parseWorkflow>;
+  /** The file text as read — the source of the authored form the builder edits. */
+  content: string;
+}
+
+/**
+ * The workflow as authored: the YAML mapping before the engine's normalizing
+ * transform. The builder edits this shape, and the normalized `workflow` cannot
+ * be sent back (validate rejects it), so GET returns both. Parsed with the same
+ * `Bun.YAML` the loader uses; undefined when the top level is not a mapping.
+ */
+function authoredForm(content: string): Record<string, unknown> | undefined {
+  const raw: unknown = Bun.YAML.parse(content);
+  return raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : undefined;
 }
 
 async function tryReadWorkflowAt(dir: string, name: string): Promise<RawWorkflowFile | null> {
@@ -137,7 +152,7 @@ async function tryReadWorkflowAt(dir: string, name: string): Promise<RawWorkflow
       const content = await readFile(absolutePath, 'utf-8');
       const parsed = parseWorkflow(content, filename);
       if (parsed.workflow !== null && !acceptedNames.has(parsed.workflow.name)) continue;
-      return { absolutePath, filename, packaged: false, parsed };
+      return { absolutePath, filename, packaged: false, parsed, content };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
@@ -221,6 +236,7 @@ async function findPackagedWorkflowAt(
         filename: `${pack}/${workflowFolder}/${yamlFilename}`,
         packaged: true,
         parsed,
+        content,
       };
     }
   }
@@ -243,19 +259,20 @@ function isBundledWorkflowsRoot(workflowsRoot: string): boolean {
 
 function findBundledWorkflow(
   name: string
-): { filename: string; parsed: ReturnType<typeof parseWorkflow> } | null {
+): { filename: string; parsed: ReturnType<typeof parseWorkflow>; content: string } | null {
   const direct = BUNDLED_WORKFLOWS[name];
   if (direct !== undefined) {
     const filename = `${name}.yaml`;
     const parsed = parseWorkflow(direct, filename);
     if (parsed.error !== null || parsed.workflow?.name === name) {
-      return { filename, parsed };
+      return { filename, parsed, content: direct };
     }
   }
 
   let match: {
     filename: string;
     parsed: ReturnType<typeof parseWorkflow>;
+    content: string;
   } | null = null;
   for (const [filenameStem, content] of Object.entries(BUNDLED_WORKFLOWS)) {
     if (filenameStem === name) continue;
@@ -263,7 +280,7 @@ function findBundledWorkflow(
     const parsed = parseWorkflow(content, filename);
     if (parsed.workflow?.name !== name) continue;
     if (match !== null) throw new Error(`Multiple bundled workflows declare the name '${name}'`);
-    match = { filename, parsed };
+    match = { filename, parsed, content };
   }
   return match;
 }
@@ -4463,6 +4480,7 @@ export function registerApiRoutes(
             }
             return c.json({
               workflow: result.workflow,
+              authored: authoredForm(hit.content),
               filename: hit.filename,
               source: 'project' as WorkflowSource,
             });
@@ -4484,6 +4502,7 @@ export function registerApiRoutes(
           }
           return c.json({
             workflow: result.workflow,
+            authored: authoredForm(hit.content),
             filename: hit.filename,
             source: 'global' as WorkflowSource,
           });
@@ -4502,6 +4521,7 @@ export function registerApiRoutes(
         }
         return c.json({
           workflow: result.workflow,
+          authored: authoredForm(bundled.content),
           filename: bundled.filename,
           source: 'bundled' as WorkflowSource,
         });
@@ -4519,6 +4539,7 @@ export function registerApiRoutes(
             }
             return c.json({
               workflow: result.workflow,
+              authored: authoredForm(hit.content),
               filename: hit.filename,
               source: 'bundled' as WorkflowSource,
             });
