@@ -85,3 +85,25 @@ export function formatBytes(bytes: number): string {
 export function dragHasFiles(types: DataTransfer['types']): boolean {
   return Array.from(types).includes('Files');
 }
+
+/**
+ * The image files on a clipboard payload.
+ *
+ * A copied screenshot rides the clipboard as an `image/*` item rather than as a
+ * path, so reading the items is the only way to see it. Everything else is left
+ * alone — an ordinary text copy carries `text/plain` and `text/html` items and
+ * must keep pasting as text.
+ *
+ * Reads through `Array.from` because `DataTransferItemList` is array-like
+ * rather than an array.
+ */
+export function imagesFromClipboard(items: DataTransferItemList): File[] {
+  const images: File[] = [];
+  for (const item of Array.from(items)) {
+    if (!item.type.startsWith('image/')) continue;
+    // Null when the item is not really a file despite its MIME type.
+    const file = item.getAsFile();
+    if (file !== null) images.push(file);
+  }
+  return images;
+}

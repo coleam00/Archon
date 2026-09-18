@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { isAcceptedFileType, formatBytes, dragHasFiles } from './file';
+import { isAcceptedFileType, formatBytes, dragHasFiles, imagesFromClipboard } from './file';
 
 const file = (name: string, type = ''): File => new File(['x'], name, { type });
 
@@ -55,5 +55,49 @@ describe('dragHasFiles', () => {
   test("reads array-likes, since Safari's types is a DOMStringList", () => {
     const domStringList = { length: 1, 0: 'Files' } as unknown as DataTransfer['types'];
     expect(dragHasFiles(domStringList)).toBe(true);
+  });
+});
+
+const clipboardItem = (type: string, asFile: File | null): DataTransferItem =>
+  ({
+    type,
+    kind: asFile === null ? 'string' : 'file',
+    getAsFile: () => asFile,
+  }) as DataTransferItem;
+
+const itemList = (...items: DataTransferItem[]): DataTransferItemList => {
+  // DataTransferItemList is array-like, not an array: indexed keys plus length.
+  const list: Record<string, unknown> = { length: items.length };
+  items.forEach((item, i) => (list[String(i)] = item));
+  return list as unknown as DataTransferItemList;
+};
+
+describe('imagesFromClipboard', () => {
+  test('takes the image off a pasted screenshot', () => {
+    const png = new File(['x'], 'image.png', { type: 'image/png' });
+    expect(imagesFromClipboard(itemList(clipboardItem('image/png', png)))).toEqual([png]);
+  });
+
+  test('ignores a plain text copy, so ordinary pasting is untouched', () => {
+    const items = itemList(clipboardItem('text/plain', null), clipboardItem('text/html', null));
+    expect(imagesFromClipboard(items)).toEqual([]);
+  });
+
+  test('takes only the image when a web-page copy carries text alongside it', () => {
+    const jpg = new File(['x'], 'photo.jpg', { type: 'image/jpeg' });
+    const items = itemList(
+      clipboardItem('text/html', null),
+      clipboardItem('image/jpeg', jpg),
+      clipboardItem('text/plain', null)
+    );
+    expect(imagesFromClipboard(items)).toEqual([jpg]);
+  });
+
+  test('skips an image item that yields no file', () => {
+    expect(imagesFromClipboard(itemList(clipboardItem('image/png', null)))).toEqual([]);
+  });
+
+  test('returns nothing for an empty clipboard', () => {
+    expect(imagesFromClipboard(itemList())).toEqual([]);
   });
 });

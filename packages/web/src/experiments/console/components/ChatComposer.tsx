@@ -1,5 +1,12 @@
 import { Paperclip } from 'lucide-react';
-import { useRef, useState, type DragEvent, type KeyboardEvent, type ReactElement } from 'react';
+import {
+  useRef,
+  useState,
+  type ClipboardEvent,
+  type DragEvent,
+  type KeyboardEvent,
+  type ReactElement,
+} from 'react';
 import {
   ACCEPTED_EXTENSIONS,
   MAX_FILES,
@@ -7,6 +14,7 @@ import {
   MAX_FILE_MB,
   dragHasFiles,
   formatBytes,
+  imagesFromClipboard,
   isAcceptedFileType,
 } from '../primitives/file';
 
@@ -25,9 +33,9 @@ interface PickedFile {
 
 /**
  * Console-native chat composer. Auto-growing textarea, Enter sends,
- * Shift+Enter newline, Escape blurs. Attach files with the paperclip icon or
- * by dropping them anywhere on the composer (the send skill builds the
- * multipart upload).
+ * Shift+Enter newline, Escape blurs. Attach files with the paperclip icon, by
+ * dropping them anywhere on the composer, or by pasting a copied image (the
+ * send skill builds the multipart upload).
  *
  * Reimplemented (not imported) from the old chat's MessageInput because the
  * console may not import production `@/components/**` (ESLint isolation rule).
@@ -115,6 +123,18 @@ export function ChatComposer({
     setDragging(false);
     if (disabled) return;
     if (e.dataTransfer.files.length > 0) addFiles(Array.from(e.dataTransfer.files));
+  };
+
+  // Only cancels the paste when images were actually taken, so a normal text
+  // paste — and the text riding along with an image copied from a web page —
+  // still lands in the textarea. Unlike a drop, an uncancelled paste is
+  // harmless, so a disabled composer can simply ignore it.
+  const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>): void => {
+    if (disabled) return;
+    const images = imagesFromClipboard(e.clipboardData.items);
+    if (images.length === 0) return;
+    e.preventDefault();
+    addFiles(images);
   };
 
   const submit = (): void => {
@@ -244,6 +264,7 @@ export function ChatComposer({
               grow(e.target);
             }}
             onKeyDown={onKeyDown}
+            onPaste={onPaste}
             rows={1}
             placeholder={placeholder}
             className="min-h-0 flex-1 resize-none bg-transparent py-[7px] text-[14.5px] leading-[1.5] text-text-primary placeholder:text-text-tertiary focus:outline-none disabled:opacity-50"
