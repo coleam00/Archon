@@ -12,6 +12,8 @@ import { toConversationSummary, type ConversationSummary } from '../primitives/c
  *     the backend dispatches it to the orchestrator atomically and the response
  *     also carries dispatch fields (ignored here). `conversationId` is the
  *     platform id used by every other conversation route.
+ *   - renameConversation: PATCH /api/conversations/:id — sets the title,
+ *     replacing the server's auto-generated one.
  *   - listConversations:  GET /api/conversations?codebaseId=<id>&mine=true
  *     (JSON array). `mine=true` is non-enforcing: it narrows to the signed-in
  *     user's conversations when an identity resolves (Better Auth cookie or
@@ -80,4 +82,18 @@ export async function sendMessage(
     const path = new URL(url, window.location.origin).pathname;
     throw new HttpError(res.status, path, msg);
   }
+}
+
+/**
+ * Rename a conversation. The server auto-titles from the first message; this
+ * overwrites that with the user's own wording and it sticks.
+ */
+export async function renameConversation(
+  conversationPlatformId: string,
+  title: string
+): Promise<void> {
+  await requestJson<{ success: boolean }>(
+    `/api/conversations/${encodeURIComponent(conversationPlatformId)}`,
+    { method: 'PATCH', body: JSON.stringify({ title }) }
+  );
 }

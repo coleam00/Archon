@@ -3,6 +3,7 @@ import { useParams } from 'react-router';
 import { ChatStream } from '../components/ChatStream';
 import { ChatComposer } from '../components/ChatComposer';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
+import { ConversationBar } from '../components/ConversationBar';
 import { WorkingIndicator } from '../components/WorkingIndicator';
 import { WorkflowDock } from '../components/WorkflowDock';
 import { EmptyState } from '../components/EmptyState';
@@ -55,11 +56,32 @@ export function ChatPage(): ReactElement {
 
   // Active conversation: most-recent web conversation, else null until first send.
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
+  // Set when the user asks for a new chat. Without it the auto-select effect
+  // below would immediately put them back in the most recent conversation, so
+  // the button would appear to do nothing.
+  const [startingNew, setStartingNew] = useState(false);
   useEffect(() => {
-    if (activeConvId !== null) return;
+    if (activeConvId !== null || startingNew) return;
     const web = (conversations ?? []).find(c => c.platformType === 'web');
     if (web !== undefined) setActiveConvId(web.id);
-  }, [conversations, activeConvId]);
+  }, [conversations, activeConvId, startingNew]);
+
+  const selectConversation = (id: string | null): void => {
+    setError(null);
+    setStartingNew(id === null);
+    setActiveConvId(id);
+  };
+
+  const renameConversation = (id: string, title: string): void => {
+    void (async (): Promise<void> => {
+      try {
+        await skill.renameConversation(id, title);
+        if (projectId !== undefined) invalidate(K.conversations(projectId));
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : 'Rename failed.');
+      }
+    })();
+  };
 
   const { data: messages, error: messagesError } = useEntity<Message[]>(
     activeConvId !== null ? K.messages(activeConvId) : 'noop:no-conv',
@@ -161,6 +183,7 @@ export function ChatPage(): ReactElement {
         if (activeConvId === null) {
           const conv = await skill.createConversation(projectId, text);
           setActiveConvId(conv.conversationId);
+          setStartingNew(false);
           invalidate(K.conversations(projectId));
           invalidate(K.messages(conv.conversationId));
           // createConversation is JSON-only — files can't ride the first message.
@@ -253,6 +276,13 @@ export function ChatPage(): ReactElement {
           </div>
         </div>
         <ProjectViewTabs projectId={projectId} active="chat" />
+        <ConversationBar
+          conversations={conversations ?? []}
+          activeConvId={activeConvId}
+          onSelect={selectConversation}
+          onRename={renameConversation}
+          disabled={busy}
+        />
       </header>
 
       <div className="relative min-h-0 flex-1">
@@ -265,7 +295,7 @@ export function ChatPage(): ReactElement {
           <div className="mx-auto max-w-[940px]">
             {messageList.length === 0 && !busy ? (
               <EmptyState
-                title="No messages yet."
+                title={activeConvId === null ? 'New chat.' : 'No messages yet.'}
                 hint="Ask the agent about this project, or tell it what to run."
               />
             ) : (
