@@ -113,7 +113,14 @@ export type WorkflowSaveSource = 'project' | 'global';
 
 /** `GET /api/workflows/:name` response. */
 export interface GetWorkflowResponse {
-  workflow: WireWorkflowDefinition;
+  /** The engine-normalized form (`kind`/`source`/…) — what runs, not what was written. */
+  workflow: unknown;
+  /**
+   * The file's YAML mapping before normalization. This is the builder's wire
+   * shape (`WireWorkflowDefinition` is the authored `DagNode`) and the only form
+   * PUT/validate accept back.
+   */
+  authored?: Record<string, unknown>;
   filename: string;
   /**
    * Where the workflow came from. `Workflow['source']` widens to
@@ -164,7 +171,14 @@ export function buildSavePath(name: string, cwd: string, source: WorkflowSaveSou
  */
 export async function loadWorkflow(name: string, cwd: string): Promise<LoadedWorkflow> {
   const res = await requestJson<GetWorkflowResponse>(buildWorkflowPath(name, cwd));
-  return { definition: res.workflow, filename: res.filename, source: res.source };
+  if (res.authored === undefined) {
+    // Editing the normalized form would open every node as unrecognised and
+    // write them back as empty prompts — refuse rather than corrupt on save.
+    throw new Error(`GET /api/workflows/${name} returned no authored form; cannot edit it`);
+  }
+  // The server parsed this same mapping with parseWorkflow before answering.
+  const definition = res.authored as unknown as WireWorkflowDefinition;
+  return { definition, filename: res.filename, source: res.source };
 }
 
 /** Persist (create or update) a workflow YAML via PUT `?cwd=&source=`. */
@@ -177,7 +191,9 @@ export async function saveWorkflow(
     method: 'PUT',
     body: JSON.stringify({ definition }),
   });
-  return { definition: res.workflow, filename: res.filename, source: res.source };
+  // The file now holds exactly `definition` (the PUT response carries only the
+  // normalized form), so that is the authored definition to report back.
+  return { definition, filename: res.filename, source: res.source };
 }
 
 /** Delete a user-defined workflow via DELETE `?cwd=&source=`. Bundled deletes 400 server-side. */

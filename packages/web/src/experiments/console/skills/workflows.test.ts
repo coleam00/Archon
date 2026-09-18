@@ -1,5 +1,11 @@
 import { describe, test, expect, afterEach } from 'bun:test';
-import { buildWorkflowPath, buildSavePath, getWorkflowGraph, listWorkflows } from './workflows';
+import {
+  buildWorkflowPath,
+  buildSavePath,
+  getWorkflowGraph,
+  listWorkflows,
+  loadWorkflow,
+} from './workflows';
 
 describe('buildWorkflowPath', () => {
   test('encodes both name and cwd', () => {
@@ -102,5 +108,58 @@ describe('getWorkflowGraph', () => {
     await expect(getWorkflowGraph('await-checks')).resolves.toEqual([
       { id: 'checks', dependsOn: [], kind: 'wait' },
     ]);
+  });
+});
+
+describe('loadWorkflow', () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  function stubGet(body: unknown): void {
+    globalThis.fetch = ((_input: RequestInfo | URL, _init?: RequestInit) =>
+      Promise.resolve(
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      )) as typeof fetch;
+  }
+
+  test('hands the builder the authored form, not the normalized one', async () => {
+    // The normalized `workflow` is what the engine runs; the builder imports and
+    // saves the authored shape, and the server rejects the normalized one on save.
+    const authored = {
+      name: 'assist',
+      description: 'one node',
+      nodes: [{ id: 'assist', command: 'archon-assist' }],
+    };
+    stubGet({
+      workflow: {
+        name: 'assist',
+        description: 'one node',
+        nodes: [
+          { id: 'assist', kind: 'agent', source: { kind: 'command', name: 'archon-assist' } },
+        ],
+      },
+      authored,
+      filename: 'assist.yaml',
+      source: 'bundled',
+    });
+
+    const loaded = await loadWorkflow('assist', '/repo');
+    expect(loaded.definition).toEqual(authored);
+  });
+
+  test('refuses a response without the authored form instead of editing the normalized one', async () => {
+    stubGet({
+      workflow: { name: 'assist', description: 'one node', nodes: [] },
+      filename: 'assist.yaml',
+      source: 'bundled',
+    });
+
+    await expect(loadWorkflow('assist', '/repo')).rejects.toThrow('authored');
   });
 });
