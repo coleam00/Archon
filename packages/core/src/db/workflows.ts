@@ -481,7 +481,16 @@ export async function findWorkflowRunsByIdPrefix(
   if (idPrefix.length === 0 || !/^[0-9a-fA-F-]+$/.test(idPrefix)) return [];
   try {
     const result = await pool.query<WorkflowRun>(
-      'SELECT * FROM remote_agent_workflow_runs WHERE codebase_id = $1 AND id LIKE $2 LIMIT 2',
+      // `id::text` — `id` is a uuid column, and Postgres has no `uuid ~~ text`
+      // operator, so an uncast LIKE throws `operator does not exist: uuid ~~
+      // unknown` on EVERY call. That failed before comparing anything, so this
+      // never matched even a full, exact uuid: `get`, `cancel`, `abandon`,
+      // `resume`, `approve`, `reject` and `respond` were all unreachable
+      // through manage_run, leaving only `list` and `start`.
+      //
+      // The cast is injection-safe because `idPrefix` is already constrained to
+      // the UUID charset above, which is what keeps `%` and `_` out.
+      'SELECT * FROM remote_agent_workflow_runs WHERE codebase_id = $1 AND id::text LIKE $2 LIMIT 2',
       [codebaseId, `${idPrefix}%`]
     );
     return result.rows.map(normalizeWorkflowRun);
