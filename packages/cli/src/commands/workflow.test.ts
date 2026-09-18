@@ -531,6 +531,7 @@ mock.module('@archon/core/db/workflows', () => ({
   getWorkflowRunStatus: mock(() => Promise.resolve(null)),
   failWorkflowRun: mock(() => Promise.resolve()),
   cancelWorkflowRun: mock(() => Promise.resolve({ cancelled: true })),
+  cancelRunningWorkflowRun: mock(() => Promise.resolve({ cancelled: true })),
   findChildRuns: mock(() => Promise.resolve([])),
   findResumableRun: mock(() => Promise.resolve(null)),
   resumeWorkflowRun: mock(() => Promise.resolve(null)),
@@ -10836,6 +10837,10 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
     const workflowsDb = require('@archon/core/db/workflows');
     (workflowsDb.failWorkflowRun as ReturnType<typeof mock>).mockClear();
     (workflowsDb.cancelWorkflowRun as ReturnType<typeof mock>).mockClear();
+    (workflowsDb.cancelRunningWorkflowRun as ReturnType<typeof mock>).mockReset();
+    (workflowsDb.cancelRunningWorkflowRun as ReturnType<typeof mock>).mockResolvedValue({
+      cancelled: true,
+    });
     (workflowsDb.getActiveWorkflowRun as ReturnType<typeof mock>).mockClear();
     (workflowsDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockReset();
     (workflowsDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValue(null);
@@ -10907,7 +10912,7 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
 
     // Paused-at-gate is an external transition the signal handler must respect.
     expect(workflowsDb.failWorkflowRun).not.toHaveBeenCalled();
-    expect(workflowsDb.cancelWorkflowRun).not.toHaveBeenCalled();
+    expect(workflowsDb.cancelRunningWorkflowRun).not.toHaveBeenCalled();
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
@@ -10944,7 +10949,7 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
       'Workflow failed'
     );
 
-    expect(workflowsDb.cancelWorkflowRun).toHaveBeenCalledWith('test-run-id', {
+    expect(workflowsDb.cancelRunningWorkflowRun).toHaveBeenCalledWith('test-run-id', {
       reason: 'Process terminated (SIGTERM)',
     });
     expect(workflowsDb.failWorkflowRun).not.toHaveBeenCalled();
@@ -10970,7 +10975,7 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
       expect(handler).toBeDefined();
       // Double-signal: the CLI's own `terminating` guard makes the second
       // invocation a no-op before it ever reaches the database — and even if
-      // that guard were bypassed, cancelWorkflowRun is idempotent and would
+      // that guard were bypassed, cancelRunningWorkflowRun is idempotent and would
       // return { cancelled: false } instead of throwing a CAS miss.
       handler();
       handler();
@@ -10983,10 +10988,52 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
       'Workflow failed'
     );
 
-    expect(workflowsDb.cancelWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(workflowsDb.cancelRunningWorkflowRun).toHaveBeenCalledTimes(1);
     expect(workflowsDb.failWorkflowRun).not.toHaveBeenCalled();
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
+
+  // The status read says 'running', but the executor commits a different state
+  // before the cancel lands. The `status = 'running'` predicate must absorb it:
+  // the update matches nothing, the handler neither throws nor falls back to
+  // failWorkflowRun, and the committed state survives.
+  for (const racedState of ['paused', 'failed'] as const) {
+    it(`leaves a ${racedState} run committed between the status read and the cancel untouched`, async () => {
+      const workflowsDb = require('@archon/core/db/workflows');
+      (workflowsDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValue('running');
+      (workflowsDb.cancelRunningWorkflowRun as ReturnType<typeof mock>).mockResolvedValue({
+        cancelled: false,
+      });
+
+      const sigtermBefore = process.listeners('SIGTERM');
+      const { executeWorkflow } = require('@archon/workflows/executor');
+      (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
+        capturedSubscribeHandler?.({
+          type: 'workflow_started',
+          runId: 'run-1',
+          workflowName: 'plan',
+          conversationId: 'conv-1',
+          transcriptPath: '/logs/run-1.jsonl',
+        });
+        const [handler] = addedSigtermListeners(sigtermBefore);
+        expect(handler).toBeDefined();
+        handler();
+        await settleCleanup();
+        return { success: false, workflowRunId: 'run-1', error: 'interrupted' };
+      });
+
+      setupWorkflowMocks();
+      await expect(workflowRunCommand('/test/path', 'plan', 'hello', {})).rejects.toThrow(
+        'Workflow failed'
+      );
+
+      expect(workflowsDb.cancelRunningWorkflowRun).toHaveBeenCalledWith('test-run-id', {
+        reason: 'Process terminated (SIGTERM)',
+      });
+      expect(workflowsDb.failWorkflowRun).not.toHaveBeenCalled();
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+  }
 
   it('lets an exact-run cancel controller own the lifecycle transition', async () => {
     const workflowsDb = require('@archon/core/db/workflows');
@@ -11065,7 +11112,7 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
     setupWorkflowMocks();
     await workflowRunCommand('/test/path', 'plan', 'hello', {});
 
-    expect(workflowsDb.cancelWorkflowRun).toHaveBeenCalledWith('test-run-id', {
+    expect(workflowsDb.cancelRunningWorkflowRun).toHaveBeenCalledWith('test-run-id', {
       reason: 'Process terminated (SIGTERM)',
     });
     expect(workflowsDb.failWorkflowRun).not.toHaveBeenCalled();

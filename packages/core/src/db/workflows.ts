@@ -1333,6 +1333,52 @@ export async function cancelWorkflowRun(
   return { cancelled };
 }
 
+/**
+ * Cancel a run only while it is still 'running'.
+ *
+ * Narrower sibling of cancelWorkflowRun for callers that read the status and
+ * then write (the CLI signal handler): the `status = 'running'` predicate
+ * closes that read-then-write window, so a gate pause or a genuine failure
+ * committed in between is left untouched. Unlike failWorkflowRun's CAS, a miss
+ * is a silent idempotent no-op returning { cancelled: false } rather than a
+ * throw, which makes a repeated signal safe.
+ */
+export async function cancelRunningWorkflowRun(
+  id: string,
+  event?: WorkflowCancellationEventDetails
+): Promise<{ cancelled: boolean }> {
+  const dialect = getDialect();
+  let result: Awaited<ReturnType<IDatabase['query']>>;
+  try {
+    result = await getDatabase().withTransaction(async query => {
+      const update = await query(
+        `UPDATE remote_agent_workflow_runs
+         SET status = 'cancelled', completed_at = ${dialect.now()}
+         WHERE id = $1 AND status = 'running'`,
+        [id]
+      );
+      if ((update.rowCount ?? 0) > 0) {
+        await insertTerminalWorkflowEvent(query, {
+          workflow_run_id: id,
+          event_type: 'workflow_cancelled',
+          step_name: event?.step_name,
+          data: event?.reason === undefined ? undefined : { reason: event.reason },
+        });
+      }
+      return update;
+    });
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err }, 'db.workflow_run_cancel_failed');
+    throw new Error(`Failed to cancel workflow run: ${err.message}`);
+  }
+  const cancelled = (result.rowCount ?? 0) > 0;
+  if (!cancelled) {
+    getLog().info({ workflowRunId: id }, 'db.workflow_run_cancel_running_noop');
+  }
+  return { cancelled };
+}
+
 export async function cancelFanOutRun(
   id: string,
   reason: FanOutCancelReason

@@ -42,6 +42,7 @@ import {
   signalWorkflowWait,
   clearWorkflowWaitContext,
   cancelWorkflowRun,
+  cancelRunningWorkflowRun,
   cancelFanOutRun,
   findChildRuns,
   getRunAncestry,
@@ -2082,6 +2083,49 @@ describe('workflows database', () => {
       mockQuery.mockRejectedValueOnce(new Error('Lock timeout'));
 
       await expect(cancelWorkflowRun('workflow-run-123')).rejects.toThrow(
+        'Failed to cancel workflow run: Lock timeout'
+      );
+    });
+  });
+
+  describe('cancelRunningWorkflowRun', () => {
+    test('cancels a running run and emits the terminal event', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+      mockTerminalSnapshot('cancelled');
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      const result = await cancelRunningWorkflowRun('workflow-run-123', {
+        reason: 'Process terminated (SIGINT)',
+      });
+
+      expect(result).toEqual({ cancelled: true });
+      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain("status = 'cancelled'");
+      // Narrower than cancelWorkflowRun: a paused or failed run must not match.
+      expect(query).toContain("WHERE id = $1 AND status = 'running'");
+      expect(params).toEqual(['workflow-run-123']);
+      const [eventQuery, eventParams] = mockQuery.mock.calls[3] as [string, unknown[]];
+      expect(eventQuery).toContain('INSERT INTO remote_agent_workflow_events');
+      expect(eventParams.slice(1, 3)).toEqual(['workflow-run-123', 'workflow_cancelled']);
+      expect(JSON.parse(eventParams[5] as string)).toMatchObject({
+        reason: 'Process terminated (SIGINT)',
+      });
+    });
+
+    test('reports { cancelled: false } without throwing when the run is no longer running', async () => {
+      // UPDATE matches nothing: the run moved to paused/failed in between.
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
+
+      await expect(cancelRunningWorkflowRun('workflow-run-123')).resolves.toEqual({
+        cancelled: false,
+      });
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+    });
+
+    test('throws on database error', async () => {
+      mockQuery.mockRejectedValueOnce(new Error('Lock timeout'));
+
+      await expect(cancelRunningWorkflowRun('workflow-run-123')).rejects.toThrow(
         'Failed to cancel workflow run: Lock timeout'
       );
     });
