@@ -99,7 +99,7 @@ import {
 } from './schemas';
 import type { BindingDirective } from './schemas';
 import { mapNodeTemplateSlots } from './template-walker';
-import { buildExecNodeEnvironment } from './exec-environment';
+import { buildExecNodeEnvironment, withUserLocalBin } from './exec-environment';
 import { planGraph, resolvedBodyNodes } from './graph-plan';
 import { FAN_OUT_CANCEL_REASONS, waitCompletionEvents } from './store';
 import type { DagResumeSnapshot, FanOutCancelReason, PersistedNodeOutput } from './store';
@@ -3417,8 +3417,14 @@ async function runSubprocess(
     retention: SubprocessRetention;
   }
 ): Promise<{ stdout: string; stderr: string; credentialValues: readonly string[] }> {
+  // `withUserLocalBin` on BOTH paths: a host run inherits the server's PATH,
+  // which omits ~/.local/bin, and a container run gets no PATH from the bag at
+  // all. Either way a script node calling `uv`/`pipx`/a cargo binary would die
+  // at ENOENT after the run had already spent its money.
   const subprocessEnv =
-    execContext.kind === 'container' ? options.env : { ...process.env, ...options.env };
+    execContext.kind === 'container'
+      ? withUserLocalBin(options.env)
+      : withUserLocalBin({ ...process.env, ...options.env });
   // Both outcomes redact against the same values, so the credential set is resolved
   // once here rather than separately per path — a success path that redacted less than
   // the failure path would be the security hole, not a style difference.
@@ -3439,7 +3445,11 @@ async function runSubprocess(
             'docker',
             buildSubprocessDockerArgs(execContext, cmd, args, {
               cwd: options.cwd,
-              env: options.env,
+              // `subprocessEnv`, not `options.env`: the container's env is what
+              // is DELIVERED, so the PATH fix has to ride this argument. Using
+              // options.env here would leave the augmented PATH visible only to
+              // the credential scan above and absent from the actual container.
+              env: subprocessEnv,
             }),
             { timeout: options.timeout }
           )
