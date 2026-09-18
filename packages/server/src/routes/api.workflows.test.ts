@@ -423,6 +423,50 @@ describe('GET /api/workflows/:name', () => {
     }
   });
 
+  test('returns the authored (un-normalized) form of a project workflow alongside it', async () => {
+    // The builder edits the authored shape; the normalized `workflow` cannot be
+    // saved back (the server's own validate rejects it), so the raw file must reach it.
+    const testDir = join(tmpdir(), `wf-get-authored-${Date.now()}`);
+    const workflowDir = join(testDir, '.archon', 'workflows');
+    await mkdir(workflowDir, { recursive: true });
+    await writeFile(
+      join(workflowDir, 'authored.yaml'),
+      'name: authored\ndescription: Raw\nnodes:\n  - id: plan\n    command: plan\n    settingSources: []\n'
+    );
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+      mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
+      const response = await app.request(`/api/workflows/authored?cwd=${testDir}`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { authored?: unknown };
+      expect(body.authored).toEqual({
+        name: 'authored',
+        description: 'Raw',
+        nodes: [{ id: 'plan', command: 'plan', settingSources: [] }],
+      });
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
+  test('returns the authored form of a bundled workflow', async () => {
+    const app = createTestApp();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+    mockListCodebases.mockImplementationOnce(async () => []);
+
+    const response = await app.request('/api/workflows/archon-assist');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { authored?: unknown };
+    expect(body.authored).toEqual({
+      name: 'archon-assist',
+      description: 'Archon Assist',
+      nodes: [],
+    });
+  });
+
   test('returns project workflow when file uses .yml extension (matches discovery)', async () => {
     const testDir = join(tmpdir(), `wf-yml-test-${Date.now()}`);
     const workflowDir = join(testDir, '.archon', 'workflows');
