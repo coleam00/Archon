@@ -749,19 +749,20 @@ export async function findChildRuns(parentRunId: string): Promise<WorkflowRun[]>
 const MAX_RUN_ANCESTRY_DEPTH = 32;
 
 /**
- * Thrown by {@link getRunAncestry} when a run's `parent_run_id` chain is still
- * unresolved, and not cyclic, after {@link MAX_RUN_ANCESTRY_DEPTH} hops. This
- * must fail loudly rather than silently returning a truncated ancestry: callers
- * that depend on ancestry for cycle detection or path-lock exclusion would
- * otherwise silently mis-scope on a legitimately deep tree.
+ * Thrown by {@link getRunAncestry} when a run's `parent_run_id` chain still
+ * resolves to a further ancestor — and is not cyclic — after
+ * {@link MAX_RUN_ANCESTRY_DEPTH} hops. This must fail loudly rather than
+ * silently returning a truncated ancestry: callers that depend on ancestry for
+ * cycle detection or path-lock exclusion would otherwise silently mis-scope on
+ * a legitimately deep tree.
  */
 export class RunAncestryDepthExceededError extends Error {
   constructor(
     public readonly runId: string,
-    public readonly depth: number
+    public readonly depthCap: number
   ) {
     super(
-      `Run ancestry for '${runId}' exceeds the depth cap (${depth}); refusing to return a truncated chain.`
+      `Run ancestry for '${runId}' continues past the maximum of ${depthCap} ancestors; refusing to return a truncated chain.`
     );
     this.name = 'RunAncestryDepthExceededError';
   }
@@ -773,10 +774,13 @@ export class RunAncestryDepthExceededError extends Error {
  * repeated id stops the walk). Used by the runtime cycle guard and to build the
  * path-lock exclusion set for a shared-checkout sub-run.
  *
- * Throws {@link RunAncestryDepthExceededError} if the chain is still ongoing
- * (current run still has an unresolved parent) once the depth cap is reached,
- * rather than silently truncating. Cycle detection wins over the cap: a
- * repeated id always ends the walk normally, whatever depth it sits at.
+ * Throws {@link RunAncestryDepthExceededError} only when the chain genuinely
+ * continues past the cap — i.e. a real, resolvable parent still remains after
+ * {@link MAX_RUN_ANCESTRY_DEPTH} hops — rather than silently truncating. A
+ * chain that ends at the cap, whether at a root or at a dangling
+ * `parent_run_id`, is complete and is returned in full. Cycle detection wins
+ * over the cap: a repeated id always ends the walk normally, whatever depth it
+ * sits at.
  */
 export async function getRunAncestry(runId: string): Promise<WorkflowRun[]> {
   const ancestors: WorkflowRun[] = [];
@@ -786,11 +790,12 @@ export async function getRunAncestry(runId: string): Promise<WorkflowRun[]> {
   while (current?.parent_run_id) {
     const parentId = current.parent_run_id;
     if (seen.has(parentId)) break; // cyclic data — stop rather than loop forever
-    if (depth >= MAX_RUN_ANCESTRY_DEPTH) {
-      throw new RunAncestryDepthExceededError(runId, depth);
-    }
     const parent = await getWorkflowRun(parentId);
     if (!parent) break; // parent deleted (ON DELETE SET NULL orphan) — chain ends
+    // Only now is the chain known to really continue, so the cap can fire.
+    if (depth >= MAX_RUN_ANCESTRY_DEPTH) {
+      throw new RunAncestryDepthExceededError(runId, MAX_RUN_ANCESTRY_DEPTH);
+    }
     ancestors.push(parent);
     seen.add(parentId);
     current = parent;

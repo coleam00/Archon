@@ -1730,6 +1730,42 @@ describe('workflows database', () => {
       );
     });
 
+    test('returns a full chain of exactly the cap that ends at a root', async () => {
+      // 33 runs (run0 -> ... -> run32) walked from 'run32': exactly
+      // MAX_RUN_ANCESTRY_DEPTH (32) ancestors, terminating at a real root.
+      const chainLength = 33;
+      const idFor = (i: number): string => `run${i}`;
+      for (let i = chainLength - 1; i >= 0; i--) {
+        const parentId = i === 0 ? null : idFor(i - 1);
+        mockQuery.mockResolvedValueOnce(createQueryResult([runRow(idFor(i), parentId)]));
+      }
+
+      const result = await getRunAncestry(idFor(chainLength - 1));
+
+      expect(result.map(r => r.id)).toEqual(
+        Array.from({ length: chainLength - 1 }, (_, i) => idFor(chainLength - 2 - i))
+      );
+    });
+
+    test('returns a full chain of exactly the cap that ends at a deleted parent', async () => {
+      // Same 32-ancestor chain, but run0's parent row is missing. The chain
+      // genuinely ends there, so it must be returned in full rather than
+      // reported as an overflow.
+      const chainLength = 33;
+      const idFor = (i: number): string => `run${i}`;
+      for (let i = chainLength - 1; i >= 0; i--) {
+        const parentId = i === 0 ? 'gone' : idFor(i - 1);
+        mockQuery.mockResolvedValueOnce(createQueryResult([runRow(idFor(i), parentId)]));
+      }
+      mockQuery.mockResolvedValueOnce(createQueryResult([])); // 'gone' has no row
+
+      const result = await getRunAncestry(idFor(chainLength - 1));
+
+      expect(result.map(r => r.id)).toEqual(
+        Array.from({ length: chainLength - 1 }, (_, i) => idFor(chainLength - 2 - i))
+      );
+    });
+
     test('stops on a cycle that closes exactly at the depth cap instead of throwing', async () => {
       // 33 runs (run0 -> ... -> run32) walked from 'run32', with run0's parent
       // pointing back to 'run32'. The repeat is only reached once depth equals
