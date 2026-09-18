@@ -3018,10 +3018,11 @@ async function runWorkflowWithOwnedSource(
       // ('completed','cancelled') guard) — unlike failWorkflowRun's CAS, a
       // double call or a race with the executor committing a gate pause is a
       // safe no-op (`{cancelled: false}`), not a thrown error. An
-      // operator-initiated stop is not an execution failure: it now records
-      // `status='cancelled'`, not `status='failed'` (#3334 M7) — the run
-      // stays failed-free for this signal path; failWorkflowRun remains
-      // reserved for genuine execution failures elsewhere in this file.
+      // operator-initiated stop is not an execution failure: it records
+      // `status='cancelled'`, not `status='failed'` — that behavior change is
+      // owned by #3351; this call site only routes it through the port.
+      // failWorkflowRun remains reserved for genuine execution failures
+      // elsewhere in this file.
       await engine.cancel(interruptedRunId, `Process terminated (${signal})`);
     })()
       .catch((err: unknown) => {

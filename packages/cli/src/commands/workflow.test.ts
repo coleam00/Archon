@@ -432,7 +432,7 @@ mock.module('@archon/workflows/event-emitter', () => ({
 mock.module('@archon/workflows/in-process-engine', () => ({
   InProcessWorkflowEngine: class {
     // Mirrors the real InProcessWorkflowEngine.submit()'s 1:1 delegation to
-    // executeWorkflow (#3334 M1), routed through the same `@archon/workflows/executor`
+    // executeWorkflow, routed through the same `@archon/workflows/executor`
     // mock below so existing executeWorkflow-return-value/call-count assertions
     // keep working unchanged after the CLI switched from calling executeWorkflow
     // directly to going through the engine.
@@ -459,7 +459,7 @@ mock.module('@archon/workflows/in-process-engine', () => ({
       );
     }
     // Mirrors the real InProcessWorkflowEngine.cancel()'s 1:1 delegation to
-    // store.cancelWorkflowRun (#3334 M7) so CLI-level SIGINT/SIGTERM tests can
+    // store.cancelWorkflowRun so CLI-level SIGINT/SIGTERM tests can
     // assert against the same `@archon/core/db/workflows` mock they already use
     // for failWorkflowRun.
     async cancel(runId: string, reason?: string): Promise<{ cancelled: boolean }> {
@@ -10951,7 +10951,7 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
-  it('cancels (not fails) the run on a genuine mid-run interrupt — operator stop is not a failure (#3334 M7)', async () => {
+  it('cancels (not fails) the run on a genuine mid-run interrupt — operator stop is not a failure', async () => {
     const workflowsDb = require('@archon/core/db/workflows');
     (workflowsDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValue('running');
     const shutdownOrder: string[] = [];
@@ -10986,7 +10986,7 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
 
     // Ctrl-C/SIGTERM now records status='cancelled' via engine.cancel(), never
     // status='failed' via failWorkflowRun — an operator-initiated stop is not
-    // an execution failure (#3334 M7, deliberate behavior change).
+    // an execution failure (deliberate behavior change, owned by #3351).
     expect(workflowsDb.cancelWorkflowRun).toHaveBeenCalledWith('test-run-id', {
       reason: 'Process terminated (SIGTERM)',
     });

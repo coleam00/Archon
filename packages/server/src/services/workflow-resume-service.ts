@@ -157,7 +157,7 @@ export async function resumeWorkflowRunFromServer(
           : undefined;
 
       // engine.resume() folds hydrateResumableRun + executeWorkflow into one call
-      // (IWorkflowEngine, #3334 M1/M2), but its own promise only settles once
+      // (IWorkflowEngine, #3334), but its own promise only settles once
       // execution has fully finished. This caller needs the ORIGINAL fast/slow
       // split — resolve as soon as hydration accepts the run and execution has
       // been kicked off, without blocking the HTTP handlers that call this
@@ -167,7 +167,7 @@ export async function resumeWorkflowRunFromServer(
       // `onAccepted` ever firing when hydration declines the run, i.e.
       // "nothing to resume", or rejects, i.e. a lost CAS race / hydration
       // failure). Once accepted, the engine promise's own completion is
-      // handled detached (`void ...`), exactly like the pre-M2 fire-and-forget
+      // handled detached (`void ...`), exactly like the previous fire-and-forget
       // `execution.then(...)` path.
       const engine = new InProcessWorkflowEngine(deps.store);
       let resolveAccepted!: () => void;
@@ -237,7 +237,7 @@ export async function resumeWorkflowRunFromServer(
       }
 
       // Accepted: execution has started. Detach completion handling exactly
-      // like the pre-M2 fire-and-forget `execution.then(...)` path.
+      // like the previous fire-and-forget `execution.then(...)` path.
       void resultPromise
         .then(
           async result => {

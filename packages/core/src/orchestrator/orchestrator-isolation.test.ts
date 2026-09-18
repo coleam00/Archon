@@ -291,7 +291,7 @@ mock.module('@archon/workflows/executor', () => ({
     withObservableCapturedSource(capturedSourceOwnerCalls, body)
   ),
   // Statically imported (transitively, via `InProcessWorkflowEngine`) by the dispatch
-  // path since #3334 M3; a named import must link even when these tests never exercise
+  // path; a named import must link even when these tests never exercise
   // the resume path.
   hydrateResumableRun: mock(() => Promise.resolve(null)),
 }));

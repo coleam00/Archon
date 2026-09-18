@@ -1,7 +1,7 @@
 /**
  * Wires the shared `IWorkflowEngine` contract-test suite
  * (`engine-contract-tests.ts`) against `InProcessWorkflowEngine`
- * (issue #3334, M1).
+ * (issue #3334).
  *
  * Mock setup mirrors `executor.test.ts`'s "Mock ... / Import after mocks"
  * convention — `InProcessWorkflowEngine` delegates straight through to the

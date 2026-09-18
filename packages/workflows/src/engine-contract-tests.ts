@@ -1,6 +1,6 @@
 /**
  * Shared contract-test suite for `IWorkflowEngine` implementations (issue
- * #3334, M1). Authored from scratch — there is no prior `IWorkflowStore` /
+ * #3334). Authored from scratch — there is no prior `IWorkflowStore` /
  * `IWorkflowPlatform` contract-test suite to extend.
  *
  * Runs the REAL `executeWorkflow` / `hydrateResumableRun` call path (via
