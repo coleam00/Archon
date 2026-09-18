@@ -10,6 +10,7 @@ import { PendingInputBanner } from '../components/PendingInputBanner';
 import { useEntity } from '../store/cache';
 import { K, type Scope } from '../store/keys';
 import { useDashboardSSE } from '../lib/sse';
+import { readProjectView } from '../lib/project-view';
 import { useKeymap, type Binding } from '../lib/keymap';
 import * as skill from '../skills';
 import type { Run } from '../primitives/run';
@@ -279,6 +280,18 @@ export function RunsPage(): ReactElement {
   const scope: Scope = projectId ?? 'all';
   const [searchParams] = useSearchParams();
   const demoMode = searchParams.get('demo') === '1';
+
+  // Land on the view this project was last opened in. Only the project's index
+  // route redirects: a deep link to a run is explicit, and clicking the Runs tab
+  // records 'runs' before navigating, so it is never bounced back to Chat.
+  // `replace` keeps the skipped Runs entry out of history, so Back still leaves
+  // the project rather than ping-ponging.
+  useEffect(() => {
+    if (projectId === undefined) return;
+    if (readProjectView(projectId) === 'chat') {
+      void navigate(`/console/p/${projectId}/chat`, { replace: true });
+    }
+  }, [projectId, navigate]);
 
   // Default to `running` — where the user's attention belongs. Completed is a
   // retrospective view, not the first thing to see.
