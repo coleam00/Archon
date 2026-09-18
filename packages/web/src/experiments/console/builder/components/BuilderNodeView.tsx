@@ -7,8 +7,8 @@
  */
 import { memo, type CSSProperties, type ReactElement, type ReactNode } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { VARIANT_REGISTRY } from '../variants';
-import type { BuilderNode } from '../types';
+import { nodeCapabilities } from '../variants';
+import type { BuilderNode, WireDagNode } from '../types';
 import type { BuilderFlowNode } from '../flow/types';
 
 /** First line of the node's main content, for the in-node preview. */
@@ -36,12 +36,26 @@ export function contentPreview(node: BuilderNode): string {
       );
     case 'cancel':
       return node.data.reason.split('\n')[0] ?? '';
+    case 'opaque':
+      return opaquePreview(node.data.fields);
   }
+}
+
+/** Preview line for a read-only node: the sub-workflow / include target, or the group size. */
+function opaquePreview(fields: Partial<WireDagNode>): string {
+  if (fields.workflow !== undefined) {
+    return fields.fan_out !== undefined
+      ? `${fields.workflow} × ${fields.fan_out.items}`
+      : fields.workflow;
+  }
+  if (fields.include !== undefined) return fields.include;
+  const inner = fields.loop_group?.nodes.length ?? 0;
+  return `${String(inner)} nodes, ≤${String(fields.loop_group?.max_iterations ?? 0)} rounds`;
 }
 
 function BuilderNodeRender({ data, selected }: NodeProps<BuilderFlowNode>): ReactElement {
   const node = data.node;
-  const capabilities = VARIANT_REGISTRY[node.variant].capabilities;
+  const capabilities = nodeCapabilities(node);
   const preview = contentPreview(node);
   const stripeStyle: CSSProperties = { background: `var(--node-${node.variant})` };
   const badgeStyle: CSSProperties = {
