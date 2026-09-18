@@ -5,15 +5,11 @@
  * path, with no behavior changes. `cancel` is out of this milestone's scope
  * (M7) and throws an explicit not-implemented error — nothing calls it yet.
  *
- * `subscribe()` (M6) is real: it polls `IWorkflowStore`'s event-read methods
- * (never a database directly) and is descendant-inclusive — see its own doc
- * comment below.
- *
  * `cancel()` (#3334 M7) is also real: it delegates to `IWorkflowStore.cancelWorkflowRun`,
  * which is backed by `@archon/core`'s idempotent `cancelWorkflowRun` (guards
  * `status NOT IN ('completed', 'cancelled')`, never throws on a double-cancel).
  * `@archon/workflows` cannot import `@archon/core` directly (core depends on
- * workflows, not the reverse), so `cancel()` — like `subscribe()` — requires a
+ * workflows, not the reverse), so `cancel()` requires a
  * store-bound engine instance: `new InProcessWorkflowEngine(deps.store)`.
  */
 import { executeWorkflow, hydrateResumableRun } from './executor';
@@ -21,12 +17,9 @@ import type {
   IWorkflowEngine,
   WorkflowEngineSubmitInput,
   WorkflowResumeInput,
-  WorkflowEvent,
 } from './engine-port';
 import type { IWorkflowStore } from './store';
 import type { WorkflowExecutionResult } from './schemas';
-import { isRunInSubscriptionScope } from './run-subscription-membership';
-import { mapPersistedEventToEmitterEvent } from './db-event-mapping';
 import { createLogger } from '@archon/paths';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -34,11 +27,6 @@ function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('workflow.in-process-engine');
   return cachedLog;
 }
-
-/** Default poll cadence for `subscribe()`. Overridable per-call for tests. */
-const DEFAULT_SUBSCRIBE_POLL_INTERVAL_MS = 250;
-/** Max rows read per poll tick — generous; `subscribe()` is typically single-consumer (CLI). */
-const SUBSCRIBE_DRAIN_LIMIT = 500;
 
 /**
  * Wraps any error `hydrateResumableRun` throws other than a lost CAS race
@@ -63,8 +51,8 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
   /**
    * `store` is optional so every existing `new InProcessWorkflowEngine()` call
    * site (which passes `deps`/`store` per-call to `submit`/`resume` instead)
-   * keeps working unchanged. `subscribe()` has no such per-call parameter (the
-   * `IWorkflowEngine` port fixes its signature to `(runId, listener)`), so a
+   * keeps working unchanged. `cancel()` has no such per-call parameter (the
+   * `IWorkflowEngine` port fixes its signature to `(runId, reason)`), so a
    * caller that needs it must construct the engine with a store:
    * `new InProcessWorkflowEngine(deps.store)`.
    */
@@ -180,99 +168,5 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
     // own poll throttle, so a resolved `{ cancelled: true }` means "recorded",
     // not "execution has already stopped".
     return this.store.cancelWorkflowRun(runId, reason === undefined ? undefined : { reason });
-  }
-
-  /**
-   * Subscribe to `runId`'s events AND every descendant sub-run's events, delivered
-   * in `event_order` order (#3334 M6). Descendant-inclusion is a per-event
-   * ancestry walk-UP (`isRunInSubscriptionScope`), not a descendant walk-down —
-   * see that helper's doc comment for why. Implemented purely through
-   * `IWorkflowStore`'s event-read methods (`getGlobalMaxEventOrder`,
-   * `listWorkflowEventsAfter`), never a direct DB query.
-   *
-   * Anchoring: fires `getGlobalMaxEventOrder()` synchronously, before this method
-   * returns — NOT lazily on the first poll tick — so a synchronous caller that
-   * `subscribe()`s and then immediately triggers execution (the CLI/orchestrator's
-   * own ordering) cannot race an event write ahead of the anchor read. The anchor
-   * is the TRUE global max, not a per-run maximum: a per-run max
-   * understates the watermark whenever a descendant sub-run already has older
-   * events with a higher global order than `runId`'s own latest event (e.g. on
-   * resume, when a sub-run started in an earlier attempt) — using it would let
-   * those pre-existing events look new and get replayed. Only events with a
-   * strictly greater `event_order` than the anchor are ever delivered, so a new
-   * subscription never replays history. Because `event_order` is a single
-   * globally-monotonic counter shared across every run (not scoped per run — see
-   * `listWorkflowEventsAfter`'s doc comment in `store.ts`), one poll loop with one
-   * cursor sees every descendant's events too, including ones from sub-runs that
-   * do not exist yet at subscribe time.
-   *
-   * A `RunAncestryDepthExceededError` (or any other ancestry-walk failure) from
-   * `getRunAncestry` is a real invariant violation — a truncated ancestry would
-   * silently mis-scope events, exactly the bug #3334 M5 fixed — so it is never
-   * swallowed: it is logged at ERROR and the subscription stops polling rather
-   * than risk delivering wrongly-scoped events forever after. The same applies to
-   * a failed anchor read itself.
-   */
-  subscribe(
-    runId: string,
-    listener: (event: WorkflowEvent) => void,
-    pollIntervalMs = DEFAULT_SUBSCRIBE_POLL_INTERVAL_MS
-  ): () => void {
-    const store = this.store;
-    if (!store) {
-      throw new Error(
-        'IWorkflowEngine.subscribe requires a store-bound engine instance — ' +
-          'construct with `new InProcessWorkflowEngine(deps.store)`'
-      );
-    }
-
-    let stopped = false;
-    let polling = false;
-    // Kicked off synchronously, right now — not deferred behind the first
-    // `setInterval` tick — so the anchor is captured before any event this
-    // subscription's own caller is about to trigger can be written.
-    const cursorReady = store.getGlobalMaxEventOrder();
-    let cursor: number | undefined;
-
-    const poll = async (): Promise<void> => {
-      if (stopped || polling) return;
-      polling = true;
-      try {
-        cursor ??= await cursorReady;
-        const rows = await store.listWorkflowEventsAfter(cursor, SUBSCRIBE_DRAIN_LIMIT);
-        for (const row of rows) {
-          if (stopped) return;
-          cursor = Math.max(cursor, row.event_order);
-          const inScope = await isRunInSubscriptionScope(
-            row.workflow_run_id,
-            runId,
-            store.getRunAncestry.bind(store)
-          );
-          if (!inScope) continue;
-          const event = mapPersistedEventToEmitterEvent(row);
-          if (event) listener(event);
-        }
-      } finally {
-        polling = false;
-      }
-    };
-
-    const intervalId = setInterval(() => {
-      poll().catch((err: unknown) => {
-        getLog().error(
-          { err: err as Error, runId },
-          'in_process_engine.subscribe_poll_failed_stopping'
-        );
-        stopped = true;
-        clearInterval(intervalId);
-      });
-    }, pollIntervalMs);
-    const timer = intervalId as unknown as { unref?: () => void };
-    if (typeof timer.unref === 'function') timer.unref();
-
-    return (): void => {
-      stopped = true;
-      clearInterval(intervalId);
-    };
   }
 }

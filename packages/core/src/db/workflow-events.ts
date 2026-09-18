@@ -24,8 +24,6 @@ import {
   type PersistedNodeOutput,
   type WorkflowEventInput,
   type ObservabilityEventInput,
-  type PersistedWorkflowEvent,
-  type WorkflowEventType,
 } from '@archon/workflows/store';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -254,74 +252,6 @@ export async function listWorkflowEventsSince(
     getLog().error({ err: error as Error }, 'db.workflow_events_list_since_failed');
     throw new Error(
       `Failed to list workflow events since ${after.toISOString()}: ${(error as Error).message}`
-    );
-  }
-}
-
-/**
- * Current max `event_order` across ALL workflow runs (0 if the table is empty).
- * The true global watermark `IWorkflowEngine.subscribe()` (#3334 M6) anchors on
- * at subscribe time — see `IWorkflowEventReader.getGlobalMaxEventOrder`'s doc
- * comment for why this, and not a per-run maximum, is the correct anchor.
- */
-export async function getGlobalMaxEventOrder(): Promise<number> {
-  try {
-    const result = await pool.query<{ max_order: number | string | null }>(
-      'SELECT MAX(event_order) AS max_order FROM remote_agent_workflow_events'
-    );
-    const raw = result.rows[0]?.max_order;
-    return raw == null ? 0 : Number(raw);
-  } catch (error) {
-    getLog().error({ err: error as Error }, 'db.workflow_events_global_max_order_failed');
-    throw new Error(`Failed to read global max event_order: ${(error as Error).message}`);
-  }
-}
-
-/**
- * List events across ALL workflow runs with `event_order` strictly greater than
- * `afterEventOrder`, oldest first, capped at `limit`. Backs
- * `IWorkflowEngine.subscribe()` (#3334 M6): `event_order` is a single
- * globally-monotonic counter (see the column's migration comment in
- * `bundled-schema.generated.ts`), so one cursor tails every run at once instead of
- * a poll per run. `event_order > $1` cannot match a NULL column value, so a
- * legacy pre-event_order row is excluded by the query itself, not a runtime check.
- */
-export async function listWorkflowEventsAfter(
-  afterEventOrder: number,
-  limit: number
-): Promise<PersistedWorkflowEvent[]> {
-  try {
-    const result = await pool.query<WorkflowEventRow>(
-      `SELECT * FROM remote_agent_workflow_events
-       WHERE event_order > $1
-       ORDER BY event_order ASC
-       LIMIT $2`,
-      [afterEventOrder, limit]
-    );
-    return [...result.rows].map(parseEventRow).map(row => {
-      // Structurally unreachable given the `event_order > $1` predicate above —
-      // asserted rather than silently coerced, per the fail-loud invariant this
-      // read exists to uphold (#3334 M6).
-      if (row.event_order == null) {
-        throw new Error(
-          `workflow_events row ${row.id} (run ${row.workflow_run_id}) has NULL event_order ` +
-            `ahead of subscribe anchor ${String(afterEventOrder)} — event_order invariant violated`
-        );
-      }
-      return {
-        id: row.id,
-        workflow_run_id: row.workflow_run_id,
-        event_type: row.event_type as WorkflowEventType,
-        step_name: row.step_name,
-        data: row.data,
-        event_order: row.event_order,
-        created_at: row.created_at,
-      };
-    });
-  } catch (error) {
-    getLog().error({ err: error as Error }, 'db.workflow_events_list_after_failed');
-    throw new Error(
-      `Failed to list workflow events after ${String(afterEventOrder)}: ${(error as Error).message}`
     );
   }
 }

@@ -27,13 +27,7 @@
 import type { WorkflowDeps, IWorkflowPlatform } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';
 import type { WorkflowResumeCursor } from './store';
-import type { WorkflowEmitterEvent } from './event-emitter';
 import type { ResolvedWorkflow, WorkflowRun, WorkflowExecutionResult } from './schemas';
-
-/** Alias kept local to the port so callers of `IWorkflowEngine` don't need to know
- * events are currently backed by `WorkflowEmitterEvent`; that's an implementation
- * detail of whichever engine backs the port. */
-export type WorkflowEvent = WorkflowEmitterEvent;
 
 /**
  * Shared positional identity + dependencies every submit/resume call needs,
@@ -72,31 +66,11 @@ export interface WorkflowResumeInput extends WorkflowEngineCallBase {
 }
 
 /**
- * Read-only event subscription, kept as its own trait (ISP, same reasoning as
- * `IRunTreeStore` being split out of `IWorkflowStore`) so a caller that only
- * needs to observe a run doesn't have to depend on submit/resume/cancel.
- */
-export interface IWorkflowEventStream {
-  /**
-   * Subscribe to events for `runId` AND every descendant sub-run reachable from
-   * it (resolved via `IRunTreeStore`'s `parent_run_id` walk) — NOT events keyed
-   * by conversation id. A `workflow:` node's child run's events must reach a
-   * subscriber on the parent run id the same way they reach the conversation
-   * today.
-   *
-   * An implementation MUST be satisfiable by reading through `IWorkflowStore`'s
-   * event-read methods only; it must never query a database directly. Returns
-   * an unsubscribe function.
-   */
-  subscribe(runId: string, listener: (event: WorkflowEvent) => void): () => void;
-}
-
-/**
  * Port abstracting workflow execution. Implementations live behind this trait
  * so callers (CLI, orchestrator, adapters) depend only on the interface, never
  * on `executeWorkflow` / `dag-executor.ts` internals directly.
  */
-export interface IWorkflowEngine extends IWorkflowEventStream {
+export interface IWorkflowEngine {
   /** Start a new workflow run. Equivalent to today's `executeWorkflow(...)` call
    * with no resume state in `options`. */
   submit(input: WorkflowEngineSubmitInput): Promise<WorkflowExecutionResult>;

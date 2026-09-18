@@ -417,11 +417,15 @@ mock.module('@archon/workflows/dry-run', () => ({
 // Capture the subscription handler so tests can trigger events
 let capturedSubscribeHandler: ((event: WorkflowEmitterEvent) => void) | null = null;
 const mockUnsubscribe = mock(() => undefined);
-const mockEmit = mock(() => undefined);
 
 mock.module('@archon/workflows/event-emitter', () => ({
   getWorkflowEventEmitter: mock(() => ({
-    emit: mockEmit,
+    subscribeForConversation: mock(
+      (_convId: string, handler: (event: WorkflowEmitterEvent) => void) => {
+        capturedSubscribeHandler = handler;
+        return mockUnsubscribe;
+      }
+    ),
   })),
 }));
 
@@ -453,10 +457,6 @@ mock.module('@archon/workflows/in-process-engine', () => ({
         input.conversationDbId,
         input.options
       );
-    }
-    subscribe(_runId: string, handler: (event: WorkflowEmitterEvent) => void): () => void {
-      capturedSubscribeHandler = handler;
-      return mockUnsubscribe;
     }
     // Mirrors the real InProcessWorkflowEngine.cancel()'s 1:1 delegation to
     // store.cancelWorkflowRun (#3334 M7) so CLI-level SIGINT/SIGTERM tests can
@@ -10405,28 +10405,32 @@ describe('workflowRunCommand — progress rendering', () => {
     expect(mockUnsubscribe).toHaveBeenCalledTimes(1);
   });
 
-  it('renders the transcript path at workflow start unless quiet', async () => {
-    // `mapPersistedEventToEmitterEvent` never delivers `workflow_started` (its
-    // `transcriptPath` can't be reconstructed from a persisted DB row — see
-    // `db-event-mapping.ts`), so the CLI derives and prints this line itself,
-    // from the reserved run id + the same storage-root resolution the executor
-    // uses, independent of whatever `capturedSubscribeHandler` receives.
-    const expectedTranscriptPath = getRunLogPathForRootReal(
-      getProjectStoragePathsReal(
-        resolveProjectStorageKeyReal({ name: 'test-repo', default_cwd: '/test/path' }, '/test/path')
-      ).root,
-      'test-run-id'
-    );
+  it('renders the executor-owned transcript path at workflow start unless quiet', async () => {
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    const emitWorkflowStart = async (): Promise<{ success: true; workflowRunId: string }> => {
+      capturedSubscribeHandler?.({
+        type: 'workflow_started',
+        runId: 'run-1',
+        workflowName: 'plan',
+        conversationId: 'conv-1',
+        transcriptPath: '/archon/workspaces/acme/widget/logs/run-1.jsonl',
+      });
+      return { success: true, workflowRunId: 'run-1' };
+    };
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(emitWorkflowStart);
 
     setupWorkflowMocks();
     await workflowRunCommand('/test/path', 'plan', 'hello', {});
-    expect(stderrSpy).toHaveBeenCalledWith(`[workflow] Transcript: ${expectedTranscriptPath}\n`);
+    expect(stderrSpy).toHaveBeenCalledWith(
+      '[workflow] Transcript: /archon/workspaces/acme/widget/logs/run-1.jsonl\n'
+    );
 
     stderrSpy.mockClear();
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(emitWorkflowStart);
     setupWorkflowMocks();
     await workflowRunCommand('/test/path', 'plan', 'hello', { quiet: true });
     expect(stderrSpy).not.toHaveBeenCalledWith(
-      `[workflow] Transcript: ${expectedTranscriptPath}\n`
+      '[workflow] Transcript: /archon/workspaces/acme/widget/logs/run-1.jsonl\n'
     );
   });
 

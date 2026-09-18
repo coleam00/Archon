@@ -3094,54 +3094,16 @@ async function runWorkflowWithOwnedSource(
   // One-time-per-version notice when the workflow uses unconfigured tier keywords.
   await maybePrintTierNotice(workflow, workingCwd, cliUserId, options.quiet);
 
-  // Subscribe to workflow events for progress rendering, by the RUN this process
-  // owns (`ownedRunId`) rather than by conversation — `IWorkflowEngine.subscribe`
-  // is descendant-inclusive (any `workflow:` node's child sub-run's events reach
-  // this listener too, the same coverage conversation-scoped subscription gave
-  // for free since children share a conversation), and unlike the emitter's
-  // in-memory `subscribeForConversation`, it is backed by durable DB rows —
-  // events from BEFORE this call (there are none yet, but future replay/resume
-  // paths could add them) are excluded by construction, not by a race with
-  // registration order.
+  // Subscribe to workflow events for progress rendering. The owner identity was
+  // already reserved by source capture, before executeWorkflow can create its row.
+  // subscribeForConversation is pure in-memory registration — cannot throw in practice.
+  // If that changes, this should be moved inside the try block to prevent blocking executeWorkflow.
   const { quiet, verbose } = options;
-
-  // `workflow_started`'s `transcriptPath` can't survive the DB round-trip
-  // (`mapPersistedEventToEmitterEvent` intentionally drops it — see
-  // `db-event-mapping.ts`; it's derived from the run + storage root, not a
-  // persisted fact, and can't be reconstructed from a persisted event row).
-  // The CLI derives and prints the same line locally instead of waiting on
-  // the event stream — it either already holds the run row (resume/detached
-  // handoff) or, for a fresh run whose row the executor hasn't created yet,
-  // it composes the path the same way the pre-creation detached-launch path
-  // above does: from the resolved project storage root + the reserved run id.
-  if (!quiet) {
-    const preCreatedRun = resumable ?? detachedPreCreatedRun;
-    let transcriptPath: string | null;
-    if (preCreatedRun) {
-      transcriptPath = await resolveRunTranscriptPath(preCreatedRun);
-    } else {
-      try {
-        const storage = archonPaths.getProjectStoragePaths(
-          archonPaths.resolveProjectStorageKey(codebase, cwd)
-        );
-        transcriptPath = archonPaths.getRunLogPathForRoot(storage.root, ownedRunId);
-      } catch {
-        transcriptPath = null;
-      }
+  const unsubscribe = getWorkflowEventEmitter().subscribeForConversation(conversationId, event => {
+    if (!quiet) {
+      renderWorkflowEvent(event, verbose ?? false);
     }
-    if (transcriptPath) {
-      process.stderr.write(`[workflow] Transcript: ${transcriptPath}\n`);
-    }
-  }
-
-  const unsubscribe = new InProcessWorkflowEngine(createWorkflowStore()).subscribe(
-    ownedRunId,
-    event => {
-      if (!quiet) {
-        renderWorkflowEvent(event, verbose ?? false);
-      }
-    }
-  );
+  });
 
   // Notify Web UI that a workflow is dispatching.
   // Mirrors the orchestrator dispatch message structure (category/segment/workflowDispatch),
