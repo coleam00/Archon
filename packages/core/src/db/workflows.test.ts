@@ -1729,6 +1729,26 @@ describe('workflows database', () => {
         RunAncestryDepthExceededError
       );
     });
+
+    test('stops on a cycle that closes exactly at the depth cap instead of throwing', async () => {
+      // 33 runs (run0 -> ... -> run32) walked from 'run32', with run0's parent
+      // pointing back to 'run32'. The repeat is only reached once depth equals
+      // MAX_RUN_ANCESTRY_DEPTH (32), so a cycle sitting at the cap must still
+      // end the walk normally rather than look like an overflowing chain.
+      const chainLength = 33;
+      const idFor = (i: number): string => `run${i}`;
+      // getWorkflowRun('run32') first, then each subsequent parent lookup.
+      for (let i = chainLength - 1; i >= 0; i--) {
+        const parentId = i === 0 ? idFor(chainLength - 1) : idFor(i - 1);
+        mockQuery.mockResolvedValueOnce(createQueryResult([runRow(idFor(i), parentId)]));
+      }
+
+      const result = await getRunAncestry(idFor(chainLength - 1));
+
+      expect(result.map(r => r.id)).toEqual(
+        Array.from({ length: chainLength - 1 }, (_, i) => idFor(chainLength - 2 - i))
+      );
+    });
   });
 
   describe('listWorkflowRuns', () => {

@@ -750,10 +750,10 @@ const MAX_RUN_ANCESTRY_DEPTH = 32;
 
 /**
  * Thrown by {@link getRunAncestry} when a run's `parent_run_id` chain is still
- * unresolved after {@link MAX_RUN_ANCESTRY_DEPTH} hops. This must fail loudly
- * rather than silently returning a truncated ancestry: callers that depend on
- * ancestry for cycle detection or path-lock exclusion would otherwise silently
- * mis-scope on a legitimately deep tree.
+ * unresolved, and not cyclic, after {@link MAX_RUN_ANCESTRY_DEPTH} hops. This
+ * must fail loudly rather than silently returning a truncated ancestry: callers
+ * that depend on ancestry for cycle detection or path-lock exclusion would
+ * otherwise silently mis-scope on a legitimately deep tree.
  */
 export class RunAncestryDepthExceededError extends Error {
   constructor(
@@ -775,7 +775,8 @@ export class RunAncestryDepthExceededError extends Error {
  *
  * Throws {@link RunAncestryDepthExceededError} if the chain is still ongoing
  * (current run still has an unresolved parent) once the depth cap is reached,
- * rather than silently truncating.
+ * rather than silently truncating. Cycle detection wins over the cap: a
+ * repeated id always ends the walk normally, whatever depth it sits at.
  */
 export async function getRunAncestry(runId: string): Promise<WorkflowRun[]> {
   const ancestors: WorkflowRun[] = [];
@@ -783,11 +784,11 @@ export async function getRunAncestry(runId: string): Promise<WorkflowRun[]> {
   let current = await getWorkflowRun(runId);
   let depth = 0;
   while (current?.parent_run_id) {
+    const parentId = current.parent_run_id;
+    if (seen.has(parentId)) break; // cyclic data — stop rather than loop forever
     if (depth >= MAX_RUN_ANCESTRY_DEPTH) {
       throw new RunAncestryDepthExceededError(runId, depth);
     }
-    const parentId = current.parent_run_id;
-    if (seen.has(parentId)) break; // cyclic data — stop rather than loop forever
     const parent = await getWorkflowRun(parentId);
     if (!parent) break; // parent deleted (ON DELETE SET NULL orphan) — chain ends
     ancestors.push(parent);
