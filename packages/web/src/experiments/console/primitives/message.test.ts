@@ -111,3 +111,30 @@ describe('isSystemCategory', () => {
     expect(isSystemCategory('tool_call_formatted')).toBe(false);
   });
 });
+
+describe('toMessage — attachments', () => {
+  const withFiles = (metadata: Record<string, unknown>) =>
+    toMessage(raw({ id: 'm1', role: 'user', content: 'see this' }, metadata));
+
+  test('carries the files the server persisted on the message', () => {
+    const m = withFiles({ files: [{ name: 'shot.png', mimeType: 'image/png', size: 2048 }] });
+    expect(m.files).toEqual([{ name: 'shot.png', mimeType: 'image/png', size: 2048 }]);
+  });
+
+  test('a message with no attachments has an empty list, not undefined', () => {
+    expect(withFiles({}).files).toEqual([]);
+    expect(withFiles({ category: 'workflow_status' }).files).toEqual([]);
+  });
+
+  test('drops an entry with no usable name rather than rendering a blank chip', () => {
+    const m = withFiles({
+      files: [{ mimeType: 'image/png', size: 10 }, { name: '', size: 10 }, null],
+    });
+    expect(m.files).toEqual([]);
+  });
+
+  test('a missing size degrades to 0 rather than losing the attachment', () => {
+    const m = withFiles({ files: [{ name: 'notes.md' }] });
+    expect(m.files).toEqual([{ name: 'notes.md', mimeType: '', size: 0 }]);
+  });
+});

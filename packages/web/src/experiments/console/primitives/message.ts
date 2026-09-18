@@ -33,6 +33,17 @@ export function isSystemCategory(category: string | null): boolean {
   return SYSTEM_CATEGORY_PREFIXES.some(p => category.startsWith(p));
 }
 
+/**
+ * An attachment recorded on a message. The server persists name, MIME type and
+ * size when the upload is saved, deliberately omitting the on-disk path — the
+ * file is deleted once the agent has read it, so there is nothing to link to.
+ */
+export interface MessageFile {
+  name: string;
+  mimeType: string;
+  size: number;
+}
+
 export interface WorkflowDispatchMeta {
   workflowName: string;
   workerConversationId?: string;
@@ -57,6 +68,8 @@ export interface Message {
   dispatch: WorkflowDispatchMeta | null;
   /** Parsed workflowResult payload — present on `workflow_result` messages. */
   workflowResult: WorkflowResultMeta | null;
+  /** Attachments sent with this message. Empty when there were none. */
+  files: MessageFile[];
 }
 
 interface RawMessage {
@@ -88,6 +101,9 @@ interface ParsedMetadata {
     workflowName: string;
     runId: string;
   };
+  // Written by the server when an upload is saved. Same untrusted-shape caveat
+  // as workflowResult: toMessage validates before producing domain values.
+  files?: { name: string; mimeType: string; size: number }[];
 }
 
 function parseMetadata(raw: string): ParsedMetadata {
@@ -142,6 +158,19 @@ export function toMessage(raw: RawMessage): Message {
     wr != null && typeof wr.workflowName === 'string' && typeof wr.runId === 'string'
       ? { workflowName: wr.workflowName, runId: wr.runId }
       : null;
+  // Drop entries missing a usable name or size rather than rendering a chip
+  // labelled `undefined`. A non-numeric size degrades to 0, which formatBytes
+  // renders as `0 B` — a wrong size is better than losing the attachment.
+  const files: MessageFile[] = (meta.files ?? [])
+    .filter(
+      (f): f is { name: string; mimeType: string; size: number } =>
+        f != null && typeof f.name === 'string' && f.name.length > 0
+    )
+    .map(f => ({
+      name: f.name,
+      mimeType: typeof f.mimeType === 'string' ? f.mimeType : '',
+      size: typeof f.size === 'number' ? f.size : 0,
+    }));
   return {
     id: raw.id,
     role: toMessageRole(raw.role),
@@ -152,5 +181,6 @@ export function toMessage(raw: RawMessage): Message {
     category: meta.category ?? null,
     dispatch,
     workflowResult,
+    files,
   };
 }

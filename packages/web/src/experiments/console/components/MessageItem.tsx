@@ -1,3 +1,4 @@
+import { Paperclip } from 'lucide-react';
 import type { ReactElement } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -5,6 +6,7 @@ import remarkBreaks from 'remark-breaks';
 import rehypeHighlight from 'rehype-highlight';
 import { AgentAvatar } from './AgentAvatar';
 import { formatClock } from '../lib/format';
+import { formatBytes } from '../primitives/file';
 import type { Message } from '../primitives/message';
 
 interface MessageItemProps {
@@ -69,6 +71,27 @@ const MD_COMPONENTS: Components = {
   ),
 };
 
+/**
+ * Attachments sent with a message. Rendered only on the user bubble: the server
+ * records file metadata on the user's message, so no other role carries any.
+ */
+const FILE_CHIPS = (files: Message['files']): ReactElement => (
+  <div className="mt-[8px] flex flex-wrap justify-end gap-[6px]">
+    {files.map((f, i) => (
+      <span
+        key={`${f.name}-${String(i)}`}
+        title={`${f.name} · ${formatBytes(f.size)}`}
+        className="flex items-center gap-[6px] rounded-[8px] border bg-[color:var(--surface-elevated)] px-[9px] py-[4px] text-[11.5px]"
+        style={{ borderColor: 'var(--border-bright)' }}
+      >
+        <Paperclip aria-hidden className="h-[12px] w-[12px] text-text-tertiary" />
+        <span className="max-w-[180px] truncate text-text-secondary">{f.name}</span>
+        <span className="font-mono text-[10px] text-text-tertiary">{formatBytes(f.size)}</span>
+      </span>
+    ))}
+  </div>
+);
+
 const ERROR_BLOCK = (msg: string): ReactElement => (
   <div className="mt-2 rounded border border-error/40 bg-error/10 px-2 py-1.5 font-mono text-[12px] text-error">
     {msg}
@@ -124,6 +147,7 @@ export function MessageItem({ message, variant = 'chat' }: MessageItemProps): Re
         >
           {content}
         </div>
+        {message.files.length > 0 ? FILE_CHIPS(message.files) : null}
         {message.error !== null ? ERROR_BLOCK(message.error.message) : null}
       </div>
     );
