@@ -79,7 +79,7 @@ export function ChatPage(): ReactElement {
         await skill.setConversationColor(id, color);
         if (projectId !== undefined) invalidate(K.conversations(projectId));
       } catch (e: unknown) {
-        setError(e instanceof Error ? e.message : 'Could not change the colour.');
+        setError(e instanceof Error ? e.message : 'Could not change the color.');
       }
     })();
   };

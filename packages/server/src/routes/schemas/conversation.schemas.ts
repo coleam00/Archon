@@ -54,8 +54,8 @@ export const createConversationResponseSchema = z
 /**
  * PATCH /api/conversations/:id request body.
  *
- * `color: null` clears the colour — distinct from omitting the field, which
- * leaves it untouched. Without that distinction a colour could be set but never
+ * `color: null` clears the color — distinct from omitting the field, which
+ * leaves it untouched. Without that distinction a color could be set but never
  * removed.
  */
 export const updateConversationBodySchema = z

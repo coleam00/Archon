@@ -284,7 +284,7 @@ export async function updateConversationTitle(id: string, title: string): Promis
 }
 
 /**
- * Set or clear a conversation's colour label.
+ * Set or clear a conversation's color label.
  *
  * `null` clears it. The value is validated at the API boundary against
  * CONVERSATION_COLORS; this layer stores whatever it is handed.

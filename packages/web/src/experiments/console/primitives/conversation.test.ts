@@ -55,18 +55,18 @@ describe('byMostRecent', () => {
 });
 
 describe('parseConversationColor', () => {
-  test('accepts every colour in the palette', () => {
+  test('accepts every color in the palette', () => {
     expect(parseConversationColor('magenta')).toBe('magenta');
     expect(parseConversationColor('teal')).toBe('teal');
     expect(parseConversationColor('red')).toBe('red');
   });
 
-  test('no colour is the default', () => {
+  test('no color is the default', () => {
     expect(parseConversationColor(null)).toBeNull();
     expect(parseConversationColor(undefined)).toBeNull();
   });
 
-  test('an unrecognised value reads as no colour rather than a blank swatch', () => {
+  test('an unrecognised value reads as no color rather than a blank swatch', () => {
     // A value written by a newer build, or hand-edited, must not render an
     // empty circle or reach the style attribute.
     expect(parseConversationColor('chartreuse')).toBeNull();
@@ -76,12 +76,12 @@ describe('parseConversationColor', () => {
 });
 
 describe('colorToken', () => {
-  test('maps a colour to a design token, never a raw hex', () => {
+  test('maps a color to a design token, never a raw hex', () => {
     expect(colorToken('magenta')).toBe('var(--brand-magenta)');
     expect(colorToken('green')).toBe('var(--success)');
   });
 
-  test('no colour maps to no token', () => {
+  test('no color maps to no token', () => {
     expect(colorToken(null)).toBeNull();
   });
 });

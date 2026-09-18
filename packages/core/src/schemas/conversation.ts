@@ -13,11 +13,11 @@ export type { IdentityPlatform } from './user';
 // ---------------------------------------------------------------------------
 
 /**
- * The colours a conversation may be labelled with. Names, not hex values, so the
+ * The colors a conversation may be labelled with. Names, not hex values, so the
  * UI owns the rendering and a theme change never has to rewrite stored rows.
  *
- * `null` means no colour, which is every conversation's default. The server
- * never interprets a colour; it is a visual label for scanning a chat list.
+ * `null` means no color, which is every conversation's default. The server
+ * never interprets a color; it is a visual label for scanning a chat list.
  */
 export const CONVERSATION_COLORS = ['magenta', 'violet', 'teal', 'green', 'amber', 'red'] as const;
 

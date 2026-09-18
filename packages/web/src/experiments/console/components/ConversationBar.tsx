@@ -144,18 +144,18 @@ export function ConversationBar({
       </button>
 
       {/*
-        Colour is never the only channel: each swatch carries its name as its
-        accessible label and its tooltip, so the label survives colour blindness
+        Color is never the only channel: each swatch carries its name as its
+        accessible label and its tooltip, so the label survives color blindness
         and screen readers.
       */}
-      <div className="flex shrink-0 items-center gap-[4px]" role="group" aria-label="Chat colour">
+      <div className="flex shrink-0 items-center gap-[4px]" role="group" aria-label="Chat color">
         {CONVERSATION_COLORS.map(({ value, label, token }) => (
           <button
             key={value}
             type="button"
             onClick={() => {
               if (active === null) return;
-              // Clicking the current colour clears it, so the picker is its own
+              // Clicking the current color clears it, so the picker is its own
               // undo and needs no separate "none" control.
               onRecolor(active.id, active.color === value ? null : value);
             }}

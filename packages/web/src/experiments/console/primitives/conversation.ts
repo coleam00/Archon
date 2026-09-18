@@ -1,6 +1,6 @@
 /** Conversation summary primitive. Normalized from the server conversation row. */
 /**
- * The colours a chat can be labelled with, paired with the design token that
+ * The colors a chat can be labelled with, paired with the design token that
  * renders each. Copied from `@archon/core`'s CONVERSATION_COLORS rather than
  * imported — the console may not import production modules (ESLint isolation
  * rule) — so the two lists must change together.
@@ -28,7 +28,7 @@ export interface ConversationSummary {
   title: string | null;
   platformType: string;
   lastActivityAt: string | null;
-  /** User-chosen colour label, or null for none. */
+  /** User-chosen color label, or null for none. */
   color: ConversationColor | null;
 }
 
@@ -52,14 +52,14 @@ export function toConversationSummary(raw: RawConversation): ConversationSummary
 }
 
 /**
- * Normalise a stored colour. Anything unrecognised — written by a newer build,
- * or hand-edited — reads as no colour rather than rendering a blank swatch.
+ * Normalise a stored color. Anything unrecognised — written by a newer build,
+ * or hand-edited — reads as no color rather than rendering a blank swatch.
  */
 export function parseConversationColor(raw: string | null | undefined): ConversationColor | null {
   return CONVERSATION_COLORS.some(c => c.value === raw) ? (raw as ConversationColor) : null;
 }
 
-/** The design token that renders a colour, or null when the chat has none. */
+/** The design token that renders a color, or null when the chat has none. */
 export function colorToken(color: ConversationColor | null): string | null {
   return CONVERSATION_COLORS.find(c => c.value === color)?.token ?? null;
 }

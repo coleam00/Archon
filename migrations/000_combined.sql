@@ -317,7 +317,7 @@ ALTER TABLE remote_agent_conversations
 ALTER TABLE remote_agent_conversations
   ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE;
 
--- User-chosen colour label on a conversation (visual only; never interpreted).
+-- User-chosen color label on a conversation (visual only; never interpreted).
 ALTER TABLE remote_agent_conversations
   ADD COLUMN IF NOT EXISTS color VARCHAR(20);
 
