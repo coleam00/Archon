@@ -591,17 +591,19 @@ const getConversationRoute = createRoute({
   },
 });
 
+// Body validation is handled manually in the handler (multipart vs JSON
+// branching), mirroring sendMessageRoute. Declaring `request.body` would force
+// JSON validation to run on multipart payloads and reject them.
 const createConversationRoute = createRoute({
   method: 'post',
   path: '/api/conversations',
   tags: ['Conversations'],
-  summary: 'Create a new conversation',
-  request: {
-    body: {
-      content: { 'application/json': { schema: createConversationBodySchema } },
-      required: false,
-    },
-  },
+  summary: 'Create a new conversation (JSON or multipart with file uploads)',
+  description:
+    'Accepts `application/json` with `{ codebaseId?, message? }`, or ' +
+    '`multipart/form-data` with optional `codebaseId` and `message` fields and ' +
+    'optional file attachments (max 5 files, 10 MB each). Files require a ' +
+    '`message` to attach them to. An empty body creates an empty conversation.',
   responses: {
     200: {
       content: { 'application/json': { schema: createConversationResponseSchema } },
@@ -2717,8 +2719,63 @@ export function registerApiRoutes(
   // Accepts optional `message` field for atomic create+send (avoids ghost "Untitled" entries)
   registerOpenApiRoute(createConversationRoute, async c => {
     try {
-      const { codebaseId, message } = getValidatedBody(c, createConversationBodySchema);
       const userId = await resolveWebUserId(c);
+
+      let codebaseId: string | undefined;
+      let message: string | undefined;
+      let fileEntries: File[] = [];
+
+      const contentType = c.req.header('content-type') ?? '';
+      if (contentType.includes('multipart/form-data')) {
+        let body: Record<string, string | File | (string | File)[]>;
+        try {
+          body = await c.req.parseBody({ all: true });
+        } catch (parseErr: unknown) {
+          getLog().warn({ err: parseErr }, 'conversation.upload_parse_failed');
+          return apiError(c, 400, 'Bad request', 'Invalid multipart form data');
+        }
+        if (typeof body.codebaseId === 'string' && body.codebaseId.length > 0) {
+          codebaseId = body.codebaseId;
+        }
+        if (typeof body.message === 'string' && body.message.length > 0) {
+          message = body.message;
+        }
+        const rawFiles = body.files;
+        const fileList: (string | File)[] = Array.isArray(rawFiles)
+          ? rawFiles
+          : rawFiles !== undefined
+            ? [rawFiles]
+            : [];
+        fileEntries = fileList.filter((e): e is File => e instanceof File);
+        // Attachments ride a message; with no message there is nothing to
+        // attach them to and nothing would ever read them.
+        if (fileEntries.length > 0 && message === undefined) {
+          return apiError(c, 400, 'Bad request', 'message is required when files are attached');
+        }
+      } else {
+        // The body is optional (an empty POST creates an empty conversation),
+        // so an absent body parses as `{}` rather than failing.
+        let json: unknown = {};
+        const rawBody = await c.req.text();
+        if (rawBody.length > 0) {
+          try {
+            json = JSON.parse(rawBody);
+          } catch {
+            return apiError(c, 400, 'Bad request', 'Invalid JSON in request body');
+          }
+        }
+        const parsed = createConversationBodySchema.safeParse(json);
+        if (!parsed.success) {
+          // Formatted exactly as validationErrorHook would have, so dropping the
+          // declarative body above does not change this route's error contract.
+          return c.json(
+            { error: parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ') },
+            400
+          );
+        }
+        codebaseId = parsed.data.codebaseId;
+        message = parsed.data.message;
+      }
 
       // Validate codebase exists if provided
       if (codebaseId) {
@@ -2729,6 +2786,23 @@ export function registerApiRoutes(
       }
 
       const conversationId = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+      // Persist uploads before creating anything in the database, so a rejected
+      // upload leaves no ghost conversation behind.
+      let savedFiles: AttachedFile[] = [];
+      let uploadDir = '';
+      if (fileEntries.length > 0) {
+        const saved = await persistUploadedFiles(conversationId, fileEntries);
+        if (!saved.ok) {
+          return c.json({ error: saved.error }, saved.status);
+        }
+        savedFiles = saved.savedFiles;
+        uploadDir = saved.uploadDir;
+        getLog().info(
+          { conversationId, fileCount: savedFiles.length },
+          'conversation.files_uploaded'
+        );
+      }
 
       const conversation = await conversationDb.getOrCreateConversation(
         'web',
@@ -2742,7 +2816,19 @@ export function registerApiRoutes(
       // If message provided, dispatch it atomically (avoids ghost "Untitled" conversations)
       if (message) {
         try {
-          await messageDb.addMessage(conversation.id, 'user', message, undefined, userId);
+          // Same shape the send-message route persists: name/type/size only,
+          // never the path — the file is deleted once the agent has read it.
+          const meta =
+            savedFiles.length > 0
+              ? {
+                  files: savedFiles.map(f => ({
+                    name: f.name,
+                    mimeType: f.mimeType,
+                    size: f.size,
+                  })),
+                }
+              : undefined;
+          await messageDb.addMessage(conversation.id, 'user', message, meta, userId);
         } catch (e: unknown) {
           // Log only (no SSE warning) — the SSE stream isn't connected yet for new conversations.
           // The existing /message endpoint emits a warning because the stream is guaranteed to be active.
@@ -2771,10 +2857,16 @@ export function registerApiRoutes(
           );
         }
 
+        const extraContext: Omit<HandleMessageContext, 'isolationHints'> =
+          savedFiles.length > 0 ? { userId, attachedFiles: savedFiles } : { userId };
+        // Cleanup runs inside the lock handler after the agent has read the
+        // files, never in this request's scope.
+        const filesToCleanup = savedFiles.length > 0 ? { files: savedFiles, uploadDir } : undefined;
         const result = await dispatchToOrchestrator(
           conversation.platform_conversation_id,
           message,
-          { userId }
+          extraContext,
+          filesToCleanup
         );
 
         return c.json({

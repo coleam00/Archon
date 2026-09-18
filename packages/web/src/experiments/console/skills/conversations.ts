@@ -10,8 +10,9 @@ import { toConversationSummary, type ConversationSummary } from '../primitives/c
  *
  *   - createConversation: POST /api/conversations. When `message` is supplied
  *     the backend dispatches it to the orchestrator atomically and the response
- *     also carries dispatch fields (ignored here). `conversationId` is the
- *     platform id used by every other conversation route.
+ *     also carries dispatch fields (ignored here). Sends multipart when files
+ *     are attached, so the first message of a new chat can carry them.
+ *     `conversationId` is the platform id used by every other conversation route.
  *   - listConversations:  GET /api/conversations?codebaseId=<id>&mine=true
  *     (JSON array). `mine=true` is non-enforcing: it narrows to the signed-in
  *     user's conversations when an identity resolves (Better Auth cookie or
@@ -21,6 +22,31 @@ import { toConversationSummary, type ConversationSummary } from '../primitives/c
  *     multipart when files are attached (mirrors startRun's multipart path).
  */
 
+/**
+ * POST a FormData body and decode the JSON reply.
+ *
+ * Deliberately not `requestJson`: the Content-Type header must be left unset so
+ * the browser can add the multipart boundary. Mirrors requestJson's error
+ * decoding so both paths raise the same HttpError.
+ */
+async function postMultipart<T>(url: string, form: FormData): Promise<T> {
+  const res = await fetch(url, { method: 'POST', body: form });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    let parsed: { error?: string } = {};
+    try {
+      parsed = JSON.parse(text) as { error?: string };
+    } catch {
+      /* not JSON */
+    }
+    const raw = parsed.error ?? (text.length > 0 ? text : `HTTP ${res.status.toString()}`);
+    const msg = raw.length > 200 ? `${raw.slice(0, 200)}...` : raw;
+    const path = new URL(url, window.location.origin).pathname;
+    throw new HttpError(res.status, path, msg);
+  }
+  return (await res.json()) as T;
+}
+
 interface CreateConversationResponse {
   conversationId: string;
   id: string;
@@ -28,8 +54,18 @@ interface CreateConversationResponse {
 
 export async function createConversation(
   projectId: string,
-  message?: string
+  message?: string,
+  files?: File[]
 ): Promise<CreateConversationResponse> {
+  if (message !== undefined && files !== undefined && files.length > 0) {
+    const form = new FormData();
+    form.append('codebaseId', projectId);
+    form.append('message', message);
+    for (const file of files) {
+      form.append('files', file, file.name);
+    }
+    return postMultipart<CreateConversationResponse>('/api/conversations', form);
+  }
   return requestJson<CreateConversationResponse>('/api/conversations', {
     method: 'POST',
     body: JSON.stringify(
@@ -60,24 +96,10 @@ export async function sendMessage(
     return;
   }
 
-  // Multipart path: don't set Content-Type — the browser adds the boundary.
   const form = new FormData();
   form.append('message', message);
   for (const file of files) {
     form.append('files', file, file.name);
   }
-  const res = await fetch(url, { method: 'POST', body: form });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    let parsed: { error?: string } = {};
-    try {
-      parsed = JSON.parse(text) as { error?: string };
-    } catch {
-      /* not JSON */
-    }
-    const raw = parsed.error ?? (text.length > 0 ? text : `HTTP ${res.status.toString()}`);
-    const msg = raw.length > 200 ? `${raw.slice(0, 200)}...` : raw;
-    const path = new URL(url, window.location.origin).pathname;
-    throw new HttpError(res.status, path, msg);
-  }
+  await postMultipart<{ accepted: boolean; status: string }>(url, form);
 }
