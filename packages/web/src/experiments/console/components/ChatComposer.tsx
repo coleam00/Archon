@@ -125,16 +125,17 @@ export function ChatComposer({
     if (e.dataTransfer.files.length > 0) addFiles(Array.from(e.dataTransfer.files));
   };
 
-  // Only cancels the paste when images were actually taken, so a normal text
-  // paste — and the text riding along with an image copied from a web page —
-  // still lands in the textarea. Unlike a drop, an uncancelled paste is
-  // harmless, so a disabled composer can simply ignore it.
+  // Unlike a drop, an uncancelled paste is harmless, so a disabled composer can
+  // simply ignore it.
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>): void => {
     if (disabled) return;
     const images = imagesFromClipboard(e.clipboardData.items);
     if (images.length === 0) return;
-    e.preventDefault();
     addFiles(images);
+    // Cancel only an image-only payload. Copying a web-page selection that
+    // holds both an image and its text puts both on the clipboard, and
+    // preventDefault would attach the image while silently eating the text.
+    if (e.clipboardData.getData('text/plain').length === 0) e.preventDefault();
   };
 
   const submit = (): void => {
