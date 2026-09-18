@@ -110,6 +110,7 @@ import {
   getWorkflowEventEmitter,
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
+import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import type {
   DeclaredWorkflowConfig,
   WorkflowDefinition,
@@ -3008,11 +3009,19 @@ async function runWorkflowWithOwnedSource(
         );
         return;
       }
-      // Genuine interrupt of the run this process is driving. failWorkflowRun's
-      // own status='running' CAS closes the read-then-write window: if the
-      // executor commits a gate pause between the read above and this write,
-      // the CAS misses and throws (caught below) — the run stays paused.
-      await workflowDb.failWorkflowRun(interruptedRunId, `Process terminated (${signal})`);
+      // Genuine interrupt of the run this process is driving. `cancel()` is
+      // backed by @archon/core's idempotent cancelWorkflowRun (status NOT IN
+      // ('completed','cancelled') guard) — unlike failWorkflowRun's CAS, a
+      // double call or a race with the executor committing a gate pause is a
+      // safe no-op (`{cancelled: false}`), not a thrown error. An
+      // operator-initiated stop is not an execution failure: it now records
+      // `status='cancelled'`, not `status='failed'` (#3334 M7) — the run
+      // stays failed-free for this signal path; failWorkflowRun remains
+      // reserved for genuine execution failures elsewhere in this file.
+      await new InProcessWorkflowEngine(createWorkflowStore()).cancel(
+        interruptedRunId,
+        `Process terminated (${signal})`
+      );
     })()
       .catch((err: unknown) => {
         const e = err as Error;
@@ -3085,16 +3094,54 @@ async function runWorkflowWithOwnedSource(
   // One-time-per-version notice when the workflow uses unconfigured tier keywords.
   await maybePrintTierNotice(workflow, workingCwd, cliUserId, options.quiet);
 
-  // Subscribe to workflow events for progress rendering. The owner identity was
-  // already reserved by source capture, before executeWorkflow can create its row.
-  // subscribeForConversation is pure in-memory registration — cannot throw in practice.
-  // If that changes, this should be moved inside the try block to prevent blocking executeWorkflow.
+  // Subscribe to workflow events for progress rendering, by the RUN this process
+  // owns (`ownedRunId`) rather than by conversation — `IWorkflowEngine.subscribe`
+  // is descendant-inclusive (any `workflow:` node's child sub-run's events reach
+  // this listener too, the same coverage conversation-scoped subscription gave
+  // for free since children share a conversation), and unlike the emitter's
+  // in-memory `subscribeForConversation`, it is backed by durable DB rows —
+  // events from BEFORE this call (there are none yet, but future replay/resume
+  // paths could add them) are excluded by construction, not by a race with
+  // registration order.
   const { quiet, verbose } = options;
-  const unsubscribe = getWorkflowEventEmitter().subscribeForConversation(conversationId, event => {
-    if (!quiet) {
-      renderWorkflowEvent(event, verbose ?? false);
+
+  // `workflow_started`'s `transcriptPath` can't survive the DB round-trip
+  // (`mapPersistedEventToEmitterEvent` intentionally drops it — see
+  // `db-event-mapping.ts`; it's derived from the run + storage root, not a
+  // persisted fact, and can't be reconstructed from a persisted event row).
+  // The CLI derives and prints the same line locally instead of waiting on
+  // the event stream — it either already holds the run row (resume/detached
+  // handoff) or, for a fresh run whose row the executor hasn't created yet,
+  // it composes the path the same way the pre-creation detached-launch path
+  // above does: from the resolved project storage root + the reserved run id.
+  if (!quiet) {
+    const preCreatedRun = resumable ?? detachedPreCreatedRun;
+    let transcriptPath: string | null;
+    if (preCreatedRun) {
+      transcriptPath = await resolveRunTranscriptPath(preCreatedRun);
+    } else {
+      try {
+        const storage = archonPaths.getProjectStoragePaths(
+          archonPaths.resolveProjectStorageKey(codebase, cwd)
+        );
+        transcriptPath = archonPaths.getRunLogPathForRoot(storage.root, ownedRunId);
+      } catch {
+        transcriptPath = null;
+      }
     }
-  });
+    if (transcriptPath) {
+      process.stderr.write(`[workflow] Transcript: ${transcriptPath}\n`);
+    }
+  }
+
+  const unsubscribe = new InProcessWorkflowEngine(createWorkflowStore()).subscribe(
+    ownedRunId,
+    event => {
+      if (!quiet) {
+        renderWorkflowEvent(event, verbose ?? false);
+      }
+    }
+  );
 
   // Notify Web UI that a workflow is dispatching.
   // Mirrors the orchestrator dispatch message structure (category/segment/workflowDispatch),
@@ -3241,16 +3288,16 @@ async function runWorkflowWithOwnedSource(
           // when IT creates the row, and this row already carries them.
           ...(detachedPreCreatedRun ? { preCreatedRun: detachedPreCreatedRun } : {}),
         };
-    result = await executeWorkflow(
+    result = await new InProcessWorkflowEngine().submit({
       deps,
-      adapter,
+      platform: adapter,
       conversationId,
-      workingCwd,
+      cwd: workingCwd,
       workflow,
       userMessage,
-      conversation.id,
-      opts
-    );
+      conversationDbId: conversation.id,
+      options: opts,
+    });
   } finally {
     await closeRunLiveOwner();
     unsubscribe();

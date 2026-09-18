@@ -42,7 +42,6 @@ import type { WorkspaceSyncResult } from '@archon/git';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { findWorkflow, resolveWorkflowName } from '@archon/workflows/router';
 import {
-  executeWorkflow,
   resolveContinuationWorkflow,
   withCapturedSource,
   type CapturedSourceOwner,
@@ -52,6 +51,7 @@ import {
   recordSelectedWorkflow,
   type PreparedWorkflowSource,
 } from '@archon/workflows/executor';
+import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
 import { liveSourceRoots } from '@archon/workflows/workflow-discovery';
 import {
@@ -1290,15 +1290,15 @@ async function dispatchOrchestratorWorkflowOwned(
         // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
         // executor adopts for us there (see #2690). Until then a rename failure leaves
         // the staged directory un-adopted so the wrap reclaims it on the way out.
-        await executeWorkflow(
+        await new InProcessWorkflowEngine().submit({
           deps,
           platform,
           conversationId,
-          resumableWorkingPath,
+          cwd: resumableWorkingPath,
           workflow,
           userMessage,
-          conversation.id,
-          {
+          conversationDbId: conversation.id,
+          options: {
             codebaseId: codebase.id,
             parentConversationId: conversation.id,
             userId,
@@ -1309,8 +1309,8 @@ async function dispatchOrchestratorWorkflowOwned(
             resolveChildIsolation,
             capturedSourceOwner: owner,
             ...prepared,
-          }
-        );
+          },
+        });
       } else {
         await resumeOwner.close();
         resumeOwnerClosed = true;
@@ -1344,15 +1344,15 @@ async function dispatchOrchestratorWorkflowOwned(
         // the helper has already run `owner.hold`, which is the only thing the wrap
         // needs to know to reclaim if the rename fails.
         await withRunLiveOwner(captured.preparedSource.runId, {}, async () => {
-          await executeWorkflow(
+          await new InProcessWorkflowEngine().submit({
             deps,
             platform,
             conversationId,
-            resumableWorkingPath,
+            cwd: resumableWorkingPath,
             workflow,
             userMessage,
-            conversation.id,
-            {
+            conversationDbId: conversation.id,
+            options: {
               codebaseId: codebase.id,
               parentConversationId: conversation.id,
               userId,
@@ -1374,8 +1374,8 @@ async function dispatchOrchestratorWorkflowOwned(
                   }
                 : {}),
               ...(options?.runConfig ? { runConfig: options.runConfig } : {}),
-            }
-          );
+            },
+          });
         });
       }
     } finally {
@@ -1441,15 +1441,15 @@ async function dispatchOrchestratorWorkflowOwned(
     // executor adopts for us there (see #2690). `freshCaptured` proves the prior
     // `captureFreshSource` call already ran `owner.hold`.
     await withRunLiveOwner(freshCaptured.preparedSource.runId, {}, async () => {
-      await executeWorkflow(
-        createWorkflowDeps(),
+      await new InProcessWorkflowEngine().submit({
+        deps: createWorkflowDeps(),
         platform,
         conversationId,
         cwd,
         workflow,
         userMessage,
-        conversation.id,
-        {
+        conversationDbId: conversation.id,
+        options: {
           codebaseId: codebase.id,
           parentConversationId: conversation.id,
           userId,
@@ -1474,8 +1474,8 @@ async function dispatchOrchestratorWorkflowOwned(
               }
             : {}),
           ...(options?.runConfig ? { runConfig: options.runConfig } : {}),
-        }
-      );
+        },
+      });
     });
   }
 }

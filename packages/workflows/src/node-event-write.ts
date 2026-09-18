@@ -67,6 +67,19 @@ export function getNodeName(node: NodeStateSubject): string {
   return commandNameOf(node) ?? node.id;
 }
 
+/**
+ * The identity fields a future durable-log-backed `subscribe()` needs to derive the
+ * same display name the CLI renders today (`command ?? node_id`, see `getNodeName`)
+ * without re-deriving it from `step_name` — which can carry a loop-iteration or
+ * instance-scope prefix and is not the same value as `node.id`.
+ */
+export function nodeIdentityData(node: NodeStateSubject): {
+  command: string | null;
+  node_id: string;
+} {
+  return { command: commandNameOf(node) ?? null, node_id: node.id };
+}
+
 function transcriptContent(node: NodeStateSubject, event: NodeStateEventInput): string {
   if (typeof event.data?.command === 'string') return event.data.command;
   if (node.kind === 'agent') return commandNameOf(node) ?? '<inline>';
@@ -225,6 +238,18 @@ export async function recordDerivedNodeState(
 }
 
 /**
+ * `node_completed`/`node_failed` rows get `command`/`node_id` stamped on, so a future
+ * durable-log-backed `subscribe()` can derive the same display name `node_started`
+ * already supports (`command ?? node_id`) without a separate `nodeName` field that
+ * would re-enumerate a derived value. `node_started` sources its own `command` at its
+ * own construction site, so it is left alone here.
+ */
+function withNodeIdentity(node: NodeStateSubject, event: NodeStateEventInput): NodeStateEventInput {
+  if (event.event_type !== 'node_completed' && event.event_type !== 'node_failed') return event;
+  return { ...event, data: { ...nodeIdentityData(node), ...event.data } };
+}
+
+/**
  * Write one node-state fact to every sink. The durable row goes first and is awaited:
  * its rejection is a NodeEventWriteError that must reach the run failure boundary. The
  * transcript and the emitter then derive from the same value.
@@ -235,6 +260,6 @@ export async function recordNodeState(
   event: NodeStateEventInput,
   execution?: ResolvedExecution
 ): Promise<void> {
-  await persistNodeEvent(sinks.store, event);
+  await persistNodeEvent(sinks.store, withNodeIdentity(node, event));
   await recordDerivedNodeState(sinks, node, event, execution);
 }

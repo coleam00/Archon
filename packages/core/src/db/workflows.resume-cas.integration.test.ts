@@ -986,6 +986,7 @@ describe('durable wait continuation races — real SQLite', () => {
       clearWorkflowWaitContext('attention-explicit-resume', attentionA, {
         stepName: 'rerun-ci',
         result: { status: 'satisfied', waited_ms: 1000 },
+        nodeIdentity: { command: null, node_id: 'rerun-ci' },
       })
     ).resolves.toMatchObject({ cleared: true });
 
@@ -1003,6 +1004,7 @@ describe('durable wait continuation races — real SQLite', () => {
       clearWorkflowWaitContext('attention-explicit-resume', attentionA, {
         stepName: 'rerun-ci',
         result: { status: 'satisfied', waited_ms: 1000 },
+        nodeIdentity: { command: null, node_id: 'rerun-ci' },
       })
     ).resolves.toEqual({ cleared: false });
     expect((await getWorkflowRun('attention-explicit-resume'))?.metadata.wait).toEqual(attentionB);
@@ -1057,6 +1059,7 @@ describe('durable wait continuation races — real SQLite', () => {
     await clearWorkflowWaitContext('wait-signal-cursor', waitA, {
       stepName: 'release-loop.await-checks',
       result: { status: 'satisfied', waited_ms: 1, event: waitA.event },
+      nodeIdentity: { command: null, node_id: 'release-loop.await-checks' },
     });
 
     const waitB = {
@@ -1128,6 +1131,7 @@ describe('durable wait continuation races — real SQLite', () => {
         event: waitA.event,
         payload: { conclusion: 'success' },
       },
+      nodeIdentity: { command: null, node_id: 'release-loop.await-checks' },
     });
     const consumed = await getWorkflowRun('wait-three-way-race');
     expect(consumed?.status).toBe('running');

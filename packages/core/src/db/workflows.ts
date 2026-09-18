@@ -749,17 +749,44 @@ export async function findChildRuns(parentRunId: string): Promise<WorkflowRun[]>
 const MAX_RUN_ANCESTRY_DEPTH = 32;
 
 /**
+ * Thrown by {@link getRunAncestry} when a run's `parent_run_id` chain is still
+ * unresolved after {@link MAX_RUN_ANCESTRY_DEPTH} hops. This must fail loudly
+ * rather than silently returning a truncated ancestry: callers that depend on
+ * ancestry for cycle detection, path-lock exclusion, or (in a future milestone)
+ * per-run event subscription would otherwise silently mis-scope on a
+ * legitimately deep tree.
+ */
+export class RunAncestryDepthExceededError extends Error {
+  constructor(
+    public readonly runId: string,
+    public readonly depth: number
+  ) {
+    super(
+      `Run ancestry for '${runId}' exceeds the depth cap (${depth}); refusing to return a truncated chain.`
+    );
+    this.name = 'RunAncestryDepthExceededError';
+  }
+}
+
+/**
  * Walk `parent_run_id` from `runId` up to the root, returning ancestors nearest
  * first (the immediate parent at index 0). Depth-capped and cycle-safe (a
  * repeated id stops the walk). Used by the runtime cycle guard and to build the
  * path-lock exclusion set for a shared-checkout sub-run.
+ *
+ * Throws {@link RunAncestryDepthExceededError} if the chain is still ongoing
+ * (current run still has an unresolved parent) once the depth cap is reached,
+ * rather than silently truncating.
  */
 export async function getRunAncestry(runId: string): Promise<WorkflowRun[]> {
   const ancestors: WorkflowRun[] = [];
   const seen = new Set<string>([runId]);
   let current = await getWorkflowRun(runId);
   let depth = 0;
-  while (current?.parent_run_id && depth < MAX_RUN_ANCESTRY_DEPTH) {
+  while (current?.parent_run_id) {
+    if (depth >= MAX_RUN_ANCESTRY_DEPTH) {
+      throw new RunAncestryDepthExceededError(runId, depth);
+    }
     const parentId = current.parent_run_id;
     if (seen.has(parentId)) break; // cyclic data — stop rather than loop forever
     const parent = await getWorkflowRun(parentId);

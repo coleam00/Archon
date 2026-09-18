@@ -5,7 +5,12 @@
  * Independent nodes within the same layer run concurrently via Promise.allSettled.
  * Captures all assistant output regardless of streaming mode for $node_id.output substitution.
  */
-import { NodeEventWriteError, recordDerivedNodeState, recordNodeState } from './node-event-write';
+import {
+  NodeEventWriteError,
+  nodeIdentityData,
+  recordDerivedNodeState,
+  recordNodeState,
+} from './node-event-write';
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { basename, isAbsolute, join as joinPath, resolve as resolvePath, sep } from 'path';
@@ -7322,6 +7327,7 @@ async function executeWaitNode(
     const outcome = await deps.store.clearWorkflowWaitContext(workflowRun.id, context, {
       stepName,
       result,
+      nodeIdentity: nodeIdentityData(node),
     });
     if (!outcome.cleared) {
       throw new Error(`Wait node '${node.id}' lost ownership of its persisted wait cursor`);
@@ -7330,7 +7336,11 @@ async function executeWaitNode(
     // handed it back; the transcript and emitter derive from that row, not a rebuilt one.
     await recordDerivedNodeState({ logDir }, node, outcome.nodeEvent);
   } else {
-    const rows = waitCompletionEvents(workflowRun.id, { stepName, result });
+    const rows = waitCompletionEvents(workflowRun.id, {
+      stepName,
+      result,
+      nodeIdentity: nodeIdentityData(node),
+    });
     await deps.store.createWorkflowEvent(rows.outcome);
     await recordNodeState({ store: deps.store, logDir }, node, rows.node);
   }
@@ -9164,6 +9174,7 @@ async function executeComposeFanOutNode(
             event_type: 'node_failed',
             step_name: instanceScopeName,
             data: {
+              ...nodeIdentityData(node),
               type: 'compose_fan_out_instance',
               aggregate: true,
               error: outcome.error,
@@ -9208,6 +9219,7 @@ async function executeComposeFanOutNode(
           event_type: 'node_completed',
           step_name: instanceScopeName,
           data: {
+            ...nodeIdentityData(node),
             type: 'compose_fan_out_instance',
             aggregate: true,
             node_output: outcome.output,

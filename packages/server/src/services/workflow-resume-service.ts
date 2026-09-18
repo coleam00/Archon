@@ -3,7 +3,10 @@ import { resolveRunContinuation } from '@archon/core/handlers';
 import * as codebaseDb from '@archon/core/db/codebases';
 import * as workflowDb from '@archon/core/db/workflows';
 import { createLogger, getArchonWorkspacesPath } from '@archon/paths';
-import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor';
+import {
+  InProcessWorkflowEngine,
+  WorkflowResumeHydrationError,
+} from '@archon/workflows/in-process-engine';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -138,26 +141,8 @@ export async function resumeWorkflowRunFromServer(
       });
       return runLiveOwnerClose;
     };
-    let executionStarted = false;
+    let accepted = false;
     try {
-      let hydrated: Awaited<ReturnType<typeof hydrateResumableRun>>;
-      try {
-        hydrated = await hydrateResumableRun(deps, run, cursor);
-      } catch (error) {
-        if (error instanceof workflowDb.WorkflowNotResumableError) {
-          log.info(
-            { runId: run.id, status: error.currentStatus },
-            'workflow_resume_headless_lost_race'
-          );
-          return false;
-        }
-        throw error;
-      }
-      if (!hydrated) {
-        log.info({ runId: run.id }, 'workflow_resume_headless_nothing_to_resume');
-        return false;
-      }
-
       const effectiveUserId = actorUserId ?? run.user_id ?? undefined;
       const resolveChildIsolation =
         codebase && codebase.kind !== 'folder'
@@ -171,24 +156,89 @@ export async function resumeWorkflowRunFromServer(
             })
           : undefined;
 
-      const execution = executeWorkflow(
-        deps,
-        platform,
-        platformConversationId,
-        workingPath,
-        continuation.workflow.definition,
-        run.user_message ?? '',
-        run.conversation_id,
+      // engine.resume() folds hydrateResumableRun + executeWorkflow into one call
+      // (IWorkflowEngine, #3334 M1/M2), but its own promise only settles once
+      // execution has fully finished. This caller needs the ORIGINAL fast/slow
+      // split — resolve as soon as hydration accepts the run and execution has
+      // been kicked off, without blocking the HTTP handlers that call this
+      // function on the run's full duration — so it races `opts.onAccepted`
+      // (fired synchronously right before `executeWorkflow` starts) against the
+      // engine promise settling on its own (which only happens without
+      // `onAccepted` ever firing when hydration declines the run, i.e.
+      // "nothing to resume", or rejects, i.e. a lost CAS race / hydration
+      // failure). Once accepted, the engine promise's own completion is
+      // handled detached (`void ...`), exactly like the pre-M2 fire-and-forget
+      // `execution.then(...)` path.
+      const engine = new InProcessWorkflowEngine();
+      let resolveAccepted!: () => void;
+      const acceptedSignal = new Promise<void>(resolve => {
+        resolveAccepted = resolve;
+      });
+      const resultPromise = engine.resume(
         {
-          codebaseId: run.codebase_id ?? undefined,
-          userId: effectiveUserId,
-          baseBranch: codebase?.default_branch?.trim() || undefined,
-          resolveChildIsolation,
-          ...hydrated,
+          deps,
+          platform,
+          conversationId: platformConversationId,
+          cwd: workingPath,
+          workflow: continuation.workflow.definition,
+          userMessage: run.user_message ?? '',
+          conversationDbId: run.conversation_id,
+          run,
+          cursor,
+          options: {
+            codebaseId: run.codebase_id ?? undefined,
+            userId: effectiveUserId,
+            baseBranch: codebase?.default_branch?.trim() || undefined,
+            resolveChildIsolation,
+          },
+        },
+        {
+          onAccepted: () => {
+            accepted = true;
+            resolveAccepted();
+          },
         }
       );
-      executionStarted = true;
-      void execution
+
+      const outcome = await Promise.race([
+        acceptedSignal.then(() => ({ kind: 'accepted' as const })),
+        resultPromise.then(
+          result => ({ kind: 'settled' as const, result }),
+          (error: unknown) => ({ kind: 'errored' as const, error })
+        ),
+      ]);
+
+      if (outcome.kind === 'errored') {
+        if (outcome.error instanceof workflowDb.WorkflowNotResumableError) {
+          log.info(
+            { runId: run.id, status: outcome.error.currentStatus },
+            'workflow_resume_headless_lost_race'
+          );
+          return false;
+        }
+        if (outcome.error instanceof WorkflowResumeHydrationError) {
+          // Hydration itself failed before execution ever started — same
+          // control flow as any other failure this function's outer catch
+          // handles (`workflow_resume_headless_unexpected_error`), not the
+          // execution-failed compensation path below.
+          throw outcome.error.cause;
+        }
+        throw outcome.error;
+      }
+
+      if (outcome.kind === 'settled') {
+        // `hydrateResumableRun` used to signal "candidate has nothing to
+        // hydrate" by returning `null`, which this caller treated as "do not
+        // start execution". `engine.resume()` surfaces the same outcome by
+        // resolving (with an explicit `{ success: false, ... }` result)
+        // without ever calling `onAccepted` (see in-process-engine.ts).
+        log.info({ runId: run.id }, 'workflow_resume_headless_nothing_to_resume');
+        return false;
+      }
+
+      // Accepted: execution has started. Detach completion handling exactly
+      // like the pre-M2 fire-and-forget `execution.then(...)` path.
+      void resultPromise
         .then(
           async result => {
             await closeRunLiveOwner();
@@ -271,7 +321,7 @@ export async function resumeWorkflowRunFromServer(
         });
       return true;
     } finally {
-      if (!executionStarted) await closeRunLiveOwner();
+      if (!accepted) await closeRunLiveOwner();
     }
   } catch (error) {
     log.warn({ err: error as Error, runId: run.id }, 'workflow_resume_headless_unexpected_error');

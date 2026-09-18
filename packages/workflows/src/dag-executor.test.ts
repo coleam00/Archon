@@ -272,6 +272,10 @@ function createMockStore(): MockWorkflowStore {
         return { persisted: true };
       }
     ),
+    getGlobalMaxEventOrder: mock<IWorkflowStore['getGlobalMaxEventOrder']>(async () => 0),
+    listWorkflowEventsAfter: mock<IWorkflowStore['listWorkflowEventsAfter']>(
+      async (_afterEventOrder, _limit) => []
+    ),
     getDagResumeSnapshot: mock<IWorkflowStore['getDagResumeSnapshot']>(async _workflowRunId =>
       Promise.resolve({
         completedNodeOutputs: new Map<string, { output: string }>(),
