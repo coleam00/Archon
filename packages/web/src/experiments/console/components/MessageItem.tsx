@@ -78,6 +78,9 @@ const ERROR_BLOCK = (msg: string): ReactElement => (
 /**
  * Direction-B chat row. Role-branched:
  *  - `user` → meta line + right-aligned outlined-magenta bubble (all lengths).
+ *    Rendered as raw text with whitespace preserved, not as markdown: people
+ *    paste terminal output, paths and code into chat, and markdown would eat
+ *    the underscores and asterisks in them.
  *  - `assistant`/`system` → meta line + 30px gradient-ring avatar + soft
  *    surface-elevated card containing the markdown body.
  *
@@ -114,7 +117,11 @@ export function MessageItem({ message, variant = 'chat' }: MessageItemProps): Re
           </time>
         </header>
         <div
-          className="max-w-[76%] self-end rounded-[14px_14px_4px_14px] px-[17px] py-[13px] text-[14.5px] leading-[1.5] break-words"
+          // `whitespace-pre-wrap`: the bubble renders raw text, so without it
+          // every newline, blank line and indent in a pasted block collapses
+          // into one run-on line. Deliberately not markdown — see the note on
+          // the component.
+          className="max-w-[76%] self-end rounded-[14px_14px_4px_14px] px-[17px] py-[13px] text-[14.5px] leading-[1.5] break-words whitespace-pre-wrap"
           style={{
             background: 'color-mix(in oklch, var(--brand-magenta), transparent 94%)',
             border: '1px solid color-mix(in oklch, var(--brand-magenta), transparent 50%)',
