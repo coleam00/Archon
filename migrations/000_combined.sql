@@ -116,6 +116,9 @@ CREATE TABLE IF NOT EXISTS remote_agent_conversations (
   isolation_env_id UUID,  -- FK added after isolation_environments table exists
   title VARCHAR(255),
   color VARCHAR(20),
+  brief TEXT,
+  brief_updated_at TIMESTAMP WITH TIME ZONE,
+  brief_pinned BOOLEAN DEFAULT FALSE,
   deleted_at TIMESTAMP WITH TIME ZONE,
   hidden BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMP DEFAULT NOW(),
@@ -320,6 +323,15 @@ ALTER TABLE remote_agent_conversations
 -- User-chosen color label on a conversation (visual only; never interpreted).
 ALTER TABLE remote_agent_conversations
   ADD COLUMN IF NOT EXISTS color VARCHAR(20);
+
+-- Agent-maintained summary of the chat, when it was last written, and whether a
+-- human edited it (which stops the agent overwriting it unasked).
+ALTER TABLE remote_agent_conversations
+  ADD COLUMN IF NOT EXISTS brief TEXT;
+ALTER TABLE remote_agent_conversations
+  ADD COLUMN IF NOT EXISTS brief_updated_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE remote_agent_conversations
+  ADD COLUMN IF NOT EXISTS brief_pinned BOOLEAN DEFAULT FALSE;
 
 -- From migration 015: parent_conversation_id + hidden
 ALTER TABLE remote_agent_workflow_runs

@@ -4,6 +4,7 @@ import { ChatStream } from '../components/ChatStream';
 import { ChatComposer } from '../components/ChatComposer';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
 import { ConversationRail, type ArchiveScope } from '../components/ConversationRail';
+import { ChatSummary } from '../components/ChatSummary';
 import type { ConversationColor } from '../primitives/conversation';
 import { WorkingIndicator } from '../components/WorkingIndicator';
 import { WorkflowDock } from '../components/WorkflowDock';
@@ -90,6 +91,19 @@ export function ChatPage(): ReactElement {
     invalidate(`${K.conversations(projectId)}:${scope}`);
     invalidate(`${K.conversations(projectId)}:archived-count`);
     invalidate(K.conversations(projectId));
+  };
+
+  const saveBrief = (brief: string | null): void => {
+    if (activeConvId === null) return;
+    const id = activeConvId;
+    void (async (): Promise<void> => {
+      try {
+        await skill.setConversationBrief(id, brief);
+        invalidateConversations();
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : 'Could not save the summary.');
+      }
+    })();
   };
 
   const archiveConversations = (ids: string[], archived: boolean): void => {
@@ -298,6 +312,7 @@ export function ChatPage(): ReactElement {
   }
 
   const messageList = messages ?? [];
+  const activeConversation = (conversations ?? []).find(c => c.id === activeConvId);
 
   // Surface a failed (re)load of the conversation list or message history — a
   // revalidation can fail silently (network blip, server restart) and otherwise
@@ -352,6 +367,9 @@ export function ChatPage(): ReactElement {
             className="h-full overflow-y-auto px-[30px] pt-[26px] pb-[18px]"
           >
             {/* Match the composer's centered 940px column (design: .stream-inner) */}
+            {activeConversation !== undefined ? (
+              <ChatSummary conversation={activeConversation} onSave={saveBrief} />
+            ) : null}
             <div className="mx-auto max-w-[940px]">
               {messageList.length === 0 && !busy ? (
                 <EmptyState

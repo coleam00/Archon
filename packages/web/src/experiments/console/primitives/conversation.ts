@@ -32,6 +32,12 @@ export interface ConversationSummary {
   color: ConversationColor | null;
   /** Archived chats are hidden from the default list but are never destroyed. */
   archived: boolean;
+  /** Short summary of the chat, or null when nothing has written one yet. */
+  brief: string | null;
+  /** When the summary was last written — what makes staleness visible. */
+  briefUpdatedAt: string | null;
+  /** True when a human wrote it, so the agent leaves it alone. */
+  briefPinned: boolean;
 }
 
 interface RawConversation {
@@ -42,6 +48,9 @@ interface RawConversation {
   last_activity_at: string | null;
   color: string | null;
   deleted_at?: string | null;
+  brief?: string | null;
+  brief_updated_at?: string | null;
+  brief_pinned?: boolean | null;
 }
 
 export function toConversationSummary(raw: RawConversation): ConversationSummary {
@@ -53,7 +62,25 @@ export function toConversationSummary(raw: RawConversation): ConversationSummary
     color: parseConversationColor(raw.color),
     // Archiving is a soft delete, so the timestamp's presence is the state.
     archived: raw.deleted_at != null,
+    brief: typeof raw.brief === 'string' && raw.brief.trim().length > 0 ? raw.brief : null,
+    briefUpdatedAt: raw.brief_updated_at ?? null,
+    briefPinned: raw.brief_pinned === true,
   };
+}
+
+/** How old a summary may get before the UI stops presenting it as current. */
+export const BRIEF_STALE_AFTER_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * True when a summary is old enough that it should be shown as possibly out of
+ * date. A summary you cannot date is one you will wrongly trust, so age is
+ * surfaced rather than hidden. No summary is not stale — it is simply absent.
+ */
+export function isBriefStale(c: ConversationSummary, now: number = Date.now()): boolean {
+  if (c.brief === null || c.briefUpdatedAt === null) return false;
+  const written = Date.parse(c.briefUpdatedAt);
+  if (Number.isNaN(written)) return false;
+  return now - written > BRIEF_STALE_AFTER_MS;
 }
 
 /**

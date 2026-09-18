@@ -2799,7 +2799,10 @@ export function registerApiRoutes(
   // PATCH /api/conversations/:id - Update conversation (title, color)
   registerOpenApiRoute(updateConversationRoute, async c => {
     const platformId = c.req.param('id') ?? '';
-    const { title, color, archived } = getValidatedBody(c, updateConversationBodySchema);
+    const { title, color, archived, brief, briefPinned } = getValidatedBody(
+      c,
+      updateConversationBodySchema
+    );
     try {
       const conv = await conversationDb.findConversationByPlatformId(platformId);
       if (!conv) {
@@ -2817,6 +2820,11 @@ export function registerApiRoutes(
       // archive is never a one-way door the user cannot walk back through.
       if (archived !== undefined) {
         await conversationDb.setConversationArchived(conv.id, archived);
+      }
+      // A write through this route is a human editing it unless the caller says
+      // otherwise, so it pins by default — the agent writes through its tool.
+      if (brief !== undefined) {
+        await conversationDb.updateConversationBrief(conv.id, brief, briefPinned ?? true);
       }
       return c.json({ success: true });
     } catch (error) {

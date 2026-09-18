@@ -328,6 +328,17 @@ export class SqliteAdapter implements IDatabase {
       if (!colNames.has('color')) {
         this.db.run('ALTER TABLE remote_agent_conversations ADD COLUMN color TEXT');
       }
+      if (!colNames.has('brief')) {
+        this.db.run('ALTER TABLE remote_agent_conversations ADD COLUMN brief TEXT');
+      }
+      if (!colNames.has('brief_updated_at')) {
+        this.db.run('ALTER TABLE remote_agent_conversations ADD COLUMN brief_updated_at TEXT');
+      }
+      if (!colNames.has('brief_pinned')) {
+        this.db.run(
+          'ALTER TABLE remote_agent_conversations ADD COLUMN brief_pinned INTEGER DEFAULT 0'
+        );
+      }
       if (!colNames.has('deleted_at')) {
         this.db.run('ALTER TABLE remote_agent_conversations ADD COLUMN deleted_at TEXT');
       }
@@ -703,6 +714,9 @@ export class SqliteAdapter implements IDatabase {
         isolation_env_id TEXT,
         title TEXT,
         color TEXT,
+        brief TEXT,
+        brief_updated_at TEXT,
+        brief_pinned INTEGER DEFAULT 0,
         deleted_at TEXT,
         hidden INTEGER DEFAULT 0,
         user_id TEXT REFERENCES remote_agent_users(id) ON DELETE SET NULL,

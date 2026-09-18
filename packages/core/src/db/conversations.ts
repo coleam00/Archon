@@ -295,6 +295,33 @@ export async function updateConversationTitle(id: string, title: string): Promis
 }
 
 /**
+ * Write a conversation's summary.
+ *
+ * `pinned` records that a human wrote it, which stops the agent replacing it
+ * unasked. Passing `null` for the text clears the summary and the pin together,
+ * so "start again" is one call rather than a two-step the caller can half-do.
+ */
+export async function updateConversationBrief(
+  id: string,
+  brief: string | null,
+  pinned: boolean
+): Promise<void> {
+  const dialect = getDialect();
+  const result = await pool.query(
+    `UPDATE remote_agent_conversations
+       SET brief = $1,
+           brief_pinned = $2,
+           brief_updated_at = ${brief === null ? 'NULL' : dialect.now()},
+           updated_at = ${dialect.now()}
+     WHERE id = $3`,
+    [brief, brief === null ? false : pinned, id]
+  );
+  if (result.rowCount === 0) {
+    throw new ConversationNotFoundError(id);
+  }
+}
+
+/**
  * Archive or restore a conversation.
  *
  * Archiving is the same soft delete `softDeleteConversation` performs; this

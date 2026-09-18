@@ -68,6 +68,10 @@ export const updateConversationBodySchema = z
     // true archives, false restores. Omitted leaves the state alone, so a
     // rename cannot accidentally resurrect an archived chat.
     archived: z.boolean().optional(),
+    // The chat summary. An explicit null clears it; omitted leaves it alone.
+    brief: z.string().max(2000).nullable().optional(),
+    // True when a human wrote it, which stops the agent overwriting it unasked.
+    briefPinned: z.boolean().optional(),
   })
   .openapi('UpdateConversationBody');
 

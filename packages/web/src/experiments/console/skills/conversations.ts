@@ -57,6 +57,20 @@ export async function listConversations(
 }
 
 /**
+ * Write or clear a chat's summary. Writing through this verb marks it as the
+ * user's, so the agent stops replacing it on its own; `null` clears both.
+ */
+export async function setConversationBrief(
+  conversationPlatformId: string,
+  brief: string | null
+): Promise<void> {
+  await requestJson<{ success: boolean }>(
+    `/api/conversations/${encodeURIComponent(conversationPlatformId)}`,
+    { method: 'PATCH', body: JSON.stringify({ brief, briefPinned: brief !== null }) }
+  );
+}
+
+/**
  * Archive or restore a conversation. Symmetric by design — an archive the user
  * cannot undo is a delete wearing a friendlier word.
  */

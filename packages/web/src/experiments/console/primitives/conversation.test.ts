@@ -1,6 +1,8 @@
 import { describe, test, expect } from 'bun:test';
 import {
   toConversationSummary,
+  isBriefStale,
+  BRIEF_STALE_AFTER_MS,
   byMostRecent,
   colorToken,
   conversationLabel,
@@ -17,6 +19,9 @@ const conv = (over: Partial<ConversationSummary> = {}): ConversationSummary => (
   platformType: 'web',
   lastActivityAt: '2026-06-05T10:00:00Z',
   color: null,
+  brief: null,
+  briefUpdatedAt: null,
+  briefPinned: false,
   archived: false,
   ...over,
 });
@@ -141,6 +146,9 @@ describe('toConversationSummary — archived', () => {
     title: 'Refund reconciliation',
     last_activity_at: '2026-06-05T10:00:00Z',
     color: null,
+    brief: null,
+    brief_updated_at: null,
+    brief_pinned: false,
     ...over,
   });
 
@@ -152,5 +160,71 @@ describe('toConversationSummary — archived', () => {
     expect(toConversationSummary(raw({ deleted_at: null })).archived).toBe(false);
     // Older payloads omit the field entirely rather than sending null.
     expect(toConversationSummary(raw()).archived).toBe(false);
+  });
+});
+
+describe('isBriefStale', () => {
+  const now = Date.parse('2026-06-10T12:00:00Z');
+  const withBrief = (brief: string | null, updated: string | null) =>
+    conv({ brief, briefUpdatedAt: updated });
+
+  test('a summary written just now is current', () => {
+    expect(isBriefStale(withBrief('Fixing the refund job.', '2026-06-10T11:00:00Z'), now)).toBe(
+      false
+    );
+  });
+
+  test('a summary older than the window is stale', () => {
+    expect(isBriefStale(withBrief('Fixing the refund job.', '2026-06-08T12:00:00Z'), now)).toBe(
+      true
+    );
+  });
+
+  test('the boundary is not stale, one millisecond past it is', () => {
+    const edge = new Date(now - BRIEF_STALE_AFTER_MS).toISOString();
+    const past = new Date(now - BRIEF_STALE_AFTER_MS - 1).toISOString();
+    expect(isBriefStale(withBrief('x', edge), now)).toBe(false);
+    expect(isBriefStale(withBrief('x', past), now)).toBe(true);
+  });
+
+  test('no summary is absent, not stale', () => {
+    // An empty card must not shout a warning about text that was never written.
+    expect(isBriefStale(withBrief(null, null), now)).toBe(false);
+    expect(isBriefStale(withBrief(null, '2026-01-01T00:00:00Z'), now)).toBe(false);
+  });
+
+  test('an unparsable timestamp is treated as current rather than crying wolf', () => {
+    expect(isBriefStale(withBrief('x', 'not-a-date'), now)).toBe(false);
+  });
+});
+
+describe('toConversationSummary — summary fields', () => {
+  const row = (over: Record<string, unknown> = {}) => ({
+    id: 'db-1',
+    platform_conversation_id: 'web-1',
+    platform_type: 'web',
+    title: 'Refund reconciliation',
+    last_activity_at: '2026-06-05T10:00:00Z',
+    color: null,
+    ...over,
+  });
+
+  test('carries the summary the server stored', () => {
+    const c = toConversationSummary(
+      row({ brief: 'Half done.', brief_updated_at: '2026-06-05T10:00:00Z', brief_pinned: true })
+    );
+    expect(c.brief).toBe('Half done.');
+    expect(c.briefUpdatedAt).toBe('2026-06-05T10:00:00Z');
+    expect(c.briefPinned).toBe(true);
+  });
+
+  test('a blank summary reads as none, so the card stays clean', () => {
+    expect(toConversationSummary(row({ brief: '   ' })).brief).toBeNull();
+    expect(toConversationSummary(row({ brief: null })).brief).toBeNull();
+    expect(toConversationSummary(row()).brief).toBeNull();
+  });
+
+  test('an older payload without the fields does not claim a pin', () => {
+    expect(toConversationSummary(row()).briefPinned).toBe(false);
   });
 });
