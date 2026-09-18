@@ -1,10 +1,11 @@
 import { Paperclip } from 'lucide-react';
-import { useRef, useState, type KeyboardEvent, type ReactElement } from 'react';
+import { useRef, useState, type DragEvent, type KeyboardEvent, type ReactElement } from 'react';
 import {
   ACCEPTED_EXTENSIONS,
   MAX_FILES,
   MAX_FILE_BYTES,
   MAX_FILE_MB,
+  dragHasFiles,
   formatBytes,
   isAcceptedFileType,
 } from '../primitives/file';
@@ -24,8 +25,9 @@ interface PickedFile {
 
 /**
  * Console-native chat composer. Auto-growing textarea, Enter sends,
- * Shift+Enter newline, Escape blurs. Click-to-attach files via the paperclip
- * icon (the send skill builds the multipart upload).
+ * Shift+Enter newline, Escape blurs. Attach files with the paperclip icon or
+ * by dropping them anywhere on the composer (the send skill builds the
+ * multipart upload).
  *
  * Reimplemented (not imported) from the old chat's MessageInput because the
  * console may not import production `@/components/**` (ESLint isolation rule).
@@ -43,6 +45,7 @@ export function ChatComposer({
   const [value, setValue] = useState('');
   const [files, setFiles] = useState<PickedFile[]>([]);
   const [fileError, setFileError] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const idRef = useRef(0);
@@ -87,6 +90,33 @@ export function ChatComposer({
     setFileError(null);
   };
 
+  // A file drag must be cancelled on both dragover and drop. Without
+  // `preventDefault` the browser handles the drop itself and navigates the tab
+  // to the dropped file, which tears down the whole single-page app and loses
+  // the conversation. That is true while the composer is disabled too, so a
+  // disabled composer still cancels the event — it just refuses the files
+  // instead of ignoring the drop.
+  const onDragOver = (e: DragEvent<HTMLDivElement>): void => {
+    if (!dragHasFiles(e.dataTransfer.types)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = disabled ? 'none' : 'copy';
+    if (!disabled) setDragging(true);
+  };
+
+  const onDragLeave = (e: DragEvent<HTMLDivElement>): void => {
+    // Also fires when the pointer crosses into a child, so only clear once it
+    // has left the composer entirely.
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+  };
+
+  const onDrop = (e: DragEvent<HTMLDivElement>): void => {
+    if (!dragHasFiles(e.dataTransfer.types)) return;
+    e.preventDefault();
+    setDragging(false);
+    if (disabled) return;
+    if (e.dataTransfer.files.length > 0) addFiles(Array.from(e.dataTransfer.files));
+  };
+
   const submit = (): void => {
     const trimmed = value.trim();
     if (trimmed.length === 0 || disabled) return;
@@ -100,6 +130,9 @@ export function ChatComposer({
       textareaRef.current.focus();
     }
   };
+
+  const idlePlaceholder = disabled ? (disabledReason ?? 'Waiting…') : 'Message the agent…';
+  const placeholder = dragging ? 'Drop files to attach…' : idlePlaceholder;
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
     // Don't submit while an IME composition is in progress (Japanese,
@@ -119,6 +152,9 @@ export function ChatComposer({
     <div
       className="shrink-0 border-t border-border bg-surface px-[30px] py-[14px]"
       title={disabledReason}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
     >
       <div className="mx-auto max-w-[940px]">
         {files.length > 0 ? (
@@ -153,8 +189,18 @@ export function ChatComposer({
           <div className="mb-[8px] font-mono text-[11px] text-error">{fileError}</div>
         ) : null}
         <div
-          className="flex items-end gap-[10px] rounded-[14px] border bg-[color:var(--surface-elevated)] py-[8px] pl-[14px] pr-[8px] transition-[border-color,box-shadow] focus-within:border-[color:color-mix(in_oklch,var(--brand-magenta),transparent_40%)] focus-within:shadow-[0_0_0_4px_color-mix(in_oklch,var(--brand-magenta),transparent_92%)]"
-          style={{ borderColor: 'var(--border-bright)' }}
+          className={`flex items-end gap-[10px] rounded-[14px] border bg-[color:var(--surface-elevated)] py-[8px] pl-[14px] pr-[8px] transition-[border-color,box-shadow] focus-within:border-[color:color-mix(in_oklch,var(--brand-magenta),transparent_40%)] focus-within:shadow-[0_0_0_4px_color-mix(in_oklch,var(--brand-magenta),transparent_92%)]${
+            dragging
+              ? ' shadow-[0_0_0_4px_color-mix(in_oklch,var(--brand-magenta),transparent_92%)]'
+              : ''
+          }`}
+          style={{
+            // Inline, because the inline border-color would otherwise win over
+            // any class-based drag state.
+            borderColor: dragging
+              ? 'color-mix(in oklch, var(--brand-magenta), transparent 40%)'
+              : 'var(--border-bright)',
+          }}
         >
           <div className="flex shrink-0 items-end gap-[6px] pb-[7px] text-text-tertiary">
             <button
@@ -199,7 +245,7 @@ export function ChatComposer({
             }}
             onKeyDown={onKeyDown}
             rows={1}
-            placeholder={disabled ? (disabledReason ?? 'Waiting…') : 'Message the agent…'}
+            placeholder={placeholder}
             className="min-h-0 flex-1 resize-none bg-transparent py-[7px] text-[14.5px] leading-[1.5] text-text-primary placeholder:text-text-tertiary focus:outline-none disabled:opacity-50"
             style={{ maxHeight: `${MAX_HEIGHT.toString()}px` }}
           />

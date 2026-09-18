@@ -70,3 +70,18 @@ export function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${String(Math.round(bytes / 1024))} KB`;
   return `${String(Math.round(bytes / (1024 * 1024)))} MB`;
 }
+
+/**
+ * True when a drag carries files.
+ *
+ * `DataTransfer.types` reports `'Files'` for a file drag, while dragging a text
+ * selection out of the composer's own textarea reports `'text/plain'` only.
+ * Distinguishing them keeps a text drag from lighting up the drop zone and from
+ * being swallowed by the drop handler's `preventDefault`.
+ *
+ * Reads through `Array.from` because Safari hands back a `DOMStringList` rather
+ * than a real array.
+ */
+export function dragHasFiles(types: DataTransfer['types']): boolean {
+  return Array.from(types).includes('Files');
+}

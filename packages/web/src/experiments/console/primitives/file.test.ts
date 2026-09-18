@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { isAcceptedFileType, formatBytes } from './file';
+import { isAcceptedFileType, formatBytes, dragHasFiles } from './file';
 
 const file = (name: string, type = ''): File => new File(['x'], name, { type });
 
@@ -33,5 +33,27 @@ describe('formatBytes', () => {
     expect(formatBytes(512)).toBe('512 B');
     expect(formatBytes(2048)).toBe('2 KB');
     expect(formatBytes(5 * 1024 * 1024)).toBe('5 MB');
+  });
+});
+
+describe('dragHasFiles', () => {
+  test('true when the drag carries files', () => {
+    expect(dragHasFiles(['Files'])).toBe(true);
+    // A desktop file drag commonly advertises several types alongside Files.
+    expect(dragHasFiles(['application/x-moz-file', 'Files'])).toBe(true);
+  });
+
+  test('false for a text drag — selecting inside the textarea and dragging it', () => {
+    expect(dragHasFiles(['text/plain'])).toBe(false);
+    expect(dragHasFiles(['text/plain', 'text/html'])).toBe(false);
+  });
+
+  test('false for a drag that advertises nothing', () => {
+    expect(dragHasFiles([])).toBe(false);
+  });
+
+  test("reads array-likes, since Safari's types is a DOMStringList", () => {
+    const domStringList = { length: 1, 0: 'Files' } as unknown as DataTransfer['types'];
+    expect(dragHasFiles(domStringList)).toBe(true);
   });
 });
