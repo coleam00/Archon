@@ -74,13 +74,18 @@ const MD_COMPONENTS: Components = {
 /**
  * Attachments sent with a message. Rendered only on the user bubble: the server
  * records file metadata on the user's message, so no other role carries any.
+ *
+ * The chip is deliberately not a link. The upload is ephemeral — the server
+ * deletes it once the agent has read it and omits the path from the stored
+ * metadata — so there is nothing left to open. The tooltip says so, because a
+ * chip that looks like a file and does nothing reads as a broken link.
  */
 const FILE_CHIPS = (files: Message['files']): ReactElement => (
   <div className="mt-[8px] flex flex-wrap justify-end gap-[6px]">
     {files.map((f, i) => (
       <span
         key={`${f.name}-${String(i)}`}
-        title={`${f.name} · ${formatBytes(f.size)}`}
+        title={`${f.name} · ${formatBytes(f.size)}\nSent to the agent. The file was deleted from the server once it was read — this is a record of the upload, not a copy of it.`}
         className="flex items-center gap-[6px] rounded-[8px] border bg-[color:var(--surface-elevated)] px-[9px] py-[4px] text-[11.5px]"
         style={{ borderColor: 'var(--border-bright)' }}
       >
