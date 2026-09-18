@@ -133,6 +133,14 @@ describe('toMessage — attachments', () => {
     expect(m.files).toEqual([]);
   });
 
+  test('a non-array files value yields no attachments instead of throwing', () => {
+    // parseMetadata does not validate, so toMessage must survive a wrong-typed
+    // blob rather than take the whole history's render down.
+    expect(withFiles({ files: { name: 'not-an-array.png' } }).files).toEqual([]);
+    expect(withFiles({ files: 'shot.png' }).files).toEqual([]);
+    expect(withFiles({ files: null }).files).toEqual([]);
+  });
+
   test('a missing size degrades to 0 rather than losing the attachment', () => {
     const m = withFiles({ files: [{ name: 'notes.md' }] });
     expect(m.files).toEqual([{ name: 'notes.md', mimeType: '', size: 0 }]);

@@ -161,7 +161,10 @@ export function toMessage(raw: RawMessage): Message {
   // Drop entries missing a usable name or size rather than rendering a chip
   // labelled `undefined`. A non-numeric size degrades to 0, which formatBytes
   // renders as `0 B` — a wrong size is better than losing the attachment.
-  const files: MessageFile[] = (meta.files ?? [])
+  // Array.isArray, not `?? []`: parseMetadata casts JSON.parse output without
+  // validating it, so a metadata blob carrying a non-array `files` would reach
+  // .filter and throw — taking the whole message history's render down with it.
+  const files: MessageFile[] = (Array.isArray(meta.files) ? meta.files : [])
     .filter(
       (f): f is { name: string; mimeType: string; size: number } =>
         f != null && typeof f.name === 'string' && f.name.length > 0
