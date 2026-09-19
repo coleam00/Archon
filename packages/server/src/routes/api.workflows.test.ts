@@ -448,7 +448,7 @@ describe('GET /api/workflows/:name', () => {
         nodes: [{ id: 'plan', command: 'plan', settingSources: [] }],
       });
     } finally {
-      await rm(testDir, { recursive: true, force: true });
+      await removeTempTree(testDir);
     }
   });
 
