@@ -1,7 +1,8 @@
 import type { ReactElement } from 'react';
 import type { Run } from '../primitives/run';
 import { statusTextClass } from '../lib/run-status';
-import { formatElapsed, elapsedSince, formatCost, formatClock } from '../lib/format';
+import { formatElapsed, elapsedSince, formatCost } from '../lib/format';
+import { useClock } from '../lib/clock';
 import { RunOutcomeBadge } from './RunOutcomeBadge';
 
 /**
@@ -10,6 +11,7 @@ import { RunOutcomeBadge } from './RunOutcomeBadge';
  * and how it ended so the log is a complete story rather than a tool dump.
  */
 export function RunStartedLine({ run }: { run: Run }): ReactElement {
+  const clock = useClock();
   return (
     <>
       <div className="flex items-center gap-2 py-1 text-[11px]">
@@ -17,7 +19,7 @@ export function RunStartedLine({ run }: { run: Run }): ReactElement {
           ▶
         </span>
         <span className="font-medium text-text-secondary">Workflow {run.workflow} started</span>
-        <span className="font-mono text-text-tertiary">{formatClock(run.startedAt)}</span>
+        <span className="font-mono text-text-tertiary">{clock(run.startedAt)}</span>
         <div className="h-px flex-1 bg-border/50" aria-hidden />
       </div>
       {run.userMessage !== '' ? (

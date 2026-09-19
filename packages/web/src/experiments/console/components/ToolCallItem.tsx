@@ -1,5 +1,6 @@
 import { useState, type ReactElement } from 'react';
-import { formatRelativeToBaseline, formatClock } from '../lib/format';
+import { formatRelativeToBaseline } from '../lib/format';
+import { useClock } from '../lib/clock';
 import { useStreamContext } from '../lib/stream-context';
 import type { InlineToolCall } from '../primitives/message';
 
@@ -32,7 +33,7 @@ export function ToolCallItem({ call, timestamp }: ToolCallItemProps): ReactEleme
   const [expanded, setExpanded] = useState(false);
   const { runStartedAt } = useStreamContext();
   const displayed = formatRelativeToBaseline(timestamp, runStartedAt);
-  const wallClock = formatClock(timestamp);
+  const wallClock = useClock()(timestamp);
   const summary = argsSummary(call.input);
   const hasDetails =
     Object.keys(call.input).length > 0 || (call.output !== undefined && call.output.length > 0);

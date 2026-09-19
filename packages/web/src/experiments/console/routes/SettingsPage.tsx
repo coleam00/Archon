@@ -4,6 +4,7 @@ import { AliasesPanel } from '../components/AliasesPanel';
 import { AgentsPanel } from '../components/AgentsPanel';
 import { AssistantConfigPanel } from '../components/AssistantConfigPanel';
 import { SystemPanel } from '../components/SystemPanel';
+import { AppearancePanel } from '../components/AppearancePanel';
 import { GithubIdentityPanel } from '../components/GithubIdentityPanel';
 
 /**
@@ -25,6 +26,7 @@ export function SettingsPage(): ReactElement {
           <AliasesPanel />
           <AgentsPanel />
           <AssistantConfigPanel />
+          <AppearancePanel />
           <SystemPanel />
           <GithubIdentityPanel />
         </div>

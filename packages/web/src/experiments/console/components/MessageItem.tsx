@@ -4,7 +4,9 @@ import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import rehypeHighlight from 'rehype-highlight';
 import { AgentAvatar } from './AgentAvatar';
-import { formatClock } from '../lib/format';
+import { CodeBlock } from './CodeBlock';
+import { copyLabel, useCopy } from '../lib/clipboard';
+import { useClock } from '../lib/clock';
 import type { Message } from '../primitives/message';
 
 interface MessageItemProps {
@@ -57,11 +59,7 @@ const MD_COMPONENTS: Components = {
     <ol className="my-1 ml-5 list-decimal space-y-0.5 marker:text-text-tertiary">{children}</ol>
   ),
   li: ({ children }) => <li className="leading-relaxed">{children}</li>,
-  pre: ({ children }) => (
-    <pre className="my-2 overflow-x-auto rounded border border-border bg-surface-inset p-2 text-[12px] leading-relaxed">
-      {children}
-    </pre>
-  ),
+  pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
   blockquote: ({ children }) => (
     <blockquote className="my-1 border-l-2 border-border pl-2 text-text-secondary">
       {children}
@@ -89,7 +87,8 @@ const ERROR_BLOCK = (msg: string): ReactElement => (
 export function MessageItem({ message, variant = 'chat' }: MessageItemProps): ReactElement {
   const kind = message.role;
   const content = message.content.trim();
-  const clock = formatClock(message.timestamp);
+  const clock = useClock()(message.timestamp);
+  const { state: copyState, copy } = useCopy();
   const log = variant === 'log';
 
   if (kind === 'user') {
@@ -132,7 +131,7 @@ export function MessageItem({ message, variant = 'chat' }: MessageItemProps): Re
   const label = kind === 'system' ? 'System' : 'Agent';
 
   return (
-    <div className="flex flex-col">
+    <div className="group relative flex flex-col">
       <header className="mb-2 flex items-center gap-[9px] font-mono">
         <span
           className="rounded px-[7px] py-[2px] text-[10px] font-bold uppercase tracking-[0.14em]"
@@ -150,7 +149,33 @@ export function MessageItem({ message, variant = 'chat' }: MessageItemProps): Re
         >
           {clock}
         </time>
+        <button
+          type="button"
+          onClick={() => {
+            // The markdown source, not the rendered text — so fences survive
+            // and the reply pastes correctly into an issue.
+            copy(message.content);
+          }}
+          aria-label="Copy message as markdown"
+          className={`ml-auto flex items-center gap-1.5 rounded-[6px] border px-[7px] py-[2px] text-[10px] transition-opacity focus:opacity-100 group-hover:opacity-100 ${
+            copyState === 'idle' ? 'opacity-0' : 'opacity-100'
+          } ${copyState === 'copied' ? 'text-success' : 'text-text-secondary hover:text-text-primary'}`}
+          style={{
+            borderColor:
+              copyState === 'copied'
+                ? 'color-mix(in oklch, var(--success), transparent 55%)'
+                : 'var(--border-bright)',
+          }}
+        >
+          <span aria-hidden>{copyState === 'copied' ? '✓' : '⧉'}</span>
+          {copyLabel(copyState, 'Copy message', 'Message copied')}
+        </button>
       </header>
+      {/* Announced as well as shown: a visual-only confirmation leaves a
+          screen-reader user with no idea whether it worked. */}
+      <span aria-live="polite" className="sr-only">
+        {copyState === 'copied' ? 'Message copied to clipboard' : ''}
+      </span>
       <div className="flex max-w-full items-start gap-[13px]">
         {log ? null : (
           <div className="shrink-0">
