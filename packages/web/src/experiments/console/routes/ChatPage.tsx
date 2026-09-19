@@ -74,6 +74,15 @@ export function ChatPage(): ReactElement {
   // below would immediately put them back in the most recent conversation, so
   // the button would appear to do nothing.
   const [startingNew, setStartingNew] = useState(false);
+  // Switching project must release the previous project's conversation. The
+  // auto-select effect below only fires when activeConvId is null, so without
+  // this the page kept showing a chat belonging to the project just left.
+  useEffect(() => {
+    setActiveConvId(null);
+    setStartingNew(false);
+    setBusy(false);
+  }, [projectId]);
+
   useEffect(() => {
     if (activeConvId !== null || startingNew) return;
     const web = (conversations ?? []).find(c => c.platformType === 'web');
@@ -359,6 +368,9 @@ export function ChatPage(): ReactElement {
   return (
     <section className="flex h-full min-h-0 flex-row">
       <ConversationRail
+        // Remounted per project: the filter text, the selection and any open
+        // menu all name chats in the project being left.
+        key={projectId}
         conversations={conversations ?? []}
         activeConvId={activeConvId}
         onSelect={selectConversation}
