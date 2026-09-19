@@ -125,7 +125,7 @@ export function ConversationRail({
 
   return (
     <aside
-      className="flex w-[268px] shrink-0 flex-col border-r border-border"
+      className="flex h-full min-h-0 w-[268px] shrink-0 flex-col border-r border-border"
       aria-label="Chats"
       onClick={() => {
         setMenuFor(null);

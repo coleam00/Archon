@@ -347,7 +347,7 @@ export function ChatPage(): ReactElement {
         archivedCount={archivedList?.length ?? 0}
         busy={busy}
       />
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex flex-col gap-3 border-b border-border px-6 py-4">
           <div className="flex items-baseline justify-between gap-4">
             <div className="min-w-0">
