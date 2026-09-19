@@ -9,18 +9,26 @@ import {
   isAcceptedFileType,
 } from '../primitives/file';
 
+/** What the user has typed and attached but not yet sent, for one conversation. */
+export interface ChatDraft {
+  text: string;
+  files: File[];
+}
+
 interface ChatComposerProps {
   onSend: (message: string, files?: File[]) => void;
+  /**
+   * The draft is owned by the page and keyed by conversation. Held here it
+   * would follow the user between chats, so text typed in one appeared in
+   * another.
+   */
+  draft: ChatDraft;
+  onDraftChange: (next: ChatDraft) => void;
   disabled: boolean;
   disabledReason?: string;
 }
 
 const MAX_HEIGHT = 200;
-
-interface PickedFile {
-  file: File;
-  id: string;
-}
 
 /**
  * Console-native chat composer. Auto-growing textarea, Enter sends,
@@ -37,15 +45,22 @@ interface PickedFile {
  */
 export function ChatComposer({
   onSend,
+  draft,
+  onDraftChange,
   disabled,
   disabledReason,
 }: ChatComposerProps): ReactElement {
-  const [value, setValue] = useState('');
-  const [files, setFiles] = useState<PickedFile[]>([]);
+  const value = draft.text;
+  const files = draft.files;
+  const setValue = (text: string): void => {
+    onDraftChange({ text, files });
+  };
+  const setFiles = (next: File[]): void => {
+    onDraftChange({ text: value, files: next });
+  };
   const [fileError, setFileError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const idRef = useRef(0);
 
   const grow = (el: HTMLTextAreaElement): void => {
     el.style.height = 'auto';
@@ -55,7 +70,7 @@ export function ChatComposer({
   };
 
   const addFiles = (incoming: File[]): void => {
-    const next = [...files];
+    const next: File[] = [...files];
     // Accumulate every rejection reason (not just the last) so a mixed pick
     // surfaces all of them.
     const skipped: string[] = [];
@@ -72,7 +87,7 @@ export function ChatComposer({
         skipped.push(`${file.name}: unsupported type`);
         continue;
       }
-      next.push({ file, id: String(idRef.current++) });
+      next.push(file);
     }
     setFiles(next);
     setFileError(
@@ -82,15 +97,15 @@ export function ChatComposer({
     );
   };
 
-  const removeFile = (id: string): void => {
-    setFiles(prev => prev.filter(f => f.id !== id));
+  const removeFile = (index: number): void => {
+    setFiles(files.filter((_, i) => i !== index));
     setFileError(null);
   };
 
   const submit = (): void => {
     const trimmed = value.trim();
     if (trimmed.length === 0 || disabled) return;
-    onSend(trimmed, files.length > 0 ? files.map(f => f.file) : undefined);
+    onSend(trimmed, files.length > 0 ? [...files] : undefined);
     setValue('');
     setFiles([]);
     setFileError(null);
@@ -123,22 +138,22 @@ export function ChatComposer({
       <div className="mx-auto max-w-[940px]">
         {files.length > 0 ? (
           <div className="mb-[10px] flex flex-wrap gap-[6px]">
-            {files.map(f => (
+            {files.map((f, i) => (
               <span
-                key={f.id}
+                key={`${f.name}-${String(i)}`}
                 className="flex items-center gap-[6px] rounded-[8px] border bg-[color:var(--surface-elevated)] py-[4px] pl-[9px] pr-[5px] text-[11.5px]"
                 style={{ borderColor: 'var(--border-bright)' }}
               >
-                <span className="max-w-[180px] truncate text-text-primary">{f.file.name}</span>
+                <span className="max-w-[180px] truncate text-text-primary">{f.name}</span>
                 <span className="font-mono text-[10px] text-text-tertiary">
-                  {formatBytes(f.file.size)}
+                  {formatBytes(f.size)}
                 </span>
                 <button
                   type="button"
                   onClick={() => {
-                    removeFile(f.id);
+                    removeFile(i);
                   }}
-                  aria-label={`Remove ${f.file.name}`}
+                  aria-label={`Remove ${f.name}`}
                   className="rounded p-[1px] text-text-tertiary transition-colors hover:bg-[color:var(--surface-hover)] hover:text-text-primary"
                 >
                   <span aria-hidden className="text-[11px] leading-none">

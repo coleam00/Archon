@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { useParams } from 'react-router';
 import { ChatStream } from '../components/ChatStream';
-import { ChatComposer } from '../components/ChatComposer';
+import { ChatComposer, type ChatDraft } from '../components/ChatComposer';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
 import { ConversationRail, type ArchiveScope } from '../components/ConversationRail';
 import { ChatSummary } from '../components/ChatSummary';
@@ -172,6 +172,14 @@ export function ChatPage(): ReactElement {
   // so it stays correct even when the per-conversation SSE drops or never
   // connects (which it can, cross-origin in dev). SSE is a pure accelerator.
   const [busy, setBusy] = useState(false);
+  // Keyed by conversation — a pending chat has no id yet, so it gets its own
+  // slot. Held in the composer this followed the user between chats.
+  const [drafts, setDrafts] = useState<Record<string, ChatDraft>>({});
+  const draftKey = activeConvId ?? '__new__';
+  const draft = drafts[draftKey] ?? { text: '', files: [] };
+  const setDraft = (next: ChatDraft): void => {
+    setDrafts(prev => ({ ...prev, [draftKey]: next }));
+  };
   const [error, setError] = useState<string | null>(null);
   // Non-error advisory (distinct channel from `error` so it doesn't read as a
   // send failure) — e.g. files dropped from a first message.
@@ -433,7 +441,7 @@ export function ChatPage(): ReactElement {
           </div>
         ) : null}
 
-        <ChatComposer onSend={onSend} disabled={busy} />
+        <ChatComposer onSend={onSend} draft={draft} onDraftChange={setDraft} disabled={busy} />
       </div>
     </section>
   );
