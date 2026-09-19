@@ -66,7 +66,7 @@ export function CodeBlock({ children }: { children?: ReactNode }): ReactElement 
   const label = state === 'copied' ? 'Copied' : state === 'failed' ? 'Press ⌘C' : 'Copy';
 
   return (
-    <div className="my-2">
+    <div className="relative my-2">
       <div
         className="flex items-center justify-between rounded-t-[8px] border border-b-0 bg-surface-elevated px-2.5 py-1 font-mono text-[10.5px] text-text-tertiary"
         style={{ borderColor: 'var(--border)' }}
