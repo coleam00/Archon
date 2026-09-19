@@ -50,11 +50,21 @@ export const DOCUMENT_CACHE_CONTROL = 'no-cache';
 export async function mountWebUi(app: Mountable, webDistPath: string): Promise<void> {
   const { serveStatic } = await import('hono/bun');
 
-  app.use('/assets/*', async (c, next) => {
-    await next();
-    c.header('Cache-Control', ASSET_CACHE_CONTROL);
-  });
-  app.use('/assets/*', serveStatic({ root: webDistPath }));
+  // `onFound` rather than a wrapping middleware: a miss under /assets/ calls
+  // next() and falls through to the SPA fallback below, which answers with the
+  // document. A wrapper would then stamp the immutable directive over that
+  // document's no-cache — telling the browser to keep a piece of HTML, served
+  // under an asset URL, for a year. This callback only runs when the file is
+  // really there.
+  app.use(
+    '/assets/*',
+    serveStatic({
+      root: webDistPath,
+      onFound: (_path, c) => {
+        c.header('Cache-Control', ASSET_CACHE_CONTROL);
+      },
+    })
+  );
 
   app.use('/favicon.png', serveStatic({ root: webDistPath, path: 'favicon.png' }));
 

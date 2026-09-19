@@ -48,6 +48,16 @@ describe('mountWebUi — caching', () => {
     expect(res.headers.get('Cache-Control')).toBe(ASSET_CACHE_CONTROL);
   });
 
+  // A miss under /assets/ falls through to the SPA fallback, so it is answered
+  // with the document — and must be cached like one. Stamping the asset
+  // directive here would tell the browser to keep that HTML for a year under a
+  // URL that will later serve a real script.
+  test('a missing asset keeps the document directive, not the immutable one', async () => {
+    const res = await (await mounted()).request('/assets/index-doesnotexist.js');
+    expect(res.headers.get('Cache-Control')).toBe(DOCUMENT_CACHE_CONTROL);
+    expect(res.headers.get('Cache-Control')).not.toBe(ASSET_CACHE_CONTROL);
+  });
+
   test('the two directives are genuinely opposite, not accidentally equal', () => {
     expect(ASSET_CACHE_CONTROL).not.toBe(DOCUMENT_CACHE_CONTROL);
     expect(ASSET_CACHE_CONTROL).toContain('immutable');
