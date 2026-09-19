@@ -19,7 +19,7 @@ export type { IdentityPlatform } from './user';
  * `null` means no color, which is every conversation's default. The server
  * never interprets a color; it is a visual label for scanning a chat list.
  */
-export const CONVERSATION_COLORS = ['magenta', 'violet', 'teal', 'green', 'amber', 'red'] as const;
+export const CONVERSATION_COLORS = ['magenta', 'violet', 'blue', 'green', 'amber', 'red'] as const;
 
 export const conversationColorSchema = z.enum(CONVERSATION_COLORS);
 export type ConversationColor = z.infer<typeof conversationColorSchema>;

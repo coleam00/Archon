@@ -11,8 +11,8 @@
 export const CONVERSATION_COLORS = [
   { value: 'magenta', label: 'Magenta', token: 'var(--brand-magenta)' },
   { value: 'violet', label: 'Violet', token: 'var(--brand-violet)' },
-  { value: 'teal', label: 'Teal', token: 'var(--brand-teal)' },
-  { value: 'green', label: 'Green', token: 'var(--success)' },
+  { value: 'blue', label: 'Blue', token: 'var(--brand-blue)' },
+  { value: 'green', label: 'Green', token: 'var(--brand-green)' },
   { value: 'amber', label: 'Amber', token: 'var(--warning)' },
   { value: 'red', label: 'Red', token: 'var(--error)' },
 ] as const;

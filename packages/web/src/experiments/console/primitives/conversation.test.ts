@@ -67,7 +67,7 @@ describe('byMostRecent', () => {
 describe('parseConversationColor', () => {
   test('accepts every color in the palette', () => {
     expect(parseConversationColor('magenta')).toBe('magenta');
-    expect(parseConversationColor('teal')).toBe('teal');
+    expect(parseConversationColor('blue')).toBe('blue');
     expect(parseConversationColor('red')).toBe('red');
   });
 
@@ -88,7 +88,8 @@ describe('parseConversationColor', () => {
 describe('colorToken', () => {
   test('maps a color to a design token, never a raw hex', () => {
     expect(colorToken('magenta')).toBe('var(--brand-magenta)');
-    expect(colorToken('green')).toBe('var(--success)');
+    expect(colorToken('blue')).toBe('var(--brand-blue)');
+    expect(colorToken('green')).toBe('var(--brand-green)');
   });
 
   test('no color maps to no token', () => {
