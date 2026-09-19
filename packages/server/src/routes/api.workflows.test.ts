@@ -1114,6 +1114,81 @@ describe('PUT /api/workflows/:name', () => {
       await rm(testDir, { recursive: true, force: true });
     }
   });
+
+  describe('keeps the authored YAML text', () => {
+    const commentedYaml = [
+      '# Top-level comment about the flow',
+      'name: my-flow',
+      "description: 'Commented flow'",
+      '',
+      'nodes:',
+      '  # the planning step',
+      '  - id: plan',
+      '    command: plan # inline note',
+      '',
+      '  # the build step',
+      '  - id: build',
+      '    depends_on: [plan]',
+      '    bash: |',
+      '      # not a YAML comment, part of the script',
+      '      echo build',
+      '',
+    ].join('\n');
+    const definition = {
+      name: 'my-flow',
+      description: 'Commented flow',
+      nodes: [
+        { id: 'plan', command: 'plan' },
+        {
+          id: 'build',
+          depends_on: ['plan'],
+          bash: '# not a YAML comment, part of the script\necho build\n',
+        },
+      ],
+    };
+
+    async function putOverCommentedFile(
+      body: typeof definition
+    ): Promise<{ status: number; saved: string }> {
+      const testDir = join(tmpdir(), `wf-put-comments-${Date.now()}-${Math.random()}`);
+      const filePath = join(testDir, '.archon', 'workflows', 'my-flow.yaml');
+      await mkdir(dirname(filePath), { recursive: true });
+      await writeFile(filePath, commentedYaml);
+      try {
+        const app = createTestApp();
+        registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+        mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
+        const response = await app.request(`/api/workflows/my-flow?cwd=${testDir}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ definition: body }),
+        });
+        return { status: response.status, saved: await readFile(filePath, 'utf-8') };
+      } finally {
+        await removeTempTree(testDir);
+      }
+    }
+
+    test('an unchanged definition leaves the file byte-for-byte as it was', async () => {
+      const { status, saved } = await putOverCommentedFile(definition);
+      expect(status).toBe(200);
+      expect(saved).toBe(commentedYaml);
+    });
+
+    test('one changed field keeps the comments of everything else', async () => {
+      const edited = structuredClone(definition);
+      edited.nodes[0].command = 'plan-v2';
+      const { status, saved } = await putOverCommentedFile(edited);
+      expect(status).toBe(200);
+      expect(saved).toContain('command: plan-v2');
+      expect(saved).toContain('# Top-level comment about the flow');
+      expect(saved).toContain('# the planning step');
+      expect(saved).toContain('# the build step');
+      expect(saved).toContain('# not a YAML comment, part of the script');
+      expect(saved).toContain("description: 'Commented flow'");
+      expect(saved).toContain('depends_on: [plan]');
+    });
+  });
 });
 
 describe('DELETE /api/workflows/:name', () => {
