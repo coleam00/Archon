@@ -4,7 +4,9 @@ import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import rehypeHighlight from 'rehype-highlight';
 import { AgentAvatar } from './AgentAvatar';
+import { AskCard } from './AskCard';
 import { formatClock } from '../lib/format';
+import { splitReply } from '../primitives/ask';
 import type { Message } from '../primitives/message';
 
 interface MessageItemProps {
@@ -14,6 +16,12 @@ interface MessageItemProps {
    * (design v3 .log-agent-card): violet left accent + mono body, no avatar.
    */
   variant?: 'chat' | 'log';
+  /**
+   * Send an answer to an ask block in this message. Absent in read-only
+   * surfaces (run logs, history), where the card renders as a record of what
+   * was asked rather than something to fill in.
+   */
+  onAnswer?: (text: string) => void;
 }
 
 const MD_COMPONENTS: Components = {
@@ -86,7 +94,11 @@ const ERROR_BLOCK = (msg: string): ReactElement => (
  * border-utility colors otherwise (see `theme.css`, mirrored in
  * `StreamCard.tsx`).
  */
-export function MessageItem({ message, variant = 'chat' }: MessageItemProps): ReactElement {
+export function MessageItem({
+  message,
+  variant = 'chat',
+  onAnswer,
+}: MessageItemProps): ReactElement {
   const kind = message.role;
   const content = message.content.trim();
   const clock = formatClock(message.timestamp);
@@ -177,13 +189,20 @@ export function MessageItem({ message, variant = 'chat' }: MessageItemProps): Re
                     : 'max-w-none text-[14.5px] leading-[1.62] text-text-primary'
                 }
               >
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm, remarkBreaks]}
-                  rehypePlugins={[rehypeHighlight]}
-                  components={MD_COMPONENTS}
-                >
-                  {content}
-                </ReactMarkdown>
+                {splitReply(content).map((part, i) =>
+                  part.kind === 'ask' ? (
+                    <AskCard key={`ask-${String(i)}`} spec={part.spec} onAnswer={onAnswer} />
+                  ) : (
+                    <ReactMarkdown
+                      key={`md-${String(i)}`}
+                      remarkPlugins={[remarkGfm, remarkBreaks]}
+                      rehypePlugins={[rehypeHighlight]}
+                      components={MD_COMPONENTS}
+                    >
+                      {part.text}
+                    </ReactMarkdown>
+                  )
+                )}
               </div>
             ) : null}
             {message.error !== null ? ERROR_BLOCK(message.error.message) : null}

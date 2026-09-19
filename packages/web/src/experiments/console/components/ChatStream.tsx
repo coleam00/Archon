@@ -13,6 +13,8 @@ interface ChatStreamProps {
    * indicator) the full trace is revealed inline.
    */
   showTools?: boolean;
+  /** Send an answer to an ask block. Omitted where the stream is read-only. */
+  onAnswer?: (text: string) => void;
 }
 
 /**
@@ -23,7 +25,11 @@ interface ChatStreamProps {
  * Wrap in <StreamContextProvider> upstream (ChatPage) so StreamCard timestamps
  * resolve — pass runStartedAt: null for wall-clock display.
  */
-export function ChatStream({ messages, showTools = false }: ChatStreamProps): ReactElement {
+export function ChatStream({
+  messages,
+  showTools = false,
+  onAnswer,
+}: ChatStreamProps): ReactElement {
   // `workflow_result` messages are normally swept up by `isSystemCategory` (the
   // `workflow_` prefix), but they carry the run summary + a completion card — let
   // them through explicitly. Other `workflow_*` narration stays suppressed.
@@ -46,7 +52,7 @@ export function ChatStream({ messages, showTools = false }: ChatStreamProps): Re
               summary={message.content}
             />
           ) : (
-            <MessageItem message={message} />
+            <MessageItem message={message} onAnswer={onAnswer} />
           )}
           {showTools
             ? message.toolCalls.map((call, i) => (

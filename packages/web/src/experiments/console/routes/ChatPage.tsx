@@ -270,7 +270,17 @@ export function ChatPage(): ReactElement {
               />
             ) : (
               <StreamContextProvider value={{ runStartedAt: null }}>
-                <ChatStream messages={messageList} showTools={showTools} />
+                <ChatStream
+                  messages={messageList}
+                  showTools={showTools}
+                  onAnswer={
+                    busy
+                      ? undefined
+                      : (text: string): void => {
+                          onSend(text);
+                        }
+                  }
+                />
                 {busy ? (
                   <WorkingIndicator
                     activity={currentActivity}
