@@ -3,6 +3,9 @@ import { useParams } from 'react-router';
 import { ChatStream } from '../components/ChatStream';
 import { ChatComposer } from '../components/ChatComposer';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
+import { ConversationRail, type ArchiveScope } from '../components/ConversationRail';
+import { ChatSummary } from '../components/ChatSummary';
+import type { ConversationColor } from '../primitives/conversation';
 import { WorkingIndicator } from '../components/WorkingIndicator';
 import { WorkflowDock } from '../components/WorkflowDock';
 import { EmptyState } from '../components/EmptyState';
@@ -48,18 +51,105 @@ export function ChatPage(): ReactElement {
     () => (projectId !== undefined ? skill.getProject(projectId) : Promise.resolve(null))
   );
 
+  // Which archived state the rail is showing. Part of the cache key, or
+  // switching scope would render the previous scope's list.
+  const [scope, setScope] = useState<ArchiveScope>('active');
   const { data: conversations, error: conversationsError } = useEntity<ConversationSummary[]>(
-    projectId !== undefined ? K.conversations(projectId) : 'noop:no-project-convs',
-    () => (projectId !== undefined ? skill.listConversations(projectId) : Promise.resolve([]))
+    projectId !== undefined ? `${K.conversations(projectId)}:${scope}` : 'noop:no-project-convs',
+    () =>
+      projectId !== undefined ? skill.listConversations(projectId, scope) : Promise.resolve([])
+  );
+
+  // Counting archived chats needs its own read: the active list cannot know
+  // how many it is leaving out.
+  const { data: archivedList } = useEntity<ConversationSummary[]>(
+    projectId !== undefined ? `${K.conversations(projectId)}:archived-count` : 'noop:no-archived',
+    () =>
+      projectId !== undefined ? skill.listConversations(projectId, 'archived') : Promise.resolve([])
   );
 
   // Active conversation: most-recent web conversation, else null until first send.
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
+  // Set when the user asks for a new chat. Without it the auto-select effect
+  // below would immediately put them back in the most recent conversation, so
+  // the button would appear to do nothing.
+  const [startingNew, setStartingNew] = useState(false);
   useEffect(() => {
-    if (activeConvId !== null) return;
+    if (activeConvId !== null || startingNew) return;
     const web = (conversations ?? []).find(c => c.platformType === 'web');
     if (web !== undefined) setActiveConvId(web.id);
-  }, [conversations, activeConvId]);
+  }, [conversations, activeConvId, startingNew]);
+
+  const selectConversation = (id: string | null): void => {
+    setError(null);
+    setStartingNew(id === null);
+    setActiveConvId(id);
+  };
+
+  const invalidateConversations = (): void => {
+    if (projectId === undefined) return;
+    invalidate(`${K.conversations(projectId)}:${scope}`);
+    invalidate(`${K.conversations(projectId)}:archived-count`);
+    invalidate(K.conversations(projectId));
+  };
+
+  const saveBrief = (brief: string | null): void => {
+    if (activeConvId === null) return;
+    const id = activeConvId;
+    void (async (): Promise<void> => {
+      try {
+        await skill.setConversationBrief(id, brief);
+        invalidateConversations();
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : 'Could not save the summary.');
+      }
+    })();
+  };
+
+  const archiveConversations = (ids: string[], archived: boolean): void => {
+    void (async (): Promise<void> => {
+      try {
+        for (const id of ids) {
+          await skill.setConversationArchived(id, archived);
+        }
+        // Archiving the chat you are reading would leave the page showing a
+        // conversation the rail no longer lists, so step out of it.
+        if (archived && activeConvId !== null && ids.includes(activeConvId)) {
+          setActiveConvId(null);
+          setStartingNew(true);
+        }
+        invalidateConversations();
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : 'Could not change the archive state.');
+      }
+    })();
+  };
+
+  const recolorConversations = (ids: string[], color: ConversationColor | null): void => {
+    void (async (): Promise<void> => {
+      try {
+        // Sequential rather than concurrent: a handful of PATCHes is not worth
+        // a burst, and one failure then reports the chat it actually happened on.
+        for (const id of ids) {
+          await skill.setConversationColor(id, color);
+        }
+        invalidateConversations();
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : 'Could not change the color.');
+      }
+    })();
+  };
+
+  const renameConversation = (id: string, title: string): void => {
+    void (async (): Promise<void> => {
+      try {
+        await skill.renameConversation(id, title);
+        invalidateConversations();
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : 'Rename failed.');
+      }
+    })();
+  };
 
   const { data: messages, error: messagesError } = useEntity<Message[]>(
     activeConvId !== null ? K.messages(activeConvId) : 'noop:no-conv',
@@ -161,6 +251,7 @@ export function ChatPage(): ReactElement {
         if (activeConvId === null) {
           const conv = await skill.createConversation(projectId, text);
           setActiveConvId(conv.conversationId);
+          setStartingNew(false);
           invalidate(K.conversations(projectId));
           invalidate(K.messages(conv.conversationId));
           // createConversation is JSON-only — files can't ride the first message.
@@ -221,6 +312,7 @@ export function ChatPage(): ReactElement {
   }
 
   const messageList = messages ?? [];
+  const activeConversation = (conversations ?? []).find(c => c.id === activeConvId);
 
   // Surface a failed (re)load of the conversation list or message history — a
   // revalidation can fail silently (network blip, server restart) and otherwise
@@ -242,76 +334,93 @@ export function ChatPage(): ReactElement {
   }, [messageList]);
 
   return (
-    <section className="flex h-full flex-col">
-      <header className="flex flex-col gap-3 border-b border-border px-6 py-4">
-        <div className="flex items-baseline justify-between gap-4">
-          <div className="min-w-0">
-            <h1 className="truncate text-base font-medium text-text-primary">
-              {project?.name ?? 'Project'}
-            </h1>
-            <p className="text-xs text-text-tertiary">{project?.path ?? 'Loading…'}</p>
+    <section className="flex h-full min-h-0 flex-row">
+      <ConversationRail
+        conversations={conversations ?? []}
+        activeConvId={activeConvId}
+        onSelect={selectConversation}
+        onRename={renameConversation}
+        onRecolor={recolorConversations}
+        onArchive={archiveConversations}
+        scope={scope}
+        onScopeChange={setScope}
+        archivedCount={archivedList?.length ?? 0}
+        busy={busy}
+      />
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <header className="flex flex-col gap-3 border-b border-border px-6 py-4">
+          <div className="flex items-baseline justify-between gap-4">
+            <div className="min-w-0">
+              <h1 className="truncate text-base font-medium text-text-primary">
+                {project?.name ?? 'Project'}
+              </h1>
+              <p className="text-xs text-text-tertiary">{project?.path ?? 'Loading…'}</p>
+            </div>
           </div>
-        </div>
-        <ProjectViewTabs projectId={projectId} active="chat" />
-      </header>
+          <ProjectViewTabs projectId={projectId} active="chat" />
+        </header>
 
-      <div className="relative min-h-0 flex-1">
-        <div
-          ref={scrollRef}
-          onScroll={handleScroll}
-          className="h-full overflow-y-auto px-[30px] pt-[26px] pb-[18px]"
-        >
-          {/* Match the composer's centered 940px column (design: .stream-inner) */}
-          <div className="mx-auto max-w-[940px]">
-            {messageList.length === 0 && !busy ? (
-              <EmptyState
-                title="No messages yet."
-                hint="Ask the agent about this project, or tell it what to run."
-              />
-            ) : (
-              <StreamContextProvider value={{ runStartedAt: null }}>
-                <ChatStream messages={messageList} showTools={showTools} />
-                {busy ? (
-                  <WorkingIndicator
-                    activity={currentActivity}
-                    expanded={showTools}
-                    onToggle={() => {
-                      setShowTools(v => !v);
-                    }}
-                  />
-                ) : null}
-              </StreamContextProvider>
-            )}
-          </div>
-        </div>
-        {!atBottom ? (
-          <button
-            type="button"
-            onClick={scrollToBottom}
-            aria-label="Jump to bottom"
-            className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-border bg-surface-elevated px-3 py-1 text-[11px] text-text-secondary shadow-md transition-colors hover:text-text-primary"
+        <div className="relative min-h-0 flex-1">
+          <div
+            ref={scrollRef}
+            onScroll={handleScroll}
+            className="h-full overflow-y-auto px-[30px] pt-[26px] pb-[18px]"
           >
-            <span aria-hidden>↓</span>
-            Jump to bottom
-          </button>
+            {/* Match the composer's centered 940px column (design: .stream-inner) */}
+            {activeConversation !== undefined ? (
+              <ChatSummary conversation={activeConversation} onSave={saveBrief} />
+            ) : null}
+            <div className="mx-auto max-w-[940px]">
+              {messageList.length === 0 && !busy ? (
+                <EmptyState
+                  title={activeConvId === null ? 'New chat.' : 'No messages yet.'}
+                  hint="Ask the agent about this project, or tell it what to run."
+                />
+              ) : (
+                <StreamContextProvider value={{ runStartedAt: null }}>
+                  <ChatStream messages={messageList} showTools={showTools} />
+                  {busy ? (
+                    <WorkingIndicator
+                      activity={currentActivity}
+                      expanded={showTools}
+                      onToggle={() => {
+                        setShowTools(v => !v);
+                      }}
+                    />
+                  ) : null}
+                </StreamContextProvider>
+              )}
+            </div>
+          </div>
+          {!atBottom ? (
+            <button
+              type="button"
+              onClick={scrollToBottom}
+              aria-label="Jump to bottom"
+              className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-border bg-surface-elevated px-3 py-1 text-[11px] text-text-secondary shadow-md transition-colors hover:text-text-primary"
+            >
+              <span aria-hidden>↓</span>
+              Jump to bottom
+            </button>
+          ) : null}
+        </div>
+
+        <WorkflowDock projectId={projectId} />
+
+        {notice !== null ? (
+          <div className="shrink-0 border-t border-warning/30 bg-warning/[0.06] px-6 py-2 font-mono text-[11px] text-warning">
+            {notice}
+          </div>
         ) : null}
+
+        {error !== null || loadError !== undefined ? (
+          <div className="shrink-0 border-t border-error/30 bg-error/[0.06] px-6 py-2 font-mono text-[11px] text-error">
+            {error ?? `Failed to load chat: ${loadError?.message ?? 'unknown error'}`}
+          </div>
+        ) : null}
+
+        <ChatComposer onSend={onSend} disabled={busy} />
       </div>
-
-      <WorkflowDock projectId={projectId} />
-
-      {notice !== null ? (
-        <div className="shrink-0 border-t border-warning/30 bg-warning/[0.06] px-6 py-2 font-mono text-[11px] text-warning">
-          {notice}
-        </div>
-      ) : null}
-
-      {error !== null || loadError !== undefined ? (
-        <div className="shrink-0 border-t border-error/30 bg-error/[0.06] px-6 py-2 font-mono text-[11px] text-error">
-          {error ?? `Failed to load chat: ${loadError?.message ?? 'unknown error'}`}
-        </div>
-      ) : null}
-
-      <ChatComposer onSend={onSend} disabled={busy} />
     </section>
   );
 }
