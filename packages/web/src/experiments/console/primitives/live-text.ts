@@ -21,6 +21,19 @@
  *
  * These functions mirror the server's segmentation rules so the preview can be
  * matched against the rows that eventually land, without comparing content.
+ *
+ * KNOWN LIMITATION. The match is positional: `pendingSegments` drops as many
+ * leading segments as the turn already has rows. If the stream drops after the
+ * server persists a segment and the replacement stream replays only later
+ * events, the client can hold fewer segments than there are rows, and the slice
+ * yields nothing — so that turn shows no preview until the next flush.
+ *
+ * That is the behaviour this file exists to improve on, not a regression of it:
+ * the text is in the database and renders from there, nothing is duplicated or
+ * lost, and the next flush restores the preview. Tracking a subscription offset
+ * or stable per-segment identifiers would close the window, at the cost of a
+ * second identity scheme to keep in step with the server's. Not worth it for a
+ * transient gap; revisit if reconnects prove common.
  */
 
 /** Categories the server treats as their own bubble rather than appending to the previous one. */

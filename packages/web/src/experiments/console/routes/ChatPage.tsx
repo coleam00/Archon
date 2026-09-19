@@ -209,17 +209,19 @@ export function ChatPage(): ReactElement {
   // Inline auto-scroll: stick to bottom on new messages if already near it.
   // Mirrors RunDetailPage's variant.
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  // Stickiness is owned by `handleScroll` alone, so it records where the reader
+  // was BEFORE new content arrived. It used to be re-measured in an effect on
+  // every render, which ran after the DOM had already grown — so the growth
+  // itself pushed the reading past the threshold and cancelled the auto-scroll
+  // that was supposed to follow it.
   const lastBottomRef = useRef(true);
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el === null) return;
-    lastBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
-  });
   useEffect(() => {
     const el = scrollRef.current;
     if (el === null || !lastBottomRef.current) return;
     el.scrollTop = el.scrollHeight;
-  }, [messages?.length]);
+    // Streamed text grows the tail without adding a row, so `messages.length`
+    // alone would leave the reader watching a reply scroll out of view.
+  }, [messages?.length, liveSegments]);
 
   // Jump-to-bottom affordance: `atBottom` (state) drives the button's visibility;
   // `lastBottomRef` (above) drives the auto-scroll stickiness. Keep them in sync.
