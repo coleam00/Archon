@@ -370,15 +370,21 @@ export function ConversationRail({
                     background: 'var(--surface-hover)',
                   }}
                 >
+                  {selected.size > 1 && selected.has(c.id) ? (
+                    <div className="px-2.5 pb-1 pt-0.5 font-mono text-[9.5px] tracking-[0.12em] text-text-tertiary">
+                      {selected.size} SELECTED
+                    </div>
+                  ) : null}
                   <button
                     type="button"
                     role="menuitem"
+                    disabled={selected.size > 1 && selected.has(c.id)}
                     onClick={() => {
                       setDraft(conversationLabel(c));
                       setRenamingId(c.id);
                       setMenuFor(null);
                     }}
-                    className="w-full rounded-lg px-2.5 py-1.5 text-left text-[12.5px] text-text-secondary hover:bg-surface-elevated hover:text-text-primary"
+                    className="w-full rounded-lg px-2.5 py-1.5 text-left text-[12.5px] text-text-secondary hover:bg-surface-elevated hover:text-text-primary disabled:cursor-default disabled:opacity-40"
                   >
                     Rename…
                   </button>
@@ -439,63 +445,6 @@ export function ConversationRail({
           );
         })}
       </div>
-
-      {selected.size > 0 ? (
-        <div
-          className="flex items-center gap-2 border-t bg-surface-elevated px-3 py-2 text-[11.5px]"
-          style={{ borderColor: 'var(--border-bright)' }}
-        >
-          <span className="font-semibold text-text-primary">{selected.size} selected</span>
-          <div className="ml-auto flex items-center gap-1.5">
-            {CONVERSATION_COLORS.map(({ value, label, token: swatch }) => (
-              <button
-                key={value}
-                type="button"
-                aria-label={`${label} for ${String(selected.size)} chats`}
-                title={label}
-                onClick={() => {
-                  onRecolor([...selected], value);
-                }}
-                className="h-3.5 w-3.5 rounded-full border transition-transform hover:scale-110"
-                style={{
-                  background: swatch,
-                  borderColor: 'color-mix(in oklch, black, transparent 70%)',
-                }}
-              />
-            ))}
-            <button
-              type="button"
-              onClick={() => {
-                // Restore when every selected chat is already archived,
-                // otherwise archive — one button that always does the
-                // non-destructive thing for the current selection.
-                const ids = [...selected];
-                const allArchived = ids.every(
-                  id => conversations.find(c => c.id === id)?.archived === true
-                );
-                onArchive(ids, !allArchived);
-                setSelected(new Set());
-              }}
-              className="ml-1 rounded-[7px] border px-2 py-1 text-[11px] text-text-secondary hover:text-text-primary"
-              style={{ borderColor: 'var(--border-bright)' }}
-            >
-              {[...selected].every(id => conversations.find(c => c.id === id)?.archived === true)
-                ? 'Restore'
-                : 'Archive'}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setSelected(new Set());
-              }}
-              className="rounded-[7px] border px-2 py-1 text-[11px] text-text-secondary hover:text-text-primary"
-              style={{ borderColor: 'var(--border-bright)' }}
-            >
-              Clear
-            </button>
-          </div>
-        </div>
-      ) : null}
     </aside>
   );
 }

@@ -390,13 +390,16 @@ export function ChatPage(): ReactElement {
       />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex flex-col gap-3 border-b border-border px-6 py-4">
-          <div className="flex items-baseline justify-between gap-4">
+          <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
               <h1 className="truncate text-base font-medium text-text-primary">
                 {project?.name ?? 'Project'}
               </h1>
               <p className="text-xs text-text-tertiary">{project?.path ?? 'Loading…'}</p>
             </div>
+            {activeConversation !== undefined ? (
+              <ChatSummary conversation={activeConversation} onSave={saveBrief} />
+            ) : null}
           </div>
           <ProjectViewTabs projectId={projectId} active="chat" />
         </header>
@@ -408,9 +411,6 @@ export function ChatPage(): ReactElement {
             className="h-full overflow-y-auto px-[30px] pt-[26px] pb-[18px]"
           >
             {/* Match the composer's centered 940px column (design: .stream-inner) */}
-            {activeConversation !== undefined ? (
-              <ChatSummary conversation={activeConversation} onSave={saveBrief} />
-            ) : null}
             <div className="mx-auto max-w-[940px]">
               {messageList.length === 0 && !busy ? (
                 <EmptyState
@@ -446,7 +446,7 @@ export function ChatPage(): ReactElement {
           ) : null}
         </div>
 
-        <WorkflowDock projectId={projectId} />
+        <WorkflowDock projectId={projectId} conversationDbId={activeConversation?.dbId ?? null} />
 
         {notice !== null ? (
           <div className="shrink-0 border-t border-warning/30 bg-warning/[0.06] px-6 py-2 font-mono text-[11px] text-warning">

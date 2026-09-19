@@ -15,6 +15,7 @@ import {
 
 const conv = (over: Partial<ConversationSummary> = {}): ConversationSummary => ({
   id: 'web-1',
+  dbId: 'db-1',
   title: 'Debug the migration',
   platformType: 'web',
   lastActivityAt: '2026-06-05T10:00:00Z',

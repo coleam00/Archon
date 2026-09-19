@@ -57,7 +57,7 @@ export function ChatSummary({ conversation, onSave }: ChatSummaryProps): ReactEl
 
   return (
     <div
-      className="mx-auto mb-[18px] max-w-[940px] rounded-[12px] border bg-surface-elevated px-4 py-3"
+      className="ml-auto min-w-0 max-w-[560px] flex-1 rounded-[10px] border bg-surface-elevated px-3 py-2"
       style={{ borderColor: 'var(--border-bright)', borderLeft: `3px solid ${token}` }}
     >
       <div className="mb-2 flex items-center gap-2 font-mono text-[10px] font-bold tracking-[0.16em] text-text-tertiary">
@@ -99,7 +99,9 @@ export function ChatSummary({ conversation, onSave }: ChatSummaryProps): ReactEl
           style={{ borderColor: 'var(--border-bright)' }}
         />
       ) : (
-        <p className="whitespace-pre-wrap text-[13px] leading-[1.6] text-text-primary">{brief}</p>
+        <p className="line-clamp-2 whitespace-pre-wrap text-[12.5px] leading-[1.55] text-text-primary">
+          {brief}
+        </p>
       )}
     </div>
   );
