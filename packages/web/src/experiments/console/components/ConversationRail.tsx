@@ -5,7 +5,6 @@ import {
   conversationLabel,
   conversationMonogram,
   CONVERSATION_COLORS,
-  isBriefStale,
   matchesFilter,
   type ConversationColor,
   type ConversationSummary,
@@ -376,22 +375,6 @@ export function ConversationRail({
                     ) : null}
                   </span>
                 )}
-                {c.brief !== null ? (
-                  <span className="mt-[3px] line-clamp-2 block text-[11.5px] leading-[1.5] text-text-secondary">
-                    {c.brief}
-                  </span>
-                ) : null}
-                {c.briefUpdatedAt !== null ? (
-                  <span
-                    className={`mt-[5px] block font-mono text-[10px] ${
-                      isBriefStale(c) ? 'text-warning' : 'text-text-tertiary'
-                    }`}
-                  >
-                    {isBriefStale(c)
-                      ? `summary ${relativeTime(c.briefUpdatedAt)} — may be stale`
-                      : `summary ${relativeTime(c.briefUpdatedAt)}`}
-                  </span>
-                ) : null}
               </button>
 
               {menuFor === c.id ? (
