@@ -1,14 +1,5 @@
-import {
-  isValidElement,
-  useEffect,
-  useRef,
-  useState,
-  type ReactElement,
-  type ReactNode,
-} from 'react';
-
-/** How long the confirmation holds before the button returns to "Copy". */
-const CONFIRM_MS = 1800;
+import { isValidElement, useRef, type ReactElement, type ReactNode } from 'react';
+import { copyLabel, useCopy } from '../lib/clipboard';
 
 /** `language-bash` → `bash`. Unknown or absent leaves the label empty. */
 function languageOf(children: ReactNode): string {
@@ -33,37 +24,16 @@ function languageOf(children: ReactNode): string {
  */
 export function CodeBlock({ children }: { children?: ReactNode }): ReactElement {
   const preRef = useRef<HTMLPreElement>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const { state, copy } = useCopy();
   const language = languageOf(children);
 
-  useEffect((): (() => void) => {
-    return (): void => {
-      if (timer.current !== null) clearTimeout(timer.current);
-    };
-  }, []);
-
-  const copy = (): void => {
-    const text = preRef.current?.textContent ?? '';
-    if (text.length === 0) return;
-    void (async (): Promise<void> => {
-      let ok = false;
-      try {
-        // Requires a secure context; absent on plain HTTP and older browsers.
-        await navigator.clipboard.writeText(text);
-        ok = true;
-      } catch {
-        ok = false;
-      }
-      setState(ok ? 'copied' : 'failed');
-      if (timer.current !== null) clearTimeout(timer.current);
-      timer.current = setTimeout(() => {
-        setState('idle');
-      }, CONFIRM_MS);
-    })();
+  const onCopy = (): void => {
+    // textContent, not the React children: highlighting wraps the code in
+    // spans, so rebuilding from the tree risks pasting markup.
+    copy(preRef.current?.textContent ?? '');
   };
 
-  const label = state === 'copied' ? 'Copied' : state === 'failed' ? 'Press ⌘C' : 'Copy';
+  const label = copyLabel(state, 'Copy', 'Copied');
 
   return (
     <div className="relative my-2">
@@ -74,7 +44,7 @@ export function CodeBlock({ children }: { children?: ReactNode }): ReactElement 
         <span>{language}</span>
         <button
           type="button"
-          onClick={copy}
+          onClick={onCopy}
           aria-label={`Copy ${language === '' ? 'code' : language} block`}
           className={`flex items-center gap-1.5 rounded-[6px] border px-[7px] py-[2px] transition-colors ${
             state === 'copied' ? 'text-success' : 'text-text-secondary hover:text-text-primary'
