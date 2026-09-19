@@ -9,6 +9,8 @@ import {
   type ConversationColor,
   type ConversationSummary,
 } from '../primitives/conversation';
+import { isBriefStale } from '../primitives/conversation';
+import { parseBrief } from '../primitives/brief';
 import { relativeTime } from '../lib/format';
 import { applyChatOrder, readChatOrder, reorder, writeChatOrder } from '../lib/chat-order';
 
@@ -29,6 +31,12 @@ interface ConversationRailProps {
   onRename: (id: string, title: string) => void;
   onRecolor: (ids: string[], color: ConversationColor | null) => void;
   onArchive: (ids: string[], archived: boolean) => void;
+  /**
+   * Open a chat's summary. The card shows only that one exists and how fresh
+   * it is — the text itself is too long to sit in a rail without either
+   * clamping it to uselessness or making every card a different height.
+   */
+  onOpenBrief: (id: string, startEditing: boolean) => void;
   /** Which archived state the list is showing; the rail does not fetch. */
   scope: ArchiveScope;
   onScopeChange: (scope: ArchiveScope) => void;
@@ -61,6 +69,7 @@ export function ConversationRail({
   onRename,
   onRecolor,
   onArchive,
+  onOpenBrief,
   scope,
   onScopeChange,
   archivedCount,
@@ -350,28 +359,39 @@ export function ConversationRail({
                   style={{ borderColor: 'var(--border-bright)' }}
                 />
               ) : (
-                <button
-                  type="button"
-                  onClick={e => {
-                    e.stopPropagation();
-                    open(c.id, e.metaKey || e.ctrlKey || e.shiftKey);
-                  }}
-                  className="min-w-0 flex-1 text-left"
-                >
-                  <span className="flex items-baseline gap-2">
-                    <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-text-primary">
-                      {conversationLabel(c)}
+                <div className="min-w-0 flex-1">
+                  <button
+                    type="button"
+                    onClick={e => {
+                      e.stopPropagation();
+                      open(c.id, e.metaKey || e.ctrlKey || e.shiftKey);
+                    }}
+                    className="w-full text-left"
+                  >
+                    <span className="flex items-baseline gap-2">
+                      <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-text-primary">
+                        {conversationLabel(c)}
+                      </span>
+                      {c.lastActivityAt !== null ? (
+                        <time
+                          dateTime={c.lastActivityAt}
+                          className="shrink-0 font-mono text-[10px] text-text-tertiary"
+                        >
+                          {relativeTime(c.lastActivityAt)}
+                        </time>
+                      ) : null}
                     </span>
-                    {c.lastActivityAt !== null ? (
-                      <time
-                        dateTime={c.lastActivityAt}
-                        className="shrink-0 font-mono text-[10px] text-text-tertiary"
-                      >
-                        {relativeTime(c.lastActivityAt)}
-                      </time>
-                    ) : null}
-                  </span>
-                </button>
+                  </button>
+                  {/* A sibling of the open button, not a child: a button inside
+                      a button is invalid markup and the inner one stops firing
+                      in some browsers. */}
+                  <BriefChip
+                    conversation={c}
+                    onOpen={startEditing => {
+                      onOpenBrief(c.id, startEditing);
+                    }}
+                  />
+                </div>
               )}
 
               {menuFor === c.id ? (
@@ -462,5 +482,62 @@ export function ConversationRail({
         })}
       </div>
     </aside>
+  );
+}
+
+/**
+ * The card's summary control: that one exists, and how old it is. Never the
+ * text — a two-line clamp on a rail card is a preview nobody can act on, and
+ * an unclamped one makes every card a different height.
+ */
+function BriefChip({
+  conversation,
+  onOpen,
+}: {
+  conversation: ConversationSummary;
+  onOpen: (startEditing: boolean) => void;
+}): ReactElement {
+  const brief = parseBrief(conversation.brief);
+  const stale = isBriefStale(conversation);
+
+  if (brief === null) {
+    return (
+      <button
+        type="button"
+        onClick={e => {
+          e.stopPropagation();
+          onOpen(true);
+        }}
+        // Dashed and quiet: an empty summary should be discoverable without
+        // competing with the chats that have one.
+        className="mt-1 rounded-[7px] border border-dashed px-1.5 py-[1px] font-mono text-[9.5px] text-text-tertiary opacity-0 transition-opacity hover:text-text-secondary group-hover:opacity-100 focus-visible:opacity-100"
+        style={{ borderColor: 'var(--border)' }}
+      >
+        + summary
+      </button>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={e => {
+        e.stopPropagation();
+        onOpen(false);
+      }}
+      title="Read the summary"
+      className="mt-1 flex items-center gap-1 rounded-[7px] border px-1.5 py-[1px] font-mono text-[9.5px] transition-colors"
+      style={{
+        borderColor: stale ? 'var(--warning)' : 'var(--border-bright)',
+        color: stale ? 'var(--warning)' : 'var(--text-secondary)',
+      }}
+    >
+      <span aria-hidden>▤</span>
+      summary
+      {conversation.briefUpdatedAt !== null
+        ? ` · ${relativeTime(conversation.briefUpdatedAt).replace(' ago', '')}`
+        : ''}
+      {stale ? ' — stale' : ''}
+    </button>
   );
 }
