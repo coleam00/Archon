@@ -331,36 +331,33 @@ export function ConversationRail({
                 {conversationMonogram(c)}
               </span>
 
-              <button
-                type="button"
-                onClick={e => {
-                  e.stopPropagation();
-                  open(c.id, e.metaKey || e.ctrlKey || e.shiftKey);
-                }}
-                className="min-w-0 flex-1 text-left"
-              >
-                {renamingId === c.id ? (
-                  <input
-                    ref={renameRef}
-                    value={draft}
-                    onClick={e => {
-                      e.stopPropagation();
-                    }}
-                    onChange={e => {
-                      setDraft(e.target.value);
-                    }}
-                    onKeyDown={e => {
-                      onRenameKey(e, c.id);
-                    }}
-                    onBlur={() => {
-                      commitRename(c.id);
-                    }}
-                    maxLength={255}
-                    aria-label="Rename chat"
-                    className="w-full rounded border bg-surface px-1 py-0.5 text-[13px] text-text-primary focus:outline-none"
-                    style={{ borderColor: 'var(--border-bright)' }}
-                  />
-                ) : (
+              {renamingId === c.id ? (
+                <input
+                  ref={renameRef}
+                  value={draft}
+                  onChange={e => {
+                    setDraft(e.target.value);
+                  }}
+                  onKeyDown={e => {
+                    onRenameKey(e, c.id);
+                  }}
+                  onBlur={() => {
+                    commitRename(c.id);
+                  }}
+                  maxLength={255}
+                  aria-label="Rename chat"
+                  className="w-full rounded border bg-surface px-1 py-0.5 text-[13px] text-text-primary focus:outline-none"
+                  style={{ borderColor: 'var(--border-bright)' }}
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={e => {
+                    e.stopPropagation();
+                    open(c.id, e.metaKey || e.ctrlKey || e.shiftKey);
+                  }}
+                  className="min-w-0 flex-1 text-left"
+                >
                   <span className="flex items-baseline gap-2">
                     <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-text-primary">
                       {conversationLabel(c)}
@@ -374,8 +371,8 @@ export function ConversationRail({
                       </time>
                     ) : null}
                   </span>
-                )}
-              </button>
+                </button>
+              )}
 
               {menuFor === c.id ? (
                 <div

@@ -2632,7 +2632,7 @@ export async function handleMessage(
         }),
         // Scoped to this conversation, not the project: a summary describes one
         // chat, and the tool must not be able to write to a different one.
-        buildChatSummaryTool({ conversationPlatformId: conversationId }),
+        buildChatSummaryTool({ conversationDbId: conversation.id }),
       ];
     }
 

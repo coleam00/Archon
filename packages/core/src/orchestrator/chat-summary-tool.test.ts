@@ -1,19 +1,18 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 
 const mockFind = mock(
-  async (_platformId: string) =>
-    null as null | { id: string; brief_pinned: boolean; brief: string | null }
+  async (_id: string) => null as null | { id: string; brief_pinned: boolean; brief: string | null }
 );
 const mockUpdate = mock(async (_id: string, _brief: string | null, _pinned: boolean) => {});
 
 mock.module('../db/conversations', () => ({
-  findConversationByPlatformId: mockFind,
+  getConversationById: mockFind,
   updateConversationBrief: mockUpdate,
 }));
 
 const { buildChatSummaryTool } = await import('./chat-summary-tool');
 
-const tool = buildChatSummaryTool({ conversationPlatformId: 'web-1' });
+const tool = buildChatSummaryTool({ conversationDbId: 'conv-1' });
 const call = (input: Record<string, unknown>): Promise<string> =>
   tool.handler(input) as Promise<string>;
 

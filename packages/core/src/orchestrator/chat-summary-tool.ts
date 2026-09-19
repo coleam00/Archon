@@ -1,6 +1,6 @@
 import { defineNativeToolInputSchema, type NativeTool } from '@archon/providers/types';
 import { createLogger } from '@archon/paths';
-import { findConversationByPlatformId, updateConversationBrief } from '../db/conversations';
+import { getConversationById, updateConversationBrief } from '../db/conversations';
 
 const log = createLogger('orchestrator.update_chat_summary');
 
@@ -8,8 +8,15 @@ const log = createLogger('orchestrator.update_chat_summary');
 const MAX_SUMMARY = 2000;
 
 export interface ChatSummaryContext {
-  /** Platform id of the conversation this turn belongs to. */
-  conversationPlatformId: string;
+  /**
+   * Database id of the conversation this turn belongs to.
+   *
+   * Deliberately not the platform id: uniqueness there is only
+   * (platform_type, platform_conversation_id), so the same id on another
+   * platform could be selected instead and the summary written to a stranger's
+   * chat.
+   */
+  conversationDbId: string;
 }
 
 const INPUT_SCHEMA = defineNativeToolInputSchema({
@@ -25,7 +32,11 @@ const INPUT_SCHEMA = defineNativeToolInputSchema({
         'Set true to remove the summary entirely, for a chat that turned out to be a one-off. Omit `summary` when using this.',
     },
   },
-  required: ['summary'],
+  // Nothing is required at the schema level: `clear` is documented as omitting
+  // `summary`, so requiring it would have a provider reject the documented call
+  // before the handler could run. The handler enforces the real rule — one of
+  // the two must be present.
+  required: [],
 });
 
 /**
@@ -58,9 +69,9 @@ export function buildChatSummaryTool(ctx: ChatSummaryContext): NativeTool {
         return 'update_chat_summary error: `summary` is required unless `clear` is true.';
       }
 
-      const conv = await findConversationByPlatformId(ctx.conversationPlatformId);
+      const conv = await getConversationById(ctx.conversationDbId);
       if (conv === null) {
-        log.warn({ conversationPlatformId: ctx.conversationPlatformId }, 'conversation_not_found');
+        log.warn({ conversationId: ctx.conversationDbId }, 'conversation_not_found');
         return 'update_chat_summary error: this conversation no longer exists.';
       }
 

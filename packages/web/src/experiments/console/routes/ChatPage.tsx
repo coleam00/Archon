@@ -189,7 +189,10 @@ export function ChatPage(): ReactElement {
   // Keyed by conversation — a pending chat has no id yet, so it gets its own
   // slot. Held in the composer this followed the user between chats.
   const [drafts, setDrafts] = useState<Record<string, ChatDraft>>({});
-  const draftKey = activeConvId ?? '__new__';
+  // Keyed by project as well as conversation: ChatPage stays mounted across a
+  // project switch, so a bare '__new__' slot was shared by every project and
+  // text typed in one project's new chat surfaced in another's.
+  const draftKey = `${projectId ?? '_'}:${activeConvId ?? '__new__'}`;
   const draft = drafts[draftKey] ?? { text: '', files: [] };
   const setDraft = (next: ChatDraft): void => {
     setDrafts(prev => ({ ...prev, [draftKey]: next }));
