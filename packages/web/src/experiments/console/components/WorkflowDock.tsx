@@ -20,6 +20,13 @@ interface FeedData {
 
 interface WorkflowDockProps {
   projectId: string;
+  /**
+   * Database id of the chat being read. A run belongs to the conversation that
+   * started it, so showing every project run in every chat attributed work to
+   * chats that never asked for it. A run started outside a chat (CLI, webhook)
+   * has no conversation and belongs in none.
+   */
+  conversationDbId: string | null;
 }
 
 function needsApproval(run: Run): boolean {
@@ -41,7 +48,10 @@ function needsApproval(run: Run): boolean {
  *
  * Live via the dashboard SSE (which invalidates the shared runs cache).
  */
-export function WorkflowDock({ projectId }: WorkflowDockProps): ReactElement | null {
+export function WorkflowDock({
+  projectId,
+  conversationDbId,
+}: WorkflowDockProps): ReactElement | null {
   const [expanded, setExpanded] = useState(false);
 
   const { data } = useEntity<FeedData>(K.runs(projectId), () =>
@@ -49,7 +59,14 @@ export function WorkflowDock({ projectId }: WorkflowDockProps): ReactElement | n
   );
   useDashboardSSE();
 
-  const active = (data?.runs ?? []).filter(r => r.status === 'running' || r.status === 'paused');
+  const active = (data?.runs ?? []).filter(
+    r =>
+      (r.status === 'running' || r.status === 'paused') &&
+      // A run belongs to the chat that started it. One with no conversation was
+      // started outside chat entirely and belongs in none of them.
+      r.conversationId !== null &&
+      r.conversationId === conversationDbId
+  );
   if (active.length === 0) return null;
 
   const approvals = active.filter(needsApproval);

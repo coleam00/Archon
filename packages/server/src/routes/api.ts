@@ -2684,12 +2684,16 @@ export function registerApiRoutes(
         // and stays silent.
         getLog().warn({ route: 'GET /api/conversations' }, 'api.mine_filter_identity_unresolved');
       }
+      const archivedParam = c.req.query('archived');
+      const archived =
+        archivedParam === 'archived' || archivedParam === 'all' ? archivedParam : 'active';
       const conversations = await conversationDb.listConversations(
         50,
         platformType,
         codebaseId,
         true,
-        userId
+        userId,
+        archived
       );
       return c.json(conversations.map(toApiConversation));
     } catch (error) {
@@ -2792,10 +2796,13 @@ export function registerApiRoutes(
     }
   });
 
-  // PATCH /api/conversations/:id - Update conversation (title)
+  // PATCH /api/conversations/:id - Update conversation (title, color)
   registerOpenApiRoute(updateConversationRoute, async c => {
     const platformId = c.req.param('id') ?? '';
-    const { title } = getValidatedBody(c, updateConversationBodySchema);
+    const { title, color, archived, brief, briefPinned } = getValidatedBody(
+      c,
+      updateConversationBodySchema
+    );
     try {
       const conv = await conversationDb.findConversationByPlatformId(platformId);
       if (!conv) {
@@ -2803,6 +2810,21 @@ export function registerApiRoutes(
       }
       if (title !== undefined) {
         await conversationDb.updateConversationTitle(conv.id, title.slice(0, 255));
+      }
+      // `undefined` leaves the color alone; an explicit `null` clears it. The
+      // schema already constrained any non-null value to CONVERSATION_COLORS.
+      if (color !== undefined) {
+        await conversationDb.updateConversationColor(conv.id, color);
+      }
+      // Symmetric on purpose: the same field archives and restores, so an
+      // archive is never a one-way door the user cannot walk back through.
+      if (archived !== undefined) {
+        await conversationDb.setConversationArchived(conv.id, archived);
+      }
+      // A write through this route is a human editing it unless the caller says
+      // otherwise, so it pins by default — the agent writes through its tool.
+      if (brief !== undefined) {
+        await conversationDb.updateConversationBrief(conv.id, brief, briefPinned ?? true);
       }
       return c.json({ success: true });
     } catch (error) {
@@ -2924,6 +2946,16 @@ export function registerApiRoutes(
       conv = await conversationDb.findConversationByPlatformId(conversationId);
     } catch (e: unknown) {
       getLog().error({ err: e, conversationId }, 'conversation_lookup_failed');
+    }
+
+    // Sending to an archived chat brings it back. Archive means "not now", and a
+    // message disappearing into a hidden thread is a surprise found much later.
+    if (conv?.deleted_at != null) {
+      try {
+        await conversationDb.setConversationArchived(conv.id, false);
+      } catch (e: unknown) {
+        getLog().warn({ err: e, conversationId: conv.id }, 'conversation.restore_on_send_failed');
+      }
     }
 
     // Persist user message and pass DB ID to adapter for assistant message persistence

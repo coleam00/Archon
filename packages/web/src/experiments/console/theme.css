@@ -45,6 +45,14 @@
   --brand-violet: oklch(0.56 0.215 305);
   --brand-teal: oklch(0.755 0.165 168);
   --brand-teal-2: oklch(0.7 0.15 175);
+
+  /* Chat-label palette. The six colors a chat can be tagged with must stay
+     mutually distinguishable, which the status tokens do not guarantee:
+     --success aliases --brand-teal here, so a 'green' label and a 'teal' one
+     rendered the same pixel. Blue and green get their own brand tokens so a
+     status re-theme can never collapse two labels into one again. */
+  --brand-blue: oklch(0.72 0.155 245);
+  --brand-green: oklch(0.72 0.17 150);
   --brand-gradient: linear-gradient(
     135deg,
     var(--brand-magenta) 0%,
