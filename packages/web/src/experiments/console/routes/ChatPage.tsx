@@ -263,7 +263,6 @@ export function ChatPage(): ReactElement {
           const conv = await skill.createConversation(projectId, text);
           setActiveConvId(conv.conversationId);
           setStartingNew(false);
-          invalidate(K.conversations(projectId));
           invalidate(K.messages(conv.conversationId));
           // createConversation is JSON-only — files can't ride the first message.
           // Surface it as a non-error notice (not silently dropped); phrased so
@@ -278,6 +277,11 @@ export function ChatPage(): ReactElement {
           await skill.sendMessage(activeConvId, text, files);
           invalidate(K.messages(activeConvId));
         }
+        // Sending can change the conversation list, not just its messages: a
+        // new chat appears in it, and sending to an archived chat un-archives
+        // it server-side. Without this the rail kept showing the chat as
+        // archived and the count never moved.
+        invalidateConversations();
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : 'Send failed.');
         setBusy(false); // unblock so the user can retry
