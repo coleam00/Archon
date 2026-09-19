@@ -87,6 +87,11 @@ function variantTextBodies(node: BuilderNode): string[] {
       ];
     case 'cancel':
       return [node.data.reason];
+    case 'opaque':
+      // Not scanned: a loop_group body references its own inner node ids, which
+      // are not workflow-level nodes, so a scan here would report false dangling
+      // refs. The engine loader validates these nodes on save.
+      return [];
   }
 }
 

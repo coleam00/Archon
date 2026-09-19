@@ -87,6 +87,9 @@
      (console-scoped) until the production palette needs them. */
   --node-script: oklch(0.7 0.14 140);
   --node-cancel: oklch(0.62 0.19 10);
+  /* Read-only nodes (loop_group / workflow / include): deliberately desaturated
+     so they read as "not editable here" next to the eight editable variants. */
+  --node-opaque: oklch(0.6 0.02 265);
 
   /* shadcn-compatible overrides */
   --background: oklch(0.145 0.006 265);

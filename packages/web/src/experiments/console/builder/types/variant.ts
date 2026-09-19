@@ -54,6 +54,9 @@ export type WireBaseKey =
   | 'maxBudgetUsd'
   | 'systemPrompt'
   | 'fallbackModel'
+  | 'settingSources'
+  | 'pi'
+  | 'mutates_checkout'
   | 'betas'
   | 'sandbox'
   | 'always_run'
@@ -108,6 +111,11 @@ export interface ApprovalOnReject {
 /** Human-gate approval data. */
 export interface ApprovalNodeData {
   message: string;
+  /**
+   * Authored decision set (#2707). Opaque passthrough: no editor yet, but
+   * dropping it on save would turn a custom gate back into approve/reject.
+   */
+  decisions?: NonNullable<WireDagNode['approval']>['decisions'];
   capture_response?: boolean;
   on_reject?: ApprovalOnReject;
 }
@@ -206,14 +214,36 @@ export type VariantData = VariantDataMap[VariantId];
  * No `position`/selection/clipboard fields — those are canvas concerns owned by
  * PR-2 (added as an additive extension later).
  */
-export type BuilderNode = {
-  [K in VariantId]: {
-    id: string;
-    variant: K;
-    base: BaseFields;
-    data: VariantDataMap[K];
-  };
-}[VariantId];
+export type BuilderNode =
+  | {
+      [K in VariantId]: {
+        id: string;
+        variant: K;
+        base: BaseFields;
+        data: VariantDataMap[K];
+      };
+    }[VariantId]
+  | OpaqueBuilderNode;
+
+/**
+ * Valid authored node modes the builder has no editor for. Kept out of
+ * `VariantId` on purpose: they cannot be created from the palette or switched
+ * to, only opened from an existing workflow.
+ */
+export type OpaqueKind = 'loop_group' | 'workflow' | 'include';
+
+/**
+ * A node the builder shows read-only and writes back exactly as it was read.
+ * Its graph position (`base.depends_on`, `when`, …) stays editable; the mode
+ * fields in `fields` are carried verbatim so an open-and-save never rewrites
+ * a loop group, a sub-workflow call or an include into something else.
+ */
+export interface OpaqueBuilderNode {
+  id: string;
+  variant: 'opaque';
+  base: BaseFields;
+  data: { kind: OpaqueKind; fields: Partial<WireDagNode> };
+}
 
 /** Workflow-level metadata (everything on the wire def except name/description/nodes). */
 export type WorkflowMeta = Omit<WireWorkflowDefinition, 'name' | 'description' | 'nodes'>;
