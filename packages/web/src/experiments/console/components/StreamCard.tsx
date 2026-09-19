@@ -1,5 +1,6 @@
 import type { ReactElement, ReactNode } from 'react';
-import { formatClock, formatRelativeToBaseline } from '../lib/format';
+import { formatRelativeToBaseline } from '../lib/format';
+import { useClock } from '../lib/clock';
 import { useStreamContext } from '../lib/stream-context';
 
 interface StreamCardProps {
@@ -88,7 +89,7 @@ export function StreamCard({
   const style = KIND_STYLES[kind];
   const { runStartedAt } = useStreamContext();
   const displayed = formatRelativeToBaseline(timestamp, runStartedAt);
-  const wallClock = formatClock(timestamp);
+  const wallClock = useClock()(timestamp);
   return (
     <article
       onClick={onClick}
