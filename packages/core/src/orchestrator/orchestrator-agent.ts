@@ -28,6 +28,7 @@ import { toError } from '../utils/error';
 import { safeDeactivateSession } from '../state/session-transitions';
 import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
 import { buildManageRunTool } from './manage-run-tool';
+import { buildChatSummaryTool } from './chat-summary-tool';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { resolveWorkflowSourceRoot } from '../utils/workflow-source-root';
 import {
@@ -2629,6 +2630,9 @@ export async function handleMessage(
             return `Started workflow "${wf.name}" in the background — it'll appear in the runs list and the workflow dock shortly.`;
           },
         }),
+        // Scoped to this conversation, not the project: a summary describes one
+        // chat, and the tool must not be able to write to a different one.
+        buildChatSummaryTool({ conversationPlatformId: conversationId }),
       ];
     }
 
