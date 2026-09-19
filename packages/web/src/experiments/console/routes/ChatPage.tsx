@@ -334,7 +334,7 @@ export function ChatPage(): ReactElement {
   }, [messageList]);
 
   return (
-    <section className="flex h-full flex-row">
+    <section className="flex h-full min-h-0 flex-row">
       <ConversationRail
         conversations={conversations ?? []}
         activeConvId={activeConvId}
