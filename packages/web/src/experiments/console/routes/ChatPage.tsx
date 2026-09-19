@@ -84,6 +84,17 @@ export function ChatPage(): ReactElement {
     setError(null);
     setStartingNew(id === null);
     setActiveConvId(id);
+    // `busy` describes the conversation being read, not the page. Leaving it
+    // set while switching made one chat's pending reply lock every other chat
+    // in the project. The effect below re-derives it from the new
+    // conversation's own trailing message, and the settle timer from the old
+    // one must not outlive the switch.
+    if (settleTimerRef.current !== null) {
+      clearTimeout(settleTimerRef.current);
+      settleTimerRef.current = null;
+    }
+    settleSigRef.current = '';
+    setBusy(false);
   };
 
   const invalidateConversations = (): void => {
@@ -345,7 +356,6 @@ export function ChatPage(): ReactElement {
         scope={scope}
         onScopeChange={setScope}
         archivedCount={archivedList?.length ?? 0}
-        busy={busy}
       />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex flex-col gap-3 border-b border-border px-6 py-4">

@@ -33,8 +33,6 @@ interface ConversationRailProps {
   scope: ArchiveScope;
   onScopeChange: (scope: ArchiveScope) => void;
   archivedCount: number;
-  /** True while a reply is in flight, which freezes actions that would move the user. */
-  busy: boolean;
 }
 
 /**
@@ -58,7 +56,6 @@ export function ConversationRail({
   scope,
   onScopeChange,
   archivedCount,
-  busy,
 }: ConversationRailProps): ReactElement {
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
@@ -144,7 +141,10 @@ export function ConversationRail({
             setSelected(new Set());
             onSelect(null);
           }}
-          disabled={busy || activeConvId === null}
+          // Deliberately not gated on `busy`: a reply owed to another chat
+          // still lands in that chat, so waiting for it buys nothing and makes
+          // the project feel single-threaded when it is not.
+          disabled={activeConvId === null}
           title={activeConvId === null ? 'Already on a new chat' : 'Start a new chat'}
           className="ml-auto rounded-full border px-2.5 py-[3px] font-mono text-[10px] tracking-[0.1em] text-text-secondary transition-colors hover:text-text-primary disabled:cursor-default disabled:opacity-40"
           style={{ borderColor: 'var(--border-bright)' }}
