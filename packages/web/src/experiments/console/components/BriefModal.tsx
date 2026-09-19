@@ -4,6 +4,7 @@ import {
   EMPTY_BRIEF,
   filledParts,
   isBriefEmpty,
+  MAX_BRIEF_PART,
   parseBrief,
   serializeBrief,
   type Brief,
@@ -164,7 +165,7 @@ export function BriefModal({
                     setDraft(d => ({ ...d, [p.key]: e.target.value }));
                   }}
                   rows={3}
-                  maxLength={2000}
+                  maxLength={MAX_BRIEF_PART}
                   // Every part is optional on purpose: a throwaway chat fills in
                   // the first box and stops, and three mandatory boxes would
                   // make people write filler to get past them.

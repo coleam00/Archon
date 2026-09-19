@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   BRIEF_PARTS,
+  MAX_BRIEF,
   EMPTY_BRIEF,
   filledParts,
   isBriefEmpty,
@@ -79,6 +80,33 @@ describe('serializeBrief', () => {
     expect(serializeBrief({ doing: '  Rail ', where: '', left: '' })).toBe(
       '{"doing":"Rail","where":"","left":""}'
     );
+  });
+});
+
+describe('serializeBrief bounds', () => {
+  test('stays inside what the API accepts, even with three full parts', () => {
+    const b = { doing: 'a'.repeat(900), where: 'b'.repeat(900), left: 'c'.repeat(900) };
+    const json = serializeBrief(b) as string;
+    expect(json.length).toBeLessThanOrEqual(MAX_BRIEF);
+    expect(parseBrief(json)?.where).toContain('b');
+  });
+
+  test('escaping cannot push it over — quotes cost two characters each', () => {
+    const b = { doing: '"'.repeat(1500), where: '\n'.repeat(400), left: 'c'.repeat(400) };
+    expect((serializeBrief(b) as string).length).toBeLessThanOrEqual(MAX_BRIEF);
+  });
+
+  test('trims the longest part, leaving the short answers whole', () => {
+    const b = { doing: 'a'.repeat(2400), where: 'short', left: 'also short' };
+    const back = parseBrief(serializeBrief(b));
+    expect(back?.where).toBe('short');
+    expect(back?.left).toBe('also short');
+    expect((back?.doing.length ?? 0) < 2400).toBe(true);
+  });
+
+  test('a summary that already fits is stored untouched', () => {
+    const b = { doing: 'Rail', where: 'Half', left: 'Deploy' };
+    expect(parseBrief(serializeBrief(b))).toEqual(b);
   });
 });
 

@@ -7,6 +7,15 @@ const log = createLogger('orchestrator.update_chat_summary');
 /** Longest summary the column accepts; the API enforces the same bound. */
 const MAX_SUMMARY = 2000;
 
+/**
+ * Longest any one part may be. Three of these plus the JSON envelope sit
+ * comfortably inside MAX_SUMMARY, and a part longer than this is a paragraph
+ * rather than the one-line answer the field asks for.
+ *
+ * Mirrors the console's MAX_BRIEF_PART.
+ */
+const MAX_PART = 600;
+
 export interface ChatSummaryContext {
   /**
    * Database id of the conversation this turn belongs to.
@@ -21,23 +30,77 @@ export interface ChatSummaryContext {
 
 const INPUT_SCHEMA = defineNativeToolInputSchema({
   properties: {
-    summary: {
+    doing: {
       kind: 'string',
       description:
-        "The whole summary, rewritten — not an addition to what is there. Three short lines, plain language a twelve-year-old could follow, no ticket numbers or jargon. Cover what we are trying to do, where we are, and what is left. Omit a line that does not apply: a throwaway question needs one sentence, not an empty skeleton. Good: 'Built, but not switched on here. It needs the server restarted first.' Bad: '#3356 held pending server restart.'",
+        "What we are trying to do, in one or two sentences. Plain language a twelve-year-old could follow, no ticket numbers or jargon. Good: 'Making the chat list down the side, so you can see every chat at once.' Bad: 'Implementing #3390 ConversationRail.'",
+    },
+    where: {
+      kind: 'string',
+      description:
+        "Where the work actually stands right now. Good: 'Built, but not switched on here — it needs the server restarted first.' Leave it out if the work has not started.",
+    },
+    left: {
+      kind: 'string',
+      description:
+        'What is still outstanding, and anything the user has to do themselves. Leave it out if nothing is.',
     },
     clear: {
       kind: 'boolean',
       description:
-        'Set true to remove the summary entirely, for a chat that turned out to be a one-off. Omit `summary` when using this.',
+        'Set true to remove the summary entirely, for a chat that turned out to be a one-off. Omit the other fields when using this.',
+    },
+    summary: {
+      kind: 'string',
+      description:
+        'Deprecated — prefer the three fields above. Accepted as `doing` so a call written against the older single-field shape still works.',
     },
   },
-  // Nothing is required at the schema level: `clear` is documented as omitting
-  // `summary`, so requiring it would have a provider reject the documented call
-  // before the handler could run. The handler enforces the real rule — one of
-  // the two must be present.
+  // Nothing is required at the schema level: every part is documented as
+  // optional and `clear` takes none of them, so requiring one would have a
+  // provider reject a documented call before the handler could run. The handler
+  // enforces the real rule — `clear`, or at least one part.
   required: [],
 });
+
+/**
+ * The stored shape. Mirrored by the console's `primitives/brief.ts`, which may
+ * not import production modules (ESLint isolation rule), so the two must change
+ * together — the key names are the contract between them.
+ */
+interface StoredBrief {
+  doing: string;
+  where: string;
+  left: string;
+}
+
+function readPart(value: unknown): string {
+  return typeof value === 'string' ? value.trim().slice(0, MAX_PART) : '';
+}
+
+/**
+ * Serialize within the bound the API and column share.
+ *
+ * Capping each part by character count is not enough: JSON escaping expands
+ * text the cap counted as short — every quote and newline becomes two
+ * characters — so a model that answers entirely in quoted speech could still
+ * produce a payload the write rejects. Trim the longest part until it fits,
+ * which keeps the shorter answers whole.
+ */
+function serializeBrief(brief: StoredBrief): string {
+  const parts: StoredBrief = { ...brief };
+  let json = JSON.stringify(parts);
+  while (json.length > MAX_SUMMARY) {
+    const over = json.length - MAX_SUMMARY;
+    const key = (['doing', 'where', 'left'] as const).reduce((a, b) =>
+      parts[a].length >= parts[b].length ? a : b
+    );
+    if (parts[key].length === 0) break;
+    parts[key] = parts[key].slice(0, Math.max(0, parts[key].length - over));
+    json = JSON.stringify(parts);
+  }
+  return json;
+}
 
 /**
  * Lets the agent keep a chat's summary current.
@@ -59,14 +122,22 @@ export function buildChatSummaryTool(ctx: ChatSummaryContext): NativeTool {
   return {
     name: 'update_chat_summary',
     description:
-      "Rewrite this chat's short summary — what we're doing, where we are, what's left — so the user can see at a glance where they left off. Call it when the state of the work changes (a decision made, a piece finished, a direction abandoned), NOT on every turn. Plain language, no jargon. Leaves a summary the user edited themselves alone unless they ask.",
+      "Rewrite this chat's short summary as three separate answers — `doing` (what we're doing), `where` (where we are), `left` (what's left) — so the user can see at a glance where they left off. Each is optional: a throwaway question needs one line, not an empty skeleton. Call it when the state of the work changes (a decision made, a piece finished, a direction abandoned), NOT on every turn. Always rewrite the whole thing, never add to what is there. Plain language, no jargon. Leaves a summary the user edited themselves alone unless they ask.",
     inputSchema: INPUT_SCHEMA,
     handler: async (input): Promise<string> => {
       const clear = input.clear === true;
-      const raw = typeof input.summary === 'string' ? input.summary.trim() : '';
+      const brief: StoredBrief = {
+        // `summary` folds into the first part rather than being rejected: a
+        // call written against the older single-field shape should still land
+        // somewhere readable instead of silently doing nothing.
+        doing: readPart(input.doing) || readPart(input.summary),
+        where: readPart(input.where),
+        left: readPart(input.left),
+      };
+      const empty = brief.doing === '' && brief.where === '' && brief.left === '';
 
-      if (!clear && raw.length === 0) {
-        return 'update_chat_summary error: `summary` is required unless `clear` is true.';
+      if (!clear && empty) {
+        return 'update_chat_summary error: give at least one of `doing`, `where` or `left`, or set `clear` to true.';
       }
 
       const conv = await getConversationById(ctx.conversationDbId);
@@ -81,13 +152,15 @@ export function buildChatSummaryTool(ctx: ChatSummaryContext): NativeTool {
         return 'Not updated: the user edited this summary themselves, so it is left as they wrote it. Ask them if it should be rewritten.';
       }
 
-      const summary = clear ? null : raw.slice(0, MAX_SUMMARY);
-      await updateConversationBrief(conv.id, summary, false);
+      const stored = clear ? null : serializeBrief(brief);
+      await updateConversationBrief(conv.id, stored, false);
       log.info(
-        { conversationId: conv.id, cleared: clear, length: summary?.length ?? 0 },
+        { conversationId: conv.id, cleared: clear, length: stored?.length ?? 0 },
         'summary_written'
       );
-      return clear ? 'Summary cleared.' : `Summary updated: ${summary ?? ''}`;
+      return clear
+        ? 'Summary cleared.'
+        : `Summary updated. What we are doing: ${brief.doing || '(blank)'} Where we are: ${brief.where || '(blank)'} What's left: ${brief.left || '(blank)'}`;
     },
   };
 }

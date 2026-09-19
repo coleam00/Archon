@@ -18,6 +18,20 @@ export type Brief = Record<BriefPartKey, string>;
 export const EMPTY_BRIEF: Brief = { doing: '', where: '', left: '' };
 
 /**
+ * Longest serialized summary the API accepts (`brief: z.string().max(2000)`).
+ * Exceeding it is a rejected PATCH, which reaches the user as "could not save
+ * the summary" — so the bound is enforced here, before the request.
+ */
+export const MAX_BRIEF = 2000;
+
+/**
+ * Longest any one part may be typed. Three of these plus the JSON envelope sit
+ * comfortably inside MAX_BRIEF, and a part longer than this is a paragraph
+ * rather than the one-line answer the section asks for.
+ */
+export const MAX_BRIEF_PART = 600;
+
+/**
  * Read a stored summary.
  *
  * The column is plain TEXT and already holds free-text summaries written before
@@ -73,7 +87,23 @@ export function serializeBrief(brief: Brief): string | null {
     left: brief.left.trim(),
   };
   if (isBriefEmpty(trimmed)) return null;
-  return JSON.stringify(trimmed);
+
+  let json = JSON.stringify(trimmed);
+  // Bound the serialized string rather than trusting a character cap on the
+  // parts: JSON escaping expands text that a cap counted as short (every quote
+  // and newline becomes two characters), so text that passed the per-box limit
+  // can still serialize past the API's. Trim the longest part until it fits,
+  // which keeps the shorter answers whole.
+  while (json.length > MAX_BRIEF) {
+    const over = json.length - MAX_BRIEF;
+    const key = BRIEF_PARTS.map(p => p.key).reduce((a, b) =>
+      trimmed[a].length >= trimmed[b].length ? a : b
+    );
+    if (trimmed[key].length === 0) break;
+    trimmed[key] = trimmed[key].slice(0, Math.max(0, trimmed[key].length - over));
+    json = JSON.stringify(trimmed);
+  }
+  return json;
 }
 
 export function isBriefEmpty(brief: Brief): boolean {
