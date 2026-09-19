@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react';
-import { formatElapsed, formatRelativeToBaseline, formatClock } from '../lib/format';
+import { formatElapsed, formatRelativeToBaseline } from '../lib/format';
+import { useClock } from '../lib/clock';
 import { useStreamContext } from '../lib/stream-context';
 
 interface NodeDividerProps {
@@ -61,7 +62,7 @@ export function NodeDivider({
 }: NodeDividerProps): ReactElement {
   const { runStartedAt } = useStreamContext();
   const displayed = formatRelativeToBaseline(timestamp, runStartedAt);
-  const wallClock = formatClock(timestamp);
+  const wallClock = useClock()(timestamp);
   const dur =
     durationMs !== null && durationMs > 0
       ? ` · ${formatElapsed(Math.floor(durationMs / 1000))}`
