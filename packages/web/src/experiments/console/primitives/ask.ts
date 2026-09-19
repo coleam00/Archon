@@ -114,10 +114,17 @@ export function parseAskSpec(raw: string): AskSpec | null {
   return { questions: parsed };
 }
 
-/** Opening fence for an ask block, at the start of a line. */
-const ASK_FENCE = /^[ \t]*```ask[ \t]*$/;
-/** Any closing fence. */
-const CLOSE_FENCE = /^[ \t]*```[ \t]*$/;
+/**
+ * A fence line: its indent, its character (backtick or tilde), its length, and
+ * whatever info string follows.
+ *
+ * Markdown lets a fence be any run of three or more backticks or tildes, and a
+ * fence is closed only by the same character at the same length or longer.
+ * That is what lets this file — and the docs that describe the format —
+ * demonstrate an ask block inside a longer fence without the demonstration
+ * being mistaken for a real one.
+ */
+const FENCE = /^([ \t]*)(`{3,}|~{3,})[ \t]*(\S*)[ \t]*$/;
 
 /**
  * Split a reply into prose and ask cards.
@@ -140,22 +147,57 @@ export function splitReply(content: string): ReplyPart[] {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? '';
-    if (!ASK_FENCE.test(line)) {
+    const open = FENCE.exec(line);
+    // Only an `ask` fence at the top level opens a card. Anything else is an
+    // ordinary code block, and is copied through verbatim along with everything
+    // it encloses — including an ask fence used as an example.
+    if (open?.[3] !== 'ask') {
+      if (open !== null) {
+        const marker = open[2] ?? '';
+        const char = marker[0] ?? '`';
+        prose.push(line);
+        // Skip to this block's own closing fence: same character, at least as
+        // long. Unterminated, the rest of the reply is prose.
+        i++;
+        for (; i < lines.length; i++) {
+          const inner = lines[i] ?? '';
+          prose.push(inner);
+          const close = FENCE.exec(inner);
+          if (
+            close !== null &&
+            close[3] === '' &&
+            (close[2] ?? '').startsWith(char) &&
+            (close[2] ?? '').length >= marker.length
+          ) {
+            break;
+          }
+        }
+        continue;
+      }
       prose.push(line);
       continue;
     }
 
+    const marker = open[2] ?? '```';
+    const char = marker[0] ?? '`';
+
     // Collect to the closing fence. Without one, this was not a block.
     const body: string[] = [];
-    let close = -1;
+    let closeAt = -1;
     for (let j = i + 1; j < lines.length; j++) {
-      if (CLOSE_FENCE.test(lines[j] ?? '')) {
-        close = j;
+      const candidate = FENCE.exec(lines[j] ?? '');
+      if (
+        candidate !== null &&
+        candidate[3] === '' &&
+        (candidate[2] ?? '').startsWith(char) &&
+        (candidate[2] ?? '').length >= marker.length
+      ) {
+        closeAt = j;
         break;
       }
       body.push(lines[j] ?? '');
     }
-    if (close === -1) {
+    if (closeAt === -1) {
       prose.push(line);
       continue;
     }
@@ -163,12 +205,12 @@ export function splitReply(content: string): ReplyPart[] {
     const spec = parseAskSpec(body.join('\n'));
     if (spec === null) {
       // Keep it readable as code rather than dropping the question entirely.
-      prose.push(line, ...body, lines[close] ?? '```');
+      prose.push(line, ...body, lines[closeAt] ?? '```');
     } else {
       flushProse();
       parts.push({ kind: 'ask', spec });
     }
-    i = close;
+    i = closeAt;
   }
 
   flushProse();
@@ -213,4 +255,27 @@ export function toggleChoice(current: Answer, value: string, multi: boolean): st
   if (!multi) return [value];
   const chosen = current ?? [];
   return chosen.includes(value) ? chosen.filter(v => v !== value) : [...chosen, value];
+}
+
+/**
+ * Set the free-text answer, replacing any previous one.
+ *
+ * Deliberately not {@link toggleChoice}: editing free text is a correction, not
+ * an additional choice. Toggling would have left the old text alongside the new
+ * on a multi-answer question — and since the card shows the first non-option
+ * value, it would still have displayed the old one while submitting both.
+ *
+ * On a single-answer question the custom text is the whole answer. On a
+ * multi-answer one it sits alongside the chosen options, which keep their
+ * order.
+ */
+export function setCustomAnswer(
+  current: Answer,
+  value: string,
+  options: AskOption[],
+  multi: boolean
+): string[] {
+  if (!multi) return [value];
+  const kept = (current ?? []).filter(v => options.some(o => o.label === v));
+  return value.length > 0 ? [...kept, value] : kept;
 }

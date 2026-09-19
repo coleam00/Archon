@@ -5,6 +5,7 @@ import {
   composeAnswer,
   isComplete,
   toggleChoice,
+  setCustomAnswer,
   type AskQuestion,
 } from './ask';
 
@@ -108,6 +109,55 @@ describe('splitReply', () => {
     const content = '```json\n{"questions":[]}\n```';
     expect(splitReply(content)).toEqual([{ kind: 'markdown', text: content }]);
   });
+
+  // Documenting the format means showing an ask fence inside a longer one. If
+  // that example were read as a real card, every doc about ask blocks would be
+  // corrupted by the thing it describes.
+  test('an ask fence demonstrated inside a longer backtick fence stays code', () => {
+    const content = ['````markdown', '```ask', JSON.stringify(SPEC), '```', '````'].join('\n');
+    const parts = splitReply(content);
+    expect(parts).toEqual([{ kind: 'markdown', text: content }]);
+  });
+
+  test('an ask fence inside a tilde fence stays code', () => {
+    const content = ['~~~markdown', '```ask', JSON.stringify(SPEC), '```', '~~~'].join('\n');
+    expect(splitReply(content)).toEqual([{ kind: 'markdown', text: content }]);
+  });
+
+  test('a real card after a code block that contained an example is still read', () => {
+    const content = [
+      '````markdown',
+      '```ask',
+      '{"questions":[]}',
+      '```',
+      '````',
+      '',
+      fenced(SPEC),
+    ].join('\n');
+    const parts = splitReply(content);
+    expect(parts.map(p => p.kind)).toEqual(['markdown', 'ask']);
+  });
+
+  test('a longer ask fence is opened and closed at its own length', () => {
+    const content = ['````ask', JSON.stringify(SPEC), '````'].join('\n');
+    expect(splitReply(content).map(p => p.kind)).toEqual(['ask']);
+  });
+
+  test('a short fence does not close a longer ask fence', () => {
+    // Unterminated at its own length, so it degrades to prose rather than
+    // ending the card early at the three-backtick line.
+    const content = ['````ask', JSON.stringify(SPEC), '```'].join('\n');
+    const parts = splitReply(content);
+    expect(parts).toHaveLength(1);
+    expect(parts[0]?.kind).toBe('markdown');
+  });
+
+  test('an unterminated ordinary fence leaves the rest as prose, not a card', () => {
+    const content = ['```markdown', '```ask', '{"questions":[]}'].join('\n');
+    const parts = splitReply(content);
+    expect(parts).toHaveLength(1);
+    expect(parts[0]?.kind).toBe('markdown');
+  });
 });
 
 describe('composeAnswer', () => {
@@ -173,6 +223,29 @@ describe('toggleChoice', () => {
 
   test('keeps the order options were chosen in', () => {
     expect(toggleChoice(['c', 'a'], 'b', true)).toEqual(['c', 'a', 'b']);
+  });
+});
+
+describe('setCustomAnswer', () => {
+  const options = [{ label: 'a' }, { label: 'b' }];
+
+  test('a single-answer question is replaced outright', () => {
+    expect(setCustomAnswer(null, 'typed', options, false)).toEqual(['typed']);
+    expect(setCustomAnswer(['old'], 'new', options, false)).toEqual(['new']);
+  });
+
+  // The bug this exists to prevent: toggling left both, the card displayed the
+  // stale one, and composeAnswer submitted the pair.
+  test('editing free text replaces the old text, it does not add to it', () => {
+    expect(setCustomAnswer(['old'], 'new', options, true)).toEqual(['new']);
+  });
+
+  test('chosen options survive alongside the custom text, in order', () => {
+    expect(setCustomAnswer(['a', 'old', 'b'], 'new', options, true)).toEqual(['a', 'b', 'new']);
+  });
+
+  test('clearing the text leaves the chosen options behind', () => {
+    expect(setCustomAnswer(['a', 'old'], '', options, true)).toEqual(['a']);
   });
 });
 

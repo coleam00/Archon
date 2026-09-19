@@ -6,11 +6,12 @@ import {
   type CSSProperties,
   type ReactElement,
 } from 'react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   composeAnswer,
   isComplete,
+  setCustomAnswer,
   toggleChoice,
   type Answer,
   type AskQuestion,
@@ -48,14 +49,54 @@ function primaryStyle(disabled: boolean): CSSProperties {
 /** Keycap letters. Ten options is far past the point the list stops being readable. */
 const KEYS = 'ABCDEFGHIJ';
 
-/** Inline markdown only — option labels carry `code` spans, never block content. */
-const INLINE_MD = {
-  p: ({ children }: { children?: React.ReactNode }): ReactElement => <>{children}</>,
-  code: ({ children }: { children?: React.ReactNode }): ReactElement => (
+/**
+ * Option text renders as inline markdown, with everything interactive or
+ * block-level unwrapped to its text.
+ *
+ * An allowlist rather than a few overrides. Option labels sit inside a
+ * `<button>`, and react-markdown would otherwise use its defaults for every
+ * node it was not told about: a link becomes an `<a>` nested in the button,
+ * whose click both navigates and bubbles up to select the option, and a list or
+ * heading becomes block content inside a button, which is not valid HTML.
+ *
+ * Emphasis and code survive because they are inline and inert. Everything else
+ * keeps its text and loses its element.
+ */
+const UNWRAP = ({ children }: { children?: React.ReactNode }): ReactElement => <>{children}</>;
+
+const INLINE_MD: Components = {
+  code: ({ children }) => (
     <code className="rounded bg-surface-inset px-1 py-[1px] font-mono text-[0.86em] text-text-primary">
       {children}
     </code>
   ),
+  em: ({ children }) => <em>{children}</em>,
+  strong: ({ children }) => <strong>{children}</strong>,
+  del: ({ children }) => <del>{children}</del>,
+  // Interactive or block-level: keep the text, drop the element.
+  a: UNWRAP,
+  p: UNWRAP,
+  h1: UNWRAP,
+  h2: UNWRAP,
+  h3: UNWRAP,
+  h4: UNWRAP,
+  h5: UNWRAP,
+  h6: UNWRAP,
+  ul: UNWRAP,
+  ol: UNWRAP,
+  li: UNWRAP,
+  blockquote: UNWRAP,
+  pre: UNWRAP,
+  table: UNWRAP,
+  thead: UNWRAP,
+  tbody: UNWRAP,
+  tr: UNWRAP,
+  th: UNWRAP,
+  td: UNWRAP,
+  hr: () => <></>,
+  img: () => <></>,
+  input: () => <></>,
+  br: () => <> </>,
 };
 
 function Inline({ text }: { text: string }): ReactElement {
@@ -115,11 +156,15 @@ export function AskCard({ spec, onAnswer }: AskCardProps): ReactElement {
   );
 
   const choose = useCallback(
-    (value: string): void => {
-      const multi = questions[index]?.multi === true;
+    (value: string, custom = false): void => {
+      const question = questions[index];
+      const multi = question?.multi === true;
       setAnswers(prev => {
         const next = [...prev];
-        next[index] = toggleChoice(prev[index] ?? null, value, multi);
+        // Free text is a correction, not an extra choice — see setCustomAnswer.
+        next[index] = custom
+          ? setCustomAnswer(prev[index] ?? null, value, question?.options ?? [], multi)
+          : toggleChoice(prev[index] ?? null, value, multi);
         return next;
       });
       closeOwn();
@@ -146,7 +191,7 @@ export function AskCard({ spec, onAnswer }: AskCardProps): ReactElement {
     if (e.target instanceof HTMLTextAreaElement) {
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
         e.preventDefault();
-        if (ownDraft.trim().length > 0) choose(ownDraft.trim());
+        if (ownDraft.trim().length > 0) choose(ownDraft.trim(), true);
       }
       return;
     }
@@ -346,7 +391,7 @@ function QuestionBlock({
   onOwnDraft: (v: string) => void;
   onOpenOwn: () => void;
   onCancelOwn: () => void;
-  onChoose: (value: string) => void;
+  onChoose: (value: string, custom?: boolean) => void;
 }): ReactElement {
   const ownSlot = KEYS[question.options.length] ?? '?';
   const custom = chosen.find(c => !question.options.some(o => o.label === c));
@@ -412,7 +457,7 @@ function QuestionBlock({
                   type="button"
                   disabled={ownDraft.trim().length === 0}
                   onClick={() => {
-                    onChoose(ownDraft.trim());
+                    onChoose(ownDraft.trim(), true);
                   }}
                   className={PRIMARY_BUTTON}
                   style={primaryStyle(ownDraft.trim().length === 0)}
