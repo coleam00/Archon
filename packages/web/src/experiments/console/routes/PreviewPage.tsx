@@ -6,6 +6,8 @@ import { BuilderPage } from '../builder/BuilderPage';
 import { FIXTURES } from '../builder/fixtures';
 import { importWorkflowDefinition } from '../builder/model';
 import type { Run } from '../primitives/run';
+import { AskCard } from '../components/AskCard';
+import { parseAskSpec } from '../primitives/ask';
 
 /**
  * Visual preview of the console's warm palette in context.
@@ -183,6 +185,72 @@ function BuilderPreview(): ReactElement {
   );
 }
 
+/**
+ * Two questions so the pager, the recommendation and the free-text option are
+ * all visible at once. Built through `parseAskSpec` rather than as a literal,
+ * so the preview exercises the same path a real reply takes.
+ */
+const ASK_SAMPLE = parseAskSpec(
+  JSON.stringify({
+    questions: [
+      {
+        title: 'What is `framework` now?',
+        chip: 'rajababa-io/framework',
+        evidence:
+          '**Last updated Jul 20** — two months cold, while `claude-skills` and `eng-skills` were both touched today. Exactly one file in `vault` mentions it.',
+        options: [
+          {
+            label: 'Dead — archive it.',
+            detail:
+              'It was the ambition; skills became the real delivery mechanism. Archiving costs nothing and stops it competing for attention.',
+            recommended: true,
+            why: 'Two months cold while its two successors got touched today is the whole argument. Archiving is reversible.',
+          },
+          {
+            label: 'Parked, not dead.',
+            detail: "There's content in it you intend to come back to.",
+          },
+          {
+            label: 'Still the canonical home for standards.',
+            detail: '`claude-skills` and `eng-skills` are the executable layer.',
+          },
+        ],
+      },
+      {
+        title: 'Is `atlas` still the graph store?',
+        chip: 'rajababa-io/atlas',
+        options: [
+          { label: 'Still the graph store.', detail: 'FalkorDB runs out of it on adina.' },
+          {
+            label: 'Absorbed by vault.',
+            detail: 'The schema files moved in August.',
+            recommended: true,
+            why: 'Nothing has written to atlas since.',
+          },
+        ],
+      },
+    ],
+  })
+);
+
+/** A multi-answer question, so the preview shows the toggle behaviour. */
+const ASK_MULTI_SAMPLE = parseAskSpec(
+  JSON.stringify({
+    questions: [
+      {
+        title: 'Which of these should the sweep touch?',
+        chip: 'rajababa-io',
+        multi: true,
+        options: [
+          { label: 'framework', detail: 'Two months cold.' },
+          { label: 'atlas', detail: 'Still serving FalkorDB.' },
+          { label: 'wix-access', detail: 'Nothing has referenced it since July.' },
+        ],
+      },
+    ],
+  })
+);
+
 export function PreviewPage(): ReactElement {
   return (
     <div className="flex h-full flex-col overflow-y-auto">
@@ -325,6 +393,14 @@ export function PreviewPage(): ReactElement {
               note="completed strip (muted), check icons, Approve"
             />
           </div>
+        </Section>
+
+        <Section title="Ask card">
+          <AskCard spec={ASK_SAMPLE ?? { questions: [] }} onAnswer={() => undefined} />
+        </Section>
+
+        <Section title="Ask card — multi-answer">
+          <AskCard spec={ASK_MULTI_SAMPLE ?? { questions: [] }} onAnswer={() => undefined} />
         </Section>
 
         <Section title="Borders">
