@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import rehypeHighlight from 'rehype-highlight';
 import { AgentAvatar } from './AgentAvatar';
+import { CodeBlock } from './CodeBlock';
 import { useClock } from '../lib/clock';
 import type { Message } from '../primitives/message';
 
@@ -57,11 +58,7 @@ const MD_COMPONENTS: Components = {
     <ol className="my-1 ml-5 list-decimal space-y-0.5 marker:text-text-tertiary">{children}</ol>
   ),
   li: ({ children }) => <li className="leading-relaxed">{children}</li>,
-  pre: ({ children }) => (
-    <pre className="my-2 overflow-x-auto rounded border border-border bg-surface-inset p-2 text-[12px] leading-relaxed">
-      {children}
-    </pre>
-  ),
+  pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
   blockquote: ({ children }) => (
     <blockquote className="my-1 border-l-2 border-border pl-2 text-text-secondary">
       {children}
