@@ -52,6 +52,9 @@ export function ChatComposer({
 }: ChatComposerProps): ReactElement {
   const value = draft.text;
   const files = draft.files;
+  // Each of these rebuilds the whole draft from the current props, so they must
+  // not be chained — two in a row and the second undoes the first. Anything
+  // changing both fields calls onDraftChange once.
   const setValue = (text: string): void => {
     onDraftChange({ text, files });
   };
@@ -106,8 +109,10 @@ export function ChatComposer({
     const trimmed = value.trim();
     if (trimmed.length === 0 || disabled) return;
     onSend(trimmed, files.length > 0 ? [...files] : undefined);
-    setValue('');
-    setFiles([]);
+    // One call, not setValue('') then setFiles([]). Each of those rebuilds the
+    // whole draft from the props it closed over, so the second would restore
+    // the text the first had just cleared.
+    onDraftChange({ text: '', files: [] });
     setFileError(null);
     if (fileInputRef.current !== null) fileInputRef.current.value = '';
     if (textareaRef.current !== null) {
