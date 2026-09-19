@@ -13,6 +13,12 @@ import { K } from '../store/keys';
 import * as skill from '../skills';
 import type { Project } from '../primitives/project';
 import type { Message } from '../primitives/message';
+import {
+  reduceLive,
+  pendingSegments,
+  type LiveSegment,
+  type LiveEvent,
+} from '../primitives/live-text';
 import type { ConversationSummary } from '../primitives/conversation';
 
 // While a turn is active, refetch messages on this cadence so streamed replies
@@ -94,7 +100,22 @@ export function ChatPage(): ReactElement {
     }
     setBusy(false);
   }, []);
-  useConversationSSE(activeConvId, onLockChange);
+
+  // Streamed text that has not been written to the database yet. The server
+  // holds assistant text in memory and persists it late, so without this the
+  // reply is invisible until a flush — the reload-to-see-it bug. See
+  // `primitives/live-text.ts` for why persisting sooner is not the fix.
+  const [liveSegments, setLiveSegments] = useState<LiveSegment[]>([]);
+  const onLive = useCallback((event: LiveEvent): void => {
+    setLiveSegments(prev => reduceLive(prev, event));
+  }, []);
+
+  useConversationSSE(activeConvId, onLockChange, onLive);
+
+  // Switching chats must not carry one conversation's preview into another.
+  useEffect(() => {
+    setLiveSegments([]);
+  }, [activeConvId]);
 
   // Derive turn state from the trailing message: a user message means a reply
   // is pending; once an assistant reply lands and stays stable for SETTLE_MS the
@@ -155,6 +176,7 @@ export function ChatPage(): ReactElement {
     if (projectId === undefined) return;
     setError(null);
     setNotice(null);
+    setLiveSegments([]); // a new turn — the previous reply is history now
     setBusy(true); // optimistic: disable the composer immediately
     void (async (): Promise<void> => {
       try {
@@ -227,6 +249,32 @@ export function ChatPage(): ReactElement {
   // leave stale/empty data with no signal. Send errors take precedence.
   const loadError = messagesError ?? conversationsError;
 
+  // What actually renders: the persisted rows, followed by the streamed text
+  // the database has not caught up with. Each preview disappears the moment its
+  // real row lands, because `pendingSegments` slices by how many rows this turn
+  // already has — no content comparison, and nothing to de-duplicate.
+  const renderedMessages = useMemo<Message[]>(() => {
+    const pending = pendingSegments(liveSegments, messageList);
+    if (pending.length === 0) return messageList;
+    const now = new Date().toISOString();
+    return [
+      ...messageList,
+      ...pending.map(
+        (seg, i): Message => ({
+          id: `live-${String(i)}`,
+          role: 'assistant',
+          content: seg.content,
+          timestamp: now,
+          toolCalls: [],
+          error: null,
+          category: seg.category,
+          dispatch: null,
+          workflowResult: null,
+        })
+      ),
+    ];
+  }, [messageList, liveSegments]);
+
   // Current activity for the working indicator: the latest tool the agent
   // invoked in the in-flight turn (walk back to the last user message).
   const currentActivity = useMemo<string | null>(() => {
@@ -263,14 +311,14 @@ export function ChatPage(): ReactElement {
         >
           {/* Match the composer's centered 940px column (design: .stream-inner) */}
           <div className="mx-auto max-w-[940px]">
-            {messageList.length === 0 && !busy ? (
+            {renderedMessages.length === 0 && !busy ? (
               <EmptyState
                 title="No messages yet."
                 hint="Ask the agent about this project, or tell it what to run."
               />
             ) : (
               <StreamContextProvider value={{ runStartedAt: null }}>
-                <ChatStream messages={messageList} showTools={showTools} />
+                <ChatStream messages={renderedMessages} showTools={showTools} />
                 {busy ? (
                   <WorkingIndicator
                     activity={currentActivity}

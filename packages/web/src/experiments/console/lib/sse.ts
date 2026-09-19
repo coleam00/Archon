@@ -16,11 +16,14 @@ import { useEffect } from 'react';
 import { invalidate } from '../store/cache';
 import { K } from './../store/keys';
 import { SSE_BASE_URL } from './http';
+import type { LiveEvent } from '../primitives/live-text';
 
 interface ParsedEvent {
   type?: string;
   runId?: string;
   locked?: boolean;
+  content?: string;
+  category?: string;
 }
 
 function parse(raw: string): ParsedEvent | null {
@@ -168,10 +171,18 @@ export function useRunStreamSSE(conversationPlatformId: string | null, runId: st
  *
  *   text / tool_call / tool_result → messages changed (debounced refetch)
  *   conversation_lock              → onLockChange(locked)
+ *   text / tool_call / retract     → onLive(event), for the streamed preview
+ *
+ * `onLive` exists because the refetch alone cannot show a reply as it arrives:
+ * the server buffers assistant text in memory and writes the rows late (see
+ * `primitives/live-text.ts`), so the invalidation it triggers reads a database
+ * that does not have the text yet. The event already carries the text, so the
+ * payload is handed to the caller as well as being used as a refetch trigger.
  */
 export function useConversationSSE(
   conversationPlatformId: string | null,
-  onLockChange?: (locked: boolean) => void
+  onLockChange?: (locked: boolean) => void,
+  onLive?: (event: LiveEvent) => void
 ): void {
   useEffect(() => {
     if (conversationPlatformId === null) return;
@@ -200,10 +211,27 @@ export function useConversationSSE(
 
       switch (ev.type) {
         case 'text':
+          // Render from the payload, then still refetch: the row that replaces
+          // this preview is authoritative once it exists.
+          if (typeof ev.content === 'string') {
+            onLive?.({ kind: 'text', content: ev.content, category: ev.category ?? null });
+          }
+          messagesDirty = true;
+          scheduleFlush();
+          break;
         case 'tool_call':
+          onLive?.({ kind: 'tool' });
+          messagesDirty = true;
+          scheduleFlush();
+          break;
         case 'tool_result':
           messagesDirty = true;
           scheduleFlush();
+          break;
+        case 'retract':
+          // The orchestrator withdrew its streamed prose (it turned out to be a
+          // workflow dispatch). Drop the preview or it outlives the text.
+          onLive?.({ kind: 'retract' });
           break;
         case 'conversation_lock':
           if (typeof ev.locked === 'boolean') onLockChange?.(ev.locked);
@@ -224,5 +252,5 @@ export function useConversationSSE(
       if (flushTimer !== null) clearTimeout(flushTimer);
       es.close();
     };
-  }, [conversationPlatformId, onLockChange]);
+  }, [conversationPlatformId, onLockChange, onLive]);
 }
