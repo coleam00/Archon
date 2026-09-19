@@ -33,6 +33,12 @@ interface ConversationRailProps {
   scope: ArchiveScope;
   onScopeChange: (scope: ArchiveScope) => void;
   archivedCount: number;
+  /**
+   * True while a new chat is pending. It has no row in the database until the
+   * first message is sent, so the rail draws a placeholder — without one,
+   * pressing New chat looked like it had done nothing.
+   */
+  pendingNew: boolean;
 }
 
 /**
@@ -56,6 +62,7 @@ export function ConversationRail({
   scope,
   onScopeChange,
   archivedCount,
+  pendingNew,
 }: ConversationRailProps): ReactElement {
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
@@ -190,7 +197,34 @@ export function ConversationRail({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-        {visible.length === 0 ? (
+        {pendingNew ? (
+          <div
+            className="mb-0.5 flex items-center gap-2.5 rounded-[10px] border px-2.5 py-2"
+            style={{
+              borderColor: 'color-mix(in oklch, var(--brand-magenta), transparent 55%)',
+              background: 'var(--surface-elevated)',
+            }}
+          >
+            <span aria-hidden className="w-3.5 shrink-0" />
+            <span
+              aria-hidden
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-dashed font-mono text-[12px] font-bold text-text-tertiary"
+              style={{ borderColor: 'var(--border-bright)' }}
+            >
+              +
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[13px] font-semibold text-text-primary">
+                New chat
+              </span>
+              <span className="mt-[2px] block text-[11px] text-text-tertiary">
+                Send a message to start it
+              </span>
+            </span>
+          </div>
+        ) : null}
+
+        {visible.length === 0 && !pendingNew ? (
           <p className="px-2 py-3 text-[12px] text-text-tertiary">
             {conversations.length === 0 ? 'No chats yet.' : 'No chats match that filter.'}
           </p>
