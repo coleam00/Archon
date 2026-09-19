@@ -11,6 +11,7 @@ import {
   type ConversationSummary,
 } from '../primitives/conversation';
 import { relativeTime } from '../lib/format';
+import { applyChatOrder, readChatOrder, reorder, writeChatOrder } from '../lib/chat-order';
 
 /** Which archived state the rail is showing. */
 export type ArchiveScope = 'active' | 'archived' | 'all';
@@ -33,6 +34,8 @@ interface ConversationRailProps {
   scope: ArchiveScope;
   onScopeChange: (scope: ArchiveScope) => void;
   archivedCount: number;
+  /** Which project's manual order to read and write. */
+  projectId: string;
   /**
    * True while a new chat is pending. It has no row in the database until the
    * first message is sent, so the rail draws a placeholder — without one,
@@ -63,6 +66,7 @@ export function ConversationRail({
   onScopeChange,
   archivedCount,
   pendingNew,
+  projectId,
 }: ConversationRailProps): ReactElement {
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
@@ -75,10 +79,23 @@ export function ConversationRail({
     if (renamingId !== null) renameRef.current?.focus();
   }, [renamingId]);
 
-  const visible = useMemo(
-    () => [...conversations].filter(c => matchesFilter(c, query)).sort(byMostRecent),
-    [conversations, query]
-  );
+  // Bumped after a drop so the list re-reads the stored order.
+  const [orderTick, setOrderTick] = useState(0);
+  const [dragId, setDragId] = useState<string | null>(null);
+
+  const visible = useMemo(() => {
+    const byRecency = [...conversations].filter(c => matchesFilter(c, query)).sort(byMostRecent);
+    return applyChatOrder(byRecency, readChatOrder(projectId));
+    // orderTick is the dependency that matters after a drop; the read itself is
+    // from localStorage, which useMemo cannot observe.
+  }, [conversations, query, projectId, orderTick]);
+
+  const onDropOn = (targetId: string): void => {
+    if (dragId === null || dragId === targetId) return;
+    writeChatOrder(projectId, reorder(visible, dragId, targetId));
+    setDragId(null);
+    setOrderTick(t => t + 1);
+  };
 
   const commitRename = (id: string): void => {
     const next = draft.trim();
@@ -237,9 +254,9 @@ export function ConversationRail({
           return (
             <div
               key={c.id}
-              className={`group relative mb-0.5 flex items-start gap-2.5 rounded-[10px] border px-2.5 py-2 transition-colors ${
-                c.archived ? 'opacity-55 hover:opacity-100 ' : ''
-              }${
+              className={`group relative mb-0.5 flex cursor-grab items-start gap-2.5 rounded-[10px] border px-2.5 py-2 transition-colors active:cursor-grabbing ${
+                dragId === c.id ? 'opacity-40 ' : ''
+              }${c.archived ? 'opacity-55 hover:opacity-100 ' : ''}${
                 isSelected
                   ? 'bg-[color:color-mix(in_oklch,var(--brand-magenta),transparent_92%)]'
                   : isActive
@@ -252,6 +269,25 @@ export function ConversationRail({
                   : isSelected
                     ? 'color-mix(in oklch, var(--brand-magenta), transparent 60%)'
                     : 'transparent',
+              }}
+              draggable={renamingId === null}
+              onDragStart={e => {
+                setDragId(c.id);
+                e.dataTransfer.effectAllowed = 'move';
+                // Firefox refuses to start a drag without payload.
+                e.dataTransfer.setData('text/plain', c.id);
+              }}
+              onDragEnd={() => {
+                setDragId(null);
+              }}
+              onDragOver={e => {
+                if (dragId === null || dragId === c.id) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+              }}
+              onDrop={e => {
+                e.preventDefault();
+                onDropOn(c.id);
               }}
               onContextMenu={e => {
                 e.preventDefault();

@@ -387,6 +387,7 @@ export function ChatPage(): ReactElement {
         onScopeChange={setScope}
         archivedCount={archivedList?.length ?? 0}
         pendingNew={startingNew && activeConvId === null}
+        projectId={projectId}
       />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex flex-col gap-3 border-b border-border px-6 py-4">

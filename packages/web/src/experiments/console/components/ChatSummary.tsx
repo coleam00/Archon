@@ -29,9 +29,25 @@ export function ChatSummary({ conversation, onSave }: ChatSummaryProps): ReactEl
   }, [editing]);
 
   const { brief, briefUpdatedAt, briefPinned } = conversation;
-  // Nothing to show and nothing to edit: an empty card on a fresh chat is
-  // furniture, not information.
-  if (brief === null && !editing) return null;
+
+  // With no summary there was nothing at all in the header — no text and no way
+  // to write one, so the feature looked missing rather than empty. A quiet
+  // affordance is the smallest thing that is still discoverable.
+  if (brief === null && !editing) {
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          setDraft('');
+          setEditing(true);
+        }}
+        className="ml-auto shrink-0 rounded-[8px] border border-dashed px-2.5 py-1 font-mono text-[10.5px] text-text-tertiary transition-colors hover:text-text-secondary"
+        style={{ borderColor: 'var(--border)' }}
+      >
+        + summary
+      </button>
+    );
+  }
 
   const token = colorToken(conversation.color) ?? 'var(--brand-magenta)';
   const stale = isBriefStale(conversation);
