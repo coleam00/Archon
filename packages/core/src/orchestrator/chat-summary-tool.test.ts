@@ -79,6 +79,26 @@ describe('update_chat_summary', () => {
     expect(mockUpdate).not.toHaveBeenCalled();
   });
 
+  test('the user asking for a rewrite overrides the pin', async () => {
+    mockFind.mockResolvedValue({ id: 'conv-1', brief_pinned: true, brief: 'Mine.' });
+    const out = await call({ doing: 'The rewrite they asked for.', rewrite_pinned: true });
+    expect(out).toContain('Summary updated');
+    expect(JSON.parse(written() as string).doing).toBe('The rewrite they asked for.');
+  });
+
+  test('a rewrite does not claim the user wrote the new words', async () => {
+    mockFind.mockResolvedValue({ id: 'conv-1', brief_pinned: true, brief: 'Mine.' });
+    await call({ doing: 'Not theirs.', rewrite_pinned: true });
+    expect(mockUpdate.mock.calls.at(-1)?.[2]).toBe(false);
+  });
+
+  test('the refusal names the way past it, so the pin is not a dead end', async () => {
+    mockFind.mockResolvedValue({ id: 'conv-1', brief_pinned: true, brief: 'Mine.' });
+    // Without this the only route was clear-then-write, which destroys the
+    // summary in between — an interrupted rewrite would leave nothing.
+    expect(await call({ doing: 'x' })).toContain('rewrite_pinned');
+  });
+
   test('clearing works even on a pinned summary, since it is explicit', async () => {
     mockFind.mockResolvedValue({ id: 'conv-1', brief_pinned: true, brief: 'Mine.' });
     const out = await call({ clear: true });

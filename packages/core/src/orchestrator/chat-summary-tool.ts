@@ -50,6 +50,11 @@ const INPUT_SCHEMA = defineNativeToolInputSchema({
       description:
         'Set true to remove the summary entirely, for a chat that turned out to be a one-off. Omit the other fields when using this.',
     },
+    rewrite_pinned: {
+      kind: 'boolean',
+      description:
+        'Set true ONLY when the user has just asked for the summary to be updated or rewritten. A summary the user wrote themselves is otherwise left alone, and this is how their ask overrides that. Never set it on your own initiative.',
+    },
     summary: {
       kind: 'string',
       description:
@@ -122,7 +127,7 @@ export function buildChatSummaryTool(ctx: ChatSummaryContext): NativeTool {
   return {
     name: 'update_chat_summary',
     description:
-      "Rewrite this chat's short summary as three separate answers — `doing` (what we're doing), `where` (where we are), `left` (what's left) — so the user can see at a glance where they left off. Each is optional: a throwaway question needs one line, not an empty skeleton. Call it when the state of the work changes (a decision made, a piece finished, a direction abandoned), NOT on every turn. Always rewrite the whole thing, never add to what is there. Plain language, no jargon. Leaves a summary the user edited themselves alone unless they ask.",
+      "Rewrite this chat's short summary as three separate answers — `doing` (what we're doing), `where` (where we are), `left` (what's left) — so the user can see at a glance where they left off. Each is optional: a throwaway question needs one line, not an empty skeleton. Call it when the state of the work changes (a decision made, a piece finished, a direction abandoned), NOT on every turn. Always rewrite the whole thing, never add to what is there. Plain language, no jargon. Leaves a summary the user edited themselves alone unless they ask — then call again with `rewrite_pinned`.",
     inputSchema: INPUT_SCHEMA,
     handler: async (input): Promise<string> => {
       const clear = input.clear === true;
@@ -146,13 +151,17 @@ export function buildChatSummaryTool(ctx: ChatSummaryContext): NativeTool {
         return 'update_chat_summary error: this conversation no longer exists.';
       }
 
-      // The user's own words win. They can still ask for a rewrite, which comes
-      // through as a request rather than as the agent overwriting them unasked.
-      if (conv.brief_pinned && !clear) {
-        return 'Not updated: the user edited this summary themselves, so it is left as they wrote it. Ask them if it should be rewritten.';
+      // The user's own words win unless they asked for them to be replaced.
+      // Without the override the only way past the pin was to clear first and
+      // write second, which destroys the summary in between — so an interrupted
+      // rewrite left the chat with nothing.
+      if (conv.brief_pinned && !clear && input.rewrite_pinned !== true) {
+        return 'Not updated: the user edited this summary themselves, so it is left as they wrote it. If they asked for it to be rewritten, call again with `rewrite_pinned` set to true.';
       }
 
       const stored = clear ? null : serializeBrief(brief);
+      // Written by the agent, so the pin comes off even when a rewrite was
+      // asked for: leaving it set would claim the user wrote these words.
       await updateConversationBrief(conv.id, stored, false);
       log.info(
         { conversationId: conv.id, cleared: clear, length: stored?.length ?? 0 },
