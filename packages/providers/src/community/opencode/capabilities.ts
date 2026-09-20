@@ -32,6 +32,7 @@ export const OPENCODE_CAPABILITIES: ProviderCapabilities = {
   structuredOutput: 'enforced', // sends format:{json_schema}; reads info.structured_output
   envInjection: true,
   costControl: false,
+  costReporting: true, // tokens.ts maps SDK info.cost when the SDK reports one
   effortControl: false,
   fallbackModel: false,
   sandbox: false,

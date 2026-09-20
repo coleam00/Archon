@@ -61,13 +61,18 @@ export const YOUR_CAPABILITIES: ProviderCapabilities = {
   mcp: false,
   hooks: false,
   skills: false,
+  agents: false,
   toolRestrictions: false,
   structuredOutput: false,
   envInjection: false,
   costControl: false,
+  costReporting: false,
   effortControl: false,
   fallbackModel: false,
   sandbox: false,
+  settingSources: false,
+  nativeTools: false,
+  containerExec: false,
 };
 ```
 

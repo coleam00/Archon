@@ -719,7 +719,22 @@ export interface ProviderCapabilities {
    */
   structuredOutput: 'enforced' | 'best-effort' | false;
   envInjection: boolean;
+  /**
+   * Whether the provider enforces the per-run spend limit (`maxBudgetUsd`) — it
+   * can stop a run once the limit is exceeded. Says nothing about whether a turn
+   * reports what it cost; see {@link costReporting}.
+   */
   costControl: boolean;
+  /**
+   * Whether the provider emits a monetary `cost` on a turn's usage, which the
+   * engine surfaces as `costUsd` on node results and rolls up into run totals.
+   * True means the translation from the SDK's cost field exists; a turn may still
+   * omit the figure when the SDK reports none.
+   *
+   * Independent of {@link costControl}: an uncappable provider still prices every
+   * turn, and a cappable one is not made cheaper by reporting.
+   */
+  costReporting: boolean;
   effortControl: boolean;
   fallbackModel: boolean;
   sandbox: boolean;

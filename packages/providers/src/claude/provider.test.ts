@@ -136,6 +136,7 @@ describe('ClaudeProvider', () => {
         structuredOutput: 'enforced',
         envInjection: true,
         costControl: true,
+        costReporting: true,
         effortControl: true,
         fallbackModel: true,
         sandbox: true,
