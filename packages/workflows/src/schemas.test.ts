@@ -1359,15 +1359,6 @@ describe('LOOP_NODE_AI_FIELDS', () => {
     expect(LOOP_NODE_AI_FIELDS).not.toContain('provider');
   });
 
-  test('excludes the tool restrictions (a loop: node scopes its own sendQuery)', () => {
-    // #3324: listing these made the loader warn-and-drop a security restriction the
-    // author declared, with nothing to fall back on — there is no workflow-level
-    // allowed_tools/denied_tools. A loop node calls sendQuery itself, so the
-    // restriction reaches the provider exactly like `pi` and `output_format` do.
-    expect(LOOP_NODE_AI_FIELDS).not.toContain('allowed_tools');
-    expect(LOOP_NODE_AI_FIELDS).not.toContain('denied_tools');
-  });
-
   test('contains all other AI-specific fields from BASH_NODE_AI_FIELDS', () => {
     // `output_format` is deliberately absent since #2563 — a loop: node makes its
     // own sendQuery, so the schema is honoured rather than warned-and-dropped.
@@ -1446,10 +1437,12 @@ describe('dagNodeSchema — LoopNode AI-field survival', () => {
     expect(parseLoopWith('allowed_tools', []).allowed_tools).toEqual([]);
   });
 
-  test('omits the tool fields when they are not declared', () => {
+  test('omits undeclared tool, model, and provider fields', () => {
     const node = parseLoopWith('description', 'no tool fields here');
     expect('allowed_tools' in node).toBe(false);
     expect('denied_tools' in node).toBe(false);
+    expect('model' in node).toBe(false);
+    expect('provider' in node).toBe(false);
   });
 
   test('a field survives the transform exactly when LOOP_NODE_AI_FIELDS omits it', () => {
@@ -1465,6 +1458,7 @@ describe('dagNodeSchema — LoopNode AI-field survival', () => {
       expect(field in node, `'${field}' survival must match LOOP_NODE_AI_FIELDS`).toBe(
         shouldSurvive
       );
+      if (shouldSurvive) expect(node[field]).toEqual(value);
     }
   });
 });
@@ -2165,16 +2159,6 @@ describe('INCLUDE_NODE_IGNORED_FIELDS', () => {
       expect(INCLUDE_NODE_IGNORED_FIELDS).not.toContain(f);
     }
   });
-
-  test('ignores denied_tools and allowed_tools: policy restrictions are not path isolation', () => {
-    // An include has no execution site of its own. Provider enforcement of a tool
-    // policy differs per node kind, and a caller-side list cannot honestly narrow or
-    // deny what the included block's own nodes will run. #2848 owns building real
-    // provider-capability enforcement or path isolation across an include boundary;
-    // until then, warning is the honest outcome instead of a claimed sandbox.
-    expect(INCLUDE_NODE_IGNORED_FIELDS).toContain('denied_tools');
-    expect(INCLUDE_NODE_IGNORED_FIELDS).toContain('allowed_tools');
-  });
 });
 
 describe('dagNodeSchema — mutates_checkout tree-integrity declaration (#2771)', () => {
@@ -2506,62 +2490,6 @@ describe('runAttention', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// dagNodeSchema — LoopNode model/provider forwarding
-//
-// Regression coverage: the transform's loop branch previously returned only
-// { ...base, loop } and dropped node-level `model`/`provider`, so a loop node's
-// per-node model override was silently stripped at parse time and the executor
-// always fell back to the workflow-level model. LOOP_NODE_AI_FIELDS excludes
-// these two fields precisely because the loop executor DOES forward them, so the
-// transform must preserve them.
-// ---------------------------------------------------------------------------
-
-describe('dagNodeSchema — LoopNode model/provider', () => {
-  const loopNode = {
-    id: 'build',
-    model: 'sonnet',
-    provider: 'claude',
-    loop: { command: 'ralph-build', until: 'PLAN_COMPLETE', max_iterations: 100 },
-  };
-
-  /** Parse and narrow to a LoopNode, failing the test if either step doesn't hold. */
-  const parseLoop = (input: unknown) => {
-    const result = dagNodeSchema.safeParse(input);
-    expect(result.success).toBe(true);
-    if (!result.success) throw new Error('expected a valid loop node');
-    const node = result.data as DagNode;
-    expect(isLoopNode(node)).toBe(true);
-    if (!isLoopNode(node)) throw new Error('expected a loop node');
-    return node;
-  };
-
-  test('preserves node-level model on a loop node', () => {
-    expect(parseLoop(loopNode).model).toBe('sonnet');
-  });
-
-  test('preserves node-level provider on a loop node', () => {
-    expect(parseLoop(loopNode).provider).toBe('claude');
-  });
-
-  test('parsed loop node is still recognized by isLoopNode', () => {
-    // parseLoop asserts the guard; this case pins it as its own regression.
-    expect(isLoopNode(parseLoop(loopNode))).toBe(true);
-  });
-
-  test('omits model/provider when not set (no undefined keys leak in)', () => {
-    const node = parseLoop({
-      id: 'build',
-      loop: { command: 'ralph-build', until: 'PLAN_COMPLETE', max_iterations: 100 },
-    });
-    expect('model' in node).toBe(false);
-    expect('provider' in node).toBe(false);
-  });
-});
-
-// No existing 'dagNodeSchema — loop' describe block exists (only '— loop_group' above), so
-// both node kinds' timeout validation live together here, next to the loop_group block whose
-// superRefine guard they share (`if (hasLoop || hasLoopGroup)`, dag-node.ts).
 describe('dagNodeSchema — loop and loop_group select timeout', () => {
   // The mode transform drops every key the mode does not select, so a value that
   // never reaches the parsed node can never reach the until_bash subprocess.

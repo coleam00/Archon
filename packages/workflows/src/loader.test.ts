@@ -2549,6 +2549,7 @@ nodes:
 
       // The included block's own node is unrestricted: the caller's denial never applied.
       const expandedNode = (parent?.workflow.nodes as DagNode[]).find(n => n.id === 'use__build');
+      expect(expandedNode).toBeDefined();
       expect(expandedNode?.denied_tools).toBeUndefined();
 
       const aiFieldWarnings = mockLogger.warn.mock.calls.filter(
