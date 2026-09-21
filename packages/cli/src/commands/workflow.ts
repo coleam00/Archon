@@ -1,6 +1,8 @@
 /**
  * Workflow command - list and run workflows
  */
+
+import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { existsSync, readdirSync, type Dirent } from 'node:fs';
 import * as archonPaths from '@archon/paths';
 import {
@@ -19,7 +21,11 @@ import {
   normalizeRunConfigSemantics,
   sealWorkflowRunConfig,
 } from '@archon/core/config';
-import { WORKFLOW_EVENT_TYPES, type WorkflowEventType } from '@archon/workflows/store';
+import {
+  WORKFLOW_EVENT_TYPES,
+  isNodeStateEventType,
+  type WorkflowEventType,
+} from '@archon/workflows/store';
 import {
   isTierName,
   applyResolvedRunModelOverrides,
@@ -58,19 +64,21 @@ import { mkdirSync, openSync, closeSync, readFileSync, rmSync, writeSync } from 
 import { mkdir, open as openFile } from 'node:fs/promises';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
+import { toHydratedTimestamp } from '@archon/core/db/timestamps';
 import { createChildWorktreeResolver } from '@archon/core/workflows/child-isolation-resolver';
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
 import { reclaimContainerEnv } from '@archon/core/services/cleanup-service';
 import { waitForRunAttention } from '@archon/core/services/run-attention-watch';
 import type { RunWaitResult } from '@archon/core/services/run-attention-watch';
-import { startRunLiveOwner } from '@archon/core/services/run-live-owner';
+import {
+  startRunLiveOwner,
+  RunLiveOwnerAlreadyOwnedError,
+} from '@archon/core/services/run-live-owner';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import {
-  executeWorkflow,
   disposeWorkflowSource,
   finalizeWorkflowSource,
-  hydrateResumableRun,
   prepareWorkflowSource,
   recordSelectedWorkflow,
   resolveContinuationWorkflow,
@@ -101,6 +109,7 @@ import {
   getWorkflowEventEmitter,
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
+import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import type {
   DeclaredWorkflowConfig,
   WorkflowDefinition,
@@ -114,6 +123,7 @@ import {
   workflowRunStatusSchema,
   isApprovalContext,
   isWorkflowWaitContext,
+  workflowWaitStepName,
   isScheduledWorkflowResume,
   skipCauseSchema,
   SUBRUN_METADATA_KEYS,
@@ -442,6 +452,61 @@ function generateConversationId(): string {
   const timestamp = Date.now();
   const random = Math.random().toString(36).substring(2, 8);
   return `cli-${String(timestamp)}-${random}`;
+}
+
+/**
+ * The conversation this invocation writes to.
+ *
+ * A caller that already knows the thread passes it (approve, respond, and the owner's
+ * automatic wait-resume all do). A continuation that does not — `workflow resume <id>`
+ * and `run <name> --resume` — inherits the one its run already has (#3328): the run
+ * row's `conversation_id` is the single record of which thread the run belongs to, and
+ * it is written once at creation, so minting a fresh conversation here does not move
+ * the run. It only sends the resumed segment somewhere the run never references, and
+ * the run's own thread stops at the pause.
+ *
+ * The row holds a database id; `getOrCreateConversation` keys on the platform id, which
+ * is why this resolves through the conversation rather than using the field directly.
+ *
+ * A continuation whose conversation cannot be read must stop. Generating a new id in
+ * that case would resume successfully into a thread the run does not reference.
+ */
+async function resolveRunConversationId(
+  options: WorkflowRunOptions,
+  continuationRun: WorkflowRun | undefined
+): Promise<string> {
+  if (options.conversationId !== undefined) return options.conversationId;
+  if (continuationRun !== undefined) {
+    let conversation;
+    try {
+      conversation = await conversationDb.getConversationById(continuationRun.conversation_id);
+    } catch (error) {
+      getLog().error(
+        {
+          err: error as Error,
+          runId: continuationRun.id,
+          conversationId: continuationRun.conversation_id,
+        },
+        'cli.workflow_continuation_conversation_lookup_failed'
+      );
+      throw new Error(
+        `Failed to load conversation '${continuationRun.conversation_id}' for workflow run '${continuationRun.id}': ${(error as Error).message}\n` +
+          'The run was not resumed. Fix the conversation lookup problem, then retry.'
+      );
+    }
+    if (!conversation) {
+      getLog().error(
+        { runId: continuationRun.id, conversationId: continuationRun.conversation_id },
+        'cli.workflow_continuation_conversation_not_found'
+      );
+      throw new Error(
+        `Conversation '${continuationRun.conversation_id}' for workflow run '${continuationRun.id}' no longer exists.\n` +
+          'The run was not resumed. Restore the conversation, then retry.'
+      );
+    }
+    return conversation.platform_conversation_id;
+  }
+  return generateConversationId();
 }
 
 /**
@@ -1007,11 +1072,12 @@ function renderWorkflowEvent(event: WorkflowEmitterEvent, verbose: boolean): voi
     case 'node_failed':
       process.stderr.write(`[${event.nodeName}] Failed: ${event.error}\n`);
       break;
-    case 'node_skipped': {
-      const detail = 'cause' in event ? formatSkipCause(event.cause) : event.reason;
-      process.stderr.write(`[${event.nodeName}] Skipped (${detail})\n`);
+    case 'node_skipped':
+      process.stderr.write(`[${event.nodeName}] Skipped (${formatSkipCause(event.cause)})\n`);
       break;
-    }
+    case 'node_skipped_prior_success':
+      process.stderr.write(`[${event.nodeName}] Skipped (prior_success)\n`);
+      break;
     case 'approval_pending':
       process.stderr.write(`[${event.nodeId}] Waiting for approval: ${event.message}\n`);
       break;
@@ -1188,10 +1254,12 @@ export class WorkflowListLookupError extends Error {
  * fails, a workflow cannot load, or an explicitly named target has none.
  */
 export async function workflowTestCommand(
-  cwd: string,
+  invokingCwd: string,
   target: string | undefined,
-  options: { json?: boolean; targetCwd?: string } = {}
+  options: { json?: boolean } = {}
 ): Promise<number> {
+  // Discovery uses the repository root; explicit relative targets use the caller's directory.
+  const cwd = (await git.findRepoRoot(invokingCwd)) ?? invokingCwd;
   const { workflows, errors } = await loadWorkflows(cwd);
   // The fixture runner freezes this repo's source before executing anything, exactly as
   // `workflow run` does, and this config decides which directories get frozen. A malformed
@@ -1207,7 +1275,7 @@ export async function workflowTestCommand(
     report = await runFixtures({
       workflows,
       cwd,
-      ...(options.targetCwd !== undefined ? { targetCwd: options.targetCwd } : {}),
+      targetCwd: invokingCwd,
       sourceConfig: workflowSourceConfigFrom(config),
       ...(target !== undefined ? { target } : {}),
     });
@@ -1495,11 +1563,9 @@ async function runWorkflowWithOwnedSource(
   cwd: string,
   workflowName: string,
   userMessage: string,
-  options: WorkflowRunOptions = {}
-): Promise<void> {
-  const detachedProcessOwner = process.env[DETACHED_RUN_OWNER_ENV] === '1';
-  if (detachedProcessOwner) Reflect.deleteProperty(process.env, DETACHED_RUN_OWNER_ENV);
-  if (detachedProcessOwner) assertDetachedRunProcessOwner();
+  options: WorkflowRunOptions = {},
+  detachedProcessOwner: boolean
+): Promise<PendingWaitContinuation | undefined> {
   const effectiveDiscoveryCwd = options.discoveryCwd ?? cwd;
   const modelOverrides = options.modelAssignments
     ? parseRunModelAssignments(options.modelAssignments)
@@ -1576,8 +1642,9 @@ async function runWorkflowWithOwnedSource(
   // The flag names a run row this process will execute AS, so three things are checked.
   // Be precise about which one carries the weight, because it is not the first.
   //
-  // The owner marker plus `assertDetachedRunProcessOwner` (above) raise the bar, they do
-  // not prove provenance: a plain scripted process is not its own process-group leader,
+  // The owner marker plus `assertDetachedRunProcessOwner` (called by `workflowRunCommand`
+  // before it reaches this function) raise the bar, they do not prove provenance: a plain
+  // scripted process is not its own process-group leader,
   // so cron, CI, and wrapper scripts are blocked — but a foreground command under a real
   // pseudo-tty IS one by default, so a person setting the env var at their own terminal
   // satisfies it. Treat it as a barrier to automated misuse, not as proof that an Archon
@@ -1849,7 +1916,7 @@ async function runWorkflowWithOwnedSource(
           `Created dry-run stub scaffold for ${workflow.name}: ${stubsInitPath} (${String(nodeCount)} nodes)\n`
         );
       }
-      return;
+      return undefined;
     }
     const stubs = await loadDryRunStubs(stubsPath);
     // The install's config + AI profile are what make the per-node provider/model report
@@ -1921,7 +1988,7 @@ async function runWorkflowWithOwnedSource(
           : 'Dry-run failed. See the trace for details.'
       );
     }
-    return;
+    return undefined;
   }
 
   // Validate mutually exclusive flags (defensive — cli.ts checks these for UX, but
@@ -2099,7 +2166,7 @@ async function runWorkflowWithOwnedSource(
       assertComposedGateDriveable(workflow.nodes);
     }
 
-    const childConversationId = options.conversationId ?? generateConversationId();
+    const childConversationId = await resolveRunConversationId(options, continuationRun);
     const extraArgs: string[] = [];
     let pinnedBranch: string | undefined;
 
@@ -2256,7 +2323,8 @@ async function runWorkflowWithOwnedSource(
       pinnedBranch = `${workflowName}-${String(Date.now())}`;
       extraArgs.push('--branch', pinnedBranch);
     }
-    // Pin the conversation id only when generated (an explicit one is already in argv).
+    // Pin the conversation id this process resolved — generated, or inherited from the
+    // run being continued. An explicit one is already in argv, so it needs no pin.
     if (options.conversationId === undefined) {
       extraArgs.push('--conversation-id', childConversationId);
     }
@@ -2360,7 +2428,7 @@ async function runWorkflowWithOwnedSource(
         console.warn('Warning: could not open a log file — child output will not be captured.');
       }
     }
-    return;
+    return undefined;
   }
 
   console.log(`Running workflow: ${workflowName}`);
@@ -2370,8 +2438,8 @@ async function runWorkflowWithOwnedSource(
   // Create CLI adapter
   const adapter = new CLIAdapter();
 
-  // Generate conversation ID
-  const conversationId = options.conversationId ?? generateConversationId();
+  // The caller's thread, the continued run's own thread, or a new one — in that order.
+  const conversationId = await resolveRunConversationId(options, continuationRun);
 
   // Get or create conversation in database
   let conversation;
@@ -3104,12 +3172,11 @@ async function runWorkflowWithOwnedSource(
     );
   }
 
-  // When --resume, hand the already-found run (and its completed-node outputs)
-  // to executeWorkflow. Otherwise this is a fresh run and prepared stays null.
   // The lookup-by-(workflowName, cwd) was already done above for worktree-path
   // resolution; reuse that result rather than querying twice.
   const deps = createWorkflowDeps();
-  let result: Awaited<ReturnType<typeof executeWorkflow>> | undefined;
+  const engine = new InProcessWorkflowEngine(deps);
+  let result: Awaited<ReturnType<InProcessWorkflowEngine['submit']>> | undefined;
   // A genuine container-teardown failure captured in the finally, rethrown AFTER
   // the finally when the run itself succeeded — so a leaked privileged container
   // fails the CLI instead of reporting success + exit 0.
@@ -3118,48 +3185,6 @@ async function runWorkflowWithOwnedSource(
     runLiveOwner = await startRunLiveOwner(ownedRunId, {
       ...(detachedProcessOwner ? { detachedProcessPid: process.pid } : {}),
     });
-    let prepared: Awaited<ReturnType<typeof hydrateResumableRun>> = null;
-    if (options.resume && resumable) {
-      try {
-        prepared = await hydrateResumableRun(deps, resumable);
-      } catch (error) {
-        const err = error as Error;
-        getLog().error(
-          { err, workflowName, runId: resumable.id },
-          'cli.workflow_hydrate_resume_failed'
-        );
-        throw new Error(
-          `Cannot resume workflow '${workflowName}': failed to load prior run state — ${err.message}`
-        );
-      }
-      if (!prepared) {
-        // `--branch` is only runnable when the prior run used worktree isolation:
-        // folder projects reject worktree options outright, and an in-place repo run
-        // cannot be relaunched onto the branch its own checkout holds. A stale-running
-        // orphan cannot be superseded until it is released, so name that step first.
-        const worktreeBranch = isFolderCodebase ? undefined : resumeBranch;
-        const unblock = isTerminalRunStatus(resumable.status)
-          ? ''
-          : `The run is still marked ${resumable.status}; release it before relaunching:\n` +
-            `  archon workflow abandon ${resumable.id}\n`;
-        const relaunch = [
-          'archon workflow run',
-          workflowName,
-          ...(worktreeBranch ? ['--branch', worktreeBranch] : []),
-          '--supersedes',
-          resumable.id,
-        ].join(' ');
-        throw new Error(
-          `Cannot resume: the prior run for '${workflowName}' has no completed nodes and no interactive-loop state.\n` +
-            unblock +
-            (worktreeBranch
-              ? 'Nothing can be skipped, so relaunch on the same branch instead:\n'
-              : 'Nothing can be skipped, so start a fresh run instead:\n') +
-            `  ${relaunch}`
-        );
-      }
-    }
-
     // Container run context for the engine (Phase C): the write-back backend port +
     // env id + policy. The executor drives suspend-on-pause and the write-back gate
     // through this. Absent for host/in-place runs.
@@ -3186,60 +3211,102 @@ async function runWorkflowWithOwnedSource(
             createdByUserId: cliUserId,
           })
         : undefined;
-    const opts = prepared
-      ? {
-          codebaseId: codebase?.id,
-          source: workflowSource,
-          parseWarnings: workflowEntry?.parseWarnings,
-          userId: cliUserId,
-          baseBranch: codebaseDefaultBranch,
-          baseOverride: flagBase,
-          execContext,
-          container: containerRunCtx,
-          resolveChildIsolation,
-          ...prepared,
-        }
-      : {
-          codebaseId: codebase?.id,
-          source: workflowSource,
-          parseWarnings: workflowEntry?.parseWarnings,
-          userId: cliUserId,
-          baseBranch: codebaseDefaultBranch,
-          baseOverride: flagBase,
-          execContext,
-          container: containerRunCtx,
-          resolveChildIsolation,
-          // Fresh run only: a resume (`prepared`) replays the inputs already on its row.
-          inputs: resolvedInputs,
-          ...(modelOverrides
-            ? { modelOverrideLayer: { kind: 'raw' as const, overrides: modelOverrides } }
-            : {}),
-          ...(runConfig ? { runConfig } : {}),
-          // The frozen source this run executes, captured before the workflow was even
-          // selected. A resume ignores it and loads the source recorded on its own row.
-          preparedSource,
-          // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
-          // executor adopts for us there (see #2690). Until then a rename failure
-          // leaves the staged directory un-adopted so the wrap reclaims it on the
-          // way out.
-          capturedSourceOwner: owner,
-          // Between-run continuation (#2747): written once onto the fresh row.
-          ...(adoptedFromRunId !== undefined ? { adoptedFromRunId, continuationMode } : {}),
-          // The row a detached parent already wrote (#2872). `inputs` and the
-          // continuation fields above are still passed: the executor consumes them only
-          // when IT creates the row, and this row already carries them.
-          ...(detachedPreCreatedRun ? { preCreatedRun: detachedPreCreatedRun } : {}),
-        };
-    result = await executeWorkflow(
-      deps,
-      adapter,
-      conversationId,
-      workingCwd,
-      workflow,
-      userMessage,
-      conversation.id,
-      opts
-    );
+    const commonOptions = {
+      codebaseId: codebase?.id,
+      source: workflowSource,
+      parseWarnings: workflowEntry?.parseWarnings,
+      userId: cliUserId,
+      baseBranch: codebaseDefaultBranch,
+      baseOverride: flagBase,
+      execContext,
+      container: containerRunCtx,
+      resolveChildIsolation,
+    };
+    if (options.resume && resumable) {
+      let admission: Awaited<ReturnType<InProcessWorkflowEngine['resume']>>;
+      try {
+        admission = await engine.resume({
+          platform: adapter,
+          conversationId,
+          cwd: workingCwd,
+          legacyWorkflow: workflow,
+          userMessage,
+          conversationDbId: conversation.id,
+          run: resumable,
+          options: commonOptions,
+        });
+      } catch (error) {
+        const err = error as Error;
+        getLog().error(
+          { err, workflowName, runId: resumable.id },
+          'cli.workflow_hydrate_resume_failed'
+        );
+        throw new Error(
+          `Cannot resume workflow '${workflowName}': failed to load prior run state — ${err.message}`,
+          { cause: err }
+        );
+      }
+      if (!admission.accepted) {
+        // `--branch` is only runnable when the prior run used worktree isolation:
+        // folder projects reject worktree options outright, and an in-place repo run
+        // cannot be relaunched onto the branch its own checkout holds. A stale-running
+        // orphan cannot be superseded until it is released, so name that step first.
+        const worktreeBranch = isFolderCodebase ? undefined : resumeBranch;
+        const unblock = isTerminalRunStatus(resumable.status)
+          ? ''
+          : `The run is still marked ${resumable.status}; release it before relaunching:\n` +
+            `  archon workflow abandon ${resumable.id}\n`;
+        const relaunch = [
+          'archon workflow run',
+          workflowName,
+          ...(worktreeBranch ? ['--branch', worktreeBranch] : []),
+          '--supersedes',
+          resumable.id,
+        ].join(' ');
+        throw new Error(
+          `Cannot resume: the prior run for '${workflowName}' has no completed nodes and no interactive-loop state.\n` +
+            unblock +
+            (worktreeBranch
+              ? 'Nothing can be skipped, so relaunch on the same branch instead:\n'
+              : 'Nothing can be skipped, so start a fresh run instead:\n') +
+            `  ${relaunch}`
+        );
+      }
+      result = await admission.settled;
+    } else {
+      const opts = {
+        ...commonOptions,
+        // A resume replays the inputs already on its row.
+        inputs: resolvedInputs,
+        ...(modelOverrides
+          ? { modelOverrideLayer: { kind: 'raw' as const, overrides: modelOverrides } }
+          : {}),
+        ...(runConfig ? { runConfig } : {}),
+        // The frozen source this run executes, captured before the workflow was even
+        // selected. A resume ignores it and loads the source recorded on its own row.
+        preparedSource,
+        // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
+        // executor adopts for us there (see #2690). Until then a rename failure
+        // leaves the staged directory un-adopted so the wrap reclaims it on the
+        // way out.
+        capturedSourceOwner: owner,
+        // Between-run continuation (#2747): written once onto the fresh row.
+        ...(adoptedFromRunId !== undefined ? { adoptedFromRunId, continuationMode } : {}),
+        // The row a detached parent already wrote (#2872). `inputs` and the
+        // continuation fields above are still passed: the executor consumes them only
+        // when IT creates the row, and this row already carries them.
+        ...(detachedPreCreatedRun ? { preCreatedRun: detachedPreCreatedRun } : {}),
+      };
+      result = await engine.submit({
+        platform: adapter,
+        conversationId,
+        cwd: workingCwd,
+        workflow,
+        userMessage,
+        conversationDbId: conversation.id,
+        options: opts,
+      });
+    }
   } finally {
     await closeRunLiveOwner();
     unsubscribe();
@@ -3393,6 +3460,17 @@ async function runWorkflowWithOwnedSource(
 
   // Check result and exit appropriately
   if (result.success && 'paused' in result && result.paused) {
+    // A durable `time`/`event` wait is this process's own cursor to wake; a gate or
+    // `attention` pause has no deadline and stays with whoever resolves it.
+    const pausedRun = await workflowDb.getWorkflowRun(result.workflowRunId);
+    const wait = pausedRun === null ? undefined : pendingDurableWait(pausedRun);
+    if (pausedRun !== null && wait !== undefined) {
+      console.log(
+        `\nWorkflow paused — waiting for '${wait.stepName}' until ${wait.resumeAt}; ` +
+          'this process resumes the run at its deadline.'
+      );
+      return { run: pausedRun, wait, platformConversationId: conversationId };
+    }
     if (!presentRunFacts('\nWorkflow paused — waiting for approval.', 'paused')) {
       console.log('\nWorkflow paused — waiting for approval.');
     }
@@ -3420,6 +3498,137 @@ async function runWorkflowWithOwnedSource(
     presentRunFacts('\nWorkflow finished.', 'failed');
     throw new WorkflowRunFailedError(result.error, detachedProcessOwner);
   }
+  return undefined;
+}
+
+/**
+ * The durable cursor of a wait that this run's own process must wake. `attention`
+ * waits are excluded at the source: they are a decision, not a deadline.
+ */
+export interface DurableWaitCursor {
+  stepName: string;
+  resumeAt: string;
+  signaled: boolean;
+}
+
+/** A run this process should resume itself once its wait's deadline arrives. */
+export interface PendingWaitContinuation {
+  run: WorkflowRun;
+  wait: DurableWaitCursor;
+  /**
+   * The platform conversation the first attempt ran under. Threaded into every
+   * continuation so the resumed segment's dispatch and result card stay in the run's
+   * original thread instead of generating a second conversation.
+   */
+  platformConversationId: string;
+}
+
+/**
+ * Read the wait this process owns off a run row, if any.
+ *
+ * `undefined` means the run is not paused on a `time`/`event` wait — a terminal
+ * run, a gate, or an `attention` wait, none of which has a deadline to enforce.
+ */
+export function pendingDurableWait(run: WorkflowRun): DurableWaitCursor | undefined {
+  if (run.status !== 'paused') return undefined;
+  const wait = run.metadata.wait;
+  if (!isWorkflowWaitContext(wait) || wait.kind === 'attention') return undefined;
+  return {
+    stepName: workflowWaitStepName(wait),
+    resumeAt: wait.resumeAt,
+    signaled: wait.kind === 'event' && wait.signaledAt !== undefined,
+  };
+}
+
+/** How soon a sleeping owner notices that another host moved or released its run. */
+const WAIT_CONTINUATION_POLL_MS = 5_000;
+
+/**
+ * Sleep until this run's wait is due, then let the caller resume it.
+ *
+ * The row is re-read every poll rather than trusting the cursor copied at pause
+ * time: `archon serve`'s scan, an operator's `resume`/`resignal`/`abandon`, or a
+ * crash can move or end the wait. A superseded cursor stops the loop instead of
+ * executing a run this process no longer owns; the resume's own compare-and-swap
+ * is the final guard.
+ */
+async function awaitDurableWaitDeadline(
+  runId: string,
+  wait: DurableWaitCursor
+): Promise<'resume' | 'stop'> {
+  let cursor = wait;
+  for (;;) {
+    if (cursor.signaled) return 'resume';
+    const remainingMs = Date.parse(cursor.resumeAt) - Date.now();
+    if (remainingMs <= 0) return 'resume';
+    await new Promise<void>(resolve =>
+      setTimeout(resolve, Math.min(remainingMs, WAIT_CONTINUATION_POLL_MS))
+    );
+    const latest = await workflowDb.getWorkflowRun(runId);
+    const next = latest === null ? undefined : pendingDurableWait(latest);
+    if (next?.stepName !== cursor.stepName || next.resumeAt !== cursor.resumeAt) {
+      return 'stop';
+    }
+    cursor = next;
+  }
+}
+
+/** The invocation parameters of one continuation attempt, in `workflowRunCommand`'s shape. */
+interface WaitResumeAttempt {
+  cwd: string;
+  workflowName: string;
+  userMessage: string;
+  options: WorkflowRunOptions;
+}
+
+/** Mirror `workflowResumeCommand`'s continuation options for a run this process owns. */
+async function buildWaitResumeAttempt(
+  run: WorkflowRun,
+  platformConversationId: string
+): Promise<WaitResumeAttempt> {
+  if (!run.working_path) {
+    throw new Error(
+      `Workflow run '${run.id}' has no working path recorded.\n` +
+        'Cannot determine where to resume. The run may be too old.'
+    );
+  }
+  const discoveryCwd = run.codebase_id
+    ? await resolveDiscoveryCwdForCodebase(run.id, run.codebase_id, 'resume')
+    : undefined;
+  return {
+    cwd: run.working_path,
+    workflowName: run.workflow_name,
+    userMessage: run.user_message ?? '',
+    options: {
+      continuationRun: run,
+      resume: true,
+      codebaseId: run.codebase_id ?? undefined,
+      conversationId: platformConversationId,
+      discoveryCwd,
+    },
+  };
+}
+
+/**
+ * True when a resume attempt lost the run to another owner rather than failing.
+ *
+ * Both signals mean the row already moved — another host claimed it (the
+ * compare-and-swap) or still holds its endpoint — so the winner finishes it and
+ * this process should stop quietly instead of reporting a failure.
+ */
+function isResumeSuperseded(error: unknown): boolean {
+  const MAX_CAUSE_DEPTH = 5;
+  for (let current: unknown = error, depth = 0; current instanceof Error; depth += 1) {
+    if (
+      current instanceof workflowDb.WorkflowNotResumableError ||
+      current instanceof RunLiveOwnerAlreadyOwnedError
+    ) {
+      return true;
+    }
+    if (depth >= MAX_CAUSE_DEPTH) return false;
+    current = current.cause;
+  }
+  return false;
 }
 
 /**
@@ -3429,6 +3638,13 @@ async function runWorkflowWithOwnedSource(
  * the capture is either adopted by a run or reclaimed. The implementation has a dozen
  * ordinary ways out — unknown workflow, refused inputs, flag conflicts, a detached
  * dispatch — and asking each to remember a disposal call is how most of them did not.
+ *
+ * When the attempt pauses on a durable `time`/`event` wait, this command owns the
+ * run's deadline: it sleeps until `metadata.wait.resumeAt` and re-executes through
+ * the same continuation path `archon workflow resume` uses. That is what makes a
+ * CLI-only install able to finish a wait without `archon serve`. The pause itself is
+ * unchanged — the row stays `paused` and the live owner is released between segments
+ * — so another host can still take the run and this loop then stops.
  */
 export async function workflowRunCommand(
   cwd: string,
@@ -3436,13 +3652,43 @@ export async function workflowRunCommand(
   userMessage: string,
   options: WorkflowRunOptions = {}
 ): Promise<void> {
-  try {
-    await withCapturedSource(owner =>
-      runWorkflowWithOwnedSource(owner, cwd, workflowName, userMessage, options)
-    );
-  } catch (error) {
-    await recordDetachedChildStartupFailure(options.detachedRunId, error as Error);
-    throw error;
+  // Read the marker once, before any provider or bash subprocess can inherit it: every
+  // attempt in this process is the detached owner, and a resumed segment must keep its
+  // active-stop lease (`archon workflow cancel`) and detached failure exit code.
+  const detachedProcessOwner = process.env[DETACHED_RUN_OWNER_ENV] === '1';
+  if (detachedProcessOwner) Reflect.deleteProperty(process.env, DETACHED_RUN_OWNER_ENV);
+
+  let attempt: WaitResumeAttempt = { cwd, workflowName, userMessage, options };
+  for (;;) {
+    let pending: PendingWaitContinuation | undefined;
+    try {
+      // Inside the try so a refused process-group claim still records the `pending` row
+      // the launcher handed over (#2872) instead of stranding it.
+      if (detachedProcessOwner) assertDetachedRunProcessOwner();
+      pending = await withCapturedSource(owner =>
+        runWorkflowWithOwnedSource(
+          owner,
+          attempt.cwd,
+          attempt.workflowName,
+          attempt.userMessage,
+          attempt.options,
+          detachedProcessOwner
+        )
+      );
+    } catch (error) {
+      await recordDetachedChildStartupFailure(options.detachedRunId, error as Error);
+      if (isResumeSuperseded(error)) {
+        getLog().info(
+          { runId: attempt.options.continuationRun?.id, workflowName: attempt.workflowName },
+          'cli.wait_continuation_superseded'
+        );
+        return;
+      }
+      throw error;
+    }
+    if (pending === undefined) return;
+    if ((await awaitDurableWaitDeadline(pending.run.id, pending.wait)) === 'stop') return;
+    attempt = await buildWaitResumeAttempt(pending.run, pending.platformConversationId);
   }
 }
 
@@ -3484,11 +3730,7 @@ async function recordDetachedChildStartupFailure(
  * Format age of a run from started_at to now.
  */
 function formatAge(startedAt: Date | string): string {
-  // SQLite returns UTC strings without Z suffix — append it so Date parses as UTC
-  const date =
-    startedAt instanceof Date
-      ? startedAt
-      : new Date(startedAt.endsWith('Z') ? startedAt : startedAt + 'Z');
+  const date = toHydratedTimestamp(startedAt);
   if (Number.isNaN(date.getTime())) return 'unknown';
   const ms = Date.now() - date.getTime();
   const secs = Math.floor(ms / 1000);
@@ -3563,7 +3805,7 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
 
     switch (event.event_type) {
       case 'node_started': {
-        startTimes.set(nodeId, new Date(event.created_at).getTime());
+        startTimes.set(nodeId, toHydratedTimestamp(event.created_at).getTime());
         // A retry is a new active attempt, so stale terminal details must not
         // leak into the compact current-state summary.
         summaries.set(nodeId, { nodeId, state: 'running', startedAt: event.created_at });
@@ -3571,7 +3813,7 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
       }
       case 'node_completed': {
         const started = startTimes.get(nodeId);
-        const endTime = new Date(event.created_at).getTime();
+        const endTime = toHydratedTimestamp(event.created_at).getTime();
         summaries.set(nodeId, {
           nodeId,
           state: 'completed',
@@ -3583,7 +3825,7 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
       }
       case 'node_failed': {
         const started = startTimes.get(nodeId);
-        const endTime = new Date(event.created_at).getTime();
+        const endTime = toHydratedTimestamp(event.created_at).getTime();
         summaries.set(nodeId, {
           nodeId,
           state: 'failed',
@@ -4075,14 +4317,20 @@ export async function workflowGetCommand(
     return 1;
   }
 
-  // getWorkflowRun returns the base WorkflowRun (no current_step_name) — derive
-  // per-node detail from the event log, and only when verbose is requested.
-  let events: WorkflowEventRow[] | undefined;
-  let eventsFailed = false;
-  if (verbose) {
-    const fetched = await fetchVerboseEvents(run.id);
-    events = fetched.events;
-    eventsFailed = fetched.failed;
+  // The terminal record is persisted in the event log, including for default get.
+  let events: WorkflowEventRow[];
+  let terminalRecord;
+  try {
+    events = await workflowEventsDb.listWorkflowEvents(run.id);
+    terminalRecord = getTerminalRecord(run.status, events);
+  } catch (error) {
+    getLog().warn({ err: error as Error, runId: run.id }, 'cli.workflow_get_events_failed');
+    if (json) {
+      await writeJsonLine({ ok: false, runId: run.id, error: 'workflow_events_unavailable' });
+    } else {
+      console.log(`Workflow run events unavailable: ${run.id} (see logs)`);
+    }
+    return 1;
   }
 
   // Leave-behind view (#2747): what did this run leave, and where. Assembled
@@ -4107,19 +4355,25 @@ export async function workflowGetCommand(
       await writeJsonLine({
         ...run,
         transcript_path: transcriptPath,
+        terminal_record: terminalRecord,
         ...(leaveBehind ? { leave_behind: leaveBehind } : {}),
       });
       return 0;
     }
 
-    const verboseEvents = events ?? [];
-    const parseWarnings = readParseWarningEvents(verboseEvents);
+    const parseWarnings = readParseWarningEvents(events);
     const output = rawEvents
-      ? { ...run, transcript_path: transcriptPath, events: verboseEvents }
+      ? {
+          ...run,
+          transcript_path: transcriptPath,
+          terminal_record: terminalRecord,
+          events,
+        }
       : {
           ...run,
           transcript_path: transcriptPath,
-          nodes: buildNodeSummaries(verboseEvents),
+          terminal_record: terminalRecord,
+          nodes: buildNodeSummaries(events),
           // Keys the engine dropped from this run's YAML (#2213). Surfaced as a
           // named field rather than leaving the caller to scan raw events.
           ...(parseWarnings.length > 0 ? { parseWarnings } : {}),
@@ -4174,6 +4428,20 @@ export async function workflowGetCommand(
   if (runError) {
     console.log(`  Error:  ${runError}`);
   }
+  if (terminalRecord) {
+    console.log('  Terminal record:');
+    if (terminalRecord.first_failed_node) {
+      console.log(`    First failed node: ${terminalRecord.first_failed_node}`);
+    }
+    console.log(`    Selected return: ${terminalRecord.returns.availability}`);
+    console.log(`    Artifacts observed: ${String(terminalRecord.artifacts.files.length)}`);
+    for (const file of terminalRecord.artifacts.files) console.log(`      - ${file.path}`);
+    for (const limitation of terminalRecord.artifacts.limitations) {
+      console.log(`    Inventory limitation: ${limitation.kind} (${limitation.path})`);
+    }
+  } else {
+    console.log('  Terminal record: (unavailable)');
+  }
   if (leaveBehind) {
     console.log('  Leave-behind:');
     if (leaveBehind.branch) console.log(`    Branch: ${leaveBehind.branch}`);
@@ -4192,10 +4460,7 @@ export async function workflowGetCommand(
       if (leaveBehind.artifactFiles.length > 20) console.log('      …');
     }
   }
-  if (events) {
-    if (eventsFailed) {
-      console.log('  (node events unavailable — see logs)');
-    }
+  if (verbose) {
     const parseWarnings = readParseWarningEvents(events);
     if (parseWarnings.length > 0) {
       console.log(`  Ignored keys (${String(parseWarnings.length)}):`);
@@ -5362,8 +5627,7 @@ export async function workflowCleanupCommand(days: number): Promise<void> {
 
 /**
  * Emit a workflow event directly to the database.
- * Event persistence mirrors createWorkflowEvent's fire-and-forget contract;
- * run-id resolution can still fail before the event reaches the store.
+ * Node-state writes propagate storage failures; observability remains best-effort.
  */
 export function isValidEventType(value: string): value is WorkflowEventType {
   return (WORKFLOW_EVENT_TYPES as readonly string[]).includes(value);
@@ -5377,6 +5641,15 @@ export async function workflowEventEmitCommand(
 ): Promise<void> {
   const resolvedId = await resolveRunIdArg(runId, cwd, true);
   const store = createWorkflowStore();
+  if (isNodeStateEventType(eventType)) {
+    await store.persistWorkflowEvent({
+      workflow_run_id: resolvedId,
+      event_type: eventType,
+      data,
+    });
+    console.log(`Event persisted: ${eventType} for run ${resolvedId}`);
+    return;
+  }
   await store.createWorkflowEvent({
     workflow_run_id: resolvedId,
     event_type: eventType,

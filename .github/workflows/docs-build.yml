@@ -14,6 +14,8 @@ on:
   pull_request:
     paths:
       - 'packages/docs-web/**'
+      # The community-provider page renders this file's contents, so changing it changes the site.
+      - 'packages/providers/src/community/_template/capabilities.ts'
       - 'bun.lock'
       - '.github/workflows/docs-build.yml'
 
@@ -44,5 +46,7 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # A declared exclusion from `bun run validate` (scripts/validate-ci-parity.test.ts):
+      # the gate must run on a Bun-only checkout, and this build needs the Node setup above.
       - name: Build docs
         run: bun run build:docs

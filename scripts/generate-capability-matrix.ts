@@ -59,13 +59,18 @@ const AXES: readonly { key: keyof ProviderCapabilities; label: string }[] = [
   { key: 'toolRestrictions', label: 'Tool restrictions (`allowed_tools`/`denied_tools`)' },
   { key: 'structuredOutput', label: 'Structured output (`output_format`)' },
   { key: 'envInjection', label: 'Env injection (`env:`)' },
-  { key: 'costControl', label: 'Cost control (`maxBudgetUsd`)' },
+  { key: 'costControl', label: 'Spend limit (`maxBudgetUsd`)' },
+  { key: 'costReporting', label: 'Cost reporting (`costUsd`)' },
   { key: 'effortControl', label: 'Effort control (`effort`)' },
   { key: 'fallbackModel', label: 'Fallback model (`fallbackModel`)' },
   { key: 'sandbox', label: 'Sandbox (`sandbox`)' },
   { key: 'settingSources', label: 'Setting sources (`settingSources`)' },
   { key: 'nativeTools', label: 'In-process native tools' },
   { key: 'containerExec', label: 'Container exec (folder-project container backend)' },
+  {
+    key: 'requiresAllPropertiesRequired',
+    label: 'Strict-mode `required` coverage (every key in `properties` MUST appear in `required`)',
+  },
 ];
 
 /**

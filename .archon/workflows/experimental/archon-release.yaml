@@ -474,6 +474,9 @@ nodes:
       written.push(ver.versionFile);
 
       // 2. Workspace version sync (monorepo only)
+      // The script refreshes the lockfile itself, so step 3 below is a no-op
+      // re-check for a bun monorepo. Step 3 stays because it is the generic
+      // path — other stacks, and bun repos without sync-versions.sh, need it.
       if (existsSync("scripts/sync-versions.sh")) {
         execSync("bash scripts/sync-versions.sh", { stdio: "inherit" });
         // Stage workspace package.json files explicitly downstream

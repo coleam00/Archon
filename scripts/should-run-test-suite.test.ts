@@ -39,6 +39,10 @@ describe('test-suite change decision', () => {
     ['.archon/workflows/sdlc/implement/commands/implement.md', 'a packaged command prompt'],
     ['.claude/skills/archon-cli/SKILL.md', 'the bundled CLI skill'],
     ['packages/docs-web/src/content/docs/reference/provider-capabilities.md', 'a generated doc'],
+    [
+      'packages/docs-web/src/content/docs/contributing/adding-a-community-provider.mdx',
+      'the capabilities template the providers suite reads',
+    ],
   ])('runs for %s, which is %s rather than prose', file => {
     expect(shouldRunTestSuite([file])).toBe(true);
   });
@@ -167,7 +171,9 @@ describe('test-suite change decision', () => {
     expect(fixtureJob).toContain('bun-version: ${{ env.BUN_VERSION }}');
     expect(fixtureJob).toContain('uses: astral-sh/setup-uv@v4');
     expect(fixtureJob).toContain('run: bun install --frozen-lockfile');
-    expect(fixtureJob).toContain('run: bun run cli workflow test --json');
+    // The fixture command itself lives in scripts/validate.ts so `bun run validate` runs it
+    // too; scripts/validate-ci-parity.test.ts proves this id still names a real check.
+    expect(fixtureJob).toContain('run: bun run validate --only workflow-fixtures');
   });
 });
 

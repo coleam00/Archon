@@ -255,6 +255,21 @@ loop:
 `until_bash` runs only on iterations that no other completion channel already
 ended, so a loop declaring more than one never pays for a redundant check.
 
+The check uses the node's `timeout`: a positive, finite number of milliseconds,
+with a default of 120000. This applies to `loop:` and `loop_group:`, including a
+completion recheck after an interactive group resumes. It limits each check,
+not the AI iteration or the group's body nodes. For a longer test suite, declare
+the budget on the node:
+
+```yaml
+- id: fix-tests
+  timeout: 900000             # The suite takes ~4 min; 120 s would kill the check.
+  loop:
+    prompt: "Fix the failing tests"
+    max_iterations: 5
+    until_bash: "bun run test"
+```
+
 :::caution[If your `until_bash` accumulates state]
 The skip means the script does not run on an iteration another channel already
 completed, so a check that *mutates* state each time it runs — a counter, an append,
@@ -477,6 +492,9 @@ Now the only way out is a passing suite.
 - `trigger_rule` — join semantics
 - `idle_timeout` — per-iteration timeout (default: 30 minutes)
 - `provider` / `model` — node-level overrides are resolved and used for every iteration
+- `allowed_tools` / `denied_tools` — passed to the selected provider on every iteration,
+  just as on a `prompt:` node. Enforcement depends on the provider's tool-restriction
+  support; Archon warns when the provider declares that it cannot enforce them
 - `$nodeId.output` — downstream nodes receive the last iteration's output
 
 ### `interactive` and `gate_message`
@@ -580,19 +598,20 @@ nodes:
 ### What is NOT supported on loop nodes
 
 - `retry` — rejected at parse time. The loader fails the workflow if `retry:` is set on a loop node.
-- `context: fresh` — silently ignored. Session control is handled exclusively by `fresh_context` within the `loop:` config
+- `context: fresh` — ignored. Session control is handled exclusively by `fresh_context` within the `loop:` config
 - `hooks` — per-node SDK hooks are not passed through to loop iterations
 - `mcp` — per-node MCP server configs are not loaded for loop nodes
 - `skills` — skill preloading is not applied to loop iterations
-- `allowed_tools` / `denied_tools` — tool restrictions are not enforced on loop iterations
 
-These fields (except `retry`) are silently discarded at parse time with a
-loader warning — the workflow still loads but the fields have no effect.
-`retry` is the exception: it causes a hard load error.
+These fields (except `retry`) are discarded at parse time — the workflow still
+loads but the fields have no effect. The drop is reported as a warning naming the
+node and the fields, both in the loader log and in the author-facing output of
+`archon validate workflows` and `archon workflow list`. `retry` is the exception:
+it causes a hard load error.
 
 The loop executor manages its own AI sessions independently from the standard
-node executor. If you need hooks, MCP, skills, or tool restrictions, consider
-using a command node that wraps the iterative logic in a command file.
+node executor. If you need hooks, MCP, or skills, consider using a command node
+that wraps the iterative logic in a command file.
 
 ## Output
 

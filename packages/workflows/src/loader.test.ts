@@ -52,6 +52,7 @@ import type { WorkflowDefinition } from './schemas/workflow';
 import type { DagNode, IncludeDirective, BindingDirective } from './schemas';
 import type { JsonValue } from './output-ref';
 import * as bundledDefaults from './defaults/bundled-defaults';
+import { readBundleIndex } from './defaults/bundle-inventory';
 import { parsePackagedResourceReference } from './packaged-workflow';
 import { discoverScriptsForCwd } from './script-discovery';
 
@@ -146,7 +147,8 @@ describe('Workflow Loader', () => {
   describe('packaged workflow folders (#2527)', () => {
     it('discovers arbitrary repo pack/workflow folders and qualifies local resources', async () => {
       const workflowDir = join(testDir, '.archon', 'workflows', 'team-kit', 'ship-it');
-      await mkdir(workflowDir, { recursive: true });
+      await mkdir(join(workflowDir, 'scripts'), { recursive: true });
+      await writeFile(join(workflowDir, 'scripts', 'publish.ts'), 'console.log(1);');
       await writeFile(
         join(workflowDir, 'release.yaml'),
         `name: release\ndescription: release\nnodes:\n  - id: command\n    command: prepare\n  - id: script\n    script: publish\n    runtime: bun\n`
@@ -232,6 +234,39 @@ describe('Workflow Loader', () => {
       const parent = result.workflows.find(entry => entry.workflow.name === 'parent')?.workflow;
       const included = parent?.nodes.find(node => node.id === 'review__run');
       expect(inlinePrompt(included) ?? '').toBe('Package-owned review prompt.');
+    });
+
+    it('rejects a shared module used as a named script while loading the workflow', async () => {
+      const pack = join(testDir, '.archon', 'workflows', 'module-pack');
+      await mkdir(join(pack, '.shared'), { recursive: true });
+      await mkdir(join(pack, 'release'), { recursive: true });
+      await writeFile(join(pack, '.shared', 'helper.ts'), 'export const value = 1;');
+      await writeFile(
+        join(pack, 'release', 'release.yaml'),
+        'name: release\ndescription: release\nnodes:\n  - id: run\n    script: helper\n    runtime: bun\n'
+      );
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.workflows).toHaveLength(0);
+      expect(result.errors).toEqual([
+        expect.objectContaining({
+          errorType: 'validation_error',
+          error: expect.stringContaining('Named packaged script'),
+        }),
+      ]);
+    });
+
+    it('reserves pack .shared folders for modules without workflow discovery errors', async () => {
+      const pack = join(testDir, '.archon', 'workflows', 'module-pack');
+      await mkdir(join(pack, '.shared'), { recursive: true });
+      await mkdir(join(pack, 'release'), { recursive: true });
+      await writeFile(join(pack, '.shared', 'value.ts'), 'export const value = 1;');
+      await writeFile(
+        join(pack, 'release', 'release.yaml'),
+        'name: release\ndescription: release\nnodes:\n  - id: run\n    bash: echo ok\n'
+      );
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toEqual([]);
+      expect(result.workflows.map(entry => entry.workflow.name)).toContain('release');
     });
 
     it('uses the identical authored structure in home scope', async () => {
@@ -2470,6 +2505,166 @@ nodes:
       );
       expect(aiFieldWarnings).toHaveLength(0);
     });
+
+    it("warns, operator-visibly, that an include's denied_tools is dropped rather than enforced", async () => {
+      // The real bug behind #3196: a caller sandboxing a block it did not write got no
+      // signal that its restriction never attached. A log line only an operator tailing
+      // server output can see is not enough; this must land in `parseWarnings`, the
+      // channel the workflow's actual author reads via `/api/workflows` and `/workflow
+      // list` (#2213).
+      await writeWorkflowFile(
+        testDir,
+        'block.yaml',
+        `
+name: block
+description: An included building block
+nodes:
+  - id: build
+    prompt: "do the work"
+`
+      );
+      await writeWorkflowFile(
+        testDir,
+        'include-denied-tools.yaml',
+        `
+name: include-denied-tools
+description: A caller trying to sandbox a block it did not write
+nodes:
+  - id: use
+    include: block
+    denied_tools: ["Bash(rm:*)"]
+`
+      );
+
+      mockLogger.warn.mockClear();
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+
+      const parent = result.workflows.find(w => w.workflow.name === 'include-denied-tools');
+      const pw = parent?.parseWarnings ?? [];
+      expect(pw).toHaveLength(1);
+      expect(pw[0]).toContain("Node 'use'");
+      expect(pw[0]).toContain("'denied_tools'");
+      expect(pw[0]).toContain('an include attaches a sub-graph and does not reconfigure it');
+
+      // The included block's own node is unrestricted: the caller's denial never applied.
+      const expandedNode = (parent?.workflow.nodes as DagNode[]).find(n => n.id === 'use__build');
+      expect(expandedNode).toBeDefined();
+      expect(expandedNode?.denied_tools).toBeUndefined();
+
+      const aiFieldWarnings = mockLogger.warn.mock.calls.filter(
+        call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
+      );
+      expect(aiFieldWarnings).toHaveLength(1);
+      expect(aiFieldWarnings[0][0]).toMatchObject({ fields: ['denied_tools'], warning: pw[0] });
+    });
+
+    it('should NOT warn about tool restrictions on a loop node and should preserve them (#3324)', async () => {
+      // A loop: node scopes its own per-iteration sendQuery, so the restriction has to
+      // survive the transform. Dropping it was fail-open: there is no workflow-level
+      // allowed_tools/denied_tools for the node to fall back on.
+      await writeWorkflowFile(
+        testDir,
+        'loop-denied.yaml',
+        `
+name: loop-denied
+description: Loop that must not reach the network
+nodes:
+  - id: work
+    denied_tools: [WebFetch, WebSearch]
+    allowed_tools: [Read, Grep]
+    loop:
+      prompt: "Do something"
+      until_bash: "true"
+      max_iterations: 3
+`
+      );
+
+      mockLogger.warn.mockClear();
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+
+      const node = (result.workflows[0].workflow.nodes as DagNode[])[0];
+      expect(isLoopNode(node)).toBe(true);
+      expect(node.denied_tools).toEqual(['WebFetch', 'WebSearch']);
+      expect(node.allowed_tools).toEqual(['Read', 'Grep']);
+
+      expect(
+        mockLogger.warn.mock.calls.filter(
+          call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
+        )
+      ).toHaveLength(0);
+      expect(result.workflows[0].parseWarnings ?? []).toHaveLength(0);
+    });
+
+    it('reports an ignored AI field to the author, not only to the log (#3324)', async () => {
+      // The defect this closes: the drop was announced by a pino line alone, which
+      // neither `archon validate workflows` nor `archon workflow list` renders — both
+      // read parseWarnings. A field the engine drops has to appear in that list.
+      await writeWorkflowFile(
+        testDir,
+        'loop-ignored-fields.yaml',
+        `
+name: loop-ignored-fields
+description: Loop declaring fields the engine drops
+nodes:
+  - id: work
+    mcp: ./mcp.json
+    skills: [code-review]
+    loop:
+      prompt: "Do something"
+      until_bash: "true"
+      max_iterations: 3
+`
+      );
+
+      mockLogger.warn.mockClear();
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+
+      const parseWarnings = result.workflows[0].parseWarnings ?? [];
+      expect(parseWarnings).toHaveLength(1);
+      expect(parseWarnings[0]).toContain("Node 'work'");
+      expect(parseWarnings[0]).toContain("'mcp'");
+      expect(parseWarnings[0]).toContain("'skills'");
+      expect(parseWarnings[0]).toContain('ignored at run time');
+
+      // The structured log line keeps its payload and now carries the same prose.
+      const aiFieldWarnings = mockLogger.warn.mock.calls.filter(
+        call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
+      );
+      expect(aiFieldWarnings).toHaveLength(1);
+      const logged = aiFieldWarnings[0][0] as { fields: string[]; warning: string };
+      expect(logged.fields).toEqual(['mcp', 'skills']);
+      expect(logged.warning).toBe(parseWarnings[0]);
+    });
+
+    it('reports ignored AI fields on a non-AI node to the author too (#3324)', async () => {
+      // Same routing for every node kind with an ignored-field list — a bash node is
+      // where an author is most likely to declare a restriction that does nothing.
+      await writeWorkflowFile(
+        testDir,
+        'bash-ignored-fields.yaml',
+        `
+name: bash-ignored-fields
+description: Bash node declaring an AI-only field
+nodes:
+  - id: check
+    bash: echo hi
+    denied_tools: [WebFetch]
+`
+      );
+
+      mockLogger.warn.mockClear();
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+
+      const parseWarnings = result.workflows[0].parseWarnings ?? [];
+      expect(parseWarnings).toHaveLength(1);
+      expect(parseWarnings[0]).toContain("'denied_tools'");
+      expect(parseWarnings[0]).toContain('(bash)');
+    });
   });
 
   describe('DAG output ref validation', () => {
@@ -2988,8 +3183,8 @@ nodes:
     });
 
     it('should still reject unknown $nodeId.output refs outside code', async () => {
-      // Stripping fenced/inline code must not weaken validation of real refs
-      // that appear in prose outside any code marker.
+      // The scan reads the body verbatim, so a real (unknown) ref in prose and a
+      // fenced example are both live; the prose one is reported first.
 
       await writeWorkflowFile(
         testDir,
@@ -6481,12 +6676,14 @@ nodes:
           structuredOutput: false,
           envInjection: false,
           costControl: false,
+          costReporting: false,
           effortControl: false,
           fallbackModel: false,
           sandbox: false,
           settingSources: false,
           nativeTools: false,
           containerExec: false,
+          requiresAllPropertiesRequired: false,
         },
         factory: () => ({
           getType: () => 'no-resume-skip-test',
@@ -6500,12 +6697,14 @@ nodes:
             structuredOutput: false,
             envInjection: false,
             costControl: false,
+            costReporting: false,
             effortControl: false,
             fallbackModel: false,
             sandbox: false,
             settingSources: false,
             nativeTools: false,
             containerExec: false,
+            requiresAllPropertiesRequired: false,
           }),
           // eslint-disable-next-line require-yield
           async *sendQuery() {
@@ -6547,12 +6746,14 @@ nodes:
           structuredOutput: false,
           envInjection: false,
           costControl: false,
+          costReporting: false,
           effortControl: false,
           fallbackModel: false,
           sandbox: false,
           settingSources: false,
           nativeTools: false,
           containerExec: false,
+          requiresAllPropertiesRequired: false,
         },
         factory: () => ({
           getType: () => 'no-resume-test',
@@ -6566,12 +6767,14 @@ nodes:
             structuredOutput: false,
             envInjection: false,
             costControl: false,
+            costReporting: false,
             effortControl: false,
             fallbackModel: false,
             sandbox: false,
             settingSources: false,
             nativeTools: false,
             containerExec: false,
+            requiresAllPropertiesRequired: false,
           }),
           // eslint-disable-next-line require-yield
           async *sendQuery() {
@@ -6957,6 +7160,10 @@ nodes:
       const tmp = await mkdtemp(join(tmpdir(), 'archon-legacy-'));
       const defaultsDir = join(tmp, 'bundled', 'defaults', 'legacy');
       await mkdir(defaultsDir, { recursive: true });
+      for (const pack of await readBundleIndex()) {
+        await mkdir(join(tmp, 'bundled', pack), { recursive: true });
+      }
+      await mkdir(join(tmp, 'bundled-commands', 'defaults'), { recursive: true });
       await writeFile(
         join(defaultsDir, 'legacy-wf.yaml'),
         [
@@ -6977,6 +7184,7 @@ nodes:
       return {
         ...roots,
         bundledWorkflows: join(tmp, 'bundled'),
+        bundledCommands: join(tmp, 'bundled-commands', 'defaults'),
         globalWorkflows: join(tmp, '.empty-global'),
       };
     };

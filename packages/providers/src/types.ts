@@ -520,21 +520,58 @@ export interface AgentRequestOptions {
 }
 
 /**
+ * One property on a native tool's input object. `kind` is the discriminant the
+ * provider converters switch on; each variant maps to exactly one SDK schema
+ * form. `values` is a non-empty tuple, so an enum with no options is a compile
+ * error rather than a provider-side runtime throw.
+ */
+export type NativeToolProperty =
+  | { kind: 'string'; description?: string }
+  | { kind: 'enum'; values: readonly [string, ...string[]]; description?: string }
+  | { kind: 'boolean'; description?: string };
+
+/**
+ * The closed input shape a native tool may declare: a flat object of string /
+ * string-enum / boolean properties, plus the names of the required ones. Every
+ * provider maps this to its SDK's schema form, so the supported subset lives
+ * here once instead of being re-derived by each converter.
+ */
+export interface NativeToolInputSchema {
+  properties: Record<string, NativeToolProperty>;
+  required: readonly string[];
+}
+
+/**
+ * Build a NativeToolInputSchema while tying `required` to the property keys: a
+ * name that is not a declared property is a compile error, where the erased
+ * interface alone would accept any string. Returns the erased shape so
+ * `NativeTool` stays non-generic — a `keyof P` constraint on the interface
+ * itself would make the schema invariant in `P` and break assignment to
+ * `SendQueryOptions.nativeTools`.
+ */
+export function defineNativeToolInputSchema<P extends Record<string, NativeToolProperty>>(input: {
+  properties: P;
+  required: readonly (keyof P & string)[];
+}): NativeToolInputSchema {
+  return input;
+}
+
+/**
  * A provider-neutral in-process tool. The handler runs in the host process and
  * closes over whatever live context it needs (DB, operations, conversation), so
  * `@archon/providers` never imports `@archon/core` — the tool crosses the
  * boundary as data + a function on the request options.
  *
- * `inputSchema` is canonical JSON Schema (object). Each provider converts it to
- * its SDK's schema form. The handler is expected to return a text result rather
- * than throw — provider adapters add no safety net, so an uncaught throw would
+ * `inputSchema` is the closed typed shape each provider maps to its SDK's
+ * schema form. The handler is expected to return a text result rather than
+ * throw — provider adapters add no safety net, so an uncaught throw would
  * surface into the agent loop. (core's `buildManageRunTool` guarantees this with
  * an outer try/catch around its dispatch.)
  */
 export interface NativeTool {
   name: string;
   description: string;
-  inputSchema: Record<string, unknown>;
+  inputSchema: NativeToolInputSchema;
   handler: (input: Record<string, unknown>) => Promise<string>;
 }
 
@@ -681,8 +718,35 @@ export interface ProviderCapabilities {
    *  - `false`         — the provider cannot produce structured output at all.
    */
   structuredOutput: 'enforced' | 'best-effort' | false;
+  /**
+   * Whether the provider enforces OpenAI Structured Outputs strict-mode's
+   * required-coverage rule: every key declared in `properties` MUST also
+   * appear in `required`. A schema that violates this rule is rejected by the
+   * provider's API with HTTP 400 `invalid_json_schema` before any work starts.
+   *
+   * Only relevant when `structuredOutput` is `'enforced'`. Among enforced
+   * providers, only Codex (OpenAI) enforces this rule; Claude accepts
+   * optional-by-omission. Best-effort providers never reject schemas at the
+   * API level and declare `false`.
+   */
+  requiresAllPropertiesRequired: boolean;
   envInjection: boolean;
+  /**
+   * Whether the provider enforces the per-run spend limit (`maxBudgetUsd`) — it
+   * can stop a run once the limit is exceeded. Says nothing about whether a turn
+   * reports what it cost; see {@link costReporting}.
+   */
   costControl: boolean;
+  /**
+   * Whether the provider emits a monetary `cost` on a turn's usage, which the
+   * engine surfaces as `costUsd` on node results and rolls up into run totals.
+   * True means the translation from the SDK's cost field exists; a turn may still
+   * omit the figure when the SDK reports none.
+   *
+   * Independent of {@link costControl}: an uncappable provider still prices every
+   * turn, and a cappable one is not made cheaper by reporting.
+   */
+  costReporting: boolean;
   effortControl: boolean;
   fallbackModel: boolean;
   sandbox: boolean;

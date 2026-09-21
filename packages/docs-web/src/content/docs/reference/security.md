@@ -149,7 +149,7 @@ Archon's own env sources (`~/.archon/.env`, dev `.env`) are loaded after the CWD
 
 **If you need env vars available during workflow execution**, use managed env injection:
 - `.archon/config.yaml` `env:` section (per-repo, checked into version control)
-- Web UI: Settings → Projects → Env Vars (per-codebase, stored in Archon DB)
+- Web UI: open **Environment variables** from the project row in the console project rail (per-codebase, stored in Archon DB)
 
 **CORS:**
 - API routes use `WEB_UI_ORIGIN` to restrict CORS. The default is `*` (allow all), which is appropriate for local single-developer use. Set a specific origin when exposing the server publicly.

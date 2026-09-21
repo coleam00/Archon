@@ -71,5 +71,14 @@ Do not modify source files, commit, branch, push, open or comment on pull reques
 
 - `rooted` — true only when the causal chain is proven end to end AND the implementation plan is decided. False when anything load-bearing remains unknown, or when the fix hinges on a product decision that is not yours to make — the report is still written, with the gap or the decision named. An honest inconclusive beats a confident guess.
 - `summary` — a few sentences: the cause (or the decisive gap), and that the full report is at `$ARTIFACTS_DIR/investigation.md`.
+- `report` — a pointer to the report you just wrote, copied exactly:
+
+  ```json
+  {"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "investigation.md"}
+  ```
+
+  This node is refused if that file does not exist, so write the report before you
+  declare. `run_id` is the value above verbatim, and `path` is relative to
+  `$ARTIFACTS_DIR`.
 
 Before declaring, re-read the report: confirm every cited location exists in the current code, every command you cite actually ran in this session, no unresolved gap was disguised by extra breadth, and `git status` matches what you started with.

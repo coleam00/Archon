@@ -1,11 +1,6 @@
 /**
- * Chat file-attachment limits + client-side validation.
- *
- * These are UX hints only — the server is the authoritative validator of
- * uploads. The accepted-extension list is an *approximate subset* of the old
- * production MessageInput's set (copied, not imported — the console may not
- * import `@/components/**`), so it can drift; a file the picker hides may still
- * be accepted by the server. Kept conservative on purpose.
+ * Chat attachment limits and client-side filtering. The list is deliberately
+ * conservative; the server remains the authoritative upload validator.
  */
 
 export const MAX_FILES = 5;

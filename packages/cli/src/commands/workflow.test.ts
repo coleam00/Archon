@@ -38,6 +38,7 @@ import {
   resolveRunStorageRoot as resolveRunStorageRootReal,
 } from '@archon/paths/archon-paths';
 import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
+import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import type * as WorkflowDiscovery from '@archon/workflows/workflow-discovery';
 import type * as WorkflowExecutor from '@archon/workflows/executor';
 import type * as DetachedRunControl from '../utils/detached-run-control';
@@ -71,6 +72,7 @@ import {
   resolveDetachedRunEncryptionEnv,
   maybePrintTierNotice,
   resolveContainerBackendConfig,
+  pendingDurableWait,
   hasUnresolvedWriteback,
   buildNodeSummaries,
   resolveCliExitCode,
@@ -157,6 +159,7 @@ mock.module('@archon/core/services/run-attention-watch', () => ({
 }));
 
 const mockCreateWorkflowEvent = mock(() => Promise.resolve());
+const mockPersistWorkflowEvent = mock(() => Promise.resolve());
 const mockFolderBackendPrepare = mock(() =>
   Promise.resolve({
     cwd: '/test/path',
@@ -252,7 +255,10 @@ mock.module('@archon/core', () => ({
   generateAndSetTitle: mock(() => Promise.resolve()),
   loadRepoConfig: mock(() => Promise.resolve(null)),
   getUserAiPrefs: mock(() => Promise.resolve({})),
-  createWorkflowStore: mock(() => ({ createWorkflowEvent: mockCreateWorkflowEvent })),
+  createWorkflowStore: mock(() => ({
+    createWorkflowEvent: mockCreateWorkflowEvent,
+    persistWorkflowEvent: mockPersistWorkflowEvent,
+  })),
   // requires: [github] gate. Default to a solo-install posture (disabled) so the
   // gate is a no-op for every existing test; the gate-specific tests below flip
   // isPerUserGitHubEnabled on per-invocation.
@@ -458,7 +464,13 @@ mock.module('@archon/core/db/conversations', () => ({
   getOrCreateConversation: mock(() =>
     Promise.resolve({ id: 'conv-123', platform_type: 'cli', platform_conversation_id: 'cli-123' })
   ),
-  getConversationById: mock(() => Promise.resolve(null)),
+  getConversationById: mock(() =>
+    Promise.resolve({
+      id: 'conv-123',
+      platform_type: 'cli',
+      platform_conversation_id: 'cli-123',
+    })
+  ),
   updateConversation: mock(() => Promise.resolve()),
 }));
 
@@ -2294,12 +2306,15 @@ describe('workflowRunCommand — continuation and capture ownership (#2646)', ()
       workflows: [makeTestWorkflowWithSource({ name: 'review-block', description: 'edited' })],
       errors: [],
     });
-    mockResolveContinuationWorkflow.mockResolvedValueOnce({
+    const frozenContinuation = {
       workflow: frozen,
       roots: CAPTURED_SOURCE_ROOTS,
-      workflows: [{ workflow: frozen, source: 'project' }],
+      workflows: [{ workflow: frozen, source: 'project' as const }],
       errors: [],
-    });
+    };
+    mockResolveContinuationWorkflow
+      .mockResolvedValueOnce(frozenContinuation)
+      .mockResolvedValueOnce(frozenContinuation);
     (workflowDb.findResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-prior',
       working_path: null,
@@ -2330,8 +2345,8 @@ describe('workflowRunCommand — continuation and capture ownership (#2646)', ()
 
     // Live discovery never even runs: the continuation carries the discovery it paid for.
     expect(discoverMock).not.toHaveBeenCalled();
-    // The row is resolved before discovery and handed to the shared entry point...
-    expect(mockResolveContinuationWorkflow).toHaveBeenCalledTimes(1);
+    // Host preparation and engine admission both resolve this run's recorded source.
+    expect(mockResolveContinuationWorkflow).toHaveBeenCalledTimes(2);
     const continuedRun = mockResolveContinuationWorkflow.mock.calls[0]?.[1] as unknown as {
       id: string;
     };
@@ -5407,7 +5422,10 @@ describe('workflowGetCommand', () => {
 
     const code = await workflowGetCommand('run-legacy', true);
 
-    expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({ transcript_path: null });
+    expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
+      transcript_path: null,
+      terminal_record: null,
+    });
     expect(code).toBe(0);
   });
 
@@ -5738,7 +5756,7 @@ describe('workflowGetCommand', () => {
     expect(parsed.transcript_path).toBeNull();
   });
 
-  it('degrades a raw verbose JSON event-query failure to an empty events payload', async () => {
+  it('fails explicitly when a raw verbose JSON event query fails', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const eventsDb = await import('@archon/core/db/workflow-events');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -5753,10 +5771,14 @@ describe('workflowGetCommand', () => {
       new Error('events unavailable')
     );
 
-    await workflowGetCommand('run-v', true, true, undefined, true);
+    const code = await workflowGetCommand('run-v', true, true, undefined, true);
 
-    const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as { events: unknown[] };
-    expect(parsed.events).toEqual([]);
+    expect(code).toBe(1);
+    expect(JSON.parse(firstJsonPayload(stdoutSpy))).toEqual({
+      ok: false,
+      runId: 'run-v',
+      error: 'workflow_events_unavailable',
+    });
   });
 });
 
@@ -5966,6 +5988,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
     (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockClear();
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockClear();
     mockCreateWorkflowEvent.mockClear();
+    mockPersistWorkflowEvent.mockClear();
   });
 
   afterEach(() => {
@@ -6219,6 +6242,27 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
     expect(consoleSpy).toHaveBeenCalledWith(
       `Event submitted (best-effort): workflow_started for run ${FULL_ID}`
     );
+  });
+
+  it('persists node-state events before reporting success', async () => {
+    const data = { node_output: 'done' };
+    await workflowEventEmitCommand(FULL_ID, 'node_completed', data);
+    expect(mockPersistWorkflowEvent).toHaveBeenCalledWith({
+      workflow_run_id: FULL_ID,
+      event_type: 'node_completed',
+      data,
+    });
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+    expect(consoleSpy).toHaveBeenCalledWith(`Event persisted: node_completed for run ${FULL_ID}`);
+  });
+
+  it('propagates a node-state persistence failure without reporting success', async () => {
+    mockPersistWorkflowEvent.mockRejectedValueOnce(new Error('database unavailable'));
+    await expect(
+      workflowEventEmitCommand(FULL_ID, 'node_failed', { error: 'producer failed' })
+    ).rejects.toThrow('database unavailable');
+    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+    expect(consoleSpy).not.toHaveBeenCalled();
   });
 
   it('resolves an event prefix from a workspace-scoped worktree', async () => {
@@ -7739,6 +7783,77 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
         conversationId: 'cli-123',
       })
     ).rejects.toThrow(/cannot find the run 'run-vanished'/);
+  });
+});
+
+describe('pendingDurableWait — which pauses this process owns', () => {
+  const run = (status: WorkflowRunStatus, metadata: Record<string, unknown>): WorkflowRun =>
+    ({ id: 'run-wait', status, metadata }) as unknown as WorkflowRun;
+
+  it('reads the cursor for a time wait', () => {
+    expect(
+      pendingDurableWait(
+        run('paused', {
+          wait: {
+            owner: 'node',
+            kind: 'time',
+            nodeId: 'cooldown',
+            waitingSince: '2026-01-01T00:00:00.000Z',
+            resumeAt: '2026-01-01T00:01:00.000Z',
+          },
+        })
+      )
+    ).toEqual({
+      stepName: 'cooldown',
+      resumeAt: '2026-01-01T00:01:00.000Z',
+      signaled: false,
+    });
+  });
+
+  it('marks a signaled event wait and names a loop-owned body wait', () => {
+    expect(
+      pendingDurableWait(
+        run('paused', {
+          wait: {
+            owner: 'loop_group',
+            nodeId: 'poll',
+            bodyWaitId: 'checks',
+            iteration: 2,
+            sessionId: null,
+            sessionProvider: null,
+            kind: 'event',
+            event: 'checks.complete',
+            waitingSince: '2026-01-01T00:00:00.000Z',
+            resumeAt: '2026-01-01T00:05:00.000Z',
+            signaledAt: '2026-01-01T00:00:30.000Z',
+          },
+        })
+      )
+    ).toEqual({
+      stepName: 'poll.checks',
+      resumeAt: '2026-01-01T00:05:00.000Z',
+      signaled: true,
+    });
+  });
+
+  it('returns nothing for a running run, an attention wait, or an approval gate', () => {
+    expect(pendingDurableWait(run('running', {}))).toBeUndefined();
+    expect(
+      pendingDurableWait(
+        run('paused', {
+          wait: {
+            owner: 'node',
+            kind: 'attention',
+            nodeId: 'await-operator',
+            waitingSince: '2026-01-01T00:00:00.000Z',
+            message: 'Do the outside action',
+          },
+        })
+      )
+    ).toBeUndefined();
+    expect(
+      pendingDurableWait(run('paused', { approval: { nodeId: 'gate', message: 'ok?' } }))
+    ).toBeUndefined();
   });
 });
 
@@ -10480,6 +10595,27 @@ describe('workflowRunCommand — progress rendering', () => {
     );
   });
 
+  it('should render a prior-success replay as a prior_success skip', async () => {
+    setupWorkflowMocks();
+
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
+      if (capturedSubscribeHandler) {
+        capturedSubscribeHandler({
+          type: 'node_skipped_prior_success',
+          runId: 'run-1',
+          nodeId: 'plan',
+          nodeName: 'plan',
+        });
+      }
+      return { success: true, workflowRunId: 'run-1' };
+    });
+
+    await workflowRunCommand('/test/path', 'plan', 'hello', {});
+
+    expect(stderrSpy).toHaveBeenCalledWith('[plan] Skipped (prior_success)\n');
+  });
+
   it('should render a timeout node_skipped event to stderr', async () => {
     setupWorkflowMocks();
 
@@ -11225,6 +11361,9 @@ describe('workflowTestCommand', () => {
   beforeEach(async () => {
     stdoutSpy = spyOnJsonStdout();
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    const gitModule = await import('@archon/git');
+    (gitModule.findRepoRoot as ReturnType<typeof mock>).mockReset().mockResolvedValue(null);
+    mockDiscoverWorkflowsWithConfig.mockClear();
     const fixtureRunner = await import('@archon/workflows/fixture-runner');
     (fixtureRunner.runFixtures as ReturnType<typeof mock>).mockClear();
     (fixtureRunner.formatFixtureReport as ReturnType<typeof mock>).mockClear();
@@ -11271,7 +11410,9 @@ describe('workflowTestCommand', () => {
     expect(payload.results[0]).toMatchObject({ fixture: 'sdlc/plan/fixtures/ready.stubs.yaml' });
   });
 
-  it('keeps the invoking directory for relative fixture path targets', async () => {
+  it('discovers workflows at the repository root while resolving targets from the invoking directory', async () => {
+    const gitModule = await import('@archon/git');
+    (gitModule.findRepoRoot as ReturnType<typeof mock>).mockResolvedValueOnce('/test/repository');
     const fixtureRunner = await import('@archon/workflows/fixture-runner');
     (fixtureRunner.runFixtures as ReturnType<typeof mock>).mockResolvedValue({
       results: [],
@@ -11279,10 +11420,13 @@ describe('workflowTestCommand', () => {
       failed: 0,
     });
 
-    await workflowTestCommand('/test/repository', 'local-pack', {
-      targetCwd: '/test/repository/tools',
-    });
+    await workflowTestCommand('/test/repository/tools', '../.archon/workflows/local-pack');
 
+    expect(gitModule.findRepoRoot).toHaveBeenCalledWith('/test/repository/tools');
+    expect(mockDiscoverWorkflowsWithConfig).toHaveBeenCalledWith(
+      '/test/repository',
+      expect.any(Function)
+    );
     expect(fixtureRunner.runFixtures).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: '/test/repository', targetCwd: '/test/repository/tools' })
     );
@@ -12472,5 +12616,48 @@ describe('workflowWaitCommand', () => {
     await expect(workflowWaitCommand(FULL_ID, undefined, '/repo')).rejects.toThrow(
       'Failed to wait for workflow run: database unreachable'
     );
+  });
+});
+
+describe('workflowRunCommand — continuation conversation lookup', () => {
+  it('refuses before opening a new conversation when the lookup fails', async () => {
+    const { hydrateResumableRun } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
+
+    (
+      workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>
+    ).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'resume-thread' })],
+      errors: [],
+    });
+    (workflowDb.findResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-prior',
+      working_path: null,
+      workflow_name: 'resume-thread',
+      conversation_id: 'conv-prior',
+    });
+    (hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      preCreatedRun: { id: 'run-prior', workflow_name: 'resume-thread' },
+      priorCompletedNodes: new Map([['node-a', 'done']]),
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-resume',
+      default_cwd: '/repo/root',
+      default_branch: 'develop',
+    });
+    (conversationDb.getConversationById as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error('database busy')
+    );
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockClear();
+
+    await expect(
+      workflowRunCommand('/repo/root', 'resume-thread', 'go', { resume: true })
+    ).rejects.toThrow(
+      "Failed to load conversation 'conv-prior' for workflow run 'run-prior': database busy"
+    );
+    expect(conversationDb.getOrCreateConversation).not.toHaveBeenCalled();
   });
 });

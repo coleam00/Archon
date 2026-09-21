@@ -2,12 +2,14 @@
  * REST API routes for the Archon Web UI.
  * Provides conversation, codebase, and SSE streaming endpoints.
  */
+
+import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';
 import type { WebAdapter } from '../adapters/web';
 import { boundMetadataToolOutputs } from '../adapters/web/truncate';
-import { rm, readFile, writeFile, unlink, mkdir, readdir, stat } from 'fs/promises';
+import { rm, readFile, writeFile, unlink, mkdir, readdir, realpath, stat } from 'fs/promises';
 import { existsSync, readFileSync } from 'fs';
 import { normalize, join, sep, basename, dirname, resolve } from 'path';
 import { randomUUID } from 'crypto';
@@ -422,6 +424,13 @@ function resolveRunArtifactDir(
 ): string | null {
   const root = resolveRunStorageRoot(run, codebase);
   return root ? getRunArtifactsDirForRoot(root, runId) : null;
+}
+
+function isPathInside(parent: string, candidate: string): boolean {
+  const normalisedParent = normalize(parent);
+  const normalisedCandidate = normalize(candidate);
+  const parentPrefix = normalisedParent.endsWith(sep) ? normalisedParent : normalisedParent + sep;
+  return normalisedCandidate === normalisedParent || normalisedCandidate.startsWith(parentPrefix);
 }
 
 // =========================================================================
@@ -2560,7 +2569,7 @@ export function registerApiRoutes(
       }
       // Explicit resume targeting: `/workflow resume <id>` routes through the
       // command handler's resume path, which validates the run and hands the
-      // orchestrator an explicit resumeRun. A bare `/workflow run <name>` would
+      // orchestrator a resume request carrying that run. A bare `/workflow run <name>` would
       // instead rely on implicit resume detection and collide with the
       // ambiguity guard for any non-paused resumable state (#2075).
       const resumeMessage = `/workflow resume ${run.id}`;
@@ -3693,7 +3702,7 @@ export function registerApiRoutes(
       }
       // Dispatch resume by sending `/workflow resume <id>` to the parent web
       // conversation; the command handler validates the run and hands the
-      // orchestrator an explicit resumeRun to hydrate. Explicit targeting (not
+      // orchestrator a resume request carrying that run. Explicit targeting (not
       // a bare `/workflow run <name>`) so a genuinely-failed run resumes
       // directly instead of hitting the disambiguation prompt (#2075).
       // Mirrors the approve/reject auto-resume path.
@@ -4255,6 +4264,7 @@ export function registerApiRoutes(
           worker_platform_id: workerPlatformId,
           parent_platform_id: parentPlatformId,
           conversation_platform_id: conversationPlatformId ?? null,
+          terminal_record: getTerminalRecord(run.status, events),
         },
         events,
       });
@@ -4804,17 +4814,44 @@ export function registerApiRoutes(
     const filePath = join(artifactDir, filename);
 
     // Final safety check: ensure resolved path stays within artifact directory
-    if (
-      !normalize(filePath).startsWith(normalize(artifactDir) + sep) &&
-      normalize(filePath) !== normalize(artifactDir)
-    ) {
+    if (!isPathInside(artifactDir, filePath)) {
       getLog().warn({ runId, filename, filePath, artifactDir }, 'artifacts.path_escape_blocked');
       return apiError(c, 400, 'Invalid filename');
     }
 
+    // readFile follows symlinks, so contain the resolved target within the
+    // resolved artifact directory and read that checked path (#3160).
+    let realArtifactDir: string;
+    try {
+      realArtifactDir = await realpath(artifactDir);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return apiError(c, 404, 'Artifact file not found');
+      }
+      getLog().error({ err, runId, artifactDir }, 'artifacts.read_failed');
+      return apiError(c, 500, 'Failed to read artifact file');
+    }
+    let realFilePath: string;
+    try {
+      realFilePath = await realpath(filePath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return apiError(c, 404, 'Artifact file not found');
+      }
+      getLog().error({ err, runId, filename }, 'artifacts.read_failed');
+      return apiError(c, 500, 'Failed to read artifact file');
+    }
+    if (!isPathInside(realArtifactDir, realFilePath)) {
+      getLog().warn(
+        { runId, filename, realFilePath, realArtifactDir },
+        'artifacts.symlink_escape_blocked'
+      );
+      return apiError(c, 404, 'Artifact file not found');
+    }
+
     let content: string;
     try {
-      content = await readFile(filePath, 'utf-8');
+      content = await readFile(realFilePath, 'utf-8');
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         return apiError(c, 404, 'Artifact file not found');

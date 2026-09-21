@@ -1040,13 +1040,16 @@ describe('dagNodeSchema — ExecNode', () => {
         node: { id: 'prompt', prompt: 'Review this.' },
         ignored: { bash: '   ', script: '   ', timeout: 0, on_timeout: 'skip' },
       },
+      // `timeout` is absent from both loop cases: these two modes SELECT it, because
+      // an until_bash check is a subprocess that needs a budget. See
+      // 'dagNodeSchema — loop and loop_group select timeout'.
       {
         name: 'loop',
         node: {
           id: 'loop',
           loop: { prompt: 'Review this.', until: 'DONE', max_iterations: 1 },
         },
-        ignored: { bash: '   ', script: '   ', timeout: 0, on_timeout: 'skip' },
+        ignored: { bash: '   ', script: '   ', on_timeout: 'skip' },
       },
       {
         name: 'loop_group',
@@ -1058,7 +1061,7 @@ describe('dagNodeSchema — ExecNode', () => {
             nodes: [{ id: 'review', prompt: 'Review this.' }],
           },
         },
-        ignored: { bash: '   ', script: '   ', timeout: 0, on_timeout: 'skip' },
+        ignored: { bash: '   ', script: '   ', on_timeout: 'skip' },
       },
       {
         name: 'approval',
@@ -1361,8 +1364,6 @@ describe('LOOP_NODE_AI_FIELDS', () => {
     // own sendQuery, so the schema is honoured rather than warned-and-dropped.
     const expectedFields = [
       'context',
-      'allowed_tools',
-      'denied_tools',
       'hooks',
       'mcp',
       'skills',
@@ -1375,6 +1376,89 @@ describe('LOOP_NODE_AI_FIELDS', () => {
     ];
     for (const field of expectedFields) {
       expect(LOOP_NODE_AI_FIELDS).toContain(field);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// dagNodeSchema — loop field projection and author-facing classification
+// ---------------------------------------------------------------------------
+
+describe('dagNodeSchema — LoopNode AI-field survival', () => {
+  /**
+   * One valid authored value per AI field, so each can be parsed on its own and
+   * checked against the list. Values only have to satisfy the schema — nothing
+   * here asserts what a provider does with them.
+   */
+  const SAMPLE_AI_FIELD_VALUES: Record<string, unknown> = {
+    provider: 'claude',
+    model: 'sonnet',
+    context: 'fresh',
+    output_format: { type: 'object', properties: { done: { type: 'boolean' } } },
+    allowed_tools: ['Read', 'Grep'],
+    denied_tools: ['WebFetch', 'WebSearch'],
+    hooks: { PreToolUse: [{ matcher: 'Bash', response: { decision: 'block' } }] },
+    mcp: '.mcp.json',
+    skills: ['code-review'],
+    agents: { reviewer: { description: 'reviews', prompt: 'review it' } },
+    pi: { enableExtensions: false },
+    effort: 'low',
+    maxBudgetUsd: 5,
+    systemPrompt: 'be brief',
+    fallbackModel: 'haiku',
+    settingSources: ['project'],
+    betas: ['some-beta'],
+    sandbox: { enabled: true },
+    persist_session: true,
+  };
+
+  const parseLoopWith = (field: string, value: unknown): Record<string, unknown> => {
+    const result = dagNodeSchema.safeParse({
+      id: 'work',
+      [field]: value,
+      loop: { prompt: 'go', until_bash: 'true', max_iterations: 1 },
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error(`expected a valid loop node declaring '${field}'`);
+    return result.data as unknown as Record<string, unknown>;
+  };
+
+  test('preserves denied_tools so the restriction reaches each iteration (#3324)', () => {
+    expect(parseLoopWith('denied_tools', ['WebFetch', 'WebSearch']).denied_tools).toEqual([
+      'WebFetch',
+      'WebSearch',
+    ]);
+  });
+
+  test('preserves allowed_tools, including an empty allow-list', () => {
+    expect(parseLoopWith('allowed_tools', ['Read']).allowed_tools).toEqual(['Read']);
+    // `[]` means "no tools", not "no restriction" — dropping it would be the same
+    // fail-open as dropping denied_tools, so it must survive as an empty array.
+    expect(parseLoopWith('allowed_tools', []).allowed_tools).toEqual([]);
+  });
+
+  test('omits undeclared tool, model, and provider fields', () => {
+    const node = parseLoopWith('description', 'no tool fields here');
+    expect('allowed_tools' in node).toBe(false);
+    expect('denied_tools' in node).toBe(false);
+    expect('model' in node).toBe(false);
+    expect('provider' in node).toBe(false);
+  });
+
+  test('a field survives the transform exactly when LOOP_NODE_AI_FIELDS omits it', () => {
+    // The conformance check: every AI field the loader could warn about, parsed on
+    // a loop node and compared against the list that describes it. A field claimed
+    // as supported but dropped is a silent no-op; a field claimed as ignored but
+    // carried is a warning the author did not need.
+    for (const field of [...BASH_NODE_AI_FIELDS, 'output_format']) {
+      const value = SAMPLE_AI_FIELD_VALUES[field];
+      expect(value, `no sample value declared for '${field}'`).toBeDefined();
+      const node = parseLoopWith(field, value);
+      const shouldSurvive = !LOOP_NODE_AI_FIELDS.includes(field);
+      expect(field in node, `'${field}' survival must match LOOP_NODE_AI_FIELDS`).toBe(
+        shouldSurvive
+      );
+      if (shouldSurvive) expect(node[field]).toEqual(value);
     }
   });
 });
@@ -1778,16 +1862,18 @@ describe('LOOP_GROUP_NODE_AI_FIELDS', () => {
     expect(LOOP_GROUP_NODE_AI_FIELDS).not.toContain('provider');
   });
 
-  test('differs from LOOP_NODE_AI_FIELDS on pi (#2133) and output_format (#2563)', () => {
-    // Both differences have the same cause: a plain loop: node calls sendQuery
-    // itself, so its per-node Pi posture AND its output_format schema both reach
-    // that call. A loop_group never calls sendQuery — its body nodes carry their
-    // own — so both stay warned-ignored on the group.
-    expect(LOOP_NODE_AI_FIELDS).not.toContain('pi');
-    expect(LOOP_NODE_AI_FIELDS).not.toContain('output_format');
-    expect(LOOP_GROUP_NODE_AI_FIELDS).toContain('pi');
-    expect(LOOP_GROUP_NODE_AI_FIELDS).toContain('output_format');
-    expect(LOOP_GROUP_NODE_AI_FIELDS.filter(f => f !== 'pi' && f !== 'output_format')).toEqual([
+  test('differs from LOOP_NODE_AI_FIELDS on the fields a loop: node sendQuerys with', () => {
+    // Every difference has the same cause: a plain loop: node calls sendQuery
+    // itself, so its per-node Pi posture (#2133), its output_format schema (#2563)
+    // and its tool restrictions (#3324) all reach that call. A loop_group never
+    // calls sendQuery — its body nodes carry their own — so all four stay
+    // warned-ignored on the group.
+    const loopSendQueryFields = ['pi', 'output_format', 'allowed_tools', 'denied_tools'];
+    for (const field of loopSendQueryFields) {
+      expect(LOOP_NODE_AI_FIELDS).not.toContain(field);
+      expect(LOOP_GROUP_NODE_AI_FIELDS).toContain(field);
+    }
+    expect(LOOP_GROUP_NODE_AI_FIELDS.filter(f => !loopSendQueryFields.includes(f))).toEqual([
       ...LOOP_NODE_AI_FIELDS,
     ]);
   });
@@ -1963,6 +2049,7 @@ describe('dagNodeSchema — include', () => {
       model: 'opus',
       always_run: true,
       output_type: 'code',
+      denied_tools: ['Bash(rm:*)'],
     });
     expect(result.success).toBe(true);
     if (result.success) {
@@ -1970,6 +2057,10 @@ describe('dagNodeSchema — include', () => {
       expect(node.model).toBeUndefined();
       expect(node.always_run).toBeUndefined();
       expect(node.output_type).toBeUndefined();
+      // A caller-side denial cannot honestly narrow what the included block's own
+      // nodes will run (provider enforcement differs per node kind, and this is not
+      // path isolation); the loader's ignored-field warning is the honest signal.
+      expect(node.denied_tools).toBeUndefined();
     }
   });
 });
@@ -2396,5 +2487,66 @@ describe('runAttention', () => {
   test('an absent metadata bag on a paused run is unreadable, not silence', () => {
     const attention = runAttention({ id: 'run-1', status: 'paused' as WorkflowRunStatus });
     expect(attention).toMatchObject({ kind: 'unreadable', reason: 'malformed_gate' });
+  });
+});
+
+describe('dagNodeSchema — loop and loop_group select timeout', () => {
+  // The mode transform drops every key the mode does not select, so a value that
+  // never reaches the parsed node can never reach the until_bash subprocess.
+  test('carries timeout through the loop transform', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'l',
+      timeout: 600_000,
+      loop: { prompt: 'p', until: 'DONE', max_iterations: 3 },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data).toMatchObject({ kind: 'loop', timeout: 600_000 });
+  });
+
+  test('carries timeout through the loop_group transform', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'grp',
+      timeout: 600_000,
+      loop_group: { until: 'DONE', max_iterations: 3, nodes: [{ id: 'x', prompt: 'x' }] },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data).toMatchObject({ kind: 'loop_group', timeout: 600_000 });
+  });
+
+  test.each([
+    ['loop', 0],
+    ['loop', -1],
+    ['loop', Number.POSITIVE_INFINITY],
+    ['loop_group', 0],
+    ['loop_group', -1],
+    ['loop_group', Number.POSITIVE_INFINITY],
+  ] as const)('rejects an invalid %s timeout of %s', (kind, timeout) => {
+    const mode =
+      kind === 'loop'
+        ? { loop: { prompt: 'p', until: 'DONE', max_iterations: 3 } }
+        : {
+            loop_group: {
+              until: 'DONE',
+              max_iterations: 3,
+              nodes: [{ id: 'x', prompt: 'x' }],
+            },
+          };
+    const result = dagNodeSchema.safeParse({ id: kind, timeout, ...mode });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ['timeout'],
+        })
+      );
+      if (Number.isFinite(timeout)) {
+        expect(result.error.issues).toContainEqual(
+          expect.objectContaining({ message: "'timeout' must be a positive number (ms)" })
+        );
+      }
+    }
   });
 });

@@ -7,7 +7,7 @@ interface ProjectRowProps {
   project: Project;
   selected: boolean;
   onClick: () => void;
-  onRemove?: () => void;
+  onRemove?: () => Promise<void>;
   onEditEnv?: () => void;
 }
 
@@ -83,6 +83,8 @@ export function ProjectRow({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(displayName);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -113,26 +115,42 @@ export function ProjectRow({
     setEditing(false);
   };
 
+  const requestRemoval = async (): Promise<void> => {
+    if (onRemove === undefined || removing) return;
+    setRemoving(true);
+    setRemoveError(null);
+    try {
+      await onRemove();
+    } catch (removeFailure: unknown) {
+      setRemoveError(
+        removeFailure instanceof Error ? removeFailure.message : 'Could not remove project.'
+      );
+    } finally {
+      setRemoving(false);
+    }
+  };
+
   return (
     <div
       onClick={editing || menuOpen ? undefined : onClick}
       onContextMenu={e => {
-        if (onRemove === undefined || editing) return;
+        if (onRemove === undefined || editing || removing) return;
         e.preventDefault();
         setMenuOpen(true);
       }}
       role="button"
       tabIndex={editing ? -1 : 0}
       onKeyDown={e => {
-        if (editing) return;
+        if (editing || e.target !== e.currentTarget) return;
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           onClick();
         }
       }}
+      aria-busy={removing}
       aria-pressed={selected}
       title={`${displayName} · double-click to rename`}
-      className={`group relative flex w-full cursor-pointer items-center gap-[11px] rounded-[10px] border px-2.5 py-2 text-left transition-colors ${
+      className={`group relative flex w-full cursor-pointer flex-wrap items-center gap-x-[11px] gap-y-2 rounded-[10px] border px-2.5 py-2 text-left transition-colors ${
         selected ? 'bg-surface-elevated' : 'bg-transparent hover:bg-surface-hover'
       }`}
       // Inline because the console scope's wildcard `border-color: var(--border)`
@@ -140,7 +158,11 @@ export function ProjectRow({
       style={{ borderColor: selected ? 'var(--border-bright)' : 'transparent' }}
     >
       {/* Brand gradient strip — the unmistakable "this is selected" cue. */}
-      {selected ? (
+      {removing ? (
+        <span className="shrink-0 font-mono text-[10px] font-semibold uppercase tracking-[0.05em] text-text-tertiary">
+          removing…
+        </span>
+      ) : selected ? (
         <span
           aria-hidden
           className="brand-bar pointer-events-none absolute -left-px bottom-[9px] top-[9px] w-[3px] rounded-r-[3px]"
@@ -248,6 +270,7 @@ export function ProjectRow({
           <div className="relative">
             <button
               type="button"
+              disabled={removing}
               onClick={e => {
                 e.stopPropagation();
                 setMenuOpen(v => !v);
@@ -255,7 +278,7 @@ export function ProjectRow({
               title="More actions"
               aria-label="More actions"
               aria-expanded={menuOpen}
-              className={`flex h-[29px] w-[29px] items-center justify-center rounded-lg transition-colors hover:bg-surface-hover hover:text-text-primary ${
+              className={`flex h-[29px] w-[29px] items-center justify-center rounded-lg transition-colors hover:bg-surface-hover hover:text-text-primary disabled:cursor-wait disabled:opacity-50 ${
                 menuOpen ? 'bg-surface-hover text-text-primary' : 'text-text-tertiary'
               }`}
             >
@@ -281,7 +304,7 @@ export function ProjectRow({
                     const confirmed = window.confirm(
                       `Remove project "${displayName}"?\n\nLocal files and worktrees are not deleted.`
                     );
-                    if (confirmed) onRemove();
+                    if (confirmed) void requestRemoval();
                   }}
                   className="flex w-full items-center gap-2.5 rounded-lg px-[11px] py-[9px] text-left text-[13px] font-semibold text-error transition-colors hover:bg-error/10"
                 >
@@ -293,6 +316,28 @@ export function ProjectRow({
           </div>
         ) : null}
       </div>
+      {removeError !== null ? (
+        <div
+          role="alert"
+          onClick={event => {
+            event.stopPropagation();
+          }}
+          onKeyDown={event => {
+            event.stopPropagation();
+          }}
+          className="basis-full rounded border border-error/40 bg-error/10 px-2 py-1.5 font-mono text-[10px] text-error [overflow-wrap:anywhere]"
+        >
+          <p>{removeError}</p>
+          <button
+            type="button"
+            onClick={() => void requestRemoval()}
+            disabled={removing}
+            className="mt-1 font-semibold underline underline-offset-2 disabled:cursor-wait disabled:opacity-50"
+          >
+            Retry removal
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

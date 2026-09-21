@@ -134,6 +134,8 @@ export function isScheduledWorkflowResume(value: unknown): value is ScheduledWor
  * callers pass an arbitrary `WorkflowRunStatus` to `.includes()`.
  */
 const TERMINAL_STATUS_TUPLE = ['completed', 'failed', 'cancelled'] as const;
+export const terminalWorkflowRunStatusSchema =
+  workflowRunStatusSchema.extract(TERMINAL_STATUS_TUPLE);
 
 /** Statuses that indicate a run has finished and cannot transition further. */
 export const TERMINAL_WORKFLOW_STATUSES: readonly WorkflowRunStatus[] = TERMINAL_STATUS_TUPLE;

@@ -17,6 +17,7 @@ import {
   discoverAvailableCommands,
 } from './validator';
 import type { WorkflowDefinition, DagNode } from './schemas';
+import { makeTestWorkflow } from './test-utils';
 import { formatPackagedResourceReference } from './packaged-workflow';
 
 // =============================================================================
@@ -772,6 +773,31 @@ describe('validateWorkflowResources — script nodes', () => {
     expect(scriptErrors).toHaveLength(0);
   });
 
+  test('pack modules are not targets while an existing _shared workflow keeps its scripts', async () => {
+    const packDir = join(tmpDir, '.archon', 'workflows', 'team-pack');
+    await mkdir(join(packDir, '.shared'), { recursive: true });
+    await mkdir(join(packDir, '_shared', 'scripts'), { recursive: true });
+    await writeFile(join(packDir, '.shared', 'helper.ts'), 'export const value = 1;');
+    await writeFile(join(packDir, '_shared', 'scripts', 'existing.ts'), 'console.log(1);');
+    for (const [owner, name, expectedErrors] of [
+      ['release', 'helper', 1],
+      ['_shared', 'existing', 0],
+    ] as const) {
+      const script = formatPackagedResourceReference(
+        { source: 'project', pack: 'team-pack', workflow: owner },
+        name
+      );
+      const workflow = makeTestWorkflow({
+        name: 'test',
+        nodes: [{ id: 'run', script, runtime: 'bun' }],
+      });
+      const issues = await validateWorkflowResources(workflow, tmpDir);
+      expect(
+        issues.filter(issue => issue.level === 'error' && issue.field === 'script')
+      ).toHaveLength(expectedErrors);
+    }
+  });
+
   test('validates a named script inside its owning packaged workflow', async () => {
     const scriptsDir = join(tmpDir, '.archon', 'workflows', 'team-pack', 'release', 'scripts');
     await mkdir(scriptsDir, { recursive: true });
@@ -780,9 +806,10 @@ describe('validateWorkflowResources — script nodes', () => {
       { source: 'project', pack: 'team-pack', workflow: 'release' },
       'publish'
     );
-    const workflow = makeWorkflow('test', [
-      { id: 'step1', script, runtime: 'bun' } as unknown as DagNode,
-    ]);
+    const workflow = makeTestWorkflow({
+      name: 'test',
+      nodes: [{ id: 'step1', script, runtime: 'bun' }],
+    });
 
     const issues = await validateWorkflowResources(workflow, tmpDir);
     expect(
@@ -1568,5 +1595,163 @@ describe('validateWorkflowResources — output_format compiles', () => {
 
     const issues = await validateWorkflowResources(workflow, tmpDir);
     expect(issues.filter(i => i.field === 'output_format')).toHaveLength(0);
+  });
+});
+
+describe('validateWorkflowResources — strict-schema required coverage (#2945)', () => {
+  const looseSchema = {
+    type: 'object',
+    properties: { ready: { type: 'boolean' }, note: { type: 'string' } },
+    required: ['ready'],
+  };
+
+  function makeAgent(id: string, extra: Partial<DagNode> = {}): DagNode {
+    return {
+      id,
+      kind: 'agent',
+      source: { kind: 'inline', prompt: `do ${id}` },
+      ...extra,
+    } as DagNode;
+  }
+
+  test('Codex-routed agent node with optional-by-omission reports error', async () => {
+    const workflow = makeWorkflow('test', [makeAgent('plan', { output_format: looseSchema })]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'codex');
+    const errs = issues.filter(i => i.field === 'output_format' && i.level === 'error');
+    expect(errs).toHaveLength(1);
+    expect(errs[0].nodeId).toBe('plan');
+    expect(errs[0].message).toContain('note');
+    expect(errs[0].message).toContain('required');
+  });
+
+  test('Claude-routed same schema reports nothing', async () => {
+    const workflow = makeWorkflow('test', [makeAgent('plan', { output_format: looseSchema })]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'claude');
+    const errs = issues.filter(i => i.field === 'output_format' && i.level === 'error');
+    expect(errs).toHaveLength(0);
+  });
+
+  test('loop_group body agent under Codex reports error', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'group',
+        kind: 'loop_group',
+        loop_group: {
+          until_bash: 'exit 0',
+          max_iterations: 1,
+          nodes: [makeAgent('body', { output_format: looseSchema })],
+        },
+      } as unknown as DagNode,
+    ]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'codex');
+    const errs = issues.filter(i => i.field === 'output_format' && i.level === 'error');
+    expect(errs).toHaveLength(1);
+    expect(errs[0].nodeId).toBe('body');
+  });
+
+  test('loop_group provider becomes the body provider during validation', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'group',
+        kind: 'loop_group',
+        provider: 'codex',
+        loop_group: {
+          until_bash: 'exit 0',
+          max_iterations: 1,
+          nodes: [makeAgent('body', { output_format: looseSchema })],
+        },
+      } as unknown as DagNode,
+    ]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'claude');
+    const errors = issues.filter(i => i.field === 'output_format' && i.level === 'error');
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0].nodeId).toBe('body');
+    expect(errors[0].message).toContain("Provider 'codex'");
+  });
+
+  test("loop_group model's provider becomes the body provider during validation", async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'group',
+        kind: 'loop_group',
+        model: '@codex-group',
+        loop_group: {
+          until_bash: 'exit 0',
+          max_iterations: 1,
+          nodes: [makeAgent('body', { output_format: looseSchema })],
+        },
+      } as unknown as DagNode,
+    ]);
+
+    const issues = await validateWorkflowResources(
+      workflow,
+      tmpDir,
+      { aliases: { '@codex-group': { provider: 'codex', model: 'gpt-5.5' } } },
+      'claude'
+    );
+    const errors = issues.filter(i => i.field === 'output_format' && i.level === 'error');
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0].nodeId).toBe('body');
+    expect(errors[0].message).toContain("Provider 'codex'");
+  });
+
+  test('loop_group inert schema under Codex is skipped', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'group',
+        kind: 'loop_group',
+        output_format: looseSchema,
+        loop_group: {
+          until_bash: 'exit 0',
+          max_iterations: 1,
+          nodes: [{ id: 'work', kind: 'exec', runtime: 'sh', script: 'echo done' }],
+        },
+      } as unknown as DagNode,
+    ]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'codex');
+    const errs = issues.filter(i => i.field === 'output_format' && i.level === 'error');
+    expect(errs).toHaveLength(0);
+  });
+
+  test('workflow: node with loose schema under Codex does not double-report', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'sub',
+        kind: 'workflow',
+        workflow: 'child',
+        output_format: looseSchema,
+      } as DagNode,
+    ]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'codex');
+    const outputFormatIssues = issues.filter(
+      i => i.field === 'output_format' && i.level === 'error'
+    );
+    // Ownership error fires; strict-schema error must NOT also fire.
+    expect(outputFormatIssues).toHaveLength(1);
+    expect(outputFormatIssues[0].message).toContain('returns:');
+  });
+
+  test('bash node with output_format + gap under Codex is not flagged', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'run',
+        kind: 'exec',
+        runtime: 'sh',
+        script: 'echo {}',
+        output_format: looseSchema,
+      } as unknown as DagNode,
+    ]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'codex');
+    const errs = issues.filter(i => i.field === 'output_format' && i.level === 'error');
+    expect(errs).toHaveLength(0);
   });
 });

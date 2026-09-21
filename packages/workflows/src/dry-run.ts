@@ -222,6 +222,58 @@ function stubSatisfiesNode(node: DagNode, stub: DryRunStubValue): boolean {
   return true;
 }
 
+/**
+ * An authored stub stands in for a node's real output, so it owes the same contract.
+ *
+ * The generated-scaffold route already validates its placeholder against
+ * `output_format` (`generatedStubFor` throws on a schema it cannot satisfy); this is
+ * that check for a value a fixture wrote by hand, which otherwise reached
+ * `completedOutput` unexamined. Without it a fixture keeps passing while the schema it
+ * stands in for moves, and the suite's green stops meaning the real run would certify.
+ * Throwing here is what the surrounding catch turns into a failed node, so the fixture
+ * reports the schema errors rather than a downstream symptom.
+ *
+ * Called from `stubFor`, the single point an authored stub enters a simulation, so a
+ * new consumer cannot forget it. It sat at the two hydration sites first and one of
+ * them was missed — the loop one, which is the one that matters most: `loop:` is how
+ * a workflow declares an iterated verdict, so its schema is usually the contract a
+ * composition is built on.
+ */
+function assertAuthoredStubSatisfiesSchema(node: DagNode, stub: DryRunStubValue): void {
+  if (node.output_format === undefined) return;
+  // A string stub stands in for what the node PRINTS, which the engine parses before
+  // it validates; a non-string stub already is the structured value. Parse the first
+  // the way `certifyExecOutput` does, so a fixture may keep writing either form and
+  // both are held to the same contract.
+  let value: unknown = stub;
+  if (typeof stub === 'string') {
+    try {
+      value = JSON.parse(stub);
+    } catch {
+      throw new Error(
+        `Stub for node '${node.id}' declares output_format but is not one JSON document: ` +
+          stub.slice(0, 120)
+      );
+    }
+  }
+  let compileError: string | undefined;
+  const validation = validateStructuredOutput(value, node.output_format, message => {
+    compileError = message;
+  });
+  if (compileError !== undefined) {
+    throw new Error(
+      `Stub for node '${node.id}' cannot be checked: its output_format could not be ` +
+        `compiled (${compileError})`
+    );
+  }
+  if (!validation.valid) {
+    throw new Error(
+      `Stub for node '${node.id}' does not satisfy its output_format: ` +
+        validation.errors.join('; ')
+    );
+  }
+}
+
 function collectsStub(node: DagNode): boolean {
   // `include:` is no longer a DagNode member (#2486) — it never reaches this function.
   return !(
@@ -717,6 +769,7 @@ async function executeCodeNode(
       timeout: node.timeout ?? 300_000,
       env: {
         ...process.env,
+        PYTHONDONTWRITEBYTECODE: '1',
         PWD: ctx.execWorkspace,
         OLDPWD: ctx.execWorkspace,
         ...inputEnv,
@@ -752,7 +805,11 @@ const TOLERATED_STUB_REASON =
 function stubFor(node: DagNode, ctx: DryRunContext): DryRunStubValue | undefined {
   if (Object.hasOwn(ctx.stubs, node.id)) {
     ctx.consumedStubs.add(node.id);
-    return ctx.stubs[node.id];
+    const authored = ctx.stubs[node.id];
+    // The one place an authored stub enters a simulation, so the one place that can
+    // hold its contract by construction rather than by each caller remembering to.
+    if (authored !== undefined) assertAuthoredStubSatisfiesSchema(node, authored);
+    return authored;
   }
   if (ctx.defaultStubs && !(isExecNode(node) && ctx.execCode)) {
     return generatedStubFor(node);
@@ -959,10 +1016,36 @@ async function simulateLoopGroup(
   if (!isLoopGroupNode(node)) return;
   const bodyNodes = resolvedBodyNodes(node.loop_group);
   const bodyPlan = planGraph(bodyNodes);
+  // The executor builds the body's per-iteration context from the group's OWN resolved
+  // provider and model (dag-executor.ts), so the body must simulate against those rather
+  // than the enclosing workflow's scope. Everything the executor leaves alone — the
+  // workflow-level effort and options — stays as it is. Reporting fields that describe
+  // where the inherited model came from travel with it, or a body node would be
+  // attributed to a tier it did not resolve through.
+  const groupResolution = resolveNodeModel(node, ctx.scope, ctx.assistantModels, ctx.aiProfile);
+  const bodyScope: WorkflowModelScope = {
+    ...ctx.scope,
+    provider: groupResolution.provider,
+    model: groupResolution.model,
+    preset: groupResolution.preset,
+    tier: groupResolution.tier,
+    providerOrigin: groupResolution.providerOrigin,
+  };
+  // Swap the scope on the context the body is given rather than handing it a copy.
+  // `halted` is the one scalar a nested simulation writes back — a gate inside the body
+  // sets it — so a spread copy would swallow a pause and let the run continue past it.
+  // Restoring in `finally` keeps the group's own trace entry on the enclosing scope and
+  // nests correctly when a body contains another loop_group.
+  const outerScope = ctx.scope;
   let lastOutput = '';
   for (let current = 1; current <= node.loop_group.max_iterations; current++) {
     const bodyOutputs = new Map(outputs);
-    await simulateNodes(bodyPlan, bodyOutputs, ctx, current);
+    ctx.scope = bodyScope;
+    try {
+      await simulateNodes(bodyPlan, bodyOutputs, ctx, current);
+    } finally {
+      ctx.scope = outerScope;
+    }
     lastOutput =
       bodyPlan.sinks
         .map(bodyId => bodyOutputs.get(bodyId))

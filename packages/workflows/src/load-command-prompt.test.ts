@@ -1,9 +1,41 @@
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, unlinkSync } from 'fs';
 import { symlink as fsSymlink } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import * as realPaths from '@archon/paths';
+
+// Windows only permits symlink creation for an elevated process or with Developer
+// Mode enabled, so the symlink case below is a capability question, not a platform
+// question. Probe by attempting the real operation: `process.platform === 'win32'`
+// would ALSO skip on the CI windows-latest runner, which CAN create symlinks and
+// currently covers this test — a platform guard would silently drop that coverage.
+const canSymlink = (() => {
+  // Cleaned up with a non-recursive unlink on a single path: a module-scope probe runs
+  // before any test, so it cannot use trackTempRoots (which registers an afterEach), and
+  // a recursive rmSync is what the cleanup-drift guard exists to refuse.
+  const link = join(tmpdir(), `archon-symlink-probe-${process.pid}-${Date.now()}`);
+  let created = false;
+  try {
+    symlinkSync(join(tmpdir(), 'archon-symlink-probe-target'), link);
+    created = true;
+    return true;
+  } catch (error) {
+    if (
+      error !== null &&
+      typeof error === 'object' &&
+      'code' in error &&
+      (error.code === 'EACCES' || error.code === 'EPERM')
+    ) {
+      return false;
+    }
+    throw error;
+  } finally {
+    if (created) {
+      unlinkSync(link);
+    }
+  }
+})();
 
 // Mock only the logger so test output stays clean. All other @archon/paths
 // exports (findCommandFiles, getHomeCommandsPath, etc.) use real
@@ -69,7 +101,7 @@ describe('loadCommandPrompt — home-scope resolution', () => {
     if (result.success) expect(result.content).toBe('Personal helper body');
   });
 
-  it('resolves a symlinked home command and reads target content', async () => {
+  it.skipIf(!canSymlink)('resolves a symlinked home command and reads target content', async () => {
     const sourceDir = mkdtempSync(join(tmpdir(), 'archon-command-source-'));
     try {
       writeFileSync(join(sourceDir, 'linked.md'), 'Linked body');

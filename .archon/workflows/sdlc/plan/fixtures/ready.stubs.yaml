@@ -4,6 +4,6 @@
 plan:
   ready: true
   summary: "stub: approach chosen — full plan at plan.md"
-assert-intact: '{"intact":"true"}'
+  report: { type: archon_artifact, run_id: "fixture-run", path: "plan.md" }
 fixture:
   expect: completed

@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { toRun, normalizeOrigin, runMessageConversationId } from './run';
+import { toRun, normalizeOrigin, runDetailPath, runMessageConversationId } from './run';
 import { runStatusLabel } from '../lib/run-status';
 
 type Raw = Parameters<typeof toRun>[0];
@@ -31,6 +31,18 @@ describe('normalizeOrigin', () => {
     expect(normalizeOrigin(null)).toBe('unknown');
     expect(normalizeOrigin(undefined)).toBe('unknown');
     expect(normalizeOrigin('carrier-pigeon')).toBe('unknown');
+  });
+});
+
+describe('runDetailPath', () => {
+  test('uses the project-scoped route for assigned runs', () => {
+    expect(runDetailPath({ id: 'run-1', projectId: 'project-1' })).toBe(
+      '/console/p/project-1/r/run-1'
+    );
+  });
+
+  test('uses the projectless route for unassigned runs', () => {
+    expect(runDetailPath({ id: 'run-1', projectId: null })).toBe('/console/r/run-1');
   });
 });
 

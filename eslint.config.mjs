@@ -3,12 +3,15 @@ import tseslint from 'typescript-eslint';
 import prettierConfig from 'eslint-config-prettier';
 import { readFileSync } from 'node:fs';
 
-const archonScriptsTsconfig = JSON.parse(
-  readFileSync(new URL('./.archon/scripts/tsconfig.json', import.meta.url), 'utf8')
-);
-const archonScriptFiles = archonScriptsTsconfig.include.map(
-  pattern => `.archon/scripts/${pattern}`
-);
+// Both file lists below are DERIVED from the tsconfig project that owns them, so
+// type-check, lint and execution can never select different files.
+const includeGlobs = (tsconfigPath, prefix) =>
+  JSON.parse(readFileSync(new URL(tsconfigPath, import.meta.url), 'utf8')).include.map(
+    pattern => `${prefix}${pattern}`
+  );
+
+const archonScriptFiles = includeGlobs('./.archon/scripts/tsconfig.json', '.archon/scripts/');
+const packScriptFiles = includeGlobs('./.archon/workflows/tsconfig.json', '.archon/workflows/');
 
 export default tseslint.config(
   // Global ignores (applied to all configs)
@@ -30,7 +33,11 @@ export default tseslint.config(
       '.claude/skills/**',
       '.archon/commands/**',
       '.archon/maintainer-standup/**',
-      '.archon/workflows/**',
+      // Workflow packs hold prompts, YAML and fixtures, none of them lintable. Their
+      // deterministic scripts are TypeScript and ARE linted, through the globs the
+      // pack tsconfig owns, so the ignore names what stays out rather than the tree.
+      '.archon/workflows/**/commands/**',
+      '.archon/workflows/**/fixtures/**',
       '**/*.generated.ts', // Auto-generated source files (content inlined via JSON.stringify)
       '**/*.js',
       '*.mjs',
@@ -40,9 +47,6 @@ export default tseslint.config(
       '*.d.ts', // Root-level declaration files (not in tsconfig project scope)
       '**/*.generated.d.ts', // Auto-generated declaration files (e.g. openapi-typescript output)
       'packages/web/vite.config.ts', // Vite config doesn't need type-checked linting
-      'packages/web/components.json',
-      'packages/web/src/components/ui/**', // shadcn/ui auto-generated components
-      'packages/web/src/lib/utils.ts', // shadcn/ui utility file
     ],
   },
 
@@ -57,7 +61,12 @@ export default tseslint.config(
 
   // Project-specific settings
   {
-    files: ['packages/*/src/**/*.{ts,tsx}', 'scripts/**/*.ts', ...archonScriptFiles],
+    files: [
+      'packages/*/src/**/*.{ts,tsx}',
+      'scripts/**/*.ts',
+      ...archonScriptFiles,
+      ...packScriptFiles,
+    ],
     languageOptions: {
       parserOptions: {
         projectService: true,
@@ -136,9 +145,21 @@ export default tseslint.config(
     },
   },
 
-  // Console spike (packages/web/src/experiments/console/**) — isolation guard.
-  // This experiment must not couple to the production web UI's state/components
-  // so that it can be extracted or discarded cleanly.
+  // Pack scripts sit outside every package, so typed rules need their owning project
+  // named explicitly rather than discovered.
+  {
+    files: packScriptFiles,
+    languageOptions: {
+      parserOptions: {
+        projectService: false,
+        project: './.archon/workflows/tsconfig.json',
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+  },
+
+  // The console owns its API and reactive state instead of growing a second
+  // application data layer beside its skills and cache.
   {
     files: ['packages/web/src/experiments/console/**/*.{ts,tsx}'],
     rules: {
@@ -147,30 +168,8 @@ export default tseslint.config(
         {
           patterns: [
             {
-              // `**` matches nested paths too; the single `*` form let
-              // experiments couple to `@/components/layout/...` etc.
-              group: [
-                '@/components/**',
-                '@/contexts/**',
-                '@/hooks/**',
-                '@/routes/**',
-                '@/stores/**',
-              ],
-              message:
-                'The console spike must not import from production web UI modules. See packages/web/src/experiments/console/README.md.',
-            },
-            {
-              // Block every named import from `@/lib/api` — only generated
-              // types from `@/lib/api.generated` are allowed (different
-              // module path, not matched by this glob).
-              group: ['@/lib/api'],
-              message:
-                'Import only types from @/lib/api.generated. Skill calls go through packages/web/src/experiments/console/skills/.',
-            },
-            {
               group: ['@tanstack/react-query'],
-              message:
-                'The console spike uses its own reactive store (store/cache.ts). No React Query.',
+              message: 'The console uses its own reactive store (store/cache.ts).',
             },
           ],
         },

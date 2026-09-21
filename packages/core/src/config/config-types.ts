@@ -327,8 +327,8 @@ export interface RepoConfig {
 
   /**
    * Repo-owner-curated list of recommended workflow names, in display order.
-   * Pinned on top of both the Workflows page and the sidebar run dropdown
-   * under a "Recommended for this project" header. Names not matching any
+   * The console new-run picker shows these under "Recommended for this project"
+   * and remaining choices under "Other workflows". Names not matching any
    * discovered workflow are silently ignored (advisory).
    */
   recommendedWorkflows?: string[];

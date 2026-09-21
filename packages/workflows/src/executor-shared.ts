@@ -16,6 +16,7 @@ import {
   type WorkflowSourceRoots,
 } from './workflow-source';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
+import { bundledDefaultCommandPath, bundlesPackagedResources } from './defaults/bundle-inventory';
 import { createLogger } from '@archon/paths';
 import { isValidCommandName } from './command-validation';
 import type { LoadCommandResult } from './schemas';
@@ -430,7 +431,12 @@ export async function loadCommandPrompt(
   const packaged = parsePackagedResourceReference(commandName);
   if (packaged !== null) {
     if (packaged.owner.source === 'bundled') {
-      if (!loadDefaultCommands) {
+      if (
+        !loadDefaultCommands ||
+        (roots.kind === 'live' &&
+          !isBinaryBuild() &&
+          !(await bundlesPackagedResources(packaged.owner.pack)))
+      ) {
         return {
           success: false,
           reason: 'not_found',
@@ -580,13 +586,19 @@ export async function loadCommandPrompt(
       }
       getLog().debug({ commandName }, 'command_bundled_not_found');
     } else {
-      // Bun (or any captured run): load from the bundled-commands root, walking 1 level
-      // deep so `defaults/archon-*.md` resolves.
+      // Live defaults are the flat files the index selects, so they resolve by direct
+      // path. Old captures retain whatever command layout they froze — subfolders
+      // included — so they keep the basename walk, independently of the current index.
       const appDefaultsPath = roots.bundledCommands;
-      const entries = await archonPaths.findCommandFiles(appDefaultsPath);
-      const match = entries.find(e => e.commandName === commandName);
-      if (match) {
-        const filePath = join(appDefaultsPath, match.relativePath);
+      let filePath: string | null;
+      if (roots.kind === 'captured') {
+        const entries = await archonPaths.findCommandFiles(appDefaultsPath);
+        const match = entries.find(e => e.commandName === commandName);
+        filePath = match ? join(appDefaultsPath, match.relativePath) : null;
+      } else {
+        filePath = await bundledDefaultCommandPath(appDefaultsPath, commandName);
+      }
+      if (filePath !== null) {
         try {
           const content = await readFile(filePath, 'utf-8');
           if (!content.trim()) {

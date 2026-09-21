@@ -889,6 +889,36 @@ describe('rejectWorkflow', () => {
     expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'rejected' });
   });
 
+  test('explicit empty-string reason defaults to "Rejected" in structured_output and audit event', async () => {
+    const run = makePausedRun({
+      metadata: {
+        approval: {
+          nodeId: 'review',
+          message: 'Please review',
+          type: 'approval',
+          decisions: [{ id: 'approve' }, { id: 'reject' }],
+          decisionsAuthored: true,
+        },
+      },
+    });
+    mockGetWorkflowRun.mockResolvedValueOnce(run);
+
+    const result = await rejectWorkflow('run-1', '');
+
+    expect(result.newMode).toBe(true);
+    expect(result.cancelled).toBe(false);
+    expect(mockResolveApprovalGate).toHaveBeenCalled();
+    const events = mockResolveApprovalGate.mock.calls[0][2] as unknown[] as Array<
+      Record<string, unknown>
+    >;
+    const nodeCompleted = events.find(e => e.event_type === 'node_completed');
+    expect(nodeCompleted?.data).toMatchObject({
+      structured_output: { decision: 'reject', text: 'Rejected' },
+    });
+    const approvalReceived = events.find(e => e.event_type === 'approval_received');
+    expect(approvalReceived?.data).toMatchObject({ reason: 'Rejected' });
+  });
+
   test('rejects an escalated body-terminal-gate pause — node_completed lands under the namespaced <nodeId>.<bodyGateId> step_name (#2707 step 3)', async () => {
     const run = makePausedRun({
       metadata: {

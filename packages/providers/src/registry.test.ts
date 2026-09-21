@@ -30,8 +30,10 @@ function makeMockProvider(id: string): IAgentProvider {
       agents: false,
       toolRestrictions: false,
       structuredOutput: false,
+      requiresAllPropertiesRequired: false,
       envInjection: false,
       costControl: false,
+      costReporting: false,
       effortControl: false,
       fallbackModel: false,
       sandbox: false,
@@ -309,7 +311,7 @@ describe('registry', () => {
       expect(piEntries).toHaveLength(1);
     });
 
-    test('declares v2 capabilities (effort, tools, skills, sessionResume, envInjection, structuredOutput supported)', () => {
+    test('declares v2 capabilities (effort, tools, skills, sessionResume, envInjection, structuredOutput, costReporting supported)', () => {
       registerPiProvider();
       const caps = getProviderCapabilities('pi');
       // Flipped true in v2
@@ -322,6 +324,8 @@ describe('registry', () => {
       // Best-effort structured output via prompt engineering + post-parse —
       // not SDK-enforced like Claude/Codex, but wired up and tested.
       expect(caps.structuredOutput).toBe('best-effort');
+      // Pi prices every turn yet cannot cap one — the two cost axes are independent.
+      expect(caps.costReporting).toBe(true);
       // Still false (out of v2 scope)
       expect(caps.mcp).toBe(false);
       expect(caps.hooks).toBe(false);
@@ -363,7 +367,7 @@ describe('registry', () => {
       expect(opencodeEntries).toHaveLength(1);
     });
 
-    test('declares capabilities (sessionResume, structuredOutput, envInjection, agents, and toolRestrictions supported; untranslated node fields stay off)', () => {
+    test('declares capabilities (sessionResume, structuredOutput, envInjection, agents, toolRestrictions, costReporting supported; untranslated node fields stay off)', () => {
       registerOpencodeProvider();
       const caps = getProviderCapabilities('opencode');
       expect(caps.sessionResume).toBe(true);
@@ -376,6 +380,7 @@ describe('registry', () => {
       expect(caps.toolRestrictions).toBe(true);
       expect(caps.effortControl).toBe(false);
       expect(caps.costControl).toBe(false);
+      expect(caps.costReporting).toBe(true);
       expect(caps.fallbackModel).toBe(false);
       expect(caps.sandbox).toBe(false);
     });
@@ -425,6 +430,7 @@ describe('registry', () => {
       expect(caps.toolRestrictions).toBe(true);
       expect(caps.structuredOutput).toBe('best-effort');
       expect(caps.agents).toBe(true);
+      expect(caps.costReporting).toBe(false);
       expect(caps.fallbackModel).toBe(false);
       expect(caps.sandbox).toBe(false);
     });

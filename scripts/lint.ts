@@ -1,6 +1,7 @@
 import { mkdir, readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import archonScriptsTsconfig from '../.archon/scripts/tsconfig.json';
+import packScriptsTsconfig from '../.archon/workflows/tsconfig.json';
 
 const REPO_ROOT = resolve(import.meta.dir, '..');
 const CACHE_ROOT = resolve(REPO_ROOT, 'node_modules/.cache/eslint');
@@ -11,8 +12,13 @@ interface LintTarget {
   patterns: string[];
 }
 
+// Derived from each tsconfig project's own `include`, so lint and type-check can
+// never select different files.
 const archonScriptPatterns = archonScriptsTsconfig.include.map(
   pattern => `.archon/scripts/${pattern}`
+);
+const packScriptPatterns = packScriptsTsconfig.include.map(
+  pattern => `.archon/workflows/${pattern}`
 );
 
 async function findTargets(): Promise<LintTarget[]> {
@@ -29,6 +35,10 @@ async function findTargets(): Promise<LintTarget[]> {
     {
       cacheName: 'archon-scripts',
       patterns: archonScriptPatterns,
+    },
+    {
+      cacheName: 'workflow-pack-scripts',
+      patterns: packScriptPatterns,
     },
   ];
 }

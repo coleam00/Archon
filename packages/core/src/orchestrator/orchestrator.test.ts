@@ -203,12 +203,14 @@ const providerCapabilities: ProviderCapabilities = {
   structuredOutput: 'enforced',
   envInjection: true,
   costControl: true,
+  costReporting: true,
   effortControl: true,
   fallbackModel: true,
   sandbox: true,
   settingSources: true,
   nativeTools: true,
   containerExec: true,
+  requiresAllPropertiesRequired: false,
 };
 const mockGetProviderCapabilities = mock<typeof Providers.getProviderCapabilities>(
   () => providerCapabilities
@@ -801,7 +803,7 @@ describe('orchestrator-agent handleMessage', () => {
       mockHandleCommand.mockResolvedValue({
         success: true,
         message: 'Starting workflow: `test-workflow`',
-        workflow: { definition: workflowDefinition, args: 'payload' },
+        workflow: { kind: 'start', definition: workflowDefinition, args: 'payload' },
       });
 
       await handleMessage(platform, 'chat-456', '/workflow run test-workflow payload');
@@ -823,7 +825,7 @@ describe('orchestrator-agent handleMessage', () => {
       mockHandleCommand.mockResolvedValue({
         success: true,
         message: 'Starting workflow: `test-workflow`',
-        workflow: { definition: workflowDefinition, args: 'payload' },
+        workflow: { kind: 'start', definition: workflowDefinition, args: 'payload' },
       });
       mockDiscoverWorkflows.mockResolvedValue({
         workflows: [

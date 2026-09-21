@@ -25,8 +25,10 @@ export const PI_CAPABILITIES: ProviderCapabilities = {
   agents: false,
   toolRestrictions: true,
   structuredOutput: 'best-effort', // prompt-augment + repair + validate + reask×3 (no SDK grammar)
+  requiresAllPropertiesRequired: false, // best-effort providers never reject schemas at API level
   envInjection: true,
-  costControl: false,
+  costControl: false, // no maxBudgetUsd translation — the executor warns and drops it
+  costReporting: true, // event-bridge maps usage.cost.total — uncappable, but every turn is priced
   effortControl: true,
   fallbackModel: false,
   sandbox: false,

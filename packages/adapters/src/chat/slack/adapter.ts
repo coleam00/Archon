@@ -356,6 +356,12 @@ export class SlackAdapter implements IPlatformAdapter {
     // Also handles URLs with labels: <https://example.com|example.com> -> https://example.com
     result = result.replace(/<(https?:\/\/[^|>]+)(?:\|[^>]+)?>/g, '$1');
 
+    // Slack intercepts `/reset` as a workspace slash command, so that text
+    // never reaches the bot. Accept a bare `reset` in this adapter only.
+    if (result.toLowerCase() === 'reset') {
+      return '/reset';
+    }
+
     return result;
   }
 

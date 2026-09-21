@@ -183,8 +183,12 @@ All nodes share these base fields:
 |-------|----------|
 | `all_success` | Run only if all upstream nodes succeeded (default) |
 | `one_success` | Run if at least one upstream node succeeded |
-| `none_failed_min_one_success` | Run if no upstream failed and at least one succeeded |
+| `none_failed_min_one_success` | Run if at least one dependency succeeded and none failed or skipped because of an upstream failure (`upstream_failed`) |
 | `all_done` | Run after all upstream nodes complete, regardless of result |
+
+Failure-cascade skips block `none_failed_min_one_success` by default. Condition
+skips and optional timeout skips (`on_timeout: skip`) remain admissible with a successful
+dependency. `if_skipped` does not override trigger eligibility.
 
 ### Loop Node Options
 

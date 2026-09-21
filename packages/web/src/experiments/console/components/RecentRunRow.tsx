@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react';
 import { useNavigate } from 'react-router';
 import { OriginBadge } from './OriginBadge';
-import type { Run } from '../primitives/run';
+import { runDetailPath, type Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { statusTextClass } from '../lib/run-status';
@@ -35,7 +35,7 @@ export function RecentRunRow({
   const isDocker = useIsDocker();
   const ideEnv = useIdeEnv();
   const elapsed = formatElapsed(elapsedSince(run.startedAt, run.finishedAt ?? undefined));
-  const canOpen = run.projectId !== null && !run.id.startsWith('demo-');
+  const canOpen = !run.id.startsWith('demo-');
   const canOpenIde =
     !isDocker && run.workingPath !== null && run.workingPath !== '' && !run.id.startsWith('demo-');
   const canRerun =
@@ -46,7 +46,7 @@ export function RecentRunRow({
   const glyph = STATUS_GLYPH[run.status] ?? '·';
 
   const onClick = (): void => {
-    if (canOpen) navigate(`/console/p/${run.projectId}/r/${run.id}`);
+    if (canOpen) navigate(runDetailPath(run));
   };
 
   const onRerun = (): void => {
@@ -69,6 +69,20 @@ export function RecentRunRow({
       data-run-id={run.id}
       onClick={onClick}
       role={canOpen ? 'button' : undefined}
+      tabIndex={canOpen ? 0 : undefined}
+      onKeyDown={
+        canOpen
+          ? (event): void => {
+              if (
+                event.target === event.currentTarget &&
+                (event.key === 'Enter' || event.key === ' ')
+              ) {
+                event.preventDefault();
+                onClick();
+              }
+            }
+          : undefined
+      }
       className={`group grid items-center gap-[18px] border-b border-border/40 px-[18px] py-[13px] transition-colors last:border-b-0 hover:bg-surface-hover ${gridCols} ${
         selected ? 'bg-surface-hover ring-2 ring-inset ring-accent-bright/40' : ''
       } ${canOpen ? 'cursor-pointer' : ''}`}
