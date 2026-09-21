@@ -295,6 +295,12 @@ describe('WorkflowEventEmitter', () => {
           error: 'fail',
         },
         makeNodeSkippedEvent(),
+        {
+          type: 'node_skipped_prior_success',
+          runId: 'run-1',
+          nodeId: 'cached-node',
+          nodeName: 'cached-node',
+        },
         makeArtifactEvent(),
         {
           type: 'task_activity',
