@@ -424,6 +424,27 @@ describe('Workflow Loader', () => {
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0].error).toContain("Missing required field 'name'");
     });
+
+    it('still reports a genuinely malformed workflow inside a pack', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows', 'team', 'flow');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(join(workflowDir, 'flow.yaml'), 'description: no name\nnodes: []\n');
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain("Missing required field 'name'");
+      expect(result.workflows).toEqual([]);
+    });
+
+    it('still reports a packaged workflow folder that does not hold exactly one YAML file', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows', 'team', 'flow');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(join(workflowDir, 'one.yaml'), 'name: one\ndescription: one\nnodes: []\n');
+      await writeFile(join(workflowDir, 'two.yaml'), 'name: two\ndescription: two\nnodes: []\n');
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain('must contain exactly one .yaml or .yml file');
+      expect(result.workflows).toEqual([]);
+    });
   });
 
   describe('parseWorkflow (via discoverWorkflows)', () => {

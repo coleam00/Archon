@@ -8,6 +8,7 @@ import {
   PACK_SHARED_DIRECTORY,
   type WorkflowResourceOwner,
 } from '../packaged-workflow';
+import { FIXTURES_DIR } from '../fixture-layout';
 import type { BundledScriptPack } from './bundled-script-pack';
 
 const indexSchema = z
@@ -254,7 +255,11 @@ export async function collectBundleSources(
       }
     }
     for (const entry of await readdir(packRoot, { withFileTypes: true })) {
-      if (entry.name === PACK_SHARED_DIRECTORY || !(await entryType(packRoot, entry)).isDirectory())
+      if (
+        entry.name === PACK_SHARED_DIRECTORY ||
+        entry.name === FIXTURES_DIR ||
+        !(await entryType(packRoot, entry)).isDirectory()
+      )
         continue;
       const workflow = entry.name;
       validateName(workflow, `${pack}/${workflow}`);

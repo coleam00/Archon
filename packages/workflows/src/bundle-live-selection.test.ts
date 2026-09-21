@@ -306,3 +306,34 @@ test('an existing non-directory bundle root is an invalid installation', async (
   expect(result.errors).toHaveLength(1);
   await expect(discoverScriptsForCwd(project)).rejects.toThrow();
 });
+
+// The live bundled route reads the index through `collectBundleSources`; the captured
+// route reads the same tree through `loadPackagedWorkflowsFromDir`. A pack-root
+// `fixtures/` directory must be invisible to both, or one tree catalogues a fixture as a
+// workflow while the other does not (#3183).
+test('a pack-root fixtures directory is not a bundled workflow in live or captured mode', async () => {
+  const fixtures = join(app, 'workflows', 'shipped', 'fixtures');
+  await write(
+    join(fixtures, 'clean.stubs.yaml'),
+    'fixture:\n  expect: completed\n  reached: [work]\n'
+  );
+  try {
+    const live = await discoverWorkflows(project);
+    expect(live.errors).toEqual([]);
+    expect(live.workflows.some(entry => entry.workflow.name === 'clean.stubs')).toBe(false);
+
+    const capture = await captureWorkflowSource({
+      sourceRoot: project,
+      captureRoot: join(root, 'fixture-capture'),
+    });
+    const captured = await discoverWorkflows(project, {
+      sourceRoots: capturedSourceRoots(capture.anchor),
+    });
+    expect(captured.errors).toEqual([]);
+    expect(captured.workflows.map(entry => entry.workflow.name).sort()).toEqual(
+      live.workflows.map(entry => entry.workflow.name).sort()
+    );
+  } finally {
+    await removeTempTree(fixtures);
+  }
+});
