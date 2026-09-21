@@ -468,8 +468,8 @@ function generateConversationId(): string {
  * The row holds a database id; `getOrCreateConversation` keys on the platform id, which
  * is why this resolves through the conversation rather than using the field directly.
  *
- * A run whose conversation cannot be read falls through to a generated id, because a
- * resume that still runs in a new thread beats a resume that refuses to run.
+ * A continuation whose conversation cannot be read must stop. Generating a new id in
+ * that case would resume successfully into a thread the run does not reference.
  */
 async function resolveRunConversationId(
   options: WorkflowRunOptions,
@@ -477,17 +477,11 @@ async function resolveRunConversationId(
 ): Promise<string> {
   if (options.conversationId !== undefined) return options.conversationId;
   if (continuationRun !== undefined) {
+    let conversation;
     try {
-      const conversation = await conversationDb.getConversationById(
-        continuationRun.conversation_id
-      );
-      if (conversation) return conversation.platform_conversation_id;
-      getLog().info(
-        { runId: continuationRun.id, conversationId: continuationRun.conversation_id },
-        'cli.workflow_continuation_conversation_not_found'
-      );
+      conversation = await conversationDb.getConversationById(continuationRun.conversation_id);
     } catch (error) {
-      getLog().warn(
+      getLog().error(
         {
           err: error as Error,
           runId: continuationRun.id,
@@ -495,7 +489,22 @@ async function resolveRunConversationId(
         },
         'cli.workflow_continuation_conversation_lookup_failed'
       );
+      throw new Error(
+        `Failed to load conversation '${continuationRun.conversation_id}' for workflow run '${continuationRun.id}': ${(error as Error).message}\n` +
+          'The run was not resumed. Fix the conversation lookup problem, then retry.'
+      );
     }
+    if (!conversation) {
+      getLog().error(
+        { runId: continuationRun.id, conversationId: continuationRun.conversation_id },
+        'cli.workflow_continuation_conversation_not_found'
+      );
+      throw new Error(
+        `Conversation '${continuationRun.conversation_id}' for workflow run '${continuationRun.id}' no longer exists.\n` +
+          'The run was not resumed. Restore the conversation, then retry.'
+      );
+    }
+    return conversation.platform_conversation_id;
   }
   return generateConversationId();
 }

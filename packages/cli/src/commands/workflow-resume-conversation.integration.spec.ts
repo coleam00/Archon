@@ -173,6 +173,29 @@ function readPlatformConversationId(fixture: Fixture, conversationId: string): s
   }
 }
 
+function removeRecordedConversation(fixture: Fixture, conversationId: string): void {
+  const database = new Database(join(fixture.archonHome, 'archon.db'));
+  try {
+    database.exec('PRAGMA foreign_keys = OFF');
+    database.query('DELETE FROM remote_agent_conversations WHERE id = ?').run(conversationId);
+  } finally {
+    database.close();
+  }
+}
+
+function countConversations(fixture: Fixture): number {
+  const database = openDatabase(fixture);
+  try {
+    return (
+      database
+        .query<{ total: number }, []>('SELECT COUNT(*) AS total FROM remote_agent_conversations')
+        .get()?.total ?? 0
+    );
+  } finally {
+    database.close();
+  }
+}
+
 /** Run the workflow once so it fails, leaving exactly one run in exactly one thread. */
 function seedFailedRun(fixture: Fixture): ThreadState {
   const first = runCli(fixture, [
@@ -249,6 +272,19 @@ function expectResumedInPlace(after: ThreadState, before: ThreadState): void {
 }
 
 describe('resumed runs keep one conversation', () => {
+  test('a continuation stops when its recorded conversation is missing', () => {
+    const fixture = makeFixture();
+    const before = seedFailedRun(fixture);
+    removeRecordedConversation(fixture, before.runConversationId);
+
+    const resumed = runCli(fixture, ['workflow', 'resume', before.runId, '--cwd', fixture.repo]);
+    expect(resumed.status).not.toBe(0);
+    expect(resumed.output).toContain(
+      `Conversation '${before.runConversationId}' for workflow run '${before.runId}' no longer exists.`
+    );
+    expect(countConversations(fixture)).toBe(0);
+  }, 120_000);
+
   test('workflow resume <run-id> continues the run existing thread', async () => {
     const fixture = makeFixture();
     const before = seedFailedRun(fixture);
@@ -310,6 +346,37 @@ describe('resumed runs keep one conversation', () => {
 
     // The snapshot the wait already took: at that point the conversation rows are final,
     // so asserting on it beats a second read that would race the child to its exit.
+    expectResumedInPlace(await waitForDetachedDispatch(fixture), before);
+  }, 120_000);
+
+  test('workflow resume <run-id> --detach keeps the child in the run existing thread', async () => {
+    const fixture = makeFixture();
+    const before = seedFailedRun(fixture);
+
+    const launched = runCli(fixture, [
+      'workflow',
+      'resume',
+      before.runId,
+      '--cwd',
+      fixture.repo,
+      '--detach',
+      '--json',
+    ]);
+    if (launched.status !== 0) throw new Error(`detached resume failed: ${launched.output}`);
+    const ack = JSON.parse(launched.output.trim()) as {
+      ok: boolean;
+      runId: string;
+      action: string;
+      detached: boolean;
+    };
+    detachedRunIds.add(ack.runId);
+    expect(ack).toMatchObject({
+      ok: true,
+      runId: before.runId,
+      action: 'resume',
+      detached: true,
+    });
+
     expectResumedInPlace(await waitForDetachedDispatch(fixture), before);
   }, 120_000);
 });
