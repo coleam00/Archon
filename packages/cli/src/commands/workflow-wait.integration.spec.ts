@@ -342,6 +342,18 @@ function readRunStatus(archonHome: string, runId: string): string | undefined {
          WHERE id = ?`
       )
       .get(runId)?.status;
+  } catch (error) {
+    // This helper is polled while the detached owner may be committing the pause.
+    // A transient lock means the status is not readable yet; waitFor will try again.
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      error.code === 'SQLITE_BUSY'
+    ) {
+      return undefined;
+    }
+    throw error;
   } finally {
     database.close();
   }
