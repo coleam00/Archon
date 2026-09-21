@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `none_failed_min_one_success` now blocks dependencies skipped because of an upstream failure (`upstream_failed`), even when another dependency succeeded. This fix applies by default, including across chains and includes; there is no opt-in. Joins previously admitted after a failure now skip and retain the original failed node in their skip cause. Condition skips and optional timeout skips (`on_timeout: skip`) remain admissible with a successful dependency. `all_success`, `one_success`, `all_done`, and `if_skipped` binding behavior are unchanged. (#3156)
 
+### Fixed
+
+- The Docker container no longer crash-loops on start when `~/.gitconfig` holds several `credential.https://github.com.helper` values, as `gh auth login` inside the container leaves behind. With `GH_TOKEN` set, the entrypoint now replaces all of them with its `GH_TOKEN` helper.
+
 ## [0.10.1] - 2026-08-30
 
 **This patch release contains a breaking change.** Built-in model tiers now ship for `claude` and `codex` only. If your install runs `pi`, `copilot`, or `opencode` and you have never configured `tiers:`, bundled workflows will refuse to load until you set them — read the Breaking section before upgrading. Everyone else gets a smaller review bill and four fixes.
