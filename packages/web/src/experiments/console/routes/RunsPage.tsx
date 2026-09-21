@@ -378,8 +378,7 @@ export function RunsPage(): ReactElement {
   }, [selectedRunId]);
 
   const open = (id: string, projId: string | null): void => {
-    if (projId === null) return;
-    navigate(`/console/p/${projId}/r/${id}`);
+    navigate(projId === null ? `/console/r/${id}` : `/console/p/${projId}/r/${id}`);
   };
 
   const bindings = useMemo<readonly Binding[]>(
@@ -522,6 +521,7 @@ export function RunsPage(): ReactElement {
                   setQuery('');
                 }
               }}
+              aria-label="Search runs"
               placeholder="Search workflow, project, run id…"
               spellCheck={false}
               className="min-w-0 flex-1 bg-transparent font-mono text-[12.5px] text-text-primary outline-none placeholder:text-text-tertiary"
@@ -531,7 +531,7 @@ export function RunsPage(): ReactElement {
 
         {scope === 'all' ? (
           <div className="rounded border border-dashed border-border bg-surface-inset/60 px-3 py-2 text-[12px] text-text-tertiary">
-            Pick a project on the left to start a run.
+            Choose a project to start a run.
           </div>
         ) : (
           <ProjectViewTabs projectId={scope} active="runs" />
@@ -540,7 +540,7 @@ export function RunsPage(): ReactElement {
 
       {/* Status sub-tabs — their own strip; the active underline overlaps the
           hairline below (design: .subtabs). */}
-      <div className="border-b border-border px-6">
+      <div className="shrink-0 overflow-x-auto border-b border-border px-6">
         <FilterChips value={filter} onChange={setFilter} counts={counts} />
       </div>
 

@@ -14,7 +14,7 @@ interface RunActionBarProps {
  *   running   → Cancel
  *   paused    → (nothing — the in-stream ApprovalPanel is the action surface)
  *   failed    → Resume · Abandon
- *   completed → Re-run (placeholder for M5 — navigates to the scoped Runs page)
+ *   completed → Re-run when the run has a project
  *   cancelled → Re-run
  *
  * Demo runs short-circuit the backend calls.
@@ -107,7 +107,7 @@ export function RunActionBar({ run }: RunActionBarProps): ReactElement | null {
           </button>
         ) : run.status === 'completed' || run.status === 'cancelled' ? (
           <span className="text-[12px] text-text-tertiary">
-            This run is {run.status}. Start a new one from the project page.
+            This run is {run.status}. Choose a project to start a new run.
           </span>
         ) : null}
 

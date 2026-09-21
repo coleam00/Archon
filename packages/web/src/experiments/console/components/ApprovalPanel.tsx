@@ -34,8 +34,7 @@ function decisionLabel(id: string, label: string | undefined): string {
  *     can branch on the answer.
  *   - **Every other decision**: two-step. The first click reveals an expanded
  *     textarea for the reviewer's text; the confirm button is only enabled once
- *     the textarea has content (mirrors the old UI's ConfirmRunActionDialog flow
- *     without a modal). `reject` behaves exactly as it always has — it is simply
+ *     the textarea has content. `reject` behaves exactly as it always has — it is simply
  *     one entry in the declared vocabulary now, not a hardcoded second button.
  *
  * Demo runs (id starts with `demo-`) short-circuit to a no-op so the

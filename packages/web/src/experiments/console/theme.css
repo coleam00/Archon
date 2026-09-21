@@ -1,8 +1,8 @@
 /*
  * Archon Console — brand foundation port.
  *
- * Scoped to `.console-root` so the production app's existing palette is
- * untouched. Tailwind v4's @theme inline (in index.css) defines --color-*
+ * Scoped to `.console-root` so authentication and other shared surfaces keep
+ * their base palette. Tailwind v4's @theme inline (in index.css) defines --color-*
  * theme tokens that reference plain CSS variables (--surface, --border,
  * --text-primary, etc.); redefining those CSS variables inside .console-root
  * cascades through every utility that reads them without needing a parallel
@@ -83,26 +83,16 @@
 
   /* Node variant stripes — the builder renders all eight variants. Six tokens
      (--node-command/-prompt/-bash/-loop/-approval/-wait) inherit from the
-     production :root in index.css; script and cancel exist only here
-     (console-scoped) until the production palette needs them. */
+     shared :root in index.css; script and cancel exist only here. */
   --node-script: oklch(0.7 0.14 140);
   --node-cancel: oklch(0.62 0.19 10);
 
-  /* shadcn-compatible overrides */
+  /* Console values for semantic utility names defined by the global theme. */
   --background: oklch(0.145 0.006 265);
   --foreground: var(--text-primary);
-  --card: var(--surface);
-  --card-foreground: var(--text-primary);
-  --popover: var(--surface-elevated);
-  --popover-foreground: var(--text-primary);
   --primary: var(--brand-magenta);
   --primary-foreground: oklch(0.985 0 0);
-  --secondary: var(--surface-elevated);
-  --secondary-foreground: var(--text-primary);
-  --muted: var(--surface-elevated);
-  --muted-foreground: var(--text-secondary);
   --destructive: var(--error);
-  --input: var(--border);
   --ring: var(--brand-magenta);
 
   /* Typography — Geist, with the SS01/CV11 alternates the brand uses. */
