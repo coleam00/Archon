@@ -171,6 +171,7 @@ const mockGetAgentProvider = mock<WorkflowDeps['getAgentProvider']>(_provider =>
     structuredOutput: 'enforced' as const,
     envInjection: true,
     costControl: true,
+    costReporting: true,
     effortControl: true,
     fallbackModel: true,
     sandbox: true,

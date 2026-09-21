@@ -60,6 +60,7 @@ export const CLAUDE_CAPABILITIES: ProviderCapabilities = {
   structuredOutput: 'enforced', // SDK output_config.format grammar-constrains decoding
   envInjection: true,
   costControl: true,
+  costReporting: true, // SDK resultMsg.total_cost_usd reaches the result chunk
   effortControl: true,
   fallbackModel: true,
   sandbox: true,

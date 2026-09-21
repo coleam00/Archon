@@ -347,6 +347,9 @@ export async function* streamMultiAgentOpencodeSession(
             .map(candidate => normalizeTokens(candidate.latestAssistantInfo))
             .filter((usage): usage is TokenUsage => usage !== undefined);
           const mergedUsage = mergeTokenUsage(perAgentUsage);
+          const cost = perAgentUsage.some(usage => usage.cost !== undefined)
+            ? perAgentUsage.reduce((sum, usage) => sum + (usage.cost ?? 0), 0)
+            : undefined;
           const tokens: TokenUsage | undefined =
             // A lone sub-agent passes through verbatim, as before — synthesizing `total`
             // and `cost` for it would change what a single-agent turn reports.
@@ -358,7 +361,7 @@ export async function* streamMultiAgentOpencodeSession(
                     (sum, usage) => sum + (usage.total ?? usage.input + usage.output),
                     0
                   ),
-                  cost: perAgentUsage.reduce((sum, usage) => sum + (usage.cost ?? 0), 0),
+                  ...(cost !== undefined ? { cost } : {}),
                 };
 
           // Fetch structured outputs from all agents
@@ -382,6 +385,7 @@ export async function* streamMultiAgentOpencodeSession(
           yield {
             type: 'result',
             ...(tokens ? { tokens } : {}),
+            ...(cost !== undefined ? { cost } : {}),
             ...(structuredOutputs ? { structuredOutput: structuredOutputs } : {}),
           };
           getLog().info({ nodeId }, 'opencode.multi_agent_completed');

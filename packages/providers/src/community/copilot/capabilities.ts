@@ -19,6 +19,7 @@ export const COPILOT_CAPABILITIES: ProviderCapabilities = {
   structuredOutput: 'best-effort', // prompt-augment + repair + validate + reask×3 (no SDK grammar)
   envInjection: true,
   costControl: false,
+  costReporting: false, // normalizeCopilotUsage captures token axes only
   effortControl: true,
   fallbackModel: false,
   sandbox: false,

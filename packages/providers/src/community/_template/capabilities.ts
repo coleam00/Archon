@@ -16,6 +16,7 @@ export const YOUR_CAPABILITIES: ProviderCapabilities = {
   structuredOutput: false,
   envInjection: false,
   costControl: false,
+  costReporting: false,
   effortControl: false,
   fallbackModel: false,
   sandbox: false,

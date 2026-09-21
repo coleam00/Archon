@@ -46,7 +46,8 @@ unsupported provider at load time and an implicitly resolved one at runtime.
 | Tool restrictions (`allowed_tools`/`denied_tools`) | ✅ | ❌ | ✅ | ✅ | ✅ |
 | Structured output (`output_format`) | **enforced** | **enforced** | **enforced** | best-effort | best-effort |
 | Env injection (`env:`) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Cost control (`maxBudgetUsd`) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Spend limit (`maxBudgetUsd`) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Cost reporting (`costUsd`) | ✅ | ❌ | ✅ | ✅ | ❌ |
 | Effort control (`effort`) | ✅ | ✅ | ❌ | ✅ | ✅ |
 | Fallback model (`fallbackModel`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Sandbox (`sandbox`) | ✅ | ❌ | ❌ | ❌ | ❌ |
