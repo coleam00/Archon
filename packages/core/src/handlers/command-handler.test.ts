@@ -11,7 +11,7 @@
 import { describe, test, expect, mock, beforeEach, afterAll, spyOn } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
-import type { Codebase, Conversation, Session } from '../types';
+import type { Codebase, Conversation, Session, WorkflowRequest } from '../types';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { DashboardWorkflowRun } from '../schemas/workflow-run';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
@@ -104,6 +104,39 @@ function makeWorkflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     ...overrides,
   };
 }
+
+function startRequest(
+  request: WorkflowRequest | undefined
+): Extract<WorkflowRequest, { kind: 'start' }> {
+  expect(request?.kind).toBe('start');
+  return request as Extract<WorkflowRequest, { kind: 'start' }>;
+}
+
+function resumeRequest(
+  request: WorkflowRequest | undefined
+): Extract<WorkflowRequest, { kind: 'resume' }> {
+  expect(request?.kind).toBe('resume');
+  return request as Extract<WorkflowRequest, { kind: 'resume' }>;
+}
+
+const workflowRequestTypeChecks = (): void => {
+  const run = makeWorkflowRun();
+  const resume: WorkflowRequest = { kind: 'resume', run };
+  void resume;
+  // @ts-expect-error A resume request must carry its selected run.
+  const missingRun: WorkflowRequest = { kind: 'resume' };
+  // @ts-expect-error A resume request cannot supply an independent graph.
+  const mismatchedGraph: WorkflowRequest = { kind: 'resume', run, definition: {} };
+  // @ts-expect-error A resume request cannot supply an independent run id.
+  const mismatchedId: WorkflowRequest = { kind: 'resume', run, resumeRunId: 'other-run' };
+  // @ts-expect-error A start request must carry a definition and arguments.
+  const incompleteStart: WorkflowRequest = { kind: 'start' };
+  void missingRun;
+  void mismatchedGraph;
+  void mismatchedId;
+  void incompleteStart;
+};
+void workflowRequestTypeChecks;
 
 const EMPTY_DASHBOARD_COUNTS = {
   all: 0,
@@ -1752,7 +1785,7 @@ describe('CommandHandler', () => {
         const result = await handleCommand(conversationWithCodebase, '/workflow run Assist');
 
         expect(result.success).toBe(true);
-        expect(result.workflow?.definition.name).toBe('assist');
+        expect(startRequest(result.workflow).definition.name).toBe('assist');
       });
 
       // #2213 — the run path, not just `/workflow list`. Chat and the console
@@ -1772,8 +1805,8 @@ describe('CommandHandler', () => {
         const result = await handleCommand(conversationWithCodebase, '/workflow run gated');
 
         expect(result.success).toBe(true);
-        expect(result.workflow?.definition.name).toBe('gated');
-        expect(result.workflow?.parseWarnings).toEqual([
+        expect(startRequest(result.workflow).definition.name).toBe('gated');
+        expect(startRequest(result.workflow).parseWarnings).toEqual([
           "Node 'plan': unknown key 'interactive' will be ignored.",
         ]);
       });
@@ -1791,7 +1824,7 @@ describe('CommandHandler', () => {
         const result = await handleCommand(conversationWithCodebase, '/workflow run clean');
 
         expect(result.success).toBe(true);
-        expect(result.workflow?.parseWarnings).toBeUndefined();
+        expect(startRequest(result.workflow).parseWarnings).toBeUndefined();
       });
 
       test('should match workflow name via suffix match', async () => {
@@ -1805,7 +1838,7 @@ describe('CommandHandler', () => {
         const result = await handleCommand(conversationWithCodebase, '/workflow run assist');
 
         expect(result.success).toBe(true);
-        expect(result.workflow?.definition.name).toBe('archon-assist');
+        expect(startRequest(result.workflow).definition.name).toBe('archon-assist');
       });
 
       test('should match workflow name via substring match', async () => {
@@ -1822,7 +1855,7 @@ describe('CommandHandler', () => {
         const result = await handleCommand(conversationWithCodebase, '/workflow run smart');
 
         expect(result.success).toBe(true);
-        expect(result.workflow?.definition.name).toBe('archon-smart-pr-review');
+        expect(startRequest(result.workflow).definition.name).toBe('archon-smart-pr-review');
       });
 
       test('should return failure with candidates on ambiguous suffix match', async () => {
@@ -2058,10 +2091,8 @@ describe('CommandHandler', () => {
         const result = await handleCommand(baseConversation, '/workflow resume run-123');
 
         expect(result.success).toBe(true);
-        expect(result.message).toContain('Resuming workflow: `implement`');
-        expect(result.workflow?.definition.name).toBe('implement');
-        expect(result.workflow?.args).toBe('test');
-        expect(result.workflow?.resumeRunId).toBe('run-123');
+        expect(result.message).toBe('Resume requested');
+        expect(resumeRequest(result.workflow).run).toBe(run);
       });
 
       test('should accept already-failed run without status change', async () => {
@@ -2081,21 +2112,20 @@ describe('CommandHandler', () => {
         const result = await handleCommand(baseConversation, '/workflow resume run-456');
 
         expect(result.success).toBe(true);
-        expect(result.workflow?.resumeRunId).toBe('run-456');
+        expect(resumeRequest(result.workflow).run.id).toBe('run-456');
         // Already failed — no status change needed
         expect(mockFailWorkflowRun).not.toHaveBeenCalled();
       });
 
-      test('should return error when workflow definition is unavailable', async () => {
-        mockGetWorkflowRun.mockResolvedValueOnce(
-          makeWorkflowRun({
-            id: 'run-missing-workflow',
-            workflow_name: 'missing-workflow',
-            conversation_id: 'conv-1',
-            status: 'failed' as const,
-            user_message: 'test',
-          })
-        );
+      test('defers workflow source preparation to the host', async () => {
+        const run = makeWorkflowRun({
+          id: 'run-missing-workflow',
+          workflow_name: 'missing-workflow',
+          conversation_id: 'conv-1',
+          status: 'failed' as const,
+          user_message: 'test',
+        });
+        mockGetWorkflowRun.mockResolvedValueOnce(run);
         spyDiscoverWorkflows.mockResolvedValueOnce({ workflows: [], errors: [] });
 
         const result = await handleCommand(
@@ -2103,22 +2133,22 @@ describe('CommandHandler', () => {
           '/workflow resume run-missing-workflow'
         );
 
-        expect(result.success).toBe(false);
-        expect(result.message).toContain('was not found');
-        expect(result.workflow).toBeUndefined();
+        expect(result.success).toBe(true);
+        expect(result.message).toBe('Resume requested');
+        expect(resumeRequest(result.workflow).run).toBe(run);
+        expect(spyDiscoverWorkflows).not.toHaveBeenCalled();
       });
 
-      test('should surface workflow load errors before not found during resume', async () => {
-        mockGetWorkflowRun.mockResolvedValueOnce(
-          makeWorkflowRun({
-            id: 'run-bad-workflow',
-            workflow_name: 'bad-workflow',
-            conversation_id: 'conv-1',
-            status: 'failed' as const,
-            user_message: 'test',
-            working_path: '/workspace/wt',
-          })
-        );
+      test('does not inspect live load errors before acknowledging resume', async () => {
+        const run = makeWorkflowRun({
+          id: 'run-bad-workflow',
+          workflow_name: 'bad-workflow',
+          conversation_id: 'conv-1',
+          status: 'failed' as const,
+          user_message: 'test',
+          working_path: '/workspace/wt',
+        });
+        mockGetWorkflowRun.mockResolvedValueOnce(run);
         spyDiscoverWorkflows.mockResolvedValueOnce({
           workflows: [],
           errors: [
@@ -2132,12 +2162,9 @@ describe('CommandHandler', () => {
 
         const result = await handleCommand(baseConversation, '/workflow resume run-bad-workflow');
 
-        expect(result.success).toBe(false);
-        expect(result.message).toContain(
-          'Workflow `bad-workflow` failed to load: Invalid workflow YAML'
-        );
-        expect(result.message).toContain('Fix the YAML file and try again');
-        expect(result.workflow).toBeUndefined();
+        expect(result.success).toBe(true);
+        expect(resumeRequest(result.workflow).run).toBe(run);
+        expect(spyDiscoverWorkflows).not.toHaveBeenCalled();
       });
 
       test('should reject resume of non-resumable run', async () => {
@@ -2314,8 +2341,8 @@ describe('CommandHandler', () => {
         expect(result.success).toBe(true);
         expect(result.message).toContain('Starting workflow: `test-workflow`');
         expect(result.workflow).toBeDefined();
-        expect(result.workflow?.definition.name).toBe('test-workflow');
-        expect(result.workflow?.args).toBe('');
+        expect(startRequest(result.workflow).definition.name).toBe('test-workflow');
+        expect(startRequest(result.workflow).args).toBe('');
       });
 
       test('should pass arguments to workflow', async () => {
@@ -2333,8 +2360,8 @@ describe('CommandHandler', () => {
 
         expect(result.success).toBe(true);
         expect(result.workflow).toBeDefined();
-        expect(result.workflow?.definition.name).toBe('fix-issue');
-        expect(result.workflow?.args).toBe('#42 add dark mode');
+        expect(startRequest(result.workflow).definition.name).toBe('fix-issue');
+        expect(startRequest(result.workflow).args).toBe('#42 add dark mode');
       });
 
       test('should parse --force after workflow name and strip it from args', async () => {
@@ -2351,8 +2378,8 @@ describe('CommandHandler', () => {
         );
 
         expect(result.success).toBe(true);
-        expect(result.workflow?.force).toBe(true);
-        expect(result.workflow?.args).toBe('do it');
+        expect(startRequest(result.workflow).force).toBe(true);
+        expect(startRequest(result.workflow).args).toBe('do it');
       });
 
       test('should parse --force anywhere in workflow args and strip it', async () => {
@@ -2369,8 +2396,8 @@ describe('CommandHandler', () => {
         );
 
         expect(result.success).toBe(true);
-        expect(result.workflow?.force).toBe(true);
-        expect(result.workflow?.args).toBe('do it');
+        expect(startRequest(result.workflow).force).toBe(true);
+        expect(startRequest(result.workflow).args).toBe('do it');
       });
 
       test('should leave force unset when --force is absent', async () => {
@@ -2387,8 +2414,8 @@ describe('CommandHandler', () => {
         );
 
         expect(result.success).toBe(true);
-        expect(result.workflow?.force).toBeUndefined();
-        expect(result.workflow?.args).toBe('do it');
+        expect(startRequest(result.workflow).force).toBeUndefined();
+        expect(startRequest(result.workflow).args).toBe('do it');
       });
 
       test('should return not-found when no codebase is configured', async () => {
@@ -2708,12 +2735,8 @@ describe('CommandHandler', () => {
 
         expect(result.success).toBe(true);
         expect(result.message).toContain('approved');
-        expect(result.message).toContain('Resuming');
-        expect(result.workflow?.resumeRunId).toBe('run-gate');
-        expect(result.workflow?.resumeRun).toBe(run);
-        expect(result.workflow?.definition.name).toBe('gated-wf');
-        // The run's own prompt drives the resume, not the approve comment.
-        expect(result.workflow?.args).toBe('original prompt');
+        expect(result.message).toContain('Continuation requested');
+        expect(resumeRequest(result.workflow).run).toBe(run);
       });
 
       test('reject with an on_reject rework hands back the resume payload', async () => {
@@ -2736,8 +2759,9 @@ describe('CommandHandler', () => {
         );
 
         expect(result.success).toBe(true);
-        expect(result.message).toContain('Reworking');
-        expect(result.workflow?.resumeRunId).toBe('run-gate');
+        expect(result.message).toContain('Feedback recorded');
+        expect(result.message).toContain('Continuation requested');
+        expect(resumeRequest(result.workflow).run.id).toBe('run-gate');
       });
 
       test('reject that cancels the run hands back nothing to resume', async () => {
@@ -2772,21 +2796,18 @@ describe('CommandHandler', () => {
         expect(result.workflow).toBeUndefined();
       });
 
-      test('an unresolvable continuation still reports the decision as recorded', async () => {
+      test('a recorded decision requests continuation without producer source preflight', async () => {
         const run = pausedRun();
         stubRunReads(run);
-        // The workflow YAML is gone, so the run cannot be continued.
         spyDiscoverWorkflows?.mockResolvedValue({ workflows: [], errors: [] });
 
         const result = await handleCommand(approveConversation, '/workflow approve run-gate');
 
-        // success:false would send the user to re-approve a gate that is already
-        // resolved — and the second approve throws.
         expect(result.success).toBe(true);
         expect(result.message).toContain('approved');
-        expect(result.message).toContain('could not be continued automatically');
-        expect(result.message).toContain('/workflow resume run-gate');
-        expect(result.workflow).toBeUndefined();
+        expect(result.message).toContain('Continuation requested');
+        expect(resumeRequest(result.workflow).run).toBe(run);
+        expect(spyDiscoverWorkflows).not.toHaveBeenCalled();
       });
     });
 
@@ -3057,7 +3078,7 @@ describe('CommandHandler', () => {
         );
 
         expect(result.success).toBe(true);
-        expect(result.message).toContain('Reworking');
+        expect(result.message).toContain('Feedback recorded');
         // Stays 'paused' (no status write) — rework staged on the approval context,
         // stamped atomically via the CAS (#2075/#2113), with the audit event in the
         // same transaction (#2146)

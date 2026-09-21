@@ -2569,7 +2569,7 @@ export function registerApiRoutes(
       }
       // Explicit resume targeting: `/workflow resume <id>` routes through the
       // command handler's resume path, which validates the run and hands the
-      // orchestrator an explicit resumeRun. A bare `/workflow run <name>` would
+      // orchestrator a resume request carrying that run. A bare `/workflow run <name>` would
       // instead rely on implicit resume detection and collide with the
       // ambiguity guard for any non-paused resumable state (#2075).
       const resumeMessage = `/workflow resume ${run.id}`;
@@ -3702,7 +3702,7 @@ export function registerApiRoutes(
       }
       // Dispatch resume by sending `/workflow resume <id>` to the parent web
       // conversation; the command handler validates the run and hands the
-      // orchestrator an explicit resumeRun to hydrate. Explicit targeting (not
+      // orchestrator a resume request carrying that run. Explicit targeting (not
       // a bare `/workflow run <name>`) so a genuinely-failed run resumes
       // directly instead of hitting the disambiguation prompt (#2075).
       // Mirrors the approve/reject auto-resume path.

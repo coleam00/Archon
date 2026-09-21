@@ -149,7 +149,11 @@
       "src/services/run-attention-watch.test.ts"
     ],
     [
-      "src/workflows/"
+      "src/workflows/store-adapter.test.ts",
+      "src/workflows/child-isolation-resolver.test.ts"
+    ],
+    [
+      "src/workflows/resolve-run-workflow.test.ts"
     ],
     [
       "src/operations/workflow-operations.test.ts"

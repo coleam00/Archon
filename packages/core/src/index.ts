@@ -28,6 +28,7 @@ export {
   type Codebase,
   type Session,
   type CommandResult,
+  type WorkflowRequest,
   type IPlatformAdapter,
   type IWebPlatformAdapter,
   isWebAdapter,
