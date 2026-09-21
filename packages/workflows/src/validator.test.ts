@@ -1652,6 +1652,55 @@ describe('validateWorkflowResources — strict-schema required coverage (#2945)'
     expect(errs[0].nodeId).toBe('body');
   });
 
+  test('loop_group provider becomes the body provider during validation', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'group',
+        kind: 'loop_group',
+        provider: 'codex',
+        loop_group: {
+          until_bash: 'exit 0',
+          max_iterations: 1,
+          nodes: [makeAgent('body', { output_format: looseSchema })],
+        },
+      } as unknown as DagNode,
+    ]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'claude');
+    const errors = issues.filter(i => i.field === 'output_format' && i.level === 'error');
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0].nodeId).toBe('body');
+    expect(errors[0].message).toContain("Provider 'codex'");
+  });
+
+  test("loop_group model's provider becomes the body provider during validation", async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'group',
+        kind: 'loop_group',
+        model: '@codex-group',
+        loop_group: {
+          until_bash: 'exit 0',
+          max_iterations: 1,
+          nodes: [makeAgent('body', { output_format: looseSchema })],
+        },
+      } as unknown as DagNode,
+    ]);
+
+    const issues = await validateWorkflowResources(
+      workflow,
+      tmpDir,
+      { aliases: { '@codex-group': { provider: 'codex', model: 'gpt-5.5' } } },
+      'claude'
+    );
+    const errors = issues.filter(i => i.field === 'output_format' && i.level === 'error');
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0].nodeId).toBe('body');
+    expect(errors[0].message).toContain("Provider 'codex'");
+  });
+
   test('loop_group inert schema under Codex is skipped', async () => {
     const workflow = makeWorkflow('test', [
       {

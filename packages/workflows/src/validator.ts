@@ -467,20 +467,30 @@ export async function validateWorkflowResources(
     }
   }
 
-  // Flatten top-level nodes plus every loop_group body (recursing into nested
-  // loop_groups) so resource checks (commands, mcp, skills, scripts) validate
-  // body nodes too. ID-uniqueness/cycle checks are the loader's job; the validator
-  // only checks referenced resources exist, so flattening is safe here.
-  const allNodes: (DagNode | IncludeDirective)[] = [];
-  const collectNodes = (nodes: readonly (DagNode | IncludeDirective)[]): void => {
-    for (const n of nodes) {
-      allNodes.push(n);
-      if (!isIncludeDirective(n) && isLoopGroupNode(n)) collectNodes(n.loop_group.nodes);
+  // Flatten top-level nodes plus every loop_group body while carrying the provider
+  // scope execution gives each group. Body nodes inherit the group's resolved
+  // provider/model unless they override it themselves.
+  const allNodes: {
+    node: DagNode | IncludeDirective;
+    provider: string | undefined;
+  }[] = [];
+  const collectNodes = (
+    nodes: readonly (DagNode | IncludeDirective)[],
+    inheritedProvider: string | undefined
+  ): void => {
+    for (const node of nodes) {
+      const provider = isIncludeDirective(node)
+        ? inheritedProvider
+        : resolveValidationProvider(node, inheritedProvider, defaultProvider, aiProfile);
+      allNodes.push({ node, provider });
+      if (!isIncludeDirective(node) && isLoopGroupNode(node)) {
+        collectNodes(node.loop_group.nodes, provider);
+      }
     }
   };
-  collectNodes(workflow.nodes);
+  collectNodes(workflow.nodes, effectiveWorkflowProvider);
 
-  for (const node of allNodes) {
+  for (const { node, provider } of allNodes) {
     // Include directives carry no resources to check — the target workflow is resolved
     // and inlined at DISCOVERY time (see include-expander.ts), so discovery-fed
     // validation (CLI `validate workflows`) sees the already-expanded nodes and checks
@@ -520,12 +530,6 @@ export async function validateWorkflowResources(
       }
     }
 
-    const provider = resolveValidationProvider(
-      node,
-      effectiveWorkflowProvider,
-      defaultProvider,
-      aiProfile
-    );
     const providerCaps =
       provider && isRegisteredProvider(provider) ? getProviderCapabilities(provider) : undefined;
 
