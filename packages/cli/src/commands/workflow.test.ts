@@ -463,7 +463,13 @@ mock.module('@archon/core/db/conversations', () => ({
   getOrCreateConversation: mock(() =>
     Promise.resolve({ id: 'conv-123', platform_type: 'cli', platform_conversation_id: 'cli-123' })
   ),
-  getConversationById: mock(() => Promise.resolve(null)),
+  getConversationById: mock(() =>
+    Promise.resolve({
+      id: 'conv-123',
+      platform_type: 'cli',
+      platform_conversation_id: 'cli-123',
+    })
+  ),
   updateConversation: mock(() => Promise.resolve()),
 }));
 
@@ -12417,5 +12423,48 @@ describe('workflowWaitCommand', () => {
     await expect(workflowWaitCommand(FULL_ID, undefined, '/repo')).rejects.toThrow(
       'Failed to wait for workflow run: database unreachable'
     );
+  });
+});
+
+describe('workflowRunCommand — continuation conversation lookup', () => {
+  it('refuses before opening a new conversation when the lookup fails', async () => {
+    const { hydrateResumableRun } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
+
+    (
+      workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>
+    ).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'resume-thread' })],
+      errors: [],
+    });
+    (workflowDb.findResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-prior',
+      working_path: null,
+      workflow_name: 'resume-thread',
+      conversation_id: 'conv-prior',
+    });
+    (hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      preCreatedRun: { id: 'run-prior', workflow_name: 'resume-thread' },
+      priorCompletedNodes: new Map([['node-a', 'done']]),
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-resume',
+      default_cwd: '/repo/root',
+      default_branch: 'develop',
+    });
+    (conversationDb.getConversationById as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error('database busy')
+    );
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockClear();
+
+    await expect(
+      workflowRunCommand('/repo/root', 'resume-thread', 'go', { resume: true })
+    ).rejects.toThrow(
+      "Failed to load conversation 'conv-prior' for workflow run 'run-prior': database busy"
+    );
+    expect(conversationDb.getOrCreateConversation).not.toHaveBeenCalled();
   });
 });
