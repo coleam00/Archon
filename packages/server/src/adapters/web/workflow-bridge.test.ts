@@ -57,7 +57,7 @@ test('node skip projection preserves the live skip cause', () => {
   });
 });
 
-test('prior-success replay projects as a skipped dag_node carrying prior_success', () => {
+test('prior-success replay projects as a completed dag_node', () => {
   const event: WorkflowEmitterEvent = {
     type: 'node_skipped_prior_success',
     runId: 'run-1',
@@ -70,9 +70,9 @@ test('prior-success replay projects as a skipped dag_node carrying prior_success
     type: 'dag_node',
     runId: 'run-1',
     nodeId: 'publish',
-    status: 'skipped',
-    reason: 'prior_success',
+    status: 'completed',
   });
+  expect(payload).not.toHaveProperty('reason');
   expect(payload).not.toHaveProperty('cause');
 });
 

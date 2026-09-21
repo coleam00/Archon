@@ -120,16 +120,13 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
       return JSON.stringify(payload);
     }
 
-    // The dashboard's live store reconciles from the REST refetch, so the prior-success
-    // replay keeps the `skipped` status it already had; #2978 only changes how Slack renders it.
     case 'node_skipped_prior_success':
       return JSON.stringify({
         type: 'dag_node',
         runId: event.runId,
         nodeId: event.nodeId,
         name: event.nodeName,
-        status: 'skipped',
-        reason: 'prior_success',
+        status: 'completed',
         timestamp: Date.now(),
       } satisfies DagNodeSseEvent);
 
@@ -265,7 +262,7 @@ const ROW_NODE_STATUS: Record<string, 'running' | 'completed' | 'failed' | 'skip
   node_failed: 'failed',
   loop_iteration_failed: 'failed',
   node_skipped: 'skipped',
-  node_skipped_prior_success: 'skipped',
+  node_skipped_prior_success: 'completed',
 };
 
 /** SSE payload shapes the console dashboard reacts to — a typed contract for the hand-built JSON. */
@@ -363,12 +360,7 @@ export function mapWorkflowEventRow(row: WorkflowEventRow): string | null {
         row.event_type === 'node_failed' || row.event_type === 'loop_iteration_failed'
           ? dataStr(data, 'error')
           : undefined,
-      reason:
-        row.event_type === 'node_skipped_prior_success'
-          ? 'prior_success'
-          : row.event_type === 'node_skipped'
-            ? dataSkipReason(data)
-            : undefined,
+      reason: row.event_type === 'node_skipped' ? dataSkipReason(data) : undefined,
       cause: row.event_type === 'node_skipped' ? dataSkipCause(data) : undefined,
       timestamp,
     };
