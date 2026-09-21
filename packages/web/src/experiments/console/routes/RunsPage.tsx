@@ -414,7 +414,9 @@ export function RunsPage(): ReactElement {
         label: 'Open selected',
         when: (): boolean => selectedRun !== null,
         run: (): void => {
-          if (selectedRun !== null) navigate(runDetailPath(selectedRun));
+          if (selectedRun !== null && !selectedRun.id.startsWith('demo-')) {
+            navigate(runDetailPath(selectedRun));
+          }
         },
       },
       {
