@@ -258,6 +258,61 @@ describe('mapCopilotEvent', () => {
     ]);
   });
 
+  test('tool.execution_complete failure with error.message and no result keeps the message', () => {
+    const ctx = makeCtx();
+    ctx.toolCallIdToName.set('call-1', 'read');
+    const out = mapCopilotEvent(
+      evt('tool.execution_complete', {
+        toolCallId: 'call-1',
+        success: false,
+        error: { message: 'permission denied', code: 'EACCES' },
+      }),
+      ctx
+    );
+    expect(out).toEqual([
+      { type: 'system', content: '⚠️ Tool read failed' },
+      {
+        type: 'tool_result',
+        toolName: 'read',
+        toolOutput: '❌ permission denied',
+        toolCallId: 'call-1',
+        toolOutcome: 'error',
+      },
+    ]);
+  });
+
+  test('tool.execution_complete failure with error.message and distinct result keeps both', () => {
+    const ctx = makeCtx();
+    ctx.toolCallIdToName.set('c1', 'bash');
+    const out = mapCopilotEvent(
+      evt('tool.execution_complete', {
+        toolCallId: 'c1',
+        success: false,
+        error: { message: 'command exited with code 1' },
+        result: { content: 'brief', detailedContent: 'stderr: file not found' },
+      }),
+      ctx
+    );
+    expect((out[1] as { toolOutput: string }).toolOutput).toBe(
+      '❌ command exited with code 1\nstderr: file not found'
+    );
+  });
+
+  test('tool.execution_complete failure does not repeat error.message already in result', () => {
+    const ctx = makeCtx();
+    ctx.toolCallIdToName.set('c1', 'bash');
+    const out = mapCopilotEvent(
+      evt('tool.execution_complete', {
+        toolCallId: 'c1',
+        success: false,
+        error: { message: 'permission denied' },
+        result: { content: 'Error: permission denied' },
+      }),
+      ctx
+    );
+    expect((out[1] as { toolOutput: string }).toolOutput).toBe('❌ Error: permission denied');
+  });
+
   test('tool.execution_complete with unknown toolCallId uses "unknown"', () => {
     const ctx = makeCtx();
     const out = mapCopilotEvent(

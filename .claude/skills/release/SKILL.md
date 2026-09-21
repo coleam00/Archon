@@ -260,9 +260,9 @@ gh pr view <N> --repo coleam00/Archon --json title,body
    - `Cargo.toml`: update `version = "x.y.z"`
 
 2. **Workspace version sync** (monorepo only):
-   - If `scripts/sync-versions.sh` exists, run `bash scripts/sync-versions.sh` to sync all `packages/*/package.json` versions to match the root version.
+   - If `scripts/sync-versions.sh` exists, run `bash scripts/sync-versions.sh` to sync all `packages/*/package.json` versions to match the root version. The script also refreshes `bun.lock` itself, so the workspace versions land in the lockfile too.
 
-3. **Lockfile refresh** (stack-dependent):
+3. **Lockfile refresh** (stack-dependent) — skip the matching line if step 2's script already refreshed the lockfile:
    - `package.json` + `bun.lock`: run `bun install`
    - `package.json` + `package-lock.json`: run `npm install --package-lock-only`
    - `pyproject.toml` + `uv.lock`: run `uv lock --quiet`
