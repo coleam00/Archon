@@ -158,7 +158,7 @@ export async function resumeWorkflowRunFromServer(
         platform,
         conversationId: platformConversationId,
         cwd: workingPath,
-        workflow: continuation.workflow.definition,
+        legacyWorkflow: continuation.workflow.definition,
         userMessage: run.user_message ?? '',
         conversationDbId: run.conversation_id,
         run,

@@ -71,7 +71,11 @@ mock.module('@archon/git', () => ({
 // (dag-executor.test.ts / subrun.test.ts own that); this suite only proves
 // the InProcessWorkflowEngine -> executeWorkflow/hydrateResumableRun wiring. ---
 type ExecuteDagWorkflow = typeof import('./dag-executor').executeDagWorkflow;
-const mockExecuteDagWorkflow = mock<ExecuteDagWorkflow>(async () => undefined);
+let executedWorkflow: Parameters<ExecuteDagWorkflow>[0]['workflow'] | undefined;
+const mockExecuteDagWorkflow = mock<ExecuteDagWorkflow>(async input => {
+  executedWorkflow = input.workflow;
+  return undefined;
+});
 mock.module('./dag-executor', () => ({
   executeDagWorkflow: mockExecuteDagWorkflow,
   childOutcomeFromRun: mock((run: { id: string; status: string }) => ({
@@ -108,4 +112,6 @@ registerCommunityProviders();
 import { InProcessWorkflowEngine } from './in-process-engine';
 import { runWorkflowEngineContractTests } from './engine-contract-tests';
 
-runWorkflowEngineContractTests(deps => new InProcessWorkflowEngine(deps));
+runWorkflowEngineContractTests(deps => new InProcessWorkflowEngine(deps), {
+  executedWorkflow: () => executedWorkflow,
+});

@@ -80,6 +80,7 @@ mock.module('@archon/paths', () => ({
 mock.module('@archon/workflows/executor', () => ({
   executeWorkflow: mockExecuteWorkflow,
   hydrateResumableRun: mockHydrateResumableRun,
+  resolveContinuationWorkflow: mock(async () => undefined),
 }));
 
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';

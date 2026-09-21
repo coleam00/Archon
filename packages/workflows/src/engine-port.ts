@@ -32,18 +32,20 @@ interface WorkflowEngineCallBase {
   platform: IWorkflowPlatform;
   conversationId: string;
   cwd: string;
-  workflow: ResolvedWorkflow;
   userMessage: string;
   conversationDbId: string;
 }
 
 export interface WorkflowEngineSubmitInput extends WorkflowEngineCallBase {
+  workflow: ResolvedWorkflow;
   /** A pre-created row must still be pending; replay state belongs to resume. */
   options?: WorkflowSubmitOptions;
 }
 
 export interface WorkflowResumeInput extends WorkflowEngineCallBase {
   run: WorkflowRun;
+  /** Used only for runs created before frozen workflow-source captures existed. */
+  legacyWorkflow?: ResolvedWorkflow;
   cursor?: WorkflowResumeCursor;
   options?: WorkflowResumeOptions;
 }

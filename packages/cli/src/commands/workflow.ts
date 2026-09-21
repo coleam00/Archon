@@ -3227,7 +3227,7 @@ async function runWorkflowWithOwnedSource(
           platform: adapter,
           conversationId,
           cwd: workingCwd,
-          workflow,
+          legacyWorkflow: workflow,
           userMessage,
           conversationDbId: conversation.id,
           run: resumable,

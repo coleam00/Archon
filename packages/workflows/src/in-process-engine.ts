@@ -1,4 +1,4 @@
-import { executeWorkflow, hydrateResumableRun } from './executor';
+import { executeWorkflow, hydrateResumableRun, resolveContinuationWorkflow } from './executor';
 import type { ExecuteWorkflowOptions } from './executor';
 import {
   FRESH_RUN_FORBIDDEN_OPTIONS,
@@ -46,6 +46,21 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
 
   async resume(input: WorkflowResumeInput): Promise<WorkflowResumeAdmission> {
     rejectOptions(input.options, RESUME_FORBIDDEN_OPTIONS, 'resume');
+    const continuation = await resolveContinuationWorkflow(this.deps, input.run, input.cwd);
+    let workflow = continuation?.workflow;
+    if (!workflow) {
+      if (!input.legacyWorkflow) {
+        throw new Error(
+          `Workflow run '${input.run.id}' has no captured source; supply its legacy workflow fallback.`
+        );
+      }
+      if (input.legacyWorkflow.name !== input.run.workflow_name) {
+        throw new Error(
+          `Legacy workflow fallback '${input.legacyWorkflow.name}' does not match run workflow '${input.run.workflow_name}'.`
+        );
+      }
+      workflow = input.legacyWorkflow;
+    }
     const hydrated = await hydrateResumableRun(this.deps, input.run, input.cursor);
     if (hydrated === null) return { accepted: false, reason: 'nothing-to-resume' };
 
@@ -54,7 +69,7 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
       input.platform,
       input.conversationId,
       input.cwd,
-      input.workflow,
+      workflow,
       input.userMessage,
       input.conversationDbId,
       { ...input.options, ...hydrated }

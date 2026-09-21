@@ -1267,7 +1267,7 @@ async function dispatchOrchestratorWorkflowOwned(
             platform,
             conversationId,
             cwd: resumableWorkingPath,
-            workflow,
+            legacyWorkflow: workflow,
             userMessage,
             conversationDbId: conversation.id,
             run: resumableRun,
