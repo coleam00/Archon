@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useState, type ReactElement } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router';
-import { Settings, Workflow, ArrowLeft, PenTool, type LucideIcon } from 'lucide-react';
+import { Settings, PenTool, type LucideIcon } from 'lucide-react';
+import { SessionMenu } from '@/components/auth/SessionMenu';
 import { ProjectRow } from './ProjectRow';
 import { EnvVarsDialog } from './EnvVarsDialog';
 import { useEntity, invalidate } from '../store/cache';
@@ -12,9 +13,20 @@ interface ProjectRailProps {
   onAddProject: () => void;
 }
 
-async function handleRemove(projectId: string): Promise<void> {
-  await skill.removeProject(projectId);
-  invalidate(K.projects);
+interface ProjectRemovalActions {
+  remove: (projectId: string) => Promise<void>;
+  invalidateProjects: () => void;
+  navigateToOverview: () => void;
+}
+
+export async function removeProjectFromRail(
+  projectId: string,
+  selectedProjectId: string | null,
+  actions: ProjectRemovalActions
+): Promise<void> {
+  await actions.remove(projectId);
+  actions.invalidateProjects();
+  if (selectedProjectId === projectId) actions.navigateToOverview();
 }
 
 /** Extract the project id from /console/p/:id (and /console/p/:id/r/:runId). */
@@ -54,7 +66,7 @@ function writeRailWidth(w: number): void {
 const RAIL_NAV_LINK_CLASS =
   'flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-1.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary';
 
-/** A row in the rail's bottom nav menu (Builder / Settings / Workflows / Old UI). */
+/** A destination in the console navigation. */
 function RailNavLink({
   to,
   icon: Icon,
@@ -106,6 +118,21 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
 
   const allSelected = scope === 'all';
 
+  const removeProject = useCallback(
+    async (projectId: string): Promise<void> => {
+      await removeProjectFromRail(projectId, extractProjectId(location.pathname), {
+        remove: skill.removeProject,
+        invalidateProjects: () => {
+          invalidate(K.projects);
+        },
+        navigateToOverview: () => {
+          navigate('/console');
+        },
+      });
+    },
+    [location.pathname, navigate]
+  );
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     const list = projects ?? [];
@@ -155,7 +182,7 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
     <nav
       aria-label="Projects"
       style={{ width, flexBasis: width }}
-      className="relative flex h-full shrink-0 flex-col border-r border-border bg-surface-inset"
+      className="relative flex h-full max-w-full shrink-0 flex-col border-r border-border bg-surface-inset"
     >
       {/* Header: brand + label + count + filter */}
       <div className="px-3.5 pb-2.5 pt-4">
@@ -194,6 +221,7 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
             onChange={e => {
               setQuery(e.target.value);
             }}
+            aria-label="Filter projects"
             placeholder="Filter projects…"
             spellCheck={false}
             className="min-w-0 flex-1 bg-transparent text-[13px] text-text-primary outline-none placeholder:text-text-tertiary"
@@ -268,10 +296,7 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
                 onClick={() => {
                   navigate(`/console/p/${p.id}`);
                 }}
-                onRemove={() => {
-                  void handleRemove(p.id);
-                  if (scope === p.id) navigate('/console');
-                }}
+                onRemove={() => removeProject(p.id)}
                 onEditEnv={() => {
                   setEnvProject(p);
                 }}
@@ -281,7 +306,9 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
         ))}
         {groups.length === 0 && error === undefined ? (
           <div className="px-3 py-6 text-center text-[12.5px] text-text-tertiary">
-            No projects match “{query}”.
+            {query.trim() === ''
+              ? 'No projects yet. Add one to get started.'
+              : `No projects match “${query}”.`}
           </div>
         ) : null}
       </div>
@@ -302,8 +329,7 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
         </button>
       </div>
 
-      {/* Nav menu — settings + the classic-UI escape hatches, under Add project
-          and separated from it by the border-t divider. */}
+      {/* Console navigation */}
       <div className="flex flex-col gap-0.5 border-t border-border px-2.5 py-2">
         <RailNavLink
           to="/console/builder"
@@ -318,19 +344,9 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
           label="Settings"
           title="Settings ( , )"
         />
-        <RailNavLink
-          to="/legacy/workflows"
-          icon={Workflow}
-          label="Workflows"
-          title="Workflows (classic UI)"
-        />
-        <RailNavLink
-          to="/legacy"
-          icon={ArrowLeft}
-          label="Old UI"
-          title="Switch back to the classic UI"
-        />
       </div>
+
+      <SessionMenu />
 
       {/* Resize handle */}
       <div

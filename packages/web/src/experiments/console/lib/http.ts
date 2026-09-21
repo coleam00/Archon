@@ -1,7 +1,6 @@
 /**
- * Tiny HTTP helpers owned by the console spike. Copied from packages/web/src/lib/api.ts
- * (lines 17-70 at time of spike) rather than imported, so the spike remains
- * decoupled from the production API client.
+ * Tiny HTTP helpers owned by the console. Console skills use this boundary for
+ * runtime API calls.
  */
 
 const API_PORT = (import.meta.env.VITE_API_PORT as string | undefined) ?? '3090';

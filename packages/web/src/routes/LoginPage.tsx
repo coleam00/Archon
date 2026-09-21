@@ -1,12 +1,14 @@
 import { useState } from 'react';
-import { Navigate, useNavigate } from 'react-router';
+import { Navigate, useLocation, useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { getAuthStatus } from '@/lib/api';
+import { consoleReturnDestination } from '@/lib/auth-navigation';
+import { authStatusQuery } from '@/lib/auth-status';
 import { signIn, signUp, useSession } from '@/lib/auth-client';
 
 type Mode = 'login' | 'signup';
+
+const inputClassName =
+  'h-10 w-full rounded-md border border-border bg-background px-3 text-base text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-primary';
 
 /**
  * Email/password login + signup for opt-in web auth. Signup may be gated by an
@@ -15,12 +17,10 @@ type Mode = 'login' | 'signup';
  */
 export function LoginPage(): React.ReactElement {
   const navigate = useNavigate();
+  const location = useLocation();
+  const returnTo = consoleReturnDestination(location.state);
   const { data: session } = useSession();
-  const { data: status } = useQuery({
-    queryKey: ['auth-status'],
-    queryFn: getAuthStatus,
-    staleTime: 5 * 60 * 1000,
-  });
+  const { data: status } = useQuery(authStatusQuery);
 
   const [mode, setMode] = useState<Mode>('login');
   const [name, setName] = useState('');
@@ -33,7 +33,7 @@ export function LoginPage(): React.ReactElement {
   // redirect (not an imperative navigate() in render) so we short-circuit before
   // rendering the form and don't fire a side effect during React's render phase.
   if (session?.user || status?.enabled === false) {
-    return <Navigate to="/" replace />;
+    return <Navigate to={returnTo} replace />;
   }
 
   async function handleSubmit(e: React.FormEvent): Promise<void> {
@@ -49,7 +49,7 @@ export function LoginPage(): React.ReactElement {
         setError(result.error.message ?? 'Authentication failed. Please try again.');
         return;
       }
-      navigate('/', { replace: true });
+      navigate(returnTo, { replace: true });
     } catch {
       setError('Could not reach the server. Please try again.');
     } finally {
@@ -95,7 +95,8 @@ export function LoginPage(): React.ReactElement {
           {isSignup && (
             <label className="flex flex-col gap-1">
               <span className="text-xs font-medium text-text-secondary">Name</span>
-              <Input
+              <input
+                className={inputClassName}
                 type="text"
                 autoComplete="name"
                 value={name}
@@ -108,7 +109,8 @@ export function LoginPage(): React.ReactElement {
           )}
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-text-secondary">Email</span>
-            <Input
+            <input
+              className={inputClassName}
               type="email"
               autoComplete="email"
               required
@@ -121,7 +123,8 @@ export function LoginPage(): React.ReactElement {
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-text-secondary">Password</span>
-            <Input
+            <input
+              className={inputClassName}
               type="password"
               autoComplete={isSignup ? 'new-password' : 'current-password'}
               required
@@ -134,9 +137,13 @@ export function LoginPage(): React.ReactElement {
             />
           </label>
 
-          <Button type="submit" disabled={submitting} className="mt-2 w-full">
+          <button
+            type="submit"
+            disabled={submitting}
+            className="mt-2 h-10 w-full rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground hover:opacity-90 focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50"
+          >
             {submitting ? 'Please wait…' : isSignup ? 'Create account' : 'Sign in'}
-          </Button>
+          </button>
         </form>
 
         {signupAllowed && (

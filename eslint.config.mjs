@@ -47,9 +47,6 @@ export default tseslint.config(
       '*.d.ts', // Root-level declaration files (not in tsconfig project scope)
       '**/*.generated.d.ts', // Auto-generated declaration files (e.g. openapi-typescript output)
       'packages/web/vite.config.ts', // Vite config doesn't need type-checked linting
-      'packages/web/components.json',
-      'packages/web/src/components/ui/**', // shadcn/ui auto-generated components
-      'packages/web/src/lib/utils.ts', // shadcn/ui utility file
     ],
   },
 
@@ -161,9 +158,8 @@ export default tseslint.config(
     },
   },
 
-  // Console spike (packages/web/src/experiments/console/**) — isolation guard.
-  // This experiment must not couple to the production web UI's state/components
-  // so that it can be extracted or discarded cleanly.
+  // The console owns its API and reactive state instead of growing a second
+  // application data layer beside its skills and cache.
   {
     files: ['packages/web/src/experiments/console/**/*.{ts,tsx}'],
     rules: {
@@ -172,30 +168,8 @@ export default tseslint.config(
         {
           patterns: [
             {
-              // `**` matches nested paths too; the single `*` form let
-              // experiments couple to `@/components/layout/...` etc.
-              group: [
-                '@/components/**',
-                '@/contexts/**',
-                '@/hooks/**',
-                '@/routes/**',
-                '@/stores/**',
-              ],
-              message:
-                'The console spike must not import from production web UI modules. See packages/web/src/experiments/console/README.md.',
-            },
-            {
-              // Block every named import from `@/lib/api` — only generated
-              // types from `@/lib/api.generated` are allowed (different
-              // module path, not matched by this glob).
-              group: ['@/lib/api'],
-              message:
-                'Import only types from @/lib/api.generated. Skill calls go through packages/web/src/experiments/console/skills/.',
-            },
-            {
               group: ['@tanstack/react-query'],
-              message:
-                'The console spike uses its own reactive store (store/cache.ts). No React Query.',
+              message: 'The console uses its own reactive store (store/cache.ts).',
             },
           ],
         },

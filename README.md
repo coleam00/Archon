@@ -95,7 +95,7 @@ Looking for the original Python-based Archon (task management + RAG)? It's fully
 
 ## Getting Started
 
-> **Most users should start with the [Full Setup](#full-setup-5-minutes)** - it walks you through credentials, installs the Archon skill into your projects, and gives you the web dashboard.
+> **Most users should start with the [Full Setup](#full-setup-5-minutes)** - it walks you through credentials, installs the Archon skill into your projects, and gives you the web console.
 >
 > **Already have Claude Code and just want the CLI?** Jump to the [Quick Install](#quick-install-30-seconds).
 
@@ -215,17 +215,16 @@ The coding agent handles workflow selection, branch naming, and worktree isolati
 
 ## Web UI
 
-Archon includes a web dashboard for chatting with your coding agent, running workflows, and monitoring activity. Run `archon serve` to start it, whichever way you installed. A binary downloads the matching web UI on first run. A source checkout serves the copy you build: run `bun run build:web` once from the repo root, then `archon serve`.
+Archon includes a web console for running workflows, inspecting runs, and chatting with your coding agent. Run `archon serve` to start it, whichever way you installed. A binary downloads the matching Web UI on first run. A source checkout serves the copy you build: run `bun run build:web` once from the repo root, then `archon serve`.
 
-Register a project by clicking **+** next to "Project" in the chat sidebar - enter a GitHub URL or local path. Then start a conversation, invoke workflows, and watch progress in real time.
+Register a project with **Add project** in the project rail, then enter a GitHub URL or local path. Select the project to start a run or open its chat.
 
 **Key pages:**
-- **Chat** - Conversation interface with real-time streaming and tool call visualization
-- **Dashboard** - Mission Control for monitoring running workflows, with filterable history by project, status, and date
-- **Workflow Builder** - Visual drag-and-drop editor for creating DAG workflows with loop nodes
-- **Workflow Execution** - Step-by-step progress view for any running or completed workflow
-
-**Monitoring hub:** The sidebar shows conversations from **all platforms** - not just the web. Workflows kicked off from the CLI, messages from Slack or Telegram, GitHub issue interactions - everything appears in one place.
+- **Runs** - All runs and project-scoped runs, with status filters and live progress
+- **Run detail** - Event log, artifacts, workflow graph when project context is available, and applicable governance actions
+- **Project chat** - Real-time assistant text and tool activity for the selected project
+- **Settings** - Provider credentials, model tiers and aliases, assistant defaults, system status, and GitHub identity
+- **Workflow builder** - Experimental visual authoring for a bounded set of workflow node forms
 
 See the [Web UI Guide](https://archon.diy/adapters/web/) for full documentation.
 

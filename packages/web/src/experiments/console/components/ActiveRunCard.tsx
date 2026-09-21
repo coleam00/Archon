@@ -5,7 +5,7 @@ import { LiveDot } from './LiveDot';
 import { OriginBadge } from './OriginBadge';
 import { ApprovalPanel } from './ApprovalPanel';
 import { ApprovalContext } from './ApprovalContext';
-import type { Run } from '../primitives/run';
+import { runDetailPath, type Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { statusTextClass, runStatusLabel } from '../lib/run-status';
@@ -54,7 +54,7 @@ export function ActiveRunCard({
   const isDocker = useIsDocker();
   const ideEnv = useIdeEnv();
   const elapsed = formatElapsed(elapsedSince(run.startedAt));
-  const canOpen = run.projectId !== null && !run.id.startsWith('demo-');
+  const canOpen = !run.id.startsWith('demo-');
   const canOpenIde =
     !isDocker && run.workingPath !== null && run.workingPath !== '' && !run.id.startsWith('demo-');
   const showDetailGrid = run.userMessage !== '' || run.status === 'running';
@@ -79,7 +79,7 @@ export function ActiveRunCard({
   };
 
   const onCardClick = (): void => {
-    if (canOpen) navigate(`/console/p/${run.projectId}/r/${run.id}`);
+    if (canOpen) navigate(runDetailPath(run));
   };
 
   return (
@@ -91,7 +91,7 @@ export function ActiveRunCard({
       onKeyDown={
         canOpen
           ? (e): void => {
-              if (e.key === 'Enter' || e.key === ' ') {
+              if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
                 e.preventDefault();
                 onCardClick();
               }

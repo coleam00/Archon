@@ -55,7 +55,7 @@ export async function observeArtifactManifest(
       const full = join(directory, name);
       const path = portablePath(relative(scanRoot, full));
       try {
-        const stat = await lstat(full);
+        const stat = await lstat(full, { bigint: true });
         if (stat.isSymbolicLink()) {
           manifest.limitations.push({ path, kind: 'link_excluded' });
           continue;
@@ -68,7 +68,7 @@ export async function observeArtifactManifest(
           manifest.limitations.push({ path, kind: 'unsupported_entry' });
           continue;
         }
-        manifest.files.push({ path, size: stat.size });
+        manifest.files.push({ path, size: Number(stat.size) });
         if (relative(scanRoot, directory) !== 'nodes' || !name.endsWith('.meta.json')) continue;
         if ((await realpath(directory)) !== resolve(directory)) {
           manifest.limitations.push({ path, kind: 'link_excluded' });
@@ -76,11 +76,12 @@ export async function observeArtifactManifest(
         }
         // Flags vary by platform. Descriptor identity protects the read even when
         // O_NOFOLLOW is unavailable or a parent changes between lookup and open.
+        // Keep identities exact: 64-bit file IDs can collide when converted to numbers.
         const platformFlags: Partial<Pick<typeof constants, 'O_NOFOLLOW'>> = constants;
         const handle = await open(full, constants.O_RDONLY | (platformFlags.O_NOFOLLOW ?? 0));
         let raw: string;
         try {
-          const opened = await handle.stat();
+          const opened = await handle.stat({ bigint: true });
           if (!opened.isFile() || opened.dev !== stat.dev || opened.ino !== stat.ino) {
             manifest.limitations.push({ path, kind: 'unreadable', code: 'ESTALE' });
             continue;
