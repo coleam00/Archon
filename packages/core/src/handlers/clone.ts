@@ -209,6 +209,24 @@ async function registerRepoAtPath(
     const isExistingPathManaged = existing.default_cwd.includes('/.archon/workspaces/');
     const shouldUpdateCwd = isNewPathLocal && isExistingPathManaged;
 
+    // A name match plus the managed-path convention does not prove this host owns that
+    // clone: a server sharing the database registers the same name at a path that does not
+    // exist here. Repointing it would break every consumer on that host, so an unreachable
+    // managed path — which the checkout resolver already treats as non-owning — is refused.
+    if (shouldUpdateCwd) {
+      try {
+        await access(existing.default_cwd);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code ?? 'unknown error';
+        throw new Error(
+          `Project "${existing.name}" is already registered at ${existing.default_cwd}, ` +
+            `which this host cannot reach (${code}). Refusing to repoint it to ${targetPath}. ` +
+            'If that path is gone for good, repoint it explicitly with ' +
+            `/update-project "${existing.name}" ${targetPath}`
+        );
+      }
+    }
+
     const updates: {
       default_cwd?: string;
       repository_url?: string | null;

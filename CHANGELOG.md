@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The Docker container no longer crash-loops on start when `~/.gitconfig` holds several `credential.https://github.com.helper` values, as `gh auth login` inside the container leaves behind. With `GH_TOKEN` set, the entrypoint now replaces all of them with its `GH_TOKEN` helper.
+- Registering a local checkout no longer repoints a same-named project whose managed path this host cannot reach, such as one a server on another filesystem registered in a shared database. The registration now fails with a conflict naming both paths and the explicit `/update-project` repair, instead of silently breaking the other host. (#3403)
 
 ## [0.10.1] - 2026-08-30
 

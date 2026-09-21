@@ -1462,6 +1462,12 @@ describe('name-based deduplication', () => {
         return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
       return Promise.resolve({ stdout: '', stderr: '' });
     });
+    // Same host: the managed clone exists here, so the upgrade to the local checkout is allowed.
+    spyFsAccess.mockImplementation((p: string) =>
+      p === existingCodebase.default_cwd
+        ? Promise.resolve()
+        : Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
+    );
     mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
     // Name-based lookup finds existing codebase
     mockFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
@@ -1489,6 +1495,12 @@ describe('name-based deduplication', () => {
         return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
       return Promise.resolve({ stdout: '', stderr: '' });
     });
+    // Same host: the managed clone exists here, so the upgrade to the local checkout is allowed.
+    spyFsAccess.mockImplementation((p: string) =>
+      p === existingCodebase.default_cwd
+        ? Promise.resolve()
+        : Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
+    );
     mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
     mockFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
 
@@ -1505,6 +1517,36 @@ describe('name-based deduplication', () => {
     expect(updateArgs[1].default_branch).toBe('develop');
     expect(result.defaultCwd).toBe('/home/user/repo');
     expect(result.defaultBranch).toBe('develop');
+  });
+
+  test('refuses to repoint a managed codebase whose path this host cannot reach', async () => {
+    // Registered by another host sharing the database: the managed path does not exist here
+    // (the default access spy rejects every path with ENOENT).
+    const existingCodebase = makeCodebase({
+      id: 'existing-id',
+      name: 'owner/repo',
+      repository_url: 'https://github.com/owner/repo',
+      default_cwd: '/.archon/workspaces/owner/repo/source',
+    });
+    spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
+      if (args.includes('--git-dir')) return Promise.resolve({ stdout: '.git', stderr: '' });
+      if (args.includes('get-url'))
+        return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
+      return Promise.resolve({ stdout: '', stderr: '' });
+    });
+    mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
+    mockFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
+
+    const error = await registerRepository('/home/user/repo').then(
+      () => undefined,
+      (err: unknown) => err as Error
+    );
+
+    expect(error?.message).toContain('/.archon/workspaces/owner/repo/source');
+    expect(error?.message).toContain('ENOENT');
+    expect(error?.message).toContain('/update-project "owner/repo" /home/user/repo');
+    expect(mockUpdateCodebase).not.toHaveBeenCalled();
+    expect(mockCreateCodebase).not.toHaveBeenCalled();
   });
 
   test('fills missing default_branch on existing local codebase', async () => {
