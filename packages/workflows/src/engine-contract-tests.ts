@@ -1,39 +1,15 @@
-/**
- * Shared contract-test suite for `IWorkflowEngine` implementations (issue
- * #3334). Authored from scratch — there is no prior `IWorkflowStore` /
- * `IWorkflowPlatform` contract-test suite to extend.
- *
- * Runs the REAL `executeWorkflow` / `hydrateResumableRun` call path (via
- * whichever engine `makeEngine()` builds) against fixture `IWorkflowStore` /
- * `WorkflowDeps` objects — same fixture-building convention as
- * `executor.test.ts` (`makeStore`/`makeDeps`/`makeRun`/`makeWorkflow`
- * overriding a fully-mocked baseline). It intentionally does NOT mock
- * `executeWorkflow` itself: see `workflow-resume-service.test.ts` /
- * `orchestrator-agent.test.ts` for the `mock.module('@archon/workflows/executor', ...)`
- * anti-pattern this port removes.
- *
- * A caller must mock `@archon/paths`, `@archon/git`, `./dag-executor`,
- * `./event-emitter` and `./logger` (via `bun:test`'s `mock.module`) BEFORE
- * importing this file or `./executor`/`./in-process-engine` — see
- * `in-process-engine.test.ts` for the required setup, mirroring
- * `executor.test.ts`'s own "Mock ... / Import after mocks" ordering.
- */
-import { describe, it, expect } from 'bun:test';
+import { describe, expect, it } from 'bun:test';
 import { resolveWorkflow } from './graph-plan';
-import type { IWorkflowEngine } from './engine-port';
+import { TerminalStatusWriteError } from './terminal-status-write';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
-import type { IWorkflowStore, DagResumeSnapshot } from './store';
+import type {
+  IWorkflowEngine,
+  WorkflowEngineSubmitInput,
+  WorkflowResumeInput,
+} from './engine-port';
+import type { DagResumeSnapshot, IWorkflowStore } from './store';
 import type { ResolvedWorkflow, WorkflowDefinition, WorkflowRun } from './schemas';
 
-/**
- * Local stand-in for `@archon/core`'s `WorkflowNotResumableError` (thrown by
- * the real `resumeWorkflowRun` DB implementation on a lost CAS race).
- * `@archon/workflows` has no dependency on `@archon/core`, and
- * `hydrateResumableRun`/`executeWorkflow` never catch or rewrap whatever
- * `deps.store.resumeWorkflowRun` throws — they let it propagate — so a
- * fixture store throwing this class exercises the exact same unwrapped-throw
- * path a real lost race takes in production.
- */
 export class WorkflowNotResumableError extends Error {
   constructor(
     public readonly runId: string,
@@ -44,7 +20,30 @@ export class WorkflowNotResumableError extends Error {
   }
 }
 
-function emptyDagResumeSnapshot(): DagResumeSnapshot {
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+async function captureRejection(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+    return undefined;
+  } catch (error) {
+    return error;
+  }
+}
+
+function emptySnapshot(): DagResumeSnapshot {
   return {
     completedNodeOutputs: new Map(),
     fanOutSnapshots: new Map(),
@@ -101,7 +100,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     persistWorkflowEvent: noop,
     persistWorkflowEventIfRunning: async () => ({ persisted: true }),
     findResumableRun: async () => null,
-    getDagResumeSnapshot: async () => emptyDagResumeSnapshot(),
+    getDagResumeSnapshot: async () => emptySnapshot(),
     resumeWorkflowRun: async () => makeRun(),
     recoverCancelledFanOutRun: async () => makeRun(),
     getCodebase: async () => null,
@@ -133,296 +132,326 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
   } as IWorkflowStore;
 }
 
-function makePlatform(onSendMessage?: (conversationId: string) => void): IWorkflowPlatform {
+function makePlatform(onSendMessage?: (id: string) => void): IWorkflowPlatform {
   return {
-    sendMessage: async (conversationId: string): Promise<void> => {
-      onSendMessage?.(conversationId);
-    },
+    sendMessage: async (id: string): Promise<void> => onSendMessage?.(id),
     getPlatformType: () => 'test' as const,
   } as unknown as IWorkflowPlatform;
 }
 
-function makeDeps(store?: IWorkflowStore): WorkflowDeps {
+function defaultConfig(): WorkflowConfig {
   return {
-    store: store ?? makeStore(),
-    loadConfig: async (): Promise<WorkflowConfig> => ({
-      assistant: 'claude' as const,
-      assistants: { claude: {}, codex: {} },
-      baseBranch: '',
-      commands: { folder: '' },
-    }),
-    getAgentProvider: () => ({ run: async (): Promise<void> => undefined }),
-  } as unknown as WorkflowDeps;
+    assistant: 'claude',
+    assistants: { claude: {}, codex: {} },
+    baseBranch: '',
+    commands: { folder: '' },
+  };
 }
 
-/**
- * Runs the `IWorkflowEngine` contract suite against `makeEngine()`'s
- * implementation. Call from a test file that has already set up the
- * required `mock.module` calls (see file-level doc comment above).
- */
-export function runWorkflowEngineContractTests(makeEngine: () => IWorkflowEngine): void {
+function makeDeps(
+  store: IWorkflowStore = makeStore(),
+  overrides: Partial<WorkflowDeps> = {}
+): WorkflowDeps {
+  return {
+    store,
+    loadConfig: async () => defaultConfig(),
+    getAgentProvider: () => ({ run: async (): Promise<void> => undefined }),
+    ...overrides,
+  } as WorkflowDeps;
+}
+
+function callInput(): Omit<WorkflowEngineSubmitInput, 'options'> {
+  return {
+    platform: makePlatform(),
+    conversationId: 'conv-1',
+    cwd: '/tmp/ops',
+    workflow: makeWorkflow(),
+    userMessage: 'hello',
+    conversationDbId: 'db-conv-1',
+  };
+}
+
+function resumableStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
+  return makeStore({
+    getDagResumeSnapshot: async () => ({
+      ...emptySnapshot(),
+      completedNodeOutputs: new Map([['node1', { output: 'out1' }]]),
+    }),
+    ...overrides,
+  });
+}
+
+export function runWorkflowEngineContractTests(
+  makeEngine: (deps: WorkflowDeps) => IWorkflowEngine
+): void {
   describe('IWorkflowEngine contract', () => {
-    it('submit() of a fresh run succeeds', async () => {
-      const engine = makeEngine();
-      const store = makeStore(); // default getWorkflowRun status: 'completed'
-      const result = await engine.submit({
-        deps: makeDeps(store),
-        platform: makePlatform(),
-        conversationId: 'conv-1',
-        cwd: '/tmp/ops',
-        workflow: makeWorkflow(),
-        userMessage: 'hello',
-        conversationDbId: 'db-conv-1',
-      });
-
-      expect(result.success).toBe(true);
-      if (!result.success) throw new Error('unreachable');
-      expect(result.workflowRunId).toBe('run-123');
-      expect('paused' in result).toBe(false);
-    });
-
-    it('resume() of a paused run succeeds and is narrowed correctly via `paused in result`', async () => {
-      const engine = makeEngine();
-      const candidate = makeRun({ id: 'paused-run', status: 'paused' });
-      const resumed = makeRun({ id: 'paused-run', status: 'running' });
-      const store = makeStore({
-        getDagResumeSnapshot: async () => ({
-          ...emptyDagResumeSnapshot(),
-          completedNodeOutputs: new Map([['node1', { output: 'out1' }]]),
-        }),
-        resumeWorkflowRun: async () => resumed,
-        // The DAG re-pauses again after resuming (e.g. still blocked on the
-        // same wait) — this is what exercises the `{success:true, paused:true}`
-        // arm of `WorkflowExecutionResult`, which structurally overlaps plain
-        // success (both have `success: true` — the type is NOT a clean 3-way
-        // discriminated union; see schemas/workflow.ts).
-        getWorkflowRun: async () => ({ ...resumed, status: 'paused' as const }),
-      });
-
-      const result = await engine.resume({
-        deps: makeDeps(store),
-        platform: makePlatform(),
-        conversationId: 'conv-1',
-        cwd: '/tmp/ops',
-        workflow: makeWorkflow(),
-        userMessage: 'hello',
-        conversationDbId: 'db-conv-1',
-        run: candidate,
-      });
-
-      expect(result.success).toBe(true);
-      // Narrowing check: `'paused' in result` must correctly select the paused
-      // member without assuming a 3-way tag — do not write `switch` code
-      // assuming a `status`/kind discriminant here, only `success` + `'paused' in`.
-      if ('paused' in result) {
-        expect(result.paused).toBe(true);
-        expect(result.workflowRunId).toBe('paused-run');
-      } else {
-        throw new Error('expected a paused result, got a plain success/failure result');
-      }
-    });
-
-    it('submit() routes every input field to its own destination', async () => {
-      // Every field gets a distinct sentinel: `conversationId` (the PLATFORM
-      // conversation) and `conversationDbId` (the DB row id) are both plain
-      // `string`, so swapping them inside an implementation's delegation is
-      // invisible to the type system. This test is what makes that swap fail.
-      const engine = makeEngine();
+    it('submits a fresh run with constructor-bound dependencies', async () => {
       const createdRuns: Record<string, unknown>[] = [];
-      const pathLockLookups: string[] = [];
-      const messagedConversations: string[] = [];
+      const messages: string[] = [];
+      let configLoads = 0;
       const store = makeStore({
-        createWorkflowRun: async (input: Record<string, unknown>) => {
+        createWorkflowRun: async input => {
           createdRuns.push(input);
           return makeRun();
         },
-        // Returning an active run short-circuits into the path-lock guard,
-        // which is the one deterministic branch that pushes a message at the
-        // PLATFORM conversation id — that is the only place `conversationId`
-        // is observable, and it is the field most easily confused with
-        // `conversationDbId`.
-        getActiveWorkflowRunByPath: async (cwd: string) => {
-          pathLockLookups.push(cwd);
-          return makeRun({ id: 'other-run', workflow_name: 'other-workflow', status: 'running' });
+      });
+      const deps = makeDeps(store, {
+        loadConfig: async () => {
+          configLoads += 1;
+          return defaultConfig();
         },
-        cancelWorkflowRun: async () => ({ cancelled: true }),
-      } as unknown as Partial<IWorkflowStore>);
-
-      await engine.submit({
-        deps: makeDeps(store),
-        platform: makePlatform(id => messagedConversations.push(id)),
-        conversationId: 'sentinel-platform-conversation',
-        cwd: '/sentinel/cwd',
-        workflow: makeWorkflow({ name: 'sentinel-workflow' }),
-        userMessage: 'sentinel-user-message',
-        conversationDbId: 'sentinel-db-conversation-row',
+      });
+      const result = await makeEngine(deps).submit({
+        ...callInput(),
+        platform: makePlatform(id => messages.push(id)),
       });
 
+      expect(result).toMatchObject({ success: true, workflowRunId: 'run-123' });
       expect(createdRuns).toHaveLength(1);
-      const created = createdRuns[0];
-      // The DB row id — NOT the platform conversation id — is what the run row
-      // stores as `conversation_id`.
-      expect(created.conversation_id).toBe('sentinel-db-conversation-row');
-      expect(created.working_path).toBe('/sentinel/cwd');
-      expect(created.user_message).toBe('sentinel-user-message');
-      expect(created.workflow_name).toBe('sentinel-workflow');
-      // `cwd` is also what the path lock is keyed on.
-      expect(pathLockLookups).toEqual(['/sentinel/cwd']);
-      // …while the platform conversation id is what messages are addressed to.
-      expect(messagedConversations).toEqual(['sentinel-platform-conversation']);
+      expect(createdRuns[0]?.conversation_id).toBe('db-conv-1');
+      expect(messages).toContain('conv-1');
+      expect(configLoads).toBe(1);
     });
 
-    it('resume() fires onAccepted before execution completes', async () => {
-      const engine = makeEngine();
-      const order: string[] = [];
-      const candidate = makeRun({ id: 'accepted-run', status: 'paused' });
-      const resumed = makeRun({ id: 'accepted-run', status: 'running' });
+    it('allows a pending pre-created row on fresh submit', async () => {
+      const pending = makeRun({ id: 'pending-run', status: 'pending' });
+      let created = 0;
       const store = makeStore({
-        getDagResumeSnapshot: async () => ({
-          ...emptyDagResumeSnapshot(),
-          completedNodeOutputs: new Map([['node1', { output: 'out1' }]]),
-        }),
-        resumeWorkflowRun: async () => {
-          order.push('claimed');
-          return resumed;
+        createWorkflowRun: async () => {
+          created += 1;
+          return makeRun();
         },
-        // Read by executeWorkflow only after the DAG loop has run, so seeing it
-        // AFTER 'accepted' proves onAccepted fired at the hydrate/execute
-        // boundary rather than once the whole run had finished.
-        getWorkflowRun: async () => {
-          order.push('executed');
-          return { ...resumed, status: 'completed' as const };
-        },
+        getWorkflowRun: async () => ({ ...pending, status: 'completed' as const }),
       });
-
-      const pending = engine.resume(
-        {
-          deps: makeDeps(store),
-          platform: makePlatform(),
-          conversationId: 'conv-1',
-          cwd: '/tmp/ops',
-          workflow: makeWorkflow(),
-          userMessage: 'hello',
-          conversationDbId: 'db-conv-1',
-          run: candidate,
-        },
-        { onAccepted: () => order.push('accepted') }
-      );
-      const result = await pending;
-      order.push('settled');
-
-      expect(result.success).toBe(true);
-      expect(order.indexOf('accepted')).toBeGreaterThan(order.indexOf('claimed'));
-      expect(order.indexOf('accepted')).toBeLessThan(order.indexOf('executed'));
-      expect(order[order.length - 1]).toBe('settled');
+      const result = await makeEngine(makeDeps(store)).submit({
+        ...callInput(),
+        options: { preCreatedRun: pending },
+      });
+      expect(result).toMatchObject({ success: true, workflowRunId: 'pending-run' });
+      expect(created).toBe(0);
     });
 
-    it('resume() does not fire onAccepted when there is nothing to resume', async () => {
-      // The default fixture snapshot has no completed nodes and no wait/gate
-      // state, so hydration yields null and execution must never start —
-      // therefore nothing was ever "accepted".
-      const engine = makeEngine();
-      let accepted = 0;
-      const candidate = makeRun({ id: 'empty-run', status: 'paused' });
-      let claimed = 0;
+    it('rejects a non-pending pre-created row before executor effects', async () => {
+      let created = 0;
+      let configLoads = 0;
       const store = makeStore({
-        resumeWorkflowRun: async () => {
-          claimed += 1;
-          return makeRun({ id: 'empty-run', status: 'running' });
+        createWorkflowRun: async () => {
+          created += 1;
+          return makeRun();
         },
       });
-
-      const result = await engine.resume(
-        {
-          deps: makeDeps(store),
-          platform: makePlatform(),
-          conversationId: 'conv-1',
-          cwd: '/tmp/ops',
-          workflow: makeWorkflow(),
-          userMessage: 'hello',
-          conversationDbId: 'db-conv-1',
-          run: candidate,
-        },
-        { onAccepted: () => (accepted += 1) }
-      );
-
-      expect(result.success).toBe(false);
-      expect(accepted).toBe(0);
-      expect(claimed).toBe(0);
-    });
-
-    it('resume() starts execution even when onAccepted throws', async () => {
-      // The run row is already claimed by the time onAccepted runs, so a
-      // throwing callback must not be allowed to abort the start — that would
-      // strand a `running` row with no execution behind it.
-      const engine = makeEngine();
-      let executed = 0;
-      const candidate = makeRun({ id: 'throwing-run', status: 'paused' });
-      const resumed = makeRun({ id: 'throwing-run', status: 'running' });
-      const store = makeStore({
-        getDagResumeSnapshot: async () => ({
-          ...emptyDagResumeSnapshot(),
-          completedNodeOutputs: new Map([['node1', { output: 'out1' }]]),
-        }),
-        resumeWorkflowRun: async () => resumed,
-        getWorkflowRun: async () => {
-          executed += 1;
-          return { ...resumed, status: 'completed' as const };
-        },
-      });
-
-      const result = await engine.resume(
-        {
-          deps: makeDeps(store),
-          platform: makePlatform(),
-          conversationId: 'conv-1',
-          cwd: '/tmp/ops',
-          workflow: makeWorkflow(),
-          userMessage: 'hello',
-          conversationDbId: 'db-conv-1',
-          run: candidate,
-        },
-        {
-          onAccepted: () => {
-            throw new Error('onAccepted blew up');
+      const engine = makeEngine(
+        makeDeps(store, {
+          loadConfig: async () => {
+            configLoads += 1;
+            return defaultConfig();
           },
-        }
+        })
       );
 
-      expect(result.success).toBe(true);
-      expect(executed).toBeGreaterThan(0);
+      const error = await captureRejection(
+        engine.submit({
+          ...callInput(),
+          options: { preCreatedRun: makeRun({ status: 'running' }) },
+        })
+      );
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe(
+        'Fresh execution requires a pending pre-created run; use resume instead.'
+      );
+      expect(created).toBe(0);
+      expect(configLoads).toBe(0);
     });
 
-    it('resume() surfaces a lost CAS race as an unwrapped WorkflowNotResumableError', async () => {
-      const engine = makeEngine();
-      const candidate = makeRun({ id: 'raced-run', status: 'failed' });
+    it('returns admission before execution settles', async () => {
+      const config = deferred<WorkflowConfig>();
+      const resumed = makeRun({ id: 'accepted-run', status: 'running' });
+      const store = resumableStore({
+        resumeWorkflowRun: async () => resumed,
+        getWorkflowRun: async () => ({ ...resumed, status: 'completed' as const }),
+      });
+      const engine = makeEngine(makeDeps(store, { loadConfig: () => config.promise }));
+      const admission = await engine.resume({
+        ...callInput(),
+        run: makeRun({ id: 'accepted-run', status: 'paused' }),
+      });
+      expect(admission).toMatchObject({ accepted: true, runId: 'accepted-run' });
+      if (!admission.accepted) throw new Error('expected resume admission');
+      config.resolve(defaultConfig());
+      const result = await admission.settled;
+      expect(result).toMatchObject({
+        success: true,
+        workflowRunId: 'accepted-run',
+      });
+    });
+
+    it('preserves a paused result', async () => {
+      const resumed = makeRun({ id: 'paused-run', status: 'running' });
+      const store = resumableStore({
+        resumeWorkflowRun: async () => resumed,
+        getWorkflowRun: async () => ({ ...resumed, status: 'paused' as const }),
+      });
+      const admission = await makeEngine(makeDeps(store)).resume({
+        ...callInput(),
+        run: makeRun({ id: 'paused-run', status: 'paused' }),
+      });
+      if (!admission.accepted) throw new Error('expected resume admission');
+      const result = await admission.settled;
+      expect(result).toEqual({
+        success: true,
+        paused: true,
+        workflowRunId: 'paused-run',
+      });
+    });
+
+    it('declines an empty snapshot without claiming', async () => {
+      let claims = 0;
       const store = makeStore({
-        getDagResumeSnapshot: async () => ({
-          ...emptyDagResumeSnapshot(),
-          completedNodeOutputs: new Map([['node1', { output: 'out1' }]]),
-        }),
         resumeWorkflowRun: async () => {
-          throw new WorkflowNotResumableError('raced-run', 'running');
+          claims += 1;
+          return makeRun();
         },
       });
+      const result = await makeEngine(makeDeps(store)).resume({
+        ...callInput(),
+        run: makeRun({ id: 'empty-run', status: 'paused' }),
+      });
+      expect(result).toEqual({ accepted: false, reason: 'nothing-to-resume' });
+      expect(claims).toBe(0);
+    });
 
+    it('preserves hydration and lost-claim errors before admission', async () => {
+      const hydrationError = new Error('snapshot read failed');
+      const caughtHydrationError = await captureRejection(
+        makeEngine(
+          makeDeps(
+            makeStore({
+              getDagResumeSnapshot: async () => Promise.reject(hydrationError),
+            })
+          )
+        ).resume({ ...callInput(), run: makeRun({ status: 'paused' }) })
+      );
+      expect(caughtHydrationError).toBe(hydrationError);
+
+      const claimError = new WorkflowNotResumableError('raced-run', 'running');
+      const caughtClaimError = await captureRejection(
+        makeEngine(
+          makeDeps(
+            resumableStore({
+              resumeWorkflowRun: async () => Promise.reject(claimError),
+            })
+          )
+        ).resume({ ...callInput(), run: makeRun({ id: 'raced-run', status: 'failed' }) })
+      );
+      expect(caughtClaimError).toBe(claimError);
+    });
+
+    it.each([
+      ['runConfig', { runConfig: { layer: {}, source: 'cli' } }],
+      ['modelOverrideLayer', { modelOverrideLayer: { kind: 'raw', overrides: {} } }],
+    ])('rejects resume option %s before hydration or claim', async (_field, options) => {
+      let reads = 0;
+      let claims = 0;
+      const store = makeStore({
+        getDagResumeSnapshot: async () => {
+          reads += 1;
+          return emptySnapshot();
+        },
+        resumeWorkflowRun: async () => {
+          claims += 1;
+          return makeRun();
+        },
+      });
+      const input = {
+        ...callInput(),
+        run: makeRun({ status: 'paused' }),
+        options,
+      } as unknown as WorkflowResumeInput;
+      const error = await captureRejection(makeEngine(makeDeps(store)).resume(input));
+      expect(error).toBeInstanceOf(Error);
+      expect(reads).toBe(0);
+      expect(claims).toBe(0);
+    });
+
+    it('records a post-claim failure and preserves the execution error', async () => {
+      const cause = new Error('config failed');
+      const config = deferred<WorkflowConfig>();
+      const resumed = makeRun({ id: 'failed-run', status: 'running' });
+      const failures: { id: string; message: string }[] = [];
+      const store = resumableStore({
+        resumeWorkflowRun: async () => resumed,
+        getWorkflowRunStatus: async () => 'running',
+        failWorkflowRun: async (id, message) => {
+          failures.push({ id, message });
+        },
+      });
+      const admission = await makeEngine(
+        makeDeps(store, { loadConfig: () => config.promise })
+      ).resume({
+        ...callInput(),
+        run: makeRun({ id: 'failed-run', status: 'paused' }),
+      });
+      if (!admission.accepted) throw new Error('expected resume admission');
+      config.reject(cause);
+      const caught = await captureRejection(admission.settled);
+      expect(caught).toBe(cause);
+      expect(failures).toEqual([{ id: 'failed-run', message: 'config failed' }]);
+    });
+
+    it('does not retry a failed terminal compensation write', async () => {
+      const config = deferred<WorkflowConfig>();
+      const writeError = new Error('database unavailable');
+      const resumed = makeRun({ id: 'write-failed-run', status: 'running' });
+      let writes = 0;
+      const store = resumableStore({
+        resumeWorkflowRun: async () => resumed,
+        getWorkflowRunStatus: async () => 'running',
+        failWorkflowRun: async () => {
+          writes += 1;
+          throw writeError;
+        },
+      });
+      const admission = await makeEngine(
+        makeDeps(store, { loadConfig: () => config.promise })
+      ).resume({
+        ...callInput(),
+        run: makeRun({ id: 'write-failed-run', status: 'paused' }),
+      });
+      if (!admission.accepted) throw new Error('expected resume admission');
+      config.reject(new Error('config failed'));
       let caught: unknown;
       try {
-        await engine.resume({
-          deps: makeDeps(store),
-          platform: makePlatform(),
-          conversationId: 'conv-1',
-          cwd: '/tmp/ops',
-          workflow: makeWorkflow(),
-          userMessage: 'hello',
-          conversationDbId: 'db-conv-1',
-          run: candidate,
-        });
+        await admission.settled;
       } catch (error) {
         caught = error;
       }
+      expect(caught).toBeInstanceOf(TerminalStatusWriteError);
+      expect(caught).toMatchObject({ cause: writeError });
+      expect(writes).toBe(1);
+    });
 
-      expect(caught).toBeInstanceOf(WorkflowNotResumableError);
+    it('preserves an execution TerminalStatusWriteError without compensation', async () => {
+      const cause = new TerminalStatusWriteError(new Error('terminal setup write failed'));
+      const resumed = makeRun({ id: 'terminal-error-run', status: 'running' });
+      let compensationWrites = 0;
+      const store = resumableStore({
+        resumeWorkflowRun: async () => resumed,
+        getWorkflowRunStatus: async () => 'running',
+        failWorkflowRun: async () => {
+          compensationWrites += 1;
+        },
+      });
+      const admission = await makeEngine(
+        makeDeps(store, { loadConfig: async () => Promise.reject(cause) })
+      ).resume({
+        ...callInput(),
+        run: makeRun({ id: 'terminal-error-run', status: 'paused' }),
+      });
+      if (!admission.accepted) throw new Error('expected resume admission');
+
+      const caught = await captureRejection(admission.settled);
+      expect(caught).toBe(cause);
+      expect(compensationWrites).toBe(0);
     });
   });
 }

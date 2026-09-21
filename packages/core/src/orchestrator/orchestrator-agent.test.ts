@@ -2781,7 +2781,8 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(mockFindResumableRunByParentConversation).not.toHaveBeenCalled();
     expect(mockHydrateResumableRun).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ id: 'old-run' })
+      expect.objectContaining({ id: 'old-run' }),
+      undefined
     );
     expect(mockExecuteWorkflow).toHaveBeenCalled();
     const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
@@ -2913,7 +2914,8 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(mockFindResumableRunByParentConversation).not.toHaveBeenCalled();
     expect(mockHydrateResumableRun).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ id: requestedRun.id })
+      expect.objectContaining({ id: requestedRun.id }),
+      undefined
     );
   });
 

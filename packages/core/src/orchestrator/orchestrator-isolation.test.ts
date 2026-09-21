@@ -130,7 +130,7 @@ const mockCreateWorkflowRun = mock<IWorkflowStore['createWorkflowRun']>(() => {
     conversation_id: 'worker-conv-1',
     parent_conversation_id: 'parent-conv',
     codebase_id: 'cb-1',
-    status: 'running',
+    status: 'pending',
     outcome: null,
     user_message: 'run it',
     metadata: {},

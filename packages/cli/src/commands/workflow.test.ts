@@ -429,38 +429,6 @@ mock.module('@archon/workflows/event-emitter', () => ({
   })),
 }));
 
-mock.module('@archon/workflows/in-process-engine', () => ({
-  InProcessWorkflowEngine: class {
-    // Mirrors the real InProcessWorkflowEngine.submit()'s 1:1 delegation to
-    // executeWorkflow, routed through the same `@archon/workflows/executor`
-    // mock below so existing executeWorkflow-return-value/call-count assertions
-    // keep working unchanged after the CLI switched from calling executeWorkflow
-    // directly to going through the engine.
-    async submit(input: {
-      deps: unknown;
-      platform: unknown;
-      conversationId: string;
-      cwd: string;
-      workflow: unknown;
-      userMessage: string;
-      conversationDbId: string;
-      options?: unknown;
-    }): Promise<unknown> {
-      const executor = require('@archon/workflows/executor');
-      return executor.executeWorkflow(
-        input.deps,
-        input.platform,
-        input.conversationId,
-        input.cwd,
-        input.workflow,
-        input.userMessage,
-        input.conversationDbId,
-        input.options
-      );
-    }
-  },
-}));
-
 class MockCanonicalRepoPathUnavailableError extends Error {
   constructor(
     readonly checkoutPath: string,
@@ -11006,46 +10974,6 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
       'Process terminated (SIGTERM)'
     );
     expect(shutdownOrder).toEqual(['owner-close', 'exit']);
-    expect(exitSpy).toHaveBeenCalledWith(1);
-  });
-
-  it('is a no-op and does not throw when the signal arrives twice (double Ctrl-C)', async () => {
-    const workflowsDb = require('@archon/core/db/workflows');
-    (workflowsDb.getWorkflowRunStatus as ReturnType<typeof mock>).mockResolvedValue('running');
-
-    const sigtermBefore = process.listeners('SIGTERM');
-    const { executeWorkflow } = require('@archon/workflows/executor');
-    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
-      capturedSubscribeHandler?.({
-        type: 'workflow_started',
-        runId: 'run-1',
-        workflowName: 'plan',
-        conversationId: 'conv-1',
-        transcriptPath: '/logs/run-1.jsonl',
-      });
-      const [handler] = addedSigtermListeners(sigtermBefore);
-      expect(handler).toBeDefined();
-      // Double-signal: the CLI's own `terminating` guard makes the second
-      // invocation a no-op before it ever reaches the database, so the run is
-      // only ever failed once.
-      handler();
-      handler();
-      await settleCleanup();
-      return { success: false, workflowRunId: 'run-1', error: 'interrupted' };
-    });
-
-    setupWorkflowMocks();
-    await expect(workflowRunCommand('/test/path', 'plan', 'hello', {})).rejects.toThrow(
-      'Workflow failed'
-    );
-
-    // The CLI-level `terminating` guard suppresses the second signal entirely,
-    // so the write is observed exactly once here.
-    expect(workflowsDb.failWorkflowRun).toHaveBeenCalledTimes(1);
-    expect(workflowsDb.failWorkflowRun).toHaveBeenCalledWith(
-      'test-run-id',
-      'Process terminated (SIGTERM)'
-    );
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 

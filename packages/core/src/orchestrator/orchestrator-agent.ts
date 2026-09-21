@@ -45,13 +45,13 @@ import {
   resolveContinuationWorkflow,
   withCapturedSource,
   type CapturedSourceOwner,
-  hydrateResumableRun,
   inspectResumableRun,
   prepareWorkflowSource,
   recordSelectedWorkflow,
   type PreparedWorkflowSource,
 } from '@archon/workflows/executor';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
+import type { WorkflowResumeAdmission } from '@archon/workflows/engine-port';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
 import { liveSourceRoots } from '@archon/workflows/workflow-discovery';
 import {
@@ -896,10 +896,6 @@ async function dispatchOrchestratorWorkflowOwned(
   // For a fresh run: freeze, then re-resolve the workflow FROM the frozen copy, so the
   // definition executed and the resources beside it are one consistent set of bytes.
   const runCwd = conversation.cwd ?? codebase.default_cwd;
-  // `preparedSource` is the outer binding the resume branch reads (always undefined
-  // there — step 2 didn't run for a continuation). The two fresh dispatches read
-  // `freshCaptured` directly, so the helper's narrowed return type survives.
-  let preparedSource: PreparedWorkflowSource | undefined;
   let freshCaptured:
     | { preparedSource: PreparedWorkflowSource; workflow: ResolvedWorkflow }
     | undefined;
@@ -1197,20 +1193,26 @@ async function dispatchOrchestratorWorkflowOwned(
       },
       'orchestrator.foreground_resume_detected'
     );
-    // Hydrate the already-found candidate. If hydration returns null the
-    // prior run had nothing worth resuming (zero completed nodes, no loop
-    // gate) — surface that to the user and fall through to a fresh run on
-    // the same worktree rather than silently restarting.
+    // An empty resume is the explicit restart path below; a lost claim never
+    // falls through to a fresh run on another owner's worktree.
     const deps = createWorkflowDeps();
-    const engine = new InProcessWorkflowEngine(deps.store);
+    const engine = new InProcessWorkflowEngine(deps);
     const resumeOwner = await startRunLiveOwner(resumableRun.id);
     let resumeOwnerClosed = false;
     try {
-      let prepared: Awaited<ReturnType<typeof hydrateResumableRun>>;
+      let admission: WorkflowResumeAdmission;
       try {
-        if (options?.runConfig) {
-          const inspection = await inspectResumableRun(deps, resumableRun);
-          if (inspection) {
+        const needsResumeNotice =
+          options?.runConfig !== undefined ||
+          Object.keys(options?.inputs ?? {}).length > 0 ||
+          Object.keys(options?.modelOverrides?.tiers ?? {}).length > 0 ||
+          Object.keys(options?.modelOverrides?.aliases ?? {}).length > 0;
+        const nothingToResume =
+          needsResumeNotice && (await inspectResumableRun(deps, resumableRun)) === null;
+        if (nothingToResume) {
+          admission = { accepted: false, reason: 'nothing-to-resume' };
+        } else {
+          if (options?.runConfig) {
             await platform.sendMessage(
               conversationId,
               'This command would resume an existing run, so a new run config cannot be applied. ' +
@@ -1218,9 +1220,67 @@ async function dispatchOrchestratorWorkflowOwned(
             );
             return;
           }
-          prepared = null;
-        } else {
-          prepared = await hydrateResumableRun(deps, resumableRun);
+          const resumeStateLabel = formatResumableRunState(resumableRun.status);
+          const suppliedModelBindingNames = [
+            ...Object.keys(options?.modelOverrides?.tiers ?? {}),
+            ...Object.keys(options?.modelOverrides?.aliases ?? {}),
+          ].sort();
+          // A resume replays the inputs stamped on its own row; values supplied on THIS
+          // call cannot reach it (the row already exists, so the executor's stamp never
+          // fires). Say so rather than accepting them and quietly running something else.
+          if (options?.inputs && Object.keys(options.inputs).length > 0) {
+            const ignored = Object.keys(options.inputs).sort().join(', ');
+            getLog().info(
+              {
+                workflowName: workflow.name,
+                resumableRunId: resumableRun.id,
+                ignoredKeys: ignored,
+              },
+              'orchestrator.resume_ignored_supplied_inputs'
+            );
+            await platform.sendMessage(
+              conversationId,
+              `▶️ Resuming the ${resumeStateLabel} run of **${workflow.name}** (\`${resumableRun.id}\`), which ` +
+                `keeps the inputs it started with — the values you supplied now (${ignored}) were ` +
+                'not applied. To run fresh with them instead, abandon that run first ' +
+                `(\`/workflow abandon ${resumableRun.id}\`) and re-invoke.`
+            );
+          }
+          if (suppliedModelBindingNames.length > 0) {
+            getLog().info(
+              {
+                workflowName: workflow.name,
+                resumableRunId: resumableRun.id,
+                ignoredBindings: suppliedModelBindingNames,
+              },
+              'orchestrator.resume_ignored_model_bindings'
+            );
+            await platform.sendMessage(
+              conversationId,
+              `▶️ Resuming the ${resumeStateLabel} run of **${workflow.name}** (\`${resumableRun.id}\`), which ` +
+                'keeps the model bindings it started with — the bindings you supplied now ' +
+                `(${suppliedModelBindingNames.join(', ')}) were not applied. To run fresh with them ` +
+                `instead, abandon that run first (\`/workflow abandon ${resumableRun.id}\`) and re-invoke.`
+            );
+          }
+          admission = await engine.resume({
+            platform,
+            conversationId,
+            cwd: resumableWorkingPath,
+            workflow,
+            userMessage,
+            conversationDbId: conversation.id,
+            run: resumableRun,
+            options: {
+              codebaseId: codebase.id,
+              parentConversationId: conversation.id,
+              userId,
+              source,
+              parseWarnings: options?.parseWarnings,
+              baseBranch: codebaseBaseBranch,
+              resolveChildIsolation,
+            },
+          });
         }
       } catch (err) {
         // resumeWorkflowRun is a compare-and-swap: if another surface (web Resume,
@@ -1248,70 +1308,8 @@ async function dispatchOrchestratorWorkflowOwned(
         }
         throw err;
       }
-      if (prepared) {
-        const resumeStateLabel = formatResumableRunState(resumableRun.status);
-        const suppliedModelBindingNames = [
-          ...Object.keys(options?.modelOverrides?.tiers ?? {}),
-          ...Object.keys(options?.modelOverrides?.aliases ?? {}),
-        ].sort();
-        // A resume replays the inputs stamped on its own row; values supplied on THIS
-        // call cannot reach it (the row already exists, so the executor's stamp never
-        // fires). Say so rather than accepting them and quietly running something else.
-        if (options?.inputs && Object.keys(options.inputs).length > 0) {
-          const ignored = Object.keys(options.inputs).sort().join(', ');
-          getLog().info(
-            { workflowName: workflow.name, resumableRunId: resumableRun.id, ignoredKeys: ignored },
-            'orchestrator.resume_ignored_supplied_inputs'
-          );
-          await platform.sendMessage(
-            conversationId,
-            `▶️ Resuming the ${resumeStateLabel} run of **${workflow.name}** (\`${resumableRun.id}\`), which ` +
-              `keeps the inputs it started with — the values you supplied now (${ignored}) were ` +
-              'not applied. To run fresh with them instead, abandon that run first ' +
-              `(\`/workflow abandon ${resumableRun.id}\`) and re-invoke.`
-          );
-        }
-        if (suppliedModelBindingNames.length > 0) {
-          getLog().info(
-            {
-              workflowName: workflow.name,
-              resumableRunId: resumableRun.id,
-              ignoredBindings: suppliedModelBindingNames,
-            },
-            'orchestrator.resume_ignored_model_bindings'
-          );
-          await platform.sendMessage(
-            conversationId,
-            `▶️ Resuming the ${resumeStateLabel} run of **${workflow.name}** (\`${resumableRun.id}\`), which ` +
-              'keeps the model bindings it started with — the bindings you supplied now ' +
-              `(${suppliedModelBindingNames.join(', ')}) were not applied. To run fresh with them ` +
-              `instead, abandon that run first (\`/workflow abandon ${resumableRun.id}\`) and re-invoke.`
-          );
-        }
-        // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
-        // executor adopts for us there (see #2690). Until then a rename failure leaves
-        // the staged directory un-adopted so the wrap reclaims it on the way out.
-        await engine.submit({
-          deps,
-          platform,
-          conversationId,
-          cwd: resumableWorkingPath,
-          workflow,
-          userMessage,
-          conversationDbId: conversation.id,
-          options: {
-            codebaseId: codebase.id,
-            parentConversationId: conversation.id,
-            userId,
-            source,
-            preparedSource,
-            parseWarnings: options?.parseWarnings,
-            baseBranch: codebaseBaseBranch,
-            resolveChildIsolation,
-            capturedSourceOwner: owner,
-            ...prepared,
-          },
-        });
+      if (admission.accepted) {
+        await admission.settled;
       } else {
         await resumeOwner.close();
         resumeOwnerClosed = true;
@@ -1346,7 +1344,6 @@ async function dispatchOrchestratorWorkflowOwned(
         // needs to know to reclaim if the rename fails.
         await withRunLiveOwner(captured.preparedSource.runId, {}, async () => {
           await engine.submit({
-            deps,
             platform,
             conversationId,
             cwd: resumableWorkingPath,
@@ -1439,13 +1436,12 @@ async function dispatchOrchestratorWorkflowOwned(
       );
     }
     const freshDeps = createWorkflowDeps();
-    const freshEngine = new InProcessWorkflowEngine(freshDeps.store);
+    const freshEngine = new InProcessWorkflowEngine(freshDeps);
     // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
     // executor adopts for us there (see #2690). `freshCaptured` proves the prior
     // `captureFreshSource` call already ran `owner.hold`.
     await withRunLiveOwner(freshCaptured.preparedSource.runId, {}, async () => {
       await freshEngine.submit({
-        deps: freshDeps,
         platform,
         conversationId,
         cwd,

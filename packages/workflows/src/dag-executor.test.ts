@@ -259,9 +259,6 @@ function createMockStore(): MockWorkflowStore {
     cancelWorkflowRun: mock<IWorkflowStore['cancelWorkflowRun']>(async _id => ({
       cancelled: false,
     })),
-    cancelRunningWorkflowRun: mock<IWorkflowStore['cancelRunningWorkflowRun']>(async _id => ({
-      cancelled: false,
-    })),
     cancelFanOutRun: mock<IWorkflowStore['cancelFanOutRun']>(async (_id, _reason) => ({
       cancelled: false,
     })),

@@ -76,10 +76,8 @@ import {
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import {
-  executeWorkflow,
   disposeWorkflowSource,
   finalizeWorkflowSource,
-  hydrateResumableRun,
   prepareWorkflowSource,
   recordSelectedWorkflow,
   resolveContinuationWorkflow,
@@ -3172,13 +3170,11 @@ async function runWorkflowWithOwnedSource(
     );
   }
 
-  // When --resume, hand the already-found run (and its completed-node outputs)
-  // to executeWorkflow. Otherwise this is a fresh run and prepared stays null.
   // The lookup-by-(workflowName, cwd) was already done above for worktree-path
   // resolution; reuse that result rather than querying twice.
   const deps = createWorkflowDeps();
-  const engine = new InProcessWorkflowEngine(deps.store);
-  let result: Awaited<ReturnType<typeof executeWorkflow>> | undefined;
+  const engine = new InProcessWorkflowEngine(deps);
+  let result: Awaited<ReturnType<InProcessWorkflowEngine['submit']>> | undefined;
   // A genuine container-teardown failure captured in the finally, rethrown AFTER
   // the finally when the run itself succeeded — so a leaked privileged container
   // fails the CLI instead of reporting success + exit 0.
@@ -3187,49 +3183,6 @@ async function runWorkflowWithOwnedSource(
     runLiveOwner = await startRunLiveOwner(ownedRunId, {
       ...(detachedProcessOwner ? { detachedProcessPid: process.pid } : {}),
     });
-    let prepared: Awaited<ReturnType<typeof hydrateResumableRun>> = null;
-    if (options.resume && resumable) {
-      try {
-        prepared = await hydrateResumableRun(deps, resumable);
-      } catch (error) {
-        const err = error as Error;
-        getLog().error(
-          { err, workflowName, runId: resumable.id },
-          'cli.workflow_hydrate_resume_failed'
-        );
-        throw new Error(
-          `Cannot resume workflow '${workflowName}': failed to load prior run state — ${err.message}`,
-          { cause: err }
-        );
-      }
-      if (!prepared) {
-        // `--branch` is only runnable when the prior run used worktree isolation:
-        // folder projects reject worktree options outright, and an in-place repo run
-        // cannot be relaunched onto the branch its own checkout holds. A stale-running
-        // orphan cannot be superseded until it is released, so name that step first.
-        const worktreeBranch = isFolderCodebase ? undefined : resumeBranch;
-        const unblock = isTerminalRunStatus(resumable.status)
-          ? ''
-          : `The run is still marked ${resumable.status}; release it before relaunching:\n` +
-            `  archon workflow abandon ${resumable.id}\n`;
-        const relaunch = [
-          'archon workflow run',
-          workflowName,
-          ...(worktreeBranch ? ['--branch', worktreeBranch] : []),
-          '--supersedes',
-          resumable.id,
-        ].join(' ');
-        throw new Error(
-          `Cannot resume: the prior run for '${workflowName}' has no completed nodes and no interactive-loop state.\n` +
-            unblock +
-            (worktreeBranch
-              ? 'Nothing can be skipped, so relaunch on the same branch instead:\n'
-              : 'Nothing can be skipped, so start a fresh run instead:\n') +
-            `  ${relaunch}`
-        );
-      }
-    }
-
     // Container run context for the engine (Phase C): the write-back backend port +
     // env id + policy. The executor drives suspend-on-pause and the write-back gate
     // through this. Absent for host/in-place runs.
@@ -3256,60 +3209,102 @@ async function runWorkflowWithOwnedSource(
             createdByUserId: cliUserId,
           })
         : undefined;
-    const opts = prepared
-      ? {
-          codebaseId: codebase?.id,
-          source: workflowSource,
-          parseWarnings: workflowEntry?.parseWarnings,
-          userId: cliUserId,
-          baseBranch: codebaseDefaultBranch,
-          baseOverride: flagBase,
-          execContext,
-          container: containerRunCtx,
-          resolveChildIsolation,
-          ...prepared,
-        }
-      : {
-          codebaseId: codebase?.id,
-          source: workflowSource,
-          parseWarnings: workflowEntry?.parseWarnings,
-          userId: cliUserId,
-          baseBranch: codebaseDefaultBranch,
-          baseOverride: flagBase,
-          execContext,
-          container: containerRunCtx,
-          resolveChildIsolation,
-          // Fresh run only: a resume (`prepared`) replays the inputs already on its row.
-          inputs: resolvedInputs,
-          ...(modelOverrides
-            ? { modelOverrideLayer: { kind: 'raw' as const, overrides: modelOverrides } }
-            : {}),
-          ...(runConfig ? { runConfig } : {}),
-          // The frozen source this run executes, captured before the workflow was even
-          // selected. A resume ignores it and loads the source recorded on its own row.
-          preparedSource,
-          // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
-          // executor adopts for us there (see #2690). Until then a rename failure
-          // leaves the staged directory un-adopted so the wrap reclaims it on the
-          // way out.
-          capturedSourceOwner: owner,
-          // Between-run continuation (#2747): written once onto the fresh row.
-          ...(adoptedFromRunId !== undefined ? { adoptedFromRunId, continuationMode } : {}),
-          // The row a detached parent already wrote (#2872). `inputs` and the
-          // continuation fields above are still passed: the executor consumes them only
-          // when IT creates the row, and this row already carries them.
-          ...(detachedPreCreatedRun ? { preCreatedRun: detachedPreCreatedRun } : {}),
-        };
-    result = await engine.submit({
-      deps,
-      platform: adapter,
-      conversationId,
-      cwd: workingCwd,
-      workflow,
-      userMessage,
-      conversationDbId: conversation.id,
-      options: opts,
-    });
+    const commonOptions = {
+      codebaseId: codebase?.id,
+      source: workflowSource,
+      parseWarnings: workflowEntry?.parseWarnings,
+      userId: cliUserId,
+      baseBranch: codebaseDefaultBranch,
+      baseOverride: flagBase,
+      execContext,
+      container: containerRunCtx,
+      resolveChildIsolation,
+    };
+    if (options.resume && resumable) {
+      let admission: Awaited<ReturnType<InProcessWorkflowEngine['resume']>>;
+      try {
+        admission = await engine.resume({
+          platform: adapter,
+          conversationId,
+          cwd: workingCwd,
+          workflow,
+          userMessage,
+          conversationDbId: conversation.id,
+          run: resumable,
+          options: commonOptions,
+        });
+      } catch (error) {
+        const err = error as Error;
+        getLog().error(
+          { err, workflowName, runId: resumable.id },
+          'cli.workflow_hydrate_resume_failed'
+        );
+        throw new Error(
+          `Cannot resume workflow '${workflowName}': failed to load prior run state — ${err.message}`,
+          { cause: err }
+        );
+      }
+      if (!admission.accepted) {
+        // `--branch` is only runnable when the prior run used worktree isolation:
+        // folder projects reject worktree options outright, and an in-place repo run
+        // cannot be relaunched onto the branch its own checkout holds. A stale-running
+        // orphan cannot be superseded until it is released, so name that step first.
+        const worktreeBranch = isFolderCodebase ? undefined : resumeBranch;
+        const unblock = isTerminalRunStatus(resumable.status)
+          ? ''
+          : `The run is still marked ${resumable.status}; release it before relaunching:\n` +
+            `  archon workflow abandon ${resumable.id}\n`;
+        const relaunch = [
+          'archon workflow run',
+          workflowName,
+          ...(worktreeBranch ? ['--branch', worktreeBranch] : []),
+          '--supersedes',
+          resumable.id,
+        ].join(' ');
+        throw new Error(
+          `Cannot resume: the prior run for '${workflowName}' has no completed nodes and no interactive-loop state.\n` +
+            unblock +
+            (worktreeBranch
+              ? 'Nothing can be skipped, so relaunch on the same branch instead:\n'
+              : 'Nothing can be skipped, so start a fresh run instead:\n') +
+            `  ${relaunch}`
+        );
+      }
+      result = await admission.settled;
+    } else {
+      const opts = {
+        ...commonOptions,
+        // A resume replays the inputs already on its row.
+        inputs: resolvedInputs,
+        ...(modelOverrides
+          ? { modelOverrideLayer: { kind: 'raw' as const, overrides: modelOverrides } }
+          : {}),
+        ...(runConfig ? { runConfig } : {}),
+        // The frozen source this run executes, captured before the workflow was even
+        // selected. A resume ignores it and loads the source recorded on its own row.
+        preparedSource,
+        // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
+        // executor adopts for us there (see #2690). Until then a rename failure
+        // leaves the staged directory un-adopted so the wrap reclaims it on the
+        // way out.
+        capturedSourceOwner: owner,
+        // Between-run continuation (#2747): written once onto the fresh row.
+        ...(adoptedFromRunId !== undefined ? { adoptedFromRunId, continuationMode } : {}),
+        // The row a detached parent already wrote (#2872). `inputs` and the
+        // continuation fields above are still passed: the executor consumes them only
+        // when IT creates the row, and this row already carries them.
+        ...(detachedPreCreatedRun ? { preCreatedRun: detachedPreCreatedRun } : {}),
+      };
+      result = await engine.submit({
+        platform: adapter,
+        conversationId,
+        cwd: workingCwd,
+        workflow,
+        userMessage,
+        conversationDbId: conversation.id,
+        options: opts,
+      });
+    }
   } finally {
     await closeRunLiveOwner();
     unsubscribe();
