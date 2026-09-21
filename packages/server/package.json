@@ -24,6 +24,7 @@
     "dotenv": "^17.2.3",
     "hono": "^4.12.16",
     "pg": "^8.11.0",
+    "yaml": "^2.8.2",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -114,6 +115,9 @@
     ],
     [
       "src/discord-mention.test.ts"
+    ],
+    [
+      "src/routes/workflow-yaml.test.ts"
     ]
   ]
 }
