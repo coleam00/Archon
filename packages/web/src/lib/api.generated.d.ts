@@ -4312,13 +4312,22 @@ export interface components {
       mcp: boolean;
       hooks: boolean;
       skills: boolean;
+      agents: boolean;
       toolRestrictions: boolean;
+      knownToolNames?: string[];
+      renamedTools?: {
+        [key: string]: string;
+      };
       structuredOutput: 'enforced' | 'best-effort' | false;
       envInjection: boolean;
       costControl: boolean;
+      costReporting: boolean;
       effortControl: boolean;
       fallbackModel: boolean;
       sandbox: boolean;
+      settingSources: boolean;
+      nativeTools: boolean;
+      containerExec: boolean;
     };
     PiModelListResponse: {
       models: components['schemas']['PiModelInfo'][];
