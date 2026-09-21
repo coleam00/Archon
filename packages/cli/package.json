@@ -76,6 +76,9 @@
       "src/commands/workflow-continuation-provider.integration.spec.ts"
     ],
     [
+      "src/commands/workflow-adopt-source.integration.spec.ts"
+    ],
+    [
       "src/commands/workflow-resume-conversation.integration.spec.ts"
     ],
     [
