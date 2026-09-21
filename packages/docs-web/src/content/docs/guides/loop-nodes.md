@@ -255,6 +255,21 @@ loop:
 `until_bash` runs only on iterations that no other completion channel already
 ended, so a loop declaring more than one never pays for a redundant check.
 
+The check uses the node's `timeout`: a positive, finite number of milliseconds,
+with a default of 120000. This applies to `loop:` and `loop_group:`, including a
+completion recheck after an interactive group resumes. It limits each check,
+not the AI iteration or the group's body nodes. For a longer test suite, declare
+the budget on the node:
+
+```yaml
+- id: fix-tests
+  timeout: 900000             # The suite takes ~4 min; 120 s would kill the check.
+  loop:
+    prompt: "Fix the failing tests"
+    max_iterations: 5
+    until_bash: "bun run test"
+```
+
 :::caution[If your `until_bash` accumulates state]
 The skip means the script does not run on an iteration another channel already
 completed, so a check that *mutates* state each time it runs — a counter, an append,
@@ -477,9 +492,9 @@ Now the only way out is a passing suite.
 - `trigger_rule` — join semantics
 - `idle_timeout` — per-iteration timeout (default: 30 minutes)
 - `provider` / `model` — node-level overrides are resolved and used for every iteration
-- `allowed_tools` / `denied_tools` — tool restrictions apply to every iteration. A loop node
-  builds its own provider call, so the scoping reaches it the same way it reaches a
-  `prompt:` node, and there is no workflow-level fallback if you omit them
+- `allowed_tools` / `denied_tools` — passed to the selected provider on every iteration,
+  just as on a `prompt:` node. Enforcement depends on the provider's tool-restriction
+  support; Archon warns when the provider declares that it cannot enforce them
 - `$nodeId.output` — downstream nodes receive the last iteration's output
 
 ### `interactive` and `gate_message`

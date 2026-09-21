@@ -495,12 +495,13 @@ const loopAiAuthoringSchema = dagNodeBaseSchema.pick({
 
 /**
  * Loop node schema — extends base with `loop` config.
- * AI-specific fields from the base are present in the type but ignored at runtime with a warning.
- * retry is not supported on loop nodes (enforced at parse time).
+ * The authored AI projection selects fields consumed by each iteration; remaining
+ * AI fields warn as ignored. retry is rejected because the loop owns iteration.
  */
 export const loopNodeSchema = dagNodeBaseSchema.extend({
   kind: z.literal('loop'),
   loop: loopNodeConfigSchema,
+  timeout: execNodeSchema.shape.timeout,
 });
 
 /** DAG node that runs an AI prompt in a loop until a completion condition is met */
@@ -558,6 +559,7 @@ export const loopGroupNodeConfigSchema: z.ZodType<LoopGroupNodeConfig> = loopCon
 export const loopGroupNodeSchema = dagNodeBaseSchema.extend({
   kind: z.literal('loop_group'),
   loop_group: loopGroupNodeConfigSchema,
+  timeout: execNodeSchema.shape.timeout,
 });
 
 /** DAG node that runs a multi-node sub-DAG in a loop until a completion condition is met */
@@ -1693,6 +1695,16 @@ export const dagNodeSchema = z
       });
     }
 
+    // Loop predicates are subprocesses, so a selected loop timeout has the same
+    // positive, finite contract as an exec timeout. The flat schema stays loose so
+    // modes that do not select timeout can keep dropping legacy ignored values.
+    if ((hasLoop || hasLoopGroup) && data.timeout !== undefined) {
+      const timeoutResult = execNodeSchema.pick({ timeout: true }).safeParse(data);
+      if (!timeoutResult.success) {
+        addSchemaIssues(timeoutResult.error.issues);
+      }
+    }
+
     if (hasWait && data.output_format !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -1950,6 +1962,7 @@ export const dagNodeSchema = z
         ...aiOnly,
         kind: 'loop_group',
         loop_group: data.loop_group,
+        ...(data.timeout !== undefined ? { timeout: data.timeout } : {}),
       } as LoopGroupNode;
     }
     if (!data.loop) throw new Error('unreachable: loop must be defined after superRefine');
@@ -1958,6 +1971,7 @@ export const dagNodeSchema = z
       ...loopAiAuthoringSchema.parse(aiOnly),
       kind: 'loop',
       loop: data.loop,
+      ...(data.timeout !== undefined ? { timeout: data.timeout } : {}),
     } as LoopNode;
   })
   .openapi('DagNode');
