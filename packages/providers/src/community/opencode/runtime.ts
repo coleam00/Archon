@@ -9,6 +9,31 @@ function generateRandomPassword(): string {
   return randomBytes(32).toString('hex');
 }
 
+// Deliberately no `permission` key here: the embedded server must inherit
+// whatever `ask`/`allow`/`deny` policy the user's own OpenCode config (global
+// or project) resolves to. An embedded server is not an execution sandbox,
+// and a node's `tools`/`disallowedTools` map (agent-config.ts) is an
+// orthogonal enable/disable gate, not a substitute for the user's directory
+// or repeated-action approval policy. A workflow node running unattended
+// against an unresolved `ask` permission must fail fast instead of hanging
+// (see session.ts's/multi-agent.ts's `permission.asked` handling, issue
+// #3332) — it must not have its permissions silently broadened to avoid
+// that hang.
+//
+// This is safe because `config` here becomes `OPENCODE_CONFIG_CONTENT`
+// (see `createOpencodeServer` in @opencode-ai/sdk), which OpenCode *merges*
+// into the resolved config rather than replacing it wholesale
+// (https://opencode.ai/docs/config/#config-file — "Configuration files are
+// merged together, not replaced"). Verified live: an embedded server built
+// with this exact config, given no local project config, still honored this
+// machine's real `~/.config/opencode/opencode.jsonc` `external_directory`
+// allow-list for a path outside the session's working directory. Omitting
+// `permission` here means this layer contributes nothing to that key, so
+// the user's real global/project config still resolves it. Two categories,
+// `doom_loop` and `external_directory`, default to `ask` upstream when
+// nothing configures them at all (https://opencode.ai/docs/permissions/#defaults);
+// an unattended node can legitimately hit the fail-fast path below for those
+// two unless the user's own OpenCode config sets them to `allow`.
 function buildEmbeddedServerConfig(startupPort: number): Record<string, unknown> {
   return {
     server: {

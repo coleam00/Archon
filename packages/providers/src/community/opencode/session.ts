@@ -8,7 +8,7 @@ import {
   selectSingleAgent,
   type NamedAgentConfig,
 } from './agent-config';
-import { errorMessage } from './errors';
+import { errorMessage, pendingPermissionError } from './errors';
 import type { OpencodeClientLike } from './runtime';
 import { normalizeTokens } from './tokens';
 
@@ -244,6 +244,27 @@ export async function* streamOpencodeSession(
         const err = new Error(errorMessage(rawError));
         err.cause = rawError;
         throw err;
+      }
+
+      // The embedded server (runtime.ts) sets no `permission` policy of its
+      // own, so this fires whenever the user's own OpenCode config (or an
+      // upstream default, e.g. `doom_loop`/`external_directory`, which
+      // default to `ask`) leaves a category unresolved. Workflow nodes run
+      // unattended, so nobody can answer that prompt: fail the node fast
+      // rather than hang forever waiting for a `session.idle` that will
+      // never arrive while the session is permission-blocked (issue #3332).
+      // `properties` for this event *is* the pending-permission record
+      // itself (unlike `session.error`, whose `sessionID` sits inside
+      // `properties`). The real event is `permission.asked`, not the
+      // `permission.updated` name the `@opencode-ai/sdk` npm package's
+      // types declare — verified against a live server's `EventPermissionAsked`
+      // schema (`GET /doc`); the pinned SDK's types are stale for this event.
+      if (event.type === 'permission.asked') {
+        const eventSessionId =
+          typeof properties.sessionID === 'string' ? properties.sessionID : undefined;
+        if (eventSessionId && eventSessionId !== sessionId) continue;
+
+        throw pendingPermissionError(properties);
       }
 
       if (event.type === 'session.idle') {
