@@ -26307,11 +26307,7 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
     const workflowRun = makeWorkflowRun('skip-cause-live');
     const emitted: Array<{ nodeId: string; cause: SkipCause }> = [];
     const unsubscribe = getWorkflowEventEmitter().subscribe(event => {
-      if (
-        event.type === 'node_skipped' &&
-        event.reason !== 'prior_success' &&
-        event.runId === workflowRun.id
-      ) {
+      if (event.type === 'node_skipped' && event.runId === workflowRun.id) {
         emitted.push({ nodeId: event.nodeId, cause: event.cause });
       }
     });
