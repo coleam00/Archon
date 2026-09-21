@@ -163,6 +163,7 @@ const STRING_FIELD_CLASSIFICATIONS = {
   'with.*.if_skipped': { kind: 'template', slots: ['binding.if_skipped'] },
   script: { kind: 'template', slots: ['exec.script'] },
   runtime: { kind: 'literal', reason: 'Script runtime is an executor identifier' },
+  on_timeout: { kind: 'literal', reason: 'Timeout outcome is an execution policy enum' },
   'deps.*': { kind: 'literal', reason: 'Script dependencies are package identifiers' },
 } satisfies Record<string, StringFieldClassification>;
 

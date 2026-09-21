@@ -219,7 +219,7 @@ mock.module('@archon/core/db/messages', () => ({
 }));
 
 mock.module('@archon/core/utils/commands', () => ({
-  findMarkdownFilesRecursive: mock(async () => []),
+  findCommandFiles: mock(async () => []),
 }));
 
 import { registerApiRoutes } from './api';

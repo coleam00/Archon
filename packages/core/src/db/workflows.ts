@@ -3,7 +3,8 @@
  */
 import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
 import { insertWorkflowEvent, listActiveWorkflowNodeIds } from './workflow-events';
-import { toHydratedTimestamp } from './timestamps';
+import { insertTerminalWorkflowEvent } from './workflow-terminal-event';
+import { normalizeWorkflowRun } from './workflow-run-normalization';
 import type { IDatabase, SqlDialect } from './adapters/types';
 import type {
   WorkflowRun,
@@ -35,8 +36,9 @@ import type {
   WorkflowResumeCursor,
   WorkflowWaitCompletion,
   WorkflowWaitPause,
+  NodeStateEventInput,
 } from '@archon/workflows/store';
-import { FAN_OUT_CANCEL_REASONS } from '@archon/workflows/store';
+import { FAN_OUT_CANCEL_REASONS, waitCompletionEvents } from '@archon/workflows/store';
 
 /** Best-effort ROLLBACK — log but swallow errors since we're already in an error path. */
 function rollback(): Promise<void> {
@@ -50,30 +52,6 @@ function rollback(): Promise<void> {
 
 /** Guard error for deleteWorkflowRun — re-thrown without wrapping in the outer catch. */
 class WorkflowRunGuardError extends Error {}
-
-/**
- * Normalize a WorkflowRun row from the database.
- * SQLite stores metadata as TEXT (JSON string) and timestamps as TEXT datetimes;
- * PostgreSQL returns parsed objects and real Dates. This makes both shapes match
- * the `WorkflowRun` type's promise for every consumer — downstream code may treat
- * them as a parsed object and a Date without re-guarding (a raw SQLite string once
- * crashed `resolveWorkflowAdoption` at `.toISOString()`, #2845).
- */
-function normalizeWorkflowRun<T extends WorkflowRun>(row: T): T {
-  if (typeof row.metadata === 'string') {
-    try {
-      row.metadata = JSON.parse(row.metadata) as Record<string, unknown>;
-    } catch {
-      row.metadata = {};
-    }
-  }
-  if (typeof row.started_at === 'string') row.started_at = toHydratedTimestamp(row.started_at);
-  if (typeof row.completed_at === 'string')
-    row.completed_at = toHydratedTimestamp(row.completed_at);
-  if (typeof row.last_activity_at === 'string')
-    row.last_activity_at = toHydratedTimestamp(row.last_activity_at);
-  return row;
-}
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -115,18 +93,22 @@ function rowLockClause(): string {
   return getDatabaseType() === 'postgresql' ? ' FOR UPDATE' : '';
 }
 
-function normalizeMetadata(raw: unknown): Record<string, unknown> {
-  let metadata = raw;
-  if (typeof metadata === 'string') {
+function parseJsonObject(raw: unknown): Record<string, unknown> | null {
+  let value = raw;
+  if (typeof value === 'string') {
     try {
-      metadata = JSON.parse(metadata) as unknown;
+      value = JSON.parse(value) as unknown;
     } catch {
-      return {};
+      return null;
     }
   }
-  return typeof metadata === 'object' && metadata !== null
-    ? (metadata as Record<string, unknown>)
-    : {};
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function normalizeMetadata(raw: unknown): Record<string, unknown> {
+  return parseJsonObject(raw) ?? {};
 }
 
 /**
@@ -318,7 +300,7 @@ export async function resolveAndCancelApprovalGate(
         for (const event of events) {
           await insertWorkflowEvent(query, { workflow_run_id: id, ...event });
         }
-        await insertWorkflowEvent(query, {
+        await insertTerminalWorkflowEvent(query, {
           workflow_run_id: id,
           event_type: 'workflow_cancelled',
           step_name: cancellation.step_name,
@@ -621,7 +603,7 @@ export async function cancelResumableRunsForConversation(
         );
       }
       for (const run of resumable) {
-        await insertWorkflowEvent(query, {
+        await insertTerminalWorkflowEvent(query, {
           workflow_run_id: run.id,
           event_type: 'workflow_cancelled',
         });
@@ -1215,7 +1197,7 @@ export async function completeWorkflowRun(
             [id]
           );
       if ((update.rowCount ?? 0) > 0) {
-        await insertWorkflowEvent(query, {
+        await insertTerminalWorkflowEvent(query, {
           workflow_run_id: id,
           event_type: 'workflow_completed',
           data: completion,
@@ -1286,7 +1268,7 @@ export async function failWorkflowRun(
         });
       }
       if ((update.rowCount ?? 0) > 0) {
-        await insertWorkflowEvent(query, {
+        await insertTerminalWorkflowEvent(query, {
           workflow_run_id: id,
           event_type: 'workflow_failed',
           data: { error },
@@ -1327,7 +1309,7 @@ export async function cancelWorkflowRun(
         [id]
       );
       if ((update.rowCount ?? 0) > 0) {
-        await insertWorkflowEvent(query, {
+        await insertTerminalWorkflowEvent(query, {
           workflow_run_id: id,
           event_type: 'workflow_cancelled',
           step_name: event?.step_name,
@@ -1368,7 +1350,7 @@ export async function cancelFanOutRun(
         [id, JSON.stringify({ cancelled_reason: reason })]
       );
       if ((update.rowCount ?? 0) > 0) {
-        await insertWorkflowEvent(query, {
+        await insertTerminalWorkflowEvent(query, {
           workflow_run_id: id,
           event_type: 'workflow_cancelled',
           data: { reason },
@@ -1524,7 +1506,7 @@ export async function failPausedAttentionWait(
       );
       const failed = (result.rowCount ?? 0) > 0;
       if (failed) {
-        await insertWorkflowEvent(query, {
+        await insertTerminalWorkflowEvent(query, {
           workflow_run_id: id,
           event_type: 'workflow_failed',
           data: { error },
@@ -1544,7 +1526,7 @@ export async function clearWorkflowWaitContext(
   id: string,
   waitContext: WorkflowWaitContext,
   completion: WorkflowWaitCompletion
-): Promise<{ cleared: boolean }> {
+): Promise<{ cleared: false } | { cleared: true; nodeEvent: NodeStateEventInput }> {
   const nodeExpr =
     getDatabaseType() === 'postgresql'
       ? "metadata->'wait'->>'nodeId'"
@@ -1565,24 +1547,10 @@ export async function clearWorkflowWaitContext(
         [id, waitContext.nodeId, cursor]
       );
       if ((result.rowCount ?? 0) === 0) return { cleared: false };
-      await insertWorkflowEvent(query, {
-        workflow_run_id: id,
-        event_type: completion.result.status === 'expired' ? 'wait_expired' : 'wait_completed',
-        step_name: completion.stepName,
-        data: completion.result,
-      });
-      await insertWorkflowEvent(query, {
-        workflow_run_id: id,
-        event_type: 'node_completed',
-        step_name: completion.stepName,
-        data: {
-          type: 'wait',
-          duration_ms: completion.result.waited_ms,
-          node_output: JSON.stringify(completion.result),
-          structured_output: completion.result,
-        },
-      });
-      return { cleared: true };
+      const rows = waitCompletionEvents(id, completion);
+      await insertWorkflowEvent(query, rows.outcome);
+      await insertWorkflowEvent(query, rows.node);
+      return { cleared: true, nodeEvent: rows.node };
     });
   } catch (error) {
     const err = error as Error;
@@ -1636,6 +1604,90 @@ export async function listDueWorkflowContinuations(
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_continuation_due_list_failed');
     throw new Error(`Failed to list due workflow continuations: ${err.message}`);
+  }
+}
+
+export interface WorkflowEventSignalCandidate {
+  runId: string;
+  wait: Extract<WorkflowWaitContext, { kind: 'event' }>;
+  outputType: string;
+  structuredOutput: unknown;
+}
+
+export async function listWorkflowEventSignalCandidates(
+  event: string,
+  now: Date
+): Promise<WorkflowEventSignalCandidate[]> {
+  const postgres = getDatabaseType() === 'postgresql';
+  const runJson = (path: string): string =>
+    postgres
+      ? `r.metadata->'wait'->>'${path}'`
+      : `CASE WHEN json_valid(r.metadata) THEN json_extract(r.metadata, '$.wait.${path}') END`;
+  const eventJson = (path: string): string =>
+    postgres
+      ? `e.data->>'${path}'`
+      : `CASE WHEN json_valid(e.data) THEN json_extract(e.data, '$.${path}') END`;
+  const structuredOutputType = postgres
+    ? "CASE WHEN e.data ? 'structured_output' THEN jsonb_typeof(e.data->'structured_output') END"
+    : "CASE WHEN json_valid(e.data) THEN json_type(e.data, '$.structured_output') END";
+
+  interface CandidateRow {
+    run_id: string;
+    run_metadata: unknown;
+    event_data: unknown;
+  }
+
+  try {
+    const result = await pool.query<CandidateRow>(
+      `SELECT r.id AS run_id, r.metadata AS run_metadata, e.data AS event_data
+       FROM remote_agent_workflow_runs r
+       JOIN remote_agent_workflow_events e ON e.workflow_run_id = r.id
+       WHERE r.status = 'paused'
+         AND ${runJson('kind')} = 'event'
+         AND ${runJson('event')} = $1
+         AND ${runJson('signaledAt')} IS NULL
+         AND ${runJson('resumeAt')} > $2
+         AND e.event_type = 'node_completed'
+         AND ${eventJson('output_type')} IS NOT NULL
+         AND ${eventJson('output_type')} <> ''
+         AND ${structuredOutputType} IS NOT NULL
+         AND ${structuredOutputType} <> 'null'`,
+      [event, now.toISOString()]
+    );
+
+    const candidates: WorkflowEventSignalCandidate[] = [];
+    for (const row of result.rows) {
+      const metadata = parseJsonObject(row.run_metadata);
+      const eventData = parseJsonObject(row.event_data);
+      if (!metadata || !eventData) continue;
+
+      const parsedWait = workflowWaitContextSchema.safeParse(metadata.wait);
+      const outputType = eventData.output_type;
+      if (
+        !parsedWait.success ||
+        parsedWait.data.kind !== 'event' ||
+        parsedWait.data.event !== event ||
+        parsedWait.data.signaledAt !== undefined ||
+        Date.parse(parsedWait.data.resumeAt) <= now.getTime() ||
+        typeof outputType !== 'string' ||
+        outputType === '' ||
+        !Object.hasOwn(eventData, 'structured_output')
+      ) {
+        continue;
+      }
+
+      candidates.push({
+        runId: row.run_id,
+        wait: parsedWait.data,
+        outputType,
+        structuredOutput: eventData.structured_output,
+      });
+    }
+    return candidates;
+  } catch (error) {
+    const err = error as Error;
+    getLog().error({ err, event }, 'db.workflow_event_signal_candidates_list_failed');
+    throw new Error(`Failed to list workflow event signal candidates: ${err.message}`);
   }
 }
 

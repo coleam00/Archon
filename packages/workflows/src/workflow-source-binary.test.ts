@@ -15,10 +15,11 @@
  * Own file, own `bun test` invocation: `mock.module` is process-global and irreversible,
  * and pretending to be a binary would poison every other suite in the process.
  */
-import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test';
-import { mkdtemp, mkdir, rm, readFile } from 'fs/promises';
+import { describe, test, expect, beforeAll, afterAll, mock } from 'bun:test';
+import { cp, mkdtemp, mkdir, readFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { removeTempTree } from '@archon/paths/test-utils';
 
 const actual = await import('./defaults/bundled-defaults');
 mock.module('./defaults/bundled-defaults', () => ({ ...actual, isBinaryBuild: () => true }));
@@ -29,43 +30,38 @@ const { loadCommandPrompt } = await import('./executor-shared');
 const { discoverScriptsForCwd } = await import('./script-discovery');
 
 let root: string;
-let source: string;
 let target: string;
+let capture: Awaited<ReturnType<typeof captureWorkflowSource>>;
 
 const deps = {
   loadConfig: () => Promise.resolve({} as unknown as Awaited<ReturnType<() => Promise<never>>>),
 };
 
-beforeEach(async () => {
+beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), 'archon-binary-source-'));
-  source = join(root, 'authoring');
+  const source = join(root, 'authoring');
   target = join(root, 'target');
   await mkdir(join(source, '.archon', 'workflows'), { recursive: true });
   await mkdir(target, { recursive: true });
+  // The readers share one immutable real bundle; the tamper case copies it below.
+  capture = await captureWorkflowSource({
+    sourceRoot: source,
+    captureRoot: join(root, 'capture'),
+  });
 });
 
-afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
+afterAll(async () => {
+  await removeTempTree(root);
 });
 
 describe('a binary freezes its embedded bundled source', () => {
   test('the capture claims the bundled scope, which a binary never could before', async () => {
-    const capture = await captureWorkflowSource({
-      sourceRoot: source,
-      captureRoot: join(root, 'capture'),
-    });
-
     // Without materialization this is absent in a binary, and absence is what forced the
     // resume-blocking engine-version check that used to live here.
     expect(capture.manifest.scopes).toContain('bundled');
   });
 
   test('a bundled command exists as a file and resolves from the capture', async () => {
-    const capture = await captureWorkflowSource({
-      sourceRoot: source,
-      captureRoot: join(root, 'capture'),
-    });
-
     const onDisk = await readFile(
       join(capture.anchor.root, 'bundled', 'commands', 'defaults', 'archon-assist.md'),
       'utf-8'
@@ -85,11 +81,6 @@ describe('a binary freezes its embedded bundled source', () => {
   });
 
   test('bundled workflows are written where discovery expects them', async () => {
-    const capture = await captureWorkflowSource({
-      sourceRoot: source,
-      captureRoot: join(root, 'capture'),
-    });
-
     const roots = capturedSourceRoots(capture.anchor);
     const yaml = await readFile(
       join(roots.bundledWorkflows, 'defaults', 'archon-assist.yaml'),
@@ -99,36 +90,25 @@ describe('a binary freezes its embedded bundled source', () => {
   });
 
   test('script discovery reads the capture rather than re-materializing constants', async () => {
-    const capture = await captureWorkflowSource({
-      sourceRoot: source,
-      captureRoot: join(root, 'capture'),
-    });
-
-    // No bundled scripts ship today, so the assertion is about WHERE it looked: a captured
-    // run must not fall back to the embedded-constant path.
+    // A captured run must read scripts from its frozen roots.
     const roots = capturedSourceRoots(capture.anchor);
     expect(roots.kind).toBe('captured');
     await expect(discoverScriptsForCwd(target, roots)).resolves.toBeInstanceOf(Map);
   });
 
   test('the digest covers the bundled bytes, so an upgrade cannot change them unnoticed', async () => {
-    const capture = await captureWorkflowSource({
-      sourceRoot: source,
-      captureRoot: join(root, 'capture'),
-    });
-
     // Verifies end to end — this is what replaced refusing the resume outright.
     const loaded = await loadWorkflowSource(capture.anchor.root, capture.manifest.digest);
     expect(loaded.manifest.digest).toBe(capture.manifest.digest);
 
-    // And a bundled byte changing IS caught, rather than being invisible.
+    // Mutate a copy so this test cannot alter what the other readers observe.
+    const tamperedRoot = join(root, 'tampered-capture');
+    await cp(capture.anchor.root, tamperedRoot, { recursive: true });
     const { writeFile } = await import('fs/promises');
     await writeFile(
-      join(capture.anchor.root, 'bundled', 'commands', 'defaults', 'archon-assist.md'),
+      join(tamperedRoot, 'bundled', 'commands', 'defaults', 'archon-assist.md'),
       'swapped by a different Archon build'
     );
-    await expect(
-      loadWorkflowSource(capture.anchor.root, capture.manifest.digest)
-    ).rejects.toThrow();
+    await expect(loadWorkflowSource(tamperedRoot, capture.manifest.digest)).rejects.toThrow();
   });
 });

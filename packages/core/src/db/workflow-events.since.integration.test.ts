@@ -36,6 +36,7 @@ mock.module('./connection', () => ({
 const {
   listWorkflowEventsSince,
   createWorkflowEvent,
+  persistWorkflowEvent,
   listWorkflowEvents,
   listRecentEvents,
   persistWorkflowEventIfRunning,
@@ -120,12 +121,12 @@ describe('listWorkflowEventsSince — real SQLite (catches the C1 datetime misma
   });
 
   test('preserves insertion chronology for lifecycle events sharing a timestamp', async () => {
-    await createWorkflowEvent({
+    await persistWorkflowEvent({
       workflow_run_id: 'run-1',
       event_type: 'node_started',
       step_name: 'build',
     });
-    await createWorkflowEvent({
+    await persistWorkflowEvent({
       workflow_run_id: 'run-1',
       event_type: 'node_completed',
       step_name: 'build',
@@ -150,7 +151,7 @@ describe('listWorkflowEventsSince — real SQLite (catches the C1 datetime misma
   });
 
   test('returns an event stored via datetime() when queried with an ISO Date cursor', async () => {
-    await createWorkflowEvent({
+    await persistWorkflowEvent({
       workflow_run_id: 'run-1',
       event_type: 'node_completed',
       step_name: 'build',

@@ -2,6 +2,7 @@
  * Frontend-specific types for the Archon Web UI.
  * SSE event types match what the Web adapter emits.
  */
+import type { components } from '@/lib/api.generated';
 
 export type WorkflowRunStatus =
   | 'pending'
@@ -12,6 +13,8 @@ export type WorkflowRunStatus =
   | 'paused';
 export type WorkflowStepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
 export type ArtifactType = 'pr' | 'commit' | 'file_created' | 'file_modified' | 'branch';
+export type SkipCause = components['schemas']['SkipCause'];
+export type NodeSkipReason = components['schemas']['NodeSkipReason'];
 
 /**
  * Framework category the server attaches to a message it emitted itself (as
@@ -143,16 +146,7 @@ export interface LoopIterationEvent extends BaseSSEEvent {
 }
 
 // DAG node status (emitted during DAG workflow execution)
-export interface DagNodeEvent extends BaseSSEEvent {
-  type: 'dag_node';
-  runId: string;
-  nodeId: string;
-  name: string;
-  status: WorkflowStepStatus;
-  duration?: number;
-  error?: string;
-  reason?: 'when_condition' | 'trigger_rule';
-}
+export type DagNodeEvent = components['schemas']['DagNodeSseEvent'];
 
 // Workflow tool activity (tool_started / tool_completed from executor)
 export interface WorkflowToolActivityEvent extends BaseSSEEvent {
@@ -352,7 +346,8 @@ export interface DagNodeState {
   status: WorkflowStepStatus;
   duration?: number;
   error?: string;
-  reason?: 'when_condition' | 'trigger_rule';
+  reason?: DagNodeEvent['reason'];
+  cause?: DagNodeEvent['cause'];
   currentIteration?: number;
   maxIterations?: number;
   iterations?: LoopIterationInfo[];

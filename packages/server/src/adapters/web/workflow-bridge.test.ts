@@ -37,6 +37,65 @@ test('workflow start projection does not expose the host transcript path', () =>
   expect(payload).not.toHaveProperty('transcriptPath');
 });
 
+test('node skip projection preserves the live skip cause', () => {
+  const event: WorkflowEmitterEvent = {
+    type: 'node_skipped',
+    runId: 'run-1',
+    nodeId: 'publish',
+    nodeName: 'Publish',
+    reason: 'trigger_rule',
+    cause: { kind: 'upstream_failed', origin: 'validate' },
+  };
+
+  expect(JSON.parse(mapWorkflowEvent(event) ?? '{}')).toMatchObject({
+    type: 'dag_node',
+    runId: 'run-1',
+    nodeId: 'publish',
+    status: 'skipped',
+    reason: 'trigger_rule',
+    cause: { kind: 'upstream_failed', origin: 'validate' },
+  });
+});
+
+test('prior-success replay projects as a completed dag_node', () => {
+  const event: WorkflowEmitterEvent = {
+    type: 'node_skipped_prior_success',
+    runId: 'run-1',
+    nodeId: 'publish',
+    nodeName: 'Publish',
+  };
+
+  const payload = JSON.parse(mapWorkflowEvent(event) ?? '{}') as Record<string, unknown>;
+  expect(payload).toMatchObject({
+    type: 'dag_node',
+    runId: 'run-1',
+    nodeId: 'publish',
+    status: 'completed',
+  });
+  expect(payload).not.toHaveProperty('reason');
+  expect(payload).not.toHaveProperty('cause');
+});
+
+test('timeout skip projection preserves the live timeout cause', () => {
+  const event: WorkflowEmitterEvent = {
+    type: 'node_skipped',
+    runId: 'run-1',
+    nodeId: 'ci-note',
+    nodeName: 'CI note',
+    reason: 'timeout',
+    cause: { kind: 'timeout' },
+  };
+
+  expect(JSON.parse(mapWorkflowEvent(event) ?? '{}')).toMatchObject({
+    type: 'dag_node',
+    runId: 'run-1',
+    nodeId: 'ci-note',
+    status: 'skipped',
+    reason: 'timeout',
+    cause: { kind: 'timeout' },
+  });
+});
+
 describe('mapWorkflowEvent — tool activity correlation', () => {
   test('forwards tool call IDs and completion metadata', () => {
     const started: WorkflowEmitterEvent = {

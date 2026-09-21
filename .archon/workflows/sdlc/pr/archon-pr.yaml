@@ -22,15 +22,22 @@ returns: pr
 nodes:
   - id: pr
     command: pr
+    output_type: pull-request
     # This is the durable ownership record for every later public action in
-    # delivery. Consumers bind these fields by name, never gh's ambient branch
-    # lookup.
+    # delivery and inbound forge event. Consumers use this qualified identity,
+    # never gh's ambient branch lookup.
     output_format:
       type: object
       properties:
+        repo:
+          type: object
+          properties:
+            host: { type: string }
+            path: { type: string }
+          required: [host, path]
         number: { type: integer }
         url: { type: string }
         head: { type: string }
         base: { type: string }
         is_draft: { type: boolean }
-      required: [number, url, head, base, is_draft]
+      required: [repo, number, url, head, base, is_draft]

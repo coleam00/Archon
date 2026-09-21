@@ -16,7 +16,7 @@
     "./test-utils": "./src/test-utils.ts"
   },
   "scripts": {
-    "test": "bun test src/",
+    "test": "bun run ../../scripts/package-tests.ts",
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
@@ -27,5 +27,10 @@
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
-  }
+  },
+  "testGroups": [
+    [
+      "src/"
+    ]
+  ]
 }

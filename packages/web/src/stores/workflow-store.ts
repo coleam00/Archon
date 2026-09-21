@@ -67,7 +67,7 @@ function updateActiveNodeIds(
   nodeId: string,
   status: DagNodeEvent['status']
 ): string[] | undefined {
-  if (activeNodeIds === undefined || status === 'pending') return activeNodeIds;
+  if (activeNodeIds === undefined) return activeNodeIds;
   if (status === 'running') {
     return activeNodeIds.includes(nodeId) ? activeNodeIds : [...activeNodeIds, nodeId];
   }
@@ -279,6 +279,7 @@ export const useWorkflowStore = create<WorkflowStoreState>()(
                 duration: event.duration,
                 error: event.error,
                 reason: event.reason,
+                cause: event.cause,
               };
 
               if (existingIdx >= 0) {

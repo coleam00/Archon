@@ -83,9 +83,12 @@ find /.archon -name ".git" -prune -print 2>/dev/null | while IFS= read -r git_di
 done
 
 # Configure git to use GH_TOKEN for HTTPS clones via credential helper
-# Uses a helper function so the token stays in the environment, not in ~/.gitconfig
+# Uses a helper function so the token stays in the environment, not in ~/.gitconfig.
+# --replace-all: `gh auth login` / `gh auth setup-git` write several values for this
+# key into the persisted ~/.gitconfig, and a plain set then exits non-zero under
+# `set -e`, crash-looping the container on every restart.
 if [ -n "$GH_TOKEN" ]; then
-  $RUNNER git config --global credential."https://github.com".helper \
+  $RUNNER git config --global --replace-all credential."https://github.com".helper \
     '!f() { echo "username=x-access-token"; echo "password=${GH_TOKEN}"; }; f'
 fi
 

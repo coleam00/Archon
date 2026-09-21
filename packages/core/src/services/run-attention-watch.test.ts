@@ -38,6 +38,27 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
+let reachableOwners: Set<string> | null = null;
+const RUN_LIVE_OWNER_CONTROL_HANDOFF_GRACE_MS = 10_000;
+const ownerEvents = new Map<
+  string,
+  (event: 'attention' | 'control_handoff' | 'disconnected') => void
+>();
+const ownerUnsubscribes: ReturnType<typeof mock>[] = [];
+const mockWatchRunLiveOwner = mock(
+  (runId: string, onEvent: (event: 'attention' | 'control_handoff' | 'disconnected') => void) => {
+    if (reachableOwners !== null && !reachableOwners.has(runId)) return Promise.resolve(null);
+    ownerEvents.set(runId, onEvent);
+    const unsubscribe = mock(() => undefined);
+    ownerUnsubscribes.push(unsubscribe);
+    return Promise.resolve({ unsubscribe });
+  }
+);
+mock.module('./run-live-owner', () => ({
+  RUN_LIVE_OWNER_CONTROL_HANDOFF_GRACE_MS,
+  watchRunLiveOwner: mockWatchRunLiveOwner,
+}));
+
 const { waitForRunAttention } = await import('./run-attention-watch');
 
 // ---------------------------------------------------------------------------
@@ -77,10 +98,23 @@ const gate = (over: Record<string, unknown> = {}) => ({
 const wait = (runId: string, over: Record<string, unknown> = {}) =>
   waitForRunAttention(runId, { pollIntervalMs: 5, deadlineMs: 3000, ...over });
 
+async function waitForOwner(runId: string): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (!ownerEvents.has(runId)) {
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for owner ${runId}`);
+    await Bun.sleep(5);
+  }
+}
+
 beforeEach(() => {
   rows.clear();
+  mockGetWorkflowRun.mockImplementation((id: string) => Promise.resolve(rows.get(id) ?? null));
   mockGetWorkflowRun.mockClear();
   mockGetDbNotificationListener.mockClear();
+  reachableOwners = null;
+  ownerEvents.clear();
+  ownerUnsubscribes.length = 0;
+  mockWatchRunLiveOwner.mockClear();
 });
 
 // ---------------------------------------------------------------------------
@@ -105,6 +139,128 @@ describe('waitForRunAttention', () => {
       attention: { kind: 'terminal', runId: 'r1', status: 'completed', at },
     });
     expect(mockGetWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(mockWatchRunLiveOwner).not.toHaveBeenCalled();
+  });
+
+  test('reports owner_lost after a second active read without mutating the row', async () => {
+    const before = putRun('r1', { status: 'running' });
+    reachableOwners = new Set();
+
+    expect(await wait('r1')).toEqual({
+      kind: 'owner_lost',
+      runId: 'r1',
+      observedStatus: 'running',
+    });
+    expect(mockGetWorkflowRun.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(rows.get('r1')).toEqual(before);
+  });
+
+  test('a terminal row racing a missing owner wins', async () => {
+    const running = putRun('r1', { status: 'running' });
+    const completed = { ...running, status: 'completed', completed_at: new Date() } as WorkflowRun;
+    reachableOwners = new Set();
+    let reads = 0;
+    mockGetWorkflowRun.mockImplementation(async () => {
+      reads += 1;
+      return reads === 1 ? running : completed;
+    });
+
+    expect(await wait('r1')).toMatchObject({
+      kind: 'attention',
+      attention: { kind: 'terminal', status: 'completed' },
+    });
+  });
+
+  test('owner attention wakes a durable re-read without waiting for the interval', async () => {
+    putRun('r1', { status: 'running' });
+    const pending = waitForRunAttention('r1', { pollIntervalMs: 60_000, deadlineMs: 3000 });
+    await waitForOwner('r1');
+    putRun('r1', { status: 'completed', completed_at: new Date() });
+    ownerEvents.get('r1')?.('attention');
+
+    expect(await pending).toMatchObject({
+      kind: 'attention',
+      attention: { kind: 'terminal', status: 'completed' },
+    });
+  });
+
+  test('an unexpected owner disconnect wakes immediately as owner_lost', async () => {
+    putRun('r1', { status: 'running' });
+    const pending = waitForRunAttention('r1', { pollIntervalMs: 60_000, deadlineMs: 3000 });
+    await waitForOwner('r1');
+    reachableOwners = new Set();
+    ownerEvents.get('r1')?.('disconnected');
+
+    expect(await pending).toEqual({
+      kind: 'owner_lost',
+      runId: 'r1',
+      observedStatus: 'running',
+    });
+  });
+
+  test('does not lose a disconnect delivered with the owner handshake', async () => {
+    putRun('r1', { status: 'running' });
+    reachableOwners = new Set(['r1']);
+    mockWatchRunLiveOwner.mockImplementationOnce((runId, onEvent) => {
+      ownerEvents.set(runId, onEvent);
+      const unsubscribe = mock(() => undefined);
+      ownerUnsubscribes.push(unsubscribe);
+      reachableOwners = new Set();
+      onEvent('disconnected');
+      return Promise.resolve({ unsubscribe });
+    });
+
+    expect(await wait('r1')).toEqual({
+      kind: 'owner_lost',
+      runId: 'r1',
+      observedStatus: 'running',
+    });
+    expect(ownerUnsubscribes[0]).toHaveBeenCalledTimes(1);
+  });
+
+  test('a stop handoff gives the controller bounded time to persist cancellation', async () => {
+    putRun('r1', { status: 'running' });
+    const pending = waitForRunAttention('r1', { pollIntervalMs: 20, deadlineMs: 3000 });
+    await waitForOwner('r1');
+    ownerEvents.get('r1')?.('control_handoff');
+    reachableOwners = new Set();
+    ownerEvents.get('r1')?.('disconnected');
+    await Bun.sleep(5);
+    putRun('r1', { status: 'cancelled', completed_at: new Date() });
+
+    expect(await pending).toMatchObject({
+      kind: 'attention',
+      attention: { kind: 'terminal', status: 'cancelled' },
+    });
+  });
+
+  test('a stop handoff expires when the controller never persists a transition', async () => {
+    const realNow = Date.now;
+    let now = realNow();
+    Date.now = () => now;
+    try {
+      putRun('r1', { status: 'running' });
+      let settled = false;
+      const pending = waitForRunAttention('r1', { pollIntervalMs: 5 }).finally(() => {
+        settled = true;
+      });
+      await waitForOwner('r1');
+      ownerEvents.get('r1')?.('control_handoff');
+      reachableOwners = new Set();
+      ownerEvents.get('r1')?.('disconnected');
+
+      await Bun.sleep(20);
+      expect(settled).toBe(false);
+      now += RUN_LIVE_OWNER_CONTROL_HANDOFF_GRACE_MS + 1;
+
+      expect(await pending).toEqual({
+        kind: 'owner_lost',
+        runId: 'r1',
+        observedStatus: 'running',
+      });
+    } finally {
+      Date.now = realNow;
+    }
   });
 
   test('announces the attachment once, with the status the opening read saw', async () => {
@@ -125,6 +281,8 @@ describe('waitForRunAttention', () => {
 
     expect(result).toMatchObject({ kind: 'deadline', observedStatus: 'running' });
     expect(attached).toEqual(['running']);
+    expect(ownerUnsubscribes).toHaveLength(1);
+    expect(ownerUnsubscribes[0]).toHaveBeenCalledTimes(1);
   });
 
   test('says nothing about attaching when the first read already has an answer', async () => {
@@ -192,6 +350,14 @@ describe('waitForRunAttention', () => {
       runId: 'r1',
       observedStatus: 'paused',
     });
+    expect(mockWatchRunLiveOwner).not.toHaveBeenCalled();
+  });
+
+  test('a root pending row is intentionally ownerless', async () => {
+    putRun('r1', { status: 'pending' });
+
+    expect(await wait('r1', { deadlineMs: 30 })).toMatchObject({ kind: 'deadline' });
+    expect(mockWatchRunLiveOwner).not.toHaveBeenCalled();
   });
 
   test('an action-required wait wakes with its authored message', async () => {
@@ -279,6 +445,51 @@ describe('waitForRunAttention', () => {
       expect(await wait('parent', { deadlineMs: 60 })).toMatchObject({ kind: 'deadline' });
     });
 
+    test('a blocked parent watches its process-entry ancestor and reports its own status', async () => {
+      putRun('parent', { status: 'paused', metadata: blockedOn('child') });
+      putRun('child', { status: 'running', parent_run_id: 'parent' });
+      reachableOwners = new Set(['parent']);
+      const pending = waitForRunAttention('parent', {
+        pollIntervalMs: 60_000,
+        deadlineMs: 3000,
+      });
+      await waitForOwner('parent');
+      expect(mockWatchRunLiveOwner.mock.calls.map(call => call[0]).slice(0, 2)).toEqual([
+        'child',
+        'parent',
+      ]);
+
+      reachableOwners = new Set();
+      ownerEvents.get('parent')?.('disconnected');
+      expect(await pending).toEqual({
+        kind: 'owner_lost',
+        runId: 'parent',
+        observedStatus: 'paused',
+      });
+    });
+
+    test('a direct child wait can attach to the same ancestor owner', async () => {
+      putRun('parent', { status: 'paused', metadata: blockedOn('child') });
+      putRun('child', { status: 'running', parent_run_id: 'parent' });
+      reachableOwners = new Set(['parent']);
+
+      expect(await wait('child', { deadlineMs: 30 })).toMatchObject({ kind: 'deadline' });
+      expect(mockWatchRunLiveOwner.mock.calls.map(call => call[0]).slice(0, 2)).toEqual([
+        'child',
+        'parent',
+      ]);
+    });
+
+    test('a separately resumed child prefers its own owner endpoint', async () => {
+      putRun('parent', { status: 'paused', metadata: blockedOn('child') });
+      putRun('child', { status: 'running', parent_run_id: 'parent' });
+      reachableOwners = new Set(['child', 'parent']);
+
+      expect(await wait('child', { deadlineMs: 30 })).toMatchObject({ kind: 'deadline' });
+      expect(mockWatchRunLiveOwner.mock.calls[0]?.[0]).toBe('child');
+      expect(mockWatchRunLiveOwner.mock.calls.some(call => call[0] === 'parent')).toBe(false);
+    });
+
     test('a dangling child pointer is unreadable, not an assumed state', async () => {
       putRun('parent', { status: 'paused', metadata: blockedOn('ghost') });
 
@@ -320,6 +531,8 @@ describe('waitForRunAttention', () => {
 
     expect(await pending).toEqual({ kind: 'aborted', runId: 'r1' });
     expect(rows.get('r1')).toEqual(before);
+    expect(ownerUnsubscribes).toHaveLength(1);
+    expect(ownerUnsubscribes[0]).toHaveBeenCalledTimes(1);
   });
 
   test('an already-aborted signal returns before any read', async () => {

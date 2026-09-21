@@ -18,10 +18,15 @@ import {
   getDefaultWorkflowsPath,
   getHomeCommandsPath,
   getHomeWorkflowsPath,
-  findMarkdownFilesRecursive,
+  findCommandFiles,
 } from '@archon/paths';
 import { execFileAsync } from '@archon/git';
 import { BUNDLED_COMMANDS, BUNDLED_WORKFLOWS, isBinaryBuild } from './defaults/bundled-defaults';
+import {
+  bundledDefaultCommandPath,
+  bundlesPackagedResources,
+  listBundledDefaultCommands,
+} from './defaults/bundle-inventory';
 import { isValidCommandName } from './command-validation';
 import { levenshtein, findSimilar } from './utils/fuzzy-match';
 import {
@@ -152,7 +157,7 @@ export async function discoverAvailableCommands(
   const searchPaths = getCommandFolderSearchPaths(config?.commandFolder);
   for (const folder of searchPaths) {
     const dirPath = join(cwd, folder);
-    const files = await findMarkdownFilesRecursive(dirPath, '', { maxDepth: 1 });
+    const files = await findCommandFiles(dirPath);
     for (const { commandName } of files) {
       names.add(commandName);
     }
@@ -163,7 +168,7 @@ export async function discoverAvailableCommands(
   // home-scope doesn't take down repo/bundled discovery.
   const homePath = getHomeCommandsPath();
   try {
-    const homeCommands = await findMarkdownFilesRecursive(homePath, '', { maxDepth: 1 });
+    const homeCommands = await findCommandFiles(homePath);
     for (const { commandName } of homeCommands) {
       names.add(commandName);
     }
@@ -179,10 +184,8 @@ export async function discoverAvailableCommands(
         if (parsePackagedResourceReference(name) === null) names.add(name);
       }
     } else {
-      const defaultsPath = getDefaultCommandsPath();
-      const files = await findMarkdownFilesRecursive(defaultsPath, '', { maxDepth: 1 });
-      for (const { commandName } of files) {
-        names.add(commandName);
+      for (const name of await listBundledDefaultCommands(getDefaultCommandsPath())) {
+        names.add(name);
       }
     }
   }
@@ -200,7 +203,7 @@ export async function discoverAvailableCommands(
  * deterministic walk order wins — duplicates within a scope are a user error.
  */
 async function resolveCommandInDir(rootDir: string, commandName: string): Promise<string | null> {
-  const entries = await findMarkdownFilesRecursive(rootDir, '', { maxDepth: 1 });
+  const entries = await findCommandFiles(rootDir);
   const match = entries.find(e => e.commandName === commandName);
   return match ? join(rootDir, match.relativePath) : null;
 }
@@ -226,6 +229,7 @@ async function resolveCommand(
       if (isBinaryBuild()) {
         return commandName in BUNDLED_COMMANDS ? `[bundled:${commandName}]` : null;
       }
+      if (!(await bundlesPackagedResources(packaged.owner.pack))) return null;
     }
     let workflowsRoot: string;
     if (packaged.owner.source === 'project') {
@@ -281,8 +285,21 @@ async function resolveCommand(
         return `[bundled:${commandName}]`;
       }
     } else {
-      const defaultsResolved = await resolveCommandInDir(getDefaultCommandsPath(), commandName);
-      if (defaultsResolved) return defaultsResolved;
+      const path = await bundledDefaultCommandPath(getDefaultCommandsPath(), commandName);
+      // A miss is ENOENT; any other stat failure belongs to the caller, not to a silent null.
+      if (path !== null) {
+        try {
+          if ((await stat(path)).isFile()) return path;
+        } catch (error) {
+          const err = error as NodeJS.ErrnoException;
+          if (err.code !== 'ENOENT') {
+            getLog().error({ err, path, commandName }, 'bundled_default_command_inspection_failed');
+            throw new Error(`Cannot inspect bundled default '${commandName}': ${err.message}`, {
+              cause: err,
+            });
+          }
+        }
+      }
     }
   }
 

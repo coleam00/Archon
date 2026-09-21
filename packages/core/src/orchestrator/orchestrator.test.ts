@@ -203,6 +203,7 @@ const providerCapabilities: ProviderCapabilities = {
   structuredOutput: 'enforced',
   envInjection: true,
   costControl: true,
+  costReporting: true,
   effortControl: true,
   fallbackModel: true,
   sandbox: true,
@@ -1814,8 +1815,11 @@ describe('orchestrator-agent handleMessage', () => {
       // under /var → /private/var), so the stored default_cwd is canonical.
       const canonicalPath = await mockCanonicalizeProjectPath(projectPath);
       try {
-        await Bun.spawn(['git', 'init', '-b', 'develop'], { cwd: projectPath }).exited;
-        await Bun.spawn(['git', 'commit', '--allow-empty', '-m', 'init'], {
+        const initExit = await Bun.spawn(['git', 'init', '-b', 'develop'], {
+          cwd: projectPath,
+        }).exited;
+        expect(initExit, 'git init failed during registration fixture setup').toBe(0);
+        const commitExit = await Bun.spawn(['git', 'commit', '--allow-empty', '-m', 'init'], {
           cwd: projectPath,
           env: {
             ...process.env,
@@ -1825,6 +1829,7 @@ describe('orchestrator-agent handleMessage', () => {
             GIT_COMMITTER_EMAIL: 'archon-test@example.com',
           },
         }).exited;
+        expect(commitExit, 'git commit failed during registration fixture setup').toBe(0);
         mockExistsSync.mockReturnValue(true);
         mockListCodebases.mockResolvedValue([]);
         mockCreateCodebase.mockResolvedValue({

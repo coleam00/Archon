@@ -134,6 +134,8 @@ export function isScheduledWorkflowResume(value: unknown): value is ScheduledWor
  * callers pass an arbitrary `WorkflowRunStatus` to `.includes()`.
  */
 const TERMINAL_STATUS_TUPLE = ['completed', 'failed', 'cancelled'] as const;
+export const terminalWorkflowRunStatusSchema =
+  workflowRunStatusSchema.extract(TERMINAL_STATUS_TUPLE);
 
 /** Statuses that indicate a run has finished and cannot transition further. */
 export const TERMINAL_WORKFLOW_STATUSES: readonly WorkflowRunStatus[] = TERMINAL_STATUS_TUPLE;
@@ -178,6 +180,26 @@ export type NodeState = z.infer<typeof nodeStateSchema>;
 // NodeOutput
 // ---------------------------------------------------------------------------
 
+export const skipCauseSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('condition'), expr: z.string() }),
+  z.object({ kind: z.literal('condition_parse_error'), expr: z.string() }),
+  z.object({ kind: z.literal('timeout') }),
+  z.object({ kind: z.literal('upstream_failed'), origin: z.string() }),
+  z.object({ kind: z.literal('upstream_skipped'), origin: z.string() }),
+]);
+
+export type SkipCause = z.infer<typeof skipCauseSchema>;
+
+export const nodeSkipReasonSchema = z.enum([
+  'prior_success',
+  'when_condition',
+  'when_condition_parse_error',
+  'trigger_rule',
+  'timeout',
+]);
+
+export type NodeSkipReason = z.infer<typeof nodeSkipReasonSchema>;
+
 /**
  * Captured output from a completed DAG node.
  * `output` is the concatenated assistant text (or JSON-encoded string from the SDK
@@ -187,6 +209,7 @@ export type NodeState = z.infer<typeof nodeStateSchema>;
  * the last completed iteration's real, non-empty output. No reader of a 'failed'
  * node's `output` may treat it as trustworthy regardless of content (#2713).
  * `error` is required when state is 'failed', absent on all other states.
+ * `cause` is required when state is 'skipped' so downstream decisions retain its provenance.
  * `structuredOutput` carries the provider's parsed structured payload (set by Pi/Codex/Claude
  * when the result chunk includes one). Downstream `$nodeId.output.field` substitution and
  * `when:` conditions prefer this object over re-parsing `output`, so providers that emit
@@ -224,8 +247,13 @@ export const nodeOutputSchema = z.discriminatedUnion('state', [
     retryable: z.literal(false).optional(),
   }),
   z.object({
-    state: z.enum(['pending', 'skipped']),
+    state: z.literal('pending'),
     output: z.string(),
+  }),
+  z.object({
+    state: z.literal('skipped'),
+    output: z.string(),
+    cause: skipCauseSchema,
   }),
 ]);
 

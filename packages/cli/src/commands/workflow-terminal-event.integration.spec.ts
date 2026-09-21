@@ -1,15 +1,13 @@
+import { terminalRecordSchema } from '@archon/workflows/schemas/terminal-record';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
-import {
-  canConnect,
-  detachedRunControlPath,
-  requestDetachedRunStop,
-} from '../utils/detached-run-control';
+import { canConnectToRunLiveOwner, runLiveOwnerPath } from '@archon/core/services/run-live-owner';
+import { requestDetachedRunStop } from '../utils/detached-run-control';
 
 const cleanupPaths: string[] = [];
 const activeRunIds = new Set<string>();
@@ -33,9 +31,20 @@ afterEach(async () => {
   }
 });
 
+/**
+ * How long the detached workflow's observable state may take to catch up with what the
+ * fixture was launched to do: write its run row, record its checkout, release the control
+ * endpoint, and commit the terminal status and event.
+ *
+ * This was the default on `waitFor`. Every site below waits on the same detached run, so
+ * one window covers them; naming it and removing the default means a wait with a
+ * different need has to state its own deadline instead of inheriting this one.
+ */
+const DETACHED_RUN_DEADLINE_MS = 15_000;
+
 async function waitFor<T>(
   read: () => T | undefined | Promise<T | undefined>,
-  timeoutMs = 15_000
+  timeoutMs: number
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
@@ -50,6 +59,13 @@ async function waitFor<T>(
   }
   const detail = lastError instanceof Error ? `: ${lastError.message}` : '';
   throw new Error(`Timed out waiting for detached workflow${detail}`);
+}
+
+/** Wait for the detached workflow under test to reach the state `read` describes. */
+async function waitForDetachedRun<T>(
+  read: () => T | undefined | Promise<T | undefined>
+): Promise<T> {
+  return waitFor(read, DETACHED_RUN_DEADLINE_MS);
 }
 
 function readRun(
@@ -80,6 +96,9 @@ function readRunById(
   if (!existsSync(databasePath)) return undefined;
   const database = new Database(databasePath, { readonly: true });
   try {
+    // The last writer's WAL cleanup can briefly lock a new reader. Wait for that
+    // lock, not for the acknowledged row to appear.
+    database.run('PRAGMA busy_timeout = 5000');
     return (
       database
         .query<
@@ -113,7 +132,7 @@ function readTerminalEvents(
 
 describe('detached workflow terminal database events', () => {
   test('persists one matching event before successful and failed owners exit', async () => {
-    const fixtureRoot = mkdtempSync(join(tmpdir(), 'archon-terminal-event-'));
+    const fixtureRoot = realpathSync(mkdtempSync(join(tmpdir(), 'archon-terminal-event-')));
     cleanupPaths.push(fixtureRoot);
     const archonHome = join(fixtureRoot, 'home');
     const projectRoot = join(fixtureRoot, 'project');
@@ -125,7 +144,27 @@ describe('detached workflow terminal database events', () => {
     );
     writeFileSync(
       join(workflowsDir, 'terminal-failure.yaml'),
-      'name: terminal-failure\ndescription: Detached terminal failure fixture.\nnodes:\n  - id: fail\n    bash: "echo failed >&2; exit 42"\n'
+      `name: terminal-failure
+description: Discoveries survive failure before reporting.
+returns: discover
+nodes:
+  - id: discover
+    bash: |
+      mkdir -p "$ARTIFACTS_DIR/discoveries"
+      echo finding > "$ARTIFACTS_DIR/discoveries/finding.md"
+      echo '{"found":true}'
+    output_format:
+      type: object
+      properties:
+        found: { type: boolean }
+      required: [found]
+  - id: fail
+    depends_on: [discover]
+    bash: "echo failed >&2; exit 42"
+  - id: report
+    depends_on: [fail]
+    bash: "echo should-not-run"
+`
     );
 
     const cliPath = resolve(import.meta.dir, '..', 'cli.ts');
@@ -172,7 +211,7 @@ describe('detached workflow terminal database events', () => {
       if (typeof ackRunId !== 'string') throw new Error(`ack carried no run id: ${stdout}`);
       expect(readRunById(databasePath, ackRunId)?.id).toBe(ackRunId);
 
-      const created = await waitFor(() => readRun(databasePath, fixture.workflow));
+      const created = await waitForDetachedRun(() => readRun(databasePath, fixture.workflow));
       activeRunIds.add(created.id);
       expect(created.id).toBe(ackRunId);
       // The child fills in the checkout the parent could not know at fork time.
@@ -181,7 +220,7 @@ describe('detached workflow terminal database events', () => {
       // `working_path` is whatever that function returned — a different realpath
       // variant here disagrees with it on Windows (#2927).
       const resolvedProjectRoot = await canonicalizeProjectPath(projectRoot);
-      await waitFor(() =>
+      await waitForDetachedRun(() =>
         readRunById(databasePath, created.id)?.working_path === resolvedProjectRoot
           ? true
           : undefined
@@ -191,12 +230,12 @@ describe('detached workflow terminal database events', () => {
       // the loop past that. Returning from this wait is the assertion that the owner
       // released its endpoint; re-asserting the same reading on the next line could only
       // turn one such misread into a failure, which is how it failed on Windows.
-      await waitFor(async () =>
-        (await canConnect(detachedRunControlPath(created.id))) ? undefined : true
+      await waitForDetachedRun(async () =>
+        (await canConnectToRunLiveOwner(runLiveOwnerPath(created.id))) ? undefined : true
       );
       activeRunIds.delete(created.id);
 
-      const terminal = await waitFor(() => {
+      const terminal = await waitForDetachedRun(() => {
         const run = readRun(databasePath, fixture.workflow);
         return run?.status === fixture.status ? run : undefined;
       });
@@ -210,7 +249,7 @@ describe('detached workflow terminal database events', () => {
       // contention, and the count stays exact: the event was committed atomically with
       // the status already observed above, and the owner's endpoint is unreachable, so
       // nothing can append a second row after the first read succeeds.
-      const events = await waitFor(() => {
+      const events = await waitForDetachedRun(() => {
         const rows = readTerminalEvents(databasePath, terminal.id, fixture.event);
         return rows.length > 0 ? rows : undefined;
       });
@@ -218,6 +257,48 @@ describe('detached workflow terminal database events', () => {
       const data = JSON.parse(events[0]?.data ?? '{}') as Record<string, unknown>;
       if (fixture.status === 'completed') expect(data.duration_ms).toBeNumber();
       else expect(data.error).toContain('fail');
+      const record = terminalRecordSchema.parse(data.terminal_record);
+      expect(record.status).toBe(fixture.status);
+      expect(record.run_id).toBe(terminal.id);
+      if (fixture.status === 'failed') {
+        expect(record.first_failed_node).toBe('fail');
+        expect(record.nodes).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              node_id: 'report',
+              state: 'skipped',
+              cause: expect.any(Object),
+            }),
+          ])
+        );
+        expect(record.returns).toEqual({
+          availability: 'available',
+          node_id: 'discover',
+          value: { found: true },
+        });
+        expect(record.artifacts.files).toEqual(
+          expect.arrayContaining([expect.objectContaining({ path: 'discoveries/finding.md' })])
+        );
+        if (!record.artifacts.root) throw new Error('Expected recorded artifact root');
+        await removeTempTree(record.artifacts.root);
+      }
+      const detail = Bun.spawn(
+        [process.execPath, cliPath, 'workflow', 'get', terminal.id, '--json'],
+        {
+          cwd: projectRoot,
+          env: { ...process.env, ARCHON_HOME: archonHome },
+          stdout: 'pipe',
+          stderr: 'pipe',
+        }
+      );
+      const [detailCode, detailOut, detailErr] = await Promise.all([
+        detail.exited,
+        new Response(detail.stdout).text(),
+        new Response(detail.stderr).text(),
+      ]);
+      if (detailCode !== 0) throw new Error(`CLI get failed: ${detailErr || detailOut}`);
+      const result = JSON.parse(detailOut.trim()) as { terminal_record: unknown };
+      expect(result.terminal_record).toEqual(record);
     }
   }, 40_000);
 });

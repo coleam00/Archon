@@ -133,7 +133,7 @@ mock.module('@archon/core/db/env-vars', () => ({
   deleteEnvVar: mock(async () => {}),
 }));
 mock.module('@archon/core/utils/commands', () => ({
-  findMarkdownFilesRecursive: mock(async () => []),
+  findCommandFiles: mock(async () => []),
 }));
 
 // Bootstrap registry after mocks
@@ -237,6 +237,7 @@ describe('GET /api/providers', () => {
     expect(typeof caps.sessionResume).toBe('boolean');
     expect(typeof caps.mcp).toBe('boolean');
     expect(typeof caps.hooks).toBe('boolean');
+    expect(typeof caps.costReporting).toBe('boolean');
     // structuredOutput is the tiered union, not a boolean.
     expect(['enforced', 'best-effort', false]).toContain(caps.structuredOutput);
   });

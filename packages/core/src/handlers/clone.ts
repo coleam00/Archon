@@ -25,7 +25,7 @@ import {
   parseOwnerRepo,
   slugifyFolderName,
 } from '@archon/paths';
-import { findMarkdownFilesRecursive } from '../utils/commands';
+import { findCommandFiles } from '../utils/commands';
 import { createLogger } from '@archon/paths';
 import { resolveDefaultAssistant } from '../config/resolve-assistant';
 import { resolveGitHubTokenFromEnv } from '../github-auth/config';
@@ -242,7 +242,7 @@ async function registerRepoAtPath(
       } catch {
         continue;
       }
-      const markdownFiles = await findMarkdownFilesRecursive(commandPath);
+      const markdownFiles = await findCommandFiles(commandPath);
       if (markdownFiles.length > 0) {
         const commands = { ...(await codebaseDb.getCodebaseCommands(existing.id)) };
         markdownFiles.forEach(({ commandName, relativePath }) => {
@@ -287,7 +287,7 @@ async function registerRepoAtPath(
       continue; // Folder doesn't exist, try next
     }
     // Command loading errors should NOT be swallowed
-    const markdownFiles = await findMarkdownFilesRecursive(commandPath);
+    const markdownFiles = await findCommandFiles(commandPath);
     if (markdownFiles.length > 0) {
       const commands = { ...(await codebaseDb.getCodebaseCommands(codebase.id)) };
       markdownFiles.forEach(({ commandName, relativePath }) => {

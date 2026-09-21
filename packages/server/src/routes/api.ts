@@ -2,12 +2,14 @@
  * REST API routes for the Archon Web UI.
  * Provides conversation, codebase, and SSE streaming endpoints.
  */
+
+import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';
 import type { WebAdapter } from '../adapters/web';
 import { boundMetadataToolOutputs } from '../adapters/web/truncate';
-import { rm, readFile, writeFile, unlink, mkdir, readdir, stat } from 'fs/promises';
+import { rm, readFile, writeFile, unlink, mkdir, readdir, realpath, stat } from 'fs/promises';
 import { existsSync, readFileSync } from 'fs';
 import { normalize, join, sep, basename, dirname, resolve } from 'path';
 import { randomUUID } from 'crypto';
@@ -104,7 +106,7 @@ import {
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { MessageRow } from '@archon/core/schemas/message';
 import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
-import { findMarkdownFilesRecursive } from '@archon/core/utils/commands';
+import { findCommandFiles } from '@archon/core/utils/commands';
 import { resumeWorkflowRunFromServer } from '../services/workflow-resume-service';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -377,6 +379,7 @@ import {
   introspectOpencodeCredentials,
 } from '@archon/providers';
 import { messageSchema } from './schemas/conversation.schemas';
+import { dagNodeSseEventSchema } from '../adapters/web/workflow-event.schemas';
 import {
   workflowRunSchema,
   dashboardWorkflowRunSchema,
@@ -421,6 +424,13 @@ function resolveRunArtifactDir(
 ): string | null {
   const root = resolveRunStorageRoot(run, codebase);
   return root ? getRunArtifactsDirForRoot(root, runId) : null;
+}
+
+function isPathInside(parent: string, candidate: string): boolean {
+  const normalisedParent = normalize(parent);
+  const normalisedCandidate = normalize(candidate);
+  const parentPrefix = normalisedParent.endsWith(sep) ? normalisedParent : normalisedParent + sep;
+  return normalisedCandidate === normalisedParent || normalisedCandidate.startsWith(parentPrefix);
 }
 
 // =========================================================================
@@ -1589,6 +1599,8 @@ export function registerApiRoutes(
   lockManager: ConversationLockManager,
   activePlatforms?: readonly string[]
 ): void {
+  app.openAPIRegistry.register('DagNodeSseEvent', dagNodeSseEventSchema);
+
   function apiError(
     c: Context,
     status: 400 | 401 | 404 | 422 | 500 | 503,
@@ -4252,6 +4264,7 @@ export function registerApiRoutes(
           worker_platform_id: workerPlatformId,
           parent_platform_id: parentPlatformId,
           conversation_platform_id: conversationPlatformId ?? null,
+          terminal_record: getTerminalRecord(run.status, events),
         },
         events,
       });
@@ -4567,17 +4580,11 @@ export function registerApiRoutes(
         commandMap.set(name, 'bundled');
       }
 
-      // maxDepth: 1 matches the executor's resolver (resolveCommand /
-      // loadCommandPrompt) — without this cap, the UI palette would surface
-      // commands buried in deep subfolders that the executor silently can't
-      // resolve at runtime.
-      const COMMAND_LIST_DEPTH = { maxDepth: 1 };
-
       // 2. If not binary build, also check filesystem defaults
       if (!isBinaryBuild()) {
         try {
           const defaultsPath = getDefaultCommandsPath();
-          const files = await findMarkdownFilesRecursive(defaultsPath, '', COMMAND_LIST_DEPTH);
+          const files = await findCommandFiles(defaultsPath);
           for (const { commandName } of files) {
             commandMap.set(commandName, 'bundled');
           }
@@ -4592,7 +4599,7 @@ export function registerApiRoutes(
       // 3. Home-scoped commands (~/.archon/commands/) override bundled
       try {
         const homeCommandsPath = getHomeCommandsPath();
-        const files = await findMarkdownFilesRecursive(homeCommandsPath, '', COMMAND_LIST_DEPTH);
+        const files = await findCommandFiles(homeCommandsPath);
         for (const { commandName } of files) {
           commandMap.set(commandName, 'global');
         }
@@ -4609,7 +4616,7 @@ export function registerApiRoutes(
         for (const folder of searchPaths) {
           const dirPath = join(workingDir, folder);
           try {
-            const files = await findMarkdownFilesRecursive(dirPath, '', COMMAND_LIST_DEPTH);
+            const files = await findCommandFiles(dirPath);
             for (const { commandName } of files) {
               commandMap.set(commandName, 'project');
             }
@@ -4807,17 +4814,44 @@ export function registerApiRoutes(
     const filePath = join(artifactDir, filename);
 
     // Final safety check: ensure resolved path stays within artifact directory
-    if (
-      !normalize(filePath).startsWith(normalize(artifactDir) + sep) &&
-      normalize(filePath) !== normalize(artifactDir)
-    ) {
+    if (!isPathInside(artifactDir, filePath)) {
       getLog().warn({ runId, filename, filePath, artifactDir }, 'artifacts.path_escape_blocked');
       return apiError(c, 400, 'Invalid filename');
     }
 
+    // readFile follows symlinks, so contain the resolved target within the
+    // resolved artifact directory and read that checked path (#3160).
+    let realArtifactDir: string;
+    try {
+      realArtifactDir = await realpath(artifactDir);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return apiError(c, 404, 'Artifact file not found');
+      }
+      getLog().error({ err, runId, artifactDir }, 'artifacts.read_failed');
+      return apiError(c, 500, 'Failed to read artifact file');
+    }
+    let realFilePath: string;
+    try {
+      realFilePath = await realpath(filePath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return apiError(c, 404, 'Artifact file not found');
+      }
+      getLog().error({ err, runId, filename }, 'artifacts.read_failed');
+      return apiError(c, 500, 'Failed to read artifact file');
+    }
+    if (!isPathInside(realArtifactDir, realFilePath)) {
+      getLog().warn(
+        { runId, filename, realFilePath, realArtifactDir },
+        'artifacts.symlink_escape_blocked'
+      );
+      return apiError(c, 404, 'Artifact file not found');
+    }
+
     let content: string;
     try {
-      content = await readFile(filePath, 'utf-8');
+      content = await readFile(realFilePath, 'utf-8');
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         return apiError(c, 404, 'Artifact file not found');

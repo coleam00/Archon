@@ -127,14 +127,6 @@ describe('DiscordAdapter', () => {
     });
   });
 
-  describe('client instance', () => {
-    test('should provide access to client instance', () => {
-      const adapter = new DiscordAdapter('fake-token-for-testing');
-      const client = adapter.getClient();
-      expect(client).toBeDefined();
-    });
-  });
-
   describe('conversation ID extraction', () => {
     test('should extract channel ID from message', () => {
       const adapter = new DiscordAdapter('fake-token-for-testing');

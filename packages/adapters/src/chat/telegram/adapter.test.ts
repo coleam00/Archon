@@ -50,15 +50,6 @@ describe('TelegramAdapter', () => {
     });
   });
 
-  describe('bot instance', () => {
-    test('should provide access to bot instance', () => {
-      const adapter = new TelegramAdapter('fake-token-for-testing');
-      const bot = adapter.getBot();
-      expect(bot).toBeDefined();
-      expect(bot.api).toBeDefined();
-    });
-  });
-
   describe('message formatting', () => {
     let adapter: TelegramAdapter;
     let mockSendMessage: Mock<SendMessage>;

@@ -84,6 +84,7 @@ import { loadRepoConfig } from '../config/config-loader';
 import { isPerUserGitHubEnabled } from '../github-auth/config';
 import { getUserGithubNoreplyEmail } from '../db/user-github-token-store';
 import { toBranchName } from '@archon/git';
+import { startRunLiveOwner } from '../services/run-live-owner';
 
 type IsolationResolution =
   | { status: 'existing'; cwd: string; env: IsolationEnvironmentRow }
@@ -568,7 +569,15 @@ async function dispatchBackgroundWorkflowOwned(
     return;
   }
 
-  // 7. Pre-create workflow run row so the UI can fetch it immediately.
+  // 7. Publish the owner before the row can become visible as active.
+  const runLiveOwner = await startRunLiveOwner(preparedSource.runId);
+  let runLiveOwnerClose: Promise<void> | undefined;
+  const closeRunLiveOwner = (): Promise<void> => {
+    runLiveOwnerClose ??= runLiveOwner.close();
+    return runLiveOwnerClose;
+  };
+
+  // Pre-create workflow run row so the UI can fetch it immediately.
   // Without this, navigating to the execution page before executeWorkflow's
   // async setup completes would 404 (row doesn't exist yet for 1-5 seconds).
   let preCreatedRun: Awaited<ReturnType<typeof workflowDeps.store.createWorkflowRun>> | undefined;
@@ -661,6 +670,7 @@ async function dispatchBackgroundWorkflowOwned(
             ...(ctx.runConfig ? { runConfig: ctx.runConfig } : {}),
           }
         );
+        await closeRunLiveOwner();
         // Surface workflow output to parent conversation as a result card
         if ('paused' in result) {
           // Paused workflows (approval gates) — no result card yet
@@ -726,6 +736,7 @@ async function dispatchBackgroundWorkflowOwned(
             ? 'background_workflow_terminal_write_failed'
             : 'background_workflow_failed'
         );
+        await closeRunLiveOwner();
         // Surface error to parent conversation — include workflowResult metadata when
         // we have a pre-created run ID so the chat renders a result card with "View full logs"
         const failureRunId = preCreatedRun?.id;
@@ -760,6 +771,8 @@ async function dispatchBackgroundWorkflowOwned(
       }
     } catch (outerError) {
       getLog().error({ err: toError(outerError) }, 'background_workflow_unhandled_error');
+    } finally {
+      await closeRunLiveOwner();
     }
   });
   owner.adopt();

@@ -79,7 +79,7 @@ mock.module('../config/resolve-assistant', () => ({
 }));
 
 mock.module('../utils/commands', () => ({
-  findMarkdownFilesRecursive: mock(async () => []),
+  findCommandFiles: mock(async () => []),
 }));
 
 const { cloneRepository } = await import('./clone');

@@ -163,7 +163,7 @@ mock.module('@archon/core/db/messages', () => ({
 }));
 
 mock.module('@archon/core/utils/commands', () => ({
-  findMarkdownFilesRecursive: mock(async () => []),
+  findCommandFiles: mock(async () => []),
 }));
 
 // Import the module under test AFTER all mock.module() calls

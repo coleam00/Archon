@@ -103,6 +103,7 @@ describe('CodexProvider', () => {
         structuredOutput: 'enforced',
         envInjection: true,
         costControl: false,
+        costReporting: false,
         effortControl: true,
         fallbackModel: false,
         sandbox: false,

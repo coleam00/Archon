@@ -162,6 +162,15 @@ describe('artifact pointers (#2453)', () => {
       );
     });
 
+    it('rejects an empty file, since a pointer must name evidence', async () => {
+      const current = makeRun('run-self');
+      await writeArtifact('run-self', join('review', 'report.md'), '');
+
+      expect(
+        await validateArtifactPointers(pointer('run-self', 'review/report.md'), current)
+      ).toContain('refers to an empty file');
+    });
+
     it('accepts a nested relative path', async () => {
       const current = makeRun('run-self');
       await writeArtifact('run-self', join('review', 'report.md'));

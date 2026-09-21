@@ -1,63 +1,45 @@
 /**
  * Wait until one run needs someone.
  *
- * The run ROW is the authority: every wake re-reads `remote_agent_workflow_runs` and
- * asks `runAttention` what it says. The Postgres `NOTIFY` channel is only a doorbell —
- * it makes the answer arrive sooner, it is never the answer. That split is forced by
- * evidence: `resolveAndCancelApprovalGate` writes a terminal `cancelled` while
- * inserting only an `approval_received` row, a `child_workflow` pause persists no
- * event at all, and `approval_requested` is written fire-and-forget. An event-derived
- * wake would miss all three.
- *
- * Core owns the capability; a host owns the interval, the deadline, and the lifecycle
- * (the `listDueWorkflowContinuations` / `workflow-resume-service` division). This
- * function performs NO writes: it reads run rows and returns a value.
+ * The durable row is always the answer. Database notifications and the local owner
+ * endpoint only wake a re-read or prove that active execution no longer has a process.
+ * This service never mutates run lifecycle state.
  */
-import { getDbNotificationListener } from '../db/connection';
-import { WORKFLOW_EVENT_NOTIFY_CHANNEL } from '../db/adapters/types';
-import * as workflowDb from '../db/workflows';
+import { createLogger } from '@archon/paths';
 import { runAttention } from '@archon/workflows/schemas/workflow-run';
 import type {
   RunAttention,
   WorkflowRun,
   WorkflowRunStatus,
 } from '@archon/workflows/schemas/workflow-run';
-import { createLogger } from '@archon/paths';
+import { WORKFLOW_EVENT_NOTIFY_CHANNEL } from '../db/adapters/types';
+import { getDbNotificationListener } from '../db/connection';
+import * as workflowDb from '../db/workflows';
+import {
+  RUN_LIVE_OWNER_CONTROL_HANDOFF_GRACE_MS,
+  watchRunLiveOwner,
+  type RunLiveOwnerWatch,
+  type RunLiveOwnerWatchEvent,
+} from './run-live-owner';
 
-// Lazy logger — NEVER at module scope
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('run-attention');
   return cachedLog;
 }
 
-/**
- * The same cadence on BOTH dialects, deliberately. The dashboard poller relaxes to
- * 10s when a notification listener is present; that is safe for it because every
- * transition it tracks inserts an event. Two transitions this waiter must catch do
- * not: `approval_requested` is written fire-and-forget before the awaited pause
- * (dag-executor.ts), and a `child_workflow` pause writes no event by design. So
- * NOTIFY is a latency win for the transitions that ring it, never the reason this is
- * correct. A single-run row read is cheap enough to make that the default.
- */
 export const DEFAULT_ATTENTION_POLL_INTERVAL_MS = 1000;
-
-/**
- * Safety bound on the sub-run chain walk. Same number and rationale as
- * `MAX_CASCADE_RUNS` in `operations/workflow-operations.ts` (a corrupted run tree must
- * not walk forever); kept separate because that walk cancels a subtree and this one
- * only reads. Exceeding it is reported, never assumed away.
- */
+// Persisted child and parent links are not trusted to be acyclic.
 const MAX_CHAIN_RUNS = 500;
 
-/**
- * Why the wait returned — deliberately a different type from `RunAttention`.
- * `RunAttention` is what a host consumes; this is why THIS wait ended. A caller has to
- * destructure `kind` before it can reach a status, so a deadline can never be misread
- * as a terminal run status. That is the failure mode this shape exists to prevent.
- */
+export type NonTerminalWorkflowRunStatus = Exclude<
+  WorkflowRunStatus,
+  'completed' | 'failed' | 'cancelled'
+>;
+
 export type RunWaitResult =
   | { kind: 'attention'; attention: RunAttention }
+  | { kind: 'owner_lost'; runId: string; observedStatus: NonTerminalWorkflowRunStatus }
   | { kind: 'deadline'; runId: string; observedStatus: WorkflowRunStatus }
   | { kind: 'aborted'; runId: string }
   | { kind: 'not_found'; runId: string };
@@ -69,23 +51,23 @@ export interface RunAttentionWaitOptions {
   deadlineMs?: number;
   /** Backstop re-read cadence. Defaults to `DEFAULT_ATTENTION_POLL_INTERVAL_MS`. */
   pollIntervalMs?: number;
-  /**
-   * Called once, with the status the opening read saw, when that read finds nothing
-   * to report and the wait settles in to watch. It does not fire when the run already
-   * has something to say, because then nothing was ever waited for.
-   *
-   * This is the moment the wait becomes live, and it is the only moment a caller
-   * cannot infer: a run that goes terminal after it produces a WAKE, while the same
-   * transition before it would have been an ordinary durable read of a settled row.
-   *
-   * Awaited, so a host that has to deliver this somewhere can report a failed
-   * delivery instead of dropping it. A rejection ends the wait.
-   */
+  /** Called once after the required durable and live watches are attached. */
   onAttached?: (observedStatus: WorkflowRunStatus) => void | Promise<void>;
 }
 
-/** What woke a re-read. Logged at debug so a slow wake is diagnosable. */
-type WakeSource = 'immediate' | 'notify' | 'interval' | 'deadline';
+type RunResolution =
+  | { kind: 'attention'; attention: RunAttention }
+  | { kind: 'owner_required'; activeRun: WorkflowRun; executionChainIds: readonly string[] }
+  | { kind: 'ownerless' };
+
+type WakeSource =
+  | 'immediate'
+  | 'notify'
+  | 'interval'
+  | 'deadline'
+  | 'owner_attention'
+  | 'owner_disconnect'
+  | 'owner_handoff';
 
 function unreadable(
   runId: string,
@@ -95,57 +77,87 @@ function unreadable(
   return { kind: 'unreadable', runId, reason, detail };
 }
 
-/**
- * Resolve `blocked_on_child` by walking the chain, which the pure projection cannot do.
- *
- * A parent pauses blocked on a child whether that child sits on its own gate or is
- * merely still running, and the parent row cannot tell those apart. So the walk asks
- * the child directly:
- *  - the child needs a response → return that, addressed at the CHILD and its node. This
- *    is the case a parent-row-only rule gets wrong in the dangerous direction: nothing
- *    moves until someone decides.
- *  - the child is terminal → return null and keep waiting. The parent's auto-resume
- *    hook (`maybeResumeParentRun`) should re-enter it. That hook is in-process and
- *    opportunistic, so a dropped re-entry leaves the parent paused — but a waiter
- *    cannot tell "resume in flight" from "resume dropped", and guessing is exactly
- *    what this design refuses to do.
- *  - the child is running, pending, or on a scheduled `wait:` → null. Normal progress.
- *    An action-required wait is returned as attention by the same projection above.
- */
-async function resolveAttention(run: WorkflowRun): Promise<RunAttention | null> {
-  let attention = runAttention(run);
+function isNonTerminalStatus(status: WorkflowRunStatus): status is NonTerminalWorkflowRunStatus {
+  return status !== 'completed' && status !== 'failed' && status !== 'cancelled';
+}
+
+/** Resolve the child chain while retaining whether its current state needs a live process. */
+async function resolveRun(run: WorkflowRun): Promise<RunResolution> {
+  const executionChain = [run];
+  let current = run;
+  let attention = runAttention(current);
   let steps = 0;
+
   while (attention?.kind === 'blocked_on_child') {
     steps += 1;
     if (steps > MAX_CHAIN_RUNS) {
-      return unreadable(
-        attention.runId,
-        'child_chain_too_deep',
-        `sub-run chain is deeper than ${String(MAX_CHAIN_RUNS)} runs`
-      );
+      return {
+        kind: 'attention',
+        attention: unreadable(
+          attention.runId,
+          'child_chain_too_deep',
+          `sub-run chain is deeper than ${String(MAX_CHAIN_RUNS)} runs`
+        ),
+      };
     }
     const child = await workflowDb.getWorkflowRun(attention.childRunId);
     if (!child) {
-      return unreadable(
-        attention.runId,
-        'child_run_missing',
-        `blocked on sub-run ${attention.childRunId}, which has no row`
-      );
+      return {
+        kind: 'attention',
+        attention: unreadable(
+          attention.runId,
+          'child_run_missing',
+          `blocked on sub-run ${attention.childRunId}, which has no row`
+        ),
+      };
     }
+    executionChain.push(child);
+    current = child;
     const childAttention = runAttention(child);
-    // A terminal child, like a still-working one, means nobody is needed YET.
-    if (childAttention === null || childAttention.kind === 'terminal') return null;
+    if (childAttention?.kind === 'terminal') {
+      return {
+        kind: 'owner_required',
+        activeRun: child,
+        executionChainIds: executionChain.map(candidate => candidate.id).reverse(),
+      };
+    }
     attention = childAttention;
   }
-  return attention;
+
+  if (attention) return { kind: 'attention', attention };
+  if (current.status === 'running' || (current !== run && current.status === 'pending')) {
+    return {
+      kind: 'owner_required',
+      activeRun: current,
+      executionChainIds: executionChain.map(candidate => candidate.id).reverse(),
+    };
+  }
+  return { kind: 'ownerless' };
 }
 
-/**
- * Subscribe to the run's doorbell when the dialect has one. Returns null on SQLite,
- * where the interval is the only wake source. A listener that drops is logged and not
- * replaced: the interval backstop already covers it, and failing the wait over a lost
- * optimization would be worse than waking a second later.
- */
+/** Prefer the active child, then walk toward the process-entry ancestor. */
+async function ownerCandidates(
+  resolution: Extract<RunResolution, { kind: 'owner_required' }>
+): Promise<string[]> {
+  const candidates = [...resolution.executionChainIds];
+  const seen = new Set(candidates);
+  let current = resolution.activeRun;
+  let steps = 0;
+  while (current.parent_run_id) {
+    steps += 1;
+    if (steps > MAX_CHAIN_RUNS) break;
+    const parentId = current.parent_run_id;
+    if (!seen.has(parentId)) {
+      seen.add(parentId);
+      candidates.push(parentId);
+    }
+    const parent = await workflowDb.getWorkflowRun(parentId);
+    if (!parent) break;
+    current = parent;
+  }
+  return candidates;
+}
+
 async function subscribeToRunDoorbell(
   runId: string,
   onDoorbell: () => void
@@ -168,13 +180,7 @@ async function subscribeToRunDoorbell(
   }
 }
 
-/**
- * Block until `runId` reaches a state it will not leave without someone acting, or
- * until the deadline or abort signal ends the wait.
- *
- * Durable, not live-only: the first thing this does is read the row, so a host that
- * attaches after the transition gets the same answer as one that attached before it.
- */
+/** Block until durable attention, owner loss, deadline, or caller abort. */
 export async function waitForRunAttention(
   runId: string,
   opts: RunAttentionWaitOptions = {}
@@ -182,35 +188,40 @@ export async function waitForRunAttention(
   const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_ATTENTION_POLL_INTERVAL_MS;
   const deadlineAt = opts.deadlineMs === undefined ? undefined : Date.now() + opts.deadlineMs;
   const signal = opts.signal;
-
   if (signal?.aborted) return { kind: 'aborted', runId };
 
-  // A doorbell can ring between iterations, while nothing is waiting on it.
-  let pendingDoorbell = false;
+  let pendingWake: WakeSource | undefined;
   let wake: ((source: WakeSource) => void) | null = null;
-  const unsubscribe = await subscribeToRunDoorbell(runId, () => {
-    if (wake) wake('notify');
-    else pendingDoorbell = true;
+  let ownerWatch: { runId: string; handle: RunLiveOwnerWatch } | undefined;
+  let ownerWatchEnded = false;
+  let controlHandoffUntil: number | undefined;
+
+  const queueWake = (source: WakeSource): void => {
+    if (wake) wake(source);
+    else pendingWake = source;
+  };
+  const unsubscribeDoorbell = await subscribeToRunDoorbell(runId, () => {
+    queueWake('notify');
   });
 
   const nextWake = (): Promise<WakeSource> => {
-    if (pendingDoorbell) {
-      pendingDoorbell = false;
-      return Promise.resolve('notify');
+    if (pendingWake) {
+      const source = pendingWake;
+      pendingWake = undefined;
+      return Promise.resolve(source);
     }
     return new Promise<WakeSource>(resolve => {
       const timers: ReturnType<typeof setTimeout>[] = [];
-      function finish(source: WakeSource): void {
+      const finish = (source: WakeSource): void => {
         if (wake === null) return;
         wake = null;
         for (const timer of timers) clearTimeout(timer);
         signal?.removeEventListener('abort', onAbort);
         resolve(source);
-      }
-      function onAbort(): void {
-        // The loop re-reads and then sees the aborted signal; no separate source.
+      };
+      const onAbort = (): void => {
         finish('interval');
-      }
+      };
       wake = finish;
       timers.push(
         setTimeout(() => {
@@ -231,32 +242,117 @@ export async function waitForRunAttention(
     });
   };
 
+  const onOwnerEvent = (event: RunLiveOwnerWatchEvent): void => {
+    if (event === 'control_handoff') {
+      controlHandoffUntil = Date.now() + RUN_LIVE_OWNER_CONTROL_HANDOFF_GRACE_MS;
+      queueWake('owner_handoff');
+      return;
+    }
+    ownerWatchEnded = true;
+    queueWake(event === 'attention' ? 'owner_attention' : 'owner_disconnect');
+  };
+
+  const discardOwnerWatch = (): void => {
+    ownerWatch?.handle.unsubscribe();
+    ownerWatch = undefined;
+    ownerWatchEnded = false;
+  };
+
+  const attachOwner = async (
+    resolution: Extract<RunResolution, { kind: 'owner_required' }>
+  ): Promise<boolean> => {
+    const candidates = await ownerCandidates(resolution);
+    if (ownerWatch && !ownerWatchEnded && candidates.includes(ownerWatch.runId)) return true;
+    discardOwnerWatch();
+    for (const candidate of candidates) {
+      ownerWatchEnded = false;
+      const handle = await watchRunLiveOwner(candidate, onOwnerEvent);
+      if (handle) {
+        ownerWatch = { runId: candidate, handle };
+        return !ownerWatchEnded;
+      }
+    }
+    return false;
+  };
+
   try {
     let wakeSource: WakeSource = 'immediate';
     let attached = false;
     for (;;) {
+      if (ownerWatchEnded) discardOwnerWatch();
+
       const run = await workflowDb.getWorkflowRun(runId);
       if (!run) return { kind: 'not_found', runId };
-
-      const attention = await resolveAttention(run);
-      if (attention) {
-        getLog().debug({ runId, wakeSource, attention: attention.kind }, 'run_attention.resolved');
-        return { kind: 'attention', attention };
+      let observedStatus = run.status;
+      let resolution = await resolveRun(run);
+      if (resolution.kind === 'attention') {
+        getLog().debug(
+          { runId, wakeSource, attention: resolution.attention.kind },
+          'run_attention.resolved'
+        );
+        return { kind: 'attention', attention: resolution.attention };
       }
-      // Checked AFTER the read so a transition landing on the deadline still wins.
+
+      if (resolution.kind === 'owner_required') {
+        let liveOwnerAttached = await attachOwner(resolution);
+        if (!liveOwnerAttached) {
+          const latestRun = await workflowDb.getWorkflowRun(runId);
+          if (!latestRun) return { kind: 'not_found', runId };
+          observedStatus = latestRun.status;
+          resolution = await resolveRun(latestRun);
+          if (resolution.kind === 'attention') {
+            return { kind: 'attention', attention: resolution.attention };
+          }
+          if (resolution.kind === 'owner_required') {
+            liveOwnerAttached = await attachOwner(resolution);
+            if (!liveOwnerAttached) {
+              if (controlHandoffUntil !== undefined && Date.now() < controlHandoffUntil) {
+                pendingWake = undefined;
+              } else if (isNonTerminalStatus(latestRun.status)) {
+                controlHandoffUntil = undefined;
+                return {
+                  kind: 'owner_lost',
+                  runId,
+                  observedStatus: latestRun.status,
+                };
+              }
+            }
+          } else {
+            discardOwnerWatch();
+          }
+        }
+        if (liveOwnerAttached && !attached) {
+          const verifiedRun = await workflowDb.getWorkflowRun(runId);
+          if (!verifiedRun) return { kind: 'not_found', runId };
+          observedStatus = verifiedRun.status;
+          const verified = await resolveRun(verifiedRun);
+          if (verified.kind === 'attention') {
+            return { kind: 'attention', attention: verified.attention };
+          }
+          if (verified.kind !== 'owner_required') {
+            discardOwnerWatch();
+          } else if ((await attachOwner(verified)) && !ownerWatchEnded) {
+            attached = true;
+            await opts.onAttached?.(verifiedRun.status);
+          }
+        }
+      } else {
+        controlHandoffUntil = undefined;
+        discardOwnerWatch();
+        if (!attached) {
+          attached = true;
+          await opts.onAttached?.(run.status);
+        }
+      }
+
       if (signal?.aborted) return { kind: 'aborted', runId };
       if (deadlineAt !== undefined && Date.now() >= deadlineAt) {
-        return { kind: 'deadline', runId, observedStatus: run.status };
-      }
-      if (!attached) {
-        attached = true;
-        await opts.onAttached?.(run.status);
+        return { kind: 'deadline', runId, observedStatus };
       }
       wakeSource = await nextWake();
     }
   } finally {
-    // `nextWake` clears its own timer and abort listener before it resolves, and the
-    // loop only returns between awaits, so the subscription is all that is left.
-    unsubscribe?.();
+    discardOwnerWatch();
+    unsubscribeDoorbell?.();
   }
 }

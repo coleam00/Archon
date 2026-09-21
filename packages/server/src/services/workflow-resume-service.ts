@@ -13,6 +13,7 @@ import {
   isWorkflowWaitContext,
 } from '@archon/workflows/schemas/workflow-run';
 import { HeadlessPlatform } from '../adapters/headless';
+import { startRunLiveOwner } from '@archon/core/services/run-live-owner';
 
 const log = createLogger('workflow-resume-service');
 const CONTINUATION_SCAN_INTERVAL_MS = 5_000;
@@ -101,6 +102,7 @@ export async function resumeWorkflowRunFromServer(
     log.debug({ runId: run.id }, 'workflow_resume_headless_no_working_path');
     return false;
   }
+  const workingPath = run.working_path;
   if (target.kind === 'unavailable') {
     log.warn({ runId: run.id, reason: target.reason }, 'workflow_resume_destination_unavailable');
     return false;
@@ -125,123 +127,152 @@ export async function resumeWorkflowRunFromServer(
     const destination = target.kind === 'platform' ? target.destination : undefined;
     const platform = destination?.platform ?? new HeadlessPlatform(run.conversation_id);
     const platformConversationId = destination?.conversationId ?? run.conversation_id;
-    let hydrated: Awaited<ReturnType<typeof hydrateResumableRun>>;
-    try {
-      hydrated = await hydrateResumableRun(deps, run, cursor);
-    } catch (error) {
-      if (error instanceof workflowDb.WorkflowNotResumableError) {
-        log.info(
-          { runId: run.id, status: error.currentStatus },
-          'workflow_resume_headless_lost_race'
+    const runLiveOwner = await startRunLiveOwner(run.id);
+    let runLiveOwnerClose: Promise<void> | undefined;
+    const closeRunLiveOwner = (): Promise<void> => {
+      runLiveOwnerClose ??= runLiveOwner.close().catch((error: unknown) => {
+        log.error(
+          { err: error as Error, runId: run.id },
+          'workflow_resume_headless_owner_close_failed'
         );
+      });
+      return runLiveOwnerClose;
+    };
+    let executionStarted = false;
+    try {
+      let hydrated: Awaited<ReturnType<typeof hydrateResumableRun>>;
+      try {
+        hydrated = await hydrateResumableRun(deps, run, cursor);
+      } catch (error) {
+        if (error instanceof workflowDb.WorkflowNotResumableError) {
+          log.info(
+            { runId: run.id, status: error.currentStatus },
+            'workflow_resume_headless_lost_race'
+          );
+          return false;
+        }
+        throw error;
+      }
+      if (!hydrated) {
+        log.info({ runId: run.id }, 'workflow_resume_headless_nothing_to_resume');
         return false;
       }
-      throw error;
-    }
-    if (!hydrated) {
-      log.info({ runId: run.id }, 'workflow_resume_headless_nothing_to_resume');
-      return false;
-    }
 
-    const effectiveUserId = actorUserId ?? run.user_id ?? undefined;
-    const resolveChildIsolation =
-      codebase && codebase.kind !== 'folder'
-        ? createChildWorktreeResolver({
-            codebaseId: codebase.id,
-            codebaseName: codebase.name,
-            canonicalRepoPath: codebase.default_cwd,
-            baseBranch: codebase.default_branch?.trim() || undefined,
-            createdByPlatform: platform.getPlatformType(),
-            createdByUserId: effectiveUserId,
-          })
-        : undefined;
+      const effectiveUserId = actorUserId ?? run.user_id ?? undefined;
+      const resolveChildIsolation =
+        codebase && codebase.kind !== 'folder'
+          ? createChildWorktreeResolver({
+              codebaseId: codebase.id,
+              codebaseName: codebase.name,
+              canonicalRepoPath: codebase.default_cwd,
+              baseBranch: codebase.default_branch?.trim() || undefined,
+              createdByPlatform: platform.getPlatformType(),
+              createdByUserId: effectiveUserId,
+            })
+          : undefined;
 
-    void executeWorkflow(
-      deps,
-      platform,
-      platformConversationId,
-      run.working_path,
-      continuation.workflow.definition,
-      run.user_message ?? '',
-      run.conversation_id,
-      {
-        codebaseId: run.codebase_id ?? undefined,
-        userId: effectiveUserId,
-        baseBranch: codebase?.default_branch?.trim() || undefined,
-        resolveChildIsolation,
-        ...hydrated,
-      }
-    ).then(
-      result => {
-        if (destination?.resultConversationId === undefined || 'paused' in result) return;
-        let message: string;
-        let resultRunId: string;
-        if (result.success) {
-          if (result.summary === undefined) return;
-          message = result.summary;
-          resultRunId = result.workflowRunId;
-        } else {
-          if (result.workflowRunId === undefined) return;
-          message = `Workflow **${run.workflow_name}** failed: ${result.error}`;
-          resultRunId = result.workflowRunId;
+      const execution = executeWorkflow(
+        deps,
+        platform,
+        platformConversationId,
+        workingPath,
+        continuation.workflow.definition,
+        run.user_message ?? '',
+        run.conversation_id,
+        {
+          codebaseId: run.codebase_id ?? undefined,
+          userId: effectiveUserId,
+          baseBranch: codebase?.default_branch?.trim() || undefined,
+          resolveChildIsolation,
+          ...hydrated,
         }
-        void platform
-          .sendMessage(destination.resultConversationId, message, {
-            category: 'workflow_result',
-            segment: 'new',
-            workflowResult: { workflowName: run.workflow_name, runId: resultRunId },
-          })
-          .catch((error: unknown) => {
-            log.warn(
-              { err: error as Error, runId: run.id },
-              'workflow_resume_result_surface_failed'
-            );
-          });
-      },
-      (error: unknown) => {
-        // A run whose terminal status could not be written is NOT an ordinary failure:
-        // its row still reads `running`, and `listDueWorkflowContinuations` only selects
-        // paused/failed rows, so nothing will revisit it. Marking it failed here would
-        // use the write channel that just failed — either it fails again, or it succeeds
-        // and buries the real error under a generic "headless resume failed". Escalate
-        // under its own tag instead and leave the row for an operator to resolve.
-        if (error instanceof TerminalStatusWriteError) {
-          log.error(
-            { err: error, runId: run.id, workflowName: run.workflow_name },
-            'workflow_resume_headless_terminal_write_failed'
-          );
-          if (destination?.resultConversationId !== undefined) {
+      );
+      executionStarted = true;
+      void execution
+        .then(
+          async result => {
+            await closeRunLiveOwner();
+            if (destination?.resultConversationId === undefined || 'paused' in result) return;
+            let message: string;
+            let resultRunId: string;
+            if (result.success) {
+              if (result.summary === undefined) return;
+              message = result.summary;
+              resultRunId = result.workflowRunId;
+            } else {
+              if (result.workflowRunId === undefined) return;
+              message = `Workflow **${run.workflow_name}** failed: ${result.error}`;
+              resultRunId = result.workflowRunId;
+            }
             void platform
-              .sendMessage(
-                destination.resultConversationId,
-                `⚠️ Run \`${run.id.slice(0, 8)}\` of **${run.workflow_name}** finished, but its ` +
-                  'final status could not be saved. The run may still show as running — check it ' +
-                  `with \`/workflow status ${run.id}\` before starting another.`
-              )
-              .catch((sendError: unknown) => {
+              .sendMessage(destination.resultConversationId, message, {
+                category: 'workflow_result',
+                segment: 'new',
+                workflowResult: { workflowName: run.workflow_name, runId: resultRunId },
+              })
+              .catch((error: unknown) => {
                 log.warn(
-                  { err: sendError as Error, runId: run.id },
+                  { err: error as Error, runId: run.id },
                   'workflow_resume_result_surface_failed'
                 );
               });
-          }
-          return;
-        }
-        log.error(
-          { err: error as Error, runId: run.id },
-          'workflow_resume_headless_execute_failed'
-        );
-        void workflowDb
-          .failWorkflowRun(run.id, `Headless resume failed: ${(error as Error).message}`)
-          .catch((failError: unknown) => {
+          },
+          async (error: unknown) => {
+            // A run whose terminal status could not be written is NOT an ordinary failure:
+            // its row still reads `running`, and `listDueWorkflowContinuations` only selects
+            // paused/failed rows, so nothing will revisit it. Marking it failed here would
+            // use the write channel that just failed — either it fails again, or it succeeds
+            // and buries the real error under a generic "headless resume failed". Escalate
+            // under its own tag instead and leave the row for an operator to resolve.
+            if (error instanceof TerminalStatusWriteError) {
+              log.error(
+                { err: error, runId: run.id, workflowName: run.workflow_name },
+                'workflow_resume_headless_terminal_write_failed'
+              );
+              await closeRunLiveOwner();
+              if (destination?.resultConversationId !== undefined) {
+                void platform
+                  .sendMessage(
+                    destination.resultConversationId,
+                    `⚠️ Run \`${run.id.slice(0, 8)}\` of **${run.workflow_name}** finished, but its ` +
+                      'final status could not be saved. The run may still show as running — check it ' +
+                      `with \`/workflow status ${run.id}\` before starting another.`
+                  )
+                  .catch((sendError: unknown) => {
+                    log.warn(
+                      { err: sendError as Error, runId: run.id },
+                      'workflow_resume_result_surface_failed'
+                    );
+                  });
+              }
+              return;
+            }
             log.error(
-              { err: failError as Error, runId: run.id },
-              'workflow_resume_headless_fail_mark_failed'
+              { err: error as Error, runId: run.id },
+              'workflow_resume_headless_execute_failed'
             );
-          });
-      }
-    );
-    return true;
+            await workflowDb
+              .failWorkflowRun(run.id, `Headless resume failed: ${(error as Error).message}`)
+              .catch((failError: unknown) => {
+                log.error(
+                  { err: failError as Error, runId: run.id },
+                  'workflow_resume_headless_fail_mark_failed'
+                );
+              });
+            await closeRunLiveOwner();
+          }
+        )
+        .finally(closeRunLiveOwner)
+        .catch((error: unknown) => {
+          log.error(
+            { err: error as Error, runId: run.id },
+            'workflow_resume_headless_completion_failed'
+          );
+        });
+      return true;
+    } finally {
+      if (!executionStarted) await closeRunLiveOwner();
+    }
   } catch (error) {
     log.warn({ err: error as Error, runId: run.id }, 'workflow_resume_headless_unexpected_error');
     return false;

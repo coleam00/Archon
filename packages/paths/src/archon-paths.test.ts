@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { homedir, tmpdir } from 'os';
-import { join, sep } from 'path';
+import { dirname, join, sep } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { mkdir, rm, writeFile, lstat, readlink, symlink as fsSymlink } from 'fs/promises';
 import { removeTempTree } from './test-utils';
@@ -28,6 +28,7 @@ import {
   expandTilde,
   canonicalizeProjectPath,
   getAppArchonBasePath,
+  getSourceWebDistDir,
   getDefaultCommandsPath,
   getDefaultWorkflowsPath,
   logArchonPaths,
@@ -480,6 +481,19 @@ describe('archon-paths', () => {
       // The path should end with .archon and the directory should exist
       expect(path).toMatch(/\.archon$/);
       expect(existsSync(path)).toBe(true);
+    });
+  });
+
+  describe('getSourceWebDistDir', () => {
+    test('points at the web package build output in this checkout', () => {
+      const path = getSourceWebDistDir();
+      expect(path.endsWith(join('packages', 'web', 'dist'))).toBe(true);
+      // Anchored on the package that owns the build rather than on a second copy
+      // of the same path arithmetic: `bun run build:web` writes this directory,
+      // and `archon serve` refuses to start without it.
+      const webPackageJson = join(dirname(path), 'package.json');
+      expect(existsSync(webPackageJson)).toBe(true);
+      expect(JSON.parse(readFileSync(webPackageJson, 'utf8')).name).toBe('@archon/web');
     });
   });
 
@@ -1387,6 +1401,34 @@ describe.skipIf(isWindows)('findMarkdownFilesRecursive - symlinks', () => {
     ]);
   });
 
+  test('returns entries in name order regardless of creation order', async () => {
+    // Created in reverse-alphabetical order at every level. On a filesystem
+    // that reports creation order (ext4 without dir_index, tmpfs), an unsorted
+    // walk returns this tree reversed.
+    for (const name of ['zeta', 'mid', 'alpha']) {
+      const dir = join(tempDir, name);
+      await mkdir(dir);
+      for (const leaf of ['z-leaf', 'a-leaf']) {
+        await writeFile(join(dir, `${leaf}.md`), `# ${leaf}`);
+      }
+    }
+    await writeFile(join(tempDir, 'z-root.md'), '# z-root');
+    await writeFile(join(tempDir, 'a-root.md'), '# a-root');
+
+    const files = await findMarkdownFilesRecursive(tempDir);
+
+    expect(files.map(file => file.relativePath)).toEqual([
+      'a-root.md',
+      join('alpha', 'a-leaf.md'),
+      join('alpha', 'z-leaf.md'),
+      join('mid', 'a-leaf.md'),
+      join('mid', 'z-leaf.md'),
+      'z-root.md',
+      join('zeta', 'a-leaf.md'),
+      join('zeta', 'z-leaf.md'),
+    ]);
+  });
+
   test('preserves sibling symlink aliases that point to the same directory', async () => {
     const localSourceDir = join(tempDir, 'source');
     await mkdir(localSourceDir);
@@ -1394,9 +1436,12 @@ describe.skipIf(isWindows)('findMarkdownFilesRecursive - symlinks', () => {
     await fsSymlink(localSourceDir, join(tempDir, 'alias'));
 
     const files = await findMarkdownFilesRecursive(tempDir);
-    const relativePaths = files.map(file => file.relativePath).sort();
 
-    expect(relativePaths).toEqual([join('alias', 'foo.md'), join('source', 'foo.md')]);
+    // No sort: 'alias' precedes 'source', and the walk defines that order.
+    expect(files.map(file => file.relativePath)).toEqual([
+      join('alias', 'foo.md'),
+      join('source', 'foo.md'),
+    ]);
   });
 
   test('skips broken symlinks silently', async () => {

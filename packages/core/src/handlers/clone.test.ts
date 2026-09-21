@@ -8,7 +8,9 @@
  * - Lazy logger pattern means @archon/paths mock must be set up before the module import
  */
 import { describe, test, expect, mock, beforeEach, afterAll, afterEach, spyOn } from 'bun:test';
-import { resolve } from 'path';
+import { join, resolve } from 'path';
+import { tmpdir } from 'node:os';
+import { removeTempTree } from '@archon/paths/test-utils';
 import * as fsPromises from 'fs/promises';
 import * as gitUtils from '@archon/git';
 import type { Codebase } from '../types';
@@ -19,6 +21,9 @@ import {
   type CodebaseCheckoutResolverDeps,
 } from '../services/codebase-checkout-resolver';
 import { createMockLogger } from '../test/mocks/logger';
+
+// Capture the real discovery function before the re-export is replaced by the module mock.
+const { findCommandFiles: discoverCommandFiles } = await import('@archon/paths/archon-paths');
 
 // ── DB mocks ────────────────────────────────────────────────────────────────
 const mockCreateCodebase = mock<typeof CodebaseDb.createCodebase>(() =>
@@ -113,11 +118,9 @@ mock.module('../config/config-loader', () => ({
 }));
 
 // ── utils/commands mock ─────────────────────────────────────────────────────
-const mockFindMarkdownFilesRecursive = mock<typeof Commands.findMarkdownFilesRecursive>(() =>
-  Promise.resolve([])
-);
+const mockFindCommandFiles = mock<typeof Commands.findCommandFiles>(() => Promise.resolve([]));
 mock.module('../utils/commands', () => ({
-  findMarkdownFilesRecursive: mockFindMarkdownFilesRecursive,
+  findCommandFiles: mockFindCommandFiles,
 }));
 
 // ── Import module under test AFTER mocks are registered ────────────────────
@@ -181,7 +184,7 @@ function clearMocks(): void {
   mockFindCodebaseByName.mockReset();
   mockUpdateCodebase.mockReset();
   mockCreateProjectSourceSymlink.mockClear();
-  mockFindMarkdownFilesRecursive.mockReset();
+  mockFindCommandFiles.mockReset();
   mockLoadConfig.mockReset();
   mockLoadConfig.mockResolvedValue({ assistant: 'claude' });
   mockLogger.info.mockClear();
@@ -196,7 +199,7 @@ function clearMocks(): void {
   mockFindCodebaseByDefaultCwd.mockResolvedValue(null);
   mockFindCodebaseByName.mockResolvedValue(null);
   mockUpdateCodebase.mockResolvedValue(undefined);
-  mockFindMarkdownFilesRecursive.mockResolvedValue([]);
+  mockFindCommandFiles.mockResolvedValue([]);
 }
 
 afterAll(() => {
@@ -868,7 +871,7 @@ describe('cloneRepository', () => {
         }
         return Promise.resolve(undefined);
       });
-      mockFindMarkdownFilesRecursive.mockResolvedValue([
+      mockFindCommandFiles.mockResolvedValue([
         { commandName: 'build', relativePath: 'build.md' },
         { commandName: 'test', relativePath: 'test.md' },
       ]);
@@ -899,7 +902,7 @@ describe('cloneRepository', () => {
         }
         return Promise.resolve(undefined);
       });
-      mockFindMarkdownFilesRecursive.mockResolvedValue([]);
+      mockFindCommandFiles.mockResolvedValue([]);
       mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
 
       const result = await cloneRepository('https://github.com/owner/repo');
@@ -1006,6 +1009,46 @@ describe('registerRepository', () => {
     restoreSpies();
     setupSpies();
   });
+
+  test.each([false, true])(
+    'registers only executable command files (existing codebase: %s)',
+    async alreadyExists => {
+      const cwd = await fsPromises.mkdtemp(join(tmpdir(), 'archon-command-registration-'));
+      try {
+        const commandRoot = join(cwd, '.archon', 'commands');
+        for (const folder of ['zeta', 'alpha', 'group/sub']) {
+          await fsPromises.mkdir(join(commandRoot, folder), { recursive: true });
+        }
+        await fsPromises.writeFile(join(commandRoot, 'zeta', 'review.md'), 'zeta');
+        await fsPromises.writeFile(join(commandRoot, 'alpha', 'review.md'), 'alpha');
+        await fsPromises.writeFile(join(commandRoot, 'group', 'sub', 'hidden.md'), 'hidden');
+        await fsPromises.writeFile(join(commandRoot, 'build.md'), 'build');
+        const codebase = makeCodebase({ default_cwd: cwd });
+        mockFindCodebaseByName.mockResolvedValue(alreadyExists ? codebase : null);
+        mockCreateCodebase.mockResolvedValue(codebase);
+        mockFindCommandFiles.mockImplementation(discoverCommandFiles);
+        spyFsAccess.mockResolvedValue(undefined);
+
+        const result = await registerRepository(cwd);
+
+        expect(mockUpdateCodebaseCommands).toHaveBeenCalledWith(codebase.id, {
+          review: {
+            path: join('.archon', 'commands', 'alpha', 'review.md'),
+            description: 'From .archon/commands',
+          },
+          build: {
+            path: join('.archon', 'commands', 'build.md'),
+            description: 'From .archon/commands',
+          },
+        });
+        expect(result.commandCount).toBe(2);
+        expect(result.alreadyExisted).toBe(alreadyExists);
+      } finally {
+        restoreSpies();
+        await removeTempTree(cwd);
+      }
+    }
+  );
 
   // ── Happy path ─────────────────────────────────────────────────────────
   test('registers a valid local git repo not yet in DB', async () => {
@@ -1214,9 +1257,7 @@ describe('registerRepository', () => {
       }
       return Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
     });
-    mockFindMarkdownFilesRecursive.mockResolvedValue([
-      { commandName: 'deploy', relativePath: 'deploy.md' },
-    ]);
+    mockFindCommandFiles.mockResolvedValue([{ commandName: 'deploy', relativePath: 'deploy.md' }]);
     mockFindCodebaseByDefaultCwd.mockResolvedValueOnce(null);
     mockCreateCodebase.mockResolvedValueOnce(makeCodebase() as ReturnType<typeof makeCodebase>);
 

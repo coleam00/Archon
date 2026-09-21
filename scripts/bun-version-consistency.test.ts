@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 /**
  * Every declaration of the Bun runtime version in the repository must agree.
  * This includes every workflow file's BUN_VERSION env var, package.json
- * engines.bun, and the Dockerfile base image. A hand-synced pair between any
+ * engines.bun, and both Dockerfiles. A hand-synced pair between any
  * of these is a present defect — this test is the mechanism that catches drift.
  */
 describe('Bun version consistency', () => {
@@ -24,7 +24,7 @@ describe('Bun version consistency', () => {
     const declarations: { file: string; version: string }[] = [];
     for (const file of yamlFiles) {
       const content = readFileSync(resolve(workflowDir, file), 'utf8');
-      // Match both quoted and unquoted env values: BUN_VERSION: '1.4.0' and BUN_VERSION: 1.4.0
+      // Accept both quoted and unquoted env values.
       const match = content.match(/^\s*BUN_VERSION:\s*['"]?([^'"\s]+)['"]?\s*$/m);
       if (!match) continue;
       declarations.push({ file, version: match[1] });
@@ -41,25 +41,25 @@ describe('Bun version consistency', () => {
     expect(mismatches).toEqual([]);
   });
 
-  test('Dockerfile base image version agrees with package.json engines.bun', () => {
-    const dockerfile = readFileSync(resolve(root, 'Dockerfile'), 'utf8');
+  test.each(['Dockerfile', 'packages/isolation/docker/runner.Dockerfile'])(
+    '%s Bun version agrees with package.json engines.bun',
+    file => {
+      const dockerfile = readFileSync(resolve(root, file), 'utf8');
 
-    // Extract the ARG BUN_VERSION default value and the FROM references
-    const argMatch = dockerfile.match(/^ARG BUN_VERSION=(\S+)/m);
-    expect(argMatch).not.toBeNull();
-    const argVersion = argMatch![1];
+      // Extract the ARG BUN_VERSION default value and the FROM references
+      const argMatches = [...dockerfile.matchAll(/^ARG BUN_VERSION=(\S+)/gm)];
+      expect(argMatches.length).toBeGreaterThan(0);
+      for (const match of argMatches) expect(match[1]).toBe(expected);
 
-    // Every FROM oven/bun:... must use the ARG, not a literal version
-    const fromLines = [...dockerfile.matchAll(/^FROM oven\/bun:(\S+)/gm)];
-    expect(fromLines.length).toBeGreaterThan(0);
+      // Every FROM oven/bun:... must use the ARG, not a literal version
+      const fromLines = [...dockerfile.matchAll(/^FROM oven\/bun:(\S+)/gm)];
 
-    for (const match of fromLines) {
-      const imageTag = match[1];
-      // The image tag must either reference the ARG or match the expected version
-      if (imageTag === '${BUN_VERSION}-slim') continue;
-      expect(imageTag).toBe(`${expected}-slim`);
+      for (const match of fromLines) {
+        const imageTag = match[1];
+        // The image tag must either reference the ARG or match the expected version
+        if (imageTag === '${BUN_VERSION}-slim') continue;
+        expect(imageTag).toBe(`${expected}-slim`);
+      }
     }
-
-    expect(argVersion).toBe(expected);
-  });
+  );
 });

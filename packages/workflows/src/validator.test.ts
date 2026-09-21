@@ -17,6 +17,7 @@ import {
   discoverAvailableCommands,
 } from './validator';
 import type { WorkflowDefinition, DagNode } from './schemas';
+import { makeTestWorkflow } from './test-utils';
 import { formatPackagedResourceReference } from './packaged-workflow';
 
 // =============================================================================
@@ -772,6 +773,31 @@ describe('validateWorkflowResources — script nodes', () => {
     expect(scriptErrors).toHaveLength(0);
   });
 
+  test('pack modules are not targets while an existing _shared workflow keeps its scripts', async () => {
+    const packDir = join(tmpDir, '.archon', 'workflows', 'team-pack');
+    await mkdir(join(packDir, '.shared'), { recursive: true });
+    await mkdir(join(packDir, '_shared', 'scripts'), { recursive: true });
+    await writeFile(join(packDir, '.shared', 'helper.ts'), 'export const value = 1;');
+    await writeFile(join(packDir, '_shared', 'scripts', 'existing.ts'), 'console.log(1);');
+    for (const [owner, name, expectedErrors] of [
+      ['release', 'helper', 1],
+      ['_shared', 'existing', 0],
+    ] as const) {
+      const script = formatPackagedResourceReference(
+        { source: 'project', pack: 'team-pack', workflow: owner },
+        name
+      );
+      const workflow = makeTestWorkflow({
+        name: 'test',
+        nodes: [{ id: 'run', script, runtime: 'bun' }],
+      });
+      const issues = await validateWorkflowResources(workflow, tmpDir);
+      expect(
+        issues.filter(issue => issue.level === 'error' && issue.field === 'script')
+      ).toHaveLength(expectedErrors);
+    }
+  });
+
   test('validates a named script inside its owning packaged workflow', async () => {
     const scriptsDir = join(tmpDir, '.archon', 'workflows', 'team-pack', 'release', 'scripts');
     await mkdir(scriptsDir, { recursive: true });
@@ -780,9 +806,10 @@ describe('validateWorkflowResources — script nodes', () => {
       { source: 'project', pack: 'team-pack', workflow: 'release' },
       'publish'
     );
-    const workflow = makeWorkflow('test', [
-      { id: 'step1', script, runtime: 'bun' } as unknown as DagNode,
-    ]);
+    const workflow = makeTestWorkflow({
+      name: 'test',
+      nodes: [{ id: 'step1', script, runtime: 'bun' }],
+    });
 
     const issues = await validateWorkflowResources(workflow, tmpDir);
     expect(

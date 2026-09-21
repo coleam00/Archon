@@ -401,6 +401,7 @@ export const execNodeSchema = dagNodeBaseSchema.extend({
     .positive("'timeout' must be a positive number (ms)")
     .finite("'timeout' must be a positive number (ms)")
     .optional(),
+  on_timeout: z.literal('skip').optional(),
   // Node-local named bindings (#2637): delivered as INPUTS_<UPPER_SNAKE> env vars.
   // Same value grammar as an agent node's command-sourced `with:`. Only meaningful
   // (and only ever populated) when `runtime !== 'sh'`.
@@ -413,6 +414,7 @@ export type ExecNode = z.infer<typeof execNodeSchema>;
 const bashExecAuthoringSchema = z.object({
   bash: execNodeSchema.shape.script,
   timeout: execNodeSchema.shape.timeout,
+  on_timeout: execNodeSchema.shape.on_timeout,
 });
 
 const scriptExecAuthoringSchema = execNodeSchema
@@ -421,6 +423,7 @@ const scriptExecAuthoringSchema = execNodeSchema
     runtime: true,
     deps: true,
     timeout: true,
+    on_timeout: true,
     with: true,
   })
   .extend({
@@ -443,13 +446,21 @@ const scriptExecFlatSchema = scriptExecAuthoringSchema.extend({
 
 type BashExecAuthoring = z.infer<typeof bashExecAuthoringSchema>;
 type ScriptExecAuthoring = z.infer<typeof scriptExecAuthoringSchema>;
-type ResolvedExecAuthoring = Pick<ExecNode, 'script' | 'runtime' | 'deps' | 'timeout' | 'with'>;
+type ResolvedExecAuthoring = Pick<
+  ExecNode,
+  'script' | 'runtime' | 'deps' | 'timeout' | 'on_timeout' | 'with'
+>;
 
-function resolveBashExecAuthoring({ bash, timeout }: BashExecAuthoring): ResolvedExecAuthoring {
+function resolveBashExecAuthoring({
+  bash,
+  timeout,
+  on_timeout,
+}: BashExecAuthoring): ResolvedExecAuthoring {
   return {
     script: bash,
     runtime: 'sh',
     ...(timeout !== undefined ? { timeout } : {}),
+    ...(on_timeout !== undefined ? { on_timeout } : {}),
   };
 }
 
@@ -458,6 +469,7 @@ function resolveScriptExecAuthoring({
   runtime,
   deps,
   timeout,
+  on_timeout,
   with: bindings,
 }: ScriptExecAuthoring): ResolvedExecAuthoring {
   return {
@@ -465,6 +477,7 @@ function resolveScriptExecAuthoring({
     runtime,
     ...(deps !== undefined ? { deps } : {}),
     ...(timeout !== undefined ? { timeout } : {}),
+    ...(on_timeout !== undefined ? { on_timeout } : {}),
     ...(bindings !== undefined ? { with: bindings } : {}),
   };
 }

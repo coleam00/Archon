@@ -1,8 +1,7 @@
 /**
  * Tests for the GitHub webhook route — the seam that forwards the raw payload,
- * signature, and X-GitHub-Delivery GUID into GitHubAdapter.handleWebhook().
- * The adapter's own tests pass deliveryId directly, so only this file catches
- * a silently broken header-forwarding path.
+ * signature, X-GitHub-Delivery GUID, and X-GitHub-Event type into
+ * GitHubAdapter.handleWebhook().
  */
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
@@ -26,7 +25,9 @@ mock.module('@archon/paths', () => ({
 const { registerGithubWebhookRoute } = await import('./webhooks');
 type GithubWebhookTarget = import('./webhooks').GithubWebhookTarget;
 
-const mockHandleWebhook = mock(async (_payload: string, _sig: string, _deliveryId?: string) => {});
+const mockHandleWebhook = mock(
+  async (_payload: string, _sig: string, _deliveryId?: string, _eventType?: string) => {}
+);
 
 function createWebhookApp(): OpenAPIHono {
   const app = new OpenAPIHono();
@@ -54,7 +55,7 @@ describe('POST /webhooks/github', () => {
     mockHandleWebhook.mockImplementation(async () => {});
   });
 
-  test('forwards raw payload, signature, and X-GitHub-Delivery GUID to the adapter', async () => {
+  test('forwards the raw payload, signature, delivery GUID, and event type', async () => {
     const app = createWebhookApp();
 
     const res = await postWebhook(app, {
@@ -66,7 +67,12 @@ describe('POST /webhooks/github', () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toBe('OK');
     expect(mockHandleWebhook).toHaveBeenCalledTimes(1);
-    expect(mockHandleWebhook).toHaveBeenCalledWith(rawPayload, 'sha256=abc123', 'guid-1');
+    expect(mockHandleWebhook).toHaveBeenCalledWith(
+      rawPayload,
+      'sha256=abc123',
+      'guid-1',
+      'issue_comment'
+    );
   });
 
   test('passes deliveryId as undefined when the X-GitHub-Delivery header is omitted', async () => {
@@ -79,7 +85,30 @@ describe('POST /webhooks/github', () => {
 
     expect(res.status).toBe(200);
     expect(mockHandleWebhook).toHaveBeenCalledTimes(1);
-    expect(mockHandleWebhook).toHaveBeenCalledWith(rawPayload, 'sha256=abc123', undefined);
+    expect(mockHandleWebhook).toHaveBeenCalledWith(
+      rawPayload,
+      'sha256=abc123',
+      undefined,
+      'issue_comment'
+    );
+  });
+
+  test('passes the event type as undefined when X-GitHub-Event is omitted', async () => {
+    const app = createWebhookApp();
+
+    const res = await postWebhook(app, {
+      'x-hub-signature-256': 'sha256=abc123',
+      'x-github-delivery': 'guid-1',
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockHandleWebhook).toHaveBeenCalledTimes(1);
+    expect(mockHandleWebhook).toHaveBeenCalledWith(
+      rawPayload,
+      'sha256=abc123',
+      'guid-1',
+      undefined
+    );
   });
 
   test('rejects a request without a signature header before reaching the adapter', async () => {
@@ -94,7 +123,7 @@ describe('POST /webhooks/github', () => {
     expect(mockHandleWebhook).not.toHaveBeenCalled();
   });
 
-  test('returns 200 even when async webhook processing rejects (fire-and-forget)', async () => {
+  test('returns 200 when conversational webhook processing later rejects', async () => {
     const app = createWebhookApp();
     mockHandleWebhook.mockImplementation(async () => {
       throw new Error('downstream processing failed');
@@ -107,6 +136,22 @@ describe('POST /webhooks/github', () => {
     });
 
     expect(res.status).toBe(200);
+    expect(mockHandleWebhook).toHaveBeenCalledTimes(1);
+  });
+
+  test('returns 500 when check-run processing rejects', async () => {
+    const app = createWebhookApp();
+    mockHandleWebhook.mockImplementation(async () => {
+      throw new Error('workflow signal failed');
+    });
+
+    const res = await postWebhook(app, {
+      'x-github-event': 'check_run',
+      'x-hub-signature-256': 'sha256=abc123',
+      'x-github-delivery': 'guid-1',
+    });
+
+    expect(res.status).toBe(500);
     expect(mockHandleWebhook).toHaveBeenCalledTimes(1);
   });
 });

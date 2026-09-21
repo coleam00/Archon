@@ -80,7 +80,9 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
    sharing a ~2 KB diagnostic budget — stderr keeps priority, stdout gets the
    remainder, and a label prefixes each stream only when both are populated.
    With stderr empty, the stdout tail becomes the diagnostic. The script body
-   is never echoed back to users.
+   is never echoed back to users. A timeout also fails by default. Set
+   `on_timeout: skip` when the result is optional and downstream nodes handle
+   its absence with an `if_skipped` binding.
 5. **Retain.** Regardless of outcome, capped and credential-redacted tails of
    both streams are written to the run transcript as an `exec_output` row — see
    [Retained subprocess evidence](/guides/authoring-workflows#retained-subprocess-evidence).
@@ -94,6 +96,7 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
   runtime: bun | uv                            # required
   deps: ["httpx", "pydantic>=2"]               # optional, uv-only (see below)
   timeout: 60000                               # optional ms, default 120000
+  on_timeout: skip                             # optional; default is to fail
   depends_on: [upstream]                       # optional
   when: "$upstream.output != '[]'"             # optional (upstream is a bash/script node;
                                                #  an AI producer needs output_format + a field)
@@ -116,6 +119,7 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
 | `runtime` | `'bun'` \| `'uv'` | Yes | Which runtime executes the script. Must match the file extension for named scripts |
 | `deps` | string[] | No | Python dependencies to install for this run. **uv only** — ignored with a warning for `bun` |
 | `timeout` | number (ms) | No | Hard kill after this many milliseconds. Default: `120000` (2 min) |
+| `on_timeout` | `'skip'` | No | Complete the node as skipped after a timeout. The default is failed. The persisted skip cause is `timeout` |
 | `output_format` | object | No | JSON Schema the node's stdout must satisfy. See [Declaring a result contract](#declaring-a-result-contract) |
 
 Standard DAG fields (`id`, `depends_on`, `when`, `trigger_rule`, `retry`) all
@@ -152,7 +156,53 @@ Named scripts use one of two resolution modes:
 
 Workflow-local lookup is scoped to the workflow that declared the node, including through `include:` expansion. Authors still write only the bare name (`script: publish`); the ownership key is internal.
 
-A named script is one self-contained file. Declare its dependencies inline (`deps:` for `uv`; Bun resolves imports from its own cache) rather than beside it: no imports of sibling scripts, and no `node_modules` or virtual environment next to the file. Python bytecode caching is disabled for named scripts, so a script cannot write into the capture it runs from.
+Packaged scripts can import modules from their pack's `.shared/` directory. Keep package dependencies out of that tree: packaged scripts must not depend on the target project's `package.json`, `node_modules`, or `tsconfig.json`. Python dependencies can still be declared with `deps:`. Imports across packs and npm dependencies are outside the packaged-module contract.
+
+### Share code within a pack
+
+Put reusable `.ts`, `.js`, or `.py` modules under `<pack>/.shared/`. Module subdirectories are supported. Use regular files; the binary generator rejects symlinks under `.shared`. `.shared` is reserved for modules: its files are neither workflows nor named script targets. A packaged workflow that names an unavailable script, including a shared module, fails at load time.
+
+```text
+my-pack/
+├── .shared/
+│   ├── result.ts
+│   └── result.py
+├── release/
+│   ├── release.yaml
+│   └── scripts/
+│       └── publish.ts
+└── inspect/
+    ├── inspect.yaml
+    └── scripts/
+        └── report.py
+```
+
+For Bun, import from the script's location:
+
+```typescript
+// release/scripts/publish.ts
+import { summary } from '../../.shared/result.ts';
+console.log(summary);
+```
+
+Python scripts run as files, so package-relative syntax such as `from ...shared` does not apply. Add the pack's shared directory using Python's standard library:
+
+```python
+# inspect/scripts/report.py
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / ".shared"))
+from result import summary
+
+print(summary)
+```
+
+Archon preserves these relative paths in project and global source trees, bundled binaries, and frozen captures. A binary caches each pack's scripts and modules as one unit; changing a shared module creates a new unit. Authored scripts remain the only entry points, so workflow nodes still use names such as `script: publish`.
+
+Keep output under the supplied `ARTIFACTS_DIR` or `STATE_DIR`, never beside a script. Bun module loading does not add files beside these sources, and Archon disables Python bytecode caching in both workflow execution and executable fixtures. This prevents import caches from changing the frozen source; it does not prevent your script from writing there explicitly.
+
+### Frozen source integrity
 
 When a run uses captured source, Archon rechecks the full capture against the run's pinned digest and source-resolution settings before each named-script attempt, including retries, and before lookup or subprocess dispatch. Any change to the capture refuses the node before it starts. Inline scripts are already held in the workflow definition and do not read the capture at execution time.
 

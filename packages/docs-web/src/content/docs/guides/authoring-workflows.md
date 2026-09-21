@@ -63,6 +63,8 @@ Workflows live in `.archon/workflows/` relative to the working directory:
 
 The two directories form a fixed package boundary: `.archon/workflows/<pack>/<workflow>/`. A packaged workflow contains exactly one YAML definition; bare `command:` and named `script:` references resolve only from its own `commands/` and `scripts/` directories, with no shared or cross-scope fallback. Included workflows retain their own resource folder, so two workflows may reuse names such as `review.md` without collisions.
 
+Scripts from different workflows in one pack can import modules from `<pack>/.shared/`. That directory is reserved for modules, not workflow definitions or `script:` targets. Bun and Python use the same pack-relative layout in source checkouts and binary builds. See [Share code within a pack](/guides/script-nodes/#share-code-within-a-pack) for import examples.
+
 The same tree works under `~/.archon/workflows/` for home-scoped workflows. Existing flat `.archon/workflows/foo.yaml`, one-level grouped YAML, shared `.archon/commands/`, and shared `.archon/scripts/` remain supported for compatibility.
 
 > **Global workflows:** For workflows that apply to every project, place them in `~/.archon/workflows/`. Global workflows are overridden by same-named repo workflows. See [Global Workflows](/guides/global-workflows/).
@@ -187,7 +189,7 @@ nodes:
   - id: implement
     command: implement-changes
     depends_on: [investigate, plan]
-    trigger_rule: none_failed_min_one_success  # Run if at least one dep succeeded
+    trigger_rule: none_failed_min_one_success  # Join successful and condition-skipped branches
 
   - id: inline-node
     prompt: "Summarize the changes made in $implement.output"  # Inline prompt (no command file)
@@ -208,8 +210,8 @@ nodes:
 |-------|------|-------------|
 | `command` | string | Command name. Packaged workflows resolve it only from their own `commands/`; legacy workflows use shared repo → home → bundled lookup. Optional `with:` binds upstream values by name into the file's `$INPUTS.<name>` surface — see [Binding values into command and script nodes](#binding-values-into-command-and-script-nodes) |
 | `prompt` | string | Inline prompt string |
-| `bash` | string | Shell script (no AI). Stdout captured as `$nodeId.output`; successful stdout is also stored in `node_completed.data.node_output` as an audit preview capped at 32 KiB (UTF-8 bytes). Optional `timeout` (ms, default 120000) |
-| `script` | string | TypeScript/JavaScript (via `bun`) or Python (via `uv`) — inline code or named reference. Packaged workflows resolve named scripts only from their own `scripts/`; legacy workflows use shared script directories. Stdout captured as `$nodeId.output`. Requires `runtime: bun` or `runtime: uv`. Optional `deps` (uv only) and `timeout` (ms, default 120000); optional `with:` binds upstream values by name into `INPUTS_<UPPER_SNAKE>` env vars — see [Binding values into command and script nodes](#binding-values-into-command-and-script-nodes). See [Script Nodes](/guides/script-nodes/) |
+| `bash` | string | Shell script (no AI). Stdout captured as `$nodeId.output`; successful stdout is also stored in `node_completed.data.node_output` as an audit preview capped at 32 KiB (UTF-8 bytes). Optional `timeout` (ms, default 120000); `on_timeout: skip` makes a timeout skipped instead of failed |
+| `script` | string | TypeScript/JavaScript (via `bun`) or Python (via `uv`) — inline code or named reference. Packaged workflows resolve named scripts only from their own `scripts/`; legacy workflows use shared script directories. Stdout captured as `$nodeId.output`. Requires `runtime: bun` or `runtime: uv`. Optional `deps` (uv only) and `timeout` (ms, default 120000); `on_timeout: skip` makes a timeout skipped instead of failed; optional `with:` binds upstream values by name into `INPUTS_<UPPER_SNAKE>` env vars — see [Binding values into command and script nodes](#binding-values-into-command-and-script-nodes). See [Script Nodes](/guides/script-nodes/) |
 | `loop` | object | Iterative AI prompt until a declared completion condition is met. See [Loop Nodes](/guides/loop-nodes/) |
 | `loop_group` | object | Multi-node sub-DAG body repeated per iteration until a declared completion condition is met. See [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-loop_group) |
 | `approval` | object | Pauses workflow for human review. See [Approval Nodes](/guides/approval-nodes/) |
@@ -402,8 +404,17 @@ nodes:
 |-------|----------|
 | `all_success` | Run only if all upstream deps completed successfully (default) |
 | `one_success` | Run if at least one upstream dep completed successfully |
-| `none_failed_min_one_success` | Run if no deps failed AND at least one succeeded (skipped deps are ok) |
+| `none_failed_min_one_success` | Run if at least one dependency succeeded and none failed or skipped because of an upstream failure (`upstream_failed`) |
 | `all_done` | Run when all deps are in a terminal state (completed, failed, or skipped) |
+
+`none_failed_min_one_success` blocks failure-cascade skips by default, including
+across dependency chains and includes. The skipped join retains the original failed
+node in its `upstream_failed` cause. Condition skips and optional timeout
+skips (`on_timeout: skip`) remain admissible when another dependency succeeds.
+
+`all_success`, `one_success`, and `all_done` keep their existing behavior.
+`if_skipped` supplies a value for a skipped output binding; it does not make a
+blocked node eligible to run or permit binding a failed output.
 
 :::note[`trigger_rule` is not `fan_out.join`]
 They share value names and have **different defaults**, so it is worth keeping straight:
@@ -660,7 +671,7 @@ Both sources coexist — inline agents and on-disk agents are both available to 
 
 ## Durable waits
 
-A `wait:` node records its condition in the workflow run, changes the run to `paused`, and returns the worker slot. Time and event waits carry an absolute deadline; the server resumes them through the ordinary DAG resume path. An action-required wait has no deadline and resumes only when an operator explicitly resumes the run. Restarting Archon preserves either kind.
+A `wait:` node records its condition in the workflow run, changes the run to `paused`, and returns the worker slot. Time and event waits carry an absolute deadline and resume through the ordinary DAG resume path when it arrives, enforced by the process that owns the run (see below). An action-required wait has no deadline and resumes only when an operator explicitly resumes the run. Restarting Archon preserves either kind.
 
 Declare exactly one condition:
 
@@ -705,7 +716,9 @@ curl -X POST http://localhost:3090/api/workflows/runs/<run-id>/signal \
   -d '{"event":"checks.complete","resumeAt":"<metadata.wait.resumeAt>","payload":{"conclusion":"success"}}'
 ```
 
-Use a Better Auth session cookie instead of `X-Archon-User` when browser authentication is enabled. The header is only for a trusted reverse proxy or loopback client; an auth-disabled local install can omit it. The event name must match the run's open wait. The signal and its audit event are committed together; duplicate or wrong-run signals do nothing. The server must be running for scheduled or event-driven continuation. If it is offline when a deadline passes, the persisted run resumes on the next scan after startup.
+Use a Better Auth session cookie instead of `X-Archon-User` when browser authentication is enabled. The header is only for a trusted reverse proxy or loopback client; an auth-disabled local install can omit it. The event name must match the run's open wait. The signal and its audit event are committed together; duplicate or wrong-run signals do nothing.
+
+The process that owns the run enforces a `duration_ms`/`until`/`event` deadline itself: a foreground `archon workflow run` and the child started by `--detach` stay alive through the wait and re-execute the run when its deadline arrives, so a CLI-only install needs no server. `archon serve`'s continuation scan additionally resumes due waits for runs whose owner is gone — one dispatched by the server, or one whose process died mid-wait. A run can always be advanced by hand with `archon workflow resume <run-id>`; the `/signal` endpoint above still requires the server.
 
 Read `metadata.wait.resumeAt` from the run before sending the signal and pass it back unchanged. It identifies the open wait occurrence, so a delayed retry from an earlier loop iteration cannot satisfy a later wait for the same event.
 
@@ -1024,8 +1037,9 @@ is the YAML-coordinates / code-computes split. A skipped producer with **no**
 `if_skipped` fails the node with the
 binding, producer, and fix named — a binding never silently resolves to `''`.
 
-`if_skipped` only ever covers a producer that **did not run**. A producer that ran and
-**failed** always fails the binding too, whether or not `if_skipped` is declared — a
+`if_skipped` covers a producer that completed as **skipped**, including an exec node that
+ran until an opted-in timeout. A producer that **failed** always fails the binding too,
+whether or not `if_skipped` is declared — a
 `loop_group`'s failure paths in particular can leave real, non-empty output behind (its last
 completed iteration's text), so this is an explicit check, not an accident of empty output.
 There is no way to opt a binding out of this: declaring `if_skipped` never papers over a real
@@ -2300,6 +2314,26 @@ result.
 A malformed schema is a **load error**. `archon validate workflows` and every run compile
 each declared `output_format` before a provider is called, so a contract can never silently
 stop being enforced after the money is spent.
+
+### Inspecting a terminal run
+
+The engine records terminal facts even when failure skips your reporting node. Use
+[`archon workflow get <run-id> --json`](/reference/cli/#workflow-get) to read
+`terminal_record`, or read `run.terminal_record` from `GET /api/workflows/runs/:runId`.
+The record preserves execution status, authored outcome, node states and skip causes,
+the selected `returns:` value when available, and an artifact manifest. Execution
+status and authored outcome remain independent; the engine does not infer a delivery
+verdict from filenames or output prose. Runs created before this support may have no
+record. Resumed active runs expose `null` until their next terminal transition.
+
+The manifest contains file metadata, not content previews. Its `limitations` identify
+incomplete observations. Cancellation can record pending or running nodes and files
+that are still changing; terminalization does not make the filesystem snapshot atomic.
+You do not need a new YAML field or collector node to obtain these facts.
+
+Workflow-pack adoption remains separate: [#3127](https://github.com/coleam00/Archon/issues/3127)
+owns typed discovery and failure-cause consumption and completion-only outcome formatting.
+A consumer must still depend on the producers whose artifacts it needs.
 
 ### A deterministic producer owns the same contract
 

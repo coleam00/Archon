@@ -151,7 +151,30 @@ export {
   waitForRunAttention,
   DEFAULT_ATTENTION_POLL_INTERVAL_MS,
 } from './services/run-attention-watch';
-export type { RunWaitResult, RunAttentionWaitOptions } from './services/run-attention-watch';
+export type {
+  NonTerminalWorkflowRunStatus,
+  RunWaitResult,
+  RunAttentionWaitOptions,
+} from './services/run-attention-watch';
+
+export {
+  startRunLiveOwner,
+  withRunLiveOwner,
+  watchRunLiveOwner,
+  requestRunLiveOwnerStop,
+  runLiveOwnerPath,
+  canConnectToRunLiveOwner,
+  RunLiveOwnerStopUnavailableError,
+  RUN_LIVE_OWNER_IPC_TIMEOUT_MS,
+  RUN_LIVE_OWNER_CONTROL_HANDOFF_GRACE_MS,
+} from './services/run-live-owner';
+export type {
+  RunLiveOwner,
+  RunLiveOwnerOptions,
+  RunLiveOwnerStopLease,
+  RunLiveOwnerWatch,
+  RunLiveOwnerWatchEvent,
+} from './services/run-live-owner';
 
 // =============================================================================
 // State

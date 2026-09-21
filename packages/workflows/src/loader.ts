@@ -672,6 +672,13 @@ function parseDagNode(
     getLog().warn({ id: node.id }, 'node_with_ignored');
   }
 
+  if ((raw as Record<string, unknown>).on_timeout !== undefined && node.kind !== 'exec') {
+    warnings.push(
+      `Node '${id}': 'on_timeout' is only supported on bash and script nodes — it is ignored here`
+    );
+    getLog().warn({ id: node.id }, 'node_on_timeout_ignored');
+  }
+
   // Warn about AI-specific fields on non-AI nodes (runtime behavior, not schema errors)
   const nonAiNode = ignoredFieldsForNode(node);
   if (nonAiNode) {
