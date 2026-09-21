@@ -335,6 +335,7 @@ const DEFAULT_PROVIDER_CAPS: ProviderCapabilities = {
   settingSources: false,
   nativeTools: false,
   containerExec: false,
+  requiresAllPropertiesRequired: false,
 };
 
 mock.module('@archon/providers', () => ({

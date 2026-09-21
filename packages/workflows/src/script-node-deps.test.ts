@@ -178,6 +178,7 @@ const mockGetAgentProvider = mock<WorkflowDeps['getAgentProvider']>(_provider =>
     settingSources: true,
     nativeTools: true,
     containerExec: true,
+    requiresAllPropertiesRequired: false,
   }),
 }));
 

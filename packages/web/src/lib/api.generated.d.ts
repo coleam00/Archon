@@ -4319,6 +4319,7 @@ export interface components {
         [key: string]: string;
       };
       structuredOutput: 'enforced' | 'best-effort' | false;
+      requiresAllPropertiesRequired: boolean;
       envInjection: boolean;
       costControl: boolean;
       costReporting: boolean;
