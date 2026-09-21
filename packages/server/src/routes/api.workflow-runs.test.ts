@@ -7,7 +7,8 @@ import { join, sep } from 'path';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { DashboardWorkflowRun } from '@archon/core/db/workflows';
-import type { resolveRunContinuation } from '@archon/core/handlers';
+import type { resumeWorkflow } from '@archon/core/operations';
+import type { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
 import type { WebAdapter } from '../adapters/web';
@@ -390,18 +391,28 @@ mock.module('@archon/core/utils/commands', () => ({
   findCommandFiles: mock(async () => []),
 }));
 
-// resumeRunHeadless (#2008) — the direct in-process resume fallback used when
-// a run has no parent conversation to dispatch a chat message through.
-type RunContinuationResult = Awaited<ReturnType<typeof resolveRunContinuation>>;
-const mockResolveRunContinuation = mock(
-  async (_runId: string, _cwd: string): Promise<RunContinuationResult> => ({
-    ok: true,
-    workflowName: 'deploy',
-    workflow: { definition: makeTestResolvedWorkflow({ name: 'deploy' }), args: '' },
-  })
-);
-mock.module('@archon/core/handlers', () => ({
-  resolveRunContinuation: mockResolveRunContinuation,
+// The direct in-process resume fallback used when a run has no parent
+// conversation to dispatch a chat message through.
+const mockResumeWorkflow = mock<typeof resumeWorkflow>(async runId => {
+  const source =
+    runId.includes('paused') || runId.includes('auto-resume') ? MOCK_PAUSED_RUN : MOCK_FAILED_RUN;
+  return {
+    ...source,
+    id: runId,
+    conversation_id: source.conversation_id ?? 'conv-uuid-1',
+    last_activity_at: source.last_activity_at ?? null,
+    working_path: `/tmp/worktrees/${runId}`,
+  };
+});
+const mockResolveRunWorkflow = mock<typeof resolveRunWorkflow>(async () => ({
+  ok: true,
+  workflow: makeTestResolvedWorkflow({ name: 'deploy' }),
+}));
+mock.module('@archon/core/operations', () => ({
+  resumeWorkflow: mockResumeWorkflow,
+}));
+mock.module('@archon/core/workflows/resolve-run-workflow', () => ({
+  resolveRunWorkflow: mockResolveRunWorkflow,
 }));
 
 const mockHydrateResumableRun = mock<
@@ -1743,7 +1754,8 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
     mockGetWorkflowRun.mockReset();
     mockGetConversationById.mockReset();
     mockHandleMessage.mockReset();
-    mockResolveRunContinuation.mockClear();
+    mockResumeWorkflow.mockClear();
+    mockResolveRunWorkflow.mockClear();
     mockHydrateResumableRun.mockClear();
     mockExecuteWorkflow.mockClear();
   });
@@ -1801,7 +1813,7 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
       parent_conversation_id: null,
       working_path: '/tmp/worktrees/run-uuid-4',
     });
-    mockResolveRunContinuation.mockResolvedValueOnce({
+    mockResolveRunWorkflow.mockResolvedValueOnce({
       ok: false,
       message: 'workflow deleted',
     });
@@ -2963,7 +2975,8 @@ describe('approve/reject auto-resume', () => {
     mockGetConversationById.mockReset();
     mockHandleMessage.mockReset();
     mockCancelWorkflowRun.mockReset();
-    mockResolveRunContinuation.mockClear();
+    mockResumeWorkflow.mockClear();
+    mockResolveRunWorkflow.mockClear();
     mockHydrateResumableRun.mockClear();
     mockExecuteWorkflow.mockClear();
     mockGetCodebase.mockReset();
@@ -3069,7 +3082,7 @@ describe('approve/reject auto-resume', () => {
       ...MOCK_PAUSED_RUN,
       parent_conversation_id: null,
     });
-    mockResolveRunContinuation.mockResolvedValueOnce({ ok: false, message: 'workflow deleted' });
+    mockResolveRunWorkflow.mockResolvedValueOnce({ ok: false, message: 'workflow deleted' });
 
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-paused-1/approve', {

@@ -80,27 +80,23 @@ export interface HandleMessageContext {
   readonly workflowSupersedesRunId?: string;
 }
 
+export type WorkflowRequest =
+  | {
+      kind: 'start';
+      definition: ResolvedWorkflow;
+      args: string;
+      force?: boolean;
+      /** Keys the engine dropped from this workflow's YAML (#2213). */
+      parseWarnings?: readonly string[];
+    }
+  | { kind: 'resume'; run: WorkflowRun };
+
 export interface CommandResult {
   success: boolean;
   message: string;
   modified?: boolean; // Indicates if conversation state was modified
-  workflow?: {
-    // If set, orchestrator should execute this workflow
-    definition: ResolvedWorkflow;
-    args: string;
-    force?: boolean;
-    resumeRunId?: string;
-    resumeRun?: WorkflowRun;
-    /**
-     * The continuation graph already resolved from that run's recorded source.
-     *
-     * Carried so dispatch does not repeat the digest verification and discovery the
-     * handler just paid for. A value, not a flag: it cannot claim work it did not do.
-     */
-    resolvedContinuation?: ResolvedWorkflow;
-    /** Keys the engine dropped from this workflow's YAML (#2213). */
-    parseWarnings?: readonly string[];
-  };
+  /** If set, orchestrator should execute this workflow request. */
+  workflow?: WorkflowRequest;
 }
 
 /**

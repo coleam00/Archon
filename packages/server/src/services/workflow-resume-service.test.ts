@@ -3,16 +3,19 @@ import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowPlatform, WorkflowDeps } from '@archon/workflows/deps';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import type { WorkflowResumeCursor } from '@archon/workflows/store';
-import type { resolveRunContinuation } from '@archon/core/handlers';
+import type { resumeWorkflow } from '@archon/core/operations';
+import type { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-workflow';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
-
-type RunContinuationResult = Awaited<ReturnType<typeof resolveRunContinuation>>;
 
 const mockListDueWorkflowContinuations = mock(async () => [] as WorkflowRun[]);
 const mockDeferWorkflowContinuation = mock(async () => undefined);
-const mockResolveRunContinuation = mock(
-  async (): Promise<RunContinuationResult> => ({ ok: false, message: 'unused' })
-);
+const mockResumeWorkflow = mock<typeof resumeWorkflow>(async (_runId: string) => {
+  throw new Error('unused');
+});
+const mockResolveRunWorkflow = mock<typeof resolveRunWorkflow>(async () => ({
+  ok: false,
+  message: 'unused',
+}));
 const mockHydrateResumableRun = mock<
   (typeof import('@archon/workflows/executor'))['hydrateResumableRun']
 >(async () => null);
@@ -56,8 +59,11 @@ mock.module('@archon/core', () => ({
   createChildWorktreeResolver: mock(() => undefined),
   createWorkflowDeps: mock(() => mockWorkflowDeps),
 }));
-mock.module('@archon/core/handlers', () => ({
-  resolveRunContinuation: mockResolveRunContinuation,
+mock.module('@archon/core/operations', () => ({
+  resumeWorkflow: mockResumeWorkflow,
+}));
+mock.module('@archon/core/workflows/resolve-run-workflow', () => ({
+  resolveRunWorkflow: mockResolveRunWorkflow,
 }));
 mock.module('@archon/core/services/run-live-owner', () => ({
   startRunLiveOwner: mockStartRunLiveOwner,
@@ -123,8 +129,12 @@ describe('workflow continuation scanner', () => {
     mockListDueWorkflowContinuations.mockReset();
     mockDeferWorkflowContinuation.mockReset();
     mockDeferWorkflowContinuation.mockResolvedValue(undefined);
-    mockResolveRunContinuation.mockReset();
-    mockResolveRunContinuation.mockResolvedValue({ ok: false, message: 'unused' });
+    mockResumeWorkflow.mockReset();
+    mockResumeWorkflow.mockImplementation(async () => {
+      throw new Error('unused');
+    });
+    mockResolveRunWorkflow.mockReset();
+    mockResolveRunWorkflow.mockResolvedValue({ ok: false, message: 'unused' });
     mockHydrateResumableRun.mockReset();
     mockHydrateResumableRun.mockResolvedValue(null);
     mockExecuteWorkflow.mockReset();
@@ -150,10 +160,10 @@ describe('workflow continuation scanner', () => {
   describe('rejected execution', () => {
     const startHeadlessResume = async (rejection: unknown): Promise<void> => {
       const paused = run('wait-headless', 'paused', {});
-      mockResolveRunContinuation.mockResolvedValueOnce({
+      mockResumeWorkflow.mockResolvedValueOnce(paused);
+      mockResolveRunWorkflow.mockResolvedValueOnce({
         ok: true,
-        workflowName: 'deliver',
-        workflow: { definition: makeTestResolvedWorkflow({ name: 'deliver' }), args: '' },
+        workflow: makeTestResolvedWorkflow({ name: 'deliver' }),
       });
       mockHydrateResumableRun.mockResolvedValueOnce({
         preCreatedRun: { ...paused, status: 'running' },
@@ -188,10 +198,10 @@ describe('workflow continuation scanner', () => {
 
     test('tells a watching conversation the status could not be saved', async () => {
       const paused = run('wait-headless-web', 'paused', {});
-      mockResolveRunContinuation.mockResolvedValueOnce({
+      mockResumeWorkflow.mockResolvedValueOnce(paused);
+      mockResolveRunWorkflow.mockResolvedValueOnce({
         ok: true,
-        workflowName: 'deliver',
-        workflow: { definition: makeTestResolvedWorkflow({ name: 'deliver' }), args: '' },
+        workflow: makeTestResolvedWorkflow({ name: 'deliver' }),
       });
       mockHydrateResumableRun.mockResolvedValueOnce({
         preCreatedRun: { ...paused, status: 'running' },
@@ -390,10 +400,10 @@ describe('workflow continuation scanner', () => {
       nodeId: 'delay',
       resumeAt: '2026-08-24T11:00:00.000Z',
     };
-    mockResolveRunContinuation.mockResolvedValueOnce({
+    mockResumeWorkflow.mockResolvedValueOnce(paused);
+    mockResolveRunWorkflow.mockResolvedValueOnce({
       ok: true,
-      workflowName: 'deliver',
-      workflow: { definition: makeTestResolvedWorkflow({ name: 'deliver' }), args: '' },
+      workflow: makeTestResolvedWorkflow({ name: 'deliver' }),
     });
     mockHydrateResumableRun.mockResolvedValueOnce({
       preCreatedRun: { ...paused, status: 'running' },
@@ -425,6 +435,56 @@ describe('workflow continuation scanner', () => {
     expect(mockExecuteWorkflow.mock.calls[0]?.[2]).toBe('slack-thread-123');
   });
 
+  test('prepares and resumes from the freshly validated run row', async () => {
+    const selected = run('wait-refreshed', 'paused', {});
+    const refreshed = {
+      ...selected,
+      conversation_id: 'refreshed-conversation',
+      user_message: 'refreshed request',
+      working_path: '/tmp/refreshed-worktree',
+      user_id: 'refreshed-user',
+    };
+    mockResumeWorkflow.mockResolvedValueOnce(refreshed);
+    mockResolveRunWorkflow.mockResolvedValueOnce({
+      ok: true,
+      workflow: makeTestResolvedWorkflow({ name: 'deliver' }),
+    });
+    mockHydrateResumableRun.mockResolvedValueOnce({
+      preCreatedRun: { ...refreshed, status: 'running' },
+      priorCompletedNodes: new Map(),
+      priorUsage: { costUsd: 0 },
+      priorNodeSessions: [],
+    });
+
+    await expect(resumeWorkflowRunFromServer(selected)).resolves.toBe(true);
+
+    expect(mockResumeWorkflow).toHaveBeenCalledWith(selected.id);
+    expect(mockResolveRunWorkflow).toHaveBeenCalledWith(refreshed, '/tmp/workspaces');
+    expect(mockHydrateResumableRun).toHaveBeenCalledWith(expect.anything(), refreshed, undefined);
+    expect(mockExecuteWorkflow.mock.calls[0]?.[2]).toBe('refreshed-conversation');
+    expect(mockExecuteWorkflow.mock.calls[0]?.[3]).toBe('/tmp/refreshed-worktree');
+    expect(mockExecuteWorkflow.mock.calls[0]?.[5]).toBe('refreshed request');
+    expect(mockExecuteWorkflow.mock.calls[0]?.[7]).toEqual(
+      expect.objectContaining({ userId: 'refreshed-user' })
+    );
+  });
+
+  test('refuses an unresolved source before acquiring the live owner or claiming the run', async () => {
+    const paused = run('wait-source-missing', 'paused', {});
+    mockResumeWorkflow.mockResolvedValueOnce(paused);
+    mockResolveRunWorkflow.mockResolvedValueOnce({
+      ok: false,
+      message: 'recorded workflow source is unavailable',
+    });
+
+    await expect(resumeWorkflowRunFromServer(paused)).resolves.toBe(false);
+
+    expect(mockResolveRunWorkflow).toHaveBeenCalledWith(paused, '/tmp/workspaces');
+    expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
   test('returns after admission while execution stays detached under the live owner', async () => {
     const paused = run('wait-owned', 'paused', {});
     let resolveExecution!: (result: {
@@ -439,10 +499,10 @@ describe('workflow continuation scanner', () => {
     }>(resolve => {
       resolveExecution = resolve;
     });
-    mockResolveRunContinuation.mockResolvedValueOnce({
+    mockResumeWorkflow.mockResolvedValueOnce(paused);
+    mockResolveRunWorkflow.mockResolvedValueOnce({
       ok: true,
-      workflowName: 'deliver',
-      workflow: { definition: makeTestResolvedWorkflow({ name: 'deliver' }), args: '' },
+      workflow: makeTestResolvedWorkflow({ name: 'deliver' }),
     });
     mockHydrateResumableRun.mockImplementationOnce(async () => {
       runLiveOwnerCalls.push('hydrate');
@@ -469,10 +529,10 @@ describe('workflow continuation scanner', () => {
 
   test('closes the owner when hydration declines the execution claim', async () => {
     const paused = run('wait-empty', 'paused', {});
-    mockResolveRunContinuation.mockResolvedValueOnce({
+    mockResumeWorkflow.mockResolvedValueOnce(paused);
+    mockResolveRunWorkflow.mockResolvedValueOnce({
       ok: true,
-      workflowName: 'deliver',
-      workflow: { definition: makeTestResolvedWorkflow({ name: 'deliver' }), args: '' },
+      workflow: makeTestResolvedWorkflow({ name: 'deliver' }),
     });
 
     await expect(resumeWorkflowRunFromServer(paused)).resolves.toBe(false);
@@ -484,10 +544,10 @@ describe('workflow continuation scanner', () => {
 
   test('closes the owner when another caller wins the resume claim', async () => {
     const paused = run('wait-lost-race', 'paused', {});
-    mockResolveRunContinuation.mockResolvedValueOnce({
+    mockResumeWorkflow.mockResolvedValueOnce(paused);
+    mockResolveRunWorkflow.mockResolvedValueOnce({
       ok: true,
-      workflowName: 'deliver',
-      workflow: { definition: makeTestResolvedWorkflow({ name: 'deliver' }), args: '' },
+      workflow: makeTestResolvedWorkflow({ name: 'deliver' }),
     });
     mockHydrateResumableRun.mockRejectedValueOnce(
       new MockWorkflowNotResumableError(paused.id, 'running')
@@ -503,10 +563,10 @@ describe('workflow continuation scanner', () => {
   test('surfaces a resumed background-web result when owner cleanup fails', async () => {
     const paused = run('wait-web', 'paused', {});
     const cleanupError = new Error('owner cleanup failed');
-    mockResolveRunContinuation.mockResolvedValueOnce({
+    mockResumeWorkflow.mockResolvedValueOnce(paused);
+    mockResolveRunWorkflow.mockResolvedValueOnce({
       ok: true,
-      workflowName: 'deliver',
-      workflow: { definition: makeTestResolvedWorkflow({ name: 'deliver' }), args: '' },
+      workflow: makeTestResolvedWorkflow({ name: 'deliver' }),
     });
     mockHydrateResumableRun.mockResolvedValueOnce({
       preCreatedRun: { ...paused, status: 'running' },
@@ -555,7 +615,8 @@ describe('workflow continuation scanner', () => {
       })
     ).resolves.toBe(false);
 
-    expect(mockResolveRunContinuation).not.toHaveBeenCalled();
+    expect(mockResumeWorkflow).not.toHaveBeenCalled();
+    expect(mockResolveRunWorkflow).not.toHaveBeenCalled();
     expect(mockHydrateResumableRun).not.toHaveBeenCalled();
   });
 
@@ -564,7 +625,8 @@ describe('workflow continuation scanner', () => {
 
     await expect(resumeWorkflowRunFromServer(paused)).resolves.toBe(false);
 
-    expect(mockResolveRunContinuation).not.toHaveBeenCalled();
+    expect(mockResumeWorkflow).not.toHaveBeenCalled();
+    expect(mockResolveRunWorkflow).not.toHaveBeenCalled();
     expect(mockHydrateResumableRun).not.toHaveBeenCalled();
   });
 
