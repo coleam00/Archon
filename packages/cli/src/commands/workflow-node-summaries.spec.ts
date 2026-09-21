@@ -178,3 +178,59 @@ describe('buildNodeSummaries', () => {
     ]);
   });
 });
+
+// #3271: SQLite writes `created_at` as `datetime('now')` — UTC, "YYYY-MM-DD HH:MM:SS",
+// no zone marker — and `new Date()` reads a marker-less string as LOCAL time. A
+// constant UTC offset cancels out of `end - start`, so the defect only shows when
+// the offset changes between the two events: across a DST transition the local
+// reading skips or repeats an hour and the duration is off by that hour.
+describe('buildNodeSummaries durations', () => {
+  // 01:30 → 03:30 UTC on 2026-03-08 is two hours. Read as America/New_York local
+  // time, the 02:00 → 03:00 hour does not exist that morning, so the naive parse
+  // yields one hour. UTC and Asia/Kolkata (no DST) are the controls.
+  const SQLITE_DST_INTERVAL = [
+    event('dst-start', 'node_started', 'build', '2026-03-08 01:30:00'),
+    event('dst-end', 'node_completed', 'build', '2026-03-08 03:30:00'),
+  ];
+
+  function withTimezone<T>(tz: string, fn: () => T): T {
+    const previous = process.env.TZ;
+    process.env.TZ = tz;
+    try {
+      return fn();
+    } finally {
+      if (previous === undefined) delete process.env.TZ;
+      else process.env.TZ = previous;
+    }
+  }
+
+  it.each(['America/New_York', 'UTC', 'Asia/Kolkata'])(
+    'measures a SQLite interval across a DST boundary as two hours under %s',
+    tz => {
+      const [summary] = withTimezone(tz, () => buildNodeSummaries(SQLITE_DST_INTERVAL));
+      expect(summary?.durationMs).toBe(7_200_000);
+    }
+  );
+
+  it('measures a failed node the same way as a completed one', () => {
+    const [summary] = withTimezone('America/New_York', () =>
+      buildNodeSummaries([
+        event('fail-start', 'node_started', 'build', '2026-03-08 01:30:00'),
+        event('fail-end', 'node_failed', 'build', '2026-03-08 03:30:00', { error: 'boom' }),
+      ])
+    );
+    expect(summary?.durationMs).toBe(7_200_000);
+  });
+
+  it('trusts timestamps that already carry a zone marker', () => {
+    // PostgreSQL and other paths hand over zoned strings; a `+05:30` and a `Z`
+    // naming instants two hours apart must still measure two hours.
+    const [summary] = withTimezone('America/New_York', () =>
+      buildNodeSummaries([
+        event('zoned-start', 'node_started', 'build', '2026-03-08T07:00:00+05:30'),
+        event('zoned-end', 'node_completed', 'build', '2026-03-08T03:30:00.000Z'),
+      ])
+    );
+    expect(summary?.durationMs).toBe(7_200_000);
+  });
+});

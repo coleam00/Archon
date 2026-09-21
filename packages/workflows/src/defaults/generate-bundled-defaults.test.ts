@@ -37,6 +37,7 @@ import { removeTempTree } from '@archon/paths/test-utils';
 
 const SCRIPT = resolve(import.meta.dir, '../../../../scripts/generate-bundled-defaults.ts');
 const OUTPUT_REL = 'packages/workflows/src/defaults/bundled-defaults.generated.ts';
+const INDEX_REL = 'packages/workflows/src/defaults/bundle-index.json';
 const SENTINEL = '// sentinel — must not be overwritten when the guard trips\n';
 
 function runGit(repoRoot: string, args: string[]): void {
@@ -57,6 +58,7 @@ function createTemplateRepo(): string {
     join(repoRoot, '.archon/workflows/defaults/tracked-workflow.yaml'),
     'name: tracked-workflow\n'
   );
+  writeFileSync(join(repoRoot, INDEX_REL), JSON.stringify({ packs: ['defaults'] }));
   // Sentinel output file lets tests assert the bundle is untouched on failure.
   writeFileSync(join(repoRoot, OUTPUT_REL), SENTINEL);
   runGit(repoRoot, ['init']);
@@ -91,9 +93,11 @@ afterAll(async () => {
 });
 
 /** Cheap in-process clone of the committed template repo (no git spawns). */
-function createRepo(): string {
+function createRepo(packs: string[] = ['defaults']): string {
   const repoRoot = mkdtempSync(join(tmpdir(), 'bundled-defaults-test-'));
   cpSync(getTemplateRepo(), repoRoot, { recursive: true });
+  if (packs.length !== 1 || packs[0] !== 'defaults')
+    writeFileSync(join(repoRoot, INDEX_REL), JSON.stringify({ packs }));
   return repoRoot;
 }
 
@@ -109,13 +113,35 @@ function runScript(repoRoot: string, args: string[] = []): { exitCode: number; s
 }
 
 describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
+  it('ignores unindexed packs and fails without publishing when an indexed pack is missing', async () => {
+    const repoRoot = createRepo();
+    try {
+      const privatePack = join(repoRoot, '.archon/workflows/client/private');
+      mkdirSync(privatePack, { recursive: true });
+      writeFileSync(join(privatePack, 'client.yaml'), 'name: private-client-workflow\n');
+      // Unindexed content is not inspected, including its untracked status.
+      expect(runScript(repoRoot)).toEqual({ exitCode: 0, stderr: '' });
+      const output = readFileSync(join(repoRoot, OUTPUT_REL), 'utf8');
+      expect(output).not.toContain('private-client-workflow');
+      writeFileSync(
+        join(repoRoot, INDEX_REL),
+        JSON.stringify({ packs: ['defaults', 'missing-pack'] })
+      );
+      const missing = runScript(repoRoot);
+      expect(missing.exitCode).toBe(1);
+      expect(missing.stderr).toContain('Indexed bundle pack "missing-pack" directory not found');
+      expect(readFileSync(join(repoRoot, OUTPUT_REL), 'utf8')).toBe(output);
+    } finally {
+      await removeTempTree(repoRoot);
+    }
+  });
   it('exits 0 for tracked defaults, staged-but-uncommitted defaults, and embedded packaged workflows (single amortized run)', async () => {
     // One scenario covers what used to be three separate generator runs:
     //   - all tracked legacy defaults (positive path)
     //   - staged-but-uncommitted default (staged is not untracked)
     //   - packaged workflow with commands + scripts + owner metadata
     // Each set of assertions below is preserved verbatim from its origin case.
-    const repoRoot = createRepo();
+    const repoRoot = createRepo(['defaults', 'author-pack']);
     try {
       // Staged-but-uncommitted default (previously its own case).
       writeFileSync(
@@ -127,7 +153,7 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
       mkdirSync(join(packageDir, 'commands'), { recursive: true });
       mkdirSync(join(packageDir, 'scripts/helpers'), { recursive: true });
       writeFileSync(
-        join(packageDir, 'release.yaml'),
+        join(packageDir, 'release.yml'),
         'name: release\ndescription: release\nnodes:\n  - id: run\n    command: prepare\n'
       );
       writeFileSync(join(packageDir, 'commands/prepare.md'), '# Prepare the release\n');
@@ -160,6 +186,9 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
       expect(exitCode).toBe(0);
       const packagedOutput = readFileSync(join(repoRoot, OUTPUT_REL), 'utf-8');
       expect(packagedOutput).toContain('BUNDLED_WORKFLOW_OWNERS');
+      expect(packagedOutput).toContain(
+        '"release": "workflows/author-pack/release-flow/release.yml"'
+      );
       expect(packagedOutput).toContain(
         '"release": {"pack":"author-pack","workflow":"release-flow"}'
       );
@@ -222,7 +251,7 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
       const legacyDir = join(repoRoot, '.archon/workflows/defaults/legacy');
       mkdirSync(legacyDir, { recursive: true });
       writeFileSync(
-        join(legacyDir, 'tracked-legacy-workflow.yaml'),
+        join(legacyDir, 'tracked-legacy-workflow.yml'),
         'name: tracked-legacy-workflow\ndeprecated:\n  message: Switch instead.\n'
       );
       runGit(repoRoot, ['add', '.archon/workflows/defaults/legacy']);
@@ -234,25 +263,28 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
       expect(exitCode).toBe(0);
       const output = readFileSync(join(repoRoot, OUTPUT_REL), 'utf-8');
       expect(output).toContain('"tracked-legacy-workflow"');
+      expect(output).toContain(
+        '"tracked-legacy-workflow": "workflows/defaults/legacy/tracked-legacy-workflow.yml"'
+      );
     } finally {
       await removeTempTree(repoRoot);
     }
   });
 
   it('rejects an untracked file inside a packaged workflow', async () => {
-    const repoRoot = createRepo();
+    const repoRoot = createRepo(['defaults', 'author-pack']);
     try {
       const packageDir = join(repoRoot, '.archon/workflows/author-pack/release-flow');
       mkdirSync(packageDir, { recursive: true });
       writeFileSync(
-        join(packageDir, 'release.yaml'),
+        join(packageDir, 'release.yml'),
         'name: release\ndescription: release\nnodes:\n  - id: run\n    prompt: hi\n'
       );
 
       const { exitCode, stderr } = runScript(repoRoot);
       expect(exitCode).toBe(1);
       expect(stderr).toContain('untracked files');
-      expect(stderr).toContain('.archon/workflows/author-pack/release-flow/release.yaml');
+      expect(stderr).toContain('.archon/workflows/author-pack/release-flow/release.yml');
       expect(readFileSync(join(repoRoot, OUTPUT_REL), 'utf-8')).toBe(SENTINEL);
     } finally {
       await removeTempTree(repoRoot);
@@ -260,7 +292,7 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
   });
 
   it('includes tracked shared modules, excludes nonmodules and runnable keys, and checks helper-only drift', async () => {
-    const repoRoot = createRepo();
+    const repoRoot = createRepo(['defaults', 'author-pack']);
     try {
       const pack = join(repoRoot, '.archon/workflows/author-pack');
       mkdirSync(join(pack, '.shared/nested'), { recursive: true });
@@ -300,7 +332,7 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
   });
 
   it('rejects an untracked shared module before writing the bundle', async () => {
-    const repoRoot = createRepo();
+    const repoRoot = createRepo(['defaults', 'author-pack']);
     try {
       const shared = join(repoRoot, '.archon/workflows/author-pack/.shared/nested');
       mkdirSync(shared, { recursive: true });
@@ -318,7 +350,7 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
   it.skipIf(process.platform === 'win32').each(['file', 'dir'] as const)(
     'rejects a shared %s symlink instead of silently omitting it',
     async kind => {
-      const repoRoot = createRepo();
+      const repoRoot = createRepo(['defaults', 'author-pack']);
       try {
         const shared = join(repoRoot, '.archon/workflows/author-pack/.shared');
         mkdirSync(shared, { recursive: true });

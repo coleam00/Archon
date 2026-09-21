@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
+import { bunTestCommand } from './bun-test-command';
 
 /**
  * Runs the repository's tests, from the repository root.
@@ -105,7 +106,7 @@ async function run(command: string[], cwd: string): Promise<number> {
 async function runPlan(): Promise<number> {
   for (const step of ROOT_TEST_PLAN) {
     const command =
-      step.kind === 'workspaces' ? WORKSPACE_TEST_COMMAND : ['bun', 'test', ...step.selectors];
+      step.kind === 'workspaces' ? WORKSPACE_TEST_COMMAND : bunTestCommand(step.selectors);
     const code = await run(command, REPO_ROOT);
     if (code !== 0) return code;
   }
@@ -156,7 +157,7 @@ async function runRequested(requested: string[]): Promise<number> {
   }
 
   for (const { owner, args } of runs) {
-    const code = await run(['bun', 'test', ...args], owner.cwd);
+    const code = await run(bunTestCommand(args), owner.cwd);
     if (code !== 0) return code;
   }
 

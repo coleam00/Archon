@@ -11,11 +11,12 @@
  * NOT mock ./dag-executor, so it cannot share a process with executor.test.ts,
  * which does (mock.module is process-global and irreversible).
  */
+import { readBundleIndex } from './defaults/bundle-inventory';
 import { describe, it, expect, beforeEach, afterEach, afterAll, mock } from 'bun:test';
 import { mkdir, writeFile, rm, cp, readdir, readFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { existsSync } from 'fs';
-import { join, sep } from 'path';
+import { dirname, join, sep } from 'path';
 import { tmpdir } from 'os';
 
 // --- Mock logger + telemetry (passthrough real path utilities like loader.test.ts) ---
@@ -48,6 +49,8 @@ const mockLogger = {
 // removing that file fan-out per capture per platform-multiplied runner.
 const bundledDefaultsRoot = join(tmpdir(), `subrun-test-empty-bundled-${process.pid}`);
 await mkdir(join(bundledDefaultsRoot, 'defaults'), { recursive: true });
+for (const pack of await readBundleIndex())
+  await mkdir(join(bundledDefaultsRoot, pack), { recursive: true });
 afterAll(() => removeTempTree(bundledDefaultsRoot));
 const realArchonPaths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
@@ -68,13 +71,14 @@ mock.module('@archon/git', () => ({
   toRepoPath: mock((p: string) => p),
 }));
 
-// --- Mock fs/promises.rename so a single test can force the rename the recursive
+// --- Filesystem controls keep source removal pending or force the rename the recursive
 //     executeWorkflow performs (moving the staged capture under the child's
 //     artifacts directory) to throw. The wrap's `finally` is the only thing that
 //     can reclaim that staged capture when the rename fails — without the fix
 //     in runChildWorkflow, the staged tree leaks until the hourly age-based
-//     sweep reaps it (review R1). Every other fs/promises function delegates
-//     to the real implementation so other tests are unaffected.
+//     sweep reaps it (review R1). Removal gates only target existing, finalized
+//     roots under the current test staging directory; preparation and other cleanup
+//     delegate to the real filesystem.
 //
 //     The forced failure targets ONLY the move-out-of-staging rename: source
 //     lives under `staged-source/`, destination does NOT. `captureWorkflowSource`
@@ -90,9 +94,57 @@ mock.module('@archon/git', () => ({
 const realFsPromises = await import('fs/promises');
 let forceRenameFailure = false;
 const passthroughRename = realFsPromises.rename;
+const passthroughRemove = realFsPromises.rm;
+let removeSource: typeof passthroughRemove | undefined;
+
+function holdSourceRemoval(
+  stagedDir: string,
+  removalError?: Error
+): {
+  started: Promise<string>;
+  release: () => void;
+  finish: () => Promise<void>;
+} {
+  let signalStarted!: (root: string) => void;
+  let release!: () => void;
+  let activeRemoval: Promise<void> = Promise.resolve();
+  const started = new Promise<string>(resolve => {
+    signalStarted = resolve;
+  });
+  const released = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  removeSource = (path, options) => {
+    if (
+      typeof path !== 'string' ||
+      dirname(path) !== stagedDir ||
+      path.endsWith('.partial') ||
+      !existsSync(path)
+    ) {
+      return passthroughRemove(path, options);
+    }
+    signalStarted(path);
+    activeRemoval = released.then(async () => {
+      if (removalError) throw removalError;
+      await passthroughRemove(path, options);
+    });
+    return activeRemoval;
+  };
+  return {
+    started,
+    release,
+    finish: async () => {
+      release();
+      await activeRemoval.catch(() => {});
+      removeSource = undefined;
+    },
+  };
+}
 const stagedSourcePathSep = `staged-source${sep}`;
 mock.module('fs/promises', () => ({
   ...realFsPromises,
+  rm: (...args: Parameters<typeof passthroughRemove>): Promise<void> =>
+    (removeSource ?? passthroughRemove)(...args),
   rename: async (src: string, dst: string): Promise<void> => {
     if (
       forceRenameFailure &&
@@ -115,7 +167,8 @@ import { captureWorkflowSource, resolveRunSourceCapture } from './workflow-sourc
 import { discoverWorkflows } from './workflow-discovery';
 import { validateWorkflowResources } from './validator';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
-import type { IWorkflowStore, NodeStateEventInput } from './store';
+import type { IWorkflowStore } from './store';
+import { waitCompletionEvents } from './store';
 import type { WorkflowRun, WorkflowWaitContext } from './schemas/workflow-run';
 import type { ResolvedWorkflow } from './schemas/workflow';
 import type { WorkflowRunConfigMetadata } from './schemas/run-config';
@@ -348,25 +401,9 @@ class InMemoryStore implements IWorkflowStore {
       r.metadata = metadata;
       // Mirror the real store: both rows land in the same transaction as the cursor
       // clear, and the node row is handed back so the caller derives its sinks from it.
-      this.events.push({
-        workflow_run_id: id,
-        event_type: completion.result.status === 'expired' ? 'wait_expired' : 'wait_completed',
-        step_name: completion.stepName,
-        data: completion.result,
-      });
-      const nodeEvent: NodeStateEventInput = {
-        workflow_run_id: id,
-        event_type: 'node_completed',
-        step_name: completion.stepName,
-        data: {
-          type: 'wait',
-          duration_ms: completion.result.waited_ms,
-          node_output: JSON.stringify(completion.result),
-          structured_output: completion.result,
-        },
-      };
-      this.events.push(nodeEvent);
-      return Promise.resolve({ cleared: true, nodeEvent });
+      const rows = waitCompletionEvents(id, completion);
+      this.events.push(rows.outcome, rows.node);
+      return Promise.resolve({ cleared: true, nodeEvent: rows.node });
     }
     return Promise.resolve({ cleared: false });
   };
@@ -1839,42 +1876,81 @@ nodes:
     expect(childEventsAfter).toBe(childEventsBefore); // child was NOT re-driven
   });
 
-  it('fails cleanly with "Unknown sub-run workflow" on a typo\'d target (S5)', async () => {
-    await writeWorkflow(
-      'parent-typo',
-      `
+  it.each([false, true])(
+    'awaits source disposal without hiding an unknown target (cleanup failure=%s)',
+    async cleanupFails => {
+      await writeWorkflow(
+        'parent-typo',
+        `
 name: parent-typo
 description: references a non-existent sub-run
 nodes:
   - id: sub
     workflow: does-not-exist-typo
 `
-    );
+      );
 
-    const store = new InMemoryStore();
-    const deps = makeDeps(store);
-    const parent = await discover('parent-typo');
-    const result = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      'conv-db'
-    );
+      const store = new InMemoryStore();
+      const deps = makeDeps(store);
+      const parent = await discover('parent-typo');
+      const cleanupError = cleanupFails ? new Error('source removal rejected') : undefined;
+      const gate = holdSourceRemoval(join(cwd, 'home', 'staged-source'), cleanupError);
+      const execution = executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        parent,
+        'goal',
+        'conv-db'
+      );
 
-    expect(result.success).toBe(false);
-    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-typo');
-    expect(parentRun?.status).toBe('failed');
-    // The node_failed event carries the authoring-friendly reason.
-    const nodeFailed = store.events.find(
-      e => e.event_type === 'node_failed' && e.step_name === 'sub'
-    );
-    expect(String(nodeFailed?.data?.error)).toContain('Unknown sub-run workflow');
-    // No child run was created for a target that doesn't resolve.
-    expect([...store.runs.values()].filter(r => r.parent_run_id !== null)).toHaveLength(0);
-  });
+      try {
+        const root = await Promise.race([
+          gate.started,
+          execution.then(() => {
+            throw new Error('Execution returned without reaching source disposal');
+          }),
+        ]);
+        let settled = false;
+        void execution.then(
+          () => {
+            settled = true;
+          },
+          () => {
+            settled = true;
+          }
+        );
+        // Let an incorrectly detached refusal continue while removal remains held.
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(settled).toBe(false);
+        expect(existsSync(root)).toBe(true);
+        gate.release();
+        const result = await execution;
+        expect(existsSync(root)).toBe(cleanupFails);
+        if (cleanupError) {
+          expect(mockLogger.warn).toHaveBeenCalledWith(
+            { err: cleanupError, captureRoot: root },
+            'workflow.source_capture_dispose_failed'
+          );
+        }
+        expect(result.success).toBe(false);
+        const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-typo');
+        expect(parentRun?.status).toBe('failed');
+        // The node_failed event carries the authoring-friendly reason.
+        const nodeFailed = store.events.find(
+          e => e.event_type === 'node_failed' && e.step_name === 'sub'
+        );
+        expect(String(nodeFailed?.data?.error)).toContain('Unknown sub-run workflow');
+        // No child run was created for a target that doesn't resolve.
+        expect([...store.runs.values()].filter(r => r.parent_run_id !== null)).toHaveLength(0);
+      } finally {
+        gate.release();
+        await execution.catch(() => {});
+        await gate.finish();
+      }
+    }
+  );
 
   // --- slice 2, PR-A: per-child worktree isolation ------------------------------
 

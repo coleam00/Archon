@@ -4,9 +4,10 @@ impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true
+  red_cause: ""
   summary: "stub: initial implementation green"
 impl__assert-changed: "2 files changed"
-gate-green: '{"gate":"green"}'
+gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
 pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 6, url: "https://github.com/example/repo/pull/6", head: "fixture-branch", base: "dev", is_draft: true }
 classify:
   errors: false
@@ -16,7 +17,9 @@ classify:
     docs: "stub"
 resolve-scope: '{"errors":"false"}'
 review__mode: '{"continuation":false}'
-review__scope: "accepted contract recorded"
+review__scope:
+  # accepted contract recorded
+  docs: false
 review__code: "1 Important in-scope finding"
 review__seams: "0 findings"
 review__simplify: "0 findings"
@@ -25,20 +28,25 @@ review__synthesize:
   ready: false
   action: correct
   findings_summary: "stub: one in-scope correction"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 ci-note: "No CI evidence is available for this round (no checks reported, or the read failed). Proceed on the review findings alone."
 fix__record-start: '{"start":"recorded"}'
 fix__implement:
   done: true
   green: true
+  red_cause: ""
   summary: "stub: correction exposed a scope conflict"
 fix__assert-changed: "1 file changed"
-gate-correction-green: '{"gate":"green"}'
+gate-correction-green: '{"gate":"green","red_cause":"","stage":"The correction","summary":""}'
 recheck__mode: '{"continuation":true}'
-recheck__scope: "light review with original accepted contract"
+recheck__scope:
+  # light review with original accepted contract
+  docs: false
 recheck__synthesize:
   ready: false
   action: replan
   findings_summary: "stub: remaining correction requires replanning"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 fixture:
   expect: failed
   fail-node: gate-ready

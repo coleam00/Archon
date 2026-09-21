@@ -107,8 +107,8 @@ bun run validate
 
 `scripts/validate.ts` lists what this runs; the levels above are a subset of it.
 
-This is the command CI runs. If it passes locally, CI will pass — except for the
-PostgreSQL and Docker jobs, which CONTRIBUTING.md lists with how to run each one.
+This is the command CI runs. `CONTRIBUTING.md` lists the PostgreSQL, Docker, docs,
+and marketplace jobs kept outside it, with the command to run each one.
 
 ---
 

@@ -89,13 +89,8 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
     label: 'Test suite, per-package isolation preserved',
     command: ['bun', 'run', 'test'],
   },
-  // The fixture check runs LAST, after the suite, and that ordering is load-bearing on
-  // Windows. Running it first put 48 workflow captures (a tree created and deleted each)
-  // immediately before a suite whose own slowest tests copy trees in %TEMP% and spawn
-  // `bun`/`git`: the suite stayed the same speed overall (median 0.87x of the same run on
-  // dev, 2612 tests compared) but its tail blew Bun's 5s per-test budget — one timeout in
-  // each of two runs, on tests that cost 350ms on dev, against zero timeouts in six dev runs.
-  // Put it back in front only with Windows evidence that the tail holds.
+  // The fixture check runs last because it is filesystem-heavy and the cheaper checks
+  // should fail first. `--only workflow-fixtures` remains the focused iteration command.
   //
   // The docs build is not here on purpose: Astro's CLI runs under Node, and this gate must
   // run on a checkout that has only Bun. It stays a declared exclusion with its own CI job,

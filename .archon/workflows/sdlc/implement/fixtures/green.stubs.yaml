@@ -6,6 +6,7 @@ record-start: '{"start":"recorded"}'
 implement:
   done: true
   green: true
+  red_cause: ""
   summary: "stub: work complete, checks green"
 assert-changed: "1 file changed"
 fixture:

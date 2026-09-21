@@ -33,7 +33,12 @@ describe('validateContent', () => {
     expect(issues.some(i => i.rule === 'content.var.unknown')).toBe(true);
   });
 
-  test('refs inside code spans are ignored', () => {
+  test('refs inside inline and fenced code spans are flagged, like the engine (#2632)', () => {
+    // This exact body fed to the engine's `parseWorkflow` fails the load with
+    // "Node 'use' field 'prompt' references unknown node '$ghost.output'" —
+    // runtime substitution is syntax-agnostic, so backticks buy no immunity.
+    // Both ids must be flagged: catching only the fenced one (or only the inline
+    // one) is a half-fix that a plain `.some()` assertion would let pass.
     const issues = validateContent(
       wf([
         {
@@ -41,6 +46,41 @@ describe('validateContent', () => {
           variant: 'prompt',
           base: {},
           data: { prompt: 'Example: `$ghost.output` and ```\n$other.output\n``` are docs.' },
+        },
+      ])
+    );
+    const flagged = issues.filter(i => i.rule === 'content.var.unknown').map(i => i.message);
+    expect(flagged).toHaveLength(2);
+    expect(flagged.join('\n')).toContain('$ghost.output');
+    expect(flagged.join('\n')).toContain('$other.output');
+  });
+
+  test('a ref inside a script body template literal is flagged', () => {
+    // A JS template literal wears the same delimiter as a Markdown inline code
+    // span, so a code-stripping scan silently skipped the whole substitution.
+    const issues = validateContent(
+      wf([
+        {
+          id: 's',
+          variant: 'script',
+          base: {},
+          data: { script: 'const x = `payload: $ghost.output`;', runtime: 'bun' },
+        },
+      ])
+    );
+    expect(issues.some(i => i.rule === 'content.var.unknown')).toBe(true);
+  });
+
+  test('an upstream ref inside a code span still passes', () => {
+    // Scanning raw text must flag unknown refs, not every ref that sits in a fence.
+    const issues = validateContent(
+      wf([
+        { id: 'classify', variant: 'prompt', base: {}, data: { prompt: 'classify it' } },
+        {
+          id: 'use',
+          variant: 'prompt',
+          base: { depends_on: ['classify'] },
+          data: { prompt: 'Read `$classify.output` and ```\n$classify.output\n``` again.' },
         },
       ])
     );

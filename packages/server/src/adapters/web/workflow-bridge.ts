@@ -6,13 +6,12 @@ import {
 import {
   nodeSkipReasonSchema,
   skipCauseSchema,
+  type NodeSkipReason,
   type SkipCause,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowEventRow } from '@archon/core/db/workflow-events';
 import { SSETransport } from './transport';
 import type { DagNodeSseEvent } from './workflow-event.schemas';
-
-type NodeSkipReason = Extract<WorkflowEmitterEvent, { type: 'node_skipped' }>['reason'];
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -115,14 +114,21 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         duration: event.type === 'node_completed' ? event.duration : undefined,
         error: event.type === 'node_failed' ? event.error : undefined,
         reason: event.type === 'node_skipped' ? event.reason : undefined,
-        cause:
-          event.type === 'node_skipped' && event.reason !== 'prior_success'
-            ? event.cause
-            : undefined,
+        cause: event.type === 'node_skipped' ? event.cause : undefined,
         timestamp: Date.now(),
       };
       return JSON.stringify(payload);
     }
+
+    case 'node_skipped_prior_success':
+      return JSON.stringify({
+        type: 'dag_node',
+        runId: event.runId,
+        nodeId: event.nodeId,
+        name: event.nodeName,
+        status: 'completed',
+        timestamp: Date.now(),
+      } satisfies DagNodeSseEvent);
 
     case 'tool_started':
       return JSON.stringify({
@@ -256,7 +262,7 @@ const ROW_NODE_STATUS: Record<string, 'running' | 'completed' | 'failed' | 'skip
   node_failed: 'failed',
   loop_iteration_failed: 'failed',
   node_skipped: 'skipped',
-  node_skipped_prior_success: 'skipped',
+  node_skipped_prior_success: 'completed',
 };
 
 /** SSE payload shapes the console dashboard reacts to — a typed contract for the hand-built JSON. */
@@ -354,12 +360,7 @@ export function mapWorkflowEventRow(row: WorkflowEventRow): string | null {
         row.event_type === 'node_failed' || row.event_type === 'loop_iteration_failed'
           ? dataStr(data, 'error')
           : undefined,
-      reason:
-        row.event_type === 'node_skipped_prior_success'
-          ? 'prior_success'
-          : row.event_type === 'node_skipped'
-            ? dataSkipReason(data)
-            : undefined,
+      reason: row.event_type === 'node_skipped' ? dataSkipReason(data) : undefined,
       cause: row.event_type === 'node_skipped' ? dataSkipCause(data) : undefined,
       timestamp,
     };

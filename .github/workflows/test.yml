@@ -105,13 +105,20 @@ jobs:
       # drive root, recursively, so nothing under either was being scanned to
       # begin with. `Add-MpPreference` also cost 5s per run to change nothing.
       # Evidence: https://github.com/coleam00/Archon/pull/2943
+      # The first `uv run` on a fresh windows-latest VM costs 1.2 to 5.0 s (interpreter
+      # discovery and cache creation), measured on green legs. Paying it inside the first
+      # uv-backed test's own budget made that test a budget-edge case by itself, so it is
+      # paid here instead. Evidence on coleam00/Archon#3294.
+      - name: Warm uv
+        if: runner.os == 'Windows'
+        run: uv run python -c "print('uv warm')"
 
-      # This job used to restate every command in `bun run validate`, which meant the
-      # documented pre-pull-request command and the gate it was supposed to reproduce
-      # could disagree — and did. scripts/validate.ts now owns the list, this step runs
-      # it, and scripts/validate-ci-parity.test.ts fails if a check reappears here as its
-      # own step. Add a check there, not here. The installer test skips itself on Windows
-      # (scripts/install.sh refuses MINGW/MSYS by design) and says so in the log.
+      # This job used to restate every command in `bun run validate`, which let the
+      # documented local gate and CI drift apart. scripts/validate.ts owns the list;
+      # scripts/validate-ci-parity.test.ts keeps this job and that list aligned. The
+      # installer check skips itself on Windows because scripts/install.sh is POSIX-only.
+      # The Windows test check keeps the 20 s per-test budget in
+      # scripts/bun-test-command.ts; see coleam00/Archon#3294.
       - name: Validate
         run: bun run validate
 

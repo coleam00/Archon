@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import * as archonPaths from '@archon/paths';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, sep } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { makeTestComposedWorkflow, makeTestWorkflow } from './test-utils';
 import {
   createDryRunStubScaffold as createResolvedDryRunStubScaffold,
@@ -18,12 +18,16 @@ import { resolveWorkflowModelScope } from './node-model-resolution';
 import { expandWorkflowIncludes } from './include-expander';
 import type { ResolvedWorkflow, WorkflowDefinition } from './schemas';
 import { captureWorkflowSource, capturedSourceRoots, loadWorkflowSource } from './workflow-source';
+import { readBundleIndex } from './defaults/bundle-inventory';
 
 // These fixtures read only project files. Avoid copying the repository's bundled
 // defaults into every capture; the materialization suite covers bundled content.
 async function captureProjectSource(options: Parameters<typeof captureWorkflowSource>[0]) {
   const bundled = join(options.sourceRoot, 'empty-bundled', 'defaults');
   mkdirSync(bundled, { recursive: true });
+  for (const pack of await readBundleIndex()) {
+    mkdirSync(join(dirname(bundled), pack), { recursive: true });
+  }
   const workflows = spyOn(archonPaths, 'getDefaultWorkflowsPath').mockReturnValue(bundled);
   const commands = spyOn(archonPaths, 'getDefaultCommandsPath').mockReturnValue(bundled);
   try {
@@ -386,6 +390,64 @@ describe('dry-run stub scaffolding and sparse defaults (#2624)', () => {
       state: 'failed',
       reason: expect.stringContaining('asynchronous output_format schemas are unsupported'),
     });
+  });
+
+  test('holds an authored stub to the contract it stands in for', async () => {
+    // A fixture's stub replaces a node's real output, so a schema the real output
+    // must satisfy is one the stub must satisfy too. The generated-scaffold route
+    // has always checked this; the authored route reached `completedOutput`
+    // unexamined, which let a fixture keep passing while the contract it stands in
+    // for moved underneath it.
+    const workflow = makeTestWorkflow({
+      name: 'stub-contract',
+      nodes: [
+        {
+          id: 'certified',
+          bash: 'echo hi',
+          output_format: {
+            type: 'object',
+            properties: { pr_url: { type: 'string' } },
+            required: ['pr_url'],
+          },
+        },
+      ],
+    });
+
+    const missingField = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { certified: { url: 'https://example.test/pull/1' } },
+    });
+    expect(missingField.outcome).toBe('failed');
+    expect(missingField.trace[0]).toMatchObject({
+      nodeId: 'certified',
+      state: 'failed',
+      reason: expect.stringContaining('does not satisfy its output_format'),
+    });
+
+    // A string stub stands in for what the node PRINTS, so it is parsed first — the
+    // same order certification uses on real stdout.
+    const notJson = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { certified: 'https://example.test/pull/1' },
+    });
+    expect(notJson.outcome).toBe('failed');
+    expect(notJson.trace[0]).toMatchObject({
+      nodeId: 'certified',
+      state: 'failed',
+      reason: expect.stringContaining('is not one JSON document'),
+    });
+
+    const printed = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { certified: '{"pr_url":"https://example.test/pull/1"}' },
+    });
+    expect(printed.outcome).toBe('completed');
   });
 
   test('completes a 36-node composition with only three load-bearing overrides', async () => {
@@ -795,7 +857,11 @@ describe('dryRunWorkflow', () => {
     }
   );
 
-  test('leaves authored outcome null when the structured result violates its schema', async () => {
+  test('refuses a structured result that violates its schema, and authors no outcome', async () => {
+    // The invariant is that a value which does not satisfy its schema never becomes an
+    // authored outcome. It used to hold by `resolveDryRunAuthoredOutcome` declining to
+    // read one; it holds earlier and louder now, because such a stub cannot stand in
+    // for a node's output at all — the same refusal a real run makes at certification.
     const result = await dryRunWorkflow({
       workflow: makeTestWorkflow({
         name: 'invalid-authored-outcome',
@@ -821,7 +887,12 @@ describe('dryRunWorkflow', () => {
       stubs: { verdict: { green: false } },
     });
 
-    expect(result).toMatchObject({ outcome: 'completed', authoredOutcome: null });
+    expect(result).toMatchObject({ outcome: 'failed', authoredOutcome: null });
+    expect(result.trace[0]).toMatchObject({
+      nodeId: 'verdict',
+      state: 'failed',
+      reason: expect.stringContaining('does not satisfy its output_format'),
+    });
   });
 
   test('leaves authored outcome null when the declared result is not reached', async () => {
@@ -1591,6 +1662,39 @@ describe('dryRunWorkflow', () => {
     expect(paused.outcome).toBe('paused');
     expect(paused.trace.at(-1)).toMatchObject({ nodeId: 'gate', state: 'paused' });
     expect(paused.unusedStubs).toEqual(['after']);
+  });
+
+  test('a gate inside a loop_group body pauses the whole run', async () => {
+    // simulateLoopGroup gives the body a scope of its own. It must do that on the
+    // caller's context, not a copy: `halted` is written by the nested simulation, so a
+    // copied context swallows the pause and the run continues past the gate and ends
+    // failed. The fixture corpus catches this too, in a job outside `bun run validate`.
+    const workflow = makeTestWorkflow({
+      name: 'gate-in-loop-group',
+      nodes: [
+        {
+          id: 'group',
+          loop_group: {
+            until_bash: 'exit 0',
+            max_iterations: 2,
+            nodes: [
+              { id: 'work', prompt: 'p' },
+              { id: 'gate', approval: { message: 'ok?' }, depends_on: ['work'] },
+            ],
+          },
+        },
+      ],
+    });
+
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { work: 'done' },
+      pauseAtGates: true,
+    });
+
+    expect(result.outcome).toBe('paused');
   });
 
   test('reports a durable wait as a pause without AI resolution', async () => {
@@ -2513,6 +2617,30 @@ describe('dryRunWorkflow — effective provider/model per node', () => {
       providerFrom: 'node',
       authoredIn: 'blk',
     });
+  });
+
+  test('reports a loop_group body node against the group own resolved model', async () => {
+    // The executor builds the body's context from the group's resolved provider and
+    // model, so a body node declaring neither inherits the GROUP's, not the enclosing
+    // workflow's. A dry run that reported the workflow's would name a model the run
+    // never uses.
+    const byId = await trace([
+      {
+        id: 'group',
+        model: 'large',
+        loop_group: {
+          until_bash: 'exit 0',
+          max_iterations: 1,
+          nodes: [{ id: 'body', prompt: 'p' }],
+        },
+      },
+    ]);
+
+    const group = byId.get('group');
+    const body = byId.get('body');
+    expect(body).toBeDefined();
+    expect(body?.model).toBe(group?.model);
+    expect(body?.provider).toBe(group?.provider);
   });
 
   test('reports a provider/model conflict the real run would warn about', async () => {

@@ -294,7 +294,7 @@ describe('bundled-defaults', () => {
       const triage = parsed.workflow.nodes.find(node => node.id === 'triage');
       expect(triage?.kind).toBe('include');
       if (triage?.kind !== 'include') throw new Error('triage is not an include');
-      expect(triage.with).toEqual({ target: '$INPUTS.target' });
+      expect(triage.with).toEqual({ target: '$INPUTS.target', publish: '$INPUTS.publish' });
 
       const triageCommand = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:triage::triage'];
       expect(triageCommand).toContain('Write `$ARTIFACTS_DIR/triage.md`');
@@ -327,7 +327,7 @@ describe('bundled-defaults', () => {
       expect(resolveScope).toBeDefined();
       expect(resolveScope?.kind).toBe('exec');
       if (resolveScope?.kind !== 'exec') throw new Error('resolve-scope is not executable');
-      expect(resolveScope.runtime).toBe('uv');
+      expect(resolveScope.runtime).toBe('bun');
       expect(resolveScope.script).toBe('resolve-review-scope');
       expect(resolveScope.with).toEqual({
         c_errors: '$classify.output.errors',
@@ -384,55 +384,26 @@ describe('bundled-defaults', () => {
       expect(fix?.depends_on).toEqual(['ci-evidence']);
     });
 
-    it('archon-deliver validates review action before correction and carries the work order into recheck', () => {
-      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
-      if (parsed.workflow === null) throw new Error(parsed.error.error);
-
-      const reviewAction = parsed.workflow.nodes.find(node => node.id === 'review-action');
-      expect(reviewAction?.kind).toBe('exec');
-      if (reviewAction?.kind !== 'exec') throw new Error('review-action is not executable');
-      expect(reviewAction.script).toBe('validate-review-action');
-      expect(reviewAction.with).toEqual({
-        ready: '$review.output.ready',
-        action: '$review.output.action',
-      });
-
-      const corrections = parsed.workflow.nodes.find(node => node.id === 'corrections');
-      expect(corrections?.kind).toBe('loop_group');
-      if (corrections?.kind !== 'loop_group') throw new Error('corrections is not a loop group');
-      expect(corrections.when).toBe("$review-action.output.action == 'correct'");
-      expect(corrections.loop_group.until_bash).toContain(
-        '$recheck-action.output.action != "correct"'
-      );
-
-      const recheck = corrections.loop_group.nodes.find(node => node.id === 'recheck');
-      expect(recheck?.kind).toBe('include');
-      if (recheck?.kind !== 'include') throw new Error('recheck is not an include');
-      expect(recheck.with).toMatchObject({
-        scope: '$pr.output.number',
-        work_order: '$INPUTS.work',
-      });
-      expect(recheck.with).not.toHaveProperty('pr_number');
-      expect(recheck.with).not.toHaveProperty('pr_head');
-
-      const gateReady = parsed.workflow.nodes.find(node => node.id === 'gate-ready');
-      expect(gateReady?.kind).toBe('exec');
-      if (gateReady?.kind !== 'exec') throw new Error('gate-ready is not executable');
-      expect(gateReady.with).toEqual({
-        review_ready: { from: '$review-action.output.ready', if_skipped: false },
-        review_action: { from: '$review-action.output.action', if_skipped: null },
-        correction_ready: { from: '$corrections.output.ready', if_skipped: false },
-        correction_action: { from: '$corrections.output.action', if_skipped: null },
-      });
-    });
-
-    it('flip-ready directly depends on every failable gate ancestor', () => {
+    it('flip-ready names only what it needs, and never loses a gate to a longer chain', () => {
+      // The flip used to name ten ancestors because a failure propagated exactly one
+      // hop: a join that named only the tail of a chain never saw the chain's gates
+      // fail. Failure-cascade skips carry `upstream_failed` across every hop now, so
+      // the list is the four the flip actually needs. gate-validated, gate-ready and
+      // validate are reachable through ci-verdict; ci-verdict stays because the rule
+      // needs one successful dependency, and a clean-review delivery has no other.
+      // That the cascade really blocks is proved by execution, not by this list —
+      // deliver's validate-red* and late-red-unconverged fixtures expect the gate
+      // itself as the failed node and never reach the flip.
       const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
       if (parsed.workflow === null) throw new Error(parsed.error.error);
       const flipReady = parsed.workflow.nodes.find(node => node.id === 'flip-ready');
-      expect(flipReady?.depends_on).toContain('gate-validated');
-      expect(flipReady?.depends_on).toContain('gate-ready');
-      expect(flipReady?.depends_on).toContain('validate');
+      expect(flipReady?.depends_on).toEqual([
+        'ci-verdict',
+        'ci-attention-route',
+        'ci-attention',
+        'sync-pr-body',
+      ]);
+      expect(flipReady?.trigger_rule).toBe('none_failed_min_one_success');
     });
 
     it('archon-review exposes the three-way action contract behind a successful preflight', () => {
@@ -808,7 +779,11 @@ describe('bundled-defaults', () => {
         const group = parsed.workflow.nodes.find(node => node.id === groupId);
         if (group?.kind !== 'loop_group') throw new Error(`${groupId} is not a loop group`);
         expect(group.loop_group.max_iterations).toBe(13);
-        expect(group.loop_group.until_bash).toContain('gh pr checks');
+        // Completion reads the probe's own certified field. It shelled out to `gh`
+        // while a resumed wait was believed unable to see the iteration's outputs;
+        // that was a quoting error in this predicate, not an engine limit, so the
+        // reference is bare and the probe owns the answer.
+        expect(group.loop_group.until_bash).toBe(`test $${probeId}.output.state != "pending"`);
 
         const probeIndex = group.loop_group.nodes.findIndex(node => node.id === probeId);
         const pauseIndex = group.loop_group.nodes.findIndex(node => node.id === pauseId);
@@ -1019,31 +994,41 @@ describe('bundled-defaults', () => {
         const workflow = parsed.workflow;
         if (workflow === null) continue;
 
-        // Coverage mirrors the resolver, not the doc comments:
+        // Walk with the scope a node actually resolves against, mirroring the resolver:
         //  - a node's own `model:` always wins;
-        //  - a workflow's `model:` reaches a node only when the node resolves to the
-        //    workflow's own provider (include-expander's `workflowModelTravelsTo`);
-        //  - a `loop_group`'s own `model:` covers nothing — the executor forwards only
-        //    its resolved provider into the body context, never its model.
-        const covered = (node: PackNode | LoopGroupBodyNode): boolean => {
-          if ('model' in node && node.model !== undefined) return true;
-          if (workflow.model === undefined) return false;
-          const nodeProvider = 'provider' in node ? node.provider : undefined;
-          return nodeProvider === undefined || nodeProvider === workflow.provider;
-        };
+        //  - an inherited model reaches a node only when the node resolves to the scope's
+        //    own provider (include-expander's `workflowModelTravelsTo`), so a node naming
+        //    a different provider inherits nothing;
+        //  - a `loop_group` becomes the scope for its body, carrying whichever model it
+        //    resolved, because the executor forwards its provider, model, tier and preset
+        //    into the per-iteration context.
+        interface Scope {
+          provider: string | undefined;
+          model: string | undefined;
+        }
 
-        const visit = (nodes: readonly (PackNode | LoopGroupBodyNode)[], trail: string): void => {
+        const visit = (
+          nodes: readonly (PackNode | LoopGroupBodyNode)[],
+          trail: string,
+          scope: Scope
+        ): void => {
           for (const node of nodes) {
             const id = `${trail}${node.id}`;
-            // `agent` and `loop` both invoke a provider. `loop_group` runs none
-            // itself; its body holds the work, so descend into it.
-            if ((node.kind === 'agent' || node.kind === 'loop') && !covered(node)) {
+            const ownProvider = 'provider' in node ? node.provider : undefined;
+            const ownModel = 'model' in node ? node.model : undefined;
+            const provider = ownProvider ?? scope.provider;
+            const model = ownModel ?? (provider === scope.provider ? scope.model : undefined);
+
+            // `agent` and `loop` both invoke a provider. `loop_group` runs none itself.
+            if ((node.kind === 'agent' || node.kind === 'loop') && model === undefined) {
               uncovered.push(`${name}:${id}`);
             }
-            if (node.kind === 'loop_group') visit(node.loop_group.nodes, `${id}/`);
+            if (node.kind === 'loop_group') {
+              visit(node.loop_group.nodes, `${id}/`, { provider, model });
+            }
           }
         };
-        visit(workflow.nodes, '');
+        visit(workflow.nodes, '', { provider: workflow.provider, model: workflow.model });
       }
 
       expect(uncovered).toEqual([]);

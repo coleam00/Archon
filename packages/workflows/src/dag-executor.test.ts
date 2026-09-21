@@ -145,6 +145,7 @@ import {
 import { OutputRefError } from './output-ref';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore, PersistedNodeOutput } from './store';
+import { waitCompletionEvents } from './store';
 import {
   buildInstanceSnapshots,
   composeFanOutScopeSegment,
@@ -247,12 +248,7 @@ function createMockStore(): MockWorkflowStore {
     clearWorkflowWaitContext: mock<IWorkflowStore['clearWorkflowWaitContext']>(
       async (id, _waitContext, completion) => ({
         cleared: true,
-        nodeEvent: {
-          workflow_run_id: id,
-          event_type: 'node_completed',
-          step_name: completion.stepName,
-          data: { type: 'wait', duration_ms: completion.result.waited_ms },
-        },
+        nodeEvent: waitCompletionEvents(id, completion).node,
       })
     ),
     rewriteApprovalContext: mock<IWorkflowStore['rewriteApprovalContext']>(
@@ -2334,6 +2330,65 @@ describe('executeDagWorkflow -- tool restrictions', () => {
     expect(nodeStartedCall?.[0].data?.tier).toBe('large');
     expect(nodeStartedCall?.[0].data?.model).toBe('opus');
     expect(nodeStartedCall?.[0].data?.effort).toBe('max');
+  });
+
+  it('forwards a loop_group tier to a body AI node that declares none', async () => {
+    // The schema documents `model`/`provider` as forwarded from a loop_group to its
+    // body AI nodes. The provider always was; the model was resolved and then thrown
+    // away, so a body node silently took the enclosing workflow's model — or, when the
+    // workflow declared none, the install's default assistant.
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+    const aiProfile = buildAiProfile('claude', {
+      repoTiers: {
+        small: { provider: 'claude', model: 'haiku', effort: 'low' },
+        large: { provider: 'claude', model: 'opus', effort: 'max' },
+      },
+    });
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        platform,
+        cwd: testDir,
+        workflow: {
+          name: 'loop-group-tier-forwarding',
+          model: 'large',
+          nodes: [
+            dagNodeSchema.parse({
+              id: 'group',
+              model: 'small',
+              loop_group: {
+                until_bash: 'exit 0',
+                max_iterations: 1,
+                nodes: [{ id: 'body', prompt: 'body work' }],
+              },
+            }),
+          ],
+        },
+        workflowRun,
+        aiProfile,
+      })
+    );
+
+    // The body node declares no model, so it takes the group's `small`, not the
+    // workflow's `large`.
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    expect(optionsArg.model).toBe('haiku');
+
+    // Tier and preset travel with the model. Forwarding the model alone would run
+    // `haiku` while attributing it to `large` and applying that preset's `max` effort.
+    const nodeConfig = optionsArg.nodeConfig as Record<string, unknown>;
+    expect(nodeConfig.effort).toBe('low');
+
+    const createEventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock
+      .calls as Array<[{ event_type: string; step_name?: string; data?: Record<string, unknown> }]>;
+    const bodyStarted = createEventCalls.find(
+      ([arg]) => arg.event_type === 'node_started' && arg.step_name?.endsWith('body')
+    );
+    expect(bodyStarted?.[0].data?.tier).toBe('small');
+    expect(bodyStarted?.[0].data?.model).toBe('haiku');
   });
 
   it('surfaces the workflow-level tier on nodes that inherit the workflow model', async () => {
@@ -26252,11 +26307,7 @@ describe('executeDagWorkflow -- flattened include expansion', () => {
     const workflowRun = makeWorkflowRun('skip-cause-live');
     const emitted: Array<{ nodeId: string; cause: SkipCause }> = [];
     const unsubscribe = getWorkflowEventEmitter().subscribe(event => {
-      if (
-        event.type === 'node_skipped' &&
-        event.reason !== 'prior_success' &&
-        event.runId === workflowRun.id
-      ) {
+      if (event.type === 'node_skipped' && event.runId === workflowRun.id) {
         emitted.push({ nodeId: event.nodeId, cause: event.cause });
       }
     });
@@ -31788,7 +31839,10 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
         return {
           ...node,
           runtime: 'sh' as const,
-          script: `printf '%s' flipped > ${JSON.stringify(flipMarkerPath)}; printf '%s' 'https://github.com/example/repo/pull/3115'`,
+          // Both stand-ins print the shape their real node declares: the flip and the
+          // terminal report certify their own stdout, so a bare URL here would fail
+          // certification rather than the node under test.
+          script: `printf '%s' flipped > ${JSON.stringify(flipMarkerPath)}; printf '%s' '{"pr_url":"https://github.com/example/repo/pull/3115"}'`,
           deps: undefined,
           with: undefined,
         };
@@ -31797,7 +31851,8 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
         return {
           ...node,
           runtime: 'sh' as const,
-          script: "printf '%s' delivered",
+          script:
+            'printf \'%s\' \'{"pr_url":"https://github.com/example/repo/pull/3115","summary":"delivered"}\'',
           deps: undefined,
           with: undefined,
         };

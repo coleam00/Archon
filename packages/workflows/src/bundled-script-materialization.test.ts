@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn, type Mock } from 'bun:test';
 import * as fs from 'fs/promises';
 import { mkdir, mkdtemp, readFile, readdir, stat, utimes, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -30,6 +30,7 @@ const fixture: BundledScriptPack = {
 const packs: Record<string, BundledScriptPack> = { example: fixture };
 let binary = true;
 const actual = await import('./defaults/bundled-defaults');
+const bundleInventory = await import('./defaults/bundle-inventory');
 mock.module('./defaults/bundled-defaults', () => ({
   ...actual,
   BUNDLED_SCRIPT_PACKS: packs,
@@ -79,6 +80,7 @@ describe('pack shared modules across source and binary distributions (#3251)', (
   let root: string;
   let target: string;
   let originalArchonHome: string | undefined;
+  let indexSpy: Mock<typeof bundleInventory.readBundleIndex>;
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'archon-bundled-script-'));
     target = join(root, 'empty-target');
@@ -87,8 +89,10 @@ describe('pack shared modules across source and binary distributions (#3251)', (
     process.env.ARCHON_HOME = join(root, 'home');
     packs.example = fixture;
     binary = true;
+    indexSpy = spyOn(bundleInventory, 'readBundleIndex').mockResolvedValue(['example']);
   });
   afterEach(async () => {
+    indexSpy.mockRestore();
     if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = originalArchonHome;
     await removeTempTree(root);
@@ -96,7 +100,12 @@ describe('pack shared modules across source and binary distributions (#3251)', (
 
   it('runs identical Bun and Python sources from project, global, bundled, cache and frozen roots', async () => {
     const source = join(root, 'authoring');
-    const roots = { ...liveSourceRoots(source), bundledWorkflows: join(root, 'bundled-source') };
+    const roots = {
+      ...liveSourceRoots(source),
+      bundledWorkflows: join(root, 'bundled-source'),
+      bundledCommands: join(root, 'bundled-commands', 'defaults'),
+    };
+    await mkdir(roots.bundledCommands, { recursive: true });
     for (const workflows of [
       join(source, '.archon', 'workflows'),
       roots.globalWorkflows,
@@ -106,6 +115,12 @@ describe('pack shared modules across source and binary distributions (#3251)', (
         const destination = join(workflows, 'example', path);
         await mkdir(dirname(destination), { recursive: true });
         await writeFile(destination, content);
+      }
+      for (const workflow of ['first', 'second']) {
+        await writeFile(
+          join(workflows, 'example', workflow, `${workflow}.yaml`),
+          `name: ${workflow}\ndescription: shared module fixture\nnodes:\n  - id: work\n    prompt: work\n`
+        );
       }
     }
     const before = await treeContents(root);

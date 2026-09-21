@@ -58,6 +58,18 @@ export class RunLiveOwnerStopUnavailableError extends Error {
   }
 }
 
+/**
+ * Another live process already owns this run's endpoint. Thrown where ownership is
+ * claimed, so a caller that raced another owner can stop instead of dying on a
+ * string it had to match.
+ */
+export class RunLiveOwnerAlreadyOwnedError extends Error {
+  constructor(readonly endpointPath: string) {
+    super(`Run live-owner endpoint is already owned: ${endpointPath}`);
+    this.name = 'RunLiveOwnerAlreadyOwnedError';
+  }
+}
+
 function endpointToken(runId: string): string {
   return createHash('sha256').update(runId).digest('hex').slice(0, 32);
 }
@@ -150,7 +162,7 @@ async function listenWithoutReplacingOwner(server: Server, path: string): Promis
   }
 
   if (await canConnectToRunLiveOwner(path)) {
-    throw new Error(`Run live-owner endpoint is already owned: ${path}`);
+    throw new RunLiveOwnerAlreadyOwnedError(path);
   }
 
   // A crashed Unix owner can leave a socket pathname behind. Refusal, not age,
@@ -168,13 +180,13 @@ async function acquireOwnerLock(runId: string, endpointPath: string): Promise<nu
   }
 
   if (await canConnectToRunLiveOwner(endpointPath)) {
-    throw new Error(`Run live-owner endpoint is already owned: ${endpointPath}`);
+    throw new RunLiveOwnerAlreadyOwnedError(endpointPath);
   }
   // The lock is created immediately before listen. Give that startup window one
   // chance to become reachable before treating both paths as crash residue.
   await new Promise<void>(resolve => setTimeout(resolve, STARTUP_RECHECK_MS));
   if (await canConnectToRunLiveOwner(endpointPath)) {
-    throw new Error(`Run live-owner endpoint is already owned: ${endpointPath}`);
+    throw new RunLiveOwnerAlreadyOwnedError(endpointPath);
   }
 
   rmSync(lockPath, { force: true });

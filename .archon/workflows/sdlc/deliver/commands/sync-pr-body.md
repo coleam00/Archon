@@ -28,10 +28,12 @@ recorded number as the selector for every `gh` read or edit.
    every claim that is still accurate. Do not rewrite from scratch, do not add
    sections, and do not narrate the correction history or this sync.
 4. When nothing is falsified, change nothing.
-   One exception to "add no sections": if `$ARTIFACTS_DIR/red-causes.json` records
-   a red the body does not already disclose, add that disclosure — cause and its
-   evidence from `$ARTIFACTS_DIR/implementation.md`. A correction round can go red after the body
-   was written, and a reviewer must not have to discover that from a red badge.
+   One exception to "add no sections": the gates record red they let through as
+   typed artifacts. Read every `$ARTIFACTS_DIR/nodes/*.meta.json` whose `outputType`
+   is `green-gate` and the `.md` beside it; any with a non-empty `red_cause` that the
+   body does not already disclose gets that disclosure — its `stage`, `red_cause`, and
+   `summary`. A correction round or the project gate can go red after the body was
+   written, and a reviewer must not have to discover that from a red badge.
 5. After an edit, read the body back (`gh pr view`) and confirm it carries your
    corrections.
 

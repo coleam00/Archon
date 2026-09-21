@@ -154,13 +154,15 @@ describe('mapWorkflowEventRow', () => {
     expect(e).toMatchObject({ type: 'dag_node', status: 'running' });
   });
 
-  test('node_skipped_prior_success → dag_node skipped (hit on every resume)', () => {
+  test('node_skipped_prior_success → dag_node completed (hit on every resume)', () => {
     const e = JSON.parse(
       mapWorkflowEventRow(
         row({ event_type: 'node_skipped_prior_success', step_name: 'plan' })
       ) as string
     );
-    expect(e).toMatchObject({ type: 'dag_node', status: 'skipped', nodeId: 'plan' });
+    expect(e).toMatchObject({ type: 'dag_node', status: 'completed', nodeId: 'plan' });
+    expect(e).not.toHaveProperty('reason');
+    expect(e).not.toHaveProperty('cause');
   });
 
   test('approval_requested → workflow_status paused with approval', () => {

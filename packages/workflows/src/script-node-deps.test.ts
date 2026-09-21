@@ -25,6 +25,7 @@ mock.module('@archon/git', () => ({
 // --- Mock logger (MUST come before module-under-test imports) ---
 
 const mockLogFn = mock(() => {});
+let testDir: string;
 const mockLogger = {
   info: mockLogFn,
   warn: mockLogFn,
@@ -41,7 +42,9 @@ mock.module('@archon/paths', () => ({
     if (folder) paths.unshift(folder);
     return paths;
   },
-  getDefaultCommandsPath: () => '/nonexistent/defaults',
+  // This fixture has project scripts and no installed bundled source tree.
+  getDefaultCommandsPath: () => join(testDir, 'absent-bundle', 'commands', 'defaults'),
+  getDefaultWorkflowsPath: () => join(testDir, 'absent-bundle', 'workflows', 'defaults'),
 }));
 
 // --- Imports (after all mock.module calls) ---
@@ -272,8 +275,6 @@ function dagOptions(overrides: DagOptionsOverrides): ExecuteDagWorkflowOptions {
 }
 
 describe('script node deps field — command construction', () => {
-  let testDir: string;
-
   beforeEach(async () => {
     testDir = join(
       tmpdir(),

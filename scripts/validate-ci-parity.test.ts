@@ -13,9 +13,8 @@
  * workflows are excluded because they run maintainer automation against a fork's head rather
  * than checks a contributor can reproduce.
  *
- * Text scanning, not YAML parsing: the repository has no YAML dependency at the root, and
- * `scripts/bun-version-consistency.test.ts` and `scripts/publish-triggers.test.ts` already read
- * these files the same way.
+ * Bun parses the workflow trigger so comments and step text cannot make a non-PR workflow look
+ * like a gate. Step bodies are scanned as text because the command is the shell program itself.
  */
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -70,20 +69,25 @@ interface WorkflowCommand {
   command: string;
 }
 
+function hasPullRequestTrigger(content: string): boolean {
+  const parsed: unknown = Bun.YAML.parse(content);
+  if (typeof parsed !== 'object' || parsed === null || !('on' in parsed)) return false;
+
+  const trigger = parsed.on;
+  if (trigger === 'pull_request') return true;
+  if (Array.isArray(trigger)) return trigger.includes('pull_request');
+  return typeof trigger === 'object' && trigger !== null && 'pull_request' in trigger;
+}
+
 /** Workflows that gate a pull request. `pull_request_target` is deliberately not one. */
 function pullRequestWorkflows(): { name: string; content: string }[] {
-  return (
-    readdirSync(WORKFLOW_DIR)
-      .filter(name => name.endsWith('.yml') || name.endsWith('.yaml'))
-      .map(name => ({
-        name,
-        content: readFileSync(resolve(WORKFLOW_DIR, name), 'utf8').replace(/\r\n/g, '\n'),
-      }))
-      // Matches the key at any indentation and inside a flow list (`on: [push, pull_request]`),
-      // so a future workflow cannot slip past this test by writing its trigger another way. A
-      // comment line starts with `#`, so prose mentioning the trigger does not match.
-      .filter(({ content }) => /(?:^\s*|[[,]\s*)pull_request(?![_A-Za-z])/m.test(content))
-  );
+  return readdirSync(WORKFLOW_DIR)
+    .filter(name => name.endsWith('.yml') || name.endsWith('.yaml'))
+    .map(name => ({
+      name,
+      content: readFileSync(resolve(WORKFLOW_DIR, name), 'utf8').replace(/\r\n/g, '\n'),
+    }))
+    .filter(({ content }) => hasPullRequestTrigger(content));
 }
 
 /** Every `run:` step body, inline or block scalar. */
@@ -147,6 +151,13 @@ function gatedIds(command: string): string[] {
 }
 
 describe('validate covers the pull-request gates', () => {
+  test('workflow discovery reads trigger syntax rather than arbitrary prose', () => {
+    expect(hasPullRequestTrigger('on:\n  pull_request:\n')).toBe(true);
+    expect(hasPullRequestTrigger('on: [push, pull_request]\n')).toBe(true);
+    expect(hasPullRequestTrigger('on: pull_request\n')).toBe(true);
+    expect(hasPullRequestTrigger('on: push\njobs:\n  note: pull_request\n')).toBe(false);
+  });
+
   test('every Bun command in a PR-gating workflow runs through validate or is declared', () => {
     const undeclared = workflowBunCommands()
       .filter(

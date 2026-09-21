@@ -52,6 +52,7 @@ import type { WorkflowDefinition } from './schemas/workflow';
 import type { DagNode, IncludeDirective, BindingDirective } from './schemas';
 import type { JsonValue } from './output-ref';
 import * as bundledDefaults from './defaults/bundled-defaults';
+import { readBundleIndex } from './defaults/bundle-inventory';
 import { parsePackagedResourceReference } from './packaged-workflow';
 import { discoverScriptsForCwd } from './script-discovery';
 
@@ -3022,8 +3023,8 @@ nodes:
     });
 
     it('should still reject unknown $nodeId.output refs outside code', async () => {
-      // Stripping fenced/inline code must not weaken validation of real refs
-      // that appear in prose outside any code marker.
+      // The scan reads the body verbatim, so a real (unknown) ref in prose and a
+      // fenced example are both live; the prose one is reported first.
 
       await writeWorkflowFile(
         testDir,
@@ -6991,6 +6992,10 @@ nodes:
       const tmp = await mkdtemp(join(tmpdir(), 'archon-legacy-'));
       const defaultsDir = join(tmp, 'bundled', 'defaults', 'legacy');
       await mkdir(defaultsDir, { recursive: true });
+      for (const pack of await readBundleIndex()) {
+        await mkdir(join(tmp, 'bundled', pack), { recursive: true });
+      }
+      await mkdir(join(tmp, 'bundled-commands', 'defaults'), { recursive: true });
       await writeFile(
         join(defaultsDir, 'legacy-wf.yaml'),
         [
@@ -7011,6 +7016,7 @@ nodes:
       return {
         ...roots,
         bundledWorkflows: join(tmp, 'bundled'),
+        bundledCommands: join(tmp, 'bundled-commands', 'defaults'),
         globalWorkflows: join(tmp, '.empty-global'),
       };
     };
