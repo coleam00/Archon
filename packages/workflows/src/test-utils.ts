@@ -117,3 +117,11 @@ export async function withObservableCapturedSource<T>(
     if (held && !adopted) calls.push(`reclaim:${held}`);
   }
 }
+
+/** Run the actual DAG only when an integration test asks for it. */
+export async function executeTestDagWorkflow(
+  options: Parameters<typeof import('./dag-executor').executeDagWorkflow>[0]
+): ReturnType<typeof import('./dag-executor').executeDagWorkflow> {
+  const { executeDagWorkflow } = await import('./dag-executor');
+  return executeDagWorkflow(options);
+}

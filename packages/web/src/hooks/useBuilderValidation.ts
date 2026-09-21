@@ -156,7 +156,9 @@ export function getDebouncedIssues(nodes: DagFlowNode[], edges: Edge[]): Validat
   // therefore go unflagged in this panel and flagged in the console. That gap
   // predates this change and is left open deliberately: the legacy builder is
   // slated for deletion, so the honest note is worth more than a wider scan on
-  // doomed code. (The console also strips code fences first; no equivalent here.)
+  // doomed code. Within the fields it does read, this scan matches the engine
+  // and the console builder: raw text, so a ref inside Markdown code spans
+  // counts (#2632).
   for (const node of nodes) {
     const textsToScan: string[] = [];
     if (node.data.when) textsToScan.push(node.data.when);

@@ -1416,10 +1416,10 @@ export class ClaudeProvider implements IAgentProvider {
    * Send a query to Claude and stream responses.
    * Orchestrates option building, nodeConfig translation, streaming, and retry.
    */
-  // TODO(#1135): Pre-spawn env-leak gate was removed during provider extraction.
-  // Caller-side enforcement (orchestrator, dag-executor) is tracked in #1135.
-  // Providers must NOT implement security gates — the platform guarantees safety
-  // before a provider runs.
+  // No security gate lives here on purpose. Env hygiene for a target repo is
+  // structural (the platform strips what must not reach a subprocess before a
+  // provider runs), so a provider that scanned or refused would be a second,
+  // divergent copy of that policy.
   async *sendQuery(
     prompt: string,
     cwd: string,

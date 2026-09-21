@@ -9,6 +9,8 @@ import {
 } from './schemas';
 import { isValidCommandName } from './command-validation';
 
+export const PACK_SHARED_DIRECTORY = '.shared';
+
 const PACKAGED_RESOURCE_PREFIX = '__archon_pack__';
 const OWNER_SEPARATOR = ':';
 const RESOURCE_SEPARATOR = '::';

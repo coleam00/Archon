@@ -3,7 +3,10 @@ name: Deploy Docs
 on:
   push:
     branches: [main]
-    paths: ['packages/docs-web/**']
+    paths:
+      - 'packages/docs-web/**'
+      # The community-provider page renders this file's contents, so changing it changes the site.
+      - 'packages/providers/src/community/_template/capabilities.ts'
   workflow_dispatch:
 
 env:

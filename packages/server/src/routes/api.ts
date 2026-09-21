@@ -2,6 +2,8 @@
  * REST API routes for the Archon Web UI.
  * Provides conversation, codebase, and SSE streaming endpoints.
  */
+
+import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';
@@ -77,7 +79,6 @@ import {
   getHomeWorkflowsPath,
   getRunArtifactsDirForRoot,
   resolveRunStorageRoot,
-  isInside,
   isInsideArchonHome,
   getArchonHome,
   isDocker,
@@ -423,6 +424,13 @@ function resolveRunArtifactDir(
 ): string | null {
   const root = resolveRunStorageRoot(run, codebase);
   return root ? getRunArtifactsDirForRoot(root, runId) : null;
+}
+
+function isPathInside(parent: string, candidate: string): boolean {
+  const normalisedParent = normalize(parent);
+  const normalisedCandidate = normalize(candidate);
+  const parentPrefix = normalisedParent.endsWith(sep) ? normalisedParent : normalisedParent + sep;
+  return normalisedCandidate === normalisedParent || normalisedCandidate.startsWith(parentPrefix);
 }
 
 // =========================================================================
@@ -4256,6 +4264,7 @@ export function registerApiRoutes(
           worker_platform_id: workerPlatformId,
           parent_platform_id: parentPlatformId,
           conversation_platform_id: conversationPlatformId ?? null,
+          terminal_record: getTerminalRecord(run.status, events),
         },
         events,
       });
@@ -4805,28 +4814,22 @@ export function registerApiRoutes(
     const filePath = join(artifactDir, filename);
 
     // Final safety check: ensure resolved path stays within artifact directory
-    if (!isInside(artifactDir, filePath)) {
+    if (!isPathInside(artifactDir, filePath)) {
       getLog().warn({ runId, filename, filePath, artifactDir }, 'artifacts.path_escape_blocked');
       return apiError(c, 400, 'Invalid filename');
     }
 
-    // #3160 — the lexical check above rejects `..` segments in the request
-    // path, but readFile follows symlinks. Resolve the real path of the
-    // artifact directory and of the file target, then re-check containment
-    // on the real paths and read from the resolved path. This protects stable
-    // symlinks; it does not make containment and reading atomic against
-    // concurrent filesystem changes. An escaping symlink is refused with the
-    // same 404 response as a missing file.
+    // readFile follows symlinks, so contain the resolved target within the
+    // resolved artifact directory and read that checked path (#3160).
     let realArtifactDir: string;
     try {
       realArtifactDir = await realpath(artifactDir);
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-        getLog().error({ err, runId, artifactDir }, 'artifacts.read_failed');
-        return apiError(c, 500, 'Failed to read artifact file');
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return apiError(c, 404, 'Artifact file not found');
       }
-      // The file realpath below also maps a missing artifact directory to 404.
-      realArtifactDir = artifactDir;
+      getLog().error({ err, runId, artifactDir }, 'artifacts.read_failed');
+      return apiError(c, 500, 'Failed to read artifact file');
     }
     let realFilePath: string;
     try {
@@ -4838,7 +4841,7 @@ export function registerApiRoutes(
       getLog().error({ err, runId, filename }, 'artifacts.read_failed');
       return apiError(c, 500, 'Failed to read artifact file');
     }
-    if (!isInside(realArtifactDir, realFilePath)) {
+    if (!isPathInside(realArtifactDir, realFilePath)) {
       getLog().warn(
         { runId, filename, realFilePath, realArtifactDir },
         'artifacts.symlink_escape_blocked'

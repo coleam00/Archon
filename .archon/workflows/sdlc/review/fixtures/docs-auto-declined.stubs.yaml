@@ -13,6 +13,7 @@ synthesize:
   ready: true
   action: none
   findings_summary: "stub: clean, docs lens skipped"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 fixture:
   expect: completed
   reached: [code, seams, simplify, tests]

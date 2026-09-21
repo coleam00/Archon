@@ -48,12 +48,45 @@ Despite older docs suggesting otherwise, positional `$1`…`$9` are **not substi
 
 ## Node Output Details (DAG Only)
 
-`$nodeId.output` resolves to the full text output of the upstream node. If the node used `output_format:` (structured output), the output is the JSON-stringified validated result. Bash/script output is stdout with the trailing newline trimmed. Loop/loop_group output is the final iteration's output with completion-signal tags stripped. A gate with authored `approval.decisions` always outputs JSON `{decision, text}`; read its fields as `$gate.output.decision` and `$gate.output.text`. A legacy gate without authored decisions keeps the old behavior: its approval comment is output only when `capture_response: true`, otherwise `''`. Unknown or skipped producers resolve to an empty string (with a warning logged).
+`$nodeId.output` resolves to the full text output of the upstream node. If the node used `output_format:` (structured output), the output is the JSON-stringified validated result. Bash/script output without `output_format` is stdout with the trailing newline trimmed; with it, stdout is certified as JSON under the same result contract (see `node-reference.md` → Result contracts). Loop/loop_group output is the final iteration's output with completion-signal tags stripped. A gate with authored `approval.decisions` always outputs JSON `{decision, text}`; read its fields as `$gate.output.decision` and `$gate.output.text`. A legacy gate without authored decisions keeps the old behavior: its approval comment is output only when `capture_response: true`, otherwise `''`. Unknown or skipped producers resolve to an empty string (with a warning logged).
 
 `$nodeId.output.field` is **strict** (no-silent-drop) — it either resolves or **fails the consuming node**:
 
 - Producer has `output_format`: a field **declared** in the schema resolves to its value, or `''` if absent (declared-optional). A field **not in the schema** fails the consumer (typo protection).
-- Schemaless producer (bash/script/prose): the output must be a JSON object containing the key — anything else (non-JSON output, missing key) fails the consumer.
+- Schemaless producer (no `output_format` on the producing node): the output must be a JSON object containing the key — anything else (non-JSON output, missing key) fails the consumer.
 - Producer skipped or pending: fails the consumer — guard the reference with `when:` or a permissive `trigger_rule`.
 
 Values: strings pass through; numbers/booleans stringify; objects/arrays are JSON-stringified.
+
+For `workflow:` results, these field rules use the child's `returns:` node's
+schema, whose field names travel with the value and survive cold resume. The
+caller cannot add or narrow the contract. An `include:` alias uses its selected
+producer directly after flattening.
+
+### Artifact pointers
+
+Return a small JSON value containing a pointer when a machine consumer needs a
+file result. The reserved shape is:
+
+```json
+{"type":"archon_artifact","run_id":"<producing run id>","path":"review/report.md"}
+```
+
+Use the actual `WORKFLOW_ID` value for `run_id`, not the literal variable name.
+The producer must first write the file under its `$ARTIFACTS_DIR`. Sibling keys
+on the pointer are allowed. Before persisting the result, the engine validates
+tagged pointers against the producing run: its own run id, a nonempty relative
+path with no `..` segment or NUL, lexical containment, and an existing regular
+file. Absolute/escaping paths, directories, missing files, and another run's id
+fail the producer.
+
+A `workflow:` parent and fan-out aggregate relay pointers unchanged without
+revalidating them against the parent. Events and resume retain the run id and
+relative path. The engine does not expand the pointer into an absolute path,
+read its contents into a prompt, or provide an in-workflow resolver. For prompt
+handoffs inside the producing run, keep using `$ARTIFACTS_DIR/<path>`.
+
+The reader owns authorization, run reachability, and realpath containment at
+read time. Producer validation is not a read-side symlink guarantee; the artifact
+API's outstanding realpath check is tracked in #3160. Full semantics live in
+the repository's `reference/variables.md` → Artifact pointers in a result.

@@ -49,11 +49,33 @@ returns: synthesize
 outcome_field: ready
 
 nodes:
+  # A continuation round is one whose caller handed it the prior round's report.
+  # Deliver's rounds pass the path of a pointer this workflow's own synthesize
+  # node certified, but `prior_report` is also a declared input an outside
+  # caller can fill with a path from an earlier run, which no pointer covers.
+  # That boundary is checked here, once, because a continuation that cannot
+  # read the report it continues from would review nothing and say it reviewed
+  # everything. The node also turns the input into the routable fact the lenses
+  # gate on: an include's inputs are substituted as text at load time and cannot
+  # be compared in a `when:`.
   - id: mode
-    script: resolve-review-mode
-    runtime: uv
+    script: |
+      const prior = (process.env.INPUTS_PRIOR_REPORT ?? '').trim();
+      const exists = prior !== '' && (() => { try { return require('node:fs').statSync(prior).isFile(); } catch { return false; } })();
+      if (prior !== '' && !exists) {
+        console.error(`Previous review report does not exist: ${prior}`);
+        process.exitCode = 1;
+      } else {
+        console.log(JSON.stringify({ continuation: prior !== '' }));
+      }
+    runtime: bun
     with:
       prior_report: "$INPUTS.prior_report"
+    output_format:
+      type: object
+      properties:
+        continuation: { type: boolean }
+      required: [continuation]
 
   - id: scope
     command: review-scope
@@ -149,10 +171,11 @@ nodes:
   # Claude Code, Codex, and Pi. Bundled defaults stay on that shared capability
   # floor even where the configured provider can resume a named upstream session.
   #
-  # v1 note: adversarial per-finding verification happens inside this node's
-  # prompt. When in-parent runtime fan-out lands, a verify stage slots in
-  # between the lenses and this node without changing either side's contract —
-  # the findings files are the declared boundary.
+  # Adversarial per-finding verification happens inside this node's prompt. A
+  # separate verify stage between the lenses and this node is now expressible and
+  # would not change either side's contract — the findings files are the declared
+  # boundary — but nothing has measured it as better than the in-prompt pass, so
+  # it stays here until something does.
   - id: synthesize
     command: review-synthesize
     context: fresh
@@ -168,4 +191,14 @@ nodes:
           enum: [none, correct, replan]
         findings_summary:
           type: string
-      required: [ready, action, findings_summary]
+        # The report the verdict rests on, as a certified artifact pointer: the
+        # engine refuses the verdict at this node when the file is missing or
+        # empty, so a caller that continues over it never has to check.
+        report:
+          type: object
+          properties:
+            type: { type: string, enum: [archon_artifact] }
+            run_id: { type: string }
+            path: { type: string, enum: [review/report.md] }
+          required: [type, run_id, path]
+      required: [ready, action, findings_summary, report]

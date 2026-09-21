@@ -157,6 +157,12 @@ async function checkPointer(
   if (!stats.isFile()) {
     return `${where} does not refer to a regular file`;
   }
+  // A pointer is evidence the producer offers for its result. An empty file carries
+  // none, so it is refused here rather than by every consumer that would otherwise
+  // have to re-check the one thing the contract already promised.
+  if (stats.size === 0) {
+    return `${where} refers to an empty file; a pointer must name evidence`;
+  }
   return null;
 }
 

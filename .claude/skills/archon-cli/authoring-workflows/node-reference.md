@@ -99,6 +99,52 @@ only; anything with branching is a script node.
 Prefer named script files over inline bodies. Python (`runtime: uv`) preferred,
 TypeScript (`runtime: bun`) fine. `deps:` adds uv dependencies.
 
+### Result contracts — the producer owns the schema
+
+Use the producing node's `output_format` for a JSON result. `returns:` selects
+that node; it does not declare another schema. No value-shape declaration belongs
+on `inputs:` or `returns:`.
+
+```yaml
+name: certified-result
+description: Certify a deterministic result and bind its field downstream
+returns: build
+nodes:
+  - id: build
+    bash: printf '%s' '{"ready":true}'
+    output_format:
+      type: object
+      properties:
+        ready: {type: boolean}
+      required: [ready]
+  - id: consume
+    depends_on: [build]
+    with:
+      ready: "$build.output.ready"
+    runtime: uv
+    script: |
+      import os
+      print(os.environ["INPUTS_READY"])
+```
+
+A `bash:` or `script:` node with `output_format` must print one strict JSON
+document satisfying that schema. Send diagnostics to stderr. There is no JSON
+repair or reask; a contract violation fails the node and is not retried, even
+with `retry:`. A schema that cannot compile is a load error. Without
+`output_format`, exec stdout remains raw text. Named scripts use the same rule;
+the small bash example above keeps the handoff visible.
+
+An `include:` alias exposes the selected producer's contract through flattening.
+A `workflow:` caller receives the child's selected result and declared field
+names, persisted for cold resume. Do not repeat the schema on the caller:
+`output_format` on a `workflow:` node is a load error; on `include:` it is ignored
+with a warning. A schemaless child stays schemaless. Fan-out returns an ordered
+array of item values; consume the whole aggregate, not a field on the array.
+
+For field-access and file-pointer rules, read `variables.md` → Node Output Details and
+Artifact pointers. The repository's `guides/authoring-workflows.md` → Result
+contracts gives the full composition examples.
+
 ### loop — iterate ONE AI job
 
 ```yaml

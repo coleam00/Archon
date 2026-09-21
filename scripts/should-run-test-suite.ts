@@ -15,6 +15,9 @@ const EMPTY_GIT_SHA = '0000000000000000000000000000000000000000';
  *     compiled into the CLI itself (`check:bundled-skill`).
  *   - `provider-capabilities.md` is generated from the providers' `capabilities.ts`
  *     (`check:capability-matrix`), and lives under the docs site without being prose.
+ *   - `adding-a-community-provider.mdx` is read by
+ *     `packages/providers/src/community/_template/capabilities.test.ts`, which asserts the page
+ *     renders the capabilities template by reference instead of a hand-copied snapshot.
  *   - The docs manifest is copied by the Docker dependency layer.
  */
 const BUILD_INPUTS = [
@@ -22,6 +25,7 @@ const BUILD_INPUTS = [
   '.archon/workflows/',
   '.claude/skills/',
   'packages/docs-web/src/content/docs/reference/provider-capabilities.md',
+  'packages/docs-web/src/content/docs/contributing/adding-a-community-provider.mdx',
   'packages/docs-web/package.json',
 ];
 

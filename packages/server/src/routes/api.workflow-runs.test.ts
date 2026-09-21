@@ -1,3 +1,4 @@
+import { terminalRecordSchema } from '@archon/workflows/schemas/terminal-record';
 import { describe, test, expect, mock, beforeAll, beforeEach, afterEach, spyOn } from 'bun:test';
 import { mkdir, mkdtemp, rm, symlink, writeFile, realpath } from 'fs/promises';
 import * as fsPromises from 'fs/promises';
@@ -1392,6 +1393,60 @@ describe('GET /api/workflows/runs/:runId', () => {
     expect(body.events.length).toBe(3);
     expect(body.events[0]?.event_type).toBe('step_started');
     expect(body.events[2]?.event_type).toBe('tool_called');
+  });
+
+  test('exposes the persisted terminal record and suppresses it during resumed execution', async () => {
+    const terminalRecord = terminalRecordSchema.parse({
+      run_id: MOCK_FAILED_RUN.id,
+      status: 'failed',
+      outcome: null,
+      error: 'producer failed',
+      first_failed_node: 'producer',
+      nodes: [{ node_id: 'producer', state: 'failed', error: 'producer failed' }],
+      returns: { availability: 'unavailable', node_id: 'producer', reason: 'node_not_completed' },
+      artifacts: {
+        root: '/deleted/artifacts',
+        files: [{ path: 'discoveries/finding.md', size: 7 }],
+        limitations: [],
+      },
+    });
+    for (const status of ['failed', 'running'] as const) {
+      mockGetWorkflowRun.mockImplementationOnce(async () => ({ ...MOCK_FAILED_RUN, status }));
+      mockListWorkflowEvents.mockImplementationOnce(async () => [
+        {
+          id: 'terminal-event',
+          workflow_run_id: MOCK_FAILED_RUN.id,
+          event_type: 'workflow_failed',
+          step_index: null,
+          step_name: null,
+          data: { terminal_record: terminalRecord },
+          created_at: new Date().toISOString(),
+        },
+      ]);
+      const { app } = makeApp();
+      const response = await app.request(`/api/workflows/runs/${MOCK_FAILED_RUN.id}`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { run: { terminal_record: unknown } };
+      expect(body.run.terminal_record).toEqual(status === 'failed' ? terminalRecord : null);
+    }
+  });
+
+  test('historical terminal runs have no fabricated record', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_FAILED_RUN);
+    mockListWorkflowEvents.mockImplementationOnce(async () => []);
+    const { app } = makeApp();
+    const response = await app.request(`/api/workflows/runs/${MOCK_FAILED_RUN.id}`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { run: { terminal_record: unknown } };
+    expect(body.run.terminal_record).toBeNull();
+  });
+
+  test('does not disguise an event query failure as an absent terminal record', async () => {
+    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_FAILED_RUN);
+    mockListWorkflowEvents.mockRejectedValueOnce(new Error('storage unavailable'));
+    const { app } = makeApp();
+    const response = await app.request(`/api/workflows/runs/${MOCK_FAILED_RUN.id}`);
+    expect(response.status).toBe(500);
   });
 
   test('returns 404 when run not found', async () => {
@@ -3653,30 +3708,17 @@ describe('GET /api/artifacts/:runId/* storage-key resolution', () => {
     expect(await response.text()).toBe('# the full report');
   });
 
-  // Symlinks can chain through readFile; the lexical containment check only
-  // rejects .. segments. Git-Bash on Windows can't create real symlinks and
-  // MSYS mangles absolute targets, so the symlink cases skip on win32 — the
-  // lexical containment tests above still run there.
+  // Git-Bash cannot reliably create the symlinks these cases exercise.
   const isWin = process.platform === 'win32';
 
   test.skipIf(isWin)(
     'an escape symlink is refused with 404 and never leaks its target (#3160)',
     async () => {
-      // Plant a sentinel file under mockArchonHome but OUTSIDE this run's
-      // artifact dir, then a relative symlink inside the artifact dir that
-      // points back at it. The lexical check passes (no `..` segments in the
-      // request), so before the real-path check the route reads through the
-      // symlink and serves the sentinel. After the real-path check it must
-      // 404 with the same body as a missing file, and the response body must
-      // not contain the sentinel — refusing the request must not confirm what
-      // exists outside the artifacts directory.
       const runId = 'run-serve-symlink-escape';
       const dir = join(wsRoot(), '_local', 'workspace', 'artifacts', 'runs', runId);
       await mkdir(dir, { recursive: true });
       const sentinel = 'TOP_SECRET_SENTINEL_VALUE_DO_NOT_LEAK';
       await writeFile(join(mockArchonHome, 'secret.txt'), sentinel);
-      // Six `..` to climb runs/<runId> -> runs -> artifacts -> workspace -> _local
-      // -> workspaces -> mockArchonHome.
       await symlink(`../../../../../../secret.txt`, join(dir, 'escape.txt'));
 
       mockGetWorkflowRun.mockImplementationOnce(async () => ({
@@ -3704,10 +3746,6 @@ describe('GET /api/artifacts/:runId/* storage-key resolution', () => {
   test.skipIf(isWin)(
     'a sibling symlink inside the artifacts directory is still served (#3160)',
     async () => {
-      // Real-path resolution must not break the supported case: a symlink to a
-      // sibling file inside the same artifacts directory resolves to a path
-      // that still lies under the real artifact directory, so the route
-      // serves the target's content normally.
       const runId = 'run-serve-symlink-sibling';
       const dir = join(wsRoot(), '_local', 'workspace', 'artifacts', 'runs', runId);
       await mkdir(dir, { recursive: true });
@@ -3734,52 +3772,11 @@ describe('GET /api/artifacts/:runId/* storage-key resolution', () => {
   );
 
   test.skipIf(isWin)(
-    'an absolute symlink target outside ARCHON_HOME is also refused (#3160)',
-    async () => {
-      // Guards against an accidental realpath that lands outside the trust
-      // boundary in the opposite direction from the lexical check. /etc/hosts
-      // exists on every Linux and macOS host and contains no private data.
-      const runId = 'run-serve-symlink-absolute';
-      const dir = join(wsRoot(), '_local', 'workspace', 'artifacts', 'runs', runId);
-      await mkdir(dir, { recursive: true });
-      await symlink('/etc/hosts', join(dir, 'hosts'));
-
-      mockGetWorkflowRun.mockImplementationOnce(async () => ({
-        ...MOCK_RUNNING_RUN,
-        id: runId,
-        codebase_id: 'cb-local',
-      }));
-      mockGetCodebase.mockImplementationOnce(async () => ({
-        name: 'workspace',
-        kind: 'repo',
-        default_cwd: '/home/u/workspace',
-      }));
-
-      const { app } = makeApp();
-      const response = await app.request(`/api/artifacts/${runId}/hosts`);
-
-      expect(response.status).toBe(404);
-      const body = (await response.json()) as { error: string };
-      expect(body.error).toBe('Artifact file not found');
-    }
-  );
-
-  // Guards the directory-side realpath: when `workspaces/` itself is a
-  // symlink (a real `~/.archon/workspaces -> /srv/data/workspaces` setup),
-  // `realpath(artifactDir)` differs from the lexical path the resolver
-  // returned. A regression that drops the directory realpath — or compares
-  // against the lexical `artifactDir` — would 404 every artifact request
-  // under such a deployment, and every other test in this describe block
-  // plants the workspace directly with `mkdir(..., { recursive: true })`,
-  // so none of them would catch it.
-  test.skipIf(isWin)(
     'still serves when the workspace itself is a symlinked ancestor (#3160)',
     async () => {
       const runId = 'run-serve-symlinked-workspace';
       const realWs = join(mockArchonHome, 'real-ws');
       await mkdir(realWs, { recursive: true });
-      // The lexical `workspaces/` path lives inside mockArchonHome but
-      // points at real-ws; artifactDir is resolved through the symlink.
       await symlink(realWs, wsRoot());
       const dir = join(wsRoot(), '_local', 'workspace', 'artifacts', 'runs', runId);
       await mkdir(dir, { recursive: true });

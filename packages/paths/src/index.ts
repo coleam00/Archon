@@ -40,7 +40,6 @@ export {
   resolveProjectStorageKey,
   getProjectStoragePaths,
   getStoragePathsForRoot,
-  isInside,
   isInsideArchonHome,
   resolveRunStorageRoot,
   getRunArtifactsDirForKey,
