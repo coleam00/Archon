@@ -277,7 +277,7 @@ describe('node-event-write', () => {
   });
 
   describe('derivation mappings over NodeStateEventType', () => {
-    it('node_skipped_prior_success folds to node_skipped emitter event', () => {
+    it('node_skipped_prior_success derives a distinct emitter event type', () => {
       const event: NodeStateEventInput = {
         workflow_run_id: 'run-prior',
         event_type: 'node_skipped_prior_success',
@@ -294,11 +294,26 @@ describe('node-event-write', () => {
 
       const emitter = deriveEmitterEvent(step('cached-step'), event);
       expect(emitter).toEqual({
-        type: 'node_skipped',
+        type: 'node_skipped_prior_success',
         runId: 'run-prior',
         nodeId: 'cached-step',
         nodeName: 'cached-step',
-        reason: 'prior_success',
+      });
+    });
+
+    it('a node_skipped row carrying reason prior_success also derives the distinct emitter event type', () => {
+      const event: NodeStateEventInput = {
+        workflow_run_id: 'run-legacy',
+        event_type: 'node_skipped',
+        step_name: 'cached-step',
+        data: { reason: 'prior_success' },
+      };
+
+      expect(deriveEmitterEvent(step('cached-step'), event)).toEqual({
+        type: 'node_skipped_prior_success',
+        runId: 'run-legacy',
+        nodeId: 'cached-step',
+        nodeName: 'cached-step',
       });
     });
 
