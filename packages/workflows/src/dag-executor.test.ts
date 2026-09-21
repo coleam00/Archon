@@ -26839,6 +26839,42 @@ describe('collectStrictSchemaViolations', () => {
     expect(violations[0].nodeId).toBe('inner');
   });
 
+  it("uses the loop_group's resolved provider as the body default", () => {
+    const group = {
+      id: 'g',
+      kind: 'loop_group',
+      provider: 'codex',
+      loop_group: {
+        max_iterations: 1,
+        nodes: [agentNode('inner', { output_format: looseSchema })],
+      },
+    } as unknown as DagNode;
+
+    const violations = collectStrictSchemaViolations([group], 'claude');
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toMatchObject({ provider: 'codex', nodeId: 'inner' });
+  });
+
+  it('lets a body node override the inherited loop_group provider', () => {
+    const group = {
+      id: 'g',
+      kind: 'loop_group',
+      provider: 'codex',
+      loop_group: {
+        max_iterations: 1,
+        nodes: [
+          agentNode('inner', {
+            provider: 'claude',
+            output_format: looseSchema,
+          }),
+        ],
+      },
+    } as unknown as DagNode;
+
+    expect(collectStrictSchemaViolations([group], 'claude')).toEqual([]);
+  });
+
   it('skips loop_group inert output_format', () => {
     const group = {
       id: 'g',

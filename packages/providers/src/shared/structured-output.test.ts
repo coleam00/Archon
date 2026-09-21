@@ -482,6 +482,44 @@ describe('findRequiredPropertyGaps', () => {
     ]);
   });
 
+  test('does not treat schema annotations or a properties map as subschemas', () => {
+    const schema = {
+      type: 'object',
+      properties: {
+        properties: { type: 'string' },
+        config: {
+          type: 'object',
+          properties: { enabled: { type: 'boolean' } },
+          required: ['enabled'],
+          default: { properties: { accidental: {} } },
+          examples: [{ properties: { accidental: {} } }],
+        },
+      },
+      required: ['properties', 'config'],
+      default: { properties: { accidental: {} } },
+      examples: [{ properties: { accidental: {} } }],
+    };
+
+    expect(findRequiredPropertyGaps(schema, 'output_format')).toEqual([]);
+  });
+
+  test('recurses through JSON Schema subschema keywords', () => {
+    const looseObject = { type: 'object', properties: { value: { type: 'string' } } };
+    const schema = {
+      allOf: [looseObject],
+      anyOf: [true, { items: looseObject }],
+      $defs: { nested: looseObject },
+      dependentSchemas: { mode: looseObject },
+    };
+
+    expect(findRequiredPropertyGaps(schema, 'output_format')).toEqual([
+      { schemaPath: 'output_format.allOf[0]', missing: ['value'] },
+      { schemaPath: 'output_format.anyOf[1].items', missing: ['value'] },
+      { schemaPath: 'output_format.dependentSchemas.mode', missing: ['value'] },
+      { schemaPath: 'output_format.$defs.nested', missing: ['value'] },
+    ]);
+  });
+
   test('skips nodes without properties (primitive leafs)', () => {
     const schema = {
       type: 'object',

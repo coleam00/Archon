@@ -10800,8 +10800,9 @@ function visitProviderInvokingNodes(
     if (isIncludeDirective(node) || isExecNode(node) || isHaltNode(node) || isWaitNode(node))
       continue;
     if (isLoopGroupNode(node)) {
-      visit(node, resolve(node));
-      visitProviderInvokingNodes(node.loop_group.nodes, workflowProvider, aiProfile, visit);
+      const groupProvider = resolve(node);
+      visit(node, groupProvider);
+      visitProviderInvokingNodes(node.loop_group.nodes, groupProvider, aiProfile, visit);
       continue;
     }
     if (isGateNode(node)) {

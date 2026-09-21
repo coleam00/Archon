@@ -275,7 +275,49 @@ function collectGaps(
     const missing = Object.keys(properties).filter(key => !required.has(key));
     if (missing.length > 0) out.push({ schemaPath: path, missing });
   }
-  for (const [key, value] of Object.entries(record)) collectGaps(value, `${path}.${key}`, out);
+
+  const collectSchema = (key: string): void => {
+    if (key in record) collectGaps(record[key], `${path}.${key}`, out);
+  };
+  const collectSchemaArray = (key: string): void => {
+    const schemas = record[key];
+    if (!Array.isArray(schemas)) return;
+    schemas.forEach((item, index) => collectGaps(item, `${path}.${key}[${index}]`, out));
+  };
+  const collectSchemaMap = (key: string): void => {
+    const schemas = record[key];
+    if (schemas === null || typeof schemas !== 'object' || Array.isArray(schemas)) return;
+    for (const [name, subschema] of Object.entries(schemas)) {
+      collectGaps(subschema, `${path}.${key}.${name}`, out);
+    }
+  };
+
+  for (const key of [
+    'additionalProperties',
+    'unevaluatedProperties',
+    'propertyNames',
+    'contains',
+    'not',
+    'if',
+    'then',
+    'else',
+    'contentSchema',
+  ]) {
+    collectSchema(key);
+  }
+  if (Array.isArray(record.items)) collectSchemaArray('items');
+  else collectSchema('items');
+  for (const key of ['prefixItems', 'allOf', 'anyOf', 'oneOf']) collectSchemaArray(key);
+  for (const key of [
+    'properties',
+    'patternProperties',
+    'dependentSchemas',
+    'dependencies',
+    '$defs',
+    'definitions',
+  ]) {
+    collectSchemaMap(key);
+  }
   return out;
 }
 
