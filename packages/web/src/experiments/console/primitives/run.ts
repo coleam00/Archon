@@ -86,6 +86,13 @@ export interface Run {
   parentRunId?: string | null;
 }
 
+export function runDetailPath(run: Pick<Run, 'id' | 'projectId'>): string {
+  const runId = encodeURIComponent(run.id);
+  return run.projectId === null
+    ? `/console/r/${runId}`
+    : `/console/p/${encodeURIComponent(run.projectId)}/r/${runId}`;
+}
+
 // Server shapes we read from. These track the real server schema loosely —
 // fields we don't use are omitted. The normalizer defends against missing
 // optional fields.

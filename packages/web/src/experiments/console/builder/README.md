@@ -19,15 +19,16 @@ panel, and read-only YAML preview. It directly represents these node variants:
 - cancel
 
 The builder does not represent include directives, `loop_group` nodes, or
-`workflow` sub-run nodes. Edit workflows that use those forms as YAML. Import
-issues also report fields the current model cannot preserve. Treat the YAML file
-as the authoritative workflow definition and review the preview before saving.
+`workflow` sub-run nodes. Use YAML for workflows that contain those forms.
 
-Project workflows can be created, loaded, validated, renamed, saved, and
-deleted. Bundled workflows open read-only and can be saved as a project override.
-The editor warns about unsaved changes on reload and on its own navigation
-controls. Browser Back and navigation through the project rail do not currently
-run that guard.
+Use the builder to draft new workflows from the supported node forms, validate
+them, and inspect the generated YAML. Editing an existing workflow and relying on
+a load/edit/save round trip is not supported until
+[#3378](https://github.com/coleam00/Archon/pull/3378) and
+[#3379](https://github.com/coleam00/Archon/pull/3379) land. Edit existing
+workflows as YAML. Bundled workflows open read-only. The editor warns about
+unsaved changes on reload and on its own navigation controls. Browser Back and
+navigation through the project rail do not currently run that guard.
 
 ## Ownership
 
@@ -49,13 +50,14 @@ The builder's unit tests focus on pure conversions, validation, serialization,
 history, clipboard, and layout logic. `/console/_preview` provides fixture-backed
 visual examples.
 
-## Round-trip contract
+## Current round-trip limit
 
-Supported fixtures satisfy
-`toWorkflowDefinition(fromWorkflowDefinition(fixture)) === fixture`. The engine
-emits sparse nodes, and the exporter preserves that shape. Canvas positions are
-UI state and never enter workflow YAML.
+The unit fixtures exercise conversion for the builder's supported generated
+shape. They do not prove a lossless round trip for existing authored workflow
+files. The normalized loader can discard authored structure, including fields
+the builder does not represent. Use YAML to edit existing workflows until the
+linked fixes land. Canvas positions are UI state and never enter workflow YAML.
 
-Saving normalizes YAML key order, so a correct save can still produce a textual
-diff. Workflow names are tied to their filenames. Workflows in nested
-`.archon/workflows/` directories cannot be loaded through the single-name route.
+Generated YAML normalizes key order. Workflow names are tied to their filenames.
+Workflows in nested `.archon/workflows/` directories cannot be loaded through
+the single-name route.

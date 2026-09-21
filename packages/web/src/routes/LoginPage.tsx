@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Navigate, useNavigate } from 'react-router';
+import { Navigate, useLocation, useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
+import { consoleReturnDestination } from '@/lib/auth-navigation';
 import { authStatusQuery } from '@/lib/auth-status';
 import { signIn, signUp, useSession } from '@/lib/auth-client';
 
@@ -16,6 +17,8 @@ const inputClassName =
  */
 export function LoginPage(): React.ReactElement {
   const navigate = useNavigate();
+  const location = useLocation();
+  const returnTo = consoleReturnDestination(location.state);
   const { data: session } = useSession();
   const { data: status } = useQuery(authStatusQuery);
 
@@ -30,7 +33,7 @@ export function LoginPage(): React.ReactElement {
   // redirect (not an imperative navigate() in render) so we short-circuit before
   // rendering the form and don't fire a side effect during React's render phase.
   if (session?.user || status?.enabled === false) {
-    return <Navigate to="/" replace />;
+    return <Navigate to={returnTo} replace />;
   }
 
   async function handleSubmit(e: React.FormEvent): Promise<void> {
@@ -46,7 +49,7 @@ export function LoginPage(): React.ReactElement {
         setError(result.error.message ?? 'Authentication failed. Please try again.');
         return;
       }
-      navigate('/', { replace: true });
+      navigate(returnTo, { replace: true });
     } catch {
       setError('Could not reach the server. Please try again.');
     } finally {

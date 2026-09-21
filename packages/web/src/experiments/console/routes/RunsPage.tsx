@@ -12,7 +12,7 @@ import { K, type Scope } from '../store/keys';
 import { useDashboardSSE } from '../lib/sse';
 import { useKeymap, type Binding } from '../lib/keymap';
 import * as skill from '../skills';
-import type { Run } from '../primitives/run';
+import { runDetailPath, type Run } from '../primitives/run';
 import type { RunCounts } from '../skills/runs';
 import type { Project } from '../primitives/project';
 
@@ -377,10 +377,6 @@ export function RunsPage(): ReactElement {
     if (el !== null) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, [selectedRunId]);
 
-  const open = (id: string, projId: string | null): void => {
-    navigate(projId === null ? `/console/r/${id}` : `/console/p/${projId}/r/${id}`);
-  };
-
   const bindings = useMemo<readonly Binding[]>(
     () => [
       {
@@ -418,7 +414,7 @@ export function RunsPage(): ReactElement {
         label: 'Open selected',
         when: (): boolean => selectedRun !== null,
         run: (): void => {
-          if (selectedRun !== null) open(selectedRun.id, selectedRun.projectId);
+          if (selectedRun !== null) navigate(runDetailPath(selectedRun));
         },
       },
       {
@@ -478,7 +474,7 @@ export function RunsPage(): ReactElement {
         },
       },
     ],
-    [runs, selectedIndex, selectedRun]
+    [navigate, runs, selectedIndex, selectedRun]
   );
   useKeymap({ bindings });
 

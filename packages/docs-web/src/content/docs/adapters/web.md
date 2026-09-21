@@ -98,11 +98,14 @@ text message, then attach files on the next turn.
 
 ## Experimental workflow builder
 
-The builder is retained as a bounded experiment inside the console. It provides
-a canvas, inspector, YAML preview, validation, and project-scoped create/edit
-flows for prompt, command, bash, script, loop, approval, wait, and cancel nodes.
-It does not represent include directives, loop groups, or workflow sub-run nodes,
-so edit those definitions as YAML. Workflow YAML remains the authoritative
+The builder is retained as a bounded experiment inside the console. Use its
+canvas, inspector, validation, and YAML preview to draft new workflows with
+prompt, command, bash, script, loop, approval, wait, and cancel nodes. Editing an
+existing workflow and relying on a load/edit/save round trip is not supported
+until [#3378](https://github.com/coleam00/Archon/pull/3378) and
+[#3379](https://github.com/coleam00/Archon/pull/3379) land. Edit existing
+workflows as YAML. The builder also does not represent include directives, loop
+groups, or workflow sub-run nodes. Workflow YAML remains the authoritative
 artifact.
 
 ## Further reading

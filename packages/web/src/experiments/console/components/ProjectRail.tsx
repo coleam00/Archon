@@ -13,9 +13,20 @@ interface ProjectRailProps {
   onAddProject: () => void;
 }
 
-async function handleRemove(projectId: string): Promise<void> {
-  await skill.removeProject(projectId);
-  invalidate(K.projects);
+interface ProjectRemovalActions {
+  remove: (projectId: string) => Promise<void>;
+  invalidateProjects: () => void;
+  navigateToOverview: () => void;
+}
+
+export async function removeProjectFromRail(
+  projectId: string,
+  selectedProjectId: string | null,
+  actions: ProjectRemovalActions
+): Promise<void> {
+  await actions.remove(projectId);
+  actions.invalidateProjects();
+  if (selectedProjectId === projectId) actions.navigateToOverview();
 }
 
 /** Extract the project id from /console/p/:id (and /console/p/:id/r/:runId). */
@@ -106,6 +117,21 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
   const { data: projects, error } = useEntity<Project[]>(K.projects, () => skill.listProjects());
 
   const allSelected = scope === 'all';
+
+  const removeProject = useCallback(
+    async (projectId: string): Promise<void> => {
+      await removeProjectFromRail(projectId, extractProjectId(location.pathname), {
+        remove: skill.removeProject,
+        invalidateProjects: () => {
+          invalidate(K.projects);
+        },
+        navigateToOverview: () => {
+          navigate('/console');
+        },
+      });
+    },
+    [location.pathname, navigate]
+  );
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -270,10 +296,7 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
                 onClick={() => {
                   navigate(`/console/p/${p.id}`);
                 }}
-                onRemove={() => {
-                  void handleRemove(p.id);
-                  if (scope === p.id) navigate('/console');
-                }}
+                onRemove={() => removeProject(p.id)}
                 onEditEnv={() => {
                   setEnvProject(p);
                 }}

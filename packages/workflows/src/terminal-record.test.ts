@@ -181,6 +181,87 @@ describe('terminal artifact observation', () => {
     }
   );
 
+  it.each(['dev', 'ino'] as const)(
+    'does not read a replaced sidecar when distinct %s IDs round to the same number',
+    async field => {
+      const root = await scratch();
+      const outside = await scratch();
+      await mkdir(join(root, 'nodes'));
+      const sidecar = join(root, 'nodes', 'swapped.meta.json');
+      const external = join(outside, 'secret');
+      await writeFile(sidecar, '{}');
+      await writeFile(external, 'external contents');
+      const observedId = 2n ** 54n;
+      const replacementId = observedId + 1n;
+      expect(Number(observedId)).toBe(Number(replacementId));
+
+      const realLstat = fsPromises.lstat;
+      const realOpen = fsPromises.open;
+      let externalReads = 0;
+      let observedSidecar = false;
+      // Proxies retain the native overloads while changing only fixture identities.
+      const statSpy = spyOn(fsPromises, 'lstat').mockImplementation(
+        new Proxy(realLstat, {
+          async apply(
+            target,
+            _receiver,
+            args: Parameters<typeof realLstat>
+          ): ReturnType<typeof realLstat> {
+            const [path] = args;
+            const stat = await target(...args);
+            if (path === sidecar) {
+              observedSidecar = true;
+              Object.assign(stat, {
+                dev: typeof stat.dev === 'bigint' ? 1n : 1,
+                ino: typeof stat.ino === 'bigint' ? 1n : 1,
+                [field]: typeof stat[field] === 'bigint' ? observedId : Number(observedId),
+              });
+            }
+            return stat;
+          },
+        })
+      );
+      const openSpy = spyOn(fsPromises, 'open').mockImplementation(async (path, flags, mode) => {
+        if (path !== sidecar) return realOpen(path, flags, mode);
+        // Model an open following a replaced path when O_NOFOLLOW is unavailable.
+        const handle = await realOpen(external, 'r');
+        const realStat = handle.stat.bind(handle);
+        spyOn(handle, 'stat').mockImplementation(
+          new Proxy(realStat, {
+            async apply(
+              target,
+              _receiver,
+              args: Parameters<typeof realStat>
+            ): ReturnType<typeof realStat> {
+              const stat = await target(...args);
+              return Object.assign(stat, {
+                dev: typeof stat.dev === 'bigint' ? 1n : 1,
+                ino: typeof stat.ino === 'bigint' ? 1n : 1,
+                [field]: typeof stat[field] === 'bigint' ? replacementId : Number(replacementId),
+              });
+            },
+          })
+        );
+        spyOn(handle, 'readFile').mockImplementation(async () => {
+          externalReads++;
+          throw new Error('Must not read the replaced sidecar');
+        });
+        return handle;
+      });
+      try {
+        const manifest = await observeArtifactManifest(root);
+        expect(observedSidecar).toBe(true);
+        expect(externalReads).toBe(0);
+        expect(manifest.limitations).toEqual([
+          { path: 'nodes/swapped.meta.json', kind: 'unreadable', code: 'ESTALE' },
+        ]);
+      } finally {
+        statSpy.mockRestore();
+        openSpy.mockRestore();
+      }
+    }
+  );
+
   it('distinguishes an unreadable directory listing from an empty inventory', async () => {
     const root = await scratch();
     const file = join(root, 'file');

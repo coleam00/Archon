@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Navigate } from 'react-router';
+import { Navigate, useLocation } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { authStatusQuery } from '@/lib/auth-status';
 import { useSession } from '@/lib/auth-client';
@@ -13,6 +13,7 @@ import { useSession } from '@/lib/auth-client';
  * Enabled + no session → redirect to /login. Enabled + session → render the app.
  */
 export function SessionGate({ children }: { children: ReactNode }): React.ReactElement {
+  const location = useLocation();
   const { data: status, isPending: statusPending, error, refetch } = useQuery(authStatusQuery);
   const { data: session, isPending: sessionPending } = useSession();
 
@@ -49,7 +50,13 @@ export function SessionGate({ children }: { children: ReactNode }): React.ReactE
     return <FullScreenLoader />;
   }
   if (!session?.user) {
-    return <Navigate to="/login" replace />;
+    return (
+      <Navigate
+        to="/login"
+        state={{ returnTo: location.pathname + location.search + location.hash }}
+        replace
+      />
+    );
   }
   return <>{children}</>;
 }

@@ -5,7 +5,7 @@ import { LiveDot } from './LiveDot';
 import { OriginBadge } from './OriginBadge';
 import { ApprovalPanel } from './ApprovalPanel';
 import { ApprovalContext } from './ApprovalContext';
-import type { Run } from '../primitives/run';
+import { runDetailPath, type Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { statusTextClass, runStatusLabel } from '../lib/run-status';
@@ -79,10 +79,7 @@ export function ActiveRunCard({
   };
 
   const onCardClick = (): void => {
-    if (canOpen)
-      navigate(
-        run.projectId === null ? `/console/r/${run.id}` : `/console/p/${run.projectId}/r/${run.id}`
-      );
+    if (canOpen) navigate(runDetailPath(run));
   };
 
   return (

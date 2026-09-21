@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react';
 import { useNavigate } from 'react-router';
 import { OriginBadge } from './OriginBadge';
-import type { Run } from '../primitives/run';
+import { runDetailPath, type Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { statusTextClass } from '../lib/run-status';
@@ -46,10 +46,7 @@ export function RecentRunRow({
   const glyph = STATUS_GLYPH[run.status] ?? '·';
 
   const onClick = (): void => {
-    if (canOpen)
-      navigate(
-        run.projectId === null ? `/console/r/${run.id}` : `/console/p/${run.projectId}/r/${run.id}`
-      );
+    if (canOpen) navigate(runDetailPath(run));
   };
 
   const onRerun = (): void => {
