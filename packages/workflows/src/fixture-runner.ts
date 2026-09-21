@@ -53,6 +53,9 @@ import {
   type WorkflowSourceRoots,
 } from './workflow-source';
 
+/** Compares text the checkout may have converted to CRLF against a fixture's LF expectation. */
+const withLfEndings = (text: string): string => text.replaceAll('\r\n', '\n');
+
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -652,7 +655,20 @@ async function checkFixture(
           failureReason = `expected resolved text for node '${nodeId}', but it was not reached`;
           break;
         }
-        if (!traceEntries.some(entry => entry.resolvedText?.includes(expectedText) === true)) {
+        // Line endings belong to the checkout, not to the workflow. A command file is read as
+        // raw text, so `* text=auto` gives a Windows clone CRLF inside it, while a fixture
+        // spells its expectation with `\n` escapes that stay LF everywhere. This declaration is
+        // about interpolated content, so it compares on LF alone rather than passing on Linux
+        // and failing on Windows for the same workflow. (Workflow YAML is immune: the parser
+        // normalizes line breaks in its own scalars.)
+        const expected = withLfEndings(expectedText);
+        if (
+          !traceEntries.some(
+            entry =>
+              entry.resolvedText !== undefined &&
+              withLfEndings(entry.resolvedText).includes(expected)
+          )
+        ) {
           failureReason = `expected node '${nodeId}' resolved text to contain ${JSON.stringify(expectedText)}`;
           break;
         }

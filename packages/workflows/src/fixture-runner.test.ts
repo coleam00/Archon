@@ -595,6 +595,39 @@ describe('runFixtures', () => {
     expect(report.passed).toBe(1);
   });
 
+  it('matches a multi-line fragment against a command file checked out with CRLF', async () => {
+    // A command file is read as raw text, so `* text=auto` hands a Windows clone CRLF inside
+    // it — while a fixture spells its expectation with `\n` escapes that stay LF everywhere.
+    // Three archon-ship fixtures failed on windows-latest alone until this comparison
+    // normalized. (Workflow YAML is immune: the YAML parser normalizes its own line breaks.)
+    const { cwd } = writeTempProject({
+      workflowYaml:
+        'name: test-wf\ndescription: test\ninputs:\n  target:\n    default: ""\nnodes:\n' +
+        '  - id: node-a\n    command: bind-test\n    with:\n      target: "$INPUTS.target"\n',
+      body: [
+        'fixture:',
+        '  inputs:',
+        '    target: "issue #3031"',
+        '  resolved-text-contains:',
+        '    node-a: "target:\\n\\nissue #3031\\n\\nThe operator request"',
+        'node-a: "stub"',
+      ].join('\n'),
+    });
+    mkdirSync(join(cwd, '.archon', 'commands'), { recursive: true });
+    writeFileSync(
+      join(cwd, '.archon', 'commands', 'bind-test.md'),
+      'target:\r\n\r\n$INPUTS.target\r\n\r\nThe operator request\r\n'
+    );
+
+    const report = await runFixtures({
+      workflows: [workflowsOnDisk(cwd, ['test-wf'])[0]],
+      cwd,
+    });
+
+    expect(report.results[0].failureReason).toBeUndefined();
+    expect(report.passed).toBe(1);
+  });
+
   it('reports a malformed fixture as a failure, not a crash', async () => {
     const { cwd } = writeTempProject({ body: ['fixture:', '  expect: bogus'].join('\n') });
     const report = await runFixtures({

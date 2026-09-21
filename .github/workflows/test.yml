@@ -59,8 +59,11 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # A dedicated job so fixture breakage reports in ~2 minutes instead of behind the
+      # full matrix. The command itself lives in scripts/validate.ts, which is also what
+      # `bun run validate` runs locally.
       - name: Run workflow fixtures
-        run: bun run cli workflow test --json
+        run: bun run validate --only workflow-fixtures
 
   test:
     needs: changes
@@ -95,44 +98,6 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Check CLI import boundaries
-        run: bun run check:cli-import-boundary
-
-      - name: Check bundled defaults
-        run: bun run check:bundled
-
-      - name: Check bundled skill
-        run: bun run check:bundled-skill
-
-      - name: Check bundled schema
-        run: bun run check:bundled-schema
-
-      - name: Check Pi vendor map
-        run: bun run check:pi-vendor-map
-
-      - name: Check provider capability matrix
-        run: bun run check:capability-matrix
-
-      - name: Check generated API types
-        run: bun run check:api-types
-
-      - name: Type check
-        run: bun run type-check
-
-      - name: Lint
-        run: bun run lint --max-warnings 0
-
-      - name: Check formatting
-        run: bun run format:check
-
-      - name: Run installer tests
-        # POSIX-shell installer only. scripts/install.sh refuses MINGW/MSYS by design
-        # (Windows users are directed to WSL2), and test-install.sh runs the real
-        # installer with only curl mocked — so on windows-latest `uname -s` reports
-        # MINGW64_NT, the installer exits, and `set -euo pipefail` fails the job.
-        if: runner.os != 'Windows'
-        run: bun run test:install
-
       # No Windows Defender exclusion step here on purpose. It was the named
       # remaining suspect behind the downloadWebDist stalls (#2924), so one was
       # added and run on windows-latest — and its own readback disproved the
@@ -148,10 +113,14 @@ jobs:
         if: runner.os == 'Windows'
         run: uv run python -c "print('uv warm')"
 
-      # The Windows leg runs with a 20 s default per-test budget (scripts/bun-test-command.ts)
-      # as an attributed runner-floor residual; see that file and coleam00/Archon#3294.
-      - name: Run tests
-        run: bun run test
+      # This job used to restate every command in `bun run validate`, which let the
+      # documented local gate and CI drift apart. scripts/validate.ts owns the list;
+      # scripts/validate-ci-parity.test.ts keeps this job and that list aligned. The
+      # installer check skips itself on Windows because scripts/install.sh is POSIX-only.
+      # The Windows test check keeps the 20 s per-test budget in
+      # scripts/bun-test-command.ts; see coleam00/Archon#3294.
+      - name: Validate
+        run: bun run validate
 
   schema-upgrade:
     needs: changes
