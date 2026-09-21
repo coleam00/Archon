@@ -570,6 +570,8 @@ instead.
 docker compose exec app gh auth login
 ```
 
+When `GH_TOKEN` is set, the container resets the `https://github.com` git credential helper to the `GH_TOKEN` helper on every start, so a helper installed by `gh auth login` only applies without `GH_TOKEN`.
+
 ---
 
 ## GitHub Webhooks
