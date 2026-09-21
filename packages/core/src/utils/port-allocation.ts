@@ -21,6 +21,9 @@ const MIN_OFFSET = 100;
 /** Number of distinct worktree offsets (100–999 → ports 3190–4089). */
 const OFFSET_SPAN = 900;
 
+/** Internal handoff from the root dev launcher to the server process. */
+export const DEV_SERVER_PORT_ENV = 'ARCHON_DEV_SERVER_PORT';
+
 /**
  * Calculate hash-based port offset for worktree paths.
  * Exported for testing.
@@ -66,14 +69,15 @@ export function isPortAvailable(port: number, hostname: string): Promise<boolean
 /**
  * Get the port for the Hono server
  * - If PORT env var is set: use it (explicit override, validated, never probed)
+ * - If the root dev launcher already resolved a port: use that exact handoff
  * - If running in worktree: deterministic port from the path hash, advanced to the
  *   next free port in the range when that one is taken
  * - Otherwise: use default 3090 (matches the Vite proxy fallback in packages/web/vite.config.ts)
  *
- * Note: Exits process with code 1 if PORT env var is set but invalid (not 1-65535)
+ * Note: Exits process with code 1 if a configured port is invalid (not 1-65535)
  */
 export async function getPort(): Promise<number> {
-  const envPort = process.env.PORT;
+  const envPort = process.env.PORT ?? process.env[DEV_SERVER_PORT_ENV];
 
   if (envPort) {
     const parsedPort = Number(envPort);
@@ -138,7 +142,15 @@ export async function resolveWorktreePort(
       getLog().info({ cwd, port, basePort: BASE_PORT, offset }, 'worktree_port_allocated');
     } else {
       getLog().info(
-        { cwd, port, basePort: BASE_PORT, offset: candidate, preferredOffset: offset, attempt },
+        {
+          cwd,
+          port,
+          preferredPort: BASE_PORT + offset,
+          basePort: BASE_PORT,
+          offset: candidate,
+          preferredOffset: offset,
+          attempt,
+        },
         'worktree_port_reallocated'
       );
     }

@@ -8,7 +8,7 @@
   "type": "module",
   "scripts": {
     "cli": "bun --cwd packages/cli src/cli.ts",
-    "dev": "bun --filter '*' dev",
+    "dev": "bun run scripts/dev.ts",
     "dev:server": "bun --filter @archon/server dev",
     "start": "bun --filter @archon/server start",
     "build": "bun --filter '*' build",
