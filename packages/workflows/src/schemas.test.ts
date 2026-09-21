@@ -1356,13 +1356,20 @@ describe('LOOP_NODE_AI_FIELDS', () => {
     expect(LOOP_NODE_AI_FIELDS).not.toContain('provider');
   });
 
+  test('excludes the tool restrictions (a loop: node scopes its own sendQuery)', () => {
+    // #3324: listing these made the loader warn-and-drop a security restriction the
+    // author declared, with nothing to fall back on — there is no workflow-level
+    // allowed_tools/denied_tools. A loop node calls sendQuery itself, so the
+    // restriction reaches the provider exactly like `pi` and `output_format` do.
+    expect(LOOP_NODE_AI_FIELDS).not.toContain('allowed_tools');
+    expect(LOOP_NODE_AI_FIELDS).not.toContain('denied_tools');
+  });
+
   test('contains all other AI-specific fields from BASH_NODE_AI_FIELDS', () => {
     // `output_format` is deliberately absent since #2563 — a loop: node makes its
     // own sendQuery, so the schema is honoured rather than warned-and-dropped.
     const expectedFields = [
       'context',
-      'allowed_tools',
-      'denied_tools',
       'hooks',
       'mcp',
       'skills',
@@ -1375,6 +1382,86 @@ describe('LOOP_NODE_AI_FIELDS', () => {
     ];
     for (const field of expectedFields) {
       expect(LOOP_NODE_AI_FIELDS).toContain(field);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// dagNodeSchema — loop field projection and author-facing classification
+// ---------------------------------------------------------------------------
+
+describe('dagNodeSchema — LoopNode AI-field survival', () => {
+  /**
+   * One valid authored value per AI field, so each can be parsed on its own and
+   * checked against the list. Values only have to satisfy the schema — nothing
+   * here asserts what a provider does with them.
+   */
+  const SAMPLE_AI_FIELD_VALUES: Record<string, unknown> = {
+    provider: 'claude',
+    model: 'sonnet',
+    context: 'fresh',
+    output_format: { type: 'object', properties: { done: { type: 'boolean' } } },
+    allowed_tools: ['Read', 'Grep'],
+    denied_tools: ['WebFetch', 'WebSearch'],
+    hooks: { PreToolUse: [{ matcher: 'Bash', response: { decision: 'block' } }] },
+    mcp: '.mcp.json',
+    skills: ['code-review'],
+    agents: { reviewer: { description: 'reviews', prompt: 'review it' } },
+    pi: { enableExtensions: false },
+    effort: 'low',
+    maxBudgetUsd: 5,
+    systemPrompt: 'be brief',
+    fallbackModel: 'haiku',
+    settingSources: ['project'],
+    betas: ['some-beta'],
+    sandbox: { enabled: true },
+    persist_session: true,
+  };
+
+  const parseLoopWith = (field: string, value: unknown): Record<string, unknown> => {
+    const result = dagNodeSchema.safeParse({
+      id: 'work',
+      [field]: value,
+      loop: { prompt: 'go', until_bash: 'true', max_iterations: 1 },
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) throw new Error(`expected a valid loop node declaring '${field}'`);
+    return result.data as unknown as Record<string, unknown>;
+  };
+
+  test('preserves denied_tools so the restriction reaches each iteration (#3324)', () => {
+    expect(parseLoopWith('denied_tools', ['WebFetch', 'WebSearch']).denied_tools).toEqual([
+      'WebFetch',
+      'WebSearch',
+    ]);
+  });
+
+  test('preserves allowed_tools, including an empty allow-list', () => {
+    expect(parseLoopWith('allowed_tools', ['Read']).allowed_tools).toEqual(['Read']);
+    // `[]` means "no tools", not "no restriction" — dropping it would be the same
+    // fail-open as dropping denied_tools, so it must survive as an empty array.
+    expect(parseLoopWith('allowed_tools', []).allowed_tools).toEqual([]);
+  });
+
+  test('omits the tool fields when they are not declared', () => {
+    const node = parseLoopWith('description', 'no tool fields here');
+    expect('allowed_tools' in node).toBe(false);
+    expect('denied_tools' in node).toBe(false);
+  });
+
+  test('a field survives the transform exactly when LOOP_NODE_AI_FIELDS omits it', () => {
+    // The conformance check: every AI field the loader could warn about, parsed on
+    // a loop node and compared against the list that describes it. A field claimed
+    // as supported but dropped is a silent no-op; a field claimed as ignored but
+    // carried is a warning the author did not need.
+    for (const field of [...BASH_NODE_AI_FIELDS, 'output_format']) {
+      const value = SAMPLE_AI_FIELD_VALUES[field];
+      expect(value, `no sample value declared for '${field}'`).toBeDefined();
+      const node = parseLoopWith(field, value);
+      const shouldSurvive = !LOOP_NODE_AI_FIELDS.includes(field);
+      expect(field in node, `'${field}' survival must match LOOP_NODE_AI_FIELDS`).toBe(
+        shouldSurvive
+      );
     }
   });
 });
@@ -1778,16 +1865,18 @@ describe('LOOP_GROUP_NODE_AI_FIELDS', () => {
     expect(LOOP_GROUP_NODE_AI_FIELDS).not.toContain('provider');
   });
 
-  test('differs from LOOP_NODE_AI_FIELDS on pi (#2133) and output_format (#2563)', () => {
-    // Both differences have the same cause: a plain loop: node calls sendQuery
-    // itself, so its per-node Pi posture AND its output_format schema both reach
-    // that call. A loop_group never calls sendQuery — its body nodes carry their
-    // own — so both stay warned-ignored on the group.
-    expect(LOOP_NODE_AI_FIELDS).not.toContain('pi');
-    expect(LOOP_NODE_AI_FIELDS).not.toContain('output_format');
-    expect(LOOP_GROUP_NODE_AI_FIELDS).toContain('pi');
-    expect(LOOP_GROUP_NODE_AI_FIELDS).toContain('output_format');
-    expect(LOOP_GROUP_NODE_AI_FIELDS.filter(f => f !== 'pi' && f !== 'output_format')).toEqual([
+  test('differs from LOOP_NODE_AI_FIELDS on the fields a loop: node sendQuerys with', () => {
+    // Every difference has the same cause: a plain loop: node calls sendQuery
+    // itself, so its per-node Pi posture (#2133), its output_format schema (#2563)
+    // and its tool restrictions (#3324) all reach that call. A loop_group never
+    // calls sendQuery — its body nodes carry their own — so all four stay
+    // warned-ignored on the group.
+    const loopSendQueryFields = ['pi', 'output_format', 'allowed_tools', 'denied_tools'];
+    for (const field of loopSendQueryFields) {
+      expect(LOOP_NODE_AI_FIELDS).not.toContain(field);
+      expect(LOOP_GROUP_NODE_AI_FIELDS).toContain(field);
+    }
+    expect(LOOP_GROUP_NODE_AI_FIELDS.filter(f => !loopSendQueryFields.includes(f))).toEqual([
       ...LOOP_NODE_AI_FIELDS,
     ]);
   });

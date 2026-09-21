@@ -482,6 +482,17 @@ function resolveScriptExecAuthoring({
   };
 }
 
+// The loop makes its own provider call. Its supported AI fields own both the
+// authored projection and the ignored-field classification below.
+const loopAiAuthoringSchema = dagNodeBaseSchema.pick({
+  model: true,
+  provider: true,
+  pi: true,
+  allowed_tools: true,
+  denied_tools: true,
+  output_format: true,
+});
+
 /**
  * Loop node schema — extends base with `loop` config.
  * AI-specific fields from the base are present in the type but ignored at runtime with a warning.
@@ -1010,25 +1021,10 @@ export const BASH_NODE_AI_FIELDS: readonly string[] = [
 /** AI-specific fields that are meaningless on script nodes — same as bash nodes */
 export const SCRIPT_NODE_AI_FIELDS: readonly string[] = BASH_NODE_AI_FIELDS;
 
-/**
- * AI-specific fields that are unsupported on loop nodes.
- * `model` and `provider` are excluded because the DAG executor resolves them from
- * `node.model`/`node.provider` and forwards them to each iteration's AI call; the
- * transform below preserves both on the loop branch so they survive to the
- * executor. `pi` is excluded because the portable per-node Pi posture
- * (#2133) IS threaded into each iteration's sendQuery — the loop is the very
- * node whose extension posture users need to scope (plannotator planning-mode
- * leak, #2073). `output_format` is excluded for the same class of reason (#2563):
- * a `loop:` node makes its own sendQuery, so the schema reaches the provider, each
- * iteration's payload is validated against it, and `loop.until_field` can terminate
- * on a declared boolean. It stays listed for `loop_group`, which never calls
- * sendQuery — its body nodes carry their own. (Since #2453 `output_format` is no
- * longer in the base list either, so nothing has to be filtered out here for it.)
- */
+/** Fields ignored by a loop's own provider call, derived from its authored projection. */
 export const LOOP_NODE_AI_FIELDS: readonly string[] = [
-  ...BASH_NODE_AI_FIELDS.filter(f => f !== 'model' && f !== 'provider' && f !== 'pi'),
-  // The tree-integrity assertion (#2771) is enforced only on exec/agent nodes; on a
-  // loop it would have to cover every iteration's body, which no execution path does.
+  ...BASH_NODE_AI_FIELDS.filter(field => !(field in loopAiAuthoringSchema.shape)),
+  // Tree-integrity enforcement belongs to exec/agent nodes, not whole loops.
   'mutates_checkout',
 ];
 
@@ -1763,7 +1759,7 @@ export const dagNodeSchema = z
       ...(data.retry !== undefined ? { retry: data.retry } : {}),
     };
 
-    // AI-only fields (not applicable to bash/loop nodes)
+    // Provider-call fields; each node mode selects the fields it supports.
     const aiOnly = {
       ...(data.model !== undefined ? { model: data.model } : {}),
       ...(data.provider !== undefined ? { provider: data.provider } : {}),
@@ -1945,8 +1941,7 @@ export const dagNodeSchema = z
     }
     // loop_group — guaranteed by superRefine to be defined at this point.
     // Spread aiOnly so group-level model/provider survive parsing — the executor forwards
-    // them to body AI nodes unless overridden per-node ('loop:' historically drops them at
-    // parse; loop_group keeps them to support group-level overrides). The REMAINING aiOnly
+    // them to body AI nodes unless overridden per-node. The REMAINING aiOnly
     // fields are the ones LOOP_GROUP_NODE_AI_FIELDS declares unsupported: they ride along
     // here but the loader warns about and ignores them at runtime.
     if (data.loop_group !== undefined) {
@@ -1957,27 +1952,11 @@ export const dagNodeSchema = z
         loop_group: data.loop_group,
       } as LoopGroupNode;
     }
-    // loop — guaranteed by superRefine to be defined at this point.
-    // Most of aiOnly is dropped for loops, but three fields are kept.
-    // `model`/`provider`: the executor resolves them from `node.model`/`node.provider`
-    // and forwards them to each iteration's AI call, so a per-node override has to
-    // survive the parse to reach it — without this it was silently stripped and every
-    // iteration fell back to the workflow-level model. `pi` posture IS kept: the loop's
-    // per-iteration Pi sendQuery is exactly where plannotator planning mode leaks
-    // (#2073/#2133), so the portable `pi:` block must reach it. All three are excluded
-    // from LOOP_NODE_AI_FIELDS so the loader doesn't warn they're ignored.
     if (!data.loop) throw new Error('unreachable: loop must be defined after superRefine');
     return {
       ...base,
+      ...loopAiAuthoringSchema.parse(aiOnly),
       kind: 'loop',
-      ...(data.model !== undefined ? { model: data.model } : {}),
-      ...(data.provider !== undefined ? { provider: data.provider } : {}),
-      ...(data.pi !== undefined ? { pi: data.pi } : {}),
-      // Kept for the same reason as `pi`: a loop: node runs its own sendQuery, so
-      // the schema reaches the provider and each iteration's payload is validated
-      // against it (#2563). `loop.until_field` then terminates on a declared
-      // boolean, and the node's output becomes the validated JSON.
-      ...(data.output_format !== undefined ? { output_format: data.output_format } : {}),
       loop: data.loop,
     } as LoopNode;
   })

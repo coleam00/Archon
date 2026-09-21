@@ -477,6 +477,9 @@ Now the only way out is a passing suite.
 - `trigger_rule` — join semantics
 - `idle_timeout` — per-iteration timeout (default: 30 minutes)
 - `provider` / `model` — node-level overrides are resolved and used for every iteration
+- `allowed_tools` / `denied_tools` — tool restrictions apply to every iteration. A loop node
+  builds its own provider call, so the scoping reaches it the same way it reaches a
+  `prompt:` node, and there is no workflow-level fallback if you omit them
 - `$nodeId.output` — downstream nodes receive the last iteration's output
 
 ### `interactive` and `gate_message`
@@ -580,19 +583,20 @@ nodes:
 ### What is NOT supported on loop nodes
 
 - `retry` — rejected at parse time. The loader fails the workflow if `retry:` is set on a loop node.
-- `context: fresh` — silently ignored. Session control is handled exclusively by `fresh_context` within the `loop:` config
+- `context: fresh` — ignored. Session control is handled exclusively by `fresh_context` within the `loop:` config
 - `hooks` — per-node SDK hooks are not passed through to loop iterations
 - `mcp` — per-node MCP server configs are not loaded for loop nodes
 - `skills` — skill preloading is not applied to loop iterations
-- `allowed_tools` / `denied_tools` — tool restrictions are not enforced on loop iterations
 
-These fields (except `retry`) are silently discarded at parse time with a
-loader warning — the workflow still loads but the fields have no effect.
-`retry` is the exception: it causes a hard load error.
+These fields (except `retry`) are discarded at parse time — the workflow still
+loads but the fields have no effect. The drop is reported as a warning naming the
+node and the fields, both in the loader log and in the author-facing output of
+`archon validate workflows` and `archon workflow list`. `retry` is the exception:
+it causes a hard load error.
 
 The loop executor manages its own AI sessions independently from the standard
-node executor. If you need hooks, MCP, skills, or tool restrictions, consider
-using a command node that wraps the iterative logic in a command file.
+node executor. If you need hooks, MCP, or skills, consider using a command node
+that wraps the iterative logic in a command file.
 
 ## Output
 
