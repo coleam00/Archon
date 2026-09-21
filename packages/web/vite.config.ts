@@ -5,10 +5,17 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig, loadEnv } from 'vite';
 
+export function resolveApiPort(
+  loadedEnv: Record<string, string>,
+  runtimeEnv: Record<string, string | undefined> = process.env
+): string {
+  return loadedEnv.PORT ?? runtimeEnv.VITE_API_PORT ?? '3090';
+}
+
 export default defineConfig(({ mode }) => {
-  // Load env from repo root so PORT from .env is available
+  // Load env from repo root so PORT from .env remains available outside the root dev launcher.
   const env = loadEnv(mode, path.resolve(__dirname, '../..'), '');
-  const apiPort = env.PORT ?? '3090';
+  const apiPort = resolveApiPort(env);
 
   // Read version from root package.json
   const rootPkgPath = path.resolve(__dirname, '../../package.json');

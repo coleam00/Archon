@@ -51,6 +51,13 @@ Worktrees auto-allocate ports (3190–4089 range, hash-based on path). Same work
 - Main repo defaults to 3090
 - Override: `PORT=4000 bun dev`
 - Same worktree always gets same port (deterministic)
+- If that port is already taken — another worktree hashed to it, or any unrelated
+  process holds it — the server takes the next free port in the range and logs
+  `worktree_port_reallocated` with both the port it wanted and the one it got.
+  The root `bun dev` launcher passes that selected port to both the server and Web
+  client, so the Vite proxy and SSE streams use the endpoint the server binds. It
+  returns to the hashed port once that frees up.
+- `PORT` is never moved: an explicit override binds where you said, or fails.
 
 ## `bun run test` vs `bun test`
 
