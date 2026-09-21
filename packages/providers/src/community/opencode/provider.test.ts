@@ -377,6 +377,7 @@ describe('OpencodeProvider', () => {
         }),
       ])
     );
+    expect(chunks).toContainEqual({ type: 'result' });
   });
 
   test('multi-agent usage keeps cache from the sub-agent that reported it', async () => {
@@ -442,6 +443,7 @@ describe('OpencodeProvider', () => {
       expect.arrayContaining([
         expect.objectContaining({
           type: 'result',
+          cost: 0.5,
           tokens: {
             input: 36,
             output: 10,

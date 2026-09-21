@@ -14,6 +14,7 @@ export const CODEX_CAPABILITIES: ProviderCapabilities = {
   structuredOutput: 'enforced', // SDK outputSchema grammar-constrains decoding
   envInjection: true,
   costControl: false,
+  costReporting: false, // turn usage carries token axes only
   // Codex reads the node-level `effort:` field like every other effort-capable
   // provider and translates it to the SDK's `modelReasoningEffort` internally
   // (#2556). Before that it was `false` — which was read as "Codex cannot do
