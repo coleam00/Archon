@@ -104,6 +104,7 @@ describe('CodexProvider', () => {
         requiresAllPropertiesRequired: true,
         envInjection: true,
         costControl: false,
+        costReporting: false,
         effortControl: true,
         fallbackModel: false,
         sandbox: false,

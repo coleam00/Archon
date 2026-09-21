@@ -203,6 +203,7 @@ const providerCapabilities: ProviderCapabilities = {
   structuredOutput: 'enforced',
   envInjection: true,
   costControl: true,
+  costReporting: true,
   effortControl: true,
   fallbackModel: true,
   sandbox: true,

@@ -61,6 +61,7 @@ export const CLAUDE_CAPABILITIES: ProviderCapabilities = {
   requiresAllPropertiesRequired: false, // Claude accepts optional-by-omission (no strict-mode required-coverage rule)
   envInjection: true,
   costControl: true,
+  costReporting: true, // SDK resultMsg.total_cost_usd reaches the result chunk
   effortControl: true,
   fallbackModel: true,
   sandbox: true,

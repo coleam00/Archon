@@ -340,6 +340,7 @@ const mockClaudeCapabilities = () => ({
   structuredOutput: 'enforced' as const,
   envInjection: true,
   costControl: true,
+  costReporting: true,
   effortControl: true,
   fallbackModel: true,
   sandbox: true,

@@ -328,6 +328,7 @@ const DEFAULT_PROVIDER_CAPS: ProviderCapabilities = {
   structuredOutput: false,
   envInjection: true,
   costControl: false,
+  costReporting: false,
   effortControl: true,
   fallbackModel: false,
   sandbox: false,

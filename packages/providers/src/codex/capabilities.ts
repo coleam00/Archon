@@ -15,6 +15,7 @@ export const CODEX_CAPABILITIES: ProviderCapabilities = {
   requiresAllPropertiesRequired: true, // OpenAI strict-mode: every key in properties must appear in required
   envInjection: true,
   costControl: false,
+  costReporting: false, // turn usage carries token axes only
   // Codex reads the node-level `effort:` field like every other effort-capable
   // provider and translates it to the SDK's `modelReasoningEffort` internally
   // (#2556). Before that it was `false` — which was read as "Codex cannot do

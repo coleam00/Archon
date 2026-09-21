@@ -64,6 +64,7 @@ import { mkdirSync, openSync, closeSync, readFileSync, rmSync, writeSync } from 
 import { mkdir, open as openFile } from 'node:fs/promises';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
+import { toHydratedTimestamp } from '@archon/core/db/timestamps';
 import { createChildWorktreeResolver } from '@archon/core/workflows/child-isolation-resolver';
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
 import { reclaimContainerEnv } from '@archon/core/services/cleanup-service';
@@ -3731,11 +3732,7 @@ async function recordDetachedChildStartupFailure(
  * Format age of a run from started_at to now.
  */
 function formatAge(startedAt: Date | string): string {
-  // SQLite returns UTC strings without Z suffix — append it so Date parses as UTC
-  const date =
-    startedAt instanceof Date
-      ? startedAt
-      : new Date(startedAt.endsWith('Z') ? startedAt : startedAt + 'Z');
+  const date = toHydratedTimestamp(startedAt);
   if (Number.isNaN(date.getTime())) return 'unknown';
   const ms = Date.now() - date.getTime();
   const secs = Math.floor(ms / 1000);
@@ -3810,7 +3807,7 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
 
     switch (event.event_type) {
       case 'node_started': {
-        startTimes.set(nodeId, new Date(event.created_at).getTime());
+        startTimes.set(nodeId, toHydratedTimestamp(event.created_at).getTime());
         // A retry is a new active attempt, so stale terminal details must not
         // leak into the compact current-state summary.
         summaries.set(nodeId, { nodeId, state: 'running', startedAt: event.created_at });
@@ -3818,7 +3815,7 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
       }
       case 'node_completed': {
         const started = startTimes.get(nodeId);
-        const endTime = new Date(event.created_at).getTime();
+        const endTime = toHydratedTimestamp(event.created_at).getTime();
         summaries.set(nodeId, {
           nodeId,
           state: 'completed',
@@ -3830,7 +3827,7 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
       }
       case 'node_failed': {
         const started = startTimes.get(nodeId);
-        const endTime = new Date(event.created_at).getTime();
+        const endTime = toHydratedTimestamp(event.created_at).getTime();
         summaries.set(nodeId, {
           nodeId,
           state: 'failed',

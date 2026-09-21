@@ -20,6 +20,7 @@ export const COPILOT_CAPABILITIES: ProviderCapabilities = {
   requiresAllPropertiesRequired: false, // best-effort providers never reject schemas at API level
   envInjection: true,
   costControl: false,
+  costReporting: false, // normalizeCopilotUsage captures token axes only
   effortControl: true,
   fallbackModel: false,
   sandbox: false,

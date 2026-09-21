@@ -33,6 +33,7 @@ export const OPENCODE_CAPABILITIES: ProviderCapabilities = {
   requiresAllPropertiesRequired: false, // OpenCode does not enforce the required-coverage rule
   envInjection: true,
   costControl: false,
+  costReporting: true, // tokens.ts maps SDK info.cost when the SDK reports one
   effortControl: false,
   fallbackModel: false,
   sandbox: false,
