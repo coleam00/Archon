@@ -49,7 +49,7 @@ import * as db from '../db/conversations';
 import { createIsolationStore } from '../db/isolation-environments';
 import { toError } from '../utils/error';
 import { getCodebase } from '../db/codebases';
-import { executeWorkflow } from '@archon/workflows/executor';
+import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
 import { resolveWorkflowSourceRoot } from '../utils/workflow-source-root';
 import {
@@ -519,6 +519,7 @@ async function dispatchBackgroundWorkflowOwned(
   }
 
   const workflowDeps = createWorkflowDeps();
+  const engine = new InProcessWorkflowEngine(workflowDeps);
 
   // Freeze this run's executable source, then re-resolve the workflow FROM the frozen
   // copy so the definition executed and the commands and scripts beside it are one
@@ -631,15 +632,14 @@ async function dispatchBackgroundWorkflowOwned(
         // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
         // executor adopts for us there (see #2690). Until then a rename failure leaves
         // the staged directory un-adopted so the wrap reclaims it on the way out.
-        const result = await executeWorkflow(
-          workflowDeps,
-          ctx.platform,
-          workerPlatformId,
-          workerCwd,
+        const result = await engine.submit({
+          platform: ctx.platform,
+          conversationId: workerPlatformId,
+          cwd: workerCwd,
           workflow,
-          ctx.originalMessage,
-          workerConv.id,
-          {
+          userMessage: ctx.originalMessage,
+          conversationDbId: workerConv.id,
+          options: {
             codebaseId: ctx.codebaseId,
             issueContext: ctx.issueContext,
             isolationContext,
@@ -668,8 +668,8 @@ async function dispatchBackgroundWorkflowOwned(
               ? { modelOverrideLayer: { kind: 'raw' as const, overrides: ctx.modelOverrides } }
               : {}),
             ...(ctx.runConfig ? { runConfig: ctx.runConfig } : {}),
-          }
-        );
+          },
+        });
         await closeRunLiveOwner();
         // Surface workflow output to parent conversation as a result card
         if ('paused' in result) {

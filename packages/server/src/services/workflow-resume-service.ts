@@ -3,7 +3,7 @@ import { resolveRunContinuation } from '@archon/core/handlers';
 import * as codebaseDb from '@archon/core/db/codebases';
 import * as workflowDb from '@archon/core/db/workflows';
 import { createLogger, getArchonWorkspacesPath } from '@archon/paths';
-import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor';
+import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -138,26 +138,8 @@ export async function resumeWorkflowRunFromServer(
       });
       return runLiveOwnerClose;
     };
-    let executionStarted = false;
+    let accepted = false;
     try {
-      let hydrated: Awaited<ReturnType<typeof hydrateResumableRun>>;
-      try {
-        hydrated = await hydrateResumableRun(deps, run, cursor);
-      } catch (error) {
-        if (error instanceof workflowDb.WorkflowNotResumableError) {
-          log.info(
-            { runId: run.id, status: error.currentStatus },
-            'workflow_resume_headless_lost_race'
-          );
-          return false;
-        }
-        throw error;
-      }
-      if (!hydrated) {
-        log.info({ runId: run.id }, 'workflow_resume_headless_nothing_to_resume');
-        return false;
-      }
-
       const effectiveUserId = actorUserId ?? run.user_id ?? undefined;
       const resolveChildIsolation =
         codebase && codebase.kind !== 'folder'
@@ -171,24 +153,31 @@ export async function resumeWorkflowRunFromServer(
             })
           : undefined;
 
-      const execution = executeWorkflow(
-        deps,
+      const engine = new InProcessWorkflowEngine(deps);
+      const admission = await engine.resume({
         platform,
-        platformConversationId,
-        workingPath,
-        continuation.workflow.definition,
-        run.user_message ?? '',
-        run.conversation_id,
-        {
+        conversationId: platformConversationId,
+        cwd: workingPath,
+        legacyWorkflow: continuation.workflow.definition,
+        userMessage: run.user_message ?? '',
+        conversationDbId: run.conversation_id,
+        run,
+        cursor,
+        options: {
           codebaseId: run.codebase_id ?? undefined,
           userId: effectiveUserId,
           baseBranch: codebase?.default_branch?.trim() || undefined,
           resolveChildIsolation,
-          ...hydrated,
-        }
-      );
-      executionStarted = true;
-      void execution
+        },
+      });
+
+      if (!admission.accepted) {
+        log.info({ runId: run.id }, 'workflow_resume_headless_nothing_to_resume');
+        return false;
+      }
+
+      accepted = true;
+      void admission.settled
         .then(
           async result => {
             await closeRunLiveOwner();
@@ -251,14 +240,6 @@ export async function resumeWorkflowRunFromServer(
               { err: error as Error, runId: run.id },
               'workflow_resume_headless_execute_failed'
             );
-            await workflowDb
-              .failWorkflowRun(run.id, `Headless resume failed: ${(error as Error).message}`)
-              .catch((failError: unknown) => {
-                log.error(
-                  { err: failError as Error, runId: run.id },
-                  'workflow_resume_headless_fail_mark_failed'
-                );
-              });
             await closeRunLiveOwner();
           }
         )
@@ -271,9 +252,16 @@ export async function resumeWorkflowRunFromServer(
         });
       return true;
     } finally {
-      if (!executionStarted) await closeRunLiveOwner();
+      if (!accepted) await closeRunLiveOwner();
     }
   } catch (error) {
+    if (error instanceof workflowDb.WorkflowNotResumableError) {
+      log.info(
+        { runId: run.id, status: error.currentStatus },
+        'workflow_resume_headless_lost_race'
+      );
+      return false;
+    }
     log.warn({ err: error as Error, runId: run.id }, 'workflow_resume_headless_unexpected_error');
     return false;
   }
