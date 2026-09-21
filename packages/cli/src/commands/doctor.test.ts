@@ -10,10 +10,11 @@
 import { describe, it, expect, spyOn, afterEach, beforeEach } from 'bun:test';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import * as git from '@archon/git';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { copyArchonSkill } from './skill';
 import {
   checkClaudeBinary,
   checkCodexBinary,
@@ -919,35 +920,60 @@ describe('checkArchonSkill', () => {
     tmp = mkdtempSync(join(tmpdir(), 'archon-doctor-skill-'));
   });
 
-  afterEach(() => {
-    rmSync(tmp, { recursive: true, force: true });
+  afterEach(async () => {
+    await removeTempTree(tmp);
   });
 
-  it('skips when no skill trees are present', () => {
-    const result = checkArchonSkill(tmp);
+  it('skips when no skill trees are present', async () => {
+    const result = await checkArchonSkill(tmp);
     expect(result.status).toBe('skip');
     expect(result.label).toBe('Archon skill');
   });
 
-  it('fails when a retired skill root is still on disk', () => {
+  it('fails when a retired skill root is still on disk', async () => {
     mkdirSync(join(tmp, '.claude', 'skills', 'archon'), { recursive: true });
-    const result = checkArchonSkill(tmp);
+    const result = await checkArchonSkill(tmp);
     expect(result.status).toBe('fail');
     expect(result.message).toContain('retired skill root');
     expect(result.message).toContain('archon skill install');
   });
 
-  it('fails when skills exist but archon-cli is missing', () => {
+  it('fails when skills exist but archon-cli is missing', async () => {
     mkdirSync(join(tmp, '.claude', 'skills'), { recursive: true });
-    const result = checkArchonSkill(tmp);
+    const result = await checkArchonSkill(tmp);
     expect(result.status).toBe('fail');
     expect(result.message).toContain('archon-cli is missing');
   });
 
-  it('passes when archon-cli is installed and retired roots are gone', () => {
-    mkdirSync(join(tmp, '.claude', 'skills', 'archon-cli'), { recursive: true });
-    mkdirSync(join(tmp, '.agents', 'skills', 'archon-cli'), { recursive: true });
-    const result = checkArchonSkill(tmp);
+  it('fails when one existing skills tree is missing archon-cli', async () => {
+    await copyArchonSkill(tmp);
+    await removeTempTree(join(tmp, '.agents', 'skills', 'archon-cli'));
+
+    const result = await checkArchonSkill(tmp);
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain(join(tmp, '.agents', 'skills'));
+  });
+
+  it('checks only skill trees that exist', async () => {
+    await copyArchonSkill(tmp);
+    await removeTempTree(join(tmp, '.agents'));
+
+    const result = await checkArchonSkill(tmp);
+    expect(result.status).toBe('pass');
+  });
+
+  it('fails when an installed archon-cli differs from the bundled skill', async () => {
+    await copyArchonSkill(tmp);
+    writeFileSync(join(tmp, '.claude', 'skills', 'archon-cli', 'SKILL.md'), 'stale');
+
+    const result = await checkArchonSkill(tmp);
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('differs from the skill bundled');
+  });
+
+  it('passes when both installed copies match the bundled skill', async () => {
+    await copyArchonSkill(tmp);
+    const result = await checkArchonSkill(tmp);
     expect(result.status).toBe('pass');
     expect(result.message).toContain('archon-cli');
   });
