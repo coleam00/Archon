@@ -7,6 +7,7 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { listDashboardRuns, findWorkflowRunsByIdPrefix } from '../db/workflows';
+import { toError } from '../utils/error';
 import {
   abandonWorkflow,
   approveWorkflow,
@@ -28,7 +29,7 @@ export interface ManageRunContext {
   startWorkflow?: (workflowName: string, message: string) => Promise<string>;
   /**
    * Continuation seam for a gate the agent just resolved. Called with the run
-   * (as read BEFORE the resolution) once `approve`/`reject` leaves it resumable
+   * reloaded AFTER the committed decision leaves it resumable
    * — never for a reject that cancelled the run, which is already terminal.
    *
    * Resolving a gate and continuing the run are two halves of one user action:
@@ -414,7 +415,7 @@ async function handleWrite(
       // so a loop with a completed condition finalizes from its persisted output on resume.
       const feedback = willFinalize ? undefined : message;
       const result = await approveWorkflow(id, feedback);
-      const continues = signalGateResolved(ctx, run, 'approve');
+      const continues = await signalGateResolved(ctx, run, 'approve');
       if (result.type !== 'interactive_loop') {
         return `Approved ${result.workflowName} (${id.slice(0, 8)}).${continues}`;
       }
@@ -429,10 +430,8 @@ async function handleWrite(
         const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
         return `Rejected and cancelled ${result.workflowName} (${id.slice(0, 8)})${suffix}. Nothing further runs.`;
       }
-      const continues = signalGateResolved(ctx, run, 'reject');
-      return result.newMode
-        ? `Rejected ${result.workflowName} (${id.slice(0, 8)}). The run continues.${continues}`
-        : `Rejected ${result.workflowName} (${id.slice(0, 8)}). It reworks with your feedback.${continues}`;
+      const continues = await signalGateResolved(ctx, run, 'reject');
+      return `Rejected ${result.workflowName} (${id.slice(0, 8)}).${continues}`;
     }
     case 'respond': {
       // Any decision the gate declared, not just approve/reject (#2707 step 2).
@@ -451,12 +450,10 @@ async function handleWrite(
           const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
           return `Rejected and cancelled ${result.workflowName} (${id.slice(0, 8)})${suffix}. Nothing further runs.`;
         }
-        const continues = signalGateResolved(ctx, run, 'respond');
-        return result.newMode
-          ? `Rejected ${result.workflowName} (${id.slice(0, 8)}). The run continues.${continues}`
-          : `Rejected ${result.workflowName} (${id.slice(0, 8)}). It reworks with your feedback.${continues}`;
+        const continues = await signalGateResolved(ctx, run, 'respond');
+        return `Rejected ${result.workflowName} (${id.slice(0, 8)}).${continues}`;
       }
-      const continues = signalGateResolved(ctx, run, 'respond');
+      const continues = await signalGateResolved(ctx, run, 'respond');
       return `Responded '${decision}' to ${result.workflowName} (${id.slice(0, 8)}).${continues}`;
     }
   }
@@ -466,19 +463,19 @@ async function handleWrite(
 
 /**
  * Hand a just-resolved gate to the caller's continuation and describe the
- * outcome for the agent. Returns the sentence to append to the action's reply:
- * a promise the run continues when a continuation is wired, and the explicit
- * manual step when it is not — never silence, which reads as "it's handled".
+ * request for the agent. Reload after the decision: first-node legacy rework
+ * has no completed node, so hydration needs the committed rejection metadata.
+ * A preparation failure must not make the already-recorded decision look failed.
  *
  * A container run is never handed over: `executeWorkflow` refuses a resume it
  * cannot rewire, so scheduling one would fail the run to say what we can say
  * here for free (#2565).
  */
-function signalGateResolved(
+async function signalGateResolved(
   ctx: ManageRunContext,
   run: WorkflowRun,
   action: 'approve' | 'reject' | 'respond'
-): string {
+): Promise<string> {
   if (isContainerRun(run)) {
     log.info({ runId: run.id, action }, 'manage_run.gate_continuation_container_only_cli');
     return (
@@ -487,13 +484,28 @@ function signalGateResolved(
       'the same project.'
     );
   }
-  const scheduled = ctx.onGateResolved?.(run, action) ?? false;
-  if (!scheduled) {
+  const manualResume = ` The run stays paused — it must be resumed separately (\`/workflow resume ${run.id}\`).`;
+  if (!ctx.onGateResolved) {
     log.info({ runId: run.id, action }, 'manage_run.gate_continuation_unavailable');
-    return ` The run stays paused — it must be resumed separately (\`/workflow resume ${run.id}\`).`;
+    return manualResume;
+  }
+  let continuationRun: WorkflowRun;
+  try {
+    continuationRun = await resumeWorkflow(run.id);
+  } catch (error) {
+    const err = toError(error);
+    log.warn({ err, runId: run.id, action }, 'manage_run.gate_continuation_prepare_failed');
+    return (
+      ` The decision is recorded, but continuation could not be requested: ${err.message}. ` +
+      `Check \`/workflow status ${run.id}\` before retrying \`/workflow resume ${run.id}\`.`
+    );
+  }
+  if (!ctx.onGateResolved(continuationRun, action)) {
+    log.info({ runId: run.id, action }, 'manage_run.gate_continuation_unavailable');
+    return manualResume;
   }
   log.info({ runId: run.id, action }, 'manage_run.gate_continuation_scheduled');
-  return ' The run continues from here — no separate resume needed.';
+  return ' Continuation requested — no separate resume needed.';
 }
 
 /**

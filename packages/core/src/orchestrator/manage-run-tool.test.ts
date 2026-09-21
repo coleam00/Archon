@@ -5,6 +5,9 @@ import type {
   RejectionOperationResult,
 } from '../operations/workflow-operations';
 
+const { hydrateResumableRun: realHydrateResumableRun } = await import('@archon/workflows/executor');
+const { createWorkflowDeps: realCreateWorkflowDeps } = await import('../workflows/store-adapter');
+
 const CODEBASE_ID = 'proj-1';
 
 // ---------------------------------------------------------------------------
@@ -149,6 +152,7 @@ beforeEach(() => {
   ]) {
     m.mockReset();
   }
+  mockResume.mockImplementation(id => Promise.resolve(makeRun({ id, status: 'paused' })));
 });
 
 describe('manage_run — progressive disclosure', () => {
@@ -508,7 +512,7 @@ describe('manage_run — destructive confirmation gate', () => {
     expect(mockReject).toHaveBeenCalledWith('r1abcdef-1234', 'Rejected');
   });
 
-  test('reject with confirm and an on-reject prompt reports rework, not cancellation', async () => {
+  test('reject with confirm and an on-reject prompt records rejection, not cancellation', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
     mockReject.mockResolvedValue(rejectionResult({ cancelled: false }));
     const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
@@ -518,7 +522,7 @@ describe('manage_run — destructive confirmation gate', () => {
       confirm: true,
       message: 'redo it',
     });
-    expect(out).toContain('rework');
+    expect(out).toContain('Rejected wf');
     expect(out).not.toContain('cancelled');
   });
 
@@ -615,7 +619,130 @@ describe('manage_run — gate continuation', () => {
     };
   }
 
-  test('approve hands the run to the continuation and says the run moves on', async () => {
+  function makeHydrationDeps(reloadedRun: WorkflowRun) {
+    const deps = realCreateWorkflowDeps();
+    const resumeClaim = mock(async () => ({ ...reloadedRun, status: 'running' as const }));
+    return {
+      deps: {
+        ...deps,
+        store: {
+          ...deps.store,
+          getDagResumeSnapshot: async () => ({
+            completedNodeOutputs: new Map(),
+            fanOutSnapshots: new Map(),
+            unresolvedNodeStarts: new Set<string>(),
+            costUsd: 0,
+          }),
+          listWorkflowRunNodeSessions: async () => [],
+          resumeWorkflowRun: resumeClaim,
+        },
+      },
+      resumeClaim,
+    };
+  }
+
+  test('approve, reject, and respond callbacks receive the reloaded post-decision run', async () => {
+    const actions = [
+      {
+        action: 'approve' as const,
+        arrange: () => mockApprove.mockResolvedValue(approvalResult('approval_gate')),
+        input: {},
+      },
+      {
+        action: 'reject' as const,
+        arrange: () => mockReject.mockResolvedValue(rejectionResult({ cancelled: false })),
+        input: { message: 'redo' },
+      },
+      {
+        action: 'respond' as const,
+        arrange: () => mockRespond.mockResolvedValue(approvalResult('approval_gate')),
+        input: { decision: 'revise' },
+      },
+      {
+        action: 'respond' as const,
+        arrange: () => mockRespond.mockResolvedValue(rejectionResult({ cancelled: false })),
+        input: { decision: 'reject', message: 'redo' },
+      },
+    ];
+
+    for (const [index, scenario] of actions.entries()) {
+      const stale = makeRun({ status: 'paused', metadata: { approval: { nodeId: 'gate' } } });
+      const reloaded = makeRun({
+        status: 'paused',
+        metadata: { approval: { nodeId: 'gate', resolved: 'approved' }, marker: index },
+      });
+      mockFindByPrefix.mockResolvedValueOnce([stale]);
+      mockResume.mockResolvedValueOnce(reloaded);
+      scenario.arrange();
+      const received: WorkflowRun[] = [];
+
+      const out = await buildManageRunTool({
+        codebaseId: CODEBASE_ID,
+        onGateResolved: run => {
+          received.push(run);
+          return true;
+        },
+      }).handler({
+        action: scenario.action,
+        runId: 'r1abcdef',
+        confirm: true,
+        ...scenario.input,
+      });
+
+      expect(received).toEqual([reloaded]);
+      expect(out).toContain('Continuation requested');
+    }
+  });
+
+  test('legacy first-node rejection hydrates from the committed rejection state', async () => {
+    const stale = makeRun({
+      status: 'paused',
+      metadata: {
+        approval: {
+          nodeId: 'gate',
+          message: 'Review',
+          onRejectPrompt: 'Rework the plan',
+        },
+      },
+    });
+    const reloaded = makeRun({
+      status: 'paused',
+      metadata: {
+        approval: {
+          nodeId: 'gate',
+          message: 'Review',
+          onRejectPrompt: 'Rework the plan',
+          resolved: 'rejected',
+        },
+        rejection_reason: 'Needs revision',
+        rejection_count: 1,
+      },
+    });
+    mockFindByPrefix.mockResolvedValue([stale]);
+    mockReject.mockResolvedValue(rejectionResult({ cancelled: false }));
+    mockResume.mockResolvedValue(reloaded);
+    let hydration: ReturnType<typeof realHydrateResumableRun> | undefined;
+    const { deps, resumeClaim } = makeHydrationDeps(reloaded);
+
+    await buildManageRunTool({
+      codebaseId: CODEBASE_ID,
+      onGateResolved: run => {
+        hydration = realHydrateResumableRun(deps, run);
+        return true;
+      },
+    }).handler({
+      action: 'reject',
+      runId: 'r1abcdef',
+      confirm: true,
+      message: 'Needs revision',
+    });
+
+    expect(hydration).toBeDefined();
+    expect(await hydration).not.toBeNull();
+    expect(resumeClaim).toHaveBeenCalledWith(reloaded.id);
+  });
+
+  test('approve hands the run to the continuation and acknowledges the request', async () => {
     const run = makeRun({ status: 'paused' });
     mockFindByPrefix.mockResolvedValue([run]);
     mockApprove.mockResolvedValue(approvalResult('approval_gate'));
@@ -628,7 +755,7 @@ describe('manage_run — gate continuation', () => {
     });
 
     expect(resolved).toEqual([{ run, action: 'approve' }]);
-    expect(out).toContain('continues from here');
+    expect(out).toContain('Continuation requested');
   });
 
   test('a reject that stages a rework continues; one that cancels does not', async () => {
@@ -644,7 +771,7 @@ describe('manage_run — gate continuation', () => {
       message: 'redo',
     });
     expect(resolved).toEqual([{ run, action: 'reject' }]);
-    expect(rework).toContain('continues from here');
+    expect(rework).toContain('Continuation requested');
 
     // A cancelled run is already in its terminal state — nothing to continue.
     mockReject.mockResolvedValue(rejectionResult());
@@ -656,6 +783,28 @@ describe('manage_run — gate continuation', () => {
     });
     expect(resolved).toHaveLength(1);
     expect(cancelled).toContain('Nothing further runs');
+    expect(mockResume).toHaveBeenCalledTimes(1);
+  });
+
+  test('a recorded decision stays successful when the post-decision reload fails', async () => {
+    mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
+    mockApprove.mockResolvedValue(approvalResult('approval_gate'));
+    mockResume.mockRejectedValue(new Error('database unavailable'));
+    const { resolved, ctx } = makeCtx();
+
+    const out = await buildManageRunTool(ctx).handler({
+      action: 'approve',
+      runId: 'r1abcdef',
+      confirm: true,
+    });
+
+    expect(mockApprove).toHaveBeenCalled();
+    expect(resolved).toHaveLength(0);
+    expect(out).toContain('Approved');
+    expect(out).toContain('decision is recorded');
+    expect(out).toContain('database unavailable');
+    expect(out).toContain('/workflow status r1abcdef-1234');
+    expect(out).toContain('/workflow resume r1abcdef-1234');
   });
 
   test('a preview call resolves nothing, so it never schedules a continuation', async () => {
@@ -685,6 +834,7 @@ describe('manage_run — gate continuation', () => {
 
     expect(mockApprove).toHaveBeenCalled(); // the decision is still recorded
     expect(resolved).toHaveLength(0);
+    expect(mockResume).not.toHaveBeenCalled();
     expect(out).toContain('isolation container');
     expect(out).toContain('archon workflow resume r1abcdef-1234');
     expect(out).not.toContain('continues from here');
@@ -705,6 +855,7 @@ describe('manage_run — gate continuation', () => {
 
     expect(out).toContain('stays paused');
     expect(out).toContain('/workflow resume r1abcdef-1234');
+    expect(mockResume).toHaveBeenCalledTimes(1);
   });
 
   test('without a continuation the tool names the manual resume instead of implying one', async () => {
@@ -720,6 +871,7 @@ describe('manage_run — gate continuation', () => {
 
     expect(out).toContain('stays paused');
     expect(out).toContain('/workflow resume r1abcdef-1234');
+    expect(mockResume).not.toHaveBeenCalled();
   });
 });
 

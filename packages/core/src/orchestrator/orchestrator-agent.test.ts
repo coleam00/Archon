@@ -4041,8 +4041,8 @@ describe('paused approval gate routing', () => {
     const hydrated = mockHydrateResumableRun.mock.calls[0] as unknown[];
     expect((hydrated[1] as { id: string }).id).toBe(run.id);
     expect(mockExecuteWorkflow).toHaveBeenCalled();
-    // The tool must tell the agent the run moves on, not that it stays parked.
-    expect(toolReplies[0]).toContain('continues from here');
+    // The tool acknowledges the continuation request before the host prepares it.
+    expect(toolReplies[0]).toContain('Continuation requested');
   });
 
   test('the agent rejecting a gate with on_reject rework resumes the run', async () => {
@@ -4067,7 +4067,7 @@ describe('paused approval gate routing', () => {
     expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'rejected' });
     expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).toHaveBeenCalled();
-    expect(toolReplies[0]).toContain('continues from here');
+    expect(toolReplies[0]).toContain('Continuation requested');
   });
 
   test('a reject that cancels the run does not try to resume it', async () => {
