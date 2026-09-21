@@ -477,7 +477,7 @@ function resolveScriptExecAuthoring({
 export const loopNodeSchema = dagNodeBaseSchema.extend({
   kind: z.literal('loop'),
   loop: loopNodeConfigSchema,
-  timeout: z.number().optional(),
+  timeout: execNodeSchema.shape.timeout,
 });
 
 /** DAG node that runs an AI prompt in a loop until a completion condition is met */
@@ -535,7 +535,7 @@ export const loopGroupNodeConfigSchema: z.ZodType<LoopGroupNodeConfig> = loopCon
 export const loopGroupNodeSchema = dagNodeBaseSchema.extend({
   kind: z.literal('loop_group'),
   loop_group: loopGroupNodeConfigSchema,
-  timeout: z.number().optional(),
+  timeout: execNodeSchema.shape.timeout,
 });
 
 /** DAG node that runs a multi-node sub-DAG in a loop until a completion condition is met */
@@ -1681,6 +1681,21 @@ export const dagNodeSchema = z
           "'retry' is not supported on loop_group nodes (loop_group manages its own iteration)",
         path: ['retry'],
       });
+    }
+
+    // Loop predicates are subprocesses, so a selected loop timeout has the same
+    // positive, finite contract as an exec timeout. The flat schema stays loose so
+    // modes that do not select timeout can keep dropping legacy ignored values.
+    if ((hasLoop || hasLoopGroup) && data.timeout !== undefined) {
+      const timeoutResult = execNodeSchema.shape.timeout.safeParse(data.timeout);
+      if (!timeoutResult.success) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            timeoutResult.error.issues[0]?.message ?? "'timeout' must be a positive number (ms)",
+          path: ['timeout'],
+        });
+      }
     }
 
     if (hasWait && data.output_format !== undefined) {

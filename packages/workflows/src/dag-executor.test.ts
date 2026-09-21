@@ -31446,6 +31446,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       nodes: [
         dagNodeSchema.parse({
           id: 'grp',
+          timeout: 600_000,
           loop_group: {
             until_bash:
               'printf "resume probe ran\\n"; printf "recheck note\\n" >&2; [ $check.output.decision = "approve" ]',
@@ -31466,17 +31467,29 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       ],
     };
 
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(store),
-        platform,
-        cwd: testDir,
-        workflow: ready(talkativeProbeWorkflow),
-        workflowRun,
-        logDir,
-        priorCompletedNodes,
-      })
-    );
+    const execSpy = spyOn(git, 'execFileAsync');
+    let resumeProbeTimeout: number | undefined;
+    try {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform,
+          cwd: testDir,
+          workflow: ready(talkativeProbeWorkflow),
+          workflowRun,
+          logDir,
+          priorCompletedNodes,
+        })
+      );
+      const resumeProbe = execSpy.mock.calls.find(call =>
+        (call[1] as string[]).some(arg => arg.includes('resume probe ran'))
+      );
+      resumeProbeTimeout = resumeProbe?.[2]?.timeout;
+    } finally {
+      execSpy.mockRestore();
+    }
+
+    expect(resumeProbeTimeout).toBe(600_000);
 
     // Zero provider calls means no fresh iteration ran, so the single retained row
     // below can only have come from the resume branch's probe — not the ordinary
@@ -33528,7 +33541,7 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
   });
 });
 
-// A loop predicate could not declare a time budget: both `until_bash` call sites passed a
+// A loop predicate could not declare a time budget: every `until_bash` execution path passed a
 // bare SUBPROCESS_DEFAULT_TIMEOUT while the ordinary bash/script paths already resolved
 // `node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT`. Nodes are built through the real schema, so
 // each test proves the whole chain (schema -> transform -> executor), not just the

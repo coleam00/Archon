@@ -2378,4 +2378,39 @@ describe('dagNodeSchema — loop and loop_group select timeout', () => {
     expect(result.success).toBe(true);
     if (result.success) expect(result.data).toMatchObject({ kind: 'loop_group', timeout: 600_000 });
   });
+
+  test.each([
+    ['loop', 0],
+    ['loop', -1],
+    ['loop', Number.POSITIVE_INFINITY],
+    ['loop_group', 0],
+    ['loop_group', -1],
+    ['loop_group', Number.POSITIVE_INFINITY],
+  ] as const)('rejects an invalid %s timeout of %s', (kind, timeout) => {
+    const mode =
+      kind === 'loop'
+        ? { loop: { prompt: 'p', until: 'DONE', max_iterations: 3 } }
+        : {
+            loop_group: {
+              until: 'DONE',
+              max_iterations: 3,
+              nodes: [{ id: 'x', prompt: 'x' }],
+            },
+          };
+    const result = dagNodeSchema.safeParse({ id: kind, timeout, ...mode });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ['timeout'],
+        })
+      );
+      if (Number.isFinite(timeout)) {
+        expect(result.error.issues).toContainEqual(
+          expect.objectContaining({ message: "'timeout' must be a positive number (ms)" })
+        );
+      }
+    }
+  });
 });

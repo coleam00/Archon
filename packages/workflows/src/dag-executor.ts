@@ -4881,7 +4881,7 @@ async function executeLoopGroupNode(
         try {
           await runSubprocess(execContext, resumedBashPath, ['-c', resumedSubstitutedBash], {
             cwd,
-            timeout: SUBPROCESS_DEFAULT_TIMEOUT,
+            timeout: node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT,
             protectedEnvKeys: config.protectedEnvKeys,
             protectedCredentialValues: config.protectedCredentialValues,
             retention: {
