@@ -645,22 +645,48 @@ nodes:
         fi
       fi
       # The flip prints a confirmation this node has no use for, and its stdout is
-      # not a value, so both streams are captured together and re-emitted only if
-      # the flip failed — where gh's own words are the diagnostic.
-      if ! FLIP=$(gh pr ready "$PR_NUMBER" --repo "$ORIGIN_REPO" 2>&1); then
-        printf '%s\n' "flip-ready: the ready flip failed: $FLIP" >&2
-        exit 1
-      fi
-      # The two reads below capture a VALUE, so their stderr is dropped rather than
-      # merged: a gh notice must never become the draft state or the delivered URL.
-      # Each failure names the read it could not complete, so neither is silent.
-      if ! draft=$(gh pr view "$PR_NUMBER" --repo "$ORIGIN_REPO" --json isDraft --jq .isDraft 2>/dev/null); then
-        printf '%s\n' "flip-ready: PR was flipped but its draft state could not be read back." >&2
-        exit 1
-      fi
-      if [ "$draft" != "false" ]; then
-        printf '%s\n' "flip-ready: PR still reports draft after the ready flip" >&2
-        exit 1
+      # not a value, so both streams are captured together and re-emitted only where
+      # the refusal is the diagnostic — in gh's own words.
+      if FLIP=$(gh pr ready "$PR_NUMBER" --repo "$ORIGIN_REPO" 2>&1); then
+        # A VALUE read, so its stderr is dropped rather than merged: a gh notice must
+        # never become the draft state. The failure names the read it could not
+        # complete, so it is not silent. Exit 0 is not proof the state changed.
+        if ! draft=$(gh pr view "$PR_NUMBER" --repo "$ORIGIN_REPO" --json isDraft --jq .isDraft 2>/dev/null); then
+          printf '%s\n' "flip-ready: PR was flipped but its draft state could not be read back." >&2
+          exit 1
+        fi
+        if [ "$draft" != "false" ]; then
+          printf '%s\n' "flip-ready: PR still reports draft after the ready flip" >&2
+          exit 1
+        fi
+      else
+        # gh refuses to ready any pull request that is not an open draft, so this
+        # refusal covers both a genuine failure and a pull request someone merged or
+        # closed while the run was in flight. gh's wording is not the classifier —
+        # the pull request's own state is. Another VALUE read, stderr dropped, and a
+        # state that cannot be read leaves the refusal as the failure it looks like.
+        if ! STATE=$(gh pr view "$PR_NUMBER" --repo "$ORIGIN_REPO" --json state --jq .state 2>/dev/null); then
+          STATE=""
+        fi
+        case "$STATE" in
+          MERGED)
+            # A merged pull request IS the outcome this node exists to reach, reached
+            # by another hand, so the delivery is reported rather than failed. The
+            # draft read-back above is not repeated here: it verifies an action this
+            # branch did not take, and a merged pull request's draft flag answers
+            # nothing. The URL read below still runs, so stdout carries the same
+            # declared result as a flip, and this note reaches the operator.
+            printf '%s\n' "flip-ready: the PR was already merged, so no flip was needed." >&2
+            ;;
+          CLOSED)
+            printf '%s\n' "flip-ready: the PR is CLOSED without a merge, so there is no delivery to report." >&2
+            exit 1
+            ;;
+          *)
+            printf '%s\n' "flip-ready: the ready flip failed: $FLIP" >&2
+            exit 1
+            ;;
+        esac
       fi
       # This node's stdout is its declared result and nothing else. gh's own --jq
       # composes the document, so the URL never passes through shell quoting, and
@@ -669,7 +695,7 @@ nodes:
       # tail's own report reads the same field, neither re-deriving a URL from raw
       # text.
       if ! gh pr view "$PR_NUMBER" --repo "$ORIGIN_REPO" --json url --jq '{pr_url: .url}' 2>/dev/null; then
-        printf '%s\n' "flip-ready: PR was flipped but its URL could not be read back." >&2
+        printf '%s\n' "flip-ready: the PR URL could not be read back." >&2
         exit 1
       fi
     output_format:
