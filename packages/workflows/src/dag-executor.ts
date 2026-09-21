@@ -4776,7 +4776,7 @@ async function executeLoopGroupNode(
         try {
           await runSubprocess(execContext, resumedBashPath, ['-c', resumedSubstitutedBash], {
             cwd,
-            timeout: SUBPROCESS_DEFAULT_TIMEOUT,
+            timeout: node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT,
             protectedEnvKeys: config.protectedEnvKeys,
             protectedCredentialValues: config.protectedCredentialValues,
             retention: {
@@ -5243,7 +5243,7 @@ async function executeLoopGroupNode(
         );
         await runSubprocess(execContext, groupBashPath, ['-c', substitutedBash], {
           cwd,
-          timeout: SUBPROCESS_DEFAULT_TIMEOUT,
+          timeout: node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT,
           protectedEnvKeys: config.protectedEnvKeys,
           protectedCredentialValues: config.protectedCredentialValues,
           retention: {
@@ -6819,7 +6819,7 @@ async function executeLoopNode(
         );
         await runSubprocess(execContext, loopBashPath, ['-c', substitutedBash], {
           cwd,
-          timeout: SUBPROCESS_DEFAULT_TIMEOUT,
+          timeout: node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT,
           protectedEnvKeys: config.protectedEnvKeys,
           protectedCredentialValues: config.protectedCredentialValues,
           retention: {
