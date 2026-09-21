@@ -679,15 +679,26 @@ function parseDagNode(
     getLog().warn({ id: node.id }, 'node_on_timeout_ignored');
   }
 
-  // Warn about AI-specific fields on non-AI nodes (runtime behavior, not schema errors)
+  // parseWarnings owns author-facing diagnostics; the structured log observes the
+  // same message for operators without becoming a second classification path.
   const nonAiNode = ignoredFieldsForNode(node);
   if (nonAiNode) {
     const presentAiFields = nonAiNode.fields.filter(
       f => (raw as Record<string, unknown>)[f] !== undefined
     );
     if (presentAiFields.length > 0) {
+      const quoted = presentAiFields.map(f => `'${f}'`).join(', ');
+      const plural = presentAiFields.length > 1;
+      const message =
+        nonAiNode.type === 'include'
+          ? `Node '${id}': ${quoted} ${plural ? 'are' : 'is'} ignored and will have no effect ` +
+            '(an include attaches a sub-graph and does not reconfigure it; declare the ' +
+            `${plural ? 'fields' : 'field'} on the included nodes instead)`
+          : `Node '${id}': ${quoted} ${plural ? 'are' : 'is'} not supported on this node type ` +
+            `(${nonAiNode.type}) — ${plural ? 'they are' : 'it is'} ignored at run time.`;
+      warnings.push(message);
       getLog().warn(
-        { id: node.id, fields: presentAiFields },
+        { id: node.id, fields: presentAiFields, warning: message },
         `${nonAiNode.type}_node_ai_fields_ignored`
       );
     }

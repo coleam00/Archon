@@ -130,7 +130,7 @@ const mockCreateWorkflowRun = mock<IWorkflowStore['createWorkflowRun']>(() => {
     conversation_id: 'worker-conv-1',
     parent_conversation_id: 'parent-conv',
     codebase_id: 'cb-1',
-    status: 'running',
+    status: 'pending',
     outcome: null,
     user_message: 'run it',
     metadata: {},
@@ -290,6 +290,10 @@ mock.module('@archon/workflows/executor', () => ({
   withCapturedSource: mock((body: Parameters<typeof withObservableCapturedSource>[1]) =>
     withObservableCapturedSource(capturedSourceOwnerCalls, body)
   ),
+  // Statically imported (transitively, via `InProcessWorkflowEngine`) by the dispatch
+  // path; a named import must link even when these tests never exercise
+  // the resume path.
+  hydrateResumableRun: mock(() => Promise.resolve(null)),
 }));
 mock.module('@archon/workflows/router', () => ({
   findWorkflow: mock(() => undefined),

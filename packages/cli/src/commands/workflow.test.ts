@@ -2305,12 +2305,15 @@ describe('workflowRunCommand — continuation and capture ownership (#2646)', ()
       workflows: [makeTestWorkflowWithSource({ name: 'review-block', description: 'edited' })],
       errors: [],
     });
-    mockResolveContinuationWorkflow.mockResolvedValueOnce({
+    const frozenContinuation = {
       workflow: frozen,
       roots: CAPTURED_SOURCE_ROOTS,
-      workflows: [{ workflow: frozen, source: 'project' }],
+      workflows: [{ workflow: frozen, source: 'project' as const }],
       errors: [],
-    });
+    };
+    mockResolveContinuationWorkflow
+      .mockResolvedValueOnce(frozenContinuation)
+      .mockResolvedValueOnce(frozenContinuation);
     (workflowDb.findResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-prior',
       working_path: null,
@@ -2341,8 +2344,8 @@ describe('workflowRunCommand — continuation and capture ownership (#2646)', ()
 
     // Live discovery never even runs: the continuation carries the discovery it paid for.
     expect(discoverMock).not.toHaveBeenCalled();
-    // The row is resolved before discovery and handed to the shared entry point...
-    expect(mockResolveContinuationWorkflow).toHaveBeenCalledTimes(1);
+    // Host preparation and engine admission both resolve this run's recorded source.
+    expect(mockResolveContinuationWorkflow).toHaveBeenCalledTimes(2);
     const continuedRun = mockResolveContinuationWorkflow.mock.calls[0]?.[1] as unknown as {
       id: string;
     };
