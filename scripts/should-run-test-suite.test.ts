@@ -39,6 +39,10 @@ describe('test-suite change decision', () => {
     ['.archon/workflows/sdlc/implement/commands/implement.md', 'a packaged command prompt'],
     ['.claude/skills/archon-cli/SKILL.md', 'the bundled CLI skill'],
     ['packages/docs-web/src/content/docs/reference/provider-capabilities.md', 'a generated doc'],
+    [
+      'packages/docs-web/src/content/docs/contributing/adding-a-community-provider.mdx',
+      'the capabilities template the providers suite reads',
+    ],
   ])('runs for %s, which is %s rather than prose', file => {
     expect(shouldRunTestSuite([file])).toBe(true);
   });

@@ -4,6 +4,7 @@ import { resolvedBodyNodes } from './graph-plan';
 import { dagNodeSchema } from './schemas';
 import type { WorkflowDefinition, ResolvedWorkflow, DagNode } from './schemas';
 import { COMPOSE_FAN_OUT_STEP_MARKER } from './fan-out-identity';
+import { evaluateCondition } from './condition-evaluator';
 import {
   COMPILED_LOOP_COMMAND,
   COMPOSED_NODE,
@@ -2413,6 +2414,60 @@ describe('expandWorkflowIncludes — composed-node metadata survives nesting', (
         entryTriggerRule: 'all_success',
       },
     ]);
+  });
+
+  test('loop_group body boundaries are renamed when the enclosing block is included again', () => {
+    // Regression: lifecycle → ship → deliver. deliver's corrections loop body carried
+    // ship-level boundary ids ('gate-direct'); including ship into lifecycle renamed the
+    // top-level nodes to 'ship__gate-direct' but left the body's boundary untouched, so
+    // the first correction iteration was skipped as "upstream failed: gate-direct".
+    const leaf = wf('leaf', [
+      { id: 'seed', bash: 'echo seed' },
+      {
+        id: 'loop',
+        depends_on: ['seed'],
+        loop_group: {
+          until_bash: 'test 1 = 1',
+          max_iterations: 1,
+          nodes: [{ id: 'body', bash: 'echo body' }],
+        },
+      },
+    ]);
+    const middle = wf('middle', [
+      { id: 'm-gate', bash: 'echo m' },
+      {
+        id: 'inner',
+        include: 'leaf',
+        depends_on: ['m-gate'],
+        when: "$m-gate.output == 'run'",
+        trigger_rule: 'none_failed_min_one_success',
+      },
+    ]);
+    const top = wf('top', [
+      { id: 't-gate', bash: 'echo t' },
+      { id: 'outer', include: 'middle', depends_on: ['t-gate'] },
+    ]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(leaf, middle, top));
+    expect(errors).toHaveLength(0);
+    const loop = nodeById(workflows.get('top')!, 'outer__inner__loop');
+    const body = loopGroupNodes(loop)?.find(node => node.id === 'body');
+    expect(composedBoundaries(body)?.map(boundary => boundary.dependsOn)).toEqual([
+      ['t-gate'],
+      ['outer__m-gate'],
+    ]);
+    expect(composedBoundaries(body)?.map(boundary => boundary.entryTriggerRules)).toEqual([
+      ['all_success'],
+      ['none_failed_min_one_success'],
+    ]);
+    const innerBoundary = composedBoundaries(body)?.at(-1);
+    expect(innerBoundary?.when).toBe("$outer__m-gate.output == 'run'");
+    expect(
+      evaluateCondition(
+        innerBoundary!.when!,
+        new Map([['outer__m-gate', { state: 'completed', output: 'run' }]])
+      )
+    ).toEqual({ parsed: true, result: true });
   });
 });
 
