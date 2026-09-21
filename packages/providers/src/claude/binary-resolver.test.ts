@@ -21,16 +21,24 @@ const canSymlink = (() => {
   // before any test, so it cannot use trackTempRoots (which registers an afterEach), and
   // a recursive rmSync is what the cleanup-drift guard exists to refuse.
   const link = join(tmpdir(), `archon-symlink-probe-${process.pid}-${Date.now()}`);
+  let created = false;
   try {
     symlinkSync(join(tmpdir(), 'archon-symlink-probe-target'), link);
+    created = true;
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if (
+      error !== null &&
+      typeof error === 'object' &&
+      'code' in error &&
+      (error.code === 'EACCES' || error.code === 'EPERM')
+    ) {
+      return false;
+    }
+    throw error;
   } finally {
-    try {
+    if (created) {
       unlinkSync(link);
-    } catch {
-      // The symlink was never created — nothing to remove.
     }
   }
 })();
