@@ -1,6 +1,7 @@
 import { terminalRecordSchema } from '@archon/workflows/schemas/terminal-record';
-import { describe, test, expect, mock, beforeAll, beforeEach, afterEach } from 'bun:test';
-import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { describe, test, expect, mock, beforeAll, beforeEach, afterEach, spyOn } from 'bun:test';
+import { mkdir, mkdtemp, rm, symlink, writeFile, realpath } from 'fs/promises';
+import * as fsPromises from 'fs/promises';
 import { tmpdir } from 'os';
 import { join, sep } from 'path';
 import { OpenAPIHono } from '@hono/zod-openapi';
@@ -3524,6 +3525,42 @@ describe('GET /api/artifacts/:runId/* storage-key resolution', () => {
     await rm(used, { recursive: true, force: true });
   });
 
+  test.each([
+    ['ENOENT', 404],
+    ['EACCES', 500],
+  ] as const)('maps a post-resolution read failure %s to %d', async (code, status) => {
+    const runId = 'run-read-error';
+    const dir = join(wsRoot(), '_local', 'workspace', 'artifacts', 'runs', runId);
+    const target = join(dir, 'report.md');
+    await mkdir(dir, { recursive: true });
+    await writeFile(target, '# report');
+    const resolvedTarget = await realpath(target);
+    mockGetWorkflowRun.mockImplementationOnce(async () => ({
+      ...MOCK_RUNNING_RUN,
+      id: runId,
+      codebase_id: 'cb-local',
+    }));
+    mockGetCodebase.mockImplementationOnce(async () => ({
+      name: 'workspace',
+      kind: 'repo',
+      default_cwd: '/home/u/workspace',
+    }));
+    const { app } = makeApp();
+    const read = spyOn(fsPromises, 'readFile').mockRejectedValueOnce(
+      Object.assign(new Error('artifact read failed'), { code })
+    );
+    try {
+      const response = await app.request(`/api/artifacts/${runId}/report.md`);
+      expect(read).toHaveBeenCalledWith(resolvedTarget, 'utf-8');
+      expect(response.status).toBe(status);
+      expect(await response.json()).toEqual({
+        error: code === 'ENOENT' ? 'Artifact file not found' : 'Failed to read artifact file',
+      });
+    } finally {
+      read.mockRestore();
+    }
+  });
+
   test('returns 404 when there is no codebase and no output_root to resolve from', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => ({
       ...MOCK_RUNNING_RUN,
@@ -3645,8 +3682,8 @@ describe('GET /api/artifacts/:runId/* storage-key resolution', () => {
     // producing node (packages/workflows/src/artifact-pointer.ts) against its own run's
     // artifacts root. Those two fields ARE this route's parameters: the pointer needs no
     // resolution surface of its own. The read side owns reachability and real-path checks
-    // by design; this route does lexical containment on the untrusted request path today,
-    // and real-path resolution at read time is not yet implemented (#3160).
+    // by design; this route checks lexical and real-path containment at read time
+    // for stable artifact paths (#3160).
     const runId = 'run-serve-pointer';
     const dir = join(wsRoot(), '_local', 'workspace', 'artifacts', 'runs', runId);
     await mkdir(join(dir, 'review'), { recursive: true });
@@ -3670,4 +3707,97 @@ describe('GET /api/artifacts/:runId/* storage-key resolution', () => {
     expect(response.status).toBe(200);
     expect(await response.text()).toBe('# the full report');
   });
+
+  // Git-Bash cannot reliably create the symlinks these cases exercise.
+  const isWin = process.platform === 'win32';
+
+  test.skipIf(isWin)(
+    'an escape symlink is refused with 404 and never leaks its target (#3160)',
+    async () => {
+      const runId = 'run-serve-symlink-escape';
+      const dir = join(wsRoot(), '_local', 'workspace', 'artifacts', 'runs', runId);
+      await mkdir(dir, { recursive: true });
+      const sentinel = 'TOP_SECRET_SENTINEL_VALUE_DO_NOT_LEAK';
+      await writeFile(join(mockArchonHome, 'secret.txt'), sentinel);
+      await symlink(`../../../../../../secret.txt`, join(dir, 'escape.txt'));
+
+      mockGetWorkflowRun.mockImplementationOnce(async () => ({
+        ...MOCK_RUNNING_RUN,
+        id: runId,
+        codebase_id: 'cb-local',
+      }));
+      mockGetCodebase.mockImplementationOnce(async () => ({
+        name: 'workspace',
+        kind: 'repo',
+        default_cwd: '/home/u/workspace',
+      }));
+
+      const { app } = makeApp();
+      const response = await app.request(`/api/artifacts/${runId}/escape.txt`);
+
+      expect(response.status).toBe(404);
+      const bodyText = await response.text();
+      expect(bodyText).not.toContain(sentinel);
+      const body = JSON.parse(bodyText) as { error: string };
+      expect(body.error).toBe('Artifact file not found');
+    }
+  );
+
+  test.skipIf(isWin)(
+    'a sibling symlink inside the artifacts directory is still served (#3160)',
+    async () => {
+      const runId = 'run-serve-symlink-sibling';
+      const dir = join(wsRoot(), '_local', 'workspace', 'artifacts', 'runs', runId);
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, 'target.md'), '# sibling target');
+      await symlink('target.md', join(dir, 'link.md'));
+
+      mockGetWorkflowRun.mockImplementationOnce(async () => ({
+        ...MOCK_RUNNING_RUN,
+        id: runId,
+        codebase_id: 'cb-local',
+      }));
+      mockGetCodebase.mockImplementationOnce(async () => ({
+        name: 'workspace',
+        kind: 'repo',
+        default_cwd: '/home/u/workspace',
+      }));
+
+      const { app } = makeApp();
+      const response = await app.request(`/api/artifacts/${runId}/link.md`);
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe('# sibling target');
+    }
+  );
+
+  test.skipIf(isWin)(
+    'still serves when the workspace itself is a symlinked ancestor (#3160)',
+    async () => {
+      const runId = 'run-serve-symlinked-workspace';
+      const realWs = join(mockArchonHome, 'real-ws');
+      await mkdir(realWs, { recursive: true });
+      await symlink(realWs, wsRoot());
+      const dir = join(wsRoot(), '_local', 'workspace', 'artifacts', 'runs', runId);
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, 'plan.md'), '# under a symlinked workspace');
+
+      mockGetWorkflowRun.mockImplementationOnce(async () => ({
+        ...MOCK_RUNNING_RUN,
+        id: runId,
+        codebase_id: 'cb-local',
+      }));
+      mockGetCodebase.mockImplementationOnce(async () => ({
+        name: 'workspace',
+        kind: 'repo',
+        default_cwd: '/home/u/workspace',
+      }));
+
+      const { app } = makeApp();
+      const response = await app.request(`/api/artifacts/${runId}/plan.md`);
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe('# under a symlinked workspace');
+    }
+  );
 });
