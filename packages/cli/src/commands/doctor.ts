@@ -5,7 +5,7 @@
  * return value so a doctor failure does not abort setup (the env file was
  * already written successfully).
  */
-import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'fs';
+import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { execFileAsync } from '@archon/git';
@@ -733,6 +733,32 @@ type LoadBundledSkillFiles = () => Promise<Record<string, string>>;
 const loadBundledSkillFiles: LoadBundledSkillFiles = async () =>
   (await import('../bundled-skill')).BUNDLED_SKILL_FILES;
 
+function skillTreeMatches(skillRoot: string, bundledFiles: Record<string, string>): boolean {
+  const unmatched = new Set(Object.keys(bundledFiles));
+  const pending = [{ absolute: skillRoot, relative: '' }];
+
+  while (pending.length > 0) {
+    const directory = pending.pop();
+    if (!directory) break;
+
+    for (const entry of readdirSync(directory.absolute, { withFileTypes: true })) {
+      const absolute = join(directory.absolute, entry.name);
+      const relative = directory.relative ? `${directory.relative}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        pending.push({ absolute, relative });
+      } else if (
+        !entry.isFile() ||
+        !unmatched.delete(relative) ||
+        readFileSync(absolute, 'utf-8') !== bundledFiles[relative]
+      ) {
+        return false;
+      }
+    }
+  }
+
+  return unmatched.size === 0;
+}
+
 /**
  * Catch the v0.10.0 skill migration that `archon skill install` performs but
  * upgrades never run: leftover `archon` / `manage-run` roots, or a missing
@@ -790,11 +816,7 @@ export async function checkArchonSkill(
   const bundledFiles = await loadFiles();
   for (const skillsRoot of installedRoots) {
     const currentRoot = join(skillsRoot, CURRENT_SKILL_ROOT);
-    const differs = Object.entries(bundledFiles).some(([relativePath, content]) => {
-      const installedPath = join(currentRoot, relativePath);
-      return !existsSync(installedPath) || readFileSync(installedPath, 'utf-8') !== content;
-    });
-    if (differs) {
+    if (!skillTreeMatches(currentRoot, bundledFiles)) {
       return {
         label,
         status: 'fail',

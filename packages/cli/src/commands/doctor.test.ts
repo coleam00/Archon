@@ -971,6 +971,21 @@ describe('checkArchonSkill', () => {
     expect(result.message).toContain('differs from the skill bundled');
   });
 
+  it('fails when either installed archon-cli tree contains an extra file', async () => {
+    await copyArchonSkill(tmp);
+
+    for (const root of ['.claude', '.agents']) {
+      const extra = join(tmp, root, 'skills', 'archon-cli', 'retired.md');
+      writeFileSync(extra, 'retired guidance');
+
+      const result = await checkArchonSkill(tmp);
+      expect(result.status).toBe('fail');
+      expect(result.message).toContain(join(tmp, root, 'skills', 'archon-cli'));
+
+      await removeTempTree(extra);
+    }
+  });
+
   it('passes when both installed copies match the bundled skill', async () => {
     await copyArchonSkill(tmp);
     const result = await checkArchonSkill(tmp);
