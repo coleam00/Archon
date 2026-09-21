@@ -4,6 +4,7 @@ import { resolvedBodyNodes } from './graph-plan';
 import { dagNodeSchema } from './schemas';
 import type { WorkflowDefinition, ResolvedWorkflow, DagNode } from './schemas';
 import { COMPOSE_FAN_OUT_STEP_MARKER } from './fan-out-identity';
+import { evaluateCondition } from './condition-evaluator';
 import {
   COMPILED_LOOP_COMMAND,
   COMPOSED_NODE,
@@ -2438,6 +2439,7 @@ describe('expandWorkflowIncludes — composed-node metadata survives nesting', (
         id: 'inner',
         include: 'leaf',
         depends_on: ['m-gate'],
+        when: "$m-gate.output == 'run'",
         trigger_rule: 'none_failed_min_one_success',
       },
     ]);
@@ -2458,6 +2460,14 @@ describe('expandWorkflowIncludes — composed-node metadata survives nesting', (
       ['all_success'],
       ['none_failed_min_one_success'],
     ]);
+    const innerBoundary = composedBoundaries(body)?.at(-1);
+    expect(innerBoundary?.when).toBe("$outer__m-gate.output == 'run'");
+    expect(
+      evaluateCondition(
+        innerBoundary!.when!,
+        new Map([['outer__m-gate', { state: 'completed', output: 'run' }]])
+      )
+    ).toEqual({ parsed: true, result: true });
   });
 });
 
