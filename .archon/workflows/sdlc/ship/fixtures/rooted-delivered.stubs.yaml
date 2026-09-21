@@ -12,7 +12,15 @@
 # resolve — a pass here is proof the report is built from the delivered value and nothing
 # the checkout happens to be sitting on.
 triage__triage:
+  contract: READY
   route: investigate
+  design_first: false
+  complexity: risky
+  item: { repository: "", number: 0 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
   summary: "stub: current evidence leaves the causal chain unresolved"
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
 inv__investigate:

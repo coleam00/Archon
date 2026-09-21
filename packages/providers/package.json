@@ -60,6 +60,9 @@
       "src/types.test.ts"
     ],
     [
+      "src/community/_template/capabilities.test.ts"
+    ],
+    [
       "src/oauth.test.ts"
     ],
     [
@@ -78,7 +81,7 @@
       "src/claude/binary-resolver-dev.test.ts"
     ],
     [
-      "src/claude/native-tools.test.ts"
+      "src/native-tools-conformance.test.ts"
     ],
     [
       "src/claude/config.test.ts"
@@ -97,9 +100,6 @@
     ],
     [
       "src/community/pi/session-resolver.test.ts"
-    ],
-    [
-      "src/community/pi/native-tools.test.ts"
     ],
     [
       "src/community/pi/resource-loader.test.ts"

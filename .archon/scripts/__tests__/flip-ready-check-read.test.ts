@@ -5,7 +5,9 @@
  * output directly, so no fixture can observe a failed `gh` read. This test
  * extracts the live bash body from the workflow YAML, substitutes the one
  * template reference, and runs it against fake `gh` and `git` executables so a
- * failed check read must refuse before `gh pr ready` is invoked.
+ * failed check read must refuse before `gh pr ready` is invoked, and a refused
+ * flip is classified on the pull request's structured state rather than on gh's
+ * wording.
  */
 import { describe, expect, it } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -18,6 +20,10 @@ const WORKFLOW_YAML = resolve(
   import.meta.dir,
   '../../workflows/sdlc/deliver/archon-deliver.yaml'
 );
+
+/** gh's own refusal for a pull request that is no longer an open draft. */
+const READY_REFUSAL =
+  'X Pull request example/repo#42 is closed.\nOnly draft pull requests can be marked as "ready for review"';
 
 const trackTempRoot = trackTempRoots();
 
@@ -41,6 +47,10 @@ interface FakeGh {
   checksOut?: string;
   /** stderr when `gh pr checks` fails (exit 1); omit for success. */
   checksFail?: string;
+  /** stderr when `gh pr ready` refuses (exit 1); omit for a flip that succeeds. */
+  readyFail?: string;
+  /** stdout for `gh pr view --json state`; omit to make that read fail (exit 1). */
+  stateOut?: string;
 }
 
 function runFlipReady(gh: FakeGh): {
@@ -67,11 +77,17 @@ if [ "$1" = "pr" ] && [ "$2" = "checks" ]; then
 fi
 if [ "$1" = "pr" ] && [ "$2" = "ready" ]; then
   : > '${marker}'
+  if [ -n '${gh.readyFail ?? ''}' ]; then echo '${gh.readyFail ?? ''}' >&2; exit 1; fi
   echo "PR is ready"
   exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   case "$*" in
+    *'--json state'*)
+      if [ -n '${gh.stateOut ?? ''}' ]; then echo '${gh.stateOut ?? ''}'; exit 0; fi
+      echo "fake gh: state read failed" >&2
+      exit 1
+      ;;
     *'--json isDraft'*) echo "false"; exit 0 ;;
     *'--json url'*) echo "https://github.com/example/repo/pull/42"; exit 0 ;;
   esac
@@ -156,5 +172,40 @@ describe('flip-ready check-state read', () => {
     expect(result.readyCalled).toBe(false);
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain('flip-ready');
+  });
+});
+
+describe('flip-ready terminal-state classification', () => {
+  it('reports the delivery when the refused flip finds the PR already merged', () => {
+    const result = runFlipReady({ graphqlOut: '0', readyFail: READY_REFUSAL, stateOut: 'MERGED' });
+
+    expect(result.readyCalled).toBe(true);
+    expect(result.code).toBe(0);
+    expect(result.stdout.trim()).toBe('https://github.com/example/repo/pull/42');
+    expect(result.stderr).toContain('already merged');
+  });
+
+  it('refuses a PR closed without a merge and names the state', () => {
+    const result = runFlipReady({ graphqlOut: '0', readyFail: READY_REFUSAL, stateOut: 'CLOSED' });
+
+    expect(result.code).not.toBe(0);
+    expect(result.stdout.trim()).toBe('');
+    expect(result.stderr).toContain('CLOSED');
+    expect(result.stderr).not.toContain('the ready flip failed');
+  });
+
+  it("keeps a refusal on an open PR a failure carrying gh's own words", () => {
+    const result = runFlipReady({ graphqlOut: '0', readyFail: READY_REFUSAL, stateOut: 'OPEN' });
+
+    expect(result.code).toBe(1);
+    expect(result.stdout.trim()).toBe('');
+    expect(result.stderr).toContain('Only draft pull requests');
+  });
+
+  it("fails with gh's own words when the state behind a refusal cannot be read", () => {
+    const result = runFlipReady({ graphqlOut: '0', readyFail: READY_REFUSAL });
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('Only draft pull requests');
   });
 });

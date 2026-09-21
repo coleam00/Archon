@@ -14,7 +14,15 @@
 # honest is the flip's own contract being the only source of the delivered value —
 # `deliver/scripts/outcome.ts` and both composing tails bind `pr_url` and nothing else.
 triage__triage:
+  contract: READY
   route: deliver
+  design_first: false
+  complexity: small
+  item: { repository: "", number: 0 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
   summary: "stub: current code confirms a complete work order"
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
 gate-direct: '{"gate":"direct"}'

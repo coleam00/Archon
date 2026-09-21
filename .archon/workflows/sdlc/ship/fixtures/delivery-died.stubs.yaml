@@ -2,7 +2,15 @@
 # ship's outcome join even though triage succeeded. Terminal reporting after
 # delivery failure belongs to #3043; this fixture checks the original gate failure.
 triage__triage:
+  contract: READY
   route: deliver
+  design_first: false
+  complexity: small
+  item: { repository: "", number: 0 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
   summary: "stub: current code confirms a complete work order"
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
 deliver__impl__record-start: '{"start":"recorded"}'

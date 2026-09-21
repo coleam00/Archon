@@ -140,6 +140,16 @@ jobs:
       # drive root, recursively, so nothing under either was being scanned to
       # begin with. `Add-MpPreference` also cost 5s per run to change nothing.
       # Evidence: https://github.com/coleam00/Archon/pull/2943
+      # The first `uv run` on a fresh windows-latest VM costs 1.2 to 5.0 s (interpreter
+      # discovery and cache creation), measured on green legs. Paying it inside the first
+      # uv-backed test's own budget made that test a budget-edge case by itself, so it is
+      # paid here instead. Evidence on coleam00/Archon#3294.
+      - name: Warm uv
+        if: runner.os == 'Windows'
+        run: uv run python -c "print('uv warm')"
+
+      # The Windows leg runs with a 20 s default per-test budget (scripts/bun-test-command.ts)
+      # as an attributed runner-floor residual; see that file and coleam00/Archon#3294.
       - name: Run tests
         run: bun run test
 

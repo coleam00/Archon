@@ -13,12 +13,26 @@ import { requestDetachedRunStop } from './detached-run-control';
 // cleanup, and an unretried removal fails a test whose assertions already passed (#2306).
 const trackTempRoot = trackTempRoots();
 
-async function waitFor(check: () => boolean, timeoutMs = 5_000): Promise<void> {
+/**
+ * How long a spawned fixture process may take to reach the state a test polls for: to
+ * signal that it is ready, or to be gone once the terminator stopped it.
+ *
+ * This was the default on `waitFor`. Naming it and removing the default means a wait that
+ * needs a different window has to state one rather than inherit this.
+ */
+const FIXTURE_STATE_DEADLINE_MS = 5_000;
+
+async function waitFor(check: () => boolean, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!check()) {
     if (Date.now() >= deadline) throw new Error('Timed out waiting for fixture');
     await new Promise<void>(resolve => setTimeout(resolve, 25));
   }
+}
+
+/** Wait for a spawned fixture process to reach the state `check` describes. */
+async function waitForFixtureProcess(check: () => boolean): Promise<void> {
+  await waitFor(check, FIXTURE_STATE_DEADLINE_MS);
 }
 
 function waitForExit(
@@ -114,7 +128,7 @@ describe('detached run control integration', () => {
     const exited = waitForExit(owner);
 
     try {
-      await waitFor(() => existsSync(readyPath));
+      await waitForFixtureProcess(() => existsSync(readyPath));
       const pids = JSON.parse(readFileSync(readyPath, 'utf8')) as {
         owner: number;
         leakWriter: number;
@@ -129,7 +143,7 @@ describe('detached run control integration', () => {
       await exited;
       // Event-driven proof instead of a fixed sleep: wait for the descendant's
       // observable death. A dead process cannot act on any future signal.
-      await waitFor(() => !processExists(pids.leakWriter));
+      await waitForFixtureProcess(() => !processExists(pids.leakWriter));
       writeFileSync(goPath, 'go');
       expect(existsSync(leakPath)).toBe(false);
     } finally {
@@ -158,7 +172,7 @@ describe('detached run control integration', () => {
     const gonePid = doomed.pid;
     await waitForExit(doomed);
     // The premise, asserted rather than assumed: the terminator is aimed at nothing.
-    await waitFor(() => !processExists(gonePid));
+    await waitForFixtureProcess(() => !processExists(gonePid));
 
     const server = stubOwner(gonePid);
     await listen(server, path);

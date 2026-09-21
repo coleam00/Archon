@@ -1,0 +1,18 @@
+# Dry-run fixture: the outcome is already delivered, so no action; the verdict
+# derives archon-close and the run completes with outcome false.
+triage:
+  contract: NO_ACTION
+  route: no_action
+  design_first: false
+  complexity: small
+  item: { repository: "", number: 0 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+  summary: "stub: the requested outcome is already present on the current branch"
+fixture:
+  expect: completed
+  reached: [verdict]
+exec-code: true

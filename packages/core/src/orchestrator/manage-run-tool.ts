@@ -1,4 +1,4 @@
-import type { NativeTool } from '@archon/providers/types';
+import { defineNativeToolInputSchema, type NativeTool } from '@archon/providers/types';
 import { createLogger } from '@archon/paths';
 import {
   isApprovalContext,
@@ -79,41 +79,40 @@ const ACTIONS = [
 ] as const;
 type Action = (typeof ACTIONS)[number];
 
-const INPUT_SCHEMA: Record<string, unknown> = {
-  type: 'object',
+const INPUT_SCHEMA = defineNativeToolInputSchema({
   properties: {
     action: {
-      type: 'string',
-      enum: [...ACTIONS],
+      kind: 'enum',
+      values: [...ACTIONS],
       description:
         "What to do. Call action='help' (optionally with subtool=<action>) to see exactly what each action needs before using it.",
     },
     subtool: {
-      type: 'string',
+      kind: 'string',
       description:
         "For action=help: the action to describe (e.g. 'approve'). Omit for an overview.",
     },
     runId: {
-      type: 'string',
+      kind: 'string',
       description:
         'Run id — required for get/resume/cancel/abandon/approve/reject/respond. Accepts the short (8-char) or full id.',
     },
     workflow: {
-      type: 'string',
+      kind: 'string',
       description: 'Workflow name to launch — required for action=start.',
     },
     decision: {
-      type: 'string',
+      kind: 'string',
       description:
         "Required for action=respond: the decision id the paused gate declared (call action=get to see them — the run detail lists 'gate: decisions: ...' when applicable). 'approve'/'reject' work here too, but prefer the dedicated approve/reject actions for those — respond is for a gate whose declared decisions include something else (e.g. 'revise', 'escalate'). An id the gate did not declare fails with the actual options.",
     },
     message: {
-      type: 'string',
+      kind: 'string',
       description:
         'Free text whose meaning depends on the action: start=the prompt/instructions; approve=optional comment; reject=the reason; respond=text recorded alongside the decision.',
     },
     confirm: {
-      type: 'boolean',
+      kind: 'boolean',
       description:
         'Required (true) to actually perform a destructive action (cancel/abandon/approve/reject/respond). Omit first to get a preview.',
     },
@@ -122,13 +121,13 @@ const INPUT_SCHEMA: Record<string, unknown> = {
     // every approve must still be able to force finalize — that footgun is the
     // reason this arg exists (#2074).
     accept: {
-      type: 'boolean',
+      kind: 'boolean',
       description:
         'For action=approve on an interactive-loop gate with completionSignaled=true: accept=true finalizes the node from the already-computed output WITHOUT re-running, regardless of any message (a simultaneous message is discarded, not recorded). Omit and pass message=<feedback> to run another iteration instead.',
     },
   },
   required: ['action'],
-};
+});
 
 // ─── Progressive-disclosure help text ───────────────────────────────────────
 

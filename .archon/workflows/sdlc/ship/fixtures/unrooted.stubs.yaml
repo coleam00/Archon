@@ -2,7 +2,15 @@
 # result (run with --default-stubs --exec-code). gate-rooted and the complete
 # delivery tail stay skipped, while the real outcome node points to the report.
 triage__triage:
+  contract: READY
   route: investigate
+  design_first: false
+  complexity: risky
+  item: { repository: "", number: 0 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
   summary: "stub: reported failure still needs a proven cause"
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
 inv__investigate:

@@ -1,0 +1,18 @@
+# Guard fixture, seen red: the prompt declared an engineering route on an item
+# whose contract is not READY. The real verdict script must refuse the tuple.
+triage:
+  contract: NEEDS_CONTRACT_WORK
+  route: plan
+  design_first: false
+  complexity: small
+  item: { repository: "", number: 0 }
+  area_labels: []
+  proposed_edits: { title: "stub: proposed title", body: "stub: proposed body" }
+  blocked_reason: ""
+  blocked_by: []
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+  summary: "stub: an illegal pair the boundary must catch"
+fixture:
+  expect: failed
+  fail-node: verdict
+exec-code: true
