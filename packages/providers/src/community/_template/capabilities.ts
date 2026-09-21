@@ -14,6 +14,7 @@ export const YOUR_CAPABILITIES: ProviderCapabilities = {
   agents: false,
   toolRestrictions: false,
   structuredOutput: false,
+  requiresAllPropertiesRequired: false,
   envInjection: false,
   costControl: false,
   costReporting: false,

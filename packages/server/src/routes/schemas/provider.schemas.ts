@@ -22,6 +22,7 @@ const providerCapabilitiesSchema = z
     knownToolNames: z.array(z.string()).optional(),
     renamedTools: z.record(z.string(), z.string()).optional(),
     structuredOutput: z.union([z.literal('enforced'), z.literal('best-effort'), z.literal(false)]),
+    requiresAllPropertiesRequired: z.boolean(),
     envInjection: z.boolean(),
     costControl: z.boolean(),
     costReporting: z.boolean(),
