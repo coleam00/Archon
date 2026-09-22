@@ -20,8 +20,61 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-import { mapWorkflowEvent } from './workflow-bridge';
+import { mapWorkflowEvent, mapWorkflowEventRow } from './workflow-bridge';
 import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
+import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
+
+const suspendedExecution: NodeExecutionMetadata = {
+  runId: 'run-1',
+  path: 'review',
+  node: { id: 'review', kind: 'workflow' },
+  invocation: { id: 'inv-1', startedAt: '2026-09-22T10:00:00Z', loopPath: [] },
+  attempt: { id: 'attempt-1', startedAt: '2026-09-22T10:00:00Z' },
+  binding: { sessionPreview: '12345678', sessionOrigin: 'resumed' },
+  timing: { startedAt: '2026-09-22T10:00:00Z', durationMs: 25 },
+  spend: {
+    tokens: { source: 'unavailable', reason: 'not_applicable' },
+    costUsd: { source: 'unavailable', reason: 'not_applicable' },
+    stopReason: { source: 'unavailable', reason: 'not_applicable' },
+    numTurns: { source: 'unavailable', reason: 'not_applicable' },
+  },
+  accounting: 'node',
+  lifecycle: { status: 'suspended', point: 'child_workflow' },
+};
+
+test('suspended node stays running and carries only public execution metadata', () => {
+  const event: WorkflowEmitterEvent = {
+    type: 'node_suspended',
+    runId: 'run-1',
+    nodeId: 'review',
+    nodeName: 'Review',
+    execution: suspendedExecution,
+  };
+  const payload = JSON.parse(mapWorkflowEvent(event) ?? '{}') as Record<string, unknown>;
+  expect(payload).toMatchObject({
+    type: 'dag_node',
+    status: 'running',
+    execution: suspendedExecution,
+  });
+  expect(JSON.stringify(payload)).not.toContain('sessionId');
+});
+
+test('persisted typed node rows retain public execution metadata through dashboard replay', () => {
+  const { runId: _runId, path: _path, lifecycle: _lifecycle, ...data } = suspendedExecution;
+  const payload = JSON.parse(
+    mapWorkflowEventRow({
+      id: 'event-1',
+      workflow_run_id: 'run-1',
+      event_type: 'node_suspended',
+      step_index: null,
+      step_name: 'review',
+      created_at: '2026-09-22T10:00:25Z',
+      data: { ...data, suspend_point: 'child_workflow' },
+    }) ?? '{}'
+  ) as Record<string, unknown>;
+  expect(payload).toMatchObject({ status: 'running', execution: suspendedExecution });
+  expect(JSON.stringify(payload)).not.toContain('sessionId');
+});
 
 test('workflow start projection does not expose the host transcript path', () => {
   const event: WorkflowEmitterEvent = {
