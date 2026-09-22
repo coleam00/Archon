@@ -68,6 +68,6 @@ describe('flip-ready forge check policy', () => {
     const result = run('green', true);
     expect(result.code).toBe(1);
     expect(result.ops).toEqual(['pr.view', 'checks.state']);
-    expect(result.stderr).toContain('forge check read failed');
+    expect(result.stderr).toContain('plugin unavailable');
   });
 });

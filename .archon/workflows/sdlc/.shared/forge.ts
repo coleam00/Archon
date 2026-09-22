@@ -108,7 +108,7 @@ export function invokeForge(op: string, request: Record<string, unknown>): Recor
       );
     }
     const response = record(parsed);
-    if (!response || typeof response.operationId !== 'string') {
+    if (!response || typeof response.operationId !== 'string' || response.operationId === '') {
       throw new Error(`forge ${op} returned an unexpected response envelope`);
     }
     const resultBody = record(response.result);
@@ -258,36 +258,7 @@ function samePr(left: QualifiedPr, right: QualifiedPr): boolean {
 /** Invoke `archon forge checks` and validate only the fields pack policy consumes. */
 export function readChecks(boundPr: string | undefined): ChecksObservation {
   const ref = parseQualifiedPr(boundPr);
-  const command = parseCommand(process.env.ARCHON_CLI_COMMAND);
-  const result = Bun.spawnSync(
-    [...command, 'forge', 'checks', '--json', '--data', JSON.stringify({ ref })],
-    {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    }
-  );
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(result.stdout.toString());
-  } catch {
-    if (result.exitCode !== 0)
-      throw new Error(`forge check read failed: ${result.stderr.toString().trim()}`);
-    throw new Error('forge check read returned invalid JSON');
-  }
-  const response = record(parsed);
-  if (response?.ok === false) {
-    const error = record(response.error);
-    throw new Error(
-      `forge check read failed: ${typeof error?.message === 'string' ? error.message : 'unknown error'}`
-    );
-  }
-  if (result.exitCode !== 0) {
-    const detail = result.stderr.toString().trim();
-    throw new Error(`forge check read failed${detail === '' ? '' : `: ${detail}`}`);
-  }
-  const resultBody = record(response?.result);
-  const value = record(resultBody?.value);
+  const value = invokeForge('checks.state', { ref });
   const observedRef = record(value?.ref);
   const observedRepo = record(observedRef?.repo);
   const observed =
@@ -297,10 +268,6 @@ export function readChecks(boundPr: string | undefined): ChecksObservation {
   const full = parseSet(value);
   const required = value?.required === null ? null : parseSet(value?.required);
   if (
-    typeof response?.operationId !== 'string' ||
-    response.operationId === '' ||
-    response.ok !== true ||
-    resultBody?.op !== 'checks.state' ||
     typeof value?.revision !== 'string' ||
     value.revision === '' ||
     !observed ||

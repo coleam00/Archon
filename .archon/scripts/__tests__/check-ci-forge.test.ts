@@ -39,7 +39,8 @@ function set(state: State, name = 'build'): Pick<ChecksObservation, 'units' | 's
 
 function run(
   full: ReturnType<typeof set>,
-  required: ReturnType<typeof set> | null = null
+  required: ReturnType<typeof set> | null = null,
+  exitCode = 0
 ): SpawnSyncReturns<string> {
   const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'check-ci-')));
   const bin = join(root, 'bin');
@@ -53,7 +54,7 @@ function run(
       value: { ref: PR, revision: 'deadbeef', ...full, required },
     },
   });
-  writeFileSync(cli, `process.stdout.write(${JSON.stringify(response)});`);
+  writeFileSync(cli, `process.stdout.write(${JSON.stringify(response)}); process.exitCode = ${exitCode};`);
   return spawnSync('bun', ['run', SCRIPT], {
     env: {
       ...process.env,
@@ -72,6 +73,14 @@ describe('check-ci forge observations', () => {
       state: 'red',
       detail: 'non-green checks at deadbeef: external/status (failure)',
     });
+  });
+
+  it('preserves a successful read when only audit persistence failed', () => {
+    const result = run(set('green'), null, 2);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('applied/read succeeded; audit persistence failed');
+    expect(result.stderr).toContain('op-checks');
+    expect(result.stdout).toBe('');
   });
 
   it('prefers the authoritative required set when available', () => {
