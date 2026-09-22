@@ -107,6 +107,7 @@ import {
 import { planGraph, resolveWorkflow, resolvedBodyNodes } from './graph-plan';
 import { dryRunWorkflow } from './dry-run';
 import { writeNodeArtifact, readNodeArtifacts } from './artifacts-index';
+import { nodeArtifactsListingSchema } from './schemas/node-artifact';
 import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from './event-emitter';
 import { loadMcpConfig } from '@archon/providers/mcp/config';
 import type {
@@ -603,6 +604,15 @@ function makeOutput(
       : { state, output };
   }
   return { state, output, ...extra } as NodeOutput;
+}
+
+/**
+ * The reader's grouped result flattened across types, the whole-run view these
+ * executor tests assert; scope filtering is proved in artifacts-index.test.ts.
+ */
+async function readAllArtifacts(artifactsDir: string) {
+  const { artifactsByType } = await readNodeArtifacts(artifactsDir, { scope: 'resolved-scope' });
+  return Object.values(artifactsByType).flat();
 }
 
 function makeWorkflowRun(id = 'dag-test-run-id', overrides?: Partial<WorkflowRun>): WorkflowRun {
@@ -19300,6 +19310,82 @@ describe('executeDagWorkflow -- typed artifacts (output_type)', () => {
     expect(typeof meta.producedAt).toBe('string');
   });
 
+  it('delivers a current-run listing to an exec node through TYPED_ARTIFACTS_FILE', async () => {
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        cwd: testDir,
+        workflow: {
+          name: 'typed-listing-exec',
+          nodes: [
+            {
+              id: 'planner',
+              kind: 'agent',
+              source: { kind: 'command', name: 'my-cmd' },
+              output_type: 'plan',
+            },
+            {
+              id: 'reader',
+              kind: 'exec',
+              runtime: 'sh',
+              // Braced form: the engine substitute is not applied, so this reads the
+              // reserved process environment the exec builder delivers.
+              script: 'cp "${TYPED_ARTIFACTS_FILE}" "$ARTIFACTS_DIR/observed-listing.json"',
+              depends_on: ['planner'],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('dag-typed-exec-listing'),
+      })
+    );
+
+    const listing = nodeArtifactsListingSchema.parse(
+      JSON.parse(await readFile(join(testDir, 'artifacts', 'observed-listing.json'), 'utf8'))
+    );
+    expect(listing.runId).toBe('dag-typed-exec-listing');
+    expect(listing.artifactsByType.plan?.map(entry => entry.nodeId)).toEqual(['planner']);
+    // The pointer names a content path that is readable relative to the artifacts dir.
+    const planPath = listing.artifactsByType.plan?.[0]?.path;
+    if (planPath === undefined) throw new Error('expected a listed plan artifact');
+    expect(await readFile(join(testDir, 'artifacts', planPath), 'utf8')).toBe('AI response');
+  });
+
+  it('resolves $TYPED_ARTIFACTS_FILE in an agent prompt to a readable listing', async () => {
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        cwd: testDir,
+        workflow: {
+          name: 'typed-listing-agent',
+          nodes: [
+            {
+              id: 'planner',
+              kind: 'agent',
+              source: { kind: 'command', name: 'my-cmd' },
+              output_type: 'plan',
+            },
+            {
+              id: 'consumer',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'Listing: $TYPED_ARTIFACTS_FILE' },
+              depends_on: ['planner'],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('dag-typed-agent-listing'),
+      })
+    );
+
+    const consumerPrompt = mockSendQueryDag.mock.calls.at(-1)?.[0] as string | undefined;
+    expect(consumerPrompt).toMatch(/^Listing: \//);
+    const listingPath = (consumerPrompt ?? '').slice('Listing: '.length).trim();
+    const listing = nodeArtifactsListingSchema.parse(
+      JSON.parse(await readFile(listingPath, 'utf8'))
+    );
+    expect(listing.runId).toBe('dag-typed-agent-listing');
+    expect(listing.artifactsByType.plan?.map(entry => entry.nodeId)).toEqual(['planner']);
+  });
+
   it('persists the declared output type beside an agent structured output', async () => {
     const structuredOutput = {
       repo: { host: 'github.com', path: 'example/repo' },
@@ -20591,7 +20677,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
     );
 
     expect(callCount).toBe(3);
-    const artifacts = (await readNodeArtifacts(artifactsDir)).sort(
+    const artifacts = (await readAllArtifacts(artifactsDir)).sort(
       (left, right) =>
         (left.loopGroupPath?.[0]?.iteration ?? 0) - (right.loopGroupPath?.[0]?.iteration ?? 0)
     );
@@ -20676,7 +20762,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
     );
 
     expect(callCount).toBe(2);
-    const artifacts = (await readNodeArtifacts(artifactsDir)).sort(
+    const artifacts = (await readAllArtifacts(artifactsDir)).sort(
       (left, right) =>
         (left.loopGroupPath?.[0]?.iteration ?? 0) - (right.loopGroupPath?.[0]?.iteration ?? 0)
     );
@@ -20735,7 +20821,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
       })
     );
 
-    const beforeResume = await readNodeArtifacts(artifactsDir);
+    const beforeResume = await readAllArtifacts(artifactsDir);
     expect(beforeResume).toHaveLength(1);
     expect(beforeResume[0]?.loopGroupPath).toEqual([{ groupId: 'refine', iteration: 1 }]);
     const firstPath = beforeResume[0]?.path;
@@ -20769,7 +20855,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
       })
     );
 
-    const afterResume = (await readNodeArtifacts(artifactsDir)).sort(
+    const afterResume = (await readAllArtifacts(artifactsDir)).sort(
       (left, right) =>
         (left.loopGroupPath?.[0]?.iteration ?? 0) - (right.loopGroupPath?.[0]?.iteration ?? 0)
     );

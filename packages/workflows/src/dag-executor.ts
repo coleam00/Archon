@@ -125,7 +125,7 @@ import {
   type JsonValue,
 } from './output-ref';
 import { buildTruncationMarker } from './utils/output-truncation';
-import { writeNodeArtifact, readNodeArtifacts } from './artifacts-index';
+import { writeNodeArtifact, readNodeArtifacts, writeNodeArtifactsListing } from './artifacts-index';
 import { validateArtifactPointers } from './artifact-pointer';
 import {
   COMPILED_LOOP_COMMAND,
@@ -2088,7 +2088,8 @@ async function executeNodeInternal(
   resolvedEffort?: EffortLevel,
   stepNamePrefix = '',
   iteration?: number,
-  checkpointSession?: SessionCheckpoint
+  checkpointSession?: SessionCheckpoint,
+  typedArtifactsFile?: string
 ): Promise<NodeExecutionResult> {
   const {
     deps,
@@ -2267,7 +2268,7 @@ async function executeNodeInternal(
       docsDir,
       issueContext,
       `dag node '${node.id}' prompt`,
-      { stateDir, inputs: promptInputs }
+      { stateDir, inputs: promptInputs, typedArtifactsFile }
     );
   } catch (error) {
     const err = error as Error;
@@ -3776,6 +3777,10 @@ async function executeBashNode(
     data: { type: 'bash', ...iterationData },
   });
 
+  // Fresh per call: executeBashNode runs once per retry attempt, so each attempt
+  // observes the artifacts published before IT. A materialization failure propagates
+  // to the retry/dispatch boundary as an explicit node provisioning error.
+  const typedArtifactsFile = await writeNodeArtifactsListing(artifactsDir, workflowRun.id);
   // Variable substitution on script
   const { prompt: substitutedScript } = substituteWorkflowVariables(
     node.script,
@@ -3788,7 +3793,7 @@ async function executeBashNode(
     undefined,
     undefined,
     undefined,
-    { shellSafe: true, stateDir }
+    { shellSafe: true, stateDir, typedArtifactsFile }
   );
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, true, artifactsDir);
 
@@ -3828,6 +3833,7 @@ async function executeBashNode(
       rejectionReason: '',
       issueContext,
       adoptedRunDir: currentAdoptedRunDir(),
+      typedArtifactsFile,
     }),
   };
 
@@ -4057,6 +4063,8 @@ async function executeScriptNode(
   // deterministic retry classifier, so an integrity failure cannot consume retries.
   // User-controlled variables stay in subprocess env instead of being spliced into
   // TS/Python source; strict node-output references keep raw substitution (#2115).
+  // Fresh per call, same as executeBashNode: one attempt, one observation.
+  const typedArtifactsFile = await writeNodeArtifactsListing(artifactsDir, workflowRun.id);
   const { prompt: substitutedScript } = substituteWorkflowVariables(
     node.script,
     workflowRun.id,
@@ -4068,7 +4076,7 @@ async function executeScriptNode(
     undefined,
     undefined,
     undefined,
-    { shellSafe: true, stateDir }
+    { shellSafe: true, stateDir, typedArtifactsFile }
   );
   const finalScript = substituteNodeOutputRefs(substitutedScript, nodeOutputs, false);
   if (!isInlineScript(finalScript)) {
@@ -4114,6 +4122,7 @@ async function executeScriptNode(
       rejectionReason: '',
       issueContext,
       adoptedRunDir: currentAdoptedRunDir(),
+      typedArtifactsFile,
     }),
     // Named Python scripts run from the frozen capture, and CPython writes bytecode
     // caches beside any module it imports. A cache landing in the capture would change
@@ -4741,6 +4750,8 @@ async function executeLoopGroupNode(
         group.until !== undefined && detectCompletionSignal(rawIterationOutput, group.until);
       let resumedBashComplete = false;
       if (group.until_bash && !resumedSignalDetected) {
+        // Fresh observation for this resumed iteration's condition.
+        const typedArtifactsFile = await writeNodeArtifactsListing(artifactsDir, workflowRun.id);
         // No $LOOP_PREV history survives a resume beyond the single reconstructed
         // iteration above — #2748 restores only the LATEST persisted body outputs,
         // not a full history — so an until_bash referencing $LOOP_PREV from the
@@ -4758,7 +4769,7 @@ async function executeLoopGroupNode(
           undefined,
           undefined,
           undefined,
-          { shellSafe: true, stateDir }
+          { shellSafe: true, stateDir, typedArtifactsFile }
         );
         // Merge outer-DAG outputs underneath the reconstructed body outputs —
         // mirrors how a normal (non-resumed) iteration seeds scopedNodeOutputs
@@ -4798,6 +4809,7 @@ async function executeLoopGroupNode(
               CONTEXT: issueContext ?? '',
               EXTERNAL_CONTEXT: issueContext ?? '',
               ISSUE_CONTEXT: issueContext ?? '',
+              TYPED_ARTIFACTS_FILE: typedArtifactsFile,
             },
           });
           resumedBashComplete = true;
@@ -4899,6 +4911,9 @@ async function executeLoopGroupNode(
 
   for (let i = startIteration; i <= iterationLimit; i++) {
     const iterationStart = Date.now();
+    // Fresh per iteration, like executeLoopNode: this iteration's until_bash sees the
+    // artifacts published before it.
+    const typedArtifactsFile = await writeNodeArtifactsListing(artifactsDir, workflowRun.id);
 
     // Between-iteration status check (paused tolerated — mirrors executeLoopNode).
     const runStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
@@ -5235,7 +5250,7 @@ async function executeLoopGroupNode(
           i === startIteration ? loopUserInput : undefined,
           undefined,
           undefined,
-          { shellSafe: true, stateDir }
+          { shellSafe: true, stateDir, typedArtifactsFile }
         );
         const substitutedBash = substituteNodeOutputRefs(
           bashPrompt,
@@ -5271,6 +5286,7 @@ async function executeLoopGroupNode(
             CONTEXT: issueContext ?? '',
             EXTERNAL_CONTEXT: issueContext ?? '',
             ISSUE_CONTEXT: issueContext ?? '',
+            TYPED_ARTIFACTS_FILE: typedArtifactsFile,
           },
         });
         bashComplete = true;
@@ -5851,6 +5867,10 @@ async function executeLoopNode(
 
   for (let i = startIteration; i <= loop.max_iterations; i++) {
     const iterationStart = Date.now();
+    // Fresh per iteration: this iteration's prompt and until_bash observe the
+    // artifacts published before it. Materialization failure is an explicit node
+    // provisioning error and propagates to the dispatch boundary.
+    const typedArtifactsFile = await writeNodeArtifactsListing(artifactsDir, workflowRun.id);
 
     // Check for non-running status between iterations. `paused` is tolerated
     // here for the same reason as the streaming check: a sibling approval
@@ -6059,7 +6079,7 @@ async function executeLoopNode(
             i === startIteration ? loopUserInput : '',
             undefined, // rejectionReason
             i === startIteration ? '' : lastIterationOutput,
-            { stateDir, inputs: resolveRunInputs(workflowRun) }
+            { stateDir, inputs: resolveRunInputs(workflowRun), typedArtifactsFile }
           );
           const basePrompt = substituteNodeOutputRefs(substitutedPrompt, nodeOutputs);
           // A reask re-runs this iteration's prompt with the schema errors appended, so
@@ -6811,7 +6831,7 @@ async function executeLoopNode(
           undefined,
           undefined,
           undefined,
-          { shellSafe: true, stateDir }
+          { shellSafe: true, stateDir, typedArtifactsFile }
         );
         const substitutedBash = substituteNodeOutputRefs(
           bashPrompt,
@@ -6850,6 +6870,7 @@ async function executeLoopNode(
             CONTEXT: issueContext ?? '',
             EXTERNAL_CONTEXT: issueContext ?? '',
             ISSUE_CONTEXT: issueContext ?? '',
+            TYPED_ARTIFACTS_FILE: typedArtifactsFile,
           },
         });
         bashComplete = true; // exit 0 = complete
@@ -7486,6 +7507,9 @@ async function executeApprovalNode(
       execContext
     );
 
+    // Fresh per rework attempt: the approval's rework node is an ordinary agent
+    // invocation, so it observes artifacts published before this attempt.
+    const typedArtifactsFile = await writeNodeArtifactsListing(artifactsDir, workflowRun.id);
     const output = await executeNodeInternal(
       ctx,
       syntheticNode,
@@ -7497,7 +7521,8 @@ async function executeApprovalNode(
       resolvedEffort,
       stepNamePrefix,
       iteration,
-      undefined // synthetic on_reject node never carries a session checkpoint
+      undefined, // synthetic on_reject node never carries a session checkpoint
+      typedArtifactsFile
     );
 
     if (output.state === 'failed') {
@@ -9337,7 +9362,17 @@ async function buildColdResumeRecoveryPointer(
   nodeId: string
 ): Promise<string> {
   try {
-    const priorArtifacts = (await readNodeArtifacts(scopeArtifactsDir))
+    const { artifactsByType, errors } = await readNodeArtifacts(scopeArtifactsDir, {
+      scope: 'resolved-scope',
+    });
+    if (errors.length > 0) {
+      getLog().warn(
+        { errors, scopeArtifactsDir, nodeId },
+        'dag.cold_resume_artifacts_partial_read'
+      );
+    }
+    const priorArtifacts = Object.values(artifactsByType)
+      .flat()
       .filter(entry => entry.runId !== currentRunId)
       .sort((a, b) => b.producedAt.localeCompare(a.producedAt));
     if (priorArtifacts.length === 0) return '';
@@ -9708,6 +9743,11 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               };
             };
 
+            // Established before AI-configuration substitution below; each node kind
+            // that reaches a provider assigns its own fresh observation before that
+            // call. Coordination-only nodes leave it undefined, so an AI-config text
+            // that references $TYPED_ARTIFACTS_FILE there fails loudly.
+            let typedArtifactsFile: string | undefined;
             // `systemPrompt:` and `agents.*` go straight to the provider, so they get the
             // same two substitution passes a `prompt:` does (#2476). Inside a loop_group
             // body this reads the body's scoped `nodeOutputs`, matching every other surface.
@@ -9724,7 +9764,11 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   undefined,
                   undefined,
                   undefined,
-                  { stateDir: ctx.stateDir, inputs: resolveRunInputs(ctx.workflowRun) }
+                  {
+                    stateDir: ctx.stateDir,
+                    inputs: resolveRunInputs(ctx.workflowRun),
+                    typedArtifactsFile,
+                  }
                 ).prompt,
                 ctx.nodeOutputs
               );
@@ -10063,6 +10107,13 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               }
 
               case 'loop': {
+                // Materialized before provider resolution so AI-configuration text can
+                // reference the listing. executeLoopNode materializes its own fresh
+                // observation for each iteration's prompt and until_bash.
+                typedArtifactsFile = await writeNodeArtifactsListing(
+                  ctx.artifactsDir,
+                  ctx.workflowRun.id
+                );
                 // Loop node dispatch — manages its own AI sessions and iteration
                 const {
                   provider: loopProvider,
@@ -10106,6 +10157,12 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
 
               case 'loop_group': {
                 await persistDispatchStart();
+                // Materialized before provider resolution for the group's AI-configuration
+                // text. Body nodes re-enter runLayers and establish their own observation.
+                typedArtifactsFile = await writeNodeArtifactsListing(
+                  ctx.artifactsDir,
+                  ctx.workflowRun.id
+                );
                 // Loop-group node dispatch — manages its own subgraph iteration
                 // (body is a sealed sub-DAG re-executed per iteration; the loop is
                 // encapsulated inside this one node, keeping the outer DAG acyclic).
@@ -10251,6 +10308,12 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
             }
 
             // 4. Resolve per-node provider/model/options
+            // Agent nodes reach a provider, so AI-configuration text gets this
+            // observation; the body prompt is substituted per attempt below.
+            typedArtifactsFile = await writeNodeArtifactsListing(
+              ctx.artifactsDir,
+              ctx.workflowRun.id
+            );
             const {
               provider,
               model: resolvedNodeModel,
@@ -10439,8 +10502,15 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
               ctx.conversationId,
               ctx.workflowRun,
               getEffectiveNodeRetryConfig(node),
-              () =>
-                executeNodeInternal(
+              async () => {
+                // Fresh per attempt: an attempt after a transient failure observes
+                // artifacts published in the interval, and never reuses the
+                // listing handed to AI-configuration substitution above.
+                const attemptTypedArtifactsFile = await writeNodeArtifactsListing(
+                  ctx.artifactsDir,
+                  ctx.workflowRun.id
+                );
+                return executeNodeInternal(
                   ctx,
                   node,
                   provider,
@@ -10454,8 +10524,10 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                   resolvedEffort,
                   ctx.stepNamePrefix,
                   iteration,
-                  checkpointSessionForProvider(provider)
-                ),
+                  checkpointSessionForProvider(provider),
+                  attemptTypedArtifactsFile
+                );
+              },
               { state: 'failed', output: '', error: 'Node did not execute' } as NodeExecutionResult
             );
             const output = await assertCheckoutUntouched(
