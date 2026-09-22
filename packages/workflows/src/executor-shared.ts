@@ -712,9 +712,10 @@ export function substituteWorkflowVariables(
     /** Adopted run's artifact directory (#2747). Undefined = no adoption active. */
     adoptedRunDir?: string;
     /**
-     * This invocation's typed-artifact listing path. Undefined = the caller did not
-     * observe artifacts (dry runs, coordination nodes); a prompt that references
-     * `$TYPED_ARTIFACTS_FILE` then throws rather than substituting an empty string.
+     * This invocation's typed-artifact listing path. Undefined means the caller never
+     * supplied one (a coordination node, or a wiring bug) and a prompt that references
+     * `$TYPED_ARTIFACTS_FILE` throws. An explicit `''` is a caller stating it has no
+     * listing — the dry-run preview — and substitutes empty without throwing.
      */
     typedArtifactsFile?: string;
   }
@@ -752,10 +753,11 @@ export function substituteWorkflowVariables(
   }
 
   // $TYPED_ARTIFACTS_FILE is delivered by every executable invocation context (bash,
-  // script, agent prompt, loop attempt). A context that never materialized one must
-  // fail loudly: substituting '' would read as "no typed artifacts", which is the
-  // exact silent-empty lookup this contract exists to remove.
-  if (!options?.typedArtifactsFile && prompt.includes('$TYPED_ARTIFACTS_FILE')) {
+  // script, agent prompt, loop attempt). A context that never supplied one must fail
+  // loudly: substituting '' would read as "no typed artifacts", which is the exact
+  // silent-empty lookup this contract exists to remove. An explicit empty string is
+  // different — a caller that knows it has no listing (the dry-run preview) says so.
+  if (options?.typedArtifactsFile === undefined && prompt.includes('$TYPED_ARTIFACTS_FILE')) {
     throw new Error(
       '$TYPED_ARTIFACTS_FILE is referenced but this invocation has no typed-artifact listing. ' +
         'It is available inside bash, script, agent, loop, and approval-rework nodes; ' +

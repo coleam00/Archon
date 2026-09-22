@@ -180,6 +180,23 @@ describe('substituteWorkflowVariables', () => {
     ).toThrow(/has no typed-artifact listing/);
   });
 
+  it('treats an explicit empty listing as a caller stating it has none (dry run)', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Read [$TYPED_ARTIFACTS_FILE]',
+      'run-1',
+      'msg',
+      '/tmp/artifacts',
+      'main',
+      'docs/',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { typedArtifactsFile: '' }
+    );
+    expect(prompt).toBe('Read []');
+  });
+
   it('does not throw and does not touch a longer identifier that merely starts with the typed-artifact name', () => {
     const { prompt } = substituteWorkflowVariables(
       'Use $INPUTS_TYPED_ARTIFACTS_FILE',

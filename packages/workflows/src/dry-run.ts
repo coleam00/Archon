@@ -604,7 +604,10 @@ function resolveText(
     undefined,
     undefined,
     loopPrevOutput,
-    { shellSafe, stateDir: ctx.stateDir, ...(inputs ? { inputs } : {}) }
+    // A dry run never writes typed artifacts, so it has no listing to point at. Pass
+    // an explicit empty value: the preview substitutes '' rather than throwing the way
+    // a real invocation that forgot to materialize a listing does.
+    { shellSafe, stateDir: ctx.stateDir, typedArtifactsFile: '', ...(inputs ? { inputs } : {}) }
   ).prompt;
   return substituteNodeOutputRefs(substituted, outputs, escapeNodeOutputs);
 }
