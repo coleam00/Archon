@@ -1,0 +1,8 @@
+# A missing manifest must fail, not fall back to ordinary validation.
+fixture:
+  inputs:
+    comparison: missing-comparison.json
+  expect: failed
+  fail-node: compare
+  reached: [mode]
+exec-code: true
