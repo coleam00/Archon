@@ -131,14 +131,16 @@ function actor(
   return sender ? { host, id: String(sender.id), login: sender.login ?? null } : undefined;
 }
 
-function checkPhase(status: string): 'pending' | 'running' | 'completed' | 'unknown' {
+export function checkPhase(status: string): 'pending' | 'running' | 'completed' | 'unknown' {
   if (['queued', 'pending', 'waiting', 'requested'].includes(status)) return 'pending';
   if (['in_progress'].includes(status)) return 'running';
   if (['completed', 'success', 'failure', 'error'].includes(status)) return 'completed';
   return 'unknown';
 }
 
-function checkResult(value: string | null | undefined): z.infer<typeof checkResultSchema> | null {
+export function checkResult(
+  value: string | null | undefined
+): z.infer<typeof checkResultSchema> | null {
   if (value === null || value === undefined) return null;
   const parsed = checkResultSchema.safeParse(value);
   return parsed.success ? parsed.data : 'unknown';
