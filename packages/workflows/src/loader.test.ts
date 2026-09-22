@@ -359,6 +359,94 @@ describe('Workflow Loader', () => {
     });
   });
 
+  describe('fixtures are not workflows (#3183)', () => {
+    const fixtureYaml = (id: string): string =>
+      `fixture:\n  expect: completed\n  reached: [${id}]\n${id}: {}\n`;
+
+    const writeWorkflowWithFixtures = async (
+      segments: readonly string[],
+      fixtureNames: readonly string[]
+    ): Promise<void> => {
+      const dir = join(testDir, '.archon', 'workflows', ...segments);
+      await mkdir(join(dir, 'fixtures'), { recursive: true });
+      await writeFile(
+        join(dir, 'flow.yaml'),
+        'name: flow\ndescription: flow\nnodes:\n  - id: run\n    bash: echo hi\n'
+      );
+      for (const name of fixtureNames) {
+        await writeFile(join(dir, 'fixtures', `${name}.stubs.yaml`), fixtureYaml('run'));
+      }
+    };
+
+    for (const [label, segments] of [
+      ['directly under the workflows root', ['flow']],
+      ['inside a pack', ['team', 'flow']],
+    ] as const) {
+      for (const [count, fixtureNames] of [
+        ['one fixture', ['greets']],
+        ['several fixtures', ['greets', 'partings']],
+      ] as const) {
+        it(`ignores ${count} ${label}`, async () => {
+          await writeWorkflowWithFixtures(segments, fixtureNames);
+          const result = await discoverWorkflows(testDir, { loadDefaults: false });
+          expect(result.errors).toEqual([]);
+          expect(result.workflows.map(entry => entry.workflow.name)).toEqual(['flow']);
+        });
+      }
+    }
+
+    it('ignores a fixtures directory at the workflows root', async () => {
+      await mkdir(join(testDir, '.archon', 'workflows', 'fixtures', 'nested'), {
+        recursive: true,
+      });
+      await writeFile(
+        join(testDir, '.archon', 'workflows', 'fixtures', 'stray.stubs.yaml'),
+        fixtureYaml('run')
+      );
+      // A subdirectory holds no workflow either: the whole `fixtures/` tree is reserved.
+      await writeFile(
+        join(testDir, '.archon', 'workflows', 'fixtures', 'nested', 'flow.yaml'),
+        'name: buried\ndescription: buried\nnodes:\n  - id: run\n    bash: echo hi\n'
+      );
+      await writeWorkflowFile(
+        testDir,
+        'plain.yaml',
+        'name: plain\ndescription: plain\nnodes:\n  - id: run\n    bash: echo hi\n'
+      );
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toEqual([]);
+      expect(result.workflows.map(entry => entry.workflow.name)).toEqual(['plain']);
+    });
+
+    it('still reports a genuinely malformed workflow', async () => {
+      await writeWorkflowFile(testDir, 'broken.yaml', 'description: no name\nnodes: []\n');
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain("Missing required field 'name'");
+    });
+
+    it('still reports a genuinely malformed workflow inside a pack', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows', 'team', 'flow');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(join(workflowDir, 'flow.yaml'), 'description: no name\nnodes: []\n');
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain("Missing required field 'name'");
+      expect(result.workflows).toEqual([]);
+    });
+
+    it('still reports a packaged workflow folder that does not hold exactly one YAML file', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows', 'team', 'flow');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(join(workflowDir, 'one.yaml'), 'name: one\ndescription: one\nnodes: []\n');
+      await writeFile(join(workflowDir, 'two.yaml'), 'name: two\ndescription: two\nnodes: []\n');
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain('must contain exactly one .yaml or .yml file');
+      expect(result.workflows).toEqual([]);
+    });
+  });
+
   describe('parseWorkflow (via discoverWorkflows)', () => {
     it('should parse interactive: true when present', async () => {
       const yaml = `name: test\ndescription: test\ninteractive: true\nnodes:\n  - id: n\n    prompt: p\n`;

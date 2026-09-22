@@ -18,6 +18,7 @@
     "./run-config": "./src/run-config.ts",
     "./script-discovery": "./src/script-discovery.ts",
     "./command-validation": "./src/command-validation.ts",
+    "./fixture-layout": "./src/fixture-layout.ts",
     "./defaults": "./src/defaults/bundled-defaults.ts",
     "./validator": "./src/validator.ts",
     "./dry-run": "./src/dry-run.ts",

@@ -52,6 +52,7 @@ import {
   type WorkflowSourceConfig,
   type WorkflowSourceRoots,
 } from './workflow-source';
+import { FIXTURE_SUFFIX, FIXTURES_DIR } from './fixture-layout';
 
 /** Compares text the checkout may have converted to CRLF against a fixture's LF expectation. */
 const withLfEndings = (text: string): string => text.replaceAll('\r\n', '\n');
@@ -131,8 +132,6 @@ export function parseFixtureFile(text: string, path: string): ParsedFixtureFile 
   return { declaration, execCode, stubs: stubsResult.data };
 }
 
-const FIXTURES_DIR = 'fixtures';
-const FIXTURE_SUFFIX = '.stubs.yaml';
 // Discovery walks user directories. This is a hang-guard margin for a pathological
 // tree, not a mirror of discovery's cap (MAX_DISCOVERY_DEPTH is 1, and the catalog
 // reaches one packaged-scanner level deeper): fixtures below the catalog's reach are
