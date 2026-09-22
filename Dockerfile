@@ -23,6 +23,7 @@ COPY packages/core/package.json ./packages/core/
 # (see .github/workflows/deploy-docs.yml). package.json is included only
 # so Bun's workspace lockfile resolves correctly.
 COPY packages/docs-web/package.json ./packages/docs-web/
+COPY packages/forge/package.json ./packages/forge/
 COPY packages/git/package.json ./packages/git/
 COPY packages/isolation/package.json ./packages/isolation/
 COPY packages/paths/package.json ./packages/paths/
@@ -142,6 +143,7 @@ COPY --chown=appuser:appuser packages/core/package.json ./packages/core/
 # (see .github/workflows/deploy-docs.yml). package.json is included only
 # so Bun's workspace lockfile resolves correctly.
 COPY --chown=appuser:appuser packages/docs-web/package.json ./packages/docs-web/
+COPY --chown=appuser:appuser packages/forge/package.json ./packages/forge/
 COPY --chown=appuser:appuser packages/git/package.json ./packages/git/
 COPY --chown=appuser:appuser packages/isolation/package.json ./packages/isolation/
 COPY --chown=appuser:appuser packages/paths/package.json ./packages/paths/
@@ -161,6 +163,7 @@ RUN HOME=/home/appuser BUN_INSTALL_CACHE_DIR=/tmp/bun-install-cache \
 COPY --chown=appuser:appuser packages/adapters/ ./packages/adapters/
 COPY --chown=appuser:appuser packages/cli/ ./packages/cli/
 COPY --chown=appuser:appuser packages/core/ ./packages/core/
+COPY --chown=appuser:appuser packages/forge/ ./packages/forge/
 COPY --chown=appuser:appuser packages/git/ ./packages/git/
 COPY --chown=appuser:appuser packages/isolation/ ./packages/isolation/
 COPY --chown=appuser:appuser packages/paths/ ./packages/paths/
