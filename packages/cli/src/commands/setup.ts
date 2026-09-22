@@ -1340,7 +1340,8 @@ async function collectGitHubConfig(): Promise<GitHubConfig> {
       '1. Go to github.com/settings/tokens\n' +
       '2. Click "Generate new token" -> "Generate new token (classic)"\n' +
       '3. Set an expiration and select these scopes:\n' +
-      '   - repo (clone and push, issues, pull requests, and CI check state)\n' +
+      '   - repo (clone and push, issues, pull requests, and reading CI check\n' +
+      '     state, which gh queries through GraphQL statusCheckRollup)\n' +
       '   - workflow (only if runs may change .github/workflows/ files)\n' +
       '4. Generate and copy the token\n\n' +
       'A fine-grained token cannot read GitHub Actions check runs: GitHub exposes\n' +
