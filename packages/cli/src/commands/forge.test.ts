@@ -157,3 +157,49 @@ test('the CLI does not inject a built-in producer into explicit plugin configura
   );
   expect(configured).toEqual({ plugins: [], hosts: {}, pluginDirs: [tmpdir()], scanPath: false });
 });
+
+test('uses trusted discovery/runtime values while retaining repo credential values', async () => {
+  let dispatchedOptions: { env?: NodeJS.ProcessEnv; credentialEnv?: NodeJS.ProcessEnv } | undefined;
+  await forgeCommand(
+    'resolve',
+    { data: '{"remote":null}', trustedEnv: { ARCHON_HOME: '/trusted', PATH: '/trusted/bin' } },
+    {
+      readConfig: async () => ({}),
+      dispatch: async (request, options) => {
+        dispatchedOptions = options;
+        const response: ForgeResponse = {
+          operationId: request.operationId,
+          ok: true,
+          result: { op: 'resolve', value: { kind: 'none', forge: 'none' } },
+        };
+        return {
+          response,
+          plugin: null,
+          audit: {
+            operationId: request.operationId,
+            operation: request.op,
+            target: null,
+            plugin: null,
+            result: response,
+            durationMs: 0,
+          },
+        };
+      },
+      write: async () => {},
+      env: {
+        ARCHON_HOME: '/repo-controlled',
+        PATH: '/repo-controlled/bin',
+        REPO_SELECTED_TOKEN: 'repo-credential',
+      },
+    }
+  );
+
+  expect(dispatchedOptions).toMatchObject({
+    env: { ARCHON_HOME: '/trusted', PATH: '/trusted/bin' },
+    credentialEnv: {
+      ARCHON_HOME: '/repo-controlled',
+      PATH: '/repo-controlled/bin',
+      REPO_SELECTED_TOKEN: 'repo-credential',
+    },
+  });
+});

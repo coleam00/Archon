@@ -6,10 +6,10 @@ import { forgePluginConfigSchema } from '@archon/forge/plugin-config';
 import { forgeRequestSchema, type ForgeResponse } from '@archon/forge/operations';
 import { writeJsonLine } from '../utils/stdout';
 
-async function readForgeConfig(): Promise<unknown> {
+async function readForgeConfig(configPath: string): Promise<unknown> {
   let source: string;
   try {
-    source = await readFile(getArchonConfigPath(), 'utf8');
+    source = await readFile(configPath, 'utf8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
     throw error;
@@ -37,7 +37,7 @@ async function persistAudit(audit: ForgeOperationAudit, runId: string): Promise<
 
 export async function forgeCommand(
   subcommand: string | undefined,
-  options: { data?: string },
+  options: { data?: string; configPath?: string; trustedEnv?: NodeJS.ProcessEnv },
   dependencies: {
     dispatch?: typeof dispatchForge;
     readConfig?: () => Promise<unknown>;
@@ -58,9 +58,17 @@ export async function forgeCommand(
     }
     const request = forgeRequestSchema.parse({ ...supplied, operationId, op });
     const config = forgePluginConfigSchema.parse(
-      await (dependencies.readConfig ?? readForgeConfig)()
+      dependencies.readConfig
+        ? await dependencies.readConfig()
+        : await readForgeConfig(options.configPath ?? getArchonConfigPath())
     );
-    const result = await (dependencies.dispatch ?? dispatchForge)(request, { config, env });
+    const result = await (dependencies.dispatch ?? dispatchForge)(request, {
+      config,
+      env: options.trustedEnv ?? env,
+      // Repo scope may supply the credential named by trusted user config. It
+      // cannot replace executable discovery or the plugin's runtime identity.
+      credentialEnv: env,
+    });
     response = result.response;
     if (env.WORKFLOW_ID) {
       try {

@@ -112,6 +112,7 @@ export async function dispatchForge(
   options: {
     config?: ForgePluginConfig;
     env?: NodeJS.ProcessEnv;
+    credentialEnv?: NodeJS.ProcessEnv;
     discovery?: PluginDiscovery;
     timeoutMs?: number;
     maxOutputBytes?: number;
@@ -150,16 +151,21 @@ export async function dispatchForge(
     const plugin = discovery.byHost.get(selectedHost);
     if (!plugin) {
       response =
-        request.op === 'resolve'
-          ? {
-              operationId: request.operationId,
-              ok: true,
-              result: { op: 'resolve', value: { kind: 'none', forge: 'none' } },
-            }
-          : errorResponse(request, {
-              kind: 'no_plugin_for_host',
-              message: `no forge plugin claims ${host}`,
-            });
+        discovery.unavailable.length > 0
+          ? errorResponse(request, {
+              kind: 'process_failed',
+              message: `forge discovery could not resolve ${selectedHost}: ${discovery.unavailable.map(error => error.message).join('; ')}`,
+            })
+          : request.op === 'resolve'
+            ? {
+                operationId: request.operationId,
+                ok: true,
+                result: { op: 'resolve', value: { kind: 'none', forge: 'none' } },
+              }
+            : errorResponse(request, {
+                kind: 'no_plugin_for_host',
+                message: `no forge plugin claims ${host}`,
+              });
     } else {
       pluginIdentity = { name: plugin.metadata.name, version: plugin.metadata.version };
       if (!plugin.metadata.capabilities.includes(request.op)) {
@@ -169,7 +175,12 @@ export async function dispatchForge(
         });
       } else {
         const env = options.env ?? process.env;
-        const credential = selectedCredential(discovery, plugin, selectedHost, env);
+        const credential = selectedCredential(
+          discovery,
+          plugin,
+          selectedHost,
+          options.credentialEnv ?? env
+        );
         if (credential.missing && request.op !== 'resolve') {
           response = errorResponse(request, {
             kind: 'no_credential',

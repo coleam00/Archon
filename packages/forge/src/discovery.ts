@@ -14,6 +14,7 @@ import { runPluginProcess, type PluginArgv } from './plugin-process';
 
 export interface PluginCandidate extends PluginArgv {
   source: string;
+  configured: boolean;
   expectedName?: string;
 }
 
@@ -23,6 +24,7 @@ export interface DiscoveredPlugin extends PluginCandidate {
 
 export interface PluginDiscovery {
   plugins: readonly DiscoveredPlugin[];
+  unavailable: readonly PluginDiscoveryError[];
   byHost: ReadonlyMap<string, DiscoveredPlugin>;
   hostConfig: ReadonlyMap<string, Exclude<ForgeHostPlugin, string>>;
   pluginTokenEnv: ReadonlyMap<string, string>;
@@ -63,8 +65,22 @@ async function scanDirectory(directory: string, source: string): Promise<PluginC
       continue;
     }
     const command = resolve(directory, entry);
-    const details = await stat(command);
-    if (!details.isFile()) continue;
+    try {
+      const details = await stat(command);
+      if (!details.isFile()) continue;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      // Retain a broken link as an unavailable candidate, so selecting it
+      // cannot silently turn into an unclaimed (no-forge) result.
+      candidates.push({
+        source: `${source}:${name}`,
+        configured: false,
+        command,
+        args: [],
+        expectedName: name,
+      });
+      continue;
+    }
     if (process.platform !== 'win32') {
       try {
         await access(command, constants.X_OK);
@@ -73,7 +89,13 @@ async function scanDirectory(directory: string, source: string): Promise<PluginC
         continue;
       }
     }
-    candidates.push({ source: `${source}:${name}`, command, args: [], expectedName: name });
+    candidates.push({
+      source: `${source}:${name}`,
+      configured: false,
+      command,
+      args: [],
+      expectedName: name,
+    });
   }
   return candidates;
 }
@@ -83,6 +105,7 @@ function configuredCandidates(
 ): PluginCandidate[] {
   const candidates: PluginCandidate[] = config.plugins.map(plugin => ({
     source: `config:${plugin.plugin}`,
+    configured: true,
     command: plugin.command,
     args: plugin.args,
     expectedName: plugin.plugin,
@@ -91,6 +114,7 @@ function configuredCandidates(
     if (typeof value !== 'string' && value.command) {
       candidates.push({
         source: `config:${host}`,
+        configured: true,
         command: value.command,
         args: value.args,
         expectedName: value.plugin,
@@ -98,6 +122,44 @@ function configuredCandidates(
     }
   }
   return candidates;
+}
+
+async function readMetadata(
+  candidate: PluginCandidate,
+  env: NodeJS.ProcessEnv,
+  options: { timeoutMs?: number; maxOutputBytes?: number }
+): Promise<PluginMetadata> {
+  const outcome = await runPluginProcess(candidate, ['metadata'], {
+    env,
+    timeoutMs: options.timeoutMs ?? 10_000,
+    maxOutputBytes: options.maxOutputBytes,
+  });
+  if (outcome.spawnError || outcome.timedOut || outcome.outputExceeded || outcome.exitCode !== 0) {
+    throw new PluginDiscoveryError(
+      'process_failed',
+      `${candidate.source}: metadata handshake failed`
+    );
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(outcome.stdout) as unknown;
+  } catch {
+    throw new PluginDiscoveryError('invalid_response', `${candidate.source}: metadata is not JSON`);
+  }
+  const parsed = pluginMetadataSchema.safeParse(raw);
+  if (!parsed.success || parsed.data.protocol !== 1) {
+    throw new PluginDiscoveryError(
+      'invalid_response',
+      `${candidate.source}: incompatible plugin metadata`
+    );
+  }
+  if (candidate.expectedName && parsed.data.name !== candidate.expectedName) {
+    throw new PluginDiscoveryError(
+      'invalid_response',
+      `${candidate.source}: metadata name does not match configuration`
+    );
+  }
+  return parsed.data;
 }
 
 export async function discoverPlugins(
@@ -118,10 +180,11 @@ export async function discoverPlugins(
     ...config.pluginDirs,
     ...(config.scanPath ? (env.PATH ?? env.Path ?? '').split(delimiter).filter(Boolean) : []),
   ];
+  const configuredDirs = new Set(config.pluginDirs.map(dir => resolve(dir)));
   const scanned = (
     await Promise.all(
-      [...new Set(dirs)].map((dir, index) =>
-        scanDirectory(dir, index < config.pluginDirs.length ? 'plugin-dir' : 'discovery')
+      [...new Set(dirs.map(dir => resolve(dir)))].map(dir =>
+        scanDirectory(dir, configuredDirs.has(dir) ? 'plugin-dir' : 'discovery')
       )
     )
   ).flat();
@@ -135,55 +198,44 @@ export async function discoverPlugins(
   );
   const plugins: DiscoveredPlugin[] = [];
   const names = new Set<string>();
+  const unavailable: PluginDiscoveryError[] = [];
+  const unavailableNames = new Set<string>();
+  const selectedNames = new Set(
+    Object.values(config.hosts).map(value => (typeof value === 'string' ? value : value.plugin))
+  );
   for (const candidate of candidates) {
-    const outcome = await runPluginProcess(candidate, ['metadata'], {
-      env,
-      timeoutMs: options.timeoutMs ?? 10_000,
-      maxOutputBytes: options.maxOutputBytes,
-    });
-    if (
-      outcome.spawnError ||
-      outcome.timedOut ||
-      outcome.outputExceeded ||
-      outcome.exitCode !== 0
-    ) {
-      throw new PluginDiscoveryError(
-        'process_failed',
-        `${candidate.source}: metadata handshake failed`
-      );
-    }
-    let raw: unknown;
+    let metadata: PluginMetadata;
     try {
-      raw = JSON.parse(outcome.stdout) as unknown;
-    } catch {
-      throw new PluginDiscoveryError(
-        'invalid_response',
-        `${candidate.source}: metadata is not JSON`
-      );
+      metadata = await readMetadata(candidate, env, options);
+    } catch (error) {
+      if (
+        !(error instanceof PluginDiscoveryError) ||
+        candidate.configured ||
+        (candidate.expectedName && selectedNames.has(candidate.expectedName))
+      )
+        throw error;
+      unavailable.push(error);
+      if (candidate.expectedName) unavailableNames.add(candidate.expectedName);
+      process.stderr.write(`Skipping forge plugin ${candidate.command}: ${error.message}\n`);
+      continue;
     }
-    const parsed = pluginMetadataSchema.safeParse(raw);
-    if (!parsed.success || parsed.data.protocol !== 1) {
-      throw new PluginDiscoveryError(
-        'invalid_response',
-        `${candidate.source}: incompatible plugin metadata`
-      );
-    }
-    if (candidate.expectedName && parsed.data.name !== candidate.expectedName) {
-      throw new PluginDiscoveryError(
-        'invalid_response',
-        `${candidate.source}: metadata name does not match configuration`
-      );
-    }
-    if (names.has(parsed.data.name)) {
+    if (names.has(metadata.name)) {
       throw new PluginDiscoveryError(
         'duplicate_host',
-        `duplicate forge plugin name: ${parsed.data.name}`
+        `duplicate forge plugin name: ${metadata.name}`
       );
     }
-    names.add(parsed.data.name);
-    plugins.push({ ...candidate, metadata: parsed.data });
+    names.add(metadata.name);
+    plugins.push({ ...candidate, metadata });
   }
 
+  for (const name of unavailableNames) {
+    if (names.has(name))
+      throw new PluginDiscoveryError(
+        'duplicate_host',
+        `forge plugin ${name} has both available and failed candidates`
+      );
+  }
   const byName = new Map(plugins.map(plugin => [plugin.metadata.name, plugin]));
   const byHost = new Map<string, DiscoveredPlugin>();
   const claim = (host: string, plugin: DiscoveredPlugin): void => {
@@ -215,5 +267,5 @@ export async function discoverPlugins(
     claim(host, plugin);
     hostConfig.set(normalizeHost(host), value);
   }
-  return { plugins, byHost, hostConfig, pluginTokenEnv };
+  return { plugins, unavailable, byHost, hostConfig, pluginTokenEnv };
 }

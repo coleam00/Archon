@@ -27,6 +27,74 @@ const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
 // .archon/workflows/ directory so an unknown workflow name fails deterministically.
 const repoRoot = join(import.meta.dir, '..', '..', '..');
 
+describe('forge user trust boundary', () => {
+  it('keeps config and executable discovery user-scoped while accepting a repo credential', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-forge-trust-'));
+    const repo = join(root, 'repo');
+    const trustedHome = join(root, 'trusted-home');
+    const repoSelectedHome = join(root, 'repo-selected-home');
+    const plugin = join(root, 'plugin.ts');
+    const trustedMarker = join(root, 'trusted-marker');
+    const repoMarker = join(root, 'repo-marker');
+    mkdirSync(join(repo, '.archon'), { recursive: true });
+    mkdirSync(trustedHome, { recursive: true });
+    mkdirSync(repoSelectedHome, { recursive: true });
+    spawnSync('git', ['init', '-q', '.'], { cwd: repo });
+    writeFileSync(
+      plugin,
+      `import { appendFileSync } from 'node:fs';\n` +
+        `const marker = process.argv[2];\n` +
+        `if (process.env.ARCHON_FORGE_TOKEN) appendFileSync(marker, process.env.ARCHON_FORGE_TOKEN);\n` +
+        `if (process.argv[3] === 'metadata') {\n` +
+        `  console.log(JSON.stringify({ protocol: 1, name: 'trusted', version: '1', forge: 'test', hosts: ['forge.example'], capabilities: ['checks.state'], token_env: ['FORGE_SECRET'] }));\n` +
+        `} else {\n` +
+        `  const request = JSON.parse(await Bun.stdin.text());\n` +
+        `  console.log(JSON.stringify({ operationId: request.operationId, ok: true, result: { op: 'checks.state', value: { ref: request.ref, revision: 'trusted-revision', units: [], required: null, summary: { state: 'none', counts: { total: 0, green: 0, red: 0, pending: 0, gated: 0, unknown: 0 } } } } }));\n` +
+        `}\n`
+    );
+    writeFileSync(
+      join(trustedHome, 'config.yaml'),
+      `forge:\n  plugins:\n    - plugin: trusted\n      command: ${JSON.stringify(process.execPath)}\n      args: [${JSON.stringify(plugin)}, ${JSON.stringify(trustedMarker)}]\n  hosts:\n    forge.example: trusted\n`
+    );
+    writeFileSync(
+      join(repoSelectedHome, 'config.yaml'),
+      `forge:\n  plugins:\n    - plugin: trusted\n      command: ${JSON.stringify(process.execPath)}\n      args: [${JSON.stringify(plugin)}, ${JSON.stringify(repoMarker)}]\n  hosts:\n    forge.example: trusted\n`
+    );
+    writeFileSync(
+      join(repo, '.archon', '.env'),
+      `ARCHON_HOME=${repoSelectedHome}\nPATH=${root}\nHOME=${root}\nFORGE_SECRET=repo-secret\n`
+    );
+
+    try {
+      const ref = { repo: { host: 'forge.example', path: 'owner/repo' }, number: 7 };
+      const result = spawnSync(
+        process.execPath,
+        [CLI_ENTRY, 'forge', 'checks', '--data', JSON.stringify({ ref })],
+        {
+          cwd: repo,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            ARCHON_HOME: trustedHome,
+            ARCHON_TELEMETRY_DISABLED: '1',
+            FORGE_SECRET: '',
+          },
+        }
+      );
+
+      expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: '' });
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: true,
+        result: { value: { revision: 'trusted-revision' } },
+      });
+      expect(existsSync(repoMarker)).toBe(false);
+      await expect(Bun.file(trustedMarker).text()).resolves.toBe('repo-secret');
+    } finally {
+      await removeTempTree(root);
+    }
+  });
+});
+
 describe('removed continue command', () => {
   // Full interpreter startup: the rejection lives in main()'s dispatch, not in
   // a pure guard, so a subprocess is the only way to pin the actual outcome.
