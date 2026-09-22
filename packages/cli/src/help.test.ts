@@ -168,6 +168,8 @@ Usage:
   archon <command> [subcommand] [options] [arguments]
 
 Commands:
+  forge resolve              Resolve an explicit remote through optional forge plugins
+  forge checks               Observe checks for an explicit qualified pull request
   chat <message>             Send a message to the orchestrator
   setup                      Interactive setup wizard for credentials and config
   workflow list [name] [--full] [--json]

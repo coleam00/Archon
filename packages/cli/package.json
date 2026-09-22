@@ -22,7 +22,8 @@
     "@archon/server": "workspace:*",
     "@archon/workflows": "workspace:*",
     "@clack/prompts": "^1.0.0",
-    "dotenv": "^17.2.3"
+    "dotenv": "^17.2.3",
+    "@archon/forge": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0"
@@ -92,6 +93,9 @@
     ],
     [
       "src/adapters/cli-adapter.test.ts"
+    ],
+    [
+      "src/commands/forge.test.ts"
     ]
   ]
 }

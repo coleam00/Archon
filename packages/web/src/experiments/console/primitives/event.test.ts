@@ -122,6 +122,49 @@ describe('toRunEvent — node transitions', () => {
 });
 
 describe('toRunEvent — tool calls (regression guard)', () => {
+  test('integration operations retain target, producer and result without interpreting their policy', () => {
+    const result = { ok: true, result: { observation: 'red' } };
+    const event = toRunEvent(
+      raw({
+        event_type: 'integration_operation',
+        data: {
+          integration: 'example',
+          operation: 'inspect',
+          operationId: 'operation-42',
+          target: { id: 'item-7' },
+          plugin: { name: 'sample', version: '1' },
+          result,
+          durationMs: 5,
+        },
+      })
+    );
+    expect(event).toMatchObject({
+      kind: 'tool_call',
+      tool: 'example.inspect',
+      args: {
+        operationId: 'operation-42',
+        target: { id: 'item-7' },
+        plugin: { name: 'sample', version: '1' },
+        result,
+      },
+      result: { ok: true, durationMs: 5 },
+    });
+  });
+
+  test('integration failure exposes its structured diagnostic', () => {
+    const event = toRunEvent(
+      raw({
+        event_type: 'integration_operation',
+        data: {
+          integration: 'example',
+          operation: 'inspect',
+          result: { ok: false, error: { message: 'No credential configured' } },
+        },
+      })
+    );
+    expect(event).toMatchObject({ result: { ok: false, message: 'No credential configured' } });
+  });
+
   test('tool_called carries tool name + input, no result yet', () => {
     const e = toRunEvent(
       raw({ event_type: 'tool_called', data: { tool_name: 'Bash', tool_input: { cmd: 'ls' } } })

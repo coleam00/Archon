@@ -6,7 +6,11 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./conformance": "./src/conformance.ts"
+    "./conformance": "./src/conformance.ts",
+    "./operations": "./src/operations.ts",
+    "./dispatch": "./src/dispatch.ts",
+    "./plugin-config": "./src/plugin-config.ts",
+    "./github-plugin": "./src/github-plugin.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",
@@ -22,5 +26,8 @@
     [
       "src/"
     ]
-  ]
+  ],
+  "devDependencies": {
+    "@archon/paths": "workspace:*"
+  }
 }

@@ -171,3 +171,5 @@ export function verifyGitHubSourceConformance(
   }
   return failures;
 }
+
+export { runForgeReadConformance, type ForgeReadConformanceCase } from './outbound-conformance';

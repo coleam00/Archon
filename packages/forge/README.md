@@ -11,3 +11,9 @@ const bindingSchema = createForgeBindingSchema(jsonValueSchema);
 ```
 
 A missing direct field rejects that binding. Source actors record forge provenance only; the trigger host separately resolves and authorizes the binding's Archon run-as identity.
+
+## Outbound operations
+
+`@archon/forge/operations` owns read-operation requests, results, metadata and audit payloads. `@archon/forge/dispatch` executes optional plugins; generic workflow execution imports neither. The first GitHub executable implements `resolve` and `checks.state` through the same handshake as installed plugins.
+
+See the [forge reference](../docs-web/src/content/docs/reference/forge.md) for the CLI, trusted configuration, UTF-8 process protocol, credentials and check semantics. Run `bun run test` and `bun run type-check` from this package to exercise contract, mapping and process conformance.

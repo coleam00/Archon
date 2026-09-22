@@ -44,11 +44,12 @@ checking, and `validate` runs the project's tests against it without checking.
 The preflight alone cost 31 lines and a stub in 17 fixtures, for a node no fixture
 could ever run. All three copies are gone.
 
-What survived in the ready flip is the part that passes the rule: it refuses an
-origin remote that does not normalize to `owner/repo`, because its own `gh` calls
-would otherwise go somewhere unintended; it refuses to flip while any check is
-non-green; and it reads the draft state back afterwards, because a successful
-exit is not proof the state changed.
+The ready preflight reads checks through `archon forge checks` with the recorded
+qualified PR. It refuses pending, red, gated, unknown and failed observations.
+The flip targets that same qualified PR and reads the draft state back afterwards,
+because a successful exit is not proof the state changed. The CLI host supplies
+`ARCHON_CLI_COMMAND` as a JSON argv array; SDK and container hosts supply an invocation
+that works inside their execution environment.
 
 The rule is not "never defend against what has not happened" — the two Keep cases
 above have not happened either, and both are worth their few lines. The question is

@@ -21,7 +21,9 @@ const hasDetachedRunConfigHandoff = process.argv
 const inheritedInstallContext = hasDetachedRunConfigHandoff
   ? captureDetachedInstallContext()
   : undefined;
-loadArchonEnv(process.cwd());
+// Exec plugins receive the dispatcher's constrained environment. Loading user or
+// repository env here would bypass that boundary before the plugin starts.
+if (process.argv[2] !== 'forge-plugin') loadArchonEnv(process.cwd());
 // The detached parent sealed this payload with its effective install key. Repo
 // env still loads normally, but it cannot replace any input that derives the
 // install home before the child consumes the accepted snapshot.
@@ -81,6 +83,11 @@ import {
   refreshCompiledInstallManifest,
   canonicalizeProjectPath,
 } from '@archon/paths';
+
+const cliInvocation: [string, ...string[]] = BUNDLED_IS_BINARY
+  ? [process.execPath]
+  : [process.execPath, '--no-env-file', import.meta.path];
+process.env.ARCHON_CLI_COMMAND = JSON.stringify(cliInvocation);
 
 let providersRegistered = false;
 let databaseRouteLoaded = false;
@@ -220,6 +227,11 @@ async function main(): Promise<number> {
     }
   }
 
+  if (args[0] === 'forge-plugin' && args[1] === 'github') {
+    const { runGithubPlugin } = await import('@archon/forge/github-plugin');
+    return runGithubPlugin(args.slice(2));
+  }
+
   // Parse global options
   let parsedArgs: { values: Record<string, unknown>; positionals: string[] };
 
@@ -327,6 +339,15 @@ async function main(): Promise<number> {
       // forks — so this only fires on a hand-built `--internal-detached-run-config`, and
       // saves it a database round-trip on the way to the same message.
       if (resumeFlag) throw new Error(RESUME_RUN_CONFIG_CONFLICT);
+    }
+
+    if (command === 'forge') {
+      const { forgeCommand } = await loadRoute(() => import('./commands/forge'));
+      return await forgeCommand(subcommand, {
+        cwd,
+        data: typeof values.data === 'string' ? values.data : undefined,
+        command: cliInvocation,
+      });
     }
 
     const configOutsideRun = rejectConfigOutsideRun(command, subcommand, values.config);

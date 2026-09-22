@@ -132,6 +132,7 @@ export const WORKFLOW_EVENT_TYPES = [
   'quota_resume_skipped',
   'workflow_cancelled',
   'workflow_artifact',
+  'integration_operation',
   'node_session_resumed',
   // Phase 2 of #975 — subagent task lifecycle (aggregated from provider
   // task_started / task_progress / task_notification chunks). Stored
