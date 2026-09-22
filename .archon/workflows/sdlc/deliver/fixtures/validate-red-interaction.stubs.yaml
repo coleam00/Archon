@@ -1,0 +1,45 @@
+# An interaction is red, never an inherited/environment delivery bypass.
+impl__record-start: '{"start":"recorded"}'
+impl__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: implemented and green on the checks it ran"
+impl__assert-changed: "3 files changed"
+pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 8, url: "https://github.com/example/repo/pull/8", head: "fixture-branch", base: "dev", is_draft: true }
+classify:
+  errors: false
+  docs: false
+  reasons:
+    errors: "stub: no failure paths"
+    docs: "stub: no doc-facing changes"
+resolve-scope: '{"errors":"false"}'
+review__mode: '{"continuation":false}'
+review__scope:
+  # PR diff in scope; head sha stubbed
+  docs: false
+review__code: "0 findings"
+review__seams: "0 findings"
+review__simplify: "0 findings"
+review__tests: "0 findings"
+review__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: clean on initial review"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+validate__validate:
+  green: false
+  red_cause: introduced
+  summary: "stub: the full gate caught two type errors this change added"
+# The comparison producer is tested with real Git in sdlc-composition-evidence.test.ts.
+# This stub exercises its certified result through the actual delivery consumer.
+validate__result:
+  evidence: null
+  green: false
+  red_cause: interaction
+  summary: "project gate passes PR A and PR B separately; their exact composition fails"
+fixture:
+  expect: failed
+  fail-node: gate-validated
+  reached: [pr__pr, review__synthesize]
+exec-code: true

@@ -18,14 +18,60 @@ inputs:
       Optional narrowing — a package, directory, or named check to focus on.
       Empty means the project's full applicable gate.
 
-returns: validate
+  comparison:
+    default: ""
+    description: >-
+      Optional path to a composition request JSON: pinned original_base/base/head,
+      change/base_changes, merge method and the project check argv/environment identity.
+      Runs that exact gate on separate and composed trees without an agent.
+
+returns: result
 outcome_field: green
 
 nodes:
+  - id: mode
+    script: mode
+    runtime: bun
+    with:
+      comparison: "$INPUTS.comparison"
+    output_format:
+      type: object
+      properties:
+        comparison: { type: boolean }
+      required: [comparison]
+
+  - id: compare
+    script: compare
+    runtime: bun
+    always_run: true
+    depends_on: [mode]
+    when: "$mode.output.comparison == true"
+    with:
+      comparison: "$INPUTS.comparison"
+    output_format: &composition_verdict
+      type: object
+      properties:
+        green: { type: boolean }
+        red_cause:
+          type: string
+          enum: [introduced, inherited, environment, interaction, ""]
+        summary: { type: string }
+        evidence:
+          anyOf:
+            - type: "null"
+            - type: object
+              properties:
+                type: { type: string, enum: [archon_artifact] }
+                run_id: { type: string }
+                path: { type: string }
+              required: [type, run_id, path]
+      required: [green, red_cause, summary, evidence]
+
   - id: validate
     command: validate
+    depends_on: [mode]
+    when: "$mode.output.comparison == false"
     always_run: true
-    output_type: validation
     output_format:
       type: object
       properties:
@@ -41,3 +87,14 @@ nodes:
         summary:
           type: string
       required: [green, red_cause, summary]
+
+  - id: result
+    script: result
+    runtime: bun
+    depends_on: [compare, validate]
+    trigger_rule: none_failed_min_one_success
+    with:
+      comparison: { from: "$compare.output", if_skipped: null }
+      validation: { from: "$validate.output", if_skipped: null }
+    output_type: validation
+    output_format: *composition_verdict

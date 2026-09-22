@@ -62,6 +62,10 @@ export const CLAUDE_CAPABILITIES: ProviderCapabilities = {
   envInjection: true,
   costControl: true,
   costReporting: true, // SDK resultMsg.total_cost_usd reaches the result chunk
+  tokenReporting: true,
+  stopReasonReporting: true,
+  turnCountReporting: true,
+  resolvedModelReporting: true,
   effortControl: true,
   fallbackModel: true,
   sandbox: true,

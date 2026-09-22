@@ -50,7 +50,10 @@ if (green === 'true') {
   );
 } else if (!passesRed(cause)) {
   refuse(
-    `${stage} is red, and the cause is the change itself. ` +
+    `${stage} is red (${cause}). ` +
+      (cause === 'interaction'
+        ? `The separately green changes fail when composed; hold this combination. ${summary} `
+        : 'The change has no accepted non-introduced-red evidence. ') +
       'Refusing to open or advance a pull request on red work.'
   );
 } else if (summary === '') {

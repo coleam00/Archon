@@ -21,6 +21,10 @@ export const COPILOT_CAPABILITIES: ProviderCapabilities = {
   envInjection: true,
   costControl: false,
   costReporting: false, // normalizeCopilotUsage captures token axes only
+  tokenReporting: true,
+  stopReasonReporting: false,
+  turnCountReporting: false,
+  resolvedModelReporting: false,
   effortControl: true,
   fallbackModel: false,
   sandbox: false,
