@@ -224,6 +224,27 @@ describe('GET /api/providers', () => {
     }
   });
 
+  test('reports the different execution metrics available from each provider', async () => {
+    const response = await app.request('/api/providers');
+    const body = (await response.json()) as {
+      providers: { id: string; capabilities: Record<string, unknown> }[];
+    };
+    expect(body.providers.find(provider => provider.id === 'claude')?.capabilities).toMatchObject({
+      tokenReporting: true,
+      costReporting: true,
+      stopReasonReporting: true,
+      turnCountReporting: true,
+      resolvedModelReporting: true,
+    });
+    expect(body.providers.find(provider => provider.id === 'codex')?.capabilities).toMatchObject({
+      tokenReporting: true,
+      costReporting: false,
+      stopReasonReporting: false,
+      turnCountReporting: false,
+      resolvedModelReporting: false,
+    });
+  });
+
   test('capabilities have expected boolean fields', async () => {
     const response = await app.request('/api/providers');
     const body = (await response.json()) as {

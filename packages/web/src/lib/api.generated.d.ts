@@ -4323,6 +4323,10 @@ export interface components {
       envInjection: boolean;
       costControl: boolean;
       costReporting: boolean;
+      tokenReporting: boolean;
+      stopReasonReporting: boolean;
+      turnCountReporting: boolean;
+      resolvedModelReporting: boolean;
       effortControl: boolean;
       fallbackModel: boolean;
       sandbox: boolean;
