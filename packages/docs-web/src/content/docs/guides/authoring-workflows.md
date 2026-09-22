@@ -1119,6 +1119,32 @@ load-time `<include>__<node>` ID in metadata and as the sanitized body suffix.
 
 This works on **every** node type (`bash`/`script` produce typed outputs too, just without a `sessionId`). The write is **best-effort** — if it fails, the node still succeeds and a warning is logged; the typed sidecar may simply be absent. `output_type` is an open set of labels (`plan`, `findings`, `code`, `summary`, …) — pick a convention and keep casing consistent, since lookup is case-sensitive.
 
+#### Reading typed artifacts by type
+
+Every executable invocation receives a typed-artifact listing at `$TYPED_ARTIFACTS_FILE`: a JSON file inside the run's artifact directory, recreated before the node runs. It has the shape `{ "runId", "artifactsByType": { "<outputType>": [ …metadata ] }, "errors": [ … ] }`, so a script or agent selects a type without knowing `nodes/`, sidecar names, or loop filename rules. Each entry is the same metadata the sidecar holds (`nodeId`, `outputType`, `path`, `runId`, `producedAt`, `size`, and optional `loopGroupPath`/`sessionId`), and `path` is relative to `$ARTIFACTS_DIR`.
+
+```ts
+// A script: read the listing the same way in host or container runs.
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const listing = JSON.parse(readFileSync(process.env.TYPED_ARTIFACTS_FILE!, 'utf8'));
+if (listing.runId !== process.env.WORKFLOW_ID) throw new Error('listing is for another run');
+for (const error of listing.errors) console.error(`unreadable: ${error.path} (${error.kind})`);
+for (const gate of listing.artifactsByType['green-gate'] ?? []) {
+  const body = readFileSync(join(process.env.ARTIFACTS_DIR!, gate.path), 'utf8');
+  console.log(gate.nodeId, body);
+}
+```
+
+In an agent prompt, point at the listing rather than the layout: "Read `$TYPED_ARTIFACTS_FILE`, select `artifactsByType["plan"]`, and open each entry's `path` under `$ARTIFACTS_DIR`."
+
+Properties worth knowing:
+
+- **Observation, not a ledger.** Entries of a type are ordered by `producedAt` ascending, with ties broken by content path. The listing freezes which artifacts existed when the node started and their metadata; it is not an execution history or a completion-order log, and re-running the same node owner overwrites its sidecar. The node sees artifacts published **before it started**, never a running sibling's — declare `depends_on` to order a producer ahead of its consumer.
+- **Failures stay visible.** `errors` lists every record the read could not turn into an artifact (malformed or foreign-run sidecar, unsafe path, missing or unreadable content). A corrupt sidecar has no trustworthy type, so it never disappears into an empty type list. An absent key means no matching readable metadata; `runId` lets a consumer reject a listing handed to it out of scope.
+- **Everywhere an invocation runs.** The path is delivered in `bash:` and `script:` nodes (as both `$TYPED_ARTIFACTS_FILE` and the `TYPED_ARTIFACTS_FILE` environment variable), agent prompts, loop attempts, and approval rework. A prompt that references it in a context with no listing fails rather than substituting an empty string.
+
 Successful bash stdout is retained by default on the completed run as a bounded audit preview in `node_completed.data.node_output`. Output over 32 KiB (32,768 UTF-8 bytes) ends with a truncation marker, and the event also includes `node_output_truncated: true` plus `node_output_original_bytes`. Because stdout is persisted, never print secrets or credentials from bash nodes. This preview is separate from `output_type`: declaring `output_type` opts into a best-effort file sidecar that may contain the full output and is not required for ordinary bash audit retention.
 
 ### Retained subprocess evidence
