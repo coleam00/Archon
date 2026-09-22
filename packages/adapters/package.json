@@ -66,6 +66,9 @@
     ],
     [
       "src/forge/github/trigger-ingress.test.ts"
+    ],
+    [
+      "src/forge/github/normalize-event.test.ts"
     ]
   ]
 }

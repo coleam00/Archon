@@ -8,8 +8,8 @@ import {
   forgeEventSelectorSchema,
   mapForgeInputs,
   matchForgeEvent,
-  normalizeGitHubWebhook,
 } from '@archon/forge';
+import { normalizeGitHubWebhook } from './normalize-event';
 import { acceptStartReceipt } from '@archon/core/db/resource-starts';
 import { getUserById } from '@archon/core/db/users';
 import { jsonValueSchema } from '@archon/workflows/output-ref';

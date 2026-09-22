@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import type { ForgeEvent } from './events';
 
 export const eventActionCapabilitySchema = z.union([
   z.object({
@@ -32,16 +31,3 @@ export const forgeSourceCapabilitiesSchema = z.object({
   events: z.array(eventActionCapabilitySchema),
 });
 export type ForgeSourceCapabilities = z.infer<typeof forgeSourceCapabilitiesSchema>;
-
-export function supportsForgeEvent(
-  capabilities: ForgeSourceCapabilities,
-  event: ForgeEvent
-): boolean {
-  return capabilities.events.some(
-    capability =>
-      capability.kind === event.kind &&
-      capability.action === event.action &&
-      (event.kind !== 'check.changed' ||
-        ('unitKind' in capability && capability.unitKind === event.unit.kind))
-  );
-}
