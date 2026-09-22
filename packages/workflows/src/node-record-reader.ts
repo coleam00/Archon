@@ -1,4 +1,5 @@
 import { z } from '@hono/zod-openapi';
+import { NODE_STATE_EVENT_TYPES } from './store';
 import {
   nodeExecutionMetadataSchema,
   type NodeExecutionMetadata,
@@ -28,16 +29,7 @@ export interface ReadNodeRecordEvent {
 }
 
 const eventDataSchema = z.record(z.string(), z.unknown());
-const eventTypes = new Set<string>([
-  'node_started',
-  'node_completed',
-  'node_failed',
-  'node_skipped',
-  'node_suspended',
-  'node_skipped_prior_success',
-  'node_always_run_reset',
-  'node_prior_cache_invalidated',
-]);
+const eventTypes = new Set<string>(NODE_STATE_EVENT_TYPES);
 const metadataKeys = [
   'node',
   'invocation',
