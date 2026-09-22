@@ -1,8 +1,25 @@
-/** Standalone client for the forge CLI operation used by bundled workflow scripts. */
+/** Standalone client for forge CLI operations used by bundled workflow scripts. */
+
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 export interface QualifiedPr {
   readonly repo: { readonly host: string; readonly path: string };
   readonly number: number;
+}
+
+export interface PrRecord extends QualifiedPr {
+  readonly schemaVersion: 1;
+  readonly url: string;
+  readonly head: string;
+  readonly base: string;
+  readonly is_draft: boolean;
+  readonly state: 'open' | 'closed' | 'merged';
+  readonly head_repo: { readonly host: string; readonly path: string } | null;
+  readonly head_revision: string | null;
+  readonly base_revision: string | null;
+  readonly maintainer_can_modify: boolean | null;
 }
 
 // This standalone boundary is checked against @archon/forge by forge-contract.test.ts.
@@ -27,10 +44,135 @@ export interface ChecksObservation extends CheckSet {
   readonly required: CheckSet | null;
 }
 
-function record(value: unknown): Record<string, unknown> | undefined {
+export function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null
     ? (value as Record<string, unknown>)
     : undefined;
+}
+
+export class ForgeOperationError extends Error {
+  constructor(
+    message: string,
+    readonly response: Record<string, unknown>,
+    readonly mutation: Record<string, unknown> | undefined
+  ) {
+    super(message);
+    this.name = 'ForgeOperationError';
+  }
+}
+
+function forgeCommand(): readonly string[] {
+  return parseCommand(process.env.ARCHON_CLI_COMMAND);
+}
+
+function safeAppliedEvidence(
+  operationId: string,
+  result: Record<string, unknown> | undefined
+): Record<string, unknown> {
+  const value = record(result?.value);
+  const pr = record(value?.pr);
+  const comment = record(value?.comment);
+  return {
+    operationId,
+    op: result?.op,
+    outcome: value?.outcome,
+    target: value?.target,
+    requested: value?.requested,
+    enforced: value?.enforced,
+    changed: value?.changed,
+    ...(pr
+      ? { pr: { repo: pr.repo, number: pr.number, url: pr.url } }
+      : {}),
+    ...(comment
+      ? { comment: { ref: comment.ref, id: comment.id, url: comment.url } }
+      : {}),
+  };
+}
+
+/** Run one typed forge operation without placing authored bodies in argv. */
+export function invokeForge(op: string, request: Record<string, unknown>): Record<string, unknown> {
+  const directory = mkdtempSync(join(tmpdir(), 'archon-forge-'));
+  const path = join(directory, 'request.json');
+  try {
+    writeFileSync(path, JSON.stringify(request), { mode: 0o600 });
+    const result = Bun.spawnSync([...forgeCommand(), 'forge', op, '--json', '--data-file', path], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(result.stdout.toString());
+    } catch {
+      throw new Error(
+        `forge ${op} returned invalid JSON${result.stderr.length ? `: ${result.stderr.toString().trim()}` : ''}`
+      );
+    }
+    const response = record(parsed);
+    if (!response || typeof response.operationId !== 'string') {
+      throw new Error(`forge ${op} returned an unexpected response envelope`);
+    }
+    const resultBody = record(response.result);
+    if (response.ok === true && result.exitCode === 2) {
+      const applied = safeAppliedEvidence(response.operationId, resultBody);
+      throw new ForgeOperationError(
+        `forge ${op} applied/read succeeded; audit persistence failed: ${JSON.stringify(applied)}`,
+        response,
+        record(resultBody?.value)
+      );
+    }
+    if (response.ok !== true || result.exitCode !== 0) {
+      const mutation = record(response.mutation);
+      const error = record(response.error);
+      const outcome = typeof mutation?.outcome === 'string' ? mutation.outcome : undefined;
+      const message = typeof error?.message === 'string' ? error.message : 'operation failed';
+      const evidence = mutation ? ` ${JSON.stringify(mutation)}` : '';
+      throw new ForgeOperationError(
+        `forge ${op} ${outcome ?? 'failed'}: ${message}${evidence}`,
+        response,
+        mutation
+      );
+    }
+    const value = record(resultBody?.value);
+    if (resultBody?.op !== op || !value) throw new Error(`forge ${op} returned the wrong result`);
+    return value;
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+function repo(value: unknown): QualifiedPr['repo'] | undefined {
+  const candidate = record(value);
+  return typeof candidate?.host === 'string' && candidate.host !== '' &&
+    typeof candidate.path === 'string' && candidate.path !== ''
+    ? { host: candidate.host, path: candidate.path }
+    : undefined;
+}
+
+export function parsePrRecord(value: unknown): PrRecord {
+  const pr = record(value);
+  const identity = repo(pr?.repo);
+  const headRepo = pr?.head_repo === null ? null : repo(pr?.head_repo);
+  if (
+    pr?.schemaVersion !== 1 || !identity ||
+    typeof pr.number !== 'number' || !Number.isInteger(pr.number) || pr.number <= 0 ||
+    typeof pr.url !== 'string' || !URL.canParse(pr.url) || typeof pr.head !== 'string' || pr.head === '' ||
+    typeof pr.base !== 'string' || pr.base === '' || typeof pr.is_draft !== 'boolean' ||
+    !['open', 'closed', 'merged'].includes(String(pr.state)) ||
+    (pr.head_repo !== null && !headRepo) ||
+    !(typeof pr.head_revision === 'string' && pr.head_revision !== '' || pr.head_revision === null) ||
+    !(typeof pr.base_revision === 'string' && pr.base_revision !== '' || pr.base_revision === null) ||
+    !(typeof pr.maintainer_can_modify === 'boolean' || pr.maintainer_can_modify === null)
+  ) throw new Error('forge returned an invalid pull-request record');
+  const verifiedHeadRepo = pr.head_repo === null ? null : headRepo;
+  if (verifiedHeadRepo === undefined) throw new Error('forge returned an invalid head repository');
+  const state = pr.state === 'open' ? 'open' : pr.state === 'closed' ? 'closed' : 'merged';
+  return {
+    schemaVersion: 1, repo: identity, number: pr.number, url: pr.url, head: pr.head,
+    base: pr.base, is_draft: pr.is_draft, state,
+    head_repo: verifiedHeadRepo, head_revision: pr.head_revision,
+    base_revision: pr.base_revision,
+    maintainer_can_modify: pr.maintainer_can_modify,
+  };
 }
 
 export function parseQualifiedPr(value: string | undefined): QualifiedPr {

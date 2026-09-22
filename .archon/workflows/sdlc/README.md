@@ -10,8 +10,8 @@ A guard here must protect an action the node it lives in takes.
 
 **Keep** a guard when it:
 
-- verifies the effect of something this node just did — exit 0 is not proof, and
-  `gh pr ready` can succeed against an already-ready PR without changing anything; or
+- verifies the effect of something this node just did — exit 0 is not proof, and a
+  forge mutation still needs its schema-owned read-back; or
 - refuses to proceed on a question it asked and could not get an answer to, where
   guessing is irreversible. `archon complete` blocking a branch delete it could not
   prove safe is the shape.
@@ -44,10 +44,11 @@ checking, and `validate` runs the project's tests against it without checking.
 The preflight alone cost 31 lines and a stub in 17 fixtures, for a node no fixture
 could ever run. All three copies are gone.
 
-The ready preflight reads checks through `archon forge checks` with the recorded
-qualified PR. It refuses pending, red, gated, unknown and failed observations.
-The flip targets that same qualified PR and reads the draft state back afterwards,
-because a successful exit is not proof the state changed. The CLI host supplies
+The ready preflight refreshes the recorded qualified PR through `pr.view`, then reads
+checks through `archon forge checks`. It refuses pending, red, gated, unknown and failed
+observations. The flip uses `pr.ready` against that same refreshed target. Its typed result
+includes the read-back; a structured refusal whose observed PR merged during the race is
+also a successful delivery, while an unknown outcome stops without a retry. The CLI host supplies
 `ARCHON_CLI_COMMAND` as a JSON argv array; SDK and container hosts supply an invocation
 that works inside their execution environment.
 
@@ -97,8 +98,8 @@ The engine retains what every exec node prints, so a node's output is the record
 whether it set out to keep one or not. Never print a value that can contain a
 secret: read it where it is normalized and pass on the normalized form. A remote
 URL is the common one — `https://<token>@host/repo` is a perfectly ordinary origin
-— so the ready flip normalizes `owner/repo` inside the substitution that reads the
-remote, and only that reaches a command line. Failure messages are the same
+— so agent nodes resolve it through the forge boundary and deterministic publishers receive
+only normalized identities. Failure messages are the same
 surface: interpolating the raw value into one leaks it just as effectively.
 
 That retention is also why a node does not need its own log. The ready flip once

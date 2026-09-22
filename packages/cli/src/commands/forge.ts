@@ -3,7 +3,13 @@ import { readFile } from 'node:fs/promises';
 import { getArchonConfigPath } from '@archon/paths/archon-paths';
 import { dispatchForge, type ForgeOperationAudit } from '@archon/forge/dispatch';
 import { forgePluginConfigSchema } from '@archon/forge/plugin-config';
-import { forgeRequestSchema, type ForgeResponse } from '@archon/forge/operations';
+import {
+  forgeRequestSchema,
+  isMutationRequest,
+  mutationEvidence,
+  type ForgeRequest,
+  type ForgeResponse,
+} from '@archon/forge/operations';
 import { writeJsonLine } from '../utils/stdout';
 
 async function readForgeConfig(configPath: string): Promise<unknown> {
@@ -37,7 +43,12 @@ async function persistAudit(audit: ForgeOperationAudit, runId: string): Promise<
 
 export async function forgeCommand(
   subcommand: string | undefined,
-  options: { data?: string; configPath?: string; trustedEnv?: NodeJS.ProcessEnv },
+  options: {
+    data?: string;
+    dataFile?: string;
+    configPath?: string;
+    trustedEnv?: NodeJS.ProcessEnv;
+  },
   dependencies: {
     dispatch?: typeof dispatchForge;
     readConfig?: () => Promise<unknown>;
@@ -50,18 +61,25 @@ export async function forgeCommand(
   const env = dependencies.env ?? process.env;
   const operationId = randomUUID();
   let response: ForgeResponse;
+  let request: ForgeRequest | undefined;
+  let dispatchStarted = false;
   try {
     const op = subcommand === 'checks' ? 'checks.state' : subcommand;
-    const supplied: unknown = options.data ? JSON.parse(options.data) : {};
+    if (options.data !== undefined && options.dataFile !== undefined)
+      throw new Error('Choose one JSON request source');
+    const source =
+      options.dataFile !== undefined ? await readFile(options.dataFile, 'utf8') : options.data;
+    const supplied: unknown = source !== undefined ? JSON.parse(source) : {};
     if (typeof supplied !== 'object' || supplied === null || Array.isArray(supplied)) {
       throw new Error('--data must be a JSON object');
     }
-    const request = forgeRequestSchema.parse({ ...supplied, operationId, op });
+    request = forgeRequestSchema.parse({ ...supplied, operationId, op });
     const config = forgePluginConfigSchema.parse(
       dependencies.readConfig
         ? await dependencies.readConfig()
         : await readForgeConfig(options.configPath ?? getArchonConfigPath())
     );
+    dispatchStarted = true;
     const result = await (dependencies.dispatch ?? dispatchForge)(request, {
       config,
       env: options.trustedEnv ?? env,
@@ -88,12 +106,22 @@ export async function forgeCommand(
       operationId,
       ok: false,
       error: {
-        kind: 'invalid_request',
-        message:
-          error instanceof SyntaxError
+        kind: dispatchStarted ? 'process_failed' : 'invalid_request',
+        message: dispatchStarted
+          ? 'Forge dispatch failed; reconcile an unknown mutation before retrying'
+          : error instanceof SyntaxError
             ? 'Invalid JSON input or configuration'
             : 'Invalid forge request or configuration; see archon forge --help',
       },
+      ...(request && isMutationRequest(request)
+        ? {
+            mutation: {
+              ...mutationEvidence(request),
+              op: request.op,
+              outcome: dispatchStarted ? ('outcome_unknown' as const) : ('refused' as const),
+            },
+          }
+        : {}),
     };
   }
   await write(response);

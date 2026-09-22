@@ -1,6 +1,19 @@
 #!/usr/bin/env bun
-import { forgeRequestSchema, type ForgeResponse } from '@archon/forge/operations';
-import { githubPluginMetadata, handleGithubOperation } from './operations';
+import {
+  forgeRequestSchema,
+  type ForgeRequest,
+  type ForgeResponse,
+} from '@archon/forge/operations';
+import {
+  githubPluginMetadata,
+  handleGithubOperation,
+  type GitHubOperationOptions,
+} from './operations';
+
+const invokeGithubOperation: (
+  request: ForgeRequest,
+  options: GitHubOperationOptions
+) => Promise<ForgeResponse> = handleGithubOperation;
 
 function invalidRequest(operationId: string, message: string): ForgeResponse {
   return { operationId, ok: false, error: { kind: 'invalid_request', message } };
@@ -45,7 +58,7 @@ export async function runGithubPlugin(args: readonly string[]): Promise<number> 
     return 1;
   }
 
-  const response = await handleGithubOperation(request.data, {
+  const response = await invokeGithubOperation(request.data, {
     token: process.env.ARCHON_FORGE_TOKEN,
   });
   console.log(JSON.stringify(response));

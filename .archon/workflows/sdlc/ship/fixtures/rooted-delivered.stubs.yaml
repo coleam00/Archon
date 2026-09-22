@@ -32,7 +32,8 @@ deliver__gate-validated: '{"gate":"green","red_cause":"","stage":"The project ga
 deliver__impl__record-start: '{"start":"recorded"}'
 deliver__impl__assert-changed: "3 files changed"
 deliver__gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
-deliver__pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true }
+deliver__pr__pr: { intent: "/tmp/pr-intent-2.json" }
+deliver__pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true, state: open, head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixture-head-2", base_revision: "fixture-base-2", maintainer_can_modify: true }
 ci-probe: '{"state":"concluded","detail":"all checks passed"}'
 deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
 deliver__flip-ready: { pr_url: "https://github.com/example/repo/pull/2" }
@@ -50,12 +51,18 @@ deliver__review__mode: '{"continuation":false}'
 deliver__review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
+  pr: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true, state: open, head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixture-head-2", base_revision: "fixture-base-2", maintainer_can_modify: true }
 deliver__review__code: "0 findings"
 deliver__review__seams: "0 findings"
 deliver__review__simplify: "0 findings"
 deliver__review__tests: "0 findings"
 deliver__review__review-complete: "settled"
 deliver__review__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: no open findings"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+deliver__review__publish:
   ready: true
   action: none
   findings_summary: "stub: no open findings"

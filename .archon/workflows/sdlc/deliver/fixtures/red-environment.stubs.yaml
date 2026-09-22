@@ -13,7 +13,8 @@ impl__implement:
   red_cause: ""
   summary: "stub: implemented and green"
 impl__assert-changed: "3 files changed"
-pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 7, url: "https://github.com/example/repo/pull/7", head: "fixture-branch", base: "dev", is_draft: true }
+pr__pr: { intent: "/tmp/pr-intent-7.json" }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 7, url: "https://github.com/example/repo/pull/7", head: "fixture-branch", base: "dev", is_draft: true, state: open, head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixture-head-7", base_revision: "fixture-base-7", maintainer_can_modify: true }
 classify:
   errors: false
   docs: false
@@ -25,11 +26,17 @@ review__mode: '{"continuation":false}'
 review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
+  pr: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 7, url: "https://github.com/example/repo/pull/7", head: "fixture-branch", base: "dev", is_draft: true, state: open, head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixture-head-7", base_revision: "fixture-base-7", maintainer_can_modify: true }
 review__code: "1 Important finding"
 review__seams: "0 findings"
 review__simplify: "0 findings"
 review__tests: "0 findings"
 review__synthesize:
+  ready: false
+  action: correct
+  findings_summary: "stub: one Important finding open"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+review__publish:
   ready: false
   action: correct
   findings_summary: "stub: one Important finding open"
@@ -48,12 +55,19 @@ recheck__mode: '{"continuation":true}'
 recheck__scope:
   # light mode; delta since cursor
   docs: false
+  pr: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 7, url: "https://github.com/example/repo/pull/7", head: "fixture-branch", base: "dev", is_draft: true, state: open, head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixture-head-7", base_revision: "fixture-base-7", maintainer_can_modify: true }
 recheck__synthesize:
   ready: true
   action: none
   findings_summary: "stub: the correction closed the finding"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
-sync-pr-body: "body resynced, and the environment red disclosed"
+recheck__publish:
+  ready: true
+  action: none
+  findings_summary: "stub: the correction closed the finding"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+sync-pr-body: { intent: "/tmp/pr-body-intent.json" }
+publish-pr-body: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 7, url: "https://github.com/example/repo/pull/7", head: "fixture-branch", base: "dev", is_draft: true, state: open, head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixture-head-7", base_revision: "fixture-base-7", maintainer_can_modify: true }
 validate__validate:
   green: true
   red_cause: ""

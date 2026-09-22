@@ -8,7 +8,8 @@ impl__implement:
   summary: "stub: implementation preserved one adjacent discovery"
 impl__assert-changed: "2 files changed"
 gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
-pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 5, url: "https://github.com/example/repo/pull/5", head: "fixture-branch", base: "dev", is_draft: true }
+pr__pr: { intent: "/tmp/pr-intent-5.json" }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 5, url: "https://github.com/example/repo/pull/5", head: "fixture-branch", base: "dev", is_draft: true, state: open, head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixture-head-5", base_revision: "fixture-base-5", maintainer_can_modify: true }
 classify:
   errors: false
   docs: false
@@ -20,12 +21,18 @@ review__mode: '{"continuation":false}'
 review__scope:
   # accepted contract recorded
   docs: false
+  pr: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 5, url: "https://github.com/example/repo/pull/5", head: "fixture-branch", base: "dev", is_draft: true, state: open, head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixture-head-5", base_revision: "fixture-base-5", maintainer_can_modify: true }
 review__code: "0 findings; 1 adjacent discovery recorded"
 review__seams: "0 findings"
 review__simplify: "0 findings"
 review__tests: "0 findings"
 review__review-complete: "settled"
 review__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: no blockers; one adjacent discovery preserved"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+review__publish:
   ready: true
   action: none
   findings_summary: "stub: no blockers; one adjacent discovery preserved"

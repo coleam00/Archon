@@ -28,6 +28,7 @@ export const cliArgOptions: CliArgOptions = {
   'run-id': { type: 'string' },
   type: { type: 'string' },
   data: { type: 'string' },
+  'data-file': { type: 'string' },
   comment: { type: 'string' },
   reason: { type: 'string' },
   text: { type: 'string' },

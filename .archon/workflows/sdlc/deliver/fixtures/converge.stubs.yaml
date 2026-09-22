@@ -14,17 +14,24 @@ impl__implement:
   summary: "stub: implemented and green"
 impl__assert-changed: "3 files changed"
 gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
-pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true }
+pr__pr: { intent: "/tmp/pr-intent-1.json" }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true, state: open, head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixture-head-1", base_revision: "fixture-base-1", maintainer_can_modify: true }
 review__mode: '{"continuation":false}'
 review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
+  pr: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true, state: open, head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixture-head-1", base_revision: "fixture-base-1", maintainer_can_modify: true }
 review__code: "2 findings (Important)"
 review__seams: "0 findings"
 review__simplify: "0 findings"
 review__tests: "0 findings"
 review__errors: "0 findings"
 review__synthesize:
+  ready: false
+  action: correct
+  findings_summary: "stub: 3 Important findings open"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+review__publish:
   ready: false
   action: correct
   findings_summary: "stub: 3 Important findings open"
@@ -42,6 +49,7 @@ recheck__mode: '{"continuation":true}'
 recheck__scope:
   # light mode; delta since cursor
   docs: false
+  pr: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true, state: open, head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixture-head-1", base_revision: "fixture-base-1", maintainer_can_modify: true }
 # No recheck specialist stubs: continuation mode must skip the fan-out and let
 # the deciding agent review the prior report and correction delta itself.
 recheck__synthesize:
@@ -49,9 +57,15 @@ recheck__synthesize:
   action: none
   findings_summary: "stub: no open Critical/Important"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+recheck__publish:
+  ready: true
+  action: none
+  findings_summary: "stub: no open Critical/Important"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 # gate-ready is deliberately unstubbed: under --exec-code the real script runs,
 # proving the $corrections.output whole-ref binding on a completed loop_group.
-sync-pr-body: "body resynced: corrected the claims the correction round falsified"
+sync-pr-body: { intent: "/tmp/pr-body-intent.json" }
+publish-pr-body: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true, state: open, head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixture-head-1", base_revision: "fixture-base-1", maintainer_can_modify: true }
 validate__validate:
   green: true
   red_cause: ""

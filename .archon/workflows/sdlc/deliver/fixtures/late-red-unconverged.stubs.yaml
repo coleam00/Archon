@@ -21,7 +21,8 @@ impl__implement:
   red_cause: ""
   summary: "stub: implemented and green"
 impl__assert-changed: "3 files changed"
-pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 11, url: "https://github.com/example/repo/pull/11", head: "fixture-branch", base: "dev", is_draft: true }
+pr__pr: { intent: "/tmp/pr-intent-11.json" }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 11, url: "https://github.com/example/repo/pull/11", head: "fixture-branch", base: "dev", is_draft: true, state: open, head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixture-head-11", base_revision: "fixture-base-11", maintainer_can_modify: true }
 classify:
   errors: false
   docs: false
@@ -33,11 +34,17 @@ review__mode: '{"continuation":false}'
 review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
+  pr: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 11, url: "https://github.com/example/repo/pull/11", head: "fixture-branch", base: "dev", is_draft: true, state: open, head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixture-head-11", base_revision: "fixture-base-11", maintainer_can_modify: true }
 review__code: "0 findings"
 review__seams: "0 findings"
 review__simplify: "0 findings"
 review__tests: "0 findings"
 review__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: clean on initial review; CI still running"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+review__publish:
   ready: true
   action: none
   findings_summary: "stub: clean on initial review; CI still running"

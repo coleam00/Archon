@@ -13,7 +13,8 @@ impl__implement:
 impl__assert-changed: "3 files changed"
 # gate-green, gate-validated, and gate-ci-fix are deliberately unstubbed: the
 # real gates must accept the inherited classification.
-pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 10, url: "https://github.com/example/repo/pull/10", head: "fixture-branch", base: "dev", is_draft: true }
+pr__pr: { intent: "/tmp/pr-intent-10.json" }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 10, url: "https://github.com/example/repo/pull/10", head: "fixture-branch", base: "dev", is_draft: true, state: open, head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixture-head-10", base_revision: "fixture-base-10", maintainer_can_modify: true }
 classify:
   errors: false
   docs: false
@@ -25,11 +26,17 @@ review__mode: '{"continuation":false}'
 review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
+  pr: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 10, url: "https://github.com/example/repo/pull/10", head: "fixture-branch", base: "dev", is_draft: true, state: open, head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixture-head-10", base_revision: "fixture-base-10", maintainer_can_modify: true }
 review__code: "0 findings"
 review__seams: "0 findings"
 review__simplify: "0 findings"
 review__tests: "0 findings"
 review__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: clean on initial review; CI still running"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+review__publish:
   ready: true
   action: none
   findings_summary: "stub: clean on initial review; CI still running"
@@ -54,7 +61,13 @@ ci-recheck__mode: '{"continuation":true}'
 ci-recheck__scope:
   # light mode; zero delta
   docs: false
+  pr: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 10, url: "https://github.com/example/repo/pull/10", head: "fixture-branch", base: "dev", is_draft: true, state: open, head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixture-head-10", base_revision: "fixture-base-10", maintainer_can_modify: true }
 ci-recheck__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: no delta; prior report stands"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+ci-recheck__publish:
   ready: true
   action: none
   findings_summary: "stub: no delta; prior report stands"
@@ -63,7 +76,7 @@ fix-ci-probe: '{"state":"red","detail":"e2e-smoke (fail)"}'
 attention-ci-probe: '{"state":"red","detail":"e2e-smoke (fail)"}'
 fixture:
   expect: paused
-  reached: [review__synthesize, gate-validated, ci-verdict, ci-fix__assert-changed, gate-ci-fix, ci-recheck__synthesize, ci-round-result, fix-ci-probe, ci-attention-route, attention-ci-probe]
+  reached: [review__publish, gate-validated, ci-verdict, ci-fix__assert-changed, gate-ci-fix, ci-recheck__publish, ci-round-result, fix-ci-probe, ci-attention-route, attention-ci-probe]
   resolved-text-contains:
     attention-ci-pause: "pull request #10 after Archon classified the failure as inherited: e2e-smoke (fail) Re-run the failing check, then resume this run."
 exec-code: true

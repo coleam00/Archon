@@ -1,4 +1,4 @@
-import { execFile, spawn } from 'node:child_process';
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { extname, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -12,6 +12,7 @@ export interface PluginArgv {
 }
 
 export interface PluginProcessResult {
+  launched: boolean;
   exitCode: number | null;
   stdout: string;
   stderr: string;
@@ -99,6 +100,7 @@ export async function runPluginProcess(
   const invalid = validateCommand(argv.command);
   if (invalid)
     return {
+      launched: false,
       exitCode: null,
       stdout: '',
       stderr: '',
@@ -107,7 +109,14 @@ export async function runPluginProcess(
       spawnError: invalid,
     };
   if (options.signal?.aborted)
-    return { exitCode: null, stdout: '', stderr: '', timedOut: true, outputExceeded: false };
+    return {
+      launched: false,
+      exitCode: null,
+      stdout: '',
+      stderr: '',
+      timedOut: true,
+      outputExceeded: false,
+    };
 
   return new Promise(resolve => {
     const stdout: Buffer[] = [];
@@ -118,13 +127,34 @@ export async function runPluginProcess(
     let spawnError: string | undefined;
     let terminationError: string | undefined;
     let terminating: Promise<void> | undefined;
-    const child = spawn(argv.command, [...argv.args, ...operationArgs], {
-      detached: process.platform !== 'win32',
-      env: pluginProcessEnv(options.env, options.token),
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-      timeout: (options.timeoutMs ?? FORGE_PLUGIN_TIMEOUT_MS) + 5_000,
-      killSignal: 'SIGKILL',
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      child = spawn(argv.command, [...argv.args, ...operationArgs], {
+        detached: process.platform !== 'win32',
+        env: pluginProcessEnv(options.env, options.token),
+        stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true,
+        timeout: (options.timeoutMs ?? FORGE_PLUGIN_TIMEOUT_MS) + 5_000,
+        killSignal: 'SIGKILL',
+      });
+    } catch (error) {
+      resolve({
+        launched: false,
+        exitCode: null,
+        stdout: '',
+        stderr: '',
+        timedOut: false,
+        outputExceeded: false,
+        spawnError: redactToken(
+          error instanceof Error ? error.message : 'plugin process could not be launched',
+          options.token
+        ),
+      });
+      return;
+    }
+    let launched = child.pid !== undefined;
+    child.once('spawn', () => {
+      launched = true;
     });
     const terminate = (): void => {
       if (terminating || child.pid === undefined) return;
@@ -177,6 +207,7 @@ export async function runPluginProcess(
       void (async (): Promise<void> => {
         await terminating;
         resolve({
+          launched,
           exitCode,
           stdout: redactToken(Buffer.concat(stdout).toString('utf8'), options.token),
           stderr: redactToken(Buffer.concat(stderr).toString('utf8'), options.token),

@@ -453,9 +453,10 @@ describe('GitHubAdapter', () => {
     test('the adapter matcher accepts the bundled PR producer contract', () => {
       const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-pr'], 'archon-pr.yaml');
       if (parsed.workflow === null) throw new Error(parsed.error.error);
-      const node = parsed.workflow.nodes.find(item => item.id === 'pr');
-      if (node?.kind !== 'agent' || node.output_format === undefined) {
-        throw new Error('archon-pr does not expose an agent output contract');
+      const returned = parsed.workflow.returns;
+      const node = parsed.workflow.nodes.find(item => item.id === returned);
+      if (node?.kind !== 'exec' || node.output_format === undefined) {
+        throw new Error('archon-pr does not return a deterministic publisher contract');
       }
       expect(node.output_type).toBe('pull-request');
       expect(validateStructuredOutput(pullRequestRecord, node.output_format).valid).toBe(true);

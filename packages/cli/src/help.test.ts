@@ -170,6 +170,13 @@ Usage:
 Commands:
   forge resolve              Resolve an explicit remote through optional forge plugins
   forge checks               Observe checks for an explicit qualified pull request
+  forge workitem.view        Run a qualified lifecycle operation through an installed forge plugin
+  forge pr.view              Run a qualified lifecycle operation through an installed forge plugin
+  forge pr.create            Run a qualified lifecycle operation through an installed forge plugin
+  forge pr.edit-body         Run a qualified lifecycle operation through an installed forge plugin
+  forge pr.ready             Run a qualified lifecycle operation through an installed forge plugin
+  forge comment.upsert       Run a qualified lifecycle operation through an installed forge plugin
+  forge pr.merge             Run a qualified lifecycle operation through an installed forge plugin
   chat <message>             Send a message to the orchestrator
   setup                      Interactive setup wizard for credentials and config
   workflow list [name] [--full] [--json]

@@ -13,8 +13,14 @@
 mode: '{"continuation":true}'
 scope:
   docs: true
+  pr: {}
 review-complete: "settled"
 synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: prior findings verified against the delta; nothing open"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+publish:
   ready: true
   action: none
   findings_summary: "stub: prior findings verified against the delta; nothing open"

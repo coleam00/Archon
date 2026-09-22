@@ -152,6 +152,9 @@
       "src/state-migration.test.ts",
       "src/dry-run.test.ts",
       "src/fixture-runner.test.ts"
+    ],
+    [
+      "src/lifecycle-pack-projection.test.ts"
     ]
   ]
 }

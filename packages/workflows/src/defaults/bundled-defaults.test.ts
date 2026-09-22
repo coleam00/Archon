@@ -338,7 +338,7 @@ describe('bundled-defaults', () => {
       expect(review?.kind).toBe('include');
       if (review?.kind !== 'include') throw new Error('review is not an include');
       expect(review.with).toMatchObject({
-        scope: '$pr.output.number',
+        scope: '$pr.output',
         work_order: '$INPUTS.work',
         errors: '$resolve-scope.output.errors',
         docs: '$classify.output.docs',
@@ -407,7 +407,7 @@ describe('bundled-defaults', () => {
         'ci-verdict',
         'ci-attention-route',
         'ci-attention',
-        'sync-pr-body',
+        'publish-pr-body',
       ]);
       expect(flipReady?.trigger_rule).toBe('none_failed_min_one_success');
     });
@@ -430,8 +430,8 @@ describe('bundled-defaults', () => {
       if (scope?.kind !== 'agent') throw new Error('scope is not an agent');
       expect(scope.output_format).toEqual({
         type: 'object',
-        properties: { docs: { type: 'boolean' } },
-        required: ['docs'],
+        properties: { docs: { type: 'boolean' }, pr: { type: 'object' } },
+        required: ['docs', 'pr'],
       });
       expect(parsed.workflow.inputs?.docs?.default).toBe('auto');
       const docs = parsed.workflow.nodes.find(node => node.id === 'docs');
@@ -454,6 +454,11 @@ describe('bundled-defaults', () => {
         },
         required: expect.arrayContaining(['action']),
       });
+      const publish = parsed.workflow.nodes.find(node => node.id === 'publish');
+      expect(publish?.kind).toBe('exec');
+      if (publish?.kind !== 'exec') throw new Error('publish is not executable');
+      expect(publish.output_format).toEqual(synthesize.output_format);
+      expect(parsed.workflow.returns).toBe('publish');
 
       expect(parsed.workflow.model).toBe('medium');
       expect(parsed.workflow.inputs?.tests).toBeUndefined();
@@ -663,8 +668,8 @@ describe('bundled-defaults', () => {
 
       expect(pr).toContain('output_type: pull-request');
       expect(deliver).not.toContain('output_type: public-action');
-      expect(pr).toContain('required: [repo, number, url, head, base, is_draft]');
-      expect(deliver).toContain('scope: "$pr.output.number"');
+      expect(pr).toContain('output_format: { type: object }');
+      expect(deliver.match(/scope: "\$pr\.output"/g)).toHaveLength(3);
       const parsedDelivery = parseWorkflow(deliver, 'archon-deliver.yaml');
       if (parsedDelivery.workflow === null) throw new Error(parsedDelivery.error.error);
       const flip = parsedDelivery.workflow.nodes.find(node => node.id === 'flip-ready');
@@ -675,29 +680,23 @@ describe('bundled-defaults', () => {
         with: { pr: { from: '$pr.output' } },
       });
       expect(deliver).not.toContain('git remote get-url origin');
-      // A command node reads its node-local `with:` map through `$INPUTS.<name>`,
-      // never the INPUTS_<UPPER_SNAKE> env form — that one is built only for
-      // bash/script nodes, and naming it here left the agent reading the literal
-      // token with no PR number in it (#2909 R1).
-      expect(sync).toContain('$INPUTS.pr_number');
-      expect(sync).toContain('$INPUTS.pr_head');
-      expect(sync).not.toContain('INPUTS_PR_NUMBER');
+      expect(sync).toContain('$INPUTS.pr');
       const prParsed = parseWorkflow(pr, 'archon-pr.yaml');
       if (prParsed.workflow === null) throw new Error(prParsed.error.error);
       const prNode = prParsed.workflow.nodes.find(node => node.id === 'pr');
       expect(prNode?.kind).toBe('agent');
       if (prNode?.kind !== 'agent') throw new Error('pr is not an agent node');
-      expect(prNode.output_type).toBe('pull-request');
+      expect(prNode.output_type).toBe('pull-request-intent');
       expect(prNode.output_format).toMatchObject({
-        properties: {
-          repo: {
-            type: 'object',
-            properties: { host: { type: 'string' }, path: { type: 'string' } },
-            required: ['host', 'path'],
-          },
-          number: { type: 'integer' },
-        },
-        required: ['repo', 'number', 'url', 'head', 'base', 'is_draft'],
+        properties: { intent: { type: 'string' } },
+        required: ['intent'],
+      });
+      const publishPr = prParsed.workflow.nodes.find(node => node.id === 'publish');
+      expect(publishPr).toMatchObject({
+        kind: 'exec',
+        script: 'publish-pr',
+        output_type: 'pull-request',
+        output_format: { type: 'object' },
       });
       const deliverParsed = parseWorkflow(deliver, 'archon-deliver.yaml');
       if (deliverParsed.workflow === null) throw new Error(deliverParsed.error.error);
@@ -707,7 +706,15 @@ describe('bundled-defaults', () => {
       // A command node carries its bindings on `source`, not the node root.
       expect(syncNode.source).toMatchObject({
         kind: 'command',
-        with: { pr_number: '$pr.output.number', pr_head: '$pr.output.head' },
+        with: { pr: '$pr.output' },
+      });
+      const bodyPublisher = deliverParsed.workflow.nodes.find(
+        node => node.id === 'publish-pr-body'
+      );
+      expect(bodyPublisher).toMatchObject({
+        kind: 'exec',
+        script: 'publish-pr-body',
+        with: { pr: '$pr.output', intent: '$sync-pr-body.output.intent' },
       });
       // Composition once dropped that binding while materializing the command body
       // and then reported both names as missing caller inputs, so archon-deliver

@@ -36,7 +36,7 @@ Run AI-powered workflows from your terminal.
 
 ## Forge reads
 
-Use `archon forge resolve --data <json>` for an explicit remote and `archon forge checks --data <json>` for a qualified PR. Both return structured observations. See [Forge operations](/reference/forge/) for request shapes, plugin configuration, credentials and audit behavior.
+Use `archon forge resolve --data <json>` for an explicit remote and `archon forge checks --data <json>` for a qualified PR. Both return structured observations. Lifecycle operations such as `pr.create`, `pr.edit-body`, `comment.upsert`, `pr.ready` and explicit `pr.merge` accept structured requests through `archon forge OPERATION --data-file request.json`; mutation results distinguish refusal, verified application and uncertain outcomes. See [Forge operations](/reference/forge/) for request shapes, plugin configuration, credentials and audit behavior.
 
 ## Quick Start
 

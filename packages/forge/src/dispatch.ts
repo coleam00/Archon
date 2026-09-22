@@ -1,6 +1,13 @@
+import { createHash } from 'node:crypto';
+import type { RepoRef, PrRef } from './identity';
 import { z } from 'zod';
 import {
   forgeOperationAuditSchema,
+  forgeAuditResponse,
+  isMutationRequest,
+  mutationEvidence,
+  type ForgeMutationFailure,
+  type ForgeMutationRequest,
   forgeRequestSchema,
   forgeResponseSchema,
   type ForgeError,
@@ -24,15 +31,44 @@ export interface ForgeDispatchResult {
   audit: ForgeOperationAudit;
 }
 
-function errorResponse(request: ForgeRequest, error: ForgeError): ForgeResponse {
-  return { operationId: request.operationId, ok: false, error };
+function errorResponse(
+  request: ForgeRequest,
+  error: ForgeError,
+  outcome: 'refused' | 'outcome_unknown' = 'refused'
+): ForgeResponse {
+  return {
+    operationId: request.operationId,
+    ok: false,
+    error,
+    ...(isMutationRequest(request)
+      ? { mutation: { ...mutationEvidence(request), op: request.op, outcome } }
+      : {}),
+  };
+}
+function sameRepo(a: RepoRef, b: RepoRef): boolean {
+  return a.host === b.host && a.path === b.path;
+}
+function sameRef(a: PrRef, b: PrRef): boolean {
+  return sameRepo(a.repo, b.repo) && a.number === b.number;
+}
+function sameTarget(a: RepoRef | PrRef, b: RepoRef | PrRef): boolean {
+  return 'repo' in a ? 'repo' in b && sameRef(a, b) : !('repo' in b) && sameRepo(a, b);
+}
+function requestRepo(request: Exclude<ForgeRequest, { op: 'resolve' }>): RepoRef {
+  if (request.op === 'pr.create') return request.repo;
+  if (request.op === 'pr.view')
+    return request.selector.kind === 'head' ? request.selector.repo : request.selector.ref.repo;
+  return request.ref.repo;
 }
 
 function requestTarget(
   request: ForgeRequest,
   response?: ForgeResponse
 ): ForgeOperationAudit['target'] {
-  if (request.op === 'checks.state') return request.ref;
+  if (request.op === 'pr.create') return request.repo;
+  if (request.op === 'pr.view')
+    return request.selector.kind === 'head' ? request.selector.repo : request.selector.ref;
+  if (request.op !== 'resolve') return request.ref;
   if (
     response?.ok &&
     response.result.op === 'resolve' &&
@@ -56,31 +92,141 @@ function remoteHost(remote: string | null): string | undefined {
   }
 }
 
-function matchesOperation(
+export function matchesForgeOperationResponse(
   request: ForgeRequest,
   response: ForgeResponse,
   metadata: PluginMetadata,
   host: string
 ): boolean {
-  if (!response.ok) return true;
-  const result = response.result;
-  if (result.op === 'checks.state') {
+  if (!response.ok) {
+    if (!isMutationRequest(request)) return response.mutation === undefined;
+    const value = response.mutation;
+    if (value?.op !== request.op || !sameTarget(value.target, mutationEvidence(request).target))
+      return false;
+    if (!matchesConditions(request, value, metadata, false)) return false;
     return (
-      request.op === 'checks.state' &&
-      result.value.ref.number === request.ref.number &&
-      result.value.ref.repo.host === request.ref.repo.host &&
-      result.value.ref.repo.path === request.ref.repo.path
+      !value.observed ||
+      (request.op === 'pr.create'
+        ? sameRepo(value.observed.repo, request.repo)
+        : sameRef(value.observed, request.ref))
     );
   }
-  if (request.op !== 'resolve') return false;
-  const value = result.value;
+  const result = response.result;
+  if (result.op !== request.op) return false;
+  switch (result.op) {
+    case 'resolve': {
+      const value = result.value;
+      return (
+        value.kind === 'none' ||
+        (normalizeHost(value.repo.host) === host &&
+          value.forge === metadata.forge &&
+          value.plugin.name === metadata.name &&
+          value.plugin.version === metadata.version)
+      );
+    }
+    case 'checks.state':
+      return request.op === result.op && sameRef(result.value.ref, request.ref);
+    case 'workitem.view':
+      return request.op === result.op && sameRef(result.value.ref, request.ref);
+    case 'pr.view': {
+      if (request.op !== result.op) return false;
+      const value = result.value;
+      if (!value) return request.selector.kind === 'head';
+      const selector = request.selector;
+      return selector.kind === 'number'
+        ? sameRef(value.pr, selector.ref)
+        : sameRepo(value.pr.repo, selector.repo) &&
+            value.pr.head === selector.head &&
+            value.pr.head_repo !== null &&
+            sameRepo(value.pr.head_repo, selector.headRepo) &&
+            (!selector.base || value.pr.base === selector.base);
+    }
+    default: {
+      if (!isMutationRequest(request)) return false;
+      const value = result.value;
+      if (
+        !sameTarget(value.target, mutationEvidence(request).target) ||
+        !matchesConditions(request, value, metadata, true)
+      )
+        return false;
+      if (result.op === 'comment.upsert')
+        return (
+          request.op === result.op &&
+          sameRef(result.value.comment.ref, request.ref) &&
+          result.value.comment.bodyDigest ===
+            createHash('sha256').update(request.body).digest('hex')
+        );
+      const pr = result.value.pr;
+      if (request.op === 'pr.create')
+        return (
+          result.op === request.op &&
+          sameRepo(pr.repo, request.repo) &&
+          pr.head_repo !== null &&
+          sameRepo(pr.head_repo, request.headRepo) &&
+          pr.head === request.head &&
+          pr.base === request.base &&
+          pr.head_revision === request.headRevision &&
+          pr.is_draft === request.draft &&
+          pr.state === 'open'
+        );
+      if (!sameRef(pr, request.ref)) return false;
+      if (result.op === 'pr.ready') return pr.state === 'open' && !pr.is_draft;
+      if (result.op === 'pr.edit-body')
+        return (
+          request.op === result.op &&
+          result.value.bodyDigest === createHash('sha256').update(request.body).digest('hex')
+        );
+      if (result.op === 'pr.merge')
+        return (
+          request.op === result.op &&
+          pr.state === 'merged' &&
+          result.value.method === request.method
+        );
+      return false;
+    }
+  }
+}
+
+function matchesConditions(
+  request: ForgeMutationRequest,
+  value: Pick<ForgeMutationFailure, 'requested' | 'enforced'>,
+  metadata: PluginMetadata,
+  applied: boolean
+): boolean {
+  const required = mutationEvidence(request).requested;
+  const keys = new Set([...Object.keys(required), ...Object.keys(value.requested)]);
+  if ([...keys].some(key => Reflect.get(required, key) !== Reflect.get(value.requested, key)))
+    return false;
+  for (const [key, id] of Object.entries(value.enforced)) {
+    if (
+      id !== Reflect.get(required, key) ||
+      !metadata.operations?.['pr.merge']?.atomicConditions.some(condition => condition === key)
+    )
+      return false;
+  }
   return (
-    value.kind === 'none' ||
-    (normalizeHost(value.repo.host) === host &&
-      value.forge === metadata.forge &&
-      value.plugin.name === metadata.name &&
-      value.plugin.version === metadata.version)
+    !applied ||
+    [...keys].every(key => Reflect.get(value.enforced, key) === Reflect.get(required, key))
   );
+}
+
+function unsupportedMerge(request: ForgeRequest, metadata: PluginMetadata): ForgeError | undefined {
+  if (request.op !== 'pr.merge') return undefined;
+  const capabilities = metadata.operations?.['pr.merge'];
+  if (!capabilities?.methods.includes(request.method))
+    return {
+      kind: 'unsupported_op',
+      message: 'plugin does not declare the requested merge method',
+    };
+  const unsupported = Object.keys(request.required).filter(
+    key => !capabilities.atomicConditions.some(condition => condition === key)
+  );
+  if (unsupported.length)
+    return {
+      kind: 'unsupported_condition',
+      message: `plugin cannot atomically enforce requested merge conditions: ${unsupported.join(', ')}`,
+    };
+  return undefined;
 }
 
 function discoveryError(request: ForgeRequest, error: unknown): ForgeResponse {
@@ -125,7 +271,9 @@ export async function dispatchForge(
   let response: ForgeResponse;
 
   const host =
-    request.op === 'resolve' ? remoteHost(request.remote) : normalizeHost(request.ref.repo.host);
+    request.op === 'resolve'
+      ? remoteHost(request.remote)
+      : normalizeHost(requestRepo(request).host);
   if (request.op === 'resolve' && !host) {
     response = {
       operationId: request.operationId,
@@ -168,11 +316,14 @@ export async function dispatchForge(
               });
     } else {
       pluginIdentity = { name: plugin.metadata.name, version: plugin.metadata.version };
+      const mergeError = unsupportedMerge(request, plugin.metadata);
       if (!plugin.metadata.capabilities.includes(request.op)) {
         response = errorResponse(request, {
           kind: 'unsupported_op',
           message: `plugin ${plugin.metadata.name} does not support ${request.op}`,
         });
+      } else if (mergeError) {
+        response = errorResponse(request, mergeError);
       } else {
         const env = options.env ?? process.env;
         const credential = selectedCredential(
@@ -195,29 +346,42 @@ export async function dispatchForge(
             maxOutputBytes: options.maxOutputBytes,
             signal: options.signal,
           });
+          const uncertainty = outcome.launched ? 'outcome_unknown' : 'refused';
           if (outcome.timedOut)
-            response = errorResponse(request, {
-              kind: 'timeout',
-              message: 'forge plugin timed out',
-            });
+            response = errorResponse(
+              request,
+              {
+                kind: 'timeout',
+                message: 'forge plugin timed out',
+              },
+              uncertainty
+            );
           else if (outcome.outputExceeded)
-            response = errorResponse(request, {
-              kind: 'process_failed',
-              message: 'forge plugin output exceeded 16 MiB',
-            });
+            response = errorResponse(
+              request,
+              {
+                kind: 'process_failed',
+                message: 'forge plugin output exceeded the configured output limit',
+              },
+              uncertainty
+            );
           else if (
             outcome.spawnError ||
             outcome.terminationError ||
             ![0, 1].includes(outcome.exitCode ?? -1)
           ) {
-            response = errorResponse(request, {
-              kind: 'process_failed',
-              message:
-                outcome.spawnError ??
-                outcome.terminationError ??
-                `forge plugin exited ${String(outcome.exitCode)}: ${outcome.stderr.slice(0, 1000)}`,
-              exitCode: outcome.exitCode,
-            });
+            response = errorResponse(
+              request,
+              {
+                kind: 'process_failed',
+                message:
+                  outcome.spawnError ??
+                  outcome.terminationError ??
+                  `forge plugin exited ${String(outcome.exitCode)}: ${outcome.stderr.slice(0, 1000)}`,
+                exitCode: outcome.exitCode,
+              },
+              uncertainty
+            );
           } else {
             let raw: unknown;
             try {
@@ -230,12 +394,16 @@ export async function dispatchForge(
               !parsed.success ||
               parsed.data.operationId !== request.operationId ||
               parsed.data.ok !== (outcome.exitCode === 0) ||
-              !matchesOperation(request, parsed.data, plugin.metadata, selectedHost)
+              !matchesForgeOperationResponse(request, parsed.data, plugin.metadata, selectedHost)
             ) {
-              response = errorResponse(request, {
-                kind: 'invalid_response',
-                message: 'forge plugin returned an invalid response',
-              });
+              response = errorResponse(
+                request,
+                {
+                  kind: 'invalid_response',
+                  message: 'forge plugin returned an invalid response',
+                },
+                uncertainty
+              );
             } else response = parsed.data;
           }
         }
@@ -256,7 +424,7 @@ function finish(
     operation: request.op,
     target: requestTarget(request, response),
     plugin,
-    result: response,
+    result: forgeAuditResponse(response),
     durationMs: Math.max(0, performance.now() - started),
   });
   return { response, plugin, audit };

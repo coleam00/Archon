@@ -16,8 +16,6 @@ description: |
 # and a clean review stops immediately. Exhausting the bound fails truthfully
 # with the PR still draft and the canonical report carrying the open findings.
 
-requires: [github]
-
 inputs:
   work:
     default: ""
@@ -145,7 +143,7 @@ nodes:
     with:
       # The PR node's structured read-back is the target authority. Review must
       # not rediscover an ambient branch→PR mapping.
-      scope: "$pr.output.number"
+      scope: "$pr.output"
       prior_report: "$INPUTS.prior_report"
       work_order: "$INPUTS.work"
       errors: "$resolve-scope.output.errors"
@@ -277,7 +275,7 @@ nodes:
         - id: recheck
           include: archon-review
           with:
-            scope: "$pr.output.number"
+            scope: "$pr.output"
             prior_report: "$ARTIFACTS_DIR/review/report.md"
             work_order: "$INPUTS.work"
             # Continuation mode owns coverage and skips every specialist,
@@ -313,13 +311,26 @@ nodes:
     command: sync-pr-body
     model: medium
     with:
-      pr_number: "$pr.output.number"
-      pr_head: "$pr.output.head"
+      pr: "$pr.output"
     # After the project gate, not beside it: the gates record the red they let
     # through as typed artifacts, and the body must disclose every one of them,
     # so this reads once all of them exist instead of racing the last writer.
     depends_on: [gate-validated]
     when: "$review.output.action != 'none'"
+    output_format:
+      type: object
+      properties:
+        intent: { type: string }
+      required: [intent]
+
+  - id: publish-pr-body
+    script: publish-pr-body
+    runtime: bun
+    with:
+      pr: "$pr.output"
+      intent: "$sync-pr-body.output.intent"
+    depends_on: [sync-pr-body]
+    output_format: { type: object }
 
   # Final local gate, ALWAYS run: the project's own checks via the validate
   # package. Uniform on every path — and when CI is maintainer-gated (fork
@@ -470,7 +481,7 @@ nodes:
         - id: ci-recheck
           include: archon-review
           with:
-            scope: "$pr.output.number"
+            scope: "$pr.output"
             prior_report: "$ARTIFACTS_DIR/review/report.md"
             work_order: "$INPUTS.work"
             errors: "$resolve-scope.output.errors"
@@ -580,9 +591,9 @@ nodes:
     # be named directly: the skip carries `upstream_failed` from the node that
     # actually failed, across every hop. ci-verdict is the successful dependency
     # the rule requires — a strict transitive reduction without it can leave a
-    # clean-review delivery with no success at all. sync-pr-body orders the flip
+    # clean-review delivery with no success at all. publish-pr-body orders the flip
     # after the resync even when the CI waits return immediately.
-    depends_on: [ci-verdict, ci-attention-route, ci-attention, sync-pr-body]
+    depends_on: [ci-verdict, ci-attention-route, ci-attention, publish-pr-body]
     trigger_rule: none_failed_min_one_success
 
   # This tail's terminal report, like every other SDLC tail's (scripts/outcome.ts).

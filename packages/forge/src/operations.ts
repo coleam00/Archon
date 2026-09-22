@@ -1,5 +1,20 @@
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { checkChangedEventSchema } from './events';
+import {
+  lifecycleReadResultSchemas,
+  mutationResultSchemas,
+  mutationRequestSchemas,
+  mutationOperationSchema,
+  mutationFailureSchema,
+  mergeCapabilitiesSchema,
+  workItemViewRequestSchema,
+  prViewRequestSchema,
+  workItemViewSchema,
+  prViewSchema,
+  type ForgeMutationRequest,
+} from './lifecycle';
+export * from './lifecycle';
 import { gitObjectIdSchema, prRefSchema, repoRefSchema } from './identity';
 
 export const checksStateSchema = z.enum(['none', 'pending', 'green', 'red', 'gated', 'unknown']);
@@ -57,6 +72,7 @@ export const pluginMetadataSchema = pluginIdentitySchema.extend({
   forge: z.string().min(1),
   hosts: z.array(z.string().min(1)),
   capabilities: z.array(z.string().min(1)),
+  operations: z.object({ 'pr.merge': mergeCapabilitiesSchema.optional() }).optional(),
   token_env: z.array(z.string().min(1)).default([]),
 });
 export type PluginMetadata = z.infer<typeof pluginMetadataSchema>;
@@ -82,11 +98,17 @@ export const checksRequestSchema = z.object({
 export const forgeRequestSchema = z.discriminatedUnion('op', [
   resolveRequestSchema,
   checksRequestSchema,
+  workItemViewRequestSchema,
+  prViewRequestSchema,
+  ...mutationRequestSchemas,
 ]);
 export type ForgeRequest = z.infer<typeof forgeRequestSchema>;
 export const forgeErrorSchema = z.object({
   kind: z.enum([
     'unsupported_op',
+    'unsupported_condition',
+    'conflict',
+    'authorization',
     'no_plugin_for_host',
     'no_credential',
     'not_found',
@@ -109,17 +131,77 @@ export const forgeResponseSchema = z.discriminatedUnion('ok', [
     result: z.discriminatedUnion('op', [
       z.object({ op: z.literal('resolve'), value: resolveResultSchema }),
       z.object({ op: z.literal('checks.state'), value: checksObservationSchema }),
+      ...lifecycleReadResultSchemas,
+      ...mutationResultSchemas,
     ]),
   }),
-  responseBase.extend({ ok: z.literal(false), error: forgeErrorSchema }),
+  responseBase.extend({
+    ok: z.literal(false),
+    error: forgeErrorSchema,
+    mutation: mutationFailureSchema.optional(),
+  }),
 ]);
 export type ForgeResponse = z.infer<typeof forgeResponseSchema>;
+export function isMutationRequest(request: ForgeRequest): request is ForgeMutationRequest {
+  return mutationOperationSchema.safeParse(request.op).success;
+}
+
+const contentAuditSchema = z.object({
+  digest: z.string().min(1),
+  bytes: z.number().int().nonnegative(),
+});
+const auditResponseSchema = z.discriminatedUnion('ok', [
+  responseBase.extend({
+    ok: z.literal(true),
+    result: z.discriminatedUnion('op', [
+      z.object({ op: resolveRequestSchema.shape.op, value: resolveResultSchema }),
+      z.object({ op: checksRequestSchema.shape.op, value: checksObservationSchema }),
+      z.object({
+        op: workItemViewRequestSchema.shape.op,
+        value: workItemViewSchema
+          .omit({ title: true, body: true })
+          .extend({ content: contentAuditSchema }),
+      }),
+      z.object({
+        op: prViewRequestSchema.shape.op,
+        value: prViewSchema
+          .omit({ title: true, body: true })
+          .extend({ content: contentAuditSchema })
+          .nullable(),
+      }),
+      ...mutationResultSchemas,
+    ]),
+  }),
+  forgeResponseSchema.options[1],
+]);
+export function forgeAuditResponse(response: ForgeResponse): z.infer<typeof auditResponseSchema> {
+  if (!response.ok) return response;
+  if (response.result.op !== 'workitem.view' && response.result.op !== 'pr.view')
+    return { ...response, result: response.result };
+  const result = response.result;
+  if (result.value === null) return { ...response, result: { op: 'pr.view', value: null } };
+  const { title, body, ...facts } = result.value;
+  const source = JSON.stringify({ title, body });
+  return auditResponseSchema.parse({
+    ...response,
+    result: {
+      op: result.op,
+      value: {
+        ...facts,
+        content: {
+          digest: createHash('sha256').update(source).digest('hex'),
+          bytes: Buffer.byteLength(source),
+        },
+      },
+    },
+  });
+}
 export const forgeOperationAuditSchema = z.object({
   operationId: z.string().min(1),
-  operation: z.union([resolveRequestSchema.shape.op, checksRequestSchema.shape.op]),
+  operation: z.enum(forgeRequestSchema.options.map(schema => schema.shape.op.value)),
   target: z.union([prRefSchema, repoRefSchema]).nullable(),
   plugin: pluginIdentitySchema.nullable(),
-  result: forgeResponseSchema,
+  result: auditResponseSchema,
   durationMs: z.number().nonnegative(),
 });
 

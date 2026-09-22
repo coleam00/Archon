@@ -355,6 +355,7 @@ async function main(): Promise<number> {
         data: typeof values.data === 'string' ? values.data : undefined,
         configPath: forgeConfigPath,
         trustedEnv: forgeTrustedEnv,
+        dataFile: typeof values['data-file'] === 'string' ? values['data-file'] : undefined,
       });
     }
 

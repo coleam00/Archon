@@ -85,6 +85,30 @@ const commandHelp: HelpEntry[] = [
       { spec: '--data <json>', description: 'JSON object with ref: {repo: {host, path}, number}' },
     ],
   },
+  ...[
+    'workitem.view',
+    'pr.view',
+    'pr.create',
+    'pr.edit-body',
+    'pr.ready',
+    'comment.upsert',
+    'pr.merge',
+  ].map(subcommand => ({
+    command: 'forge',
+    subcommand,
+    spec: `forge ${subcommand}`,
+    description: 'Run a qualified lifecycle operation through an installed forge plugin',
+    scopedFlags: [
+      {
+        spec: '--data <json>',
+        description: 'Structured operation request (without operationId or op)',
+      },
+      {
+        spec: '--data-file <path>',
+        description: 'Read the JSON request from a file instead of argv',
+      },
+    ],
+  })),
   { command: 'chat', spec: 'chat <message>', description: 'Send a message to the orchestrator' },
   {
     command: 'setup',

@@ -97,3 +97,13 @@ test.each(['plugin.cmd', 'plugin.bat'])('refuses shell shim %s without execution
   expect(result.spawnError).toContain('.cmd or .bat');
   expect(result.exitCode).toBeNull();
 });
+
+test('a synchronous spawn rejection records that no process launched', async () => {
+  const result = await runPluginProcess(
+    { command: process.execPath, args: ['invalid\0argument'] },
+    [],
+    { env: process.env }
+  );
+  expect(result.launched).toBe(false);
+  expect(result.spawnError).toBeDefined();
+});

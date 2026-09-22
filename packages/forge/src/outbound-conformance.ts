@@ -1,8 +1,12 @@
+import { matchesForgeOperationResponse } from './dispatch';
 import {
   forgeResponseSchema,
   type ForgeRequest,
   type ForgeResponse,
   type ChecksState,
+  type ForgeMutationRequest,
+  type ForgeMutationFailure,
+  type PluginMetadata,
 } from './operations';
 
 export interface ForgeReadConformanceCase {
@@ -43,6 +47,43 @@ export async function runForgeReadConformance(
     const expected = fixture.expected.units.map(unit => `${unit.kind}:${unit.id}`).sort();
     if (JSON.stringify(identities) !== JSON.stringify(expected))
       failures.push(`${fixture.name}: enumerated unit identities differ`);
+  }
+  return failures;
+}
+
+export interface ForgeMutationConformanceCase {
+  name: string;
+  request: ForgeMutationRequest;
+  expectedOutcome: 'applied' | ForgeMutationFailure['outcome'];
+}
+
+/** The fixture owns remote state; this runner checks the public mutation evidence. */
+export async function runForgeMutationConformance(
+  invoke: (request: ForgeMutationRequest) => Promise<ForgeResponse>,
+  metadata: PluginMetadata,
+  cases: readonly ForgeMutationConformanceCase[]
+): Promise<string[]> {
+  const failures: string[] = [];
+  for (const fixture of cases) {
+    const parsed = forgeResponseSchema.safeParse(await invoke(fixture.request));
+    const host =
+      fixture.request.op === 'pr.create'
+        ? fixture.request.repo.host
+        : fixture.request.ref.repo.host;
+    if (
+      !parsed.success ||
+      parsed.data.operationId !== fixture.request.operationId ||
+      !matchesForgeOperationResponse(fixture.request, parsed.data, metadata, host)
+    ) {
+      failures.push(`${fixture.name}: invalid mutation correlation, target or guarantee evidence`);
+      continue;
+    }
+    const response = parsed.data;
+    const outcome = response.ok ? 'applied' : response.mutation?.outcome;
+    if (outcome !== fixture.expectedOutcome)
+      failures.push(
+        `${fixture.name}: expected ${fixture.expectedOutcome}, received ${String(outcome)}`
+      );
   }
   return failures;
 }

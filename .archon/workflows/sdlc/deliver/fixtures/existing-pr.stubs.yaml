@@ -15,16 +15,23 @@ impl__implement:
   summary: "stub: findings on PR #42 addressed on its branch"
 impl__assert-changed: "2 files changed"
 gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
-pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 42, url: "https://github.com/example/repo/pull/42", head: "feat/existing-42", base: "dev", is_draft: false }
+pr__pr: { intent: "/tmp/pr-intent-42.json" }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 42, url: "https://github.com/example/repo/pull/42", head: "feat/existing-42", base: "dev", is_draft: false, state: open, head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixture-head-42", base_revision: "fixture-base-42", maintainer_can_modify: true }
 review__mode: '{"continuation":false}'
 review__scope:
   # PR #42 diff in scope; head sha stubbed
   docs: false
+  pr: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 42, url: "https://github.com/example/repo/pull/42", head: "feat/existing-42", base: "dev", is_draft: false, state: open, head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixture-head-42", base_revision: "fixture-base-42", maintainer_can_modify: true }
 review__code: "1 finding (Important)"
 review__seams: "0 findings"
 review__simplify: "0 findings"
 review__tests: "0 findings"
 review__synthesize:
+  ready: false
+  action: correct
+  findings_summary: "stub: 1 Important finding open"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+review__publish:
   ready: false
   action: correct
   findings_summary: "stub: 1 Important finding open"
@@ -42,12 +49,19 @@ recheck__mode: '{"continuation":true}'
 recheck__scope:
   # light mode; delta since cursor
   docs: false
+  pr: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 42, url: "https://github.com/example/repo/pull/42", head: "feat/existing-42", base: "dev", is_draft: false, state: open, head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixture-head-42", base_revision: "fixture-base-42", maintainer_can_modify: true }
 recheck__synthesize:
   ready: true
   action: none
   findings_summary: "stub: no open Critical/Important"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
-sync-pr-body: "body resynced against the corrected diff"
+recheck__publish:
+  ready: true
+  action: none
+  findings_summary: "stub: no open Critical/Important"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+sync-pr-body: { intent: "/tmp/pr-body-intent.json" }
+publish-pr-body: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 42, url: "https://github.com/example/repo/pull/42", head: "feat/existing-42", base: "dev", is_draft: false, state: open, head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixture-head-42", base_revision: "fixture-base-42", maintainer_can_modify: true }
 validate__validate:
   green: true
   red_cause: ""
@@ -67,7 +81,7 @@ fixture:
   expect: completed
   inputs:
     work: "Repair pull request #42 on its branch: address the Important finding from the review report."
-  reached: [fix__implement, recheck__synthesize, flip-ready]
+  reached: [fix__implement, recheck__publish, flip-ready]
   resolved-text-contains:
     impl__implement: "pull request #42"
 exec-code: true

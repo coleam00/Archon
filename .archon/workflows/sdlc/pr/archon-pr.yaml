@@ -10,34 +10,28 @@ description: |
   NOT for: implementing (implement), reviewing (review), or merging (always human).
 
 model: medium
-requires: [github]
-
 inputs:
   draft:
     default: "true"
     description: '"true" opens the PR as a draft; anything else opens it ready for review.'
 
-returns: pr
+returns: publish
 
 nodes:
   - id: pr
     command: pr
-    output_type: pull-request
-    # This is the durable ownership record for every later public action in
-    # delivery and inbound forge event. Consumers use this qualified identity,
-    # never gh's ambient branch lookup.
+    output_type: pull-request-intent
     output_format:
       type: object
       properties:
-        repo:
-          type: object
-          properties:
-            host: { type: string }
-            path: { type: string }
-          required: [host, path]
-        number: { type: integer }
-        url: { type: string }
-        head: { type: string }
-        base: { type: string }
-        is_draft: { type: boolean }
-      required: [repo, number, url, head, base, is_draft]
+        intent: { type: string }
+      required: [intent]
+
+  - id: publish
+    script: publish-pr
+    runtime: bun
+    depends_on: [pr]
+    with:
+      intent: "$pr.output.intent"
+    output_type: pull-request
+    output_format: { type: object }
