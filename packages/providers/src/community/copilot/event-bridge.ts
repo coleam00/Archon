@@ -110,8 +110,7 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
 
 /**
  * Coerce the SDK's `assistant.usage.data` shape into Archon's TokenUsage.
- * Returns undefined if neither input nor output token count is a number,
- * so callers don't emit a meaningless result chunk with {0, 0}.
+ * Returns undefined unless both required token counts are numbers.
  */
 export function normalizeCopilotUsage(raw?: {
   inputTokens?: number;
@@ -120,12 +119,8 @@ export function normalizeCopilotUsage(raw?: {
   if (!raw) return undefined;
   const input = raw.inputTokens;
   const output = raw.outputTokens;
-  if (typeof input !== 'number' && typeof output !== 'number') return undefined;
-  const usage: TokenUsage = {
-    input: typeof input === 'number' ? input : 0,
-    output: typeof output === 'number' ? output : 0,
-  };
-  return usage;
+  if (typeof input !== 'number' || typeof output !== 'number') return undefined;
+  return { input, output };
 }
 
 /**
