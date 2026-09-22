@@ -446,6 +446,8 @@ describe('checkPi', () => {
   // due to ESM rebinding — the wrapper pattern (same as `probeFileExists` in setup.ts)
   // is the correct way to make this testable.
   let authJsonSpy: ReturnType<typeof spyOn<typeof doctorModule, 'probeAuthJsonExists'>>;
+  let piAuthReaderSpy: ReturnType<typeof spyOn<typeof doctorModule, 'probePiAuthValidity'>> | null =
+    null;
 
   beforeEach(() => {
     authJsonSpy = spyOn(doctorModule, 'probeAuthJsonExists');
@@ -453,6 +455,7 @@ describe('checkPi', () => {
 
   afterEach(() => {
     authJsonSpy.mockRestore();
+    piAuthReaderSpy?.mockRestore();
   });
 
   it('returns skip when Pi is not configured', async () => {
@@ -464,6 +467,13 @@ describe('checkPi', () => {
 
   it('returns pass when ~/.pi/agent/auth.json exists', async () => {
     authJsonSpy.mockReturnValue(true);
+    // The store has to hold a usable credential too — presence alone is no
+    // longer a pass (#3274), so this pins the "exists AND valid" path.
+    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
+      status: 'valid',
+      providers: ['anthropic'],
+      expiresAt: Date.UTC(2027, 0, 1),
+    });
     const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
     expect(result.status).toBe('pass');
     expect(result.message).toContain('auth.json');
@@ -484,6 +494,63 @@ describe('checkPi', () => {
     const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
     expect(result.status).toBe('fail');
     expect(result.message).toContain('pi /login');
+  });
+
+  it('returns fail when auth.json holds a grant that already expired (#3274)', async () => {
+    authJsonSpy.mockReturnValue(true);
+    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
+      status: 'expired',
+      providers: ['anthropic'],
+      expiresAt: Date.UTC(2026, 5, 8),
+    });
+
+    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
+
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('anthropic');
+    expect(result.message).toContain('expired');
+  });
+
+  it('reports the expiry date rather than any credential value', async () => {
+    authJsonSpy.mockReturnValue(true);
+    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
+      status: 'expired',
+      providers: ['anthropic'],
+      expiresAt: Date.UTC(2026, 5, 8),
+    });
+
+    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
+
+    expect(result.message).toContain('2026');
+    expect(result.message).not.toContain('stored-access');
+    expect(result.message).not.toContain('stored-refresh');
+  });
+
+  it('returns pass when auth.json holds a grant that is still valid', async () => {
+    authJsonSpy.mockReturnValue(true);
+    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
+      status: 'valid',
+      providers: ['anthropic'],
+      expiresAt: Date.UTC(2027, 0, 1),
+    });
+
+    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
+
+    expect(result.status).toBe('pass');
+  });
+
+  it('does not turn an unreadable store into an expired-credential failure', async () => {
+    authJsonSpy.mockReturnValue(true);
+    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
+      status: 'unreadable',
+    });
+
+    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
+
+    // The file exists but says nothing usable. That is not the same defect as
+    // an expired grant, and the message must not claim it is.
+    expect(result.message).not.toContain('expired');
+    expect(result.message).toContain('auth.json');
   });
 
   it('returns skip for Claude-only users who have ANTHROPIC_API_KEY but Pi is not default', async () => {
