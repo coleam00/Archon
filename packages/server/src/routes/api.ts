@@ -92,6 +92,7 @@ import {
   discoverWorkflowsWithConfig,
   isValidWorkflowFolderSegment,
 } from '@archon/workflows/workflow-discovery';
+import { FIXTURES_DIR } from '@archon/workflows/fixture-layout';
 import { parseWorkflow } from '@archon/workflows/loader';
 import { isValidCommandName, isValidWorkflowName } from '@archon/workflows/command-validation';
 import { BUNDLED_WORKFLOWS, BUNDLED_COMMANDS, isBinaryBuild } from '@archon/workflows/defaults';
@@ -154,6 +155,7 @@ async function findPackagedWorkflowAt(
 
   let match: RawWorkflowFile | null = null;
   for (const pack of packs.sort((a, b) => a.localeCompare(b))) {
+    if (pack === FIXTURES_DIR) continue;
     if (!isValidWorkflowFolderSegment(pack)) continue;
     const packPath = join(workflowsRoot, pack);
     try {
@@ -171,6 +173,7 @@ async function findPackagedWorkflowAt(
       throw error;
     }
     for (const workflowFolder of workflowFolders.sort((a, b) => a.localeCompare(b))) {
+      if (workflowFolder === FIXTURES_DIR) continue;
       if (!isValidWorkflowFolderSegment(workflowFolder)) continue;
       const workflowPath = join(packPath, workflowFolder);
       try {

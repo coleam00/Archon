@@ -354,6 +354,31 @@ describe('discoverScriptsForCwd — merge repo + home with repo winning', () => 
       '/repo/.archon/workflows/team-pack/release/scripts/shared.ts'
     );
   });
+
+  test('does not register scripts from a reserved fixtures directory (#3183)', async () => {
+    mockReaddir.mockImplementation(async (path: string) => {
+      const p = norm(path);
+      if (p === '/home/scripts' || p === '/repo/.archon/scripts') return [];
+      if (p === '/home/workflows') return ['personal-pack'];
+      if (p === '/home/workflows/personal-pack') return ['daily', 'fixtures'];
+      if (p === '/home/workflows/personal-pack/daily/scripts') return ['shared.py'];
+      if (p === '/home/workflows/personal-pack/fixtures/scripts') return ['hidden.py'];
+      if (p === '/repo/.archon/workflows') return ['fixtures'];
+      if (p === '/repo/.archon/workflows/fixtures/scripts') return ['root-hidden.ts'];
+      return [];
+    });
+    mockStat.mockImplementation(async (path: string) => ({
+      isDirectory: () => !/\.(ts|py)$/.test(norm(path)),
+    }));
+
+    const result = await discoverScriptsForCwd('/repo');
+    expect([...result.keys()]).toEqual([
+      formatPackagedResourceReference(
+        { source: 'global', pack: 'personal-pack', workflow: 'daily' },
+        'shared'
+      ),
+    ]);
+  });
 });
 
 describe('getDefaultScripts', () => {

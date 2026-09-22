@@ -37,6 +37,7 @@ mock.module('@archon/paths', () => ({
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import * as gitModule from '@archon/git';
 import { parseWorkflow } from './loader';
+import { discoverWorkflows } from './workflow-discovery';
 import { expandWorkflowIncludes } from './include-expander';
 import type { WorkflowWithSource } from './schemas/workflow';
 import {
@@ -1067,6 +1068,29 @@ describe('runFixtures', () => {
     expect(report.results.map(r => r.fixture)).toEqual(['ship/fixtures/x.stubs.yaml']);
     expect(report.results[0].expect).toBe('completed');
   });
+});
+
+describe('discovery and fixture execution agree (#3183)', () => {
+  for (const [label, path] of [
+    ['directly under the workflows root', 'hello'],
+    ['inside a pack', 'team/hello'],
+  ] as const) {
+    it(`runs a fixture ${label} without loading it as a workflow`, async () => {
+      const cwd = makeTempProject();
+      writeWorkflowDirs(cwd, [path]);
+
+      const discovered = await discoverWorkflows(cwd, {
+        loadDefaults: false,
+        sourceRoots: isolatedSourceRoots(cwd),
+      });
+      expect(discovered.errors).toEqual([]);
+      expect(discovered.workflows.map(entry => entry.workflow.name)).toEqual(['hello-wf']);
+
+      const report = await runFixtures({ workflows: discovered.workflows, cwd });
+      expect(report.results.map(r => r.fixture)).toEqual([`${path}/fixtures/hello.stubs.yaml`]);
+      expect(report).toMatchObject({ passed: 1, failed: 0 });
+    });
+  }
 });
 
 describe('runFixtures exec-code isolation (#2851)', () => {
