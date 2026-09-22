@@ -14,14 +14,29 @@ import '@archon/paths/strip-cwd-env-boot';
 // <cwd>/.archon/.env (repo scope, wins over user). Both with override: true.
 // See packages/paths/src/env-loader.ts and the three-path model (#1302 / #1303).
 import { loadArchonEnv } from '@archon/paths/env-loader';
-import { captureDetachedInstallContext, restoreDetachedInstallContext } from '@archon/paths';
+import {
+  captureDetachedInstallContext,
+  getArchonConfigPath,
+  getArchonHome,
+  restoreDetachedInstallContext,
+} from '@archon/paths';
 const hasDetachedRunConfigHandoff = process.argv
   .slice(2)
   .includes('--internal-detached-run-config');
 const inheritedInstallContext = hasDetachedRunConfigHandoff
   ? captureDetachedInstallContext()
   : undefined;
-loadArchonEnv(process.cwd());
+let forgeConfigPath = '';
+let forgeTrustedEnv: NodeJS.ProcessEnv = {};
+loadArchonEnv(process.cwd(), {
+  afterUserLoad: () => {
+    forgeConfigPath = getArchonConfigPath();
+    // Discovery receives this snapshot only through its constrained process
+    // boundary. Resolve ARCHON_HOME so Docker and HOME-based installs keep the
+    // same user-scoped plugin location after repo env loads.
+    forgeTrustedEnv = { ...process.env, ARCHON_HOME: getArchonHome() };
+  },
+});
 // The detached parent sealed this payload with its effective install key. Repo
 // env still loads normally, but it cannot replace any input that derives the
 // install home before the child consumes the accepted snapshot.
@@ -338,6 +353,8 @@ async function main(): Promise<number> {
       const { forgeCommand } = await loadRoute(() => import('./commands/forge'));
       return await forgeCommand(subcommand, {
         data: typeof values.data === 'string' ? values.data : undefined,
+        configPath: forgeConfigPath,
+        trustedEnv: forgeTrustedEnv,
       });
     }
 
