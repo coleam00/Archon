@@ -128,6 +128,9 @@
       "src/community/pi/provider-bedrock-register.test.ts"
     ],
     [
+      "src/community/pi/provider-oauth-register.test.ts"
+    ],
+    [
       "src/community/pi/ui-context-stub.test.ts"
     ],
     [
