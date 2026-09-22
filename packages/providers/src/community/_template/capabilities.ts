@@ -42,6 +42,10 @@ type OptionalCapabilityAxis = {
  */
 export const OPTIONAL_AXES = {
   sessionFork: true,
+  tokenReporting: true,
+  stopReasonReporting: true,
+  turnCountReporting: true,
+  resolvedModelReporting: true,
   knownToolNames: true,
   renamedTools: true,
 } satisfies Record<OptionalCapabilityAxis, true>;

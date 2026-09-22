@@ -1,6 +1,11 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
+import {
+  registerBuiltinProviders,
+  clearRegistry,
+  getRegistration,
+  registerProvider,
+} from '@archon/providers';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
 import { EFFORT_LADDER } from '@archon/paths/effort';
@@ -141,6 +146,7 @@ clearRegistry();
 registerBuiltinProviders();
 
 import { registerApiRoutes } from './api';
+import { providerListResponseSchema } from './schemas/provider.schemas';
 
 type Hono = InstanceType<typeof OpenAPIHono>;
 
@@ -221,6 +227,33 @@ describe('GET /api/providers', () => {
       // Non-serializable fields must NOT leak
       expect(provider).not.toHaveProperty('factory');
       expect(provider).not.toHaveProperty('isModelCompatible');
+    }
+  });
+
+  test('preserves absent reporting declarations from older providers', async () => {
+    const existing = getRegistration('claude');
+    const capabilities = { ...existing.capabilities };
+    delete capabilities.tokenReporting;
+    delete capabilities.stopReasonReporting;
+    delete capabilities.turnCountReporting;
+    delete capabilities.resolvedModelReporting;
+    registerProvider({ ...existing, id: 'legacy-reporting', capabilities });
+    try {
+      const response = await app.request('/api/providers');
+      const body: unknown = await response.json();
+      const parsed = providerListResponseSchema.safeParse(body);
+      expect(parsed.success).toBe(true);
+      if (!parsed.success) throw parsed.error;
+      const legacy = parsed.data.providers.find(provider => provider.id === 'legacy-reporting');
+      if (!legacy) throw new Error('Legacy provider missing from response');
+      expect(capabilities).toEqual(legacy.capabilities);
+      expect(legacy?.capabilities).not.toHaveProperty('tokenReporting');
+      expect(legacy?.capabilities).not.toHaveProperty('stopReasonReporting');
+      expect(legacy?.capabilities).not.toHaveProperty('turnCountReporting');
+      expect(legacy?.capabilities).not.toHaveProperty('resolvedModelReporting');
+    } finally {
+      clearRegistry();
+      registerBuiltinProviders();
     }
   });
 

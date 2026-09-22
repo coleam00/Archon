@@ -310,6 +310,43 @@ describe('CodexProvider', () => {
       });
     });
 
+    test('omits tokens when turn.completed has no usage', async () => {
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield { type: 'turn.completed' };
+        })(),
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks).toEqual([{ type: 'result', sessionId: 'new-thread-id' }]);
+    });
+
+    test('preserves reported zero token usage', async () => {
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield {
+            type: 'turn.completed',
+            usage: { ...defaultUsage, input_tokens: 0, output_tokens: 0 },
+          };
+        })(),
+      });
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
+        chunks.push(chunk);
+      }
+      expect(chunks).toEqual([
+        {
+          type: 'result',
+          sessionId: 'new-thread-id',
+          tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      ]);
+    });
+
     test('captures the new-thread id from the thread.started event (resumable sessionId)', async () => {
       // The real Codex SDK assigns a NEW thread's id during the run, via the
       // thread.started event — not synchronously on startThread(). Simulate a

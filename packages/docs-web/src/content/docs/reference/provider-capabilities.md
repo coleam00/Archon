@@ -29,7 +29,8 @@ Reporting flags describe SDK fields that Archon translates into execution result
 Supported does not guarantee that every result reports a value or that usage includes
 all nested agents. Unsupported fields remain absent; Archon does not estimate cost,
 count events as turns, or substitute the requested model for an unreported model.
-Cost reporting is independent of spend-limit support.
+Cost reporting is independent of spend-limit support. Older providers may omit
+reporting declarations; absence means unknown, not unsupported.
 
 ## Providers
 
@@ -73,6 +74,7 @@ Cost reporting is independent of spend-limit support.
 ## Legend
 
 - **✅ / ❌** — the capability is supported or unsupported for this provider.
+- **Unknown** — the provider has not declared whether this reporting channel is supported.
 - **✅¹ (superscript)** — supported, but with semantics that differ from the headline
   meaning of the axis — see [Caveats](#caveats).
 - **Structured output** — `enforced` (the SDK/backend grammar-constrains decoding),

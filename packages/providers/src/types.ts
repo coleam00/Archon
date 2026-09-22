@@ -744,19 +744,20 @@ export interface ProviderCapabilities {
    * omit the figure when the SDK reports none. The other reporting flags follow
    * the same rule: they describe an available translation, not a guarantee that
    * every result contains the field or that usage covers every nested agent.
+   * Omitted reporting flags on older providers mean unknown, not unsupported.
    *
    * Independent of {@link costControl}: an uncappable provider still prices every
    * turn, and a cappable one is not made cheaper by reporting.
    */
   costReporting: boolean;
   /** Whether the provider translates SDK token usage into result tokens. */
-  tokenReporting: boolean;
+  tokenReporting?: boolean;
   /** Whether the provider translates an SDK stop reason into the terminal result. */
-  stopReasonReporting: boolean;
+  stopReasonReporting?: boolean;
   /** Whether the provider reports the SDK's turn count, without counting events. */
-  turnCountReporting: boolean;
+  turnCountReporting?: boolean;
   /** Whether the provider translates a reported model identity, not the requested alias. */
-  resolvedModelReporting: boolean;
+  resolvedModelReporting?: boolean;
   effortControl: boolean;
   fallbackModel: boolean;
   sandbox: boolean;

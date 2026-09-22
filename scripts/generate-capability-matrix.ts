@@ -122,13 +122,15 @@ interface ResolvedCaveat {
 }
 
 /** Render a single provider's value for an axis. */
-function renderCell(caps: ProviderCapabilities, key: keyof ProviderCapabilities): string {
+export function renderCell(caps: ProviderCapabilities, key: keyof ProviderCapabilities): string {
   if (key === 'structuredOutput') {
     const tier = caps.structuredOutput;
     if (tier === 'enforced') return '**enforced**';
     if (tier === 'best-effort') return 'best-effort';
     return '❌';
   }
+  // sessionFork predates reporting declarations and explicitly defines omission as unsupported.
+  if (caps[key] === undefined && key !== 'sessionFork') return 'Unknown';
   return caps[key] ? '✅' : '❌';
 }
 
@@ -238,7 +240,8 @@ function buildMarkdown(providers: ProviderInfo[], caveats: ResolvedCaveat[]): st
     'Supported does not guarantee that every result reports a value or that usage includes',
     'all nested agents. Unsupported fields remain absent; Archon does not estimate cost,',
     'count events as turns, or substitute the requested model for an unreported model.',
-    'Cost reporting is independent of spend-limit support.',
+    'Cost reporting is independent of spend-limit support. Older providers may omit',
+    'reporting declarations; absence means unknown, not unsupported.',
     '',
     '## Providers',
     '',
@@ -254,6 +257,7 @@ function buildMarkdown(providers: ProviderInfo[], caveats: ResolvedCaveat[]): st
     '## Legend',
     '',
     '- **✅ / ❌** — the capability is supported or unsupported for this provider.',
+    '- **Unknown** — the provider has not declared whether this reporting channel is supported.',
     '- **✅¹ (superscript)** — supported, but with semantics that differ from the headline',
     '  meaning of the axis — see [Caveats](#caveats).',
     '- **Structured output** — `enforced` (the SDK/backend grammar-constrains decoding),',
@@ -302,7 +306,9 @@ async function main(): Promise<void> {
   console.log(`Generated ${OUTPUT_PATH} (${providers.length} providers, ${AXES.length} axes)`);
 }
 
-main().catch(err => {
-  console.error(err instanceof Error ? err.message : err);
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch(err => {
+    console.error(err instanceof Error ? err.message : err);
+    process.exit(1);
+  });
+}
