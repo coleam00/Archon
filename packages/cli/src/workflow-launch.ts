@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { loadConfig } from '@archon/core';
-import { sealWorkflowRunConfig } from '@archon/core/config';
+import { sealWorkflowRunConfig, unsealWorkflowRunConfig } from '@archon/core/config';
 import * as conversationDb from '@archon/core/db/conversations';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import {
@@ -13,7 +13,10 @@ import {
 } from '@archon/workflows/executor';
 import type { JsonValue } from '@archon/workflows/output-ref';
 import { resolveWorkflowName } from '@archon/workflows/router';
-import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
+import {
+  readWorkflowRunConfigMetadata,
+  WORKFLOW_RUN_CONFIG_METADATA_KEY,
+} from '@archon/workflows/run-config';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import {
   SUBRUN_METADATA_KEYS,
@@ -197,12 +200,21 @@ export async function executePreparedWorkflowLaunch(
 ): Promise<void> {
   const launch = preparedWorkflowLaunchSchema.parse(durableLaunch);
   const lane = launch.execution.isolation;
+  const runConfigMetadata = readWorkflowRunConfigMetadata(launch.run.metadata);
   await workflowRunCommand(
     launch.execution.cwd,
     launch.run.workflow_name,
     launch.run.user_message,
     {
       preparedLaunch: launch,
+      ...(runConfigMetadata
+        ? {
+            detachedRunConfig: {
+              layer: unsealWorkflowRunConfig(runConfigMetadata),
+              source: runConfigMetadata.source,
+            },
+          }
+        : {}),
       conversationId: launch.execution.conversationId,
       codebaseId: launch.run.codebase_id,
       ...(lane.kind === 'in-place'

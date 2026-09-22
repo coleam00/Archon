@@ -1,6 +1,8 @@
 /**
  * Database operations for workflow runs
  */
+import type { ResourceStartDisposition } from '@archon/workflows/schemas/resource-start';
+
 import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
 import { insertWorkflowEvent, listActiveWorkflowNodeIds } from './workflow-events';
 import { insertTerminalWorkflowEvent } from './workflow-terminal-event';
@@ -356,10 +358,10 @@ export class WorkflowNotResumableError extends Error {
 export class WorkflowResourceBusyError extends Error {
   constructor(
     public readonly runId: string,
-    public readonly blockerRunId: string
+    public readonly blocker: Extract<ResourceStartDisposition, { status: 'queued' }>['blocker']
   ) {
     super(
-      `Workflow run '${runId}' cannot resume while resource owner '${blockerRunId}' is active.`
+      `Workflow run '${runId}' cannot resume while ${blocker.kind === 'run' ? 'resource owner' : 'queued request'} '${blocker.id}' has priority.`
     );
     this.name = 'WorkflowResourceBusyError';
   }
@@ -1017,7 +1019,19 @@ export async function resumeWorkflowRun(
           active.status !== null &&
           !TERMINAL_WORKFLOW_STATUSES.includes(active.status as WorkflowRunStatus)
         ) {
-          throw new WorkflowResourceBusyError(id, active.active_run_id);
+          throw new WorkflowResourceBusyError(id, { kind: 'run', id: active.active_run_id });
+        }
+        // A failed run released its resource and must not bypass promised queued work.
+        // A paused run still owns it: refusing that continuation would deadlock the queue.
+        if (prior.status === 'failed') {
+          const queued = await query<{ id: string }>(
+            `SELECT id FROM remote_agent_resource_start_requests
+              WHERE resource_key = $1 AND status = 'queued'
+              ORDER BY queue_position LIMIT 1`,
+            [resourceKey]
+          );
+          const next = queued.rows[0];
+          if (next) throw new WorkflowResourceBusyError(id, { kind: 'request', id: next.id });
         }
         await query(
           `UPDATE remote_agent_start_resources

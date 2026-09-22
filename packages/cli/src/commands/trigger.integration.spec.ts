@@ -56,7 +56,12 @@ async function runCli(
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const child = Bun.spawn([process.execPath, cliPath, ...args], {
     cwd,
-    env: { ...process.env, DATABASE_URL: '', ARCHON_HOME: archonHome },
+    env: {
+      ...process.env,
+      DATABASE_URL: '',
+      ARCHON_HOME: archonHome,
+      TOKEN_ENCRYPTION_KEY: 'ab'.repeat(32),
+    },
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -106,7 +111,7 @@ nodes:
   - id: hold
     bash: |
       sleep 8
-      echo "${marker}-$INPUTS_COUNT" > "$ARTIFACTS_DIR/result.txt"
+      echo "${marker}-$INPUTS_COUNT-$TRIGGER_CONFIG_PROOF" > "$ARTIFACTS_DIR/result.txt"
 `;
 }
 
@@ -126,6 +131,11 @@ describe('trigger CLI durable execution', () => {
     const databasePath = join(archonHome, 'archon.db');
     const userId = crypto.randomUUID();
     const configPath = join(root, 'trigger.json');
+    const runConfigPath = join(root, 'run-config.json');
+    writeFileSync(
+      runConfigPath,
+      JSON.stringify({ env: { TRIGGER_CONFIG_PROOF: 'original-config' } })
+    );
     const config = {
       version: 1,
       sourceInstanceId: 'integration-timer',
@@ -139,6 +149,7 @@ describe('trigger CLI durable execution', () => {
         launch: {
           cwd: projectRoot,
           workflowName: 'queued-trigger-proof',
+          configSource: runConfigPath,
           inputs: { count: 7 },
           isolation: { kind: 'in-place' },
         },
@@ -188,12 +199,17 @@ describe('trigger CLI durable execution', () => {
       execution: { inputs: { count: unknown } };
       run: { metadata: { inputs_values?: { count?: unknown } } };
     };
+    expect(queued[1].launch).not.toContain('original-config');
     expect(queuedLaunch.execution.inputs.count).toBe(7);
     expect(queuedLaunch.run.metadata.inputs_values?.count).toBe(7);
 
     // Change the live authoring checkout after intake. Cold drain must execute the
     // finalized capture owned by the queued request, not discover these new bytes.
     writeFileSync(join(workflowsDir, 'queued-trigger-proof.yaml'), workflow('EDITED'));
+    writeFileSync(
+      runConfigPath,
+      JSON.stringify({ env: { TRIGGER_CONFIG_PROOF: 'edited-config' } })
+    );
     await waitFor(() => {
       const row = readRows<RunRow>(
         databasePath,
@@ -228,7 +244,9 @@ describe('trigger CLI durable execution', () => {
       ).toBe(7);
       if (!run.output_root) throw new Error(`Run ${run.id} recorded no output root`);
       const artifacts = getRunArtifactsDirForRoot(run.output_root, run.id);
-      expect(readFileSync(join(artifacts, 'result.txt'), 'utf8').trim()).toBe('ORIGINAL-7');
+      expect(readFileSync(join(artifacts, 'result.txt'), 'utf8').trim()).toBe(
+        'ORIGINAL-7-original-config'
+      );
     }
     expect(
       readRows<RequestRow>(
@@ -324,6 +342,6 @@ describe('trigger CLI durable execution', () => {
         join(getRunArtifactsDirForRoot(forgeRun.output_root, forgeRun.id), 'result.txt'),
         'utf8'
       ).trim()
-    ).toBe('EDITED-9');
+    ).toBe('EDITED-9-edited-config');
   }, 45_000);
 });

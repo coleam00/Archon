@@ -344,7 +344,12 @@ describe('durable resource starts', () => {
     const children = starts.map(intent =>
       Bun.spawn(['bun', '-e', script], {
         cwd: join(import.meta.dir, '../../../..'),
-        env: { ...process.env, ARCHON_HOME: root, TEST_START_INTENT: JSON.stringify(intent) },
+        env: {
+          ...process.env,
+          DATABASE_URL: '',
+          ARCHON_HOME: root,
+          TEST_START_INTENT: JSON.stringify(intent),
+        },
         stdout: 'pipe',
         stderr: 'pipe',
       })
@@ -365,6 +370,29 @@ describe('durable resource starts', () => {
     resetDatabase();
   });
 
+  test('a paused owner can continue while requests queue behind its held resource', async () => {
+    const owner = crypto.randomUUID();
+    const queued = crypto.randomUUID();
+    await admitResourceStart({
+      resource: 'paused',
+      hostId: 'host',
+      overlap: 'queue',
+      launch: launch(owner),
+    });
+    await admitResourceStart({
+      resource: 'paused',
+      hostId: 'host',
+      overlap: 'queue',
+      launch: launch(queued),
+    });
+    await getDatabase().query(
+      "UPDATE remote_agent_workflow_runs SET status = 'paused' WHERE id = $1",
+      [owner]
+    );
+    expect((await resumeWorkflowRun(owner)).status).toBe('running');
+    expect((await getResourceStartRequest(queued))?.status).toBe('queued');
+  });
+
   test('busy resume preserves its scheduled cursor and later reacquires the resource', async () => {
     const firstId = '56565656-5656-4656-8656-565656565656';
     const secondId = '78787878-7878-4878-8878-787878787878';
@@ -375,6 +403,12 @@ describe('durable resource starts', () => {
       launch: launch(firstId),
     });
     expect((await claimPendingWorkflowRun(firstId))?.status).toBe('running');
+    await admitResourceStart({
+      resource: 'repo:resume',
+      hostId: 'host',
+      overlap: 'queue',
+      launch: launch(secondId),
+    });
     const scheduled = {
       reason: 'quota' as const,
       resumeAt: '2026-09-22T10:00:00.000Z',
@@ -386,12 +420,23 @@ describe('durable resource starts', () => {
       `UPDATE remote_agent_workflow_runs SET status = 'failed', metadata = $2 WHERE id = $1`,
       [firstId, JSON.stringify({ scheduled_resume: scheduled })]
     );
-    await admitResourceStart({
-      resource: 'repo:resume',
-      hostId: 'host',
-      overlap: 'queue',
-      launch: launch(secondId),
-    });
+    await expect(
+      resumeWorkflowRun(firstId, {
+        kind: 'quota',
+        attempt: scheduled.attempt,
+        resumeAt: scheduled.resumeAt,
+      })
+    ).rejects.toMatchObject({ blocker: { kind: 'request', id: secondId } });
+    const beforeDrain = await getDatabase().query<{ metadata: string }>(
+      'SELECT metadata FROM remote_agent_workflow_runs WHERE id = $1',
+      [firstId]
+    );
+    expect(
+      JSON.parse(beforeDrain.rows[0]?.metadata ?? '{}').scheduled_resume.triggeredAt
+    ).toBeUndefined();
+    expect(await drainResourceStarts({ resource: 'repo:resume', hostId: 'host' })).toEqual([
+      { status: 'admitted', requestId: secondId, runId: secondId },
+    ]);
     expect((await claimPendingWorkflowRun(secondId))?.status).toBe('running');
 
     await expect(
