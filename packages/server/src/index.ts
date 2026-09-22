@@ -66,6 +66,8 @@ registerCommunityProviders();
 getVendorCatalog();
 
 import { OpenAPIHono, z } from '@hono/zod-openapi';
+import type { Context } from 'hono';
+import { cacheControlForStaticPath } from './static-cache';
 import { validationErrorHook } from './routes/openapi-defaults';
 import {
   TelegramAdapter,
@@ -893,10 +895,23 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       getLog().warn({ webDistPath }, 'web_dist_not_found');
     }
 
-    app.use('/assets/*', serveStatic({ root: webDistPath }));
+    // Hashed assets keep their name forever, so they can be cached
+    // indefinitely and never revalidated; index.html names those hashes, so it
+    // must be revalidated on every load or it outlives the assets it points at
+    // (#3383). serveStatic's onFound receives the resolved path, so the request
+    // query string never reaches the decision.
+    const applyStaticCacheControl = (path: string, c: Context): void => {
+      const value = cacheControlForStaticPath(path);
+      if (value !== undefined) c.header('Cache-Control', value);
+    };
+
+    app.use('/assets/*', serveStatic({ root: webDistPath, onFound: applyStaticCacheControl }));
     app.use('/favicon.png', serveStatic({ root: webDistPath, path: 'favicon.png' }));
     // SPA fallback - serve index.html for unmatched routes (after all API routes)
-    app.get('*', serveStatic({ root: webDistPath, path: 'index.html' }));
+    app.get(
+      '*',
+      serveStatic({ root: webDistPath, path: 'index.html', onFound: applyStaticCacheControl })
+    );
   }
 
   const hostname = process.env.HOST || '0.0.0.0';
