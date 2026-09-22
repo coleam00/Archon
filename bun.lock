@@ -101,6 +101,16 @@
         "starlight-llms-txt": "^0.10.0",
       },
     },
+    "packages/forge": {
+      "name": "@archon/forge",
+      "version": "0.10.1",
+      "dependencies": {
+        "zod": "^4.4.3",
+      },
+      "peerDependencies": {
+        "typescript": "^5.0.0",
+      },
+    },
     "packages/git": {
       "name": "@archon/git",
       "version": "0.10.1",
@@ -278,6 +288,8 @@
     "@archon/core": ["@archon/core@workspace:packages/core"],
 
     "@archon/docs-web": ["@archon/docs-web@workspace:packages/docs-web"],
+
+    "@archon/forge": ["@archon/forge@workspace:packages/forge"],
 
     "@archon/git": ["@archon/git@workspace:packages/git"],
 
