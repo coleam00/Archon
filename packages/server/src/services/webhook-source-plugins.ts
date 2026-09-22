@@ -41,12 +41,12 @@ export interface WebhookSourcePluginHost {
 
 export interface WebhookSourceHostDependencies {
   acceptReceipt: typeof acceptStartReceipt;
-  findUser: typeof getUserById;
+  isKnownUser: (id: string) => Promise<boolean>;
 }
 
 const defaultDependencies: WebhookSourceHostDependencies = {
   acceptReceipt: acceptStartReceipt,
-  findUser: getUserById,
+  isKnownUser: async id => (await getUserById(id)) !== null,
 };
 
 const log = createLogger('server.webhook-sources');
@@ -152,7 +152,7 @@ export async function loadWebhookSourcePlugins(
         );
       }
       for (const binding of result.acceptance.bindings) {
-        if (!(await dependencies.findUser(binding.runAsUserId))) {
+        if (!(await dependencies.isKnownUser(binding.runAsUserId))) {
           log.error({ sourceInstanceId, stage: 'run_as' }, 'webhook_source_failed');
           throw new Error(`Webhook source '${sourceInstanceId}' resolved an unknown run-as user`);
         }

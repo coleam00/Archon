@@ -11,7 +11,9 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map(removeTempTree));
 });
 
-function acceptance(sourceInstanceId = 'source-1'): SourceReceiptAcceptance {
+function acceptance(
+  sourceInstanceId = 'source-1'
+): Extract<SourceReceiptAcceptance, { outcome: 'matched' }> {
   return {
     receipt: {
       id: '11111111-1111-4111-8111-111111111111',
@@ -74,7 +76,7 @@ describe('webhook source plugin host', () => {
     });
     const host = await loadWebhookSourcePlugins(configPath, {
       acceptReceipt,
-      findUser: mock(async () => ({ id: 'user-1' }) as never),
+      isKnownUser: mock(async () => true),
     });
 
     const result = host.receive('source-1', {
@@ -99,7 +101,7 @@ describe('webhook source plugin host', () => {
     const acceptReceipt = mock(async () => ({ receiptId: 'unused', replay: false }));
     const host = await loadWebhookSourcePlugins(configPath, {
       acceptReceipt,
-      findUser: mock(async () => ({ id: 'user-1' }) as never),
+      isKnownUser: mock(async () => true),
     });
     await expect(
       host.receive('source-1', { body: '', headers: {}, receivedAt: new Date().toISOString() })
@@ -112,7 +114,7 @@ describe('webhook source plugin host', () => {
     const acceptReceipt = mock(async () => ({ receiptId: 'unused', replay: false }));
     const first = await loadWebhookSourcePlugins(unauthenticated.configPath, {
       acceptReceipt,
-      findUser: mock(async () => null),
+      isKnownUser: mock(async () => false),
     });
     expect(
       await first.receive('source-1', {
@@ -125,7 +127,7 @@ describe('webhook source plugin host', () => {
     const unknownUser = await fixture({ status: 'received', acceptance: acceptance() });
     const second = await loadWebhookSourcePlugins(unknownUser.configPath, {
       acceptReceipt,
-      findUser: mock(async () => null),
+      isKnownUser: mock(async () => false),
     });
     await expect(
       second.receive('source-1', { body: '', headers: {}, receivedAt: new Date().toISOString() })
@@ -133,14 +135,38 @@ describe('webhook source plugin host', () => {
     expect(acceptReceipt).not.toHaveBeenCalled();
   });
 
+  test.each(['matched', 'unmatched', 'unsupported', 'malformed'] as const)(
+    'rejects a contradictory %s receipt before persistence',
+    async outcome => {
+      const invalid = {
+        ...acceptance(),
+        outcome,
+        bindings: outcome === 'matched' ? [] : acceptance().bindings,
+      };
+      const { configPath } = await fixture({ status: 'received', acceptance: invalid });
+      const acceptReceipt = mock(async () => ({ receiptId: 'unused', replay: false }));
+      const host = await loadWebhookSourcePlugins(configPath, {
+        acceptReceipt,
+        isKnownUser: mock(async () => true),
+      });
+      await expect(
+        host.receive('source-1', { body: '', headers: {}, receivedAt: new Date().toISOString() })
+      ).rejects.toThrow('failed to normalize');
+      expect(acceptReceipt).not.toHaveBeenCalled();
+    }
+  );
+
   test('returns malformed only after the durable receipt is accepted', async () => {
-    const malformed = acceptance();
-    malformed.outcome = 'malformed';
+    const malformed: SourceReceiptAcceptance = {
+      ...acceptance(),
+      outcome: 'malformed',
+      bindings: [],
+    };
     const { configPath } = await fixture({ status: 'received', acceptance: malformed });
     const acceptReceipt = mock(async () => ({ receiptId: malformed.receipt.id, replay: false }));
     const host = await loadWebhookSourcePlugins(configPath, {
       acceptReceipt,
-      findUser: mock(async () => ({ id: 'user-1' }) as never),
+      isKnownUser: mock(async () => true),
     });
     expect(
       await host.receive('source-1', {
@@ -156,7 +182,7 @@ describe('webhook source plugin host', () => {
     const duplicate = acceptance();
     duplicate.evaluatedBindings = [
       {
-        bindingId: duplicate.bindings[0]!.bindingId,
+        bindingId: duplicate.bindings[0].bindingId,
         bindingRevision: null,
         status: 'rejected',
         reason: 'not selected',
@@ -166,7 +192,7 @@ describe('webhook source plugin host', () => {
     const acceptReceipt = mock(async () => ({ receiptId: 'unused', replay: false }));
     const host = await loadWebhookSourcePlugins(configPath, {
       acceptReceipt,
-      findUser: mock(async () => ({ id: 'user-1' }) as never),
+      isKnownUser: mock(async () => true),
     });
     await expect(
       host.receive('source-1', { body: '', headers: {}, receivedAt: new Date().toISOString() })
@@ -180,7 +206,7 @@ describe('webhook source plugin host', () => {
       acceptReceipt: mock(async () => {
         throw new Error('database detail');
       }),
-      findUser: mock(async () => ({ id: 'user-1' }) as never),
+      isKnownUser: mock(async () => true),
     });
     await expect(
       host.receive('source-1', { body: '', headers: {}, receivedAt: new Date().toISOString() })

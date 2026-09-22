@@ -136,12 +136,10 @@ export const resourceStartBindingIntentSchema = z
   .strict();
 export type ResourceStartBindingIntent = z.infer<typeof resourceStartBindingIntentSchema>;
 
-export const sourceReceiptAcceptanceSchema = z
+const sourceReceiptAcceptanceBaseSchema = z
   .object({
     receipt: sourceReceiptInputSchema,
-    outcome: z.enum(['matched', 'unmatched', 'unsupported', 'malformed']),
     reason: z.string().optional(),
-    bindings: z.array(resourceStartBindingIntentSchema),
     evaluatedBindings: z
       .array(
         z
@@ -155,7 +153,19 @@ export const sourceReceiptAcceptanceSchema = z
       )
       .optional(),
   })
-  .strict()
+  .strict();
+
+export const sourceReceiptAcceptanceSchema = z
+  .discriminatedUnion('outcome', [
+    sourceReceiptAcceptanceBaseSchema.extend({
+      outcome: z.literal('matched'),
+      bindings: z.tuple([resourceStartBindingIntentSchema]).rest(resourceStartBindingIntentSchema),
+    }),
+    sourceReceiptAcceptanceBaseSchema.extend({
+      outcome: z.enum(['unmatched', 'unsupported', 'malformed']),
+      bindings: z.tuple([]),
+    }),
+  ])
   .superRefine((acceptance, context) => {
     const seen = new Set<string>();
     for (const [index, binding] of acceptance.bindings.entries()) {

@@ -172,13 +172,15 @@ const createGitHubWebhookSource: WebhookSourcePluginFactory = ({
           })
         );
       }
+      const [first, ...rest] = bindings;
       return {
         status: 'received',
         acceptance: {
           receipt,
-          outcome: bindings.length ? 'matched' : 'unmatched',
-          bindings,
           evaluatedBindings,
+          ...(first
+            ? { outcome: 'matched', bindings: [first, ...rest] }
+            : { outcome: 'unmatched', bindings: [] }),
         },
       };
     },
