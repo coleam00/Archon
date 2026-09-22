@@ -341,8 +341,8 @@ export async function* streamMultiAgentOpencodeSession(
 
           // Aggregate tokens across sub-agents. The cache axes follow the shared floor
           // rule (#2662): one sub-agent without cache telemetry narrows the total and
-          // flags it, instead of erasing cache the others did report. `total` and `cost`
-          // keep OpenCode's own composition, including its `input + output` fallback.
+          // flags it, instead of erasing cache the others did report. A total is only
+          // available when every sub-agent reported every component needed to compute it.
           const perAgentUsage = states
             .map(candidate => normalizeTokens(candidate.latestAssistantInfo))
             .filter((usage): usage is TokenUsage => usage !== undefined);
@@ -350,19 +350,24 @@ export async function* streamMultiAgentOpencodeSession(
           const cost = perAgentUsage.some(usage => usage.cost !== undefined)
             ? perAgentUsage.reduce((sum, usage) => sum + (usage.cost ?? 0), 0)
             : undefined;
+          const totals = perAgentUsage
+            .map(usage => usage.total)
+            .filter((total): total is number => total !== undefined);
+          const totalComplete =
+            perAgentUsage.length === states.length && totals.length === perAgentUsage.length;
           const tokens: TokenUsage | undefined =
-            // A lone sub-agent passes through verbatim, as before — synthesizing `total`
-            // and `cost` for it would change what a single-agent turn reports.
+            // A lone reported usage otherwise passes through verbatim; merging it would
+            // synthesize fields and change what a single-agent turn reports.
             perAgentUsage.length === 1
               ? { ...perAgentUsage[0] }
               : mergedUsage && {
                   ...mergedUsage,
-                  total: perAgentUsage.reduce(
-                    (sum, usage) => sum + (usage.total ?? usage.input + usage.output),
-                    0
-                  ),
                   ...(cost !== undefined ? { cost } : {}),
                 };
+          if (tokens) {
+            if (totalComplete) tokens.total = totals.reduce((sum, total) => sum + total, 0);
+            else delete tokens.total;
+          }
 
           // Fetch structured outputs from all agents
           const structuredOutputs = await Promise.all(

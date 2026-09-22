@@ -34,6 +34,10 @@ export const OPENCODE_CAPABILITIES: ProviderCapabilities = {
   envInjection: true,
   costControl: false,
   costReporting: true, // tokens.ts maps SDK info.cost when the SDK reports one
+  tokenReporting: true,
+  stopReasonReporting: true,
+  turnCountReporting: false,
+  resolvedModelReporting: true,
   effortControl: false,
   fallbackModel: false,
   sandbox: false,

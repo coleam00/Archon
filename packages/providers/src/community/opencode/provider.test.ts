@@ -132,6 +132,34 @@ mock.module('@opencode-ai/sdk', () => ({
 }));
 
 import { OpencodeProvider, resetEmbeddedRuntime } from './provider';
+import { normalizeTokens } from './tokens';
+
+describe('normalizeTokens', () => {
+  test('omits usage when either required token axis is absent', () => {
+    expect(normalizeTokens({ tokens: { output: 7 } })).toBeUndefined();
+    expect(normalizeTokens({ tokens: { input: 11 } })).toBeUndefined();
+  });
+
+  test('preserves measured zeros and computes a complete zero total', () => {
+    expect(
+      normalizeTokens({
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+    ).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
+  });
+
+  test('omits total when optional reasoning or cache axes are incomplete', () => {
+    expect(normalizeTokens({ tokens: { input: 11, output: 7 } })).toEqual({
+      input: 11,
+      output: 7,
+    });
+    expect(
+      normalizeTokens({
+        tokens: { input: 11, output: 7, reasoning: 3, cache: { read: 5 } },
+      })
+    ).toEqual({ input: 16, output: 7, cacheRead: 5 });
+  });
+});
 import { classifyOpencodeError } from './errors';
 import type { NodeConfig } from '../../types';
 
@@ -438,7 +466,8 @@ describe('OpencodeProvider', () => {
 
     expect(error).toBeUndefined();
     // Scout's cache survives as a floor instead of being erased by the reviewer's silence,
-    // while gross input still sums across both sub-agents (#2662).
+    // while gross input still sums across both sub-agents (#2662). Total stays absent because
+    // neither event reported the optional reasoning axis and one omitted cache telemetry.
     expect(chunks).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -450,8 +479,73 @@ describe('OpencodeProvider', () => {
             cacheRead: 5,
             cacheWrite: 0,
             cachePartial: true,
-            total: 46,
             cost: 0.5,
+          },
+        }),
+      ])
+    );
+  });
+
+  test('multi-agent usage omits total when a sub-agent reports no usage', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    const runtime = makeRuntime({
+      sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+    });
+    runtimeQueue.push(runtime);
+    scriptedEvents = [
+      {
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'message-scout',
+            role: 'assistant',
+            sessionID: 'scout-session',
+            providerID: 'anthropic',
+            modelID: 'claude-sonnet',
+            tokens: { input: 11, output: 7, reasoning: 3, cache: { read: 5, write: 0 } },
+          },
+        },
+      },
+      {
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'message-reviewer',
+            role: 'assistant',
+            sessionID: 'reviewer-session',
+            providerID: 'anthropic',
+            modelID: 'claude-sonnet',
+          },
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: 'scout-session' } },
+      { type: 'session.idle', properties: { sessionID: 'reviewer-session' } },
+    ];
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+      })
+    );
+
+    expect(error).toBeUndefined();
+    expect(chunks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'result',
+          tokens: {
+            input: 16,
+            output: 7,
+            cacheRead: 5,
+            cacheWrite: 0,
           },
         }),
       ])
