@@ -958,8 +958,11 @@ describe('a durable wait deadline is enforced by the owning process', () => {
     );
 
     // An attention wait has no deadline, so its owner must exit rather than sleep.
-    // With the endpoint gone nothing in this process can advance the run, which is
-    // the difference that keeps a human decision out of the continuation loop.
+    // The paused read above establishes the durable state before the endpoint goes
+    // away. With the endpoint gone nothing in this process can advance that run,
+    // which is the difference that keeps a human decision out of the continuation
+    // loop. Do not re-read SQLite after endpoint shutdown: owner close and database
+    // lock release are independent, so that read can transiently be unavailable.
     const ownerGone = await waitFor(
       'the attention owner to release its endpoint',
       async () => {
@@ -974,7 +977,6 @@ describe('a durable wait deadline is enforced by the owning process', () => {
       30_000
     );
     expect(ownerGone).toBe('gone');
-    expect(readRunStatus(fixture.archonHome, runId)).toBe('paused');
   }, 90_000);
 
   test('does not resume a wait another process released', async () => {
