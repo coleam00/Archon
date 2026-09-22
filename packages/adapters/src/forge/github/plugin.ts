@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
-import { forgeRequestSchema, type ForgeResponse } from './operations';
-import { githubPluginMetadata, handleGithubOperation } from './github-outbound';
+import { forgeRequestSchema, type ForgeResponse } from '@archon/forge/operations';
+import { githubPluginMetadata, handleGithubOperation } from './operations';
 
 function invalidRequest(operationId: string, message: string): ForgeResponse {
   return { operationId, ok: false, error: { kind: 'invalid_request', message } };

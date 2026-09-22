@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { resolve } from 'node:path';
-import type { ForgeRequest } from './operations';
-import { githubPluginMetadata, handleGithubOperation } from './github-outbound';
+import type { ForgeRequest } from '@archon/forge/operations';
+import { githubPluginMetadata, handleGithubOperation } from './operations';
 
 const checksRequest = {
   operationId: 'operation-1',
@@ -170,7 +170,7 @@ describe('GitHub outbound producer', () => {
 });
 
 describe('GitHub executable protocol', () => {
-  const executable = resolve(import.meta.dir, 'github-plugin.ts');
+  const executable = resolve(import.meta.dir, 'plugin.ts');
 
   async function run(args: string[], stdin = '', token?: string) {
     const child = Bun.spawn([process.execPath, executable, ...args], {
@@ -226,7 +226,7 @@ describe('GitHub executable protocol', () => {
 });
 
 test('passes the public read conformance kit for an external-status-only repository', async () => {
-  const { runForgeReadConformance } = await import('./outbound-conformance');
+  const { runForgeReadConformance } = await import('@archon/forge/conformance');
   const ref = { repo: { host: 'github.com', path: 'owner/repo' }, number: 1 };
   const failures = await runForgeReadConformance(
     request =>

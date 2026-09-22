@@ -9,6 +9,22 @@ status: current
 
 Forge operations load only when a caller invokes `archon forge`. Local workflows and SDK execution do not discover plugins or require forge credentials.
 
+## Install the GitHub plugin
+
+GitHub is an optional, independently executable plugin. Its source is temporarily housed under `packages/adapters/src/forge/github`; the entry point imports the public forge contract and its own vendor code, not Archon's engine or adapter host. The CLI does not inject or require a GitHub implementation.
+
+From an Archon source checkout on POSIX:
+
+```sh
+bun run --cwd packages/adapters build:github-plugin
+mkdir -p "${ARCHON_HOME:-$HOME/.archon}/plugins"
+cp packages/adapters/dist/archon-forge-github "${ARCHON_HOME:-$HOME/.archon}/plugins/"
+```
+
+On Windows, compile the same entry point with `bun build --compile packages/adapters/src/forge/github/plugin.ts --outfile <plugin-directory>/archon-forge-github.exe`. The plugin directory must exist. The resulting native executable runs without the source checkout. Alternatively, configure its absolute executable path under `forge.plugins` below.
+
+The eventual single marketplace will distribute forge plugins, agent providers, workflow packs, chat integrations, webhook sources, themes and other plugin kinds. The Archon-maintained GitHub plugin will move to its own repository and install through that marketplace, optionally during setup. That changes packaging and location, not this runtime protocol. The marketplace and a mandatory setup install are not prerequisites today. Other production forges are community-maintained; the existing bundled Gitea/GitLab transition is not settled by this contract.
+
 ## Commands
 
 ```sh
@@ -22,13 +38,13 @@ Exit 0 means the observation succeeded, even when checks are red. Exit 1 means t
 
 ## GitHub credentials and check observations
 
-The first-party GitHub executable uses `GH_TOKEN` or `GITHUB_TOKEN`. The dispatcher passes the selected value to the child as `ARCHON_FORGE_TOKEN`. Tokens never belong in command arguments, JSON requests or remote URLs.
+The GitHub plugin uses `GH_TOKEN` or `GITHUB_TOKEN`. The dispatcher passes the selected value to the child as `ARCHON_FORGE_TOKEN`. Tokens never belong in command arguments, JSON requests or remote URLs.
 
 Checks identify the evaluated revision and each check-run or commit-status unit. GitHub enumeration includes current check runs and the latest status for each context. The plugin preserves distinct runs with the same name. It does not use GitHub's aggregate status as evidence that checks exist.
 
 The summary states are `none`, `pending`, `green`, `red`, `gated` and `unknown`. `none` means zero enumerated units. The summary precedence is red, gated, unknown, pending, then green. `gated` names an explicit action-required conclusion; missing checks are not evidence of an approval gate. Unrecognized vendor states remain unknown with their native value retained.
 
-`required` is null when no authoritative required set was obtained. The current GitHub producer returns null; it does not infer branch protection from check names. The SDLC pack prefers a supplied required set, otherwise uses the full observation. It waits once for registration when no checks exist and refuses the final ready preflight for pending, red, gated, unknown or failed reads. The workflow owns this policy.
+`required` is null when no authoritative required set was obtained. The current GitHub plugin returns null; it does not infer branch protection from check names. The SDLC pack prefers a supplied required set, otherwise uses the full observation. It waits once for registration when no checks exist and refuses the final ready preflight for pending, red, gated, unknown or failed reads. The workflow owns this policy.
 
 ## Plugin configuration
 
@@ -47,9 +63,9 @@ forge:
   scanPath: true
 ```
 
-A host mapping may name a discovered plugin directly, or supply `plugin`, an absolute `command`, interpreter `args`, and `token_env`. The built-in GitHub producer supports explicitly mapped GitHub Enterprise hosts at `https://HOST/api/v3`.
+A host mapping may name a discovered plugin directly, or supply `plugin`, an absolute `command`, interpreter `args`, and `token_env`. The GitHub plugin supports explicitly mapped GitHub Enterprise hosts at `https://HOST/api/v3`.
 
-Discovery examines configured executables, `~/.archon/plugins`, configured `pluginDirs`, and PATH names beginning with `archon-forge-`. Duplicate identities or host claims fail loudly. A configured GitHub executable replaces the built-in candidate by name. No remote URL can select an arbitrary executable.
+Discovery examines configured executables, `~/.archon/plugins`, configured `pluginDirs`, and PATH names beginning with `archon-forge-`. Duplicate identities or host claims fail loudly. No forge is injected as an implicit fallback. No remote URL can select an arbitrary executable.
 
 ## Executable protocol
 

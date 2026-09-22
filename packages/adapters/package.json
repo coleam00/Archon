@@ -8,11 +8,13 @@
     ".": "./src/index.ts",
     "./*": "./src/*",
     "./community/forge/gitea": "./src/community/forge/gitea/index.ts",
-    "./community/forge/gitlab": "./src/community/forge/gitlab/index.ts"
+    "./community/forge/gitlab": "./src/community/forge/gitlab/index.ts",
+    "./forge/github-plugin": "./src/forge/github/plugin.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",
-    "type-check": "bun x tsc --noEmit"
+    "type-check": "bun x tsc --noEmit",
+    "build:github-plugin": "bun build --compile ./src/forge/github/plugin.ts --outfile ./dist/archon-forge-github"
   },
   "dependencies": {
     "@archon/core": "workspace:*",
@@ -25,7 +27,10 @@
     "@slack/bolt": "^4.6.0",
     "discord.js": "^14.16.0",
     "grammy": "^1.36.0",
-    "telegramify-markdown": "^1.3.3"
+    "telegramify-markdown": "^1.3.3",
+    "@archon/forge": "workspace:*",
+    "zod": "^4.4.3",
+    "@hono/zod-openapi": "^1.4.0"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
@@ -61,6 +66,12 @@
     ],
     [
       "src/community/forge/gitlab/clone-security.integration.test.ts"
+    ],
+    [
+      "src/forge/github/normalize-event.test.ts"
+    ],
+    [
+      "src/forge/github/operations.test.ts"
     ]
   ]
 }

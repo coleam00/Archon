@@ -21,9 +21,7 @@ const hasDetachedRunConfigHandoff = process.argv
 const inheritedInstallContext = hasDetachedRunConfigHandoff
   ? captureDetachedInstallContext()
   : undefined;
-// Exec plugins receive the dispatcher's constrained environment. Loading user or
-// repository env here would bypass that boundary before the plugin starts.
-if (process.argv[2] !== 'forge-plugin') loadArchonEnv(process.cwd());
+loadArchonEnv(process.cwd());
 // The detached parent sealed this payload with its effective install key. Repo
 // env still loads normally, but it cannot replace any input that derives the
 // install home before the child consumes the accepted snapshot.
@@ -227,11 +225,6 @@ async function main(): Promise<number> {
     }
   }
 
-  if (args[0] === 'forge-plugin' && args[1] === 'github') {
-    const { runGithubPlugin } = await import('@archon/forge/github-plugin');
-    return runGithubPlugin(args.slice(2));
-  }
-
   // Parse global options
   let parsedArgs: { values: Record<string, unknown>; positionals: string[] };
 
@@ -344,9 +337,7 @@ async function main(): Promise<number> {
     if (command === 'forge') {
       const { forgeCommand } = await loadRoute(() => import('./commands/forge'));
       return await forgeCommand(subcommand, {
-        cwd,
         data: typeof values.data === 'string' ? values.data : undefined,
-        command: cliInvocation,
       });
     }
 

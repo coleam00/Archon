@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { checkPhase, checkResult } from './github';
+import { checkPhase, checkResult } from './normalize-event';
 import {
   type CheckObservation,
   type ForgeError,
@@ -7,7 +7,7 @@ import {
   type ForgeResponse,
   type PluginMetadata,
   summarizeChecks,
-} from './operations';
+} from '@archon/forge/operations';
 
 export const githubPluginMetadata = {
   protocol: 1,

@@ -9,8 +9,7 @@
     "./conformance": "./src/conformance.ts",
     "./operations": "./src/operations.ts",
     "./dispatch": "./src/dispatch.ts",
-    "./plugin-config": "./src/plugin-config.ts",
-    "./github-plugin": "./src/github-plugin.ts"
+    "./plugin-config": "./src/plugin-config.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",

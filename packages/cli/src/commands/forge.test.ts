@@ -8,7 +8,7 @@ test('local resolve does not discover plugins and emits no-forge JSON', async ()
   const output: unknown[] = [];
   const code = await forgeCommand(
     'resolve',
-    { cwd: '/tmp', data: '{"remote":null}', command: [process.execPath] },
+    { data: '{"remote":null}' },
     {
       readConfig: async () => ({
         plugins: [{ plugin: 'broken', command: join(tmpdir(), 'missing-forge.exe') }],
@@ -31,7 +31,7 @@ test('records qualified target and evaluated revision through the host audit', a
   const ref = { repo: { host: 'forge.example', path: 'group/team/repo' }, number: 42 };
   const code = await forgeCommand(
     'checks',
-    { cwd: '/tmp', data: JSON.stringify({ ref }), command: [process.execPath] },
+    { data: JSON.stringify({ ref }) },
     {
       readConfig: async () => ({}),
       env: { WORKFLOW_ID: 'run-42' },
@@ -86,7 +86,7 @@ test('audit failure retains the known result and returns a distinct nonzero exit
   const output: unknown[] = [];
   const code = await forgeCommand(
     'resolve',
-    { cwd: '/tmp', data: '{"remote":null}', command: [process.execPath] },
+    { data: '{"remote":null}' },
     {
       readConfig: async () => ({}),
       env: { WORKFLOW_ID: 'missing-run' },
@@ -107,7 +107,7 @@ test('invalid data fails before dispatch without echoing user data', async () =>
   let dispatched = false;
   const code = await forgeCommand(
     'checks',
-    { cwd: '/tmp', data: '{secret', command: [process.execPath] },
+    { data: '{secret' },
     {
       dispatch: async () => {
         dispatched = true;
@@ -124,36 +124,29 @@ test('invalid data fails before dispatch without echoing user data', async () =>
   expect(JSON.stringify(output)).not.toContain('secret');
 });
 
-test('an explicit host executable replaces the bundled producer by name', async () => {
+test('the CLI does not inject a built-in producer into explicit plugin configuration', async () => {
   let configured: unknown;
   await forgeCommand(
     'resolve',
-    { cwd: '/tmp', data: '{"remote":null}', command: [process.execPath] },
+    { data: '{"remote":null}' },
     {
-      readConfig: async () => ({
-        hosts: {
-          'github.example': { plugin: 'github', command: process.execPath, args: ['custom'] },
-        },
-      }),
+      readConfig: async () => ({ pluginDirs: [tmpdir()], scanPath: false }),
       dispatch: async (request, options) => {
         configured = options?.config;
+        const response: ForgeResponse = {
+          operationId: request.operationId,
+          ok: true,
+          result: { op: 'resolve', value: { kind: 'none', forge: 'none' } },
+        };
         return {
-          response: {
-            operationId: request.operationId,
-            ok: true,
-            result: { op: 'resolve', value: { kind: 'none', forge: 'none' } },
-          },
+          response,
           plugin: null,
           audit: {
             operationId: request.operationId,
             operation: request.op,
             target: null,
             plugin: null,
-            result: {
-              operationId: request.operationId,
-              ok: true,
-              result: { op: 'resolve', value: { kind: 'none', forge: 'none' } },
-            },
+            result: response,
             durationMs: 0,
           },
         };
@@ -162,8 +155,5 @@ test('an explicit host executable replaces the bundled producer by name', async 
       env: {},
     }
   );
-  expect(configured).toMatchObject({
-    plugins: [],
-    hosts: { 'github.example': { args: ['custom'] } },
-  });
+  expect(configured).toEqual({ plugins: [], hosts: {}, pluginDirs: [tmpdir()], scanPath: false });
 });

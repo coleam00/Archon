@@ -37,7 +37,7 @@ async function persistAudit(audit: ForgeOperationAudit, runId: string): Promise<
 
 export async function forgeCommand(
   subcommand: string | undefined,
-  options: { cwd: string; data?: string; command: readonly [string, ...string[]] },
+  options: { data?: string },
   dependencies: {
     dispatch?: typeof dispatchForge;
     readConfig?: () => Promise<unknown>;
@@ -60,17 +60,6 @@ export async function forgeCommand(
     const config = forgePluginConfigSchema.parse(
       await (dependencies.readConfig ?? readForgeConfig)()
     );
-    const [command, ...args] = options.command;
-    // A configured implementation can replace the default producer by name. It
-    // still goes through exactly the same metadata and operation process protocol.
-    const configuredGithub =
-      config.plugins.some(plugin => plugin.plugin === 'github') ||
-      Object.values(config.hosts).some(
-        value => typeof value !== 'string' && value.plugin === 'github' && value.command
-      );
-    if (!configuredGithub) {
-      config.plugins.push({ plugin: 'github', command, args: [...args, 'forge-plugin', 'github'] });
-    }
     const result = await (dependencies.dispatch ?? dispatchForge)(request, { config, env });
     response = result.response;
     if (env.WORKFLOW_ID) {

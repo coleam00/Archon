@@ -1,12 +1,12 @@
-import { z } from 'zod';
-import type { ForgeSourceCapabilities } from './capabilities';
-import type { SourceActor } from './identity';
+import { z } from '@hono/zod-openapi';
 import {
+  type ForgeSourceCapabilities,
+  type SourceActor,
   checkResultSchema,
   forgeEventEnvelopeSchema,
   type ForgeEvent,
   type ForgeEventEnvelope,
-} from './events';
+} from '@archon/forge';
 
 type PrLifecycleAction = Extract<ForgeEvent, { kind: 'pr.lifecycle' }>['action'];
 
