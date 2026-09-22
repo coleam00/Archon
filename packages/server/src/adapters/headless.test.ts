@@ -57,4 +57,19 @@ describe('HeadlessPlatform', () => {
     const platform = new HeadlessPlatform('conv-db-1');
     await expect(platform.sendMessage('ignored', 'hello')).resolves.toBeUndefined();
   });
+
+  test('persists every future WorkflowMessageMetadata field by derivation (#2709)', async () => {
+    mockAddMessage.mockClear();
+    const platform = new HeadlessPlatform('conv-db-1');
+    await platform.sendMessage('ignored', 'done', {
+      category: 'workflow_status',
+      segment: 'new',
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ...({ traceId: 'trace-abc' } as any),
+    } as Parameters<typeof platform.sendMessage>[2]);
+    expect(mockAddMessage).toHaveBeenCalledWith('conv-db-1', 'assistant', 'done', {
+      category: 'workflow_status',
+      traceId: 'trace-abc',
+    });
+  });
 });

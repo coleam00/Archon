@@ -115,11 +115,7 @@ export interface MessageMetadata {
   workflowResult?: { workflowName: string; runId: string };
 }
 
-export {
-  toPersistedMessageMetadata,
-  type PersistedMessageMetadata,
-  type MessageMetadataLike,
-} from './message-metadata';
+export { toPersistedMessageMetadata } from './message-metadata';
 
 export interface IPlatformAdapter {
   /**

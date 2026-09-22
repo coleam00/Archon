@@ -1,5 +1,5 @@
 /**
- * Projection from `MessageMetadata` to its persisted subset.
+ * Projection from a MessageMetadata-like input to its persisted subset.
  *
  * `segment` is intentionally transient — it tells adapters how to lay out the
  * live stream but is never written to message history. All other fields ride
@@ -10,35 +10,20 @@
  * pass it straight to `addMessage` and preserve the historical "omit when
  * empty" behaviour pinned by existing CLI and headless tests.
  *
- * Accepts the structurally-identical `WorkflowMessageMetadata` (defined in
- * `@archon/workflows/deps` to keep the workflows package free of any
- * `@archon/core` dependency) so a single projection covers every adapter.
+ * Accepts any object so the structurally-identical `WorkflowMessageMetadata`
+ * (defined in `@archon/workflows/deps` to keep workflows free of any
+ * `@archon/core` dependency) flows through one projection alongside
+ * `MessageMetadata` itself. The input is field-agnostic — runtime walks
+ * `Object.entries` rather than enumerating fields.
  */
-import type { MessageMetadata } from './index';
-
-type TransientKey = 'segment';
-
-/** Minimal contract for any MessageMetadata-like input — keep this narrow. */
-export interface MessageMetadataLike {
-  category?: MessageMetadata['category'];
-  segment?: MessageMetadata['segment'];
-  workflowDispatch?: MessageMetadata['workflowDispatch'];
-  workflowResult?: MessageMetadata['workflowResult'];
-}
-
-export type PersistedMessageMetadata = {
-  [K in Exclude<keyof MessageMetadataLike, TransientKey>]?: MessageMetadataLike[K];
-} & Record<string, unknown>;
-
 export function toPersistedMessageMetadata(
-  metadata: MessageMetadataLike | undefined
-): PersistedMessageMetadata | undefined {
+  metadata: object | undefined
+): Record<string, unknown> | undefined {
   if (!metadata) return undefined;
 
   const projection: Record<string, unknown> = {};
-  for (const key of Object.keys(metadata) as (keyof MessageMetadataLike)[]) {
+  for (const [key, value] of Object.entries(metadata as Record<string, unknown>)) {
     if (key === 'segment') continue;
-    const value = metadata[key];
     if (value !== undefined) {
       projection[key] = value;
     }

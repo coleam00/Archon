@@ -1,6 +1,5 @@
 import { describe, test, expect } from 'bun:test';
 import { toPersistedMessageMetadata } from './message-metadata';
-import type { MessageMetadata } from './index';
 
 describe('toPersistedMessageMetadata', () => {
   test('returns undefined when metadata is undefined', () => {
@@ -66,17 +65,15 @@ describe('toPersistedMessageMetadata', () => {
   });
 
   test('a new MessageMetadata field flows through without changing the helper (#2709)', () => {
-    // Simulates adding a brand-new field to MessageMetadata by widening the
-    // input through a record cast — this is what real callers do when a new
-    // field lands and proves the helper does not hand-maintain a field list.
-    const metadata = {
+    // Simulates adding a brand-new field to MessageMetadata — this is what
+    // real callers do when a new field lands and proves the helper does not
+    // hand-maintain a field list.
+    const result = toPersistedMessageMetadata({
       category: 'workflow_status',
       segment: 'auto',
       // New field — the helper must pick it up by derivation, not enumeration.
       newField: { traceId: 'abc' },
-    } as unknown as MessageMetadata;
-
-    const result = toPersistedMessageMetadata(metadata);
+    });
     expect(result).toEqual({
       category: 'workflow_status',
       newField: { traceId: 'abc' },

@@ -253,8 +253,10 @@ export class MessagePersistence {
           duration: tc.duration,
           ...(tc.output !== undefined ? { output: tc.output } : {}),
         }));
-        const persistedMeta = toPersistedMessageMetadata(seg.metadata) ?? {};
-        const metadata = toolCalls.length > 0 ? { ...persistedMeta, toolCalls } : persistedMeta;
+        const metadata = {
+          ...toPersistedMessageMetadata(seg.metadata),
+          ...(toolCalls.length > 0 ? { toolCalls } : {}),
+        };
         await addMessage(dbId, 'assistant', seg.content, metadata);
       }
     } catch (e: unknown) {
