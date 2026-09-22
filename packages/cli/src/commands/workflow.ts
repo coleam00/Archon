@@ -119,6 +119,7 @@ import type {
   WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
+import type { PreparedWorkflowLaunch } from '@archon/workflows/schemas/resource-start';
 import {
   workflowRunStatusSchema,
   isApprovalContext,
@@ -270,6 +271,8 @@ async function waitForDetachedStartup(
  * --base + --no-worktree.
  */
 export interface WorkflowRunOptions {
+  /** @internal Durable typed launch restored by the resource-start host. */
+  preparedLaunch?: PreparedWorkflowLaunch;
   branchName?: string;
   fromBranch?: string;
   /**
@@ -892,16 +895,34 @@ async function assertCliWorkflowRequirementsMet(
   // user id, then check for a stored GitHub connection. An unresolvable user or
   // a lookup failure means "not connected" — fail closed, never silently allow.
   const cliId = resolveCliUserId();
-  let githubConnected = false;
+  let actingUserId: string | undefined;
   if (cliId) {
     try {
       const cliUser = await userDb.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
-      githubConnected = Boolean(await getDecryptedAccessToken(cliUser.id));
+      actingUserId = cliUser.id;
     } catch (error) {
       getLog().warn({ err: error as Error, cliId }, 'cli.requirement_gate_user_resolve_failed');
     }
   }
 
+  await assertUserGitHubRequirement(workflow, actingUserId);
+}
+
+export async function assertWorkflowRequirementsForUser(
+  workflow: RequirementBearingWorkflow,
+  actingUserId: string | undefined
+): Promise<void> {
+  if (!isPerUserGitHubEnabled() || !workflow.requires?.length) return;
+  await assertUserGitHubRequirement(workflow, actingUserId);
+}
+
+async function assertUserGitHubRequirement(
+  workflow: RequirementBearingWorkflow,
+  actingUserId: string | undefined
+): Promise<void> {
+  const githubConnected = actingUserId
+    ? Boolean(await getDecryptedAccessToken(actingUserId))
+    : false;
   assertWorkflowRequirementsMet(workflow, { githubConnected });
 }
 
@@ -1463,7 +1484,7 @@ export async function workflowListCommand(
  * because one caller emits a machine-readable document on stdout and cannot have a
  * sentence written into the middle of it.
  */
-async function resolveRunCodebase(
+export async function resolveRunCodebase(
   cwd: string,
   options: Pick<WorkflowRunOptions, 'codebaseId' | 'folder'>
 ): Promise<{
@@ -1606,9 +1627,30 @@ async function runWorkflowWithOwnedSource(
     }
   }
 
+  let preparedLaunchRun: WorkflowRun | undefined;
+  if (options.preparedLaunch !== undefined) {
+    preparedLaunchRun =
+      (await workflowDb.getWorkflowRun(options.preparedLaunch.run.id)) ?? undefined;
+    if (!preparedLaunchRun) {
+      throw new Error(
+        `Prepared workflow launch cannot find pending run '${options.preparedLaunch.run.id}'.`
+      );
+    }
+    if (preparedLaunchRun.status !== 'pending') {
+      throw new Error(
+        `Cannot execute prepared run '${preparedLaunchRun.id}': it is ${preparedLaunchRun.status}.`
+      );
+    }
+  }
+
   let continuation: ResolvedContinuation | undefined;
   if (continuationRun !== undefined) {
     continuation = await resolveContinuationWorkflow(createWorkflowDeps(), continuationRun, cwd);
+  } else if (preparedLaunchRun !== undefined) {
+    continuation = await resolveContinuationWorkflow(createWorkflowDeps(), preparedLaunchRun, cwd);
+    if (!continuation) {
+      throw new Error(`Prepared workflow run '${preparedLaunchRun.id}' has no frozen source.`);
+    }
   }
 
   // A continuation never captures. With a record it reads that record (above); without
@@ -1656,7 +1698,7 @@ async function runWorkflowWithOwnedSource(
   // closed evidence. The `workflow_name` match (checked once the workflow resolves,
   // below) is what stops one launch's row being executed as another workflow. Neither is
   // redundant with the process-group check, and removing either reopens its own outcome.
-  let detachedPreCreatedRun: WorkflowRun | undefined;
+  let detachedPreCreatedRun: WorkflowRun | undefined = preparedLaunchRun;
   if (options.detachedRunId !== undefined) {
     if (!detachedProcessOwner) {
       throw new Error(
@@ -1688,7 +1730,7 @@ async function runWorkflowWithOwnedSource(
   // either `finalizeWorkflowSource` (container) or `executeWorkflow`'s rename
   // (everything else), so an `rm` against it is a no-op once prep has moved it.
   let originalStagedRoot: string | undefined;
-  if (!isContinuation && !options.dryRun && !options.stubsInitPath) {
+  if (!isContinuation && !preparedLaunchRun && !options.dryRun && !options.stubsInitPath) {
     try {
       preparedSource = await prepareWorkflowSource(createWorkflowDeps(), {
         sourceRoot: effectiveDiscoveryCwd,
@@ -2125,10 +2167,12 @@ async function runWorkflowWithOwnedSource(
   // supplied would make every resume of a required-input run impossible.
   let resolvedInputs: Record<string, string> | undefined;
   if (!options.resume) {
-    resolvedInputs = resolveTopLevelInputs(
-      workflow,
-      options.inputs ? parseInputAssignments(options.inputs) : undefined
-    );
+    if (!options.preparedLaunch) {
+      resolvedInputs = resolveTopLevelInputs(
+        workflow,
+        options.inputs ? parseInputAssignments(options.inputs) : undefined
+      );
+    }
   }
 
   // Capability gate: hard-fail before the --detach fork and any worktree/clone/
@@ -2136,7 +2180,14 @@ async function runWorkflowWithOwnedSource(
   // user hasn't connected. No-op on solo PAT installs. Mirrors the orchestrator
   // gate (dispatchOrchestratorWorkflow) so CLI, REST (via orchestrator), and
   // chat dispatch enforce `requires: [github]` identically.
-  await assertCliWorkflowRequirementsMet(workflow);
+  if (options.preparedLaunch) {
+    await assertWorkflowRequirementsForUser(
+      workflow,
+      options.preparedLaunch.execution.actingUserId
+    );
+  } else {
+    await assertCliWorkflowRequirementsMet(workflow);
+  }
 
   // --detach: hand the whole run to a detached background child and return now.
   // Done AFTER workflow resolution + flag validation above (so unknown-workflow /
@@ -2963,7 +3014,8 @@ async function runWorkflowWithOwnedSource(
   // across invocations — this is what attributes the workflow run to the human
   // running the command and what `getUserProviderEnv` keys on for per-user
   // AI-provider credentials (#1891 Phase 2).
-  const cliUserId = await resolveCliUserRecordId();
+  const cliUserId =
+    options.preparedLaunch?.execution.actingUserId ?? (await resolveCliUserRecordId());
 
   // Persist user message for Web UI history.
   try {
@@ -3277,7 +3329,7 @@ async function runWorkflowWithOwnedSource(
       const opts = {
         ...commonOptions,
         // A resume replays the inputs already on its row.
-        inputs: resolvedInputs,
+        ...(resolvedInputs ? { inputs: resolvedInputs } : {}),
         ...(modelOverrides
           ? { modelOverrideLayer: { kind: 'raw' as const, overrides: modelOverrides } }
           : {}),

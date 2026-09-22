@@ -52,6 +52,9 @@
   },
   "testGroups": [
     [
+      "src/db/resource-starts.integration.test.ts"
+    ],
+    [
       "src/handlers/command-handler.test.ts"
     ],
     [

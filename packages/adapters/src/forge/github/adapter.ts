@@ -3,7 +3,7 @@
  * Handles issue and PR comments with @mention detection
  */
 import { Octokit } from '@octokit/rest';
-import { createHmac, timingSafeEqual } from 'crypto';
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'crypto';
 import { readdir, access } from 'fs/promises';
 import { join } from 'path';
 import type { IPlatformAdapter, MessageMetadata, GitHubAuth } from '@archon/core';
@@ -61,6 +61,18 @@ const MAX_LENGTH = 65000; // GitHub comment limit (~65,536, leave buffer for saf
 const BOT_RESPONSE_MARKER = '<!-- archon-bot-response -->';
 
 type ConversationLocker = Pick<ConversationLockManager, 'acquireLock'>;
+
+/** Verified transport input; the source integration still validates its event schema. */
+export type VerifiedGitHubDelivery = {
+  deliveryId: string | null;
+  eventName: string | undefined;
+  contentDigest: string;
+  receivedAt: string;
+} & ({ decoded: true; payload: unknown } | { decoded: false });
+
+export interface GitHubTriggerIngress {
+  receive(delivery: VerifiedGitHubDelivery): Promise<void>;
+}
 
 interface PullRequestIdentity {
   host: string;
@@ -167,6 +179,7 @@ export class GitHubAdapter implements IPlatformAdapter {
    * they reach the lock manager, which orders but does not dedup.
    */
   private readonly deliveryDedup = new DeliveryDeduplicator();
+  private readonly triggerIngress?: GitHubTriggerIngress;
   private readonly retryDelayFn: (attempt: number) => number;
   /**
    * Resolve the originating user's personal GitHub token (App mode only).
@@ -190,6 +203,7 @@ export class GitHubAdapter implements IPlatformAdapter {
     lockManager: ConversationLocker,
     botMention?: string,
     options?: {
+      triggerIngress?: GitHubTriggerIngress;
       retryDelayMs?: (attempt: number) => number;
       getUserToken?: (userId: string) => Promise<string | undefined>;
     }
@@ -200,6 +214,7 @@ export class GitHubAdapter implements IPlatformAdapter {
     this.lockManager = lockManager;
     this.botMention = botMention ?? 'Archon';
     this.getUserToken = options?.getUserToken;
+    this.triggerIngress = options?.triggerIngress;
 
     // Parse GitHub user whitelist (optional - empty = open access)
     this.allowedUsers = parseGitHubAllowedUsers(process.env.GITHUB_ALLOWED_USERS);
@@ -553,13 +568,7 @@ export class GitHubAdapter implements IPlatformAdapter {
       const isValid = timingSafeEqual(digestBuffer, signatureBuffer);
 
       if (!isValid) {
-        getLog().error(
-          {
-            receivedPrefix: signature.substring(0, 15) + '...',
-            computedPrefix: digest.substring(0, 15) + '...',
-          },
-          'github.signature_mismatch'
-        );
+        getLog().error('github.signature_mismatch');
       }
 
       return isValid;
@@ -1047,6 +1056,46 @@ ${userComment}`;
     }
   }
 
+  /** Await durable source intake without holding the HTTP request for a chat workflow. */
+  async receiveWebhook(
+    payload: string,
+    signature: string,
+    deliveryId?: string,
+    eventName?: string
+  ): Promise<'accepted' | 'invalid_signature' | 'malformed'> {
+    if (!this.verifySignature(payload, signature)) {
+      getLog().warn(
+        { attemptId: randomUUID(), reason: 'invalid_signature' },
+        'github.webhook_rejected'
+      );
+      return 'invalid_signature';
+    }
+    const identity = {
+      deliveryId: deliveryId ?? null,
+      eventName,
+      contentDigest: createHash('sha256').update(payload).digest('hex'),
+      receivedAt: new Date().toISOString(),
+    };
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(payload) as unknown;
+    } catch {
+      await this.triggerIngress?.receive({ ...identity, decoded: false });
+      getLog().warn({ reason: 'invalid_json' }, 'github.webhook_rejected');
+      return 'malformed';
+    }
+    await this.triggerIngress?.receive({ ...identity, decoded: true, payload: decoded });
+    if (eventName === 'check_run') {
+      if (isCheckRunCompletedEvent(decoded)) await this.handleCompletedCheckRun(decoded);
+    } else {
+      // Chat is an independent consumer. Its eventual execution is not the receipt ACK.
+      void this.handleWebhook(payload, signature, deliveryId, eventName).catch(() => {
+        getLog().error({ deliveryId, eventName }, 'github.conversational_webhook_failed');
+      });
+    }
+    return 'accepted';
+  }
+
   /**
    * Handle incoming webhook event
    * @param deliveryId - GitHub's X-GitHub-Delivery GUID; dedup fallback when
@@ -1062,7 +1111,7 @@ ${userComment}`;
     // 1. Verify signature
     if (!this.verifySignature(payload, signature)) {
       getLog().error(
-        { signaturePrefix: signature?.substring(0, 15) + '...', payloadSize: payload.length },
+        { attemptId: randomUUID(), reason: 'invalid_signature' },
         'github.invalid_webhook_signature'
       );
       return;

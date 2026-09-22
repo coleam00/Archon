@@ -16,11 +16,13 @@
   },
   "dependencies": {
     "@archon/core": "workspace:*",
+    "@archon/forge": "workspace:*",
     "@archon/git": "workspace:*",
     "@archon/isolation": "workspace:*",
     "@archon/paths": "workspace:*",
     "@archon/providers": "workspace:*",
     "@archon/workflows": "workspace:*",
+    "@hono/zod-openapi": "^1.4.0",
     "@octokit/rest": "^22.0.0",
     "@slack/bolt": "^4.6.0",
     "discord.js": "^14.16.0",
@@ -61,6 +63,9 @@
     ],
     [
       "src/community/forge/gitlab/clone-security.integration.test.ts"
+    ],
+    [
+      "src/forge/github/trigger-ingress.test.ts"
     ]
   ]
 }

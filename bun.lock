@@ -31,11 +31,13 @@
       "version": "0.10.1",
       "dependencies": {
         "@archon/core": "workspace:*",
+        "@archon/forge": "workspace:*",
         "@archon/git": "workspace:*",
         "@archon/isolation": "workspace:*",
         "@archon/paths": "workspace:*",
         "@archon/providers": "workspace:*",
         "@archon/workflows": "workspace:*",
+        "@hono/zod-openapi": "^1.4.0",
         "@octokit/rest": "^22.0.0",
         "@slack/bolt": "^4.6.0",
         "discord.js": "^14.16.0",
@@ -62,6 +64,7 @@
         "@archon/server": "workspace:*",
         "@archon/workflows": "workspace:*",
         "@clack/prompts": "^1.0.0",
+        "@hono/zod-openapi": "^1.4.0",
         "dotenv": "^17.2.3",
       },
       "devDependencies": {

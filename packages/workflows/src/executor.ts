@@ -42,6 +42,7 @@ import {
   WORKFLOW_SOURCE_METADATA_KEY,
   readWorkflowSourceState,
   type ContinuationMode,
+  type WorkflowSourceMetadata,
 } from './schemas';
 import {
   WorkflowSourceIntegrityError,
@@ -965,6 +966,22 @@ export async function finalizeWorkflowSource(
     ...prepared,
     anchor,
     roots: capturedSourceRoots(anchor),
+  };
+}
+
+/** Build the durable source pointer for a capture already moved to its final run path. */
+export function preparedWorkflowSourceRecord(
+  prepared: PreparedWorkflowSource
+): WorkflowSourceMetadata {
+  return {
+    version: 1,
+    root: prepared.anchor.root,
+    origin: prepared.origin,
+    captured_at: prepared.manifest.captured_at,
+    digest: prepared.manifest.digest,
+    source_config: prepared.anchor.config,
+    file_count: prepared.manifest.file_count,
+    byte_count: prepared.manifest.byte_count,
   };
 }
 
@@ -2202,6 +2219,22 @@ export async function executeWorkflow(
     }
   }
 
+  if (!isContinuation) {
+    const pendingRun = workflowRun;
+    const claimed = await deps.store.claimPendingWorkflowRun(workflowRun.id);
+    if (!claimed) {
+      getLog().warn({ workflowRunId: workflowRun.id }, 'workflow.pending_claim_lost');
+      return {
+        success: false,
+        workflowRunId: workflowRun.id,
+        error: 'Workflow run is no longer pending or no longer owns its admitted resource',
+      };
+    }
+    pendingRun.status = claimed.status;
+    pendingRun.started_at = claimed.started_at;
+    workflowRun = pendingRun;
+  }
+
   if (preCreatedRun && !isContinuation) {
     // The stamps a fresh row would have received at creation, for a row someone
     // else created. `isolation` + `isolation_env_id` are what a later resume reads
@@ -2714,16 +2747,10 @@ export async function executeWorkflow(
     }
     const sourceAnchor = { ...preparedSource.anchor, root: finalCaptureRoot };
     workflowSourceRoots = capturedSourceRoots(sourceAnchor);
-    const sourceRecord = {
-      version: 1 as const,
-      root: finalCaptureRoot,
-      origin: preparedSource.origin,
-      captured_at: preparedSource.manifest.captured_at,
-      digest: preparedSource.manifest.digest,
-      source_config: sourceAnchor.config,
-      file_count: preparedSource.manifest.file_count,
-      byte_count: preparedSource.manifest.byte_count,
-    };
+    const sourceRecord = preparedWorkflowSourceRecord({
+      ...preparedSource,
+      anchor: sourceAnchor,
+    });
     // Mirror the record onto the IN-MEMORY run as well as the row. `workflowRun` is what
     // gets handed to child, fan-out, and `workflow:` dispatch, and those read the record
     // to find the parent's authoring origin — a stale in-memory copy sends them to the
@@ -2968,24 +2995,6 @@ export async function executeWorkflow(
             'workflow_event_persist_failed'
           );
         });
-    }
-
-    // Set status to running now that execution has started (skip for resumed runs — already running)
-    if (!dagPriorCompletedNodes) {
-      try {
-        await deps.store.updateWorkflowRun(workflowRun.id, { status: 'running' });
-      } catch (dbError) {
-        getLog().error(
-          { err: dbError as Error, workflowRunId: workflowRun.id },
-          'db_workflow_status_update_failed'
-        );
-        await sendCriticalMessage(
-          platform,
-          conversationId,
-          'Workflow blocked: Unable to update status. Please try again.'
-        );
-        return { success: false, error: 'Database error setting workflow to running' };
-      }
     }
 
     // Context for error logging

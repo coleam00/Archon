@@ -296,6 +296,7 @@ async function main(): Promise<number> {
 
   // Commands that don't require git repo validation
   const noGitCommands = [
+    'trigger',
     'version',
     'help',
     'setup',
@@ -469,6 +470,21 @@ async function main(): Promise<number> {
     }
 
     switch (command) {
+      case 'trigger': {
+        const { triggerCommand } = await loadRoute(() => import('./commands/trigger'), {
+          providers: subcommand === 'fire' || subcommand === 'drain' || subcommand === 'execute',
+          database: true,
+        });
+        await triggerCommand(subcommand, positionals.slice(2), {
+          config: typeof values.config === 'string' ? values.config : undefined,
+          host: typeof values.host === 'string' ? values.host : undefined,
+          owner: typeof values.owner === 'string' ? values.owner : undefined,
+          limit: typeof values.limit === 'string' ? values.limit : undefined,
+          yes: values.yes === true,
+        });
+        break;
+      }
+
       case 'version': {
         const { versionCommand } = await loadRoute(() => import('./commands/version'));
         await versionCommand();

@@ -1,0 +1,137 @@
+import { z } from '@hono/zod-openapi';
+import { jsonValueSchema } from '../output-ref';
+
+const jsonObjectSchema = z.record(z.string(), jsonValueSchema);
+const preparedIsolationSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('in-place') }).strict(),
+  z
+    .object({
+      kind: z.literal('worktree'),
+      branch: z.string().min(1).optional(),
+      fromBranch: z.string().min(1).optional(),
+      baseOverride: z.string().min(1).optional(),
+    })
+    .strict(),
+]);
+
+export const preparedWorkflowLaunchSchema = z
+  .object({
+    version: z.literal(1),
+    run: z
+      .object({
+        id: z.string().uuid(),
+        workflow_name: z.string().min(1),
+        conversation_id: z.string().min(1),
+        codebase_id: z.string().min(1).optional(),
+        user_message: z.string(),
+        metadata: jsonObjectSchema,
+        working_path: z.string().min(1).optional(),
+        parent_conversation_id: z.string().min(1).optional(),
+        user_id: z.string().min(1).optional(),
+      })
+      .strict(),
+    execution: z
+      .object({
+        cwd: z.string().min(1),
+        conversationId: z.string().min(1),
+        conversationDbId: z.string().min(1),
+        actingUserId: z.string().min(1),
+        inputs: z.record(z.string(), jsonValueSchema),
+        isolation: preparedIsolationSchema,
+      })
+      .strict(),
+  })
+  .strict();
+export type PreparedWorkflowLaunch = z.infer<typeof preparedWorkflowLaunchSchema>;
+
+export const resourceStartIntentSchema = z
+  .object({
+    resource: z.string().trim().min(1),
+    hostId: z.string().trim().min(1),
+    overlap: z.enum(['skip', 'queue']),
+    launch: preparedWorkflowLaunchSchema,
+    receipt: z
+      .object({ receiptId: z.string().uuid(), bindingId: z.string().min(1) })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export type ResourceStartIntent = z.infer<typeof resourceStartIntentSchema>;
+
+export const resourceStartDispositionSchema = z.discriminatedUnion('status', [
+  z.object({
+    status: z.literal('admitted'),
+    requestId: z.string().uuid(),
+    runId: z.string().uuid(),
+  }),
+  z.object({
+    status: z.literal('queued'),
+    requestId: z.string().uuid(),
+    blocker: z.discriminatedUnion('kind', [
+      z.object({ kind: z.literal('run'), id: z.string().uuid() }),
+      z.object({ kind: z.literal('request'), id: z.string().uuid() }),
+    ]),
+  }),
+  z.object({
+    status: z.literal('skipped'),
+    requestId: z.string().uuid(),
+    blocker: z.discriminatedUnion('kind', [
+      z.object({ kind: z.literal('run'), id: z.string().uuid() }),
+      z.object({ kind: z.literal('request'), id: z.string().uuid() }),
+    ]),
+  }),
+]);
+export type ResourceStartDisposition = z.infer<typeof resourceStartDispositionSchema>;
+
+export const sourceReceiptInputSchema = z
+  .object({
+    id: z.string().uuid(),
+    sourceInstanceId: z.string().min(1),
+    deliveryId: z.string().min(1).nullable(),
+    contentDigest: z.string().min(1),
+    receivedAt: z.string().datetime(),
+    occurredAt: z.string().datetime().nullable(),
+    sourceActor: z
+      .object({
+        source: z.string().min(1),
+        id: z.string().min(1),
+        display: z.string().min(1).optional(),
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+export type SourceReceiptInput = z.infer<typeof sourceReceiptInputSchema>;
+
+export const resourceStartBindingIntentSchema = z
+  .object({
+    bindingId: z.string().min(1),
+    bindingRevision: z.string().min(1).nullable(),
+    hostId: z.string().min(1),
+    runAsUserId: z.string().min(1),
+    resource: z.string().min(1),
+    overlap: z.enum(['skip', 'queue']),
+    launch: z
+      .object({
+        cwd: z.string().min(1),
+        workflowName: z.string().min(1),
+        inputs: z.record(z.string(), jsonValueSchema),
+        discoveryCwd: z.string().min(1).optional(),
+        configSource: z.string().min(1).optional(),
+        isolation: z.discriminatedUnion('kind', [
+          z.object({ kind: z.literal('default') }).strict(),
+          z.object({ kind: z.literal('in-place') }).strict(),
+          z
+            .object({
+              kind: z.literal('worktree'),
+              branch: z.string().min(1).optional(),
+              fromBranch: z.string().min(1).optional(),
+              baseOverride: z.string().min(1).optional(),
+            })
+            .strict(),
+        ]),
+      })
+      .strict(),
+  })
+  .strict();
+export type ResourceStartBindingIntent = z.infer<typeof resourceStartBindingIntentSchema>;

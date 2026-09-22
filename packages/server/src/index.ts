@@ -65,6 +65,7 @@ import { validationErrorHook } from './routes/openapi-defaults';
 import {
   TelegramAdapter,
   GitHubAdapter,
+  loadGitHubTriggerIngress,
   DiscordAdapter,
   SlackAdapter,
   SlackWorkflowBridge,
@@ -425,6 +426,14 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       getLog().warn('no_platform_adapters_configured');
     }
 
+    const githubTriggerConfigPath = process.env.ARCHON_GITHUB_TRIGGERS;
+    if (githubTriggerConfigPath && !hasGitHub) {
+      throw new Error('ARCHON_GITHUB_TRIGGERS requires configured GitHub webhook authentication.');
+    }
+    const triggerIngress = githubTriggerConfigPath
+      ? await loadGitHubTriggerIngress(githubTriggerConfigPath)
+      : undefined;
+
     if (ghAuthMode.kind === 'app') {
       // Locals avoid `!` non-null assertions: hasGitHubApp already guarantees
       // GITHUB_APP_ID and WEBHOOK_SECRET are set, but the linter can't infer that.
@@ -465,7 +474,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         ? async (userId: string): Promise<string | undefined> =>
             (await getDecryptedAccessToken(userId)) ?? undefined
         : undefined;
-      github = new GitHubAdapter(auth, webhookSecret, lockManager, botMention, { getUserToken });
+      github = new GitHubAdapter(auth, webhookSecret, lockManager, botMention, {
+        getUserToken,
+        triggerIngress,
+      });
       await github.start();
       activePlatforms.push('GitHub (App)');
       getLog().info(
@@ -481,7 +493,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       const botMention =
         process.env.GITHUB_BOT_MENTION || process.env.BOT_DISPLAY_NAME || config.botName;
       const auth: GitHubAuth = { kind: 'pat', token: patToken };
-      github = new GitHubAdapter(auth, webhookSecret, lockManager, botMention);
+      github = new GitHubAdapter(auth, webhookSecret, lockManager, botMention, { triggerIngress });
       await github.start();
       activePlatforms.push('GitHub');
       getLog().info('github.adapter_mode_pat');

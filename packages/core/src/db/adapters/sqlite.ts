@@ -41,11 +41,12 @@ export class SqliteAdapter implements IDatabase {
 
     this.db = new Database(dbPath);
 
+    // Set this before WAL initialization: opening two CLI processes can make
+    // `journal_mode = WAL` itself contend on the database header.
+    this.db.run('PRAGMA busy_timeout = 5000');
+
     // Enable WAL mode for better concurrent performance
     this.db.run('PRAGMA journal_mode = WAL');
-
-    // Retry busy locks up to 5s to avoid SQLITE_BUSY during parallel workflows
-    this.db.run('PRAGMA busy_timeout = 5000');
 
     // Enable foreign keys
     this.db.run('PRAGMA foreign_keys = ON');
@@ -772,6 +773,64 @@ export class SqliteAdapter implements IDatabase {
         working_path TEXT,
         output_root TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS remote_agent_start_receipts (
+        id TEXT PRIMARY KEY,
+        source_instance_id TEXT NOT NULL,
+        delivery_id TEXT,
+        content_digest TEXT NOT NULL,
+        received_at TEXT NOT NULL,
+        occurred_at TEXT,
+        source_actor TEXT,
+        outcome TEXT NOT NULL CHECK (outcome IN ('matched', 'unmatched', 'unsupported', 'malformed')),
+        reason TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(source_instance_id, delivery_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS remote_agent_start_receipt_bindings (
+        receipt_id TEXT NOT NULL REFERENCES remote_agent_start_receipts(id) ON DELETE CASCADE,
+        binding_id TEXT NOT NULL,
+        binding_revision TEXT,
+        host_id TEXT,
+        intent TEXT,
+        preparation_status TEXT NOT NULL CHECK (preparation_status IN ('pending', 'preparing', 'failed', 'rejected', 'unmatched', 'complete')),
+        preparation_owner TEXT,
+        preparation_error TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (receipt_id, binding_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS remote_agent_start_resources (
+        resource_key TEXT PRIMARY KEY,
+        active_run_id TEXT REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS remote_agent_resource_start_requests (
+        queue_position INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL UNIQUE,
+        resource_key TEXT NOT NULL REFERENCES remote_agent_start_resources(resource_key),
+        host_id TEXT NOT NULL,
+        overlap_policy TEXT NOT NULL CHECK (overlap_policy IN ('skip', 'queue')),
+        status TEXT NOT NULL CHECK (status IN ('queued', 'admitted', 'skipped', 'withdrawn')),
+        blocker_run_id TEXT,
+        blocker_kind TEXT CHECK (blocker_kind IN ('run', 'request')),
+        launch TEXT NOT NULL,
+        receipt_id TEXT,
+        binding_id TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        admitted_at TEXT,
+        FOREIGN KEY (receipt_id, binding_id) REFERENCES remote_agent_start_receipt_bindings(receipt_id, binding_id) ON DELETE SET NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_resource_start_queue
+        ON remote_agent_resource_start_requests(resource_key, status, queue_position);
+      CREATE INDEX IF NOT EXISTS idx_resource_start_host_queue
+        ON remote_agent_resource_start_requests(host_id, status, resource_key, queue_position);
+      CREATE INDEX IF NOT EXISTS idx_start_binding_preparation
+        ON remote_agent_start_receipt_bindings(host_id, preparation_status, created_at);
 
       -- Workflow events table
       CREATE TABLE IF NOT EXISTS remote_agent_workflow_events (
