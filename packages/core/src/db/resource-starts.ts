@@ -4,6 +4,7 @@ import type {
   ResourceStartDisposition,
   ResourceStartIntent,
   SourceReceiptInput,
+  SourceReceiptAcceptance,
 } from '@archon/workflows/schemas/resource-start';
 import {
   sourceReceiptInputSchema,
@@ -192,18 +193,9 @@ export async function drainResourceStarts(options: {
 
 export class SourceReceiptDigestConflictError extends Error {}
 
-export async function acceptStartReceipt(input: {
-  receipt: SourceReceiptInput;
-  outcome: 'matched' | 'unmatched' | 'unsupported' | 'malformed';
-  reason?: string;
-  bindings: readonly ResourceStartBindingIntent[];
-  evaluatedBindings?: readonly {
-    bindingId: string;
-    bindingRevision: string | null;
-    status: 'unmatched' | 'rejected';
-    reason: string;
-  }[];
-}): Promise<{ receiptId: string; replay: boolean }> {
+export async function acceptStartReceipt(
+  input: SourceReceiptAcceptance
+): Promise<{ receiptId: string; replay: boolean }> {
   return getDatabase().withTransaction(async query => {
     const inserted = await query(
       `INSERT INTO remote_agent_start_receipts

@@ -7,12 +7,14 @@
   "exports": {
     ".": "./src/index.ts",
     "./*": "./src/*",
+    "./forge/github-source-plugin": "./src/forge/github/source-plugin.ts",
     "./community/forge/gitea": "./src/community/forge/gitea/index.ts",
     "./community/forge/gitlab": "./src/community/forge/gitlab/index.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",
-    "type-check": "bun x tsc --noEmit"
+    "type-check": "bun x tsc --noEmit",
+    "build:github-source-plugin": "bun build ./src/forge/github/source-plugin.ts --target=bun --outfile=dist/github-source-plugin.mjs"
   },
   "dependencies": {
     "@archon/core": "workspace:*",
@@ -65,7 +67,7 @@
       "src/community/forge/gitlab/clone-security.integration.test.ts"
     ],
     [
-      "src/forge/github/trigger-ingress.test.ts"
+      "src/forge/github/source-plugin.test.ts"
     ],
     [
       "src/forge/github/normalize-event.test.ts"

@@ -3,7 +3,8 @@
  * Handles issue and PR comments with @mention detection
  */
 import { Octokit } from '@octokit/rest';
-import { createHash, createHmac, randomUUID, timingSafeEqual } from 'crypto';
+import { randomUUID } from 'crypto';
+import { verifyGitHubWebhookSignature } from './webhook-signature';
 import { readdir, access } from 'fs/promises';
 import { join } from 'path';
 import type { IPlatformAdapter, MessageMetadata, GitHubAuth } from '@archon/core';
@@ -61,18 +62,6 @@ const MAX_LENGTH = 65000; // GitHub comment limit (~65,536, leave buffer for saf
 const BOT_RESPONSE_MARKER = '<!-- archon-bot-response -->';
 
 type ConversationLocker = Pick<ConversationLockManager, 'acquireLock'>;
-
-/** Verified transport input; the source integration still validates its event schema. */
-export type VerifiedGitHubDelivery = {
-  deliveryId: string | null;
-  eventName: string | undefined;
-  contentDigest: string;
-  receivedAt: string;
-} & ({ decoded: true; payload: unknown } | { decoded: false });
-
-export interface GitHubTriggerIngress {
-  receive(delivery: VerifiedGitHubDelivery): Promise<void>;
-}
 
 interface PullRequestIdentity {
   host: string;
@@ -179,7 +168,6 @@ export class GitHubAdapter implements IPlatformAdapter {
    * they reach the lock manager, which orders but does not dedup.
    */
   private readonly deliveryDedup = new DeliveryDeduplicator();
-  private readonly triggerIngress?: GitHubTriggerIngress;
   private readonly retryDelayFn: (attempt: number) => number;
   /**
    * Resolve the originating user's personal GitHub token (App mode only).
@@ -203,7 +191,6 @@ export class GitHubAdapter implements IPlatformAdapter {
     lockManager: ConversationLocker,
     botMention?: string,
     options?: {
-      triggerIngress?: GitHubTriggerIngress;
       retryDelayMs?: (attempt: number) => number;
       getUserToken?: (userId: string) => Promise<string | undefined>;
     }
@@ -214,7 +201,6 @@ export class GitHubAdapter implements IPlatformAdapter {
     this.lockManager = lockManager;
     this.botMention = botMention ?? 'Archon';
     this.getUserToken = options?.getUserToken;
-    this.triggerIngress = options?.triggerIngress;
 
     // Parse GitHub user whitelist (optional - empty = open access)
     this.allowedUsers = parseGitHubAllowedUsers(process.env.GITHUB_ALLOWED_USERS);
@@ -550,33 +536,9 @@ export class GitHubAdapter implements IPlatformAdapter {
    * Verify webhook signature using HMAC SHA-256
    */
   private verifySignature(payload: string, signature: string): boolean {
-    try {
-      const hmac = createHmac('sha256', this.webhookSecret);
-      const digest = 'sha256=' + hmac.update(payload).digest('hex');
-
-      const digestBuffer = Buffer.from(digest);
-      const signatureBuffer = Buffer.from(signature);
-
-      if (digestBuffer.length !== signatureBuffer.length) {
-        getLog().error(
-          { receivedLength: signatureBuffer.length, computedLength: digestBuffer.length },
-          'github.signature_length_mismatch'
-        );
-        return false;
-      }
-
-      const isValid = timingSafeEqual(digestBuffer, signatureBuffer);
-
-      if (!isValid) {
-        getLog().error('github.signature_mismatch');
-      }
-
-      return isValid;
-    } catch (error) {
-      const err = error as Error;
-      getLog().error({ err }, 'github.signature_verification_error');
-      return false;
-    }
+    const valid = verifyGitHubWebhookSignature(payload, signature, this.webhookSecret);
+    if (!valid) getLog().warn('github.signature_mismatch');
+    return valid;
   }
 
   /**
@@ -1056,7 +1018,7 @@ ${userComment}`;
     }
   }
 
-  /** Await durable source intake without holding the HTTP request for a chat workflow. */
+  /** Receive conversational events and durable-wait signals independently of source plugins. */
   async receiveWebhook(
     payload: string,
     signature: string,
@@ -1070,25 +1032,17 @@ ${userComment}`;
       );
       return 'invalid_signature';
     }
-    const identity = {
-      deliveryId: deliveryId ?? null,
-      eventName,
-      contentDigest: createHash('sha256').update(payload).digest('hex'),
-      receivedAt: new Date().toISOString(),
-    };
     let decoded: unknown;
     try {
       decoded = JSON.parse(payload) as unknown;
     } catch {
-      await this.triggerIngress?.receive({ ...identity, decoded: false });
       getLog().warn({ reason: 'invalid_json' }, 'github.webhook_rejected');
       return 'malformed';
     }
-    await this.triggerIngress?.receive({ ...identity, decoded: true, payload: decoded });
     if (eventName === 'check_run') {
       if (isCheckRunCompletedEvent(decoded)) await this.handleCompletedCheckRun(decoded);
     } else {
-      // Chat is an independent consumer. Its eventual execution is not the receipt ACK.
+      // Chat execution is asynchronous; source-plugin receipt acceptance has its own endpoint.
       void this.handleWebhook(payload, signature, deliveryId, eventName).catch(() => {
         getLog().error({ deliveryId, eventName }, 'github.conversational_webhook_failed');
       });

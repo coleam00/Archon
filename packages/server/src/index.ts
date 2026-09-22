@@ -65,7 +65,6 @@ import { validationErrorHook } from './routes/openapi-defaults';
 import {
   TelegramAdapter,
   GitHubAdapter,
-  loadGitHubTriggerIngress,
   DiscordAdapter,
   SlackAdapter,
   SlackWorkflowBridge,
@@ -79,7 +78,8 @@ import { WorkflowEventBridge } from './adapters/web/workflow-bridge';
 import { DashboardEventPoller } from './adapters/web/dashboard-event-poller';
 import { PgNotifyListener } from './adapters/web/pg-notify-listener';
 import { registerApiRoutes } from './routes/api';
-import { registerGithubWebhookRoute } from './routes/webhooks';
+import { registerGithubWebhookRoute, registerWebhookSourceRoutes } from './routes/webhooks';
+import { loadWebhookSourcePlugins } from './services/webhook-source-plugins';
 import {
   startWorkflowContinuationScheduler,
   stopWorkflowContinuationScheduler,
@@ -426,14 +426,6 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       getLog().warn('no_platform_adapters_configured');
     }
 
-    const githubTriggerConfigPath = process.env.ARCHON_GITHUB_TRIGGERS;
-    if (githubTriggerConfigPath && !hasGitHub) {
-      throw new Error('ARCHON_GITHUB_TRIGGERS requires configured GitHub webhook authentication.');
-    }
-    const triggerIngress = githubTriggerConfigPath
-      ? await loadGitHubTriggerIngress(githubTriggerConfigPath)
-      : undefined;
-
     if (ghAuthMode.kind === 'app') {
       // Locals avoid `!` non-null assertions: hasGitHubApp already guarantees
       // GITHUB_APP_ID and WEBHOOK_SECRET are set, but the linter can't infer that.
@@ -476,7 +468,6 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         : undefined;
       github = new GitHubAdapter(auth, webhookSecret, lockManager, botMention, {
         getUserToken,
-        triggerIngress,
       });
       await github.start();
       activePlatforms.push('GitHub (App)');
@@ -493,7 +484,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       const botMention =
         process.env.GITHUB_BOT_MENTION || process.env.BOT_DISPLAY_NAME || config.botName;
       const auth: GitHubAuth = { kind: 'pat', token: patToken };
-      github = new GitHubAdapter(auth, webhookSecret, lockManager, botMention, { triggerIngress });
+      github = new GitHubAdapter(auth, webhookSecret, lockManager, botMention);
       await github.start();
       activePlatforms.push('GitHub');
       getLog().info('github.adapter_mode_pat');
@@ -700,6 +691,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   const app = new OpenAPIHono({ defaultHook: validationErrorHook });
   const port = opts.port ?? (await getPort());
 
+  const webhookSourcesConfigPath = process.env.ARCHON_WEBHOOK_SOURCES;
+  const webhookSources = webhookSourcesConfigPath
+    ? await loadWebhookSourcePlugins(webhookSourcesConfigPath)
+    : undefined;
+
   // Global error handler for unhandled exceptions
   app.onError((err, c) => {
     getLog().error({ err, path: c.req.path, method: c.req.method }, 'unhandled_request_error');
@@ -750,6 +746,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   if (github) {
     registerGithubWebhookRoute(app, github);
     getLog().info('github_webhook_registered');
+  }
+  if (webhookSources) {
+    registerWebhookSourceRoutes(app, webhookSources);
+    getLog().info('webhook_sources_registered');
   }
 
   // Internal endpoint: git credential helper.

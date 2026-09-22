@@ -121,62 +121,77 @@ If an admitted run has ambiguous ownership after a crash, inspect the request an
 
 ## Configure GitHub event starts
 
-GitHub event starts require the existing GitHub adapter and webhook signature verification. Set `WEBHOOK_SECRET`, then set `ARCHON_GITHUB_TRIGGERS` to the absolute path of a trigger configuration file before starting the Archon server.
+GitHub event starts use an installed source plugin. The maintained plugin is temporarily housed in this repository; it has its own module entrypoint and does not require the GitHub chat adapter or an outbound GitHub token.
+
+From a source checkout, build the module with `bun run --cwd packages/adapters build:github-source-plugin`, then copy `packages/adapters/dist/github-source-plugin.mjs` to an operator-owned plugin directory. The compiled module can load outside the Archon source tree. Installation and module paths are explicit in this release; marketplace installation is separate work.
+
+Set `WEBHOOK_SECRET` for the server process and set `ARCHON_WEBHOOK_SOURCES` to the absolute path of the host configuration below. Configure GitHub's webhook URL as `https://your-archon-host/webhooks/sources/github-production`. The existing `/webhooks/github` endpoint handles conversation and wait-signaling consumers separately.
 
 The following configuration starts `review-pull-request` when a pull request is opened against `main` in `acme/widgets`:
 
 ```json
 {
   "version": 1,
-  "sourceInstanceId": "github-production",
-  "host": "github.com",
-  "bindings": [
+  "sources": [
     {
-      "bindingId": "widgets-pr-review",
-      "hostId": "build-host-1",
-      "runAsUserId": "2a568f73-e217-40ca-b17d-a784d19fd43a",
-      "resource": "github:acme/widgets:review",
-      "overlap": "queue",
-      "launch": {
-        "cwd": "/srv/archon/widgets",
-        "workflowName": "review-pull-request",
-        "inputs": {},
-        "isolation": {
-          "kind": "default"
-        }
-      },
-      "selector": {
-        "kind": "pr.lifecycle",
-        "actions": ["opened"],
-        "repository": {
-          "host": "github.com",
-          "path": "acme/widgets"
-        },
-        "predicates": [
+      "sourceInstanceId": "github-production",
+      "module": "/opt/archon/plugins/github/source-plugin.mjs",
+      "config": {
+        "version": 1,
+        "host": "github.com",
+        "bindings": [
           {
-            "field": "pr.base.branch",
-            "equals": "main"
+            "bindingId": "widgets-pr-review",
+            "hostId": "build-host-1",
+            "runAsUserId": "2a568f73-e217-40ca-b17d-a784d19fd43a",
+            "resource": "github:acme/widgets:review",
+            "overlap": "queue",
+            "launch": {
+              "cwd": "/srv/archon/widgets",
+              "workflowName": "review-pull-request",
+              "inputs": {},
+              "isolation": {
+                "kind": "default"
+              }
+            },
+            "selector": {
+              "kind": "pr.lifecycle",
+              "actions": [
+                "opened"
+              ],
+              "repository": {
+                "host": "github.com",
+                "path": "acme/widgets"
+              },
+              "predicates": [
+                {
+                  "field": "pr.base.branch",
+                  "equals": "main"
+                }
+              ]
+            },
+            "inputMapping": {
+              "pull_request_number": {
+                "source": "field",
+                "field": "subject.number"
+              },
+              "repository": {
+                "source": "literal",
+                "value": "acme/widgets"
+              }
+            }
           }
-        ]
-      },
-      "inputMapping": {
-        "pull_request_number": {
-          "source": "field",
-          "field": "subject.number"
-        },
-        "repository": {
-          "source": "literal",
-          "value": "acme/widgets"
-        }
+        ],
+        "webhookSecretEnv": "WEBHOOK_SECRET"
       }
     }
   ]
 }
 ```
 
-The first-party GitHub source supports issue and pull-request lifecycle events, issue or pull-request label changes, check-run changes, and commit-status changes. Selectors match an exact event kind and one of the configured actions. They can also restrict the repository, issue or pull-request number, and the predicates supported for that event kind. Input mappings copy a supported event field or supply a typed JSON literal. A required field that is unavailable rejects that binding instead of inventing a value.
+The maintained GitHub source plugin supports issue and pull-request lifecycle events, issue or pull-request label changes, check-run changes, and commit-status changes. Selectors match an exact event kind and one of the configured actions. They can also restrict the repository, issue or pull-request number, and the predicates supported for that event kind. Input mappings copy a supported event field or supply a typed JSON literal. A required field that is unavailable rejects that binding instead of inventing a value.
 
-The webhook signature authenticates the payload using the configured shared secret. It does not select the Archon user who runs the workflow. Every binding must name an authorized `runAsUserId`. The optional GitHub event actor remains provenance and never becomes an Archon credential selector.
+The plugin authenticates the raw payload using the configured shared secret. The host validates its resolved receipt, verifies that the configured run-as users exist, and commits the receipt before returning success. An invalid signature creates no trusted receipt. A signed source event does not select the Archon user who runs the workflow. Every binding must name an authorized `runAsUserId`. The optional GitHub event actor remains provenance and never becomes an Archon credential selector.
 
 On the first verified delivery, Archon records the source instance, delivery ID, verified-content digest, selected binding ID and revision, resolved inputs, and launch intent. Replaying the same `(sourceInstanceId, deliveryId, bindingId)` returns the original disposition. Editing a binding does not turn an old delivery into a new start. Reusing a delivery ID with different verified content is rejected. When GitHub supplies no delivery ID, Archon cannot provide source-level replay deduplication.
 

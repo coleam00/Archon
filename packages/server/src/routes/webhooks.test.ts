@@ -22,7 +22,7 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-const { registerGithubWebhookRoute } = await import('./webhooks');
+const { registerGithubWebhookRoute, registerWebhookSourceRoutes } = await import('./webhooks');
 type GithubWebhookTarget = import('./webhooks').GithubWebhookTarget;
 
 const mockReceiveWebhook = mock(
@@ -186,5 +186,56 @@ describe('POST /webhooks/github', () => {
     mockReceiveWebhook.mockImplementation(async () => result);
     const response = await postWebhook(createWebhookApp(), { 'x-hub-signature-256': 'signed' });
     expect(response.status).toBe(status);
+  });
+});
+
+describe('POST /webhooks/sources/:sourceInstanceId', () => {
+  test.each([
+    ['accepted', 200],
+    ['malformed', 400],
+    ['unauthenticated', 401],
+  ] as const)('maps the durable host result %s to HTTP %s', async (result, status) => {
+    const app = new OpenAPIHono();
+    const receive = mock(async (_sourceInstanceId: string, _request: unknown) => result);
+    registerWebhookSourceRoutes(app, { hasSource: id => id === 'configured', receive });
+    const response = await app.request('/webhooks/sources/configured', {
+      method: 'POST',
+      headers: { 'x-source-header': 'value' },
+      body: 'raw-body',
+    });
+    expect(response.status).toBe(status);
+    expect(receive).toHaveBeenCalledTimes(1);
+    expect(receive.mock.calls[0]?.[0]).toBe('configured');
+    expect(receive.mock.calls[0]?.[1]).toMatchObject({
+      body: 'raw-body',
+      headers: { 'x-source-header': 'value' },
+    });
+  });
+
+  test('does not expose an unconfigured source or read its receiver', async () => {
+    const app = new OpenAPIHono();
+    const receive = mock(async () => 'accepted' as const);
+    registerWebhookSourceRoutes(app, { hasSource: () => false, receive });
+    const response = await app.request('/webhooks/sources/missing', {
+      method: 'POST',
+      body: 'untrusted',
+    });
+    expect(response.status).toBe(404);
+    expect(receive).not.toHaveBeenCalled();
+  });
+
+  test('returns 500 when normalization or persistence fails', async () => {
+    const app = new OpenAPIHono();
+    registerWebhookSourceRoutes(app, {
+      hasSource: () => true,
+      receive: async () => {
+        throw new Error('secret payload detail');
+      },
+    });
+    const response = await app.request('/webhooks/sources/configured', {
+      method: 'POST',
+      body: 'raw',
+    });
+    expect(response.status).toBe(500);
   });
 });

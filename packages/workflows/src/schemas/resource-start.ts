@@ -135,3 +135,48 @@ export const resourceStartBindingIntentSchema = z
   })
   .strict();
 export type ResourceStartBindingIntent = z.infer<typeof resourceStartBindingIntentSchema>;
+
+export const sourceReceiptAcceptanceSchema = z
+  .object({
+    receipt: sourceReceiptInputSchema,
+    outcome: z.enum(['matched', 'unmatched', 'unsupported', 'malformed']),
+    reason: z.string().optional(),
+    bindings: z.array(resourceStartBindingIntentSchema),
+    evaluatedBindings: z
+      .array(
+        z
+          .object({
+            bindingId: z.string().min(1),
+            bindingRevision: z.string().min(1).nullable(),
+            status: z.enum(['unmatched', 'rejected']),
+            reason: z.string(),
+          })
+          .strict()
+      )
+      .optional(),
+  })
+  .strict()
+  .superRefine((acceptance, context) => {
+    const seen = new Set<string>();
+    for (const [index, binding] of acceptance.bindings.entries()) {
+      if (seen.has(binding.bindingId)) {
+        context.addIssue({
+          code: 'custom',
+          path: ['bindings', index, 'bindingId'],
+          message: 'Duplicate binding ID',
+        });
+      }
+      seen.add(binding.bindingId);
+    }
+    for (const [index, binding] of (acceptance.evaluatedBindings ?? []).entries()) {
+      if (seen.has(binding.bindingId)) {
+        context.addIssue({
+          code: 'custom',
+          path: ['evaluatedBindings', index, 'bindingId'],
+          message: 'Duplicate binding ID',
+        });
+      }
+      seen.add(binding.bindingId);
+    }
+  });
+export type SourceReceiptAcceptance = z.infer<typeof sourceReceiptAcceptanceSchema>;

@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { z } from '@hono/zod-openapi';
 import {
@@ -10,25 +9,28 @@ import {
   matchForgeEvent,
 } from '@archon/forge';
 import { normalizeGitHubWebhook } from './normalize-event';
-import { acceptStartReceipt } from '@archon/core/db/resource-starts';
-import { getUserById } from '@archon/core/db/users';
+export { githubSourceCapabilities as capabilities } from './normalize-event';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
 import {
   resourceStartBindingIntentSchema,
   type ResourceStartBindingIntent,
   type SourceReceiptInput,
 } from '@archon/workflows/schemas/resource-start';
-import type { GitHubTriggerIngress, VerifiedGitHubDelivery } from './adapter';
+import type {
+  WebhookSourcePluginFactory,
+  WebhookSourceResult,
+} from '@archon/workflows/webhook-source-plugin';
+import { verifyGitHubWebhookSignature } from './webhook-signature';
 
 const bindingSchema = resourceStartBindingIntentSchema.omit({ bindingRevision: true }).extend({
   selector: forgeEventSelectorSchema,
   inputMapping: z.record(z.string(), createForgeInputBindingSchema(jsonValueSchema)),
 });
 
-export const githubTriggerConfigSchema = z
+export const githubWebhookSourceConfigSchema = z
   .object({
     version: z.literal(1),
-    sourceInstanceId: z.string().min(1),
+    webhookSecretEnv: z.string().min(1),
     host: z.literal('github.com'),
     bindings: z.array(bindingSchema),
   })
@@ -63,55 +65,52 @@ export const githubTriggerConfigSchema = z
         });
     }
   });
-export type GitHubTriggerConfig = z.infer<typeof githubTriggerConfigSchema>;
-
-type Intake = typeof acceptStartReceipt;
-interface Evaluation {
-  bindingId: string;
-  bindingRevision: string;
-  status: 'unmatched' | 'rejected';
-  reason: string;
-}
-
-/** Local deployment configuration is the authority to select the execution user. */
-export async function loadGitHubTriggerIngress(path: string): Promise<GitHubTriggerIngress> {
-  const parsed = githubTriggerConfigSchema.safeParse(
-    JSON.parse(await readFile(path, 'utf8')) as unknown
-  );
-  if (!parsed.success) {
-    throw new Error(
-      `Invalid GitHub trigger configuration fields: ${parsed.error.issues.map(issue => issue.path.join('.')).join(', ')}`
-    );
-  }
-  for (const binding of parsed.data.bindings) {
-    if (!(await getUserById(binding.runAsUserId))) {
-      throw new Error(`Trigger binding '${binding.bindingId}' names an unknown run-as user.`);
-    }
-  }
-  return createGitHubTriggerIngress(parsed.data, acceptStartReceipt);
-}
-
-export function createGitHubTriggerIngress(
-  config: GitHubTriggerConfig,
-  intake: Intake
-): GitHubTriggerIngress {
+/** Configured source plugins run as trusted operator-installed code. */
+const createGitHubWebhookSource: WebhookSourcePluginFactory = ({
+  sourceInstanceId,
+  config: rawConfig,
+}) => {
+  const parsed = githubWebhookSourceConfigSchema.safeParse(rawConfig);
+  if (!parsed.success) throw new Error('Invalid GitHub source plugin configuration');
+  const config = parsed.data;
+  const secret = process.env[config.webhookSecretEnv];
+  if (!secret) throw new Error('GitHub source plugin webhook secret is unavailable');
   return {
-    async receive(delivery: VerifiedGitHubDelivery): Promise<void> {
+    async receive(request): Promise<WebhookSourceResult> {
+      if (
+        !verifyGitHubWebhookSignature(
+          request.body,
+          request.headers['x-hub-signature-256'] ?? '',
+          secret
+        )
+      )
+        return { status: 'rejected', reason: 'unauthenticated' };
+      const delivery = {
+        deliveryId: request.headers['x-github-delivery'] ?? null,
+        eventName: request.headers['x-github-event'],
+        contentDigest: createHash('sha256').update(request.body).digest('hex'),
+        receivedAt: request.receivedAt,
+      };
       const receipt: SourceReceiptInput = {
         id: randomUUID(),
-        sourceInstanceId: config.sourceInstanceId,
+        sourceInstanceId: sourceInstanceId,
         deliveryId: delivery.deliveryId,
         contentDigest: delivery.contentDigest,
         receivedAt: delivery.receivedAt,
         occurredAt: null,
         sourceActor: null,
       };
-      if (!delivery.decoded) {
-        await intake({ receipt, outcome: 'malformed', reason: 'invalid_json', bindings: [] });
-        return;
+      let payload: unknown;
+      try {
+        payload = JSON.parse(request.body) as unknown;
+      } catch {
+        return {
+          status: 'received',
+          acceptance: { receipt, outcome: 'malformed', reason: 'invalid_json', bindings: [] },
+        };
       }
-      const normalized = normalizeGitHubWebhook(delivery.payload, {
-        sourceInstanceId: config.sourceInstanceId,
+      const normalized = normalizeGitHubWebhook(payload, {
+        sourceInstanceId: sourceInstanceId,
         deliveryId: delivery.deliveryId,
         contentDigest: delivery.contentDigest,
         receivedAt: delivery.receivedAt,
@@ -119,23 +118,27 @@ export function createGitHubTriggerIngress(
         eventName: delivery.eventName ?? '',
       });
       if (normalized.status !== 'normalized') {
-        await intake({
-          receipt,
-          outcome: normalized.status,
-          reason: normalized.reason,
-          bindings: [],
-        });
-        return;
+        return {
+          status: 'received',
+          acceptance: {
+            receipt,
+            outcome: normalized.status,
+            reason: normalized.reason,
+            bindings: [],
+          },
+        };
       }
       receipt.occurredAt = normalized.envelope.occurredAt;
       if (normalized.envelope.sourceActor) {
         receipt.sourceActor = {
-          source: config.sourceInstanceId,
+          source: sourceInstanceId,
           id: normalized.envelope.sourceActor.id,
         };
       }
       const bindings: ResourceStartBindingIntent[] = [];
-      const evaluatedBindings: Evaluation[] = [];
+      const evaluatedBindings: NonNullable<
+        Extract<WebhookSourceResult, { status: 'received' }>['acceptance']['evaluatedBindings']
+      > = [];
       for (const binding of config.bindings) {
         const bindingRevision = createHash('sha256').update(JSON.stringify(binding)).digest('hex');
         if (!matchForgeEvent(binding.selector, normalized.envelope.event)) {
@@ -169,12 +172,17 @@ export function createGitHubTriggerIngress(
           })
         );
       }
-      await intake({
-        receipt,
-        outcome: bindings.length ? 'matched' : 'unmatched',
-        bindings,
-        evaluatedBindings,
-      });
+      return {
+        status: 'received',
+        acceptance: {
+          receipt,
+          outcome: bindings.length ? 'matched' : 'unmatched',
+          bindings,
+          evaluatedBindings,
+        },
+      };
     },
   };
-}
+};
+
+export default createGitHubWebhookSource;

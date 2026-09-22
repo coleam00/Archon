@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import type { JsonValue } from '@archon/workflows/output-ref';
 import { getRunArtifactsDirForRoot } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { requestDetachedRunStop } from '../utils/detached-run-control';
@@ -61,6 +62,10 @@ async function runCli(
       DATABASE_URL: '',
       ARCHON_HOME: archonHome,
       TOKEN_ENCRYPTION_KEY: 'ab'.repeat(32),
+      ARCHON_SOURCE_PLUGIN_TEST_SECRET: 'test-secret',
+      GITHUB_TOKEN: '',
+      GH_TOKEN: '',
+      GITHUB_APP_ID: '',
     },
     stdout: 'pipe',
     stderr: 'pipe',
@@ -256,37 +261,64 @@ describe('trigger CLI durable execution', () => {
     ).toEqual(['admitted', 'admitted']);
 
     const forgeConfigPath = join(root, 'forge.json');
-    const forgeBinding = { ...config.binding, bindingId: 'pr-opened' };
+    const { bindingRevision, ...bindingWithoutRevision } = config.binding;
+    void bindingRevision;
+    const forgeBinding = { ...bindingWithoutRevision, bindingId: 'pr-opened' };
     const forgeConfig = {
       version: 1,
-      sourceInstanceId: 'integration-github',
+      webhookSecretEnv: 'ARCHON_SOURCE_PLUGIN_TEST_SECRET',
       host: 'github.com',
       bindings: [
         {
           ...forgeBinding,
-          bindingRevision: undefined,
           selector: { kind: 'pr.lifecycle', actions: ['opened'] },
           inputMapping: { count: { source: 'field', field: 'subject.number' } },
         },
       ],
     };
-    writeFileSync(forgeConfigPath, JSON.stringify(forgeConfig));
     const packagesRoot = resolve(import.meta.dir, '../../..');
+    const pluginInstall = join(root, 'installed-github-plugin');
+    const built = await Bun.build({
+      entrypoints: [join(packagesRoot, 'adapters/src/forge/github/source-plugin.ts')],
+      outdir: pluginInstall,
+      target: 'bun',
+      naming: 'source-plugin.mjs',
+    });
+    if (!built.success)
+      throw new Error(`Plugin build failed: ${built.logs.map(String).join('\n')}`);
+    const modulePath = join(pluginInstall, 'source-plugin.mjs');
+    const hostConfig = (sourceConfig: JsonValue): JsonValue => ({
+      version: 1,
+      sources: [
+        {
+          sourceInstanceId: 'integration-github',
+          module: modulePath,
+          config: sourceConfig,
+        },
+      ],
+    });
+    writeFileSync(forgeConfigPath, JSON.stringify(hostConfig(forgeConfig)));
     const ingressScript = join(root, 'receive.ts');
     writeFileSync(
       ingressScript,
       `
       import { createHmac } from 'node:crypto';
-      import { GitHubAdapter } from ${JSON.stringify(join(packagesRoot, 'adapters/src/forge/github/adapter.ts'))};
-      import { loadGitHubTriggerIngress } from ${JSON.stringify(join(packagesRoot, 'adapters/src/forge/github/trigger-ingress.ts'))};
+      import { OpenAPIHono } from ${JSON.stringify(import.meta.resolve('@hono/zod-openapi'))};
+      import { loadWebhookSourcePlugins } from ${JSON.stringify(join(packagesRoot, 'server/src/services/webhook-source-plugins.ts'))};
+      import { registerWebhookSourceRoutes } from ${JSON.stringify(join(packagesRoot, 'server/src/routes/webhooks.ts'))};
       import { closeDatabase } from ${JSON.stringify(join(packagesRoot, 'core/src/db/connection.ts'))};
-      const adapter = new GitHubAdapter({kind:'pat',token:'test-token'}, 'test-secret',
-        {acquireLock:async()=>({status:'started'})}, undefined,
-        {triggerIngress:await loadGitHubTriggerIngress(${JSON.stringify(forgeConfigPath)})});
+      const host = await loadWebhookSourcePlugins(${JSON.stringify(forgeConfigPath)});
+      const app = new OpenAPIHono();
+      registerWebhookSourceRoutes(app, host);
       const payload = JSON.stringify({action:'opened',repository:{full_name:'owner/repo'},
         sender:{id:42},pull_request:{number:9,state:'open',head:{sha:'opaque-revision'}}});
       const signature = 'sha256='+createHmac('sha256','test-secret').update(payload).digest('hex');
-      if(await adapter.receiveWebhook(payload,signature,'delivery-one','pull_request')!=='accepted') throw Error('Not accepted');
+      const response = await app.request('/webhooks/sources/integration-github', {
+        method: 'POST', body: payload, headers: {
+          'x-hub-signature-256': signature, 'x-github-delivery': 'delivery-one', 'x-github-event': 'pull_request',
+        },
+      });
+      if(response.status !== 200) throw Error('Not accepted: '+response.status);
       await closeDatabase();
     `
     );
@@ -294,15 +326,17 @@ describe('trigger CLI durable execution', () => {
     // Replaying after a policy edit retains the first resolved binding snapshot.
     writeFileSync(
       forgeConfigPath,
-      JSON.stringify({
-        ...forgeConfig,
-        bindings: [
-          {
-            ...forgeConfig.bindings[0],
-            inputMapping: { count: { source: 'literal', value: 999 } },
-          },
-        ],
-      })
+      JSON.stringify(
+        hostConfig({
+          ...forgeConfig,
+          bindings: [
+            {
+              ...forgeConfig.bindings[0],
+              inputMapping: { count: { source: 'literal', value: 999 } },
+            },
+          ],
+        })
+      )
     );
     await runCli(ingressScript, projectRoot, archonHome, []);
     const listing = await runCli(cliPath, projectRoot, archonHome, ['trigger', 'list', '--json']);

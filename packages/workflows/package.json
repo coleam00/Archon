@@ -30,6 +30,8 @@
     "./engine-port": "./src/engine-port.ts",
     "./in-process-engine": "./src/in-process-engine.ts",
     "./engine-contract-tests": "./src/engine-contract-tests.ts",
+    "./webhook-source-plugin": "./src/webhook-source-plugin.ts",
+    "./output-ref": "./src/output-ref.ts",
     "./fan-out-identity": "./src/fan-out-identity.ts",
     "./test-utils": "./src/test-utils.ts"
   },

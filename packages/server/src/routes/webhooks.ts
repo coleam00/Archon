@@ -9,6 +9,7 @@
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import type { GitHubAdapter } from '@archon/adapters';
 import { createLogger } from '@archon/paths';
+import type { WebhookSourcePluginHost } from '../services/webhook-source-plugins';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -43,6 +44,31 @@ export function registerGithubWebhookRoute(app: OpenAPIHono, github: GithubWebho
       return c.text('OK', 200);
     } catch {
       getLog().error({ eventType, deliveryId }, 'webhook_endpoint_error');
+      return c.json({ error: 'Internal server error' }, 500);
+    }
+  });
+}
+
+export function registerWebhookSourceRoutes(
+  app: OpenAPIHono,
+  sources: WebhookSourcePluginHost
+): void {
+  app.post('/webhooks/sources/:sourceInstanceId', async c => {
+    const sourceInstanceId = c.req.param('sourceInstanceId');
+    if (!sources.hasSource(sourceInstanceId))
+      return c.json({ error: 'Unknown webhook source' }, 404);
+
+    try {
+      const result = await sources.receive(sourceInstanceId, {
+        body: await c.req.text(),
+        headers: Object.fromEntries(c.req.raw.headers.entries()),
+        receivedAt: new Date().toISOString(),
+      });
+      if (result === 'unauthenticated') return c.json({ error: 'Unauthenticated' }, 401);
+      if (result === 'malformed') return c.json({ error: 'Malformed payload' }, 400);
+      return c.text('OK', 200);
+    } catch {
+      getLog().error({ sourceInstanceId, stage: 'receive' }, 'webhook_source_endpoint_error');
       return c.json({ error: 'Internal server error' }, 500);
     }
   });

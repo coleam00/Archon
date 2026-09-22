@@ -1,16 +1,20 @@
 import { createHmac } from 'node:crypto';
-import { describe, expect, test } from 'bun:test';
-import { GitHubAdapter } from './adapter';
-import {
-  createGitHubTriggerIngress,
-  githubTriggerConfigSchema,
-  type GitHubTriggerConfig,
-} from './trigger-ingress';
+import { afterAll, describe, expect, test } from 'bun:test';
+import createGitHubWebhookSource, { githubWebhookSourceConfigSchema } from './source-plugin';
+import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
+import type { z } from '@hono/zod-openapi';
 
-type Intake = Parameters<typeof createGitHubTriggerIngress>[1];
-type IntakeInput = Parameters<Intake>[0];
+type GitHubTriggerConfig = z.infer<typeof githubWebhookSourceConfigSchema>;
+type IntakeInput = SourceReceiptAcceptance;
+type Intake = (input: IntakeInput) => Promise<{ receiptId: string; replay: boolean }>;
 
 const secret = 'trigger-ingress-secret';
+const priorSecret = process.env.ARCHON_SOURCE_PLUGIN_TEST_SECRET;
+process.env.ARCHON_SOURCE_PLUGIN_TEST_SECRET = secret;
+afterAll(() => {
+  if (priorSecret === undefined) delete process.env.ARCHON_SOURCE_PLUGIN_TEST_SECRET;
+  else process.env.ARCHON_SOURCE_PLUGIN_TEST_SECRET = priorSecret;
+});
 
 function sign(payload: string): string {
   return `sha256=${createHmac('sha256', secret).update(payload).digest('hex')}`;
@@ -64,38 +68,50 @@ function binding(overrides: Record<string, unknown> = {}) {
 }
 
 function config(bindings: unknown[] = [binding()]): GitHubTriggerConfig {
-  return githubTriggerConfigSchema.parse({
+  return githubWebhookSourceConfigSchema.parse({
     version: 1,
-    sourceInstanceId: 'github-primary',
+    webhookSecretEnv: 'ARCHON_SOURCE_PLUGIN_TEST_SECRET',
     host: 'github.com',
     bindings,
   });
 }
 
-function recorder(options?: { failWith?: Error }) {
+function recorder() {
   const calls: IntakeInput[] = [];
   const intake: Intake = async input => {
     calls.push(input);
-    if (options?.failWith) throw options.failWith;
     return { receiptId: input.receipt.id, replay: false };
   };
   return { calls, intake };
 }
 
-function adapter(triggerConfig: GitHubTriggerConfig, intake: Intake): GitHubAdapter {
-  return new GitHubAdapter(
-    { kind: 'pat', token: 'test-token' },
-    secret,
-    { acquireLock: async () => ({ status: 'started' }) },
-    undefined,
-    { triggerIngress: createGitHubTriggerIngress(triggerConfig, intake) }
-  );
+async function adapter(triggerConfig: GitHubTriggerConfig, intake: Intake) {
+  const plugin = await createGitHubWebhookSource({
+    sourceInstanceId: 'github-primary',
+    config: triggerConfig,
+  });
+  return {
+    async receiveWebhook(body: string, signature: string, deliveryId: string, eventName: string) {
+      const result = await plugin.receive({
+        body,
+        headers: {
+          'x-hub-signature-256': signature,
+          'x-github-delivery': deliveryId,
+          'x-github-event': eventName,
+        },
+        receivedAt: '2026-09-22T10:00:00.000Z',
+      });
+      if (result.status === 'rejected') return 'invalid_signature';
+      await intake(result.acceptance);
+      return result.acceptance.outcome === 'malformed' ? 'malformed' : 'accepted';
+    },
+  };
 }
 
-describe('GitHub trigger ingress', () => {
-  test('awaits signed delivery normalization and submits a resolved binding snapshot', async () => {
+describe('GitHub source plugin', () => {
+  test('authenticates signed delivery and resolves its configured binding', async () => {
     const recorded = recorder();
-    const github = adapter(config(), recorded.intake);
+    const github = await adapter(config(), recorded.intake);
     const payload = JSON.stringify(checkRunPayload());
 
     await expect(
@@ -137,7 +153,7 @@ describe('GitHub trigger ingress', () => {
 
   test('normalizes a check with no PR association using its qualified repo and revision', async () => {
     const recorded = recorder();
-    const github = adapter(config(), recorded.intake);
+    const github = await adapter(config(), recorded.intake);
     const payload = JSON.stringify(checkRunPayload());
 
     await github.receiveWebhook(payload, sign(payload), 'delivery-zero-pr', 'check_run');
@@ -150,7 +166,7 @@ describe('GitHub trigger ingress', () => {
 
   test('rejects an invalid signature before trusted intake', async () => {
     const recorded = recorder();
-    const github = adapter(config(), recorded.intake);
+    const github = await adapter(config(), recorded.intake);
     const payload = JSON.stringify(checkRunPayload());
 
     await expect(
@@ -161,7 +177,7 @@ describe('GitHub trigger ingress', () => {
 
   test('records authenticated malformed and unsupported deliveries', async () => {
     const recorded = recorder();
-    const github = adapter(config(), recorded.intake);
+    const github = await adapter(config(), recorded.intake);
     const malformed = '{not-json';
     const unsupported = JSON.stringify({
       action: 'created',
@@ -200,7 +216,7 @@ describe('GitHub trigger ingress', () => {
         inputMapping: { result: { source: 'field', field: 'check.result' } },
       }),
     ]);
-    const github = adapter(triggerConfig, recorded.intake);
+    const github = await adapter(triggerConfig, recorded.intake);
     const payload = JSON.stringify(checkRunPayload());
 
     await github.receiveWebhook(payload, sign(payload), 'delivery-no-start', 'check_run');
@@ -222,17 +238,5 @@ describe('GitHub trigger ingress', () => {
         },
       ],
     });
-  });
-
-  test('preserves durable intake failure instead of acknowledging the delivery', async () => {
-    const failure = new Error('durable intake unavailable');
-    const recorded = recorder({ failWith: failure });
-    const github = adapter(config(), recorded.intake);
-    const payload = JSON.stringify(checkRunPayload());
-
-    await expect(
-      github.receiveWebhook(payload, sign(payload), 'delivery-failed', 'check_run')
-    ).rejects.toBe(failure);
-    expect(recorded.calls).toHaveLength(1);
   });
 });
