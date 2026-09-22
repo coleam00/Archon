@@ -67,7 +67,7 @@ Start workflows from deployment bindings and inspect durable resource admission.
 | `trigger execute <request-id> --host <host-id>` | Explicitly retry an admitted pending execution using the engine claim. |
 | `trigger withdraw <request-id>` | Withdraw untouched queued work. |
 | `trigger recover-preparation <receipt> <binding> --owner <owner-id> --yes` | Reset preparation only after verifying its recorded owner has stopped. |
-| `trigger schedule <install|remove> --config <file>` | Manage a native macOS LaunchAgent with an explicitly configured interval. |
+| `trigger schedule <install\|remove> --config <file>` | Manage a native macOS LaunchAgent with an explicitly configured interval. |
 
 
 ### `chat <message>`

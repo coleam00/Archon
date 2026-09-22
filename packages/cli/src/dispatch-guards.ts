@@ -56,7 +56,7 @@ export function rejectConfigOutsideRun(
   const triggerConfig =
     command === 'trigger' && (subcommand === 'fire' || subcommand === 'schedule');
   if (config !== undefined && !triggerConfig && (command !== 'workflow' || subcommand !== 'run')) {
-    return 'Error: --config can only be used with workflow run.';
+    return 'Error: --config can only be used with workflow run, trigger fire, or trigger schedule.';
   }
   return undefined;
 }

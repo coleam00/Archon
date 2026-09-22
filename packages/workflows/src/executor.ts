@@ -2221,7 +2221,27 @@ export async function executeWorkflow(
 
   if (!isContinuation) {
     const pendingRun = workflowRun;
-    const claimed = await deps.store.claimPendingWorkflowRun(workflowRun.id);
+    let claimed: WorkflowRun | null;
+    try {
+      claimed = await deps.store.claimPendingWorkflowRun(workflowRun.id);
+    } catch (error) {
+      getLog().error(
+        { err: error, workflowRunId: workflowRun.id },
+        'workflow.pending_claim_failed'
+      );
+      // A lost connection may hide a committed claim. Do not release ownership or
+      // write a terminal state when this process cannot confirm the transition.
+      await sendCriticalMessage(
+        platform,
+        conversationId,
+        `Unable to confirm execution ownership for workflow run '${workflowRun.id}'. Please inspect the run before retrying.`
+      );
+      return {
+        success: false,
+        workflowRunId: workflowRun.id,
+        error: 'Unable to confirm workflow execution claim; inspect the run before retrying',
+      };
+    }
     if (!claimed) {
       getLog().warn({ workflowRunId: workflowRun.id }, 'workflow.pending_claim_lost');
       return {

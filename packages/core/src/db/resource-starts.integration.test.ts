@@ -12,6 +12,7 @@ import {
   getResourceStartRequest,
   getStartReceipt,
   SourceReceiptDigestConflictError,
+  withdrawQueuedResourceStart,
 } from './resource-starts';
 import type { PreparedWorkflowLaunch } from '@archon/workflows/schemas/resource-start';
 import { claimPendingWorkflowRun, resumeWorkflowRun, WorkflowResourceBusyError } from './workflows';
@@ -40,6 +41,39 @@ function launch(id: string): PreparedWorkflowLaunch {
       isolation: { kind: 'in-place' },
     },
   };
+}
+
+async function holdSqliteWriterLock(): Promise<ReturnType<typeof Bun.spawn>> {
+  const child = Bun.spawn(
+    [
+      'bun',
+      '-e',
+      `import { SqliteAdapter } from './packages/core/src/db/adapters/sqlite.ts';
+       import { join } from 'node:path';
+       const db = new SqliteAdapter(join(process.env.ARCHON_HOME, 'archon.db'));
+       await db.query('BEGIN IMMEDIATE');
+       console.log('locked');
+       await Bun.sleep(200);
+       await db.query('COMMIT');
+       await db.close();`,
+    ],
+    {
+      cwd: join(import.meta.dir, '../../../..'),
+      env: { ...process.env, DATABASE_URL: '', ARCHON_HOME: root },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    }
+  );
+  const reader = child.stdout.getReader();
+  let output = '';
+  while (!output.includes('locked')) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    output += new TextDecoder().decode(chunk.value);
+  }
+  reader.releaseLock();
+  expect(output).toContain('locked');
+  return child;
 }
 
 beforeEach(async () => {
@@ -316,6 +350,81 @@ describe('durable resource starts', () => {
       requestStatus: 'admitted',
       disposition: { status: 'admitted', requestId: runId, runId },
     });
+  });
+
+  test('queued withdrawal waits for a cross-process SQLite writer', async () => {
+    const ownerId = 'abababab-abab-4bab-8bab-abababababab';
+    const queuedId = 'cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd';
+    await admitResourceStart({
+      resource: 'repo:contended-withdrawal',
+      hostId: 'host',
+      overlap: 'queue',
+      launch: launch(ownerId),
+    });
+    await admitResourceStart({
+      resource: 'repo:contended-withdrawal',
+      hostId: 'host',
+      overlap: 'queue',
+      launch: launch(queuedId),
+    });
+
+    const writer = await holdSqliteWriterLock();
+    try {
+      expect((await withdrawQueuedResourceStart(queuedId))?.run.id).toBe(queuedId);
+    } finally {
+      expect(await writer.exited).toBe(0);
+    }
+  });
+
+  test('binding completion waits for a cross-process SQLite writer', async () => {
+    const receiptId = 'dededede-dede-4ede-8ede-dededededede';
+    const preparedId = 'efefefef-efef-4fef-8fef-efefefefefef';
+    await acceptStartReceipt({
+      receipt: {
+        id: receiptId,
+        sourceInstanceId: 'timer:contended',
+        deliveryId: null,
+        contentDigest: 'local',
+        receivedAt: new Date().toISOString(),
+        occurredAt: null,
+        sourceActor: null,
+      },
+      outcome: 'matched',
+      bindings: [
+        {
+          bindingId: 'binding',
+          bindingRevision: '1',
+          hostId: 'host',
+          runAsUserId: '22222222-2222-4222-8222-222222222222',
+          resource: 'repo:contended-preparation',
+          overlap: 'queue',
+          launch: {
+            cwd: '/tmp/test',
+            workflowName: 'test',
+            inputs: {},
+            isolation: { kind: 'in-place' },
+          },
+        },
+      ],
+    });
+    const { claimStartBindingPreparation } = await import('./resource-starts');
+    expect(
+      await claimStartBindingPreparation({ receiptId, bindingId: 'binding', ownerId: 'owner' })
+    ).toBe(true);
+
+    const writer = await holdSqliteWriterLock();
+    try {
+      expect(
+        await completeStartBindingPreparation({
+          receiptId,
+          bindingId: 'binding',
+          ownerId: 'owner',
+          launch: launch(preparedId),
+        })
+      ).toEqual({ status: 'admitted', requestId: preparedId, runId: preparedId });
+    } finally {
+      expect(await writer.exited).toBe(0);
+    }
   });
 
   test('serializes same-resource admission across independent SQLite processes', async () => {

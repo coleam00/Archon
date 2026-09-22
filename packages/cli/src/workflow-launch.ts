@@ -11,7 +11,7 @@ import {
   recordSelectedWorkflow,
   withCapturedSource,
 } from '@archon/workflows/executor';
-import type { JsonValue } from '@archon/workflows/output-ref';
+import { canonicalValueText, type JsonValue } from '@archon/workflows/output-ref';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import {
   readWorkflowRunConfigMetadata,
@@ -157,7 +157,17 @@ export async function withPreparedWorkflowLaunch<T>(
     const metadata: Record<string, JsonValue> = {
       [WORKFLOW_SOURCE_METADATA_KEY]: preparedWorkflowSourceRecord(source),
       ...(Object.keys(resolvedInputs).length > 0
-        ? { [SUBRUN_METADATA_KEYS.inputsValues]: { ...resolvedInputs } }
+        ? {
+            [SUBRUN_METADATA_KEYS.inputs]: Object.fromEntries(
+              Object.entries(resolvedInputs).map(([name, value]) => [
+                name,
+                canonicalValueText(value),
+              ])
+            ),
+            ...(Object.values(resolvedInputs).some(value => typeof value !== 'string')
+              ? { [SUBRUN_METADATA_KEYS.inputsValues]: { ...resolvedInputs } }
+              : {}),
+          }
         : {}),
       ...(input.runConfig
         ? {

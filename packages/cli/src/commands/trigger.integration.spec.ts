@@ -202,10 +202,11 @@ describe('trigger CLI durable execution', () => {
     }, 'second start to enter the durable queue');
     const queuedLaunch = JSON.parse(queued[1].launch) as {
       execution: { inputs: { count: unknown } };
-      run: { metadata: { inputs_values?: { count?: unknown } } };
+      run: { metadata: { inputs?: { count?: unknown }; inputs_values?: { count?: unknown } } };
     };
     expect(queued[1].launch).not.toContain('original-config');
     expect(queuedLaunch.execution.inputs.count).toBe(7);
+    expect(queuedLaunch.run.metadata.inputs?.count).toBe('7');
     expect(queuedLaunch.run.metadata.inputs_values?.count).toBe(7);
 
     // Change the live authoring checkout after intake. Cold drain must execute the
@@ -244,6 +245,9 @@ describe('trigger CLI durable execution', () => {
     activeRuns.delete(runs[1].id);
 
     for (const run of runs) {
+      expect((JSON.parse(run.metadata) as { inputs?: { count?: unknown } }).inputs?.count).toBe(
+        '7'
+      );
       expect(
         (JSON.parse(run.metadata) as { inputs_values?: { count?: unknown } }).inputs_values?.count
       ).toBe(7);

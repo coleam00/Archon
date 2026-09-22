@@ -293,6 +293,51 @@ export function runWorkflowEngineContractTests(
       });
     });
 
+    for (const committed of [false, true]) {
+      it(`reports an uncertain pending claim without changing ownership (committed=${String(committed)})`, async () => {
+        const pending = makeRun({ id: 'pending-run', status: 'pending' });
+        let durableStatus = 'pending';
+        let terminalWrites = 0;
+        let executions = 0;
+        const messages: string[] = [];
+        const store = makeStore({
+          claimPendingWorkflowRun: async () => {
+            if (committed) durableStatus = 'running';
+            throw new Error('database connection lost');
+          },
+          failWorkflowRun: async () => {
+            terminalWrites += 1;
+          },
+        });
+        const result = await makeEngine(
+          makeDeps(store, {
+            getAgentProvider: () => {
+              executions += 1;
+              throw new Error('must not execute');
+            },
+          })
+        ).submit({
+          ...callInput(),
+          platform: {
+            ...makePlatform(),
+            sendMessage: async (_id, message) => {
+              messages.push(message);
+            },
+          },
+          options: { preCreatedRun: pending },
+        });
+        expect(result).toEqual({
+          success: false,
+          workflowRunId: pending.id,
+          error: 'Unable to confirm workflow execution claim; inspect the run before retrying',
+        });
+        expect(durableStatus).toBe(committed ? 'running' : 'pending');
+        expect(terminalWrites).toBe(0);
+        expect(executions).toBe(0);
+        expect(messages.join(' ')).toContain('inspect');
+      });
+    }
+
     it('rejects a non-pending pre-created row before executor effects', async () => {
       let created = 0;
       let configLoads = 0;

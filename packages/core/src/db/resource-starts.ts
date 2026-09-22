@@ -480,6 +480,11 @@ export async function withdrawQueuedResourceStart(
   id: string
 ): Promise<PreparedWorkflowLaunch | null> {
   return getDatabase().withTransaction(async query => {
+    // SQLite transactions are deferred. Write before taking the snapshot so a
+    // concurrent commit cannot make the later write fail its lock upgrade.
+    if (getDatabase().dialect === 'sqlite') {
+      await query('UPDATE remote_agent_resource_start_requests SET id = id WHERE id = $1', [id]);
+    }
     const selected = await query<{ launch: unknown }>(
       `SELECT launch FROM remote_agent_resource_start_requests WHERE id = $1 AND status = 'queued'${lock()}`,
       [id]
@@ -515,6 +520,13 @@ export async function completeStartBindingPreparation(input: {
   launch: PreparedWorkflowLaunch;
 }): Promise<ResourceStartDisposition | null> {
   return getDatabase().withTransaction(async query => {
+    // See withdrawQueuedResourceStart: acquire SQLite's writer lock before the read.
+    if (getDatabase().dialect === 'sqlite') {
+      await query(
+        'UPDATE remote_agent_start_receipt_bindings SET binding_id = binding_id WHERE receipt_id = $1 AND binding_id = $2',
+        [input.receiptId, input.bindingId]
+      );
+    }
     const binding = await query<{ intent: unknown }>(
       `SELECT intent FROM remote_agent_start_receipt_bindings
         WHERE receipt_id = $1 AND binding_id = $2 AND preparation_status = 'preparing' AND preparation_owner = $3${lock()}`,
