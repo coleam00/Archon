@@ -29,7 +29,7 @@ interface Observation {
   command: CompositionRequest['check'];
   check_digest: string;
   exit_code: number;
-  clean_after: boolean;
+  git_clean_after: boolean;
   head_after: string;
   log: string;
   started_at: string;
@@ -43,11 +43,11 @@ export interface CompositionEvidence {
   original_base: Revision;
   base: Revision;
   head: Revision;
-  merge_bases: string[];
+  merge_bases: string[] | null;
   candidate: Revision | null;
   runtime: { platform: string; arch: string; bun: string; git: string };
   observations: Observation[];
-  conflict_log: string | null;
+  composition: { exit_code: number; stdout: string; stderr: string } | null;
 }
 
 export const VALIDATION_RED_CAUSES = [
@@ -147,7 +147,7 @@ export function evidenceMatches(
 function passed(observation: Observation): boolean {
   return (
     observation.exit_code === 0 &&
-    observation.clean_after &&
+    observation.git_clean_after &&
     observation.head_after === observation.subject.commit
   );
 }
@@ -164,7 +164,7 @@ export function comparisonVerdict(
     return {
       green: false,
       red_cause: '',
-      summary: `No composed gate ran for ${identity}: local composition conflicted. Evidence: ${evidencePath}.`,
+      summary: `No composed gate ran for ${identity}: ${evidence.composition?.exit_code === 1 ? 'local composition conflicted' : 'composition evidence is incomplete'}. Evidence: ${evidencePath}.`,
     };
   }
   const valid =
@@ -179,7 +179,7 @@ export function comparisonVerdict(
     composed.subject.tree === evidence.candidate.tree &&
     evidence.observations.every(
       item =>
-        item.clean_after &&
+        item.git_clean_after &&
         item.head_after === item.subject.commit &&
         item.check_digest === digest(evidence.request.check) &&
         digest(item.command) === item.check_digest
@@ -232,23 +232,32 @@ export async function compareComposition(
     original_base: original,
     base,
     head,
-    merge_bases: git(cwd, ['merge-base', '--all', base.commit, head.commit]).split('\n'),
+    merge_bases: null,
     candidate: null,
     runtime: { platform: platform(), arch: arch(), bun: Bun.version, git: git(cwd, ['--version']) },
     observations: [],
-    conflict_log: null,
+    composition: null,
   };
   const composed = Bun.spawnSync(['git', 'merge-tree', '--write-tree', base.commit, head.commit], {
     cwd,
     stdout: 'pipe',
     stderr: 'pipe',
   });
-  if (composed.exitCode !== 0 && composed.exitCode !== 1)
-    throw new Error(`Local composition failed (exit ${composed.exitCode}).`);
-  if (composed.exitCode === 1) {
-    evidence.conflict_log = join(directory, 'composition-conflict.log');
-    writeFileSync(evidence.conflict_log, composed.stdout);
-  } else {
+  evidence.composition = {
+    exit_code: composed.exitCode,
+    stdout: join(directory, 'composition.stdout.log'),
+    stderr: join(directory, 'composition.stderr.log'),
+  };
+  writeFileSync(evidence.composition.stdout, composed.stdout);
+  writeFileSync(evidence.composition.stderr, composed.stderr);
+  writeFileSync(path, JSON.stringify(evidence, null, 2));
+  if (composed.exitCode !== 0 && composed.exitCode !== 1) {
+    throw new Error(
+      `Local composition failed (exit ${composed.exitCode}). Evidence: ${path}.\n${composed.stdout.toString()}${composed.stderr.toString()}`
+    );
+  }
+  evidence.merge_bases = git(cwd, ['merge-base', '--all', base.commit, head.commit]).split('\n');
+  if (composed.exitCode === 0) {
     const tree = composed.stdout.toString().trim().split('\n')[0];
     if (!tree || !/^[a-f0-9]+$/.test(tree))
       throw new Error('Local composition did not return a tree ID.');
@@ -312,7 +321,7 @@ export async function compareComposition(
           command: request.check,
           check_digest: digest(request.check),
           exit_code: exitCode,
-          clean_after: git(worktree, ['status', '--porcelain', '--untracked-files=all']) === '',
+          git_clean_after: git(worktree, ['status', '--porcelain', '--untracked-files=all']) === '',
           head_after: git(worktree, ['rev-parse', 'HEAD']),
           log,
           started_at: started,

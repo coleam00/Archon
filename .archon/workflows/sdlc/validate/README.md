@@ -57,10 +57,16 @@ exit statuses, timestamps and logs. `evidence.json` is the observation record;
 - `introduced`: the composed gate failed without both separate trees passing.
   This preserves the existing conservative default, not a proof of sole blame.
 - Empty cause with `green: false`: composition conflicted, records were incomplete,
-  or a gate changed tracked/untracked checkout state. No clean-tree gate verdict
+  or a gate changed tracked or nonignored untracked checkout state. No Git-clean gate verdict
   can be claimed. Execution errors fail the node rather than fabricate results.
 - `green: true`: the gate passed on the recorded composition. It does not prove
   the forge will accept a merge or that a later base still has this composition.
+
+`git_clean_after` measures Git-visible state. Ignored dependencies and build outputs
+are permitted so the command can install locked dependencies and run the project gate.
+They are not part of the recorded Git tree; this is not a proof of a hermetic runtime.
+Both composition streams and the exit status are retained even if Git refuses to
+compose the revisions before any gate runs.
 
 Ordinary validation cannot emit `interaction`: only the script-backed comparison
 producer's schema admits it. SDLC delivery rejects interaction as red; it is not

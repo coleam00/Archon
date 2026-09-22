@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -10,6 +17,7 @@ import {
   parseCompositionRequest,
   VALIDATION_RED_CAUSES,
   type CompositionRequest,
+  type CompositionEvidence,
 } from '../.archon/workflows/sdlc/.shared/composition';
 import { PASSES_RED, passesRed } from '../.archon/workflows/sdlc/.shared/verdict';
 
@@ -28,6 +36,7 @@ function fixture(): { cwd: string; artifacts: string; request: CompositionReques
   git(cwd, 'init', '-b', 'main');
   git(cwd, 'config', 'user.name', 'Test');
   git(cwd, 'config', 'user.email', 'test@example.invalid');
+  writeFileSync(join(cwd, '.gitignore'), 'ignored-output\n');
   writeFileSync(join(cwd, 'value.txt'), 'value');
   git(cwd, 'add', '.');
   git(cwd, 'commit', '-qm', 'original');
@@ -77,7 +86,7 @@ describe('three-tree project gate evidence', () => {
         git(f.cwd, 'rev-parse', `${observation.subject.commit}^{tree}`)
       );
       expect(observation.command).toEqual(f.request.check);
-      expect(observation.clean_after).toBe(true);
+      expect(observation.git_clean_after).toBe(true);
     }
     expect(readFileSync(result.evidence.observations[2]!.log, 'utf8')).toContain('value.txt');
     expect(JSON.parse(readFileSync(result.path, 'utf8'))).toEqual(result.evidence);
@@ -157,6 +166,39 @@ describe('three-tree project gate evidence', () => {
     expect(result.verdict.summary).toContain('changed a checkout');
   });
 
+  it('permits ignored gate output without claiming it belongs to the Git tree', async () => {
+    const f = fixture();
+    f.request.check.argv = [
+      process.execPath,
+      '-e',
+      "require('node:fs').writeFileSync('ignored-output','build')",
+    ];
+    const result = await compareComposition(f.cwd, f.artifacts, f.request);
+    expect(result.verdict.green).toBe(true);
+    expect(result.evidence.observations.every(o => o.git_clean_after)).toBe(true);
+    expect(git(f.cwd, 'ls-tree', '-r', result.evidence.candidate!.tree)).not.toContain(
+      'ignored-output'
+    );
+  });
+
+  it('retains command diagnostics and revision identity when Git refuses composition', async () => {
+    const f = fixture();
+    git(f.cwd, 'checkout', '--orphan', 'unrelated');
+    git(f.cwd, 'commit', '-qm', 'unrelated root');
+    f.request.base = git(f.cwd, 'rev-parse', 'HEAD');
+    await expect(compareComposition(f.cwd, f.artifacts, f.request)).rejects.toThrow('Evidence:');
+    const evidence = JSON.parse(
+      readFileSync(join(f.artifacts, readdirSync(f.artifacts)[0]!, 'evidence.json'), 'utf8')
+    ) as CompositionEvidence;
+    expect(evidence.request).toEqual(f.request);
+    expect(evidence.composition!.exit_code).not.toBe(0);
+    expect(evidence.composition!.exit_code).not.toBe(1);
+    expect(readFileSync(evidence.composition!.stderr, 'utf8').length).toBeGreaterThan(0);
+    expect(readFileSync(evidence.composition!.stdout, 'utf8')).toBe('');
+    expect(evidence.observations).toEqual([]);
+    expect(evidence.merge_bases).toBeNull();
+  });
+
   it('retains a composition conflict without pretending three gates ran', async () => {
     const f = fixture();
     git(f.cwd, 'checkout', '--detach', f.request.original_base);
@@ -172,7 +214,7 @@ describe('three-tree project gate evidence', () => {
     const result = await compareComposition(f.cwd, f.artifacts, f.request);
     expect(result.verdict.red_cause).toBe('');
     expect(result.evidence.observations).toEqual([]);
-    expect(readFileSync(result.evidence.conflict_log!, 'utf8')).toContain('value.txt');
+    expect(readFileSync(result.evidence.composition!.stdout, 'utf8')).toContain('value.txt');
   });
 
   it('rejects moving refs and abbreviated identities before execution', async () => {
@@ -232,7 +274,12 @@ it('equal predecessor trees do not preserve subsequent merge ancestry', () => {
 
 it('keeps the validation producer schemas and script vocabulary in agreement', () => {
   type Workflow = {
-    nodes: { id: string; output_format?: { properties: { red_cause: { enum: string[] } } } }[];
+    returns: string;
+    nodes: {
+      id: string;
+      output_type?: string;
+      output_format?: { properties: { red_cause: { enum: string[] } } };
+    }[];
   };
   const root = join(import.meta.dir, '..', '.archon/workflows/sdlc');
   const validate = Bun.YAML.parse(
@@ -247,6 +294,9 @@ it('keeps the validation producer schemas and script vocabulary in agreement', (
   expect(
     validate.nodes.find(n => n.id === 'result')!.output_format!.properties.red_cause.enum
   ).toEqual([...VALIDATION_RED_CAUSES]);
+  expect(validate.nodes.filter(n => n.output_type === 'validation').map(n => n.id)).toEqual([
+    validate.returns,
+  ]);
   const ordinary = VALIDATION_RED_CAUSES.filter(cause => cause !== 'interaction');
   expect(
     validate.nodes.find(n => n.id === 'validate')!.output_format!.properties.red_cause.enum

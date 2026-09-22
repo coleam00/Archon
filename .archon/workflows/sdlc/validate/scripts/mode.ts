@@ -1,3 +1,7 @@
-import { emit, trimmed } from '../../.shared/io.ts';
+import { emit } from '../../.shared/io.ts';
 
-emit({ comparison: trimmed(process.env.INPUTS_COMPARISON) !== '' });
+const comparison = process.env.INPUTS_COMPARISON ?? '';
+if (comparison !== '' && comparison.trim() === '') {
+  throw new Error('Comparison path must not contain only whitespace.');
+}
+emit({ comparison: comparison !== '' });

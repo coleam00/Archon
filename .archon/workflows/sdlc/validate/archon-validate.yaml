@@ -72,7 +72,6 @@ nodes:
     depends_on: [mode]
     when: "$mode.output.comparison == false"
     always_run: true
-    output_type: validation
     output_format:
       type: object
       properties:
