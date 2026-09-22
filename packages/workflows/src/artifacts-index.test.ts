@@ -439,6 +439,27 @@ describe('artifacts-index read', () => {
     expect(errors).toEqual([{ path: 'nodes/theirs.meta.json', kind: 'foreign_run' }]);
   });
 
+  test('groups an output_type that names an Object.prototype key without throwing', async () => {
+    const dir = await makeDir();
+    for (const [nodeId, outputType] of [
+      ['proto', '__proto__'],
+      ['ctor', 'constructor'],
+      ['stringer', 'toString'],
+    ] as const) {
+      await writeNodeArtifact(
+        dir,
+        { nodeId, outputType, runId: 'r', producedAt: '2026-06-03T00:00:00.000Z' },
+        nodeId
+      );
+    }
+
+    const { artifactsByType, errors } = await readCurrentRun(dir);
+    expect(errors).toEqual([]);
+    expect(Object.getOwnPropertyDescriptor(artifactsByType, '__proto__')?.value).toHaveLength(1);
+    expect(artifactsByType['constructor']?.map(e => e.nodeId)).toEqual(['ctor']);
+    expect(artifactsByType['toString']?.map(e => e.nodeId)).toEqual(['stringer']);
+  });
+
   test('a malformed or schema-invalid sidecar is reported while valid records survive', async () => {
     const dir = await makeDir();
     await writeNodeArtifact(

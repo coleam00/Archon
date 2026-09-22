@@ -4912,8 +4912,11 @@ async function executeLoopGroupNode(
   for (let i = startIteration; i <= iterationLimit; i++) {
     const iterationStart = Date.now();
     // Fresh per iteration, like executeLoopNode: this iteration's until_bash sees the
-    // artifacts published before it.
-    const typedArtifactsFile = await writeNodeArtifactsListing(artifactsDir, workflowRun.id);
+    // artifacts published before it. Only until_bash reads the listing, so a group
+    // without one pays no read or write.
+    const typedArtifactsFile = group.until_bash
+      ? await writeNodeArtifactsListing(artifactsDir, workflowRun.id)
+      : undefined;
 
     // Between-iteration status check (paused tolerated — mirrors executeLoopNode).
     const runStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
@@ -7445,6 +7448,11 @@ async function executeApprovalNode(
       return { state: 'completed' as const, output: '' };
     }
 
+    // Materialize the listing before substitution so a rework prompt may reference
+    // $TYPED_ARTIFACTS_FILE. Fresh per rework attempt: the approval's rework node is an
+    // ordinary agent invocation, so it observes artifacts published before this attempt.
+    const typedArtifactsFile = await writeNodeArtifactsListing(artifactsDir, workflowRun.id);
+
     // Run the rework prompt via AI
     const { prompt: substitutedPrompt } = substituteWorkflowVariables(
       rework.prompt,
@@ -7457,7 +7465,7 @@ async function executeApprovalNode(
       undefined, // loopUserInput
       rejectionReason,
       undefined, // loopPrevOutput
-      { stateDir, inputs: resolveRunInputs(workflowRun) }
+      { stateDir, inputs: resolveRunInputs(workflowRun), typedArtifactsFile }
     );
 
     // Build a synthetic PromptNode to reuse executeNodeInternal.
@@ -7507,9 +7515,6 @@ async function executeApprovalNode(
       execContext
     );
 
-    // Fresh per rework attempt: the approval's rework node is an ordinary agent
-    // invocation, so it observes artifacts published before this attempt.
-    const typedArtifactsFile = await writeNodeArtifactsListing(artifactsDir, workflowRun.id);
     const output = await executeNodeInternal(
       ctx,
       syntheticNode,

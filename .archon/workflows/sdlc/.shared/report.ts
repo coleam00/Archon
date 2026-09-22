@@ -172,14 +172,25 @@ function discoveries(artifacts: string, failed: boolean): string {
  * behind. A missing or unreadable listing is a named limitation, never silence: the
  * reader is exactly the person who can go open the run's records.
  */
-function listedGates(artifactsByType: unknown): readonly Record<string, unknown>[] {
-  if (typeof artifactsByType !== 'object' || artifactsByType === null) return [];
+function listedGates(
+  artifactsByType: unknown
+):
+  | { readonly gates: readonly Record<string, unknown>[] }
+  | { readonly limitation: string } {
+  if (typeof artifactsByType !== 'object' || artifactsByType === null) {
+    return { limitation: 'its `artifactsByType` is not a JSON object' };
+  }
   const gates = (artifactsByType as Record<string, unknown>)['green-gate'];
-  if (!Array.isArray(gates)) return [];
-  return gates.filter(
-    (entry): entry is Record<string, unknown> =>
-      typeof entry === 'object' && entry !== null && !Array.isArray(entry)
-  );
+  if (gates === undefined) return { gates: [] };
+  if (!Array.isArray(gates)) {
+    return { limitation: "its `artifactsByType['green-gate']` is not an array" };
+  }
+  return {
+    gates: gates.filter(
+      (entry): entry is Record<string, unknown> =>
+        typeof entry === 'object' && entry !== null && !Array.isArray(entry)
+    ),
+  };
 }
 
 function listingLimitation(message: string): string {
@@ -211,7 +222,13 @@ function redCauses(artifacts: string, listingFile: string | undefined): string {
 
   const reds: string[] = [];
   const unreadable: string[] = [];
-  for (const gate of listedGates(envelope.artifactsByType)) {
+  const gates = listedGates(envelope.artifactsByType);
+  if ('limitation' in gates) {
+    return listingLimitation(
+      `the typed-artifact listing ${listingFile} is malformed: ${gates.limitation}.`
+    );
+  }
+  for (const gate of gates.gates) {
     const outputPath = join(artifacts, display(gate.path));
     const body = readJson(outputPath);
     if (body === undefined || 'error' in body) {
@@ -231,15 +248,24 @@ function redCauses(artifacts: string, listingFile: string | undefined): string {
   }
 
   // Listing diagnostics name every record the engine could not turn into an
-  // artifact — including a gate whose sidecar or content it could not read.
-  for (const error of records(envelope.errors)) {
-    const path = display(error.path) || '(unknown record)';
-    const kind = display(error.kind) || 'unreadable';
-    const code = display(error.code);
+  // artifact — including a gate whose sidecar or content it could not read. A
+  // present-but-non-array `errors` value is itself a shape failure, not silence.
+  const listingErrors = envelope.errors;
+  if (listingErrors !== undefined && !Array.isArray(listingErrors)) {
     unreadable.push(
-      `- ${path} (${kind}${code ? `, ${code}` : ''}): the engine could not read this record. ` +
-        'Open it directly.'
+      `- ${listingFile} (errors): the listing's \`errors\` value is not an array. ` +
+        'Its diagnostics cannot be read; open the listing directly.'
     );
+  } else {
+    for (const error of records(listingErrors)) {
+      const path = display(error.path) || '(unknown record)';
+      const kind = display(error.kind) || 'unreadable';
+      const code = display(error.code);
+      unreadable.push(
+        `- ${path} (${kind}${code ? `, ${code}` : ''}): the engine could not read this record. ` +
+          'Open it directly.'
+      );
+    }
   }
 
   if (reds.length === 0 && unreadable.length === 0) return '';

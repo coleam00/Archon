@@ -135,6 +135,37 @@ describe("the terminal report reads passed reds from the gates' typed artifacts"
     );
   });
 
+  it('names a shape-invalid listing instead of reading as no gates', () => {
+    const dir = artifactsDir();
+    gate(dir, 'gate-red', '2026-09-10T09:00:00.000Z', {
+      gate: 'green',
+      red_cause: 'inherited',
+      stage: 'The project gate',
+      summary: '',
+    });
+
+    const malformedEnvelopes: Record<string, unknown>[] = [
+      { runId: 'run', artifactsByType: 'corrupt', errors: [] },
+      { runId: 'run', artifactsByType: { 'green-gate': 'corrupt' }, errors: [] },
+    ];
+    malformedEnvelopes.forEach((envelope, index) => {
+      const listingFile = join(dir, `malformed-${String(index)}.json`);
+      writeFileSync(listingFile, JSON.stringify(envelope));
+      const text = caveats(dir, { failed: false, listingFile });
+      expect(text).toContain('could not be verified');
+      expect(text).toContain('malformed');
+    });
+
+    const badErrors = join(dir, 'bad-errors.json');
+    writeFileSync(
+      badErrors,
+      JSON.stringify({ runId: 'run', artifactsByType: { 'green-gate': [] }, errors: 'also' })
+    );
+    expect(caveats(dir, { failed: false, listingFile: badErrors })).toContain(
+      '`errors` value is not an array'
+    );
+  });
+
   it('ignores typed artifacts of other kinds', async () => {
     const dir = artifactsDir();
     writeFileSync(join(dir, 'nodes', 'triage.md'), 'a report');

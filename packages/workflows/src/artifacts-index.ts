@@ -180,8 +180,12 @@ export async function readNodeArtifacts(
 ): Promise<NodeArtifactReadResult> {
   const nodesDir = join(artifactsDir, NODES_SUBDIR);
   const errors: NodeArtifactReadError[] = [];
-  const artifactsByType: Record<string, NodeArtifact[]> = {};
-  const empty: NodeArtifactReadResult = { artifactsByType, errors };
+  // A Map, not a plain object: `output_type` is an open string, and a plain record
+  // indexed by a key such as `__proto__` resolves an inherited property, so the
+  // accumulator write below would throw. `Object.fromEntries` defines each entry as
+  // an own data property, so such a type survives serialization as a normal key.
+  const artifactsByType = new Map<string, NodeArtifact[]>();
+  const empty: NodeArtifactReadResult = { artifactsByType: {}, errors };
 
   let files: string[];
   try {
@@ -277,10 +281,12 @@ export async function readNodeArtifacts(
       errors.push({ path: metaRel, kind: 'unreadable_content', code: contentCheck.code });
     }
 
-    (artifactsByType[parsed.outputType] ??= []).push(parsed);
+    const existing = artifactsByType.get(parsed.outputType);
+    if (existing !== undefined) existing.push(parsed);
+    else artifactsByType.set(parsed.outputType, [parsed]);
   }
 
-  for (const entries of Object.values(artifactsByType)) {
+  for (const entries of artifactsByType.values()) {
     entries.sort((left, right) => {
       // Numeric, not lexicographic: `…00Z` and `…00.000Z` are the same instant but
       // different strings. Equal instants keep a deterministic order by content path,
@@ -289,7 +295,7 @@ export async function readNodeArtifacts(
       return delta !== 0 ? delta : left.path.localeCompare(right.path);
     });
   }
-  return { artifactsByType, errors };
+  return { artifactsByType: Object.fromEntries(artifactsByType), errors };
 }
 
 function parseArtifact(rawMetadata: string): NodeArtifact | undefined {
