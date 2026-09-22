@@ -152,6 +152,24 @@ describe('CLIAdapter', () => {
       await adapter.sendMessage('conv-id', 'Hello');
       expect(mockAddMessage).toHaveBeenCalledWith('conv-123', 'assistant', 'Hello', undefined);
     });
+
+    it('persists every future MessageMetadata field by derivation (#2709)', async () => {
+      // Adding a brand-new field to MessageMetadata must flow through the
+      // shared helper without re-editing the adapter. The cast widens the
+      // input to simulate the future field; the contract is that the new
+      // field lands in the persisted projection with no call-site change.
+      adapter.setConversationDbId('conv-id', 'conv-123');
+      await adapter.sendMessage('conv-id', 'Hello', {
+        category: 'workflow_status',
+        segment: 'new',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ...({ traceId: 'abc-123' } as any),
+      } as Parameters<typeof adapter.sendMessage>[2]);
+      expect(mockAddMessage).toHaveBeenCalledWith('conv-123', 'assistant', 'Hello', {
+        category: 'workflow_status',
+        traceId: 'abc-123',
+      });
+    });
   });
 
   describe('ensureThread', () => {
