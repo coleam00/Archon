@@ -39,6 +39,27 @@ describe('GitHub inbound normalization', () => {
     expect(result.envelope.event.pullRequests).toEqual([]);
   });
 
+  test('does not turn check action requests into completion events', () => {
+    for (const action of ['rerequested', 'requested_action', 'future_action']) {
+      const result = normalizeGitHubWebhook(
+        {
+          action,
+          repository: { full_name: 'org/repo' },
+          check_run: {
+            id: 1,
+            name: 'build',
+            head_sha: 'revision',
+            status: 'completed',
+            conclusion: 'success',
+            pull_requests: [],
+          },
+        },
+        { ...context, eventName: 'check_run' }
+      );
+      expect(result.status).toBe('unsupported');
+    }
+  });
+
   test('distinguishes unsupported actions from malformed supported payloads', () => {
     expect(
       normalizeGitHubWebhook(
