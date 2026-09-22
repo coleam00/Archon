@@ -908,11 +908,21 @@ export class PiProvider implements IAgentProvider {
       model = modelRegistry.find(parsed.provider, parsed.modelId);
       if (!model) {
         session.dispose();
+        // A provider Pi already knows means the model id is missing from the
+        // catalog, which is what a stale catalog looks like after a new model
+        // ships. An unknown provider is the missing-extension case. Pi owns the
+        // refresh; Archon only names it (see issue #3272).
+        const providerKnown = modelRegistry.getProvider(parsed.provider) !== undefined;
+        const remedy = providerKnown
+          ? 'The provider is configured, but this model id is not in the Pi model catalog. ' +
+            'If the model is newer than your catalog, refresh it with `pi update --models`; ' +
+            'Archon reads the refreshed store at ~/.pi/agent/models-store.json.'
+          : `Provider '${parsed.provider}' is not in the Pi model catalog. If it comes from a Pi ` +
+            'provider extension, install that extension (e.g. `pi install npm:pi-provider-kiro`) ' +
+            'and set `enableExtensions: true` in .archon/config.yaml. If it is a catalog provider, ' +
+            'refresh the catalog with `pi update --models`.';
         throw new Error(
-          `Pi model not found: provider='${parsed.provider}' model='${parsed.modelId}'. ` +
-            'The model was not found in the static catalog or via any installed extension. ' +
-            'Ensure the provider extension is installed (e.g. `pi install npm:pi-provider-kiro`) ' +
-            'and `enableExtensions: true` is set in .archon/config.yaml.'
+          `Pi model not found: provider='${parsed.provider}' model='${parsed.modelId}'. ${remedy}`
         );
       }
       try {

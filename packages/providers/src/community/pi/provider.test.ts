@@ -139,11 +139,18 @@ const mockModelRegistryFind = mock<ModelRegistry['find']>((provider, modelId) =>
   if (provider === 'nonexistent') return undefined;
   return createMockModel(provider, modelId);
 });
+// `provider === 'nonexistent'` is the only unknown provider in these tests;
+// every other id (built-in, models.json, extension-registered) resolves.
+const mockModelRegistryGetProvider = mock<ModelRegistry['getProvider']>(provider =>
+  provider === 'nonexistent'
+    ? undefined
+    : ({ id: provider, name: provider } as NonNullable<ReturnType<ModelRegistry['getProvider']>>)
+);
 type MockModelRegistry = Pick<ModelRegistry, 'find'> &
   Partial<
     Pick<
       ModelRegistry,
-      'getApiKeyAndHeaders' | 'getError' | 'hasConfiguredAuth' | 'registerProvider'
+      'getApiKeyAndHeaders' | 'getError' | 'hasConfiguredAuth' | 'registerProvider' | 'getProvider'
     >
   > & {
     /** Per-registry extension provider registrations, for assertions. */
@@ -163,6 +170,11 @@ type MockModelRegistryCtor = new (runtime: MockModelRuntime) => MockModelRegistr
 function makeMockRegistry(runtime: MockModelRuntime): MockModelRegistry {
   return {
     find: mockModelRegistryFind,
+    // A provider exists unless the test names an unknown one. The real facade
+    // returns a provider for any built-in, models.json, or extension-registered
+    // id; the missing-model error uses this to tell a stale catalog from a
+    // missing provider extension.
+    getProvider: mockModelRegistryGetProvider,
     hasConfiguredAuth: mock(model => runtime.hasConfiguredAuth(model.provider)),
     getApiKeyAndHeaders: mock(async model => {
       const resolution = (await runtime.getAuth(model.provider)) as
@@ -1007,6 +1019,8 @@ describe('PiProvider', () => {
       const r = runtime as MockModelRuntime;
       return {
         find: mockModelRegistryFind,
+        // The models.json load error means Pi has no provider entry to resolve.
+        getProvider: () => undefined,
         hasConfiguredAuth: mock((model: Model<Api>) => r.hasConfiguredAuth(model.provider)),
         getApiKeyAndHeaders: mock(async () => ({ ok: true as const })),
         getError: () => 'Provider lm-studio: "baseUrl" is required when defining custom models.',
@@ -1021,7 +1035,7 @@ describe('PiProvider', () => {
     );
 
     expect(error?.message).toContain('Pi model not found');
-    expect(error?.message).toContain('provider extension');
+    expect(error?.message).toContain('pi update --models');
     expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({
         piProvider: 'lm-studio',
@@ -1097,8 +1111,30 @@ describe('PiProvider', () => {
         model: 'google/unknown-model-id',
       })
     );
+    // A known provider with an unknown model id is a stale catalog, not a
+    // missing provider extension, so the extension remedy must not appear.
+    expect(error?.message).toContain('Pi model not found');
+    expect(error?.message).toContain('pi update --models');
+    expect(error?.message).toContain('~/.pi/agent/models-store.json');
+    expect(error?.message).not.toContain('provider extension');
+    expect(error?.message).not.toContain('enableExtensions');
+  });
+
+  test('unknown provider points at the provider extension remedy', async () => {
+    // `nonexistent` is the one provider the mock registry does not know, so
+    // this is the missing-extension case rather than a stale catalog.
+    mockModelRegistryFind.mockImplementationOnce(() => undefined);
+    mockModelRegistryFind.mockImplementationOnce(() => undefined);
+    resetScript(scriptedAgentEnd());
+    const { error } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'nonexistent/some-model',
+      })
+    );
     expect(error?.message).toContain('Pi model not found');
     expect(error?.message).toContain('provider extension');
+    expect(error?.message).toContain('enableExtensions: true');
+    expect(error?.message).toContain('pi update --models');
   });
 
   test('deferred resolution: calls session.setModel when find() resolves after bindExtensions', async () => {

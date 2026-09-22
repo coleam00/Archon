@@ -629,6 +629,8 @@ assistants:
     # model: openrouter/qwen/qwen3-coder    # via OpenRouter (nested slashes allowed)
 ```
 
+Pi's model catalog is refreshable, and Archon reads it directly. The embedded Pi SDK loads the same catalog store your global `pi` CLI writes (`~/.pi/agent/models-store.json`), so a model added by `pi update --models` becomes available to Archon without changing Archon or its dependencies. Model availability does not track Archon releases: if you pin a model released after your last catalog refresh, run `pi update --models` and retry. The refresh is a Pi CLI action; Archon never refreshes the catalog itself and never falls back to a different model when a lookup fails.
+
 ### Usage in workflows
 
 ```yaml
