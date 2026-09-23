@@ -514,6 +514,11 @@ describe('bundled-defaults', () => {
     // must carry those items for it to judge, and an unmet one must block like any
     // Important finding and stay attributable in findings.json.
     it('review holds the change to the accepted contract on every round', () => {
+      // Triage is where the delivery chain first restates the contract; a count or summary
+      // of acceptance there is where the items were lost.
+      expect(BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:triage::triage']).toContain(
+        "quote the source's invariants, acceptance items, and any solution steering"
+      );
       const scope = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-scope'];
       expect(scope).toContain('list every **acceptance** item');
       const synthesize = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize'];
