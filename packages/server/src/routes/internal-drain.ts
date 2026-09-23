@@ -43,10 +43,7 @@ const drainRequestSchema = z.object({
 });
 
 /** The slice of the lock manager these routes drive. */
-export type DrainTarget = Pick<
-  ConversationLockManager,
-  'beginDrain' | 'cancelDrain' | 'getDrainStatus'
->;
+export type DrainTarget = Pick<ConversationLockManager, 'beginDrain' | 'cancelDrain'>;
 
 /**
  * Constant-time bearer check. Mirrors `verifyWebhookToken` in the GitLab adapter:

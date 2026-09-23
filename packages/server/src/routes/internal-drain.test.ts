@@ -38,7 +38,6 @@ function makeApp(): { app: OpenAPIHono; target: DrainTarget } {
   const target: DrainTarget = {
     beginDrain: mock(() => DRAIN_STATUS),
     cancelDrain: mock(() => {}),
-    getDrainStatus: mock(() => undefined),
   };
   registerInternalDrainRoutes(app, target, TOKEN);
   return { app, target };
