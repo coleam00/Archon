@@ -28,7 +28,7 @@ When an open PR already exists for this work, it is the pull request: never crea
 - Title: concise, human, the meaningful outcome — never an implementation inventory.
 - Link the issue with `Closes #N` only when the PR fully resolves it; `Relates to #N` otherwise. Never infer linkage from a bare number.
 - Never add AI attribution, generated-by footers, or robot emoji.
-- Check whether a gate passed red: read every `$ARTIFACTS_DIR/nodes/*.meta.json` whose `outputType` is `green-gate`, then the `.md` file beside it, which holds that gate's JSON result. Any with a non-empty `red_cause` means this branch is being delivered while a project check is red. Add a short, plainly-titled section near the top of the body giving each such gate's `stage`, `red_cause`, and `summary`, and say that the PR's own CI is the check that still decides. A reviewer must not have to discover this from a red badge.
+- Check whether a gate passed red: read the typed-artifact listing at `$TYPED_ARTIFACTS_FILE`, take its `artifactsByType["green-gate"]` entries in the order the engine recorded them, and open each entry's `path` relative to `$ARTIFACTS_DIR` for that gate's JSON result. Any with a non-empty `red_cause` means this branch is being delivered while a project check is red. Add a short, plainly-titled section near the top of the body giving each such gate's `stage`, `red_cause`, and `summary`, and say that the PR's own CI is the check that still decides. Surface every listing `errors` entry and every gate body you cannot read as a caveat, never as "no gates". A reviewer must not have to discover this from a red badge.
 - If you write the body to a file, put it under `$ARTIFACTS_DIR/` — never inside the repository.
 
 ## 4. Push and create
