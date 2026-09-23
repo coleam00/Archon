@@ -328,19 +328,12 @@ export async function sampleCheckout(
   // record (it is still on disk). The file exists, so the untracked record describes it;
   // otherwise the tracked record's worktree mode is the authority.
   const byPath = new Map<string, StatusEntry>();
+  const authority = (entry: StatusEntry): number =>
+    entry.untracked ? 1 : entry.worktreeMode === '000000' ? 0 : 2;
   for (const entry of statusEntries) {
     const key = entry.raw.toString('base64');
     const existing = byPath.get(key);
-    const tracked = existing?.untracked === false ? existing : entry;
-    const untracked = existing?.untracked === true ? existing : entry;
-    byPath.set(
-      key,
-      existing === undefined
-        ? entry
-        : tracked.worktreeMode === '000000' && untracked.untracked
-          ? untracked
-          : tracked
-    );
+    if (existing === undefined || authority(entry) > authority(existing)) byPath.set(key, entry);
   }
 
   const entries: CheckoutManifestEntry[] = [];
