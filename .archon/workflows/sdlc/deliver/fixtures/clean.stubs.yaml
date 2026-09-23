@@ -57,3 +57,7 @@ classify:
 resolve-scope: '{"errors":"false"}'
 fixture:
   expect: completed
+  # The review round is handed the verified PR record, not a bare number: the
+  # comment its publish node writes must land on that exact pull request.
+  resolved-text-contains:
+    review__scope: '"path":"example/repo"'
