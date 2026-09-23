@@ -462,7 +462,7 @@ export async function claimPendingWorkflowRun(id: string): Promise<WorkflowRun |
               SELECT 1
                 FROM remote_agent_resource_start_requests q
                 JOIN remote_agent_resource_slot_holders h
-                  ON h.resource_key = q.resource_key AND h.holder_kind = 'run' AND h.holder_id = q.id
+                  ON h.resource_key = q.resource_key AND h.holder_kind = 'run' AND h.holder_id = CAST(q.id AS TEXT)
                WHERE q.id = $1 AND q.status = 'admitted'
             )
           )`,
