@@ -13,7 +13,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { observeCheckout, sampleCheckout } from './checkout-observation';
+import { observeCheckout, readContainerProbe, sampleCheckout } from './checkout-observation';
 import {
   checkoutManifestSchema,
   type CheckoutManifest,
@@ -186,6 +186,62 @@ describe('checkout observation', () => {
     expect(readManifest(observation, artifacts)?.entries).toEqual([
       { path: 'sub', kind: 'incomplete', reason: 'dirty_submodule' },
     ]);
+  });
+
+  test('a file removed from the index but still on disk is identified by its content', async () => {
+    const { dir, artifacts } = repo();
+    writeFileSync(join(dir, 'kept.txt'), 'one\n');
+    commitAll(dir);
+    git(dir, 'rm', '-q', '--cached', 'kept.txt');
+    writeFileSync(join(dir, 'kept.txt'), 'two\n');
+    const observation = await observe(dir, artifacts);
+    expect(readManifest(observation, artifacts)?.entries).toEqual([
+      {
+        path: 'kept.txt',
+        kind: 'file',
+        mode: '100644',
+        blob: git(dir, 'hash-object', 'kept.txt'),
+      },
+    ]);
+  });
+
+  test('a conflicted path records its worktree mode', async () => {
+    const { dir, artifacts } = repo();
+    writeFileSync(join(dir, 'run.sh'), 'base\n');
+    chmodSync(join(dir, 'run.sh'), 0o755);
+    commitAll(dir, 'base');
+    git(dir, 'checkout', '-q', '-b', 'other');
+    writeFileSync(join(dir, 'run.sh'), 'other\n');
+    commitAll(dir, 'other');
+    git(dir, 'checkout', '-q', 'main');
+    writeFileSync(join(dir, 'run.sh'), 'main\n');
+    commitAll(dir, 'main');
+    const merge = Bun.spawnSync(['git', 'merge', '-q', 'other'], { cwd: dir, stderr: 'pipe' });
+    expect(merge.exitCode).not.toBe(0);
+    const observation = await observe(dir, artifacts);
+    expect(readManifest(observation, artifacts)?.entries).toEqual([
+      {
+        path: 'run.sh',
+        kind: 'file',
+        mode: '100755',
+        blob: git(dir, 'hash-object', 'run.sh'),
+      },
+    ]);
+  });
+
+  test('a container probe answers only with its own output; any other result is unknown', async () => {
+    expect(readContainerProbe(0, 'marker\n')).toBe('marker');
+    expect(readContainerProbe(0, 'none\n')).toBe('none');
+    // docker exec exits 1 for "No such container", the same status a shell's "false" has.
+    expect(readContainerProbe(1, '')).toBe('failed');
+    expect(readContainerProbe(0, '')).toBe('failed');
+    expect(readContainerProbe(-1, '')).toBe('failed');
+    const observation = await observeCheckout(
+      scratch(),
+      { kind: 'container', containerId: 'archon-test-no-such-container' },
+      { runId: 'run-1', artifactsDir: scratch() }
+    );
+    expect(observation).toMatchObject({ kind: 'unavailable', reason: 'probe_failed' });
   });
 
   test('sampling writes nothing until the sample is recorded', async () => {

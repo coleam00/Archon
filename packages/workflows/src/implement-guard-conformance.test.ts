@@ -218,6 +218,14 @@ describe('implement assert-changed guard over engine checkout observations', () 
     expect((await guard(s, baseline)).passed).toBe(false);
   });
 
+  test('an unrelated empty commit does not make a pre-existing .archon file count', async () => {
+    const s = scratch();
+    s.write('.archon/workflows/copied.yaml', 'name: copied\n');
+    const baseline = await s.observe();
+    git(s.repo, 'commit', '-q', '--allow-empty', '-m', 'empty');
+    expect((await guard(s, baseline)).passed).toBe(false);
+  });
+
   test('committing a pre-existing uncommitted .archon file is not new work', async () => {
     const s = scratch();
     s.write('.archon/workflows/copied.yaml', 'name: copied\n');

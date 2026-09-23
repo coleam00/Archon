@@ -8894,4 +8894,23 @@ nodes:
     const result = load('$ghost.execution.checkoutStart');
     expect(result.error?.error).toContain("no node 'ghost' exists");
   });
+
+  it('rejects the reference on a workflow: node, which cannot pass it to the child run', () => {
+    const result = parseWorkflow(
+      `
+name: checkout-binding-child
+description: a child launch cannot carry an execution fact
+nodes:
+  - id: implement
+    prompt: work
+  - id: child
+    workflow: some-child
+    depends_on: [implement]
+    with:
+      baseline: "$implement.execution.checkoutStart"
+`,
+      'checkout-binding-child.yaml'
+    );
+    expect(result.error?.error).toContain('a workflow: node cannot pass to its child run');
+  });
 });

@@ -51,7 +51,7 @@ function fakeResolveProjectStorageKey(
     if (codebase.kind === 'folder') return { kind: 'folder', slug: codebase.name };
     const [owner, repo] = codebase.name.split('/');
     if (owner && repo) return { kind: 'repo', owner, repo };
-    const base = codebase.default_cwd.split('/').filter(Boolean).pop();
+    const base = codebase.default_cwd.split(/[\\/]/).filter(Boolean).pop();
     if (base && base !== '.' && base !== '..') return { kind: 'repo', owner: '_local', repo: base };
   }
   return { kind: 'cwd', cwd };
@@ -87,7 +87,7 @@ function fakeGetProjectStoragePaths(
       ? wsPath(key.owner, key.repo)
       : key.kind === 'folder'
         ? wsPath('_folder', key.slug)
-        : wsPath('_cwd', key.cwd.split('/').filter(Boolean).pop() ?? '_');
+        : wsPath('_cwd', key.cwd.split(/[\\/]/).filter(Boolean).pop() ?? '_');
   return fakeStoragePathsForRoot(root);
 }
 

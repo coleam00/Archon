@@ -98,21 +98,36 @@ function hasGitMarker(cwd: string): boolean {
   }
 }
 
+/**
+ * The marker walk run inside a container. It answers on stdout rather than through its
+ * exit status, because `docker exec` exits 1 for its own failures too ("No such
+ * container"), which would be indistinguishable from "no .git found".
+ */
 const CONTAINER_MARKER_PROBE =
-  'd=$(pwd -P); while :; do [ -e "$d/.git" ] && exit 0; [ "$d" = / ] && exit 1; d=$(dirname "$d"); done';
+  'd=$(pwd -P); while :; do if [ -e "$d/.git" ]; then echo marker; exit 0; fi; if [ "$d" = / ]; then echo none; exit 0; fi; d=$(dirname "$d"); done';
 
-/** Exit status of the marker walk inside the container: 0 marker, 1 none, else unknown. */
+export type ContainerProbe = 'marker' | 'none' | 'failed';
+
+/** Only a successful exit with exactly one of the probe's own answers is an answer. */
+export function readContainerProbe(exitCode: number, stdout: string): ContainerProbe {
+  if (exitCode !== 0) return 'failed';
+  const answer = stdout.trim();
+  return answer === 'marker' || answer === 'none' ? answer : 'failed';
+}
+
 function probeContainerMarker(
   cwd: string,
   execContext: Extract<ExecutionContext, { kind: 'container' }>
-): Promise<number> {
+): Promise<ContainerProbe> {
   const args = ['exec', '-w', cwd];
   if (execContext.execUser) args.push('-u', execContext.execUser);
   args.push(execContext.containerId, 'sh', '-c', CONTAINER_MARKER_PROBE);
   return new Promise(resolve => {
-    execFile('docker', args, { timeout: GIT_TIMEOUT_MS, windowsHide: true }, error => {
-      const code = error === null ? 0 : (error as { code?: unknown }).code;
-      resolve(typeof code === 'number' ? code : -1);
+    execFile('docker', args, { timeout: GIT_TIMEOUT_MS, windowsHide: true }, (error, stdout) => {
+      const exit: unknown = error?.code;
+      resolve(
+        readContainerProbe(error === null ? 0 : typeof exit === 'number' ? exit : -1, stdout)
+      );
     });
   });
 }
@@ -155,7 +170,9 @@ function parseStatus(output: Buffer): StatusEntry[] {
       entries.push({ raw: record.subarray(2), staged: false, unstaged: false, untracked: true });
       continue;
     }
-    // Fixed-width header fields precede the path: 8 for ordinary, 10 for unmerged.
+    // Space-separated header fields precede the path, counting the record type: 8 for an
+    // ordinary record (`1 XY sub mH mI mW hH hI`), 10 for an unmerged one
+    // (`u XY sub m1 m2 m3 mW h1 h2 h3`). `mW` is the worktree mode in both.
     const fieldCount = kind === '1' ? 8 : kind === 'u' ? 10 : -1;
     if (fieldCount === -1) {
       throw new Error(`unexpected git status record type '${kind}'`);
@@ -171,7 +188,7 @@ function parseStatus(output: Buffer): StatusEntry[] {
     const xy = fields[1] ?? '..';
     entries.push({
       raw: record.subarray(offset),
-      worktreeMode: kind === '1' ? fields[5] : fields[7],
+      worktreeMode: kind === '1' ? fields[5] : fields[6],
       submodule: fields[2],
       staged: !xy.startsWith('.'),
       unstaged: xy.charAt(1) !== '.',
@@ -262,12 +279,12 @@ export async function sampleCheckout(
   const sampledAt = now().toISOString();
   if (execContext.kind === 'container') {
     const probe = await probeContainerMarker(cwd, execContext);
-    if (probe === 1) return { observation: { kind: 'not_git', sampledAt } };
+    if (probe === 'none') return { observation: { kind: 'not_git', sampledAt } };
     return {
       observation: {
         kind: 'unavailable',
         sampledAt,
-        reason: probe === 0 ? 'unsupported_backend' : 'probe_failed',
+        reason: probe === 'marker' ? 'unsupported_backend' : 'probe_failed',
       },
     };
   }
@@ -306,13 +323,24 @@ export async function sampleCheckout(
   const fileModeResult = await runGit(top, ['config', '--type=bool', '--get', 'core.fileMode']);
   const honorsExecutableBit = fileModeResult.code !== 0 || text(fileModeResult.stdout) !== 'false';
 
-  // One entry per path: an index deletion plus an untracked file of the same name
-  // describe one worktree path, whose content the tracked record's mode already names.
+  // One entry per path. `git rm --cached` yields two records for one file: a tracked
+  // record whose worktree mode is 000000 (the index no longer tracks it) and an untracked
+  // record (it is still on disk). The file exists, so the untracked record describes it;
+  // otherwise the tracked record's worktree mode is the authority.
   const byPath = new Map<string, StatusEntry>();
   for (const entry of statusEntries) {
     const key = entry.raw.toString('base64');
     const existing = byPath.get(key);
-    if (existing === undefined || (existing.untracked && !entry.untracked)) byPath.set(key, entry);
+    const tracked = existing?.untracked === false ? existing : entry;
+    const untracked = existing?.untracked === true ? existing : entry;
+    byPath.set(
+      key,
+      existing === undefined
+        ? entry
+        : tracked.worktreeMode === '000000' && untracked.untracked
+          ? untracked
+          : tracked
+    );
   }
 
   const entries: CheckoutManifestEntry[] = [];

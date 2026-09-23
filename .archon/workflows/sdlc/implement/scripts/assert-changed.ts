@@ -250,7 +250,12 @@ function contentChanges(baseline: Observed, current: Observed): number {
   for (const key of all) {
     const start = baseline.dirty.get(key) ?? startTree.get(key);
     if (Buffer.from(key, 'base64').subarray(0, ARCHON_DIR.length).equals(ARCHON_DIR)) {
-      if (baseline.commit !== current.commit && !same(currentTree.get(key), start)) changed++;
+      // Only commits count here: the committed entry must have changed since the start,
+      // and must differ from what the path held at the start -- so a new commit that
+      // leaves a pre-existing uncommitted file alone, or commits its bytes as they were,
+      // is not new work.
+      const committed = currentTree.get(key);
+      if (!same(committed, startTree.get(key)) && !same(committed, start)) changed++;
       continue;
     }
     const now = current.dirty.get(key) ?? currentTree.get(key);
