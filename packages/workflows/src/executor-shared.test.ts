@@ -197,7 +197,7 @@ describe('substituteWorkflowVariables', () => {
     expect(prompt).toBe('Read []');
   });
 
-  it('does not throw and does not touch a longer identifier that merely starts with the typed-artifact name', () => {
+  it('leaves the INPUTS_ variable of an input named typed_artifacts_file alone', () => {
     const { prompt } = substituteWorkflowVariables(
       'Use $INPUTS_TYPED_ARTIFACTS_FILE',
       'run-1',
