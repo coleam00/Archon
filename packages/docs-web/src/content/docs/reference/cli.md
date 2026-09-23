@@ -54,6 +54,23 @@ archon workflow run assist --cwd /path/to/repo --no-worktree "Quick question"
 
 ## Commands
 
+### `trigger`
+
+Start workflows from deployment bindings and inspect durable resource admission. A server with `ARCHON_TRIGGER_HOST` set hosts the same bindings without these commands. See [workflow triggers](/guides/workflow-triggers/) for configuration, capacity, overlap policy, and recovery requirements.
+
+| Command | Behavior |
+| --- | --- |
+| `trigger fire --config <file>` | Record a timer receipt and drain its configured host. |
+| `trigger drain --host <host-id>` | Prepare persisted starts and admit eligible queued work. |
+| `trigger list [--limit <1-1000>]` | List recent safe receipt summaries (default 50). |
+| `trigger inspect <receipt-or-request-id>` | Show source identity, current disposition, blockers, and recovery guidance. |
+| `trigger execute <request-id> --host <host-id>` | Explicitly retry an admitted pending execution using the engine claim. |
+| `trigger withdraw <request-id>` | Withdraw untouched queued work. |
+| `trigger recover-preparation <receipt> <binding> --owner <owner-id> --yes` | Reset preparation only after verifying its recorded owner has stopped. |
+| `trigger schedule <install\|remove> --config <file>` | Manage a native macOS LaunchAgent with an explicitly configured interval. |
+| `trigger whoami` | Print the Archon user ID for your CLI identity, to use as a binding's `runAsUserId`. |
+
+
 ### `chat <message>`
 
 Send a message to the orchestrator for a one-off AI interaction.

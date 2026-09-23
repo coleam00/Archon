@@ -52,6 +52,9 @@
   },
   "testGroups": [
     [
+      "src/db/resource-starts.integration.test.ts"
+    ],
+    [
       "src/handlers/command-handler.test.ts"
     ],
     [
@@ -130,6 +133,9 @@
     ],
     [
       "src/db/isolation-environments.live-run.postgres.integration.test.ts"
+    ],
+    [
+      "src/db/resource-slots.postgres.integration.test.ts"
     ],
     [
       "src/db/workflows.adoption-timestamp.integration.test.ts"

@@ -22,6 +22,7 @@
     "@archon/server": "workspace:*",
     "@archon/workflows": "workspace:*",
     "@clack/prompts": "^1.0.0",
+    "@hono/zod-openapi": "^1.4.0",
     "dotenv": "^17.2.3"
   },
   "devDependencies": {
@@ -92,6 +93,12 @@
     ],
     [
       "src/adapters/cli-adapter.test.ts"
+    ],
+    [
+      "src/triggers/native-schedule.test.ts"
+    ],
+    [
+      "src/commands/trigger.integration.spec.ts"
     ]
   ]
 }

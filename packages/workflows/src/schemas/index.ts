@@ -59,6 +59,21 @@ export {
   workflowRunConfigInputSchema,
   workflowRunConfigMetadataSchema,
 } from './run-config';
+
+export {
+  preparedWorkflowLaunchSchema,
+  resourceStartIntentSchema,
+  resourceStartDispositionSchema,
+  sourceReceiptInputSchema,
+  resourceStartBindingIntentSchema,
+} from './resource-start';
+export type {
+  PreparedWorkflowLaunch,
+  ResourceStartIntent,
+  ResourceStartDisposition,
+  SourceReceiptInput,
+  ResourceStartBindingIntent,
+} from './resource-start';
 export type {
   WorkflowRunConfigLayer,
   WorkflowRunConfigSource,

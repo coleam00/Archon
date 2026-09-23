@@ -30,6 +30,7 @@ export { SessionNotFoundError } from './sessions';
 export * from './sessions';
 export * from './isolation-environments';
 export * from './workflows';
+export * from './resource-starts';
 export * from './workflow-node-sessions';
 export * from './workflow-run-node-sessions';
 export * from './users';

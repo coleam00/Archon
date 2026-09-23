@@ -67,6 +67,11 @@ interface HelpEntry {
 // subcommand (`--detach` is owned by `workflow approve`/`reject`, which
 // live here so the global Commands block does not grow).
 const commandHelp: HelpEntry[] = [
+  {
+    command: 'trigger',
+    spec: 'trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>',
+    description: 'Start configured workflows and inspect durable resource admission',
+  },
   { command: 'chat', spec: 'chat <message>', description: 'Send a message to the orchestrator' },
   {
     command: 'setup',
@@ -331,6 +336,60 @@ const commandHelp: HelpEntry[] = [
 // "no flag documentation is lost" invariant honest — nothing here ships in
 // global help that was not in the original.
 const scopedOnlyHelp: HelpEntry[] = [
+  {
+    command: 'trigger',
+    subcommand: 'list',
+    spec: 'trigger list [--limit <1-1000>]',
+    description: 'List recent safe receipt summaries (default 50)',
+  },
+  {
+    command: 'trigger',
+    subcommand: 'fire',
+    spec: 'trigger fire --config <file>',
+    description: 'Record a configured timer start and drain its execution host',
+  },
+  {
+    command: 'trigger',
+    subcommand: 'drain',
+    spec: 'trigger drain --host <host-id>',
+    description: 'Prepare persisted bindings and admit eligible queued work',
+  },
+  {
+    command: 'trigger',
+    subcommand: 'inspect',
+    spec: 'trigger inspect <receipt-or-request-id>',
+    description: 'Show causal receipt, disposition, blockers, and recovery guidance',
+  },
+  {
+    command: 'trigger',
+    subcommand: 'execute',
+    spec: 'trigger execute <request-id> --host <host-id>',
+    description: 'Explicitly claim and execute an admitted pending request',
+  },
+  {
+    command: 'trigger',
+    subcommand: 'withdraw',
+    spec: 'trigger withdraw <queued-request-id>',
+    description: 'Withdraw untouched queued work and release its captured source',
+  },
+  {
+    command: 'trigger',
+    subcommand: 'recover-preparation',
+    spec: 'trigger recover-preparation <receipt> <binding> --owner <owner-id> --yes',
+    description: 'Reset preparation after confirming its exact recorded owner has stopped',
+  },
+  {
+    command: 'trigger',
+    subcommand: 'schedule',
+    spec: 'trigger schedule <install|remove> --config <file>',
+    description: 'Manage the configured native macOS LaunchAgent',
+  },
+  {
+    command: 'trigger',
+    subcommand: 'whoami',
+    spec: 'trigger whoami',
+    description: 'Print the Archon user ID to use as a binding runAsUserId',
+  },
   {
     command: 'workflow',
     subcommand: 'approve',

@@ -56,7 +56,11 @@
       "src/routes/api.providers.test.ts"
     ],
     [
-      "src/services/workflow-resume-service.test.ts"
+      "src/services/workflow-resume-service.test.ts",
+      "src/services/webhook-source-plugins.test.ts"
+    ],
+    [
+      "src/services/resource-start-hosting.integration.test.ts"
     ],
     [
       "src/adapters/web/transport.test.ts"

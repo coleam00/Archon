@@ -331,8 +331,13 @@ export async function scanDueWorkflowContinuations(
   }
 }
 
+/**
+ * @param onTick Another host duty that shares this cadence. The server passes its
+ *   resource-start drain here so queued work advances once its blocker ends.
+ */
 export function startWorkflowContinuationScheduler(
-  resolveDestination?: WorkflowResumeDestinationResolver
+  resolveDestination?: WorkflowResumeDestinationResolver,
+  onTick?: () => void
 ): void {
   if (continuationScheduler !== undefined) return;
   const resume = async (run: WorkflowRun, cursor: WorkflowResumeCursor): Promise<boolean> => {
@@ -341,14 +346,14 @@ export function startWorkflowContinuationScheduler(
       : ({ kind: 'headless' } as const);
     return resumeWorkflowRunFromServer(run, undefined, target, cursor);
   };
-  void scanDueWorkflowContinuations(new Date(), resume).catch((error: unknown) => {
-    log.error({ err: error as Error }, 'workflow_continuation_scan_failed');
-  });
-  continuationScheduler = setInterval(() => {
+  const tick = (): void => {
     void scanDueWorkflowContinuations(new Date(), resume).catch((error: unknown) => {
       log.error({ err: error as Error }, 'workflow_continuation_scan_failed');
     });
-  }, CONTINUATION_SCAN_INTERVAL_MS);
+    onTick?.();
+  };
+  tick();
+  continuationScheduler = setInterval(tick, CONTINUATION_SCAN_INTERVAL_MS);
   continuationScheduler.unref?.();
 }
 
