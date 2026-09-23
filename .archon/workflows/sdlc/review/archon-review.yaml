@@ -3,7 +3,10 @@ description: |
   Review a change through parallel specialist lenses and produce one evidence-based
   verdict. On the first round, code, seams, simplify, and tests always run; errors are
   selected for failure-path changes and docs only for shipped-doc changes. Reviews a PR when given one, otherwise the
-  working diff. Advisory and read-only: it judges, it never edits. Given the
+  working diff. Every round also holds the change to the accepted contract: each
+  stated acceptance item, invariant, and steering constraint is met with cited
+  evidence or raised as a blocking finding.
+  Advisory and read-only: it judges, it never edits. Given the
   previous round's report, one continuation reviewer verifies the prior findings,
   reviews the correction delta, and follows their causal class without repeating
   the full specialist fan-out.
