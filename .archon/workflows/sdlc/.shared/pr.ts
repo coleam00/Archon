@@ -208,6 +208,7 @@ export function createPr(intent: CreatePrIntent, source: ForgeSource): PrRecord 
     });
     return parsePrRecord(value.pr);
   }
+  const body = readFileSync(intent.bodyPath, 'utf8');
   const sameRepository = intent.headRepo.path === intent.repo.path;
   const head = sameRepository ? intent.head : `${intent.headRepo.path.split('/')[0]}:${intent.head}`;
   const created = gh(
@@ -234,6 +235,7 @@ export function createPr(intent: CreatePrIntent, source: ForgeSource): PrRecord 
   }
   if (
     view.title !== intent.title ||
+    view.body !== body ||
     view.pr.head !== intent.head ||
     view.pr.base !== intent.base ||
     view.pr.head_revision !== intent.headRevision ||
