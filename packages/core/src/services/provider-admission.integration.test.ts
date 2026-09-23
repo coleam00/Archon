@@ -293,6 +293,50 @@ describe('provider admission wrapper', () => {
     }
     expect(calls).toHaveLength(0);
   });
+
+  test('a waiter admits against the cap as it is now, not as it was when it began', async () => {
+    await writeCaps({ [PROVIDER]: 1 });
+    const a = gated();
+    const b = gated();
+    const c = gated();
+    scripts.set('a', a.script).set('b', b.script).set('c', c.script);
+    const provider = getAgentProvider(PROVIDER, POLL_MS);
+    const runA = drain(provider.sendQuery('a', '/tmp'));
+    await a.started;
+    const runB = drain(provider.sendQuery('b', '/tmp'));
+    await Bun.sleep(POLL_MS * 3);
+    expect(calls).toHaveLength(1);
+
+    // Raised while B waits: B is admitted beside A.
+    await writeCaps({ [PROVIDER]: 2 });
+    await b.started;
+    expect(await holderCount()).toBe(2);
+
+    // Removed while C waits: C proceeds uncapped without a holder.
+    await writeCaps({ [PROVIDER]: 2 });
+    const runC = drain(provider.sendQuery('c', '/tmp'));
+    await Bun.sleep(POLL_MS * 3);
+    expect(calls).toHaveLength(2);
+    await writeCaps({ claude: 1 });
+    await c.started;
+    expect(await holderCount()).toBe(2);
+
+    for (const g of [a, b, c]) g.release();
+    await Promise.all([runA, runB, runC]);
+    expect(await holderCount()).toBe(0);
+  });
+
+  test('an empty concurrency or providers block means no caps', async () => {
+    for (const config of ['concurrency:\n', 'concurrency:\n  providers:\n']) {
+      await writeCaps(config);
+      scripts.set('a', async function* () {
+        yield { type: 'result' };
+      });
+      await drain(getAgentProvider(PROVIDER, POLL_MS).sendQuery('a', '/tmp'));
+    }
+    expect(calls).toHaveLength(2);
+    expect(await holderCount()).toBe(0);
+  });
 });
 
 describe('attempt holder liveness', () => {

@@ -49,9 +49,8 @@ function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
 }
 
 /**
- * One `sendQuery` call's slot. The cap is re-read at every acquisition, including the
- * reacquire after a provider's retry backoff, so a lowered or removed cap applies to
- * the next admission. Released at most once per acquisition.
+ * One `sendQuery` call's slot. Released at most once per acquisition; `releaseDuring`
+ * acquires again after a provider's retry backoff.
  */
 class ProviderSlot implements ProviderAttemptAdmission {
   private attemptId: string | null = null;
@@ -72,11 +71,12 @@ class ProviderSlot implements ProviderAttemptAdmission {
     });
   }
 
-  /** Returns false, holding nothing, when the provider has no cap configured. */
+  /**
+   * Returns false, holding nothing, when the provider has no cap configured. The cap is
+   * re-read on every poll, so a waiter admits against the current cap, and a cap
+   * removed while it waits lets it proceed uncapped.
+   */
   async acquire(): Promise<boolean> {
-    const capacity = (await loadProviderConcurrencyCaps()).get(this.provider);
-    if (capacity === undefined) return false;
-    this.capacity = capacity;
     const attemptId = randomUUID();
     const signal = this.options?.abortSignal;
     let waiting = false;
@@ -86,9 +86,12 @@ class ProviderSlot implements ProviderAttemptAdmission {
           getLog().info({ provider: this.provider, attemptId }, 'provider_admission.wait_aborted');
         throw new ProviderAdmissionAbortedError(this.provider);
       }
+      const capacity = (await loadProviderConcurrencyCaps()).get(this.provider);
+      if (capacity === undefined) return false;
+      this.capacity = capacity;
       const { admitted, live } = await tryAdmitProviderAttempt({
         provider: this.provider,
-        capacity: this.capacity,
+        capacity,
         attemptId,
       });
       if (admitted) {
@@ -100,7 +103,7 @@ class ProviderSlot implements ProviderAttemptAdmission {
       if (!waiting) {
         waiting = true;
         getLog().info(
-          { provider: this.provider, attemptId, capacity: this.capacity, live },
+          { provider: this.provider, attemptId, capacity, live },
           'provider_admission.waiting'
         );
         this.emit('waiting', attemptId);

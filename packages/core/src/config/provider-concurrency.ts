@@ -23,10 +23,12 @@ export class ProviderConcurrencyConfigError extends Error {
 }
 
 // Only the cap path is strict; every other key belongs to the ordinary config loader.
+// `.nullish()`: YAML reads an empty `concurrency:` or `providers:` key as null, which
+// means no caps, not an invalid config.
 const configSchema = z.looseObject({
   concurrency: z
-    .looseObject({ providers: z.record(z.string(), z.number().int().min(1)).optional() })
-    .optional(),
+    .looseObject({ providers: z.record(z.string(), z.number().int().min(1)).nullish() })
+    .nullish(),
 });
 
 /** Caps keyed by provider registration ID. An absent provider is unlimited. */
