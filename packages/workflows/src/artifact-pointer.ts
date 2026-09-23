@@ -34,9 +34,9 @@
  * resumed run. The engine never expands it into an absolute path and never loads the file.
  */
 import { stat } from 'node:fs/promises';
-import { isAbsolute, join, normalize, sep } from 'node:path';
+import { isAbsolute, join, normalize } from 'node:path';
 import { z } from 'zod';
-import { getRunArtifactsDirForRoot, isInsideArchonHome } from '@archon/paths';
+import { getRunArtifactsDirForRoot, isInsideArchonHome, isPathInside } from '@archon/paths';
 import type { WorkflowRun } from './schemas';
 
 /** Reserved `type` discriminator. An object carrying it MUST be a valid pointer. */
@@ -138,7 +138,7 @@ async function checkPointer(
 
   const root = normalize(getRunArtifactsDirForRoot(outputRoot, currentRun.id));
   const full = normalize(join(root, pointer.path));
-  if (!full.startsWith(root + sep)) {
+  if (!isPathInside(root, full, { lexical: true })) {
     return `${where} resolves outside this run's artifacts directory`;
   }
 

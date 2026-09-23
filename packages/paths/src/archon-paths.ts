@@ -24,7 +24,18 @@
  * For Docker: /.archon/
  */
 
-import { join, dirname, normalize, basename, resolve, sep } from 'path';
+import {
+  join,
+  dirname,
+  normalize,
+  basename,
+  resolve,
+  sep,
+  relative,
+  isAbsolute,
+  parse,
+} from 'path';
+import type { PlatformPath } from 'path';
 import { homedir } from 'os';
 import { access, mkdir, symlink, lstat, readdir, readlink, realpath, rm, stat } from 'fs/promises';
 import { readFileSync } from 'fs';
@@ -167,6 +178,67 @@ export function getArchonHome(env: NodeJS.ProcessEnv = process.env): string {
  */
 export function getArchonWorkspacesPath(): string {
   return join(getArchonHome(), 'workspaces');
+}
+
+type PathSemantics = Pick<
+  PlatformPath,
+  'resolve' | 'relative' | 'isAbsolute' | 'sep' | 'normalize' | 'parse'
+>;
+
+const hostPathSemantics: PathSemantics = { resolve, relative, isAbsolute, sep, normalize, parse };
+
+export interface PathInsideOptions {
+  /** Count `candidate` naming `root` itself as inside. Default: only descendants are inside. */
+  includeRoot?: boolean;
+  /**
+   * Compare the normalized spellings instead of resolved paths: no resolution
+   * against the process cwd (a relative path is never inside an absolute root)
+   * and exact case on every platform. Guards whose contract has always been a
+   * spelling comparison use this so moving onto the shared helper cannot make
+   * them admit a path they rejected before, such as a case variant on Windows
+   * that a case-sensitive directory would resolve somewhere else.
+   */
+  lexical?: boolean;
+  /** Defaults to this host; tests pass `path.win32` or `path.posix` to evaluate another platform. */
+  pathApi?: PathSemantics;
+}
+
+/**
+ * True when `candidate` is inside `root`, compared segment by segment so a
+ * sibling such as `workspaces-old` or a `.archon/workspaces` fragment under
+ * another root never matches.
+ *
+ * By default both paths are resolved, so on Windows either separator works and
+ * the comparison ignores case. See {@link PathInsideOptions.lexical} for the
+ * spelling comparison.
+ */
+export function isPathInside(
+  root: string,
+  candidate: string,
+  { includeRoot = false, lexical = false, pathApi = hostPathSemantics }: PathInsideOptions = {}
+): boolean {
+  if (lexical) {
+    const base = trimTrailingSep(pathApi.normalize(root), pathApi);
+    const target = trimTrailingSep(pathApi.normalize(candidate), pathApi);
+    if (target === base) return includeRoot;
+    return target.startsWith(base.endsWith(pathApi.sep) ? base : base + pathApi.sep);
+  }
+  const rel = pathApi.relative(pathApi.resolve(root), pathApi.resolve(candidate));
+  if (rel === '') return includeRoot;
+  return rel !== '..' && !rel.startsWith(`..${pathApi.sep}`) && !pathApi.isAbsolute(rel);
+}
+
+/** Drop one trailing separator (normalize has already collapsed repeats), keeping a filesystem root such as `/` or `C:\`. */
+function trimTrailingSep(p: string, pathApi: PathSemantics): string {
+  return p.endsWith(pathApi.sep) && p.length > pathApi.parse(p).root.length ? p.slice(0, -1) : p;
+}
+
+/**
+ * True when `candidate` is inside this host's Archon workspaces root, the tree
+ * Archon clones into and manages. The one answer to "is this path Archon-managed".
+ */
+export function isInsideArchonWorkspaces(candidate: string): boolean {
+  return isPathInside(getArchonWorkspacesPath(), candidate);
 }
 
 /**
@@ -786,12 +858,11 @@ export function getProjectStoragePaths(key: ProjectStorageKey): ProjectStoragePa
  * on it would let a relative or whitespace root scatter a run's artifacts AND
  * its shared state under whatever the server's cwd happens to be.
  *
- * Rejects relative paths implicitly — they cannot start with the absolute home.
+ * A lexical comparison: a relative path is never inside the absolute home, and
+ * case must match exactly even on Windows.
  */
 export function isInsideArchonHome(candidate: string): boolean {
-  const home = normalize(getArchonHome());
-  const normalised = normalize(candidate);
-  return normalised === home || normalised.startsWith(home + sep);
+  return isPathInside(getArchonHome(), candidate, { includeRoot: true, lexical: true });
 }
 
 /**
@@ -939,23 +1010,6 @@ export function getFolderRunArtifactsPath(slug: string, workflowRunId: string): 
 export async function ensureFolderProjectStructure(slug: string): Promise<void> {
   const dirs = [getFolderProjectArtifactsPath(slug), getFolderProjectLogsPath(slug)];
   await Promise.all(dirs.map(dir => mkdir(dir, { recursive: true })));
-}
-
-/**
- * Resolve the project root path from a working directory path.
- * If the path is under ~/.archon/workspaces/owner/repo/..., returns the project root.
- * Returns null if the path is not under the workspaces directory.
- */
-export function resolveProjectRootFromCwd(cwd: string): string | null {
-  const workspacesPath = getArchonWorkspacesPath();
-  if (!cwd.startsWith(workspacesPath)) return null;
-
-  // Path after workspaces/: "owner/repo/..." or "owner/repo"
-  const relative = cwd.substring(workspacesPath.length + 1); // +1 for trailing slash
-  const parts = relative.split(/[/\\]/).filter(p => p.length > 0);
-  if (parts.length < 2) return null;
-
-  return join(workspacesPath, parts[0], parts[1]);
 }
 
 /**

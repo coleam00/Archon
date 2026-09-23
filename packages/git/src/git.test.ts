@@ -5,8 +5,9 @@ import { tmpdir, homedir } from 'os';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { createRecordingGitFixture } from './test-utils';
 // Loaded BEFORE mock.module replaces the module in the registry, so these are
-// the REAL identity validators — the mock re-exports them (no drift possible).
-import { parseOwnerRepo, resolveRepoProjectIdentity } from '@archon/paths';
+// the REAL pure helpers (identity validators, isPathInside) — the mock
+// re-exports them (no drift possible).
+import { isPathInside, parseOwnerRepo, resolveRepoProjectIdentity } from '@archon/paths';
 
 // ---------------------------------------------------------------------------
 // Mock @archon/paths: suppress logger, pass-through path functions
@@ -59,6 +60,7 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonWorktreesPath: () => join(getArchonHome(), 'worktrees'),
   getArchonWorkspacesPath: () => join(getArchonHome(), 'workspaces'),
+  isInsideArchonWorkspaces: (p: string) => isPathInside(join(getArchonHome(), 'workspaces'), p),
   getProjectWorktreesPath: (owner: string, repo: string) =>
     join(getArchonHome(), 'workspaces', owner, repo, 'worktrees'),
   parseOwnerRepo,
@@ -442,6 +444,18 @@ describe('git utilities', () => {
       const result = git.getWorktreeBase(repo(repoPath));
       expect(result).toEqual({
         base: join(workspacesPath, 'acme', 'widget', 'worktrees'),
+        layout: 'workspace-scoped',
+      });
+    });
+
+    test('does not read owner/repo from a sibling that only shares the workspaces prefix', () => {
+      delete process.env.WORKSPACE_PATH;
+      delete process.env.ARCHON_DOCKER;
+      delete process.env.ARCHON_HOME;
+      const lookalike = join(homedir(), '.archon', 'workspaces-old', 'acme', 'widget', 'source');
+      const result = git.getWorktreeBase(repo(lookalike));
+      expect(result).toEqual({
+        base: join(homedir(), '.archon', 'workspaces', '_local', 'source', 'worktrees'),
         layout: 'workspace-scoped',
       });
     });

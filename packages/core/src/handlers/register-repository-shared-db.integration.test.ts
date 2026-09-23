@@ -15,10 +15,12 @@
  */
 import { describe, test, expect, mock, afterEach } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, realpath } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { lstat, mkdir, mkdtemp, readdir, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { quoteCommandArg } from '../utils/command-args';
 
 const { SqliteAdapter, sqliteDialect } = await import('../db/adapters/sqlite');
 const db = new SqliteAdapter(':memory:');
@@ -56,9 +58,9 @@ interface Fixture {
 }
 
 /**
- * An ARCHON_HOME whose managed paths contain `/.archon/workspaces/`, a row the
- * other host registered at this home's managed source path, and a separate local
- * clone of the same repository on this host. Each test names its own repo: the
+ * An ARCHON_HOME, a row the other host registered at this home's managed source
+ * path, and a separate local clone of the same repository on this host. Each
+ * test names its own repo: the
  * in-memory database outlives a test, and the lookup under test is by name.
  */
 async function sharedDatabaseFixture(repo: string): Promise<Fixture> {
@@ -85,27 +87,36 @@ async function expectRefusedAndUnchanged(fixture: Fixture): Promise<void> {
   );
   expect((await getCodebase(fixture.rowId))?.default_cwd).toBe(fixture.managed);
   expect(error?.message).toContain(fixture.managed);
-  expect(error?.message).toContain(`/update-project "${fixture.name}" ${fixture.local}`);
+  expect(error?.message).toContain(
+    `/update-project ${quoteCommandArg(fixture.name)} ${quoteCommandArg(fixture.local)}`
+  );
 }
 
-// registerRepoAtPath recognizes a managed path by the POSIX substring
-// `/.archon/workspaces/`, which a Windows path never contains, and the shared
-// `/.archon` home under test is a Docker (Linux) layout.
-describe.skipIf(process.platform === 'win32')(
-  'registerRepository with a row another host registered',
-  () => {
-    test('refuses when this host has nothing at the managed path', async () => {
-      // registerRepository itself creates the managed source path here (as a link
-      // to the local clone) before it decides, so "the path exists" proves nothing.
-      await expectRefusedAndUnchanged(await sharedDatabaseFixture('unlinked'));
-    });
+describe('registerRepository with a row another host registered', () => {
+  test('refuses when this host has nothing at the managed path, and creates nothing', async () => {
+    const fixture = await sharedDatabaseFixture('unlinked');
+    await expectRefusedAndUnchanged(fixture);
+    // A refusal leaves no project tree and no `source` link behind: a link at the
+    // managed path would make it look populated to every later check.
+    expect(existsSync(dirname(fixture.managed))).toBe(false);
+  });
 
-    test('refuses when this host holds its own clone at the same managed path', async () => {
-      const fixture = await sharedDatabaseFixture('cloned');
-      // This host auto-cloned the project earlier: a real, different checkout at
-      // the byte-identical path string the other host's row names.
-      await gitCheckout(fixture.managed, fixture.remote);
-      await expectRefusedAndUnchanged(fixture);
-    });
-  }
-);
+  test('refuses when this host holds its own clone at the same managed path', async () => {
+    const fixture = await sharedDatabaseFixture('cloned');
+    // This host auto-cloned the project earlier: a real, different checkout at
+    // the byte-identical path string the other host's row names.
+    await gitCheckout(fixture.managed, fixture.remote);
+    await expectRefusedAndUnchanged(fixture);
+    expect(await readdir(dirname(fixture.managed))).toEqual(['source']);
+  });
+
+  test('refuses without touching an operator-created directory at the managed path', async () => {
+    const fixture = await sharedDatabaseFixture('precreated');
+    await mkdir(fixture.managed, { recursive: true });
+    await expectRefusedAndUnchanged(fixture);
+    // Still the operator's own empty directory, not a link to the local clone.
+    expect((await lstat(fixture.managed)).isSymbolicLink()).toBe(false);
+    expect(await readdir(fixture.managed)).toEqual([]);
+    expect(await readdir(dirname(fixture.managed))).toEqual(['source']);
+  });
+});

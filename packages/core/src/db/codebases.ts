@@ -1,10 +1,10 @@
 /**
  * Database operations for codebases
  */
-import { sep as pathSep } from 'path';
+import { resolve } from 'path';
 import { pool, getDialect } from './connection';
 import type { Codebase } from '../types';
-import { createLogger, captureCodebaseRegistered } from '@archon/paths';
+import { createLogger, captureCodebaseRegistered, isPathInside } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -127,15 +127,15 @@ export async function findCodebaseByDefaultCwd(defaultCwd: string): Promise<Code
  */
 export async function findCodebaseByPathPrefix(cwdPath: string): Promise<Codebase | null> {
   const result = await pool.query<Codebase>('SELECT * FROM remote_agent_codebases');
-  let best: Codebase | null = null;
+  let best: { row: Codebase; rootLength: number } | null = null;
   for (const row of result.rows) {
-    const base = row.default_cwd;
-    const isMatch = cwdPath === base || cwdPath.startsWith(base + pathSep);
-    if (isMatch && (best === null || base.length > best.default_cwd.length)) {
-      best = row;
-    }
+    if (!isPathInside(row.default_cwd, cwdPath, { includeRoot: true, lexical: true })) continue;
+    // Rank on the normalized root: isPathInside matched it, and a stored spelling
+    // with trailing separators would otherwise outrank a nested codebase.
+    const rootLength = resolve(row.default_cwd).length;
+    if (best === null || rootLength > best.rootLength) best = { row, rootLength };
   }
-  return best;
+  return best?.row ?? null;
 }
 
 export async function findCodebaseByName(name: string): Promise<Codebase | null> {

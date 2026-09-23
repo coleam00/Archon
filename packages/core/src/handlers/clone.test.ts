@@ -16,14 +16,16 @@ import * as gitUtils from '@archon/git';
 import type { Codebase } from '../types';
 import type * as CodebaseDb from '../db/codebases';
 import type * as Commands from '../utils/commands';
+import { quoteCommandArg } from '../utils/command-args';
 import {
   findCodebaseForCheckoutPath,
   type CodebaseCheckoutResolverDeps,
 } from '../services/codebase-checkout-resolver';
 import { createMockLogger } from '../test/mocks/logger';
 
-// Capture the real discovery function before the re-export is replaced by the module mock.
-const { findCommandFiles: discoverCommandFiles } = await import('@archon/paths/archon-paths');
+// Capture the real functions before the re-export is replaced by the module mock.
+const { findCommandFiles: discoverCommandFiles, isPathInside } =
+  await import('@archon/paths/archon-paths');
 
 // ── DB mocks ────────────────────────────────────────────────────────────────
 const mockCreateCodebase = mock<typeof CodebaseDb.createCodebase>(() =>
@@ -58,6 +60,7 @@ const mockFindCodebaseByName = mock<typeof CodebaseDb.findCodebaseByName>(() =>
 );
 const mockUpdateCodebase = mock<typeof CodebaseDb.updateCodebase>(() => Promise.resolve());
 const mockCreateProjectSourceSymlink = mock((): Promise<void> => Promise.resolve());
+const mockEnsureProjectStructure = mock((): Promise<void> => Promise.resolve());
 
 mock.module('../db/codebases', () => ({
   createCodebase: mockCreateCodebase,
@@ -88,11 +91,12 @@ mock.module('@archon/paths', () => ({
     }
   }),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands']),
-  ensureProjectStructure: mock(() => Promise.resolve()),
+  ensureProjectStructure: mockEnsureProjectStructure,
   getProjectSourcePath: mock(
     (owner: string, repo: string) => `/home/test/.archon/workspaces/${owner}/${repo}/source`
   ),
   createProjectSourceSymlink: mockCreateProjectSourceSymlink,
+  isInsideArchonWorkspaces: (p: string) => isPathInside('/home/test/.archon/workspaces', p),
   parseOwnerRepo: mock((name: string) => {
     const parts = name.split('/');
     return parts.length === 2 ? { owner: parts[0], repo: parts[1] } : null;
@@ -184,6 +188,7 @@ function clearMocks(): void {
   mockFindCodebaseByName.mockReset();
   mockUpdateCodebase.mockReset();
   mockCreateProjectSourceSymlink.mockClear();
+  mockEnsureProjectStructure.mockClear();
   mockFindCommandFiles.mockReset();
   mockLoadConfig.mockReset();
   mockLoadConfig.mockResolvedValue({ assistant: 'claude' });
@@ -1470,12 +1475,42 @@ describe('name-based deduplication', () => {
     );
 
     expect(error?.message).toContain('/home/test/.archon/workspaces/owner/repo/source');
-    expect(error?.message).toContain('/update-project "owner/repo" /home/user/repo');
+    expect(error?.message).toContain(
+      `/update-project ${quoteCommandArg('owner/repo')} ${quoteCommandArg('/home/user/repo')}`
+    );
     expect(mockUpdateCodebase).not.toHaveBeenCalled();
     expect(mockCreateCodebase).not.toHaveBeenCalled();
+    // The refusal is decided before anything is written to disk.
+    expect(mockEnsureProjectStructure).not.toHaveBeenCalled();
+    expect(mockCreateProjectSourceSymlink).not.toHaveBeenCalled();
   });
 
-  test('escapes a quote in the project name of the /update-project suggestion', async () => {
+  test('treats a path that only contains .archon/workspaces outside the real root as local', async () => {
+    const existingCodebase = makeCodebase({
+      id: 'existing-id',
+      name: 'owner/repo',
+      default_cwd: '/home/test/.archon/workspaces/owner/repo/source',
+    });
+    spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
+      if (args.includes('--git-dir')) return Promise.resolve({ stdout: '.git', stderr: '' });
+      if (args.includes('get-url'))
+        return Promise.resolve({ stdout: 'https://github.com/owner/repo', stderr: '' });
+      return Promise.resolve({ stdout: '', stderr: '' });
+    });
+    mockFindCodebaseByName.mockResolvedValueOnce(existingCodebase);
+    const lookalike = '/mnt/backup/.archon/workspaces/owner/repo/source';
+
+    const error = await registerRepository(lookalike).then(
+      () => undefined,
+      (err: unknown) => err as Error
+    );
+
+    expect(error?.message).toContain(
+      `/update-project ${quoteCommandArg('owner/repo')} ${quoteCommandArg(lookalike)}`
+    );
+  });
+
+  test('escapes quotes in the project name and path of the /update-project suggestion', async () => {
     // Without a remote the name falls back to the directory basename, which may hold a quote.
     const existingCodebase = makeCodebase({
       id: 'existing-id',
@@ -1494,7 +1529,7 @@ describe('name-based deduplication', () => {
       (err: unknown) => err as Error
     );
 
-    expect(error?.message).toContain('/update-project "we\\"ird" /home/user/we"ird');
+    expect(error?.message).toContain('/update-project "we\\"ird" "/home/user/we\\"ird"');
   });
 
   test('fills missing default_branch on existing local codebase', async () => {

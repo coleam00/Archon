@@ -32,7 +32,7 @@ import { readdir, realpath, rm, stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from '@hono/zod-openapi';
-import { createLogger, getArchonTempPath } from '@archon/paths';
+import { createLogger, getArchonTempPath, isPathInside } from '@archon/paths';
 import { execFileAsync } from '@archon/git';
 import {
   RESERVED_FIXTURE_KEYS,
@@ -492,7 +492,7 @@ export async function runFixtures(options: RunFixturesOptions): Promise<FixtureR
       fixture =>
         (targetIsLoadedWorkflow && fixture.workflowNames.includes(targetName)) ||
         fixture.dirs.includes(targetName) ||
-        fixture.path.startsWith(targetReal + sep)
+        isPathInside(targetReal, fixture.path, { lexical: true })
     );
     if (selected.length === 0) {
       // Suggest only workflows a discovered fixture actually targets AND that the catalog

@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The Docker container no longer crash-loops on start when `~/.gitconfig` holds several `credential.https://github.com.helper` values, as `gh auth login` inside the container leaves behind. With `GH_TOKEN` set, the entrypoint now replaces all of them with its `GH_TOKEN` helper.
 - Registering a local checkout, including the CLI's automatic registration on `archon workflow run`, no longer repoints a same-named project that Archon cloned into its managed workspace. In a database shared by several hosts, that path may belong to another host, and every Docker host uses the same `/.archon` path, so the rewrite silently broke the other host. The registration now fails with a conflict naming both paths and the `/update-project` command that moves the project explicitly. (#3403)
+- A refused project registration no longer leaves a project directory or `source` link behind in the managed workspace, and no longer replaces an empty directory you created there with a link. (#3440)
+- Archon now decides whether a path is in its managed workspace by comparing it against the configured workspaces root. On Windows no path was recognized, so the managed-project conflict above never fired. A path such as `~/.archon/workspaces-old/...` or a `.archon/workspaces` folder under another root is no longer treated as managed, so worktree creation no longer hard-resets a checkout there and its unpushed-work reminder no longer fires. (#3441)
 
 ## [0.10.1] - 2026-08-30
 

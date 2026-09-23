@@ -1430,6 +1430,33 @@ describe('GET /api/workflows - cwd validation', () => {
     const response = await app.request('/api/workflows?cwd=/tmp/project');
     expect(response.status).toBe(200);
   });
+
+  test('accepts a subdirectory of a registered codebase path', async () => {
+    const app = createTestApp();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    const cwd = encodeURIComponent(join('/tmp/project', 'packages', 'app'));
+    const response = await app.request(`/api/workflows?cwd=${cwd}`);
+    expect(response.status).toBe(200);
+  });
+
+  test('rejects a lookalike sibling, a climb out with .., a relative path, and a case variant', async () => {
+    const app = createTestApp();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    // Relative and case-variant spellings stay rejected on every platform: the
+    // check compares spellings, it does not resolve against the server's cwd or
+    // fold case on Windows.
+    for (const cwd of [
+      '/tmp/project-old',
+      join('/tmp/project', '..', 'secrets'),
+      'tmp/project',
+      '/tmp/PROJECT/sub',
+    ]) {
+      const response = await app.request(`/api/workflows?cwd=${encodeURIComponent(cwd)}`);
+      expect(response.status).toBe(400);
+    }
+  });
 });
 
 describe('PUT /api/workflows/:name - cwd validation', () => {
