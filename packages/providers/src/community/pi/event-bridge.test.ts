@@ -683,6 +683,40 @@ describe('streaming tail completion', () => {
     } as unknown as AgentSessionEvent;
   }
 
+  test('completes a truncated tail from an earlier loop run in the same prompt', async () => {
+    // One prompt() can run Pi's loop twice (e.g. compact-and-continue). The first
+    // run's final turn lost its tail; the second run streamed cleanly. The first
+    // run's tail must still be recovered, in order, before the second run's text.
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    const mockSession = {
+      sessionId: 'session-1',
+      subscribe: (fn: (event: AgentSessionEvent) => void) => {
+        listener = fn;
+        return () => {};
+      },
+      prompt: async () => {
+        listener?.({ type: 'turn_start' } as AgentSessionEvent);
+        listener?.(makeTextDeltaEvent('first run lost its '));
+        listener?.(makeAgentEndEvent('first run lost its tail'));
+        listener?.({ type: 'turn_start' } as AgentSessionEvent);
+        listener?.(makeTextDeltaEvent('second run is clean'));
+        listener?.(makeAgentEndEvent('second run is clean'));
+      },
+      abort: async () => {},
+      dispose: () => {},
+    } as unknown as AgentSession;
+
+    const chunks: MessageChunk[] = [];
+    for await (const chunk of bridgeSession(mockSession, 'prompt')) chunks.push(chunk);
+
+    expect(chunks.filter(c => c.type === 'assistant').map(c => c.content)).toEqual([
+      'first run lost its ',
+      'tail',
+      'second run is clean',
+    ]);
+    expect(chunks.filter(c => c.type === 'result')).toHaveLength(1);
+  });
+
   test('emits corrective assistant chunk when streaming truncated', async () => {
     const streamed = 'The repo is cloned. Let me register it.\n\n/register-project';
     const full =

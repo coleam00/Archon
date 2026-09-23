@@ -385,13 +385,9 @@ export async function* bridgeSession(
   const wantsStructured = jsonSchema !== undefined;
   let assistantBuffer = '';
   // Track text streamed via text_delta for the current assistant turn.
-  // Reset at each turn_start so only the final turn's text is compared
-  // against finalAssembledText (see streaming-tail completion below).
+  // Reset at each turn_start so only a run's final turn is compared against
+  // the assembled text on its agent_end (see streaming-tail completion below).
   let currentTurnText = '';
-  // Assembled text of the final assistant message from the last agent_end.
-  // Set inside the subscribe callback, before prompt() resolves and the result
-  // chunk is pushed, so it is always ready when the yield loop processes the result.
-  let finalAssembledText: string | undefined;
   // Every message this prompt produced. One prompt() can run Pi's agent loop more
   // than once (auto-retry after a retryable error, compact-and-continue after a
   // recoverable `length` stop or context overflow, queued follow-ups), and each run
@@ -410,7 +406,35 @@ export async function* bridgeSession(
         currentTurnText = '';
       }
       if (event.type === 'agent_end') {
-        finalAssembledText = extractLastAssistantText(event.messages);
+        // Streaming tail completion: Pi occasionally fails to flush the last
+        // characters of an assistant turn as text_delta events, leaving them
+        // present only in agent_end.messages. Detect the gap and emit the
+        // missing suffix as a corrective assistant chunk so the orchestrator's
+        // allMessages accumulator receives the full command text. Checked on
+        // every agent_end: each loop run's final turn can have its own gap.
+        // Condition: assembled text is strictly longer and starts with what was
+        // streamed (an extension, not a replacement); no assistant message in
+        // the transcript is treated as clean.
+        const assembled = extractLastAssistantText(event.messages);
+        flushPendingAssistant();
+        if (
+          assembled !== undefined &&
+          assembled.length > currentTurnText.length &&
+          assembled.startsWith(currentTurnText)
+        ) {
+          const tail = assembled.slice(currentTurnText.length);
+          queue.push({ kind: 'chunk', chunk: { type: 'assistant', content: tail } });
+          if (wantsStructured) assistantBuffer += tail;
+          getLog().warn(
+            {
+              streamedLen: currentTurnText.length,
+              assembledLen: assembled.length,
+              tailLen: tail.length,
+            },
+            'pi.event-bridge.streaming_tail_completed'
+          );
+        }
+        currentTurnText = '';
         promptMessages.push(...event.messages);
         sawAgentEnd = true;
         return;
@@ -495,33 +519,6 @@ export async function* bridgeSession(
       // it unconditionally and let the caller decide whether resume is
       // meaningful (capability-gated at the registry level).
       if (item.chunk.type === 'result') {
-        // Streaming tail completion: Pi occasionally fails to flush the last
-        // characters of an assistant turn as text_delta events, leaving them
-        // present only in agent_end.messages. Detect the gap and emit the
-        // missing suffix as a corrective assistant chunk so the orchestrator's
-        // allMessages accumulator receives the full command text.
-        // Condition: assembled text is strictly longer, starts with what was
-        // streamed (ensuring we emit an extension, not a replacement), and is
-        // not undefined (no assistant message in transcript — treated as clean).
-        if (
-          finalAssembledText !== undefined &&
-          finalAssembledText.length > currentTurnText.length &&
-          finalAssembledText.startsWith(currentTurnText)
-        ) {
-          const tail = finalAssembledText.slice(currentTurnText.length);
-          yield { type: 'assistant', content: tail };
-          if (wantsStructured) {
-            assistantBuffer += tail;
-          }
-          getLog().warn(
-            {
-              streamedLen: currentTurnText.length,
-              assembledLen: finalAssembledText.length,
-              tailLen: tail.length,
-            },
-            'pi.event-bridge.streaming_tail_completed'
-          );
-        }
         let terminal: MessageChunk = item.chunk;
         if (session.sessionId) {
           terminal = { ...terminal, sessionId: session.sessionId };
