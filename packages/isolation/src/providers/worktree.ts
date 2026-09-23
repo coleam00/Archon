@@ -18,7 +18,6 @@ import {
   getDefaultRemote,
   getWorktreeBase,
   listWorktrees,
-  lockWorktree,
   mkdirAsync,
   readWorktreeLock,
   removeWorktree,
@@ -64,6 +63,10 @@ function getLog(): ReturnType<typeof createLogger> {
  * concurrent run sees the marker instead of a directory that merely looks ready.
  * Matched exactly, it is also the creating call's proof on rollback that the
  * checkout is still its own to delete (#3448).
+ *
+ * Every worktree is born carrying it — `git worktree add --lock` writes the
+ * reason before the checkout is populated, so there is no instant in which the
+ * directory exists unmarked.
  */
 const SETUP_LOCK_REASON = 'archon: worktree setup in progress';
 
@@ -893,20 +896,18 @@ export class WorktreeProvider implements IIsolationProvider {
     }
 
     // Reaching here means this call's own `git worktree add` produced the
-    // directory. The lock marks it unfinished until setup completes, so no other
-    // caller adopts it meanwhile, and the rollback below only ever removes a
-    // checkout this attempt created and still holds. Without both, a half-set-up
-    // worktree survives with no isolation-environment row tracking it, and the
-    // next run on the same branch adopts it as ready (#3448).
-    let lockHeld = false;
+    // directory and left the setup lock on it. The lock marks the checkout
+    // unfinished until setup completes, so no other caller adopts it meanwhile,
+    // and the rollback below only ever removes a checkout this attempt created
+    // and still holds. Without both, a half-set-up worktree survives with no
+    // isolation-environment row tracking it, and the next run on the same branch
+    // adopts it as ready (#3448).
     let warnings: string[];
     try {
-      await lockWorktree(repoPath, toWorktreePath(worktreePath), SETUP_LOCK_REASON);
-      lockHeld = true;
       warnings = await this.finishWorktreeSetup(request, repoPath, worktreePath, worktreeConfig);
     } catch (error) {
       const setupError = error instanceof Error ? error : new Error(String(error));
-      await this.rollBackIncompleteWorktree(repoPath, worktreePath, setupError, lockHeld);
+      await this.rollBackIncompleteWorktree(repoPath, worktreePath, setupError);
       throw setupError;
     }
 
@@ -992,15 +993,14 @@ export class WorktreeProvider implements IIsolationProvider {
   private async rollBackIncompleteWorktree(
     repoPath: RepoPath,
     worktreePath: string,
-    setupError: Error,
-    lockHeld: boolean
+    setupError: Error
   ): Promise<void> {
     getLog().warn(
       { repoPath, worktreePath, err: setupError },
       'isolation.incomplete_worktree_rollback_started'
     );
 
-    const failure = await this.removeIncompleteWorktree(repoPath, worktreePath, lockHeld);
+    const failure = await this.removeIncompleteWorktree(repoPath, worktreePath);
     if (!failure) {
       getLog().info({ repoPath, worktreePath }, 'isolation.incomplete_worktree_rolled_back');
       return;
@@ -1027,26 +1027,23 @@ export class WorktreeProvider implements IIsolationProvider {
    * fails here. Nothing has run in the checkout between `git worktree add` and
    * this point, so there is no user work to force past.
    *
-   * The lock is re-read first when this call took one. It is the only evidence
-   * that no one else has claimed the path since; without it the checkout may
-   * already be serving another run, and removing it would delete work in
-   * progress. No branch name is passed either way: the branch may predate this
-   * call — an adopted task branch always does — and deleting it is never what
-   * recovering from a failed setup requires.
+   * The lock this call's own `git worktree add` took is re-read first. It is the
+   * only evidence that no one else has claimed the path since; without it the
+   * checkout may already be serving another run, and removing it would delete
+   * work in progress. No branch name is passed either way: the branch may
+   * predate this call — an adopted task branch always does — and deleting it is
+   * never what recovering from a failed setup requires.
    */
   private async removeIncompleteWorktree(
     repoPath: RepoPath,
-    worktreePath: string,
-    lockHeld: boolean
+    worktreePath: string
   ): Promise<string | null> {
     try {
-      if (lockHeld) {
-        const lock = await readWorktreeLock(toWorktreePath(worktreePath));
-        if (lock?.reason !== SETUP_LOCK_REASON) {
-          return lock === null
-            ? 'the setup lock this call took is gone, so the checkout may already belong to another run'
-            : `the checkout is locked by something else: ${lock.reason}`;
-        }
+      const lock = await readWorktreeLock(toWorktreePath(worktreePath));
+      if (lock?.reason !== SETUP_LOCK_REASON) {
+        return lock === null
+          ? 'the setup lock this call took is gone, so the checkout may already belong to another run'
+          : `the checkout is locked by something else: ${lock.reason}`;
       }
       const result = await this.destroy(worktreePath, {
         force: true,
@@ -1307,12 +1304,30 @@ export class WorktreeProvider implements IIsolationProvider {
       }
       return null;
     } catch (error) {
-      // Clean up orphaned git-registered worktree from partial failure
-      // (e.g., worktree add succeeded but createBranchWithStaleRetry failed)
+      // Clean up a git-registered worktree left behind by a partial failure.
       await this.cleanOrphanWorktreeIfExists(repoPath, worktreePath);
       const err = error as Error;
       throw new Error(`Failed to create worktree for PR #${prNumber}: ${err.message}`);
     }
+  }
+
+  /**
+   * Add a worktree that is already marked as unfinished.
+   *
+   * `--lock` is what makes the marker atomic: git writes the reason before it
+   * populates the checkout, so the directory never exists unlocked. Taking the
+   * lock as a separate `git worktree lock` afterwards leaves a window in which
+   * another `create()` finds a checkout that looks ready and adopts it — the
+   * race git documents `--lock` as closing, and the one #3448 is about. Every
+   * `git worktree add` this provider issues goes through here so no creation
+   * path can reopen it.
+   */
+  private async addLockedWorktree(repoPath: string, args: string[]): Promise<void> {
+    await execFileAsync(
+      'git',
+      ['-C', repoPath, 'worktree', 'add', '--lock', '--reason', SETUP_LOCK_REASON, ...args],
+      { timeout: GIT_OPERATION_TIMEOUT_MS }
+    );
   }
 
   /**
@@ -1347,18 +1362,17 @@ export class WorktreeProvider implements IIsolationProvider {
     // Try to create worktree with the branch
     try {
       // If branch doesn't exist locally, create it tracking remote
-      await execFileAsync(
-        'git',
-        ['-C', repoPath, 'worktree', 'add', worktreePath, '-b', prBranch, `${remote}/${prBranch}`],
-        { timeout: GIT_OPERATION_TIMEOUT_MS }
-      );
+      await this.addLockedWorktree(repoPath, [
+        worktreePath,
+        '-b',
+        prBranch,
+        `${remote}/${prBranch}`,
+      ]);
     } catch (error) {
       const err = error as Error & { stderr?: string };
       // Branch already exists locally - use it directly
       if (err.stderr?.includes('already exists')) {
-        await execFileAsync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, prBranch], {
-          timeout: GIT_OPERATION_TIMEOUT_MS,
-        });
+        await this.addLockedWorktree(repoPath, [worktreePath, prBranch]);
       } else {
         throw error;
       }
@@ -1402,9 +1416,7 @@ export class WorktreeProvider implements IIsolationProvider {
         timeout: GIT_OPERATION_TIMEOUT_MS,
       });
 
-      await execFileAsync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, prSha], {
-        timeout: GIT_OPERATION_TIMEOUT_MS,
-      });
+      await this.addLockedWorktree(repoPath, [worktreePath, prSha]);
 
       // Create a local tracking branch so it's not detached HEAD
       await this.createBranchWithStaleRetry(
@@ -1443,11 +1455,7 @@ export class WorktreeProvider implements IIsolationProvider {
       );
 
       try {
-        await execFileAsync(
-          'git',
-          ['-C', repoPath, 'worktree', 'add', worktreePath, reviewBranch],
-          { timeout: GIT_OPERATION_TIMEOUT_MS }
-        );
+        await this.addLockedWorktree(repoPath, [worktreePath, reviewBranch]);
       } catch (error) {
         const adopted = await this.findRegisteredWorktree(request, reviewBranch, true);
         if (adopted) {
@@ -1493,9 +1501,7 @@ export class WorktreeProvider implements IIsolationProvider {
   ): Promise<void> {
     await this.cleanOrphanDirectoryIfExists(worktreePath);
     try {
-      await execFileAsync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, branchName], {
-        timeout: GIT_OPERATION_TIMEOUT_MS,
-      });
+      await this.addLockedWorktree(repoPath, [worktreePath, branchName]);
     } catch (error) {
       await this.cleanOrphanWorktreeIfExists(repoPath, worktreePath);
       const err = error instanceof Error ? error : new Error(String(error));
@@ -1526,23 +1532,13 @@ export class WorktreeProvider implements IIsolationProvider {
     try {
       // `--no-track` keeps `branch.<name>.merge` unset; otherwise `gh pr view`
       // (no PR number) resolves to the base branch's PR via upstream config.
-      await execFileAsync(
-        'git',
-        [
-          '-C',
-          repoPath,
-          'worktree',
-          'add',
-          '--no-track',
-          worktreePath,
-          '-b',
-          branchName,
-          startPoint,
-        ],
-        {
-          timeout: GIT_OPERATION_TIMEOUT_MS,
-        }
-      );
+      await this.addLockedWorktree(repoPath, [
+        '--no-track',
+        worktreePath,
+        '-b',
+        branchName,
+        startPoint,
+      ]);
     } catch (error) {
       const err = error as Error & { stderr?: string };
       // Branch already exists - reset to intended start-point and use it
@@ -1570,9 +1566,7 @@ export class WorktreeProvider implements IIsolationProvider {
         await execFileAsync('git', ['-C', repoPath, 'branch', '-f', branchName, startPoint], {
           timeout: 10000,
         });
-        await execFileAsync('git', ['-C', repoPath, 'worktree', 'add', worktreePath, branchName], {
-          timeout: GIT_OPERATION_TIMEOUT_MS,
-        });
+        await this.addLockedWorktree(repoPath, [worktreePath, branchName]);
       } else {
         throw error;
       }
@@ -1678,6 +1672,14 @@ export class WorktreeProvider implements IIsolationProvider {
   /**
    * Clean up a git-registered worktree that was left by a partial failure.
    * Best-effort: logs errors but doesn't throw (the original error is more important).
+   *
+   * The removal is unforced on purpose. Every worktree this provider adds is
+   * locked until its setup finishes, so git refuses to remove a checkout that is
+   * still being set up — including one a concurrent `create()` won the path
+   * with, which is the common reason the `git worktree add` above fails. Leaving
+   * that checkout locked for the run that owns it beats deleting its work, and a
+   * later run refuses to adopt an unfinished checkout rather than silently
+   * reusing it (#3448).
    */
   private async cleanOrphanWorktreeIfExists(repoPath: string, worktreePath: string): Promise<void> {
     try {

@@ -24,7 +24,6 @@ export {
   findWorktreeByBranch,
   isWorktreePath,
   removeWorktree,
-  lockWorktree,
   unlockWorktree,
   readWorktreeLock,
   getCanonicalRepoPath,

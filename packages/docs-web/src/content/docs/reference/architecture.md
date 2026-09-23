@@ -715,10 +715,11 @@ The provider adopts existing worktrees before creating new ones:
 1. **Path match**: If worktree exists at expected path -> adopt
 2. **Branch match**: If a same-repository PR branch or a task request with `taskBranch.kind: 'existing'` has an existing worktree -> adopt
 
-Only a worktree whose setup finished can be adopted. `create()` locks the worktree it just
-added (`git worktree lock`) and releases the lock once setup — git identity, submodule init,
-configured file copies — completes. A setup failure removes the worktree it locked before
-rethrowing, so the next run creates a fresh one.
+Only a worktree whose setup finished can be adopted. `create()` adds every worktree already
+locked (`git worktree add --lock`) and releases the lock once setup — git identity, submodule
+init, configured file copies — completes, so the checkout is never visible as ready while it is
+still half-built. A setup failure removes the worktree it locked before rethrowing, so the next
+run creates a fresh one.
 
 A worktree still carrying that lock is refused rather than adopted: either another run is
 setting it up right now, or a run died before finishing and left a checkout with no

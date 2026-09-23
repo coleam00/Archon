@@ -100,7 +100,6 @@ describe('WorktreeProvider', () => {
   let getCurrentBranchStrictSpy: Mock<typeof git.getCurrentBranchStrict>;
   let getCanonicalRepoPathSpy: Mock<typeof git.getCanonicalRepoPath>;
   let verifyWorktreeOwnershipSpy: Mock<typeof git.verifyWorktreeOwnership>;
-  let lockWorktreeSpy: Mock<typeof git.lockWorktree>;
   let unlockWorktreeSpy: Mock<typeof git.unlockWorktree>;
   let readWorktreeLockSpy: Mock<typeof git.readWorktreeLock>;
 
@@ -117,7 +116,6 @@ describe('WorktreeProvider', () => {
     getCurrentBranchStrictSpy = spyOn(git, 'getCurrentBranchStrict');
     getCanonicalRepoPathSpy = spyOn(git, 'getCanonicalRepoPath');
     verifyWorktreeOwnershipSpy = spyOn(git, 'verifyWorktreeOwnership');
-    lockWorktreeSpy = spyOn(git, 'lockWorktree');
     unlockWorktreeSpy = spyOn(git, 'unlockWorktree');
     readWorktreeLockSpy = spyOn(git, 'readWorktreeLock');
     getDefaultBranchSpy = spyOn(git, 'getDefaultBranch');
@@ -133,7 +131,6 @@ describe('WorktreeProvider', () => {
     getCurrentBranchStrictSpy.mockResolvedValue(null);
     getCanonicalRepoPathSpy.mockImplementation(async path => git.toRepoPath(path));
     verifyWorktreeOwnershipSpy.mockResolvedValue(undefined);
-    lockWorktreeSpy.mockResolvedValue(undefined);
     unlockWorktreeSpy.mockResolvedValue(undefined);
     // Nothing is mid-setup by default: no worktree carries Archon's setup lock.
     readWorktreeLockSpy.mockResolvedValue(null);
@@ -174,7 +171,6 @@ describe('WorktreeProvider', () => {
     getCurrentBranchStrictSpy.mockRestore();
     getCanonicalRepoPathSpy.mockRestore();
     verifyWorktreeOwnershipSpy.mockRestore();
-    lockWorktreeSpy.mockRestore();
     unlockWorktreeSpy.mockRestore();
     readWorktreeLockSpy.mockRestore();
     getDefaultBranchSpy.mockRestore();
@@ -421,7 +417,17 @@ describe('WorktreeProvider', () => {
       expect(syncWorkspaceSpy).not.toHaveBeenCalled();
       expect(execSpy).toHaveBeenCalledWith(
         'git',
-        ['-C', '/workspace/repo', 'worktree', 'add', expect.any(String), 'feature/live-pr'],
+        [
+          '-C',
+          '/workspace/repo',
+          'worktree',
+          'add',
+          '--lock',
+          '--reason',
+          'archon: worktree setup in progress',
+          expect.any(String),
+          'feature/live-pr',
+        ],
         expect.any(Object)
       );
       const addCall = execSpy.mock.calls.find((call: unknown[]) => {
@@ -586,6 +592,9 @@ describe('WorktreeProvider', () => {
           '/workspace/repo',
           'worktree',
           'add',
+          '--lock',
+          '--reason',
+          'archon: worktree setup in progress',
           expect.any(String),
           'archon/task-test-adapters',
         ],
@@ -2089,32 +2098,37 @@ describe('WorktreeProvider', () => {
         expect((error as { cleanupFailure?: string }).cleanupFailure).toBeUndefined();
       });
 
-      test('locks the worktree for the length of its setup', async () => {
+      test('the checkout is born locked, so setup never runs on an adoptable one', async () => {
         const worktreePath = provider.getWorktreePath(baseRequest, 'archon/issue-42');
         makeGitmodulesPresent();
         const steps: string[] = [];
-        lockWorktreeSpy.mockImplementation(async () => {
-          steps.push('lock');
-        });
         unlockWorktreeSpy.mockImplementation(async () => {
           steps.push('unlock');
         });
         execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-          if (args.includes('add')) steps.push('add');
+          if (args[2] === 'worktree' && args[3] === 'add') steps.push('add');
+          if (args[2] === 'worktree' && args[3] === 'lock') steps.push('lock');
           if (args.includes('submodule')) steps.push('submodule');
           return { stdout: '', stderr: '' };
         });
 
         await provider.create(baseRequest);
 
-        // Setup runs entirely under the lock. That window is what stops another
-        // caller adopting the checkout while it is still half-built — and what
-        // makes rolling it back safe.
-        expect(steps).toEqual(['add', 'lock', 'submodule', 'unlock']);
-        expect(lockWorktreeSpy).toHaveBeenCalledWith(
-          '/workspace/repo',
-          worktreePath,
-          'archon: worktree setup in progress'
+        // No 'lock' step: git takes the lock as part of the add, so the checkout
+        // is marked unfinished from the first instant it exists. A separate lock
+        // afterwards would leave a window in which another caller adopts a
+        // half-built checkout — and rolls it back under the run using it.
+        expect(steps).toEqual(['add', 'submodule', 'unlock']);
+        expect(execSpy).toHaveBeenCalledWith(
+          'git',
+          expect.arrayContaining([
+            'worktree',
+            'add',
+            '--lock',
+            '--reason',
+            'archon: worktree setup in progress',
+          ]),
+          expect.any(Object)
         );
         expect(unlockWorktreeSpy).toHaveBeenCalledWith('/workspace/repo', worktreePath);
       });

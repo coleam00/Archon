@@ -286,25 +286,12 @@ export interface WorktreeLock {
 }
 
 /**
- * Lock a worktree, recording `reason` in git's own lock file.
+ * Release a worktree lock. Throws if the worktree is not locked.
  *
- * Git refuses to prune, move, or remove a locked worktree (`remove` needs a
- * second `--force`), which is what makes a lock usable as a marker other
- * processes and other tools cannot miss or race past.
+ * There is no counterpart that takes a lock: a worktree Archon creates is locked
+ * by `git worktree add --lock`, because taking the lock as a separate step
+ * leaves the new checkout adoptable for the length of that gap (#3448).
  */
-export async function lockWorktree(
-  repoPath: RepoPath,
-  worktreePath: WorktreePath,
-  reason: string
-): Promise<void> {
-  await execFileAsync(
-    'git',
-    ['-C', repoPath, 'worktree', 'lock', '--reason', reason, worktreePath],
-    { timeout: 15000 }
-  );
-}
-
-/** Release a worktree lock. Throws if the worktree is not locked. */
 export async function unlockWorktree(
   repoPath: RepoPath,
   worktreePath: WorktreePath

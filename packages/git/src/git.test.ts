@@ -3763,6 +3763,19 @@ branch refs/heads/feature/auth
       await git.execFileAsync('git', ['-C', root, ...args]);
     };
 
+    /** Take the lock through git directly: the package only reads and releases one. */
+    const lock = async (reason: string): Promise<void> => {
+      await git.execFileAsync('git', [
+        '-C',
+        repoPath,
+        'worktree',
+        'lock',
+        '--reason',
+        reason,
+        worktreePath,
+      ]);
+    };
+
     beforeEach(async () => {
       root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-worktree-lock-')));
       repoPath = repo(join(root, 'repo'));
@@ -3791,7 +3804,7 @@ branch refs/heads/feature/auth
     });
 
     test('round-trips the reason a lock was taken with', async () => {
-      await git.lockWorktree(repoPath, worktreePath, 'archon: worktree setup in progress');
+      await lock('archon: worktree setup in progress');
 
       expect(await git.readWorktreeLock(worktreePath)).toEqual({
         reason: 'archon: worktree setup in progress',
@@ -3811,7 +3824,7 @@ branch refs/heads/feature/auth
     });
 
     test('git refuses to remove a locked worktree unless forced twice', async () => {
-      await git.lockWorktree(repoPath, worktreePath, 'archon: worktree setup in progress');
+      await lock('archon: worktree setup in progress');
 
       // The lock is only a usable marker because git itself enforces it.
       await expect(git.removeWorktree(repoPath, worktreePath)).rejects.toThrow(/locked/);

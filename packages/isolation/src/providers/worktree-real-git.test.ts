@@ -10,7 +10,7 @@
  */
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -86,6 +86,19 @@ describe('WorktreeProvider against real git', () => {
     const record = (await worktreeRecords()).find(entry => entry.path === resolve(path));
     const locked = record?.attributes.find(line => line.startsWith('locked'));
     return locked === undefined ? null : locked.slice('locked'.length).trim();
+  };
+
+  /**
+   * What the worktree's lock file held while `git worktree add` was still
+   * running, as recorded by the `post-checkout` hook installed below.
+   */
+  const lockSeenDuringAdd = async (): Promise<string> => {
+    const adminDir = (await git(worktreePath, 'rev-parse', '--absolute-git-dir')).trim();
+    try {
+      return (await readFile(join(adminDir, 'locked-during-add'), 'utf-8')).trim();
+    } catch {
+      return 'the post-checkout hook recorded nothing';
+    }
   };
 
   beforeEach(async () => {
@@ -179,6 +192,28 @@ describe('WorktreeProvider against real git', () => {
     // may still own it.
     expect(existsSync(worktreePath)).toBe(true);
     expect(await lockReasonOf(worktreePath)).toBe('archon: worktree setup in progress');
+  });
+
+  test('the checkout is marked unfinished from the moment git creates it', async () => {
+    // `post-checkout` runs inside the new worktree before `git worktree add`
+    // returns — the first moment the checkout exists on disk, and so the first
+    // moment another run's `findExisting` could see it. Recording git's own lock
+    // file there captures exactly what that run would have found.
+    await writeFile(
+      join(repoPath, '.git', 'hooks', 'post-checkout'),
+      '#!/bin/sh\n' +
+        'gd=$(git rev-parse --absolute-git-dir)\n' +
+        'cp "$gd/locked" "$gd/locked-during-add" 2>/dev/null ||' +
+        ' printf unlocked > "$gd/locked-during-add"\n',
+      { mode: 0o755 }
+    );
+
+    await provider.create(request);
+
+    // Taking the lock after `add` returned would leave this reading `unlocked`,
+    // and a concurrent run adopting a checkout with no submodules and no
+    // configured files. `--lock` on the add itself is what closes that window.
+    expect(await lockSeenDuringAdd()).toBe('archon: worktree setup in progress');
   });
 
   test("a checkout locked for someone else's reason is still adopted", async () => {
