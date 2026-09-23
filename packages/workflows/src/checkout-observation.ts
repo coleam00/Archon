@@ -27,8 +27,11 @@ import {
 
 /** Engine-private home of manifests inside a run's artifacts directory. */
 const MANIFEST_DIR = '.archon/checkout';
-/** Keep argv well under platform limits when hashing many dirty paths at once. */
-const HASH_BATCH_SIZE = 200;
+/**
+ * Samples taken while HEAD keeps moving between the commit read and `git status` before
+ * the observation gives up as unavailable.
+ */
+const HEAD_READ_ATTEMPTS = 3;
 const GIT_TIMEOUT_MS = 120_000;
 const GIT_MAX_BUFFER = 256 * 1024 * 1024;
 
@@ -49,7 +52,7 @@ const REPOSITORY_SELECTORS = new Set([
  * Run git read-only. Repository-selecting variables are dropped so the observation reads
  * the checkout at `cwd`, not whatever repository the engine process happened to inherit.
  */
-function runGit(cwd: string, args: string[]): Promise<GitResult> {
+function runGit(cwd: string, args: string[], input?: Buffer): Promise<GitResult> {
   const env: NodeJS.ProcessEnv = {
     ...Object.fromEntries(
       Object.entries(process.env).filter(([key]) => !REPOSITORY_SELECTORS.has(key))
@@ -57,7 +60,7 @@ function runGit(cwd: string, args: string[]): Promise<GitResult> {
     GIT_OPTIONAL_LOCKS: '0',
   };
   return new Promise(resolve => {
-    execFile(
+    const child = execFile(
       'git',
       ['--no-optional-locks', ...args],
       {
@@ -75,6 +78,12 @@ function runGit(cwd: string, args: string[]): Promise<GitResult> {
         resolve({ code: error === null ? 0 : typeof exit === 'number' ? exit : -1, stdout });
       }
     );
+    if (input !== undefined && child.stdin !== null) {
+      // Git exiting before it reads all input surfaces as EPIPE here; its exit status
+      // already reports that failure through the callback.
+      child.stdin.on('error', () => undefined);
+      child.stdin.end(input);
+    }
   });
 }
 
@@ -153,12 +162,25 @@ interface StatusEntry {
   untracked: boolean;
 }
 
+interface Status {
+  /**
+   * The commit this status compared the index against, from its `# branch.oid` header:
+   * null on an unborn branch, undefined when the header is missing.
+   */
+  commit: string | null | undefined;
+  entries: StatusEntry[];
+}
+
+const BRANCH_OID_HEADER = '# branch.oid ';
+
 /**
- * Parse `git status --porcelain=v2 -z --no-renames`. Records are NUL-terminated and the
- * path is the final field, so a path containing spaces or newlines stays one record.
+ * Parse `git status --porcelain=v2 -z --branch --no-renames`. Records are NUL-terminated
+ * and the path is the final field, so a path containing spaces or newlines stays one
+ * record. Header records start with `#` and name no path.
  */
-function parseStatus(output: Buffer): StatusEntry[] {
+function parseStatus(output: Buffer): Status {
   const entries: StatusEntry[] = [];
+  let commit: string | null | undefined;
   let start = 0;
   while (start < output.length) {
     const end = output.indexOf(0, start);
@@ -166,6 +188,14 @@ function parseStatus(output: Buffer): StatusEntry[] {
     start = end === -1 ? output.length : end + 1;
     if (record.length === 0) continue;
     const kind = String.fromCharCode(record[0] ?? 0);
+    if (kind === '#') {
+      const header = record.toString('latin1');
+      if (header.startsWith(BRANCH_OID_HEADER)) {
+        const oid = header.slice(BRANCH_OID_HEADER.length);
+        commit = oid === '(initial)' ? null : oid;
+      }
+      continue;
+    }
     if (kind === '?') {
       entries.push({ raw: record.subarray(2), staged: false, unstaged: false, untracked: true });
       continue;
@@ -195,7 +225,7 @@ function parseStatus(output: Buffer): StatusEntry[] {
       untracked: false,
     });
   }
-  return entries;
+  return { commit, entries };
 }
 
 type ObjectFormat = CheckoutManifest['objectFormat'];
@@ -249,22 +279,76 @@ const FAILED = (sampledAt: string): CheckoutSample => ({
   observation: { kind: 'unavailable', sampledAt, reason: 'git_failed' },
 });
 
-async function readHead(
-  top: string
-): Promise<{ commit: string | null; tree: string | null } | undefined> {
-  const head = await runGit(top, ['rev-parse', '-q', '--verify', 'HEAD^{commit}']);
-  if (head.code === 0) {
-    const commit = text(head.stdout);
-    const tree = await runGit(top, ['rev-parse', '-q', '--verify', 'HEAD^{tree}']);
-    return tree.code === 0 ? { commit, tree: text(tree.stdout) } : undefined;
+interface Head {
+  top: string;
+  objectFormat: ObjectFormat;
+  /** Null on an unborn branch. */
+  commit: string | null;
+}
+
+/**
+ * Split `rev-parse` output that answers `--show-toplevel` first and then `count` one-word
+ * answers. The toplevel is the only answer that can itself contain a newline.
+ */
+function splitTopLevel(stdout: Buffer, count: number): { top: string; rest: string[] } | undefined {
+  const lines = stdout.toString('utf8').replace(/\n$/, '').split('\n');
+  if (lines.length <= count) return undefined;
+  return { top: lines.slice(0, -count).join('\n'), rest: lines.slice(-count) };
+}
+
+function isObjectFormat(value: string | undefined): value is ObjectFormat {
+  return value === 'sha1' || value === 'sha256';
+}
+
+/** The checkout's toplevel, object format, and HEAD commit, in one Git call when HEAD is born. */
+async function readHead(cwd: string): Promise<Head | undefined> {
+  const withCommit = await runGit(cwd, [
+    'rev-parse',
+    '--show-toplevel',
+    '--show-object-format',
+    '--verify',
+    '-q',
+    'HEAD^{commit}',
+  ]);
+  if (withCommit.code === 0) {
+    const read = splitTopLevel(withCommit.stdout, 2);
+    const [objectFormat, commit] = read?.rest ?? [];
+    if (read === undefined || !isObjectFormat(objectFormat) || commit === undefined) {
+      return undefined;
+    }
+    return { top: read.top, objectFormat, commit };
   }
+  const withoutCommit = await runGit(cwd, ['rev-parse', '--show-toplevel', '--show-object-format']);
+  const read = withoutCommit.code === 0 ? splitTopLevel(withoutCommit.stdout, 1) : undefined;
+  const objectFormat = read?.rest[0];
+  if (read === undefined || !isObjectFormat(objectFormat)) return undefined;
   // Unborn only when HEAD names a branch that does not exist yet; any other failure is a
   // broken read, not an empty repository.
-  const symbolic = await runGit(top, ['symbolic-ref', '-q', 'HEAD']);
+  const symbolic = await runGit(read.top, ['symbolic-ref', '-q', 'HEAD']);
   if (symbolic.code !== 0) return undefined;
-  const ref = await runGit(top, ['show-ref', '--verify', '-q', text(symbolic.stdout)]);
-  return ref.code === 1 ? { commit: null, tree: null } : undefined;
+  const ref = await runGit(read.top, ['show-ref', '--verify', '-q', text(symbolic.stdout)]);
+  return ref.code === 1 ? { top: read.top, objectFormat, commit: null } : undefined;
 }
+
+/**
+ * C-quote a path for `hash-object --stdin-paths`, which unquotes every line that starts
+ * with `"`. Quoting every path keeps a name that starts with `"` or holds a newline from
+ * being read as a different file.
+ */
+function stdinPath(path: string): string {
+  return `"${path.replace(/[\\"\n]/g, char => (char === '\n' ? '\\n' : `\\${char}`))}"\n`;
+}
+
+const STATUS_ARGS = [
+  'status',
+  '--porcelain=v2',
+  '-z',
+  '--branch',
+  '--no-ahead-behind',
+  '--untracked-files=all',
+  '--no-renames',
+  '--ignore-submodules=none',
+];
 
 /**
  * Sample the checkout at `cwd` through the execution backend. Container runs cannot yet be
@@ -290,38 +374,58 @@ export async function sampleCheckout(
   }
   if (!hasGitMarker(cwd)) return { observation: { kind: 'not_git', sampledAt } };
 
-  const topResult = await runGit(cwd, ['rev-parse', '--show-toplevel']);
-  if (topResult.code !== 0) return FAILED(sampledAt);
-  const top = text(topResult.stdout);
-  const formatResult = await runGit(top, ['rev-parse', '--show-object-format']);
-  const objectFormat = text(formatResult.stdout);
-  if (formatResult.code !== 0 || (objectFormat !== 'sha1' && objectFormat !== 'sha256')) {
-    return FAILED(sampledAt);
+  for (let attempt = 0; attempt < HEAD_READ_ATTEMPTS; attempt++) {
+    const sample = await sampleGit(cwd, sampledAt);
+    if (sample !== 'head_moved') return sample;
   }
-  const head = await readHead(top);
-  if (head === undefined) return FAILED(sampledAt);
+  return FAILED(sampledAt);
+}
 
-  const statusArgs = [
-    'status',
-    '--porcelain=v2',
-    '-z',
-    '--untracked-files=all',
-    '--no-renames',
-    '--ignore-submodules=none',
-  ];
-  const before = await runGit(top, statusArgs);
+/**
+ * One sample of a host Git checkout, or `head_moved` when HEAD moved between reading the
+ * commit and `git status`, so the status would describe a different commit than the one
+ * read.
+ */
+async function sampleGit(cwd: string, sampledAt: string): Promise<CheckoutSample | 'head_moved'> {
+  const head = await readHead(cwd);
+  if (head === undefined) return FAILED(sampledAt);
+  const { top, objectFormat, commit } = head;
+  // The tree is read from the commit id, not from HEAD, so it cannot belong to another
+  // commit. It runs alongside status.
+  const treeRead =
+    commit === null ? undefined : runGit(top, ['rev-parse', '-q', '--verify', `${commit}^{tree}`]);
+  const before = await runGit(top, STATUS_ARGS);
+  const treeResult = await treeRead;
   if (before.code !== 0) return FAILED(sampledAt);
-  let statusEntries: StatusEntry[];
+  let status: Status;
   try {
-    statusEntries = parseStatus(before.stdout);
+    status = parseStatus(before.stdout);
   } catch {
     return FAILED(sampledAt);
   }
-  const observation = { kind: 'git' as const, sampledAt, ...head };
+  if (status.commit === undefined) return FAILED(sampledAt);
+  // Status diffs the index against HEAD as it reads HEAD itself, and a concurrent commit,
+  // reset, or checkout can move HEAD after `rev-parse` read it. Its header names the
+  // commit it read; labelling its records with any other commit is a false observation.
+  // Git resolves HEAD for the header and for the diff separately inside the one status
+  // process, so a move in that window is not caught here.
+  if (status.commit !== commit) return 'head_moved';
+  let tree: string | null = null;
+  if (commit !== null) {
+    if (treeResult?.code !== 0) return FAILED(sampledAt);
+    tree = text(treeResult.stdout);
+  }
+  const statusEntries = status.entries;
+  const observation = { kind: 'git' as const, sampledAt, commit, tree };
   if (statusEntries.length === 0) return { observation, worktree: { status: 'clean' } };
 
-  const fileModeResult = await runGit(top, ['config', '--type=bool', '--get', 'core.fileMode']);
-  const honorsExecutableBit = fileModeResult.code !== 0 || text(fileModeResult.stdout) !== 'false';
+  // `core.fileMode` decides only an untracked file's mode, so a checkout without untracked
+  // files never reads it.
+  let honorsExecutableBit = true;
+  if (statusEntries.some(entry => entry.untracked)) {
+    const fileMode = await runGit(top, ['config', '--type=bool', '--get', 'core.fileMode']);
+    honorsExecutableBit = fileMode.code !== 0 || text(fileMode.stdout) !== 'false';
+  }
 
   // One entry per path. `git rm --cached` yields two records for one file: a tracked
   // record whose worktree mode is 000000 (the index no longer tracks it) and an untracked
@@ -342,7 +446,8 @@ export async function sampleCheckout(
     const path = encodePath(entry.raw);
     const absolute = join(top, entry.raw.toString('utf8'));
     if (typeof path !== 'string') {
-      // Hashing goes through argv, which cannot carry non-UTF-8 bytes faithfully.
+      // The path reaches `lstat` and `hash-object` as text, which cannot carry non-UTF-8
+      // bytes faithfully.
       entries.push({ path, kind: 'incomplete', reason: 'unreadable' });
       continue;
     }
@@ -422,39 +527,46 @@ export async function sampleCheckout(
     toHash.push({ entry, mode, signature });
   }
 
-  // `hash-object` applies the path's clean filter and CRLF conversion, so the id equals
-  // the blob Git would commit for these bytes. A batch that fails is retried per path to
-  // name exactly which files could not be identified.
-  const hashOne = async (paths: string[]): Promise<string[] | undefined> => {
-    const result = await runGit(top, ['hash-object', '--', ...paths]);
-    if (result.code !== 0) return undefined;
-    const ids = result.stdout.toString('utf8').split('\n').filter(Boolean);
-    return ids.length === paths.length ? ids : undefined;
-  };
-  for (let i = 0; i < toHash.length; i += HASH_BATCH_SIZE) {
-    const batch = toHash.slice(i, i + HASH_BATCH_SIZE);
-    const names = batch.map(item => item.entry.raw.toString('utf8'));
-    const ids =
-      (await hashOne(names)) ??
-      (await Promise.all(names.map(async name => (await hashOne([name]))?.[0])));
-    for (const [index, item] of batch.entries()) {
-      const path = names[index] ?? '';
-      const id = ids[index];
-      if (id === undefined) {
-        entries.push({ path, kind: 'incomplete', reason: 'unreadable' });
-        continue;
-      }
-      const unchanged = sameSignature(item.signature, await statSignature(join(top, path)));
-      entries.push(
-        unchanged
-          ? { path, kind: 'file', mode: item.mode, blob: id }
-          : { path, kind: 'incomplete', reason: 'changed_while_observing' }
-      );
+  // `hash-object` applies each path's clean filter and CRLF conversion, so the id equals
+  // the blob Git would commit for these bytes. Paths go through stdin, which has no length
+  // limit. Git prints ids in input order and exits at the first path it cannot read, so
+  // that path is the one after the printed ids; it is named unreadable and the rest are
+  // hashed again. Output that cannot be matched to paths identifies none of them.
+  const names = toHash.map(item => item.entry.raw.toString('utf8'));
+  const ids: (string | undefined)[] = [];
+  while (ids.length < names.length) {
+    const pending = names.slice(ids.length);
+    const result = await runGit(
+      top,
+      ['hash-object', '--stdin-paths'],
+      Buffer.from(pending.map(stdinPath).join(''), 'utf8')
+    );
+    const printed = result.stdout.toString('utf8').split('\n').filter(Boolean);
+    if (result.code === 0 && printed.length === pending.length) {
+      ids.push(...printed);
+    } else if (result.code > 0 && printed.length < pending.length) {
+      ids.push(...printed, undefined);
+    } else {
+      break;
     }
+  }
+  for (const [index, item] of toHash.entries()) {
+    const path = names[index] ?? '';
+    const id = ids[index];
+    if (id === undefined) {
+      entries.push({ path, kind: 'incomplete', reason: 'unreadable' });
+      continue;
+    }
+    const unchanged = sameSignature(item.signature, await statSignature(join(top, path)));
+    entries.push(
+      unchanged
+        ? { path, kind: 'file', mode: item.mode, blob: id }
+        : { path, kind: 'incomplete', reason: 'changed_while_observing' }
+    );
   }
 
   // A checkout that changed while it was being read cannot be described as one instant.
-  const after = await runGit(top, statusArgs);
+  const after = await runGit(top, STATUS_ARGS);
   if (after.code !== 0) return FAILED(sampledAt);
   if (!after.stdout.equals(before.stdout)) {
     const beforeRecords = new Set(splitRecords(before.stdout));
@@ -467,7 +579,7 @@ export async function sampleCheckout(
     try {
       changedEntries = parseStatus(
         Buffer.concat(moved.flatMap(record => [Buffer.from(record, 'base64'), Buffer.from([0])]))
-      );
+      ).entries;
     } catch {
       return FAILED(sampledAt);
     }
@@ -509,7 +621,7 @@ export async function sampleCheckout(
       manifest: {
         version: CHECKOUT_MANIFEST_VERSION,
         objectFormat,
-        commit: head.commit,
+        commit,
         entries,
       },
     },

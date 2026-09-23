@@ -340,6 +340,38 @@ describe('WorktreeProvider', () => {
       );
     });
 
+    test('refreshes the index of a worktree it created, once, after creating it', async () => {
+      const env = await provider.create(baseRequest);
+
+      const calls = execSpy.mock.calls.map(call => call[1]);
+      const refreshes = calls.filter(args => args.includes('update-index'));
+      expect(refreshes).toEqual([['-C', env.workingPath, 'update-index', '-q', '--refresh']]);
+      const added = calls.findIndex(args => args.includes('worktree') && args.includes('add'));
+      expect(added).toBeGreaterThanOrEqual(0);
+      expect(calls.findIndex(args => args.includes('update-index'))).toBeGreaterThan(added);
+    });
+
+    test('a failed index refresh still creates the worktree', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('update-index')) throw new Error('index.lock exists');
+        return { stdout: '', stderr: '' };
+      });
+
+      const env = await provider.create(baseRequest);
+
+      expect(env.status).toBe('active');
+    });
+
+    test('never refreshes the index of a worktree it adopts', async () => {
+      worktreeExistsSpy.mockResolvedValue(true);
+      mockReadFile.mockResolvedValue('gitdir: /workspace/repo/.git/worktrees/archon/issue-42\n');
+
+      const env = await provider.create(baseRequest);
+
+      expect(env.metadata).toHaveProperty('adopted', true);
+      expect(execSpy.mock.calls.filter(call => call[1].includes('update-index'))).toEqual([]);
+    });
+
     test('does not run git checkout or reset --hard on canonical repo', async () => {
       worktreeExistsSpy.mockResolvedValue(false);
       await provider.create(baseRequest);

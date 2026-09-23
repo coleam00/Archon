@@ -868,6 +868,8 @@ export class WorktreeProvider implements IIsolationProvider {
       worktreeConfig
     );
 
+    await this.refreshIndex(worktreePath);
+
     const warnings: string[] = [];
     if (configLoadFailed) {
       warnings.push(
@@ -879,6 +881,24 @@ export class WorktreeProvider implements IIsolationProvider {
       warnings,
       ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
     };
+  }
+
+  /**
+   * Refresh the stat data in a worktree this provider just created, once. `git worktree
+   * add` leaves the index racily clean, and checkout observation runs `git status` without
+   * optional locks so it never writes the index; until something refreshes it, every
+   * observation re-hashes the whole tree and throws the result away. Refreshing re-hashes
+   * before it marks an entry clean, so content identity is unchanged. A failure leaves
+   * observations correct but slower, so it is logged and creation continues.
+   */
+  private async refreshIndex(worktreePath: string): Promise<void> {
+    try {
+      await execFileAsync('git', ['-C', worktreePath, 'update-index', '-q', '--refresh'], {
+        timeout: 120000,
+      });
+    } catch (err) {
+      getLog().warn({ err: err as Error, worktreePath }, 'worktree.index_refresh_failed');
+    }
   }
 
   /**
