@@ -914,7 +914,7 @@ The resolved provider must declare `sessionResume: true` in its capabilities. Th
 
 `persist_session` applies to `command:` and `prompt:` nodes only. Other node types skip it:
 
-- **`bash:` / `script:`** — never invoke a provider, so the field is meaningless. Setting it produces a warning at load time and is ignored.
+- **`bash:` / `script:`** — never invoke a provider, so the field is meaningless. Setting it produces a parse warning (shown by `archon validate workflows`) and is ignored.
 - **`approval:` / `cancel:`** — same: no AI call, no session to persist.
 - **`loop:` / `loop_group:`** — have their own per-iteration session threading. Cross-run persistence isn't wired for them in this release; the field is warn-and-dropped on loop and loop_group nodes. Use a `prompt:` node if you need cross-run memory.
 

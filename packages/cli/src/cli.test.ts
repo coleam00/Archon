@@ -1513,3 +1513,78 @@ describe('workflow test --json error envelope', () => {
     expect(envelope()).toMatchObject({ ok: false });
   });
 });
+
+describe('log output channel (#3444)', () => {
+  // The contract is the split between the process's stdout and stderr, so the
+  // CLI runs as a subprocess.
+  const logRecords = (text: string): Record<string, unknown>[] =>
+    text
+      .split('\n')
+      .filter(line => line.startsWith('{"level"'))
+      .map(line => JSON.parse(line) as Record<string, unknown>);
+
+  it('keeps log records off stdout and loader warnings out of a default listing', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-cli-log-channel-'));
+    const repo = join(root, 'repo');
+    const workflows = join(repo, '.archon', 'workflows');
+    mkdirSync(workflows, { recursive: true });
+    spawnSync('git', ['init', '-q', '.'], { cwd: repo });
+    writeFileSync(
+      join(workflows, 'listed.yaml'),
+      'name: listed\ndescription: The listed workflow.\nnodes:\n  - id: a\n    bash: echo a\n'
+    );
+    // Another workflow with an authoring problem: discovery parses it on every
+    // listing, but only `validate` should report it.
+    writeFileSync(
+      join(workflows, 'typo.yaml'),
+      'name: typo\ndescription: Has a typo.\nnodes:\n  - id: b\n    bash: echo b\n    contxt: fresh\n'
+    );
+    // A problem only the log reports: it must stay visible, on stderr.
+    writeFileSync(
+      join(workflows, 'bad-tags.yaml'),
+      'name: bad-tags\ndescription: Bad tags.\ntags: nope\nnodes:\n  - id: c\n    bash: echo c\n'
+    );
+    const run = (
+      args: string[],
+      logLevel = ''
+    ): { status: number | null; stdout: string; stderr: string } =>
+      spawnSync(process.execPath, [CLI_ENTRY, ...args], {
+        cwd: repo,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          ARCHON_HOME: join(root, 'home'),
+          ARCHON_TELEMETRY_DISABLED: '1',
+          DATABASE_URL: '',
+          LOG_LEVEL: logLevel,
+        },
+      });
+
+    try {
+      const listed = run(['workflow', 'list', 'listed', '--full']);
+      expect(listed.status).toBe(0);
+      expect(listed.stdout).toContain('The listed workflow.');
+      expect(logRecords(listed.stdout)).toEqual([]);
+      expect(logRecords(listed.stderr).map(r => [r.level, r.msg])).toEqual([
+        [40, 'invalid_tags_block_ignored'],
+      ]);
+
+      // An explicit quieter level is not raised to the warn default.
+      const quieter = run(['workflow', 'list', 'listed'], 'error');
+      expect(quieter.status).toBe(0);
+      expect(logRecords(quieter.stderr)).toEqual([]);
+
+      const verbose = run(['workflow', 'list', 'listed', '--verbose']);
+      expect(verbose.status).toBe(0);
+      expect(logRecords(verbose.stdout)).toEqual([]);
+      expect(logRecords(verbose.stderr)).toContainEqual(
+        expect.objectContaining({ level: 20, msg: 'node_unknown_key_ignored' })
+      );
+
+      const validated = run(['validate', 'workflows', 'typo']);
+      expect(validated.stdout).toContain("unknown key 'contxt' will be ignored");
+    } finally {
+      await removeTempTree(root);
+    }
+  });
+});

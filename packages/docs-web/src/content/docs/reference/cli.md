@@ -1063,13 +1063,31 @@ archon version
 | Option | Effect |
 |--------|--------|
 | `--cwd <path>` | Override working directory (default: current directory) |
-| `--quiet`, `-q` | Reduce log verbosity to warnings and errors only |
-| `--verbose`, `-v` | Show debug-level output |
+| `--quiet`, `-q` | Log warnings and errors only (the default for every command except `archon serve`) |
+| `--verbose`, `-v` | Show debug-level logs on stderr (on stdout for `archon serve`) |
 | `--json` | Output machine-readable JSON (workflow `list`, `status`, `runs`, `get`, `wait`, and the write commands `approve`/`reject`/`abandon`/`resume`). Implies log suppression so stdout is exactly the JSON payload. |
 | `--timeout <seconds>` | For `workflow wait`: give up after N seconds and exit `3`. Omitted means wait indefinitely. |
 | `--follow` | For `workflow logs`: wait for the transcript and stream appended rows until the run ends. |
 | `--events` | With verbose JSON workflow `status`/`get`, return raw event rows instead of ordered node summaries. |
 | `--help`, `-h` | Show help message |
+
+### Logs
+
+A command's stdout carries only its output, so `archon workflow list --full > out.txt`
+captures the listing and nothing else. Engine logs go to stderr, and by default only
+warnings and errors appear. `--verbose` (or `LOG_LEVEL=debug`) adds debug logs, still on
+stderr. `--json` and `workflow logs` print no logs at all.
+
+`archon serve` is the exception: its logs are its output, so it logs at `info` (or debug with `--verbose`) on stdout,
+as the server does when started directly.
+
+Workflow definition problems, such as deprecated or unknown keys, are reported by
+`archon validate workflows`, inline under the workflow in `workflow list`, and on stderr
+before `workflow run` starts. A file that fails to load is listed with its error by
+`workflow list` and `validate workflows`, and `workflow run` names the error. These problems
+are logged only at debug, not for every workflow a command happens to discover. An invalid
+value for an optional workflow field (for example a malformed `tags:` block) is dropped with
+a warning log, because no other report names it.
 
 ## Working Directory
 
