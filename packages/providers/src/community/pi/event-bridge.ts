@@ -192,7 +192,7 @@ function sumPromptUsage(assistants: readonly AssistantMessage[]): TokenUsage | u
 }
 
 /**
- * Build the terminal `result` chunk from every message the prompt produced so far.
+ * Build the terminal `result` chunk from every message the prompt produced.
  * Usage and cost are summed over all assistant messages; stopReason, model and error
  * come from the last one. When the agent ended in error, surfaces it as `isError: true`.
  */
@@ -388,17 +388,19 @@ export async function* bridgeSession(
   // Reset at each turn_start so only the final turn's text is compared
   // against finalAssembledText (see streaming-tail completion below).
   let currentTurnText = '';
-  // Assembled text of the final assistant message from agent_end.messages.
-  // Set synchronously inside the subscribe callback before the result chunk
-  // is pushed to the queue, so it is always ready when the yield loop
-  // processes the result.
+  // Assembled text of the final assistant message from the last agent_end.
+  // Set inside the subscribe callback, before prompt() resolves and the result
+  // chunk is pushed, so it is always ready when the yield loop processes the result.
   let finalAssembledText: string | undefined;
   // Every message this prompt produced. One prompt() can run Pi's agent loop more
-  // than once (auto-retry, compaction continuation, queued follow-ups), and each run
-  // ends with its own agent_end carrying only that run's new messages. The executor
-  // keeps the last result chunk as the node's usage, so each result chunk is built
-  // from everything so far.
+  // than once (auto-retry after a retryable error, compact-and-continue after a
+  // recoverable `length` stop or context overflow, queued follow-ups), and each run
+  // ends with its own agent_end carrying only that run's new messages. The single
+  // result chunk is emitted when prompt() resolves: the executor treats the first
+  // result as terminal and stops reading, so a result per agent_end would end the
+  // node on an intermediate run and drop the rest of its output and usage.
   const promptMessages: unknown[] = [];
+  let sawAgentEnd = false;
 
   const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
     try {
@@ -410,8 +412,7 @@ export async function* bridgeSession(
       if (event.type === 'agent_end') {
         finalAssembledText = extractLastAssistantText(event.messages);
         promptMessages.push(...event.messages);
-        flushPendingAssistant();
-        queue.push({ kind: 'chunk', chunk: buildResultChunk(promptMessages) });
+        sawAgentEnd = true;
         return;
       }
       for (const chunk of mapPiEvent(event)) {
@@ -457,6 +458,10 @@ export async function* bridgeSession(
 
   const promptPromise = session.prompt(prompt).then(
     () => {
+      if (sawAgentEnd) {
+        flushPendingAssistant();
+        queue.push({ kind: 'chunk', chunk: buildResultChunk(promptMessages) });
+      }
       queue.push({ kind: 'done' });
     },
     (err: unknown) => {
@@ -467,9 +472,8 @@ export async function* bridgeSession(
   try {
     for await (const item of queue) {
       if (item.kind === 'done') {
-        // Defensive: agent_end normally flushes buffered text via its result
-        // chunk before `done` arrives, but surface any stranded text rather
-        // than dropping it.
+        // Buffered text is flushed ahead of the result chunk when an agent_end
+        // was seen; a prompt that resolved without one can still strand text.
         if (pendingAssistant.length > 0) {
           yield { type: 'assistant', content: pendingAssistant };
           pendingAssistant = '';

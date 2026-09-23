@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-agent';
+import type { StopReason } from '@earendil-works/pi-ai';
 
 import type { MessageChunk } from '../../types';
 import {
@@ -994,7 +995,7 @@ describe('bridgeSession usage covers every model call of the prompt', () => {
   /** Pi reports usage per assistant message: one message per model call. */
   function assistant(
     usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number },
-    stopReason: 'toolUse' | 'stop' | 'error' | 'aborted',
+    stopReason: StopReason,
     responseModel?: string
   ): Record<string, unknown> {
     return {
@@ -1035,16 +1036,19 @@ describe('bridgeSession usage covers every model call of the prompt', () => {
     } as unknown as AgentSession;
   }
 
-  /** The executor keeps the last result chunk of a pass as the node's usage. */
+  /**
+   * The executor treats the first result chunk as terminal and stops reading, so a
+   * prompt must yield exactly one, carrying the whole prompt's usage.
+   */
   async function lastResult(
     events: AgentSessionEvent[]
   ): Promise<Extract<MessageChunk, { type: 'result' }>> {
-    let last: Extract<MessageChunk, { type: 'result' }> | undefined;
+    const results: Extract<MessageChunk, { type: 'result' }>[] = [];
     for await (const chunk of bridgeSession(makeSession(events), 'prompt')) {
-      if (chunk.type === 'result') last = chunk;
+      if (chunk.type === 'result') results.push(chunk);
     }
-    if (!last) throw new Error('no result chunk');
-    return last;
+    expect(results).toHaveLength(1);
+    return results[0];
   }
 
   test('sums tokens and cost over every turn of a multi-turn loop', async () => {
@@ -1086,24 +1090,52 @@ describe('bridgeSession usage covers every model call of the prompt', () => {
     expect(result.isError).toBeUndefined();
   });
 
-  test('a prompt that runs the loop twice counts each call exactly once', async () => {
-    // Pi re-runs its loop inside one prompt() (auto-retry, compaction continuation,
-    // queued follow-ups). Each run ends with its own agent_end carrying only that
-    // run's new messages; the executor keeps the last result chunk.
+  test('a prompt that runs the loop again after a recoverable length stop yields one result over both runs', async () => {
+    // Pi compacts and continues after a recoverable `length` stop. `length` is not an
+    // error, so a result per agent_end would end the node on the truncated first run
+    // and drop the continuation. Each run's agent_end carries only its own messages.
     const result = await lastResult([
       agentEnd([
-        assistant({ input: 100, output: 10, cacheRead: 0, cacheWrite: 0, cost: 0.1 }, 'stop'),
+        assistant({ input: 100, output: 10, cacheRead: 0, cacheWrite: 0, cost: 0.1 }, 'toolUse'),
+        toolResult,
+        assistant({ input: 150, output: 4000, cacheRead: 0, cacheWrite: 0, cost: 0.15 }, 'length'),
       ]),
       agentEnd([
-        assistant({ input: 200, output: 20, cacheRead: 0, cacheWrite: 0, cost: 0.2 }, 'toolUse'),
-        toolResult,
         assistant({ input: 300, output: 30, cacheRead: 0, cacheWrite: 0, cost: 0.3 }, 'stop'),
       ]),
     ]);
 
-    expect(result.tokens?.input).toBe(600);
-    expect(result.tokens?.output).toBe(60);
-    expect(result.cost).toBeCloseTo(0.6, 10);
+    expect(result.tokens?.input).toBe(550);
+    expect(result.tokens?.output).toBe(4040);
+    expect(result.cost).toBeCloseTo(0.55, 10);
+    expect(result.stopReason).toBe('stop');
+  });
+
+  test('a retryable error that Pi retries yields one successful result, counting the failed call', async () => {
+    const result = await lastResult([
+      {
+        type: 'agent_end',
+        willRetry: true,
+        messages: [
+          assistant({ input: 80, output: 5, cacheRead: 0, cacheWrite: 0, cost: 0.01 }, 'error'),
+        ],
+      } as unknown as AgentSessionEvent,
+      {
+        type: 'auto_retry_start',
+        attempt: 1,
+        maxAttempts: 3,
+        delayMs: 0,
+        errorMessage: '529',
+      } as AgentSessionEvent,
+      agentEnd([
+        assistant({ input: 200, output: 20, cacheRead: 0, cacheWrite: 0, cost: 0.02 }, 'stop'),
+      ]),
+    ]);
+
+    expect(result.isError).toBeUndefined();
+    expect(result.stopReason).toBe('stop');
+    expect(result.tokens?.input).toBe(280);
+    expect(result.tokens?.output).toBe(25);
   });
 
   test('a completed call that reported no usage leaves node usage unreported', async () => {
