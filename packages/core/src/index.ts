@@ -198,6 +198,7 @@ export {
   DRAIN_REFUSAL_NOTICE,
   type DrainStatus,
   type LockAcquisitionResult,
+  notifyDrainRefusal,
 } from './utils/conversation-lock';
 
 // Webhook delivery dedup

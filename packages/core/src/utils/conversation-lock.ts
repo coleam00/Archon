@@ -10,6 +10,8 @@
 
 import { createLogger } from '@archon/paths';
 
+import type { IPlatformAdapter } from '../types';
+
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -51,6 +53,30 @@ export interface DrainStatus {
 export const DRAIN_REFUSAL_NOTICE =
   'Archon is restarting and is not accepting new work right now. Nothing was started — ' +
   'please try again in a moment.';
+
+/**
+ * Tells a sender their message was refused because the server is draining for a
+ * restart, when — and only when — that is what happened. Nothing queued the message
+ * and nothing will retry it, so silence here would be exactly the drop drain exists
+ * to avoid; a failure to deliver the notice is logged rather than thrown, because the
+ * caller has already finished with the message and has nothing left to undo.
+ *
+ * Every platform that acquires a lock shares this so the decision, the wording and
+ * the log line cannot drift apart per adapter.
+ */
+export async function notifyDrainRefusal(
+  platform: string,
+  adapter: Pick<IPlatformAdapter, 'sendMessage'>,
+  conversationId: string,
+  result: LockAcquisitionResult
+): Promise<void> {
+  if (result.status !== 'refused-draining') return;
+  try {
+    await adapter.sendMessage(conversationId, DRAIN_REFUSAL_NOTICE);
+  } catch (sendError) {
+    getLog().error({ err: sendError, platform, conversationId }, 'drain_notice_send_failed');
+  }
+}
 
 /** Internal drain bookkeeping; `expiresAtMs` is compared against an injectable clock. */
 interface DrainState {

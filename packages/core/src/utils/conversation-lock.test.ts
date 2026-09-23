@@ -1,5 +1,9 @@
-import { describe, expect, test } from 'bun:test';
-import { ConversationLockManager } from './conversation-lock';
+import { describe, expect, mock, test } from 'bun:test';
+import {
+  ConversationLockManager,
+  DRAIN_REFUSAL_NOTICE,
+  notifyDrainRefusal,
+} from './conversation-lock';
 
 /**
  * Nothing in this file sleeps. `acquireLock` resolves with the acquisition
@@ -398,6 +402,37 @@ describe('ConversationLockManager', () => {
       expect(() => manager.beginDrain(Number.NaN)).toThrow(RangeError);
       expect(() => manager.beginDrain(Number.POSITIVE_INFINITY)).toThrow(RangeError);
       expect(manager.isDraining()).toBe(false);
+    });
+  });
+
+  describe('notifyDrainRefusal', () => {
+    test('tells the sender only when the refusal was a drain refusal', async () => {
+      const sendMessage = mock(async () => {});
+
+      await notifyDrainRefusal('discord', { sendMessage }, 'conv-a', {
+        status: 'refused-draining',
+      });
+      expect(sendMessage).toHaveBeenCalledWith('conv-a', DRAIN_REFUSAL_NOTICE);
+
+      sendMessage.mockClear();
+      for (const status of ['started', 'queued-conversation', 'queued-capacity'] as const) {
+        await notifyDrainRefusal('discord', { sendMessage }, 'conv-a', { status });
+      }
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    // The caller has already finished with the message and has nothing to undo, so a
+    // failed notice must not become a second failure on top of the refusal.
+    test('does not throw when the notice cannot be delivered', async () => {
+      const sendMessage = mock(async () => {
+        throw new Error('platform unreachable');
+      });
+
+      await notifyDrainRefusal('discord', { sendMessage }, 'conv-a', {
+        status: 'refused-draining',
+      });
+
+      expect(sendMessage).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRecordingGitFixture } from '@archon/git/test-utils';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { DRAIN_REFUSAL_NOTICE } from '@archon/core/utils/conversation-lock';
+import { DRAIN_REFUSAL_NOTICE, notifyDrainRefusal } from '@archon/core/utils/conversation-lock';
 
 const mockLogger = {
   fatal: mock(() => undefined),
@@ -34,6 +34,7 @@ mock.module('@archon/core', () => ({
   onConversationClosed: mock(async () => undefined),
   ConversationNotFoundError: class extends Error {},
   DRAIN_REFUSAL_NOTICE,
+  notifyDrainRefusal,
   ConversationLockManager: class {},
 }));
 

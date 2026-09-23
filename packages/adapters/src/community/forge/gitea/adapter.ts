@@ -13,7 +13,7 @@ import {
   ConversationNotFoundError,
   handleMessage,
   classifyAndFormatError,
-  DRAIN_REFUSAL_NOTICE,
+  notifyDrainRefusal,
   toError,
   onConversationClosed,
   type ConversationLockManager,
@@ -962,13 +962,6 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
         }
       }
     });
-    if (acquisition.status === 'refused-draining') {
-      // The handler never ran and nothing queued it: silence would lose the comment.
-      try {
-        await this.sendMessage(conversationId, DRAIN_REFUSAL_NOTICE);
-      } catch (sendError) {
-        getLog().error({ err: toError(sendError), conversationId }, 'drain_notice_send_failed');
-      }
-    }
+    await notifyDrainRefusal('gitea', this, conversationId, acquisition);
   }
 }

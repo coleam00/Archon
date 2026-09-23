@@ -13,7 +13,7 @@ import {
   ConversationNotFoundError,
   handleMessage,
   classifyAndFormatError,
-  DRAIN_REFUSAL_NOTICE,
+  notifyDrainRefusal,
   toError,
   getLinkedIssueNumbers,
   onConversationClosed,
@@ -1403,16 +1403,6 @@ ${userComment}`;
         }
       }
     });
-    if (acquisition.status === 'refused-draining') {
-      // The handler never ran and nothing queued it: silence would lose the comment.
-      try {
-        await this.sendMessage(conversationId, DRAIN_REFUSAL_NOTICE);
-      } catch (sendError) {
-        getLog().error(
-          { err: toError(sendError), conversationId },
-          'github.drain_notice_send_failed'
-        );
-      }
-    }
+    await notifyDrainRefusal('github', this, conversationId, acquisition);
   }
 }

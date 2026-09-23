@@ -113,10 +113,9 @@ import {
   assertEncryptionKeyAtBoot,
   assertProviderKeysKeyAtBoot,
   getDecryptedAccessToken,
-  DRAIN_REFUSAL_NOTICE,
+  notifyDrainRefusal,
   type GitHubAuth,
   type IGitHubAppAuthProvider,
-  type LockAcquisitionResult,
 } from '@archon/core';
 import type { IPlatformAdapter } from '@archon/core';
 import type { IdentityPlatform } from '@archon/core';
@@ -201,26 +200,6 @@ function createMessageErrorHandler(
       await adapter.sendMessage(conversationId, userMessage);
     } catch (sendError) {
       getLog().error({ err: sendError, platform, conversationId }, 'error_message_send_failed');
-    }
-  };
-}
-
-/**
- * Tells a sender their message was refused because the server is draining for a
- * restart. Nothing queued it and nothing will retry it, so staying silent here
- * would be exactly the silent drop drain exists to avoid.
- */
-function createDrainRefusalNotifier(
-  platform: string,
-  adapter: IPlatformAdapter,
-  conversationId: string
-): (result: LockAcquisitionResult) => Promise<void> {
-  return async (result: LockAcquisitionResult): Promise<void> => {
-    if (result.status !== 'refused-draining') return;
-    try {
-      await adapter.sendMessage(conversationId, DRAIN_REFUSAL_NOTICE);
-    } catch (sendError) {
-      getLog().error({ err: sendError, platform, conversationId }, 'drain_notice_send_failed');
     }
   };
 }
@@ -616,7 +595,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
               userId,
             });
           })
-          .then(createDrainRefusalNotifier('Discord', discordAdapter, conversationId))
+          .then(result => notifyDrainRefusal('Discord', discordAdapter, conversationId, result))
           .catch(createMessageErrorHandler('Discord', discordAdapter, conversationId));
       });
 
@@ -694,7 +673,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
               userId,
             });
           })
-          .then(createDrainRefusalNotifier('Slack', slackAdapter, conversationId))
+          .then(result => notifyDrainRefusal('Slack', slackAdapter, conversationId, result))
           .catch(createMessageErrorHandler('Slack', slackAdapter, conversationId));
       });
 
@@ -1024,7 +1003,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
               userId,
             });
           })
-          .then(createDrainRefusalNotifier('Telegram', telegramAdapter, conversationId))
+          .then(result => notifyDrainRefusal('Telegram', telegramAdapter, conversationId, result))
           .catch(createMessageErrorHandler('Telegram', telegramAdapter, conversationId));
       }
     );

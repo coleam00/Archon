@@ -12,7 +12,7 @@ import {
   ConversationNotFoundError,
   handleMessage,
   classifyAndFormatError,
-  DRAIN_REFUSAL_NOTICE,
+  notifyDrainRefusal,
   toError,
   onConversationClosed,
   type ConversationLockManager,
@@ -810,17 +810,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
           }
         }
       });
-      if (acquisition.status === 'refused-draining') {
-        // The handler never ran and nothing queued it: silence would lose the comment.
-        try {
-          await this.sendMessage(conversationId, DRAIN_REFUSAL_NOTICE);
-        } catch (sendError) {
-          getLog().error(
-            { err: toError(sendError), conversationId },
-            'gitlab.drain_notice_send_failed'
-          );
-        }
-      }
+      await notifyDrainRefusal('gitlab', this, conversationId, acquisition);
     } catch (error) {
       const err = toError(error);
       const conversationId = this.buildConversationId(projectPath, iid, isMR);
