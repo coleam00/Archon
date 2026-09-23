@@ -11,7 +11,7 @@
  * network probe, no scanning of other tools' stores.
  */
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readPiAuthValidity } from './doctor-pi-auth';
@@ -140,5 +140,69 @@ describe('readPiAuthValidity', () => {
     const serialized = JSON.stringify(result);
     expect(serialized).not.toContain('stored-access-token');
     expect(serialized).not.toContain('stored-refresh-token');
+  });
+
+  test('a store that cannot be read is unreadable, not missing', () => {
+    // auth.json is a directory: readFileSync throws EISDIR. Reporting that as
+    // `missing` sends the operator looking for a `pi /login` that cannot fix
+    // a path that exists but is the wrong kind of thing.
+    mkdirSync(join(dir, 'auth.json'));
+
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('unreadable');
+  });
+
+  test('an absent file is still missing', () => {
+    // The other half of the errno split: ENOENT is the only `missing`.
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('missing');
+  });
+
+  test('an OAuth grant with no usable expiry is unreadable, not valid', () => {
+    // The entry declares `type: 'oauth'` but carries no `expires`. Filtering it
+    // out leaves no expiries at all, which the old code read as "an API-key-only
+    // store" and reported valid — a store no Pi workflow can authenticate
+    // against, wearing a green doctor.
+    writeFileSync(
+      join(dir, 'auth.json'),
+      JSON.stringify({
+        anthropic: { type: 'oauth', access: 'stored-access-token' },
+      })
+    );
+
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('unreadable');
+  });
+
+  test('an out-of-range expiry is unreadable rather than throwing downstream', () => {
+    // `Number.POSITIVE_INFINITY` passes `typeof === 'number'` but yields an
+    // Invalid Date, whose toISOString() throws inside the doctor line.
+    writeFileSync(
+      join(dir, 'auth.json'),
+      JSON.stringify({ anthropic: { type: 'oauth', expires: Number.POSITIVE_INFINITY } })
+    );
+
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('unreadable');
+  });
+
+  test('a store holding only API keys is valid with no expiry to report', () => {
+    // The case the expiry filter exists for, still working: no OAuth entry at
+    // all, so nothing can go stale on its own.
+    writeFileSync(
+      join(dir, 'auth.json'),
+      JSON.stringify({ anthropic: { type: 'api-key', key: 'sk-ant-test' } })
+    );
+
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('valid');
+    if (result.status !== 'valid') throw new Error('unreachable');
+    expect(result.expiresAt).toBe(Number.POSITIVE_INFINITY);
+    expect(result.providers).toEqual(['anthropic']);
   });
 });

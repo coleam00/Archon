@@ -48,8 +48,15 @@ export function readPiAuthValidity(authJsonPath: string, options: { now: number 
   let raw: string;
   try {
     raw = readFileSync(authJsonPath, 'utf8');
-  } catch {
-    return { status: 'missing' };
+  } catch (err) {
+    // Only a genuinely absent file is `missing`. A read that failed for any
+    // other reason (EISDIR when auth.json is a directory, EACCES on a store
+    // another user owns, ...) is its own state: reporting it as missing sends
+    // the operator looking for a `pi /login` that cannot fix it.
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { status: 'missing' };
+    }
+    return { status: 'unreadable' };
   }
 
   let parsed: unknown;
@@ -70,19 +77,32 @@ export function readPiAuthValidity(authJsonPath: string, options: { now: number 
   }
 
   // An API-key entry has no expiry and never goes stale on its own. Only OAuth
-  // grants carry an `expires`, so only they can decide the verdict; a store
-  // holding nothing but API keys is valid by definition.
-  const expiries = providers
+  // grants carry an `expires`, so only they can decide the verdict — but an
+  // OAuth grant *without* a usable expiry is not an API key either. Treating it
+  // as one reports a store no Pi workflow can authenticate against as valid.
+  const oauthEntries = providers
     .map(id => entries[id])
     .filter((entry): entry is StoredOAuthCredential => {
       if (typeof entry !== 'object' || entry === null) return false;
       return (entry as StoredOAuthCredential).type === 'oauth';
-    })
-    .map(entry => entry.expires)
-    .filter((expires): expires is number => typeof expires === 'number');
+    });
 
-  if (expiries.length === 0) {
+  if (oauthEntries.length === 0) {
+    // Nothing but API keys: valid by definition, with no expiry to report.
     return { status: 'valid', providers, expiresAt: Number.POSITIVE_INFINITY };
+  }
+
+  const expiries = oauthEntries
+    .map(entry => entry.expires)
+    .filter(
+      (expires): expires is number => typeof expires === 'number' && Number.isFinite(expires)
+    );
+
+  if (expiries.length !== oauthEntries.length) {
+    // At least one OAuth grant carries no finite expiry, so none of them can be
+    // trusted to date the credential. An out-of-range value would also reach
+    // `new Date(...).toISOString()` below and throw there.
+    return { status: 'unreadable' };
   }
 
   const expiresAt = Math.min(...expiries);

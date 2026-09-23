@@ -391,7 +391,11 @@ export function probePiAuthValidity(authJsonPath: string, now: number): PiAuthVa
 
 /** Format an expiry instant for a doctor line, without leaking a credential. */
 function formatExpiry(expiresAt: number): string {
-  return new Date(expiresAt).toISOString().slice(0, 10);
+  const date = new Date(expiresAt);
+  // A non-finite or out-of-range instant yields an Invalid Date, whose
+  // toISOString() throws — and this runs inside a doctor line, not a crash path.
+  if (Number.isNaN(date.getTime())) return 'an unknown date';
+  return date.toISOString().slice(0, 10);
 }
 
 export async function checkPi(env: NodeJS.ProcessEnv): Promise<CheckResult> {
@@ -432,10 +436,11 @@ export async function checkPi(env: NodeJS.ProcessEnv): Promise<CheckResult> {
       };
     }
 
-    // 'valid' and 'empty' both fall through: an empty store means the file is
-    // present but carries no credentials, which the env-var check below is the
-    // right answer for.
-    if (validity.status === 'valid' || validity.status === 'empty') {
+    // 'empty' must not claim a pass: the file is present but holds no
+    // credential, so `pi` has nothing to authenticate with. Falling through
+    // lets the env-var check below answer, and a Pi-default user with neither
+    // gets the failure instead of a green doctor.
+    if (validity.status === 'valid') {
       return { label, status: 'pass', message: '~/.pi/agent/auth.json found' };
     }
 

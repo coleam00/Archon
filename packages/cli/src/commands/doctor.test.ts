@@ -553,6 +553,38 @@ describe('checkPi', () => {
     expect(result.message).toContain('auth.json');
   });
 
+  it('an empty store is not a pass on its own', async () => {
+    // `{}` on disk means the file is present but holds no credential, so `pi`
+    // has nothing to authenticate with. It must fall through to the env-var
+    // check rather than report a green doctor for a Pi-default user.
+    authJsonSpy.mockReturnValue(true);
+    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
+      status: 'empty',
+    });
+
+    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
+
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('pi /login');
+  });
+
+  it('an empty store still passes when an API key env var is set', async () => {
+    // The reason `empty` falls through instead of failing outright: the env-var
+    // path is a legitimate answer for the same store.
+    authJsonSpy.mockReturnValue(true);
+    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
+      status: 'empty',
+    });
+
+    const result = await checkPi({
+      DEFAULT_AI_ASSISTANT: 'pi',
+      ANTHROPIC_API_KEY: 'sk-ant-test',
+    });
+
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('ANTHROPIC_API_KEY');
+  });
+
   it('returns skip for Claude-only users who have ANTHROPIC_API_KEY but Pi is not default', async () => {
     // Regression guard for M2: shared keys like ANTHROPIC_API_KEY must not be treated
     // as Pi evidence unless DEFAULT_AI_ASSISTANT=pi.
