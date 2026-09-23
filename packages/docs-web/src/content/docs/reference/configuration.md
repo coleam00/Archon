@@ -125,6 +125,17 @@ The `tiers:` block above is no longer hand-edit-only -- you can also set the `sm
 
 These files are persistent layers. For one invocation, use repeatable [`workflow run --model <name>=<spec>`](/reference/cli/#workflow-run-name-message), [`workflow run --config <path>`](/reference/cli/#per-run-config-files), or the run API's inline `config`, `tiers`, and `aliases` fields. Each run layer is sparse and sits above user, repository, global, and built-in values without editing a persistent config file.
 
+### How `assistants:` is validated
+
+Every `assistants.<provider>` block is checked by that provider when the config loads, in both `~/.archon/config.yaml` and a repository `.archon/config.yaml`. A misspelled key, an unsupported value, or a wrong type stops the load with a message naming the file, the provider, the key, and the accepted values — the same check a `--config` run layer gets. Values the provider would have quietly discarded used to reach a run and be reported as the setting the node ran at:
+
+```
+Invalid assistants config in '/Users/you/.archon/config.yaml':
+  'assistants.codex.modelReasoningEffort': expected minimal, low, medium, high, xhigh, max.
+```
+
+`archon doctor` reports the same failure as the **Config files** check. An `assistants:` entry for a provider this install has not registered is ignored, as before — there is no provider to validate it.
+
 ## Run-scoped configuration
 
 Keep a reusable file such as `config.minimax.yaml` in a repository and select it only for runs that need it:
