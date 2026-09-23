@@ -151,7 +151,16 @@ describe('implement assert-changed guard over engine checkout observations', () 
       'deleting a pre-existing untracked file',
       (s: Scratch): void => unlinkSync(join(s.repo, 'new.txt')),
     ],
-    ['changing the executable bit', (s: Scratch): void => chmodSync(join(s.repo, 'b.txt'), 0o755)],
+    // Git on Windows ignores the executable bit (core.fileMode=false), so there is no
+    // mode change to see there.
+    ...(process.platform === 'win32'
+      ? []
+      : [
+          [
+            'changing the executable bit',
+            (s: Scratch): void => chmodSync(join(s.repo, 'b.txt'), 0o755),
+          ] as const,
+        ]),
     [
       'replacing a file with a symlink',
       (s: Scratch): void => {

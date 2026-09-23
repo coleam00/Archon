@@ -21,6 +21,9 @@ import {
 } from './schemas/checkout-observation';
 
 const trackTempRoot = trackTempRoots();
+// Git on Windows ignores the executable bit (core.fileMode=false) and NTFS forbids a
+// newline in a file name, so the cases that assert on either are POSIX-only.
+const posixOnly = process.platform === 'win32' ? test.skip : test;
 
 function git(cwd: string, ...args: string[]): string {
   const result = Bun.spawnSync(['git', ...args], { cwd, stdout: 'pipe', stderr: 'pipe' });
@@ -108,7 +111,7 @@ describe('checkout observation', () => {
     ]);
   });
 
-  test('records only dirty paths, by worktree content, mode, and type', async () => {
+  posixOnly('records only dirty paths, by worktree content, mode, and type', async () => {
     const { dir, artifacts } = repo();
     writeFileSync(join(dir, 'modified.txt'), 'one\n');
     writeFileSync(join(dir, 'staged.txt'), 'one\n');
@@ -205,7 +208,7 @@ describe('checkout observation', () => {
     ]);
   });
 
-  test('a conflicted path records its worktree mode', async () => {
+  posixOnly('a conflicted path records its worktree mode', async () => {
     const { dir, artifacts } = repo();
     writeFileSync(join(dir, 'run.sh'), 'base\n');
     chmodSync(join(dir, 'run.sh'), 0o755);
