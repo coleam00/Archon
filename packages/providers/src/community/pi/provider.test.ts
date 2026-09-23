@@ -1119,7 +1119,7 @@ describe('PiProvider', () => {
     // missing provider extension, so the extension remedy must not appear.
     expect(error?.message).toContain('Pi model not found');
     expect(error?.message).toContain('pi update --models');
-    expect(error?.message).toContain('/custom/pi-agent/models-store.json');
+    expect(error?.message).toContain(join('/custom/pi-agent', 'models-store.json'));
     expect(error?.message).not.toContain('provider extension');
     expect(error?.message).not.toContain('enableExtensions');
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
