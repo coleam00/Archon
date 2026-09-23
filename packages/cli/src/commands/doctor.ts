@@ -57,6 +57,35 @@ export interface CheckResult {
   message: string;
 }
 
+/**
+ * Report whether the global and repository `.archon/config.yaml` actually load.
+ *
+ * Its own check rather than a signal folded into the binary checks: those two
+ * degrade to env/autodetect when config load throws (#2263), which protects
+ * binary resolution but would hide a config the rest of the CLI cannot read.
+ */
+export async function checkConfigFiles(
+  cwd: string = process.cwd(),
+  // Injected so tests can drive both branches without the dynamic @archon/core
+  // import or a config file on disk.
+  load: (cwd: string) => Promise<Pick<MergedConfig, 'assistant'>> = defaultLoadMergedConfig
+): Promise<CheckResult> {
+  const label = 'Config files';
+  try {
+    const config = await load(cwd);
+    return { label, status: 'pass', message: `valid (default assistant: ${config.assistant})` };
+  } catch (err) {
+    return { label, status: 'fail', message: (err as Error).message };
+  }
+}
+
+async function defaultLoadMergedConfig(cwd: string): Promise<MergedConfig> {
+  // Lazy import so doctor doesn't pull the full @archon/core graph for an
+  // unrelated check (matches defaultLoadClaudeBinaryDeps).
+  const { loadConfig } = await import('@archon/core');
+  return loadConfig(cwd);
+}
+
 export interface ClaudeBinaryDeps {
   /** `assistants.claude.claudeBinaryPath` from the merged config, if configured. */
   configBinaryPath?: string;
@@ -136,12 +165,9 @@ export async function defaultLoadClaudeBinaryDeps(
   // can be asserted without mock.module(), which is process-global and would
   // leak into every other test in this file's batch. Defaults to the real
   // lazy import so the production path is the zero-argument call.
-  loadMergedConfig: (cwd: string) => Promise<Pick<MergedConfig, 'assistants'>> = async cwd => {
-    // Lazy import so doctor doesn't pull the full @archon/core graph for an
-    // unrelated check (matches defaultLoadCodexBinaryDeps).
-    const { loadConfig } = await import('@archon/core');
-    return loadConfig(cwd);
-  }
+  loadMergedConfig: (
+    cwd: string
+  ) => Promise<Pick<MergedConfig, 'assistants'>> = defaultLoadMergedConfig
 ): Promise<ClaudeBinaryDeps> {
   const config = await loadMergedConfig(process.cwd());
   return { configBinaryPath: config.assistants.claude.claudeBinaryPath };
@@ -848,6 +874,7 @@ export async function doctorCommand(
   const promises = checks
     ? checks.map(fn => fn())
     : [
+        checkConfigFiles(),
         checkClaudeBinary(),
         checkCodexBinary(env),
         checkGhAuth(env),

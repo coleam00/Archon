@@ -18,6 +18,7 @@ import { copyArchonSkill } from './skill';
 import {
   checkClaudeBinary,
   checkCodexBinary,
+  checkConfigFiles,
   checkOpenCode,
   checkDatabase,
   checkConnectedProviders,
@@ -500,6 +501,25 @@ describe('checkPi', () => {
     const result = await checkPi({ OPENROUTER_API_KEY: 'or-key' });
     expect(result.status).toBe('skip');
     expect(result.message).toContain('not configured');
+  });
+});
+
+describe('checkConfigFiles', () => {
+  it('passes and names the resolved default assistant', async () => {
+    const result = await checkConfigFiles('/repo', async () => ({ assistant: 'codex' }));
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('codex');
+  });
+
+  it('fails with the loader message when assistants config is invalid', async () => {
+    const result = await checkConfigFiles('/repo', async () => {
+      throw new Error(
+        "Invalid assistants config in '/repo/.archon/config.yaml': " +
+          "'assistants.codex.modelReasoningEffort': expected minimal, low, medium, high, xhigh, max."
+      );
+    });
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('assistants.codex.modelReasoningEffort');
   });
 });
 
