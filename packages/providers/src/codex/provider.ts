@@ -335,10 +335,10 @@ export function classifyCodexError(
   return 'unknown';
 }
 
-function extractUsageFromCodexEvent(event: TurnCompletedEvent): TokenUsage {
+function extractUsageFromCodexEvent(event: TurnCompletedEvent): TokenUsage | undefined {
   if (!event.usage) {
     getLog().warn({ eventType: event.type }, 'codex.usage_null_on_turn_completed');
-    return { input: 0, output: 0 };
+    return undefined;
   }
   return {
     input: event.usage.input_tokens,
@@ -809,7 +809,7 @@ async function* streamCodexEvents(
       yield {
         type: 'result',
         sessionId: resolvedThreadId ?? undefined,
-        tokens: usage,
+        ...(usage ? { tokens: usage } : {}),
         ...(structuredOutput !== undefined ? { structuredOutput } : {}),
       };
       return;

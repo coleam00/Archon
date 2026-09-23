@@ -242,6 +242,17 @@ describe('SlackAdapter', () => {
         )
       ).toBe('compare https://github.com/a and https://github.com/b');
     });
+
+    test('should map a bare reset to /reset', () => {
+      expect(adapter.stripBotMention('reset')).toBe('/reset');
+      expect(adapter.stripBotMention('RESET')).toBe('/reset');
+      expect(adapter.stripBotMention('<@U1234ABCD> reset')).toBe('/reset');
+    });
+
+    test('should leave /reset and longer reset text unchanged', () => {
+      expect(adapter.stripBotMention('/reset')).toBe('/reset');
+      expect(adapter.stripBotMention('reset please')).toBe('reset please');
+    });
   });
 
   describe('parent conversation ID', () => {

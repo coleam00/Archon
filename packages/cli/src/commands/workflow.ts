@@ -3,6 +3,8 @@
  */
 
 import { getTerminalRecord } from '@archon/workflows/terminal-record';
+import { readNodeRecordEvent } from '@archon/workflows/node-record-reader';
+import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
 import { existsSync, readdirSync, type Dirent } from 'node:fs';
 import * as archonPaths from '@archon/paths';
 import {
@@ -77,10 +79,8 @@ import {
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import {
-  executeWorkflow,
   disposeWorkflowSource,
   finalizeWorkflowSource,
-  hydrateResumableRun,
   prepareWorkflowSource,
   recordSelectedWorkflow,
   resolveContinuationWorkflow,
@@ -111,6 +111,7 @@ import {
   getWorkflowEventEmitter,
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
+import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import type {
   DeclaredWorkflowConfig,
   WorkflowDefinition,
@@ -1068,7 +1069,9 @@ function renderWorkflowEvent(event: WorkflowEmitterEvent, verbose: boolean): voi
       break;
     }
     case 'node_completed':
-      process.stderr.write(`[${event.nodeName}] Completed (${formatDuration(event.duration)})\n`);
+      process.stderr.write(
+        `[${event.nodeName}] Completed${event.duration === undefined ? '' : ` (${formatDuration(event.duration)})`}\n`
+      );
       break;
     case 'node_failed':
       process.stderr.write(`[${event.nodeName}] Failed: ${event.error}\n`);
@@ -1708,8 +1711,8 @@ async function runWorkflowWithOwnedSource(
 
   // A resolved continuation already discovered over its own roots; reusing that result is
   // what keeps a resume from paying digest verification and full discovery twice.
-  // Mutable: an adopt lane that runs inside the adopted run's worktree re-freezes and
-  // re-discovers from THAT checkout once its path is known (see recaptureForLane).
+  // Mutable: without an explicit source, an adopt lane re-freezes and re-discovers
+  // from the adopted checkout once its path is known (see recaptureForLane).
   let { workflows: workflowEntries, errors } = continuation
     ? { workflows: continuation.workflows, errors: continuation.errors }
     : preparedSource
@@ -1741,11 +1744,10 @@ async function runWorkflowWithOwnedSource(
   let workflowEntry = workflow ? workflowEntries.find(ws => ws.workflow === workflow) : undefined;
   let workflowSource = workflowEntry?.source;
 
-  // An adoption lane that executes inside an inherited or freshly cut worktree must run
-  // THAT checkout's `.archon`, not the parent checkout's bytes captured on entry — the
-  // branch may carry a different workflow YAML, and executing one against the other is
-  // exactly the mixed-vintage defect (#2660/#2747). Re-freeze the source and re-discover
-  // from the lane path once the lane resolves it.
+  // By default, adoption reads the inherited or freshly cut worktree's `.archon`:
+  // the branch may carry a different workflow than the invoking checkout (#2660/#2747).
+  // An explicit source instead owns the graph, commands, and scripts for the new run;
+  // adoption changes only its execution target. The caller recaptures only the default.
   const recaptureForLane = async (sourceRoot: string): Promise<void> => {
     try {
       const replacement = await prepareWorkflowSource(createWorkflowDeps(), {
@@ -1756,7 +1758,9 @@ async function runWorkflowWithOwnedSource(
       originalStagedRoot = replacement.anchor.root;
       const stale = preparedSource;
       preparedSource = replacement;
-      if (stale) {
+      // Detached recapture replaces the same run directory in place.
+      // Remove only a distinct capture so the replacement manifest survives.
+      if (stale && stale.anchor.root !== replacement.anchor.root) {
         rmSync(stale.anchor.root, { recursive: true, force: true });
       }
     } catch (error) {
@@ -2936,9 +2940,9 @@ async function runWorkflowWithOwnedSource(
     });
   }
 
-  // The lane's checkout is final here — reuse-worktree set it in the lane block, and
-  // checkout-branch when the resolver materialized its exact branch above.
-  if (adoptLaneRunsIsolatedCheckout) {
+  // The lane's checkout is final here. Preserve an explicitly selected authoring
+  // source; only default discovery follows the adopted execution checkout.
+  if (adoptLaneRunsIsolatedCheckout && options.discoveryCwd === undefined) {
     console.log(`Capturing workflow source from ${workingCwd}.`);
     await recaptureForLane(workingCwd);
   }
@@ -3172,12 +3176,11 @@ async function runWorkflowWithOwnedSource(
     );
   }
 
-  // When --resume, hand the already-found run (and its completed-node outputs)
-  // to executeWorkflow. Otherwise this is a fresh run and prepared stays null.
   // The lookup-by-(workflowName, cwd) was already done above for worktree-path
   // resolution; reuse that result rather than querying twice.
   const deps = createWorkflowDeps();
-  let result: Awaited<ReturnType<typeof executeWorkflow>> | undefined;
+  const engine = new InProcessWorkflowEngine(deps);
+  let result: Awaited<ReturnType<InProcessWorkflowEngine['submit']>> | undefined;
   // A genuine container-teardown failure captured in the finally, rethrown AFTER
   // the finally when the run itself succeeded — so a leaked privileged container
   // fails the CLI instead of reporting success + exit 0.
@@ -3186,49 +3189,6 @@ async function runWorkflowWithOwnedSource(
     runLiveOwner = await startRunLiveOwner(ownedRunId, {
       ...(detachedProcessOwner ? { detachedProcessPid: process.pid } : {}),
     });
-    let prepared: Awaited<ReturnType<typeof hydrateResumableRun>> = null;
-    if (options.resume && resumable) {
-      try {
-        prepared = await hydrateResumableRun(deps, resumable);
-      } catch (error) {
-        const err = error as Error;
-        getLog().error(
-          { err, workflowName, runId: resumable.id },
-          'cli.workflow_hydrate_resume_failed'
-        );
-        throw new Error(
-          `Cannot resume workflow '${workflowName}': failed to load prior run state — ${err.message}`,
-          { cause: err }
-        );
-      }
-      if (!prepared) {
-        // `--branch` is only runnable when the prior run used worktree isolation:
-        // folder projects reject worktree options outright, and an in-place repo run
-        // cannot be relaunched onto the branch its own checkout holds. A stale-running
-        // orphan cannot be superseded until it is released, so name that step first.
-        const worktreeBranch = isFolderCodebase ? undefined : resumeBranch;
-        const unblock = isTerminalRunStatus(resumable.status)
-          ? ''
-          : `The run is still marked ${resumable.status}; release it before relaunching:\n` +
-            `  archon workflow abandon ${resumable.id}\n`;
-        const relaunch = [
-          'archon workflow run',
-          workflowName,
-          ...(worktreeBranch ? ['--branch', worktreeBranch] : []),
-          '--supersedes',
-          resumable.id,
-        ].join(' ');
-        throw new Error(
-          `Cannot resume: the prior run for '${workflowName}' has no completed nodes and no interactive-loop state.\n` +
-            unblock +
-            (worktreeBranch
-              ? 'Nothing can be skipped, so relaunch on the same branch instead:\n'
-              : 'Nothing can be skipped, so start a fresh run instead:\n') +
-            `  ${relaunch}`
-        );
-      }
-    }
-
     // Container run context for the engine (Phase C): the write-back backend port +
     // env id + policy. The executor drives suspend-on-pause and the write-back gate
     // through this. Absent for host/in-place runs.
@@ -3255,60 +3215,102 @@ async function runWorkflowWithOwnedSource(
             createdByUserId: cliUserId,
           })
         : undefined;
-    const opts = prepared
-      ? {
-          codebaseId: codebase?.id,
-          source: workflowSource,
-          parseWarnings: workflowEntry?.parseWarnings,
-          userId: cliUserId,
-          baseBranch: codebaseDefaultBranch,
-          baseOverride: flagBase,
-          execContext,
-          container: containerRunCtx,
-          resolveChildIsolation,
-          ...prepared,
-        }
-      : {
-          codebaseId: codebase?.id,
-          source: workflowSource,
-          parseWarnings: workflowEntry?.parseWarnings,
-          userId: cliUserId,
-          baseBranch: codebaseDefaultBranch,
-          baseOverride: flagBase,
-          execContext,
-          container: containerRunCtx,
-          resolveChildIsolation,
-          // Fresh run only: a resume (`prepared`) replays the inputs already on its row.
-          inputs: resolvedInputs,
-          ...(modelOverrides
-            ? { modelOverrideLayer: { kind: 'raw' as const, overrides: modelOverrides } }
-            : {}),
-          ...(runConfig ? { runConfig } : {}),
-          // The frozen source this run executes, captured before the workflow was even
-          // selected. A resume ignores it and loads the source recorded on its own row.
-          preparedSource,
-          // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
-          // executor adopts for us there (see #2690). Until then a rename failure
-          // leaves the staged directory un-adopted so the wrap reclaims it on the
-          // way out.
-          capturedSourceOwner: owner,
-          // Between-run continuation (#2747): written once onto the fresh row.
-          ...(adoptedFromRunId !== undefined ? { adoptedFromRunId, continuationMode } : {}),
-          // The row a detached parent already wrote (#2872). `inputs` and the
-          // continuation fields above are still passed: the executor consumes them only
-          // when IT creates the row, and this row already carries them.
-          ...(detachedPreCreatedRun ? { preCreatedRun: detachedPreCreatedRun } : {}),
-        };
-    result = await executeWorkflow(
-      deps,
-      adapter,
-      conversationId,
-      workingCwd,
-      workflow,
-      userMessage,
-      conversation.id,
-      opts
-    );
+    const commonOptions = {
+      codebaseId: codebase?.id,
+      source: workflowSource,
+      parseWarnings: workflowEntry?.parseWarnings,
+      userId: cliUserId,
+      baseBranch: codebaseDefaultBranch,
+      baseOverride: flagBase,
+      execContext,
+      container: containerRunCtx,
+      resolveChildIsolation,
+    };
+    if (options.resume && resumable) {
+      let admission: Awaited<ReturnType<InProcessWorkflowEngine['resume']>>;
+      try {
+        admission = await engine.resume({
+          platform: adapter,
+          conversationId,
+          cwd: workingCwd,
+          legacyWorkflow: workflow,
+          userMessage,
+          conversationDbId: conversation.id,
+          run: resumable,
+          options: commonOptions,
+        });
+      } catch (error) {
+        const err = error as Error;
+        getLog().error(
+          { err, workflowName, runId: resumable.id },
+          'cli.workflow_hydrate_resume_failed'
+        );
+        throw new Error(
+          `Cannot resume workflow '${workflowName}': failed to load prior run state — ${err.message}`,
+          { cause: err }
+        );
+      }
+      if (!admission.accepted) {
+        // `--branch` is only runnable when the prior run used worktree isolation:
+        // folder projects reject worktree options outright, and an in-place repo run
+        // cannot be relaunched onto the branch its own checkout holds. A stale-running
+        // orphan cannot be superseded until it is released, so name that step first.
+        const worktreeBranch = isFolderCodebase ? undefined : resumeBranch;
+        const unblock = isTerminalRunStatus(resumable.status)
+          ? ''
+          : `The run is still marked ${resumable.status}; release it before relaunching:\n` +
+            `  archon workflow abandon ${resumable.id}\n`;
+        const relaunch = [
+          'archon workflow run',
+          workflowName,
+          ...(worktreeBranch ? ['--branch', worktreeBranch] : []),
+          '--supersedes',
+          resumable.id,
+        ].join(' ');
+        throw new Error(
+          `Cannot resume: the prior run for '${workflowName}' has no completed nodes and no interactive-loop state.\n` +
+            unblock +
+            (worktreeBranch
+              ? 'Nothing can be skipped, so relaunch on the same branch instead:\n'
+              : 'Nothing can be skipped, so start a fresh run instead:\n') +
+            `  ${relaunch}`
+        );
+      }
+      result = await admission.settled;
+    } else {
+      const opts = {
+        ...commonOptions,
+        // A resume replays the inputs already on its row.
+        inputs: resolvedInputs,
+        ...(modelOverrides
+          ? { modelOverrideLayer: { kind: 'raw' as const, overrides: modelOverrides } }
+          : {}),
+        ...(runConfig ? { runConfig } : {}),
+        // The frozen source this run executes, captured before the workflow was even
+        // selected. A resume ignores it and loads the source recorded on its own row.
+        preparedSource,
+        // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
+        // executor adopts for us there (see #2690). Until then a rename failure
+        // leaves the staged directory un-adopted so the wrap reclaims it on the
+        // way out.
+        capturedSourceOwner: owner,
+        // Between-run continuation (#2747): written once onto the fresh row.
+        ...(adoptedFromRunId !== undefined ? { adoptedFromRunId, continuationMode } : {}),
+        // The row a detached parent already wrote (#2872). `inputs` and the
+        // continuation fields above are still passed: the executor consumes them only
+        // when IT creates the row, and this row already carries them.
+        ...(detachedPreCreatedRun ? { preCreatedRun: detachedPreCreatedRun } : {}),
+      };
+      result = await engine.submit({
+        platform: adapter,
+        conversationId,
+        cwd: workingCwd,
+        workflow,
+        userMessage,
+        conversationDbId: conversation.id,
+        options: opts,
+      });
+    }
   } finally {
     await closeRunLiveOwner();
     unsubscribe();
@@ -3765,6 +3767,7 @@ export interface NodeSummary {
   outputPreview?: string;
   error?: string;
   cause?: SkipCause;
+  execution?: NodeExecutionMetadata;
 }
 
 function formatSkipCause(cause: SkipCause): string {
@@ -3804,13 +3807,30 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
   for (const event of events) {
     const nodeId = event.step_name;
     if (!nodeId) continue;
+    const record = readNodeRecordEvent(event);
+    if (!record) continue;
+    const execution = record.metadata;
 
-    switch (event.event_type) {
+    switch (record.eventType) {
       case 'node_started': {
         startTimes.set(nodeId, toHydratedTimestamp(event.created_at).getTime());
         // A retry is a new active attempt, so stale terminal details must not
         // leak into the compact current-state summary.
-        summaries.set(nodeId, { nodeId, state: 'running', startedAt: event.created_at });
+        summaries.set(nodeId, {
+          nodeId,
+          state: 'running',
+          startedAt: event.created_at,
+          ...(execution === undefined ? {} : { execution }),
+        });
+        break;
+      }
+      case 'node_suspended': {
+        summaries.set(nodeId, {
+          nodeId,
+          state: 'running',
+          startedAt: summaries.get(nodeId)?.startedAt,
+          ...(execution === undefined ? {} : { execution }),
+        });
         break;
       }
       case 'node_completed': {
@@ -3820,8 +3840,10 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
           nodeId,
           state: 'completed',
           startedAt: summaries.get(nodeId)?.startedAt,
-          durationMs: started !== undefined ? endTime - started : undefined,
-          outputPreview: outputPreviewOf(event.data.node_output),
+          durationMs:
+            execution?.timing.durationMs ?? (started !== undefined ? endTime - started : undefined),
+          outputPreview: outputPreviewOf(record.data.node_output),
+          ...(execution === undefined ? {} : { execution }),
         });
         break;
       }
@@ -3832,17 +3854,20 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
           nodeId,
           state: 'failed',
           startedAt: summaries.get(nodeId)?.startedAt,
-          durationMs: started !== undefined ? endTime - started : undefined,
-          error: typeof event.data.error === 'string' ? event.data.error : 'Unknown error',
+          durationMs:
+            execution?.timing.durationMs ?? (started !== undefined ? endTime - started : undefined),
+          error: record.data.error ?? 'Unknown error',
+          ...(execution === undefined ? {} : { execution }),
         });
         break;
       }
       case 'node_skipped': {
-        const parsedCause = skipCauseSchema.safeParse(event.data.cause);
+        const parsedCause = skipCauseSchema.safeParse(record.data.cause);
         summaries.set(nodeId, {
           nodeId,
           state: 'skipped',
           ...(parsedCause.success ? { cause: parsedCause.data } : {}),
+          ...(execution === undefined ? {} : { execution }),
         });
         break;
       }
@@ -3860,7 +3885,7 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
         summaries.set(nodeId, {
           nodeId,
           state: 'completed',
-          outputPreview: outputPreviewOf(event.data.node_output),
+          outputPreview: outputPreviewOf(record.data.node_output),
         });
         break;
       }

@@ -9,7 +9,7 @@ sidebar:
   order: 9
 ---
 
-Workflows placed in `~/.archon/workflows/`, commands in `~/.archon/commands/`, and scripts in `~/.archon/scripts/` are loaded globally -- they appear in every project and can be invoked from any repository. Workflows and commands carry the `source: 'global'` label in the Web UI node palette; scripts resolve under the same repo-wins-over-home precedence.
+Workflows placed in `~/.archon/workflows/`, commands in `~/.archon/commands/`, and scripts in `~/.archon/scripts/` are loaded globally -- they appear in every project and can be invoked from any repository. Repo-specific files take precedence over home-scoped files with the same name.
 
 ## Paths
 
@@ -176,7 +176,7 @@ This way your personal workflows and commands travel with you across machines.
 
 ## CLI and Web Support
 
-Both the CLI, the server, and the Web UI discover home-scoped content automatically -- no flag, no config option.
+The CLI, server, and Web UI discover home-scoped content automatically -- no flag, no config option.
 
 ```bash
 # Lists bundled + global + repo-specific workflows
@@ -186,7 +186,9 @@ archon workflow list
 archon workflow run my-review
 ```
 
-In the Web UI workflow builder, commands from `~/.archon/commands/` appear under a **Global (~/.archon/commands/)** section in the node palette, distinct from project and bundled entries.
+In the Web UI workflow builder, add a command node and enter the command name in
+the inspector. The builder does not currently provide source-grouped command
+browsing.
 
 ## Migrating from the old path
 

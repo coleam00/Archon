@@ -20,6 +20,7 @@ import {
   isValidWorkflowFolderSegment,
   parsePackagedResourceReference,
 } from './packaged-workflow';
+import { FIXTURES_DIR } from './fixture-layout';
 import type { WorkflowSource } from './schemas';
 
 /** Normalize path separators to forward slashes for cross-platform consistency */
@@ -163,6 +164,7 @@ async function discoverPackagedScripts(
   }
 
   for (const pack of packs) {
+    if (pack === FIXTURES_DIR) continue;
     if (!isValidWorkflowFolderSegment(pack)) continue;
     const packPath = join(workflowsRoot, pack);
     try {
@@ -185,6 +187,7 @@ async function discoverPackagedScripts(
       });
     }
     for (const workflow of workflowFolders) {
+      if (workflow === FIXTURES_DIR) continue;
       if (!isValidWorkflowFolderSegment(workflow)) continue;
       try {
         if (!(await stat(join(packPath, workflow))).isDirectory()) continue;

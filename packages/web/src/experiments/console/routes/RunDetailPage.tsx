@@ -110,7 +110,7 @@ function writeNodeFilter(v: string): void {
 }
 
 export function RunDetailPage(): ReactElement {
-  const { projectId, runId } = useParams<{ projectId: string; runId: string }>();
+  const { runId } = useParams<{ projectId: string; runId: string }>();
   const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [showToolCalls, setShowToolCalls] = useState<boolean>(() =>
@@ -149,14 +149,14 @@ export function RunDetailPage(): ReactElement {
   // casts the original sentinel used — keeps the null path honest for
   // downstream readers (they can guard explicitly instead of meeting a
   // mis-typed value).
-  const { data: project } = useEntity<Project | null>(
-    projectId !== undefined ? K.project(projectId) : 'noop:no-project-id',
-    () => (projectId !== undefined ? skill.getProject(projectId) : Promise.resolve(null))
-  );
-
   const { data: detail, error: detailError } = useEntity<RunDetailView | null>(
     runId !== undefined ? K.run(runId) : 'noop:no-run-id',
     () => (runId !== undefined ? skill.getRun(runId) : Promise.resolve(null))
+  );
+  const projectId = detail?.run.projectId ?? undefined;
+  const { data: project, error: projectError } = useEntity<Project | null>(
+    projectId !== undefined ? K.project(projectId) : 'noop:no-project-id',
+    () => (projectId !== undefined ? skill.getProject(projectId) : Promise.resolve(null))
   );
 
   // Messages are tied to the run's conversation — and the /messages endpoint
@@ -381,7 +381,7 @@ export function RunDetailPage(): ReactElement {
   );
   useKeymap({ bindings });
 
-  if (projectId === undefined || runId === undefined) {
+  if (runId === undefined) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-text-tertiary">
         Invalid run URL.
@@ -449,7 +449,11 @@ export function RunDetailPage(): ReactElement {
   return (
     <StreamContextProvider value={{ runStartedAt: run.startedAt }}>
       <section className="flex h-full flex-col">
-        <RunDetailHeader run={run} projectId={projectId} projectName={project?.name ?? projectId} />
+        <RunDetailHeader
+          run={run}
+          projectId={projectId}
+          projectName={project?.name ?? detail.run.projectName ?? 'All runs'}
+        />
 
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {view === 'log' ? (
@@ -527,7 +531,13 @@ export function RunDetailPage(): ReactElement {
                   }}
                 />
               ) : (
-                <div className="p-6 text-[12px] text-text-tertiary">Loading project…</div>
+                <div className="p-6 text-[12px] text-text-tertiary">
+                  {projectId === undefined
+                    ? 'This run has no project. Its logs and artifacts are available in the other views.'
+                    : projectError
+                      ? `Could not load project: ${projectError.message}`
+                      : 'Loading project…'}
+                </div>
               )}
             </>
           ) : (

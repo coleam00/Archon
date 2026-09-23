@@ -12,7 +12,7 @@ import { K, type Scope } from '../store/keys';
 import { useDashboardSSE } from '../lib/sse';
 import { useKeymap, type Binding } from '../lib/keymap';
 import * as skill from '../skills';
-import type { Run } from '../primitives/run';
+import { runDetailPath, type Run } from '../primitives/run';
 import type { RunCounts } from '../skills/runs';
 import type { Project } from '../primitives/project';
 
@@ -377,11 +377,6 @@ export function RunsPage(): ReactElement {
     if (el !== null) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, [selectedRunId]);
 
-  const open = (id: string, projId: string | null): void => {
-    if (projId === null) return;
-    navigate(`/console/p/${projId}/r/${id}`);
-  };
-
   const bindings = useMemo<readonly Binding[]>(
     () => [
       {
@@ -419,7 +414,9 @@ export function RunsPage(): ReactElement {
         label: 'Open selected',
         when: (): boolean => selectedRun !== null,
         run: (): void => {
-          if (selectedRun !== null) open(selectedRun.id, selectedRun.projectId);
+          if (selectedRun !== null && !selectedRun.id.startsWith('demo-')) {
+            navigate(runDetailPath(selectedRun));
+          }
         },
       },
       {
@@ -479,7 +476,7 @@ export function RunsPage(): ReactElement {
         },
       },
     ],
-    [runs, selectedIndex, selectedRun]
+    [navigate, runs, selectedIndex, selectedRun]
   );
   useKeymap({ bindings });
 
@@ -522,6 +519,7 @@ export function RunsPage(): ReactElement {
                   setQuery('');
                 }
               }}
+              aria-label="Search runs"
               placeholder="Search workflow, project, run id…"
               spellCheck={false}
               className="min-w-0 flex-1 bg-transparent font-mono text-[12.5px] text-text-primary outline-none placeholder:text-text-tertiary"
@@ -531,7 +529,7 @@ export function RunsPage(): ReactElement {
 
         {scope === 'all' ? (
           <div className="rounded border border-dashed border-border bg-surface-inset/60 px-3 py-2 text-[12px] text-text-tertiary">
-            Pick a project on the left to start a run.
+            Choose a project to start a run.
           </div>
         ) : (
           <ProjectViewTabs projectId={scope} active="runs" />
@@ -540,7 +538,7 @@ export function RunsPage(): ReactElement {
 
       {/* Status sub-tabs — their own strip; the active underline overlaps the
           hairline below (design: .subtabs). */}
-      <div className="border-b border-border px-6">
+      <div className="shrink-0 overflow-x-auto border-b border-border px-6">
         <FilterChips value={filter} onChange={setFilter} counts={counts} />
       </div>
 

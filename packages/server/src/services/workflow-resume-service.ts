@@ -1,9 +1,10 @@
 import { createChildWorktreeResolver, createWorkflowDeps } from '@archon/core';
-import { resolveRunContinuation } from '@archon/core/handlers';
 import * as codebaseDb from '@archon/core/db/codebases';
 import * as workflowDb from '@archon/core/db/workflows';
+import { resumeWorkflow } from '@archon/core/operations';
+import { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-workflow';
 import { createLogger, getArchonWorkspacesPath } from '@archon/paths';
-import { executeWorkflow, hydrateResumableRun } from '@archon/workflows/executor';
+import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -102,7 +103,6 @@ export async function resumeWorkflowRunFromServer(
     log.debug({ runId: run.id }, 'workflow_resume_headless_no_working_path');
     return false;
   }
-  const workingPath = run.working_path;
   if (target.kind === 'unavailable') {
     log.warn({ runId: run.id, reason: target.reason }, 'workflow_resume_destination_unavailable');
     return false;
@@ -112,53 +112,47 @@ export async function resumeWorkflowRunFromServer(
     return false;
   }
   try {
-    const codebase = run.codebase_id ? await codebaseDb.getCodebase(run.codebase_id) : null;
+    const resumableRun = await resumeWorkflow(run.id);
+    if (!resumableRun.working_path) {
+      log.debug({ runId: resumableRun.id }, 'workflow_resume_headless_no_working_path');
+      return false;
+    }
+    if (resumableRun.metadata.isolation === 'container') {
+      log.warn({ runId: resumableRun.id }, 'workflow_resume_container_requires_cli');
+      return false;
+    }
+
+    const codebase = resumableRun.codebase_id
+      ? await codebaseDb.getCodebase(resumableRun.codebase_id)
+      : null;
     const workflowCwd = codebase?.default_cwd ?? getArchonWorkspacesPath();
     const deps = createWorkflowDeps();
-    const continuation = await resolveRunContinuation(run.id, workflowCwd);
+    const continuation = await resolveRunWorkflow(resumableRun, workflowCwd);
     if (!continuation.ok) {
       log.info(
-        { runId: run.id, reason: continuation.message },
+        { runId: resumableRun.id, reason: continuation.message },
         'workflow_resume_headless_unresolvable'
       );
       return false;
     }
 
     const destination = target.kind === 'platform' ? target.destination : undefined;
-    const platform = destination?.platform ?? new HeadlessPlatform(run.conversation_id);
-    const platformConversationId = destination?.conversationId ?? run.conversation_id;
-    const runLiveOwner = await startRunLiveOwner(run.id);
+    const platform = destination?.platform ?? new HeadlessPlatform(resumableRun.conversation_id);
+    const platformConversationId = destination?.conversationId ?? resumableRun.conversation_id;
+    const runLiveOwner = await startRunLiveOwner(resumableRun.id);
     let runLiveOwnerClose: Promise<void> | undefined;
     const closeRunLiveOwner = (): Promise<void> => {
       runLiveOwnerClose ??= runLiveOwner.close().catch((error: unknown) => {
         log.error(
-          { err: error as Error, runId: run.id },
+          { err: error as Error, runId: resumableRun.id },
           'workflow_resume_headless_owner_close_failed'
         );
       });
       return runLiveOwnerClose;
     };
-    let executionStarted = false;
+    let accepted = false;
     try {
-      let hydrated: Awaited<ReturnType<typeof hydrateResumableRun>>;
-      try {
-        hydrated = await hydrateResumableRun(deps, run, cursor);
-      } catch (error) {
-        if (error instanceof workflowDb.WorkflowNotResumableError) {
-          log.info(
-            { runId: run.id, status: error.currentStatus },
-            'workflow_resume_headless_lost_race'
-          );
-          return false;
-        }
-        throw error;
-      }
-      if (!hydrated) {
-        log.info({ runId: run.id }, 'workflow_resume_headless_nothing_to_resume');
-        return false;
-      }
-
-      const effectiveUserId = actorUserId ?? run.user_id ?? undefined;
+      const effectiveUserId = actorUserId ?? resumableRun.user_id ?? undefined;
       const resolveChildIsolation =
         codebase && codebase.kind !== 'folder'
           ? createChildWorktreeResolver({
@@ -171,24 +165,31 @@ export async function resumeWorkflowRunFromServer(
             })
           : undefined;
 
-      const execution = executeWorkflow(
-        deps,
+      const engine = new InProcessWorkflowEngine(deps);
+      const admission = await engine.resume({
         platform,
-        platformConversationId,
-        workingPath,
-        continuation.workflow.definition,
-        run.user_message ?? '',
-        run.conversation_id,
-        {
-          codebaseId: run.codebase_id ?? undefined,
+        conversationId: platformConversationId,
+        cwd: resumableRun.working_path,
+        legacyWorkflow: continuation.workflow,
+        userMessage: resumableRun.user_message ?? '',
+        conversationDbId: resumableRun.conversation_id,
+        run: resumableRun,
+        cursor,
+        options: {
+          codebaseId: resumableRun.codebase_id ?? undefined,
           userId: effectiveUserId,
           baseBranch: codebase?.default_branch?.trim() || undefined,
           resolveChildIsolation,
-          ...hydrated,
-        }
-      );
-      executionStarted = true;
-      void execution
+        },
+      });
+
+      if (!admission.accepted) {
+        log.info({ runId: resumableRun.id }, 'workflow_resume_headless_nothing_to_resume');
+        return false;
+      }
+
+      accepted = true;
+      void admission.settled
         .then(
           async result => {
             await closeRunLiveOwner();
@@ -201,18 +202,18 @@ export async function resumeWorkflowRunFromServer(
               resultRunId = result.workflowRunId;
             } else {
               if (result.workflowRunId === undefined) return;
-              message = `Workflow **${run.workflow_name}** failed: ${result.error}`;
+              message = `Workflow **${resumableRun.workflow_name}** failed: ${result.error}`;
               resultRunId = result.workflowRunId;
             }
             void platform
               .sendMessage(destination.resultConversationId, message, {
                 category: 'workflow_result',
                 segment: 'new',
-                workflowResult: { workflowName: run.workflow_name, runId: resultRunId },
+                workflowResult: { workflowName: resumableRun.workflow_name, runId: resultRunId },
               })
               .catch((error: unknown) => {
                 log.warn(
-                  { err: error as Error, runId: run.id },
+                  { err: error as Error, runId: resumableRun.id },
                   'workflow_resume_result_surface_failed'
                 );
               });
@@ -226,7 +227,11 @@ export async function resumeWorkflowRunFromServer(
             // under its own tag instead and leave the row for an operator to resolve.
             if (error instanceof TerminalStatusWriteError) {
               log.error(
-                { err: error, runId: run.id, workflowName: run.workflow_name },
+                {
+                  err: error,
+                  runId: resumableRun.id,
+                  workflowName: resumableRun.workflow_name,
+                },
                 'workflow_resume_headless_terminal_write_failed'
               );
               await closeRunLiveOwner();
@@ -234,13 +239,13 @@ export async function resumeWorkflowRunFromServer(
                 void platform
                   .sendMessage(
                     destination.resultConversationId,
-                    `⚠️ Run \`${run.id.slice(0, 8)}\` of **${run.workflow_name}** finished, but its ` +
+                    `⚠️ Run \`${resumableRun.id.slice(0, 8)}\` of **${resumableRun.workflow_name}** finished, but its ` +
                       'final status could not be saved. The run may still show as running — check it ' +
-                      `with \`/workflow status ${run.id}\` before starting another.`
+                      `with \`/workflow status ${resumableRun.id}\` before starting another.`
                   )
                   .catch((sendError: unknown) => {
                     log.warn(
-                      { err: sendError as Error, runId: run.id },
+                      { err: sendError as Error, runId: resumableRun.id },
                       'workflow_resume_result_surface_failed'
                     );
                   });
@@ -248,32 +253,31 @@ export async function resumeWorkflowRunFromServer(
               return;
             }
             log.error(
-              { err: error as Error, runId: run.id },
+              { err: error as Error, runId: resumableRun.id },
               'workflow_resume_headless_execute_failed'
             );
-            await workflowDb
-              .failWorkflowRun(run.id, `Headless resume failed: ${(error as Error).message}`)
-              .catch((failError: unknown) => {
-                log.error(
-                  { err: failError as Error, runId: run.id },
-                  'workflow_resume_headless_fail_mark_failed'
-                );
-              });
             await closeRunLiveOwner();
           }
         )
         .finally(closeRunLiveOwner)
         .catch((error: unknown) => {
           log.error(
-            { err: error as Error, runId: run.id },
+            { err: error as Error, runId: resumableRun.id },
             'workflow_resume_headless_completion_failed'
           );
         });
       return true;
     } finally {
-      if (!executionStarted) await closeRunLiveOwner();
+      if (!accepted) await closeRunLiveOwner();
     }
   } catch (error) {
+    if (error instanceof workflowDb.WorkflowNotResumableError) {
+      log.info(
+        { runId: run.id, status: error.currentStatus },
+        'workflow_resume_headless_lost_race'
+      );
+      return false;
+    }
     log.warn({ err: error as Error, runId: run.id }, 'workflow_resume_headless_unexpected_error');
     return false;
   }

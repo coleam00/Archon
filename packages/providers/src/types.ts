@@ -718,6 +718,18 @@ export interface ProviderCapabilities {
    *  - `false`         — the provider cannot produce structured output at all.
    */
   structuredOutput: 'enforced' | 'best-effort' | false;
+  /**
+   * Whether the provider enforces OpenAI Structured Outputs strict-mode's
+   * required-coverage rule: every key declared in `properties` MUST also
+   * appear in `required`. A schema that violates this rule is rejected by the
+   * provider's API with HTTP 400 `invalid_json_schema` before any work starts.
+   *
+   * Only relevant when `structuredOutput` is `'enforced'`. Among enforced
+   * providers, only Codex (OpenAI) enforces this rule; Claude accepts
+   * optional-by-omission. Best-effort providers never reject schemas at the
+   * API level and declare `false`.
+   */
+  requiresAllPropertiesRequired: boolean;
   envInjection: boolean;
   /**
    * Whether the provider enforces the per-run spend limit (`maxBudgetUsd`) — it
@@ -729,12 +741,23 @@ export interface ProviderCapabilities {
    * Whether the provider emits a monetary `cost` on a turn's usage, which the
    * engine surfaces as `costUsd` on node results and rolls up into run totals.
    * True means the translation from the SDK's cost field exists; a turn may still
-   * omit the figure when the SDK reports none.
+   * omit the figure when the SDK reports none. The other reporting flags follow
+   * the same rule: they describe an available translation, not a guarantee that
+   * every result contains the field or that usage covers every nested agent.
+   * Omitted reporting flags on older providers mean unknown, not unsupported.
    *
    * Independent of {@link costControl}: an uncappable provider still prices every
    * turn, and a cappable one is not made cheaper by reporting.
    */
   costReporting: boolean;
+  /** Whether the provider translates SDK token usage into result tokens. */
+  tokenReporting?: boolean;
+  /** Whether the provider translates an SDK stop reason into the terminal result. */
+  stopReasonReporting?: boolean;
+  /** Whether the provider reports the SDK's turn count, without counting events. */
+  turnCountReporting?: boolean;
+  /** Whether the provider translates a reported model identity, not the requested alias. */
+  resolvedModelReporting?: boolean;
   effortControl: boolean;
   fallbackModel: boolean;
   sandbox: boolean;

@@ -93,6 +93,7 @@
       "src/utils/error.test.ts",
       "src/utils/error-formatter.test.ts",
       "src/utils/github-graphql.test.ts",
+      "src/types/message-metadata.test.ts",
       "src/config/config-loader.test.ts",
       "src/config/resolve-assistant.test.ts",
       "src/state/"
@@ -149,7 +150,11 @@
       "src/services/run-attention-watch.test.ts"
     ],
     [
-      "src/workflows/"
+      "src/workflows/store-adapter.test.ts",
+      "src/workflows/child-isolation-resolver.test.ts"
+    ],
+    [
+      "src/workflows/resolve-run-workflow.test.ts"
     ],
     [
       "src/operations/workflow-operations.test.ts"

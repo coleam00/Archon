@@ -13,8 +13,8 @@ type Phase = 'idle' | 'pending' | 'error';
  * web-auth install); we render NOTHING then so there's no irrelevant panel. Any
  * other error surfaces normally.
  *
- * The connect flow ports the old UI's polling state machine into the console's
- * react-query-free cache: start → poll every `interval`s until connected / expired
+ * The connect flow uses the console's cache: start → poll every `interval`s
+ * until connected / expired
  * / denied. A `cancelledRef` (set on unmount) stops the loop and guards every
  * setState so a long poll can't write after unmount.
  */

@@ -27,6 +27,21 @@ import { parseWorkflow } from '../loader';
 import { dryRunWorkflow } from '../dry-run';
 import { resolveWorkflow } from '../graph-plan';
 import { makeTestWorkflow } from '../test-utils';
+import {
+  isExecNode,
+  isIncludeDirective,
+  isLoopGroupNode,
+  isOutputFormatEnforced,
+  isWaitNode,
+} from '../schemas';
+import {
+  findRequiredPropertyGaps,
+  getProviderCapabilities,
+  isRegisteredProvider,
+  registerBuiltinProviders,
+} from '@archon/providers';
+
+registerBuiltinProviders();
 
 // Resolve the on-disk defaults directories relative to this test file so the
 // tests work regardless of cwd. From packages/workflows/src/defaults go up
@@ -541,6 +556,60 @@ describe('bundled-defaults', () => {
         throw new Error('archon-validate has no executable validate node carrying always_run');
       }
       expect(validateNode.always_run).toBe(true);
+    });
+
+    // Replaces the deleted scripts/output-format-strict.test.ts, which guarded this
+    // same bundled set with a prose exemption rule for pinned providers. The engine now
+    // owns the rule (launch preflight + `archon validate workflows`), and this test is
+    // the CI backstop proving the shipped set stays clean. Scan under a Codex default
+    // profile: an unpinned node routes to the install's default assistant, so an install
+    // pinned to Codex is the reachable strict case. A node explicitly pinned to a
+    // non-enforcing provider (Claude) is the documented opt-out and is skipped.
+    it('every bundled workflow satisfies Codex strict-mode required coverage', () => {
+      const violations: string[] = [];
+
+      type WalkNode = NonNullable<ReturnType<typeof parseWorkflow>['workflow']>['nodes'][number];
+
+      const walk = (
+        nodes: readonly WalkNode[],
+        workflowProvider: string | undefined,
+        name: string
+      ): void => {
+        for (const node of nodes) {
+          if (isIncludeDirective(node)) continue;
+          if (isLoopGroupNode(node)) {
+            // Body nodes resolve against the workflow-level provider, not the group's
+            // own `provider` field (mirrors visitProviderInvokingNodes).
+            walk(node.loop_group.nodes, workflowProvider, name);
+            continue;
+          }
+          // exec/bash/script certify local stdout; gate/halt/loop_group schemas are
+          // inert (isOutputFormatEnforced); wait nodes carry an engine-injected
+          // output_format that never reaches a provider. Only agent and loop kinds
+          // both enforce output_format and send the schema to a provider.
+          if (isExecNode(node) || isWaitNode(node) || !isOutputFormatEnforced(node)) continue;
+          if (node.output_format === undefined) continue;
+
+          const provider = 'provider' in node ? node.provider : workflowProvider;
+          if (provider !== undefined && isRegisteredProvider(provider)) {
+            if (!getProviderCapabilities(provider).requiresAllPropertiesRequired) continue;
+          }
+          // provider === undefined routes to the install default, scanned as Codex.
+          for (const gap of findRequiredPropertyGaps(node.output_format, 'output_format')) {
+            violations.push(
+              `${name}:${node.id} ${gap.schemaPath} missing ${gap.missing.join(', ')}`
+            );
+          }
+        }
+      };
+
+      for (const [name, content] of Object.entries(BUNDLED_WORKFLOWS)) {
+        const parsed = parseWorkflow(content, `${name}.yaml`);
+        if (parsed.workflow === null) throw new Error(parsed.error.error);
+        walk(parsed.workflow.nodes, parsed.workflow.provider, name);
+      }
+
+      expect(violations).toEqual([]);
     });
   });
 

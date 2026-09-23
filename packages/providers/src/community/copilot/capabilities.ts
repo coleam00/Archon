@@ -17,9 +17,14 @@ export const COPILOT_CAPABILITIES: ProviderCapabilities = {
   agents: true,
   toolRestrictions: true,
   structuredOutput: 'best-effort', // prompt-augment + repair + validate + reask×3 (no SDK grammar)
+  requiresAllPropertiesRequired: false, // best-effort providers never reject schemas at API level
   envInjection: true,
   costControl: false,
   costReporting: false, // normalizeCopilotUsage captures token axes only
+  tokenReporting: true,
+  stopReasonReporting: false,
+  turnCountReporting: false,
+  resolvedModelReporting: false,
   effortControl: true,
   fallbackModel: false,
   sandbox: false,

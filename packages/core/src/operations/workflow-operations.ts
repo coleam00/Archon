@@ -1,3 +1,11 @@
+import { recordDerivedExecution } from '@archon/workflows/node-event-write';
+import { readNodeRecordEvent } from '@archon/workflows/node-record-reader';
+import { serializeNodeEmitter } from '@archon/workflows/node-record-serialization';
+import { getWorkflowEventEmitter } from '@archon/workflows/event-emitter';
+import { getStoragePathsForRoot, resolveRunStorageRoot } from '@archon/paths/archon-paths';
+import { finishNodeExecution } from '@archon/workflows/node-execution';
+import { serializeNodeStateRecord } from '@archon/workflows/node-record-serialization';
+import { nodeExecutionMetadataSchema } from '@archon/workflows/schemas/node-execution';
 /**
  * Shared workflow business logic — approve, reject, status, resume, abandon.
  *
@@ -237,6 +245,65 @@ function resolvedNodeCompletedStepName(approval: ApprovalContext): string {
   return approval.bodyGateId !== undefined
     ? `${approval.nodeId}.${approval.bodyGateId}`
     : approval.nodeId;
+}
+
+/** Publish only after the gate transaction wins; its inserted rows remain authoritative. */
+async function publishGateExecution(
+  run: WorkflowRun,
+  events: readonly workflowDb.GateResolutionEvent[]
+): Promise<void> {
+  for (const event of events) {
+    if (event.event_type !== 'node_completed') continue;
+    const record = readNodeRecordEvent({ workflow_run_id: run.id, ...event })?.metadata;
+    if (record === undefined) continue;
+    const root = resolveRunStorageRoot(run, null);
+    if (root === null) {
+      getLog().warn(
+        { runId: run.id, nodePath: record.path },
+        'workflow.gate_transcript_root_missing'
+      );
+      const emitted = serializeNodeEmitter(record);
+      if (emitted !== undefined) getWorkflowEventEmitter().emit(emitted);
+      continue;
+    }
+    await recordDerivedExecution({ logDir: getStoragePathsForRoot(root).logsDir }, record);
+  }
+}
+
+/** New gates retain their observed identity; old gates complete without invented history. */
+function gateCompletionEvent(
+  runId: string,
+  approval: ApprovalContext,
+  decision: string,
+  text: string,
+  structured?: { decision: string; text: string }
+): workflowDb.GateResolutionEvent {
+  if (approval.execution !== undefined) {
+    const execution = nodeExecutionMetadataSchema.parse(approval.execution);
+    if (execution.runId !== runId || execution.node.kind !== 'gate') {
+      throw new Error(`Gate execution identity does not belong to run ${runId}`);
+    }
+    const event = serializeNodeStateRecord(
+      finishNodeExecution(
+        execution,
+        { status: 'completed' },
+        {
+          output: { text, structured },
+          diagnostics: { approvalDecision: decision },
+        }
+      )
+    );
+    return { event_type: event.event_type, step_name: event.step_name, data: event.data };
+  }
+  return {
+    event_type: 'node_completed',
+    step_name: resolvedNodeCompletedStepName(approval),
+    data: {
+      node_output: text,
+      approval_decision: decision,
+      ...(structured !== undefined ? { structured_output: structured } : {}),
+    },
+  };
 }
 
 /**
@@ -647,17 +714,13 @@ export async function approveWorkflow(
           ? approvalComment
           : '';
       events = [
-        {
-          event_type: 'node_completed',
-          step_name: resolvedNodeCompletedStepName(approval),
-          data: {
-            node_output: nodeOutput,
-            approval_decision: 'approved',
-            ...(isNewMode
-              ? { structured_output: { decision: 'approve', text: comment ?? '' } }
-              : {}),
-          },
-        },
+        gateCompletionEvent(
+          runId,
+          approval,
+          'approved',
+          nodeOutput,
+          isNewMode ? { decision: 'approve', text: comment ?? '' } : undefined
+        ),
         {
           event_type: 'approval_received',
           step_name: approval.nodeId,
@@ -691,6 +754,8 @@ export async function approveWorkflow(
   if (!won) {
     throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
   }
+
+  await publishGateExecution(run, events);
 
   // Won the CAS — resolution + audit events already committed atomically.
   // Anonymous telemetry: binary resolution only — no ids/comments/names.
@@ -832,17 +897,17 @@ export async function rejectWorkflow(
   // so a failed event write rolls the resolution/cancellation back rather than
   // losing the audit trail (#2146).
   let won: boolean;
+  let completedGateEvent: workflowDb.GateResolutionEvent | undefined;
   if (willResolveNewMode && approval) {
     const structuredOutput = { decision: 'reject', text: rejectReason };
-    const nodeCompletedEvent: workflowDb.GateResolutionEvent = {
-      event_type: 'node_completed',
-      step_name: resolvedNodeCompletedStepName(approval),
-      data: {
-        node_output: JSON.stringify(structuredOutput),
-        approval_decision: 'rejected',
-        structured_output: structuredOutput,
-      },
-    };
+    const nodeCompletedEvent = gateCompletionEvent(
+      runId,
+      approval,
+      'rejected',
+      JSON.stringify(structuredOutput),
+      structuredOutput
+    );
+    completedGateEvent = nodeCompletedEvent;
     ({ resolved: won } = await workflowDb.resolveApprovalGate(
       runId,
       { approval: { ...approval, resolved: 'rejected' } },
@@ -871,6 +936,8 @@ export async function rejectWorkflow(
   if (!won) {
     throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
   }
+
+  if (completedGateEvent !== undefined) await publishGateExecution(run, [completedGateEvent]);
 
   // Won the CAS — resolution/status + audit event already committed atomically.
   // Anonymous telemetry: binary resolution only — no ids/reasons/names.
@@ -948,15 +1015,13 @@ async function respondToWorkflowWithDeclaredDecision(
 
   const structuredOutput = { decision, text: text ?? '' };
   const events: workflowDb.GateResolutionEvent[] = [
-    {
-      event_type: 'node_completed',
-      step_name: resolvedNodeCompletedStepName(approval),
-      data: {
-        node_output: JSON.stringify(structuredOutput),
-        approval_decision: decision,
-        structured_output: structuredOutput,
-      },
-    },
+    gateCompletionEvent(
+      runId,
+      approval,
+      decision,
+      JSON.stringify(structuredOutput),
+      structuredOutput
+    ),
     {
       event_type: 'approval_received',
       step_name: approval.nodeId,
@@ -971,6 +1036,8 @@ async function respondToWorkflowWithDeclaredDecision(
   if (!won) {
     throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
   }
+
+  await publishGateExecution(run, events);
 
   // Anonymous telemetry: binary resolution only — no ids/comments/names. A
   // custom decision still records as 'approved' since it resolved the gate

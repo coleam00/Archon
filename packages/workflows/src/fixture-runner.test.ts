@@ -37,6 +37,7 @@ mock.module('@archon/paths', () => ({
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import * as gitModule from '@archon/git';
 import { parseWorkflow } from './loader';
+import { discoverWorkflows } from './workflow-discovery';
 import { expandWorkflowIncludes } from './include-expander';
 import type { WorkflowWithSource } from './schemas/workflow';
 import {
@@ -595,6 +596,39 @@ describe('runFixtures', () => {
     expect(report.passed).toBe(1);
   });
 
+  it('matches a multi-line fragment against a command file checked out with CRLF', async () => {
+    // A command file is read as raw text, so `* text=auto` hands a Windows clone CRLF inside
+    // it — while a fixture spells its expectation with `\n` escapes that stay LF everywhere.
+    // Three archon-ship fixtures failed on windows-latest alone until this comparison
+    // normalized. (Workflow YAML is immune: the YAML parser normalizes its own line breaks.)
+    const { cwd } = writeTempProject({
+      workflowYaml:
+        'name: test-wf\ndescription: test\ninputs:\n  target:\n    default: ""\nnodes:\n' +
+        '  - id: node-a\n    command: bind-test\n    with:\n      target: "$INPUTS.target"\n',
+      body: [
+        'fixture:',
+        '  inputs:',
+        '    target: "issue #3031"',
+        '  resolved-text-contains:',
+        '    node-a: "target:\\n\\nissue #3031\\n\\nThe operator request"',
+        'node-a: "stub"',
+      ].join('\n'),
+    });
+    mkdirSync(join(cwd, '.archon', 'commands'), { recursive: true });
+    writeFileSync(
+      join(cwd, '.archon', 'commands', 'bind-test.md'),
+      'target:\r\n\r\n$INPUTS.target\r\n\r\nThe operator request\r\n'
+    );
+
+    const report = await runFixtures({
+      workflows: [workflowsOnDisk(cwd, ['test-wf'])[0]],
+      cwd,
+    });
+
+    expect(report.results[0].failureReason).toBeUndefined();
+    expect(report.passed).toBe(1);
+  });
+
   it('reports a malformed fixture as a failure, not a crash', async () => {
     const { cwd } = writeTempProject({ body: ['fixture:', '  expect: bogus'].join('\n') });
     const report = await runFixtures({
@@ -1034,6 +1068,29 @@ describe('runFixtures', () => {
     expect(report.results.map(r => r.fixture)).toEqual(['ship/fixtures/x.stubs.yaml']);
     expect(report.results[0].expect).toBe('completed');
   });
+});
+
+describe('discovery and fixture execution agree (#3183)', () => {
+  for (const [label, path] of [
+    ['directly under the workflows root', 'hello'],
+    ['inside a pack', 'team/hello'],
+  ] as const) {
+    it(`runs a fixture ${label} without loading it as a workflow`, async () => {
+      const cwd = makeTempProject();
+      writeWorkflowDirs(cwd, [path]);
+
+      const discovered = await discoverWorkflows(cwd, {
+        loadDefaults: false,
+        sourceRoots: isolatedSourceRoots(cwd),
+      });
+      expect(discovered.errors).toEqual([]);
+      expect(discovered.workflows.map(entry => entry.workflow.name)).toEqual(['hello-wf']);
+
+      const report = await runFixtures({ workflows: discovered.workflows, cwd });
+      expect(report.results.map(r => r.fixture)).toEqual([`${path}/fixtures/hello.stubs.yaml`]);
+      expect(report).toMatchObject({ passed: 1, failed: 0 });
+    });
+  }
 });
 
 describe('runFixtures exec-code isolation (#2851)', () => {

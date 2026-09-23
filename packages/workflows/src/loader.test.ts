@@ -359,6 +359,94 @@ describe('Workflow Loader', () => {
     });
   });
 
+  describe('fixtures are not workflows (#3183)', () => {
+    const fixtureYaml = (id: string): string =>
+      `fixture:\n  expect: completed\n  reached: [${id}]\n${id}: {}\n`;
+
+    const writeWorkflowWithFixtures = async (
+      segments: readonly string[],
+      fixtureNames: readonly string[]
+    ): Promise<void> => {
+      const dir = join(testDir, '.archon', 'workflows', ...segments);
+      await mkdir(join(dir, 'fixtures'), { recursive: true });
+      await writeFile(
+        join(dir, 'flow.yaml'),
+        'name: flow\ndescription: flow\nnodes:\n  - id: run\n    bash: echo hi\n'
+      );
+      for (const name of fixtureNames) {
+        await writeFile(join(dir, 'fixtures', `${name}.stubs.yaml`), fixtureYaml('run'));
+      }
+    };
+
+    for (const [label, segments] of [
+      ['directly under the workflows root', ['flow']],
+      ['inside a pack', ['team', 'flow']],
+    ] as const) {
+      for (const [count, fixtureNames] of [
+        ['one fixture', ['greets']],
+        ['several fixtures', ['greets', 'partings']],
+      ] as const) {
+        it(`ignores ${count} ${label}`, async () => {
+          await writeWorkflowWithFixtures(segments, fixtureNames);
+          const result = await discoverWorkflows(testDir, { loadDefaults: false });
+          expect(result.errors).toEqual([]);
+          expect(result.workflows.map(entry => entry.workflow.name)).toEqual(['flow']);
+        });
+      }
+    }
+
+    it('ignores a fixtures directory at the workflows root', async () => {
+      await mkdir(join(testDir, '.archon', 'workflows', 'fixtures', 'nested'), {
+        recursive: true,
+      });
+      await writeFile(
+        join(testDir, '.archon', 'workflows', 'fixtures', 'stray.stubs.yaml'),
+        fixtureYaml('run')
+      );
+      // A subdirectory holds no workflow either: the whole `fixtures/` tree is reserved.
+      await writeFile(
+        join(testDir, '.archon', 'workflows', 'fixtures', 'nested', 'flow.yaml'),
+        'name: buried\ndescription: buried\nnodes:\n  - id: run\n    bash: echo hi\n'
+      );
+      await writeWorkflowFile(
+        testDir,
+        'plain.yaml',
+        'name: plain\ndescription: plain\nnodes:\n  - id: run\n    bash: echo hi\n'
+      );
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toEqual([]);
+      expect(result.workflows.map(entry => entry.workflow.name)).toEqual(['plain']);
+    });
+
+    it('still reports a genuinely malformed workflow', async () => {
+      await writeWorkflowFile(testDir, 'broken.yaml', 'description: no name\nnodes: []\n');
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain("Missing required field 'name'");
+    });
+
+    it('still reports a genuinely malformed workflow inside a pack', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows', 'team', 'flow');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(join(workflowDir, 'flow.yaml'), 'description: no name\nnodes: []\n');
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain("Missing required field 'name'");
+      expect(result.workflows).toEqual([]);
+    });
+
+    it('still reports a packaged workflow folder that does not hold exactly one YAML file', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows', 'team', 'flow');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(join(workflowDir, 'one.yaml'), 'name: one\ndescription: one\nnodes: []\n');
+      await writeFile(join(workflowDir, 'two.yaml'), 'name: two\ndescription: two\nnodes: []\n');
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toContain('must contain exactly one .yaml or .yml file');
+      expect(result.workflows).toEqual([]);
+    });
+  });
+
   describe('parseWorkflow (via discoverWorkflows)', () => {
     it('should parse interactive: true when present', async () => {
       const yaml = `name: test\ndescription: test\ninteractive: true\nnodes:\n  - id: n\n    prompt: p\n`;
@@ -2504,6 +2592,166 @@ nodes:
         call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
       );
       expect(aiFieldWarnings).toHaveLength(0);
+    });
+
+    it("warns, operator-visibly, that an include's denied_tools is dropped rather than enforced", async () => {
+      // The real bug behind #3196: a caller sandboxing a block it did not write got no
+      // signal that its restriction never attached. A log line only an operator tailing
+      // server output can see is not enough; this must land in `parseWarnings`, the
+      // channel the workflow's actual author reads via `/api/workflows` and `/workflow
+      // list` (#2213).
+      await writeWorkflowFile(
+        testDir,
+        'block.yaml',
+        `
+name: block
+description: An included building block
+nodes:
+  - id: build
+    prompt: "do the work"
+`
+      );
+      await writeWorkflowFile(
+        testDir,
+        'include-denied-tools.yaml',
+        `
+name: include-denied-tools
+description: A caller trying to sandbox a block it did not write
+nodes:
+  - id: use
+    include: block
+    denied_tools: ["Bash(rm:*)"]
+`
+      );
+
+      mockLogger.warn.mockClear();
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+
+      const parent = result.workflows.find(w => w.workflow.name === 'include-denied-tools');
+      const pw = parent?.parseWarnings ?? [];
+      expect(pw).toHaveLength(1);
+      expect(pw[0]).toContain("Node 'use'");
+      expect(pw[0]).toContain("'denied_tools'");
+      expect(pw[0]).toContain('an include attaches a sub-graph and does not reconfigure it');
+
+      // The included block's own node is unrestricted: the caller's denial never applied.
+      const expandedNode = (parent?.workflow.nodes as DagNode[]).find(n => n.id === 'use__build');
+      expect(expandedNode).toBeDefined();
+      expect(expandedNode?.denied_tools).toBeUndefined();
+
+      const aiFieldWarnings = mockLogger.warn.mock.calls.filter(
+        call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
+      );
+      expect(aiFieldWarnings).toHaveLength(1);
+      expect(aiFieldWarnings[0][0]).toMatchObject({ fields: ['denied_tools'], warning: pw[0] });
+    });
+
+    it('should NOT warn about tool restrictions on a loop node and should preserve them (#3324)', async () => {
+      // A loop: node scopes its own per-iteration sendQuery, so the restriction has to
+      // survive the transform. Dropping it was fail-open: there is no workflow-level
+      // allowed_tools/denied_tools for the node to fall back on.
+      await writeWorkflowFile(
+        testDir,
+        'loop-denied.yaml',
+        `
+name: loop-denied
+description: Loop that must not reach the network
+nodes:
+  - id: work
+    denied_tools: [WebFetch, WebSearch]
+    allowed_tools: [Read, Grep]
+    loop:
+      prompt: "Do something"
+      until_bash: "true"
+      max_iterations: 3
+`
+      );
+
+      mockLogger.warn.mockClear();
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+      expect(result.workflows).toHaveLength(1);
+
+      const node = (result.workflows[0].workflow.nodes as DagNode[])[0];
+      expect(isLoopNode(node)).toBe(true);
+      expect(node.denied_tools).toEqual(['WebFetch', 'WebSearch']);
+      expect(node.allowed_tools).toEqual(['Read', 'Grep']);
+
+      expect(
+        mockLogger.warn.mock.calls.filter(
+          call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
+        )
+      ).toHaveLength(0);
+      expect(result.workflows[0].parseWarnings ?? []).toHaveLength(0);
+    });
+
+    it('reports an ignored AI field to the author, not only to the log (#3324)', async () => {
+      // The defect this closes: the drop was announced by a pino line alone, which
+      // neither `archon validate workflows` nor `archon workflow list` renders — both
+      // read parseWarnings. A field the engine drops has to appear in that list.
+      await writeWorkflowFile(
+        testDir,
+        'loop-ignored-fields.yaml',
+        `
+name: loop-ignored-fields
+description: Loop declaring fields the engine drops
+nodes:
+  - id: work
+    mcp: ./mcp.json
+    skills: [code-review]
+    loop:
+      prompt: "Do something"
+      until_bash: "true"
+      max_iterations: 3
+`
+      );
+
+      mockLogger.warn.mockClear();
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+
+      const parseWarnings = result.workflows[0].parseWarnings ?? [];
+      expect(parseWarnings).toHaveLength(1);
+      expect(parseWarnings[0]).toContain("Node 'work'");
+      expect(parseWarnings[0]).toContain("'mcp'");
+      expect(parseWarnings[0]).toContain("'skills'");
+      expect(parseWarnings[0]).toContain('ignored at run time');
+
+      // The structured log line keeps its payload and now carries the same prose.
+      const aiFieldWarnings = mockLogger.warn.mock.calls.filter(
+        call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
+      );
+      expect(aiFieldWarnings).toHaveLength(1);
+      const logged = aiFieldWarnings[0][0] as { fields: string[]; warning: string };
+      expect(logged.fields).toEqual(['mcp', 'skills']);
+      expect(logged.warning).toBe(parseWarnings[0]);
+    });
+
+    it('reports ignored AI fields on a non-AI node to the author too (#3324)', async () => {
+      // Same routing for every node kind with an ignored-field list — a bash node is
+      // where an author is most likely to declare a restriction that does nothing.
+      await writeWorkflowFile(
+        testDir,
+        'bash-ignored-fields.yaml',
+        `
+name: bash-ignored-fields
+description: Bash node declaring an AI-only field
+nodes:
+  - id: check
+    bash: echo hi
+    denied_tools: [WebFetch]
+`
+      );
+
+      mockLogger.warn.mockClear();
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(0);
+
+      const parseWarnings = result.workflows[0].parseWarnings ?? [];
+      expect(parseWarnings).toHaveLength(1);
+      expect(parseWarnings[0]).toContain("'denied_tools'");
+      expect(parseWarnings[0]).toContain('(bash)');
     });
   });
 
@@ -6523,6 +6771,7 @@ nodes:
           settingSources: false,
           nativeTools: false,
           containerExec: false,
+          requiresAllPropertiesRequired: false,
         },
         factory: () => ({
           getType: () => 'no-resume-skip-test',
@@ -6543,6 +6792,7 @@ nodes:
             settingSources: false,
             nativeTools: false,
             containerExec: false,
+            requiresAllPropertiesRequired: false,
           }),
           // eslint-disable-next-line require-yield
           async *sendQuery() {
@@ -6591,6 +6841,7 @@ nodes:
           settingSources: false,
           nativeTools: false,
           containerExec: false,
+          requiresAllPropertiesRequired: false,
         },
         factory: () => ({
           getType: () => 'no-resume-test',
@@ -6611,6 +6862,7 @@ nodes:
             settingSources: false,
             nativeTools: false,
             containerExec: false,
+            requiresAllPropertiesRequired: false,
           }),
           // eslint-disable-next-line require-yield
           async *sendQuery() {

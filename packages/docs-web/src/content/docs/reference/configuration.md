@@ -215,7 +215,8 @@ defaults:
 #   - archon-plan
 
 # Per-project environment variables for workflow execution (Claude SDK only)
-# Injected into the Claude subprocess env. Use the Web UI Settings panel for secrets.
+# Injected into the Claude subprocess env. For secrets, open Environment variables
+# from the project row in the console project rail.
 # env:
 #   MY_API_KEY: value
 #   CUSTOM_ENDPOINT: https://...
@@ -337,10 +338,9 @@ worktree:
 
 ### Recommended workflows (`recommendedWorkflows`)
 
-Repo owners curate an **ordered list of recommended workflows** that lives inside the project's own `.archon/config.yaml`. The list is surfaced **pinned on top** of both UI surfaces under a fixed "Recommended for this project" header:
-
-- The **Workflows page** grid renders the pinned cards above a divider, then the rest of the workflows below.
-- The **sidebar run dropdown** renders two native `<optgroup>` blocks: `Recommended` (declared order) and `Other workflows`.
+Repo owners curate an **ordered list of recommended workflows** in the project's
+`.archon/config.yaml`. The console's new-run picker shows that ordered list under
+**Recommended for this project** and the remaining choices under **Other workflows**.
 
 ```yaml
 recommendedWorkflows:

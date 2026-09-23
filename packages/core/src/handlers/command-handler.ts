@@ -20,8 +20,6 @@ import { getArchonWorkspacesPath } from '@archon/paths';
 import { loadConfig } from '../config/config-loader';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { resolveWorkflowName } from '@archon/workflows/router';
-import { resolveContinuationWorkflow } from '@archon/workflows/executor';
-import { createWorkflowDeps } from '../workflows/store-adapter';
 import type {
   WorkflowWithSource,
   WorkflowLoadError,
@@ -269,25 +267,10 @@ function findWorkflowLoadError(
   return loadErrors.find(error => error.filename.replace(/\.ya?ml$/, '') === workflowName);
 }
 
-/**
- * Resolve everything the orchestrator needs to continue a resumable run: the run
- * itself plus its workflow definition, packaged as the `workflow` payload of a
- * `CommandResult`. Returns a user-facing failure message instead when the run is
- * not resumable or its workflow can no longer be loaded.
- *
- * Shared by `/workflow resume`, `/workflow approve` and `/workflow reject`
- * (#2565): a gate decision that does not continue the run leaves it stranded, so
- * all three resolve the same continuation the same way. Also reused by the HTTP
- * `resumeRunHeadless` fallback (packages/server) for runs with no parent
- * conversation to dispatch a chat message through (#2008).
- */
-export async function resolveRunContinuation(
-  runId: string,
-  workflowCwd: string
+async function createResumeRequest(
+  runId: string
 ): Promise<
-  | { ok: true; workflow: NonNullable<CommandResult['workflow']>; workflowName: string }
-  // `resumeHint` replaces the caller's default "retry with /workflow resume"
-  // line when that is the wrong next step.
+  | { ok: true; workflow: NonNullable<CommandResult['workflow']> }
   | { ok: false; message: string; resumeHint?: string }
 > {
   const run = await resumeWorkflow(runId);
@@ -301,85 +284,14 @@ export async function resolveRunContinuation(
       resumeHint: `Finish it with \`archon workflow resume ${runId}\` from the CLI in the same project.`,
     };
   }
-  // The graph this run FROZE, not whatever the target holds now. Without this the run
-  // resumes into a possibly-edited DAG while the executor still feeds it commands and
-  // scripts from the old capture — a graph from one moment against resources from
-  // another. Returns undefined only for a run predating capture, which falls through to
-  // live discovery below exactly as before.
-  try {
-    const continuation = await resolveContinuationWorkflow(createWorkflowDeps(), run, workflowCwd);
-    if (continuation) {
-      return {
-        ok: true,
-        workflowName: continuation.workflow.name,
-        workflow: {
-          definition: continuation.workflow,
-          args: run.user_message,
-          resumeRunId: run.id,
-          resumeRun: run,
-          // Already resolved from the run's recorded source, digest verified and
-          // discovered. Forwarded so dispatch does not pay for both again.
-          resolvedContinuation: continuation.workflow,
-        },
-      };
-    }
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, runId }, 'cmd.workflow_continuation_source_failed');
-    return {
-      ok: false,
-      message: `its recorded workflow source is unavailable: ${err.message}`,
-      resumeHint: 'Start a fresh run to execute the current workflow.',
-    };
-  }
-
-  let workflowEntries: readonly WorkflowWithSource[];
-  let loadErrors: readonly WorkflowLoadError[];
-  try {
-    const result = await discoverWorkflowsWithConfig(workflowCwd, loadConfig);
-    workflowEntries = result.workflows;
-    loadErrors = result.errors;
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, cwd: workflowCwd, runId }, 'cmd.workflow_resume_discovery_failed');
-    return {
-      ok: false,
-      message: `Failed to load workflows: ${err.message}\n\nCheck .archon/workflows/ for YAML syntax issues.`,
-    };
-  }
-  const workflow = resolveWorkflowName(
-    run.workflow_name,
-    workflowEntries.map(ws => ws.workflow)
-  );
-  if (!workflow) {
-    const loadError = findWorkflowLoadError(loadErrors, run.workflow_name);
-    if (loadError) {
-      return {
-        ok: false,
-        message: `Workflow \`${run.workflow_name}\` failed to load: ${loadError.error}\n\nFix the YAML file and try again.`,
-      };
-    }
-    return {
-      ok: false,
-      message:
-        `Workflow \`${run.workflow_name}\` for run ${runId} was not found.\n\n` +
-        'Use /workflow list to check available workflows.',
-    };
-  }
   return {
     ok: true,
-    workflowName: workflow.name,
-    workflow: {
-      definition: workflow,
-      args: run.user_message,
-      resumeRunId: run.id,
-      resumeRun: run,
-    },
+    workflow: { kind: 'resume', run },
   };
 }
 
 /**
- * Attach the run continuation to an already-recorded gate decision.
+ * Attach a resume request to an already-recorded gate decision.
  *
  * The decision is committed by the time this runs, so a continuation that cannot
  * be resolved is reported as a follow-up step, never as a failed command — saying
@@ -388,13 +300,12 @@ export async function resolveRunContinuation(
  */
 async function withRunContinuation(
   runId: string,
-  workflowCwd: string,
   headline: string,
   action: 'approve' | 'reject' | 'respond'
 ): Promise<CommandResult> {
-  let continuation: Awaited<ReturnType<typeof resolveRunContinuation>>;
+  let continuation: Awaited<ReturnType<typeof createResumeRequest>>;
   try {
-    continuation = await resolveRunContinuation(runId, workflowCwd);
+    continuation = await createResumeRequest(runId);
   } catch (error) {
     const err = error as Error;
     getLog().warn(
@@ -413,7 +324,7 @@ async function withRunContinuation(
   }
   return {
     success: true,
-    message: `${headline}\nResuming \`${continuation.workflowName}\`...`,
+    message: `${headline}\nContinuation requested.`,
     workflow: continuation.workflow,
   };
 }
@@ -925,13 +836,13 @@ async function handleWorkflowCommand(
         };
       }
       try {
-        const continuation = await resolveRunContinuation(runId, workflowCwd);
+        const continuation = await createResumeRequest(runId);
         if (!continuation.ok) {
           return { success: false, message: continuation.message };
         }
         return {
           success: true,
-          message: `Resuming workflow: \`${continuation.workflowName}\``,
+          message: 'Resume requested',
           workflow: continuation.workflow,
         };
       } catch (error) {
@@ -1022,7 +933,7 @@ async function handleWorkflowCommand(
         // Resolving is only half the action — continue the run too (#2565).
         // Before #2565 this told the user to "type your response to resume",
         // which relied on a natural-language branch that no longer exists.
-        return await withRunContinuation(runId, workflowCwd, headline, 'approve');
+        return await withRunContinuation(runId, headline, 'approve');
       } catch (error) {
         const err = error as Error;
         getLog().error({ err, runId }, 'cmd.workflow_approve_failed');
@@ -1054,10 +965,9 @@ async function handleWorkflowCommand(
         // (#2565).
         return await withRunContinuation(
           runId,
-          workflowCwd,
           result.newMode
-            ? `Workflow \`${result.workflowName}\` rejected. Continuing...`
-            : `Workflow \`${result.workflowName}\` rejected. Reworking with your feedback...`,
+            ? `Workflow \`${result.workflowName}\` rejected.`
+            : `Workflow \`${result.workflowName}\` rejected. Feedback recorded.`,
           'reject'
         );
       } catch (error) {
@@ -1102,10 +1012,9 @@ async function handleWorkflowCommand(
           }
           return await withRunContinuation(
             runId,
-            workflowCwd,
             result.newMode
-              ? `Workflow \`${result.workflowName}\` rejected. Continuing...`
-              : `Workflow \`${result.workflowName}\` rejected. Reworking with your feedback...`,
+              ? `Workflow \`${result.workflowName}\` rejected.`
+              : `Workflow \`${result.workflowName}\` rejected. Feedback recorded.`,
             'respond'
           );
         }
@@ -1114,7 +1023,7 @@ async function handleWorkflowCommand(
           result.type === 'interactive_loop'
             ? `Workflow \`${result.workflowName}\` loop input received.${pathInfo}`
             : `Workflow \`${result.workflowName}\` responded '${decision}'.${pathInfo}`;
-        return await withRunContinuation(runId, workflowCwd, headline, 'respond');
+        return await withRunContinuation(runId, headline, 'respond');
       } catch (error) {
         const err = error as Error;
         getLog().error({ err, runId, decision }, 'cmd.workflow_respond_failed');
@@ -1214,6 +1123,7 @@ async function handleWorkflowCommand(
         success: true,
         message: `Starting workflow: \`${workflow.name}\``,
         workflow: {
+          kind: 'start',
           definition: workflow,
           args: workflowArgs,
           force: force ? true : undefined,

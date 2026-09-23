@@ -122,3 +122,11 @@ and let only your own authored messages reach the streams. Re-emit a command's
 output when it failed and its words are the diagnostic; drop it when it is just a
 tool narrating itself. Capture a value's stderr separately rather than merging it,
 too — a `gh` update notice merged into a read becomes the value.
+
+## Composition validation
+
+[archon-validate](validate/README.md) accepts an explicit composition request to run
+the same project gate on two pinned parts and their composed tree. Its `interaction`
+result remains red; delivery holds it rather than treating it as inherited or
+environmental. The report retains revision, tree and check evidence for an existing
+merger to consume. It does not install a queue or authorize a merge.

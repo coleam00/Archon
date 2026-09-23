@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
-import { Navigate } from 'react-router';
+import { Navigate, useLocation } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
-import { getAuthStatus } from '@/lib/api';
+import { authStatusQuery } from '@/lib/auth-status';
 import { useSession } from '@/lib/auth-client';
 
 /**
@@ -13,11 +13,8 @@ import { useSession } from '@/lib/auth-client';
  * Enabled + no session → redirect to /login. Enabled + session → render the app.
  */
 export function SessionGate({ children }: { children: ReactNode }): React.ReactElement {
-  const { data: status, isPending: statusPending } = useQuery({
-    queryKey: ['auth-status'],
-    queryFn: getAuthStatus,
-    staleTime: 5 * 60 * 1000,
-  });
+  const location = useLocation();
+  const { data: status, isPending: statusPending, error, refetch } = useQuery(authStatusQuery);
   const { data: session, isPending: sessionPending } = useSession();
 
   // While we don't yet know whether auth is on, avoid flashing protected
@@ -26,8 +23,25 @@ export function SessionGate({ children }: { children: ReactNode }): React.ReactE
     return <FullScreenLoader />;
   }
 
-  // Auth disabled → passthrough (today's behavior, zero change).
-  if (!status?.enabled) {
+  if (error) {
+    return (
+      <div
+        role="alert"
+        className="flex h-screen flex-col items-center justify-center gap-4 p-6 text-center"
+      >
+        <p>Could not check authentication. Try again when the server is reachable.</p>
+        <button
+          type="button"
+          onClick={() => void refetch()}
+          className="rounded border border-border px-4 py-2"
+        >
+          Try again
+        </button>
+      </div>
+    );
+  }
+
+  if (!status.enabled) {
     return <>{children}</>;
   }
 
@@ -36,7 +50,13 @@ export function SessionGate({ children }: { children: ReactNode }): React.ReactE
     return <FullScreenLoader />;
   }
   if (!session?.user) {
-    return <Navigate to="/login" replace />;
+    return (
+      <Navigate
+        to="/login"
+        state={{ returnTo: location.pathname + location.search + location.hash }}
+        replace
+      />
+    );
   }
   return <>{children}</>;
 }

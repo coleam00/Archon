@@ -708,6 +708,46 @@ describe('SlackWorkflowBridge', () => {
     expect(rendered).not.toContain(':fast_forward: `plan`');
   });
 
+  test('keeps a suspended node visibly running', async () => {
+    const { adapter, updated, triggerMap } = makeFakeAdapter();
+    triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
+    mockGetConversationId.mockReturnValue('C1:111.0');
+    new SlackWorkflowBridge(adapter as never).attach();
+    await dispatchEvent({
+      type: 'workflow_started',
+      runId: 'r1',
+      workflowName: 'assist',
+      conversationId: 'conv-db-uuid',
+      transcriptPath: '/logs/r1.jsonl',
+    });
+    await dispatchEvent({
+      type: 'node_suspended',
+      runId: 'r1',
+      nodeId: 'review',
+      nodeName: 'review',
+      execution: {
+        runId: 'r1',
+        path: 'review',
+        node: { id: 'review', kind: 'workflow' },
+        invocation: { id: 'inv-1', startedAt: '2026-09-22T10:00:00Z', loopPath: [] },
+        attempt: { id: 'attempt-1', startedAt: '2026-09-22T10:00:00Z' },
+        binding: {},
+        timing: { startedAt: '2026-09-22T10:00:00Z' },
+        spend: {
+          tokens: { source: 'unavailable', reason: 'not_applicable' },
+          costUsd: { source: 'unavailable', reason: 'not_applicable' },
+          stopReason: { source: 'unavailable', reason: 'not_applicable' },
+          numTurns: { source: 'unavailable', reason: 'not_applicable' },
+        },
+        accounting: 'node',
+        lifecycle: { status: 'suspended', point: 'child_workflow' },
+      },
+    });
+    await dispatchEvent(makeTerminalEvent('completed'));
+    const rendered = JSON.stringify(updated[updated.length - 1]);
+    expect(rendered).toContain(':hourglass_flowing_sand: `review`');
+  });
+
   test('reports a prior-success replay as completed when the resumed run has no prior entry', async () => {
     const { adapter, updated, triggerMap } = makeFakeAdapter();
     triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });

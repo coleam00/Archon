@@ -18,6 +18,7 @@
     "./run-config": "./src/run-config.ts",
     "./script-discovery": "./src/script-discovery.ts",
     "./command-validation": "./src/command-validation.ts",
+    "./fixture-layout": "./src/fixture-layout.ts",
     "./defaults": "./src/defaults/bundled-defaults.ts",
     "./validator": "./src/validator.ts",
     "./dry-run": "./src/dry-run.ts",
@@ -26,8 +27,15 @@
     "./utils/workflow-requirements": "./src/utils/workflow-requirements.ts",
     "./workflow-inputs": "./src/workflow-inputs.ts",
     "./fixture-runner": "./src/fixture-runner.ts",
+    "./engine-port": "./src/engine-port.ts",
+    "./in-process-engine": "./src/in-process-engine.ts",
+    "./engine-contract-tests": "./src/engine-contract-tests.ts",
     "./fan-out-identity": "./src/fan-out-identity.ts",
-    "./test-utils": "./src/test-utils.ts"
+    "./test-utils": "./src/test-utils.ts",
+    "./node-record-reader": "./src/node-record-reader.ts",
+    "./node-execution": "./src/node-execution.ts",
+    "./node-record-serialization": "./src/node-record-serialization.ts",
+    "./node-event-write": "./src/node-event-write.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",
@@ -89,6 +97,9 @@
       "src/executor.test.ts"
     ],
     [
+      "src/in-process-engine.test.ts"
+    ],
+    [
       "src/subrun.test.ts"
     ],
     [
@@ -145,6 +156,12 @@
       "src/state-migration.test.ts",
       "src/dry-run.test.ts",
       "src/fixture-runner.test.ts"
+    ],
+    [
+      "src/node-record-reader.test.ts"
+    ],
+    [
+      "src/node-record-serialization.test.ts"
     ]
   ]
 }

@@ -19,8 +19,8 @@ interface ArtifactPanelProps {
  * artifact dir) rather than `workflow_artifact` events — bash/script nodes
  * typically write straight to $ARTIFACTS_DIR without emitting an event.
  *
- * Markdown gets the same react-markdown + GFM + highlight stack the old UI
- * used; everything else renders as monospace plain text.
+ * Markdown uses react-markdown + GFM + highlighting; everything else renders as
+ * monospace plain text.
  */
 export function ArtifactPanel({ runId }: ArtifactPanelProps): ReactElement {
   const {

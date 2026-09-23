@@ -52,6 +52,10 @@ import {
   type WorkflowSourceConfig,
   type WorkflowSourceRoots,
 } from './workflow-source';
+import { FIXTURE_SUFFIX, FIXTURES_DIR } from './fixture-layout';
+
+/** Compares text the checkout may have converted to CRLF against a fixture's LF expectation. */
+const withLfEndings = (text: string): string => text.replaceAll('\r\n', '\n');
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -128,8 +132,6 @@ export function parseFixtureFile(text: string, path: string): ParsedFixtureFile 
   return { declaration, execCode, stubs: stubsResult.data };
 }
 
-const FIXTURES_DIR = 'fixtures';
-const FIXTURE_SUFFIX = '.stubs.yaml';
 // Discovery walks user directories. This is a hang-guard margin for a pathological
 // tree, not a mirror of discovery's cap (MAX_DISCOVERY_DEPTH is 1, and the catalog
 // reaches one packaged-scanner level deeper): fixtures below the catalog's reach are
@@ -652,7 +654,20 @@ async function checkFixture(
           failureReason = `expected resolved text for node '${nodeId}', but it was not reached`;
           break;
         }
-        if (!traceEntries.some(entry => entry.resolvedText?.includes(expectedText) === true)) {
+        // Line endings belong to the checkout, not to the workflow. A command file is read as
+        // raw text, so `* text=auto` gives a Windows clone CRLF inside it, while a fixture
+        // spells its expectation with `\n` escapes that stay LF everywhere. This declaration is
+        // about interpolated content, so it compares on LF alone rather than passing on Linux
+        // and failing on Windows for the same workflow. (Workflow YAML is immune: the parser
+        // normalizes line breaks in its own scalars.)
+        const expected = withLfEndings(expectedText);
+        if (
+          !traceEntries.some(
+            entry =>
+              entry.resolvedText !== undefined &&
+              withLfEndings(entry.resolvedText).includes(expected)
+          )
+        ) {
           failureReason = `expected node '${nodeId}' resolved text to contain ${JSON.stringify(expectedText)}`;
           break;
         }

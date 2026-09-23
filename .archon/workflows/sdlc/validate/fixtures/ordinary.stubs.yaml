@@ -1,0 +1,8 @@
+validate:
+  green: true
+  red_cause: ""
+  summary: "project gate passed on the current checkout"
+fixture:
+  expect: completed
+  reached: [mode, validate, result]
+exec-code: true

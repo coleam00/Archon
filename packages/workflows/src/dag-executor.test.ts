@@ -1,3 +1,4 @@
+import { readNodeRecordEvent, nodeInvocationKey } from './node-record-reader';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import { NodeEventWriteError } from './node-event-write';
 import { buildTerminalRecord } from './terminal-record';
@@ -16,7 +17,7 @@ import {
 import { mkdir, writeFile, rm, readFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { existsSync, unlinkSync } from 'fs';
-import { join, normalize, sep } from 'path';
+import { isAbsolute, join, normalize, sep } from 'path';
 import { tmpdir } from 'os';
 import * as git from '@archon/git';
 import { RATE_LIMIT_MAX_RETRIES } from './executor-shared';
@@ -97,6 +98,7 @@ import {
   applyLoopPrevToBodyNode,
   executeDagWorkflow,
   collectContainerIncompatibleProviders,
+  collectStrictSchemaViolations,
   containerCommandName,
   buildSubprocessDockerArgs,
   childOutcomeFromRun,
@@ -106,6 +108,7 @@ import {
 import { planGraph, resolveWorkflow, resolvedBodyNodes } from './graph-plan';
 import { dryRunWorkflow } from './dry-run';
 import { writeNodeArtifact, readNodeArtifacts } from './artifacts-index';
+import { nodeArtifactsListingSchema } from './schemas/node-artifact';
 import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from './event-emitter';
 import { loadMcpConfig } from '@archon/providers/mcp/config';
 import type {
@@ -346,6 +349,7 @@ const mockClaudeCapabilities = () => ({
   settingSources: true,
   nativeTools: true,
   containerExec: true,
+  requiresAllPropertiesRequired: false,
 });
 /** Canonical capabilities for Codex-backed test nodes. */
 const mockCodexCapabilities = (): ReturnType<typeof getProviderCapabilities> =>
@@ -601,6 +605,15 @@ function makeOutput(
       : { state, output };
   }
   return { state, output, ...extra } as NodeOutput;
+}
+
+/**
+ * The reader's grouped result flattened across types, the whole-run view these
+ * executor tests assert; scope filtering is proved in artifacts-index.test.ts.
+ */
+async function readAllArtifacts(artifactsDir: string) {
+  const { artifactsByType } = await readNodeArtifacts(artifactsDir, { scope: 'resolved-scope' });
+  return Object.values(artifactsByType).flat();
 }
 
 function makeWorkflowRun(id = 'dag-test-run-id', overrides?: Partial<WorkflowRun>): WorkflowRun {
@@ -3619,6 +3632,7 @@ describe('executeDagWorkflow -- output_format structured output', () => {
             run_code_review: { type: 'string', enum: ['true', 'false'] },
             run_tests: { type: 'string', enum: ['true', 'false'] },
           },
+          required: ['run_code_review', 'run_tests'],
         },
       },
       {
@@ -3683,7 +3697,11 @@ describe('executeDagWorkflow -- output_format structured output', () => {
         id: 'check',
         kind: 'agent',
         source: { kind: 'command', name: 'classify' },
-        output_format: { type: 'object', properties: { status: { type: 'string' } } },
+        output_format: {
+          type: 'object',
+          properties: { status: { type: 'string' } },
+          required: ['status'],
+        },
       },
     ];
 
@@ -3778,7 +3796,7 @@ describe('executeDagWorkflow -- when condition parse errors (fail-closed)', () =
     const skippedEvent = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls
       .map((call: unknown[]) => call[0] as { event_type: string; data?: Record<string, unknown> })
       .find(event => event.event_type === 'node_skipped');
-    expect(skippedEvent?.data).toEqual({
+    expect(skippedEvent?.data).toMatchObject({
       reason: 'when_condition_parse_error',
       expr: "$unconditional.output = 'yes'",
       cause: { kind: 'condition_parse_error', expr: "$unconditional.output = 'yes'" },
@@ -3948,7 +3966,67 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
         total_cache_write_tokens: 0,
       },
     ]);
+    const terminals = (
+      mockDeps.store.persistWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
+    ).mock.calls
+      .map(([event]) => event)
+      .filter(event => event.event_type === 'node_failed' || event.event_type === 'node_completed');
+    expect(terminals).toHaveLength(2);
+    expect(terminals[0].data?.invocation).toEqual(terminals[1].data?.invocation);
+    expect(terminals[0].data?.attempt).not.toEqual(terminals[1].data?.attempt);
   }, 5_000);
+
+  it('retains the failed invocation when a durable resume starts another attempt', async () => {
+    const store = createMockStore();
+    const deps = createMockDeps(store);
+    const workflowRun = makeWorkflowRun('invocation-resume');
+    const workflow = {
+      name: 'invocation-resume',
+      nodes: [
+        {
+          id: 'work',
+          kind: 'agent' as const,
+          source: { kind: 'inline' as const, prompt: 'Do work' },
+          retry: { max_attempts: 0 },
+        },
+      ],
+    };
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield {
+        type: 'result',
+        isError: true,
+        errors: ['Invalid API key'],
+        errorSubtype: 'error_during_execution',
+      };
+    });
+    await executeDagWorkflow(dagOptions({ deps, cwd: testDir, workflow, workflowRun }));
+    const failedRow = store.persistWorkflowEvent.mock.calls
+      .map(([event]) => event)
+      .find(event => event.event_type === 'node_failed');
+    expect(failedRow).toBeDefined();
+    const original =
+      failedRow && readNodeRecordEvent({ ...failedRow, data: failedRow.data })?.metadata;
+    if (original === undefined) throw new Error('Expected typed failed execution');
+    store.getDagResumeSnapshot.mockResolvedValue({
+      completedNodeOutputs: new Map(),
+      fanOutSnapshots: new Map(),
+      unresolvedNodeStarts: new Set(),
+      costUsd: 0,
+      unfinishedInvocations: new Map([[nodeInvocationKey('work', []), original]]),
+    });
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'assistant', content: 'done' };
+      yield { type: 'result' };
+    });
+    await executeDagWorkflow(
+      dagOptions({ deps, cwd: testDir, workflow, workflowRun, priorCompletedNodes: new Map() })
+    );
+    const completed = store.persistWorkflowEvent.mock.calls
+      .map(([event]) => event)
+      .find(event => event.event_type === 'node_completed');
+    expect(completed?.data?.invocation).toEqual(original.invocation);
+    expect(completed?.data?.attempt).not.toEqual(original.attempt);
+  });
 
   it('workflow fails after exhausting all node retries', async () => {
     let callCount = 0;
@@ -8541,6 +8619,12 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(failed?.data?.error).toContain(
         "Node 'poll' field 'loop.until_bash' cannot resolve '$probe.output'"
       );
+      const started = store.persistWorkflowEvent.mock.calls
+        .map(([event]) => event)
+        .find(event => event.event_type === 'node_started' && event.step_name === 'poll');
+      expect(started?.data?.attempt).toBeDefined();
+      expect(failed?.data?.attempt).toEqual(started?.data?.attempt);
+      expect(failed?.data?.binding).toEqual(started?.data?.binding);
       expect(await Bun.file(markerPath).exists()).toBe(false);
     });
 
@@ -8802,6 +8886,61 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       // the schema never reached sendQuery at all.
       const options = mockSendQueryDag.mock.calls[0][3] as { outputFormat?: unknown };
       expect(options.outputFormat).toEqual({ type: 'json_schema', schema: untilFieldSchema });
+    });
+
+    it("applies a loop node's provider, model, and tool restrictions to every iteration (#3324, #3372)", async () => {
+      // The whole chain, not the executor alone: the authored YAML shape goes through
+      // the same `dagNodeSchema` transform the loader uses, because that transform is
+      // where the restriction used to be discarded. The provider receives the node
+      // config on each iteration's sendQuery and translates it (Claude
+      // `disallowedTools`, Copilot `excludedTools`, Pi's tool set).
+      let iterations = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        iterations += 1;
+        yield {
+          type: 'assistant',
+          content: iterations === 1 ? 'Still working.' : 'Done. <promise>COMPLETE</promise>',
+        };
+        yield { type: 'result', sessionId: `loop-tools-sess-${String(iterations)}` };
+      });
+
+      const loopNode = dagNodeSchema.parse({
+        id: 'my-loop',
+        provider: 'claude',
+        model: 'node-loop-model',
+        denied_tools: ['WebFetch', 'WebSearch'],
+        allowed_tools: [],
+        loop: {
+          fresh_context: false,
+          prompt: 'Do a task. When done, output <promise>COMPLETE</promise>.',
+          until: 'COMPLETE',
+          max_iterations: 4,
+        },
+      }) as DagNode;
+
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: { name: 'dag-loop-denied-tools', nodes: [loopNode] },
+          workflowRun: makeWorkflowRun('loop-denied-tools-run'),
+          workflowProvider: 'codex',
+          workflowModel: 'workflow-default-model',
+          config: { ...minimalConfig, assistant: 'codex' },
+        })
+      );
+
+      expect(iterations).toBe(2);
+      expect(mockGetAgentProviderDag).toHaveBeenCalledWith('claude');
+      expect(mockGetAgentProviderDag).not.toHaveBeenCalledWith('codex');
+      expect(mockSendQueryDag.mock.calls).toHaveLength(2);
+      for (const call of mockSendQueryDag.mock.calls) {
+        const iterationOptions = call[3] as SendQueryOptions;
+        expect(iterationOptions.model).toBe('node-loop-model');
+        expect(iterationOptions.nodeConfig?.denied_tools).toEqual(['WebFetch', 'WebSearch']);
+        expect(iterationOptions.nodeConfig?.allowed_tools).toEqual([]);
+      }
     });
 
     it('fails rather than degrading when a payload never satisfies the schema', async () => {
@@ -10138,7 +10277,16 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       const payload = { summary: 'draft one <promise>APPROVED</promise>' };
       mockSendQueryDag.mockImplementation(async function* () {
         yield { type: 'assistant', content: 'prose' };
-        yield { type: 'result', sessionId: 'sig-struct-1', structuredOutput: payload };
+        yield {
+          type: 'result',
+          sessionId: 'sig-struct-1',
+          structuredOutput: payload,
+          resolvedModel: { id: 'observed-model', provider: 'claude' },
+          stopReason: 'end_turn',
+          numTurns: 2,
+          cost: 0,
+          tokens: { input: 0, output: 0 },
+        };
       });
       const loopNodes: DagNode[] = [
         {
@@ -10187,7 +10335,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
           deps: resumingDeps,
           cwd: testDir,
           workflow: { name: 'finalize-struct-resume', nodes: loopNodes },
-          workflowRun: makeWorkflowRun('finalize-struct-resume-run', {
+          workflowRun: makeWorkflowRun('finalize-struct-pause-run', {
             metadata: {
               approval: { ...approval },
               loop_user_input: 'Approved',
@@ -10208,6 +10356,16 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       ).mock.calls.filter(c => c[0].event_type === 'node_completed' && c[0].step_name === 'refine');
       expect(completed.length).toBe(1);
       expect(completed[0][0].data.structured_output).toEqual(payload);
+      expect(completed[0][0].data.model_usage).toMatchObject({ resolved: 'observed-model' });
+      expect(completed[0][0].data.stop_reason).toBe('end_turn');
+      expect(completed[0][0].data.num_turns).toBe(2);
+      expect(completed[0][0].data.tokens).toEqual({ input: 0, output: 0 });
+      const pausedExecution = pauseCalls[0][1].execution;
+      expect(pausedExecution).toBeDefined();
+      expect(completed[0][0].data.invocation).toEqual(pausedExecution?.invocation);
+      expect(completed[0][0].data.attempt).toEqual(pausedExecution?.attempt);
+      expect(completed[0][0].data.timing).toEqual(pausedExecution?.timing);
+      expect(JSON.stringify(completed[0][0].data)).not.toContain('sig-struct-1');
     });
 
     it('finalize omits tokens when the gate persisted none (legacy pause / no usage) (#2333)', async () => {
@@ -11098,7 +11256,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         yield { type: 'assistant', content: 'refined. <promise>COMPLETE</promise>' };
         yield { type: 'result', sessionId: 'sid-gated-2' };
       });
-      const resumedRun = makeWorkflowRun('gated-resume-run', {
+      const resumedRun = makeWorkflowRun(workflowRun.id, {
         metadata: {
           approval: { ...pausedContext },
           loop_user_input: 'tighten the summary',
@@ -11238,7 +11396,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       );
       expect(freshFailures).toHaveLength(1);
 
-      const resumedRun = makeWorkflowRun('materialized-resume-run', {
+      const resumedRun = makeWorkflowRun(undefined, {
         metadata: {
           approval: { ...pausedContext },
           loop_user_input: 'tighten the summary',
@@ -14963,6 +15121,67 @@ describe('executeDagWorkflow -- approval node', () => {
     const pauseCalls = (store.pauseWorkflowRun as Mock<IWorkflowStore['pauseWorkflowRun']>).mock
       .calls;
     expect(pauseCalls.length).toBe(1);
+  });
+
+  it('resolves $TYPED_ARTIFACTS_FILE in an approval rework prompt', async () => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'assistant', content: 'reworked' };
+      yield { type: 'result', sessionId: 'rework-listing-session' };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+
+    const workflowRun = makeWorkflowRun('rework-listing-run', {
+      metadata: {
+        approval: {
+          type: 'approval',
+          nodeId: 'review',
+          message: 'Approve this plan?',
+          onRejectPrompt: 'Fix based on: $REJECTION_REASON',
+          onRejectMaxAttempts: 3,
+        },
+        rejection_reason: 'Missing edge case handling',
+        rejection_count: 1,
+      },
+    });
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        platform,
+        conversationId: 'conv-approval',
+        cwd: testDir,
+        workflow: {
+          name: 'approval-rework-listing',
+          nodes: [
+            {
+              id: 'review',
+              kind: 'gate',
+              message: 'Approve this plan?',
+              decisions: [
+                { id: 'approve' },
+                {
+                  id: 'reject',
+                  rework: { prompt: 'Listing: $TYPED_ARTIFACTS_FILE', maxAttempts: 3 },
+                },
+              ],
+              captureResponse: true,
+              decisionsAuthored: false,
+            },
+          ],
+        },
+        workflowRun,
+      })
+    );
+
+    const aiPrompt = mockSendQueryDag.mock.calls[0][0] as string;
+    expect(aiPrompt).not.toContain('$TYPED_ARTIFACTS_FILE');
+    const listingPath = aiPrompt.replace('Listing: ', '');
+    expect(listingPath).toContain(join('.archon', 'typed-artifacts'));
+    const listing = JSON.parse(await readFile(listingPath, 'utf8')) as { runId: string };
+    expect(listing.runId).toBe('rework-listing-run');
   });
 
   it('on_reject does not write node_completed for the approval gate node ID', async () => {
@@ -19238,6 +19457,83 @@ describe('executeDagWorkflow -- typed artifacts (output_type)', () => {
     expect(typeof meta.producedAt).toBe('string');
   });
 
+  it('delivers a current-run listing to an exec node through TYPED_ARTIFACTS_FILE', async () => {
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        cwd: testDir,
+        workflow: {
+          name: 'typed-listing-exec',
+          nodes: [
+            {
+              id: 'planner',
+              kind: 'agent',
+              source: { kind: 'command', name: 'my-cmd' },
+              output_type: 'plan',
+            },
+            {
+              id: 'reader',
+              kind: 'exec',
+              runtime: 'sh',
+              // Braced form: the engine substitute is not applied, so this reads the
+              // reserved process environment the exec builder delivers.
+              script: 'cp "${TYPED_ARTIFACTS_FILE}" "$ARTIFACTS_DIR/observed-listing.json"',
+              depends_on: ['planner'],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('dag-typed-exec-listing'),
+      })
+    );
+
+    const listing = nodeArtifactsListingSchema.parse(
+      JSON.parse(await readFile(join(testDir, 'artifacts', 'observed-listing.json'), 'utf8'))
+    );
+    expect(listing.runId).toBe('dag-typed-exec-listing');
+    expect(listing.artifactsByType.plan?.map(entry => entry.nodeId)).toEqual(['planner']);
+    // The pointer names a content path that is readable relative to the artifacts dir.
+    const planPath = listing.artifactsByType.plan?.[0]?.path;
+    if (planPath === undefined) throw new Error('expected a listed plan artifact');
+    expect(await readFile(join(testDir, 'artifacts', planPath), 'utf8')).toBe('AI response');
+  });
+
+  it('resolves $TYPED_ARTIFACTS_FILE in an agent prompt to a readable listing', async () => {
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        cwd: testDir,
+        workflow: {
+          name: 'typed-listing-agent',
+          nodes: [
+            {
+              id: 'planner',
+              kind: 'agent',
+              source: { kind: 'command', name: 'my-cmd' },
+              output_type: 'plan',
+            },
+            {
+              id: 'consumer',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'Listing: $TYPED_ARTIFACTS_FILE' },
+              depends_on: ['planner'],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('dag-typed-agent-listing'),
+      })
+    );
+
+    const consumerPrompt = mockSendQueryDag.mock.calls.at(-1)?.[0] as string | undefined;
+    expect(consumerPrompt?.startsWith('Listing: ')).toBe(true);
+    const listingPath = (consumerPrompt ?? '').slice('Listing: '.length).trim();
+    expect(isAbsolute(listingPath)).toBe(true);
+    const listing = nodeArtifactsListingSchema.parse(
+      JSON.parse(await readFile(listingPath, 'utf8'))
+    );
+    expect(listing.runId).toBe('dag-typed-agent-listing');
+    expect(listing.artifactsByType.plan?.map(entry => entry.nodeId)).toEqual(['planner']);
+  });
+
   it('persists the declared output type beside an agent structured output', async () => {
     const structuredOutput = {
       repo: { host: 'github.com', path: 'example/repo' },
@@ -20408,6 +20704,19 @@ describe('executeDagWorkflow -- loop_group node', () => {
     // Two iterations: iter 1 (no signal) → iter 2 (DONE signal) → complete.
     expect(callCount).toBe(2);
     expect(result).toContain('iteration 2 final result');
+    const starts = (
+      mockDeps.store.persistWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
+    ).mock.calls
+      .map(([event]) => event)
+      .filter(event => event.event_type === 'node_started' && event.step_name === 'fixer.work');
+    expect(starts).toHaveLength(2);
+    expect(starts[0].data?.invocation).toMatchObject({
+      loopPath: [{ groupId: 'fixer', iteration: 1 }],
+    });
+    expect(starts[1].data?.invocation).toMatchObject({
+      loopPath: [{ groupId: 'fixer', iteration: 2 }],
+    });
+    expect(starts[0].data?.invocation).not.toEqual(starts[1].data?.invocation);
   });
 
   it('re-executes a load-time included body block on every loop_group iteration (#2623)', async () => {
@@ -20529,7 +20838,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
     );
 
     expect(callCount).toBe(3);
-    const artifacts = (await readNodeArtifacts(artifactsDir)).sort(
+    const artifacts = (await readAllArtifacts(artifactsDir)).sort(
       (left, right) =>
         (left.loopGroupPath?.[0]?.iteration ?? 0) - (right.loopGroupPath?.[0]?.iteration ?? 0)
     );
@@ -20614,7 +20923,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
     );
 
     expect(callCount).toBe(2);
-    const artifacts = (await readNodeArtifacts(artifactsDir)).sort(
+    const artifacts = (await readAllArtifacts(artifactsDir)).sort(
       (left, right) =>
         (left.loopGroupPath?.[0]?.iteration ?? 0) - (right.loopGroupPath?.[0]?.iteration ?? 0)
     );
@@ -20673,7 +20982,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
       })
     );
 
-    const beforeResume = await readNodeArtifacts(artifactsDir);
+    const beforeResume = await readAllArtifacts(artifactsDir);
     expect(beforeResume).toHaveLength(1);
     expect(beforeResume[0]?.loopGroupPath).toEqual([{ groupId: 'refine', iteration: 1 }]);
     const firstPath = beforeResume[0]?.path;
@@ -20707,7 +21016,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
       })
     );
 
-    const afterResume = (await readNodeArtifacts(artifactsDir)).sort(
+    const afterResume = (await readAllArtifacts(artifactsDir)).sort(
       (left, right) =>
         (left.loopGroupPath?.[0]?.iteration ?? 0) - (right.loopGroupPath?.[0]?.iteration ?? 0)
     );
@@ -21371,6 +21680,95 @@ describe('executeDagWorkflow -- loop_group node', () => {
     // The file on disk, after the run, holds only the LATEST iteration's content.
     const finalSpillContent = await readFile(iter1.node_output_spill_path, 'utf8');
     expect(finalSpillContent).toBe('b'.repeat(40_000));
+  });
+
+  it("until_bash observes the typed artifacts its own iteration's body published", async () => {
+    const counterFile = join(testDir, 'lg-typed-counter');
+    const counterRef = `"${counterFile.replace(/\\/g, '/')}"`;
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        platform: createMockPlatform(),
+        conversationId: 'conv-lg-typed',
+        cwd: testDir,
+        workflow: {
+          name: 'lg-typed-until',
+          nodes: [
+            {
+              id: 'group',
+              kind: 'loop_group',
+              loop_group: {
+                // Stops as soon as the listing names a `verdict` artifact. The body
+                // publishes one in iteration 1, so iteration 1's condition must see it.
+                until_bash: 'grep -q \'"verdict"\' "${TYPED_ARTIFACTS_FILE}"',
+                max_iterations: 3,
+                fresh_context: false,
+                nodes: [
+                  {
+                    id: 'judge',
+                    kind: 'exec',
+                    runtime: 'sh',
+                    script: `n=$(cat ${counterRef} 2>/dev/null || echo 0); echo $((n+1)) > ${counterRef}; echo ok`,
+                    output_type: 'verdict',
+                    depends_on: [],
+                  },
+                ],
+              },
+              depends_on: [],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('lg-typed-until'),
+        artifactsDir: join(testDir, 'artifacts'),
+      })
+    );
+
+    expect((await readFile(counterFile, 'utf8')).trim()).toBe('1');
+  });
+
+  it('until_bash receives the same reserved environment as an exec node', async () => {
+    const counterFile = join(testDir, 'lg-env-counter');
+    const counterRef = `"${counterFile.replace(/\\/g, '/')}"`;
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        platform: createMockPlatform(),
+        conversationId: 'conv-lg-env',
+        cwd: testDir,
+        workflow: {
+          name: 'lg-env-until',
+          nodes: [
+            {
+              id: 'group',
+              kind: 'loop_group',
+              loop_group: {
+                // Braced forms bypass engine substitution, so this reads the process
+                // environment a script launched from the condition would see.
+                until_bash: 'test "${WORKFLOW_ID}" = lg-env-until && test -d "${ARTIFACTS_DIR}"',
+                max_iterations: 2,
+                fresh_context: false,
+                nodes: [
+                  {
+                    id: 'tick',
+                    kind: 'exec',
+                    runtime: 'sh',
+                    script: `n=$(cat ${counterRef} 2>/dev/null || echo 0); echo $((n+1)) > ${counterRef}`,
+                    depends_on: [],
+                  },
+                ],
+              },
+              depends_on: [],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('lg-env-until'),
+        artifactsDir: join(testDir, 'artifacts'),
+      })
+    );
+
+    expect((await readFile(counterFile, 'utf8')).trim()).toBe('1');
   });
 
   it('INSTANCE 2: $LOOP_PREV cross-iteration ref sees prior iteration output', async () => {
@@ -26773,6 +27171,134 @@ describe('collectContainerIncompatibleProviders', () => {
   });
 });
 
+describe('collectStrictSchemaViolations', () => {
+  const agentNode = (id: string, extra: Partial<DagNode> = {}): DagNode =>
+    ({
+      id,
+      kind: 'agent',
+      source: { kind: 'inline', prompt: `do ${id}` },
+      ...extra,
+    }) as unknown as DagNode;
+
+  const looseSchema = {
+    type: 'object',
+    properties: { ready: { type: 'boolean' }, note: { type: 'string' } },
+    required: ['ready'],
+  };
+
+  it('flags an agent under Codex workflow-level provider with loose schema', () => {
+    const violations = collectStrictSchemaViolations(
+      [agentNode('a', { output_format: looseSchema })],
+      'codex'
+    );
+    expect(violations).toHaveLength(1);
+    expect(violations[0].provider).toBe('codex');
+    expect(violations[0].nodeId).toBe('a');
+    expect(violations[0].missing).toEqual(['note']);
+  });
+
+  it('is empty under Claude workflow-level provider', () => {
+    const violations = collectStrictSchemaViolations(
+      [agentNode('a', { output_format: looseSchema })],
+      'claude'
+    );
+    expect(violations).toEqual([]);
+  });
+
+  it('is empty when node pins provider: claude under Codex workflow', () => {
+    const violations = collectStrictSchemaViolations(
+      [agentNode('a', { output_format: looseSchema, provider: 'claude' })],
+      'codex'
+    );
+    expect(violations).toEqual([]);
+  });
+
+  it('flags loop_group body agent under Codex', () => {
+    const group = {
+      id: 'g',
+      kind: 'loop_group',
+      loop_group: {
+        max_iterations: 1,
+        nodes: [agentNode('inner', { output_format: looseSchema })],
+      },
+    } as unknown as DagNode;
+    const violations = collectStrictSchemaViolations([group], 'codex');
+    expect(violations).toHaveLength(1);
+    expect(violations[0].nodeId).toBe('inner');
+  });
+
+  it("uses the loop_group's resolved provider as the body default", () => {
+    const group = {
+      id: 'g',
+      kind: 'loop_group',
+      provider: 'codex',
+      loop_group: {
+        max_iterations: 1,
+        nodes: [agentNode('inner', { output_format: looseSchema })],
+      },
+    } as unknown as DagNode;
+
+    const violations = collectStrictSchemaViolations([group], 'claude');
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toMatchObject({ provider: 'codex', nodeId: 'inner' });
+  });
+
+  it('lets a body node override the inherited loop_group provider', () => {
+    const group = {
+      id: 'g',
+      kind: 'loop_group',
+      provider: 'codex',
+      loop_group: {
+        max_iterations: 1,
+        nodes: [
+          agentNode('inner', {
+            provider: 'claude',
+            output_format: looseSchema,
+          }),
+        ],
+      },
+    } as unknown as DagNode;
+
+    expect(collectStrictSchemaViolations([group], 'claude')).toEqual([]);
+  });
+
+  it('skips loop_group inert output_format', () => {
+    const group = {
+      id: 'g',
+      kind: 'loop_group',
+      output_format: looseSchema,
+      loop_group: { max_iterations: 1, nodes: [] },
+    } as unknown as DagNode;
+    const violations = collectStrictSchemaViolations([group], 'codex');
+    expect(violations).toEqual([]);
+  });
+
+  it('skips gate nodes with output_format (inert)', () => {
+    const gate = {
+      id: 'gate',
+      kind: 'gate',
+      decisions: [{ rework: 'reassess' }],
+      output_format: looseSchema,
+    } as unknown as DagNode;
+    const violations = collectStrictSchemaViolations([gate], 'codex');
+    expect(violations).toEqual([]);
+  });
+
+  it('skips unknown provider gracefully', () => {
+    const node = agentNode('a', {
+      output_format: looseSchema,
+      provider: 'unknown-provider',
+    });
+    expect(() => collectStrictSchemaViolations([node], 'unknown-provider')).not.toThrow();
+  });
+
+  it('skips node without output_format entirely', () => {
+    const violations = collectStrictSchemaViolations([agentNode('a')], 'codex');
+    expect(violations).toEqual([]);
+  });
+});
+
 describe('buildSubprocessDockerArgs — bash/script env isolation', () => {
   const CTX = { kind: 'container' as const, containerId: 'cid-9' };
 
@@ -28162,6 +28688,54 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
       store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
     ).mock.calls.map((c: unknown[]) => (c[0] as { event_type: string }).event_type);
     expect(events).not.toContain('node_failed');
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('interactive loop-group gate that loses the pause CAS keeps only its started record', async () => {
+    const store = createExternallyFailedStore();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        conversationId: 'conv-pause-race-loop-group',
+        cwd: testDir,
+        workflow: {
+          name: 'pause-race-loop-group',
+          nodes: [
+            dagNodeSchema.parse({
+              id: 'refine',
+              loop_group: {
+                until: 'APPROVED',
+                max_iterations: 2,
+                interactive: true,
+                gate_message: 'Review the result.',
+                nodes: [{ id: 'work', bash: 'printf result' }],
+              },
+            }),
+          ],
+        },
+        workflowRun,
+      })
+    );
+
+    const groupEvents = (
+      store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
+    ).mock.calls
+      .map(
+        (call: unknown[]) =>
+          call[0] as {
+            event_type: string;
+            step_name?: string | null;
+          }
+      )
+      .filter(event => event.step_name === 'refine')
+      .map(event => event.event_type);
+    expect(groupEvents).toContain('node_started');
+    expect(groupEvents).not.toContain('node_suspended');
+    expect(groupEvents).not.toContain('node_failed');
     expect(store.failWorkflowRun).not.toHaveBeenCalled();
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
   });
@@ -31533,7 +32107,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
   it('pauses correctly instead of barreling through remaining iterations', async () => {
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'assistant', content: 'work done' };
-      yield { type: 'result', sessionId: 'work-session' };
+      yield { type: 'result', sessionId: 'work-session', cost: 0 };
     });
 
     const store = createEscalationStore('run-escalation-1');
@@ -31566,6 +32140,20 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       type: 'approval',
       iteration: 1,
     });
+    const groupSuspension = (
+      store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
+    ).mock.calls
+      .map(
+        (call: unknown[]) =>
+          call[0] as {
+            event_type: string;
+            step_name?: string | null;
+            data?: Record<string, unknown>;
+          }
+      )
+      .find(event => event.event_type === 'node_suspended' && event.step_name === 'grp');
+    expect(groupSuspension?.data?.suspend_point).toBe('approval');
+    expect(groupSuspension?.data?.cost_usd).toBe(0);
     expect(store.getState().status).toBe('paused');
   });
 
@@ -31591,6 +32179,20 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       bodyWaitId: 'delay',
       iteration: 1,
     });
+    const groupSuspension = (
+      store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
+    ).mock.calls
+      .map(
+        (call: unknown[]) =>
+          call[0] as {
+            event_type: string;
+            step_name?: string | null;
+            data?: Record<string, unknown>;
+          }
+      )
+      .find(event => event.event_type === 'node_suspended' && event.step_name === 'grp');
+    expect(groupSuspension?.data?.suspend_point).toBe('wait');
+    expect(groupSuspension?.data?.cost_usd).toBeUndefined();
 
     const expiredWait = {
       ...(paused.metadata.wait as WorkflowWaitContext),
@@ -32323,6 +32925,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       nodes: [
         dagNodeSchema.parse({
           id: 'grp',
+          timeout: 600_000,
           loop_group: {
             until_bash:
               'printf "resume probe ran\\n"; printf "recheck note\\n" >&2; [ $check.output.decision = "approve" ]',
@@ -32343,17 +32946,29 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       ],
     };
 
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(store),
-        platform,
-        cwd: testDir,
-        workflow: ready(talkativeProbeWorkflow),
-        workflowRun,
-        logDir,
-        priorCompletedNodes,
-      })
-    );
+    const execSpy = spyOn(git, 'execFileAsync');
+    let resumeProbeTimeout: number | undefined;
+    try {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform,
+          cwd: testDir,
+          workflow: ready(talkativeProbeWorkflow),
+          workflowRun,
+          logDir,
+          priorCompletedNodes,
+        })
+      );
+      const resumeProbe = execSpy.mock.calls.find(call =>
+        (call[1] as string[]).some(arg => arg.includes('resume probe ran'))
+      );
+      resumeProbeTimeout = resumeProbe?.[2]?.timeout;
+    } finally {
+      execSpy.mockRestore();
+    }
+
+    expect(resumeProbeTimeout).toBe(600_000);
 
     // Zero provider calls means no fresh iteration ran, so the single retained row
     // below can only have come from the resume branch's probe — not the ordinary
@@ -32666,7 +33281,12 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
         kind === 'terminal'
           ? new TerminalStatusWriteError(cause)
           : new NodeEventWriteError(
-              { workflow_run_id: 'child', event_type: 'node_completed', step_name: 'work' },
+              {
+                workflow_run_id: 'child',
+                event_type: 'node_completed',
+                step_name: 'work',
+                data: {},
+              },
               cause
             );
       let siblingSettled = false;
@@ -35087,5 +35707,141 @@ describe('executeDagWorkflow -- unified node-state sinks (#3255)', () => {
     );
     expect(priorSuccess).toBeDefined();
     expect(priorSuccess?.data?.reason).toBe('prior_success');
+  });
+});
+
+// A loop predicate could not declare a time budget: every `until_bash` execution path passed a
+// bare SUBPROCESS_DEFAULT_TIMEOUT while the ordinary bash/script paths already resolved
+// `node.timeout ?? SUBPROCESS_DEFAULT_TIMEOUT`. Nodes are built through the real schema, so
+// each test proves the whole chain (schema -> transform -> executor), not just the
+// executor's fallback expression.
+describe('executeDagWorkflow -- until_bash honors the node timeout', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-until-bash-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+    mockSendQueryDag.mockClear();
+  });
+
+  afterEach(async () => {
+    await removeTempTree(testDir);
+  });
+
+  // runSubprocess is local/unexported — spy on the module boundary it actually calls
+  // (@archon/git's execFileAsync), the same way the script-injection tests above do.
+  function spyOnExec() {
+    return spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: '', stderr: '' });
+  }
+
+  function untilBashTimeout(execSpy: ReturnType<typeof spyOnExec>): number | undefined {
+    const call = execSpy.mock.calls.find(c => (c[1] as string[])[0] === '-c') as
+      | [string, string[], { timeout: number }]
+      | undefined;
+    expect(call).toBeDefined();
+    return call?.[2]?.timeout;
+  }
+
+  it('applies the node timeout to a loop until_bash subprocess', async () => {
+    const node = dagNodeSchema.parse({
+      id: 'my-loop',
+      timeout: 600_000,
+      loop: { prompt: 'Do a task.', until: 'NEVER_EMITTED', until_bash: 'true', max_iterations: 1 },
+    });
+
+    const execSpy = spyOnExec();
+    try {
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'assistant', content: 'working on it' };
+        yield { type: 'result', sessionId: 'loop-timeout-session' };
+      });
+
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: { name: 'dag-loop-timeout', nodes: [node] },
+          workflowRun: makeWorkflowRun(),
+        })
+      );
+
+      expect(untilBashTimeout(execSpy)).toBe(600_000);
+    } finally {
+      execSpy.mockRestore();
+    }
+  });
+
+  // Pins the `??` fallback the fix depends on: a loop node with NO declared timeout must
+  // still get SUBPROCESS_DEFAULT_TIMEOUT (120000). Guards against a future edit that
+  // replaces the resolution with a bare `node.timeout`, which would silently break every
+  // undeclared-timeout loop in every workflow.
+  it('falls back to the 120s default when a loop node declares no timeout', async () => {
+    const node = dagNodeSchema.parse({
+      id: 'my-loop-no-timeout',
+      loop: { prompt: 'Do a task.', until: 'NEVER_EMITTED', until_bash: 'true', max_iterations: 1 },
+    });
+
+    const execSpy = spyOnExec();
+    try {
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'assistant', content: 'working on it' };
+        yield { type: 'result', sessionId: 'loop-default-timeout-session' };
+      });
+
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: { name: 'dag-loop-default-timeout', nodes: [node] },
+          workflowRun: makeWorkflowRun(),
+        })
+      );
+
+      expect(untilBashTimeout(execSpy)).toBe(120_000);
+    } finally {
+      execSpy.mockRestore();
+    }
+  });
+
+  // The loop_group predicate call site (groupBashPath). The body node is AI-only (prompt),
+  // not bash, so the ONLY execFileAsync call here is the until_bash invocation itself.
+  it('applies the node timeout to a loop_group until_bash subprocess', async () => {
+    const node = dagNodeSchema.parse({
+      id: 'my-group',
+      timeout: 600_000,
+      loop_group: {
+        until: 'NEVER_EMITTED',
+        until_bash: 'true',
+        max_iterations: 1,
+        nodes: [{ id: 'work', prompt: 'Do a task.', depends_on: [] }],
+      },
+    });
+
+    const execSpy = spyOnExec();
+    try {
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'assistant', content: 'working on it' };
+        yield { type: 'result', sessionId: 'group-timeout-session' };
+      });
+
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: { name: 'dag-group-timeout', nodes: [node] },
+          workflowRun: makeWorkflowRun('lg-timeout'),
+        })
+      );
+
+      expect(untilBashTimeout(execSpy)).toBe(600_000);
+    } finally {
+      execSpy.mockRestore();
+    }
   });
 });

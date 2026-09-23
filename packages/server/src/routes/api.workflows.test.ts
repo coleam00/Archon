@@ -1235,6 +1235,29 @@ describe('DELETE /api/workflows/:name', () => {
     }
   });
 
+  test('does not match or delete a pack-root fixtures directory (#3183)', async () => {
+    const testDir = join(tmpdir(), `wf-del-fixtures-${Date.now()}`);
+    const packDir = join(testDir, '.archon', 'workflows', 'author-pack');
+    const fixturesDir = join(packDir, 'fixtures');
+    await mkdir(fixturesDir, { recursive: true });
+    const fixturePath = join(fixturesDir, 'clean.stubs.yaml');
+    await writeFile(fixturePath, 'name: clean.stubs\ndescription: not a workflow\nnodes: []\n');
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+      mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
+
+      const response = await app.request(`/api/workflows/clean.stubs?cwd=${testDir}`, {
+        method: 'DELETE',
+      });
+      expect(response.status).toBe(404);
+      await expect(readFile(fixturePath, 'utf-8')).resolves.toContain('clean.stubs');
+    } finally {
+      await removeTempTree(testDir);
+    }
+  });
+
   test('removes home-scoped .yml workflow when source=global', async () => {
     const testArchonHome = join(tmpdir(), `archon-home-del-yml-${Date.now()}`);
     const workflowDir = join(testArchonHome, 'workflows');

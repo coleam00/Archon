@@ -38,7 +38,6 @@ nodes:
       until: 'DONE'
       max_iterations: 2
     allowed_tools: []
-    effort: low
     idle_timeout: 60000
 
   # 4. output_format: Copilot's best-effort structured output path

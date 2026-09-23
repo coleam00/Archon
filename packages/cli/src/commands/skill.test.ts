@@ -2,7 +2,7 @@
  * Tests for skill install command
  */
 import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -53,6 +53,48 @@ describe('copyArchonSkill', () => {
 
     await copyArchonSkill(tempDir);
 
+    for (const root of ['.claude', '.agents']) {
+      expect(readFileSync(join(tempDir, root, 'skills', 'archon-cli', 'SKILL.md'), 'utf-8')).toBe(
+        BUNDLED_SKILL_FILES['SKILL.md']
+      );
+    }
+  });
+
+  it('removes extra files from both owned skill roots without touching sibling skills', async () => {
+    for (const root of ['.claude', '.agents']) {
+      const skillsRoot = join(tempDir, root, 'skills');
+      const skillRoot = join(skillsRoot, 'archon-cli');
+      mkdirSync(skillRoot, { recursive: true });
+      writeFileSync(join(skillRoot, 'retired.md'), 'retired guidance');
+      mkdirSync(join(skillsRoot, 'user-skill'), { recursive: true });
+      writeFileSync(join(skillsRoot, 'user-skill', 'SKILL.md'), 'user guidance');
+    }
+
+    await copyArchonSkill(tempDir);
+
+    for (const root of ['.claude', '.agents']) {
+      const skillsRoot = join(tempDir, root, 'skills');
+      expect(existsSync(join(skillsRoot, 'archon-cli', 'retired.md'))).toBe(false);
+      expect(readFileSync(join(skillsRoot, 'user-skill', 'SKILL.md'), 'utf-8')).toBe(
+        'user guidance'
+      );
+    }
+  });
+
+  it('replaces an archon-cli symlink without deleting its target', async () => {
+    const external = join(tempDir, 'external-skill');
+    mkdirSync(external);
+    writeFileSync(join(external, 'user.md'), 'keep me');
+
+    for (const root of ['.claude', '.agents']) {
+      const skillsRoot = join(tempDir, root, 'skills');
+      mkdirSync(skillsRoot, { recursive: true });
+      symlinkSync(external, join(skillsRoot, 'archon-cli'), 'dir');
+    }
+
+    await copyArchonSkill(tempDir);
+
+    expect(readFileSync(join(external, 'user.md'), 'utf-8')).toBe('keep me');
     for (const root of ['.claude', '.agents']) {
       expect(readFileSync(join(tempDir, root, 'skills', 'archon-cli', 'SKILL.md'), 'utf-8')).toBe(
         BUNDLED_SKILL_FILES['SKILL.md']

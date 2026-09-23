@@ -582,6 +582,8 @@ status=$emit.output.status
 Use `output_format` to enforce JSON output from an AI node. For Claude, the schema is passed via the SDK's `outputFormat` option and `structured_output` is used directly. For Codex (v0.116.0+), the schema is passed via `TurnOptions.outputSchema` and the agent's inline JSON response is used. Both ensure clean JSON for `when:` conditions and `$nodeId.output` substitution:
 
 > **Codex strict-mode normalization.** OpenAI's Structured Outputs validator rejects any object schema that doesn't set `additionalProperties: false`. Archon normalizes Codex schemas before sending them, injecting `additionalProperties: false` on every object node automatically — so write portable schemas and you won't notice. One caveat: an open-record `additionalProperties: { type: 'string' }` (or `additionalProperties: true`) is **replaced** with `false`, closing the object. OpenAI would reject the open form regardless, but the rewrite is logged (`codex.output_format_open_record_closed`) so it isn't silent. Open-record maps aren't supported for Codex structured output.
+>
+> **Codex strict-mode `required` coverage.** OpenAI's Structured Outputs validator also rejects any object schema where a key declared in `properties` is absent from `required`. Unlike `additionalProperties`, Archon does NOT normalize this for you — doing so would silently change an optional field into a required one. Instead, the launch preflight and `archon validate workflows` report the violation before any run starts. Include every property key in `required`. To express an *optional* field, give its type an absent-value form: a `["string","null"]` union, or an enum with a sentinel like `"none"` — the field is then always "present" in the output, carrying the sentinel when not applicable.
 
 ```yaml
 nodes:
@@ -596,7 +598,7 @@ nodes:
         severity:
           type: string
           enum: [low, medium, high]
-      required: [type]
+      required: [type, severity]
 ```
 
 - The output is captured as a JSON string and available via `$classify.output` (full JSON) or `$classify.output.type` (field access)
@@ -816,7 +818,7 @@ When a `nodes:` (DAG) workflow fails, the prior run stays in the database as a c
 
 - **CLI**: `archon workflow run <name> --resume` resumes the most recent failed run for `(workflow_name, cwd)`. Or `archon workflow resume <run-id>` to target a specific run.
 - **Chat**: Approving or rejecting a _paused_ workflow continues it from where it left off (the platform already knows the run id). For a prior **failed** (or stale `running`) run, `/workflow run <name>` does **not** silently resume — it shows a prompt offering three choices: resume it, abandon it and run fresh, or start fresh anyway. Pass `--force` to skip the prompt: `/workflow run <name> --force <args>` always starts a fresh run.
-- **Web UI**: Resume button on the workflow card.
+- **Web UI**: Open the failed run in the console and use **Resume** in the run detail action bar.
 
 **What happens on resume:**
 
@@ -826,9 +828,9 @@ When a `nodes:` (DAG) workflow fails, the prior run stays in the database as a c
 
 > **Why opt-in?** Earlier versions silently auto-resumed on plain `archon workflow run`, which caused state from prior failed runs (e.g. cached node outputs with stale inputs) to bleed into new invocations of the same workflow at the same path. See #1392 for the bug; now resume is always a user-driven decision.
 
-**Crashed servers / orphaned runs**: Archon does **not** auto-fail `running` rows on server startup — that would kill workflows actively executing in another process (CLI, adapter). If a server crash leaves a row stuck as `running`, it remains visible in the dashboard (the Dashboard nav tab shows a count of running workflows). Transition it to a terminal status explicitly:
+**Crashed servers / orphaned runs**: Archon does **not** auto-fail `running` rows on server startup — that would kill workflows actively executing in another process (CLI, adapter). If a server crash leaves a row stuck as `running`, it remains visible in the console run list. Transition it to a terminal status explicitly:
 
-- **Web UI**: click Abandon on the workflow card to mark the row `cancelled` and keep completed-node history.
+- **Web UI**: open a live run and use **Cancel** in the run detail action bar.
 - **CLI orphan cleanup**: after verifying the owner is gone, use `archon workflow abandon <run-id>`.
 - **Live detached CLI run**: use `archon workflow cancel <run-id>` to terminate the exact run's host process tree before marking it `cancelled`.
 
@@ -1116,6 +1118,32 @@ cannot alias another execution. Metadata keeps the readable provenance as
 load-time `<include>__<node>` ID in metadata and as the sanitized body suffix.
 
 This works on **every** node type (`bash`/`script` produce typed outputs too, just without a `sessionId`). The write is **best-effort** — if it fails, the node still succeeds and a warning is logged; the typed sidecar may simply be absent. `output_type` is an open set of labels (`plan`, `findings`, `code`, `summary`, …) — pick a convention and keep casing consistent, since lookup is case-sensitive.
+
+#### Reading typed artifacts by type
+
+Every executable invocation receives a typed-artifact listing at `$TYPED_ARTIFACTS_FILE`: a JSON file inside the run's artifact directory, recreated before the node runs. It has the shape `{ "runId", "artifactsByType": { "<outputType>": [ …metadata ] }, "errors": [ … ] }`, so a script or agent selects a type without knowing `nodes/`, sidecar names, or loop filename rules. Each entry is the same metadata the sidecar holds (`nodeId`, `outputType`, `path`, `runId`, `producedAt`, `size`, and optional `loopGroupPath`/`sessionId`), and `path` is relative to `$ARTIFACTS_DIR`.
+
+```ts
+// A script: read the listing the same way in host or container runs.
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const listing = JSON.parse(readFileSync(process.env.TYPED_ARTIFACTS_FILE!, 'utf8'));
+if (listing.runId !== process.env.WORKFLOW_ID) throw new Error('listing is for another run');
+for (const error of listing.errors) console.error(`unreadable: ${error.path} (${error.kind})`);
+for (const gate of listing.artifactsByType['green-gate'] ?? []) {
+  const body = readFileSync(join(process.env.ARTIFACTS_DIR!, gate.path), 'utf8');
+  console.log(gate.nodeId, body);
+}
+```
+
+In an agent prompt, point at the listing rather than the layout: "Read `$TYPED_ARTIFACTS_FILE`, select `artifactsByType["plan"]`, and open each entry's `path` under `$ARTIFACTS_DIR`."
+
+Properties worth knowing:
+
+- **Observation, not a ledger.** Entries of a type are ordered by `producedAt` ascending, with ties broken by content path. The listing freezes which artifacts existed when the invocation started (each attempt, loop iteration, and `until_bash` check gets its own) and their metadata; it is not an execution history or a completion-order log, and re-running the same node owner overwrites its sidecar. An invocation sees artifacts published **before it started**, never a running sibling's — declare `depends_on` to order a producer ahead of its consumer. A `loop_group`'s `until_bash` runs after its body, so it sees what that iteration's body published.
+- **Failures stay visible.** `errors` lists every record the read could not turn into an artifact (malformed or foreign-run sidecar, unsafe path, missing or unreadable content). A corrupt sidecar has no trustworthy type, so it never disappears into an empty type list. An absent key means no matching readable metadata; `runId` lets a consumer reject a listing handed to it out of scope.
+- **Everywhere an invocation runs.** The path is delivered in `bash:` and `script:` nodes (as both `$TYPED_ARTIFACTS_FILE` and the `TYPED_ARTIFACTS_FILE` environment variable), agent prompts, loop attempts, and approval rework. A prompt that references it in a context with no listing fails rather than substituting an empty string. A `--dry-run` preview has no artifacts and substitutes an empty string instead, so it cannot detect a reference made from a context that never receives a listing.
 
 Successful bash stdout is retained by default on the completed run as a bounded audit preview in `node_completed.data.node_output`. Output over 32 KiB (32,768 UTF-8 bytes) ends with a truncation marker, and the event also includes `node_output_truncated: true` plus `node_output_original_bytes`. Because stdout is persisted, never print secrets or credentials from bash nodes. This preview is separate from `output_type`: declaring `output_type` opts into a best-effort file sidecar that may contain the full output and is not required for ordinary bash audit retention.
 
@@ -3041,10 +3069,10 @@ When the workflow reaches `review-gate`, it pauses and notifies you. Approve or 
 - **Explicit command**: `/workflow approve <run-id>` or `/workflow reject <run-id>` — deterministic; resolves and continues the run
 - **CLI**: `bun run cli workflow approve <run-id>` or `bun run cli workflow reject <run-id>` — resolves and continues (`--json` records the decision only)
 - **Chat**: tell the agent what you want ("looks good, ship it" / "no, stop") — it resolves the gate and the run continues. An ambiguous message resolves nothing and the agent asks; a plain message is **not** an automatic approval
-- **Web UI**: Click the Approve/Reject buttons on the dashboard card — auto-resumes for Web-UI-dispatched runs; the Reject dialog includes an optional reason field that flows to `$REJECTION_REASON`
+- **Web UI**: Open the paused run in the console. Use **Continue** with an optional comment, or **Reject** and enter the required feedback that flows to `$REJECTION_REASON`. When the gate continues execution, Web-dispatched and headless CLI runs can auto-resume; the gate's rejection rules can instead cancel the run.
 - **API**: `POST /api/workflows/runs/<run-id>/approve` or `/reject`
 
-Every path continues the workflow from the next node. The user's approval comment is available as `$review-gate.output` in downstream nodes only when `capture_response: true` is set on the approval node. Cross-platform caveat: Web-UI approvals on Slack / Telegram / GitHub-dispatched runs record the decision but do not auto-resume — re-run from the originating platform to continue.
+Every path applies the gate's approval or rejection rules. The user's approval comment is available as `$review-gate.output` in downstream nodes only when `capture_response: true` is set on the approval node. Cross-platform caveat: Web UI decisions on runs with Slack, Telegram, or GitHub parents record the decision but do not auto-resume when the gate continues execution. Use `archon workflow resume <run-id>` or resume it from the originating conversation to continue the same run.
 
 Without `on_reject`: rejecting cancels the workflow.
 With `on_reject`: rejecting triggers an AI rework prompt and re-pauses for re-review.

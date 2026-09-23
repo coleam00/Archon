@@ -139,11 +139,18 @@ const mockModelRegistryFind = mock<ModelRegistry['find']>((provider, modelId) =>
   if (provider === 'nonexistent') return undefined;
   return createMockModel(provider, modelId);
 });
+// `provider === 'nonexistent'` is the only unknown provider in these tests;
+// every other id (built-in, models.json, extension-registered) resolves.
+const mockModelRegistryGetProvider = mock<ModelRegistry['getProvider']>(provider =>
+  provider === 'nonexistent'
+    ? undefined
+    : ({ id: provider, name: provider } as NonNullable<ReturnType<ModelRegistry['getProvider']>>)
+);
 type MockModelRegistry = Pick<ModelRegistry, 'find'> &
   Partial<
     Pick<
       ModelRegistry,
-      'getApiKeyAndHeaders' | 'getError' | 'hasConfiguredAuth' | 'registerProvider'
+      'getApiKeyAndHeaders' | 'getError' | 'hasConfiguredAuth' | 'registerProvider' | 'getProvider'
     >
   > & {
     /** Per-registry extension provider registrations, for assertions. */
@@ -163,6 +170,11 @@ type MockModelRegistryCtor = new (runtime: MockModelRuntime) => MockModelRegistr
 function makeMockRegistry(runtime: MockModelRuntime): MockModelRegistry {
   return {
     find: mockModelRegistryFind,
+    // A provider exists unless the test names an unknown one. The real facade
+    // returns a provider for any built-in, models.json, or extension-registered
+    // id; the missing-model error uses this to tell a stale catalog from a
+    // missing provider extension.
+    getProvider: mockModelRegistryGetProvider,
     hasConfiguredAuth: mock(model => runtime.hasConfiguredAuth(model.provider)),
     getApiKeyAndHeaders: mock(async model => {
       const resolution = (await runtime.getAuth(model.provider)) as
@@ -256,6 +268,7 @@ const MockDefaultResourceLoader = mock((_opts: unknown) => ({
   reload: mockResourceLoaderReload,
   getExtensions: mockGetExtensions,
 }));
+const mockGetAgentDir = mock(() => process.env.PI_CODING_AGENT_DIR?.trim() || '/mock/.pi/agent');
 
 // Tool factory mocks — each returns an opaque object tagged with the tool
 // name so assertions can verify which tools the provider selected.
@@ -290,7 +303,7 @@ mock.module('@earendil-works/pi-coding-agent', () => ({
   // Stub for the value import added when resource-loader.ts started passing
   // an explicit `agentDir` to DefaultResourceLoader (required since
   // pi-coding-agent 0.68+). Returns a deterministic path for tests.
-  getAgentDir: () => '/mock/.pi/agent',
+  getAgentDir: mockGetAgentDir,
   createReadTool: mockCreateReadTool,
   createBashTool: mockCreateBashTool,
   createEditTool: mockCreateEditTool,
@@ -355,6 +368,7 @@ describe('PiProvider', () => {
     mockSetModel.mockClear();
     mockSetFlagValue.mockClear();
     mockResourceLoaderReload.mockClear();
+    mockGetAgentDir.mockClear();
     mockGetExtensions.mockClear();
     mockLoaderRuntime.pendingProviderRegistrations = [];
     mockCreateAgentSession.mockClear();
@@ -1007,6 +1021,8 @@ describe('PiProvider', () => {
       const r = runtime as MockModelRuntime;
       return {
         find: mockModelRegistryFind,
+        // The models.json load error means Pi has no provider entry to resolve.
+        getProvider: () => undefined,
         hasConfiguredAuth: mock((model: Model<Api>) => r.hasConfiguredAuth(model.provider)),
         getApiKeyAndHeaders: mock(async () => ({ ok: true as const })),
         getError: () => 'Provider lm-studio: "baseUrl" is required when defining custom models.',
@@ -1021,7 +1037,7 @@ describe('PiProvider', () => {
     );
 
     expect(error?.message).toContain('Pi model not found');
-    expect(error?.message).toContain('provider extension');
+    expect(error?.message).toContain('pi update --models');
     expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({
         piProvider: 'lm-studio',
@@ -1087,6 +1103,8 @@ describe('PiProvider', () => {
 
   test('throws when ModelRegistry.find returns undefined', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = '/custom/pi-agent';
     // find() is called twice — first on the static catalog, then again after bindExtensions()
     // resolves extension providers. Both must return undefined to trigger the error.
     mockModelRegistryFind.mockImplementationOnce(() => undefined);
@@ -1097,8 +1115,32 @@ describe('PiProvider', () => {
         model: 'google/unknown-model-id',
       })
     );
+    // A known provider with an unknown model id is a stale catalog, not a
+    // missing provider extension, so the extension remedy must not appear.
+    expect(error?.message).toContain('Pi model not found');
+    expect(error?.message).toContain('pi update --models');
+    expect(error?.message).toContain(join('/custom/pi-agent', 'models-store.json'));
+    expect(error?.message).not.toContain('provider extension');
+    expect(error?.message).not.toContain('enableExtensions');
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+  });
+
+  test('unknown provider points at the provider extension remedy', async () => {
+    // `nonexistent` is the one provider the mock registry does not know, so
+    // this is the missing-extension case rather than a stale catalog.
+    mockModelRegistryFind.mockImplementationOnce(() => undefined);
+    mockModelRegistryFind.mockImplementationOnce(() => undefined);
+    resetScript(scriptedAgentEnd());
+    const { error } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'nonexistent/some-model',
+      })
+    );
     expect(error?.message).toContain('Pi model not found');
     expect(error?.message).toContain('provider extension');
+    expect(error?.message).toContain('enableExtensions: true');
+    expect(error?.message).toContain('pi update --models');
   });
 
   test('deferred resolution: calls session.setModel when find() resolves after bindExtensions', async () => {
@@ -3107,6 +3149,23 @@ describe('PiProvider', () => {
       const again = await getOrCreateReloadedExtensionLoader('/tmp', {});
       expect(again.providerRegistrations).toEqual(entry.providerRegistrations);
       expect(mockResourceLoaderReload).toHaveBeenCalledTimes(1);
+    });
+
+    test('missing extension model points at the extension rather than catalog refresh', async () => {
+      mockLoaderRuntime.pendingProviderRegistrations = [cursorRegistration];
+      mockModelRegistryFind.mockImplementationOnce(() => undefined);
+      mockModelRegistryFind.mockImplementationOnce(() => undefined);
+      resetScript(scriptedAgentEnd());
+
+      const { error } = await consume(
+        new PiProvider().sendQuery('hi', '/tmp', undefined, {
+          model: 'cursor/removed-model',
+        })
+      );
+
+      expect(error?.message).toContain('comes from an installed Pi extension');
+      expect(error?.message).toContain('Check the extension configuration and model name');
+      expect(error?.message).not.toContain('pi update --models');
     });
 
     test('a failing re-apply warns and does not fail nodes using other providers', async () => {

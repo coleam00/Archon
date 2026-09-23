@@ -232,6 +232,95 @@ export function hasOpenAdditionalProperties(schema: unknown): boolean {
   return Object.values(node).some(hasOpenAdditionalProperties);
 }
 
+// ─── Strict-mode required-coverage detection ──────────────────────────────────
+
+/**
+ * A single object schema node whose `properties` keys are not fully covered by
+ * its `required` array. `schemaPath` is a dotted path from the schema root
+ * (e.g. `"output_format.properties.status"`).
+ */
+export interface RequiredPropertyGap {
+  /** Dotted path from the schema root */
+  schemaPath: string;
+  /** Property keys declared in `properties` but absent from `required` */
+  missing: string[];
+}
+
+/**
+ * Find every object schema node, at any depth, whose `properties` keys are not
+ * fully covered by its `required` array. Only object nodes with a `properties`
+ * map are checked (OpenAI strict-mode's target).
+ *
+ * `basePath` is prepended to every gap path so callers get meaningful
+ * schema-root-relative locations (e.g. pass `'output_format'`).
+ */
+export function findRequiredPropertyGaps(schema: unknown, basePath: string): RequiredPropertyGap[] {
+  return collectGaps(schema, basePath);
+}
+
+function collectGaps(
+  schema: unknown,
+  path: string,
+  out: RequiredPropertyGap[] = []
+): RequiredPropertyGap[] {
+  if (schema === null || typeof schema !== 'object') return out;
+  if (Array.isArray(schema)) {
+    schema.forEach((item, i) => collectGaps(item, `${path}[${i}]`, out));
+    return out;
+  }
+  const record = schema as Record<string, unknown>;
+  const properties = record.properties;
+  if (properties !== null && typeof properties === 'object' && !Array.isArray(properties)) {
+    const required = new Set(Array.isArray(record.required) ? (record.required as string[]) : []);
+    const missing = Object.keys(properties).filter(key => !required.has(key));
+    if (missing.length > 0) out.push({ schemaPath: path, missing });
+  }
+
+  const collectSchema = (key: string): void => {
+    if (key in record) collectGaps(record[key], `${path}.${key}`, out);
+  };
+  const collectSchemaArray = (key: string): void => {
+    const schemas = record[key];
+    if (!Array.isArray(schemas)) return;
+    schemas.forEach((item, index) => collectGaps(item, `${path}.${key}[${index}]`, out));
+  };
+  const collectSchemaMap = (key: string): void => {
+    const schemas = record[key];
+    if (schemas === null || typeof schemas !== 'object' || Array.isArray(schemas)) return;
+    for (const [name, subschema] of Object.entries(schemas)) {
+      collectGaps(subschema, `${path}.${key}.${name}`, out);
+    }
+  };
+
+  for (const key of [
+    'additionalProperties',
+    'unevaluatedProperties',
+    'propertyNames',
+    'contains',
+    'not',
+    'if',
+    'then',
+    'else',
+    'contentSchema',
+  ]) {
+    collectSchema(key);
+  }
+  if (Array.isArray(record.items)) collectSchemaArray('items');
+  else collectSchema('items');
+  for (const key of ['prefixItems', 'allOf', 'anyOf', 'oneOf']) collectSchemaArray(key);
+  for (const key of [
+    'properties',
+    'patternProperties',
+    'dependentSchemas',
+    'dependencies',
+    '$defs',
+    'definitions',
+  ]) {
+    collectSchemaMap(key);
+  }
+  return out;
+}
+
 // ─── Schema validation (ajv) ─────────────────────────────────────────────────
 
 /**

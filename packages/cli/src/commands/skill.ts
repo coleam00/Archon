@@ -52,7 +52,9 @@ export async function copyArchonSkill(targetPath: string): Promise<void> {
   for (const skillsRoot of skillsRoots) {
     rmSync(join(skillsRoot, 'archon'), { recursive: true, force: true });
     rmSync(join(skillsRoot, 'manage-run'), { recursive: true, force: true });
-    writeSkillFiles(join(skillsRoot, 'archon-cli'), BUNDLED_SKILL_FILES);
+    const currentRoot = join(skillsRoot, 'archon-cli');
+    rmSync(currentRoot, { recursive: true, force: true });
+    writeSkillFiles(currentRoot, BUNDLED_SKILL_FILES);
   }
 }
 
