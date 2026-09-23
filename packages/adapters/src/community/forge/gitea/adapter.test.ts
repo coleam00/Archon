@@ -8,6 +8,7 @@ import { describe, test, expect, mock, spyOn, beforeEach, afterEach } from 'bun:
 import type { Mock } from 'bun:test';
 import { createHmac } from 'node:crypto';
 import type { Codebase, Conversation } from '@archon/core';
+import { DRAIN_REFUSAL_NOTICE } from '@archon/core/utils/conversation-lock';
 
 // Mock @archon/paths to suppress noisy logger output during tests
 const mockLogger = {
@@ -109,9 +110,11 @@ mock.module('@archon/core', () => ({
   classifyAndFormatError: mock((err: Error) => err.message),
   toError: mock((e: unknown) => (e instanceof Error ? e : new Error(String(e)))),
   onConversationClosed: mockOnConversationClosed,
+  DRAIN_REFUSAL_NOTICE,
   ConversationLockManager: class {
-    async acquireLock(_id: string, fn: () => Promise<void>): Promise<void> {
+    async acquireLock(_id: string, fn: () => Promise<void>): Promise<{ status: 'started' }> {
       await fn();
+      return { status: 'started' };
     }
   },
 }));

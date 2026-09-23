@@ -6,6 +6,7 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import type { Mock } from 'bun:test';
 import type { Codebase, Conversation } from '@archon/core';
+import { DRAIN_REFUSAL_NOTICE } from '@archon/core/utils/conversation-lock';
 
 type FetchCall = (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>;
 type FetchMock = Mock<FetchCall> & Pick<typeof fetch, 'preconnect'>;
@@ -111,6 +112,7 @@ mock.module('@archon/core', () => ({
   toError: mock((e: unknown) => (e instanceof Error ? e : new Error(String(e)))),
   onConversationClosed: mockOnConversationClosed,
   ConversationNotFoundError: class extends Error {},
+  DRAIN_REFUSAL_NOTICE,
   ConversationLockManager: class {
     async acquireLock(_id: string, fn: () => Promise<void>): Promise<{ status: 'started' }> {
       await fn();
