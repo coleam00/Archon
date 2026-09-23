@@ -1283,6 +1283,7 @@ describe('executeWorkflow', () => {
       expect(sentMessage).toContain('archon workflow cancel abc12345');
       // The non-CLI `/workflow` prefix should not appear in a CLI message.
       expect(sentMessage).not.toContain('/workflow cancel');
+      expect(sentMessage).not.toContain('/workflow status');
     });
 
     it('uses CLI command syntax for paused runs when platform is cli', async () => {

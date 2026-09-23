@@ -1767,11 +1767,12 @@ async function maybeResumeParentRun(
 }
 
 /** Pick the surface-appropriate command spelling for a workflow action. */
-function formatRunCommand(platform: IWorkflowPlatform, action: string, shortId: string): string {
+function formatRunCommand(platform: IWorkflowPlatform, action: string, shortId?: string): string {
+  const suffix = shortId ? ` ${shortId}` : '';
   if (platform.getPlatformType() === 'cli') {
-    return `archon workflow ${action} ${shortId}`;
+    return `archon workflow ${action}${suffix}`;
   }
-  return `/workflow ${action} ${shortId}`;
+  return `/workflow ${action}${suffix}`;
 }
 
 /**
@@ -2396,7 +2397,7 @@ export async function executeWorkflow(
           const verb = activeWorkflow.status === 'pending' ? 'starting' : 'running';
           stateLine = `${verb} ${duration}, run \`${shortId}\``;
           actionLines =
-            '• Wait for it to finish: `/workflow status`\n' +
+            `• Wait for it to finish: \`${formatRunCommand(platform, 'status')}\`\n` +
             `• Cancel it: \`${formatRunCommand(platform, 'cancel', shortId)}\`\n` +
             '• Use a different branch: `--branch <other>`';
         }

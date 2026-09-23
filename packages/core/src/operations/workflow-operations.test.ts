@@ -91,18 +91,12 @@ mock.module('../services/cleanup-service', () => ({
 const mockRequestRunLiveOwnerStop = mock<
   typeof import('../services/run-live-owner').requestRunLiveOwnerStop
 >(() => Promise.reject(new Error('unexpected call to requestRunLiveOwnerStop')));
-const mockRunLiveOwnerStopUnavailableError = class MockUnavailableError extends Error {
-  constructor(
-    readonly runId: string,
-    readonly detail: string
-  ) {
-    super(`Run ${runId} has no live detached owner: ${detail}`);
-    this.name = 'RunLiveOwnerStopUnavailableError';
-  }
-};
+// Capture the real class before mock.module replaces the module, so the mock
+// can re-export it without a hand-declared copy that would silently drift.
+import { RunLiveOwnerStopUnavailableError as RealRunLiveOwnerStopUnavailableError } from '../services/run-live-owner';
 mock.module('../services/run-live-owner', () => ({
   requestRunLiveOwnerStop: mockRequestRunLiveOwnerStop,
-  RunLiveOwnerStopUnavailableError: mockRunLiveOwnerStopUnavailableError,
+  RunLiveOwnerStopUnavailableError: RealRunLiveOwnerStopUnavailableError,
 }));
 
 const mockLogger = {
@@ -1693,7 +1687,7 @@ describe('abandonWorkflow', () => {
   test('with stopper — owner unreachable falls through to cancel', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
     mockRequestRunLiveOwnerStop.mockImplementationOnce(() =>
-      Promise.reject(new mockRunLiveOwnerStopUnavailableError('run-1', 'socket connect ENOENT'))
+      Promise.reject(new RealRunLiveOwnerStopUnavailableError('run-1', 'socket connect ENOENT'))
     );
 
     let stopOwnerCalled = false;
@@ -1737,6 +1731,36 @@ describe('abandonWorkflow', () => {
     );
 
     expect(committed).toBe(true);
+    expect(released).toBe(true);
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('with stopper — commit fails propagates error and leaves run unchanged', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
+    let released = false;
+    mockRequestRunLiveOwnerStop.mockImplementationOnce(() =>
+      Promise.resolve({
+        pid: 42,
+        commit: async () => {
+          throw new Error('Run owner ended before committing termination');
+        },
+        release: () => {
+          released = true;
+        },
+        isLive: () => true,
+      })
+    );
+
+    let stopperCalled = false;
+    const stopper = async () => {
+      stopperCalled = true;
+    };
+
+    await expect(abandonWorkflow('run-1', { stopOwner: stopper })).rejects.toThrow(
+      'Run owner ended before committing termination'
+    );
+
+    expect(stopperCalled).toBe(false);
     expect(released).toBe(true);
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
