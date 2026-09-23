@@ -211,6 +211,17 @@ describe('codebases', () => {
       expect(result?.id).toBe('plat');
     });
 
+    test('ranks by the normalized root, not a stored spelling padded with separators', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          { ...mockCodebase, id: 'padded', default_cwd: `${P('platform')}${sep.repeat(8)}` },
+          { ...mockCodebase, id: 'svc', default_cwd: P('platform', 'svc') },
+        ])
+      );
+      const result = await findCodebaseByPathPrefix(P('platform', 'svc', 'deep'));
+      expect(result?.id).toBe('svc');
+    });
+
     test('returns null when no codebase is an ancestor', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult(rows));
       const result = await findCodebaseByPathPrefix(join('/y', 'unrelated'));
