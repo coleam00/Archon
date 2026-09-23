@@ -5,6 +5,7 @@ import { RUN_GRAPH_METADATA_KEY, runGraphSchema } from './schemas/terminal-recor
 import { mkdir, readdir, rename, rm, stat, writeFile } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
+import { hostname } from 'os';
 import { dirname, join } from 'path';
 import { MANAGED_PROVIDER_CREDENTIAL_RELATIVE_PATHS } from './deps';
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
@@ -41,7 +42,9 @@ import {
   readContinuationMode,
   WORKFLOW_SOURCE_METADATA_KEY,
   readWorkflowSourceState,
+  EXECUTION_OWNER_METADATA_KEY,
   type ContinuationMode,
+  type ExecutionOwnerRecord,
   type WorkflowSourceMetadata,
 } from './schemas';
 import {
@@ -2165,6 +2168,10 @@ export async function executeWorkflow(
   const dagPriorCompletedNodes = priorCompletedNodes;
   const dagPriorUsage = priorUsage;
   let workflowRun: WorkflowRun | undefined = preCreatedRun;
+  // This process is the one executing the run, whether it created the row, claimed a
+  // row a launcher pre-created, or resumed one. `abandon` shows this record when no
+  // owner answers (#2325).
+  const executionOwner: ExecutionOwnerRecord = { host: hostname(), pid: process.pid };
 
   if (preCreatedRun && priorCompletedNodes !== undefined) {
     const resumeMsg =
@@ -2208,6 +2215,7 @@ export async function executeWorkflow(
             : {}),
           [RUN_MODEL_BINDINGS_METADATA_KEY]: modelBindingsMetadata,
           ...(runConfigMetadata ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: runConfigMetadata } : {}),
+          [EXECUTION_OWNER_METADATA_KEY]: executionOwner,
         },
         parent_conversation_id: parentConversationId,
         user_id: userId,
@@ -2264,22 +2272,29 @@ export async function executeWorkflow(
     workflowRun = pendingRun;
   }
 
-  if (preCreatedRun && !isContinuation) {
+  if (preCreatedRun) {
     // The stamps a fresh row would have received at creation, for a row someone
     // else created. `isolation` + `isolation_env_id` are what a later resume reads
     // to rediscover a container (see the creation branch above), and `working_path`
     // is null on a row created before its checkout existed (#2872, `run --detach`)
     // — write-once in the store, so re-running this can never repoint a live run.
+    // A continuation keeps what its first execution recorded and restamps only the
+    // execution owner, which is now this process.
     const invocationMetadata: Record<string, unknown> = {
-      [RUN_MODEL_BINDINGS_METADATA_KEY]: modelBindingsMetadata,
-      ...(runConfigMetadata ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: runConfigMetadata } : {}),
-      ...(execContext.kind === 'container' ? { isolation: 'container' } : {}),
-      ...(containerCtx ? { isolation_env_id: containerCtx.envId } : {}),
+      ...(isContinuation
+        ? {}
+        : {
+            [RUN_MODEL_BINDINGS_METADATA_KEY]: modelBindingsMetadata,
+            ...(runConfigMetadata ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: runConfigMetadata } : {}),
+            ...(execContext.kind === 'container' ? { isolation: 'container' } : {}),
+            ...(containerCtx ? { isolation_env_id: containerCtx.envId } : {}),
+          }),
+      [EXECUTION_OWNER_METADATA_KEY]: executionOwner,
     };
     try {
       await deps.store.updateWorkflowRun(preCreatedRun.id, {
         metadata: invocationMetadata,
-        ...(preCreatedRun.working_path === null ? { working_path: cwd } : {}),
+        ...(!isContinuation && preCreatedRun.working_path === null ? { working_path: cwd } : {}),
       });
     } catch (error) {
       const err = error as Error;
@@ -2312,7 +2327,7 @@ export async function executeWorkflow(
     }
     workflowRun = {
       ...preCreatedRun,
-      working_path: preCreatedRun.working_path ?? cwd,
+      working_path: preCreatedRun.working_path ?? (isContinuation ? null : cwd),
       metadata: {
         ...preCreatedRun.metadata,
         ...invocationMetadata,
@@ -2392,6 +2407,7 @@ export async function executeWorkflow(
             `• Approve it: \`${formatRunCommand(platform, 'approve', shortId)}\`\n` +
             `• Reject it: \`${formatRunCommand(platform, 'reject', shortId)}\`\n` +
             `• Cancel it: \`${formatRunCommand(platform, 'cancel', shortId)}\`\n` +
+            `• If its process is gone: \`${formatRunCommand(platform, 'abandon', shortId)}\`\n` +
             '• Use a different branch: `--branch <other>`';
         } else {
           const verb = activeWorkflow.status === 'pending' ? 'starting' : 'running';
@@ -2399,6 +2415,7 @@ export async function executeWorkflow(
           actionLines =
             `• Wait for it to finish: \`${formatRunCommand(platform, 'status')}\`\n` +
             `• Cancel it: \`${formatRunCommand(platform, 'cancel', shortId)}\`\n` +
+            `• If its process is gone: \`${formatRunCommand(platform, 'abandon', shortId)}\`\n` +
             '• Use a different branch: `--branch <other>`';
         }
         await sendCriticalMessage(

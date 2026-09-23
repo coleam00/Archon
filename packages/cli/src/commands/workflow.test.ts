@@ -25,7 +25,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { homedir, tmpdir } from 'node:os';
+import { homedir, hostname, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { getArchonHome, isDocker } from '@archon/paths';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
@@ -41,7 +41,7 @@ import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import type * as WorkflowDiscovery from '@archon/workflows/workflow-discovery';
 import type * as WorkflowExecutor from '@archon/workflows/executor';
-import type * as DetachedRunControl from '../utils/detached-run-control';
+import type * as RunOwnerStop from '@archon/core/services/run-owner-stop';
 import {
   makeTestComposedWorkflow,
   makeTestResolvedWorkflow,
@@ -100,25 +100,11 @@ const mockLogger = {
 const mockDetachedTargetStop = mock((): Promise<void> => Promise.resolve());
 const mockDetachedTargetRelease = mock((): undefined => undefined);
 const mockReclaimContainerEnv = mock((): Promise<void> => Promise.resolve());
-const mockRequestDetachedRunStop = mock<typeof DetachedRunControl.requestDetachedRunStop>(() =>
-  Promise.resolve({ stop: mockDetachedTargetStop, release: mockDetachedTargetRelease })
+const mockRequestDetachedRunStop = mock<typeof RunOwnerStop.requestDetachedRunStop>(() =>
+  Promise.resolve({ pid: 4242, stop: mockDetachedTargetStop, release: mockDetachedTargetRelease })
 );
 const mockRunLiveOwnerClose = mock((): Promise<void> => Promise.resolve());
 const mockAssertDetachedRunProcessOwner = mock((): undefined => undefined);
-const mockTerminateDetachedProcessTree = mock<
-  typeof DetachedRunControl.terminateDetachedProcessTree
->(() => Promise.resolve());
-const mockRequestRunLiveOwnerStop = mock<
-  (runId: string) => Promise<{
-    pid: number;
-    commit: () => Promise<void>;
-    release: () => void;
-    isLive: () => boolean;
-  }>
->(() => {
-  throw new Error('unexpected call to requestRunLiveOwnerStop');
-});
-
 let mockDetachedStopRequested = false;
 const mockStartRunLiveOwner = mock(
   (
@@ -138,23 +124,26 @@ mock.module(
   (): {
     assertDetachedRunProcessOwner: typeof mockAssertDetachedRunProcessOwner;
     DETACHED_RUN_OWNER_ENV: string;
-    requestDetachedRunStop: typeof mockRequestDetachedRunStop;
-    terminateDetachedProcessTree: typeof mockTerminateDetachedProcessTree;
   } => ({
     assertDetachedRunProcessOwner: mockAssertDetachedRunProcessOwner,
     DETACHED_RUN_OWNER_ENV: 'ARCHON_DETACHED_RUN_OWNER',
-    requestDetachedRunStop: mockRequestDetachedRunStop,
-    terminateDetachedProcessTree: mockTerminateDetachedProcessTree,
   })
 );
 
 // Capture the real class before mock.module replaces the module, so the mock
 // can re-export it without a hand-declared copy that would silently drift.
-import { RunLiveOwnerStopUnavailableError as RealRunLiveOwnerStopUnavailableError } from '@archon/core/services/run-live-owner';
+import { DetachedRunOwnerUnavailableError as RealDetachedRunOwnerUnavailableError } from '@archon/core/services/run-owner-stop';
+mock.module('@archon/core/services/run-owner-stop', () => ({
+  requestDetachedRunStop: mockRequestDetachedRunStop,
+  DetachedRunOwnerUnavailableError: RealDetachedRunOwnerUnavailableError,
+}));
+/** Abandon's owner probe when nothing listens at the run's endpoint. */
+function noOwnerAnswers(): Promise<never> {
+  return Promise.reject(new RealDetachedRunOwnerUnavailableError('run-1', 'ENOENT', 'unreachable'));
+}
+
 mock.module('@archon/core/services/run-live-owner', () => ({
   startRunLiveOwner: mockStartRunLiveOwner,
-  requestRunLiveOwnerStop: mockRequestRunLiveOwnerStop,
-  RunLiveOwnerStopUnavailableError: RealRunLiveOwnerStopUnavailableError,
 }));
 
 mock.module(
@@ -6043,10 +6032,8 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockClear();
     mockCreateWorkflowEvent.mockClear();
     mockPersistWorkflowEvent.mockClear();
-    mockRequestRunLiveOwnerStop.mockReset();
-    mockRequestRunLiveOwnerStop.mockImplementation(() =>
-      Promise.reject(new RealRunLiveOwnerStopUnavailableError('run-1', 'mock no owner'))
-    );
+    mockRequestDetachedRunStop.mockReset();
+    mockRequestDetachedRunStop.mockImplementation(noOwnerAnswers);
   });
 
   afterEach(() => {
@@ -6707,10 +6694,8 @@ describe('write command --json output', () => {
   beforeEach(() => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
     stdoutSpy = spyOnJsonStdout();
-    mockRequestRunLiveOwnerStop.mockReset();
-    mockRequestRunLiveOwnerStop.mockImplementation(() =>
-      Promise.reject(new RealRunLiveOwnerStopUnavailableError('run-1', 'mock no owner'))
-    );
+    mockRequestDetachedRunStop.mockReset();
+    mockRequestDetachedRunStop.mockImplementation(noOwnerAnswers);
   });
 
   afterEach(() => {
@@ -6724,6 +6709,8 @@ describe('write command --json output', () => {
       id: 'run-ab',
       workflow_name: 'implement',
       status: 'running',
+      last_activity_at: new Date('2026-09-20T10:00:00.000Z'),
+      metadata: { execution_owner: { host: 'build-box', pid: 4242 } },
     });
     (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       cancelled: true,
@@ -6738,6 +6725,13 @@ describe('write command --json output', () => {
       action: 'abandon',
       status: 'cancelled',
       workflowName: 'implement',
+      owner: {
+        outcome: 'no_owner_answered',
+        thisHost: hostname(),
+        recordedHost: 'build-box',
+        recordedPid: 4242,
+        lastActivityAt: '2026-09-20T10:00:00.000Z',
+      },
     });
   });
 
@@ -9208,10 +9202,8 @@ describe('workflowAbandonCommand', () => {
 
   beforeEach(() => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
-    mockRequestRunLiveOwnerStop.mockReset();
-    mockRequestRunLiveOwnerStop.mockImplementation(() =>
-      Promise.reject(new RealRunLiveOwnerStopUnavailableError('run-1', 'mock no owner'))
-    );
+    mockRequestDetachedRunStop.mockReset();
+    mockRequestDetachedRunStop.mockImplementation(noOwnerAnswers);
   });
 
   afterEach(() => {
@@ -9257,41 +9249,79 @@ describe('workflowAbandonCommand', () => {
     expect(consoleSpy).toHaveBeenCalledWith('Abandoned workflow run: run-1');
   });
 
-  it('calls terminateDetachedProcessTree when the live owner answers', async () => {
+  it('stops a live owner before recording cancelled and says so', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const order: string[] = [];
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-1',
+      workflow_name: 'implement',
+      status: 'running',
+    });
+    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockReset();
+    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockImplementation(async () => {
+      order.push('cancel-state');
+      return { cancelled: true };
+    });
+    mockRequestDetachedRunStop.mockImplementationOnce(async () => ({
+      pid: 42,
+      stop: async () => {
+        order.push('terminate');
+      },
+      release: mockDetachedTargetRelease,
+    }));
+
+    await workflowAbandonCommand('run-1');
+
+    expect(order).toEqual(['terminate', 'cancel-state']);
+    expect(consoleSpy).toHaveBeenCalledWith("Stopped the run's live owner process (pid 42) first.");
+    expect(consoleSpy).toHaveBeenCalledWith('Abandoned workflow run: run-1');
+  });
+
+  it('prints the recorded owner facts when no owner answers', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-1',
+      workflow_name: 'implement',
+      status: 'running',
+      last_activity_at: new Date('2026-09-20T10:00:00.000Z'),
+      metadata: { execution_owner: { host: 'build-box', pid: 4242 } },
+    });
+    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      cancelled: true,
+    });
+
+    await workflowAbandonCommand('run-1');
+
+    const printed = (consoleSpy.mock.calls as unknown[][]).map(call => String(call[0]));
+    expect(printed).toContain('Recorded owner: host build-box, pid 4242.');
+    expect(printed).toContain('Last activity: 2026-09-20T10:00:00.000Z.');
+    expect(printed.some(line => line.startsWith('The recorded owner is on another host'))).toBe(
+      true
+    );
+    // The facts come before the cancellation line.
+    expect(printed.indexOf('Recorded owner: host build-box, pid 4242.')).toBeLessThan(
+      printed.indexOf('Abandoned workflow run: run-1')
+    );
+  });
+
+  it('fails with the reason and leaves the run when the owner cannot be stopped', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-1',
       workflow_name: 'implement',
       status: 'running',
     });
-    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      cancelled: true,
-    });
+    (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockClear();
+    mockRequestDetachedRunStop.mockImplementationOnce(async () => ({
+      pid: 42,
+      stop: () => Promise.reject(new Error('process still exists')),
+      release: mockDetachedTargetRelease,
+    }));
 
-    let committed = false;
-    let released = false;
-    mockRequestRunLiveOwnerStop.mockReset();
-    mockRequestRunLiveOwnerStop.mockImplementationOnce(() =>
-      Promise.resolve({
-        pid: 42,
-        commit: async () => {
-          committed = true;
-        },
-        release: () => {
-          released = true;
-        },
-        isLive: () => true,
-      })
+    await expect(workflowAbandonCommand('run-1')).rejects.toThrow(
+      'Could not stop the live owner of run run-1 (pid 42): process still exists. The run was not changed.'
     );
-    mockTerminateDetachedProcessTree.mockReset();
-    mockTerminateDetachedProcessTree.mockResolvedValue(undefined);
-
-    await workflowAbandonCommand('run-1');
-
-    expect(mockTerminateDetachedProcessTree).toHaveBeenCalledWith(42, expect.any(Function));
-    expect(committed).toBe(true);
-    expect(released).toBe(true);
-    expect(workflowDb.cancelWorkflowRun).toHaveBeenCalledWith('run-1');
+    expect(workflowDb.cancelWorkflowRun).not.toHaveBeenCalled();
   });
 });
 
@@ -9305,6 +9335,7 @@ describe('workflowCancelCommand', () => {
     stdoutSpy = spyOnJsonStdout();
     mockRequestDetachedRunStop.mockReset();
     mockRequestDetachedRunStop.mockResolvedValue({
+      pid: 4242,
       stop: mockDetachedTargetStop,
       release: mockDetachedTargetRelease,
     });
@@ -9340,6 +9371,7 @@ describe('workflowCancelCommand', () => {
     mockRequestDetachedRunStop.mockImplementation(async () => {
       order.push('owner');
       return {
+        pid: 4242,
         stop: async () => {
           order.push('terminate');
         },

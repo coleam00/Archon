@@ -275,6 +275,8 @@ import * as messageDb from '@archon/core/db/messages';
 import * as userDb from '@archon/core/db/users';
 import {
   abandonWorkflow,
+  AbandonOwnerNotStoppedError,
+  describeAbandonOwner,
   approveWorkflow,
   rejectWorkflow,
   respondToWorkflow,
@@ -1016,6 +1018,7 @@ const abandonWorkflowRunRoute = createRoute({
     },
     400: jsonError('Bad request'),
     404: jsonError('Not found'),
+    409: jsonError('A live owner answered but could not be stopped; the run was not changed'),
     500: jsonError('Server error'),
   },
 });
@@ -1601,7 +1604,7 @@ export function registerApiRoutes(
 
   function apiError(
     c: Context,
-    status: 400 | 401 | 404 | 422 | 500 | 503,
+    status: 400 | 401 | 404 | 409 | 422 | 500 | 503,
     message: string,
     detail?: string
   ): Response {
@@ -3796,8 +3799,8 @@ export function registerApiRoutes(
       // Delegate to the SHARED op — a raw cancelWorkflowRun here previously skipped
       // the sub-run cascade cancel AND the container reclaim (M2), so a web abandon
       // orphaned children that CLI/chat abandons cleaned up.
-      const { cascadeFailures, blockedParentRunId } = await abandonWorkflow(runId);
-      let message = `Abandoned workflow: ${run.workflow_name}`;
+      const { cascadeFailures, blockedParentRunId, owner } = await abandonWorkflow(runId);
+      let message = `${describeAbandonOwner(owner).join(' ')} Abandoned workflow: ${run.workflow_name}`;
       if (cascadeFailures > 0) {
         message += ` — warning: ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running`;
       }
@@ -3806,6 +3809,9 @@ export function registerApiRoutes(
       }
       return c.json({ success: true, message });
     } catch (error) {
+      if (error instanceof AbandonOwnerNotStoppedError) {
+        return apiError(c, 409, error.message);
+      }
       getLog().error({ err: error, runId }, 'api.workflow_run_abandon_failed');
       return apiError(c, 500, 'Failed to abandon workflow run');
     }

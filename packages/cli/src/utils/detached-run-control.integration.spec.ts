@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { runLiveOwnerPath } from '@archon/core/services/run-live-owner';
-import { requestDetachedRunStop } from './detached-run-control';
+import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
 
 // These fixtures are torn down after tests that spawn, and then kill, a real detached
 // child. A killed process can still hold a handle inside its temp tree at the instant of

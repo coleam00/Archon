@@ -408,6 +408,17 @@ const mockResolveRunWorkflow = mock<typeof resolveRunWorkflow>(async () => ({
   ok: true,
   workflow: makeTestResolvedWorkflow({ name: 'deploy' }),
 }));
+// Capture the real class before mock.module replaces the module.
+import { DetachedRunOwnerUnavailableError as RealDetachedRunOwnerUnavailableError } from '@archon/core/services/run-owner-stop';
+// Abandon asks the run's live-owner endpoint first (#2325). Default: nothing answers.
+const mockRequestDetachedRunStop = mock<
+  typeof import('@archon/core/services/run-owner-stop').requestDetachedRunStop
+>(() => Promise.reject(new RealDetachedRunOwnerUnavailableError('run', 'ENOENT', 'unreachable')));
+mock.module('@archon/core/services/run-owner-stop', () => ({
+  requestDetachedRunStop: mockRequestDetachedRunStop,
+  DetachedRunOwnerUnavailableError: RealDetachedRunOwnerUnavailableError,
+}));
+
 mock.module('@archon/core/operations', () => ({
   resumeWorkflow: mockResumeWorkflow,
 }));
@@ -2180,6 +2191,39 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
     expect(body.success).toBe(true);
     expect(body.message).toContain('Abandoned');
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-uuid-1');
+  });
+
+  test('returns 409 with the reason and leaves the run when a live owner cannot be stopped', async () => {
+    mockGetWorkflowRun.mockResolvedValue(MOCK_RUNNING_RUN);
+    mockRequestDetachedRunStop.mockImplementationOnce(async () => ({
+      pid: 4242,
+      stop: () => Promise.reject(new Error('process still exists')),
+      release: () => undefined,
+    }));
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1/abandon', {
+      method: 'POST',
+    });
+    expect(response.status).toBe(409);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('Could not stop the live owner of run run-uuid-1 (pid 4242)');
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('reports the stopped owner in the success message', async () => {
+    mockGetWorkflowRun.mockResolvedValue(MOCK_RUNNING_RUN);
+    mockRequestDetachedRunStop.mockImplementationOnce(async () => ({
+      pid: 4242,
+      stop: () => Promise.resolve(),
+      release: () => undefined,
+    }));
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1/abandon', {
+      method: 'POST',
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { message: string };
+    expect(body.message).toContain("Stopped the run's live owner process (pid 4242) first.");
   });
 
   // #1887: a failed run is terminal but resumable, so it must remain

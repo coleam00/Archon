@@ -47,11 +47,19 @@ const mockGetWorkflowRun = mock<
   } | null>
 >(async () => ({ metadata: { total_cost_usd: 0.0234 }, outcome: null }));
 
+// Capture the real exports before mock.module replaces '@archon/core', so the mock
+// re-exports them instead of a hand-declared copy that could drift.
+import {
+  AbandonOwnerNotStoppedError,
+  describeAbandonOwner,
+} from '@archon/core/operations/workflow-operations';
 mock.module('@archon/core', () => ({
   workflowOperations: {
     approveWorkflow: mockApproveWorkflow,
     rejectWorkflow: mockRejectWorkflow,
     abandonWorkflow: mockAbandonWorkflow,
+    AbandonOwnerNotStoppedError,
+    describeAbandonOwner,
   },
   workflowDb: {
     getWorkflowRun: mockGetWorkflowRun,
@@ -205,7 +213,7 @@ describe('SlackWorkflowBridge', () => {
     mockRejectWorkflow.mockReset();
     mockRejectWorkflow.mockResolvedValue({ cancelled: false, maxAttemptsReached: false });
     mockAbandonWorkflow.mockReset();
-    mockAbandonWorkflow.mockResolvedValue({});
+    mockAbandonWorkflow.mockResolvedValue({ owner: { kind: 'stopped', pid: 4242 } });
     mockGetWorkflowRun.mockReset();
     mockGetWorkflowRun.mockResolvedValue({
       metadata: { total_cost_usd: 0.0234 },
@@ -595,6 +603,63 @@ describe('SlackWorkflowBridge', () => {
 
     expect(mockAbandonWorkflow).toHaveBeenCalledTimes(1);
     expect(mockAbandonWorkflow).toHaveBeenCalledWith('r1');
+  });
+
+  describe('cancel button owner outcomes (#2325)', () => {
+    async function clickCancel(): Promise<ReturnType<typeof makeFakeAdapter>['posted']> {
+      const { adapter, posted, triggerMap, dispatchAction } = makeFakeAdapter();
+      triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
+      mockGetConversationId.mockReturnValue('C1:111.0');
+      new SlackWorkflowBridge(adapter as never).attach();
+      await dispatchEvent({
+        type: 'workflow_started',
+        runId: 'r1',
+        workflowName: 'assist',
+        conversationId: 'conv-db-uuid',
+        transcriptPath: '/logs/r1.jsonl',
+      });
+      posted.length = 0;
+      await dispatchAction('cancel:r1', {
+        user: { id: 'U123' },
+        channel: { id: 'C1' },
+        message: { ts: '1.000' },
+      });
+      return posted;
+    }
+
+    test('a stopped owner posts nothing extra; the cancelled event repaints', async () => {
+      expect(await clickCancel()).toHaveLength(0);
+    });
+
+    test('no owner answering posts the recorded owner facts in the run thread', async () => {
+      mockAbandonWorkflow.mockResolvedValue({
+        owner: {
+          kind: 'no_owner_answered',
+          detail: 'ENOENT',
+          recordedOwner: { host: 'build-box', pid: 4242 },
+          lastActivityAt: null,
+          thisHost: 'here',
+        },
+      });
+
+      const posted = await clickCancel();
+
+      expect(posted).toHaveLength(1);
+      expect(posted[0]?.thread_ts).toBe('111.0');
+      expect(posted[0]?.text).toContain('Recorded owner: host build-box, pid 4242.');
+      expect(posted[0]?.text).toContain('The recorded owner is on another host (build-box).');
+    });
+
+    test('an owner that could not be stopped posts the reason, not the generic failure', async () => {
+      mockAbandonWorkflow.mockRejectedValue(
+        new AbandonOwnerNotStoppedError('r1', 'Could not stop the live owner of run r1.')
+      );
+
+      const posted = await clickCancel();
+
+      expect(posted).toHaveLength(1);
+      expect(posted[0]?.text).toBe(':warning: Could not stop the live owner of run r1.');
+    });
   });
 
   test('unauthorized click is silently dropped and no operation runs', async () => {

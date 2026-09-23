@@ -161,7 +161,7 @@ const commandHelp: HelpEntry[] = [
     command: 'workflow',
     subcommand: 'abandon',
     spec: 'workflow abandon <run-id>',
-    description: 'Mark a run cancelled without stopping host work',
+    description: 'Mark a run cancelled, stopping a live owner first',
   },
   {
     command: 'workflow',

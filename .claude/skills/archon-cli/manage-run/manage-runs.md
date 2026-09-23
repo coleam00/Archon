@@ -58,7 +58,7 @@ For reusable alternate setups, prefer a config layer instead of long flag lists
 | Approve (default vocabulary) | `archon workflow approve <run-id> [text]` |
 | Reject (default vocabulary) | `archon workflow reject <run-id> "<reason>"` |
 | Stop a live detached run | `archon workflow cancel <run-id>` |
-| Mark paused/orphaned run cancelled (state only) | `archon workflow abandon <run-id>` |
+| Mark paused/orphaned run cancelled | `archon workflow abandon <run-id>` |
 | Resume failed/paused from completed nodes | `archon workflow resume <run-id>` |
 
 ## The approve/resume two-step
@@ -105,8 +105,10 @@ Choose deliberately after reading what the gate produced — not by reflex.
 
 - `cancel` actively stops a live CLI-detached owner: it verifies the process tree
   is gone before recording `cancelled`. Use this to kill real work.
-- `abandon` is state-only: for runs already paused, or after you have independently
-  verified a "running" row is orphaned (crashed host). It never kills anything.
+- `abandon` is for runs already paused, or a "running" row whose owner is gone
+  (crashed host). If an owner still answers on this host, it stops it first, like
+  `cancel`. If none answers, it records `cancelled` and prints the host and pid the
+  run recorded; when that host is another machine, check there before abandoning.
 
 ## Respond: gates beyond approve/reject
 

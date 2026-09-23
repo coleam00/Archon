@@ -140,7 +140,7 @@ To stop a running run that a `trigger execute` process owns, use `archon workflo
 
 A `trigger execute` process stopped with SIGTERM or SIGINT marks its own running run failed before it exits, which also releases the resource. A crash or SIGKILL cannot do that and leaves ownership ambiguous.
 
-If an admitted run has ambiguous ownership after a crash, inspect the request and its blocking run. `archon workflow abandon` is the explicit escape hatch here: it records the run as cancelled without stopping its execution process. Verify that the exact execution owner and its descendants have stopped before using the workflow recovery command named by inspection. Archon does not abandon a run because it is old or unreachable. Automatic queue draining and recovery of ambiguous execution are separate operations.
+If an admitted run has ambiguous ownership after a crash, inspect the request and its blocking run. `archon workflow abandon` is the explicit escape hatch here. If the run's owner answers on this host, abandon stops its process tree before recording the run cancelled, so a waiting start is admitted only after that process has exited. If no owner answers, abandon records the run cancelled and prints the host and pid the run recorded; an owner on another host cannot be stopped from here, so verify it has stopped before abandoning. Archon does not abandon a run because it is old or unreachable. Automatic queue draining and recovery of ambiguous execution are separate operations.
 
 ## Configure GitHub event starts
 

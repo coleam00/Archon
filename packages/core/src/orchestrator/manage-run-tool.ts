@@ -10,6 +10,7 @@ import { listDashboardRuns, findWorkflowRunsByIdPrefix } from '../db/workflows';
 import { toError } from '../utils/error';
 import {
   abandonWorkflow,
+  describeAbandonOwner,
   approveWorkflow,
   rejectWorkflow,
   respondToWorkflow,
@@ -400,8 +401,13 @@ async function handleWrite(
     }
     case 'cancel':
     case 'abandon': {
-      const { run: cancelled, cascadeFailures, blockedParentRunId } = await abandonWorkflow(id);
-      let msg = `Cancelled run ${cancelled.id.slice(0, 8)} (${cancelled.workflow_name}).`;
+      const {
+        run: cancelled,
+        cascadeFailures,
+        blockedParentRunId,
+        owner,
+      } = await abandonWorkflow(id);
+      let msg = `${describeAbandonOwner(owner).join(' ')} Cancelled run ${cancelled.id.slice(0, 8)} (${cancelled.workflow_name}).`;
       if (cascadeFailures > 0) {
         msg += ` Warning: ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running.`;
       }

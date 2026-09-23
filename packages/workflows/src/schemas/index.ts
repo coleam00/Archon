@@ -234,6 +234,8 @@ export {
   readWorkflowSourceState,
   CONTINUATION_METADATA_KEY,
   readContinuationMode,
+  EXECUTION_OWNER_METADATA_KEY,
+  readExecutionOwner,
 } from './workflow-run';
 export type {
   WorkflowRunStatus,
@@ -260,6 +262,7 @@ export type {
   WorkflowSourceConfig,
   WorkflowSourceState,
   ContinuationMode,
+  ExecutionOwnerRecord,
 } from './workflow-run';
 
 // Per-node persisted provider sessions

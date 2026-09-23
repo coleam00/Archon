@@ -26,13 +26,23 @@ mock.module('../db/workflows', () => ({
   listDashboardRuns: mockListDashboardRuns,
 }));
 
+const noOwnerAnswered = {
+  kind: 'no_owner_answered',
+  detail: 'ENOENT',
+  recordedOwner: { host: 'build-box', pid: 4242 },
+  lastActivityAt: null,
+  thisHost: 'here',
+} as const;
 const mockAbandon = mock((_id: string) =>
   Promise.resolve({
     run: { id: 'r1abcdef', workflow_name: 'wf' },
     cascadeFailures: 0,
     blockedParentRunId: null,
+    owner: noOwnerAnswered,
   })
 );
+// The wording is owned and tested in workflow-operations; this proves the tool relays it.
+const mockDescribeAbandonOwner = mock((_owner: unknown) => ['<owner facts>']);
 function approvalResult(type: ApprovalOperationResult['type']): ApprovalOperationResult {
   return {
     workflowName: 'wf',
@@ -81,6 +91,7 @@ const mockRespond = mock<
 
 mock.module('../operations/workflow-operations', () => ({
   abandonWorkflow: mockAbandon,
+  describeAbandonOwner: mockDescribeAbandonOwner,
   approveWorkflow: mockApprove,
   rejectWorkflow: mockReject,
   respondToWorkflow: mockRespond,
@@ -409,10 +420,13 @@ describe('manage_run — destructive confirmation gate', () => {
       run: { id: 'r1abcdef-1234', workflow_name: 'archon-assist' },
       cascadeFailures: 0,
       blockedParentRunId: null,
+      owner: noOwnerAnswered,
     });
     const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
     const out = await tool.handler({ action: 'cancel', runId: 'r1abcdef', confirm: true });
     expect(out).toContain('Cancelled');
+    expect(mockDescribeAbandonOwner).toHaveBeenCalledWith(noOwnerAnswered);
+    expect(out).toContain('<owner facts>');
     // Operations are called with the resolved full id, not the short prefix.
     expect(mockAbandon).toHaveBeenCalledWith('r1abcdef-1234');
   });

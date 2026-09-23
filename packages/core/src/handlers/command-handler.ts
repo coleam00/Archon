@@ -34,6 +34,7 @@ import {
   getWorkflowStatus,
   resumeWorkflow,
   abandonWorkflow,
+  describeAbandonOwner,
   abandonResumableRunsForConversation,
   resetWorkflowNodeSessions,
 } from '../operations/workflow-operations';
@@ -861,8 +862,8 @@ async function handleWorkflowCommand(
         };
       }
       try {
-        const { run, cascadeFailures, blockedParentRunId } = await abandonWorkflow(runId);
-        let message = `Abandoned workflow run \`${run.workflow_name}\` (${runId})`;
+        const { run, cascadeFailures, blockedParentRunId, owner } = await abandonWorkflow(runId);
+        let message = `${describeAbandonOwner(owner).join('\n')}\nAbandoned workflow run \`${run.workflow_name}\` (${runId})`;
         if (cascadeFailures > 0) {
           message += `\n⚠️ ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check /workflow status.`;
         }

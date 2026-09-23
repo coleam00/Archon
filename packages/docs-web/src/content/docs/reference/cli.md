@@ -650,7 +650,8 @@ After verifying that the run's work has stopped, release its persisted state wit
 
 Live-owner detection is local to the host running `workflow wait`. With a shared remote
 PostgreSQL database, `owner_lost` means no owner endpoint is reachable on this host; the
-run may still be executing on another host. Check the owning host before abandoning it.
+run may still be executing on another host. Check the owning host before abandoning it;
+`abandon` prints the host the run recorded and says when it is not this one.
 
 `--json` emits one document. On a wake it carries the attention value:
 
@@ -734,15 +735,28 @@ descendant and can report the same cascade failures or blocked parent described 
 
 ### `workflow abandon`
 
-Discard a workflow run by marking it `cancelled`. This is a state-only operation: it
-does not stop a live host process or subprocess. Use it for paused runs and for orphaned
-rows after verifying that their owner is gone. To stop a live `--detach` run, use
-`workflow cancel`.
+Discard a workflow run by marking it `cancelled`. `cancelled` releases the run's
+worktree lock and resource slot, so abandon first asks the run's live-owner endpoint on
+this host:
+
+- **An owner answers:** abandon stops it through the same path as `workflow cancel`
+  (proves the owner, terminates its process tree, waits), then records `cancelled`.
+- **No owner answers:** abandon records `cancelled` and prints what the run recorded:
+  the host and pid of the process that last executed it, and its last activity. If that
+  host is not this one, it says so: abandon cannot reach or stop a process on another
+  host. Nothing decides the run is dead from its age or pid.
+- **An owner answers but cannot be stopped:** abandon fails with the reason and leaves
+  the run unchanged. This includes a run executing inside a live Archon server, which
+  abandon cannot stop; cancel it from that server instead.
 
 ```bash
 archon workflow abandon <run-id>
 archon workflow abandon <run-id> --json
 ```
+
+`--json` adds an `owner` object: `{ "outcome": "stopped", "pid": … }`, or
+`{ "outcome": "no_owner_answered", "thisHost", "recordedHost", "recordedPid",
+"lastActivityAt" }`.
 
 **Sub-run trees (#2121 Phase 2):** abandoning a parent that spawned `workflow:` sub-runs cascade-cancels every non-terminal descendant (children and grandchildren; already-terminal runs are left alone). These are database transitions, not process termination; an in-flight host command can continue until it returns. If part of the tree could not be reached, the command reports the count so you know descendants may still be alive. Conversely, abandoning a **child** that its parent is paused-and-blocked on strands that parent (nothing re-fires the auto-resume hook); the command surfaces the blocked parent's run id so you can `resume` it (which fails the sub-run node cleanly) or abandon it too.
 

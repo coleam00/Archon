@@ -1868,6 +1868,15 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description A live owner answered but could not be stopped; the run was not changed */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
           headers: {

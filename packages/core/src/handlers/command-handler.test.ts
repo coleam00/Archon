@@ -401,6 +401,19 @@ const mockCleanupStaleWorktrees = mock(() =>
     skipped: [] as { branchName: string; reason: string }[],
   })
 );
+// Capture the real class before mock.module replaces the module, so the mock
+// re-exports it rather than a hand-declared copy that could drift.
+import { DetachedRunOwnerUnavailableError as RealDetachedRunOwnerUnavailableError } from '../services/run-owner-stop';
+// Abandon asks the run's live-owner endpoint first (#2325). Default: nothing answers,
+// without touching a real socket.
+const mockRequestDetachedRunStop = mock<
+  typeof import('../services/run-owner-stop').requestDetachedRunStop
+>(() => Promise.reject(new RealDetachedRunOwnerUnavailableError('run', 'ENOENT', 'unreachable')));
+mock.module('../services/run-owner-stop', () => ({
+  requestDetachedRunStop: mockRequestDetachedRunStop,
+  DetachedRunOwnerUnavailableError: RealDetachedRunOwnerUnavailableError,
+}));
+
 mock.module('../services/cleanup-service', () => ({
   cleanupMergedWorktrees: mockCleanupMergedWorktrees,
   cleanupStaleWorktrees: mockCleanupStaleWorktrees,
@@ -2265,6 +2278,54 @@ describe('CommandHandler', () => {
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('not found');
+      });
+
+      test('shows the recorded owner facts when no owner answers (#2325)', async () => {
+        mockGetWorkflowRun.mockResolvedValueOnce(
+          makeWorkflowRun({
+            id: 'run-123',
+            workflow_name: 'implement',
+            conversation_id: 'conv-1',
+            status: 'running' as const,
+            user_message: 'test',
+            metadata: { execution_owner: { host: 'build-box', pid: 4242 } },
+          })
+        );
+
+        const result = await handleCommand(baseConversation, '/workflow abandon run-123');
+
+        expect(result.success).toBe(true);
+        expect(result.message).toContain('Recorded owner: host build-box, pid 4242.');
+        expect(result.message).toContain('The recorded owner is on another host (build-box).');
+      });
+
+      test('fails with the reason and leaves the run when a live owner cannot be stopped', async () => {
+        mockGetWorkflowRun.mockResolvedValueOnce(
+          makeWorkflowRun({
+            id: 'run-live',
+            workflow_name: 'implement',
+            conversation_id: 'conv-1',
+            status: 'running' as const,
+            user_message: 'test',
+          })
+        );
+        mockRequestDetachedRunStop.mockImplementationOnce(() =>
+          Promise.reject(
+            new RealDetachedRunOwnerUnavailableError(
+              'run-live',
+              'the live owner is not a detached CLI',
+              'not_detached'
+            )
+          )
+        );
+        mockCancelWorkflowRun.mockClear();
+
+        const result = await handleCommand(baseConversation, '/workflow abandon run-live');
+
+        expect(result.success).toBe(false);
+        expect(result.message).toContain('abandon cannot stop');
+        expect(result.message).toContain('The run was not changed.');
+        expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
       });
 
       test('should return usage when no id provided', async () => {

@@ -439,6 +439,32 @@ export function readContinuationMode(
   return mode === 'adopt' || mode === 'supersede' ? mode : undefined;
 }
 
+/**
+ * The host and process that last took over executing this run, stamped by the
+ * executor each time it starts or resumes execution. The live-owner endpoint is
+ * host-local, so when no owner answers, this record is what `abandon` shows the
+ * operator, including whether the owner was on another host. It is a report,
+ * never a liveness signal: nothing decides a run is dead from it.
+ */
+export const EXECUTION_OWNER_METADATA_KEY = 'execution_owner';
+
+export interface ExecutionOwnerRecord {
+  host: string;
+  pid: number;
+}
+
+/** Typed view of the execution-owner stamp; undefined on runs that predate it. */
+export function readExecutionOwner(
+  metadata: Record<string, unknown> | undefined
+): ExecutionOwnerRecord | undefined {
+  const raw = metadata?.[EXECUTION_OWNER_METADATA_KEY];
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const { host, pid } = raw as { host?: unknown; pid?: unknown };
+  if (typeof host !== 'string' || host.length === 0) return undefined;
+  if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return undefined;
+  return { host, pid };
+}
+
 /** Typed view of the run-lifecycle keys on a run's metadata; undefined when unset. */
 export function readIdentityUnresolved(
   metadata: Record<string, unknown> | undefined

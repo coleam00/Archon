@@ -6,7 +6,7 @@
 import { NodeEventWriteError } from './node-event-write';
 import { describe, it, expect, mock, beforeEach, spyOn } from 'bun:test';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'path';
 
 // --- Mock logger ---
@@ -335,6 +335,49 @@ describe('executeWorkflow', () => {
       resume ? { preCreatedRun: makeRun(), priorCompletedNodes: new Map() } : {}
     );
     expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  describe('execution owner record (#2325)', () => {
+    const owner = { execution_owner: { host: hostname(), pid: process.pid } };
+
+    it('stamps this process on a run it creates', async () => {
+      const store = makeStore();
+      await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'msg',
+        'db-conv-1'
+      );
+      expect(store.createWorkflowRun).toHaveBeenCalledWith(
+        expect.objectContaining({ metadata: expect.objectContaining(owner) })
+      );
+    });
+
+    it.each([
+      ['a row a launcher pre-created', makeRun({ status: 'pending' }), undefined],
+      ['a resumed run', makeRun({ status: 'running' }), new Map()],
+    ])('restamps this process on %s', async (_label, preCreatedRun, priorCompletedNodes) => {
+      const store = makeStore({
+        claimPendingWorkflowRun: mock(async () => makeRun({ status: 'running' })),
+      });
+      await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'msg',
+        'db-conv-1',
+        { preCreatedRun, ...(priorCompletedNodes ? { priorCompletedNodes } : {}) }
+      );
+      expect(store.updateWorkflowRun).toHaveBeenCalledWith(
+        preCreatedRun.id,
+        expect.objectContaining({ metadata: expect.objectContaining(owner) })
+      );
+    });
   });
 
   it('rejects a structurally valid but semantically invalid outcome declaration before side effects', async () => {
@@ -1126,6 +1169,7 @@ describe('executeWorkflow', () => {
       // Concrete next actions — every line tells the user something to do.
       expect(sentMessage).toContain('/workflow status');
       expect(sentMessage).toContain('/workflow cancel abc12345');
+      expect(sentMessage).toContain('/workflow abandon abc12345');
       expect(sentMessage).toContain('--branch');
     });
 
@@ -1281,6 +1325,7 @@ describe('executeWorkflow', () => {
       expect(sendMessageSpy).toHaveBeenCalled();
       const sentMessage = (sendMessageSpy.mock.calls[0] as [string, string])[1];
       expect(sentMessage).toContain('archon workflow cancel abc12345');
+      expect(sentMessage).toContain('archon workflow abandon abc12345');
       // The non-CLI `/workflow` prefix should not appear in a CLI message.
       expect(sentMessage).not.toContain('/workflow cancel');
       expect(sentMessage).not.toContain('/workflow status');
