@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'bun:test';
-import { existsSync, readFileSync, readdirSync } from 'fs';
-import { join } from 'path';
+import { spawnSync } from 'child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { dirname, join } from 'path';
+import { removeTempTree } from '@archon/paths/test-utils';
 import {
   isBinaryBuild,
   BUNDLED_COMMANDS,
@@ -746,6 +749,106 @@ describe('bundled-defaults', () => {
         expect(pause.wait).not.toHaveProperty('duration_ms');
         expect(pause.depends_on).toEqual([probeId]);
         expect(pause.when).toBe(`$${probeId}.output.state == 'pending'`);
+      }
+    });
+  });
+
+  // A binary install executes the shipped copies of the deliver check scripts, so
+  // these run the bundled pack rather than the source tree. The full matrix for
+  // both sources lives in .archon/scripts/__tests__; this pins the default and
+  // the loud opt-in failure on what actually ships.
+  describe('deliver check source (bundled pack)', () => {
+    const runShipped = async (
+      script: 'check-ci' | 'flip-ready',
+      options: { source?: string; checks?: { name: string; bucket: string }[] | 'fail' }
+    ): Promise<{ code: number; stdout: string; stderr: string; gh: string[] }> => {
+      const root = mkdtempSync(join(tmpdir(), 'archon-bundled-checks-'));
+      try {
+        for (const [path, content] of Object.entries(BUNDLED_SCRIPT_PACKS.sdlc!.files)) {
+          mkdirSync(dirname(join(root, 'sdlc', path)), { recursive: true });
+          writeFileSync(join(root, 'sdlc', path), content);
+        }
+        const ghLog = join(root, 'gh.log');
+        const preload = join(root, 'fake-gh.ts');
+        writeFileSync(
+          preload,
+          `import { appendFileSync } from 'node:fs';
+const checks = ${JSON.stringify(options.checks ?? 'fail')};
+const original = Bun.spawnSync.bind(Bun);
+Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
+  if (argv[0] !== 'gh') return original(argv, settings);
+  const text = argv.slice(1).join(' ');
+  appendFileSync(${JSON.stringify(ghLog)}, text + '\\n');
+  const result = (exitCode, stdout = '', stderr = '') =>
+    ({ exitCode, stdout: Buffer.from(stdout), stderr: Buffer.from(stderr) });
+  if (text.startsWith('pr checks'))
+    return checks === 'fail' ? result(1, '', 'HTTP 502') : result(0, JSON.stringify(checks));
+  if (text.includes('statusCheckRollup')) return result(1, '', 'HTTP 502');
+  if (text.startsWith('pr ready')) return result(0, 'ready');
+  if (text.includes('--json isDraft')) return result(0, 'false');
+  if (text.includes('--json url')) return result(0, 'https://github.com/owner/repo/pull/42');
+  return result(95, '', 'unexpected gh call');
+} });
+`
+        );
+        const run = spawnSync(
+          process.execPath,
+          ['--preload', preload, join(root, 'sdlc', 'deliver', 'scripts', `${script}.ts`)],
+          {
+            cwd: root,
+            encoding: 'utf8',
+            env: {
+              ...process.env,
+              INPUTS_PR: JSON.stringify({
+                repo: { host: 'github.com', path: 'owner/repo' },
+                number: 42,
+              }),
+              ARCHON_SDLC_CHECKS: options.source ?? '',
+              ARCHON_CLI_COMMAND: '',
+            },
+          }
+        );
+        return {
+          code: run.status ?? -1,
+          stdout: run.stdout,
+          stderr: run.stderr,
+          gh: existsSync(ghLog) ? readFileSync(ghLog, 'utf8').split('\n').filter(Boolean) : [],
+        };
+      } finally {
+        await removeTempTree(root);
+      }
+    };
+
+    it('reads checks through gh by default', async () => {
+      const probe = await runShipped('check-ci', { checks: [{ name: 'build', bucket: 'fail' }] });
+      expect(probe.code).toBe(0);
+      expect(JSON.parse(probe.stdout)).toEqual({
+        state: 'red',
+        detail: 'non-green checks: build (fail)',
+      });
+      expect(probe.gh[0]).toBe('pr checks 42 --repo github.com/owner/repo --json name,bucket');
+
+      const flip = await runShipped('flip-ready', { checks: [{ name: 'build', bucket: 'pass' }] });
+      expect(flip.code).toBe(0);
+      expect(flip.gh).toContain('pr ready 42 --repo github.com/owner/repo');
+    });
+
+    it('refuses the ready flip when the default gh read fails', async () => {
+      const flip = await runShipped('flip-ready', { checks: 'fail' });
+      expect(flip.code).not.toBe(0);
+      expect(flip.stderr).toContain('flip-ready: could not read check state');
+      expect(flip.gh.some(call => call.startsWith('pr ready'))).toBe(false);
+    });
+
+    it('fails loudly when the forge source is selected but unavailable', async () => {
+      for (const script of ['check-ci', 'flip-ready'] as const) {
+        const run = await runShipped(script, {
+          source: 'forge',
+          checks: [{ name: 'build', bucket: 'pass' }],
+        });
+        expect(run.code).not.toBe(0);
+        expect(run.stderr).toContain('ARCHON_SDLC_CHECKS=forge: ARCHON_CLI_COMMAND is not set');
+        expect(run.gh).toEqual([]);
       }
     });
   });

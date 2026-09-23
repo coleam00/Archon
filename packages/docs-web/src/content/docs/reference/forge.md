@@ -44,7 +44,13 @@ Checks identify the evaluated revision and each check-run or commit-status unit.
 
 The summary states are `none`, `pending`, `green`, `red`, `gated` and `unknown`. `none` means zero enumerated units. The summary precedence is red, gated, unknown, pending, then green. `gated` names an explicit action-required conclusion; missing checks are not evidence of an approval gate. Unrecognized vendor states remain unknown with their native value retained.
 
-`required` is null when no authoritative required set was obtained. The current GitHub plugin returns null; it does not infer branch protection from check names. The SDLC pack prefers a supplied required set, otherwise uses the full observation. It waits once for registration when no checks exist and refuses the final ready preflight for pending, red, gated, unknown or failed reads. The workflow owns this policy.
+`required` is null when no authoritative required set was obtained. The current GitHub plugin returns null; it does not infer branch protection from check names.
+
+## Use forge checks in the SDLC pack
+
+The bundled SDLC deliver pack reads checks through `gh` by default. Forge reads are an explicit opt-in until the GitHub plugin installs through the marketplace. To opt in, install a plugin for the PR's host and set `ARCHON_SDLC_CHECKS=forge` in the environment Archon runs with, for example `~/.archon/.env`. Any other value except `gh` fails the check steps.
+
+With the opt-in, the pack prefers a supplied required set, otherwise it uses the full observation. It applies the same gate policy it applies to `gh` reads: it waits once for registration when no checks exist and refuses the final ready preflight for pending, red, gated, unknown or failed reads. The workflow owns this policy. Archon never switches to the forge path because a plugin is installed, and a selected forge path that cannot answer never falls back to `gh`: the CI probe and the ready flip fail with the reason, for example `no forge plugin claims <host>`.
 
 ## Plugin configuration
 
@@ -83,6 +89,6 @@ On Windows, discovered executables must have an `.exe` extension. `.cmd` and `.b
 
 ## Workflow host integration and audit
 
-The CLI host sets `ARCHON_CLI_COMMAND` to a JSON argv array for its own executable, including the runtime and source entry when applicable. Bundled scripts append command arguments without shell parsing. An SDK or container host must supply an argv array usable inside that execution environment; a host binary path is not assumed to exist in a container.
+The CLI and the server both set `ARCHON_CLI_COMMAND` at startup to a JSON argv array for the install's CLI: the executable of a compiled binary, or the Bun runtime and CLI source entry in a source checkout. Runs launched from the CLI, the Web UI or a chat or forge adapter therefore see the same value. Bundled scripts append command arguments without shell parsing. An SDK host must supply its own argv array. A container execution does not receive the variable, because a host binary path is not assumed to exist in a container.
 
 When `WORKFLOW_ID` is present, the CLI persists an `integration_operation` event through its database host. The forge payload retains operation correlation, qualified target, plugin identity/version, exact result and duration. The engine does not interpret the forge payload. The CLI reports persistence failure separately from the operation's observed outcome.

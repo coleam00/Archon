@@ -195,10 +195,8 @@ nodes:
         # from separate reads could present a half-failed read as clean CI. The
         # engine owns the bounded read. A timeout skips this optional producer;
         # ci-evidence below turns that absence into the declared fallback passed
-        # to the fix. The exit code is read together with the captured output,
-        # never alone — this gh form can encode check state in its exit code and
-        # can exit zero on failing checks, so non-zero with output is data, and
-        # only empty output from a failed read means the read itself failed.
+        # to the fix. The read goes through the pack's one check reader
+        # (.shared/checks.ts), the same one check-ci and flip-ready use.
         - id: ci-note
           timeout: 45000
           on_timeout: skip

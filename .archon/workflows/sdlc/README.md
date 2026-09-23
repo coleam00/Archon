@@ -44,17 +44,38 @@ checking, and `validate` runs the project's tests against it without checking.
 The preflight alone cost 31 lines and a stub in 17 fixtures, for a node no fixture
 could ever run. All three copies are gone.
 
-The ready preflight reads checks through `archon forge checks` with the recorded
-qualified PR. It refuses pending, red, gated, unknown and failed observations.
-The flip targets that same qualified PR and reads the draft state back afterwards,
-because a successful exit is not proof the state changed. The CLI host supplies
-`ARCHON_CLI_COMMAND` as a JSON argv array; SDK and container hosts supply an invocation
-that works inside their execution environment.
+The ready preflight re-reads checks for the recorded qualified PR itself. It refuses
+pending, red, gated and unknown checks and any failed read, because a failed
+observation is not evidence that no CI exists. The flip targets that same qualified
+PR and reads the draft state back afterwards, because a successful exit is not proof
+the state changed.
 
 The rule is not "never defend against what has not happened" — the two Keep cases
 above have not happened either, and both are worth their few lines. The question is
 whether the guard is protecting *this node's own action*, or restating something
 that was already true when the node started.
+
+## Check source
+
+`check-ci`, `ci-note` and the ready preflight read checks through one reader,
+[`.shared/checks.ts`](.shared/checks.ts), which returns the same check units from
+either source, so one gate policy classifies both:
+
+- **`gh` (default).** The GitHub CLI reads the recorded qualified PR. This needs only
+  the authenticated `gh` the pack already uses for its writes.
+- **`forge` (opt-in).** Set `ARCHON_SDLC_CHECKS=forge` in the environment Archon
+  runs with, for example `~/.archon/.env`. Checks are then read through
+  `archon forge checks`, which needs a forge plugin installed for the PR's host
+  (see the forge reference in the docs) and the `ARCHON_CLI_COMMAND` host command
+  that the CLI and server publish at startup.
+
+The source is never picked from what happens to be installed. When `forge` is
+selected and cannot answer (no host command, no plugin for the host, a failed
+read), `check-ci` and the ready flip refuse and `ci-note` reports the failure on
+stderr; none of them falls back to `gh`. Any other value of `ARCHON_SDLC_CHECKS`
+refuses too. The forge source is for host execution: a container execution
+receives neither `ARCHON_SDLC_CHECKS` nor `ARCHON_CLI_COMMAND`, so a containerized
+run reads through `gh`.
 
 ## Deterministic scripts
 

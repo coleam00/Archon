@@ -1,4 +1,4 @@
-/** Standalone client for the forge CLI operation used by bundled workflow scripts. */
+/** Standalone client for `archon forge checks`, the opt-in check source in ./checks.ts. */
 
 export interface QualifiedPr {
   readonly repo: { readonly host: string; readonly path: string };
@@ -57,6 +57,11 @@ export function parseQualifiedPr(value: string | undefined): QualifiedPr {
 }
 
 function parseCommand(value: string | undefined): readonly string[] {
+  if (value === undefined || value === '') {
+    throw new Error(
+      'ARCHON_CLI_COMMAND is not set; the host that started this run did not publish its CLI command'
+    );
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(value ?? '');
@@ -114,8 +119,7 @@ function samePr(left: QualifiedPr, right: QualifiedPr): boolean {
 }
 
 /** Invoke `archon forge checks` and validate only the fields pack policy consumes. */
-export function readChecks(boundPr: string | undefined): ChecksObservation {
-  const ref = parseQualifiedPr(boundPr);
+export function readChecks(ref: QualifiedPr): ChecksObservation {
   const command = parseCommand(process.env.ARCHON_CLI_COMMAND);
   const result = Bun.spawnSync(
     [...command, 'forge', 'checks', '--json', '--data', JSON.stringify({ ref })],

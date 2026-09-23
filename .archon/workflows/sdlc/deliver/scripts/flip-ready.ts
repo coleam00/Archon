@@ -1,19 +1,39 @@
-import { parseQualifiedPr, readChecks, preferredChecks } from '../../.shared/forge.ts';
+/**
+ * The ready flip: the one irreversible step, so it re-verifies CI itself instead of
+ * trusting the loop above. It reads through the pack's check reader (`gh` by
+ * default, `archon forge checks` with `ARCHON_SDLC_CHECKS=forge`) and refuses any
+ * pending, red, gated or unknown check, and any failed read: a failed observation
+ * is not evidence that no CI exists. Both the read and the flip target the recorded
+ * qualified pull request, never the checkout's remote. The writes stay on `gh`.
+ */
+import { atRevision, describeUnits, gateState, readPrChecks } from '../../.shared/checks.ts';
+import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, refuse } from '../../.shared/io.ts';
 
-function flipReady(): void {
+const boundPr = process.env.INPUTS_PR;
+const selected = process.env.ARCHON_SDLC_CHECKS;
+
+function preflight(): QualifiedPr | undefined {
   try {
-    const observation = readChecks(process.env.INPUTS_PR);
-    const checks = preferredChecks(observation);
-    if (checks.summary.state !== 'green' && checks.summary.state !== 'none') {
-      throw new Error(`refusing at ${observation.revision} with ${checks.summary.state} checks`);
+    const pr = parseQualifiedPr(boundPr);
+    const read = readPrChecks(pr, selected);
+    const state = gateState(read.units);
+    if (state !== 'green' && state !== 'none') {
+      const notGreen = read.units.filter(unit => unit.state !== 'green');
+      throw new Error(
+        `refusing to flip with ${state} checks${atRevision(read)}: ${describeUnits(notGreen)}`
+      );
     }
+    return pr;
   } catch (error) {
     refuse(`flip-ready: ${error instanceof Error ? error.message : String(error)}`);
-    return;
+    return undefined;
   }
+}
 
-  const pr = parseQualifiedPr(process.env.INPUTS_PR);
+function flipReady(): void {
+  const pr = preflight();
+  if (pr === undefined) return;
   const repo = `${pr.repo.host}/${pr.repo.path}`;
   const number = String(pr.number);
 
