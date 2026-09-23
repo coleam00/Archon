@@ -428,7 +428,11 @@ export interface DeclaredWorkflowConfig {
 export interface WorkflowWithSource {
   readonly workflow: ResolvedWorkflow;
   readonly source: WorkflowSource;
-  /** Warnings from YAML parsing (e.g. unknown keys) — never hard-fails. */
+  /**
+   * Author-facing warnings for this workflow: unknown keys and deprecation notices from
+   * parsing the file, plus the loop_group sink-shape verdicts discovery computes on the
+   * expanded graph (#2756). Never hard-fails.
+   */
   readonly parseWarnings?: readonly string[];
   /** What the author declared at workflow level, for display. @see DeclaredWorkflowConfig */
   readonly declared?: DeclaredWorkflowConfig;

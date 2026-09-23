@@ -7781,6 +7781,160 @@ nodes:
       expect(pw).toEqual([]);
     });
 
+    /**
+     * The sink-shape checks judge the EXPANDED graph (#2756). An `include:` is a
+     * legal loop_group body entry, so the shape these checks exist to catch can
+     * arrive through composition — and pre-expansion there is nothing but an
+     * unresolved include id to look at.
+     */
+    describe('include-composed sinks (#2756)', () => {
+      /** Write a parent plus a reusable block and return the PARENT's warnings. */
+      const parentWarningsFor = async (parent: string[], block: string[]): Promise<string[]> => {
+        await writeWorkflowFile(testDir, 'parent.yaml', parent.join('\n'));
+        await writeWorkflowFile(testDir, 'block.yaml', block.join('\n'));
+        const result = await discoverWorkflows(testDir, { loadDefaults: false });
+        expect(result.errors).toEqual([]);
+        const found = result.workflows.find(w => w.workflow.name === 'parent');
+        expect(found).toBeDefined();
+        return [...(found?.parseWarnings ?? [])];
+      };
+
+      it("warns when an include's own terminal sink makes it an unescalatable loop_group sink", async () => {
+        const pw = await parentWarningsFor(
+          [
+            'name: parent',
+            'description: composes a review block',
+            'interactive: true',
+            'nodes:',
+            '  - id: outer',
+            '    loop_group:',
+            '      until_bash: "exit 0"',
+            '      max_iterations: 5',
+            '      nodes:',
+            '        - id: step-a',
+            '          bash: "echo work"',
+            '        - id: review',
+            '          include: review-block',
+            '          depends_on: [step-a]',
+          ],
+          [
+            'name: review-block',
+            'description: reusable interactive review',
+            'interactive: true',
+            'nodes:',
+            '  - id: iterate',
+            '    loop_group:',
+            '      interactive: true',
+            '      gate_message: continue?',
+            '      until_bash: "exit 0"',
+            '      max_iterations: 3',
+            '      nodes:',
+            '        - id: work',
+            '          prompt: do work',
+          ]
+        );
+        expect(pw).toHaveLength(1);
+        expect(pw[0]).toContain("Node 'outer'");
+        expect(pw[0]).toContain("'review__iterate'");
+        expect(pw[0]).toContain('#2753');
+      });
+
+      it("warns when an included gate is not the expanded body's sole terminal sink", async () => {
+        const pw = await parentWarningsFor(
+          [
+            'name: parent',
+            'description: composes a gate block mid-body',
+            'interactive: true',
+            'nodes:',
+            '  - id: outer',
+            '    loop_group:',
+            '      until_bash: "exit 0"',
+            '      max_iterations: 5',
+            '      nodes:',
+            '        - id: review',
+            '          include: gate-block',
+            '        - id: after',
+            '          depends_on: [review]',
+            '          bash: "echo more work"',
+          ],
+          [
+            'name: gate-block',
+            'description: reusable approval',
+            'interactive: true',
+            'nodes:',
+            '  - id: check',
+            '    approval:',
+            '      message: ok?',
+          ]
+        );
+        expect(pw).toHaveLength(1);
+        expect(pw[0]).toContain("Node 'review__check'");
+        expect(pw[0]).toContain('terminal sink');
+      });
+
+      it("accepts a composed gate sink whose decision the group's until_bash reads", async () => {
+        // The gate is the expanded body's sole terminal sink and 'until_bash' reaches it
+        // through the include alias, which expansion rewrites to the namespaced id — the
+        // completion-reference half of the #2707 step 3 check has to see it rewritten.
+        const pw = await parentWarningsFor(
+          [
+            'name: parent',
+            'description: composes an approval as the loop sink',
+            'interactive: true',
+            'nodes:',
+            '  - id: outer',
+            '    loop_group:',
+            '      until_bash: test "$review.output.decision" = approve',
+            '      max_iterations: 5',
+            '      nodes:',
+            '        - id: step-a',
+            '          bash: "echo work"',
+            '        - id: review',
+            '          include: gate-block',
+            '          depends_on: [step-a]',
+          ],
+          [
+            'name: gate-block',
+            'description: reusable approval',
+            'interactive: true',
+            'nodes:',
+            '  - id: check',
+            '    approval:',
+            '      message: ok?',
+          ]
+        );
+        expect(pw).toEqual([]);
+      });
+
+      it('does not warn when the composed sink has no pause to escalate', async () => {
+        const pw = await parentWarningsFor(
+          [
+            'name: parent',
+            'description: composes a deterministic block',
+            'nodes:',
+            '  - id: outer',
+            '    loop_group:',
+            '      until_bash: "exit 0"',
+            '      max_iterations: 5',
+            '      nodes:',
+            '        - id: step-a',
+            '          bash: "echo work"',
+            '        - id: review',
+            '          include: work-block',
+            '          depends_on: [step-a]',
+          ],
+          [
+            'name: work-block',
+            'description: reusable deterministic work',
+            'nodes:',
+            '  - id: check',
+            '    bash: "echo checked"',
+          ]
+        );
+        expect(pw).toEqual([]);
+      });
+    });
+
     it('warns on a gate node with a dependent inside a loop_group body (not a terminal sink)', async () => {
       const pw = await warningsFor([
         'name: test',
