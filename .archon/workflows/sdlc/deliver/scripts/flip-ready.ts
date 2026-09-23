@@ -1,7 +1,7 @@
 /**
  * The ready flip: the one irreversible step, so it re-verifies CI itself instead of
  * trusting the loop above. It reads through the pack's check reader (`gh` by
- * default, `archon forge checks` with `ARCHON_SDLC_CHECKS=forge`) and refuses any
+ * default, `archon forge checks` with `ARCHON_SDLC_FORGE=forge`) and refuses any
  * pending, red, gated or unknown check, and any failed read: a failed observation
  * is not evidence that no CI exists. Both the read and the flip target the recorded
  * qualified pull request, never the checkout's remote. The writes stay on `gh`.
@@ -11,7 +11,7 @@ import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, refuse } from '../../.shared/io.ts';
 
 const boundPr = process.env.INPUTS_PR;
-const selected = process.env.ARCHON_SDLC_CHECKS;
+const selected = process.env.ARCHON_SDLC_FORGE;
 
 function preflight(): QualifiedPr | undefined {
   try {

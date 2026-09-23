@@ -120,7 +120,7 @@ export function runDeliverScript(
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     INPUTS_PR: JSON.stringify(PR),
-    ARCHON_SDLC_CHECKS: options.source ?? '',
+    ARCHON_SDLC_FORGE: options.source ?? '',
     ARCHON_CLI_COMMAND: '',
   };
   const forge = options.forge ?? { kind: 'fake' };

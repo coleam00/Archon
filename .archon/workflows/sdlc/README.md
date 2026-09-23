@@ -63,7 +63,7 @@ either source, so one gate policy classifies both:
 
 - **`gh` (default).** The GitHub CLI reads the recorded qualified PR. This needs only
   the authenticated `gh` the pack already uses for its writes.
-- **`forge` (opt-in).** Set `ARCHON_SDLC_CHECKS=forge` in the environment Archon
+- **`forge` (opt-in).** Set `ARCHON_SDLC_FORGE=forge` in the environment Archon
   runs with, for example `~/.archon/.env`. Checks are then read through
   `archon forge checks`, which needs a forge plugin installed for the PR's host
   (see the forge reference in the docs) and the `ARCHON_CLI_COMMAND` host command
@@ -72,9 +72,9 @@ either source, so one gate policy classifies both:
 The source is never picked from what happens to be installed. When `forge` is
 selected and cannot answer (no host command, no plugin for the host, a failed
 read), `check-ci` and the ready flip refuse and `ci-note` reports the failure on
-stderr; none of them falls back to `gh`. Any other value of `ARCHON_SDLC_CHECKS`
+stderr; none of them falls back to `gh`. Any other value of `ARCHON_SDLC_FORGE`
 refuses too. The forge source is for host execution: a container execution
-receives neither `ARCHON_SDLC_CHECKS` nor `ARCHON_CLI_COMMAND`, so a containerized
+receives neither `ARCHON_SDLC_FORGE` nor `ARCHON_CLI_COMMAND`, so a containerized
 run reads through `gh`.
 
 ## Deterministic scripts

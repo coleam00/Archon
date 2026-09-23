@@ -5,7 +5,7 @@
  * durable `wait:` node owns the time between probes, so this script reads the state,
  * declares it, and exits. The checks come from the pack's one reader
  * (`.shared/checks.ts`): `gh` by default, `archon forge checks` when the operator
- * opts in with `ARCHON_SDLC_CHECKS=forge`.
+ * opts in with `ARCHON_SDLC_FORGE=forge`.
  *
  * States, declared through this node's `output_format` so `when:` and `until_bash`
  * branch on a certified field rather than on prose:
@@ -38,7 +38,7 @@ import { emit, refuse } from '../../.shared/io.ts';
 
 /** The recorded pull request, so no read ever falls back to the ambient branch. */
 const boundPr = process.env.INPUTS_PR;
-const selected = process.env.ARCHON_SDLC_CHECKS;
+const selected = process.env.ARCHON_SDLC_FORGE;
 
 function classify(read: CheckRead): void {
   const at = atRevision(read);

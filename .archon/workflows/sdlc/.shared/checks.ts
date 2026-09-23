@@ -5,7 +5,7 @@
  * classify one shape whichever source read it:
  *
  *   gh     the default. Reads the recorded pull request through the GitHub CLI.
- *   forge  opt-in with `ARCHON_SDLC_CHECKS=forge`. Reads through `archon forge
+ *   forge  opt-in with `ARCHON_SDLC_FORGE=forge`. Reads through `archon forge
  *          checks`, which needs an installed forge plugin and the host command
  *          (`ARCHON_CLI_COMMAND`) the CLI and server publish.
  *
@@ -50,7 +50,7 @@ export function checkSource(value: string | undefined): CheckSource {
   const selected = (value ?? '').trim();
   if (selected === '' || selected === 'gh') return 'gh';
   if (selected === 'forge') return 'forge';
-  throw new Error(`ARCHON_SDLC_CHECKS must be "gh" (the default) or "forge", not "${selected}"`);
+  throw new Error(`ARCHON_SDLC_FORGE must be "gh" (the default) or "forge", not "${selected}"`);
 }
 
 interface Ran {
@@ -164,7 +164,7 @@ export function readPrChecks(pr: QualifiedPr, selected: string | undefined): Che
     };
   } catch (error) {
     throw new Error(
-      `ARCHON_SDLC_CHECKS=forge: ${error instanceof Error ? error.message : String(error)}`
+      `ARCHON_SDLC_FORGE=forge: ${error instanceof Error ? error.message : String(error)}`
     );
   }
 }

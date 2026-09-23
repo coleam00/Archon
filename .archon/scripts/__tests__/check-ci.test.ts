@@ -102,7 +102,7 @@ describe('check-ci on the default gh source', () => {
   it('refuses an unrecognized check source instead of guessing one', () => {
     const result = probe({ source: 'gitlab', gh: { checks: [{ name: 'b', state: 'SUCCESS', bucket: 'pass' }] } });
     expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('ARCHON_SDLC_CHECKS must be "gh" (the default) or "forge"');
+    expect(result.stderr).toContain('ARCHON_SDLC_FORGE must be "gh" (the default) or "forge"');
     expect(result.gh).toEqual([]);
   });
 });
@@ -167,7 +167,7 @@ describe('check-ci on the opt-in forge source', () => {
   it('fails loudly when forge is selected but the host published no CLI command', () => {
     const result = probe({ source: 'forge', forge: { kind: 'no-host' } });
     expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('ARCHON_SDLC_CHECKS=forge: ARCHON_CLI_COMMAND is not set');
+    expect(result.stderr).toContain('ARCHON_SDLC_FORGE=forge: ARCHON_CLI_COMMAND is not set');
     expect(result.gh).toEqual([]);
   });
 
@@ -176,7 +176,7 @@ describe('check-ci on the opt-in forge source', () => {
     expect(result.code).not.toBe(0);
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain(
-      'check-ci: ARCHON_SDLC_CHECKS=forge: forge check read failed: no forge plugin claims ghe.example.com'
+      'check-ci: ARCHON_SDLC_FORGE=forge: forge check read failed: no forge plugin claims ghe.example.com'
     );
     expect(result.gh).toEqual([]);
   });

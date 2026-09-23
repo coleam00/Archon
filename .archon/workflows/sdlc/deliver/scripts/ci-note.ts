@@ -11,7 +11,7 @@ import { parseQualifiedPr } from '../../.shared/forge.ts';
 import { note, report } from '../../.shared/io.ts';
 
 const boundPr = process.env.INPUTS_PR;
-const selected = process.env.ARCHON_SDLC_CHECKS;
+const selected = process.env.ARCHON_SDLC_FORGE;
 
 try {
   const read = readPrChecks(parseQualifiedPr(boundPr), selected);

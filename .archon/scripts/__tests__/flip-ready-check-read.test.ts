@@ -102,7 +102,7 @@ describe('flip-ready preflight on the opt-in forge source', () => {
     });
     expect(result.code).not.toBe(0);
     expect(result.gh).toEqual([]);
-    expect(result.stderr).toContain('flip-ready: ARCHON_SDLC_CHECKS=forge:');
+    expect(result.stderr).toContain('flip-ready: ARCHON_SDLC_FORGE=forge:');
     expect(result.stderr).toContain('no forge plugin claims ghe.example.com');
   });
 });

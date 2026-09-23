@@ -40,7 +40,7 @@ describe('ci-note', () => {
   it('surfaces a selected forge source that has no plugin', () => {
     const result = note({ source: 'forge', forge: { kind: 'no-plugin' } });
     expect(result.code).toBe(0);
-    expect(result.stderr).toContain('ARCHON_SDLC_CHECKS=forge');
+    expect(result.stderr).toContain('ARCHON_SDLC_FORGE=forge');
     expect(result.stderr).toContain('no forge plugin claims ghe.example.com');
     expect(result.gh).toEqual([]);
   });

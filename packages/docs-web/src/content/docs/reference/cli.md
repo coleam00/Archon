@@ -36,7 +36,7 @@ Run AI-powered workflows from your terminal.
 
 ## Forge reads
 
-Use `archon forge resolve --data <json>` for an explicit remote and `archon forge checks --data <json>` for a qualified PR. Both return structured observations. See [Forge operations](/reference/forge/) for request shapes, plugin configuration, credentials and audit behavior. The bundled SDLC deliver pack still reads checks through `gh` by default; set `ARCHON_SDLC_CHECKS=forge` to read them through `archon forge checks` instead.
+Use `archon forge resolve --data <json>` for an explicit remote and `archon forge checks --data <json>` for a qualified PR. Both return structured observations. See [Forge operations](/reference/forge/) for request shapes, plugin configuration, credentials and audit behavior. The bundled SDLC deliver pack still reads checks through `gh` by default; set `ARCHON_SDLC_FORGE=forge` to read them through `archon forge checks` instead.
 
 ## Quick Start
 
