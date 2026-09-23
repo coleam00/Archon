@@ -1073,6 +1073,29 @@ describe('dryRunWorkflow', () => {
     expect(result.trace[0]?.resolvedText).toBe('Inspect issue 2100');
   });
 
+  test('substitutes an empty typed-artifact listing in a dry-run preview', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'archon-dry-run-typed-artifacts-'));
+    temporaryDirectories.push(cwd);
+    mkdirSync(join(cwd, '.archon', 'commands'), { recursive: true });
+    writeFileSync(
+      join(cwd, '.archon', 'commands', 'listing.md'),
+      'Listing: [$TYPED_ARTIFACTS_FILE]'
+    );
+    const workflow = makeTestWorkflow({
+      name: 'typed-artifact-preview',
+      nodes: [{ id: 'listing', command: 'listing' }],
+    });
+
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd,
+      stubs: { listing: 'done' },
+    });
+
+    expect(result.trace[0]?.resolvedText).toBe('Listing: []');
+  });
+
   test('distinguishes false and malformed when expressions', async () => {
     const workflow = makeTestWorkflow({
       name: 'conditions',

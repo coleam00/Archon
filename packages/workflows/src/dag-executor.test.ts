@@ -17,7 +17,7 @@ import {
 import { mkdir, writeFile, rm, readFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { existsSync, unlinkSync } from 'fs';
-import { join, normalize, sep } from 'path';
+import { isAbsolute, join, normalize, sep } from 'path';
 import { tmpdir } from 'os';
 import * as git from '@archon/git';
 import { RATE_LIMIT_MAX_RETRIES } from './executor-shared';
@@ -108,6 +108,7 @@ import {
 import { planGraph, resolveWorkflow, resolvedBodyNodes } from './graph-plan';
 import { dryRunWorkflow } from './dry-run';
 import { writeNodeArtifact, readNodeArtifacts } from './artifacts-index';
+import { nodeArtifactsListingSchema } from './schemas/node-artifact';
 import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from './event-emitter';
 import { loadMcpConfig } from '@archon/providers/mcp/config';
 import type {
@@ -607,6 +608,15 @@ function makeOutput(
       : { state, output };
   }
   return { state, output, ...extra } as NodeOutput;
+}
+
+/**
+ * The reader's grouped result flattened across types, the whole-run view these
+ * executor tests assert; scope filtering is proved in artifacts-index.test.ts.
+ */
+async function readAllArtifacts(artifactsDir: string) {
+  const { artifactsByType } = await readNodeArtifacts(artifactsDir, { scope: 'resolved-scope' });
+  return Object.values(artifactsByType).flat();
 }
 
 function makeWorkflowRun(id = 'dag-test-run-id', overrides?: Partial<WorkflowRun>): WorkflowRun {
@@ -15116,6 +15126,67 @@ describe('executeDagWorkflow -- approval node', () => {
     expect(pauseCalls.length).toBe(1);
   });
 
+  it('resolves $TYPED_ARTIFACTS_FILE in an approval rework prompt', async () => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'assistant', content: 'reworked' };
+      yield { type: 'result', sessionId: 'rework-listing-session' };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+
+    const workflowRun = makeWorkflowRun('rework-listing-run', {
+      metadata: {
+        approval: {
+          type: 'approval',
+          nodeId: 'review',
+          message: 'Approve this plan?',
+          onRejectPrompt: 'Fix based on: $REJECTION_REASON',
+          onRejectMaxAttempts: 3,
+        },
+        rejection_reason: 'Missing edge case handling',
+        rejection_count: 1,
+      },
+    });
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        platform,
+        conversationId: 'conv-approval',
+        cwd: testDir,
+        workflow: {
+          name: 'approval-rework-listing',
+          nodes: [
+            {
+              id: 'review',
+              kind: 'gate',
+              message: 'Approve this plan?',
+              decisions: [
+                { id: 'approve' },
+                {
+                  id: 'reject',
+                  rework: { prompt: 'Listing: $TYPED_ARTIFACTS_FILE', maxAttempts: 3 },
+                },
+              ],
+              captureResponse: true,
+              decisionsAuthored: false,
+            },
+          ],
+        },
+        workflowRun,
+      })
+    );
+
+    const aiPrompt = mockSendQueryDag.mock.calls[0][0] as string;
+    expect(aiPrompt).not.toContain('$TYPED_ARTIFACTS_FILE');
+    const listingPath = aiPrompt.replace('Listing: ', '');
+    expect(listingPath).toContain(join('.archon', 'typed-artifacts'));
+    const listing = JSON.parse(await readFile(listingPath, 'utf8')) as { runId: string };
+    expect(listing.runId).toBe('rework-listing-run');
+  });
+
   it('on_reject does not write node_completed for the approval gate node ID', async () => {
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'assistant', content: 'Fixed based on feedback' };
@@ -19389,6 +19460,83 @@ describe('executeDagWorkflow -- typed artifacts (output_type)', () => {
     expect(typeof meta.producedAt).toBe('string');
   });
 
+  it('delivers a current-run listing to an exec node through TYPED_ARTIFACTS_FILE', async () => {
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        cwd: testDir,
+        workflow: {
+          name: 'typed-listing-exec',
+          nodes: [
+            {
+              id: 'planner',
+              kind: 'agent',
+              source: { kind: 'command', name: 'my-cmd' },
+              output_type: 'plan',
+            },
+            {
+              id: 'reader',
+              kind: 'exec',
+              runtime: 'sh',
+              // Braced form: the engine substitute is not applied, so this reads the
+              // reserved process environment the exec builder delivers.
+              script: 'cp "${TYPED_ARTIFACTS_FILE}" "$ARTIFACTS_DIR/observed-listing.json"',
+              depends_on: ['planner'],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('dag-typed-exec-listing'),
+      })
+    );
+
+    const listing = nodeArtifactsListingSchema.parse(
+      JSON.parse(await readFile(join(testDir, 'artifacts', 'observed-listing.json'), 'utf8'))
+    );
+    expect(listing.runId).toBe('dag-typed-exec-listing');
+    expect(listing.artifactsByType.plan?.map(entry => entry.nodeId)).toEqual(['planner']);
+    // The pointer names a content path that is readable relative to the artifacts dir.
+    const planPath = listing.artifactsByType.plan?.[0]?.path;
+    if (planPath === undefined) throw new Error('expected a listed plan artifact');
+    expect(await readFile(join(testDir, 'artifacts', planPath), 'utf8')).toBe('AI response');
+  });
+
+  it('resolves $TYPED_ARTIFACTS_FILE in an agent prompt to a readable listing', async () => {
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        cwd: testDir,
+        workflow: {
+          name: 'typed-listing-agent',
+          nodes: [
+            {
+              id: 'planner',
+              kind: 'agent',
+              source: { kind: 'command', name: 'my-cmd' },
+              output_type: 'plan',
+            },
+            {
+              id: 'consumer',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'Listing: $TYPED_ARTIFACTS_FILE' },
+              depends_on: ['planner'],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('dag-typed-agent-listing'),
+      })
+    );
+
+    const consumerPrompt = mockSendQueryDag.mock.calls.at(-1)?.[0] as string | undefined;
+    expect(consumerPrompt?.startsWith('Listing: ')).toBe(true);
+    const listingPath = (consumerPrompt ?? '').slice('Listing: '.length).trim();
+    expect(isAbsolute(listingPath)).toBe(true);
+    const listing = nodeArtifactsListingSchema.parse(
+      JSON.parse(await readFile(listingPath, 'utf8'))
+    );
+    expect(listing.runId).toBe('dag-typed-agent-listing');
+    expect(listing.artifactsByType.plan?.map(entry => entry.nodeId)).toEqual(['planner']);
+  });
+
   it('persists the declared output type beside an agent structured output', async () => {
     const structuredOutput = {
       repo: { host: 'github.com', path: 'example/repo' },
@@ -20693,7 +20841,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
     );
 
     expect(callCount).toBe(3);
-    const artifacts = (await readNodeArtifacts(artifactsDir)).sort(
+    const artifacts = (await readAllArtifacts(artifactsDir)).sort(
       (left, right) =>
         (left.loopGroupPath?.[0]?.iteration ?? 0) - (right.loopGroupPath?.[0]?.iteration ?? 0)
     );
@@ -20778,7 +20926,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
     );
 
     expect(callCount).toBe(2);
-    const artifacts = (await readNodeArtifacts(artifactsDir)).sort(
+    const artifacts = (await readAllArtifacts(artifactsDir)).sort(
       (left, right) =>
         (left.loopGroupPath?.[0]?.iteration ?? 0) - (right.loopGroupPath?.[0]?.iteration ?? 0)
     );
@@ -20837,7 +20985,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
       })
     );
 
-    const beforeResume = await readNodeArtifacts(artifactsDir);
+    const beforeResume = await readAllArtifacts(artifactsDir);
     expect(beforeResume).toHaveLength(1);
     expect(beforeResume[0]?.loopGroupPath).toEqual([{ groupId: 'refine', iteration: 1 }]);
     const firstPath = beforeResume[0]?.path;
@@ -20871,7 +21019,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
       })
     );
 
-    const afterResume = (await readNodeArtifacts(artifactsDir)).sort(
+    const afterResume = (await readAllArtifacts(artifactsDir)).sort(
       (left, right) =>
         (left.loopGroupPath?.[0]?.iteration ?? 0) - (right.loopGroupPath?.[0]?.iteration ?? 0)
     );
@@ -21535,6 +21683,95 @@ describe('executeDagWorkflow -- loop_group node', () => {
     // The file on disk, after the run, holds only the LATEST iteration's content.
     const finalSpillContent = await readFile(iter1.node_output_spill_path, 'utf8');
     expect(finalSpillContent).toBe('b'.repeat(40_000));
+  });
+
+  it("until_bash observes the typed artifacts its own iteration's body published", async () => {
+    const counterFile = join(testDir, 'lg-typed-counter');
+    const counterRef = `"${counterFile.replace(/\\/g, '/')}"`;
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        platform: createMockPlatform(),
+        conversationId: 'conv-lg-typed',
+        cwd: testDir,
+        workflow: {
+          name: 'lg-typed-until',
+          nodes: [
+            {
+              id: 'group',
+              kind: 'loop_group',
+              loop_group: {
+                // Stops as soon as the listing names a `verdict` artifact. The body
+                // publishes one in iteration 1, so iteration 1's condition must see it.
+                until_bash: 'grep -q \'"verdict"\' "${TYPED_ARTIFACTS_FILE}"',
+                max_iterations: 3,
+                fresh_context: false,
+                nodes: [
+                  {
+                    id: 'judge',
+                    kind: 'exec',
+                    runtime: 'sh',
+                    script: `n=$(cat ${counterRef} 2>/dev/null || echo 0); echo $((n+1)) > ${counterRef}; echo ok`,
+                    output_type: 'verdict',
+                    depends_on: [],
+                  },
+                ],
+              },
+              depends_on: [],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('lg-typed-until'),
+        artifactsDir: join(testDir, 'artifacts'),
+      })
+    );
+
+    expect((await readFile(counterFile, 'utf8')).trim()).toBe('1');
+  });
+
+  it('until_bash receives the same reserved environment as an exec node', async () => {
+    const counterFile = join(testDir, 'lg-env-counter');
+    const counterRef = `"${counterFile.replace(/\\/g, '/')}"`;
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        platform: createMockPlatform(),
+        conversationId: 'conv-lg-env',
+        cwd: testDir,
+        workflow: {
+          name: 'lg-env-until',
+          nodes: [
+            {
+              id: 'group',
+              kind: 'loop_group',
+              loop_group: {
+                // Braced forms bypass engine substitution, so this reads the process
+                // environment a script launched from the condition would see.
+                until_bash: 'test "${WORKFLOW_ID}" = lg-env-until && test -d "${ARTIFACTS_DIR}"',
+                max_iterations: 2,
+                fresh_context: false,
+                nodes: [
+                  {
+                    id: 'tick',
+                    kind: 'exec',
+                    runtime: 'sh',
+                    script: `n=$(cat ${counterRef} 2>/dev/null || echo 0); echo $((n+1)) > ${counterRef}`,
+                    depends_on: [],
+                  },
+                ],
+              },
+              depends_on: [],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('lg-env-until'),
+        artifactsDir: join(testDir, 'artifacts'),
+      })
+    );
+
+    expect((await readFile(counterFile, 'utf8')).trim()).toBe('1');
   });
 
   it('INSTANCE 2: $LOOP_PREV cross-iteration ref sees prior iteration output', async () => {

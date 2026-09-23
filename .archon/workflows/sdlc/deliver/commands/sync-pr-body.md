@@ -29,10 +29,13 @@ recorded number as the selector for every `gh` read or edit.
    sections, and do not narrate the correction history or this sync.
 4. When nothing is falsified, change nothing.
    One exception to "add no sections": the gates record red they let through as
-   typed artifacts. Read every `$ARTIFACTS_DIR/nodes/*.meta.json` whose `outputType`
-   is `green-gate` and the `.md` beside it; any with a non-empty `red_cause` that the
-   body does not already disclose gets that disclosure — its `stage`, `red_cause`, and
-   `summary`. A correction round or the project gate can go red after the body was
+   typed artifacts. Read the typed-artifact listing at `$TYPED_ARTIFACTS_FILE`,
+   take its `artifactsByType["green-gate"]` entries in the order the engine
+   recorded them, and open each entry's `path` relative to `$ARTIFACTS_DIR`; any
+   with a non-empty `red_cause` that the body does not already disclose gets that
+   disclosure — its `stage`, `red_cause`, and `summary`. Surface every listing
+   `errors` entry and every gate body you cannot read as a caveat, never as "no
+   gates". A correction round or the project gate can go red after the body was
    written, and a reviewer must not have to discover that from a red badge.
 5. After an edit, read the body back (`gh pr view`) and confirm it carries your
    corrections.

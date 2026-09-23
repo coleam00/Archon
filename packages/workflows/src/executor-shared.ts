@@ -676,6 +676,8 @@ export const CONTEXT_VAR_PATTERN_STR =
  * - $ADOPTED_RUN_DIR (#2747) - The adopted run's artifact directory, resolved
  *   through its persisted `output_root`. Read-only by contract; throws if
  *   referenced without an adoption active.
+ * - $TYPED_ARTIFACTS_FILE - This invocation's typed-artifact listing (JSON). Throws
+ *   if referenced by a context that never materialized one (see below).
  * - $BASE_BRANCH - The base branch (from config or auto-detected)
  * - $CONTEXT, $EXTERNAL_CONTEXT, $ISSUE_CONTEXT - GitHub issue/PR context (if available)
  * - $DOCS_DIR - Documentation directory path (configured or default 'docs/')
@@ -709,6 +711,13 @@ export function substituteWorkflowVariables(
     inputs?: Record<string, JsonValue>;
     /** Adopted run's artifact directory (#2747). Undefined = no adoption active. */
     adoptedRunDir?: string;
+    /**
+     * This invocation's typed-artifact listing path. Undefined means the caller never
+     * supplied one (a coordination node, or a wiring bug) and a prompt that references
+     * `$TYPED_ARTIFACTS_FILE` throws. An explicit `''` is a caller stating it has no
+     * listing — the dry-run preview — and substitutes empty without throwing.
+     */
+    typedArtifactsFile?: string;
   }
 ): { prompt: string; contextSubstituted: boolean } {
   // Fail fast if the prompt references $BASE_BRANCH but no base branch could be resolved
@@ -743,6 +752,19 @@ export function substituteWorkflowVariables(
     );
   }
 
+  // $TYPED_ARTIFACTS_FILE is delivered by every executable invocation context (bash,
+  // script, agent prompt, loop attempt). A context that never supplied one must fail
+  // loudly: substituting '' would read as "no typed artifacts", which is the exact
+  // silent-empty lookup this contract exists to remove. An explicit empty string is
+  // different — a caller that knows it has no listing (the dry-run preview) says so.
+  if (options?.typedArtifactsFile === undefined && prompt.includes('$TYPED_ARTIFACTS_FILE')) {
+    throw new Error(
+      '$TYPED_ARTIFACTS_FILE is referenced but this invocation has no typed-artifact listing. ' +
+        'It is available inside bash, script, agent, loop, and approval-rework nodes; ' +
+        'if you are seeing this from one of those, please report it as a bug.'
+    );
+  }
+
   // Defensive: ensure docsDir always has a value (callers should resolve, but guard here)
   const resolvedDocsDir = docsDir || 'docs/';
 
@@ -756,6 +778,9 @@ export function substituteWorkflowVariables(
     // or `bash:`/`script:` bodies would never see it.
     .replace(/\$STATE_DIR/g, options?.stateDir ?? '')
     .replace(/\$ADOPTED_RUN_DIR/g, options?.adoptedRunDir ?? currentAdoptedRunDir() ?? '')
+    // Also engine-controlled; the same path is delivered as TYPED_ARTIFACTS_FILE to
+    // exec subprocesses, so a shell body resolves it either way.
+    .replace(/\$TYPED_ARTIFACTS_FILE/g, options?.typedArtifactsFile ?? '')
     .replace(/\$BASE_BRANCH/g, baseBranch)
     .replace(/\$DOCS_DIR/g, resolvedDocsDir);
 
@@ -813,7 +838,8 @@ export function substituteWorkflowVariables(
  * @param issueContext - Optional GitHub issue/PR context to substitute or append
  * @param logLabel - Human-readable label for logging (e.g., 'workflow step prompt')
  * @param options - Forwarded to {@link substituteWorkflowVariables}; carries `stateDir`
- *   for `$STATE_DIR`, which throws when referenced without one.
+ *   for `$STATE_DIR` and `typedArtifactsFile` for `$TYPED_ARTIFACTS_FILE`, each of
+ *   which throws when referenced without one.
  * @returns The final prompt with variables substituted and context optionally appended
  */
 export function buildPromptWithContext(
@@ -825,7 +851,12 @@ export function buildPromptWithContext(
   docsDir: string,
   issueContext: string | undefined,
   logLabel: string,
-  options?: { shellSafe?: boolean; stateDir?: string; inputs?: Record<string, JsonValue> }
+  options?: {
+    shellSafe?: boolean;
+    stateDir?: string;
+    inputs?: Record<string, JsonValue>;
+    typedArtifactsFile?: string;
+  }
 ): string {
   const { prompt, contextSubstituted } = substituteWorkflowVariables(
     template,
