@@ -384,7 +384,7 @@ async function main(): Promise<number> {
       const { pluginCommand } = await loadRoute(() => import('./commands/plugin'));
       const { getArchonVersion } = await loadRoute(() => import('./commands/version'));
       const { defaultPluginDir } = await import('@archon/forge/discovery');
-      return await pluginCommand(subcommand, positionals[2], {
+      return await pluginCommand(subcommand, positionals.slice(2), {
         // The same trusted ARCHON_HOME forge discovery scans, so repo env cannot
         // redirect where an install lands.
         pluginsDir: defaultPluginDir(forgeTrustedEnv),

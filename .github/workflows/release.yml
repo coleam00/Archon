@@ -116,14 +116,14 @@ jobs:
         id: forge-plugin
         env:
           TARGET: ${{ matrix.target }}
-          BINARY: ${{ matrix.binary }}
         run: |
-          # `archon plugin install coleam00/Archon/plugins/forge-github` downloads
-          # <manifest executable>-<os>-<arch>[.exe]. The executable name comes from the
-          # manifest and the platform suffix from this target's CLI binary name
-          # (archon-linux-x64 -> archon-forge-github-linux-x64).
-          EXECUTABLE=$(bun -e 'console.log((await Bun.file("plugins/forge-github/archon-plugin.json").json()).executable)')
-          ASSET="${EXECUTABLE}-${BINARY#archon-}"
+          # Named by the same function `archon plugin install` uses to request it,
+          # from the manifest's executable and this Bun target.
+          ASSET=$(bun -e '
+            const { forgeReleaseAsset } = await import("./packages/plugin-manifest/src/index.ts");
+            const manifest = await Bun.file("plugins/forge-github/archon-plugin.json").json();
+            console.log(forgeReleaseAsset(manifest.executable, process.env.TARGET));
+          ')
           bun build --compile --target="$TARGET" packages/adapters/src/forge/github/plugin.ts --outfile "dist/${ASSET}"
           echo "asset=${ASSET}" >> "$GITHUB_OUTPUT"
 
@@ -132,6 +132,9 @@ jobs:
         env:
           ASSET: ${{ steps.forge-plugin.outputs.asset }}
         run: |
+          # The default run shell has no pipefail; without it a plugin that printed
+          # valid metadata and then failed would still pass.
+          set -o pipefail
           chmod +x "dist/${ASSET}"
           # Forge discovery accepts the plugin only if this handshake answers protocol 1.
           "dist/${ASSET}" metadata | bun -e '

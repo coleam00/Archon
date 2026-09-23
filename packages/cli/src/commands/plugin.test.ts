@@ -96,6 +96,7 @@ beforeAll(async () => {
   await git(repo, 'update-server-info');
 
   server = Bun.serve({
+    hostname: '127.0.0.1',
     port: 0,
     async fetch(request) {
       const path = decodeURIComponent(new URL(request.url).pathname);
@@ -167,12 +168,12 @@ async function environment(overrides: Partial<PluginEnvironment> = {}): Promise<
 async function run(
   env: PluginEnvironment,
   subcommand: string,
-  target?: string
+  ...args: string[]
 ): Promise<{ code: number; out: string; err: string }> {
   const log = spyOn(console, 'log').mockImplementation(() => undefined);
   const error = spyOn(console, 'error').mockImplementation(() => undefined);
   try {
-    const code = await pluginCommand(subcommand, target, env);
+    const code = await pluginCommand(subcommand, args, env);
     return {
       code,
       out: log.mock.calls.map(call => call.join(' ')).join('\n'),
@@ -321,8 +322,11 @@ describe('archon plugin', () => {
     }
   });
 
-  test('refuses malformed plugin ids before touching the network', async () => {
+  test('refuses malformed plugin ids and extra arguments before touching the network', async () => {
     const env = await environment();
+    for (const args of [['install', ID, 'owner/repo/other'], ['list', ID], ['install']]) {
+      expect((await run(env, args[0], ...args.slice(1))).err).toContain('Usage: archon plugin');
+    }
     for (const target of ['owner', 'owner/../x', 'owner/repo/..', 'owner/repo@', '-x/repo']) {
       expect((await run(env, 'install', target)).err).toContain('Invalid plugin');
     }

@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
-import { PLUGIN_MANIFEST_FILE, pluginManifestSchema, pluginReceiptSchema } from './index';
+import {
+  forgeReleaseAsset,
+  PLUGIN_MANIFEST_FILE,
+  pluginManifestSchema,
+  pluginReceiptSchema,
+} from './index';
 
 const manifest = {
   schemaVersion: 1,
@@ -29,6 +34,43 @@ describe('plugin manifest', () => {
     ]) {
       expect(pluginManifestSchema.safeParse(invalid).success).toBe(false);
     }
+  });
+});
+
+describe('compatibility.archon', () => {
+  const withRange = (archon: string): boolean =>
+    pluginManifestSchema.safeParse({ ...manifest, compatibility: { archon } }).success;
+
+  test('accepts comparator ranges on full versions', () => {
+    for (const range of [
+      '>=0.11.0',
+      '0.11.0',
+      '^1.2.0 <2.0.0',
+      '>=1.0.0 || ~2.1.0',
+      '>=1.0.0-rc.1',
+    ]) {
+      expect(withRange(range)).toBe(true);
+    }
+  });
+
+  // Bun.semver.satisfies returns true for every one of these, which would
+  // silently disable the install-time compatibility check.
+  test('refuses ranges Bun.semver cannot evaluate', () => {
+    for (const range of ['', 'xyz', '>=', 'not-a-range']) {
+      expect(withRange(range)).toBe(false);
+    }
+  });
+});
+
+describe('forge release asset', () => {
+  test('names each asset from the executable and the Bun compile target', () => {
+    expect(forgeReleaseAsset('archon-forge-github', 'bun-linux-x64')).toBe(
+      'archon-forge-github-linux-x64'
+    );
+    expect(forgeReleaseAsset('archon-forge-github', 'bun-windows-x64')).toBe(
+      'archon-forge-github-windows-x64.exe'
+    );
+    expect(() => forgeReleaseAsset('archon-forge-github', 'bun-freebsd-x64')).toThrow();
   });
 });
 

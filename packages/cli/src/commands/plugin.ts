@@ -13,6 +13,7 @@ import { chmod, lstat, mkdir, readdir, readFile, rename, rm, writeFile } from 'n
 import { basename, dirname, join } from 'node:path';
 import { execFileAsync } from '@archon/git';
 import {
+  forgeReleaseAsset,
   PLUGIN_MANIFEST_FILE,
   pluginManifestSchema,
   pluginReceiptSchema,
@@ -186,15 +187,6 @@ async function fetchManifest(
   return parsed.data;
 }
 
-/** The asset suffix `release.yml` builds for this platform. */
-function platformSuffix(platform: NodeJS.Platform, arch: string): string {
-  const os = platform === 'win32' ? 'windows' : platform;
-  if ((os !== 'darwin' && os !== 'linux' && os !== 'windows') || !['x64', 'arm64'].includes(arch)) {
-    throw new Error(`Forge plugin releases are not built for ${platform}-${arch}`);
-  }
-  return `${os}-${arch}${os === 'windows' ? '.exe' : ''}`;
-}
-
 async function download(url: string): Promise<Uint8Array | undefined> {
   const response = await fetch(url);
   if (response.status === 404) return undefined;
@@ -259,7 +251,8 @@ async function installForge(
     );
   }
 
-  const asset = `${manifest.executable}-${platformSuffix(platform, env.arch ?? process.arch)}`;
+  const bunTarget = `bun-${platform === 'win32' ? 'windows' : platform}-${env.arch ?? process.arch}`;
+  const asset = forgeReleaseAsset(manifest.executable, bunTarget);
   const releaseUrl = `${githubUrl}/${ref.owner}/${ref.repo}/releases/download/${encodeURIComponent(tag)}`;
   const bytes = await download(`${releaseUrl}/${asset}`);
   if (!bytes) {
@@ -344,15 +337,22 @@ const USAGE =
 
 export async function pluginCommand(
   subcommand: string | undefined,
-  target: string | undefined,
+  args: readonly string[],
   env: PluginEnvironment
 ): Promise<number> {
   try {
-    if (subcommand === 'list') {
+    // Exact arity: an ignored extra argument would install something the
+    // operator did not ask for, or silently drop a second plugin.
+    if (subcommand === 'list' && args.length === 0) {
       await listPlugins(env);
       return 0;
     }
-    if (!target || !['install', 'update', 'remove'].includes(subcommand ?? '')) {
+    const [target] = args;
+    if (
+      !target ||
+      args.length !== 1 ||
+      !['install', 'update', 'remove'].includes(subcommand ?? '')
+    ) {
       console.error(USAGE);
       return 1;
     }
