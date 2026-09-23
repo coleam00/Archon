@@ -7,7 +7,6 @@
 # identity proves an existing non-draft PR flows through review scope, the
 # correction round, and the flip unchanged. Reuse itself is prompt guidance in
 # pr.md that dry-run cannot exercise; a real repair run is the proof for that.
-impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true
@@ -30,7 +29,6 @@ review__synthesize:
   findings_summary: "stub: 1 Important finding open"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 ci-note: "CI state for this pull request (head abc123def456): No concluded failures."
-fix__record-start: '{"start":"recorded"}'
 fix__implement:
   done: true
   green: true

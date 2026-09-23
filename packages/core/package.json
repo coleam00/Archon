@@ -144,6 +144,9 @@
       "src/db/workflows.adoption-timestamp.integration.test.ts"
     ],
     [
+      "src/db/workflows.checkout-baseline.integration.test.ts"
+    ],
+    [
       "src/services/cleanup-service.test.ts"
     ],
     [

@@ -60,7 +60,13 @@ import type {
 import { INPUT_NAME_PATTERN, inputEnvKey } from './schemas/dag-node';
 import { workflowNodeHooksSchema } from './schemas/hooks';
 import { parseLoopPrevWhenAtom, parseWhenAtom, whenAtoms, WHEN_INPUTS_SCOPE } from './when-atom';
-import { declaredFieldsFromSchema, OUTPUT_REF_SOURCE, parseWholeOutputRef } from './output-ref';
+import {
+  declaredFieldsFromSchema,
+  EXECUTION_CHECKOUT_REF_SOURCE,
+  OUTPUT_REF_SOURCE,
+  parseWholeExecutionCheckoutRef,
+  parseWholeOutputRef,
+} from './output-ref';
 import { isBindingDirective } from './schemas/dag-node';
 import { readComposedBindings } from './compiled-command';
 import { visitNodeTemplateSlots } from './template-walker';
@@ -1091,6 +1097,18 @@ export function validateDagStructure(
     // otherwise filter a compose_fan_out node out of the binding check entirely.
     const composeFanOut = isComposeFanOutNode(node) ? node : undefined;
     if (isIncludeDirective(node)) continue;
+    if (isWorkflowNode(node)) {
+      // A child run's inputs resolve through the launch path, which has no execution
+      // records to read; forwarding the reference would hand the child a literal string.
+      const misuse = Object.entries(node.with ?? {}).find(
+        ([, value]) =>
+          typeof value === 'string' && new RegExp(EXECUTION_CHECKOUT_REF_SOURCE).test(value)
+      );
+      if (misuse) {
+        return `Node '${node.id}' binding 'with.${misuse[0]}' reads '$<node>.execution.checkoutStart', which a workflow: node cannot pass to its child run; only a command or script node's binding can read it`;
+      }
+      continue;
+    }
     const nodeWith = isExecNode(node)
       ? node.with
       : isAgentNode(node)
@@ -1103,7 +1121,30 @@ export function validateDagStructure(
     if (nodeWith === undefined) continue;
     for (const [name, value] of Object.entries(nodeWith)) {
       const producerIds: string[] = [];
-      if (typeof value === 'string') {
+      const readsExecution =
+        typeof value === 'string' && new RegExp(EXECUTION_CHECKOUT_REF_SOURCE).test(value);
+      if (typeof value === 'string' && readsExecution) {
+        const producerId = parseWholeExecutionCheckoutRef(value);
+        if (composeFanOut) {
+          return `Node '${node.id}' binding 'with.${name}' reads '$<node>.execution.checkoutStart', which a composed fan-out cannot pass to its instances; only a command or script node's binding can read it`;
+        }
+        if (producerId === undefined) {
+          return `Node '${node.id}' binding 'with.${name}' uses '$<node>.execution.checkoutStart' inside other text; it is only valid as the whole value of a command or script node's binding`;
+        }
+        const producer = nodesById.get(producerId) ?? enclosingNodes?.get(producerId);
+        if (producer === undefined) {
+          return `Node '${node.id}' binding 'with.${name}' reads '$${producerId}.execution.checkoutStart', but no node '${producerId}' exists in this workflow`;
+        }
+        if (
+          !isIncludeDirective(producer) &&
+          !isAgentNode(producer) &&
+          !isExecNode(producer) &&
+          !isLoopNode(producer)
+        ) {
+          return `Node '${node.id}' binding 'with.${name}' reads '$${producerId}.execution.checkoutStart', but '${producerId}' is a ${producer.kind} node, which does not execute against the checkout and records no checkout start`;
+        }
+        producerIds.push(producerId);
+      } else if (typeof value === 'string') {
         const refPattern = new RegExp(OUTPUT_REF_SOURCE, 'g');
         let refMatch: RegExpExecArray | null;
         while ((refMatch = refPattern.exec(value)) !== null) {
@@ -1116,7 +1157,7 @@ export function validateDagStructure(
       for (const producerId of producerIds) {
         if (!nodesById.has(producerId)) continue; // enclosing scope, or already rejected above
         if (!transitiveDepsOf(node.id).has(producerId)) {
-          return `Node '${node.id}' binding 'with.${name}' references '$${producerId}.output', which is not an upstream dependency — add '${producerId}' to '${node.id}'.depends_on so its value is produced first`;
+          return `Node '${node.id}' binding 'with.${name}' references '$${producerId}.${readsExecution ? 'execution.checkoutStart' : 'output'}', which is not an upstream dependency — add '${producerId}' to '${node.id}'.depends_on so its value is produced first`;
         }
       }
     }

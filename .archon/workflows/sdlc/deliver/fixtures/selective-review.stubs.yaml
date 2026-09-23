@@ -1,7 +1,6 @@
 # Dry-run fixture: code, seams, simplify, and tests run by default while the
 # classifier selects docs. The fixture keeps deterministic code stubbed; the
 # loader test protects the classifier-binding seam itself.
-impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true

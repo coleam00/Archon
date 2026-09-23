@@ -408,6 +408,11 @@ export class SqliteAdapter implements IDatabase {
       if (!wfColNames.has('output_root')) {
         this.db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN output_root TEXT');
       }
+      // Run checkout baseline (#3305): JSON checkout observation written once when the
+      // run wins its execution claim. NULL means not recorded.
+      if (!wfColNames.has('checkout_baseline')) {
+        this.db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN checkout_baseline TEXT');
+      }
       if (!wfColNames.has('outcome')) {
         this.db.run(
           "ALTER TABLE remote_agent_workflow_runs ADD COLUMN outcome TEXT CHECK (outcome IN ('succeeded', 'failed'))"
@@ -771,7 +776,8 @@ export class SqliteAdapter implements IDatabase {
         completed_at TEXT,
         last_activity_at TEXT DEFAULT (datetime('now')),
         working_path TEXT,
-        output_root TEXT
+        output_root TEXT,
+        checkout_baseline TEXT
       );
 
       CREATE TABLE IF NOT EXISTS remote_agent_start_receipts (

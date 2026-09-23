@@ -1,7 +1,6 @@
 # A proved scope conflict must not enter correction or reach validation. The
 # real verdict validator accepts the combination; the real ready gate fails
 # truthfully and leaves the draft PR plus canonical report intact.
-impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true

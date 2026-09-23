@@ -8855,3 +8855,62 @@ nodes:
     expect(schemaless.output_format).toBeUndefined();
   });
 });
+
+describe('$node.execution.checkoutStart bindings (#3375)', () => {
+  const load = (withValue: string, producerBody = 'prompt: work'): ParseResult =>
+    parseWorkflow(
+      `
+name: checkout-binding
+description: binds a producer's recorded checkout start
+nodes:
+  - id: implement
+    ${producerBody}
+  - id: guard
+    script: guard
+    runtime: bun
+    depends_on: [implement]
+    with:
+      baseline: ${JSON.stringify(withValue)}
+`,
+      'checkout-binding.yaml'
+    );
+
+  it('accepts a whole binding to an upstream node that executes against the checkout', () => {
+    const result = load('$implement.execution.checkoutStart');
+    expect(result.error).toBeNull();
+  });
+
+  it('rejects the reference inside other text', () => {
+    const result = load('start: $implement.execution.checkoutStart');
+    expect(result.error?.error).toContain('only valid as the whole value');
+  });
+
+  it('rejects a producer that records no checkout start', () => {
+    const result = load('$implement.execution.checkoutStart', 'cancel: stop here');
+    expect(result.error?.error).toContain('records no checkout start');
+  });
+
+  it('rejects an unknown producer', () => {
+    const result = load('$ghost.execution.checkoutStart');
+    expect(result.error?.error).toContain("no node 'ghost' exists");
+  });
+
+  it('rejects the reference on a workflow: node, which cannot pass it to the child run', () => {
+    const result = parseWorkflow(
+      `
+name: checkout-binding-child
+description: a child launch cannot carry an execution fact
+nodes:
+  - id: implement
+    prompt: work
+  - id: child
+    workflow: some-child
+    depends_on: [implement]
+    with:
+      baseline: "$implement.execution.checkoutStart"
+`,
+      'checkout-binding-child.yaml'
+    );
+    expect(result.error?.error).toContain('a workflow: node cannot pass to its child run');
+  });
+});

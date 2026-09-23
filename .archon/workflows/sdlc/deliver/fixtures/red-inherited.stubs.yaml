@@ -7,7 +7,6 @@
 # gate refuses it — the pull request's own CI is what decides, and it is red there
 # too, so `ci-probe` reports pending and the run suspends at `ci-pause` rather than
 # dying locally. That pause is the intended terminus: resume once the base is fixed.
-impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: false

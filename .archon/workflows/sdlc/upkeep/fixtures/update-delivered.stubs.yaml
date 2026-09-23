@@ -37,7 +37,6 @@ fixture:
   expect: completed
 exec-code: true
 deliver__gate-ready: '{"gate":"ready"}'
-deliver__impl__record-start: '{"start":"recorded"}'
 deliver__gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":""}'
 deliver__impl__assert-changed: "2 files changed"
 deliver__gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'

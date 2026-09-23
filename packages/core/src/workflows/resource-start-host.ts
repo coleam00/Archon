@@ -337,7 +337,7 @@ async function worktreeLane(
   identifier: string,
   platformType: string,
   userId: string
-): Promise<{ cwd: string; envId: string }> {
+): Promise<{ cwd: string; envId: string; cutFromCommit?: string }> {
   ensureIsolationConfigured();
   const provider = getIsolationProvider();
   // An explicit branch names one reusable checkout, so repeated starts share it.
@@ -380,7 +380,13 @@ async function worktreeLane(
     created_by_user_id: userId,
     metadata: {},
   });
-  return { cwd: env.workingPath, envId: record.id };
+  return {
+    cwd: env.workingPath,
+    envId: record.id,
+    ...(!env.metadata.adopted && env.metadata.cutFromCommit !== undefined
+      ? { cutFromCommit: env.metadata.cutFromCommit }
+      : {}),
+  };
 }
 
 export interface StartAdmittedResourceStartInput {
@@ -446,7 +452,7 @@ export async function startAdmittedResourceStart(
           platform.getPlatformType(),
           launch.run.user_id
         )
-      : { cwd: launch.execution.cwd, envId: undefined };
+      : { cwd: launch.execution.cwd, envId: undefined, cutFromCommit: undefined };
   await conversationDb.updateConversation(run.conversation_id, {
     cwd: execution.cwd,
     codebase_id: codebase.id,
@@ -473,6 +479,9 @@ export async function startAdmittedResourceStart(
         codebaseId: codebase.id,
         userId: launch.run.user_id,
         baseBranch,
+        ...(execution.cutFromCommit !== undefined
+          ? { cutFromCommit: execution.cutFromCommit }
+          : {}),
         ...(lane.kind === 'worktree' && lane.baseOverride
           ? { baseOverride: lane.baseOverride }
           : {}),

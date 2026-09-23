@@ -5139,6 +5139,7 @@ describe('workflowGetCommand', () => {
 
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-pw',
+      checkout_baseline: null,
       workflow_name: 'gated',
       working_path: '/repo',
       status: 'completed',
@@ -5171,6 +5172,7 @@ describe('workflowGetCommand', () => {
 
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-pw',
+      checkout_baseline: null,
       workflow_name: 'gated',
       working_path: '/repo',
       status: 'completed',
@@ -5201,6 +5203,7 @@ describe('workflowGetCommand', () => {
 
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-skip-cause',
+      checkout_baseline: null,
       workflow_name: 'deliver',
       working_path: '/repo',
       status: 'failed',
@@ -5233,6 +5236,7 @@ describe('workflowGetCommand', () => {
 
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-timeout-skip',
+      checkout_baseline: null,
       workflow_name: 'deliver',
       working_path: '/repo',
       status: 'completed',
@@ -5278,6 +5282,7 @@ describe('workflowGetCommand', () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-xyz',
+      checkout_baseline: null,
       workflow_name: 'implement',
       status: 'failed',
       working_path: '/tmp/wt',
@@ -5291,12 +5296,55 @@ describe('workflowGetCommand', () => {
     expect(consoleSpy).toHaveBeenCalledWith('  Name:   implement');
     expect(consoleSpy).toHaveBeenCalledWith('  Status: failed');
     expect(consoleSpy).toHaveBeenCalledWith('  Error:  Step failed: build');
+    expect(consoleSpy).toHaveBeenCalledWith('  Start:  (not recorded)');
+  });
+
+  it('prints the checkout the run started from', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-start',
+      checkout_baseline: {
+        kind: 'git',
+        sampledAt: '2026-09-23T10:00:00.000Z',
+        commit: 'a'.repeat(40),
+        tree: 'b'.repeat(40),
+        worktree: {
+          status: 'dirty',
+          content: 'complete',
+          staged: 1,
+          unstaged: 2,
+          untracked: 3,
+          manifest: {
+            pointer: {
+              type: 'archon_artifact',
+              run_id: 'run-start',
+              path: '.archon/checkout/x.json',
+            },
+            sha256: 'c'.repeat(64),
+            entries: 6,
+          },
+        },
+        cutFromCommit: 'd'.repeat(40),
+      },
+      workflow_name: 'implement',
+      status: 'completed',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {},
+    });
+
+    await workflowGetCommand('run-start');
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      `  Start:  ${'a'.repeat(40)} (dirty: 1 staged, 2 unstaged, 3 untracked, branch cut from ${'d'.repeat(40)})`
+    );
   });
 
   it('prints contradictory status and authored outcome as separate fields', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-contradictory',
+      checkout_baseline: null,
       workflow_name: 'review',
       status: 'completed',
       outcome: 'failed',
@@ -5315,6 +5363,7 @@ describe('workflowGetCommand', () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-json',
+      checkout_baseline: null,
       workflow_name: 'implement',
       status: 'completed',
       working_path: '/tmp/wt',
@@ -5349,6 +5398,7 @@ describe('workflowGetCommand', () => {
         started_at: new Date(),
         metadata: {},
         output_root: outputRoot,
+        checkout_baseline: null,
         codebase_id: 'cb-1',
       });
 
@@ -5378,6 +5428,7 @@ describe('workflowGetCommand', () => {
         started_at: new Date(),
         metadata: {},
         output_root: '/old-machine/.archon/workspaces/old/name',
+        checkout_baseline: null,
         codebase_id: 'cb-relocated',
       });
       // Both readers in workflow get consult the codebase row; the resolver
@@ -5417,6 +5468,7 @@ describe('workflowGetCommand', () => {
       started_at: new Date(),
       metadata: {},
       output_root: null,
+      checkout_baseline: null,
       codebase_id: null,
     });
 
@@ -5452,6 +5504,7 @@ describe('workflowGetCommand', () => {
         started_at: new Date(),
         metadata: {},
         output_root: decoyRoot,
+        checkout_baseline: null,
         codebase_id: null,
       });
 
@@ -5500,6 +5553,7 @@ describe('workflowGetCommand', () => {
         // current ARCHON_HOME via the run's codebase row, not walk the original
         // path.
         output_root: '/old-machine/.archon/workspaces/old/name',
+        checkout_baseline: null,
         codebase_id: 'cb-relocated-artifact',
       });
       // Both readers in workflow get consult the codebase row; the resolver
@@ -5543,6 +5597,7 @@ describe('workflowGetCommand', () => {
         started_at: new Date(),
         metadata: {},
         output_root: outputRoot,
+        checkout_baseline: null,
         codebase_id: 'cb-1',
       });
 
@@ -5594,6 +5649,7 @@ describe('workflowGetCommand', () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-gate-human',
+      checkout_baseline: null,
       workflow_name: 'validate',
       status: 'paused',
       working_path: '/tmp/wt',
@@ -5622,6 +5678,7 @@ describe('workflowGetCommand', () => {
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
       .mockResolvedValueOnce({
         id: 'run-wait-human',
+        checkout_baseline: null,
         workflow_name: 'validate',
         status: 'paused',
         working_path: '/tmp/wt',
@@ -5639,6 +5696,7 @@ describe('workflowGetCommand', () => {
       })
       .mockResolvedValueOnce({
         id: 'run-quota-human',
+        checkout_baseline: null,
         workflow_name: 'deliver',
         status: 'failed',
         working_path: '/tmp/wt',
@@ -5670,6 +5728,7 @@ describe('workflowGetCommand', () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-action-human',
+      checkout_baseline: null,
       workflow_name: 'deliver',
       status: 'paused',
       working_path: '/tmp/wt',
@@ -5704,6 +5763,7 @@ describe('workflowGetCommand', () => {
     const eventsDb = await import('@archon/core/db/workflow-events');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-v',
+      checkout_baseline: null,
       workflow_name: 'implement',
       status: 'running',
       working_path: '/tmp/wt',
@@ -5767,6 +5827,7 @@ describe('workflowGetCommand', () => {
     const eventsDb = await import('@archon/core/db/workflow-events');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-v',
+      checkout_baseline: null,
       workflow_name: 'implement',
       status: 'running',
       working_path: '/tmp/wt',
@@ -5794,6 +5855,7 @@ describe('workflowGetCommand', () => {
     const eventsDb = await import('@archon/core/db/workflow-events');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-v',
+      checkout_baseline: null,
       workflow_name: 'implement',
       status: 'running',
       working_path: '/tmp/wt',
@@ -5842,6 +5904,7 @@ describe('workflowLogsCommand', () => {
     parent_run_id: null,
     adopted_from_run_id: null,
     output_root: projectRoot,
+    checkout_baseline: null,
   });
 
   const stdoutText = (): string =>
@@ -5914,6 +5977,7 @@ describe('workflowLogsCommand', () => {
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       ...run('completed'),
       output_root: '/previous/archon/home/workspaces/acme/widget',
+      checkout_baseline: null,
     });
     (codebaseDb.getCodebase as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'cb-1',

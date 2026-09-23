@@ -35,24 +35,13 @@
  */
 import { stat } from 'node:fs/promises';
 import { isAbsolute, join, normalize } from 'node:path';
-import { z } from 'zod';
 import { getRunArtifactsDirForRoot, isInsideArchonHome, isPathInside } from '@archon/paths';
 import type { WorkflowRun } from './schemas';
 
-/** Reserved `type` discriminator. An object carrying it MUST be a valid pointer. */
-export const ARTIFACT_POINTER_TYPE = 'archon_artifact';
+import { ARTIFACT_POINTER_TYPE, artifactPointerSchema } from './schemas/artifact-pointer';
 
-/**
- * The pointer shape. Unknown sibling keys are tolerated (an author may label a pointer for
- * their own downstream code); the three engine-owned fields are not optional.
- */
-export const artifactPointerSchema = z.object({
-  type: z.literal(ARTIFACT_POINTER_TYPE),
-  run_id: z.string().min(1),
-  path: z.string().min(1),
-});
-
-export type ArtifactPointer = z.infer<typeof artifactPointerSchema>;
+export { ARTIFACT_POINTER_TYPE, artifactPointerSchema };
+export type { ArtifactPointer } from './schemas/artifact-pointer';
 
 /** One tagged object found inside a value, with the JSON path that located it. */
 interface TaggedCandidate {

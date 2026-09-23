@@ -4,7 +4,6 @@
 # the gate with the caveat recorded, and pause with the rerun-and-resume action
 # visible. The fixture pins the route: classification instead of a probe death,
 # then one fresh check read and an action-required wait rather than flip-ready.
-impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true
@@ -40,8 +39,8 @@ validate__validate:
   summary: "stub: full gate green"
 ci-probe: '{"state":"red","detail":"e2e-smoke (fail)"}'
 ci-verdict: '{"state":"red","detail":"e2e-smoke (fail)"}'
-# ci-fix__record-start and ci-fix__assert-changed run for real against the
-# clean scratch worktree: no commit and no working-tree change is exactly the
+# ci-fix__assert-changed runs for real against the clean scratch worktree: no
+# content changed since the ci-fix invocation started is exactly the
 # honest-decline state, and the real guard must pass it via the inherited
 # cause plus summary — the same proof correction-honest-decline pins
 # for the corrections loop.

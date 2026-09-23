@@ -1,7 +1,6 @@
 # Dry-run fixture: red the change caused still stops delivery dead (--exec-code, so
 # the real gate script decides). This is the route that must not change: a broken
 # check is the one red no downstream gate can excuse.
-impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: false
