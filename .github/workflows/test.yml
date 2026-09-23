@@ -339,25 +339,16 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      # The script judges every needed job, including on a documentation-only change, and
+      # reads which jobs that change may skip from this file.
       - name: Report test-suite outcome
         env:
-          RUN_TESTS: ${{ needs.changes.outputs.run-tests }}
-          STATIC: ${{ needs.static.result }}
-          TEST: ${{ needs.test.result }}
-          WORKFLOW_FIXTURES: ${{ needs.workflow-fixtures.result }}
-          WORKFLOW_FIXTURES_WINDOWS: ${{ needs.workflow-fixtures-windows.result }}
-          SCHEMA_UPGRADE: ${{ needs.schema-upgrade.result }}
-          POSTGRES_PARITY: ${{ needs.postgres-parity.result }}
-          DOCKER_BUILD: ${{ needs.docker-build.result }}
-        run: |
-          if [ "$RUN_TESTS" = false ]; then
-            echo "Skipped tests for documentation-only changes."
-            exit 0
-          fi
-
-          for result in "$STATIC" "$TEST" "$WORKFLOW_FIXTURES" "$WORKFLOW_FIXTURES_WINDOWS" "$SCHEMA_UPGRADE" "$POSTGRES_PARITY" "$DOCKER_BUILD"; do
-            if [ "$result" != success ]; then
-              echo "A test-suite job finished with $result."
-              exit 1
-            fi
-          done
+          NEEDS: ${{ toJSON(needs) }}
+        run: bun scripts/test-suite-outcome.ts

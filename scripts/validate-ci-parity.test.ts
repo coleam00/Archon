@@ -44,6 +44,10 @@ const NOT_IN_VALIDATE: readonly { command: string; reason: string }[] = [
     reason: 'Decides whether the suite runs at all. CI plumbing, not a repository check.',
   },
   {
+    command: 'bun scripts/test-suite-outcome.ts',
+    reason: "Judges the other test-suite jobs' results. CI plumbing, not a repository check.",
+  },
+  {
     command: 'bun run check:schema-upgrades',
     reason: 'Applies every released schema to a live PostgreSQL service.',
   },
@@ -134,15 +138,29 @@ function jobPlatforms(job: Record<string, unknown>, location: string): Platform[
   return [platformOfLabel(runsOn, location)];
 }
 
-/** Narrows a job's OSes by a step's `if: runner.os == '<OS>'`, the one form CI uses. */
+/** A condition that reads which OS or matrix leg it runs on. */
+const OS_REFERENCE = /\b(?:runner\.os|matrix\.)/;
+
+/**
+ * Narrows a job's OSes by a step's `if: runner.os == '<OS>'`, the one form CI uses. Any other
+ * condition that reads the OS or a matrix value throws rather than being counted on every OS
+ * the job runs on.
+ */
 function stepPlatforms(step: Record<string, unknown>, platforms: Platform[], location: string) {
   const condition = step.if;
-  if (typeof condition !== 'string' || !condition.includes('runner.os')) return platforms;
+  if (typeof condition !== 'string' || !OS_REFERENCE.test(condition)) return platforms;
   const match = /^runner\.os == '(Linux|Windows|macOS)'$/.exec(condition.trim());
   if (match === null) {
-    throw new Error(`${location}: unrecognised runner.os condition ${JSON.stringify(condition)}`);
+    throw new Error(`${location}: unsupported OS condition ${JSON.stringify(condition)}`);
   }
   return platforms.filter(platform => platform === match[1]);
+}
+
+/** A job-level condition that reads the OS or a matrix value is not modelled at all. */
+function assertNoJobOsCondition(job: Record<string, unknown>, location: string): void {
+  if (typeof job.if === 'string' && OS_REFERENCE.test(job.if)) {
+    throw new Error(`${location}: unsupported job-level OS condition ${JSON.stringify(job.if)}`);
+  }
 }
 
 /**
@@ -166,6 +184,7 @@ function gateCommands(): GateCommand[] {
     return Object.entries(jobs).flatMap(([jobId, job]) => {
       if (!isRecord(job) || !Array.isArray(job.steps)) return [];
       const location = `${name}: ${jobId}`;
+      assertNoJobOsCondition(job, location);
       const platforms = jobPlatforms(job, location);
       return job.steps.flatMap(step => {
         if (!isRecord(step) || typeof step.run !== 'string') return [];
@@ -206,6 +225,21 @@ describe('validate covers the pull-request gates', () => {
     expect(hasPullRequestTrigger('on: [push, pull_request]\n')).toBe(true);
     expect(hasPullRequestTrigger('on: pull_request\n')).toBe(true);
     expect(hasPullRequestTrigger('on: push\njobs:\n  note: pull_request\n')).toBe(false);
+  });
+
+  test('an OS condition other than runner.os == <OS> fails instead of counting on every OS', () => {
+    const both: Platform[] = ['Linux', 'Windows'];
+    expect(stepPlatforms({ if: "runner.os == 'Windows'" }, both, 'x')).toEqual(['Windows']);
+    expect(stepPlatforms({ if: 'failure()' }, both, 'x')).toEqual(both);
+    expect(() => stepPlatforms({ if: "matrix.os == 'windows-latest'" }, both, 'x')).toThrow(
+      'unsupported OS condition'
+    );
+    expect(() => stepPlatforms({ if: "runner.os != 'Linux'" }, both, 'x')).toThrow(
+      'unsupported OS condition'
+    );
+    expect(() => assertNoJobOsCondition({ if: "matrix.os == 'ubuntu-latest'" }, 'x')).toThrow(
+      'unsupported job-level OS condition'
+    );
   });
 
   test('every Bun command in a PR-gating workflow runs through validate or is declared', () => {
