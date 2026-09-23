@@ -30,7 +30,8 @@ import {
   logWorkflowError,
   logWorkflowComplete,
   logNodeComplete,
-  logWatchdogReset,
+  createWatchdogResetRecorder,
+  WATCHDOG_RESET_BURST_GAP_MS,
   type WorkflowEvent,
 } from './logger';
 
@@ -117,23 +118,47 @@ describe('Workflow Logger', () => {
     });
   });
 
-  describe('logWatchdogReset', () => {
-    it('persists the reset timestamp and chunk type without chunk content', async () => {
-      const resetAt = Date.parse('2026-08-31T20:31:53.123Z');
+  describe('createWatchdogResetRecorder', () => {
+    const t0 = Date.parse('2026-08-31T20:31:53.123Z');
+    const iso = (ms: number): string => new Date(ms).toISOString();
 
-      await logWatchdogReset(testDir, 'watchdog-test', 'review', 'thinking', resetAt);
+    it('records each burst by its ends and keeps every renewal counted', async () => {
+      const recorder = createWatchdogResetRecorder(testDir, 'watchdog-burst', 'review');
+      // 500 thinking renewals 5ms apart, then a tool chunk still inside the burst.
+      for (let i = 0; i < 500; i++) recorder.observe('thinking', t0 + i * 5);
+      recorder.observe('tool', t0 + 2_600);
+      // A quiet gap exactly at the threshold starts a new burst of one renewal.
+      const quietEnd = t0 + 2_600 + WATCHDOG_RESET_BURST_GAP_MS;
+      recorder.observe('assistant', quietEnd);
+      await recorder.flush();
 
-      const events = await readLogFile('watchdog-test');
-      expect(events).toEqual([
-        expect.objectContaining({
-          type: 'watchdog_reset',
-          workflow_id: 'watchdog-test',
-          step: 'review',
-          chunk_type: 'thinking',
-          ts: '2026-08-31T20:31:53.123Z',
-        }),
+      const events = await readLogFile('watchdog-burst');
+      expect(
+        events.map(e => ({
+          step: e.step,
+          chunk_type: e.chunk_type,
+          chunk_count: e.chunk_count,
+          ts: e.ts,
+        }))
+      ).toEqual([
+        { step: 'review', chunk_type: 'thinking', chunk_count: 1, ts: iso(t0) },
+        { step: 'review', chunk_type: 'tool', chunk_count: 500, ts: iso(t0 + 2_600) },
+        { step: 'review', chunk_type: 'assistant', chunk_count: 1, ts: iso(quietEnd) },
       ]);
-      expect(events[0].content).toBeUndefined();
+      expect(events.every(e => e.type === 'watchdog_reset' && e.content === undefined)).toBe(true);
+    });
+
+    it('a gap just under the threshold stays inside the burst', async () => {
+      const recorder = createWatchdogResetRecorder(testDir, 'watchdog-under', 'review');
+      recorder.observe('thinking', t0);
+      recorder.observe('thinking', t0 + WATCHDOG_RESET_BURST_GAP_MS - 1);
+      await recorder.flush();
+
+      const events = await readLogFile('watchdog-under');
+      expect(events.map(e => [e.chunk_count, e.ts])).toEqual([
+        [1, iso(t0)],
+        [1, iso(t0 + WATCHDOG_RESET_BURST_GAP_MS - 1)],
+      ]);
     });
   });
 
