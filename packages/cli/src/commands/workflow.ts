@@ -177,6 +177,7 @@ import {
   assertDetachedRunProcessOwner,
   DETACHED_RUN_OWNER_ENV,
   requestDetachedRunStop,
+  terminateDetachedProcessTree,
 } from '../utils/detached-run-control';
 import { resolveCliUserId } from './auth';
 import { RESUME_RUN_CONFIG_CONFLICT } from '../dispatch-guards';
@@ -4954,10 +4955,23 @@ export async function workflowAbandonCommand(
   // The container reclaim (M2) now lives in the shared `abandonWorkflow` op, so EVERY
   // surface reclaims — the CLI just reports the cancellation. Keeps `--json` a clean
   // one-line contract (no reclaim text before the payload).
+
+  // The CLI always provides a stopper so abandonWorkflow can attempt to stop a live
+  // detached owner before recording cancelled. When no owner answers the op falls
+  // through to the direct cancel path — the stopper is never called.
+  const stopper = {
+    stopOwner: async (pid: number, isLive: () => boolean): Promise<void> => {
+      await terminateDetachedProcessTree(pid, isLive);
+    },
+  };
+
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const { run, cascadeFailures, blockedParentRunId } = await abandonWorkflow(resolvedId);
+      const { run, cascadeFailures, blockedParentRunId } = await abandonWorkflow(
+        resolvedId,
+        stopper
+      );
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -4974,7 +4988,7 @@ export async function workflowAbandonCommand(
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
-  const { run, cascadeFailures, blockedParentRunId } = await abandonWorkflow(resolvedId);
+  const { run, cascadeFailures, blockedParentRunId } = await abandonWorkflow(resolvedId, stopper);
   console.log(`Abandoned workflow run: ${resolvedId}`);
   console.log(`Workflow: ${run.workflow_name}`);
   printRunTreeCancellationWarnings(cascadeFailures, blockedParentRunId);

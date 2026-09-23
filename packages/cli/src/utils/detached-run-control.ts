@@ -115,7 +115,7 @@ export function commandTerminatedBySignal(error: unknown): boolean {
 }
 
 /** Terminate the process tree while its exact-run owner holds the IPC lease open. */
-async function terminateDetachedProcessTree(
+export async function terminateDetachedProcessTree(
   pid: number,
   ownsLiveLease: () => boolean
 ): Promise<void> {

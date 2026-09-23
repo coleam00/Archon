@@ -1766,6 +1766,14 @@ async function maybeResumeParentRun(
   }
 }
 
+/** Pick the surface-appropriate command spelling for a workflow action. */
+function formatRunCommand(platform: IWorkflowPlatform, action: string, shortId: string): string {
+  if (platform.getPlatformType() === 'cli') {
+    return `archon workflow ${action} ${shortId}`;
+  }
+  return `/workflow ${action} ${shortId}`;
+}
+
 /**
  * Execute a complete DAG-based workflow.
  *
@@ -2380,16 +2388,16 @@ export async function executeWorkflow(
         if (activeWorkflow.status === 'paused') {
           stateLine = `paused waiting for user input (${duration} since started, run \`${shortId}\`)`;
           actionLines =
-            `• Approve it: \`/workflow approve ${shortId}\`\n` +
-            `• Reject it: \`/workflow reject ${shortId}\`\n` +
-            `• Cancel it: \`/workflow cancel ${shortId}\`\n` +
+            `• Approve it: \`${formatRunCommand(platform, 'approve', shortId)}\`\n` +
+            `• Reject it: \`${formatRunCommand(platform, 'reject', shortId)}\`\n` +
+            `• Cancel it: \`${formatRunCommand(platform, 'cancel', shortId)}\`\n` +
             '• Use a different branch: `--branch <other>`';
         } else {
           const verb = activeWorkflow.status === 'pending' ? 'starting' : 'running';
           stateLine = `${verb} ${duration}, run \`${shortId}\``;
           actionLines =
             '• Wait for it to finish: `/workflow status`\n' +
-            `• Cancel it: \`/workflow cancel ${shortId}\`\n` +
+            `• Cancel it: \`${formatRunCommand(platform, 'cancel', shortId)}\`\n` +
             '• Use a different branch: `--branch <other>`';
         }
         await sendCriticalMessage(

@@ -105,6 +105,28 @@ const mockRequestDetachedRunStop = mock<typeof DetachedRunControl.requestDetache
 );
 const mockRunLiveOwnerClose = mock((): Promise<void> => Promise.resolve());
 const mockAssertDetachedRunProcessOwner = mock((): undefined => undefined);
+const mockTerminateDetachedProcessTree = mock<
+  typeof DetachedRunControl.terminateDetachedProcessTree
+>(() => Promise.resolve());
+const mockRequestRunLiveOwnerStop = mock<
+  (runId: string) => Promise<{
+    pid: number;
+    commit: () => Promise<void>;
+    release: () => void;
+    isLive: () => boolean;
+  }>
+>(() => {
+  throw new Error('unexpected call to requestRunLiveOwnerStop');
+});
+const mockRunLiveOwnerStopUnavailableError = class extends Error {
+  constructor(
+    readonly runId: string,
+    readonly detail: string
+  ) {
+    super(`Run ${runId} has no live detached owner: ${detail}`);
+    this.name = 'RunLiveOwnerStopUnavailableError';
+  }
+};
 let mockDetachedStopRequested = false;
 const mockStartRunLiveOwner = mock(
   (
@@ -125,15 +147,19 @@ mock.module(
     assertDetachedRunProcessOwner: typeof mockAssertDetachedRunProcessOwner;
     DETACHED_RUN_OWNER_ENV: string;
     requestDetachedRunStop: typeof mockRequestDetachedRunStop;
+    terminateDetachedProcessTree: typeof mockTerminateDetachedProcessTree;
   } => ({
     assertDetachedRunProcessOwner: mockAssertDetachedRunProcessOwner,
     DETACHED_RUN_OWNER_ENV: 'ARCHON_DETACHED_RUN_OWNER',
     requestDetachedRunStop: mockRequestDetachedRunStop,
+    terminateDetachedProcessTree: mockTerminateDetachedProcessTree,
   })
 );
 
 mock.module('@archon/core/services/run-live-owner', () => ({
   startRunLiveOwner: mockStartRunLiveOwner,
+  requestRunLiveOwnerStop: mockRequestRunLiveOwnerStop,
+  RunLiveOwnerStopUnavailableError: mockRunLiveOwnerStopUnavailableError,
 }));
 
 mock.module(
@@ -6022,6 +6048,10 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockClear();
     mockCreateWorkflowEvent.mockClear();
     mockPersistWorkflowEvent.mockClear();
+    mockRequestRunLiveOwnerStop.mockReset();
+    mockRequestRunLiveOwnerStop.mockImplementation(() =>
+      Promise.reject(new mockRunLiveOwnerStopUnavailableError('run-1', 'mock no owner'))
+    );
   });
 
   afterEach(() => {
@@ -6682,6 +6712,10 @@ describe('write command --json output', () => {
   beforeEach(() => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
     stdoutSpy = spyOnJsonStdout();
+    mockRequestRunLiveOwnerStop.mockReset();
+    mockRequestRunLiveOwnerStop.mockImplementation(() =>
+      Promise.reject(new mockRunLiveOwnerStopUnavailableError('run-1', 'mock no owner'))
+    );
   });
 
   afterEach(() => {
@@ -9179,6 +9213,10 @@ describe('workflowAbandonCommand', () => {
 
   beforeEach(() => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    mockRequestRunLiveOwnerStop.mockReset();
+    mockRequestRunLiveOwnerStop.mockImplementation(() =>
+      Promise.reject(new mockRunLiveOwnerStopUnavailableError('run-1', 'mock no owner'))
+    );
   });
 
   afterEach(() => {

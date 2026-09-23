@@ -29,6 +29,11 @@ import type {
 import type { DashboardWorkflowRun } from '../schemas/workflow-run';
 import * as workflowDb from '../db/workflows';
 import * as workflowNodeSessionDb from '../db/workflow-node-sessions';
+import {
+  requestRunLiveOwnerStop,
+  RunLiveOwnerStopUnavailableError,
+} from '../services/run-live-owner';
+import { hostname } from 'node:os';
 
 // Lazy logger — NEVER at module scope
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -545,13 +550,51 @@ async function cancelRunAndCleanup(
  * to discard it — hence the inline check here intentionally diverges from that
  * constant and blocks only the two non-resumable terminal states.
  */
-export async function abandonWorkflow(runId: string): Promise<AbandonWorkflowResult> {
+export async function abandonWorkflow(
+  runId: string,
+  options?: {
+    /** When provided, attempt to stop the live owner before recording cancelled.
+     *  Called with the owner's PID and an `isLeaseLive` guard — the caller should
+     *  refuse to terminate if the lease dies mid-operation. */
+    stopOwner?: (pid: number, isLeaseLive: () => boolean) => Promise<void>;
+  }
+): Promise<AbandonWorkflowResult> {
   const run = await getRunOrThrow(runId, 'operations.workflow_abandon_lookup_failed');
   if (run.status === 'completed' || run.status === 'cancelled') {
     throw new Error(
       `Cannot abandon run with status '${run.status}'. Only running, paused, or failed runs can be abandoned.`
     );
   }
+
+  if (options?.stopOwner) {
+    try {
+      const lease = await requestRunLiveOwnerStop(runId);
+      try {
+        await lease.commit();
+        await options.stopOwner(lease.pid, () => lease.isLive());
+      } finally {
+        lease.release();
+      }
+    } catch (error) {
+      if (error instanceof RunLiveOwnerStopUnavailableError) {
+        getLog().info(
+          {
+            runId,
+            hostname: hostname(),
+            ownerUnavailableDetail: error.detail,
+            runStatus: run.status,
+            lastActivityAt: run.last_activity_at,
+          },
+          'abandon no live owner, recording cancelled'
+        );
+        // Fall through — no live owner to stop, record cancelled (outcome 2).
+      } else {
+        // Owner answered but the stop failed — fail loudly, run unchanged (outcome 3).
+        throw error;
+      }
+    }
+  }
+
   const result = await cancelRunAndCleanup(run, workflowDb.cancelWorkflowRun);
   return {
     run: result.run,

@@ -88,6 +88,23 @@ mock.module('../services/cleanup-service', () => ({
   reclaimContainerEnv: mockReclaimContainerEnv,
 }));
 
+const mockRequestRunLiveOwnerStop = mock<
+  typeof import('../services/run-live-owner').requestRunLiveOwnerStop
+>(() => Promise.reject(new Error('unexpected call to requestRunLiveOwnerStop')));
+const mockRunLiveOwnerStopUnavailableError = class MockUnavailableError extends Error {
+  constructor(
+    readonly runId: string,
+    readonly detail: string
+  ) {
+    super(`Run ${runId} has no live detached owner: ${detail}`);
+    this.name = 'RunLiveOwnerStopUnavailableError';
+  }
+};
+mock.module('../services/run-live-owner', () => ({
+  requestRunLiveOwnerStop: mockRequestRunLiveOwnerStop,
+  RunLiveOwnerStopUnavailableError: mockRunLiveOwnerStopUnavailableError,
+}));
+
 const mockLogger = {
   fatal: mock(() => undefined),
   error: mock(() => undefined),
@@ -1427,6 +1444,11 @@ describe('abandonWorkflow', () => {
     mockReclaimContainerEnv.mockImplementation(() => Promise.resolve());
     mockFindChildRuns.mockClear();
     mockFindChildRuns.mockImplementation(() => Promise.resolve([]));
+    mockRequestRunLiveOwnerStop.mockClear();
+    mockRequestRunLiveOwnerStop.mockImplementation(() =>
+      Promise.reject(new Error('unexpected call to requestRunLiveOwnerStop'))
+    );
+    mockLogger.info.mockClear();
   });
 
   test('cancels a non-terminal run', async () => {
@@ -1629,6 +1651,104 @@ describe('abandonWorkflow', () => {
     await expect(abandonWorkflow('run-1')).rejects.toThrow(
       "Cannot abandon run with status 'cancelled'"
     );
+  });
+
+  // --- stopOwner callback tests ---
+
+  test('with stopper — owner answers and stop succeeds', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
+    let committed = false;
+    let released = false;
+    let isLive = true;
+    mockRequestRunLiveOwnerStop.mockImplementationOnce(() =>
+      Promise.resolve({
+        pid: 42,
+        commit: async () => {
+          committed = true;
+        },
+        release: () => {
+          released = true;
+        },
+        isLive: () => isLive,
+      })
+    );
+
+    let stopOwnerCalled = false;
+    const stopper = async (pid: number, isLiveFn: () => boolean) => {
+      stopOwnerCalled = true;
+      expect(pid).toBe(42);
+      expect(isLiveFn()).toBe(true);
+    };
+
+    const { run, cancelled } = await abandonWorkflow('run-1', { stopOwner: stopper });
+
+    expect(stopOwnerCalled).toBe(true);
+    expect(committed).toBe(true);
+    expect(released).toBe(true);
+    expect(cancelled).toBe(true);
+    expect(run.id).toBe('run-1');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
+  });
+
+  test('with stopper — owner unreachable falls through to cancel', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
+    mockRequestRunLiveOwnerStop.mockImplementationOnce(() =>
+      Promise.reject(new mockRunLiveOwnerStopUnavailableError('run-1', 'socket connect ENOENT'))
+    );
+
+    let stopOwnerCalled = false;
+    const stopper = async () => {
+      stopOwnerCalled = true;
+    };
+
+    const { run, cancelled } = await abandonWorkflow('run-1', { stopOwner: stopper });
+
+    expect(stopOwnerCalled).toBe(false);
+    expect(cancelled).toBe(true);
+    expect(run.id).toBe('run-1');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
+    expect(mockLogger.info).toHaveBeenCalled();
+  });
+
+  test('with stopper — owner answers but stop fails propagates error', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
+    let committed = false;
+    let released = false;
+    mockRequestRunLiveOwnerStop.mockImplementationOnce(() =>
+      Promise.resolve({
+        pid: 42,
+        commit: async () => {
+          committed = true;
+        },
+        release: () => {
+          released = true;
+        },
+        isLive: () => true,
+      })
+    );
+
+    const stopError = new Error('SIGKILL failed');
+    const stopper = async () => {
+      throw stopError;
+    };
+
+    await expect(abandonWorkflow('run-1', { stopOwner: stopper })).rejects.toThrow(
+      'SIGKILL failed'
+    );
+
+    expect(committed).toBe(true);
+    expect(released).toBe(true);
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('without stopper — current behavior preserved (no live-owner call)', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
+
+    await abandonWorkflow('run-1');
+
+    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
+    // requestRunLiveOwnerStop should never be called when no stopper is provided
+    expect(mockRequestRunLiveOwnerStop).not.toHaveBeenCalled();
   });
 });
 
