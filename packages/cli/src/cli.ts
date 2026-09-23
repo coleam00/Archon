@@ -380,6 +380,17 @@ async function main(): Promise<number> {
           'Find a prior run id with: archon workflow runs --open (or workflow get <run-id>)'
       );
     }
+    if (command === 'plugin') {
+      const { pluginCommand } = await loadRoute(() => import('./commands/plugin'));
+      const { getArchonVersion } = await loadRoute(() => import('./commands/version'));
+      const { defaultPluginDir } = await import('@archon/forge/discovery');
+      return await pluginCommand(subcommand, positionals[2], {
+        // The same trusted ARCHON_HOME forge discovery scans, so repo env cannot
+        // redirect where an install lands.
+        pluginsDir: defaultPluginDir(forgeTrustedEnv),
+        archonVersion: await getArchonVersion(),
+      });
+    }
     // Note: orphaned run cleanup moved to `workflow cleanup` command only.
     // Running it on every CLI startup killed parallel workflow runs (all
     // 'running' status rows were marked failed by each new process).

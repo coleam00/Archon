@@ -112,6 +112,37 @@ jobs:
           mkdir -p dist
           VERSION="$VERSION" GIT_COMMIT="$GIT_COMMIT" TARGET="$TARGET" OUTFILE="$OUTFILE" bash scripts/build-binaries.sh
 
+      - name: Build GitHub forge plugin
+        id: forge-plugin
+        env:
+          TARGET: ${{ matrix.target }}
+          BINARY: ${{ matrix.binary }}
+        run: |
+          # `archon plugin install coleam00/Archon/plugins/forge-github` downloads
+          # <manifest executable>-<os>-<arch>[.exe]. The executable name comes from the
+          # manifest and the platform suffix from this target's CLI binary name
+          # (archon-linux-x64 -> archon-forge-github-linux-x64).
+          EXECUTABLE=$(bun -e 'console.log((await Bun.file("plugins/forge-github/archon-plugin.json").json()).executable)')
+          ASSET="${EXECUTABLE}-${BINARY#archon-}"
+          bun build --compile --target="$TARGET" packages/adapters/src/forge/github/plugin.ts --outfile "dist/${ASSET}"
+          echo "asset=${ASSET}" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke-test GitHub forge plugin
+        if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
+        env:
+          ASSET: ${{ steps.forge-plugin.outputs.asset }}
+        run: |
+          chmod +x "dist/${ASSET}"
+          # Forge discovery accepts the plugin only if this handshake answers protocol 1.
+          "dist/${ASSET}" metadata | bun -e '
+            const metadata = await Bun.stdin.json();
+            if (metadata.protocol !== 1 || metadata.name !== "github") {
+              console.error("::error::Unexpected forge plugin metadata", metadata);
+              process.exit(1);
+            }
+            console.log("::notice::Forge plugin metadata", JSON.stringify(metadata));
+          '
+
       - name: Smoke-test built binary
         if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
         env:
@@ -259,7 +290,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.binary }}
-          path: dist/${{ matrix.binary }}
+          path: |
+            dist/${{ matrix.binary }}
+            dist/${{ steps.forge-plugin.outputs.asset }}
           retention-days: 1
 
   release:
