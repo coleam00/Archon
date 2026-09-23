@@ -18,7 +18,8 @@ Its current description was read from the forge and written to
 checked-out branch before judging anything.
 
 1. Read that body file and the full final diff against the recorded base
-   (`git diff <base>...HEAD` in this checkout).
+   (`git fetch origin <base>`, then `git diff origin/<base>...HEAD`; a local
+   `<base>` branch can lag the pull request's base).
 2. Check every concrete claim in the body against the final diff: named
    functions and guards, described mechanics, file lists, "unchanged" claims.
    The Problem section describes the issue and rarely drifts; the Solution and

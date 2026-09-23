@@ -133,6 +133,7 @@ export function matchesForgeOperationResponse(
     if (evidence?.op !== request.op) return false;
     if (!sameTarget(evidence.target, mutationTarget(request))) return false;
     return (
+      !('observed' in evidence) ||
       !evidence.observed ||
       (request.op === 'pr.create'
         ? sameRepo(evidence.observed.repo, request.repo)

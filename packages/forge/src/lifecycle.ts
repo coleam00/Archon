@@ -135,10 +135,8 @@ export const mutationFailureSchema = z.discriminatedUnion('outcome', [
     // starts from evidence rather than from a retry.
     leaveBehind: text,
   }),
-  failureBase.extend({
-    outcome: z.literal('outcome_unknown'),
-    observed: forgePrRecordSchema.optional(),
-  }),
+  // Nothing was read back, so an unknown outcome carries no observation.
+  failureBase.extend({ outcome: z.literal('outcome_unknown') }),
 ]);
 export type ForgeMutationFailure = z.infer<typeof mutationFailureSchema>;
 
