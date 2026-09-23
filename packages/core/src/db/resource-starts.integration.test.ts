@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import { mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -14,7 +15,12 @@ import {
   SourceReceiptDigestConflictError,
   withdrawQueuedResourceStart,
 } from './resource-starts';
-import { ResourceSlotCapacityConflictError } from './resource-slots';
+import {
+  addResourceSlotHolder,
+  liveResourceSlotHolders,
+  lockResourceSlot,
+  ResourceSlotCapacityConflictError,
+} from './resource-slots';
 import type { PreparedWorkflowLaunch } from '@archon/workflows/schemas/resource-start';
 import { claimPendingWorkflowRun, resumeWorkflowRun, WorkflowResourceBusyError } from './workflows';
 
@@ -658,5 +664,57 @@ describe('durable resource starts', () => {
     expect(
       (await getDatabase().query('SELECT capacity FROM remote_agent_resource_slots')).rows
     ).toEqual([{ capacity: 1 }]);
+  });
+});
+
+describe('resource slot holders', () => {
+  test('release follows the run state and looks the run up by its primary key', async () => {
+    const live = crypto.randomUUID();
+    const ended = crypto.randomUUID();
+    const vanished = crypto.randomUUID();
+    const db = getDatabase();
+    for (const [id, status] of [
+      [live, 'running'],
+      [ended, 'completed'],
+    ] as const) {
+      await db.query(
+        `INSERT INTO remote_agent_workflow_runs (id, conversation_id, workflow_name, user_message, status)
+         VALUES ($1, '11111111-1111-4111-8111-111111111111', 'test', '', $2)`,
+        [id, status]
+      );
+    }
+
+    const statements: { sql: string; params?: unknown[] }[] = [];
+    const holders = await db.withTransaction(async query => {
+      await lockResourceSlot(query, 'slot');
+      for (const id of [live, ended, vanished]) {
+        await addResourceSlotHolder(query, 'slot', { kind: 'run', id });
+      }
+      const recording: typeof query = (sql, params) => {
+        statements.push({ sql, params });
+        return query(sql, params);
+      };
+      return await liveResourceSlotHolders(recording, 'slot');
+    });
+    expect(holders).toEqual([{ kind: 'run', id: live }]);
+
+    // The adapter runs EXPLAIN as a mutation and drops its rows, so read the plan directly.
+    const release = statements.find(statement => statement.sql.includes('DELETE'));
+    if (!release) throw new Error('no release statement');
+    const raw = new Database(join(root, 'archon.db'), { readonly: true });
+    let plan: string[];
+    try {
+      plan = raw
+        .query<{ detail: string }, SQLQueryBindings[]>(
+          `EXPLAIN QUERY PLAN ${release.sql.replace(/\$(\d+)/g, '?$1')}`
+        )
+        .all(...((release.params ?? []) as SQLQueryBindings[]))
+        .map(row => row.detail);
+    } finally {
+      raw.close();
+    }
+    // The runs table only grows; its lookup must use the primary-key index, not a scan.
+    expect(plan).toContainEqual(expect.stringMatching(/^SEARCH w USING .*INDEX/));
+    expect(plan).not.toContainEqual(expect.stringMatching(/^SCAN w\b/));
   });
 });

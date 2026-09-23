@@ -9,7 +9,7 @@
  * carries the caller's own payload (a start request carries its prepared launch).
  */
 import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
-import { getDatabase } from './connection';
+import { getDatabase, getDatabaseType } from './connection';
 
 export type TransactionQuery = Parameters<
   Parameters<ReturnType<typeof getDatabase>['withTransaction']>[0]
@@ -71,12 +71,20 @@ export async function liveResourceSlotHolders(
   query: TransactionQuery,
   resource: string
 ): Promise<ResourceSlotHolder[]> {
+  // This runs on every scheduler tick against the ever-growing runs table, so the
+  // run side stays a bare column its primary key can serve. Postgres types the run
+  // ID as UUID, so the text holder ID is cast instead; SQLite stores both as text,
+  // and has no UUID type to cast to.
+  const holderRunId =
+    getDatabaseType() === 'postgresql'
+      ? 'CAST(remote_agent_resource_slot_holders.holder_id AS UUID)'
+      : 'remote_agent_resource_slot_holders.holder_id';
   await query(
     `DELETE FROM remote_agent_resource_slot_holders
       WHERE resource_key = $1 AND holder_kind = 'run'
         AND NOT EXISTS (
           SELECT 1 FROM remote_agent_workflow_runs w
-           WHERE CAST(w.id AS TEXT) = remote_agent_resource_slot_holders.holder_id
+           WHERE w.id = ${holderRunId}
              AND w.status NOT IN (${terminalList})
         )`,
     [resource]

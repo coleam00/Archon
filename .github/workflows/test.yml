@@ -214,12 +214,18 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # The test creates and drops its own scratch database; the 'postgres'
-      # database named in the URL is only used to reach the server.
+      # Each test creates and drops its own scratch database; the 'postgres'
+      # database named in the URL is only used to reach the server. Each file
+      # replaces the connection module, so each runs in its own process.
       - name: Run Postgres parity test
         env:
           ARCHON_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
         run: bun test packages/core/src/db/isolation-environments.live-run.postgres.integration.test.ts
+
+      - name: Run Postgres resource-slot test
+        env:
+          ARCHON_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
+        run: bun test packages/core/src/db/resource-slots.postgres.integration.test.ts
 
   docker-build:
     needs: changes

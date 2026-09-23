@@ -51,6 +51,10 @@ const NOT_IN_VALIDATE: readonly { command: string; reason: string }[] = [
     reason: 'Exercises the Postgres dialect against a live PostgreSQL service.',
   },
   {
+    command: 'bun test packages/core/src/db/resource-slots.postgres.integration.test.ts',
+    reason: 'Proves the Postgres slot-release query against a live PostgreSQL service.',
+  },
+  {
     command: 'bun run build:docs',
     reason:
       "Astro's CLI runs under Node, not Bun, so a checkout with only Bun cannot build the docs " +

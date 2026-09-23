@@ -135,6 +135,9 @@
       "src/db/isolation-environments.live-run.postgres.integration.test.ts"
     ],
     [
+      "src/db/resource-slots.postgres.integration.test.ts"
+    ],
+    [
       "src/db/workflows.adoption-timestamp.integration.test.ts"
     ],
     [
