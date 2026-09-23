@@ -166,7 +166,7 @@ import * as userDb from '@archon/core/db/users';
 import * as git from '@archon/git';
 import { CLIAdapter } from '../adapters/cli-adapter';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
-import { exitWithDrain } from '../utils/exit-with-drain';
+import { registerOwnedRunTermination } from '../utils/owned-run-termination';
 import { DETACHED_RUN_FAILED_EXIT_CODE, WorkflowRunFailedError } from '../utils/workflow-exit-code';
 export {
   DETACHED_RUN_FAILED_EXIT_CODE,
@@ -3011,20 +3011,11 @@ async function runWorkflowWithOwnedSource(
     }
   })();
 
-  // Register cleanup handlers for graceful termination.
-  //
-  // Guard rails (#1123): a signal must only ever fail THE run this process is
-  // driving, and only while that run is still 'running'. The run id is reserved
-  // by source capture before a fresh execution and already exists on resume or a
-  // detached handoff — never from a
-  // conversation-wide "active run" query, which can match a run driven by
-  // another process (children share parent_conversation_id). When the run has
-  // already transitioned elsewhere — paused at a gate, completed, cancelled —
-  // the handler leaves it alone; see "No Autonomous Lifecycle Mutation Across
-  // Process Boundaries" in CLAUDE.md. The handlers themselves are removed in
-  // the finally below once executeWorkflow returns, so a late signal can never
-  // touch a settled run (and repeated workflowRunCommand calls in one process
-  // don't stack handlers).
+  // Graceful-termination guard rails (#1123) settle only THE run this process is
+  // driving. The run id is reserved by source capture before a fresh execution and
+  // already exists on resume or a detached handoff — never from a conversation-wide
+  // "active run" query, which can match a run driven by another process (children
+  // share parent_conversation_id).
   const ownedRunId = resumable?.id ?? detachedPreCreatedRun?.id ?? preparedSource?.runId;
   if (ownedRunId === undefined) throw new Error('Workflow execution has no resolved run ID');
   let runLiveOwner: Awaited<ReturnType<typeof startRunLiveOwner>> | undefined = undefined;
@@ -3034,73 +3025,27 @@ async function runWorkflowWithOwnedSource(
     runLiveOwnerClose ??= runLiveOwner.close();
     return runLiveOwnerClose;
   };
-  let terminating = false;
-  const cleanup = (signal: string): void => {
-    if (terminating) return;
-    terminating = true;
-    getLog().info({ conversationId: conversation.id, signal }, 'workflow.process_terminating');
-    const interruptedRunId = ownedRunId;
-    (async (): Promise<void> => {
-      if (!interruptedRunId) {
-        // Signal before this process created/resumed a run — nothing it owns.
-        // A pre-created 'pending' row is covered by the stale-pending hygiene.
-        getLog().info(
-          { conversationId: conversation.id, signal },
-          'workflow.termination_no_owned_run'
-        );
-        return;
-      }
-      if (runLiveOwner?.isStopRequested()) {
-        // The exact-run controller has proved ownership and is terminating this
-        // process tree. It records `cancelled` only after termination succeeds;
-        // do not race it by translating the operator's stop into generic failure.
-        getLog().info(
-          { runId: interruptedRunId, signal },
-          'workflow.operator_stop_leaves_lifecycle_to_controller'
-        );
-        return;
-      }
-      const status = await workflowDb.getWorkflowRunStatus(interruptedRunId);
-      if (status !== 'running') {
-        // Externally transitioned (paused at a new gate, completed, cancelled,
-        // failed) — not this handler's to mutate.
-        getLog().info(
-          { runId: interruptedRunId, status, signal },
-          'workflow.termination_skip_not_running'
-        );
-        return;
-      }
-      // Genuine interrupt of the run this process is driving. failWorkflowRun's
-      // own status='running' CAS closes the read-then-write window: if the
-      // executor commits a gate pause between the read above and this write,
-      // the CAS misses and throws (caught below) — the run stays paused.
-      await workflowDb.failWorkflowRun(interruptedRunId, `Process terminated (${signal})`);
-    })()
-      .catch((err: unknown) => {
-        const e = err as Error;
-        getLog().error(
-          { err: e, errorType: e.constructor.name },
-          'workflow.termination_cleanup_failed'
-        );
-      })
+  const deregisterTermination = registerOwnedRunTermination({
+    runId: ownedRunId,
+    liveOwner: {
+      isStopRequested: () => runLiveOwner?.isStopRequested() ?? false,
+      close: closeRunLiveOwner,
+    },
+    teardown: async signal => {
       // Destroy the isolation container so Ctrl-C / SIGTERM doesn't orphan a
-      // PRIVILEGED container — the forced exit below bypasses the teardown
-      // `finally`, so we must tear it down explicitly here first.
-      .then(async () => {
-        if (containerBackend && containerEnvId) {
-          try {
-            await containerBackend.destroy(containerEnvId);
-          } catch (destroyErr) {
-            console.error(
-              `\nWARNING: could not remove the isolation container on ${signal}: ` +
-                `${(destroyErr as Error).message}. Remove it manually: ` +
-                'docker ps -a --filter label=diy.archon.managed=true'
-            );
-          }
+      // PRIVILEGED container — the forced exit bypasses the teardown `finally`.
+      if (containerBackend && containerEnvId) {
+        try {
+          await containerBackend.destroy(containerEnvId);
+        } catch (destroyErr) {
+          console.error(
+            `\nWARNING: could not remove the isolation container on ${signal}: ` +
+              `${(destroyErr as Error).message}. Remove it manually: ` +
+              'docker ps -a --filter label=diy.archon.managed=true'
+          );
         }
-      })
-      // Reclaim the staged capture for the same reason the container is destroyed above:
-      // the forced exit below never returns up the stack, so the ownership `finally` —
+      }
+      // Reclaim the staged capture for the same reason: the ownership `finally` —
       // whose whole premise is "whichever way we leave" — never runs. Ctrl-C during
       // isolation resolution or worktree creation would otherwise strand a complete
       // frozen tree.
@@ -3110,39 +3055,11 @@ async function runWorkflowWithOwnedSource(
       // For container runs that path was renamed away by `finalizeWorkflowSource`
       // and `preparedSource.anchor.root` is now the LIVE source directory —
       // rm-ing it mid-execution would destroy the run's source.
-      .then(async () => {
-        if (originalStagedRoot) {
-          await disposeWorkflowSource({ captureRoot: originalStagedRoot });
-        }
-      })
-      .catch(() => undefined)
-      .then(async () => {
-        // A detached cancel already rang the handoff frame and must keep its lease
-        // open while the controller terminates this process tree. Every other
-        // graceful signal rings ordinary attention before the forced exit.
-        if (!runLiveOwner?.isStopRequested()) await closeRunLiveOwner();
-      })
-      .catch((error: unknown) => {
-        getLog().error({ err: error as Error }, 'workflow.live_owner_close_failed');
-      })
-      .finally(() => {
-        // Route through the same drain helper cli.ts's top-level exit chain
-        // uses so queued `console.log` output (this command streams progress
-        // through 101 call sites) reaches a slow reader before the process
-        // exits — a bare `process.exit(1)` here would reopen #2400's
-        // truncation on Ctrl-C/SIGTERM specifically. See R16 in the review
-        // report.
-        void exitWithDrain(1);
-      });
-  };
-  const sigtermHandler = (): void => {
-    cleanup('SIGTERM');
-  };
-  const sigintHandler = (): void => {
-    cleanup('SIGINT');
-  };
-  process.once('SIGTERM', sigtermHandler);
-  process.once('SIGINT', sigintHandler);
+      if (originalStagedRoot) {
+        await disposeWorkflowSource({ captureRoot: originalStagedRoot });
+      }
+    },
+  });
 
   // One-time-per-version notice when the workflow uses unconfigured tier keywords.
   await maybePrintTierNotice(workflow, workingCwd, cliUserId, options.quiet);
@@ -3321,8 +3238,7 @@ async function runWorkflowWithOwnedSource(
     // failWorkflowRun cleanup must never fire against a settled run (#1123),
     // and removal keeps repeated workflowRunCommand calls in one process from
     // stacking handlers.
-    process.off('SIGTERM', sigtermHandler);
-    process.off('SIGINT', sigintHandler);
+    deregisterTermination();
 
     // Container teardown (Phase C) — in `finally` so a throw from executeWorkflow
     // BEFORE its own try/catch (malformed config, env resolvers, unknown provider)

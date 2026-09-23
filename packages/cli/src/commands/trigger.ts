@@ -24,6 +24,7 @@ import { readWorkflowSourceState } from '@archon/workflows/schemas/workflow-run'
 import { CLIAdapter } from '../adapters/cli-adapter';
 import { writeJsonLine } from '../utils/stdout';
 import { DETACHED_RUN_OWNER_ENV } from '../utils/detached-run-control';
+import { registerOwnedRunTermination } from '../utils/owned-run-termination';
 import { installMacosNativeSchedule, removeMacosNativeSchedule } from '../triggers/native-schedule';
 import { resolveCliUserId } from './auth';
 
@@ -168,6 +169,7 @@ export async function triggerCommand(
         adapter.setConversationDbId(conversationId, conversationDbId);
         return adapter;
       },
+      guardOwnedRun: registerOwnedRunTermination,
     });
     if (!result.success) throw new Error(`Run ${args[0]} did not complete: ${result.error}`);
     return;

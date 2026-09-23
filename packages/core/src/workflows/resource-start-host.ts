@@ -75,7 +75,7 @@ import * as workflowDb from '../db/workflows';
 import { isPerUserGitHubEnabled } from '../github-auth/config';
 import { registerRepository } from '../handlers/clone';
 import { ensureIsolationConfigured } from '../orchestrator/orchestrator';
-import { startRunLiveOwner } from '../services/run-live-owner';
+import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner';
 import { createChildWorktreeResolver } from './child-isolation-resolver';
 import { createWorkflowDeps } from './store-adapter';
 
@@ -392,6 +392,13 @@ export interface StartAdmittedResourceStartInput {
     conversationId: string;
     conversationDbId: string;
   }) => IWorkflowPlatform;
+  /**
+   * Called once this process holds the run's exact live-owner lock, before the engine
+   * claims the run. Returns the release called after the run settles. The CLI settles
+   * the owned run on a graceful signal here; the server omits it because one process
+   * hosts many runs and must not install process-wide handlers per run.
+   */
+  guardOwnedRun?: (owned: { runId: string; liveOwner: RunLiveOwner }) => () => void;
 }
 
 /**
@@ -443,7 +450,9 @@ export async function startAdmittedResourceStart(
   const sealed = readWorkflowRunConfigMetadata(run.metadata);
   const baseBranch = codebase.default_branch?.trim() || undefined;
   const liveOwner = await startRunLiveOwner(run.id);
+  let releaseGuard: (() => void) | undefined;
   try {
+    releaseGuard = input.guardOwnedRun?.({ runId: run.id, liveOwner });
     return await input.engine.submit({
       platform,
       conversationId: launch.execution.conversationId,
@@ -477,6 +486,7 @@ export async function startAdmittedResourceStart(
       },
     });
   } finally {
+    releaseGuard?.();
     await liveOwner.close().catch((error: unknown) => {
       log.error({ err: error as Error, runId: run.id }, 'resource_start.live_owner_close_failed');
     });

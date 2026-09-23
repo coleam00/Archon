@@ -380,4 +380,113 @@ describe('trigger CLI durable execution', () => {
       ).trim()
     ).toBe('EDITED-9-edited-config');
   }, 45_000);
+
+  test('a graceful signal settles the owned run so its resource slot admits the next start', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-trigger-signal-')));
+    tempRoots.push(root);
+    const archonHome = join(root, 'home');
+    const projectRoot = join(root, 'project');
+    const workflowPath = join(projectRoot, '.archon', 'workflows', 'signal-proof.yaml');
+    mkdirSync(join(projectRoot, '.archon', 'workflows'), { recursive: true });
+    expect(await Bun.spawn(['git', 'init', '-q'], { cwd: projectRoot }).exited).toBe(0);
+    const pidFile = join(root, 'owner.pid');
+    // A bash node's parent is the `trigger execute` process that owns the run.
+    const writeWorkflow = (body: string): void => {
+      writeFileSync(
+        workflowPath,
+        `name: signal-proof\ndescription: Signal proof.\nmutates_checkout: false\nnodes:\n  - id: hold\n    bash: |\n      ${body}\n`
+      );
+    };
+    writeWorkflow(`echo "$PPID $$" > '${pidFile}'; exec sleep 60`);
+
+    const cliPath = resolve(import.meta.dir, '..', 'cli.ts');
+    const databasePath = join(archonHome, 'archon.db');
+    const userId = crypto.randomUUID();
+    const configPath = join(root, 'trigger.json');
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        sourceInstanceId: 'signal-timer',
+        binding: {
+          bindingId: 'signal-proof',
+          bindingRevision: null,
+          hostId: 'signal-host',
+          runAsUserId: userId,
+          resource: 'signal:resource',
+          overlap: 'queue',
+          launch: {
+            cwd: projectRoot,
+            workflowName: 'signal-proof',
+            inputs: {},
+            isolation: { kind: 'in-place' },
+          },
+        },
+        schedule: { intervalSeconds: 60, runAtLoad: false },
+      })
+    );
+    const fire = ['trigger', 'fire', '--config', configPath];
+    expect((await runCli(cliPath, projectRoot, archonHome, fire, false)).exitCode).not.toBe(0);
+    const database = new Database(databasePath);
+    try {
+      database
+        .query('INSERT INTO remote_agent_users (id, display_name) VALUES (?, ?)')
+        .run(userId, 'Signal actor');
+    } finally {
+      database.close();
+    }
+    const runs = (): RunRow[] =>
+      readRows<RunRow>(
+        databasePath,
+        'SELECT id,status,metadata,output_root FROM remote_agent_workflow_runs ORDER BY started_at'
+      );
+
+    let sleepPid: number | undefined;
+    try {
+      await runCli(cliPath, projectRoot, archonHome, fire);
+      const [ownerPid, nodePid] = await waitFor(() => {
+        if (runs()[0]?.status !== 'running' || !existsSync(pidFile)) return undefined;
+        const pids = readFileSync(pidFile, 'utf8').trim().split(' ').map(Number);
+        return pids.length === 2 ? pids : undefined;
+      }, 'trigger execution to start its node');
+      sleepPid = nodePid;
+
+      process.kill(ownerPid, 'SIGTERM');
+      const failed = await waitFor(() => {
+        const run = runs()[0];
+        return run?.status === 'failed' ? run : undefined;
+      }, 'signalled run to settle as failed');
+      expect(JSON.parse(failed.metadata)).toMatchObject({ error: 'Process terminated (SIGTERM)' });
+      await waitFor(() => {
+        try {
+          process.kill(ownerPid, 0);
+          return undefined;
+        } catch {
+          return true;
+        }
+      }, 'signalled owner to exit');
+
+      // With the run terminal, the capacity-1 slot admits the next start at once.
+      writeWorkflow('echo done');
+      await runCli(cliPath, projectRoot, archonHome, fire);
+      await waitFor(
+        () => (runs()[1]?.status === 'completed' ? true : undefined),
+        'next start to run'
+      );
+      expect(
+        readRows<RequestRow>(
+          databasePath,
+          'SELECT id,status,launch FROM remote_agent_resource_start_requests ORDER BY queue_position'
+        ).map(row => row.status)
+      ).toEqual(['admitted', 'admitted']);
+    } finally {
+      if (sleepPid !== undefined) {
+        try {
+          process.kill(sleepPid, 'SIGKILL');
+        } catch {
+          // Already gone.
+        }
+      }
+    }
+  }, 45_000);
 });
