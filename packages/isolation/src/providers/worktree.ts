@@ -19,6 +19,7 @@ import {
   getWorktreeBase,
   listWorktrees,
   mkdirAsync,
+  refreshWorktreeIndex,
   removeWorktree,
   syncWorkspace,
   verifyWorktreeOwnership,
@@ -884,18 +885,14 @@ export class WorktreeProvider implements IIsolationProvider {
   }
 
   /**
-   * Refresh the stat data in a worktree this provider just created, once. `git worktree
-   * add` leaves the index racily clean, and checkout observation runs `git status` without
-   * optional locks so it never writes the index; until something refreshes it, every
-   * observation re-hashes the whole tree and throws the result away. Refreshing re-hashes
-   * before it marks an entry clean, so content identity is unchanged. A failure leaves
-   * observations correct but slower, so it is logged and creation continues.
+   * Refresh the index of a worktree this provider just created, once, so checkout
+   * observation at each node start does not re-hash the whole tree (see
+   * `refreshWorktreeIndex`). A failure leaves observations correct but slower, so it is
+   * logged and creation continues.
    */
   private async refreshIndex(worktreePath: string): Promise<void> {
     try {
-      await execFileAsync('git', ['-C', worktreePath, 'update-index', '-q', '--refresh'], {
-        timeout: 120000,
-      });
+      await refreshWorktreeIndex(toWorktreePath(worktreePath));
     } catch (err) {
       getLog().warn({ err: err as Error, worktreePath }, 'worktree.index_refresh_failed');
     }

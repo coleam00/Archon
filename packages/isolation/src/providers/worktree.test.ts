@@ -72,6 +72,7 @@ import type { IIsolationStore } from '../store';
 let getDefaultBranchSpy: Mock<typeof git.getDefaultBranch>;
 let getDefaultRemoteSpy: Mock<typeof git.getDefaultRemote>;
 let syncWorkspaceSpy: Mock<typeof git.syncWorkspace>;
+let refreshWorktreeIndexSpy: Mock<typeof git.refreshWorktreeIndex>;
 
 // Mock fs.promises.access for destroy() existence check
 const mockAccess = mock((_path?: unknown): Promise<void> => Promise.resolve());
@@ -116,6 +117,8 @@ describe('WorktreeProvider', () => {
     getDefaultBranchSpy = spyOn(git, 'getDefaultBranch');
     getDefaultRemoteSpy = spyOn(git, 'getDefaultRemote');
     syncWorkspaceSpy = spyOn(git, 'syncWorkspace');
+    // The real refresh waits for the next wall-clock second.
+    refreshWorktreeIndexSpy = spyOn(git, 'refreshWorktreeIndex').mockResolvedValue(undefined);
 
     // Default mocks
     execSpy.mockResolvedValue({ stdout: '', stderr: '' });
@@ -166,6 +169,7 @@ describe('WorktreeProvider', () => {
     getDefaultBranchSpy.mockRestore();
     getDefaultRemoteSpy.mockRestore();
     syncWorkspaceSpy.mockRestore();
+    refreshWorktreeIndexSpy.mockRestore();
     mockAccess.mockClear();
     mockReadFile.mockClear();
     mockRm.mockClear();
@@ -341,21 +345,21 @@ describe('WorktreeProvider', () => {
     });
 
     test('refreshes the index of a worktree it created, once, after creating it', async () => {
+      let addedBeforeRefresh = false;
+      refreshWorktreeIndexSpy.mockImplementation(async () => {
+        addedBeforeRefresh = execSpy.mock.calls.some(
+          call => call[1].includes('worktree') && call[1].includes('add')
+        );
+      });
+
       const env = await provider.create(baseRequest);
 
-      const calls = execSpy.mock.calls.map(call => call[1]);
-      const refreshes = calls.filter(args => args.includes('update-index'));
-      expect(refreshes).toEqual([['-C', env.workingPath, 'update-index', '-q', '--refresh']]);
-      const added = calls.findIndex(args => args.includes('worktree') && args.includes('add'));
-      expect(added).toBeGreaterThanOrEqual(0);
-      expect(calls.findIndex(args => args.includes('update-index'))).toBeGreaterThan(added);
+      expect(refreshWorktreeIndexSpy.mock.calls).toEqual([[env.workingPath]]);
+      expect(addedBeforeRefresh).toBe(true);
     });
 
     test('a failed index refresh still creates the worktree', async () => {
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        if (args.includes('update-index')) throw new Error('index.lock exists');
-        return { stdout: '', stderr: '' };
-      });
+      refreshWorktreeIndexSpy.mockRejectedValue(new Error('index.lock exists'));
 
       const env = await provider.create(baseRequest);
 
@@ -369,7 +373,7 @@ describe('WorktreeProvider', () => {
       const env = await provider.create(baseRequest);
 
       expect(env.metadata).toHaveProperty('adopted', true);
-      expect(execSpy.mock.calls.filter(call => call[1].includes('update-index'))).toEqual([]);
+      expect(refreshWorktreeIndexSpy).not.toHaveBeenCalled();
     });
 
     test('does not run git checkout or reset --hard on canonical repo', async () => {
