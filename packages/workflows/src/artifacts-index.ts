@@ -158,6 +158,10 @@ export async function writeNodeArtifact(
   return meta;
 }
 
+export type NodeArtifactReadScope =
+  | { readonly scope: 'current-run'; readonly runId: string }
+  | { readonly scope: 'resolved-scope' };
+
 /**
  * Read all typed-artifact metadata entries from an artifacts dir by globbing
  * the per-node `.meta.json` files (the index is derived on read, never a single
@@ -170,10 +174,6 @@ export async function writeNodeArtifact(
  * cold-resume caller instead reads an already-resolved scope directory
  * (`resolved-scope`) and does its own prior-run filtering.
  */
-export type NodeArtifactReadScope =
-  | { readonly scope: 'current-run'; readonly runId: string }
-  | { readonly scope: 'resolved-scope' };
-
 export async function readNodeArtifacts(
   artifactsDir: string,
   readScope: NodeArtifactReadScope

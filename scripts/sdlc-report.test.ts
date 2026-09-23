@@ -147,6 +147,7 @@ describe("the terminal report reads passed reds from the gates' typed artifacts"
     const malformedEnvelopes: Record<string, unknown>[] = [
       { runId: 'run', artifactsByType: 'corrupt', errors: [] },
       { runId: 'run', artifactsByType: { 'green-gate': 'corrupt' }, errors: [] },
+      { runId: 'run', artifactsByType: { 'green-gate': ['corrupt'] }, errors: [] },
     ];
     malformedEnvelopes.forEach((envelope, index) => {
       const listingFile = join(dir, `malformed-${String(index)}.json`);

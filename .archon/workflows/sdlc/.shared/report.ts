@@ -158,6 +158,36 @@ function discoveries(artifacts: string, failed: boolean): string {
   );
 }
 
+function listedGates(
+  artifactsByType: unknown
+):
+  | { readonly gates: readonly Record<string, unknown>[] }
+  | { readonly limitation: string } {
+  if (typeof artifactsByType !== 'object' || artifactsByType === null) {
+    return { limitation: 'its `artifactsByType` is not a JSON object' };
+  }
+  const gates = (artifactsByType as Record<string, unknown>)['green-gate'];
+  if (gates === undefined) return { gates: [] };
+  if (!Array.isArray(gates)) {
+    return { limitation: "its `artifactsByType['green-gate']` is not an array" };
+  }
+  const objects = gates.filter(
+    (entry): entry is Record<string, unknown> =>
+      typeof entry === 'object' && entry !== null && !Array.isArray(entry)
+  );
+  if (objects.length !== gates.length) {
+    return { limitation: "an `artifactsByType['green-gate']` entry is not a JSON object" };
+  }
+  return { gates: objects };
+}
+
+function listingLimitation(message: string): string {
+  return (
+    `\n\nRed-cause disclosures could not be verified: ${message} ` +
+    'If a green gate accepted red, this report cannot show it.'
+  );
+}
+
 /**
  * The caveat for red this run's green gates deliberately let through.
  *
@@ -172,34 +202,6 @@ function discoveries(artifacts: string, failed: boolean): string {
  * behind. A missing or unreadable listing is a named limitation, never silence: the
  * reader is exactly the person who can go open the run's records.
  */
-function listedGates(
-  artifactsByType: unknown
-):
-  | { readonly gates: readonly Record<string, unknown>[] }
-  | { readonly limitation: string } {
-  if (typeof artifactsByType !== 'object' || artifactsByType === null) {
-    return { limitation: 'its `artifactsByType` is not a JSON object' };
-  }
-  const gates = (artifactsByType as Record<string, unknown>)['green-gate'];
-  if (gates === undefined) return { gates: [] };
-  if (!Array.isArray(gates)) {
-    return { limitation: "its `artifactsByType['green-gate']` is not an array" };
-  }
-  return {
-    gates: gates.filter(
-      (entry): entry is Record<string, unknown> =>
-        typeof entry === 'object' && entry !== null && !Array.isArray(entry)
-    ),
-  };
-}
-
-function listingLimitation(message: string): string {
-  return (
-    `\n\nRed-cause disclosures could not be verified: ${message} ` +
-    'If a green gate accepted red, this report cannot show it.'
-  );
-}
-
 function redCauses(artifacts: string, listingFile: string | undefined): string {
   if (listingFile === undefined || listingFile === '') {
     return listingLimitation('no typed-artifact listing reached this node.');
