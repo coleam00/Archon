@@ -15,8 +15,7 @@ import {
   drainResourceStartHost,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
-import { rootLogger } from '@archon/paths';
-import { removeTempTree } from '@archon/paths/test-utils';
+import { captureLogLines, removeTempTree } from '@archon/paths/test-utils';
 import type { IWorkflowEngine, WorkflowEngineSubmitInput } from '@archon/workflows/engine-port';
 import { RESOURCE_START_METADATA_KEY } from '@archon/workflows/schemas/resource-start';
 import { HeadlessPlatform } from '../adapters/headless';
@@ -395,27 +394,4 @@ async function admitWithoutStarting(): Promise<string> {
   const [requestId] = admitted;
   if (!requestId) throw new Error('nothing was admitted');
   return requestId;
-}
-
-/** Read structured log lines where every child logger writes them: the root's stream. */
-function captureLogLines(): { lines: Record<string, unknown>[]; restore(): void } {
-  const streamKey = Object.getOwnPropertySymbols(rootLogger).find(
-    symbol => symbol.description === 'pino.stream'
-  );
-  const stream = streamKey
-    ? (rootLogger as unknown as Record<symbol, { write(chunk: string): unknown }>)[streamKey]
-    : undefined;
-  if (!stream) throw new Error('logger stream not found');
-  const write = stream.write;
-  const lines: Record<string, unknown>[] = [];
-  stream.write = (chunk: string): unknown => {
-    lines.push(JSON.parse(chunk) as Record<string, unknown>);
-    return write.call(stream, chunk);
-  };
-  return {
-    lines,
-    restore: () => {
-      stream.write = write;
-    },
-  };
 }
