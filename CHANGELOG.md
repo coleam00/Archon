@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `none_failed_min_one_success` now blocks dependencies skipped because of an upstream failure (`upstream_failed`), even when another dependency succeeded. This fix applies by default, including across chains and includes; there is no opt-in. Joins previously admitted after a failure now skip and retain the original failed node in their skip cause. Condition skips and optional timeout skips (`on_timeout: skip`) remain admissible with a successful dependency. `all_success`, `one_success`, `all_done`, and `if_skipped` binding behavior are unchanged. (#3156)
 
+### Changed
+
+- CLI commands write their logs to stderr, so stdout carries only the command's output: `archon workflow list --full > out.txt` captures the listing and nothing else. Every command except `archon serve` now logs at `warn` by default; pass `--verbose` or set `LOG_LEVEL=debug` for more. `archon serve` still logs at `info` on stdout. (#3444)
+- Workflow definition problems (deprecated or unknown keys, fields ignored on a node type, and files that fail to load) are no longer logged at `warn` on every discovery. They are reported where the author looks: `archon validate workflows`, `archon workflow list`, the `workflow run` preamble, and `/api/workflows`. The log line is still written at `debug`, so a server running at the default `info` level no longer shows them. (#3444)
+
 ### Fixed
 
 - The Docker container no longer crash-loops on start when `~/.gitconfig` holds several `credential.https://github.com.helper` values, as `gh auth login` inside the container leaves behind. With `GH_TOKEN` set, the entrypoint now replaces all of them with its `GH_TOKEN` helper.

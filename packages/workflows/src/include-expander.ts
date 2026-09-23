@@ -898,6 +898,10 @@ const NON_DROPPED_WORKFLOW_KEYS: ReadonlySet<string> = new Set([
   'inputs',
   // #1764: unioned into the composing workflow's own requirement set, not dropped.
   'requires',
+  // A notice for launching this file directly. Inlining never launches it, so there
+  // is nothing to carry; warning "dropped" would fire on every discovery of a
+  // composer that includes a deprecated block.
+  'deprecated',
 ]);
 
 /** Isolation/concurrency-safety fields — a silent drop of these is the most dangerous. */

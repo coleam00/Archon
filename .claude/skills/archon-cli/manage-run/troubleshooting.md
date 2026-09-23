@@ -154,7 +154,7 @@ Common causes:
 
 ### A workflow-level field seems to have no effect
 
-Invalid values for optional workflow-level fields (`interactive`, `effort`, `thinking`, `sandbox`, `fallbackModel`, `betas`, `tags`, `worktree.enabled`, `mutates_checkout`) are **warn-and-drop**: the workflow still loads and runs, the field is discarded, and a loader warning is logged. Same for AI-only fields on bash/script nodes (`*_node_ai_fields_ignored`). Grep the server/CLI logs for `_ignored` / warn entries before assuming the field is broken.
+Invalid values for optional workflow-level fields (`interactive`, `effort`, `sandbox`, `fallbackModel`, `betas`, `tags`, `worktree.enabled`, `mutates_checkout`) are **warn-and-drop**: the workflow still loads and runs, the field is discarded, and a warn-level `*_ignored` loader log is written (stderr for CLI commands, the server log for `archon serve`). AI-only fields on bash/script nodes, unknown keys, and deprecations are parse warnings instead: run `archon validate workflows` or `archon workflow list` to see them, or set `LOG_LEVEL=debug` to see them in the logs. Check both before assuming the field is broken.
 
 ### Persisted session didn't restore (cold resume)
 
