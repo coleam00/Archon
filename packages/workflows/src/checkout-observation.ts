@@ -356,9 +356,15 @@ export async function sampleCheckout(
         entries.push({ path, kind: 'incomplete', reason: 'dirty_submodule' });
         continue;
       }
-      const sub = await runGit(absolute, ['rev-parse', '-q', '--verify', 'HEAD^{commit}']);
+      // An unpopulated submodule directory has no `.git`, so discovery from it finds the
+      // superproject. An empty prefix proves the directory is its own repository's top.
+      const prefix = await runGit(absolute, ['rev-parse', '--show-prefix']);
+      const sub =
+        prefix.code === 0 && text(prefix.stdout) === ''
+          ? await runGit(absolute, ['rev-parse', '-q', '--verify', 'HEAD^{commit}'])
+          : undefined;
       entries.push(
-        sub.code === 0
+        sub?.code === 0
           ? { path, kind: 'gitlink', mode: '160000', commit: text(sub.stdout) }
           : { path, kind: 'incomplete', reason: 'unreadable' }
       );

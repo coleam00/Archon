@@ -191,6 +191,50 @@ describe('checkout observation', () => {
     ]);
   });
 
+  test('a moved submodule records the commit it has checked out', async () => {
+    const child = repo();
+    writeFileSync(join(child.dir, 'x.txt'), 'x\n');
+    commitAll(child.dir, 'one');
+    writeFileSync(join(child.dir, 'x.txt'), 'two\n');
+    commitAll(child.dir, 'two');
+    const { dir, artifacts } = repo();
+    git(dir, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', child.dir, 'sub');
+    commitAll(dir);
+    git(join(dir, 'sub'), 'checkout', '-q', 'HEAD~1');
+    const observation = await observe(dir, artifacts);
+    expect(readManifest(observation, artifacts)?.entries).toEqual([
+      {
+        path: 'sub',
+        kind: 'gitlink',
+        mode: '160000',
+        commit: git(join(dir, 'sub'), 'rev-parse', 'HEAD'),
+      },
+    ]);
+  });
+
+  test('a gitlink over an unpopulated directory never borrows the superproject commit', async () => {
+    const child = repo();
+    writeFileSync(join(child.dir, 'x.txt'), 'x\n');
+    commitAll(child.dir);
+    const { dir, artifacts } = repo();
+    writeFileSync(join(dir, 'a.txt'), 'a\n');
+    commitAll(dir);
+    // A never-initialized submodule: the index holds a gitlink, the directory has no `.git`,
+    // so Git discovery from inside it would find the superproject.
+    mkdirSync(join(dir, 'sub'));
+    git(
+      dir,
+      'update-index',
+      '--add',
+      '--cacheinfo',
+      `160000,${git(child.dir, 'rev-parse', 'HEAD')},sub`
+    );
+    const observation = await observe(dir, artifacts);
+    expect(readManifest(observation, artifacts)?.entries).toEqual([
+      { path: 'sub', kind: 'incomplete', reason: 'unreadable' },
+    ]);
+  });
+
   test('a file removed from the index but still on disk is identified by its content', async () => {
     const { dir, artifacts } = repo();
     writeFileSync(join(dir, 'kept.txt'), 'one\n');
