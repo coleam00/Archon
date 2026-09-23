@@ -92,6 +92,9 @@ jobs:
       - name: Setup uv
         uses: astral-sh/setup-uv@v4
 
+      # No Bun download cache on Windows either. Restoring the ~600MB cache took as long
+      # as a plain install (52s + 10s against 53s, measured side by side on PR #3438), and
+      # it took Actions cache space that the Docker layer cache needs.
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
@@ -140,12 +143,6 @@ jobs:
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v4
-
-      - name: Cache Bun dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
