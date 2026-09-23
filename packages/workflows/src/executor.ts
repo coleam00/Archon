@@ -40,9 +40,12 @@ import {
   readIdentityUnresolved,
   CONTINUATION_METADATA_KEY,
   readContinuationMode,
+  RUN_DISPATCH_METADATA_KEY,
+  readRunDispatchMetadata,
   WORKFLOW_SOURCE_METADATA_KEY,
   readWorkflowSourceState,
   type ContinuationMode,
+  type RunDispatchMetadata,
   type WorkflowSourceMetadata,
 } from './schemas';
 import {
@@ -1961,16 +1964,38 @@ export async function executeWorkflow(
   }
   const configuredCommandFolder = config.commands.folder;
 
-  // Resolve base branch: the per-dispatch override takes priority, then repo
-  // config, then the caller-provided codebase default, then git auto-detection.
+  // What the run recorded when it started (#2454). A continuation re-enters with whatever
+  // the resuming surface happens to hold — and the in-process auto-resume after a child
+  // gate holds nothing — so without the record the run's second half resolves against the
+  // environment it is being resumed in rather than the one it started in.
+  const recordedDispatch = isContinuation
+    ? readRunDispatchMetadata(preCreatedRun.metadata)
+    : undefined;
+  if (isContinuation && recordedDispatch === undefined) {
+    // Started before this build recorded it, died before the stamp landed, or carries a
+    // record this build cannot read. Re-resolving is the behavior such a run has always
+    // had; say so rather than let a re-derived value pass for a restored one.
+    getLog().warn(
+      { workflowRunId: preCreatedRun.id },
+      'workflow.dispatch_not_recorded_resolving_live'
+    );
+  }
+
+  // Resolve base branch: the per-dispatch override takes priority, then what this run
+  // recorded at its start, then repo config, then the caller-provided codebase default,
+  // then git auto-detection.
   // The override must outrank config so `--base` reports the same branch the
-  // worktree was cut from (WorktreeProvider applies the same order).
+  // worktree was cut from (WorktreeProvider applies the same order); it also outranks the
+  // record, because re-passing `--base` to a resume is a deliberate retarget of THIS
+  // continuation (the CLI warns that only that half of it applies).
   // If detection fails, leave empty — substituteWorkflowVariables throws only if $BASE_BRANCH is referenced.
   const overrideBaseBranch = callerBaseOverride?.trim();
   const fallbackBaseBranch = callerBaseBranch?.trim();
   let baseBranch: string;
   if (overrideBaseBranch) {
     baseBranch = overrideBaseBranch;
+  } else if (recordedDispatch) {
+    baseBranch = recordedDispatch.base_branch;
   } else if (config.baseBranch) {
     baseBranch = config.baseBranch;
   } else if (fallbackBaseBranch) {
@@ -1993,6 +2018,13 @@ export async function executeWorkflow(
       baseBranch = '';
     }
   }
+
+  /** Discovery source of the workflow this run started from — telemetry attribution. */
+  const runSource = recordedDispatch?.source ?? source;
+  const dispatchMetadata: RunDispatchMetadata = {
+    base_branch: baseBranch,
+    ...(runSource ? { source: runSource } : {}),
+  };
 
   const docsDir = config.docsPath ?? 'docs/';
 
@@ -2209,6 +2241,7 @@ export async function executeWorkflow(
             ? { [CONTINUATION_METADATA_KEY]: { mode: continuationMode ?? 'adopt' } }
             : {}),
           [RUN_MODEL_BINDINGS_METADATA_KEY]: modelBindingsMetadata,
+          [RUN_DISPATCH_METADATA_KEY]: dispatchMetadata,
           ...(runConfigMetadata ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: runConfigMetadata } : {}),
         },
         parent_conversation_id: parentConversationId,
@@ -2280,6 +2313,7 @@ export async function executeWorkflow(
     // — write-once in the store, so re-running this can never repoint a live run.
     const invocationMetadata: Record<string, unknown> = {
       [RUN_MODEL_BINDINGS_METADATA_KEY]: modelBindingsMetadata,
+      [RUN_DISPATCH_METADATA_KEY]: dispatchMetadata,
       ...(runConfigMetadata ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: runConfigMetadata } : {}),
       ...(execContext.kind === 'container' ? { isolation: 'container' } : {}),
       ...(containerCtx ? { isolation_env_id: containerCtx.envId } : {}),
@@ -2973,7 +3007,7 @@ export async function executeWorkflow(
     const telemetryNodes = workflow.nodes;
     captureWorkflowInvoked({
       workflowName: workflow.name,
-      workflowSource: source,
+      workflowSource: runSource,
       platform: platform.getPlatformType(),
       provider: resolvedProvider,
       model: resolvedModel,
@@ -3299,7 +3333,7 @@ export async function executeWorkflow(
     captureWorkflowCompleted({
       outcome: 'failed',
       workflowName: workflow.name,
-      workflowSource: source,
+      workflowSource: runSource,
       provider: resolvedProvider,
       exitReason: 'unhandled_error',
       // Categorical class only (fatal/transient/unknown) — err.message never leaves.

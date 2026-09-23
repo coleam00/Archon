@@ -53,6 +53,9 @@ for (const pack of await readBundleIndex())
   await mkdir(join(bundledDefaultsRoot, pack), { recursive: true });
 afterAll(() => removeTempTree(bundledDefaultsRoot));
 const realArchonPaths = await import('@archon/paths');
+/** Every `workflow_invoked` telemetry call, in order, so a resumed drive's categorization
+ *  can be compared with the dispatch that started the run. */
+const telemetryInvocations: { workflowName: string; workflowSource?: string }[] = [];
 mock.module('@archon/paths', () => ({
   ...realArchonPaths,
   // NB: point these one level DEEP (`<root>/defaults`) — captureWorkflowSource copies
@@ -60,7 +63,12 @@ mock.module('@archon/paths', () => ({
   getDefaultWorkflowsPath: () => join(bundledDefaultsRoot, 'defaults'),
   getDefaultCommandsPath: () => join(bundledDefaultsRoot, 'defaults'),
   createLogger: mock(() => mockLogger),
-  captureWorkflowInvoked: mock(() => {}),
+  captureWorkflowInvoked: mock((props: { workflowName: string; workflowSource?: string }) => {
+    telemetryInvocations.push({
+      workflowName: props.workflowName,
+      workflowSource: props.workflowSource,
+    });
+  }),
   captureWorkflowCompleted: mock(() => {}),
   captureApprovalResolved: mock(() => {}),
 }));
@@ -2547,6 +2555,131 @@ nodes:
     expect(reviewChild?.status).toBe('completed');
     expect(reviewChild?.working_path).not.toBe(cwd);
     expect(reviewChild?.working_path).not.toBe(gatedChild?.working_path);
+  });
+
+  it('a parent auto-resumed after a child gate keeps its base branch, user and source (#2454)', async () => {
+    // The run's identity must not change at a gate. The parent's post-gate nodes have to
+    // resolve the same `$BASE_BRANCH`, the same execution user, and report the same
+    // workflow source as its pre-gate nodes — and the failure here is success-shaped, so
+    // asserting completion proves nothing. `getDefaultBranch` is mocked to 'main' in this
+    // file, which is exactly the git auto-detection an unrestored re-entry falls back to.
+    await writeWorkflow(
+      'identity-child',
+      `
+name: identity-child
+description: child that pauses at its own gate
+interactive: true
+nodes:
+  - id: work
+    bash: |
+      printf 'child-work'
+  - id: gate
+    approval:
+      message: "approve the sub-run"
+    depends_on: [work]
+`
+    );
+    await writeWorkflow(
+      'identity-parent',
+      `
+name: identity-parent
+description: reads $BASE_BRANCH on both sides of a child gate
+interactive: true
+nodes:
+  - id: before
+    bash: |
+      printf '%s' "$BASE_BRANCH"
+  - id: sub
+    workflow: identity-child
+    input: "build it"
+    depends_on: [before]
+  - id: after
+    bash: |
+      printf '%s' "$BASE_BRANCH"
+    depends_on: [sub]
+`
+    );
+
+    const store = new InMemoryStore();
+    const prefsUserIds: string[] = [];
+    const deps: WorkflowDeps = {
+      ...makeDeps(store),
+      getUserAiPrefs: (userId: string) => {
+        prefsUserIds.push(userId);
+        return Promise.resolve({});
+      },
+    };
+    const parent = await discover('identity-parent');
+    telemetryInvocations.length = 0;
+
+    // Dispatch as the CLI does: the codebase's default branch as the `$BASE_BRANCH`
+    // fallback, the starting user, and the workflow's discovery source.
+    const r1 = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      'conv-db',
+      {
+        baseBranch: 'release-2026',
+        userId: 'user-alpha',
+        source: 'bundled',
+      }
+    );
+    expect(r1.success && 'paused' in r1 && r1.paused).toBe(true);
+
+    const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'identity-parent');
+    const child = [...store.runs.values()].find(r => r.workflow_name === 'identity-child');
+    expect(parentRun?.status).toBe('paused');
+    expect(child?.status).toBe('paused');
+
+    const preGateBase = store.events.find(
+      e => e.event_type === 'node_completed' && e.step_name === 'before'
+    )?.data?.node_output;
+    expect(preGateBase).toBe('release-2026');
+    const preGatePrefsCalls = prefsUserIds.length;
+    const preGateTelemetry = telemetryInvocations.filter(t => t.workflowName === 'identity-parent');
+    expect(preGateTelemetry).toEqual([
+      { workflowName: 'identity-parent', workflowSource: 'bundled' },
+    ]);
+
+    // Approve the child and resume it the way the approving surface does. The child's
+    // completion fires the in-process parent auto-resume, which re-enters executeWorkflow
+    // with nothing but what the run itself recorded.
+    store.approveGate(child!.id);
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(child!.id))!);
+    expect(hydrated).not.toBeNull();
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      child!.working_path!,
+      await discover('identity-child'),
+      child!.user_message,
+      'conv-db',
+      { ...hydrated! }
+    );
+
+    expect((await store.getWorkflowRun(parentRun!.id))?.status).toBe('completed');
+    const postGateBase = store.events.find(
+      e => e.event_type === 'node_completed' && e.step_name === 'after'
+    )?.data?.node_output;
+    expect(postGateBase).toBe(preGateBase);
+
+    // Execution identity: the per-user AI prefs resolution ran again on the post-gate
+    // drive, and for the same user. A dropped userId is silent — the guarded lookup
+    // simply never happens — so the call count matters as much as the value.
+    expect(prefsUserIds.length).toBeGreaterThan(preGatePrefsCalls);
+    expect([...new Set(prefsUserIds)]).toEqual(['user-alpha']);
+
+    // The resumed half of the run reports the same workflow source, so a bundled
+    // workflow is not recategorized as custom halfway through.
+    expect(telemetryInvocations.filter(t => t.workflowName === 'identity-parent')).toEqual([
+      { workflowName: 'identity-parent', workflowSource: 'bundled' },
+      { workflowName: 'identity-parent', workflowSource: 'bundled' },
+    ]);
   });
 
   // --- slice 2, PR-C: dynamic fan-out -------------------------------------------
