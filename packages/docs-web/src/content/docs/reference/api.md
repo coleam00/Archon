@@ -8,7 +8,7 @@ sidebar:
   order: 6
 ---
 
-Archon exposes a REST API via a [Hono](https://hono.dev/) server with OpenAPI spec generation. All endpoints are prefixed with `/api/`.
+Archon exposes a REST API via a [Hono](https://hono.dev/) server with OpenAPI spec generation. All endpoints are prefixed with `/api/`, except the host-only `/internal/*` surface -- see [Drain](#drain) -- which is unprefixed, authenticated, and must never be proxied.
 
 ## Base URL
 
@@ -32,7 +32,7 @@ You can feed this into tools like Swagger UI or use it to generate typed API cli
 
 ## Authentication
 
-None. Archon is a single-developer tool -- there is no authentication on the API by default. If you expose Archon on a network, use a reverse proxy or firewall to restrict access.
+None. Archon is a single-developer tool -- there is no authentication on the API by default. If you expose Archon on a network, use a reverse proxy or firewall to restrict access. The `/internal/*` routes are the exception: they carry their own bearer token and only exist when it is configured.
 
 ---
 
