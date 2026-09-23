@@ -591,7 +591,11 @@ const orderedFlags: FlagHelp[] = [
     description: 'Log warnings and errors only (the default except for serve)',
     owners: [],
   },
-  { spec: '--verbose, -v', description: 'Show debug-level logs on stderr', owners: [] },
+  {
+    spec: '--verbose, -v',
+    description: 'Show debug-level logs (on stderr; on stdout for serve)',
+    owners: [],
+  },
   {
     spec: '--json',
     description:

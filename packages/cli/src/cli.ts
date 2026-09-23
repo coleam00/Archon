@@ -89,6 +89,7 @@ if (!process.env.CLAUDE_API_KEY && !process.env.CLAUDE_CODE_OAUTH_TOKEN) {
 
 import {
   setLogLevel,
+  getLogLevel,
   createLogger,
   checkForUpdate,
   BUNDLED_IS_BINARY,
@@ -303,7 +304,8 @@ async function main(): Promise<number> {
   if (jsonFlag || rawTranscriptCommand) {
     setLogLevel('silent');
   } else if (values.quiet || suppressByDefault) {
-    setLogLevel('warn');
+    // Only ever quieter: an explicit LOG_LEVEL of error, fatal, or silent stays.
+    if (['trace', 'debug', 'info'].includes(getLogLevel())) setLogLevel('warn');
   } else if (values.verbose) {
     setLogLevel('debug');
   }

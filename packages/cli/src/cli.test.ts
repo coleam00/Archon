@@ -1539,7 +1539,15 @@ describe('log output channel (#3444)', () => {
       join(workflows, 'typo.yaml'),
       'name: typo\ndescription: Has a typo.\nnodes:\n  - id: b\n    bash: echo b\n    contxt: fresh\n'
     );
-    const run = (args: string[]): { status: number | null; stdout: string; stderr: string } =>
+    // A problem only the log reports: it must stay visible, on stderr.
+    writeFileSync(
+      join(workflows, 'bad-tags.yaml'),
+      'name: bad-tags\ndescription: Bad tags.\ntags: nope\nnodes:\n  - id: c\n    bash: echo c\n'
+    );
+    const run = (
+      args: string[],
+      logLevel = ''
+    ): { status: number | null; stdout: string; stderr: string } =>
       spawnSync(process.execPath, [CLI_ENTRY, ...args], {
         cwd: repo,
         encoding: 'utf8',
@@ -1548,7 +1556,7 @@ describe('log output channel (#3444)', () => {
           ARCHON_HOME: join(root, 'home'),
           ARCHON_TELEMETRY_DISABLED: '1',
           DATABASE_URL: '',
-          LOG_LEVEL: '',
+          LOG_LEVEL: logLevel,
         },
       });
 
@@ -1557,7 +1565,14 @@ describe('log output channel (#3444)', () => {
       expect(listed.status).toBe(0);
       expect(listed.stdout).toContain('The listed workflow.');
       expect(logRecords(listed.stdout)).toEqual([]);
-      expect(logRecords(listed.stderr)).toEqual([]);
+      expect(logRecords(listed.stderr).map(r => [r.level, r.msg])).toEqual([
+        [40, 'invalid_tags_block_ignored'],
+      ]);
+
+      // An explicit quieter level is not raised to the warn default.
+      const quieter = run(['workflow', 'list', 'listed'], 'error');
+      expect(quieter.status).toBe(0);
+      expect(logRecords(quieter.stderr)).toEqual([]);
 
       const verbose = run(['workflow', 'list', 'listed', '--verbose']);
       expect(verbose.status).toBe(0);

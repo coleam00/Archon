@@ -1054,7 +1054,7 @@ archon version
 |--------|--------|
 | `--cwd <path>` | Override working directory (default: current directory) |
 | `--quiet`, `-q` | Log warnings and errors only (the default for every command except `archon serve`) |
-| `--verbose`, `-v` | Show debug-level logs on stderr |
+| `--verbose`, `-v` | Show debug-level logs on stderr (on stdout for `archon serve`) |
 | `--json` | Output machine-readable JSON (workflow `list`, `status`, `runs`, `get`, `wait`, and the write commands `approve`/`reject`/`abandon`/`resume`). Implies log suppression so stdout is exactly the JSON payload. |
 | `--timeout <seconds>` | For `workflow wait`: give up after N seconds and exit `3`. Omitted means wait indefinitely. |
 | `--follow` | For `workflow logs`: wait for the transcript and stream appended rows until the run ends. |
@@ -1068,7 +1068,7 @@ captures the listing and nothing else. Engine logs go to stderr, and by default 
 warnings and errors appear. `--verbose` (or `LOG_LEVEL=debug`) adds debug logs, still on
 stderr. `--json` and `workflow logs` print no logs at all.
 
-`archon serve` is the exception: its logs are its output, so it logs at `info` on stdout,
+`archon serve` is the exception: its logs are its output, so it logs at `info` (or debug with `--verbose`) on stdout,
 as the server does when started directly.
 
 Workflow definition problems, such as deprecated or unknown keys, are reported by
