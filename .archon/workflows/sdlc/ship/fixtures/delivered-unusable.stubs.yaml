@@ -34,7 +34,10 @@ deliver__impl__implement:
   summary: "stub: direct work implemented and green"
 deliver__impl__assert-changed: "2 files changed"
 deliver__gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
-deliver__pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 5, url: "https://github.com/example/repo/pull/5", head: "fixture-branch", base: "dev", is_draft: true }
+deliver__pr__pr: { intent: "/fixture/pr-intent.json" }
+deliver__pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 5, url: "https://github.com/example/repo/pull/5", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+deliver__read-pr-body: { body: "/fixture/pr-body-current.md", url: "https://github.com/example/repo/pull/5" }
+deliver__publish-pr-body: {}
 deliver__classify:
   errors: false
   docs: false
@@ -46,12 +49,18 @@ deliver__review__mode: '{"continuation":false}'
 deliver__review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 5 }
 deliver__review__code: "0 findings"
 deliver__review__seams: "0 findings"
 deliver__review__simplify: "0 findings"
 deliver__review__tests: "0 findings"
 deliver__review__review-complete: "settled"
 deliver__review__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: no open findings"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+deliver__review__publish:
   ready: true
   action: none
   findings_summary: "stub: no open findings"

@@ -1,10 +1,12 @@
 /**
- * Runs a deliver pack check script as the engine does (a Bun subprocess reading
- * `INPUTS_PR`) against a fake `gh` and a fake or real `archon forge checks`.
+ * Runs a deliver pack script as the engine does (a Bun subprocess reading
+ * `INPUTS_*`) against a fake `gh` and a fake or real `archon forge`.
  *
  * The fake `gh` is a preload that replaces `Bun.spawnSync` for `gh` argv only, so
- * it behaves the same on every platform. The preload also makes the registration
- * grace instant.
+ * it behaves the same on every platform. It keeps one mutable pull request and
+ * one comment list, so a write and the read-back that follows it see the same
+ * state — which is what makes an unverified write observable here at all. The
+ * preload also makes the registration grace instant.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,7 +15,8 @@ import { spawnSync } from 'node:child_process';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import type { ChecksObservation } from '../../../packages/forge/src/operations';
 
-export const SCRIPTS = resolve(import.meta.dir, '../../workflows/sdlc/deliver/scripts');
+export const PACK = resolve(import.meta.dir, '../../workflows/sdlc');
+export const SCRIPTS = join(PACK, 'deliver/scripts');
 export const CLI_ENTRY = resolve(import.meta.dir, '../../../packages/cli/src/cli.ts');
 export const PR = { repo: { host: 'ghe.example.com', path: 'example/repo' }, number: 42 };
 export const PR_URL = 'https://ghe.example.com/example/repo/pull/42';
@@ -32,6 +35,23 @@ export interface GhCheckRow {
   readonly bucket: 'pass' | 'fail' | 'pending' | 'skipping' | 'cancel';
 }
 
+/** One row of `gh api .../issues/<n>/comments`. */
+export interface GhCommentRow {
+  readonly id: number;
+  readonly body: string;
+}
+
+/** The pull request `gh pr view --json` reports, before any write in the run. */
+export interface GhPr {
+  readonly title?: string;
+  readonly body?: string;
+  readonly isDraft?: boolean;
+  readonly state?: 'OPEN' | 'CLOSED' | 'MERGED';
+  readonly headRefName?: string;
+  readonly headRefOid?: string;
+  readonly baseRefName?: string;
+}
+
 export interface GhFake {
   /**
    * What `gh pr checks --json` knows about each check; the fake prints only the
@@ -44,8 +64,16 @@ export interface GhFake {
   readonly workflows?: number | 'fail';
   /** stderr for a refused `gh pr ready`; omit for a flip that succeeds. */
   readonly readyFail?: string;
-  /** `gh pr view --json state`; omit to make that read fail. */
-  readonly prState?: string;
+  /** The pull request every `gh pr view`/`gh pr list` read reports. */
+  readonly pr?: GhPr;
+  /** No pull request matches `gh pr list --head`, so a create is the only path. */
+  readonly noOpenPr?: boolean;
+  /** Existing issue comments, in listing order. */
+  readonly comments?: readonly GhCommentRow[];
+  /** stderr for a refused write (`pr create`, `pr edit`, or a comment write). */
+  readonly writeFail?: string;
+  /** Drop the write instead of applying it, so the read-back disagrees. */
+  readonly writeLost?: boolean;
 }
 
 export type ForgeFake =
@@ -64,6 +92,10 @@ export interface ScriptRun {
   readonly gh: readonly string[];
   /** Every `archon` argv the fake CLI received. */
   readonly forge: readonly string[];
+  /** Every JSON request body the fake CLI was handed through `--data-file`. */
+  readonly forgeRequests: readonly string[];
+  /** The run's artifact directory, for a script that writes one. */
+  readonly artifacts: string;
 }
 
 /**
@@ -71,10 +103,17 @@ export interface ScriptRun {
  * `ghLog`. Shared with the bundled-pack test so both fake the same boundary.
  */
 export function fakeGhPreload(fake: GhFake, ghLog: string): string {
-  return `import { appendFileSync } from 'node:fs';
+  return `import { appendFileSync, readFileSync } from 'node:fs';
 const fake = ${JSON.stringify(fake)};
 const original = Bun.spawnSync.bind(Bun);
 Object.defineProperty(Bun, 'sleepSync', { value: () => {} });
+const pr = {
+  number: 42, title: 'A title', body: 'A body', isDraft: true, state: 'OPEN',
+  headRefName: 'feature', headRefOid: 'deadbeef', baseRefName: 'dev',
+  maintainerCanModify: null, ...(fake.pr ?? {}),
+};
+let comments = (fake.comments ?? []).map(row => ({ ...row }));
+let nextId = 900;
 Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   if (argv[0] !== 'gh') return original(argv, settings);
   const text = argv.slice(1).join(' ');
@@ -82,6 +121,21 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   // gh appends an update notice to stderr on successful calls too.
   const result = (exitCode, stdout = '', stderr = 'gh: A new release of gh is available') =>
     ({ exitCode, stdout: Buffer.from(stdout), stderr: Buffer.from(stderr) });
+  const selector = argv[argv.indexOf('--repo') + 1] ?? 'github.com/owner/repo';
+  const host = selector.split('/')[0];
+  const path = selector.split('/').slice(1).join('/');
+  const owner = path.split('/')[0];
+  const name = path.split('/')[1];
+  const project = () => {
+    const fields = argv[argv.indexOf('--json') + 1].split(',');
+    const row = {
+      ...pr,
+      url: 'https://' + host + '/' + path + '/pull/' + String(pr.number),
+      headRepository: { name },
+      headRepositoryOwner: { login: owner },
+    };
+    return Object.fromEntries(fields.map(field => [field, row[field]]));
+  };
   if (text.startsWith('pr checks')) {
     if (fake.checks === undefined || fake.checks === 'fail')
       return result(1, '', fake.checks === 'fail' ? 'HTTP 502' : 'no checks reported');
@@ -97,37 +151,93 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   // Real gh refuses this combination before any request (gh 2.92).
   if (argv.includes('--slurp') && (argv.includes('--jq') || argv.includes('--template')))
     return result(1, '', 'the \`--slurp\` option is not supported with \`--jq\` or \`--template\`');
-  // With --paginate, gh applies --jq to each page; the fake prints one id per active workflow.
-  if (text.startsWith('api'))
-    return fake.workflows === 'fail' || fake.workflows === undefined
-      ? result(1, '', 'HTTP 404')
-      : result(0, Array.from({ length: fake.workflows }, (_, index) => index + 1 + '\\n').join(''));
-  if (text.startsWith('pr ready'))
-    return fake.readyFail === undefined ? result(0, 'ready') : result(1, '', fake.readyFail);
-  if (text.includes('--json isDraft')) return result(0, 'false');
-  if (text.includes('--json state')) return fake.prState === undefined ? result(1) : result(0, fake.prState);
-  if (text.includes('--json url')) return result(0, ${JSON.stringify(PR_URL)});
+  if (text.startsWith('pr ready')) {
+    if (fake.readyFail !== undefined) return result(1, '', fake.readyFail);
+    if (!fake.writeLost) pr.isDraft = false;
+    return result(0, 'ready');
+  }
+  if (text.startsWith('pr create')) {
+    if (fake.writeFail !== undefined) return result(1, '', fake.writeFail);
+    if (!fake.writeLost) {
+      pr.isDraft = argv.includes('--draft');
+      pr.title = argv[argv.indexOf('--title') + 1];
+      pr.body = readFileSync(argv[argv.indexOf('--body-file') + 1], 'utf8');
+      pr.headRefName = (argv[argv.indexOf('--head') + 1] ?? pr.headRefName).split(':').pop();
+      pr.baseRefName = argv[argv.indexOf('--base') + 1] ?? pr.baseRefName;
+      pr.state = 'OPEN';
+    }
+    return result(0, 'https://' + host + '/' + path + '/pull/' + String(pr.number));
+  }
+  if (text.startsWith('pr edit')) {
+    if (fake.writeFail !== undefined) return result(1, '', fake.writeFail);
+    if (!fake.writeLost) pr.body = readFileSync(argv[argv.indexOf('--body-file') + 1], 'utf8');
+    return result(0, '');
+  }
+  if (text.startsWith('pr list'))
+    return result(0, JSON.stringify(fake.noOpenPr ? [] : [project()]));
+  if (text.startsWith('pr view')) return result(0, JSON.stringify(project()));
+  if (text.startsWith('api')) {
+    const endpoint = argv.find(part => part.startsWith('repos/'));
+    if (endpoint === undefined) return result(95, '', 'unexpected gh api call');
+    if (endpoint.includes('/actions/workflows'))
+      return fake.workflows === 'fail' || fake.workflows === undefined
+        ? result(1, '', 'HTTP 404')
+        // With --paginate, gh applies --jq to each page; the fake prints one id per active workflow.
+        : result(0, Array.from({ length: fake.workflows }, (_, index) => index + 1 + '\\n').join(''));
+    const url = (id) => 'https://' + host + '/' + path + '/pull/' + String(pr.number) + '#issuecomment-' + String(id);
+    const method = argv.includes('--method') ? argv[argv.indexOf('--method') + 1] : 'GET';
+    if (method === 'GET') {
+      const page = Number(new URLSearchParams(endpoint.split('?')[1] ?? '').get('page') ?? '1');
+      const rows = page === 1 ? comments.map(row => ({ ...row, html_url: url(row.id) })) : [];
+      return result(0, JSON.stringify(rows));
+    }
+    if (fake.writeFail !== undefined) return result(1, '', fake.writeFail);
+    const body = JSON.parse(readFileSync(argv[argv.indexOf('--input') + 1], 'utf8')).body;
+    const id = method === 'PATCH' ? Number(endpoint.split('/').pop()) : nextId++;
+    if (!fake.writeLost) {
+      const existing = comments.find(row => row.id === id);
+      if (existing) existing.body = body;
+      else comments.push({ id, body });
+    }
+    return result(0, JSON.stringify({ id, body, html_url: url(id) }));
+  }
   return result(95, '', 'unexpected gh call');
 } });
 `;
 }
 
-export function runDeliverScript(
-  script: 'check-ci' | 'ci-note' | 'flip-ready',
-  options: { source?: string; gh?: GhFake; forge?: ForgeFake } = {}
-): ScriptRun {
-  const root = trackTempRoot(mkdtempSync(join(tmpdir(), `deliver-${script}-`)));
+export interface ScriptOptions {
+  readonly source?: string;
+  readonly gh?: GhFake;
+  readonly forge?: ForgeFake;
+  /** `INPUTS_*` values this script reads, beyond the recorded pull request. */
+  readonly inputs?: Readonly<Record<string, string>>;
+  /** Files to write under the run's artifact directory before the script runs. */
+  readonly artifacts?: Readonly<Record<string, string>>;
+}
+
+/** Run one pack script the way the engine does: `<pack>/<relative>.ts`. */
+export function runPackScript(relative: string, options: ScriptOptions = {}): ScriptRun {
+  const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-pack-script-')));
   const ghLog = join(root, 'gh.log');
   const forgeLog = join(root, 'forge.log');
+  const requestLog = join(root, 'forge-requests');
   const readsLog = join(root, 'forge-reads');
+  const artifacts = join(root, 'artifacts');
+  mkdirSync(artifacts, { recursive: true });
+  for (const [name, content] of Object.entries(options.artifacts ?? {})) {
+    writeFileSync(join(artifacts, name), content);
+  }
   const preload = join(root, 'preload.ts');
   writeFileSync(preload, fakeGhPreload(options.gh ?? {}, ghLog));
 
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     INPUTS_PR: JSON.stringify(PR),
+    ARTIFACTS_DIR: artifacts,
     ARCHON_SDLC_FORGE: options.source ?? '',
     ARCHON_CLI_COMMAND: '',
+    ...options.inputs,
   };
   const forge = options.forge ?? { kind: 'fake' };
   if (forge.kind === 'no-plugin') {
@@ -150,33 +260,51 @@ export function runDeliverScript(
     writeFileSync(
       cli,
       `import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-appendFileSync(${JSON.stringify(forgeLog)}, process.argv.slice(2).join(' ') + '\\n');
+const argv = process.argv.slice(2);
+appendFileSync(${JSON.stringify(forgeLog)}, argv.join(' ') + '\\n');
+const dataFile = argv.indexOf('--data-file');
+if (dataFile >= 0) appendFileSync(${JSON.stringify(requestLog)}, readFileSync(argv[dataFile + 1], 'utf8') + '\\n');
 const responses = ${JSON.stringify(responses ?? null)};
 if (responses === null) { process.stderr.write('plugin unavailable'); process.exitCode = 1; }
 else {
   const reads = existsSync(${JSON.stringify(readsLog)}) ? Number(readFileSync(${JSON.stringify(readsLog)}, 'utf8')) : 0;
   writeFileSync(${JSON.stringify(readsLog)}, String(reads + 1));
-  process.stdout.write(responses[Math.min(reads, responses.length - 1)]);
+  const chosen = JSON.parse(responses[Math.min(reads, responses.length - 1)]);
+  process.stdout.write(JSON.stringify(chosen));
+  process.exitCode = chosen.ok === true ? 0 : 1;
 }
 `
     );
     env.ARCHON_CLI_COMMAND = JSON.stringify([process.execPath, cli]);
   }
 
-  const result = spawnSync(process.execPath, ['--preload', preload, join(SCRIPTS, `${script}.ts`)], {
+  const result = spawnSync(process.execPath, ['--preload', preload, join(PACK, `${relative}.ts`)], {
     cwd: root,
     env,
     encoding: 'utf8',
   });
   const lines = (path: string): string[] =>
-    existsSync(path) ? readFileSync(path, 'utf8').split('\n').filter(line => line !== '') : [];
+    existsSync(path)
+      ? readFileSync(path, 'utf8')
+          .split('\n')
+          .filter(line => line !== '')
+      : [];
   return {
     code: result.status ?? -1,
     stdout: result.stdout ?? '',
     stderr: result.stderr ?? '',
     gh: lines(ghLog),
     forge: lines(forgeLog),
+    forgeRequests: lines(requestLog),
+    artifacts,
   };
+}
+
+export function runDeliverScript(
+  script: 'check-ci' | 'ci-note' | 'flip-ready',
+  options: ScriptOptions = {}
+): ScriptRun {
+  return runPackScript(`deliver/scripts/${script}`, options);
 }
 
 type ForgeState = 'none' | 'pending' | 'green' | 'red' | 'gated' | 'unknown';
@@ -216,5 +344,44 @@ export function forgeResponse(
         required: options.required ? set(options.required) : null,
       },
     },
+  });
+}
+
+/** A verified pull-request record in the forge wire shape. */
+export function forgePrRecord(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schemaVersion: 1,
+    repo: PR.repo,
+    number: PR.number,
+    url: PR_URL,
+    head: 'feature',
+    base: 'dev',
+    is_draft: true,
+    state: 'open',
+    head_repo: PR.repo,
+    head_revision: 'deadbeef',
+    base_revision: 'cafe',
+    maintainer_can_modify: null,
+    ...overrides,
+  };
+}
+
+/** One forge operation response document, as the CLI prints it. */
+export function forgeOperation(op: string, value: unknown): string {
+  return JSON.stringify({ operationId: `op-${op}`, ok: true, result: { op, value } });
+}
+
+/** One failed forge operation, with the mutation evidence a write owes its caller. */
+export function forgeFailure(
+  op: string,
+  outcome: 'refused' | 'verification_failed' | 'outcome_unknown',
+  message: string,
+  extra: Record<string, unknown> = {}
+): string {
+  return JSON.stringify({
+    operationId: `op-${op}`,
+    ok: false,
+    error: { kind: 'forge_error', message },
+    mutation: { op, target: PR, outcome, ...extra },
   });
 }

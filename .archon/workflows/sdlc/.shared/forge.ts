@@ -1,8 +1,48 @@
-/** Standalone client for `archon forge checks`, the opt-in check source in ./checks.ts. */
+/**
+ * Standalone client for `archon forge`, the pack's opt-in forge source.
+ *
+ * One switch selects the source for every forge read and write this pack makes:
+ *
+ *   gh     the default. The GitHub CLI, as the pack has always used it.
+ *   forge  opt-in with `ARCHON_SDLC_FORGE=forge`. An installed forge plugin,
+ *          reached through the host command (`ARCHON_CLI_COMMAND`) the CLI and
+ *          server publish.
+ *
+ * The source is never inferred from what happens to be installed, and a selected
+ * source that cannot answer fails the operation rather than falling back to the
+ * other. A container execution receives neither variable, so it uses `gh`.
+ */
+
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+export type ForgeSource = 'gh' | 'forge';
+
+export function forgeSource(value: string | undefined): ForgeSource {
+  const selected = (value ?? '').trim();
+  if (selected === '' || selected === 'gh') return 'gh';
+  if (selected === 'forge') return 'forge';
+  throw new Error(`ARCHON_SDLC_FORGE must be "gh" (the default) or "forge", not "${selected}"`);
+}
 
 export interface QualifiedPr {
   readonly repo: { readonly host: string; readonly path: string };
   readonly number: number;
+}
+
+/** The pull-request facts every later public action in a run depends on. */
+export interface PrRecord extends QualifiedPr {
+  readonly schemaVersion: 1;
+  readonly url: string;
+  readonly head: string;
+  readonly base: string;
+  readonly is_draft: boolean;
+  readonly state: 'open' | 'closed' | 'merged';
+  readonly head_repo: { readonly host: string; readonly path: string } | null;
+  readonly head_revision: string | null;
+  readonly base_revision: string | null;
+  readonly maintainer_can_modify: boolean | null;
 }
 
 // This standalone boundary is checked against @archon/forge by forge-contract.test.ts.
@@ -45,10 +85,132 @@ export interface ChecksObservation extends CheckSet {
   readonly required: CheckSet | null;
 }
 
-function record(value: unknown): Record<string, unknown> | undefined {
+export function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null
     ? (value as Record<string, unknown>)
     : undefined;
+}
+
+/**
+ * A forge operation that did not produce a verified result.
+ *
+ * `mutation` carries the evidence a write owes its caller: which of `refused`,
+ * `verification_failed` or `outcome_unknown` happened, and what may remain on the
+ * forge. A caller may report it; it may never retry past an unknown outcome.
+ */
+export class ForgeOperationError extends Error {
+  constructor(
+    message: string,
+    readonly mutation: Record<string, unknown> | undefined
+  ) {
+    super(message);
+    this.name = 'ForgeOperationError';
+  }
+}
+
+/**
+ * Run one typed forge operation.
+ *
+ * The request travels as a file so authored content — a pull-request body, a
+ * review report — never appears in any process's argv.
+ */
+export function invokeForge(op: string, request: Record<string, unknown>): Record<string, unknown> {
+  const command = parseCommand(process.env.ARCHON_CLI_COMMAND);
+  const directory = mkdtempSync(join(tmpdir(), 'archon-forge-'));
+  const path = join(directory, 'request.json');
+  try {
+    writeFileSync(path, JSON.stringify(request), { mode: 0o600 });
+    const result = Bun.spawnSync([...command, 'forge', op, '--json', '--data-file', path], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(result.stdout.toString());
+    } catch {
+      const detail = result.stderr.toString().trim();
+      throw new Error(`forge ${op} failed${detail === '' ? '' : `: ${detail}`}`);
+    }
+    const response = record(parsed);
+    if (!response || typeof response.operationId !== 'string' || response.operationId === '') {
+      throw new Error(`forge ${op} returned an unexpected response envelope`);
+    }
+    if (response.ok !== true || result.exitCode !== 0) {
+      const mutation = record(response.mutation);
+      const error = record(response.error);
+      const outcome = typeof mutation?.outcome === 'string' ? mutation.outcome : undefined;
+      const message = typeof error?.message === 'string' ? error.message : 'operation failed';
+      // Exit 2 means the operation itself completed and only its audit did not.
+      const reason =
+        result.exitCode === 2
+          ? `completed but could not be audited: ${message}`
+          : `${outcome ?? 'failed'}: ${message}`;
+      throw new ForgeOperationError(
+        `forge ${op} ${reason}${mutation ? ` ${JSON.stringify(mutation)}` : ''}`,
+        mutation
+      );
+    }
+    const body = record(response.result);
+    const value = record(body?.value);
+    if (body?.op !== op || !value) throw new Error(`forge ${op} returned the wrong result`);
+    return value;
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+function qualifiedRepo(value: unknown): QualifiedPr['repo'] | undefined {
+  const repo = record(value);
+  return typeof repo?.host === 'string' &&
+    repo.host.trim() !== '' &&
+    typeof repo.path === 'string' &&
+    repo.path.trim() !== ''
+    ? { host: repo.host, path: repo.path }
+    : undefined;
+}
+
+/** Validate only the pull-request facts this pack's policy consumes. */
+export function parsePrRecord(value: unknown): PrRecord {
+  const pr = record(value);
+  const repo = qualifiedRepo(pr?.repo);
+  const headRepo = pr?.head_repo === null ? null : qualifiedRepo(pr?.head_repo);
+  const optionalText = (field: unknown): boolean =>
+    field === null || (typeof field === 'string' && field !== '');
+  if (
+    pr?.schemaVersion !== 1 ||
+    !repo ||
+    typeof pr.number !== 'number' ||
+    !Number.isInteger(pr.number) ||
+    pr.number <= 0 ||
+    typeof pr.url !== 'string' ||
+    !URL.canParse(pr.url) ||
+    typeof pr.head !== 'string' ||
+    pr.head === '' ||
+    typeof pr.base !== 'string' ||
+    pr.base === '' ||
+    typeof pr.is_draft !== 'boolean' ||
+    (pr.state !== 'open' && pr.state !== 'closed' && pr.state !== 'merged') ||
+    headRepo === undefined ||
+    !optionalText(pr.head_revision) ||
+    !optionalText(pr.base_revision) ||
+    !(typeof pr.maintainer_can_modify === 'boolean' || pr.maintainer_can_modify === null)
+  ) {
+    throw new Error('forge returned an invalid pull-request record');
+  }
+  return {
+    schemaVersion: 1,
+    repo,
+    number: pr.number,
+    url: pr.url,
+    head: pr.head,
+    base: pr.base,
+    is_draft: pr.is_draft,
+    state: pr.state,
+    head_repo: headRepo,
+    head_revision: pr.head_revision as string | null,
+    base_revision: pr.base_revision as string | null,
+    maintainer_can_modify: pr.maintainer_can_modify,
+  };
 }
 
 export function parseQualifiedPr(value: string | undefined): QualifiedPr {

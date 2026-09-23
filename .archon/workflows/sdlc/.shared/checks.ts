@@ -1,32 +1,24 @@
 /**
  * The deliver pack's one pull-request check reader and its gate policy.
  *
- * Two sources return the same units, so `check-ci`, `ci-note` and `flip-ready`
- * classify one shape whichever source read it:
- *
- *   gh     the default. Reads the recorded pull request through the GitHub CLI.
- *   forge  opt-in with `ARCHON_SDLC_FORGE=forge`. Reads through `archon forge
- *          checks`, which needs an installed forge plugin and the host command
- *          (`ARCHON_CLI_COMMAND`) the CLI and server publish.
- *
- * The source is never inferred from what happens to be installed. A selected
- * source that cannot answer fails the read; it never falls back to the other.
- * A container execution receives neither variable, so it reads through `gh`.
+ * Both sources return the same units, so `check-ci`, `ci-note` and `flip-ready`
+ * classify one shape whichever source read it. ./forge.ts owns which source a
+ * run selected; this file owns how a read is performed and how it gates.
  */
 
 import {
   CONCLUDED_CHECK_STATES,
+  forgeSource,
   preferredChecks,
   readChecks,
   type CheckUnit,
+  type ForgeSource,
   type QualifiedPr,
 } from './forge.ts';
 
-export type CheckSource = 'gh' | 'forge';
-
 /** Checks for one read. `revision` is null when the source does not report the evaluated head. */
 export interface CheckRead {
-  readonly source: CheckSource;
+  readonly source: ForgeSource;
   readonly revision: string | null;
   readonly units: readonly CheckUnit[];
 }
@@ -44,13 +36,6 @@ export function gateState(units: readonly CheckUnit[]): GateState {
   if (units.some(unit => unit.state === 'red' || unit.state === 'unknown')) return 'red';
   if (units.some(unit => unit.state === 'gated')) return 'gated';
   return 'green';
-}
-
-export function checkSource(value: string | undefined): CheckSource {
-  const selected = (value ?? '').trim();
-  if (selected === '' || selected === 'gh') return 'gh';
-  if (selected === 'forge') return 'forge';
-  throw new Error(`ARCHON_SDLC_FORGE must be "gh" (the default) or "forge", not "${selected}"`);
 }
 
 interface Ran {
@@ -153,7 +138,7 @@ function readGhChecks(pr: QualifiedPr): readonly CheckUnit[] {
 
 /** Read the recorded pull request's checks from the selected source. */
 export function readPrChecks(pr: QualifiedPr, selected: string | undefined): CheckRead {
-  const source = checkSource(selected);
+  const source = forgeSource(selected);
   if (source === 'gh') return { source, revision: null, units: readGhChecks(pr) };
   try {
     const observation = readChecks(pr);
