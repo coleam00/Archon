@@ -31,7 +31,11 @@
     "./in-process-engine": "./src/in-process-engine.ts",
     "./engine-contract-tests": "./src/engine-contract-tests.ts",
     "./fan-out-identity": "./src/fan-out-identity.ts",
-    "./test-utils": "./src/test-utils.ts"
+    "./test-utils": "./src/test-utils.ts",
+    "./node-record-reader": "./src/node-record-reader.ts",
+    "./node-execution": "./src/node-execution.ts",
+    "./node-record-serialization": "./src/node-record-serialization.ts",
+    "./node-event-write": "./src/node-event-write.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",
@@ -152,6 +156,12 @@
       "src/state-migration.test.ts",
       "src/dry-run.test.ts",
       "src/fixture-runner.test.ts"
+    ],
+    [
+      "src/node-record-reader.test.ts"
+    ],
+    [
+      "src/node-record-serialization.test.ts"
     ]
   ]
 }

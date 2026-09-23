@@ -1,0 +1,13 @@
+# Run the real branch selection and result join; real Git/gate execution is covered
+# by scripts/sdlc-composition-evidence.test.ts. No agent stub: it must not run.
+compare:
+  evidence: null
+  green: false
+  red_cause: interaction
+  summary: "gate passed the two pinned parts and failed their composition"
+fixture:
+  inputs:
+    comparison: comparison.json
+  expect: completed
+  reached: [mode, compare, result]
+exec-code: true

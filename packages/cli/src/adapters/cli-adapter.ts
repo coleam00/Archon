@@ -3,6 +3,7 @@
  * Implements IPlatformAdapter to allow workflow execution via command line
  */
 import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
+import { toPersistedMessageMetadata } from '@archon/core/types';
 import { createLogger } from '@archon/paths';
 import * as messageDb from '@archon/core/db/messages';
 
@@ -47,17 +48,11 @@ export class CLIAdapter implements IPlatformAdapter {
     const dbId = this.dbIdMap.get(conversationId);
     if (dbId) {
       try {
-        // Build persistence metadata from MessageMetadata (mirror web adapter pattern)
-        const persistMeta: Record<string, unknown> = {};
-        if (metadata?.category) persistMeta.category = metadata.category;
-        if (metadata?.workflowDispatch) persistMeta.workflowDispatch = metadata.workflowDispatch;
-        if (metadata?.workflowResult) persistMeta.workflowResult = metadata.workflowResult;
-
         await messageDb.addMessage(
           dbId,
           'assistant',
           message,
-          Object.keys(persistMeta).length > 0 ? persistMeta : undefined
+          toPersistedMessageMetadata(metadata)
         );
       } catch (error) {
         getLog().warn(

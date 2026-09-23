@@ -25,6 +25,13 @@ behavior is feature-specific: some optional fields are ignored with a warning, w
 strict contracts fail closed. In particular, `context.resume` rejects an explicitly
 unsupported provider at load time and an implicitly resolved one at runtime.
 
+Reporting flags describe SDK fields that Archon translates into execution results.
+Supported does not guarantee that every result reports a value or that usage includes
+all nested agents. Unsupported fields remain absent; Archon does not estimate cost,
+count events as turns, or substitute the requested model for an unreported model.
+Cost reporting is independent of spend-limit support. Older providers may omit
+reporting declarations; absence means unknown, not unsupported.
+
 ## Providers
 
 - `claude` — Claude (Anthropic)
@@ -48,6 +55,10 @@ unsupported provider at load time and an implicitly resolved one at runtime.
 | Env injection (`env:`) | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Spend limit (`maxBudgetUsd`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Cost reporting (`costUsd`) | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Token reporting | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Stop reason reporting | ✅ | ❌ | ✅ | ✅ | ❌ |
+| Turn count reporting | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Resolved model reporting | ✅ | ❌ | ✅ | ✅ | ❌ |
 | Effort control (`effort`) | ✅ | ✅ | ❌ | ✅ | ✅ |
 | Fallback model (`fallbackModel`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Sandbox (`sandbox`) | ✅ | ❌ | ❌ | ❌ | ❌ |
@@ -63,6 +74,7 @@ unsupported provider at load time and an implicitly resolved one at runtime.
 ## Legend
 
 - **✅ / ❌** — the capability is supported or unsupported for this provider.
+- **Unknown** — the provider has not declared whether this reporting channel is supported.
 - **✅¹ (superscript)** — supported, but with semantics that differ from the headline
   meaning of the axis — see [Caveats](#caveats).
 - **Structured output** — `enforced` (the SDK/backend grammar-constrains decoding),
