@@ -10,7 +10,6 @@
 # says the diff has failure paths, the operator declared `errors: false`, and the
 # real resolve-scope script must let the declaration win. review__errors has no
 # stub, so a lens that runs anyway fails and breaks the single-failure assertion.
-impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true

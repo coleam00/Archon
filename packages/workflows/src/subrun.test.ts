@@ -225,6 +225,7 @@ class InMemoryStore implements IWorkflowStore {
       user_id: data.user_id ?? null,
       parent_run_id: data.parent_run_id ?? null,
       output_root: null,
+      checkout_baseline: null,
       adopted_from_run_id: null,
     };
     this.runs.set(id, row);
@@ -236,6 +237,16 @@ class InMemoryStore implements IWorkflowStore {
     if (!row || row.status !== 'pending') return Promise.resolve(null);
     row.status = 'running';
     return Promise.resolve(this.clone(row));
+  };
+
+  recordWorkflowRunCheckoutBaseline: IWorkflowStore['recordWorkflowRunCheckoutBaseline'] = (
+    id,
+    baseline
+  ) => {
+    const row = this.runs.get(id);
+    if (!row) return Promise.reject(new Error(`run ${id} not found`));
+    row.checkout_baseline ??= baseline;
+    return Promise.resolve(row.checkout_baseline);
   };
 
   getWorkflowRun = (id: string): Promise<WorkflowRun | null> => {

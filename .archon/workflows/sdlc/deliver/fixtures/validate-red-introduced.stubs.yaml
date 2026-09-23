@@ -5,7 +5,6 @@
 #
 # The sibling case, a non-green project gate that declares no cause at all, is
 # validate-red.stubs.yaml.
-impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true

@@ -420,6 +420,9 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagRe
   const fanOutSnapshots = new Map<string, readonly FanOutInstanceSnapshot[]>();
   const unresolvedNodeStarts = new Set<string>();
   const unfinishedInvocations = new Map<string, NodeExecutionMetadata>();
+  // The completion a reusable output belongs to. A prior-success replay row carries no
+  // execution facts of its own, so it inherits the completion it replays.
+  const completedExecutions = new Map<string, NodeExecutionMetadata>();
   // Collected and merged once at the end rather than folded pairwise: a pairwise fold
   // cannot tell "one of five contributions reported" from "one of two" (#2662).
   const usageContributions: { stepName: string; tokens?: TokenUsage; costUsd?: number }[] = [];
@@ -476,6 +479,9 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagRe
       } else if (record.eventType === 'node_completed' || record.eventType === 'node_skipped') {
         unfinishedInvocations.delete(key);
       }
+      if (record.eventType === 'node_completed')
+        completedExecutions.set(record.path, record.metadata);
+      else completedExecutions.delete(record.path);
     } else if (
       record.eventType === 'node_skipped_prior_success' ||
       record.eventType === 'node_always_run_reset' ||
@@ -574,6 +580,9 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagRe
           ? { structuredOutput: data.structured_output }
           : {}),
         ...(declaredFields !== undefined ? { declaredFields } : {}),
+        ...(completedExecutions.has(row.step_name)
+          ? { execution: completedExecutions.get(row.step_name) }
+          : {}),
       });
     }
     // Composed-instance terminals are the durable accounting source for their whole

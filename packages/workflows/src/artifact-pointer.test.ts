@@ -40,6 +40,7 @@ describe('artifact pointers (#2453)', () => {
       parent_run_id: null,
       adopted_from_run_id: null,
       output_root: outputRoot,
+      checkout_baseline: null,
       ...overrides,
     };
   }

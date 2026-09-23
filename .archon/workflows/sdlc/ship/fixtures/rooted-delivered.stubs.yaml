@@ -29,7 +29,6 @@ inv__investigate:
   report: { type: archon_artifact, run_id: "fixture-run", path: "investigation.md" }
 gate-rooted: '{"gate":"rooted"}'
 deliver__gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":""}'
-deliver__impl__record-start: '{"start":"recorded"}'
 deliver__impl__assert-changed: "3 files changed"
 deliver__gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
 deliver__pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true }

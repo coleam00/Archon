@@ -6,7 +6,6 @@
 # This is also the classifier-selects-errors path: `classify` says the diff has
 # failure paths, the operator declared nothing, and resolve-scope is left unstubbed
 # so the real script adopts that judgment. `reached` proves the lens actually ran.
-impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true
@@ -30,7 +29,6 @@ review__synthesize:
   findings_summary: "stub: 3 Important findings open"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 ci-note: "CI state for this pull request (head abc123def456): No concluded failures. 2 check(s) still running — never wait on them."
-fix__record-start: '{"start":"recorded"}'
 fix__implement:
   done: true
   green: true

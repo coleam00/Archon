@@ -9,7 +9,6 @@
 # concludes green, and the flip proceeds. flip-ready stays stubbed as every
 # fixture must: exec-code runs bash for real and this worktree's origin is a
 # real repository — an unstubbed flip would be a live public action.
-impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true
@@ -45,7 +44,6 @@ validate__validate:
   summary: "stub: full gate green"
 ci-probe: '{"state":"red","detail":"test (windows-latest) (fail)"}'
 ci-verdict: '{"state":"red","detail":"test (windows-latest) (fail)"}'
-ci-fix__record-start: '{"start":"recorded"}'
 ci-fix__implement:
   done: true
   green: true

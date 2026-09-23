@@ -2,6 +2,7 @@
  * Database operations for workflow runs
  */
 import type { ResourceStartDisposition } from '@archon/workflows/schemas/resource-start';
+import type { CheckoutObservation } from '@archon/workflows/schemas/checkout-observation';
 
 import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
 import {
@@ -477,6 +478,28 @@ export async function claimPendingWorkflowRun(id: string): Promise<WorkflowRun |
     );
     return selected.rows[0] ? normalizeWorkflowRun(selected.rows[0]) : null;
   });
+}
+
+/**
+ * Write-once run checkout baseline (#3305). The `IS NULL` guard makes the first value
+ * permanent in the store itself, so a retried or concurrent writer can never replace the
+ * observation the run actually started from; every caller gets the persisted value back.
+ */
+export async function recordWorkflowRunCheckoutBaseline(
+  id: string,
+  baseline: CheckoutObservation
+): Promise<CheckoutObservation> {
+  await pool.query(
+    `UPDATE remote_agent_workflow_runs SET checkout_baseline = $1
+      WHERE id = $2 AND checkout_baseline IS NULL`,
+    [JSON.stringify(baseline), id]
+  );
+  const run = await getWorkflowRun(id);
+  if (!run) throw new Error(`Workflow run not found (id: ${id})`);
+  if (run.checkout_baseline === null) {
+    throw new Error(`Workflow run ${id} has no readable checkout baseline after recording one`);
+  }
+  return run.checkout_baseline;
 }
 
 export async function getWorkflowRun(id: string): Promise<WorkflowRun | null> {

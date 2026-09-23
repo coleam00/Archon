@@ -27,6 +27,7 @@ const run = {
   status: 'failed' as const,
   outcome: null,
   output_root: null,
+  checkout_baseline: null,
   metadata: {
     [RUN_GRAPH_METADATA_KEY]: {
       node_ids: ['discover', 'build', 'report', 'untouched'],

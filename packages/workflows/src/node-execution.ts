@@ -3,6 +3,7 @@ import type { ProviderCapabilities, TokenUsage } from '@archon/providers/types';
 import type { DagNode } from './schemas/dag-node';
 import type { EffortLevel } from './schemas/effort';
 import type { TierName } from './schemas/model-binding';
+import type { CheckoutObservation } from './schemas/checkout-observation';
 import {
   executionTokenUsageSchema,
   nodeExecutionMetadataSchema,
@@ -78,6 +79,8 @@ export function startNodeExecution(input: {
   capabilities?: ProviderCapabilities;
   sessionId?: string;
   accounting?: NodeExecutionRecord['accounting'];
+  /** This attempt's checkout sample; the invocation keeps its own first sample. */
+  checkoutStart?: CheckoutObservation;
   now?: string;
 }): NodeExecutionRecord {
   const now = input.now ?? new Date().toISOString();
@@ -90,7 +93,11 @@ export function startNodeExecution(input: {
     path: input.path,
     node,
     invocation: input.invocation,
-    attempt: { id: randomUUID(), startedAt: now },
+    attempt: {
+      id: randomUUID(),
+      startedAt: now,
+      ...(input.checkoutStart !== undefined ? { checkoutStart: input.checkoutStart } : {}),
+    },
     binding: {
       ...(input.provider ? { provider: input.provider } : {}),
       ...(hasProvider
