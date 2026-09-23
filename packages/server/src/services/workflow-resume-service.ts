@@ -334,10 +334,16 @@ export async function scanDueWorkflowContinuations(
 /**
  * @param onTick Another host duty that shares this cadence. The server passes its
  *   resource-start drain here so queued work advances once its blocker ends.
+ * @param shouldPause Skip this tick entirely. The server passes its drain flag: a
+ *   draining process is being replaced and must start no continuation it cannot
+ *   finish. Skipping before the scan is what keeps the rows untouched — a due
+ *   continuation stays paused or failed-with-scheduled-resume, gets no compensating
+ *   defer write, and the replacement container's first tick picks it up.
  */
 export function startWorkflowContinuationScheduler(
   resolveDestination?: WorkflowResumeDestinationResolver,
-  onTick?: () => void
+  onTick?: () => void,
+  shouldPause?: () => boolean
 ): void {
   if (continuationScheduler !== undefined) return;
   const resume = async (run: WorkflowRun, cursor: WorkflowResumeCursor): Promise<boolean> => {
@@ -347,6 +353,7 @@ export function startWorkflowContinuationScheduler(
     return resumeWorkflowRunFromServer(run, undefined, target, cursor);
   };
   const tick = (): void => {
+    if (shouldPause?.()) return;
     void scanDueWorkflowContinuations(new Date(), resume).catch((error: unknown) => {
       log.error({ err: error as Error }, 'workflow_continuation_scan_failed');
     });

@@ -5,12 +5,12 @@ import * as fsPromises from 'fs/promises';
 import { tmpdir } from 'os';
 import { join, sep } from 'path';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import type { ConversationLockManager } from '@archon/core';
 import type { DashboardWorkflowRun } from '@archon/core/db/workflows';
 import type { resumeWorkflow } from '@archon/core/operations';
 import type { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
+import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
 import { validationErrorHook } from './openapi-defaults';
 import {
@@ -20,6 +20,7 @@ import {
 import {
   makeDashboardRunsResult,
   makeListDashboardRunsMock,
+  makeMockLockManager,
   mockAllWorkflowModules,
 } from '../test/workflow-mock-factories';
 
@@ -542,20 +543,17 @@ const MOCK_CONV = {
   codebase_id: null,
 };
 
-function makeApp(): { app: OpenAPIHono; mockWebAdapter: WebAdapter } {
+function makeApp(lockManagerOverrides: Partial<ConversationLockManager> = {}): {
+  app: OpenAPIHono;
+  mockWebAdapter: WebAdapter;
+} {
   const app = new OpenAPIHono({ defaultHook: validationErrorHook });
   const mockWebAdapter = {
     setConversationDbId: mock((_platformId: string, _dbId: string) => {}),
     emitSSE: mock(async () => {}),
     emitLockEvent: mock(async () => {}),
   } as unknown as WebAdapter;
-  const mockLockManager = {
-    acquireLock: mock(async (_id: string, fn: () => Promise<void>) => {
-      await fn();
-      return { status: 'started' };
-    }),
-    getStats: mock(() => ({ active: 0, queued: 0 })),
-  } as unknown as ConversationLockManager;
+  const mockLockManager = makeMockLockManager(lockManagerOverrides);
   registerApiRoutes(app, mockWebAdapter, mockLockManager);
   return { app, mockWebAdapter };
 }
@@ -1779,6 +1777,39 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
     expect(response.status).toBe(400);
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain('Cannot resume');
+  });
+
+  // The headless branch bypasses the conversation lock entirely, so drain has to
+  // refuse here or it would start a run the process is about to abandon.
+  test('refuses a headless resume while draining and leaves the run untouched', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_FAILED_RUN,
+      parent_conversation_id: null,
+      working_path: '/tmp/worktrees/run-uuid-4',
+    });
+    const { app } = makeApp({ isDraining: mock(() => true) });
+    const response = await app.request('/api/workflows/runs/run-uuid-4/resume', {
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(503);
+    const body = (await response.json()) as { error: string };
+    expect(body.error.length).toBeGreaterThan(0);
+    // Invariant: drain starts no work and transitions no run.
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockResumeWorkflow).not.toHaveBeenCalled();
+  });
+
+  test('refuses a dispatched resume while draining', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(MOCK_FAILED_RUN);
+    const { app } = makeApp({ isDraining: mock(() => true) });
+    const response = await app.request('/api/workflows/runs/run-uuid-1/resume', {
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(503);
+    expect(mockHandleMessage).not.toHaveBeenCalled();
   });
 
   test('resumes headlessly (no dispatch) when run has no parent_conversation_id (#2008)', async () => {

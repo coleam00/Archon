@@ -3,7 +3,7 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
 import { validationErrorHook } from './openapi-defaults';
-import { mockAllWorkflowModules } from '../test/workflow-mock-factories';
+import { makeMockLockManager, mockAllWorkflowModules } from '../test/workflow-mock-factories';
 
 const mockFindConversationByPlatformId = mock(
   async (_platformId: string) =>
@@ -64,21 +64,23 @@ mock.module('@archon/core', () => ({
 
 mockAllWorkflowModules();
 
+const mockGetOrCreateConversation = mock(async () => ({
+  id: 'internal-uuid-123',
+  platform_conversation_id: 'web-test-abc',
+  title: null,
+  created_at: new Date().toISOString(),
+  updated_at: new Date().toISOString(),
+  platform_type: 'web',
+  deleted_at: null,
+  codebase_id: null,
+}));
+
 mock.module('@archon/core/db/conversations', () => ({
   findConversationByPlatformId: mockFindConversationByPlatformId,
   softDeleteConversation: mockSoftDeleteConversation,
   updateConversationTitle: mockUpdateConversationTitle,
   listConversations: mock(async () => []),
-  getOrCreateConversation: mock(async () => ({
-    id: 'internal-uuid-123',
-    platform_conversation_id: 'web-test-abc',
-    title: null,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-    platform_type: 'web',
-    deleted_at: null,
-    codebase_id: null,
-  })),
+  getOrCreateConversation: mockGetOrCreateConversation,
 }));
 
 mock.module('@archon/core/db/isolation-environments', () => ({}));
@@ -336,18 +338,45 @@ describe('POST /api/conversations', () => {
 });
 
 describe('POST /api/conversations with message (atomic create+send)', () => {
-  const mockLockManager = {
-    acquireLock: mock(async (_convId: string, fn: () => Promise<void>) => {
-      await fn();
-      return { status: 'started' as const };
-    }),
-  } as unknown as ConversationLockManager;
+  const mockLockManager = makeMockLockManager();
 
   const mockWebAdapter = {
     setConversationDbId: mock((_platformId: string, _dbId: string) => {}),
     emitLockEvent: mock((_convId: string, _locked: boolean) => {}),
     emitSSE: mock(async (_convId: string, _data: string) => {}),
   } as unknown as WebAdapter;
+
+  // Refused BEFORE the row is written: creating a conversation and then refusing
+  // the dispatch would leave exactly the ghost "Untitled" this route exists to avoid.
+  test('refuses with 503 while draining, creating no conversation', async () => {
+    const callsBefore = mockGetOrCreateConversation.mock.calls.length;
+    const app = new OpenAPIHono({ defaultHook: validationErrorHook });
+    registerApiRoutes(app, mockWebAdapter, makeMockLockManager({ isDraining: mock(() => true) }));
+
+    const response = await app.request('/api/conversations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'hello' }),
+    });
+
+    expect(response.status).toBe(503);
+    const body = (await response.json()) as { error: string };
+    expect(body.error.length).toBeGreaterThan(0);
+    expect(mockGetOrCreateConversation.mock.calls.length).toBe(callsBefore);
+  });
+
+  // An empty conversation carries no work, so drain has no reason to refuse it.
+  test('still creates an empty conversation while draining', async () => {
+    const app = new OpenAPIHono({ defaultHook: validationErrorHook });
+    registerApiRoutes(app, mockWebAdapter, makeMockLockManager({ isDraining: mock(() => true) }));
+
+    const response = await app.request('/api/conversations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(response.status).toBe(200);
+  });
 
   test('creates conversation and dispatches message atomically', async () => {
     const app = new OpenAPIHono({ defaultHook: validationErrorHook });

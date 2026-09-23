@@ -62,6 +62,7 @@ import {
   setUserTiers,
   setUserAliases,
   setUserDefault,
+  DRAIN_REFUSAL_NOTICE,
 } from '@archon/core';
 import type { UserTiersPatch, UserAliasesPatch, AliasesPatch } from '@archon/core';
 import { parseWorkflowRunConfig } from '@archon/core/config';
@@ -614,6 +615,7 @@ const createConversationRoute = createRoute({
     },
     400: jsonError('Bad request'),
     500: jsonError('Server error'),
+    503: jsonError('Server is draining for a restart'),
   },
 });
 
@@ -697,6 +699,7 @@ const sendMessageRoute = createRoute({
     },
     400: jsonError('Bad request'),
     500: jsonError('Server error'),
+    503: jsonError('Server is draining for a restart'),
   },
 });
 
@@ -860,6 +863,7 @@ const runWorkflowRoute = createRoute({
     },
     400: jsonError('Bad request'),
     500: jsonError('Server error'),
+    503: jsonError('Server is draining for a restart'),
   },
 });
 
@@ -967,6 +971,7 @@ const resumeWorkflowRunRoute = createRoute({
     400: jsonError('Bad request'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
+    503: jsonError('Server is draining for a restart'),
   },
 });
 
@@ -1552,6 +1557,23 @@ const getHealthRoute = createRoute({
               is_wsl: z.boolean(),
               wsl_distro: z.string().optional(),
               activePlatforms: z.array(z.string()).optional(),
+              // Present only while the server is draining for a restart (see
+              // /internal/drain). `holding` names each reason the box is not yet
+              // drained, so an operator watching a deploy wait can see what it is
+              // waiting for rather than only that it is waiting.
+              drain: z
+                .object({
+                  state: z.enum(['draining', 'drained']),
+                  requestedAt: z.string(),
+                  expiresAt: z.string(),
+                  refusedCount: z.number(),
+                  holding: z.object({
+                    activeConversations: z.number(),
+                    queuedMessages: z.number(),
+                    runningWorkflows: z.number(),
+                  }),
+                })
+                .optional(),
               // Schema vintage (#2316) so a bug report can state which Archon build
               // created this database and which last applied schema to it. Omitted
               // when unrecorded or unreadable — health must answer regardless.
@@ -2380,6 +2402,34 @@ export function registerApiRoutes(
     return { ok: true, savedFiles, uploadDir };
   }
 
+  /**
+   * Remove the files an upload staged for one dispatch. Called once the AI has had
+   * its chance to read them, or immediately when the dispatch was never accepted —
+   * either way nothing else will, so leaving them behind leaks the upload directory.
+   */
+  async function cleanupUploads(
+    conversationId: string,
+    filesToCleanup: { files: AttachedFile[]; uploadDir: string }
+  ): Promise<void> {
+    for (const f of filesToCleanup.files) {
+      await unlink(f.path).catch((err: NodeJS.ErrnoException) => {
+        if (err.code !== 'ENOENT') {
+          getLog().warn({ err, filePath: f.path, conversationId }, 'upload.cleanup_failed');
+        }
+      });
+    }
+    await rm(filesToCleanup.uploadDir, { recursive: true, force: true }).catch(
+      (err: NodeJS.ErrnoException) => {
+        if (err.code !== 'ENOENT') {
+          getLog().warn(
+            { err, uploadDir: filesToCleanup.uploadDir, conversationId },
+            'upload.dir_cleanup_failed'
+          );
+        }
+      }
+    );
+  }
+
   async function dispatchToOrchestrator(
     conversationId: string,
     message: string,
@@ -2412,31 +2462,19 @@ export function registerApiRoutes(
         }
       } finally {
         await webAdapter.emitLockEvent(conversationId, false);
-        // Clean up uploaded files AFTER handleMessage completes so the AI subprocess
-        // has had a chance to read them. Doing this in the HTTP handler's finally block
-        // would delete files while the fire-and-forget lock handler is still running.
-        if (filesToCleanup) {
-          for (const f of filesToCleanup.files) {
-            await unlink(f.path).catch((err: NodeJS.ErrnoException) => {
-              if (err.code !== 'ENOENT') {
-                getLog().warn({ err, filePath: f.path, conversationId }, 'upload.cleanup_failed');
-              }
-            });
-          }
-          // Remove the now-empty upload directory for this conversation.
-          await rm(filesToCleanup.uploadDir, { recursive: true, force: true }).catch(
-            (err: NodeJS.ErrnoException) => {
-              if (err.code !== 'ENOENT') {
-                getLog().warn(
-                  { err, uploadDir: filesToCleanup.uploadDir, conversationId },
-                  'upload.dir_cleanup_failed'
-                );
-              }
-            }
-          );
-        }
+        // Clean up AFTER handleMessage completes so the AI subprocess has had a chance
+        // to read the files. Doing this in the HTTP handler's finally block would delete
+        // them while the fire-and-forget lock handler is still running.
+        if (filesToCleanup) await cleanupUploads(conversationId, filesToCleanup);
       }
     });
+
+    if (result.status === 'refused-draining') {
+      // The handler never ran, so nothing else will remove what the upload staged and
+      // no lock event was ever emitted to pair a release with.
+      if (filesToCleanup) await cleanupUploads(conversationId, filesToCleanup);
+      return { accepted: false, status: result.status };
+    }
 
     if (result.status === 'queued-conversation' || result.status === 'queued-capacity') {
       // Intentionally fire-and-forget: the lock-acquire signal (locked: true) is sent
@@ -2486,6 +2524,12 @@ export function registerApiRoutes(
     // Undefined on solo installs (no web identity) → creator fallback applies.
     gateActorUserId?: string
   ): Promise<boolean> {
+    if (lockManager.isDraining()) {
+      // The gate decision is already recorded and the run stays paused; the three
+      // routes' existing "not resumed" text already tells the user how to continue.
+      getLog().info({ runId: run.id, action }, 'api.workflow_gate_auto_resume_skipped_draining');
+      return false;
+    }
     // Literal event names per action — greppable for ops tooling. Keeping the
     // branch explicit rather than templating avoids the earlier 3-segment
     // `api.workflow_*.dispatched` shape that broke `{domain}.{action}_{state}`.
@@ -2731,6 +2775,13 @@ export function registerApiRoutes(
         }
       }
 
+      // Refuse before the row exists: creating it and then refusing the dispatch would
+      // leave exactly the ghost "Untitled" conversation this route dispatches atomically
+      // to avoid. An empty conversation carries no work, so drain still allows it.
+      if (message && lockManager.isDraining()) {
+        return apiError(c, 503, DRAIN_REFUSAL_NOTICE);
+      }
+
       const conversationId = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
       const conversation = await conversationDb.getOrCreateConversation(
@@ -2779,6 +2830,9 @@ export function registerApiRoutes(
           message,
           { userId }
         );
+        // Backstop for a drain that begins after the check above: never answer
+        // `dispatched: true` for a turn the lock manager refused.
+        if (!result.accepted) return apiError(c, 503, DRAIN_REFUSAL_NOTICE);
 
         return c.json({
           conversationId: conversation.platform_conversation_id,
@@ -2972,6 +3026,7 @@ export function registerApiRoutes(
       extraContext,
       filesToCleanup
     );
+    if (!result.accepted) return apiError(c, 503, DRAIN_REFUSAL_NOTICE);
     return c.json(result);
   });
 
@@ -3611,6 +3666,7 @@ export function registerApiRoutes(
         extraContext,
         filesToCleanup
       );
+      if (!result.accepted) return apiError(c, 503, DRAIN_REFUSAL_NOTICE);
       return c.json(result);
     } catch (error) {
       getLog().error({ err: error }, 'run_workflow_failed');
@@ -3691,6 +3747,12 @@ export function registerApiRoutes(
       }
       if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
         return apiError(c, 400, `Cannot resume workflow in '${run.status}' status`);
+      }
+      // Covers both branches below: the headless execution bypasses the conversation
+      // lock entirely, so nothing else would refuse it. The run keeps its current
+      // status — drain starts no work and finishes none.
+      if (lockManager.isDraining()) {
+        return apiError(c, 503, DRAIN_REFUSAL_NOTICE);
       }
       // Dispatch resume by sending `/workflow resume <id>` to the parent web
       // conversation; the command handler validates the run and hands the
@@ -5064,6 +5126,24 @@ export function registerApiRoutes(
       getLog().warn({ err }, 'api.schema_version_read_failed');
     }
 
+    // Drained is derived from the two counts this route already reports, so the
+    // deploy's own busy check and the server's answer can never disagree.
+    const drainStatus = lockManager.getDrainStatus();
+    const holding = {
+      activeConversations: allActiveIds.length,
+      queuedMessages: stats.queuedTotal,
+      runningWorkflows: runningWorkflowRows.length,
+    };
+    const drain = drainStatus
+      ? {
+          ...drainStatus,
+          state: Object.values(holding).every(count => count === 0)
+            ? ('drained' as const)
+            : ('draining' as const),
+          holding,
+        }
+      : undefined;
+
     return c.json({
       status: 'ok',
       adapter: 'web',
@@ -5078,6 +5158,7 @@ export function registerApiRoutes(
       is_wsl: isWSL(),
       ...(wslDistro ? { wsl_distro: wslDistro } : {}),
       activePlatforms: activePlatforms ? [...activePlatforms] : ['Web'],
+      ...(drain ? { drain } : {}),
       ...(schema ? { schema } : {}),
     });
   });

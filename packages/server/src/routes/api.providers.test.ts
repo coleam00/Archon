@@ -6,14 +6,14 @@ import {
   getRegistration,
   registerProvider,
 } from '@archon/providers';
-import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
 import { EFFORT_LADDER } from '@archon/paths/effort';
 import {
-  makeDiscoverWorkflowsMock,
-  makeLoaderMock,
   makeCommandValidationMock,
+  makeDiscoverWorkflowsMock,
   makeListDashboardRunsMock,
+  makeLoaderMock,
+  makeMockLockManager,
 } from '../test/workflow-mock-factories';
 
 // ---------------------------------------------------------------------------
@@ -157,19 +157,7 @@ function makeApp(): Hono {
     emitSSE: mock(async () => {}),
     emitLockEvent: mock(async () => {}),
   } as unknown as WebAdapter;
-  const mockLockManager = {
-    acquireLock: mock(async (_id: string, fn: () => Promise<void>) => {
-      await fn();
-      return { status: 'started' };
-    }),
-    getStats: mock(() => ({
-      active: 0,
-      queuedTotal: 0,
-      queuedByConversation: [],
-      maxConcurrent: 10,
-      activeConversationIds: [],
-    })),
-  } as unknown as ConversationLockManager;
+  const mockLockManager = makeMockLockManager();
   registerApiRoutes(app, mockWebAdapter, mockLockManager);
   return app;
 }

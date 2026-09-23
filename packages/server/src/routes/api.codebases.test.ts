@@ -1,9 +1,12 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
 import { validationErrorHook } from './openapi-defaults';
-import { makeListDashboardRunsMock, mockAllWorkflowModules } from '../test/workflow-mock-factories';
+import {
+  makeListDashboardRunsMock,
+  makeMockLockManager,
+  mockAllWorkflowModules,
+} from '../test/workflow-mock-factories';
 
 // ---------------------------------------------------------------------------
 // Mock setup — must be declared before any dynamic imports of mocked modules
@@ -210,13 +213,7 @@ function makeApp(): OpenAPIHono {
     emitSSE: mock(async () => {}),
     emitLockEvent: mock(async () => {}),
   } as unknown as WebAdapter;
-  const mockLockManager = {
-    acquireLock: mock(async (_id: string, fn: () => Promise<void>) => {
-      await fn();
-      return { status: 'started' };
-    }),
-    getStats: mock(() => ({ active: 0, queued: 0 })),
-  } as unknown as ConversationLockManager;
+  const mockLockManager = makeMockLockManager();
   registerApiRoutes(app, mockWebAdapter, mockLockManager);
   return app;
 }

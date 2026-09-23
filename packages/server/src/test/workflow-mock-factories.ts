@@ -1,5 +1,6 @@
 import type { Mock } from 'bun:test';
 import { mock } from 'bun:test';
+import type { ConversationLockManager } from '@archon/core';
 import type { DashboardRunsResult } from '@archon/core/db/workflows';
 import type { WorkflowLoadResult } from '@archon/workflows/schemas/workflow';
 import type { ParseResult } from '@archon/workflows/loader';
@@ -95,4 +96,38 @@ export function makeDefaultsMock(): {
     BUNDLED_COMMANDS: {},
     isBinaryBuild: mock(() => false),
   };
+}
+
+/**
+ * A lock manager that admits everything, for route tests that are not about
+ * admission. One definition rather than a copy per test file: `registerApiRoutes`
+ * takes the real class, so every duck-typed copy has to grow each member the routes
+ * start calling, and a copy that misses one fails at runtime with a bare TypeError.
+ *
+ * Override the members a test is actually about — `isDraining` for drain refusal,
+ * `getStats`/`getDrainStatus` for what health reports.
+ */
+export function makeMockLockManager(
+  overrides: Partial<ConversationLockManager> = {}
+): ConversationLockManager {
+  return {
+    acquireLock: mock(async (_id: string, fn: () => Promise<void>) => {
+      await fn();
+      return { status: 'started' };
+    }),
+    getStats: mock(() => ({
+      active: 0,
+      queuedTotal: 0,
+      queuedByConversation: [],
+      maxConcurrent: 10,
+      activeConversationIds: [],
+    })),
+    beginDrain: mock(() => {
+      throw new Error('makeMockLockManager: beginDrain is not stubbed');
+    }),
+    cancelDrain: mock(() => {}),
+    getDrainStatus: mock(() => undefined),
+    isDraining: mock(() => false),
+    ...overrides,
+  } as unknown as ConversationLockManager;
 }

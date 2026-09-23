@@ -1,12 +1,12 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
 import {
   makeDiscoverWorkflowsMock,
   makeLoaderMock,
   makeCommandValidationMock,
   makeListDashboardRunsMock,
+  makeMockLockManager,
 } from '../test/workflow-mock-factories';
 
 // ---------------------------------------------------------------------------
@@ -32,6 +32,9 @@ const mockGetSchemaVersion = mock(async () => ({
 const mockIsDocker = mock(() => false);
 const mockIsWSL = mock(() => false);
 const mockGetWSLDistroName = mock((): string | undefined => undefined);
+const mockGetDrainStatus = mock(
+  (): { requestedAt: string; expiresAt: string; refusedCount: number } | undefined => undefined
+);
 const mockGetStats = mock(() => ({
   active: 1,
   queuedTotal: 2,
@@ -194,13 +197,10 @@ function makeApp(): OpenAPIHono {
     emitSSE: mock(async () => {}),
     emitLockEvent: mock(async () => {}),
   } as unknown as WebAdapter;
-  const mockLockManager = {
-    acquireLock: mock(async (_id: string, fn: () => Promise<void>) => {
-      await fn();
-      return { status: 'started' };
-    }),
+  const mockLockManager = makeMockLockManager({
     getStats: mockGetStats,
-  } as unknown as ConversationLockManager;
+    getDrainStatus: mockGetDrainStatus,
+  });
   registerApiRoutes(app, mockWebAdapter, mockLockManager);
   return app;
 }
@@ -217,6 +217,8 @@ describe('GET /api/health', () => {
     mockIsWSL.mockClear();
     mockGetWSLDistroName.mockClear();
     mockGetSchemaVersion.mockClear();
+    mockGetDrainStatus.mockReset();
+    mockGetDrainStatus.mockImplementation(() => undefined);
   });
 
   test('returns status ok with adapter and concurrency info', async () => {
@@ -496,6 +498,127 @@ describe('GET /api/health', () => {
     const body = (await response.json()) as { is_wsl: boolean; wsl_distro?: string };
     expect(body.is_wsl).toBe(true);
     expect(body.wsl_distro).toBe('Ubuntu');
+  });
+
+  // Drain (deploy support): /api/health is the only place a deploy learns whether
+  // the box still holds work, so `drained` must mean all three counts are zero.
+  describe('drain', () => {
+    const DRAIN_STATUS = {
+      requestedAt: '2026-09-23T19:00:00.000Z',
+      expiresAt: '2026-09-23T19:30:00.000Z',
+      refusedCount: 4,
+    };
+
+    const idle = (): void => {
+      mockGetStats.mockImplementationOnce(() => ({
+        active: 0,
+        queuedTotal: 0,
+        queuedByConversation: [],
+        maxConcurrent: 10,
+        activeConversationIds: [],
+      }));
+      mockGetRunningWorkflows.mockImplementationOnce(async () => []);
+    };
+
+    test('omits the drain block entirely when not draining', async () => {
+      idle();
+      const app = makeApp();
+      const body = (await (await app.request('/api/health')).json()) as Record<string, unknown>;
+      // Byte-identical to today's payload for every existing consumer.
+      expect(body).not.toHaveProperty('drain');
+    });
+
+    test('reports draining while a conversation is still active', async () => {
+      mockGetDrainStatus.mockImplementation(() => DRAIN_STATUS);
+      mockGetStats.mockImplementationOnce(() => ({
+        active: 1,
+        queuedTotal: 0,
+        queuedByConversation: [],
+        maxConcurrent: 10,
+        activeConversationIds: ['conv-1'],
+      }));
+      mockGetRunningWorkflows.mockImplementationOnce(async () => []);
+
+      const app = makeApp();
+      const body = (await (await app.request('/api/health')).json()) as {
+        drain?: { state: string; refusedCount: number; holding: Record<string, number> };
+      };
+      expect(body.drain?.state).toBe('draining');
+      expect(body.drain?.refusedCount).toBe(4);
+      expect(body.drain?.holding).toEqual({
+        activeConversations: 1,
+        queuedMessages: 0,
+        runningWorkflows: 0,
+      });
+    });
+
+    test('reports draining while a message is still queued', async () => {
+      mockGetDrainStatus.mockImplementation(() => DRAIN_STATUS);
+      mockGetStats.mockImplementationOnce(() => ({
+        active: 0,
+        queuedTotal: 2,
+        queuedByConversation: [],
+        maxConcurrent: 10,
+        activeConversationIds: [],
+      }));
+      mockGetRunningWorkflows.mockImplementationOnce(async () => []);
+
+      const app = makeApp();
+      const body = (await (await app.request('/api/health')).json()) as {
+        drain?: { state: string; holding: { queuedMessages: number } };
+      };
+      expect(body.drain?.state).toBe('draining');
+      expect(body.drain?.holding.queuedMessages).toBe(2);
+    });
+
+    test('a running workflow alone holds drain open', async () => {
+      mockGetDrainStatus.mockImplementation(() => DRAIN_STATUS);
+      mockGetStats.mockImplementationOnce(() => ({
+        active: 0,
+        queuedTotal: 0,
+        queuedByConversation: [],
+        maxConcurrent: 10,
+        activeConversationIds: [],
+      }));
+      mockGetRunningWorkflows.mockImplementationOnce(async () => [
+        {
+          id: 'run-1',
+          conversation_id: 'conv-bg',
+          workflow_name: 'deliver',
+          started_at: '2026-09-23',
+        },
+      ]);
+
+      const app = makeApp();
+      const body = (await (await app.request('/api/health')).json()) as {
+        drain?: {
+          state: string;
+          holding: { runningWorkflows: number; activeConversations: number };
+        };
+      };
+      expect(body.drain?.state).toBe('draining');
+      expect(body.drain?.holding.runningWorkflows).toBe(1);
+      // A background run also counts as an active conversation — both must be zero.
+      expect(body.drain?.holding.activeConversations).toBe(1);
+    });
+
+    test('reports drained only once nothing at all is held', async () => {
+      mockGetDrainStatus.mockImplementation(() => DRAIN_STATUS);
+      idle();
+
+      const app = makeApp();
+      const body = (await (await app.request('/api/health')).json()) as {
+        drain?: { state: string; requestedAt: string; expiresAt: string; holding: unknown };
+      };
+      expect(body.drain?.state).toBe('drained');
+      expect(body.drain?.requestedAt).toBe(DRAIN_STATUS.requestedAt);
+      expect(body.drain?.expiresAt).toBe(DRAIN_STATUS.expiresAt);
+      expect(body.drain?.holding).toEqual({
+        activeConversations: 0,
+        queuedMessages: 0,
+        runningWorkflows: 0,
+      });
+    });
   });
 });
 

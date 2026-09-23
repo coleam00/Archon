@@ -3,7 +3,11 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
 import { validationErrorHook } from './openapi-defaults';
-import { makeListDashboardRunsMock, mockAllWorkflowModules } from '../test/workflow-mock-factories';
+import {
+  makeListDashboardRunsMock,
+  makeMockLockManager,
+  mockAllWorkflowModules,
+} from '../test/workflow-mock-factories';
 import { MAX_TOOL_OUTPUT_CHARS } from '../adapters/web/truncate';
 
 // ---------------------------------------------------------------------------
@@ -192,22 +196,20 @@ const MOCK_MESSAGES = [
   },
 ];
 
-function makeApp(): { app: OpenAPIHono; mockWebAdapter: WebAdapter } {
+function makeApp(lockManagerOverrides: Partial<ConversationLockManager> = {}): {
+  app: OpenAPIHono;
+  mockWebAdapter: WebAdapter;
+  mockLockManager: ConversationLockManager;
+} {
   const app = new OpenAPIHono({ defaultHook: validationErrorHook });
   const mockWebAdapter = {
     setConversationDbId: mock((_platformId: string, _dbId: string) => {}),
     emitSSE: mock(async () => {}),
     emitLockEvent: mock(async () => {}),
   } as unknown as WebAdapter;
-  const mockLockManager = {
-    acquireLock: mock(async (_id: string, fn: () => Promise<void>) => {
-      await fn();
-      return { status: 'started' };
-    }),
-    getStats: mock(() => ({ active: 0, queued: 0 })),
-  } as unknown as ConversationLockManager;
+  const mockLockManager = makeMockLockManager(lockManagerOverrides);
   registerApiRoutes(app, mockWebAdapter, mockLockManager);
-  return { app, mockWebAdapter };
+  return { app, mockWebAdapter, mockLockManager };
 }
 
 // ---------------------------------------------------------------------------
@@ -245,6 +247,27 @@ describe('POST /api/conversations/:id/message', () => {
     const body = (await response.json()) as { accepted: boolean; status: string };
     expect(body.accepted).toBe(true);
     expect(body.status).toBe('started');
+  });
+
+  // Invariant: a message that arrives during drain must never be silently dropped.
+  // Refusal (not a queue) is the choice: the queue is in-memory and the process is
+  // about to be replaced, so a queued message would be lost by the swap.
+  test('refuses a message with 503 while draining, without acquiring the lock', async () => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+    const acquireLock = mock(async () => ({ status: 'refused-draining' as const }));
+
+    const { app } = makeApp({ acquireLock, isDraining: mock(() => true) });
+    const response = await app.request('/api/conversations/web-test-abc/message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'Hello' }),
+    });
+
+    expect(response.status).toBe(503);
+    const body = (await response.json()) as { error: string };
+    expect(body.error.length).toBeGreaterThan(0);
+    // The caller was told, and the turn never started.
+    expect(mockHandleMessage).not.toHaveBeenCalled();
   });
 
   test('persists user message to DB when conversation is found', async () => {

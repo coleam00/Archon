@@ -13,6 +13,7 @@ import {
   ConversationNotFoundError,
   handleMessage,
   classifyAndFormatError,
+  DRAIN_REFUSAL_NOTICE,
   toError,
   getLinkedIssueNumbers,
   onConversationClosed,
@@ -1380,7 +1381,7 @@ ${userComment}`;
     );
 
     // 13. Route to orchestrator with isolation hints (with lock for concurrency control)
-    await this.lockManager.acquireLock(conversationId, async () => {
+    const acquisition = await this.lockManager.acquireLock(conversationId, async () => {
       try {
         await handleMessage(this, conversationId, finalMessage, {
           issueContext: contextToAppend,
@@ -1402,5 +1403,16 @@ ${userComment}`;
         }
       }
     });
+    if (acquisition.status === 'refused-draining') {
+      // The handler never ran and nothing queued it: silence would lose the comment.
+      try {
+        await this.sendMessage(conversationId, DRAIN_REFUSAL_NOTICE);
+      } catch (sendError) {
+        getLog().error(
+          { err: toError(sendError), conversationId },
+          'github.drain_notice_send_failed'
+        );
+      }
+    }
   }
 }

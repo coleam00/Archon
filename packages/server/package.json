@@ -121,6 +121,9 @@
     ],
     [
       "src/host-command.test.ts"
+    ],
+    [
+      "src/routes/internal-drain.test.ts"
     ]
   ]
 }

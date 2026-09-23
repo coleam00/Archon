@@ -94,6 +94,8 @@ import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-writ
 import {
   resumeWorkflowRunFromServer,
   scanDueWorkflowContinuations,
+  startWorkflowContinuationScheduler,
+  stopWorkflowContinuationScheduler,
   workflowResumeConversationId,
   workflowResumeTargetForConversation,
 } from './workflow-resume-service';
@@ -681,5 +683,49 @@ describe('workflow continuation scanner', () => {
       '2026-08-24T11:01:00.000Z',
       { kind: 'wait', nodeId: 'delay', resumeAt: '2026-08-24T11:00:00.000Z' }
     );
+  });
+});
+
+// The scheduler is the only place the server resumes a continuation with nobody
+// watching. A draining process is about to be replaced, so it must start none —
+// and, critically, must not record anything about the ones it skipped.
+describe('continuation scheduler while draining', () => {
+  beforeEach(() => {
+    stopWorkflowContinuationScheduler();
+    mockListDueWorkflowContinuations.mockReset();
+    mockListDueWorkflowContinuations.mockResolvedValue([run('due', 'paused', {})]);
+    mockDeferWorkflowContinuation.mockReset();
+    mockDeferWorkflowContinuation.mockResolvedValue(undefined);
+  });
+
+  test('skips the tick entirely, transitioning no row', async () => {
+    startWorkflowContinuationScheduler(undefined, undefined, () => true);
+    await Promise.resolve();
+
+    // Never scanned, so nothing was resumed and — the invariant — nothing got the
+    // compensating defer write either. A due continuation stays exactly as it is
+    // and the replacement container's first tick picks it up.
+    expect(mockListDueWorkflowContinuations).not.toHaveBeenCalled();
+    expect(mockDeferWorkflowContinuation).not.toHaveBeenCalled();
+    stopWorkflowContinuationScheduler();
+  });
+
+  test('skips the shared host duty on the same tick', async () => {
+    const onTick = mock(() => {});
+    startWorkflowContinuationScheduler(undefined, onTick, () => true);
+    await Promise.resolve();
+
+    expect(onTick).not.toHaveBeenCalled();
+    stopWorkflowContinuationScheduler();
+  });
+
+  test('scans as usual when not draining', async () => {
+    const onTick = mock(() => {});
+    startWorkflowContinuationScheduler(undefined, onTick, () => false);
+    await Promise.resolve();
+
+    expect(mockListDueWorkflowContinuations).toHaveBeenCalled();
+    expect(onTick).toHaveBeenCalled();
+    stopWorkflowContinuationScheduler();
   });
 });
