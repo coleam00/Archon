@@ -1332,15 +1332,19 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       };
     }
 
+    // A load failure reaches the author through the returned `error`, which discovery
+    // collects for `workflow list`, `validate workflows`, `workflow run`, and the API.
+    // Like parse warnings, the log line is debug so a broken file is not repeated on
+    // every discovery (#3444).
     if (!raw.name || typeof raw.name !== 'string') {
-      getLog().warn({ filename }, 'workflow_missing_name');
+      getLog().debug({ filename }, 'workflow_missing_name');
       return {
         workflow: null,
         error: { filename, error: "Missing required field 'name'", errorType: 'validation_error' },
       };
     }
     if (!raw.description || typeof raw.description !== 'string') {
-      getLog().warn({ filename }, 'workflow_missing_description');
+      getLog().debug({ filename }, 'workflow_missing_description');
       return {
         workflow: null,
         error: {
@@ -1375,7 +1379,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     }
 
     if (!hasNodes) {
-      getLog().warn({ filename }, 'workflow_missing_nodes');
+      getLog().debug({ filename }, 'workflow_missing_nodes');
       return {
         workflow: null,
         error: {
@@ -1394,7 +1398,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       .filter((n): n is DagNode | IncludeDirective => n !== null);
 
     if (dagNodes.length !== (raw.nodes as unknown[]).length) {
-      getLog().warn({ filename, validationErrors }, 'dag_node_validation_failed');
+      getLog().debug({ filename, validationErrors }, 'dag_node_validation_failed');
       return {
         workflow: null,
         error: {
@@ -1407,7 +1411,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
 
     const structureError = validateDagStructure(dagNodes);
     if (structureError) {
-      getLog().warn({ filename, structureError }, 'dag_structure_invalid');
+      getLog().debug({ filename, structureError }, 'dag_structure_invalid');
       return {
         workflow: null,
         error: { filename, error: structureError, errorType: 'validation_error' },
@@ -1416,7 +1420,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
 
     const outputFormatError = validateNodeOutputFormats(dagNodes);
     if (outputFormatError) {
-      getLog().warn({ filename, outputFormatError }, 'output_format_rejected');
+      getLog().debug({ filename, outputFormatError }, 'output_format_rejected');
       return {
         workflow: null,
         error: { filename, error: outputFormatError, errorType: 'validation_error' },
@@ -1824,7 +1828,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     if (typeof raw.returns === 'string' && raw.returns.trim().length > 0) {
       returns = raw.returns.trim();
     } else if (raw.returns !== undefined) {
-      getLog().warn({ filename, value: raw.returns }, 'invalid_workflow_returns_value_rejected');
+      getLog().debug({ filename, value: raw.returns }, 'invalid_workflow_returns_value_rejected');
       return {
         workflow: null,
         error: {
@@ -1858,7 +1862,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     if (typeof raw.outcome_field === 'string' && raw.outcome_field.trim().length > 0) {
       outcomeField = raw.outcome_field.trim();
     } else if (raw.outcome_field !== undefined) {
-      getLog().warn(
+      getLog().debug(
         { filename, value: raw.outcome_field },
         'invalid_workflow_outcome_field_value_rejected'
       );
@@ -2055,7 +2059,9 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     const linePattern = /line (\d+)/i;
     const lineMatch = linePattern.exec(err.message);
     const lineInfo = lineMatch ? ` (near line ${lineMatch[1]})` : '';
-    getLog().error(
+    // Debug for the same reason as the validation failures above: the returned
+    // parse_error is what the author sees, and discovery re-parses on every command.
+    getLog().debug(
       {
         err,
         filename,

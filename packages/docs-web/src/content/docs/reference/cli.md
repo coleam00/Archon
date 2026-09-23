@@ -1073,8 +1073,11 @@ as the server does when started directly.
 
 Workflow definition problems, such as deprecated or unknown keys, are reported by
 `archon validate workflows`, inline under the workflow in `workflow list`, and on stderr
-before `workflow run` starts. They are not logged for every workflow a command happens to
-discover.
+before `workflow run` starts. A file that fails to load is listed with its error by
+`workflow list` and `validate workflows`, and `workflow run` names the error. These problems
+are logged only at debug, not for every workflow a command happens to discover. An invalid
+value for an optional workflow field (for example a malformed `tags:` block) is dropped with
+a warning log, because no other report names it.
 
 ## Working Directory
 

@@ -6034,6 +6034,28 @@ nodes:
       expect(call).toBeUndefined();
     });
 
+    it('does not warn that an included block dropped its deprecated: notice', async () => {
+      await writeWorkflowFile(
+        testDir,
+        'deprecated-block.yaml',
+        `name: deprecated-block\ndescription: Superseded block\ndeprecated:\n  message: Use the new block.\nnodes:\n  - id: work\n    bash: "echo work"\n`
+      );
+      await writeWorkflowFile(
+        testDir,
+        'deprecated-parent.yaml',
+        `name: deprecated-parent\ndescription: Includes the deprecated block\nnodes:\n  - id: old-sub\n    include: deprecated-block\n`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors.filter(e => e.filename === 'deprecated-parent.yaml')).toHaveLength(0);
+      const call = (mockLogger.warn as Mock<(...args: unknown[]) => unknown>).mock.calls.find(
+        c =>
+          c[1] === 'include.workflow_level_fields_dropped' &&
+          (c[0] as { include?: string }).include === 'old-sub'
+      );
+      expect(call).toBeUndefined();
+    });
+
     it('should compile a block command file and namespace a local sibling ref', async () => {
       const commandsDir = join(testDir, '.archon', 'commands');
       await mkdir(commandsDir, { recursive: true });
