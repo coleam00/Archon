@@ -21681,6 +21681,51 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(finalSpillContent).toBe('b'.repeat(40_000));
   });
 
+  it("until_bash observes the typed artifacts its own iteration's body published", async () => {
+    const counterFile = join(testDir, 'lg-typed-counter');
+    const counterRef = `"${counterFile.replace(/\\/g, '/')}"`;
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        platform: createMockPlatform(),
+        conversationId: 'conv-lg-typed',
+        cwd: testDir,
+        workflow: {
+          name: 'lg-typed-until',
+          nodes: [
+            {
+              id: 'group',
+              kind: 'loop_group',
+              loop_group: {
+                // Stops as soon as the listing names a `verdict` artifact. The body
+                // publishes one in iteration 1, so iteration 1's condition must see it.
+                until_bash: 'grep -q \'"verdict"\' "${TYPED_ARTIFACTS_FILE}"',
+                max_iterations: 3,
+                fresh_context: false,
+                nodes: [
+                  {
+                    id: 'judge',
+                    kind: 'exec',
+                    runtime: 'sh',
+                    script: `n=$(cat ${counterRef} 2>/dev/null || echo 0); echo $((n+1)) > ${counterRef}; echo ok`,
+                    output_type: 'verdict',
+                    depends_on: [],
+                  },
+                ],
+              },
+              depends_on: [],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('lg-typed-until'),
+        artifactsDir: join(testDir, 'artifacts'),
+      })
+    );
+
+    expect((await readFile(counterFile, 'utf8')).trim()).toBe('1');
+  });
+
   it('INSTANCE 2: $LOOP_PREV cross-iteration ref sees prior iteration output', async () => {
     // The body prompt references $LOOP_PREV.work.output. We assert the mock receives a
     // prompt that contains the PREVIOUS iteration's output on iteration 2+ (and empty

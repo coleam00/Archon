@@ -4949,12 +4949,6 @@ async function executeLoopGroupBody(
 
   for (let i = startIteration; i <= iterationLimit; i++) {
     const iterationStart = Date.now();
-    // Fresh per iteration, like executeLoopNode: this iteration's until_bash sees the
-    // artifacts published before it. Only until_bash reads the listing, so a group
-    // without one pays no read or write.
-    const typedArtifactsFile = group.until_bash
-      ? await writeNodeArtifactsListing(artifactsDir, workflowRun.id)
-      : undefined;
 
     // Between-iteration status check (paused tolerated — mirrors executeLoopNode).
     const runStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
@@ -5270,6 +5264,10 @@ async function executeLoopGroupBody(
       // Resolve outside the try so ARCHON_BASH_PATH validation errors bubble up
       // to the caller instead of being swallowed by the per-iteration catch.
       const groupBashPath = resolveBashPath();
+      // Observed after the body ran, so the condition sees the typed artifacts this
+      // iteration published. Outside the try: a materialization fault is a
+      // provisioning error, not an unreachable bash binary.
+      const typedArtifactsFile = await writeNodeArtifactsListing(artifactsDir, workflowRun.id);
       try {
         // Resolve this group's own cross-iteration refs against the snapshot captured
         // before its body ran. `loopPrevOutputs` now contains the CURRENT iteration, so
