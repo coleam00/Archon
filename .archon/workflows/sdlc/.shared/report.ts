@@ -61,12 +61,14 @@ function readJson(path: string): { value: unknown } | { error: string } | undefi
   }
 }
 
+/** A JSON object: not null, not an array. `typeof` alone admits both. */
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 function records(value: unknown): readonly Record<string, unknown>[] {
   if (!Array.isArray(value)) return [];
-  return value.filter(
-    (entry): entry is Record<string, unknown> =>
-      typeof entry === 'object' && entry !== null && !Array.isArray(entry)
-  );
+  return value.filter(isJsonObject);
 }
 
 /**
@@ -163,18 +165,15 @@ function listedGates(
 ):
   | { readonly gates: readonly Record<string, unknown>[] }
   | { readonly limitation: string } {
-  if (typeof artifactsByType !== 'object' || artifactsByType === null) {
+  if (!isJsonObject(artifactsByType)) {
     return { limitation: 'its `artifactsByType` is not a JSON object' };
   }
-  const gates = (artifactsByType as Record<string, unknown>)['green-gate'];
+  const gates = artifactsByType['green-gate'];
   if (gates === undefined) return { gates: [] };
   if (!Array.isArray(gates)) {
     return { limitation: "its `artifactsByType['green-gate']` is not an array" };
   }
-  const objects = gates.filter(
-    (entry): entry is Record<string, unknown> =>
-      typeof entry === 'object' && entry !== null && !Array.isArray(entry)
-  );
+  const objects = gates.filter(isJsonObject);
   if (objects.length !== gates.length) {
     return { limitation: "an `artifactsByType['green-gate']` entry is not a JSON object" };
   }
