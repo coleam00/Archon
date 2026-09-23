@@ -15,7 +15,7 @@ import {
 } from '../db/workflow-run-node-sessions';
 import * as codebaseDb from '../db/codebases';
 import * as envVarDb from '../db/env-vars';
-import { getAgentProvider } from '@archon/providers';
+import { getAgentProvider } from '../services/provider-admission';
 import { loadConfig as loadMergedConfig } from '../config/config-loader';
 import { createLogger } from '@archon/paths';
 import type { IGitHubAppAuthProvider } from '../github-auth';

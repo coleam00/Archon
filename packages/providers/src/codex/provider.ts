@@ -1154,7 +1154,11 @@ export class CodexProvider implements IAgentProvider {
 
           const delayMs = this.retryBaseDelayMs * Math.pow(2, attempt);
           getLog().info({ attempt, delayMs, errorClass }, 'retrying_query');
-          await new Promise(resolve => setTimeout(resolve, delayMs));
+          const backoff = (): Promise<void> => new Promise(resolve => setTimeout(resolve, delayMs));
+          // A capped provider's slot is not held through the backoff.
+          await (requestOptions?.admission
+            ? requestOptions.admission.releaseDuring(backoff)
+            : backoff());
           lastError = enrichedError;
         }
       } finally {

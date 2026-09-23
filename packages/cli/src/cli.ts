@@ -1184,6 +1184,8 @@ async function main(): Promise<number> {
           aiAliasListCommand,
           aiAliasUnsetCommand,
           aiDefaultCommand,
+          aiCapacityListCommand,
+          aiCapacityReleaseCommand,
         } = await loadRoute(() => import('./commands/ai'), {
           providers: true,
           database: true,
@@ -1248,6 +1250,16 @@ async function main(): Promise<number> {
                 );
             }
           }
+          case 'capacity': {
+            const action = positionals[2];
+            if (action === undefined || action === 'list')
+              return await aiCapacityListCommand(jsonFlag);
+            if (action === 'release') return await aiCapacityReleaseCommand(positionals[3]);
+            return await fail(
+              jsonFlag,
+              'Usage: archon ai capacity [list] [--json] | capacity release <attempt-id>'
+            );
+          }
           case 'default':
             return await aiDefaultCommand(
               positionals[2],
@@ -1261,7 +1273,7 @@ async function main(): Promise<number> {
                 : `Unknown ai subcommand: ${subcommand}`;
             return await fail(
               jsonFlag,
-              `${problem}\nAvailable: key set <provider>, login <provider>, list, logout <provider>, tier set|list|unset, alias set|list|unset, default <provider> [<model>]`
+              `${problem}\nAvailable: key set <provider>, login <provider>, list, logout <provider>, tier set|list|unset, alias set|list|unset, capacity [list]|release <attempt-id>, default <provider> [<model>]`
             );
           }
         }

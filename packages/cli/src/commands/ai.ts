@@ -62,6 +62,10 @@ import {
 } from '@archon/workflows/model-validation';
 import type { TierName, RawAliasEntry } from '@archon/workflows/model-validation';
 import * as userDb from '@archon/core/db/users';
+import {
+  listProviderAttemptHolders,
+  releaseProviderAttemptHolder,
+} from '@archon/core/db/provider-attempts';
 import { resolveCliUserId } from './auth';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -736,5 +740,51 @@ export async function aiDefaultCommand(
     );
     console.error(`✗ ${(err as Error).message}`);
     return 1;
+  }
+}
+
+/**
+ * List provider-attempt slot holders. A holder whose owner is on another host cannot
+ * be proven dead from here, so it stays held until `ai capacity release`.
+ */
+export async function aiCapacityListCommand(json?: boolean): Promise<number> {
+  const holders = await listProviderAttemptHolders();
+  if (json) {
+    await writeJsonLine({ holders });
+    return 0;
+  }
+  if (holders.length === 0) {
+    console.log('No provider attempts hold capacity.');
+    return 0;
+  }
+  console.log('Provider attempts holding capacity:');
+  for (const h of holders) {
+    const where = h.ownerOnThisHost ? 'this host' : 'another host';
+    console.log(
+      `  ${h.provider.padEnd(10)} ${h.attemptId}  ${h.owner.host} pid ${String(h.owner.pid)} (${where}) since ${h.acquiredAt}`
+    );
+  }
+  return 0;
+}
+
+/** Explicitly release one holder whose owner process the operator has verified is gone. */
+export async function aiCapacityReleaseCommand(attemptId: string | undefined): Promise<number> {
+  if (!attemptId) {
+    console.error('Usage: archon ai capacity release <attempt-id>');
+    return 1;
+  }
+  const outcome = await releaseProviderAttemptHolder(attemptId);
+  switch (outcome) {
+    case 'released':
+      console.log(`Released provider attempt ${attemptId}.`);
+      return 0;
+    case 'not_found':
+      console.error(`No provider attempt ${attemptId} holds capacity.`);
+      return 1;
+    case 'owner_running':
+      console.error(
+        `Provider attempt ${attemptId} belongs to a process still running on this host; it was not released.`
+      );
+      return 1;
   }
 }

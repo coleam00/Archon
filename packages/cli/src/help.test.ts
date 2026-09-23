@@ -216,6 +216,8 @@ Commands:
   ai alias set <@n> <p> <m>  Set a @custom model alias [--effort <e>] [--scope user|install]
   ai alias list [--json]     Show configured @custom aliases (install + yours)
   ai alias unset <@name>     Remove a @custom alias [--scope user|install]
+  ai capacity [--json]       Show provider attempts holding concurrency.providers capacity
+  ai capacity release <id>   Release a held attempt whose owner process you verified is gone
   ai default <p> [<model>]   Set the default assistant (+ chat model) [--scope user|install]
   telemetry status           Show anonymous telemetry state (enabled, reason, ID, host)
   telemetry reset            Rotate the anonymous install UUID

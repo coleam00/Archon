@@ -2253,6 +2253,35 @@ describe('CodexProvider', () => {
         expect(chunks.some(c => c.type === 'assistant' && c.content === 'Recovered!')).toBe(true);
       }, 5_000);
 
+      test('retry backoff runs inside the admission release, never while the slot is held', async () => {
+        const events: string[] = [];
+        mockRunStreamed.mockImplementation(() => {
+          events.push('attempt');
+          if (events.filter(e => e === 'attempt').length === 1) {
+            return Promise.reject(new Error('Codex Exec exited with code 1'));
+          }
+          return Promise.resolve({
+            events: (async function* () {
+              yield { type: 'item.completed', item: { type: 'agent_message', text: 'ok' } };
+              yield { type: 'turn.completed', usage: defaultUsage };
+            })(),
+          });
+        });
+        const admission = {
+          releaseDuring: async (wait: () => Promise<void>): Promise<void> => {
+            events.push('released');
+            await wait();
+            events.push('reacquired');
+          },
+        };
+
+        for await (const _ of client.sendQuery('test', '/workspace', undefined, { admission })) {
+          // consume
+        }
+
+        expect(events).toEqual(['attempt', 'released', 'reacquired', 'attempt']);
+      }, 5_000);
+
       test('classifies auth errors as fatal (no retry)', async () => {
         mockRunStreamed.mockRejectedValue(new Error('unauthorized'));
 

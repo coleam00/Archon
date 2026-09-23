@@ -158,6 +158,27 @@ export default tseslint.config(
     },
   },
 
+  // Provider attempts are admitted against the operator's concurrency caps. Callers
+  // get providers from core's admission seam; the registry's unadmitted
+  // getAgentProvider stays reachable only from that seam.
+  {
+    files: ['packages/*/src/**/*.{ts,tsx}'],
+    ignores: ['packages/providers/src/**', 'packages/core/src/services/provider-admission.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: ['@archon/providers', '@archon/providers/registry'].map(name => ({
+            name,
+            importNames: ['getAgentProvider'],
+            message:
+              "Use getAgentProvider from '@archon/core/services/provider-admission' so provider concurrency caps apply.",
+          })),
+        },
+      ],
+    },
+  },
+
   // The console owns its API and reactive state instead of growing a second
   // application data layer beside its skills and cache.
   {

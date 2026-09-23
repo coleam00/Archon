@@ -309,6 +309,18 @@ const commandHelp: HelpEntry[] = [
   },
   {
     command: 'ai',
+    subcommand: 'capacity',
+    spec: 'ai capacity [--json]',
+    description: 'Show provider attempts holding concurrency.providers capacity',
+  },
+  {
+    command: 'ai',
+    subcommand: 'capacity',
+    spec: 'ai capacity release <id>',
+    description: 'Release a held attempt whose owner process you verified is gone',
+  },
+  {
+    command: 'ai',
     subcommand: 'default',
     spec: 'ai default <p> [<model>]',
     description: 'Set the default assistant (+ chat model) [--scope user|install]',

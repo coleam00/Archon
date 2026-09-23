@@ -155,6 +155,10 @@ archon ai alias set <@name> <provider> <model> [--effort <effort>] [--scope user
 archon ai alias list [--json]    # show @custom aliases (install + yours)
 archon ai alias unset <@name> [--scope user|install]
 archon ai default <provider> [<model>] [--scope user|install]   # set the default assistant (+ optional chat model)
+
+# --- Provider concurrency caps ---
+archon ai capacity [list] [--json]         # provider attempts holding concurrency.providers slots
+archon ai capacity release <attempt-id>    # release one whose owner process you verified is gone
 ```
 
 Credential ids are **vendor-keyed** (`anthropic`, `openai`, `github-copilot`, plus the Pi backends like `openrouter`); legacy `claude`/`codex`/`copilot` are accepted and normalized with a printed notice. `ai login` supports subscription login for **`anthropic`**, **`openai`** (ChatGPT/Codex), and **`github-copilot`**. The `openai` login is an Archon-owned PKCE flow ([#1924](https://github.com/coleam00/Archon/issues/1924)): authorize in the browser, then paste the authorization code or the full `localhost:1455` redirect URL back at the prompt — nothing needs to listen on that port. The API key is never read from argv (it would leak into shell history): pipe it (`echo "$KEY" | archon ai key set openrouter`) or type it at the masked prompt.
