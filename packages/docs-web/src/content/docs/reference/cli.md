@@ -743,11 +743,13 @@ this host:
   (proves the owner, terminates its process tree, waits), then records `cancelled`.
 - **No owner answers:** abandon records `cancelled` and prints what the run recorded:
   the host and pid of the process that last executed it, and its last activity. If that
-  host is not this one, it says so: abandon cannot reach or stop a process on another
-  host. Nothing decides the run is dead from its age or pid.
+  host is not this one, or the owner ran as another user on this host, it says so:
+  abandon can only reach owners on its own host running as its own user. Nothing
+  decides the run is dead from its age or pid.
 - **An owner answers but cannot be stopped:** abandon fails with the reason and leaves
   the run unchanged. This includes a run executing inside a live Archon server, which
-  abandon cannot stop; cancel it from that server instead.
+  abandon cannot stop; cancel it on that server instead (the Web UI's Cancel action,
+  `POST /api/workflows/runs/{runId}/cancel`, or `/workflow cancel` in its chat).
 
 ```bash
 archon workflow abandon <run-id>
@@ -756,7 +758,7 @@ archon workflow abandon <run-id> --json
 
 `--json` adds an `owner` object: `{ "outcome": "stopped", "pid": … }`, or
 `{ "outcome": "no_owner_answered", "thisHost", "recordedHost", "recordedPid",
-"lastActivityAt" }`.
+"recordedUid", "lastActivityAt" }`.
 
 **Sub-run trees (#2121 Phase 2):** abandoning a parent that spawned `workflow:` sub-runs cascade-cancels every non-terminal descendant (children and grandchildren; already-terminal runs are left alone). These are database transitions, not process termination; an in-flight host command can continue until it returns. If part of the tree could not be reached, the command reports the count so you know descendants may still be alive. Conversely, abandoning a **child** that its parent is paused-and-blocked on strands that parent (nothing re-fires the auto-resume hook); the command surfaces the blocked parent's run id so you can `resume` it (which fails the sub-run node cleanly) or abandon it too.
 

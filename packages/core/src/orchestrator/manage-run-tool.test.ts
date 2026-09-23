@@ -32,6 +32,7 @@ const noOwnerAnswered = {
   recordedOwner: { host: 'build-box', pid: 4242 },
   lastActivityAt: null,
   thisHost: 'here',
+  thisUid: 501,
 } as const;
 const mockAbandon = mock((_id: string) =>
   Promise.resolve({

@@ -1686,7 +1686,7 @@ describe('abandonWorkflow', () => {
       makePausedRun({
         status: 'running',
         last_activity_at: lastActivity,
-        metadata: { execution_owner: { host: hostname(), pid: 4242 } },
+        metadata: { execution_owner: { host: hostname(), pid: 4242, uid: 501 } },
       })
     );
 
@@ -1696,9 +1696,10 @@ describe('abandonWorkflow', () => {
     expect(owner).toEqual({
       kind: 'no_owner_answered',
       detail: 'ENOENT',
-      recordedOwner: { host: hostname(), pid: 4242 },
+      recordedOwner: { host: hostname(), pid: 4242, uid: 501 },
       lastActivityAt: lastActivity,
       thisHost: hostname(),
+      thisUid: process.getuid?.(),
     });
   });
 
@@ -1748,13 +1749,14 @@ describe('abandonWorkflow', () => {
 });
 
 describe('describeAbandonOwner', () => {
-  const noOwner = (recordedOwner: { host: string; pid: number } | undefined) =>
+  const noOwner = (recordedOwner: { host: string; pid: number; uid?: number } | undefined) =>
     ({
       kind: 'no_owner_answered',
       detail: 'ENOENT',
       recordedOwner,
       lastActivityAt: new Date('2026-09-20T10:00:00.000Z'),
       thisHost: 'here',
+      thisUid: 501,
     }) as const;
 
   test('shows the recorded host, pid, and last activity', () => {
@@ -1772,6 +1774,18 @@ describe('describeAbandonOwner', () => {
       'The recorded owner is on another host (build-box). Abandon cannot reach or stop a process there; ' +
         'if it is still running, it keeps running after this run is marked cancelled.'
     );
+  });
+
+  test('says plainly when the recorded owner ran as another user on this host', () => {
+    // The endpoint directory is per-uid, so an owner running as another user is as
+    // unreachable as one on another host.
+    const lines = describeAbandonOwner(noOwner({ host: 'here', pid: 4242, uid: 1000 }));
+    expect(lines.at(-1)).toBe(
+      'The recorded owner ran as another user (uid 1000), and abandon runs as uid 501. ' +
+        'Abandon can only reach owners running as its own user; ' +
+        'if it is still running, it keeps running after this run is marked cancelled.'
+    );
+    expect(describeAbandonOwner(noOwner({ host: 'here', pid: 4242, uid: 501 }))).toHaveLength(3);
   });
 
   test('says when no owner was recorded', () => {

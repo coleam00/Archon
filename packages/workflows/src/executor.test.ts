@@ -338,7 +338,14 @@ describe('executeWorkflow', () => {
   });
 
   describe('execution owner record (#2325)', () => {
-    const owner = { execution_owner: { host: hostname(), pid: process.pid } };
+    const uid = process.getuid?.();
+    const owner = {
+      execution_owner: {
+        host: hostname(),
+        pid: process.pid,
+        ...(uid === undefined ? {} : { uid }),
+      },
+    };
 
     it('stamps this process on a run it creates', async () => {
       const store = makeStore();

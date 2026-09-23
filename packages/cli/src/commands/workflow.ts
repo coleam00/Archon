@@ -4974,6 +4974,7 @@ export async function workflowAbandonCommand(
                 thisHost: owner.thisHost,
                 recordedHost: owner.recordedOwner?.host ?? null,
                 recordedPid: owner.recordedOwner?.pid ?? null,
+                recordedUid: owner.recordedOwner?.uid ?? null,
                 lastActivityAt: owner.lastActivityAt?.toISOString() ?? null,
               },
         ...(cascadeFailures > 0 ? { cascadeFailures } : {}),

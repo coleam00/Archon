@@ -6730,6 +6730,7 @@ describe('write command --json output', () => {
         thisHost: hostname(),
         recordedHost: 'build-box',
         recordedPid: 4242,
+        recordedUid: null,
         lastActivityAt: '2026-09-20T10:00:00.000Z',
       },
     });

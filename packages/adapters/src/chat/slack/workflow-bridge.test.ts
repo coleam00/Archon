@@ -639,6 +639,7 @@ describe('SlackWorkflowBridge', () => {
           recordedOwner: { host: 'build-box', pid: 4242 },
           lastActivityAt: null,
           thisHost: 'here',
+          thisUid: 501,
         },
       });
 

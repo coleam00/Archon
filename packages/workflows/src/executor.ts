@@ -2171,7 +2171,12 @@ export async function executeWorkflow(
   // This process is the one executing the run, whether it created the row, claimed a
   // row a launcher pre-created, or resumed one. `abandon` shows this record when no
   // owner answers (#2325).
-  const executionOwner: ExecutionOwnerRecord = { host: hostname(), pid: process.pid };
+  const uid = process.getuid?.();
+  const executionOwner: ExecutionOwnerRecord = {
+    host: hostname(),
+    pid: process.pid,
+    ...(uid === undefined ? {} : { uid }),
+  };
 
   if (preCreatedRun && priorCompletedNodes !== undefined) {
     const resumeMsg =

@@ -508,6 +508,8 @@ export type AbandonOwnerOutcome =
       lastActivityAt: Date | null;
       /** The host abandon ran on, which is the only host whose endpoint it could ask. */
       thisHost: string;
+      /** The user abandon ran as; its endpoint directory is scoped to this uid on POSIX. */
+      thisUid: number | undefined;
     };
 
 /**
@@ -545,6 +547,16 @@ export function describeAbandonOwner(outcome: AbandonOwnerOutcome): string[] {
   if (recorded && recorded.host !== outcome.thisHost) {
     lines.push(
       `The recorded owner is on another host (${recorded.host}). Abandon cannot reach or stop a process there; ` +
+        'if it is still running, it keeps running after this run is marked cancelled.'
+    );
+  } else if (
+    recorded?.uid !== undefined &&
+    outcome.thisUid !== undefined &&
+    recorded.uid !== outcome.thisUid
+  ) {
+    lines.push(
+      `The recorded owner ran as another user (uid ${String(recorded.uid)}), and abandon runs as ` +
+        `uid ${String(outcome.thisUid)}. Abandon can only reach owners running as its own user; ` +
         'if it is still running, it keeps running after this run is marked cancelled.'
     );
   }
@@ -655,6 +667,7 @@ async function stopLiveOwnerForAbandon(run: WorkflowRun): Promise<AbandonOwnerOu
         recordedOwner: readExecutionOwner(run.metadata),
         lastActivityAt: run.last_activity_at,
         thisHost: hostname(),
+        thisUid: process.getuid?.(),
       };
     }
     throw new AbandonOwnerNotStoppedError(run.id, ownerNotStoppedMessage(run.id, error));
