@@ -416,11 +416,15 @@ export async function checkPi(env: NodeJS.ProcessEnv): Promise<CheckResult> {
 
     // An expired grant is a hard failure naming the provider and the date, so
     // the operator knows which grant to renew rather than re-running blindly.
+    // Only the grants that actually expired are named: the verdict is
+    // aggregate, but pointing at a still-usable provider sends the operator to
+    // renew a credential that does not need it.
     if (validity.status === 'expired') {
+      const expired = validity.expiredProviders ?? validity.providers;
       return {
         label,
         status: 'fail',
-        message: `~/.pi/agent/auth.json holds an expired credential for ${validity.providers.join(', ')} (expired ${formatExpiry(validity.expiresAt)}). Run \`pi /login\` to renew it.`,
+        message: `~/.pi/agent/auth.json holds an expired credential for ${expired.join(', ')} (expired ${formatExpiry(validity.expiresAt)}). Run \`pi /login\` to renew it.`,
       };
     }
 

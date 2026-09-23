@@ -77,7 +77,7 @@ describe('readPiAuthValidity', () => {
   test('an API-key entry is never treated as expiring', () => {
     writeFileSync(
       join(dir, 'auth.json'),
-      JSON.stringify({ openrouter: { type: 'api-key', key: 'sk-stored' } })
+      JSON.stringify({ openrouter: { type: 'api_key', key: 'sk-stored' } })
     );
 
     const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
@@ -178,11 +178,13 @@ describe('readPiAuthValidity', () => {
   });
 
   test('an out-of-range expiry is unreadable rather than throwing downstream', () => {
-    // `Number.POSITIVE_INFINITY` passes `typeof === 'number'` but yields an
-    // Invalid Date, whose toISOString() throws inside the doctor line.
+    // `Number.POSITIVE_INFINITY` passes `typeof === 'number'` but JSON.stringify
+    // turns it into `null`, so the store is rejected as a *missing* field — the
+    // Date range is never exercised. A finite value past ±8.64e15 is the one
+    // that reaches `new Date(...)` and must be rejected by the reader itself.
     writeFileSync(
       join(dir, 'auth.json'),
-      JSON.stringify({ anthropic: { type: 'oauth', expires: Number.POSITIVE_INFINITY } })
+      JSON.stringify({ anthropic: { type: 'oauth', expires: 8_640_000_000_000_001 } })
     );
 
     const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
@@ -190,12 +192,135 @@ describe('readPiAuthValidity', () => {
     expect(result.status).toBe('unreadable');
   });
 
+  test('a negative out-of-range expiry is unreadable too', () => {
+    writeFileSync(
+      join(dir, 'auth.json'),
+      JSON.stringify({ anthropic: { type: 'oauth', expires: -8_640_000_000_000_001 } })
+    );
+
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('unreadable');
+  });
+
+  test('an api_key entry is valid by definition, as the SDK spells it', () => {
+    // `ApiKeyCredential.type` is `"api_key"` — underscore, per
+    // @earendil-works/pi-ai `dist/auth/types.d.ts` and the runtime writes in
+    // pi-coding-agent `dist/core/auth-storage.js`. Not `"api-key"`.
+    writeFileSync(
+      join(dir, 'auth.json'),
+      JSON.stringify({ anthropic: { type: 'api_key', key: 'sk-ant-test' } })
+    );
+
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('valid');
+    if (result.status !== 'valid') throw new Error('unreachable');
+    expect(result.expiresAt).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  test('an entry of an unrecognized type is unreadable, not silently valid', () => {
+    // `type` is the only thing that says whether a credential can authenticate.
+    // An unknown tag means Archon cannot tell, and the SDK's `read()` returns
+    // such an entry verbatim — so "valid" here would be a green doctor over a
+    // store the runtime may not be able to use.
+    writeFileSync(
+      join(dir, 'auth.json'),
+      JSON.stringify({ anthropic: { type: 'totally-made-up', key: 'sk-x' } })
+    );
+
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('unreadable');
+  });
+
+  test('an entry with no type at all is unreadable', () => {
+    writeFileSync(join(dir, 'auth.json'), JSON.stringify({ anthropic: { key: 'sk-x' } }));
+
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('unreadable');
+  });
+
+  test('only the expired providers are named when the store is mixed', () => {
+    // One grant expired in June, another is good until next year. The verdict is
+    // aggregate (`expired`), but the message must not send the operator to
+    // renew a grant that is still usable.
+    writeFileSync(
+      join(dir, 'auth.json'),
+      JSON.stringify({
+        anthropic: oauthEntry(Date.UTC(2026, 5, 8)),
+        'github-copilot': oauthEntry(Date.UTC(2027, 0, 1)),
+      })
+    );
+
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('expired');
+    if (result.status !== 'valid' && result.status !== 'expired') {
+      throw new Error('unreachable');
+    }
+    expect(result.providers).toEqual(['anthropic', 'github-copilot']);
+    expect(result.expiredProviders).toEqual(['anthropic']);
+    // The reported expiry is still the soonest across all grants.
+    expect(result.expiresAt).toBe(Date.UTC(2026, 5, 8));
+  });
+
+  test('every provider is named when every grant has expired', () => {
+    writeFileSync(
+      join(dir, 'auth.json'),
+      JSON.stringify({
+        anthropic: oauthEntry(Date.UTC(2026, 5, 8)),
+        'github-copilot': oauthEntry(Date.UTC(2026, 6, 1)),
+      })
+    );
+
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('expired');
+    if (result.status !== 'valid' && result.status !== 'expired') {
+      throw new Error('unreachable');
+    }
+    expect(result.expiredProviders).toEqual(['anthropic', 'github-copilot']);
+  });
+
+  test('a still-valid store names no expired providers', () => {
+    writeFileSync(
+      join(dir, 'auth.json'),
+      JSON.stringify({ anthropic: oauthEntry(Date.UTC(2027, 0, 1)) })
+    );
+
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('valid');
+    if (result.status !== 'valid' && result.status !== 'expired') {
+      throw new Error('unreachable');
+    }
+    expect(result.expiredProviders).toEqual([]);
+  });
+
+  test('an expired API-key-only store still falls back to the full provider list', () => {
+    // No OAuth grant means nothing expires, so `expiredProviders` is empty while
+    // the verdict is valid — the caller's fallback to `providers` keeps the
+    // message honest.
+    writeFileSync(
+      join(dir, 'auth.json'),
+      JSON.stringify({ anthropic: { type: 'api_key', key: 'sk-ant-test' } })
+    );
+
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('valid');
+    if (result.status !== 'valid') throw new Error('unreachable');
+    expect(result.expiredProviders).toEqual([]);
+  });
+
   test('a store holding only API keys is valid with no expiry to report', () => {
     // The case the expiry filter exists for, still working: no OAuth entry at
     // all, so nothing can go stale on its own.
     writeFileSync(
       join(dir, 'auth.json'),
-      JSON.stringify({ anthropic: { type: 'api-key', key: 'sk-ant-test' } })
+      JSON.stringify({ anthropic: { type: 'api_key', key: 'sk-ant-test' } })
     );
 
     const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });

@@ -21,6 +21,15 @@ interface StoredOAuthCredential {
   expires?: number;
 }
 
+/** A credential `pi` writes when the provider is authenticated with a raw key. */
+interface StoredApiKeyCredential {
+  type?: string;
+  key?: string;
+}
+
+/** A single auth.json entry, before its `type` is known to be one of the two. */
+type StoredEntry = StoredOAuthCredential | StoredApiKeyCredential;
+
 /** What the store says about the credentials it holds. */
 export type PiAuthValidity =
   | { status: 'missing' }
@@ -30,9 +39,32 @@ export type PiAuthValidity =
       status: 'valid' | 'expired';
       /** Provider ids present in the store, sorted. */
       providers: string[];
+      /**
+       * Provider ids whose OAuth grants have expired, sorted. Empty on the
+       * `valid` verdict and on an API-key-only store, where nothing expires.
+       */
+      expiredProviders: string[];
       /** Epoch ms of the soonest OAuth expiry among them. */
       expiresAt: number;
     };
+
+/**
+ * The widest instant a JS `Date` can represent (±8.64e15 ms). `expires` is an
+ * external value: a finite number past this bound survives `typeof` and
+ * `Number.isFinite`, yet `new Date(n)` is an Invalid Date whose `toISOString()`
+ * throws — inside a doctor line, not a crash path. Validate the bound here, so
+ * the value never reaches the formatter.
+ */
+const MAX_TIMESTAMP_MS = 8_640_000_000_000_000;
+
+/** The `type` tags `pi` actually writes into auth.json. */
+const OAUTH_TYPE = 'oauth';
+const API_KEY_TYPE = 'api_key';
+
+/** A representable instant — finite, and inside the `Date` range at both ends. */
+function isRepresentableTimestamp(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= MAX_TIMESTAMP_MS;
+}
 
 /**
  * Decide validity from the store's contents at a given instant.
@@ -76,39 +108,61 @@ export function readPiAuthValidity(authJsonPath: string, options: { now: number 
     return { status: 'empty' };
   }
 
-  // An API-key entry has no expiry and never goes stale on its own. Only OAuth
-  // grants carry an `expires`, so only they can decide the verdict — but an
-  // OAuth grant *without* a usable expiry is not an API key either. Treating it
-  // as one reports a store no Pi workflow can authenticate against as valid.
-  const oauthEntries = providers
-    .map(id => entries[id])
-    .filter((entry): entry is StoredOAuthCredential => {
-      if (typeof entry !== 'object' || entry === null) return false;
-      return (entry as StoredOAuthCredential).type === 'oauth';
-    });
+  // `type` is the only thing that says whether a credential can authenticate,
+  // and an unknown tag means Archon cannot tell. Reporting "valid" here would
+  // be a green doctor over a store the runtime may not be able to use — the
+  // SDK returns such an entry verbatim rather than rejecting it.
+  const storedEntries = providers.map(id => entries[id] as StoredEntry | null | undefined);
+  const recognized = storedEntries.every(
+    entry => entry?.type === OAUTH_TYPE || entry?.type === API_KEY_TYPE
+  );
+  if (!recognized) {
+    return { status: 'unreadable' };
+  }
+
+  const oauthEntries = storedEntries.filter(
+    (entry): entry is StoredOAuthCredential => entry?.type === OAUTH_TYPE
+  );
 
   if (oauthEntries.length === 0) {
     // Nothing but API keys: valid by definition, with no expiry to report.
-    return { status: 'valid', providers, expiresAt: Number.POSITIVE_INFINITY };
+    return {
+      status: 'valid',
+      providers,
+      expiredProviders: [],
+      expiresAt: Number.POSITIVE_INFINITY,
+    };
   }
 
-  const expiries = oauthEntries
-    .map(entry => entry.expires)
-    .filter(
-      (expires): expires is number => typeof expires === 'number' && Number.isFinite(expires)
-    );
+  const expiries = oauthEntries.map(entry => entry.expires);
 
-  if (expiries.length !== oauthEntries.length) {
-    // At least one OAuth grant carries no finite expiry, so none of them can be
-    // trusted to date the credential. An out-of-range value would also reach
-    // `new Date(...).toISOString()` below and throw there.
+  if (!expiries.every(isRepresentableTimestamp)) {
+    // At least one OAuth grant carries no representable expiry, so none of them
+    // can be trusted to date the credential. An OAuth entry with no `expires`
+    // is not an API key either: treating it as one reports a store no Pi
+    // workflow can authenticate against as valid.
     return { status: 'unreadable' };
   }
 
   const expiresAt = Math.min(...expiries);
+
+  // Which grants are actually past their expiry, for the message. The verdict
+  // is aggregate (the soonest expiry decides it), but naming a still-usable
+  // provider sends the operator to renew a credential that does not need it.
+  // Walked per provider id so the pairing with `providers` cannot drift.
+  const expiredProviders = providers.filter(id => {
+    const entry = entries[id] as StoredOAuthCredential | StoredApiKeyCredential | null | undefined;
+    if (entry?.type !== OAUTH_TYPE) return false;
+    // Narrowed to the OAuth shape, so `expires` is in scope — and every entry
+    // here already passed `isRepresentableTimestamp` above, so it is a number.
+    const { expires } = entry as StoredOAuthCredential;
+    return typeof expires === 'number' && options.now >= expires;
+  });
+
   return {
     status: options.now >= expiresAt ? 'expired' : 'valid',
     providers,
+    expiredProviders: options.now >= expiresAt ? expiredProviders : [],
     expiresAt,
   };
 }

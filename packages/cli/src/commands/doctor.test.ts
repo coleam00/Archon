@@ -472,6 +472,7 @@ describe('checkPi', () => {
     piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
       status: 'valid',
       providers: ['anthropic'],
+      expiredProviders: [],
       expiresAt: Date.UTC(2027, 0, 1),
     });
     const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
@@ -501,6 +502,7 @@ describe('checkPi', () => {
     piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
       status: 'expired',
       providers: ['anthropic'],
+      expiredProviders: ['anthropic'],
       expiresAt: Date.UTC(2026, 5, 8),
     });
 
@@ -516,6 +518,7 @@ describe('checkPi', () => {
     piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
       status: 'expired',
       providers: ['anthropic'],
+      expiredProviders: ['anthropic'],
       expiresAt: Date.UTC(2026, 5, 8),
     });
 
@@ -526,11 +529,46 @@ describe('checkPi', () => {
     expect(result.message).not.toContain('stored-refresh');
   });
 
+  it('names only the expired provider when the store also holds a usable one', async () => {
+    // Two grants, one dead since June and one good until next year. The verdict
+    // is aggregate, but the message must not send the operator to renew a
+    // credential that does not need it.
+    authJsonSpy.mockReturnValue(true);
+    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
+      status: 'expired',
+      providers: ['anthropic', 'github-copilot'],
+      expiredProviders: ['anthropic'],
+      expiresAt: Date.UTC(2026, 5, 8),
+    });
+
+    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
+
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('anthropic');
+    expect(result.message).not.toContain('github-copilot');
+  });
+
+  it('falls back to the full provider list when no expired subset is reported', async () => {
+    // A caller that predates `expiredProviders` still gets a usable message.
+    authJsonSpy.mockReturnValue(true);
+    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
+      status: 'expired',
+      providers: ['anthropic'],
+      expiresAt: Date.UTC(2026, 5, 8),
+    } as unknown as ReturnType<typeof doctorModule.probePiAuthValidity>);
+
+    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
+
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('anthropic');
+  });
+
   it('returns pass when auth.json holds a grant that is still valid', async () => {
     authJsonSpy.mockReturnValue(true);
     piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
       status: 'valid',
       providers: ['anthropic'],
+      expiredProviders: [],
       expiresAt: Date.UTC(2027, 0, 1),
     });
 
