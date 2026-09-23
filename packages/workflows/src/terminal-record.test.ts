@@ -326,6 +326,7 @@ describe('durable terminal projection', () => {
         node('node_completed', 'build', { node_output: 'success' }),
         node('node_completed', 'discover', { node_output: 'old' }),
         node('node_started', 'discover'),
+        node('node_suspended', 'discover', { suspend_point: 'wait' }),
       ],
     });
     expect(record.first_failed_node).toBeNull();

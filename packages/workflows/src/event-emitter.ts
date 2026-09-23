@@ -1,3 +1,4 @@
+import type { NodeExecutionMetadata } from './schemas/node-execution';
 /**
  * WorkflowEventEmitter - typed event emitter for workflow execution observability.
  *
@@ -81,6 +82,7 @@ interface WorkflowArtifactEvent {
 }
 
 interface NodeStartedEvent {
+  execution?: NodeExecutionMetadata;
   type: 'node_started';
   runId: string;
   nodeId: string;
@@ -91,18 +93,28 @@ interface NodeStartedEvent {
   effort?: EffortLevel; // resolved AI effort (absent when unset or unsupported)
 }
 
+interface NodeSuspendedEvent {
+  type: 'node_suspended';
+  runId: string;
+  nodeId: string;
+  nodeName: string;
+  execution: NodeExecutionMetadata;
+}
+
 interface NodeCompletedEvent {
+  execution?: NodeExecutionMetadata;
   type: 'node_completed';
   runId: string;
   nodeId: string;
   nodeName: string;
-  duration: number;
+  duration?: number;
   costUsd?: number;
   stopReason?: string;
   numTurns?: number;
 }
 
 interface NodeFailedEvent {
+  execution?: NodeExecutionMetadata;
   type: 'node_failed';
   runId: string;
   nodeId: string;
@@ -111,6 +123,7 @@ interface NodeFailedEvent {
 }
 
 interface NodeSkippedEvent {
+  execution?: NodeExecutionMetadata;
   type: 'node_skipped';
   runId: string;
   nodeId: string;
@@ -232,6 +245,7 @@ export type WorkflowEmitterEvent =
   | LoopIterationStartedEvent
   | LoopIterationCompletedEvent
   | LoopIterationFailedEvent
+  | NodeSuspendedEvent
   | NodeStartedEvent
   | NodeCompletedEvent
   | NodeFailedEvent

@@ -9,6 +9,7 @@ import {
 } from './schemas/terminal-record';
 import { nodeSkipReasonSchema, skipCauseSchema, type WorkflowRun } from './schemas/workflow-run';
 import { observeArtifactManifest } from './terminal-artifact-manifest';
+import { readNodeRecordEvent } from './node-record-reader';
 
 export interface TerminalRecordEvent {
   event_type: string;
@@ -36,13 +37,24 @@ export async function buildTerminalRecord(input: {
   for (const [index, event] of events.entries()) {
     const nodeId = event.step_name;
     if (!nodeId) continue;
-    switch (event.event_type) {
+    const record = readNodeRecordEvent({
+      workflow_run_id: run.id,
+      step_name: nodeId,
+      event_type: event.event_type,
+      data: event.data,
+    });
+    if (!record) continue;
+    switch (record.eventType) {
       case 'node_started':
+      case 'node_suspended':
       case 'node_always_run_reset':
       case 'node_prior_cache_invalidated':
         nodes.set(nodeId, {
           node_id: nodeId,
-          state: event.event_type === 'node_started' ? 'running' : 'pending',
+          state:
+            record.eventType === 'node_started' || record.eventType === 'node_suspended'
+              ? 'running'
+              : 'pending',
         });
         outputs.delete(nodeId);
         failureOrder.delete(nodeId);
@@ -50,11 +62,11 @@ export async function buildTerminalRecord(input: {
       case 'node_completed':
       case 'node_skipped_prior_success':
         nodes.set(nodeId, { node_id: nodeId, state: 'completed' });
-        outputs.set(nodeId, eventData(event.data));
+        outputs.set(nodeId, record.data);
         failureOrder.delete(nodeId);
         break;
       case 'node_failed': {
-        const data = eventData(event.data);
+        const data = record.data;
         nodes.set(nodeId, {
           node_id: nodeId,
           state: 'failed',
@@ -65,7 +77,7 @@ export async function buildTerminalRecord(input: {
         break;
       }
       case 'node_skipped': {
-        const data = eventData(event.data);
+        const data = record.data;
         const reason = nodeSkipReasonSchema.safeParse(data.reason);
         const cause = skipCauseSchema.safeParse(data.cause);
         nodes.set(nodeId, {

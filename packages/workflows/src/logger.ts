@@ -1,3 +1,4 @@
+import type { NodeExecutionMetadata } from './schemas/node-execution';
 /**
  * SDK Event Logger - captures workflow execution to JSONL
  */
@@ -25,6 +26,7 @@ let logWarningShown = false;
  * already on disk contain those rows — keep it when reading, never write a new one.
  */
 export interface WorkflowEvent {
+  execution?: NodeExecutionMetadata;
   type:
     | 'workflow_start'
     | 'workflow_complete'
@@ -32,6 +34,7 @@ export interface WorkflowEvent {
     | 'assistant'
     | 'tool'
     | 'validation'
+    | 'node_suspended'
     | 'node_start'
     | 'node_complete'
     | 'node_skipped'
