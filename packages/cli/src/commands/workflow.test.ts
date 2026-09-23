@@ -17,6 +17,7 @@ import {
 import {
   existsSync,
   appendFileSync,
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -5746,6 +5747,68 @@ describe('workflowGetCommand', () => {
       await removeTempTree(archonHome);
     }
   });
+
+  // A directory the walk cannot read hides everything inside it. ENOENT means
+  // the directory is simply gone and dropped nothing an operator could open;
+  // anything else is a real omission that has to reach the operator.
+  it.skipIf(process.platform === 'win32')(
+    'names an artifact directory it could not read rather than skipping it silently (#3450)',
+    async () => {
+      const previousHome = process.env.ARCHON_HOME;
+      const archonHome = join(tmpdir(), 'archon-get-artifact-unreadable-home');
+      process.env.ARCHON_HOME = archonHome;
+      const runId = 'run-artifact-unreadable';
+      const outputRoot = join(archonHome, 'workspaces', 'acme', 'widget');
+      const artifactsDir = join(outputRoot, 'artifacts', 'runs', runId);
+      const lockedDir = join(artifactsDir, 'review');
+      mkdirSync(lockedDir, { recursive: true });
+      writeFileSync(join(artifactsDir, 'plan.md'), 'report');
+      writeFileSync(join(lockedDir, 'report.md'), 'report');
+      chmodSync(lockedDir, 0o000);
+      try {
+        const workflowDb = await import('@archon/core/db/workflows');
+        (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValue({
+          id: runId,
+          workflow_name: 'implement',
+          status: 'completed',
+          working_path: '/tmp/wt',
+          started_at: new Date(),
+          metadata: {},
+          output_root: outputRoot,
+          checkout_baseline: null,
+          codebase_id: 'cb-1',
+        });
+
+        await workflowGetCommand(runId, true);
+
+        const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
+          leave_behind?: {
+            artifactFiles?: string[];
+            artifactFilesOmitted?: {
+              internalFiles: number;
+              truncated: boolean;
+              unreadable: string[];
+            };
+          };
+        };
+        expect(parsed.leave_behind?.artifactFiles).toEqual(['plan.md']);
+        expect(parsed.leave_behind?.artifactFilesOmitted).toEqual({
+          internalFiles: 0,
+          truncated: false,
+          unreadable: ['review'],
+        });
+
+        await workflowGetCommand(runId);
+        const printed = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
+        expect(printed).toContain('Unreadable artifact directory: review');
+      } finally {
+        chmodSync(lockedDir, 0o700);
+        if (previousHome === undefined) delete process.env.ARCHON_HOME;
+        else process.env.ARCHON_HOME = previousHome;
+        await removeTempTree(archonHome);
+      }
+    }
+  );
 
   it('emits the full metadata.approval (incl. completionSignaled) in --json for a paused interactive_loop run (#2074 E)', async () => {
     const workflowDb = await import('@archon/core/db/workflows');

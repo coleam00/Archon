@@ -4569,7 +4569,9 @@ function listArtifactFiles(dir: string, maxFiles = 200): ArtifactListing {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') omitted.unreadable.push(prefix);
       return;
     }
-    entries.sort((left, right) => left.name.localeCompare(right.name));
+    // Order only matters where entries reach the list; inside the engine's child
+    // they are counted, and a pack run leaves hundreds of them there.
+    if (!internal) entries.sort((left, right) => left.name.localeCompare(right.name));
     const relative = (entry: Dirent): string => (prefix ? `${prefix}/${entry.name}` : entry.name);
     const isEngineOwned = (entry: Dirent): boolean =>
       internal || (prefix === '' && entry.name === archonPaths.RUN_ARTIFACTS_ENGINE_SUBDIR);
