@@ -14,6 +14,7 @@ import {
   SourceReceiptDigestConflictError,
   withdrawQueuedResourceStart,
 } from './resource-starts';
+import { ResourceSlotCapacityConflictError } from './resource-slots';
 import type { PreparedWorkflowLaunch } from '@archon/workflows/schemas/resource-start';
 import { claimPendingWorkflowRun, resumeWorkflowRun, WorkflowResourceBusyError } from './workflows';
 
@@ -108,6 +109,7 @@ describe('durable resource starts', () => {
     const independent = crypto.randomUUID();
     await admitResourceStart({
       resource: 'shared',
+      capacity: 1,
       hostId: 'host',
       overlap: 'queue',
       launch: launch(owner),
@@ -119,6 +121,7 @@ describe('durable resource starts', () => {
     expect(
       await admitResourceStart({
         resource: 'shared',
+        capacity: 1,
         hostId: 'other-host',
         overlap: 'skip',
         launch: launch(skipped),
@@ -128,6 +131,7 @@ describe('durable resource starts', () => {
     expect(
       await admitResourceStart({
         resource: 'independent',
+        capacity: 1,
         hostId: 'host',
         overlap: 'skip',
         launch: launch(independent),
@@ -147,12 +151,14 @@ describe('durable resource starts', () => {
     const queued = crypto.randomUUID();
     await admitResourceStart({
       resource: 'crash',
+      capacity: 1,
       hostId: 'host',
       overlap: 'queue',
       launch: launch(stranded),
     });
     await admitResourceStart({
       resource: 'crash',
+      capacity: 1,
       hostId: 'host',
       overlap: 'queue',
       launch: launch(queued),
@@ -184,6 +190,7 @@ describe('durable resource starts', () => {
     for (const id of [owner, first, second]) {
       await admitResourceStart({
         resource: 'fifo',
+        capacity: 1,
         hostId: 'host',
         overlap: 'queue',
         launch: launch(id),
@@ -208,6 +215,7 @@ describe('durable resource starts', () => {
     expect(
       await admitResourceStart({
         resource: 'repo:one',
+        capacity: 1,
         hostId: 'host',
         overlap: 'queue',
         launch: launch(firstId),
@@ -220,6 +228,7 @@ describe('durable resource starts', () => {
     expect(
       await admitResourceStart({
         resource: 'repo:one',
+        capacity: 1,
         hostId: 'host',
         overlap: 'queue',
         launch: launch(secondId),
@@ -283,6 +292,7 @@ describe('durable resource starts', () => {
     const blockerId = 'abababab-abab-4bab-8bab-abababababab';
     await admitResourceStart({
       resource: 'repo:two',
+      capacity: 1,
       hostId: 'host',
       overlap: 'queue',
       launch: launch(blockerId),
@@ -305,6 +315,7 @@ describe('durable resource starts', () => {
           hostId: 'host',
           runAsUserId: '22222222-2222-4222-8222-222222222222',
           resource: 'repo:two',
+          capacity: 1,
           overlap: 'queue',
           launch: {
             cwd: '/tmp/test',
@@ -357,12 +368,14 @@ describe('durable resource starts', () => {
     const queuedId = 'cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd';
     await admitResourceStart({
       resource: 'repo:contended-withdrawal',
+      capacity: 1,
       hostId: 'host',
       overlap: 'queue',
       launch: launch(ownerId),
     });
     await admitResourceStart({
       resource: 'repo:contended-withdrawal',
+      capacity: 1,
       hostId: 'host',
       overlap: 'queue',
       launch: launch(queuedId),
@@ -397,6 +410,7 @@ describe('durable resource starts', () => {
           hostId: 'host',
           runAsUserId: '22222222-2222-4222-8222-222222222222',
           resource: 'repo:contended-preparation',
+          capacity: 1,
           overlap: 'queue',
           launch: {
             cwd: '/tmp/test',
@@ -439,12 +453,14 @@ describe('durable resource starts', () => {
     const starts = [
       {
         resource: 'repo:process',
+        capacity: 1,
         hostId: 'host',
         overlap: 'queue' as const,
         launch: launch('12121212-1212-4212-8212-121212121212'),
       },
       {
         resource: 'repo:process',
+        capacity: 1,
         hostId: 'host',
         overlap: 'queue' as const,
         launch: launch('34343434-3434-4434-8434-343434343434'),
@@ -484,12 +500,14 @@ describe('durable resource starts', () => {
     const queued = crypto.randomUUID();
     await admitResourceStart({
       resource: 'paused',
+      capacity: 1,
       hostId: 'host',
       overlap: 'queue',
       launch: launch(owner),
     });
     await admitResourceStart({
       resource: 'paused',
+      capacity: 1,
       hostId: 'host',
       overlap: 'queue',
       launch: launch(queued),
@@ -507,6 +525,7 @@ describe('durable resource starts', () => {
     const secondId = '78787878-7878-4878-8878-787878787878';
     await admitResourceStart({
       resource: 'repo:resume',
+      capacity: 1,
       hostId: 'host',
       overlap: 'queue',
       launch: launch(firstId),
@@ -514,6 +533,7 @@ describe('durable resource starts', () => {
     expect((await claimPendingWorkflowRun(firstId))?.status).toBe('running');
     await admitResourceStart({
       resource: 'repo:resume',
+      capacity: 1,
       hostId: 'host',
       overlap: 'queue',
       launch: launch(secondId),
@@ -577,5 +597,63 @@ describe('durable resource starts', () => {
         })
       ).status
     ).toBe('running');
+  });
+
+  test('a capacity-2 slot admits two holders, queues the third, and drains it on release', async () => {
+    const [first, second, third] = [
+      '0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a',
+      '0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b',
+      '0c0c0c0c-0c0c-4c0c-8c0c-0c0c0c0c0c0c',
+    ];
+    const admit = (id: string): ReturnType<typeof admitResourceStart> =>
+      admitResourceStart({
+        resource: 'pool',
+        capacity: 2,
+        hostId: 'host',
+        overlap: 'queue',
+        launch: launch(id),
+      });
+    expect(await admit(first)).toEqual({ status: 'admitted', requestId: first, runId: first });
+    expect(await admit(second)).toEqual({ status: 'admitted', requestId: second, runId: second });
+    expect(await admit(third)).toEqual({
+      status: 'queued',
+      requestId: third,
+      blocker: { kind: 'run', id: first },
+    });
+    expect(await drainResourceStarts({ resource: 'pool', hostId: 'host' })).toEqual([]);
+
+    await getDatabase().query(
+      "UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1",
+      [second]
+    );
+    expect(await drainResourceStarts({ resource: 'pool', hostId: 'host' })).toEqual([
+      { status: 'admitted', requestId: third, runId: third },
+    ]);
+    expect((await claimPendingWorkflowRun(third))?.status).toBe('running');
+  });
+
+  test('a request that declares a different capacity for a resource fails without a row', async () => {
+    const owner = crypto.randomUUID();
+    const conflicting = crypto.randomUUID();
+    await admitResourceStart({
+      resource: 'fixed',
+      capacity: 1,
+      hostId: 'host',
+      overlap: 'queue',
+      launch: launch(owner),
+    });
+    await expect(
+      admitResourceStart({
+        resource: 'fixed',
+        capacity: 3,
+        hostId: 'host',
+        overlap: 'queue',
+        launch: launch(conflicting),
+      })
+    ).rejects.toBeInstanceOf(ResourceSlotCapacityConflictError);
+    expect(await getResourceStartRequest(conflicting)).toBeNull();
+    expect(
+      (await getDatabase().query('SELECT capacity FROM remote_agent_resource_slots')).rows
+    ).toEqual([{ capacity: 1 }]);
   });
 });

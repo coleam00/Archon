@@ -802,16 +802,24 @@ export class SqliteAdapter implements IDatabase {
         PRIMARY KEY (receipt_id, binding_id)
       );
 
-      CREATE TABLE IF NOT EXISTS remote_agent_start_resources (
+      CREATE TABLE IF NOT EXISTS remote_agent_resource_slots (
         resource_key TEXT PRIMARY KEY,
-        active_run_id TEXT REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL,
+        capacity INTEGER NOT NULL DEFAULT 1 CHECK (capacity >= 1),
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS remote_agent_resource_slot_holders (
+        resource_key TEXT NOT NULL REFERENCES remote_agent_resource_slots(resource_key),
+        holder_kind TEXT NOT NULL CHECK (holder_kind IN ('run')),
+        holder_id TEXT NOT NULL,
+        acquired_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (resource_key, holder_kind, holder_id)
       );
 
       CREATE TABLE IF NOT EXISTS remote_agent_resource_start_requests (
         queue_position INTEGER PRIMARY KEY AUTOINCREMENT,
         id TEXT NOT NULL UNIQUE,
-        resource_key TEXT NOT NULL REFERENCES remote_agent_start_resources(resource_key),
+        resource_key TEXT NOT NULL REFERENCES remote_agent_resource_slots(resource_key),
         host_id TEXT NOT NULL,
         overlap_policy TEXT NOT NULL CHECK (overlap_policy IN ('skip', 'queue')),
         status TEXT NOT NULL CHECK (status IN ('queued', 'admitted', 'skipped', 'withdrawn')),

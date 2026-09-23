@@ -12,16 +12,16 @@ import {
   resourceStartBindingIntentSchema,
 } from '@archon/workflows/schemas/resource-start';
 import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
-import {
-  TERMINAL_WORKFLOW_STATUSES,
-  workflowRunStatusSchema,
-} from '@archon/workflows/schemas/workflow-run';
+import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import { getDatabase, getDialect } from './connection';
+import {
+  addResourceSlotHolder,
+  liveResourceSlotHolders,
+  lockResourceSlot,
+  type TransactionQuery as Query,
+} from './resource-slots';
 import { insertWorkflowRun } from './workflows';
 
-type Query = Parameters<Parameters<ReturnType<typeof getDatabase>['withTransaction']>[0]>[0];
-
-const terminalStatuses = new Set<string>(TERMINAL_WORKFLOW_STATUSES);
 const lock = (): string => (getDatabase().dialect === 'postgres' ? ' FOR UPDATE' : '');
 
 interface RequestRow {
@@ -35,22 +35,15 @@ interface RequestRow {
   launch: unknown;
 }
 
-async function currentBlocker(query: Query, resource: string): Promise<string | null> {
-  await query(
-    'UPDATE remote_agent_start_resources SET resource_key = resource_key WHERE resource_key = $1',
+/** Start requests are the run holder's durable FIFO waiters for a resource slot. */
+async function oldestQueuedRequest(query: Query, resource: string): Promise<RequestRow | null> {
+  const queued = await query<RequestRow>(
+    `SELECT * FROM remote_agent_resource_start_requests
+      WHERE resource_key = $1 AND status = 'queued'
+      ORDER BY queue_position LIMIT 1${lock()}`,
     [resource]
   );
-  const result = await query<{ active_run_id: string | null; status: string | null }>(
-    `SELECT r.active_run_id, w.status
-       FROM remote_agent_start_resources r
-       LEFT JOIN remote_agent_workflow_runs w ON w.id = r.active_run_id
-      WHERE r.resource_key = $1`,
-    [resource]
-  );
-  const row = result.rows[0];
-  if (!row?.active_run_id) return null;
-  if (row.status && !terminalStatuses.has(row.status)) return row.active_run_id;
-  return null;
+  return queued.rows[0] ?? null;
 }
 
 async function admitExisting(query: Query, row: RequestRow): Promise<ResourceStartDisposition> {
@@ -64,12 +57,7 @@ async function admitExisting(query: Query, row: RequestRow): Promise<ResourceSta
       WHERE id = $1 AND status = 'queued'`,
     [row.id]
   );
-  await query(
-    `UPDATE remote_agent_start_resources
-        SET active_run_id = $2, updated_at = ${getDialect().now()}
-      WHERE resource_key = $1`,
-    [row.resource_key, row.id]
-  );
+  await addResourceSlotHolder(query, row.resource_key, { kind: 'run', id: row.id });
   return { status: 'admitted', requestId: row.id, runId: row.id };
 }
 
@@ -96,31 +84,22 @@ async function admitResourceStartWithQuery(
   query: Query,
   intent: ResourceStartIntent
 ): Promise<ResourceStartDisposition> {
-  await query(
-    `INSERT INTO remote_agent_start_resources (resource_key) VALUES ($1)
-       ON CONFLICT(resource_key) DO NOTHING`,
-    [intent.resource]
-  );
-  await query(
-    'UPDATE remote_agent_start_resources SET resource_key = resource_key WHERE resource_key = $1',
-    [intent.resource]
-  );
+  const { capacity } = await lockResourceSlot(query, intent.resource, intent.capacity);
   const existing = await query<RequestRow>(
     'SELECT * FROM remote_agent_resource_start_requests WHERE id = $1',
     [intent.launch.run.id]
   );
   if (existing.rows[0]) return disposition(existing.rows[0]);
 
-  const blocker = await currentBlocker(query, intent.resource);
-  const older = await query<{ id: string }>(
-    `SELECT id FROM remote_agent_resource_start_requests
-        WHERE resource_key = $1 AND status = 'queued'
-        ORDER BY queue_position LIMIT 1${lock()}`,
-    [intent.resource]
-  );
-  const olderRequest = older.rows[0]?.id;
-  const queueBlocker = olderRequest ?? blocker;
-  const status = queueBlocker ? (intent.overlap === 'queue' ? 'queued' : 'skipped') : 'queued';
+  // An older waiter keeps FIFO even when a slot is free, so a new arrival cannot pass it.
+  const older = await oldestQueuedRequest(query, intent.resource);
+  const holders = await liveResourceSlotHolders(query, intent.resource);
+  const blocker: { kind: 'run' | 'request'; id: string } | null = older
+    ? { kind: 'request', id: older.id }
+    : holders.length >= capacity && holders[0]
+      ? { kind: 'run', id: holders[0].id }
+      : null;
+  const status = blocker && intent.overlap === 'skip' ? 'skipped' : 'queued';
   await query(
     `INSERT INTO remote_agent_resource_start_requests
        (id, resource_key, host_id, overlap_policy, status, blocker_run_id, blocker_kind, launch, receipt_id, binding_id)
@@ -131,8 +110,8 @@ async function admitResourceStartWithQuery(
       intent.hostId,
       intent.overlap,
       status,
-      queueBlocker ?? null,
-      queueBlocker ? (olderRequest ? 'request' : 'run') : null,
+      blocker?.id ?? null,
+      blocker?.kind ?? null,
       JSON.stringify(intent.launch),
       intent.receipt?.receiptId ?? null,
       intent.receipt?.bindingId ?? null,
@@ -144,15 +123,11 @@ async function admitResourceStartWithQuery(
     host_id: intent.hostId,
     overlap_policy: intent.overlap,
     status,
-    blocker_run_id: queueBlocker ?? null,
-    blocker_kind: queueBlocker ? (olderRequest ? 'request' : 'run') : null,
+    blocker_run_id: blocker?.id ?? null,
+    blocker_kind: blocker?.kind ?? null,
     launch: intent.launch,
   };
-  if (olderRequest && status === 'queued') {
-    return { status: 'queued', requestId: row.id, blocker: { kind: 'request', id: olderRequest } };
-  }
-  if (queueBlocker) return disposition(row);
-  return admitExisting(query, row);
+  return blocker ? disposition(row) : admitExisting(query, row);
 }
 
 export async function admitResourceStart(
@@ -161,34 +136,26 @@ export async function admitResourceStart(
   return getDatabase().withTransaction(query => admitResourceStartWithQuery(query, intent));
 }
 
+/**
+ * Admit this host's queued requests while the slot has free capacity. Stops at the first
+ * queued request that belongs to another host: FIFO order is per resource, not per host.
+ */
 export async function drainResourceStarts(options: {
   resource: string;
   hostId: string;
-  limit?: number;
 }): Promise<ResourceStartDisposition[]> {
-  const results: ResourceStartDisposition[] = [];
-  const limit = options.limit ?? 1;
-  for (let i = 0; i < limit; i++) {
-    const result = await getDatabase().withTransaction(async query => {
-      await query(
-        'INSERT INTO remote_agent_start_resources (resource_key) VALUES ($1) ON CONFLICT(resource_key) DO NOTHING',
-        [options.resource]
-      );
-      if (await currentBlocker(query, options.resource)) return null;
-      const queued = await query<RequestRow>(
-        `SELECT * FROM remote_agent_resource_start_requests
-          WHERE resource_key = $1 AND status = 'queued'
-          ORDER BY queue_position LIMIT 1${lock()}`,
-        [options.resource]
-      );
-      const head = queued.rows[0];
-      return head?.host_id === options.hostId ? admitExisting(query, head) : null;
-    });
-    if (!result) break;
-    results.push(result);
-    break; // the newly admitted run now owns the resource
-  }
-  return results;
+  return getDatabase().withTransaction(async query => {
+    const { capacity } = await lockResourceSlot(query, options.resource);
+    let free = capacity - (await liveResourceSlotHolders(query, options.resource)).length;
+    const admitted: ResourceStartDisposition[] = [];
+    while (free > 0) {
+      const head = await oldestQueuedRequest(query, options.resource);
+      if (head?.host_id !== options.hostId) break;
+      admitted.push(await admitExisting(query, head));
+      free -= 1;
+    }
+    return admitted;
+  });
 }
 
 export class SourceReceiptDigestConflictError extends Error {}
@@ -537,6 +504,7 @@ export async function completeStartBindingPreparation(input: {
     const persisted = resourceStartBindingIntentSchema.parse(parseStoredJson(rawIntent));
     const disposition = await admitResourceStartWithQuery(query, {
       resource: persisted.resource,
+      capacity: persisted.capacity,
       hostId: persisted.hostId,
       overlap: persisted.overlap,
       launch: input.launch,

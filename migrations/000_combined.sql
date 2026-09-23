@@ -549,16 +549,24 @@ CREATE TABLE IF NOT EXISTS remote_agent_start_receipt_bindings (
   PRIMARY KEY (receipt_id, binding_id)
 );
 
-CREATE TABLE IF NOT EXISTS remote_agent_start_resources (
+CREATE TABLE IF NOT EXISTS remote_agent_resource_slots (
   resource_key TEXT PRIMARY KEY,
-  active_run_id UUID REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL,
+  capacity INTEGER NOT NULL DEFAULT 1 CHECK (capacity >= 1),
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS remote_agent_resource_slot_holders (
+  resource_key TEXT NOT NULL REFERENCES remote_agent_resource_slots(resource_key),
+  holder_kind VARCHAR(10) NOT NULL CHECK (holder_kind IN ('run')),
+  holder_id TEXT NOT NULL,
+  acquired_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (resource_key, holder_kind, holder_id)
 );
 
 CREATE TABLE IF NOT EXISTS remote_agent_resource_start_requests (
   id UUID PRIMARY KEY,
   queue_position BIGSERIAL NOT NULL UNIQUE,
-  resource_key TEXT NOT NULL REFERENCES remote_agent_start_resources(resource_key),
+  resource_key TEXT NOT NULL REFERENCES remote_agent_resource_slots(resource_key),
   host_id TEXT NOT NULL,
   overlap_policy VARCHAR(10) NOT NULL CHECK (overlap_policy IN ('skip', 'queue')),
   status VARCHAR(12) NOT NULL CHECK (status IN ('queued', 'admitted', 'skipped', 'withdrawn')),

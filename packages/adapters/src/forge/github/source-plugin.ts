@@ -167,6 +167,7 @@ const createGitHubWebhookSource: WebhookSourcePluginFactory = ({
             hostId: binding.hostId,
             runAsUserId: binding.runAsUserId,
             resource: binding.resource,
+            capacity: binding.capacity,
             overlap: binding.overlap,
             launch: { ...binding.launch, inputs: { ...binding.launch.inputs, ...mapped.inputs } },
           })

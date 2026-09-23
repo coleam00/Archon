@@ -32,6 +32,7 @@ function acceptance(
         hostId: 'host-1',
         runAsUserId: 'user-1',
         resource: 'repo:one',
+        capacity: 1,
         overlap: 'queue',
         launch: {
           cwd: '/tmp/repo',

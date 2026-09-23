@@ -44,9 +44,17 @@ export const preparedWorkflowLaunchSchema = z
   .strict();
 export type PreparedWorkflowLaunch = z.infer<typeof preparedWorkflowLaunchSchema>;
 
+/**
+ * How many admitted holders a resource slot allows at once. It defaults to 1, so a
+ * resource means "must not overlap" unless configured otherwise. Every binding that
+ * names a resource must declare the same capacity; admission refuses a mismatch.
+ */
+export const resourceSlotCapacitySchema = z.number().int().min(1).default(1);
+
 export const resourceStartIntentSchema = z
   .object({
     resource: z.string().trim().min(1),
+    capacity: resourceSlotCapacitySchema,
     hostId: z.string().trim().min(1),
     overlap: z.enum(['skip', 'queue']),
     launch: preparedWorkflowLaunchSchema,
@@ -110,6 +118,7 @@ export const resourceStartBindingIntentSchema = z
     hostId: z.string().min(1),
     runAsUserId: z.string().min(1),
     resource: z.string().min(1),
+    capacity: resourceSlotCapacitySchema,
     overlap: z.enum(['skip', 'queue']),
     launch: z
       .object({

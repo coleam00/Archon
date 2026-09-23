@@ -4,6 +4,12 @@
 import type { ResourceStartDisposition } from '@archon/workflows/schemas/resource-start';
 
 import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
+import {
+  addResourceSlotHolder,
+  liveResourceSlotHolders,
+  lockResourceSlot,
+  type TransactionQuery,
+} from './resource-slots';
 import { insertWorkflowEvent, listActiveWorkflowNodeIds } from './workflow-events';
 import { insertTerminalWorkflowEvent } from './workflow-terminal-event';
 import { normalizeWorkflowRun } from './workflow-run-normalization';
@@ -55,10 +61,6 @@ export interface WorkflowRunInsert {
   parent_run_id?: string;
   adopted_from_run_id?: string;
 }
-
-type TransactionQuery = Parameters<
-  Parameters<ReturnType<typeof getDatabase>['withTransaction']>[0]
->[0];
 
 /** Best-effort ROLLBACK — log but swallow errors since we're already in an error path. */
 function rollback(): Promise<void> {
@@ -459,8 +461,9 @@ export async function claimPendingWorkflowRun(id: string): Promise<WorkflowRun |
             OR EXISTS (
               SELECT 1
                 FROM remote_agent_resource_start_requests q
-                JOIN remote_agent_start_resources r ON r.resource_key = q.resource_key
-               WHERE q.id = $1 AND q.status = 'admitted' AND r.active_run_id = $1
+                JOIN remote_agent_resource_slot_holders h
+                  ON h.resource_key = q.resource_key AND h.holder_kind = 'run' AND h.holder_id = q.id
+               WHERE q.id = $1 AND q.status = 'admitted'
             )
           )`,
       [id]
@@ -1001,28 +1004,15 @@ export async function resumeWorkflowRun(
       }
       const resourceKey = prior?.resource_key ?? undefined;
       if (resourceKey !== undefined && (prior?.status === 'failed' || prior?.status === 'paused')) {
-        await query(
-          'UPDATE remote_agent_start_resources SET resource_key = resource_key WHERE resource_key = $1',
-          [resourceKey]
+        const { capacity } = await lockResourceSlot(query, resourceKey);
+        const others = (await liveResourceSlotHolders(query, resourceKey)).filter(
+          holder => holder.id !== id
         );
-        const owner = await query<{ active_run_id: string | null; status: string | null }>(
-          `SELECT r.active_run_id, w.status
-             FROM remote_agent_start_resources r
-             LEFT JOIN remote_agent_workflow_runs w ON w.id = r.active_run_id
-            WHERE r.resource_key = $1`,
-          [resourceKey]
-        );
-        const active = owner.rows[0];
-        if (
-          active?.active_run_id &&
-          active.active_run_id !== id &&
-          active.status !== null &&
-          !TERMINAL_WORKFLOW_STATUSES.includes(active.status as WorkflowRunStatus)
-        ) {
-          throw new WorkflowResourceBusyError(id, { kind: 'run', id: active.active_run_id });
+        if (others.length >= capacity && others[0]) {
+          throw new WorkflowResourceBusyError(id, { kind: 'run', id: others[0].id });
         }
-        // A failed run released its resource and must not bypass promised queued work.
-        // A paused run still owns it: refusing that continuation would deadlock the queue.
+        // A failed run released its slot and must not bypass promised queued work.
+        // A paused run still holds it: refusing that continuation would deadlock the queue.
         if (prior.status === 'failed') {
           const queued = await query<{ id: string }>(
             `SELECT id FROM remote_agent_resource_start_requests
@@ -1033,12 +1023,7 @@ export async function resumeWorkflowRun(
           const next = queued.rows[0];
           if (next) throw new WorkflowResourceBusyError(id, { kind: 'request', id: next.id });
         }
-        await query(
-          `UPDATE remote_agent_start_resources
-              SET active_run_id = $2, updated_at = ${dialect.now()}
-            WHERE resource_key = $1`,
-          [resourceKey, id]
-        );
+        await addResourceSlotHolder(query, resourceKey, { kind: 'run', id });
       }
       const clearedError = readMetadataError(prior?.metadata);
       const scheduled = prior?.status === 'failed' ? readScheduledResume(prior.metadata) : null;
