@@ -32,11 +32,14 @@ export const HTML_CACHE_CONTROL = 'no-cache';
  * @returns The `Cache-Control` value, or `undefined` when no directive applies.
  */
 export function cacheControlForStaticPath(resolvedPath: string): string | undefined {
-  if (resolvedPath.endsWith('.html')) {
-    return HTML_CACHE_CONTROL;
-  }
+  // `/assets/` first: a hashed HTML file under it is still an immutable asset,
+  // and the `.html` test below would otherwise claim it for the entry-point
+  // policy and pin the browser to a bundle hash the deploy has replaced.
   if (resolvedPath.includes('/assets/') || resolvedPath.includes('\\assets\\')) {
     return IMMUTABLE_ASSET_CACHE_CONTROL;
+  }
+  if (resolvedPath.endsWith('.html')) {
+    return HTML_CACHE_CONTROL;
   }
   return undefined;
 }

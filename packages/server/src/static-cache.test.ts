@@ -38,6 +38,18 @@ describe('cacheControlForStaticPath', () => {
     );
   });
 
+  test('a hashed HTML file under assets/ is an asset, not the entry point', () => {
+    // `/assets/` must be classified first: the `.html` test would otherwise
+    // claim it for the entry-point policy and pin the browser to a bundle hash
+    // the next deploy has already replaced.
+    expect(cacheControlForStaticPath('/srv/web/dist/assets/index-a1b2c3.html')).toBe(
+      IMMUTABLE_ASSET_CACHE_CONTROL
+    );
+    expect(cacheControlForStaticPath('D:\\archon\\web\\dist\\assets\\index-a1b2c3.html')).toBe(
+      IMMUTABLE_ASSET_CACHE_CONTROL
+    );
+  });
+
   test('an HTML document outside assets/ is still revalidated', () => {
     expect(cacheControlForStaticPath('/srv/web/dist/some/other/page.html')).toBe(
       HTML_CACHE_CONTROL
