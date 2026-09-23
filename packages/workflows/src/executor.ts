@@ -3227,7 +3227,7 @@ export async function executeWorkflow(
         configuredCommandFolder,
         issueContext,
         priorCompletedNodes: dagPriorCompletedNodes,
-        source,
+        source: runSource,
         aiProfile,
         workflowPreset,
         scopeArtifactsDir,

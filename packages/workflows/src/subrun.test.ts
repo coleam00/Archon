@@ -56,6 +56,10 @@ const realArchonPaths = await import('@archon/paths');
 /** Every `workflow_invoked` telemetry call, in order, so a resumed drive's categorization
  *  can be compared with the dispatch that started the run. */
 const telemetryInvocations: { workflowName: string; workflowSource?: string }[] = [];
+/** Every `workflow_completed` telemetry call. A run's two halves are categorized by
+ *  separate code paths, so the completion that fires on the resumed half has to be
+ *  observed on its own. */
+const telemetryCompletions: { workflowName: string; workflowSource?: string }[] = [];
 mock.module('@archon/paths', () => ({
   ...realArchonPaths,
   // NB: point these one level DEEP (`<root>/defaults`) — captureWorkflowSource copies
@@ -69,7 +73,12 @@ mock.module('@archon/paths', () => ({
       workflowSource: props.workflowSource,
     });
   }),
-  captureWorkflowCompleted: mock(() => {}),
+  captureWorkflowCompleted: mock((props: { workflowName: string; workflowSource?: string }) => {
+    telemetryCompletions.push({
+      workflowName: props.workflowName,
+      workflowSource: props.workflowSource,
+    });
+  }),
   captureApprovalResolved: mock(() => {}),
 }));
 
@@ -2611,6 +2620,7 @@ nodes:
     };
     const parent = await discover('identity-parent');
     telemetryInvocations.length = 0;
+    telemetryCompletions.length = 0;
 
     // Dispatch as the CLI does: the codebase's default branch as the `$BASE_BRANCH`
     // fallback, the starting user, and the workflow's discovery source.
@@ -2675,9 +2685,14 @@ nodes:
     expect([...new Set(prefsUserIds)]).toEqual(['user-alpha']);
 
     // The resumed half of the run reports the same workflow source, so a bundled
-    // workflow is not recategorized as custom halfway through.
+    // workflow is not recategorized as custom halfway through. Completion is the half
+    // that only the resumed drive reaches -- the pre-gate drive pauses instead -- so it
+    // is the one place a dropped source would land in every ordinary run's telemetry.
     expect(telemetryInvocations.filter(t => t.workflowName === 'identity-parent')).toEqual([
       { workflowName: 'identity-parent', workflowSource: 'bundled' },
+      { workflowName: 'identity-parent', workflowSource: 'bundled' },
+    ]);
+    expect(telemetryCompletions.filter(t => t.workflowName === 'identity-parent')).toEqual([
       { workflowName: 'identity-parent', workflowSource: 'bundled' },
     ]);
   });

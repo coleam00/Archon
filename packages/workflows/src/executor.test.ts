@@ -2651,6 +2651,42 @@ describe('executeWorkflow', () => {
       expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].baseBranch).toBe('release-2026');
     });
 
+    it('a continuation keeps a recorded empty base branch (#2454)', async () => {
+      // Empty is a resolved answer, not a missing one: folder projects and repos where
+      // auto-detection failed both record it. Absence is carried by the key, so the
+      // restore must branch on the record's presence, never on its value -- a truthiness
+      // check here silently reopens the bug for exactly the runs that cannot re-resolve.
+      const deps = makeDeps();
+      deps.loadConfig = mock(
+        async (): Promise<WorkflowConfig> => ({
+          assistant: 'claude' as const,
+          assistants: { claude: {}, codex: {} },
+          baseBranch: 'main',
+          commands: { folder: '' },
+        })
+      ) as unknown as WorkflowDeps['loadConfig'];
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp/worktree',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1',
+        {
+          preCreatedRun: makeRun({
+            metadata: { [RUN_DISPATCH_METADATA_KEY]: { base_branch: '' } },
+          }),
+          priorCompletedNodes: new Map(),
+          baseBranch: 'develop',
+        }
+      );
+
+      expect(mockGetDefaultBranch).not.toHaveBeenCalled();
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].baseBranch).toBe('');
+    });
+
     it('a resume that re-passes --base still retargets $BASE_BRANCH (#2454)', async () => {
       // `--base` on a resume is a deliberate act by whoever is resuming, and the CLI
       // already tells them it applies to the PR target only. The run record restores what
