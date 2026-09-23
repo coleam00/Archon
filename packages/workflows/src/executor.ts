@@ -2411,15 +2411,20 @@ export async function executeWorkflow(
           actionLines =
             `• Approve it: \`${formatRunCommand(platform, 'approve', shortId)}\`\n` +
             `• Reject it: \`${formatRunCommand(platform, 'reject', shortId)}\`\n` +
-            `• Cancel it: \`${formatRunCommand(platform, 'cancel', shortId)}\`\n` +
-            `• If its process is gone: \`${formatRunCommand(platform, 'abandon', shortId)}\`\n` +
+            // Cancel stops live work, and a paused run has none: abandon discards it.
+            `• Discard it: \`${formatRunCommand(platform, 'abandon', shortId)}\`\n` +
             '• Use a different branch: `--branch <other>`';
         } else {
           const verb = activeWorkflow.status === 'pending' ? 'starting' : 'running';
           stateLine = `${verb} ${duration}, run \`${shortId}\``;
+          // Cancel only accepts a running run; a pending one has nothing executing yet.
+          const cancelLine =
+            activeWorkflow.status === 'running'
+              ? `• Cancel it: \`${formatRunCommand(platform, 'cancel', shortId)}\`\n`
+              : '';
           actionLines =
             `• Wait for it to finish: \`${formatRunCommand(platform, 'status')}\`\n` +
-            `• Cancel it: \`${formatRunCommand(platform, 'cancel', shortId)}\`\n` +
+            cancelLine +
             `• If its process is gone: \`${formatRunCommand(platform, 'abandon', shortId)}\`\n` +
             '• Use a different branch: `--branch <other>`';
         }

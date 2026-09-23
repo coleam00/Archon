@@ -1338,6 +1338,39 @@ describe('executeWorkflow', () => {
       expect(sentMessage).not.toContain('/workflow status');
     });
 
+    it('offers no cancel for a pending blocker, which has nothing executing yet', async () => {
+      const otherRun = makeRun({
+        id: 'abc12345-rest-of-uuid',
+        workflow_name: 'archon-implement',
+        status: 'pending',
+        started_at: new Date(Date.now() - 5000),
+      });
+      const sendMessageSpy = mock<IWorkflowPlatform['sendMessage']>(
+        async (_conversationId, _message, _metadata) => {}
+      );
+      const platform = {
+        sendMessage: sendMessageSpy,
+        getPlatformType: mock(() => 'cli' as const),
+      } as unknown as IWorkflowPlatform;
+      const store = makeStore({
+        getActiveWorkflowRunByPath: mock(async () => otherRun),
+      });
+
+      await executeWorkflow(
+        makeDeps(store),
+        platform,
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1'
+      );
+
+      const sentMessage = (sendMessageSpy.mock.calls[0] as [string, string])[1];
+      expect(sentMessage).toContain('archon workflow abandon abc12345');
+      expect(sentMessage).not.toContain('workflow cancel');
+    });
+
     it('uses CLI command syntax for paused runs when platform is cli', async () => {
       const otherRun = makeRun({
         id: 'abc12345-rest-of-uuid',
@@ -1371,7 +1404,9 @@ describe('executeWorkflow', () => {
       const sentMessage = (sendMessageSpy.mock.calls[0] as [string, string])[1];
       expect(sentMessage).toContain('archon workflow approve abc12345');
       expect(sentMessage).toContain('archon workflow reject abc12345');
-      expect(sentMessage).toContain('archon workflow cancel abc12345');
+      // A paused run has no live work for cancel to stop; abandon discards it.
+      expect(sentMessage).toContain('archon workflow abandon abc12345');
+      expect(sentMessage).not.toContain('workflow cancel');
     });
   });
 
