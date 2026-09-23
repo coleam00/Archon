@@ -147,12 +147,58 @@ function extractLastAssistantText(messages: readonly unknown[]): string | undefi
 }
 
 /**
- * Build the terminal `result` chunk from the final `agent_end` event. Pulls
- * usage/stopReason/error from the last assistant message in the returned
- * transcript. When the agent ended in error, surfaces it as `isError: true`.
+ * Sum usage over every model call of one prompt.
+ *
+ * Pi reports usage per assistant message, and each assistant message is one model
+ * call. Claude and Codex hand Archon the prompt-wide total instead, and the executor
+ * treats a result chunk's usage as the whole pass, so the sum happens here (#2800).
+ *
+ * Pi's `Usage` cannot say "not reported": a provider without streamed usage leaves
+ * every field 0. A completed call always consumes input, so an all-zero completed
+ * call means its usage is unknown, and the prompt's usage is then undefined rather
+ * than a sum that silently omits it (#2314). An errored or aborted call with zero
+ * usage was rejected before a response and adds nothing.
+ */
+function sumPromptUsage(assistants: readonly AssistantMessage[]): TokenUsage | undefined {
+  const unreported = assistants.filter(
+    m =>
+      m.stopReason !== 'error' &&
+      m.stopReason !== 'aborted' &&
+      m.usage.input + m.usage.output + m.usage.cacheRead + m.usage.cacheWrite === 0
+  );
+  if (unreported.length > 0) {
+    getLog().warn(
+      { unreportedCalls: unreported.length, calls: assistants.length },
+      'pi.event-bridge.usage_unreported'
+    );
+    return undefined;
+  }
+  const sum = (pick: (u: Usage) => number): number =>
+    assistants.reduce((total, m) => total + pick(m.usage), 0);
+  return usageToTokens({
+    input: sum(u => u.input),
+    output: sum(u => u.output),
+    cacheRead: sum(u => u.cacheRead),
+    cacheWrite: sum(u => u.cacheWrite),
+    totalTokens: sum(u => u.totalTokens),
+    cost: {
+      input: sum(u => u.cost.input),
+      output: sum(u => u.cost.output),
+      cacheRead: sum(u => u.cost.cacheRead),
+      cacheWrite: sum(u => u.cost.cacheWrite),
+      total: sum(u => u.cost.total),
+    },
+  });
+}
+
+/**
+ * Build the terminal `result` chunk from every message the prompt produced so far.
+ * Usage and cost are summed over all assistant messages; stopReason, model and error
+ * come from the last one. When the agent ended in error, surfaces it as `isError: true`.
  */
 export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
-  const last = [...messages].reverse().find(isAssistantMessage);
+  const assistants = messages.filter(isAssistantMessage);
+  const last = assistants.at(-1);
   if (!last) {
     // agent_end fired with no assistant message in the transcript. This
     // shouldn't happen in healthy Pi runs — surface it as a loud error
@@ -162,13 +208,13 @@ export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
     return { type: 'result', isError: true, errorSubtype: 'missing_assistant_message' };
   }
 
-  const tokens = usageToTokens(last.usage);
+  const tokens = sumPromptUsage(assistants);
   const isError = last.stopReason === 'error' || last.stopReason === 'aborted';
 
   const chunk: MessageChunk = {
     type: 'result',
-    tokens,
-    ...(tokens.cost !== undefined ? { cost: tokens.cost } : {}),
+    ...(tokens ? { tokens } : {}),
+    ...(tokens?.cost !== undefined ? { cost: tokens.cost } : {}),
     ...(last.stopReason ? { stopReason: last.stopReason } : {}),
     ...(typeof last.responseModel === 'string' && last.responseModel.length > 0
       ? { resolvedModel: { id: last.responseModel } }
@@ -208,6 +254,9 @@ export { tryParseStructuredOutput };
  * Most Pi events map 1:1 or are skipped. Tool execution is split across
  * `tool_execution_start` / `tool_execution_end`; the start yields `tool` with
  * `toolCallId`, the end yields `tool_result` matched by the same id.
+ *
+ * `agent_end` is not mapped here: its result chunk needs every message of the
+ * prompt, which only `bridgeSession` holds.
  *
  * Events deliberately skipped in v1:
  *  - turn_start / turn_end, message_start / message_end (redundant with deltas)
@@ -257,8 +306,6 @@ export function mapPiEvent(event: AgentSessionEvent): MessageChunk[] {
       });
       return chunks;
     }
-    case 'agent_end':
-      return [buildResultChunk(event.messages)];
     case 'auto_retry_start':
       return [
         {
@@ -346,6 +393,12 @@ export async function* bridgeSession(
   // is pushed to the queue, so it is always ready when the yield loop
   // processes the result.
   let finalAssembledText: string | undefined;
+  // Every message this prompt produced. One prompt() can run Pi's agent loop more
+  // than once (auto-retry, compaction continuation, queued follow-ups), and each run
+  // ends with its own agent_end carrying only that run's new messages. The executor
+  // keeps the last result chunk as the node's usage, so each result chunk is built
+  // from everything so far.
+  const promptMessages: unknown[] = [];
 
   const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
     try {
@@ -356,6 +409,10 @@ export async function* bridgeSession(
       }
       if (event.type === 'agent_end') {
         finalAssembledText = extractLastAssistantText(event.messages);
+        promptMessages.push(...event.messages);
+        flushPendingAssistant();
+        queue.push({ kind: 'chunk', chunk: buildResultChunk(promptMessages) });
+        return;
       }
       for (const chunk of mapPiEvent(event)) {
         if (chunk.type === 'assistant') {

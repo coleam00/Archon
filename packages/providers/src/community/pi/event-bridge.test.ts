@@ -248,16 +248,14 @@ describe('buildResultChunk', () => {
     }
   });
 
-  test('prefers last assistant message when multiple present', () => {
-    const olderUsage = { ...usage, input: 1, totalTokens: 1 };
+  test('outcome comes from the last assistant message, usage from all of them', () => {
     const chunk = buildResultChunk([
-      { role: 'assistant', usage: olderUsage, stopReason: 'stop', content: [] },
+      { role: 'assistant', usage, stopReason: 'error', errorMessage: 'overloaded', content: [] },
       { role: 'user', content: [] },
       { role: 'assistant', usage, stopReason: 'stop', content: [] },
     ]);
-    if (chunk.type === 'result') {
-      expect(chunk.tokens?.input).toBe(10);
-    }
+    expect(chunk).toMatchObject({ type: 'result', stopReason: 'stop', tokens: { input: 20 } });
+    expect(chunk).not.toHaveProperty('isError');
   });
 });
 
@@ -378,24 +376,6 @@ describe('mapPiEvent', () => {
       expect(chunks[0].content).toContain('retry 1/3');
       expect(chunks[0].content).toContain('rate limit');
     }
-  });
-
-  test('agent_end → result chunk', () => {
-    const usage = {
-      input: 5,
-      output: 10,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 15,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.001 },
-    };
-    const chunks = mapPiEvent({
-      type: 'agent_end',
-      willRetry: false,
-      messages: [{ role: 'assistant', usage, stopReason: 'stop', content: [] } as never],
-    });
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0].type).toBe('result');
   });
 
   test('skipped event types yield no chunks', () => {
@@ -1005,5 +985,156 @@ describe('assistant chunk coalescing', () => {
     const assistantChunks = chunks.filter(c => c.type === 'assistant');
     expect(assistantChunks).toHaveLength(1);
     expect(assistantChunks[0].content).toBe('partial answer before crash');
+  });
+});
+
+// ─── node usage across the agentic loop (#2800) ────────────────────────────
+
+describe('bridgeSession usage covers every model call of the prompt', () => {
+  /** Pi reports usage per assistant message: one message per model call. */
+  function assistant(
+    usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number },
+    stopReason: 'toolUse' | 'stop' | 'error' | 'aborted',
+    responseModel?: string
+  ): Record<string, unknown> {
+    return {
+      role: 'assistant',
+      content: [],
+      stopReason,
+      ...(responseModel ? { responseModel } : {}),
+      usage: {
+        input: usage.input,
+        output: usage.output,
+        cacheRead: usage.cacheRead,
+        cacheWrite: usage.cacheWrite,
+        totalTokens: usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: usage.cost },
+      },
+    };
+  }
+
+  const toolResult = { role: 'toolResult', toolCallId: 't', content: [] };
+
+  function agentEnd(messages: Record<string, unknown>[]): AgentSessionEvent {
+    return { type: 'agent_end', willRetry: false, messages } as unknown as AgentSessionEvent;
+  }
+
+  function makeSession(events: AgentSessionEvent[]): AgentSession {
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    return {
+      sessionId: 'session-usage',
+      subscribe: (fn: (event: AgentSessionEvent) => void) => {
+        listener = fn;
+        return () => {};
+      },
+      prompt: async () => {
+        for (const event of events) listener?.(event);
+      },
+      abort: async () => {},
+      dispose: () => {},
+    } as unknown as AgentSession;
+  }
+
+  /** The executor keeps the last result chunk of a pass as the node's usage. */
+  async function lastResult(
+    events: AgentSessionEvent[]
+  ): Promise<Extract<MessageChunk, { type: 'result' }>> {
+    let last: Extract<MessageChunk, { type: 'result' }> | undefined;
+    for await (const chunk of bridgeSession(makeSession(events), 'prompt')) {
+      if (chunk.type === 'result') last = chunk;
+    }
+    if (!last) throw new Error('no result chunk');
+    return last;
+  }
+
+  test('sums tokens and cost over every turn of a multi-turn loop', async () => {
+    // Shape of a real implement node: tool-use turns, then a short final answer.
+    // Before #2800 the node recorded only the final turn (input 1200, output 40).
+    const result = await lastResult([
+      agentEnd([
+        { role: 'user', content: [] },
+        assistant(
+          { input: 900, output: 700, cacheRead: 0, cacheWrite: 100, cost: 0.01 },
+          'toolUse'
+        ),
+        toolResult,
+        assistant(
+          { input: 150, output: 1500, cacheRead: 850, cacheWrite: 0, cost: 0.02 },
+          'toolUse'
+        ),
+        toolResult,
+        assistant(
+          { input: 200, output: 40, cacheRead: 1000, cacheWrite: 0, cost: 0.004 },
+          'stop',
+          'deepseek-v4'
+        ),
+      ]),
+    ]);
+
+    expect(result.tokens).toEqual({
+      input: 900 + 100 + (150 + 850) + (200 + 1000),
+      output: 700 + 1500 + 40,
+      cacheRead: 850 + 1000,
+      cacheWrite: 100,
+      total: 1700 + 2500 + 1240,
+      cost: expect.closeTo(0.034, 10),
+    });
+    expect(result.cost).toBeCloseTo(0.034, 10);
+    // Outcome fields still describe the final call.
+    expect(result.stopReason).toBe('stop');
+    expect(result.resolvedModel).toEqual({ id: 'deepseek-v4' });
+    expect(result.isError).toBeUndefined();
+  });
+
+  test('a prompt that runs the loop twice counts each call exactly once', async () => {
+    // Pi re-runs its loop inside one prompt() (auto-retry, compaction continuation,
+    // queued follow-ups). Each run ends with its own agent_end carrying only that
+    // run's new messages; the executor keeps the last result chunk.
+    const result = await lastResult([
+      agentEnd([
+        assistant({ input: 100, output: 10, cacheRead: 0, cacheWrite: 0, cost: 0.1 }, 'stop'),
+      ]),
+      agentEnd([
+        assistant({ input: 200, output: 20, cacheRead: 0, cacheWrite: 0, cost: 0.2 }, 'toolUse'),
+        toolResult,
+        assistant({ input: 300, output: 30, cacheRead: 0, cacheWrite: 0, cost: 0.3 }, 'stop'),
+      ]),
+    ]);
+
+    expect(result.tokens?.input).toBe(600);
+    expect(result.tokens?.output).toBe(60);
+    expect(result.cost).toBeCloseTo(0.6, 10);
+  });
+
+  test('a completed call that reported no usage leaves node usage unreported', async () => {
+    // Providers configured without streamed usage leave every field 0. A completed
+    // model call always consumes input, so all-zero means "not reported"; writing the
+    // other calls' sum would be a silent floor.
+    const result = await lastResult([
+      agentEnd([
+        assistant({ input: 500, output: 50, cacheRead: 0, cacheWrite: 0, cost: 0.05 }, 'toolUse'),
+        toolResult,
+        assistant({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, 'stop'),
+      ]),
+    ]);
+
+    expect(result).not.toHaveProperty('tokens');
+    expect(result).not.toHaveProperty('cost');
+    expect(result.stopReason).toBe('stop');
+  });
+
+  test('a failed call with no usage adds nothing and does not erase the rest', async () => {
+    // A request rejected before streaming (e.g. a 429) reports zero usage and bills nothing.
+    const result = await lastResult([
+      agentEnd([
+        assistant({ input: 500, output: 50, cacheRead: 0, cacheWrite: 0, cost: 0.05 }, 'toolUse'),
+        toolResult,
+        assistant({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, 'error'),
+      ]),
+    ]);
+
+    expect(result.tokens?.input).toBe(500);
+    expect(result.tokens?.output).toBe(50);
+    expect(result.isError).toBe(true);
   });
 });
