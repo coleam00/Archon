@@ -20,9 +20,24 @@ export const PR_URL = 'https://ghe.example.com/example/repo/pull/42';
 
 const trackTempRoot = trackTempRoots();
 
+/**
+ * One row of `gh pr checks --json name,state,bucket`, as gh 2.92 prints it.
+ * `state` is a check run's conclusion once it completes, its status before
+ * that, or a commit status's own state; `bucket` is gh's collapse of `state`
+ * (cli/cli pkg/cmd/pr/checks/aggregate.go).
+ */
+export interface GhCheckRow {
+  readonly name: string;
+  readonly state: string;
+  readonly bucket: 'pass' | 'fail' | 'pending' | 'skipping' | 'cancel';
+}
+
 export interface GhFake {
-  /** `gh pr checks --json name,bucket`; 'fail' prints no document and exits 1. */
-  readonly checks?: readonly { name: string; bucket: string }[] | 'fail';
+  /**
+   * What `gh pr checks --json` knows about each check; the fake prints only the
+   * fields the reader requests. 'fail' prints no document and exits 1.
+   */
+  readonly checks?: readonly GhCheckRow[] | 'fail';
   /** `statusCheckRollup | length`; 'fail' exits 1. */
   readonly rollup?: number | 'fail';
   /** Active Actions workflow count; 'fail' exits 1. */
@@ -78,8 +93,12 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   if (text.startsWith('pr checks')) {
     if (fake.checks === undefined || fake.checks === 'fail')
       return result(1, '', fake.checks === 'fail' ? 'HTTP 502' : 'no checks reported');
-    const red = fake.checks.some(check => check.bucket === 'fail');
-    return result(red ? 1 : 0, JSON.stringify(fake.checks));
+    const fields = argv[argv.indexOf('--json') + 1].split(',');
+    const rows = fake.checks.map(check => Object.fromEntries(fields.map(field => [field, check[field]])));
+    // gh exits 1 on a failing bucket and 8 on a pending one, and prints the document either way.
+    const code = fake.checks.some(check => check.bucket === 'fail') ? 1
+      : fake.checks.some(check => check.bucket === 'pending') ? 8 : 0;
+    return result(code, JSON.stringify(rows));
   }
   if (text.includes('statusCheckRollup'))
     return fake.rollup === 'fail' || fake.rollup === undefined ? result(1, '', 'HTTP 502') : result(0, String(fake.rollup));

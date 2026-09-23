@@ -1,9 +1,28 @@
 import { z } from 'zod';
-import { checkChangedEventSchema } from './events';
+import { checkChangedEventSchema, type CheckResult } from './events';
 import { gitObjectIdSchema, prRefSchema, repoRefSchema } from './identity';
 
 export const checksStateSchema = z.enum(['none', 'pending', 'green', 'red', 'gated', 'unknown']);
 export type ChecksState = z.infer<typeof checksStateSchema>;
+
+/**
+ * How a concluded check's result gates. `action_required` waits on a maintainer's
+ * approval, so it is gated rather than red; `stale` and `startup_failure` are
+ * terminal and never green. Plugins and the deliver pack's gh reader both
+ * classify through this table so the sources agree.
+ */
+export const concludedCheckStates = {
+  success: 'green',
+  neutral: 'green',
+  skipped: 'green',
+  action_required: 'gated',
+  failure: 'red',
+  cancelled: 'red',
+  timed_out: 'red',
+  stale: 'red',
+  startup_failure: 'red',
+  unknown: 'unknown',
+} as const satisfies Record<CheckResult, Exclude<ChecksState, 'none' | 'pending'>>;
 export const checkObservationSchema = checkChangedEventSchema
   .pick({
     unit: true,

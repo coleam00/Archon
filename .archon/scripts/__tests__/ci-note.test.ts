@@ -8,14 +8,14 @@ describe('ci-note', () => {
     const result = note({
       gh: {
         checks: [
-          { name: 'lint', bucket: 'fail' },
-          { name: 'test', bucket: 'pending' },
-          { name: 'build', bucket: 'pass' },
+          { name: 'lint', state: 'FAILURE', bucket: 'fail' },
+          { name: 'test', state: 'IN_PROGRESS', bucket: 'pending' },
+          { name: 'build', state: 'SUCCESS', bucket: 'pass' },
         ],
       },
     });
     expect(result.code).toBe(0);
-    expect(result.stdout).toContain('Concluded non-green checks:\n- lint (fail)');
+    expect(result.stdout).toContain('Concluded non-green checks:\n- lint (failure)');
     expect(result.stdout).toContain('1 check(s) still running');
     expect(result.forge).toEqual([]);
   });

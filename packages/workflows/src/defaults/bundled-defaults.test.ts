@@ -760,7 +760,10 @@ describe('bundled-defaults', () => {
   describe('deliver check source (bundled pack)', () => {
     const runShipped = async (
       script: 'check-ci' | 'flip-ready',
-      options: { source?: string; checks?: { name: string; bucket: string }[] | 'fail' }
+      options: {
+        source?: string;
+        checks?: { name: string; state: string; bucket: string }[] | 'fail';
+      }
     ): Promise<{ code: number; stdout: string; stderr: string; gh: string[] }> => {
       const root = mkdtempSync(join(tmpdir(), 'archon-bundled-checks-'));
       try {
@@ -820,15 +823,19 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     };
 
     it('reads checks through gh by default', async () => {
-      const probe = await runShipped('check-ci', { checks: [{ name: 'build', bucket: 'fail' }] });
+      const probe = await runShipped('check-ci', {
+        checks: [{ name: 'build', state: 'FAILURE', bucket: 'fail' }],
+      });
       expect(probe.code).toBe(0);
       expect(JSON.parse(probe.stdout)).toEqual({
         state: 'red',
-        detail: 'non-green checks: build (fail)',
+        detail: 'non-green checks: build (failure)',
       });
-      expect(probe.gh[0]).toBe('pr checks 42 --repo github.com/owner/repo --json name,bucket');
+      expect(probe.gh[0]).toBe('pr checks 42 --repo github.com/owner/repo --json name,state');
 
-      const flip = await runShipped('flip-ready', { checks: [{ name: 'build', bucket: 'pass' }] });
+      const flip = await runShipped('flip-ready', {
+        checks: [{ name: 'build', state: 'SUCCESS', bucket: 'pass' }],
+      });
       expect(flip.code).toBe(0);
       expect(flip.gh).toContain('pr ready 42 --repo github.com/owner/repo');
     });
@@ -844,7 +851,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       for (const script of ['check-ci', 'flip-ready'] as const) {
         const run = await runShipped(script, {
           source: 'forge',
-          checks: [{ name: 'build', bucket: 'pass' }],
+          checks: [{ name: 'build', state: 'SUCCESS', bucket: 'pass' }],
         });
         expect(run.code).not.toBe(0);
         expect(run.stderr).toContain('ARCHON_SDLC_CHECKS=forge: ARCHON_CLI_COMMAND is not set');

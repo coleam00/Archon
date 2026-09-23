@@ -9,6 +9,24 @@ export interface QualifiedPr {
 export const CHECK_STATES = ['none', 'pending', 'green', 'red', 'gated', 'unknown'] as const;
 export type CheckState = (typeof CHECK_STATES)[number];
 
+/**
+ * How a concluded check's result gates: @archon/forge's `concludedCheckStates`,
+ * which the forge plugins classify through. The gh reader in ./checks.ts uses
+ * this copy so both sources classify a GitHub conclusion the same way.
+ */
+export const CONCLUDED_CHECK_STATES = {
+  success: 'green',
+  neutral: 'green',
+  skipped: 'green',
+  action_required: 'gated',
+  failure: 'red',
+  cancelled: 'red',
+  timed_out: 'red',
+  stale: 'red',
+  startup_failure: 'red',
+  unknown: 'unknown',
+} as const satisfies Record<string, Exclude<CheckState, 'none' | 'pending'>>;
+
 export interface CheckUnit {
   readonly unit: { readonly name: string };
   readonly phase: 'pending' | 'running' | 'completed' | 'unknown';

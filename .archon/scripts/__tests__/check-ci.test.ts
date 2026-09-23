@@ -8,8 +8,8 @@ describe('check-ci on the default gh source', () => {
     const result = probe({
       gh: {
         checks: [
-          { name: 'build', bucket: 'pass' },
-          { name: 'docs', bucket: 'skipping' },
+          { name: 'build', state: 'SUCCESS', bucket: 'pass' },
+          { name: 'docs', state: 'SKIPPED', bucket: 'skipping' },
         ],
       },
     });
@@ -18,7 +18,7 @@ describe('check-ci on the default gh source', () => {
       state: 'concluded',
       detail: 'all 2 observed check(s) green; skipped (non-blocking): docs',
     });
-    expect(result.gh[0]).toBe('pr checks 42 --repo ghe.example.com/example/repo --json name,bucket');
+    expect(result.gh[0]).toBe('pr checks 42 --repo ghe.example.com/example/repo --json name,state');
     expect(result.forge).toEqual([]);
   });
 
@@ -26,28 +26,51 @@ describe('check-ci on the default gh source', () => {
     const result = probe({
       gh: {
         checks: [
-          { name: 'lint', bucket: 'fail' },
-          { name: 'test', bucket: 'pending' },
+          { name: 'lint', state: 'FAILURE', bucket: 'fail' },
+          { name: 'test', state: 'IN_PROGRESS', bucket: 'pending' },
         ],
       },
     });
     expect(JSON.parse(result.stdout)).toEqual({ state: 'pending', detail: '1 check(s) running' });
   });
 
-  it('names failed, cancelled and unrecognized checks as red', () => {
+  // gh buckets STALE and STARTUP_FAILURE as pending and anything it does not
+  // know as pending too, so the reader classifies gh's raw state, not its bucket.
+  it('names failed, cancelled, stale, startup-failed and unrecognized checks as red', () => {
     const result = probe({
       gh: {
         checks: [
-          { name: 'lint', bucket: 'fail' },
-          { name: 'e2e', bucket: 'cancel' },
-          { name: 'odd', bucket: 'stale' },
+          { name: 'lint', state: 'FAILURE', bucket: 'fail' },
+          { name: 'e2e', state: 'CANCELLED', bucket: 'cancel' },
+          { name: 'old', state: 'STALE', bucket: 'pending' },
+          { name: 'boot', state: 'STARTUP_FAILURE', bucket: 'pending' },
+          { name: 'odd', state: 'SOMETHING_NEW', bucket: 'pending' },
         ],
       },
     });
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual({
       state: 'red',
-      detail: 'non-green checks: lint (fail), e2e (cancel); checks have unknown state: odd (stale)',
+      detail:
+        'non-green checks: lint (failure), e2e (cancelled), old (stale), boot (startup_failure); ' +
+        'checks have unknown state: odd (something_new)',
+    });
+  });
+
+  // gh buckets ACTION_REQUIRED as fail; it is a maintainer's approval gate, not a broken branch.
+  it('reports a check awaiting maintainer approval as gated, not red', () => {
+    const result = probe({
+      gh: {
+        checks: [
+          { name: 'build', state: 'SUCCESS', bucket: 'pass' },
+          { name: 'deploy', state: 'ACTION_REQUIRED', bucket: 'fail' },
+        ],
+      },
+    });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      state: 'concluded',
+      detail: 'checks gated: deploy (action_required)',
     });
   });
 
@@ -77,7 +100,7 @@ describe('check-ci on the default gh source', () => {
   });
 
   it('refuses an unrecognized check source instead of guessing one', () => {
-    const result = probe({ source: 'gitlab', gh: { checks: [{ name: 'b', bucket: 'pass' }] } });
+    const result = probe({ source: 'gitlab', gh: { checks: [{ name: 'b', state: 'SUCCESS', bucket: 'pass' }] } });
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain('ARCHON_SDLC_CHECKS must be "gh" (the default) or "forge"');
     expect(result.gh).toEqual([]);

@@ -17,8 +17,8 @@ describe('flip-ready preflight on the default gh source', () => {
     const result = flip({
       gh: {
         checks: [
-          { name: 'build', bucket: 'pass' },
-          { name: 'docs', bucket: 'skipping' },
+          { name: 'build', state: 'SUCCESS', bucket: 'pass' },
+          { name: 'docs', state: 'SKIPPED', bucket: 'skipping' },
         ],
       },
     });
@@ -38,9 +38,9 @@ describe('flip-ready preflight on the default gh source', () => {
 
   const refusals: [string, GhFake, string][] = [
     ['a failed check read', { checks: 'fail', rollup: 'fail' }, 'could not read check state'],
-    ['a red check', { checks: [{ name: 'build', bucket: 'fail' }] }, 'red checks: build (fail)'],
-    ['a running check', { checks: [{ name: 'unit', bucket: 'pending' }] }, 'pending checks: unit'],
-    ['a cancelled check', { checks: [{ name: 'e2e', bucket: 'cancel' }] }, 'red checks: e2e (cancel)'],
+    ['a red check', { checks: [{ name: 'build', state: 'FAILURE', bucket: 'fail' }] }, 'red checks: build (failure)'],
+    ['a running check', { checks: [{ name: 'unit', state: 'IN_PROGRESS', bucket: 'pending' }] }, 'pending checks: unit'],
+    ['a cancelled check', { checks: [{ name: 'e2e', state: 'CANCELLED', bucket: 'cancel' }] }, 'red checks: e2e (cancelled)'],
   ];
   for (const [label, gh, reason] of refusals) {
     it(`refuses ${label} before the ready write`, () => {
@@ -98,7 +98,7 @@ describe('flip-ready preflight on the opt-in forge source', () => {
     const result = flip({
       source: 'forge',
       forge: { kind: 'no-plugin' },
-      gh: { checks: [{ name: 'build', bucket: 'pass' }] },
+      gh: { checks: [{ name: 'build', state: 'SUCCESS', bucket: 'pass' }] },
     });
     expect(result.code).not.toBe(0);
     expect(result.gh).toEqual([]);
@@ -108,7 +108,7 @@ describe('flip-ready preflight on the opt-in forge source', () => {
 });
 
 describe('flip-ready terminal-state classification', () => {
-  const green: GhFake = { checks: [{ name: 'build', bucket: 'pass' }] };
+  const green: GhFake = { checks: [{ name: 'build', state: 'SUCCESS', bucket: 'pass' }] };
 
   it('reports the delivery when the refused flip finds the PR already merged', () => {
     const result = flip({ gh: { ...green, readyFail: READY_REFUSAL, prState: 'MERGED' } });

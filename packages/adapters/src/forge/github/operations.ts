@@ -6,6 +6,7 @@ import {
   type ForgeRequest,
   type ForgeResponse,
   type PluginMetadata,
+  concludedCheckStates,
   summarizeChecks,
 } from '@archon/forge/operations';
 
@@ -209,17 +210,9 @@ function checkRunObservation(run: z.infer<typeof checkRunSchema>): CheckObservat
     };
   }
   const state =
-    run.status !== 'completed'
+    run.status !== 'completed' || normalizedResult === null
       ? 'unknown'
-      : normalizedResult === 'success' ||
-          normalizedResult === 'neutral' ||
-          normalizedResult === 'skipped'
-        ? 'green'
-        : normalizedResult === 'action_required'
-          ? 'gated'
-          : normalizedResult === 'unknown' || normalizedResult === null
-            ? 'unknown'
-            : 'red';
+      : concludedCheckStates[normalizedResult];
   return {
     unit: { kind: 'check', id: String(run.id), name: run.name },
     nativeState: run.status,

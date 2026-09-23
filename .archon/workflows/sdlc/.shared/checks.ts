@@ -15,6 +15,7 @@
  */
 
 import {
+  CONCLUDED_CHECK_STATES,
   preferredChecks,
   readChecks,
   type CheckUnit,
@@ -74,45 +75,57 @@ function ghRepo(pr: QualifiedPr): string {
   return `${pr.repo.host}/${pr.repo.path}`;
 }
 
-interface GhCheck {
+/** One row of `gh pr checks --json name,state`. */
+export interface GhCheck {
   readonly name: string;
-  readonly bucket: string;
+  readonly state: string;
 }
 
 function isGhCheck(value: unknown): value is GhCheck {
   if (typeof value !== 'object' || value === null) return false;
   const record = value as Record<string, unknown>;
-  return typeof record.name === 'string' && typeof record.bucket === 'string';
+  return typeof record.name === 'string' && typeof record.state === 'string';
 }
 
+// gh's `state` before a check concludes: a check run's status, or a commit
+// status's PENDING or EXPECTED.
+const GH_RUNNING: readonly string[] = [
+  'EXPECTED',
+  'IN_PROGRESS',
+  'PENDING',
+  'QUEUED',
+  'REQUESTED',
+  'WAITING',
+];
+
 /**
- * gh's buckets: `pass` and `skipping` are green, `pending` is running, `fail`
- * and `cancel` are red. A bucket this reader does not know is unknown, which
- * the gate treats as red: a cancelled or unrecognized check is not a green one.
+ * Classify one gh row. Once a check concludes, gh's `state` is the check run's
+ * conclusion or the commit status's state, classified through the forge table
+ * so gh and forge agree. gh's `bucket` is not used: it calls ACTION_REQUIRED a
+ * failure, and STALE, STARTUP_FAILURE and any state it does not know pending.
+ * A state this reader does not know is unknown, which the gate treats as red.
  */
-function ghUnit(check: GhCheck): CheckUnit {
+export function ghCheckUnit(check: GhCheck): CheckUnit {
   const unit = { name: check.name };
-  switch (check.bucket) {
-    case 'pending':
-      return { unit, phase: 'pending', result: null, state: 'pending' };
-    case 'pass':
-    case 'skipping':
-      return { unit, phase: 'completed', result: check.bucket, state: 'green' };
-    case 'fail':
-    case 'cancel':
-      return { unit, phase: 'completed', result: check.bucket, state: 'red' };
-    default:
-      return { unit, phase: 'unknown', result: check.bucket, state: 'unknown' };
+  if (GH_RUNNING.includes(check.state)) {
+    return { unit, phase: 'pending', result: null, state: 'pending' };
   }
+  const result = check.state.toLowerCase();
+  // A commit status's ERROR is its failure, as the forge plugin reads it.
+  const key = result === 'error' ? 'failure' : result;
+  const state = Object.hasOwn(CONCLUDED_CHECK_STATES, key)
+    ? CONCLUDED_CHECK_STATES[key as keyof typeof CONCLUDED_CHECK_STATES]
+    : 'unknown';
+  return { unit, phase: state === 'unknown' ? 'unknown' : 'completed', result, state };
 }
 
 function readGhChecks(pr: QualifiedPr): readonly CheckUnit[] {
   const number = String(pr.number);
-  const result = gh('pr', 'checks', number, '--repo', ghRepo(pr), '--json', 'name,bucket');
+  const result = gh('pr', 'checks', number, '--repo', ghRepo(pr), '--json', 'name,state');
   let parsed: unknown;
   try {
-    // The document decides, not the exit status: this form reports failing checks
-    // through the buckets it prints and exits non-zero on them.
+    // The document decides, not the exit status: gh prints it and exits non-zero
+    // when any check is failing or pending.
     parsed = JSON.parse(result.stdout) as unknown;
   } catch {
     // No document at all: either the pull request has no checks or the read
@@ -135,7 +148,7 @@ function readGhChecks(pr: QualifiedPr): readonly CheckUnit[] {
   if (!Array.isArray(parsed) || !parsed.every(isGhCheck)) {
     throw new Error(`unexpected check payload shape: ${result.stdout.slice(0, 200)}`);
   }
-  return parsed.map(ghUnit);
+  return parsed.map(ghCheckUnit);
 }
 
 /** Read the recorded pull request's checks from the selected source. */

@@ -65,7 +65,7 @@ function classify(read: CheckRead): void {
       });
       return;
     case 'green': {
-      const skipped = units.filter(unit => unit.result === 'skipping' || unit.result === 'skipped');
+      const skipped = units.filter(unit => unit.result === 'skipped');
       const note =
         skipped.length > 0
           ? `; skipped (non-blocking): ${skipped.map(unit => unit.unit.name).join(', ')}`
