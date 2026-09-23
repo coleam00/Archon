@@ -1,7 +1,6 @@
 # Dry-run fixture: the initial review is ready, so the correction loop stays
 # skipped and gate-ready binds the review verdict directly (the corrections
 # binding takes its if_skipped default).
-impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true

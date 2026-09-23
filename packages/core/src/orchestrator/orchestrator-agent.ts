@@ -1038,6 +1038,7 @@ async function dispatchOrchestratorWorkflowOwned(
   // declarative equivalent of CLI `--no-worktree` for workflows that should always
   // run live (e.g. read-only triage, docs generation on the main checkout).
   let cwd: string;
+  let cutFromCommit: string | undefined;
   if (adoptionLane?.kind === 'reuse-worktree') {
     // Adoption lane: the adopted run's worktree survives — run in it dirty-as-is
     // instead of cutting a fresh one (same shape as the background dispatch in
@@ -1090,6 +1091,7 @@ async function dispatchOrchestratorWorkflowOwned(
         userId
       );
       cwd = result.cwd;
+      if (result.status === 'new') cutFromCommit = result.cutFromCommit;
     } catch (error) {
       if (error instanceof IsolationBlockedError) {
         getLog().warn(
@@ -1419,6 +1421,7 @@ async function dispatchOrchestratorWorkflowOwned(
           resolveChildIsolation,
           capturedSourceOwner: owner,
           inputs: resolvedInputs,
+          ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
           ...(options?.adoptRunId
             ? { adoptedFromRunId: options.adoptRunId, continuationMode: 'adopt' as const }
             : options?.supersedesRunId

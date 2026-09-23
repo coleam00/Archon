@@ -3,8 +3,10 @@
  * Covers concurrent-run guards, model/provider resolution, and resume logic
  * that the inner dag-executor.test.ts cannot reach.
  */
+import type { CheckoutObservation } from './schemas/checkout-observation';
 import { NodeEventWriteError } from './node-event-write';
-import { describe, it, expect, mock, beforeEach, spyOn } from 'bun:test';
+import { describe, it, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'path';
@@ -49,7 +51,7 @@ function fakeResolveProjectStorageKey(
     if (codebase.kind === 'folder') return { kind: 'folder', slug: codebase.name };
     const [owner, repo] = codebase.name.split('/');
     if (owner && repo) return { kind: 'repo', owner, repo };
-    const base = codebase.default_cwd.split('/').filter(Boolean).pop();
+    const base = codebase.default_cwd.split(/[\\/]/).filter(Boolean).pop();
     if (base && base !== '.' && base !== '..') return { kind: 'repo', owner: '_local', repo: base };
   }
   return { kind: 'cwd', cwd };
@@ -85,7 +87,7 @@ function fakeGetProjectStoragePaths(
       ? wsPath(key.owner, key.repo)
       : key.kind === 'folder'
         ? wsPath('_folder', key.slug)
-        : wsPath('_cwd', key.cwd.split('/').filter(Boolean).pop() ?? '_');
+        : wsPath('_cwd', key.cwd.split(/[\\/]/).filter(Boolean).pop() ?? '_');
   return fakeStoragePathsForRoot(root);
 }
 
@@ -193,6 +195,9 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     getRunAncestry: mock(async () => []),
     createWorkflowRun: mock(async () => makeRun()),
     claimPendingWorkflowRun: mock(async () => makeRun()),
+    recordWorkflowRunCheckoutBaseline: mock(
+      async (_id: string, baseline: CheckoutObservation) => baseline
+    ),
     updateWorkflowRun: mock(async () => {}),
     failWorkflowRun: mock(async () => {}),
     getWorkflowRun: mock(async () => ({ ...makeRun(), status: 'completed' as const })),
@@ -296,6 +301,7 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     user_id: null,
     parent_run_id: null,
     output_root: null,
+    checkout_baseline: null,
     adopted_from_run_id: null,
     ...overrides,
   };
@@ -731,6 +737,7 @@ describe('executeWorkflow', () => {
                 // shared resolver returns null and the executor refuses,
                 // matching the CLI leave-behind and server readers.
                 output_root: '/old-machine/.archon/workspaces/old/name',
+                checkout_baseline: null,
                 codebase_id: null,
               })
             : { ...makeRun(), status: 'completed' as const }
@@ -777,6 +784,7 @@ describe('executeWorkflow', () => {
                 // re-derived under the current ARCHON_HOME via the adopted
                 // run's codebase row, not walked verbatim.
                 output_root: '/old-machine/.archon/workspaces/old/name',
+                checkout_baseline: null,
                 codebase_id: 'cb-adopted',
               })
             : id === 'run-123'
@@ -829,6 +837,7 @@ describe('executeWorkflow', () => {
                 id: adoptedId,
                 status: 'completed',
                 output_root: '/old-machine/.archon/workspaces/old/name',
+                checkout_baseline: null,
                 codebase_id: null,
               })
             : { ...makeRun(), status: 'completed' as const }
@@ -872,6 +881,7 @@ describe('executeWorkflow', () => {
                 id: adoptedId,
                 status: 'completed',
                 output_root: '/old-machine/.archon/workspaces/old/name',
+                checkout_baseline: null,
                 codebase_id: 'cb-adopted',
               })
             : id === 'run-123'
@@ -4817,5 +4827,113 @@ describe('resolveScopeArtifactsDir', () => {
     };
     expect(resolveScopeArtifactsDir(workflow, null, ROOT)).toBeUndefined();
     expect(resolveScopeArtifactsDir(workflow, undefined, ROOT)).toBeUndefined();
+  });
+});
+
+describe('run checkout baseline (#3305)', () => {
+  let repo: string;
+
+  beforeEach(async () => {
+    mockExecuteDagWorkflow.mockClear();
+    mockExecuteDagWorkflow.mockImplementation(async () => undefined);
+    repo = await mkdtemp(join(tmpdir(), 'archon-run-baseline-'));
+    for (const args of [
+      ['init', '-q'],
+      ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init'],
+    ]) {
+      const result = Bun.spawnSync(['git', ...args], { cwd: repo, stdout: 'pipe', stderr: 'pipe' });
+      if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+    }
+  });
+
+  afterEach(async () => {
+    await removeTempTree(repo);
+  });
+
+  const head = (): string =>
+    Bun.spawnSync(['git', 'rev-parse', 'HEAD'], { cwd: repo, stdout: 'pipe' })
+      .stdout.toString()
+      .trim();
+
+  it('records one baseline after the execution claim and before the first node', async () => {
+    const store = makeStore();
+    const order: string[] = [];
+    (store.claimPendingWorkflowRun as ReturnType<typeof mock>).mockImplementation(async () => {
+      order.push('claim');
+      return makeRun();
+    });
+    (store.recordWorkflowRunCheckoutBaseline as ReturnType<typeof mock>).mockImplementation(
+      async (_id: string, baseline: CheckoutObservation) => {
+        order.push('baseline');
+        return baseline;
+      }
+    );
+    mockExecuteDagWorkflow.mockImplementationOnce(async () => {
+      order.push('first node');
+      return undefined;
+    });
+    const cutFrom = head();
+
+    await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-1',
+      repo,
+      makeWorkflow(),
+      'msg',
+      'db-conv-1',
+      { cutFromCommit: cutFrom }
+    );
+
+    expect(order).toEqual(['claim', 'baseline', 'first node']);
+    expect(store.recordWorkflowRunCheckoutBaseline).toHaveBeenCalledTimes(1);
+    expect(store.recordWorkflowRunCheckoutBaseline).toHaveBeenCalledWith(
+      'run-123',
+      expect.objectContaining({
+        kind: 'git',
+        commit: cutFrom,
+        cutFromCommit: cutFrom,
+        worktree: { status: 'clean' },
+      })
+    );
+  });
+
+  it('a resume never records a baseline of its own', async () => {
+    const store = makeStore();
+    await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-1',
+      repo,
+      makeWorkflow(),
+      'msg',
+      'db-conv-1',
+      { preCreatedRun: makeRun(), priorCompletedNodes: new Map() }
+    );
+    expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
+    expect(store.recordWorkflowRunCheckoutBaseline).not.toHaveBeenCalled();
+  });
+
+  it('fails the run before any node when the baseline cannot be persisted', async () => {
+    const store = makeStore({
+      recordWorkflowRunCheckoutBaseline: mock(async () => {
+        throw new Error('disk full');
+      }),
+    });
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'conv-1',
+      repo,
+      makeWorkflow(),
+      'msg',
+      'db-conv-1'
+    );
+    expect(result.success).toBe(false);
+    expect(store.failWorkflowRun).toHaveBeenCalledWith(
+      'run-123',
+      'Checkout baseline could not be recorded: disk full'
+    );
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
 });

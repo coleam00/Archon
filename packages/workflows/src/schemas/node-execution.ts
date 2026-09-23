@@ -14,6 +14,7 @@ import {
 import { effortLevelSchema } from './effort';
 import { tierNameSchema } from './model-binding';
 import { nodeSkipReasonSchema, skipCauseSchema, suspendReasonSchema } from './node-state';
+import { checkoutObservationSchema } from './checkout-observation';
 
 /** Conforms to the provider owner; no alternate token vocabulary at this boundary. */
 export const executionTokenUsageSchema = z.object({
@@ -74,6 +75,12 @@ export const nodeInvocationSchema = z.object({
   id: z.string(),
   startedAt: z.string().datetime({ offset: true }),
   loopPath: z.array(z.object({ groupId: z.string(), iteration: z.number().int() })),
+  /**
+   * The checkout when this invocation's first attempt started. Later attempts, inner loop
+   * turns, and a resumed continuation keep it; only a new invocation samples again.
+   * Absent for node kinds that do not execute against the checkout.
+   */
+  checkoutStart: checkoutObservationSchema.optional(),
 });
 export type NodeInvocation = z.infer<typeof nodeInvocationSchema>;
 
@@ -147,7 +154,12 @@ export const nodeExecutionMetadataSchema = z.object({
   path: z.string(),
   node: nodeDescriptorSchema,
   invocation: nodeInvocationSchema,
-  attempt: z.object({ id: z.string(), startedAt: z.string().datetime({ offset: true }) }),
+  attempt: z.object({
+    id: z.string(),
+    startedAt: z.string().datetime({ offset: true }),
+    /** The checkout when this attempt started; the attempt's own sample, not the invocation's. */
+    checkoutStart: checkoutObservationSchema.optional(),
+  }),
   binding: executionBindingSchema,
   timing: z.object({
     startedAt: z.string().datetime({ offset: true }),

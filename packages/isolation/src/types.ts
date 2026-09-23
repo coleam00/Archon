@@ -145,6 +145,8 @@ export interface AdoptedWorktreeMetadata {
 export interface CreatedWorktreeMetadata {
   adopted: false;
   request?: IsolationRequest;
+  /** The commit a newly created branch was cut from; absent when an existing branch was checked out. */
+  cutFromCommit?: string;
 }
 
 export type WorktreeMetadata = AdoptedWorktreeMetadata | CreatedWorktreeMetadata;
@@ -402,7 +404,12 @@ export type ResolutionMethod =
   | { type: 'workflow_reuse' }
   | { type: 'linked_issue_reuse'; issueNumber: number }
   | { type: 'branch_adoption'; branch: string }
-  | { type: 'created'; autoCleanedCount?: number };
+  | {
+      type: 'created';
+      autoCleanedCount?: number;
+      /** The commit the new branch was cut from, when this resolution created one. */
+      cutFromCommit?: string;
+    };
 
 export type IsolationResolution =
   | {

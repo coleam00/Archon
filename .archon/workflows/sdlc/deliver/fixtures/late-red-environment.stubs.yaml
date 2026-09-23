@@ -2,7 +2,6 @@
 # environmental failure outside the branch. The classified failure must reach
 # the same explicit rerun-and-resume pause as inherited red, with the PR left
 # draft and flip-ready unreached.
-impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true

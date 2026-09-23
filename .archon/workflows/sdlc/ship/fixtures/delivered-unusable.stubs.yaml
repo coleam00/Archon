@@ -26,7 +26,6 @@ triage__triage:
   summary: "stub: current code confirms a complete work order"
   report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
 gate-direct: '{"gate":"direct"}'
-deliver__impl__record-start: '{"start":"recorded"}'
 deliver__impl__implement:
   done: true
   green: true

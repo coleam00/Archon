@@ -18,6 +18,8 @@ import {
   type NodeExecutionRecord,
   type NodeInvocation,
 } from './schemas/node-execution';
+import type { CheckoutObservation } from './schemas/checkout-observation';
+import { observeCheckout } from './checkout-observation';
 /**
  * DAG Workflow Executor
  *
@@ -145,6 +147,8 @@ import {
   similarNodeIds,
   canonicalValueText,
   parseWholeOutputRef,
+  parseWholeExecutionCheckoutRef,
+  resolveExecutionCheckoutStart,
   parseWholeInputsRef,
   substituteInputRefs,
   type JsonValue,
@@ -486,7 +490,12 @@ export function resolveNodeBindings(
           'boolean, null, or array for a literal value.'
       );
     }
-    resolved[name] = resolveWorkflowValue(rawValue, ctx, runInputs, true);
+    const checkoutProducer =
+      typeof rawValue === 'string' ? parseWholeExecutionCheckoutRef(rawValue) : undefined;
+    resolved[name] =
+      checkoutProducer !== undefined
+        ? resolveExecutionCheckoutStart(ctx.nodeOutputs.get(checkoutProducer), checkoutProducer)
+        : resolveWorkflowValue(rawValue, ctx, runInputs, true);
   }
   return resolved;
 }
@@ -2100,7 +2109,13 @@ export function checkComposedBlockBoundaries(
   return { decision: 'run' };
 }
 
-/** Capture immutable attribution before one execution attempt starts. */
+/**
+ * Capture immutable attribution before one execution attempt starts.
+ *
+ * `checkoutStart` is this attempt's checkout sample. The first sample also becomes the
+ * invocation's, and the dispatch context keeps that invocation, so a retry or a resumed
+ * continuation is compared with where the invocation began rather than where it paused.
+ */
 function beginExecution(
   ctx: RunLayersContext,
   node: DagNode,
@@ -2111,17 +2126,34 @@ function beginExecution(
     effort?: EffortLevel;
     sessionId?: string;
     capabilities?: ProviderCapabilities;
+    checkoutStart?: CheckoutObservation;
   } = {}
 ): NodeExecutionRecord {
+  let invocation = ctx.nodeInvocation ?? newNodeInvocation(ctx.loopGroupPath);
+  if (options.checkoutStart !== undefined && invocation.checkoutStart === undefined) {
+    invocation = { ...invocation, checkoutStart: options.checkoutStart };
+  }
+  ctx.nodeInvocation = invocation;
   const execution = startNodeExecution({
     runId: ctx.workflowRun.id,
     path: ctx.stepNamePrefix + node.id,
     node,
-    invocation: ctx.nodeInvocation ?? newNodeInvocation(ctx.loopGroupPath),
+    invocation,
     ...options,
   });
   ctx.currentExecution = execution;
   return execution;
+}
+
+/**
+ * Sample the checkout a node is about to execute against, through the run's execution
+ * backend. Taken at every attempt start of a node that runs code or an agent there.
+ */
+function observeNodeCheckout(ctx: RunLayersContext): Promise<CheckoutObservation> {
+  return observeCheckout(ctx.cwd, ctx.execContext, {
+    runId: ctx.workflowRun.id,
+    artifactsDir: ctx.artifactsDir,
+  });
 }
 
 async function executeNodeInternal(
@@ -2182,6 +2214,7 @@ async function executeNodeInternal(
       effort: resolvedEffort,
       sessionId: resumeSessionId,
       capabilities: aiClient.getCapabilities(),
+      checkoutStart: await observeNodeCheckout(ctx),
     }),
     diagnostics: {
       ...(iteration !== undefined ? { iteration } : {}),
@@ -3768,7 +3801,7 @@ async function executeBashNode(
   // Namespaced persisted step_name for loop_group bodies ('' → node.id at top level, #2090).
   const stepName = stepNamePrefix + node.id;
   const execution: NodeExecutionRecord = {
-    ...beginExecution(ctx, node),
+    ...beginExecution(ctx, node, { checkoutStart: await observeNodeCheckout(ctx) }),
     diagnostics: { ...(iteration !== undefined ? { iteration } : {}) },
   };
 
@@ -3833,6 +3866,7 @@ async function executeBashNode(
       issueContext,
       adoptedRunDir: currentAdoptedRunDir(),
       typedArtifactsFile,
+      nodeExecution: execution,
     }),
   };
 
@@ -4042,7 +4076,7 @@ async function executeScriptNode(
   // Namespaced persisted step_name for loop_group bodies ('' → node.id at top level, #2090).
   const stepName = stepNamePrefix + node.id;
   const execution: NodeExecutionRecord = {
-    ...beginExecution(ctx, node),
+    ...beginExecution(ctx, node, { checkoutStart: await observeNodeCheckout(ctx) }),
     diagnostics: { ...(iteration !== undefined ? { iteration } : {}) },
   };
 
@@ -4115,6 +4149,7 @@ async function executeScriptNode(
       issueContext,
       adoptedRunDir: currentAdoptedRunDir(),
       typedArtifactsFile,
+      nodeExecution: execution,
     }),
     // Named Python scripts run from the frozen capture, and CPython writes bytecode
     // caches beside any module it imports. A cache landing in the capture would change
@@ -4864,6 +4899,7 @@ async function executeLoopGroupBody(
                 issueContext,
                 adoptedRunDir: currentAdoptedRunDir(),
                 typedArtifactsFile,
+                nodeExecution: ctx.currentExecution ?? null,
               }),
             },
           });
@@ -5340,6 +5376,7 @@ async function executeLoopGroupBody(
               issueContext,
               adoptedRunDir: currentAdoptedRunDir(),
               typedArtifactsFile,
+              nodeExecution: ctx.currentExecution ?? null,
             }),
           },
         });
@@ -5776,20 +5813,17 @@ async function executeLoopNode(
     return failLoopNode(errorMsg);
   }
 
-  execution = beginExecution(
-    {
-      ...ctx,
-      nodeInvocation: savedExecution?.invocation ?? ctx.nodeInvocation,
-    },
-    node,
-    {
-      provider: workflowProvider,
-      model: resolvedModel,
-      tier: resolvedTier,
-      effort: resolvedEffort,
-      capabilities: aiClient.getCapabilities(),
-    }
-  );
+  // A continuation after an interactive gate is the same invocation: it keeps the
+  // invocation (and its checkout start) the paused attempt recorded.
+  if (savedExecution !== undefined) ctx.nodeInvocation = savedExecution.invocation;
+  execution = beginExecution(ctx, node, {
+    provider: workflowProvider,
+    model: resolvedModel,
+    tier: resolvedTier,
+    effort: resolvedEffort,
+    capabilities: aiClient.getCapabilities(),
+    checkoutStart: await observeNodeCheckout(ctx),
+  });
   if (savedExecution !== undefined) {
     execution.timing.startedAt = savedExecution.timing.startedAt;
   }
@@ -6890,6 +6924,7 @@ async function executeLoopNode(
               issueContext,
               adoptedRunDir: currentAdoptedRunDir(),
               typedArtifactsFile,
+              nodeExecution: execution,
             }),
           },
         });
@@ -9109,6 +9144,7 @@ async function executeComposeFanOutNode(
           ...(persisted.structuredOutput !== undefined
             ? { structuredOutput: persisted.structuredOutput }
             : {}),
+          ...(persisted.execution !== undefined ? { execution: persisted.execution } : {}),
         });
       }
       const instanceExecution: NodeExecutionRecord = {
@@ -11519,6 +11555,7 @@ export async function executeDagWorkflow(
           ? { structuredOutput: prior.structuredOutput }
           : {}),
         ...(declaredFields !== undefined ? { declaredFields: [...declaredFields] } : {}),
+        ...(prior.execution !== undefined ? { execution: prior.execution } : {}),
       });
       prepopulatedCount++;
     }

@@ -1,9 +1,9 @@
 # Dry-run fixture: the honest decline the guard now accepts (run with --exec-code).
 # implement is stubbed as done-but-not-green with nothing changed, and names the
 # remaining red as one it did not cause — a check already red at the starting commit,
-# with the check named. record-start and assert-changed execute for real against a
-# clean scratch worktree, which is the exact state that used to fail the run: no
-# commit, no working-tree change, no branch lead. It passes now, because the change
+# with the check named. assert-changed executes for real against a clean scratch
+# worktree, which is the exact state that used to fail the run: no content changed
+# since the implement invocation started, no branch lead. It passes now, because the change
 # this guard would demand does not exist. What the claim is worth is the green gates'
 # question; the sibling fixtures here pin the three no-change cases still refused.
 implement:

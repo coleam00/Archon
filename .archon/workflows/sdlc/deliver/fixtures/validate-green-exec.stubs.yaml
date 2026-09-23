@@ -8,7 +8,6 @@
 #
 # The red paths through the same gate with exec-code are covered by the
 # validate-red*.stubs.yaml fixtures.
-impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true

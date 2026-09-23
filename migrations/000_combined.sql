@@ -197,7 +197,8 @@ CREATE TABLE IF NOT EXISTS remote_agent_workflow_runs (
   completed_at TIMESTAMP WITH TIME ZONE,
   last_activity_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   working_path TEXT,
-  output_root TEXT
+  output_root TEXT,
+  checkout_baseline JSONB
 );
 
 COMMENT ON TABLE remote_agent_workflow_runs IS
@@ -371,6 +372,13 @@ ALTER TABLE remote_agent_workflow_runs
 -- across a codebase rename (#1192). Declared identically on SQLite (sqlite.ts).
 ALTER TABLE remote_agent_workflow_runs
   ADD COLUMN IF NOT EXISTS output_root TEXT;
+
+-- Run checkout baseline (#3305): the checkout observation taken once when the run
+-- won its execution claim, before its first node. Write-once; NULL means not
+-- recorded (runs from before the column, or runs that never started). Declared
+-- identically on SQLite (sqlite.ts) as TEXT holding the same JSON.
+ALTER TABLE remote_agent_workflow_runs
+  ADD COLUMN IF NOT EXISTS checkout_baseline JSONB;
 
 -- Between-run continuation (#2747): the terminal run whose estate (worktree/
 -- branch + artifacts-by-reference) this run explicitly adopted. Mirrors

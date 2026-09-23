@@ -322,6 +322,24 @@ describe('WorktreeProvider', () => {
       );
     });
 
+    test('records the commit a new branch was cut from, read from the created branch', async () => {
+      const cutFrom = 'a'.repeat(40);
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) =>
+        args.includes('rev-parse') && args.includes('HEAD^{commit}')
+          ? { stdout: `${cutFrom}\n`, stderr: '' }
+          : { stdout: '', stderr: '' }
+      );
+
+      const env = await provider.create(baseRequest);
+
+      expect(env.metadata).toMatchObject({ adopted: false, cutFromCommit: cutFrom });
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        ['-C', env.workingPath, 'rev-parse', '--verify', 'HEAD^{commit}'],
+        expect.any(Object)
+      );
+    });
+
     test('does not run git checkout or reset --hard on canonical repo', async () => {
       worktreeExistsSpy.mockResolvedValue(false);
       await provider.create(baseRequest);
@@ -384,6 +402,8 @@ describe('WorktreeProvider', () => {
 
       expect(env.branchName).toBe(git.toBranchName('feature/live-pr'));
       expect(env.metadata).toMatchObject({ adopted: true, adoptedFrom: 'branch' });
+      // Adoption continues an existing branch; it never claims a cut-from commit.
+      expect(Object.hasOwn(env.metadata, 'cutFromCommit')).toBe(false);
       expect(syncWorkspaceSpy).not.toHaveBeenCalled();
       expect(execSpy).toHaveBeenCalledWith(
         'git',

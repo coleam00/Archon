@@ -530,6 +530,16 @@ invocation, attempt, provider, requested model and any model the provider report
 share an invocation; each retry has its own attempt. A new loop-group iteration creates new body
 invocations. Resuming unfinished work keeps its invocation identity.
 
+The run's starting checkout appears as `checkout_baseline` in JSON and as the `Start:` line
+in human output. The engine observes it once, right after the run wins its execution claim
+and before the first node, and never rewrites it — a resume keeps it. A Git observation gives
+the commit, that commit's tree, whether the worktree was clean or dirty (with staged,
+unstaged, and untracked counts), and, when Archon created the run's branch, the commit it was
+cut from. `not_git` means the directory is not in a Git repository; `unavailable` means the
+engine could not read it. `null` means not recorded: the run predates this field or never
+started. Node execution records carry the same observation as `invocation.checkoutStart` and
+`attempt.checkoutStart`, so you can see which commit each node started at.
+
 Each usage observation is either `{ source: "provider", value: ... }` or unavailable. Reasons
 separate unsupported reporting, a supported value not reported, unknown capability, non-provider
 work and invalid reported numbers. A reported zero stays zero. Historical nodes omit `execution`

@@ -4,13 +4,12 @@
 #
 # The open finding is already satisfied on the branch and the only check still red was
 # red at the reviewed starting commit, so the correction has no edit to make and says
-# so: done, not green, `inherited`, with the check named. `fix__record-start` and
-# `fix__assert-changed` run for real against a clean scratch worktree -- no commit, no
-# working-tree change -- which is exactly the state that used to kill the round and
+# so: done, not green, `inherited`, with the check named. `fix__assert-changed` runs
+# for real against a clean scratch worktree -- no content changed since the correction
+# invocation started -- which is exactly the state that used to kill the round and
 # discard every correction before it. The round now passes its guard, the continuation
 # review certifies the branch ready, and the inherited break rides to the CI wait like
 # any other, where the pull request's own checks decide.
-impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true

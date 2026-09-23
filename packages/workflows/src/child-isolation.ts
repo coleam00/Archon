@@ -50,6 +50,8 @@ export interface ChildIsolationResult {
   envId: string;
   /** The branch created for the child (e.g. `archon/task-<parent>-<node>-<hash>-child-0`). */
   branchName: string;
+  /** The commit that branch was cut from, when this call created it; absent on adoption. */
+  cutFromCommit?: string;
 }
 
 /**

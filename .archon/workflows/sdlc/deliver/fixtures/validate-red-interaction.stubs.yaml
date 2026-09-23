@@ -1,5 +1,4 @@
 # An interaction is red, never an inherited/environment delivery bypass.
-impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true

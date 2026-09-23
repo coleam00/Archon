@@ -1,6 +1,5 @@
 # An adjacent proved defect survives in discovery artifacts and the report but
 # does not turn an otherwise-ready review into correction work.
-impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true
