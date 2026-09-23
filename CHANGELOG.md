@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The Docker container no longer crash-loops on start when `~/.gitconfig` holds several `credential.https://github.com.helper` values, as `gh auth login` inside the container leaves behind. With `GH_TOKEN` set, the entrypoint now replaces all of them with its `GH_TOKEN` helper.
+- Registering a local checkout, including the CLI's automatic registration on `archon workflow run`, no longer repoints a same-named project that Archon cloned into its managed workspace. In a database shared by several hosts, that path may belong to another host, and every Docker host uses the same `/.archon` path, so the rewrite silently broke the other host. The registration now fails with a conflict naming both paths and the `/update-project` command that moves the project explicitly. (#3403)
 
 ## [0.10.1] - 2026-08-30
 
