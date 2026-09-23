@@ -48,9 +48,9 @@ The summary states are `none`, `pending`, `green`, `red`, `gated` and `unknown`.
 
 ## Use forge checks in the SDLC pack
 
-The bundled SDLC deliver pack reads checks through `gh` by default. Forge reads are an explicit opt-in until the GitHub plugin installs through the marketplace. To opt in, install a plugin for the PR's host and set `ARCHON_SDLC_CHECKS=forge` in the environment Archon runs with, for example `~/.archon/.env`. Any other value except `gh` fails the check steps.
+The bundled SDLC deliver pack reads checks through `gh` by default. Forge reads are an explicit opt-in until the GitHub plugin installs through the marketplace. To opt in, install a plugin for the PR's host and set `ARCHON_SDLC_CHECKS=forge` in the environment Archon runs with, for example `~/.archon/.env`. A value other than `gh` or `forge` fails the check steps.
 
-With the opt-in, the pack prefers a supplied required set, otherwise it uses the full observation. It applies the same gate policy it applies to `gh` reads: it waits once for registration when no checks exist and refuses the final ready preflight for pending, red, gated, unknown or failed reads. The workflow owns this policy. Archon never switches to the forge path because a plugin is installed, and a selected forge path that cannot answer never falls back to `gh`: the CI probe and the ready flip fail with the reason, for example `no forge plugin claims <host>`.
+With the opt-in, the pack prefers a supplied required set, otherwise it uses the full observation. It classifies each GitHub check the same way through either source and applies the same gate policy: it waits once for registration when no checks exist and refuses the final ready preflight for pending, red, gated, unknown or failed reads. The workflow owns this policy. Archon never switches to the forge path because a plugin is installed, and a selected forge path that cannot answer never falls back to `gh`: the CI probe and the ready flip fail with the reason, for example `no forge plugin claims <host>`.
 
 ## Plugin configuration
 
