@@ -185,7 +185,11 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     if (!fake.writeLost) pr.body = readFileSync(argv[argv.indexOf('--body-file') + 1], 'utf8');
     return result(0, '');
   }
-  if (text.startsWith('pr list')) return result(0, JSON.stringify(exists ? [project()] : []));
+  if (text.startsWith('pr list')) {
+    // gh applies the head and state filters server side.
+    const listed = exists && pr.state === 'OPEN' && pr.headRefName === argv[argv.indexOf('--head') + 1];
+    return result(0, JSON.stringify(listed ? [project()] : []));
+  }
   if (text.startsWith('pr view')) return result(0, JSON.stringify(project()));
   if (text.startsWith('api')) {
     const endpoint = argv.find(part => part.startsWith('repos/'));
@@ -195,7 +199,10 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
         ? result(1, '', 'HTTP 404')
         // With --paginate, gh applies --jq to each page; the fake prints one id per active workflow.
         : result(0, Array.from({ length: fake.workflows }, (_, index) => index + 1 + '\\n').join(''));
-    const url = (id) => 'https://' + host + '/' + path + '/pull/' + String(pr.number) + '#issuecomment-' + String(id);
+    // gh api names its host with --hostname and its repository in the endpoint.
+    const apiHost = argv[argv.indexOf('--hostname') + 1];
+    const apiPath = endpoint.split('/').slice(1, 3).join('/');
+    const url = (id) => 'https://' + apiHost + '/' + apiPath + '/pull/' + String(pr.number) + '#issuecomment-' + String(id);
     const method = argv.includes('--method') ? argv[argv.indexOf('--method') + 1] : 'GET';
     if (method === 'GET') {
       const page = Number(new URLSearchParams(endpoint.split('?')[1] ?? '').get('page') ?? '1');

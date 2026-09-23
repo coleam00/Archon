@@ -439,7 +439,8 @@ async function upsertComment(
   const comment = commentRecord(request.ref, observed);
   if (
     String(observed.id) !== String(written.id) ||
-    observed.issue_url !== issue ||
+    // GitHub echoes owner/name in its registered case (see sameRepo).
+    observed.issue_url.toLowerCase() !== issue.toLowerCase() ||
     (observed.body ?? '') !== request.body
   ) {
     return unverified(request, 'Comment read-back did not match', leaveBehind, { comment });

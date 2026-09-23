@@ -216,6 +216,9 @@ nodes:
     runtime: bun
     depends_on: [synthesize]
     with:
+      # Delivery's verified record, when it passed one, is the write target;
+      # the scope agent's declaration names it only for a standalone review.
+      scope: "$INPUTS.scope"
       pr: "$scope.output.pr"
       report: "$ARTIFACTS_DIR/review/report.md"
       ready: "$synthesize.output.ready"

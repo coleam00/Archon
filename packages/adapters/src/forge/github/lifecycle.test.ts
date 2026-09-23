@@ -458,6 +458,24 @@ describe('the canonical comment is one comment across rounds', () => {
     ]);
   });
 
+  test('a comment GitHub echoes in its registered repository case still verifies', async () => {
+    const github = fakeGitHub();
+    const response = await run(
+      {
+        operationId: 'case',
+        op: 'comment.upsert',
+        ref: { repo: { host: 'github.com', path: 'Archon/Test' }, number: 7 },
+        marker,
+        body: report,
+      },
+      github
+    );
+    expect(response).toMatchObject({
+      ok: true,
+      result: { op: 'comment.upsert', value: { outcome: 'applied', changed: true } },
+    });
+  });
+
   test('an unchanged round writes nothing and still verifies', async () => {
     const github = fakeGitHub({ comments: [{ id: 5, body: report }] });
     const response = await run(

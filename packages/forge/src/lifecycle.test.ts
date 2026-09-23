@@ -145,10 +145,12 @@ describe('mutation evidence at the dispatch boundary', () => {
   });
 
   test('a mutation that never reached a plugin is refused, not unknown', async () => {
-    const result = await dispatchForge(edit, {
-      config: { plugins: [], scanPath: false },
-      discovery: undefined,
+    // An empty discovery that never scans the developer's own plugin directory.
+    const discovery = await discoverPlugins({
+      config: { scanPath: false },
+      includeDefaultDir: false,
     });
+    const result = await dispatchForge(edit, { discovery });
     expect(result.response).toMatchObject({
       ok: false,
       error: { kind: 'no_plugin_for_host' },
@@ -159,7 +161,9 @@ describe('mutation evidence at the dispatch boundary', () => {
   test('a read failure carries no mutation evidence at all', async () => {
     const result = await dispatchForge(
       { operationId: 'view-1', op: 'pr.view', selector: { kind: 'number', ref } },
-      { config: { plugins: [], scanPath: false } }
+      {
+        discovery: await discoverPlugins({ config: { scanPath: false }, includeDefaultDir: false }),
+      }
     );
     expect(result.response.ok).toBe(false);
     expect(result.response).not.toHaveProperty('mutation');
@@ -205,6 +209,20 @@ test('the audit record keeps a digest of authored content, never the content', a
         },
       },
     },
+  });
+});
+
+test('a head selector accepts only an open pull request', async () => {
+  const byHead = {
+    operationId: 'head-1',
+    op: 'pr.view',
+    selector: { kind: 'head', repo: ref.repo, headRepo: ref.repo, head: 'feature' },
+  } satisfies ForgeRequest;
+  expect((await dispatch(byHead, 'view-content')).response).toMatchObject({ ok: true });
+  // A branch closed long ago must not answer for the pull request this head has now.
+  expect((await dispatch(byHead, 'closed')).response).toMatchObject({
+    ok: false,
+    error: { kind: 'invalid_response' },
   });
 });
 

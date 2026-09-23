@@ -340,6 +340,30 @@ describe('publish-review keeps one canonical comment per pull request', () => {
     expect(JSON.parse(result.stdout)).toMatchObject({ ready: true, action: 'none' });
   });
 
+  // Delivery hands the review its verified record as the scope. The scope agent's
+  // declaration is then a restatement, not the authority: a wrong or empty one must
+  // not move the comment or silently skip it.
+  it.each([
+    ['declares no pull request', '{}'],
+    ['names another pull request', JSON.stringify({ ...PR, number: 43 })],
+  ])('refuses when delivery recorded the target and the scope %s', (_label, declared) => {
+    const result = publishReview({
+      inputs: { ...report, INPUTS_SCOPE: JSON.stringify(PR), INPUTS_PR: declared },
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('delivery recorded');
+    expect(result.gh.some(call => call.includes('--method'))).toBe(false);
+  });
+
+  it('publishes to the recorded pull request when the scope declaration agrees', () => {
+    const result = publishReview({ inputs: { ...report, INPUTS_SCOPE: JSON.stringify(PR) } });
+    expect(result.code).toBe(0);
+    expect(result.gh.some(call => call.includes('repos/example/repo/issues/42/comments'))).toBe(
+      true
+    );
+  });
+
   it('upserts through the plugin on the opt-in path, with the report in the request file', () => {
     const result = publishReview({
       source: 'forge',

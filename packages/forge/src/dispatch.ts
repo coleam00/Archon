@@ -165,7 +165,9 @@ export function matchesForgeOperationResponse(
       const selector = request.selector;
       return selector.kind === 'number'
         ? sameRef(value.pr, selector.ref)
-        : sameRepo(value.pr.repo, selector.repo) &&
+        : // A head selector asks for the branch's open pull request, never a closed one.
+          value.pr.state === 'open' &&
+            sameRepo(value.pr.repo, selector.repo) &&
             value.pr.head === selector.head &&
             value.pr.head_repo !== null &&
             sameRepo(value.pr.head_repo, selector.headRepo) &&

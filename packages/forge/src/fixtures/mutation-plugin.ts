@@ -102,14 +102,18 @@ else {
     return answer(ref, { pr, bodyDigest: digest(input.body ?? '') });
   };
 
-  if (mode === 'view-content') {
+  if (mode === 'view-content' || mode === 'closed') {
     process.stdout.write(
       JSON.stringify({
         operationId: input.operationId,
         ok: true,
         result: {
           op: 'pr.view',
-          value: { pr, title: 'A secret title', body: 'A secret body' },
+          value: {
+            pr: mode === 'closed' ? { ...pr, state: 'closed' } : pr,
+            title: 'A secret title',
+            body: 'A secret body',
+          },
         },
       })
     );

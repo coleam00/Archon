@@ -38,17 +38,17 @@ archon forge pr.ready --data '{"ref":{"repo":{"host":"github.com","path":"owner/
 archon forge comment.upsert --data-file ./comment.json
 ```
 
-Every command emits JSON. `resolve` takes an explicit remote, including `null` for no remote. A local or unclaimed remote returns `{ "kind": "none", "forge": "none" }` inside the success result. It performs no HTTP host probe. Every other operation requires a qualified repository and number; none is inferred from the checkout.
+Every command emits JSON. `resolve` takes an explicit remote, including `null` for no remote. A local or unclaimed remote returns `{ "kind": "none", "forge": "none" }` inside the success result. It performs no HTTP host probe. Every other operation names its target explicitly: a qualified repository for `pr.create` and for a `pr.view` head selector, a qualified repository and number otherwise. None is inferred from the checkout.
 
 `pr.view` accepts either selector: `{"kind":"number","ref":…}`, or `{"kind":"head","repo":…,"headRepo":…,"head":"branch"}` with an optional `base`. The head form answers "does this branch have a pull request", so it resolves the **open** one and returns `null` when there is none. A head matching more than one open pull request is a conflict rather than a guess.
 
 `--data-file <path>` reads the same JSON request from a file. Authored content — a pull-request body, a review comment — belongs there rather than in `--data`, so it never appears in any process's argument list.
 
-Exit 0 means the operation succeeded. Exit 1 means it failed. Exit 2 means the operation completed but its run audit could not be persisted; stdout retains the actual result, and a write that exits 2 has already happened.
+Exit 0 means the operation succeeded. Exit 1 means it failed. Exit 2 means the operation returned a response but its run audit could not be persisted. Stdout retains that response, which may be a success or a failed write with its mutation outcome; read it before retrying or reconciling, because exit 2 alone does not say whether a write happened.
 
 ## What a write reports
 
-`pr.create`, `pr.edit-body`, `pr.ready` and `comment.upsert` each perform at most one write and then read the result back. Every one of them reports exactly one outcome, so a caller never has to guess which happened:
+`pr.create`, `pr.edit-body`, `pr.ready` and `comment.upsert` each perform at most one write and then read the result back. A valid write request reports exactly one outcome, so a caller never has to guess which happened. A request that fails validation before dispatch is answered with `invalid_request` and no `mutation`; nothing was written.
 
 | Outcome | Shape | What it means |
 | --- | --- | --- |
