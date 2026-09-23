@@ -96,11 +96,9 @@ import {
   refreshCompiledInstallManifest,
   canonicalizeProjectPath,
 } from '@archon/paths';
+import { publishArchonCliCommand } from '@archon/paths/cli-command';
 
-const cliInvocation: [string, ...string[]] = BUNDLED_IS_BINARY
-  ? [process.execPath]
-  : [process.execPath, '--no-env-file', import.meta.path];
-process.env.ARCHON_CLI_COMMAND = JSON.stringify(cliInvocation);
+publishArchonCliCommand();
 
 let providersRegistered = false;
 let databaseRouteLoaded = false;

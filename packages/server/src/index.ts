@@ -41,6 +41,11 @@ if (envPath) {
 import { loadArchonEnv } from '@archon/paths/env-loader';
 loadArchonEnv(process.cwd());
 
+// Workflow scripts started by this server call back into the CLI through the
+// same host command the CLI publishes for its own runs.
+import { publishArchonCliCommand } from '@archon/paths/cli-command';
+publishArchonCliCommand();
+
 // Smart default: fall back to Claude Code's built-in OAuth (`claude /login`)
 // ONLY for solo installs with no explicit credentials. Per-user installs
 // (TOKEN_ENCRYPTION_KEY) deliver Claude auth per-request, so the global-auth
