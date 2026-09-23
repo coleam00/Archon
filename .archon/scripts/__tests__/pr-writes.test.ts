@@ -119,6 +119,38 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(result.stderr).toContain('the base branch does not exist');
   });
 
+  it('reuses the open pull request when the head repository differs only in case', () => {
+    const result = publishPr({
+      intent: { ...intent, headRepo: { host: PR.repo.host, path: 'Example/Repo' } },
+      gh: { pr: { headRefName: 'feature' } },
+    });
+    expect(result.code).toBe(0);
+    expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
+    expect(result.stderr).toContain('already has this head');
+  });
+
+  it('keeps the created pull request when the host could not audit the write', () => {
+    const result = publishPr({
+      source: 'forge',
+      forge: {
+        kind: 'fake',
+        okExitCode: 2,
+        response: [
+          forgeOperation('pr.view', { pr: null }),
+          forgeOperation('pr.create', {
+            target: PR.repo,
+            outcome: 'applied',
+            changed: true,
+            pr: forgePrRecord(),
+          }),
+        ],
+      },
+    });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, url: PR_URL });
+    expect(result.stderr).toContain("could not record it in the run's audit log");
+  });
+
   it('reads back the pull request the run was launched onto instead of creating one', () => {
     const result = publishPr({
       intent: { repo: PR.repo, headRepo: PR.repo, head: 'feature', existing: 42 },
@@ -128,6 +160,20 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
     expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
     expect(result.gh.some(call => call.startsWith('pr list'))).toBe(false);
+  });
+
+  it('adopts a named pull request whose head repository differs only in case', () => {
+    const result = publishPr({
+      intent: {
+        repo: PR.repo,
+        headRepo: { host: PR.repo.host, path: 'Example/Repo' },
+        head: 'feature',
+        existing: 42,
+      },
+      gh: { pr: { headRefName: 'feature' } },
+    });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
   });
 
   it('refuses a named pull request whose head is not the recorded branch', () => {
@@ -320,6 +366,31 @@ describe('publish-review keeps one canonical comment per pull request', () => {
     expect(request.body.split('\n')[0]).toBe(MARKER);
     expect(request.body).toContain(REPORT);
     expect(result.forge.join(' ')).not.toContain(REPORT);
+  });
+
+  it('still reports the verdict when the host could not audit the comment write', () => {
+    const result = publishReview({
+      source: 'forge',
+      inputs: report,
+      forge: {
+        kind: 'fake',
+        okExitCode: 2,
+        response: forgeOperation('comment.upsert', {
+          target: PR,
+          outcome: 'applied',
+          changed: true,
+          comment: {
+            ref: PR,
+            id: '900',
+            url: `${PR_URL}#issuecomment-900`,
+            bodyDigest: 'digest',
+          },
+        }),
+      },
+    });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ ready: true, action: 'none' });
+    expect(result.stderr).toContain("could not record it in the run's audit log");
   });
 
   it('reports an unknown comment outcome without claiming the review was published', () => {

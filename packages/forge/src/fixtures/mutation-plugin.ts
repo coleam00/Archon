@@ -44,31 +44,63 @@ else {
     op: string;
     ref?: PluginRef;
     selector?: { kind: string; ref?: PluginRef };
+    repo?: PluginRef['repo'];
+    headRepo?: PluginRef['repo'];
+    head?: string;
+    headRevision?: string;
+    base?: string;
+    draft?: boolean;
     body?: string;
   };
   const ref = input.ref ??
     input.selector?.ref ?? { repo: { host: 'forge.example', path: 'a/b' }, number: 1 };
+  const repo = input.repo ?? ref.repo;
+  // A create answers with the pull request the request asked for; every other
+  // op answers with the one it named.
   const pr = {
     schemaVersion: 1,
-    repo: ref.repo,
+    repo,
     number: ref.number,
-    url: `https://forge.example/${ref.repo.path}/pull/${String(ref.number)}`,
-    head: 'feature',
-    base: 'dev',
-    is_draft: false,
+    url: `https://forge.example/${repo.path}/pull/${String(ref.number)}`,
+    head: input.head ?? 'feature',
+    base: input.base ?? 'dev',
+    is_draft: input.op === 'pr.create' ? (input.draft ?? false) : false,
     state: 'open',
-    head_repo: ref.repo,
-    head_revision: 'headsha',
+    head_repo: input.headRepo ?? repo,
+    head_revision: input.headRevision ?? 'headsha',
     base_revision: 'basesha',
     maintainer_can_modify: null,
   };
   const digest = (value: string): string => createHash('sha256').update(value).digest('hex');
+  const comment = {
+    ref,
+    id: '900',
+    url: `https://forge.example/${repo.path}/pull/${String(ref.number)}#comment-900`,
+    bodyDigest: digest(input.body ?? ''),
+  };
 
-  const applied = (value: object): unknown => ({
+  const answer = (target: unknown, value: object): unknown => ({
     operationId: input.operationId,
     ok: true,
-    result: { op: input.op, value: { target: ref, outcome: 'applied', changed: true, ...value } },
+    result: { op: input.op, value: { target, outcome: 'applied', changed: true, ...value } },
   });
+
+  /** An applied answer that does not answer the request it was sent. */
+  const mismatched = (): unknown => {
+    if (input.op === 'pr.create')
+      return answer(repo, { pr: { ...pr, head_revision: 'another-revision' } });
+    if (input.op === 'pr.ready') return answer(ref, { pr: { ...pr, is_draft: true } });
+    if (input.op === 'comment.upsert')
+      return answer(ref, { comment: { ...comment, bodyDigest: digest('something else') } });
+    return answer(ref, { pr, bodyDigest: digest('something else') });
+  };
+
+  const applied = (): unknown => {
+    if (input.op === 'pr.create') return answer(repo, { pr });
+    if (input.op === 'pr.ready') return answer(ref, { pr });
+    if (input.op === 'comment.upsert') return answer(ref, { comment });
+    return answer(ref, { pr, bodyDigest: digest(input.body ?? '') });
+  };
 
   if (mode === 'view-content') {
     process.stdout.write(
@@ -84,11 +116,17 @@ else {
   } else if (mode === 'wrong-target') {
     process.stdout.write(
       JSON.stringify(
-        applied({ pr: { ...pr, number: ref.number + 1 }, bodyDigest: digest(input.body ?? '') })
+        answer(ref, { pr: { ...pr, number: ref.number + 1 }, bodyDigest: digest(input.body ?? '') })
       )
     );
-  } else if (mode === 'wrong-digest') {
-    process.stdout.write(JSON.stringify(applied({ pr, bodyDigest: digest('something else') })));
+  } else if (mode === 'mismatch') {
+    process.stdout.write(JSON.stringify(mismatched()));
+  } else if (mode === 'registered-case') {
+    // The forge answers in the case it has registered, whatever case was asked with.
+    const registered = { host: repo.host.toUpperCase(), path: repo.path.toUpperCase() };
+    process.stdout.write(
+      JSON.stringify(answer(registered, { pr: { ...pr, repo: registered, head_repo: registered } }))
+    );
   } else if (mode === 'no-evidence') {
     process.stdout.write(
       JSON.stringify({
@@ -109,6 +147,6 @@ else {
     );
     process.exit(1);
   } else {
-    process.stdout.write(JSON.stringify(applied({ pr, bodyDigest: digest(input.body ?? '') })));
+    process.stdout.write(JSON.stringify(applied()));
   }
 }

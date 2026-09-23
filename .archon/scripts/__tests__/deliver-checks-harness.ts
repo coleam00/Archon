@@ -82,7 +82,15 @@ export type ForgeFake =
   /** The real CLI with an empty Archon home: no forge plugin is installed. */
   | { readonly kind: 'no-plugin' }
   /** A fake CLI that prints this document, or fails when `response` is omitted. */
-  | { readonly kind: 'fake'; readonly response?: string | readonly string[] };
+  | {
+      readonly kind: 'fake';
+      readonly response?: string | readonly string[];
+      /**
+       * The exit status for a successful response. The real CLI exits 2 when the
+       * operation completed and only its run audit could not be persisted.
+       */
+      readonly okExitCode?: number;
+    };
 
 export interface ScriptRun {
   readonly code: number;
@@ -283,7 +291,7 @@ else {
   writeFileSync(${JSON.stringify(readsLog)}, String(reads + 1));
   const chosen = JSON.parse(responses[Math.min(reads, responses.length - 1)]);
   process.stdout.write(JSON.stringify(chosen));
-  process.exitCode = chosen.ok === true ? 0 : 1;
+  process.exitCode = chosen.ok === true ? ${String(forge.okExitCode ?? 0)} : 1;
 }
 `
     );

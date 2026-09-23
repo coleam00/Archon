@@ -16,6 +16,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { note } from './io.ts';
 
 export type ForgeSource = 'gh' | 'forge';
 
@@ -85,6 +86,20 @@ export interface ChecksObservation extends CheckSet {
   readonly required: CheckSet | null;
 }
 
+/**
+ * Repository identity, compared the way a forge registers it.
+ *
+ * Host and owner/name are case-insensitive but case-preserving: a forge answers
+ * with the case it has registered, whatever case this pack asked with. Comparing
+ * exactly would read a pull request that is the requested one as a different one.
+ */
+export function sameRepo(left: QualifiedPr['repo'], right: QualifiedPr['repo']): boolean {
+  return (
+    left.host.toLowerCase() === right.host.toLowerCase() &&
+    left.path.toLowerCase() === right.path.toLowerCase()
+  );
+}
+
 export function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null
     ? (value as Record<string, unknown>)
@@ -135,18 +150,18 @@ export function invokeForge(op: string, request: Record<string, unknown>): Recor
     if (!response || typeof response.operationId !== 'string' || response.operationId === '') {
       throw new Error(`forge ${op} returned an unexpected response envelope`);
     }
-    if (response.ok !== true || result.exitCode !== 0) {
+    // Exit 2 is the host saying it could not audit an operation that did complete.
+    // The response on stdout is the real outcome, so the result is still a result;
+    // losing it here would report a performed write as a failure.
+    if (response.ok === true && result.exitCode === 2) {
+      note(`forge ${op} completed but the host could not record it in the run's audit log.`);
+    } else if (response.ok !== true || result.exitCode !== 0) {
       const mutation = record(response.mutation);
       const error = record(response.error);
       const outcome = typeof mutation?.outcome === 'string' ? mutation.outcome : undefined;
       const message = typeof error?.message === 'string' ? error.message : 'operation failed';
-      // Exit 2 means the operation itself completed and only its audit did not.
-      const reason =
-        result.exitCode === 2
-          ? `completed but could not be audited: ${message}`
-          : `${outcome ?? 'failed'}: ${message}`;
       throw new ForgeOperationError(
-        `forge ${op} ${reason}${mutation ? ` ${JSON.stringify(mutation)}` : ''}`,
+        `forge ${op} ${outcome ?? 'failed'}: ${message}${mutation ? ` ${JSON.stringify(mutation)}` : ''}`,
         mutation
       );
     }
@@ -291,11 +306,7 @@ function parseSet(value: unknown): CheckSet | undefined {
 }
 
 function samePr(left: QualifiedPr, right: QualifiedPr): boolean {
-  return (
-    left.number === right.number &&
-    left.repo.host === right.repo.host &&
-    left.repo.path === right.repo.path
-  );
+  return left.number === right.number && sameRepo(left.repo, right.repo);
 }
 
 /** Invoke `archon forge checks` and validate only the fields pack policy consumes. */

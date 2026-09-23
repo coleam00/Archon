@@ -16,7 +16,13 @@
 
 import { readFileSync } from 'node:fs';
 import { createPr, findOpenPrByHead, viewPr } from '../../.shared/pr.ts';
-import { forgeSource, record, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
+import {
+  forgeSource,
+  record,
+  sameRepo,
+  type PrRecord,
+  type QualifiedPr,
+} from '../../.shared/forge.ts';
 import { emit, note, refuse, text } from '../../.shared/io.ts';
 
 function repo(value: unknown, field: string): QualifiedPr['repo'] {
@@ -54,7 +60,8 @@ function publish(): PrRecord {
       throw new Error("the PR intent's existing must be the pull request number");
     }
     const view = viewPr({ repo: base, number: intent.existing }, source);
-    if (view.pr.head !== head || view.pr.head_repo?.path !== headRepo.path) {
+    const observedHead = view.pr.head_repo;
+    if (view.pr.head !== head || observedHead === null || !sameRepo(observedHead, headRepo)) {
       throw new Error(
         `pull request ${String(intent.existing)} has head ${String(view.pr.head_repo?.path)}:${view.pr.head}, not the recorded ${headRepo.path}:${head}`
       );

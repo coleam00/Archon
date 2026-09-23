@@ -256,6 +256,25 @@ describe('GitHub mutations report which of the four outcomes happened', () => {
     });
   });
 
+  test('applied: GitHub may echo the head repository in its registered case', async () => {
+    const github = fakeGitHub({
+      pull: pull({
+        title: 'stale',
+        body: 'stale',
+        draft: false,
+        head: { ref: 'feature', sha: 'headsha', repo: { full_name: 'Archon/Test' } },
+      }),
+    });
+    const created = await run(create, github);
+    expect(created).toMatchObject({
+      ok: true,
+      result: {
+        op: 'pr.create',
+        value: { outcome: 'applied', pr: { head_repo: { path: 'Archon/Test' } } },
+      },
+    });
+  });
+
   test('applied with changed false: an already-current write submits nothing', async () => {
     const github = fakeGitHub({ pull: pull({ body: 'same', draft: false }) });
     const edited = await run(

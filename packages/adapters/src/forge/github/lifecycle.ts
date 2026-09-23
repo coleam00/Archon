@@ -24,6 +24,7 @@ import {
 import type { PrRef, RepoRef } from '@archon/forge';
 import {
   GitHubError,
+  githubErrorDetail,
   githubPages,
   githubRequest,
   graphqlEndpoint,
@@ -94,6 +95,20 @@ function prRecord(repo: RepoRef, pull: Pull): ForgePrRecord {
     base_revision: pull.base.sha,
     maintainer_can_modify: pull.maintainer_can_modify ?? null,
   });
+}
+
+/**
+ * Repository identity, compared the way GitHub registers it.
+ *
+ * GitHub echoes `owner/name` in its canonically-registered case whatever case a
+ * request carried, so an exact comparison would read a pull request that was
+ * created exactly as asked as one whose head repository disagrees.
+ */
+function sameRepo(left: RepoRef, right: RepoRef): boolean {
+  return (
+    left.host.toLowerCase() === right.host.toLowerCase() &&
+    left.path.toLowerCase() === right.path.toLowerCase()
+  );
 }
 
 /** Prove a fork head repository exists and is the one that was named. */
@@ -228,8 +243,8 @@ async function createPullRequest(
     (observed.body ?? '') !== request.body ||
     pr.head !== request.head ||
     pr.head_revision !== request.headRevision ||
-    pr.head_repo?.host !== request.headRepo.host ||
-    pr.head_repo?.path !== request.headRepo.path ||
+    pr.head_repo === null ||
+    !sameRepo(pr.head_repo, request.headRepo) ||
     pr.base !== request.base ||
     pr.is_draft !== request.draft ||
     pr.state !== 'open'
@@ -455,18 +470,7 @@ export async function handleGithubMutation(
         return await upsertComment(request, fetchImpl, token, submit);
     }
   } catch (cause) {
-    const error =
-      cause instanceof GitHubError
-        ? cause.detail
-        : cause instanceof z.ZodError
-          ? {
-              kind: 'forge_error' as const,
-              message: `GitHub API response did not match its documented shape: ${cause.issues[0]?.message ?? 'invalid response'}`,
-            }
-          : {
-              kind: 'forge_error' as const,
-              message: cause instanceof Error ? cause.message : String(cause),
-            };
+    const error = githubErrorDetail(cause);
     if (progress.phase === 'acknowledged')
       return unverified(request, error.message, 'the acknowledged write may remain');
     if (

@@ -19,6 +19,7 @@ import {
   invokeForge,
   parsePrRecord,
   record,
+  sameRepo,
   type ForgeSource,
   type PrRecord,
   type QualifiedPr,
@@ -160,7 +161,7 @@ export function findOpenPrByHead(
   // compared here; the forge selector already carries it.
   const matches = rows
     .map(row => ghPrView(repo, row))
-    .filter(view => view.pr.head_repo?.path === headRepo.path);
+    .filter(view => view.pr.head_repo !== null && sameRepo(view.pr.head_repo, headRepo));
   if (matches.length > 1) {
     throw new Error(
       `more than one open pull request in ${repo.path} has head ${headRepo.path}:${head}`

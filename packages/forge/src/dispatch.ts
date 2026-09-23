@@ -52,8 +52,18 @@ function errorResponse(
   };
 }
 
+/**
+ * Repository identity, compared the way a forge registers it.
+ *
+ * Host and owner/name are case-insensitive but case-preserving: a forge echoes
+ * back the case it has registered, whatever case the request carried. An exact
+ * comparison would read a write that landed exactly as asked as one that did not.
+ */
 function sameRepo(left: RepoRef, right: RepoRef): boolean {
-  return left.host === right.host && left.path === right.path;
+  return (
+    normalizeHost(left.host) === normalizeHost(right.host) &&
+    left.path.toLowerCase() === right.path.toLowerCase()
+  );
 }
 function sameRef(left: PrRef, right: PrRef): boolean {
   return sameRepo(left.repo, right.repo) && left.number === right.number;

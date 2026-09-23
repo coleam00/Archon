@@ -18,6 +18,27 @@ const edit = {
   ref,
   body: 'the authored body',
 } satisfies ForgeRequest;
+const create = {
+  operationId: 'create-1',
+  op: 'pr.create',
+  repo: ref.repo,
+  headRepo: ref.repo,
+  head: 'feature',
+  headRevision: 'headsha',
+  base: 'dev',
+  title: 'A title',
+  body: 'A body',
+  draft: true,
+} satisfies ForgeRequest;
+const ready = { operationId: 'ready-1', op: 'pr.ready', ref } satisfies ForgeRequest;
+const marker = '<!-- archon-review-report -->';
+const upsert = {
+  operationId: 'comment-1',
+  op: 'comment.upsert',
+  ref,
+  marker,
+  body: `${marker}\nRound 1`,
+} satisfies ForgeRequest;
 
 async function dispatch(
   request: ForgeRequest,
@@ -49,7 +70,7 @@ describe('mutation evidence at the dispatch boundary', () => {
 
   test.each([
     ['a different pull request', 'wrong-target'],
-    ['a body it did not write', 'wrong-digest'],
+    ['a body it did not write', 'mismatch'],
   ])('refuses an applied result naming %s, without claiming a refusal', async (_label, mode) => {
     const result = await dispatch(edit, mode);
     expect(result.response).toMatchObject({
@@ -57,6 +78,42 @@ describe('mutation evidence at the dispatch boundary', () => {
       error: { kind: 'invalid_response' },
       // The plugin ran, so what it did to the pull request is not knowable here.
       mutation: { op: 'pr.edit-body', target: ref, outcome: 'outcome_unknown' },
+    });
+  });
+
+  // Verification is not pr.edit-body's alone: a plugin's answer to a create, a
+  // ready flip or a comment upsert is the only claim dispatch has that the write
+  // did what it was asked, so each op's branch is exercised both ways.
+  test.each([
+    ['pr.create', create],
+    ['pr.ready', ready],
+    ['comment.upsert', upsert],
+  ] as const)('accepts a %s result that answers the request', async (op, request) => {
+    const result = await dispatch(request);
+    expect(result.response).toMatchObject({
+      ok: true,
+      result: { op, value: { outcome: 'applied' } },
+    });
+  });
+
+  test.each([
+    ['pr.create', 'a revision it was not asked for', create],
+    ['pr.ready', 'a pull request still in draft', ready],
+    ['comment.upsert', 'a body it did not write', upsert],
+  ] as const)('refuses a %s result naming %s', async (op, _label, request) => {
+    const result = await dispatch(request, 'mismatch');
+    expect(result.response).toMatchObject({
+      ok: false,
+      error: { kind: 'invalid_response' },
+      mutation: { op, outcome: 'outcome_unknown' },
+    });
+  });
+
+  test('accepts a result echoing the repository in the case the forge registered', async () => {
+    const result = await dispatch(create, 'registered-case');
+    expect(result.response).toMatchObject({
+      ok: true,
+      result: { op: 'pr.create', value: { outcome: 'applied' } },
     });
   });
 
