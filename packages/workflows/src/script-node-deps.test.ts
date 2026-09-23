@@ -79,6 +79,7 @@ function createMockStore(): IWorkflowStore {
         adopted_from_run_id: null,
       })
     ),
+    claimPendingWorkflowRun: mock(async () => null),
     getWorkflowRun: mock(() => Promise.resolve(null)),
     findChildRuns: mock(() => Promise.resolve([])),
     getRunAncestry: mock(() => Promise.resolve([])),

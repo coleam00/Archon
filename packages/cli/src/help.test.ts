@@ -161,13 +161,15 @@ describe('CLI help output', () => {
   // string here means any future drift — a dropped Commands entry, a reordered
   // Options block, a column-width change in formatSpecLine — fails this test
   // instead of silently shipping.
-  const PRE_REFACTOR_GLOBAL_HELP = `
+  const EXPECTED_GLOBAL_HELP = `
 Archon CLI - Run AI workflows from the command line
 
 Usage:
   archon <command> [subcommand] [options] [arguments]
 
 Commands:
+  trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>
+                             Start configured workflows and inspect durable resource admission
   chat <message>             Send a message to the orchestrator
   setup                      Interactive setup wizard for credentials and config
   workflow list [name] [--full] [--json]
@@ -284,14 +286,14 @@ Examples:
 
 `;
 
-  it('archon --help matches the pre-refactor global index byte-for-byte', () => {
+  it('archon --help matches the supported global index byte-for-byte', () => {
     const result = spawnSync(process.execPath, [CLI_ENTRY, '--help'], {
       encoding: 'utf8',
       env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
     });
     expect(result.status).toBe(0);
-    expect(result.stdout).toBe(PRE_REFACTOR_GLOBAL_HELP);
-    expect(`${renderHelp()}\n`).toBe(PRE_REFACTOR_GLOBAL_HELP);
+    expect(result.stdout).toBe(EXPECTED_GLOBAL_HELP);
+    expect(`${renderHelp()}\n`).toBe(EXPECTED_GLOBAL_HELP);
   });
 
   it('archon help <cmd> [<subcmd>] matches archon <cmd> [<subcmd>] --help', () => {

@@ -308,6 +308,8 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
      */
     adopted_from_run_id?: string;
   }): Promise<WorkflowRun>;
+  /** Fresh execution must win this pending-to-running CAS before doing any work. */
+  claimPendingWorkflowRun(id: string): Promise<WorkflowRun | null>;
   getWorkflowRun(id: string): Promise<WorkflowRun | null>;
   /**
    * Find the workflow run currently holding the lock on `workingPath`.
