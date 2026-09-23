@@ -155,19 +155,35 @@ const ERROR_PATTERNS: { pattern: string; message: string; known: boolean }[] = [
 ];
 
 /**
+ * An isolation error carrying the failure of the cleanup it triggered.
+ *
+ * The note rides alongside the message instead of being appended to it: both
+ * classifiers below match on message text, and cleanup wording such as
+ * "permission denied" would otherwise outrank the real cause.
+ */
+type ErrorWithCleanupFailure = Error & { cleanupFailure?: string };
+
+/**
+ * Record that the cleanup this error triggered did not finish, so the operator
+ * learns what was left behind without losing the cause that started it.
+ */
+export function recordCleanupFailure(err: Error, detail: string): void {
+  (err as ErrorWithCleanupFailure).cleanupFailure = detail;
+}
+
+/**
  * Classify isolation creation errors into user-friendly messages.
  */
 export function classifyIsolationError(err: Error): string {
   const stderr = (err as Error & { stderr?: string }).stderr ?? '';
   const errorLower = `${err.message} ${stderr}`.toLowerCase();
 
-  for (const { pattern, message } of ERROR_PATTERNS) {
-    if (errorLower.includes(pattern)) {
-      return message;
-    }
-  }
+  const classified =
+    ERROR_PATTERNS.find(({ pattern }) => errorLower.includes(pattern))?.message ??
+    `**Error:** Could not create isolated workspace (${err.message}).`;
 
-  return `**Error:** Could not create isolated workspace (${err.message}).`;
+  const cleanupFailure = (err as ErrorWithCleanupFailure).cleanupFailure;
+  return cleanupFailure ? `${classified} ${cleanupFailure}` : classified;
 }
 
 /**

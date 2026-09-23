@@ -86,6 +86,7 @@ mock.module('node:fs/promises', () => ({
 }));
 
 import { WorktreeProvider } from './worktree';
+import { classifyIsolationError } from '../errors';
 import { IsolationResolver } from '../resolver';
 
 describe('WorktreeProvider', () => {
@@ -1971,6 +1972,69 @@ describe('WorktreeProvider', () => {
       await expect(submoduleProvider.create(baseRequest)).rejects.toThrow(
         /Submodule initialization failed/
       );
+    });
+
+    describe('rollback of a setup that did not finish', () => {
+      const submoduleError = Object.assign(new Error('git submodule update failed'), {
+        stderr: 'fatal: could not read from remote repository',
+      });
+
+      const captureError = async (promise: Promise<unknown>): Promise<Error> => {
+        const thrown: unknown = await promise.then(
+          () => undefined,
+          cause => cause
+        );
+        if (!(thrown instanceof Error))
+          throw new Error('Expected create() to reject with an Error');
+        return thrown;
+      };
+
+      const argsOfCallContaining = (token: string): string[] | undefined =>
+        execSpy.mock.calls.find((call: unknown[]) => (call[1] as string[]).includes(token))?.[1] as
+          | string[]
+          | undefined;
+
+      test('removes the worktree this call created and leaves the branch alone', async () => {
+        makeGitmodulesPresent();
+        execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+          if (args.includes('submodule')) throw submoduleError;
+          return { stdout: '', stderr: '' };
+        });
+
+        await expect(provider.create(baseRequest)).rejects.toThrow(
+          /Submodule initialization failed/
+        );
+
+        // Forced: a partly initialized submodule makes git refuse a plain remove.
+        expect(argsOfCallContaining('remove')).toEqual([
+          '-C',
+          '/workspace/repo',
+          'worktree',
+          'remove',
+          '--force',
+          provider.getWorktreePath(baseRequest, 'archon/issue-42'),
+        ]);
+        expect(argsOfCallContaining('-D')).toBeUndefined();
+      });
+
+      test('reports a failed rollback alongside the setup error instead of replacing it', async () => {
+        makeGitmodulesPresent();
+        execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+          if (args.includes('submodule')) throw submoduleError;
+          if (args.includes('remove')) throw new Error('permission denied');
+          return { stdout: '', stderr: '' };
+        });
+
+        const error = await captureError(provider.create(baseRequest));
+
+        expect(error.message).toMatch(/Submodule initialization failed/);
+        // The cleanup wording must not outrank the cause: 'permission denied' is
+        // classified ahead of a submodule failure when it reaches the message.
+        const userMessage = classifyIsolationError(error);
+        expect(userMessage).toContain('Submodule initialization failed');
+        expect(userMessage).toContain(provider.getWorktreePath(baseRequest, 'archon/issue-42'));
+        expect(userMessage).toContain('permission denied');
+      });
     });
   });
 

@@ -31,6 +31,7 @@ import {
 import type { WorktreeBaseOverride } from '@archon/git';
 import { isInsideArchonWorkspaces, isPathInside } from '@archon/paths';
 import type { BranchName, RepoPath, WorktreeInfo } from '@archon/git';
+import { recordCleanupFailure } from '../errors';
 import { copyWorktreeFiles } from '../worktree-copy';
 import type {
   DestroyResult,
@@ -845,6 +846,37 @@ export class WorktreeProvider implements IIsolationProvider {
       }
     }
 
+    // Reaching here means this call's own `git worktree add` produced the
+    // directory, so the rollback below can only ever remove a checkout this
+    // attempt created. Without it a half-set-up worktree survives with no
+    // isolation-environment row tracking it, and the next run on the same
+    // branch adopts it as ready (#3448).
+    let warnings: string[];
+    try {
+      warnings = await this.finishWorktreeSetup(request, repoPath, worktreePath, worktreeConfig);
+    } catch (error) {
+      const setupError = error instanceof Error ? error : new Error(String(error));
+      await this.rollBackIncompleteWorktree(repoPath, worktreePath, setupError);
+      throw setupError;
+    }
+
+    return {
+      kind: 'created',
+      warnings,
+      ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
+    };
+  }
+
+  /**
+   * Turn a freshly added worktree into a checkout a run can start from.
+   * Returns the warnings a caller should surface on an otherwise usable worktree.
+   */
+  private async finishWorktreeSetup(
+    request: IsolationRequest,
+    repoPath: RepoPath,
+    worktreePath: string,
+    worktreeConfig: WorktreeCreateConfig | null
+  ): Promise<string[]> {
     // Stamp the originating user's git identity on this worktree so workflow
     // commits attribute to the human (PR-C). Scoped to the worktree's local
     // config; absent identity leaves the ambient git config untouched. Failure
@@ -868,17 +900,63 @@ export class WorktreeProvider implements IIsolationProvider {
       worktreeConfig
     );
 
-    const warnings: string[] = [];
-    if (configLoadFailed) {
-      warnings.push(
-        'Config file could not be loaded — copyFiles configuration was not applied. Check your .archon/config.yaml for syntax errors.'
-      );
+    return configLoadFailed
+      ? [
+          'Config file could not be loaded — copyFiles configuration was not applied. Check your .archon/config.yaml for syntax errors.',
+        ]
+      : [];
+  }
+
+  /**
+   * Remove a worktree this call created but could not finish setting up.
+   *
+   * Forced removal is required, not a convenience: git refuses to remove a
+   * worktree that contains submodules at all, and a partly initialized submodule
+   * is the common way setup fails here. Nothing has run in the checkout between
+   * `git worktree add` and this point, so there is no user work to force past.
+   *
+   * No branch name is passed. The branch may predate this call — an adopted task
+   * branch always does — and deleting it is never what recovering from a failed
+   * setup requires.
+   *
+   * A cleanup that does not finish is recorded on the setup error rather than
+   * replacing it: the operator needs the original cause and needs to know that a
+   * directory the next run could adopt is still there.
+   */
+  private async rollBackIncompleteWorktree(
+    repoPath: RepoPath,
+    worktreePath: string,
+    setupError: Error
+  ): Promise<void> {
+    getLog().warn(
+      { repoPath, worktreePath, err: setupError },
+      'isolation.incomplete_worktree_rollback_started'
+    );
+
+    let failure: string;
+    try {
+      const result = await this.destroy(worktreePath, {
+        force: true,
+        canonicalRepoPath: repoPath,
+      });
+      if (result.worktreeRemoved && result.directoryClean) {
+        getLog().info({ repoPath, worktreePath }, 'isolation.incomplete_worktree_rolled_back');
+        return;
+      }
+      failure = result.warnings.join(' ') || 'cleanup did not complete';
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
     }
-    return {
-      kind: 'created',
-      warnings,
-      ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
-    };
+
+    getLog().error(
+      { repoPath, worktreePath, failure },
+      'isolation.incomplete_worktree_rollback_failed'
+    );
+    recordCleanupFailure(
+      setupError,
+      `The incomplete workspace at ${worktreePath} could not be removed (${failure}); ` +
+        'delete it manually before retrying, or the next run will adopt it.'
+    );
   }
 
   /**
