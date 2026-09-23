@@ -36,8 +36,6 @@ deliver__impl__assert-changed: "2 files changed"
 deliver__gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
 deliver__pr__pr: { intent: "/fixture/pr-intent.json" }
 deliver__pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 5, url: "https://github.com/example/repo/pull/5", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
-deliver__read-pr-body: { body: "/fixture/pr-body-current.md", url: "https://github.com/example/repo/pull/5" }
-deliver__publish-pr-body: {}
 deliver__classify:
   errors: false
   docs: false

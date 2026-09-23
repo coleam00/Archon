@@ -68,8 +68,6 @@ deliver__outcome: { pr_url: "https://github.com/example/repo/pull/3", summary: "
 gate-planned: '{"gate":"planned"}'
 deliver__pr__pr: { intent: "/fixture/pr-intent.json" }
 deliver__pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 3, url: "https://github.com/example/repo/pull/3", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
-deliver__read-pr-body: { body: "/fixture/pr-body-current.md", url: "https://github.com/example/repo/pull/3" }
-deliver__publish-pr-body: {}
 deliver__review__mode: '{"continuation":false}'
 deliver__review__scope:
   # PR diff in scope; head sha stubbed

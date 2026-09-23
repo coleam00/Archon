@@ -1,6 +1,6 @@
 ---
 title: Forge operations
-description: Resolve repositories and read qualified pull-request checks through optional executable plugins.
+description: Resolve repositories, read qualified pull-request checks, and perform verified pull-request writes through optional executable plugins.
 category: reference
 area: cli
 audience: [user]
@@ -30,11 +30,36 @@ The eventual single marketplace will distribute forge plugins, agent providers, 
 ```sh
 archon forge resolve --data '{"remote":"git@github.com:owner/repository.git"}'
 archon forge checks --data '{"ref":{"repo":{"host":"github.com","path":"owner/repository"},"number":42}}'
+archon forge workitem.view --data '{"ref":{"repo":{"host":"github.com","path":"owner/repository"},"number":31}}'
+archon forge pr.view --data '{"selector":{"kind":"number","ref":{"repo":{"host":"github.com","path":"owner/repository"},"number":42}}}'
+archon forge pr.create --data-file ./create.json
+archon forge pr.edit-body --data-file ./body.json
+archon forge pr.ready --data '{"ref":{"repo":{"host":"github.com","path":"owner/repository"},"number":42}}'
+archon forge comment.upsert --data-file ./comment.json
 ```
 
-Both commands emit JSON. `resolve` takes an explicit remote, including `null` for no remote. A local or unclaimed remote returns `{ "kind": "none", "forge": "none" }` inside the success result. It performs no HTTP host probe. `checks` requires a qualified repository and PR number; it never infers them from the checkout.
+Every command emits JSON. `resolve` takes an explicit remote, including `null` for no remote. A local or unclaimed remote returns `{ "kind": "none", "forge": "none" }` inside the success result. It performs no HTTP host probe. Every other operation requires a qualified repository and number; none is inferred from the checkout.
 
-Exit 0 means the observation succeeded, even when checks are red. Exit 1 means the operation or its input failed. Exit 2 means the operation completed but its run audit could not be persisted; stdout retains the actual result.
+`pr.view` accepts either selector: `{"kind":"number","ref":…}`, or `{"kind":"head","repo":…,"headRepo":…,"head":"branch"}` with an optional `base`. The head form answers "does this branch have a pull request", so it resolves the **open** one and returns `null` when there is none. A head matching more than one open pull request is a conflict rather than a guess.
+
+`--data-file <path>` reads the same JSON request from a file. Authored content — a pull-request body, a review comment — belongs there rather than in `--data`, so it never appears in any process's argument list.
+
+Exit 0 means the operation succeeded. Exit 1 means it failed. Exit 2 means the operation completed but its run audit could not be persisted; stdout retains the actual result, and a write that exits 2 has already happened.
+
+## What a write reports
+
+`pr.create`, `pr.edit-body`, `pr.ready` and `comment.upsert` each perform at most one write and then read the result back. Every one of them reports exactly one outcome, so a caller never has to guess which happened:
+
+| Outcome | Shape | What it means |
+| --- | --- | --- |
+| applied | `ok: true`, `result.value.outcome: "applied"` | The write was performed and read back. `changed: false` means the forge already carried the requested state and nothing was submitted. |
+| refused | `ok: false`, `mutation.outcome: "refused"` | Nothing was written. The forge answered with a refusal, or the request was rejected before submission. |
+| verification failed | `ok: false`, `mutation.outcome: "verification_failed"` | The write was acknowledged, but the read-back disagreed or could not run. `leaveBehind` names what may remain on the forge. |
+| outcome unknown | `ok: false`, `mutation.outcome: "outcome_unknown"` | The request was submitted and its answer was lost. Reconcile before retrying. |
+
+A read-back never claims to have *prevented* a wrong write; it only reports what it could and could not confirm. A vendor that accepts a write and silently does not apply it is reported as a verification failure, never as success.
+
+`comment.upsert` writes the one comment whose first line is the exact `marker`, creating it when absent and replacing it in place when present. A body that does not begin with that marker is refused, and more than one marked comment is a conflict.
 
 ## GitHub credentials and check observations
 
@@ -46,11 +71,13 @@ The summary states are `none`, `pending`, `green`, `red`, `gated` and `unknown`.
 
 `required` is null when no authoritative required set was obtained. The current GitHub plugin returns null; it does not infer branch protection from check names.
 
-## Use forge checks in the SDLC pack
+## Use the forge path in the SDLC pack
 
-The bundled SDLC deliver pack reads checks through `gh` by default. Forge reads are an explicit opt-in until the GitHub plugin installs through the marketplace. To opt in, install a plugin for the PR's host and set `ARCHON_SDLC_FORGE=forge` in the environment Archon runs with, for example `~/.archon/.env`. A value other than `gh` or `forge` fails the check steps.
+The bundled SDLC pack reads checks and performs its pull-request writes through `gh` by default. The forge path is an explicit opt-in until the GitHub plugin installs through the marketplace. To opt in, install a plugin for the pull request's host and set `ARCHON_SDLC_FORGE=forge` in the environment Archon runs with, for example `~/.archon/.env`. One switch covers both reads and writes; a value other than `gh` or `forge` fails the steps that use it.
 
-With the opt-in, the pack prefers a supplied required set, otherwise it uses the full observation. It classifies each GitHub check the same way through either source and applies the same gate policy: it waits once for registration when no checks exist and refuses the final ready preflight for pending, red, gated, unknown or failed reads. The workflow owns this policy. Archon never switches to the forge path because a plugin is installed, and a selected forge path that cannot answer never falls back to `gh`: the CI probe and the ready flip fail with the reason, for example `no forge plugin claims <host>`.
+The pack's writes are the draft pull request, the body resync, the canonical review comment and the ready flip. Each happens in a deterministic node — `publish-pr`, `publish-pr-body`, `publish-review` and `flip-ready` — that publishes through the selected source and fails unless the result reads back. The agents around them establish the target, author the body and decide the verdict; they never write to the forge themselves. Whether a branch already has a pull request is decided by an open-head lookup, so a second one is never opened for it.
+
+For reads, the pack prefers a supplied required set, otherwise the full observation. It classifies each GitHub check the same way through either source and applies the same gate policy: it waits once for registration when no checks exist and refuses the final ready preflight for pending, red, gated, unknown or failed reads. The workflow owns this policy. Archon never switches to the forge path because a plugin is installed, and a selected forge path that cannot answer never falls back to `gh`: the step fails with the reason, for example `no forge plugin claims <host>`.
 
 ## Plugin configuration
 
@@ -79,9 +106,13 @@ The authoritative Zod schemas and derived TypeScript types are exported by `@arc
 
 `@archon/forge/conformance` exports `runForgeReadConformance` for controlled repository fixtures. Pass the plugin operation function and cases naming the expected revision, state and exact unit identities. The kit validates the response schema, correlation, qualified target, counts and summary.
 
+It also exports `runForgeMutationConformance` for write fixtures. Pass the plugin operation function, its metadata, and cases naming the request and the outcome the fixture sets up. The kit validates the response schema, correlation, qualified target, the applied result against the request that asked for it, and that the reported outcome is the expected one.
+
 The host invokes `PLUGIN metadata` before any operation. Metadata declares integer protocol version 1, plugin name/version, forge family, static hosts, operation capabilities and credential environment names. Protocol incompatibility and unsupported operations fail before operation execution.
 
-For an operation, the host invokes `PLUGIN op OPERATION` (`resolve` or `checks.state`), sends one JSON request on stdin and expects one JSON response on stdout. Write explicit UTF-8 bytes. Diagnostics go to stderr. Exit 0 carries a success response; exit 1 carries a structured operation error. Other exits, malformed JSON and mismatched operation/target identity are process or protocol failures.
+For an operation, the host invokes `PLUGIN op OPERATION` — `resolve`, `checks.state`, `workitem.view`, `pr.view`, `pr.create`, `pr.edit-body`, `pr.ready` or `comment.upsert` — sends one JSON request on stdin and expects one JSON response on stdout. Write explicit UTF-8 bytes. Diagnostics go to stderr. Exit 0 carries a success response; exit 1 carries a structured operation error. Other exits, malformed JSON and mismatched operation/target identity are process or protocol failures.
+
+A plugin that fails a write must state which outcome it was under `mutation`, and an applied result must answer the request that asked for it — the same pull request, the same head and draft state for a create, the digest of the body it was given for an edit or comment. The host checks both rather than trusting the claim. A failed write with no stated outcome, or an applied result that does not answer the request, becomes `outcome_unknown`: the plugin ran, so what it did to the forge is no longer knowable from here. A write whose plugin process never started, or whose operation the plugin does not declare, is a refusal.
 
 The host limits combined output to 16 MiB and kills the process tree on timeout. It supplies selected runtime environment variables and the resolved token, with value-based token redaction on captured output. Windows may inject additional system environment variables. Installed plugin code is trusted code and can access files under its operating-system identity.
 
@@ -91,4 +122,4 @@ On Windows, discovered executables must have an `.exe` extension. `.cmd` and `.b
 
 The CLI and the server both set `ARCHON_CLI_COMMAND` at startup to a JSON argv array for the install's CLI: the executable of a compiled binary, or the Bun runtime and CLI source entry in a source checkout. Runs launched from the CLI, the Web UI or a chat or forge adapter therefore see the same value. Bundled scripts append command arguments without shell parsing. An SDK host must supply its own argv array. A container execution does not receive the variable, because a host binary path is not assumed to exist in a container.
 
-When `WORKFLOW_ID` is present, the CLI persists an `integration_operation` event through its database host. The forge payload retains operation correlation, qualified target, plugin identity/version, exact result and duration. The engine does not interpret the forge payload. The CLI reports persistence failure separately from the operation's observed outcome.
+When `WORKFLOW_ID` is present, the CLI persists an `integration_operation` event through its database host. The forge payload retains operation correlation, qualified target, plugin identity/version, result and duration. Audit records keep identity and content digests only: the title and body a view operation returned are replaced by a digest and a byte count, so authored content never lands in the run's durable event log. The engine does not interpret the forge payload. The CLI reports persistence failure separately from the operation's observed outcome.

@@ -66,7 +66,7 @@ export interface GhFake {
   readonly readyFail?: string;
   /** The pull request every `gh pr view`/`gh pr list` read reports. */
   readonly pr?: GhPr;
-  /** No pull request matches `gh pr list --head`, so a create is the only path. */
+  /** No pull request matches `gh pr list --head` until one is created. */
   readonly noOpenPr?: boolean;
   /** Existing issue comments, in listing order. */
   readonly comments?: readonly GhCommentRow[];
@@ -113,6 +113,7 @@ const pr = {
   maintainerCanModify: null, ...(fake.pr ?? {}),
 };
 let comments = (fake.comments ?? []).map(row => ({ ...row }));
+let exists = fake.noOpenPr !== true;
 let nextId = 900;
 Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   if (argv[0] !== 'gh') return original(argv, settings);
@@ -165,6 +166,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       pr.headRefName = (argv[argv.indexOf('--head') + 1] ?? pr.headRefName).split(':').pop();
       pr.baseRefName = argv[argv.indexOf('--base') + 1] ?? pr.baseRefName;
       pr.state = 'OPEN';
+      exists = true;
     }
     return result(0, 'https://' + host + '/' + path + '/pull/' + String(pr.number));
   }
@@ -173,8 +175,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     if (!fake.writeLost) pr.body = readFileSync(argv[argv.indexOf('--body-file') + 1], 'utf8');
     return result(0, '');
   }
-  if (text.startsWith('pr list'))
-    return result(0, JSON.stringify(fake.noOpenPr ? [] : [project()]));
+  if (text.startsWith('pr list')) return result(0, JSON.stringify(exists ? [project()] : []));
   if (text.startsWith('pr view')) return result(0, JSON.stringify(project()));
   if (text.startsWith('api')) {
     const endpoint = argv.find(part => part.startsWith('repos/'));
@@ -210,9 +211,12 @@ export interface ScriptOptions {
   readonly source?: string;
   readonly gh?: GhFake;
   readonly forge?: ForgeFake;
-  /** `INPUTS_*` values this script reads, beyond the recorded pull request. */
+  /**
+   * `INPUTS_*` values this script reads, beyond the recorded pull request.
+   * `{ARTIFACTS}` in a value is replaced with the run's artifact directory.
+   */
   readonly inputs?: Readonly<Record<string, string>>;
-  /** Files to write under the run's artifact directory before the script runs. */
+  /** Files to write under the run's artifact directory, with the same substitution. */
   readonly artifacts?: Readonly<Record<string, string>>;
 }
 
@@ -225,8 +229,9 @@ export function runPackScript(relative: string, options: ScriptOptions = {}): Sc
   const readsLog = join(root, 'forge-reads');
   const artifacts = join(root, 'artifacts');
   mkdirSync(artifacts, { recursive: true });
+  const resolveArtifacts = (value: string): string => value.split('{ARTIFACTS}').join(artifacts);
   for (const [name, content] of Object.entries(options.artifacts ?? {})) {
-    writeFileSync(join(artifacts, name), content);
+    writeFileSync(join(artifacts, name), resolveArtifacts(content));
   }
   const preload = join(root, 'preload.ts');
   writeFileSync(preload, fakeGhPreload(options.gh ?? {}, ghLog));
@@ -237,7 +242,9 @@ export function runPackScript(relative: string, options: ScriptOptions = {}): Sc
     ARTIFACTS_DIR: artifacts,
     ARCHON_SDLC_FORGE: options.source ?? '',
     ARCHON_CLI_COMMAND: '',
-    ...options.inputs,
+    ...Object.fromEntries(
+      Object.entries(options.inputs ?? {}).map(([key, value]) => [key, resolveArtifacts(value)])
+    ),
   };
   const forge = options.forge ?? { kind: 'fake' };
   if (forge.kind === 'no-plugin') {

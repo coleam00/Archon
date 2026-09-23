@@ -376,12 +376,18 @@ describe('GitHubAdapter', () => {
       resumeAt: '2099-08-24T11:00:00.000Z',
     };
     const pullRequestRecord = {
+      schemaVersion: 1,
       repo: { host: 'github.com', path: 'Example/Repo' },
       number: 42,
       url: 'https://github.com/unrelated/project/pull/999',
       head: 'a-branch-that-is-not-used-for-matching',
       base: 'dev',
       is_draft: true,
+      state: 'open',
+      head_repo: { host: 'github.com', path: 'Example/Repo' },
+      head_revision: 'headsha',
+      base_revision: 'basesha',
+      maintainer_can_modify: null,
     };
     let originalAllowedUsers: string | undefined;
     let listCandidatesSpy: ReturnType<
@@ -453,9 +459,11 @@ describe('GitHubAdapter', () => {
     test('the adapter matcher accepts the bundled PR producer contract', () => {
       const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-pr'], 'archon-pr.yaml');
       if (parsed.workflow === null) throw new Error(parsed.error.error);
-      const node = parsed.workflow.nodes.find(item => item.id === 'pr');
-      if (node?.kind !== 'agent' || node.output_format === undefined) {
-        throw new Error('archon-pr does not expose an agent output contract');
+      // The publishing node owns the verified record; the agent before it only
+      // prepares the intent, and an inbound event must never match on that.
+      const node = parsed.workflow.nodes.find(item => item.id === 'publish');
+      if (node?.kind !== 'exec' || node.output_format === undefined) {
+        throw new Error('archon-pr does not expose a published pull-request contract');
       }
       expect(node.output_type).toBe('pull-request');
       expect(validateStructuredOutput(pullRequestRecord, node.output_format).valid).toBe(true);

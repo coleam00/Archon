@@ -20,8 +20,6 @@ impl__assert-changed: "3 files changed"
 # real gates must accept this run at every gate it reaches.
 pr__pr: { intent: "/fixture/pr-intent.json" }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 9, url: "https://github.com/example/repo/pull/9", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
-read-pr-body: { body: "/fixture/pr-body-current.md", url: "https://github.com/example/repo/pull/9" }
-publish-pr-body: {}
 classify:
   errors: false
   docs: false

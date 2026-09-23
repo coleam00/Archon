@@ -10,8 +10,8 @@ A guard here must protect an action the node it lives in takes.
 
 **Keep** a guard when it:
 
-- verifies the effect of something this node just did — exit 0 is not proof, and
-  `gh pr ready` can succeed against an already-ready PR without changing anything; or
+- verifies the effect of something this node just did — exit 0 is not proof, and a
+  forge can accept a write and silently not apply it; or
 - refuses to proceed on a question it asked and could not get an answer to, where
   guessing is irreversible. `archon complete` blocking a branch delete it could not
   prove safe is the shape.
@@ -55,27 +55,42 @@ above have not happened either, and both are worth their few lines. The question
 whether the guard is protecting *this node's own action*, or restating something
 that was already true when the node started.
 
-## Check source
+## Forge source
 
-`check-ci`, `ci-note` and the ready preflight read checks through one reader,
-[`.shared/checks.ts`](.shared/checks.ts), which returns the same check units from
-either source, so one gate policy classifies both:
+One switch selects the source for every forge read and write this pack makes.
+[`.shared/forge.ts`](.shared/forge.ts) owns which one a run selected;
+[`.shared/checks.ts`](.shared/checks.ts) owns the check read and its gate policy,
+and [`.shared/pr.ts`](.shared/pr.ts) owns the pull-request reads and writes. Both
+return the same shapes from either source, so one policy classifies both:
 
-- **`gh` (default).** The GitHub CLI reads the recorded qualified PR. This needs only
-  the authenticated `gh` the pack already uses for its writes.
+- **`gh` (default).** The GitHub CLI, acting on the recorded qualified PR. This
+  needs only the authenticated `gh` the pack has always used.
 - **`forge` (opt-in).** Set `ARCHON_SDLC_FORGE=forge` in the environment Archon
-  runs with, for example `~/.archon/.env`. Checks are then read through
-  `archon forge checks`, which needs a forge plugin installed for the PR's host
-  (see the forge reference in the docs) and the `ARCHON_CLI_COMMAND` host command
-  that the CLI and server publish at startup.
+  runs with, for example `~/.archon/.env`. Operations then go through
+  `archon forge`, which needs a forge plugin installed for the PR's host (see the
+  forge reference in the docs) and the `ARCHON_CLI_COMMAND` host command that the
+  CLI and server publish at startup.
 
 The source is never picked from what happens to be installed. When `forge` is
 selected and cannot answer (no host command, no plugin for the host, a failed
-read), `check-ci` and the ready flip refuse and `ci-note` reports the failure on
-stderr; none of them falls back to `gh`. Any other value of `ARCHON_SDLC_FORGE`
-refuses too. The forge source is for host execution: a container execution
-receives neither `ARCHON_SDLC_FORGE` nor `ARCHON_CLI_COMMAND`, so a containerized
-run reads through `gh`.
+operation), the node refuses and `ci-note` reports the failure on stderr; none of
+them falls back to `gh`. Any other value of `ARCHON_SDLC_FORGE` refuses too. The
+forge source is for host execution: a container execution receives neither
+`ARCHON_SDLC_FORGE` nor `ARCHON_CLI_COMMAND`, so a containerized run uses `gh`.
+
+## Public writes belong to a script
+
+An agent judges and authors; the node after it performs the one public write and
+proves it landed. `publish-pr` opens or reuses the pull request, `publish-pr-body`
+applies the resync, `publish-review` upserts the one marked review comment, and
+`flip-ready` flips it out of draft. Each takes a recorded intent from the agent
+before it, writes through the selected source, and fails unless the result reads
+back — so "the write failed" and "the write may have landed" stay different
+outcomes, in the pack as in the forge contract.
+
+That split is also what keeps the source switch out of the prompts. A prompt that
+branched on `ARCHON_SDLC_FORGE` would be an invented protocol; the scripts read it
+and the agents never see it.
 
 ## Deterministic scripts
 
