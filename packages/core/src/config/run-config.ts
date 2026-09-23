@@ -122,20 +122,8 @@ export function normalizeRunConfigSemantics(layer: WorkflowRunConfigLayer): Work
   const assistants: Record<string, Record<string, unknown>> = {};
   for (const [provider, defaults] of Object.entries(layer.assistants ?? {})) {
     assertRegisteredProvider(provider, `assistants.${provider}`);
-    if (provider === 'pi' && Object.hasOwn(defaults, 'env')) {
-      throw new Error(
-        "Run config key 'assistants.pi.env' cannot apply: Pi extension environment mutates " +
-          'process.env and is process-scoped.'
-      );
-    }
-    if (provider === 'pi' && Object.hasOwn(defaults, 'maxConcurrent')) {
-      throw new Error(
-        "Run config key 'assistants.pi.maxConcurrent' cannot apply: Pi concurrency is " +
-          'initialized once for the process lifetime.'
-      );
-    }
     try {
-      assistants[provider] = getRegistration(provider).parseRunConfig(defaults);
+      assistants[provider] = getRegistration(provider).parseConfig(defaults, 'run');
     } catch (error) {
       if (error instanceof InvalidProviderRunConfigError) {
         const suffix = error.fieldPath ? `.${error.fieldPath}` : '';

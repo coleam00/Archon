@@ -1,4 +1,4 @@
-import type { OpencodeProviderDefaults } from '../../types';
+import type { OpencodeProviderDefaults, ProviderConfigScope } from '../../types';
 import { InvalidProviderRunConfigError } from '../../errors';
 import {
   assertKnownRunConfigKeys,
@@ -44,9 +44,25 @@ export function parseOpencodeConfig(raw: Record<string, unknown>): OpencodeProvi
   return result;
 }
 
-/** Strict counterpart used only for an explicitly selected per-run layer. */
-export function parseOpencodeRunConfig(raw: Record<string, unknown>): OpencodeProviderDefaults {
+/** Strict counterpart for authored config: `.archon/config.yaml` and per-run layers. */
+export function parseOpencodeConfigStrict(
+  raw: Record<string, unknown>,
+  scope: ProviderConfigScope
+): OpencodeProviderDefaults {
   assertKnownRunConfigKeys(raw, ['model', 'baseUrl', 'agent']);
+  // `agent` names an opencode.json agent that no consumer reads on either
+  // surface; `baseUrl` points the provider at an already-running OpenCode
+  // server, which a single run cannot switch mid-process.
+  if (Object.hasOwn(raw, 'agent')) {
+    throw new InvalidProviderRunConfigError('agent', 'default OpenCode agents are not consumed');
+  }
+  const baseUrl = normalizeRunConfigString(raw.baseUrl, 'baseUrl');
+  if (baseUrl !== undefined && scope === 'run') {
+    throw new InvalidProviderRunConfigError(
+      'baseUrl',
+      'external OpenCode runtimes are not supported'
+    );
+  }
   let model = normalizeRunConfigString(raw.model, 'model');
   if (model !== undefined) {
     const parsed = parseModelRef(model);
@@ -55,15 +71,8 @@ export function parseOpencodeRunConfig(raw: Record<string, unknown>): OpencodePr
     }
     model = `${parsed.providerID}/${parsed.modelID}`;
   }
-  for (const key of ['baseUrl', 'agent'] as const) {
-    if (Object.hasOwn(raw, key)) {
-      throw new InvalidProviderRunConfigError(
-        key,
-        key === 'baseUrl'
-          ? 'external OpenCode runtimes are not supported'
-          : 'default OpenCode agents are not consumed by workflow runs'
-      );
-    }
-  }
-  return model === undefined ? {} : { model };
+  return {
+    ...(model === undefined ? {} : { model }),
+    ...(baseUrl === undefined ? {} : { baseUrl }),
+  };
 }
