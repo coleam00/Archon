@@ -215,6 +215,10 @@ export async function triggerCommand(
                         '--host',
                         value.hostId,
                       ],
+                      // A retry runs in the foreground, not as a detached owner, so
+                      // `archon workflow cancel` can't reach it; its own signal handler can.
+                      retryStop:
+                        'The retry runs in the foreground. Stop it with Ctrl-C (SIGINT) in that terminal; it settles the run it owns.',
                     }
                   : {}),
                 prerequisite:

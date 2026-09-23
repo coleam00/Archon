@@ -567,10 +567,19 @@ describe('trigger CLI durable execution', () => {
       await runCli(cliPath, projectRoot, archonHome, fire);
       const first = await waitFor(() => {
         const run = runs()[0];
-        return run?.status === 'running' && existsSync(pidFile) ? run : undefined;
-      }, 'trigger execution to start its node');
+        return run?.status === 'running' ? run : undefined;
+      }, 'trigger execution to start');
       activeRuns.add(first.id);
-      pids = readFileSync(pidFile, 'utf8').trim().split(' ').map(Number);
+      // The node writes both PIDs with one echo, but the file can exist before the write
+      // finishes. Parse only a complete record, so a partial read never yields PID 0,
+      // which the cleanup below would turn into a signal to this runner's own group.
+      pids = await waitFor(() => {
+        if (!existsSync(pidFile)) return undefined;
+        const record = readFileSync(pidFile, 'utf8').trim().split(' ').map(Number);
+        return record.length === 2 && record.every(pid => Number.isInteger(pid) && pid > 0)
+          ? record
+          : undefined;
+      }, 'trigger node to record its PIDs');
 
       // The next start captures its own source at intake and waits behind the slot.
       writeWorkflow('echo done');
@@ -607,7 +616,7 @@ describe('trigger CLI durable execution', () => {
       expect(requests().map(row => row.status)).toEqual(['admitted', 'admitted']);
     } finally {
       if (process.platform !== 'win32') {
-        for (const pid of pids) {
+        for (const pid of pids.filter(pid => pid > 0)) {
           try {
             process.kill(pid, 'SIGKILL');
           } catch {
