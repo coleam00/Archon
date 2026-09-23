@@ -12,7 +12,7 @@ import {
   resetStartBindingPreparation,
   withdrawQueuedResourceStart,
 } from '@archon/core/db/resource-starts';
-import { getUserById } from '@archon/core/db/users';
+import { findOrCreateUserByPlatformIdentity, getUserById } from '@archon/core/db/users';
 import {
   drainResourceStartHost,
   startAdmittedResourceStart,
@@ -25,6 +25,7 @@ import { CLIAdapter } from '../adapters/cli-adapter';
 import { writeJsonLine } from '../utils/stdout';
 import { DETACHED_RUN_OWNER_ENV } from '../utils/detached-run-control';
 import { installMacosNativeSchedule, removeMacosNativeSchedule } from '../triggers/native-schedule';
+import { resolveCliUserId } from './auth';
 
 export const timerTriggerConfigSchema = z
   .object({
@@ -101,6 +102,14 @@ export async function triggerCommand(
   args: string[],
   options: { config?: string; host?: string; owner?: string; yes?: boolean; limit?: string }
 ): Promise<void> {
+  if (action === 'whoami') {
+    const cliId = resolveCliUserId();
+    if (!cliId)
+      throw new Error('Could not determine your CLI identity. Set ARCHON_USER_ID or $USER.');
+    const user = await findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
+    await writeJsonLine({ runAsUserId: user.id, cliIdentity: cliId });
+    return;
+  }
   if (action === 'list') {
     await writeJsonLine(
       await listStartReceipts(options.limit === undefined ? undefined : Number(options.limit))
@@ -264,6 +273,6 @@ export async function triggerCommand(
     return;
   }
   throw new Error(
-    'Usage: archon trigger <fire|drain|execute|list|inspect|withdraw|recover-preparation|schedule>'
+    'Usage: archon trigger <fire|drain|execute|list|inspect|withdraw|recover-preparation|schedule|whoami>'
   );
 }

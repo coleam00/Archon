@@ -56,7 +56,7 @@ archon workflow run assist --cwd /path/to/repo --no-worktree "Quick question"
 
 ### `trigger`
 
-Start workflows from deployment bindings and inspect durable resource admission. See [workflow triggers](/guides/workflow-triggers/) for configuration, overlap policy, and recovery requirements.
+Start workflows from deployment bindings and inspect durable resource admission. A server with `ARCHON_TRIGGER_HOST` set hosts the same bindings without these commands. See [workflow triggers](/guides/workflow-triggers/) for configuration, capacity, overlap policy, and recovery requirements.
 
 | Command | Behavior |
 | --- | --- |
@@ -68,6 +68,7 @@ Start workflows from deployment bindings and inspect durable resource admission.
 | `trigger withdraw <request-id>` | Withdraw untouched queued work. |
 | `trigger recover-preparation <receipt> <binding> --owner <owner-id> --yes` | Reset preparation only after verifying its recorded owner has stopped. |
 | `trigger schedule <install\|remove> --config <file>` | Manage a native macOS LaunchAgent with an explicitly configured interval. |
+| `trigger whoami` | Print the Archon user ID for your CLI identity, to use as a binding's `runAsUserId`. |
 
 
 ### `chat <message>`

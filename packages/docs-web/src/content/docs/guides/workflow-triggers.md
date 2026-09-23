@@ -13,6 +13,23 @@ Triggers start ordinary governed workflow runs. A trigger binding selects the wo
 
 Schedules and event bindings are deployment configuration. They do not belong in workflow YAML.
 
+Every binding names a `hostId`. A host prepares accepted work for its own ID, admits it, and starts the run. Two hosts ship with Archon:
+
+- The server, when `ARCHON_TRIGGER_HOST` names its host ID. It prepares and starts work as soon as a webhook receipt commits, and it checks for queued work every few seconds, so a queued start begins shortly after the run blocking it ends. The server never guesses its host ID; without `ARCHON_TRIGGER_HOST` it records webhook receipts but starts nothing.
+- The CLI, through `archon trigger fire` and `archon trigger drain --host <hostId>`. Each admitted run executes in its own detached process.
+
+Both hosts use the same admission records, so a server and a scheduled CLI command can serve the same host ID without starting a run twice.
+
+## Find your run-as user ID
+
+Every binding names the Archon user whose provider configuration and credentials the run uses, as `runAsUserId`. To use your own CLI identity, run:
+
+```bash
+archon trigger whoami
+```
+
+It prints `runAsUserId`, the ID to put in the binding, and `cliIdentity`, the name it resolved from `ARCHON_USER_ID` or `$USER`. It creates the Archon user for that identity when none exists yet. Run it with the same `ARCHON_HOME` or `DATABASE_URL` as the host that executes the binding, because user IDs belong to one Archon database.
+
 ## Configure a native macOS schedule
 
 Create `/Users/alice/.archon/triggers/repository-refresh.json`:
@@ -92,7 +109,7 @@ Archon does not install or manage Linux or Windows scheduler definitions. Config
 /opt/archon/bin/archon trigger fire --config /home/alice/.archon/triggers/repository-refresh.json
 ```
 
-For a host that receives webhook starts but has no timer binding, schedule a cold drain instead:
+A server with `ARCHON_TRIGGER_HOST` set already drains its host. Without a running server, schedule a cold drain for a host that receives webhook starts but has no timer binding:
 
 ```text
 /opt/archon/bin/archon trigger drain --host build-host-1
@@ -102,20 +119,22 @@ Use the first command as a systemd `ExecStart` or cron command on Linux. On Wind
 
 These recipes share Archon's trigger boundary, but the host scheduler owns login, sleep, wake, missed-time, and credential-loading behavior. Test the real scheduled task under its configured user before relying on unattended execution.
 
-## Choose an overlap policy
+## Choose a resource, capacity, and overlap policy
 
 `resource` names the work that must not overlap. Use the same sufficiently qualified resource for every schedule or webhook binding that can mutate that work. A trigger ID or workflow name does not imply a resource.
 
-The `overlap` setting controls a request that arrives while the resource is occupied:
+`capacity` sets how many runs can hold the resource at once. It is optional and defaults to `1`, so by default runs for one resource never overlap. Set it higher for work that tolerates a bounded number of concurrent runs, such as `"capacity": 2`. Every binding that names a resource must declare the same capacity. A start that declares a different capacity is rejected and recorded as `resource_capacity_conflict` instead of silently using either value. To change a resource's capacity, use a new resource name.
+
+The `overlap` setting controls a request that arrives while the resource is full:
 
 - `skip` records the blocking run and retains no promise to execute later.
 - `queue` retains the prepared request in durable FIFO order.
 
-Different resources can run concurrently. Pending, running, and paused root runs continue to hold their resource.
+A queued request also blocks newer requests for the same resource, so a new arrival never passes older queued work. Different resources can run concurrently. Pending, running, and paused root runs continue to hold their resource; a run releases it when it completes, fails, or is cancelled.
 
-`archon trigger drain --host <hostId>` processes untouched queued requests assigned to that host. A cold drain can run after every earlier Archon process has exited because the queue is durable. It cannot recover a request that was already admitted to a run.
+A drain processes untouched queued requests assigned to one host and admits them while the resource has free capacity. The server drains its own host continuously. `archon trigger drain --host <hostId>` runs one drain and can run after every earlier Archon process has exited, because the queue is durable. Neither recovers a request that was already admitted to a run.
 
-If a request was admitted but its run remains `pending`, inspection supplies an explicit `trigger execute` retry. The engine admits only one execution claimant. Cold drain does not retry it automatically.
+If a request was admitted but its run remains `pending`, for example because its host stopped before starting it, inspection supplies an explicit `trigger execute` retry. The engine admits only one execution claimant. A drain does not retry it automatically, and the run keeps holding its resource until it runs or is abandoned.
 
 If an admitted run has ambiguous ownership after a crash, inspect the request and its blocking run. Verify that the exact execution owner and its descendants have stopped before using the workflow recovery command named by inspection. Archon does not abandon a run because it is old or unreachable. Automatic queue draining and recovery of ambiguous execution are separate operations.
 
@@ -125,7 +144,7 @@ GitHub event starts use an installed source plugin. The maintained plugin is tem
 
 From a source checkout, build the module with `bun run --cwd packages/adapters build:github-source-plugin`, then copy `packages/adapters/dist/github-source-plugin.mjs` to an operator-owned plugin directory. The compiled module can load outside the Archon source tree. Installation and module paths are explicit in this release; marketplace installation is separate work.
 
-Set `WEBHOOK_SECRET` for the server process and set `ARCHON_WEBHOOK_SOURCES` to the absolute path of the host configuration below. Configure GitHub's webhook URL as `https://your-archon-host/webhooks/sources/github-production`. The existing `/webhooks/github` endpoint handles conversation and wait-signaling consumers separately.
+Set `WEBHOOK_SECRET` for the server process, set `ARCHON_WEBHOOK_SOURCES` to the absolute path of the host configuration below, and set `ARCHON_TRIGGER_HOST` to the `hostId` the bindings name (`build-host-1` below) so the server starts the runs. Configure GitHub's webhook URL as `https://your-archon-host/webhooks/sources/github-production`. The existing `/webhooks/github` endpoint handles conversation and wait-signaling consumers separately.
 
 The following configuration starts `review-pull-request` when a pull request is opened against `main` in `acme/widgets`:
 
@@ -191,7 +210,7 @@ The following configuration starts `review-pull-request` when a pull request is 
 
 The maintained GitHub source plugin supports issue and pull-request lifecycle events, issue or pull-request label changes, check-run changes, and commit-status changes. Selectors match an exact event kind and one of the configured actions. They can also restrict the repository, issue or pull-request number, and the predicates supported for that event kind. Input mappings copy a supported event field or supply a typed JSON literal. A required field that is unavailable rejects that binding instead of inventing a value.
 
-The plugin authenticates the raw payload using the configured shared secret. The host validates its resolved receipt, verifies that the configured run-as users exist, and commits the receipt before returning success. An invalid signature creates no trusted receipt. A signed source event does not select the Archon user who runs the workflow. Every binding must name an authorized `runAsUserId`. The optional GitHub event actor remains provenance and never becomes an Archon credential selector.
+The plugin authenticates the raw payload using the configured shared secret. The server validates its resolved receipt, verifies that the configured run-as users exist, and commits the receipt before returning success. Preparing and starting the run happen after the response, so a slow workflow never delays GitHub's delivery. An invalid signature creates no trusted receipt. A signed source event does not select the Archon user who runs the workflow. Every binding must name an authorized `runAsUserId`. The optional GitHub event actor remains provenance and never becomes an Archon credential selector.
 
 On the first verified delivery, Archon records the source instance, delivery ID, verified-content digest, selected binding ID and revision, resolved inputs, and launch intent. Replaying the same `(sourceInstanceId, deliveryId)` reuses the original receipt and does not evaluate changed or newly added bindings. Editing a binding does not turn an old delivery into a new start. Reusing a delivery ID with different verified content is rejected. When GitHub supplies no delivery ID, Archon cannot provide source-level replay deduplication.
 
@@ -203,4 +222,4 @@ The receipt freezes the evaluated bindings and resolved inputs. The execution ho
 
 A process that stops during preparation leaves its recorded preparation owner visible. After verifying that exact process has stopped, use `archon trigger recover-preparation <receipt-id> <binding-id> --owner <recorded-owner-id> --yes`, then drain the configured host. A failed validation is recorded as rejected and requires a corrected new request.
 
-Untouched queued work can be removed with `archon trigger withdraw <request-id>`. Receipt and admission records are retained in the installation database. This first version has no automatic trigger-record retention policy. Do not map credentials or unnecessary source content into workflow inputs. Detached execution writes the ordinary run output to `ARCHON_HOME/logs/trigger-run-<request-id>.log`.
+Untouched queued work can be removed with `archon trigger withdraw <request-id>`. Receipt and admission records are retained in the installation database. This first version has no automatic trigger-record retention policy. Do not map credentials or unnecessary source content into workflow inputs. A run started by a trigger records its receipt and binding IDs in its `resource_start` metadata; its request ID is the run ID, so `archon trigger inspect <run-id>` shows the request. CLI-hosted execution writes the ordinary run output to `ARCHON_HOME/logs/trigger-run-<request-id>.log`. Server-hosted runs record their messages in the run's conversation.

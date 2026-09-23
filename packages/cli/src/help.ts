@@ -385,6 +385,12 @@ const scopedOnlyHelp: HelpEntry[] = [
     description: 'Manage the configured native macOS LaunchAgent',
   },
   {
+    command: 'trigger',
+    subcommand: 'whoami',
+    spec: 'trigger whoami',
+    description: 'Print the Archon user ID to use as a binding runAsUserId',
+  },
+  {
     command: 'workflow',
     subcommand: 'approve',
     spec: 'workflow approve <run-id>',
