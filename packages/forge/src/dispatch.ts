@@ -1,13 +1,19 @@
 import { z } from 'zod';
 import {
+  contentDigest,
+  forgeAuditResponse,
   forgeOperationAuditSchema,
   forgeRequestSchema,
   forgeResponseSchema,
+  isMutationRequest,
+  mutationTarget,
   type ForgeError,
+  type ForgeMutationTarget,
   type ForgeRequest,
   type ForgeResponse,
   type PluginMetadata,
 } from './operations';
+import type { PrRef, RepoRef } from './identity';
 import {
   discoverPlugins,
   PluginDiscoveryError,
@@ -24,15 +30,55 @@ export interface ForgeDispatchResult {
   audit: ForgeOperationAudit;
 }
 
-function errorResponse(request: ForgeRequest, error: ForgeError): ForgeResponse {
-  return { operationId: request.operationId, ok: false, error };
+/**
+ * A dispatch-level failure.
+ *
+ * `outcome` says whether the plugin could have written anything before the failure:
+ * `refused` only where nothing ran, `outcome_unknown` once a process was launched
+ * and its result was lost. A reader may never widen that in the other direction.
+ */
+function errorResponse(
+  request: ForgeRequest,
+  error: ForgeError,
+  outcome: 'refused' | 'outcome_unknown' = 'refused'
+): ForgeResponse {
+  return {
+    operationId: request.operationId,
+    ok: false,
+    error,
+    ...(isMutationRequest(request)
+      ? { mutation: { op: request.op, target: mutationTarget(request), outcome } }
+      : {}),
+  };
+}
+
+function sameRepo(left: RepoRef, right: RepoRef): boolean {
+  return left.host === right.host && left.path === right.path;
+}
+function sameRef(left: PrRef, right: PrRef): boolean {
+  return sameRepo(left.repo, right.repo) && left.number === right.number;
+}
+function sameTarget(left: ForgeMutationTarget, right: ForgeMutationTarget): boolean {
+  return 'repo' in left
+    ? 'repo' in right && sameRef(left, right)
+    : !('repo' in right) && sameRepo(left, right);
+}
+
+function requestRepo(request: Exclude<ForgeRequest, { op: 'resolve' }>): RepoRef {
+  if (request.op === 'pr.create') return request.repo;
+  if (request.op === 'pr.view')
+    return request.selector.kind === 'head' ? request.selector.repo : request.selector.ref.repo;
+  return request.ref.repo;
 }
 
 function requestTarget(
   request: ForgeRequest,
   response?: ForgeResponse
 ): ForgeOperationAudit['target'] {
-  if (request.op === 'checks.state') return request.ref;
+  if (request.op === 'pr.create') return request.repo;
+  if (request.op === 'pr.view')
+    return request.selector.kind === 'head' ? request.selector.repo : request.selector.ref;
+  if (request.op !== 'resolve') return request.ref;
   if (
     response?.ok &&
     response.result.op === 'resolve' &&
@@ -56,31 +102,100 @@ function remoteHost(remote: string | null): string | undefined {
   }
 }
 
-function matchesOperation(
+/**
+ * Whether a plugin's response answers the request that was sent.
+ *
+ * A mutation's applied result is checked against what was asked rather than
+ * trusted: the plugin claims it read the write back, and this is where that claim
+ * meets the request. A failed mutation must carry its own outcome evidence — a
+ * plugin that omits it has not said whether anything was written, and the caller
+ * gets `outcome_unknown` instead of a refusal it did not earn.
+ */
+export function matchesForgeOperationResponse(
   request: ForgeRequest,
   response: ForgeResponse,
   metadata: PluginMetadata,
   host: string
 ): boolean {
-  if (!response.ok) return true;
-  const result = response.result;
-  if (result.op === 'checks.state') {
+  if (!response.ok) {
+    if (!isMutationRequest(request)) return response.mutation === undefined;
+    const evidence = response.mutation;
+    if (evidence?.op !== request.op) return false;
+    if (!sameTarget(evidence.target, mutationTarget(request))) return false;
     return (
-      request.op === 'checks.state' &&
-      result.value.ref.number === request.ref.number &&
-      result.value.ref.repo.host === request.ref.repo.host &&
-      result.value.ref.repo.path === request.ref.repo.path
+      !evidence.observed ||
+      (request.op === 'pr.create'
+        ? sameRepo(evidence.observed.repo, request.repo)
+        : sameRef(evidence.observed, request.ref))
     );
   }
-  if (request.op !== 'resolve') return false;
-  const value = result.value;
-  return (
-    value.kind === 'none' ||
-    (normalizeHost(value.repo.host) === host &&
-      value.forge === metadata.forge &&
-      value.plugin.name === metadata.name &&
-      value.plugin.version === metadata.version)
-  );
+  const result = response.result;
+  if (result.op !== request.op) return false;
+  switch (result.op) {
+    case 'resolve': {
+      const value = result.value;
+      return (
+        value.kind === 'none' ||
+        (normalizeHost(value.repo.host) === host &&
+          value.forge === metadata.forge &&
+          value.plugin.name === metadata.name &&
+          value.plugin.version === metadata.version)
+      );
+    }
+    case 'checks.state':
+      return request.op === result.op && sameRef(result.value.ref, request.ref);
+    case 'workitem.view':
+      return request.op === result.op && sameRef(result.value.ref, request.ref);
+    case 'pr.view': {
+      if (request.op !== result.op) return false;
+      const value = result.value;
+      // Only a head selector may find nothing; an explicit number must resolve.
+      if (!value) return request.selector.kind === 'head';
+      const selector = request.selector;
+      return selector.kind === 'number'
+        ? sameRef(value.pr, selector.ref)
+        : sameRepo(value.pr.repo, selector.repo) &&
+            value.pr.head === selector.head &&
+            value.pr.head_repo !== null &&
+            sameRepo(value.pr.head_repo, selector.headRepo) &&
+            (selector.base === undefined || value.pr.base === selector.base);
+    }
+    case 'comment.upsert':
+      return (
+        request.op === result.op &&
+        sameTarget(result.value.target, mutationTarget(request)) &&
+        sameRef(result.value.comment.ref, request.ref) &&
+        result.value.comment.bodyDigest === contentDigest(request.body)
+      );
+    case 'pr.create':
+      return (
+        request.op === result.op &&
+        sameTarget(result.value.target, mutationTarget(request)) &&
+        sameRepo(result.value.pr.repo, request.repo) &&
+        result.value.pr.head_repo !== null &&
+        sameRepo(result.value.pr.head_repo, request.headRepo) &&
+        result.value.pr.head === request.head &&
+        result.value.pr.base === request.base &&
+        result.value.pr.head_revision === request.headRevision &&
+        result.value.pr.is_draft === request.draft &&
+        result.value.pr.state === 'open'
+      );
+    case 'pr.edit-body':
+      return (
+        request.op === result.op &&
+        sameTarget(result.value.target, mutationTarget(request)) &&
+        sameRef(result.value.pr, request.ref) &&
+        result.value.bodyDigest === contentDigest(request.body)
+      );
+    case 'pr.ready':
+      return (
+        request.op === result.op &&
+        sameTarget(result.value.target, mutationTarget(request)) &&
+        sameRef(result.value.pr, request.ref) &&
+        result.value.pr.state === 'open' &&
+        !result.value.pr.is_draft
+      );
+  }
 }
 
 function discoveryError(request: ForgeRequest, error: unknown): ForgeResponse {
@@ -125,7 +240,9 @@ export async function dispatchForge(
   let response: ForgeResponse;
 
   const host =
-    request.op === 'resolve' ? remoteHost(request.remote) : normalizeHost(request.ref.repo.host);
+    request.op === 'resolve'
+      ? remoteHost(request.remote)
+      : normalizeHost(requestRepo(request).host);
   if (request.op === 'resolve' && !host) {
     response = {
       operationId: request.operationId,
@@ -195,29 +312,37 @@ export async function dispatchForge(
             maxOutputBytes: options.maxOutputBytes,
             signal: options.signal,
           });
+          // Once the plugin process started, a lost result is a lost mutation outcome.
+          const lost = outcome.launched ? 'outcome_unknown' : 'refused';
           if (outcome.timedOut)
-            response = errorResponse(request, {
-              kind: 'timeout',
-              message: 'forge plugin timed out',
-            });
+            response = errorResponse(
+              request,
+              { kind: 'timeout', message: 'forge plugin timed out' },
+              lost
+            );
           else if (outcome.outputExceeded)
-            response = errorResponse(request, {
-              kind: 'process_failed',
-              message: 'forge plugin output exceeded 16 MiB',
-            });
+            response = errorResponse(
+              request,
+              { kind: 'process_failed', message: 'forge plugin output exceeded 16 MiB' },
+              lost
+            );
           else if (
             outcome.spawnError ||
             outcome.terminationError ||
             ![0, 1].includes(outcome.exitCode ?? -1)
           ) {
-            response = errorResponse(request, {
-              kind: 'process_failed',
-              message:
-                outcome.spawnError ??
-                outcome.terminationError ??
-                `forge plugin exited ${String(outcome.exitCode)}: ${outcome.stderr.slice(0, 1000)}`,
-              exitCode: outcome.exitCode,
-            });
+            response = errorResponse(
+              request,
+              {
+                kind: 'process_failed',
+                message:
+                  outcome.spawnError ??
+                  outcome.terminationError ??
+                  `forge plugin exited ${String(outcome.exitCode)}: ${outcome.stderr.slice(0, 1000)}`,
+                exitCode: outcome.exitCode,
+              },
+              lost
+            );
           } else {
             let raw: unknown;
             try {
@@ -230,12 +355,16 @@ export async function dispatchForge(
               !parsed.success ||
               parsed.data.operationId !== request.operationId ||
               parsed.data.ok !== (outcome.exitCode === 0) ||
-              !matchesOperation(request, parsed.data, plugin.metadata, selectedHost)
+              !matchesForgeOperationResponse(request, parsed.data, plugin.metadata, selectedHost)
             ) {
-              response = errorResponse(request, {
-                kind: 'invalid_response',
-                message: 'forge plugin returned an invalid response',
-              });
+              response = errorResponse(
+                request,
+                {
+                  kind: 'invalid_response',
+                  message: 'forge plugin returned an invalid response',
+                },
+                lost
+              );
             } else response = parsed.data;
           }
         }
@@ -256,7 +385,7 @@ function finish(
     operation: request.op,
     target: requestTarget(request, response),
     plugin,
-    result: response,
+    result: forgeAuditResponse(response),
     durationMs: Math.max(0, performance.now() - started),
   });
   return { response, plugin, audit };

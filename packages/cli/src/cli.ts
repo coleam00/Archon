@@ -352,6 +352,7 @@ async function main(): Promise<number> {
       const { forgeCommand } = await loadRoute(() => import('./commands/forge'));
       return await forgeCommand(subcommand, {
         data: typeof values.data === 'string' ? values.data : undefined,
+        dataFile: typeof values['data-file'] === 'string' ? values['data-file'] : undefined,
         configPath: forgeConfigPath,
         trustedEnv: forgeTrustedEnv,
       });

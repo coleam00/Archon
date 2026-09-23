@@ -354,6 +354,28 @@ const commandHelp: HelpEntry[] = [
 // "no flag documentation is lost" invariant honest — nothing here ships in
 // global help that was not in the original.
 const scopedOnlyHelp: HelpEntry[] = [
+  ...(
+    [
+      ['workitem.view', 'Read a qualified work item'],
+      ['pr.view', 'Read a pull request by number or by qualified head'],
+      ['pr.create', 'Open a pull request and verify it by reading it back'],
+      ['pr.edit-body', 'Replace a pull request body and verify the result'],
+      ['pr.ready', 'Take a pull request out of draft and verify the result'],
+      ['comment.upsert', 'Write the one marked comment on a pull request'],
+    ] as const
+  ).map(([subcommand, description]) => ({
+    command: 'forge',
+    subcommand,
+    spec: `forge ${subcommand}`,
+    description,
+    scopedFlags: [
+      { spec: '--data <json>', description: 'Structured request without operationId or op' },
+      {
+        spec: '--data-file <path>',
+        description: 'Read that request from a file, keeping authored content out of argv',
+      },
+    ],
+  })),
   {
     command: 'trigger',
     subcommand: 'list',

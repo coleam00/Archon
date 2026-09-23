@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { forgeCommand } from './forge';
-import type { ForgeResponse } from '@archon/forge/operations';
+import { forgeAuditResponse, type ForgeResponse } from '@archon/forge/operations';
 
 test('local resolve does not discover plugins and emits no-forge JSON', async () => {
   const output: unknown[] = [];
@@ -62,7 +62,7 @@ test('records qualified target and evaluated revision through the host audit', a
             operation: request.op,
             target: ref,
             plugin,
-            result: response,
+            result: forgeAuditResponse(response),
             durationMs: 1,
           },
         };
@@ -146,7 +146,7 @@ test('the CLI does not inject a built-in producer into explicit plugin configura
             operation: request.op,
             target: null,
             plugin: null,
-            result: response,
+            result: forgeAuditResponse(response),
             durationMs: 0,
           },
         };
@@ -180,7 +180,7 @@ test('uses trusted discovery/runtime values while retaining repo credential valu
             operation: request.op,
             target: null,
             plugin: null,
-            result: response,
+            result: forgeAuditResponse(response),
             durationMs: 0,
           },
         };
