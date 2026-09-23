@@ -20,6 +20,7 @@ import { lstat, mkdir, mkdtemp, readdir, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { quoteCommandArg } from '../utils/command-args';
 
 const { SqliteAdapter, sqliteDialect } = await import('../db/adapters/sqlite');
 const db = new SqliteAdapter(':memory:');
@@ -86,7 +87,9 @@ async function expectRefusedAndUnchanged(fixture: Fixture): Promise<void> {
   );
   expect((await getCodebase(fixture.rowId))?.default_cwd).toBe(fixture.managed);
   expect(error?.message).toContain(fixture.managed);
-  expect(error?.message).toContain(`/update-project "${fixture.name}" "${fixture.local}"`);
+  expect(error?.message).toContain(
+    `/update-project ${quoteCommandArg(fixture.name)} ${quoteCommandArg(fixture.local)}`
+  );
 }
 
 describe('registerRepository with a row another host registered', () => {

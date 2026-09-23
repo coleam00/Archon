@@ -16,6 +16,7 @@ import * as gitUtils from '@archon/git';
 import type { Codebase } from '../types';
 import type * as CodebaseDb from '../db/codebases';
 import type * as Commands from '../utils/commands';
+import { quoteCommandArg } from '../utils/command-args';
 import {
   findCodebaseForCheckoutPath,
   type CodebaseCheckoutResolverDeps,
@@ -1474,7 +1475,9 @@ describe('name-based deduplication', () => {
     );
 
     expect(error?.message).toContain('/home/test/.archon/workspaces/owner/repo/source');
-    expect(error?.message).toContain('/update-project "owner/repo" "/home/user/repo"');
+    expect(error?.message).toContain(
+      `/update-project ${quoteCommandArg('owner/repo')} ${quoteCommandArg('/home/user/repo')}`
+    );
     expect(mockUpdateCodebase).not.toHaveBeenCalled();
     expect(mockCreateCodebase).not.toHaveBeenCalled();
     // The refusal is decided before anything is written to disk.
@@ -1502,7 +1505,9 @@ describe('name-based deduplication', () => {
       (err: unknown) => err as Error
     );
 
-    expect(error?.message).toContain(`/update-project "owner/repo" "${lookalike}"`);
+    expect(error?.message).toContain(
+      `/update-project ${quoteCommandArg('owner/repo')} ${quoteCommandArg(lookalike)}`
+    );
   });
 
   test('escapes quotes in the project name and path of the /update-project suggestion', async () => {
