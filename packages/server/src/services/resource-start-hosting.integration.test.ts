@@ -58,13 +58,18 @@ function recordingEngine(): IWorkflowEngine & {
   };
 }
 
+// A deadline, not an attempt count: on a Windows runner one drain (source capture, git,
+// SQLite) can take longer than the ~2 s that 200 short polls used to allow.
+const UNTIL_DEADLINE_MS = 15_000;
+
 async function until<T>(read: () => T | undefined | Promise<T | undefined>): Promise<T> {
-  for (let i = 0; i < 200; i++) {
+  const deadline = Date.now() + UNTIL_DEADLINE_MS;
+  while (Date.now() < deadline) {
     const value = await read();
     if (value !== undefined) return value;
     await Bun.sleep(10);
   }
-  throw new Error('condition not reached');
+  throw new Error(`condition not reached within ${String(UNTIL_DEADLINE_MS)} ms`);
 }
 
 interface Fixture {
