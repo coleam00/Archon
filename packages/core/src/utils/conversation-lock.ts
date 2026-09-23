@@ -5,6 +5,7 @@
  * - Global concurrency limit (max N conversations simultaneously)
  * - Per-conversation ordering (messages process sequentially per conversation)
  * - Explicit queueing with observability
+ * - Drain: stop admitting new turns so a deploy can replace the process
  */
 
 import { createLogger } from '@archon/paths';
@@ -25,10 +26,45 @@ interface QueuedMessage {
 }
 
 /**
- * Result of acquiring a lock, indicating whether the message was started or queued
+ * Result of acquiring a lock, indicating whether the message was started, queued,
+ * or refused because the server is draining
  */
 export interface LockAcquisitionResult {
-  status: 'started' | 'queued-conversation' | 'queued-capacity';
+  status: 'started' | 'queued-conversation' | 'queued-capacity' | 'refused-draining';
+}
+
+/**
+ * What a draining manager is holding open, for an operator watching a deploy wait.
+ * `refusedCount` is cumulative across the whole drain, including re-requests.
+ */
+export interface DrainStatus {
+  requestedAt: string;
+  expiresAt: string;
+  refusedCount: number;
+}
+
+/**
+ * The one sentence every caller shows someone whose message drain refused. Nothing
+ * retries a refused message, so it has to say the work was not accepted and what to
+ * do about it — a vaguer notice would read as "received" and lose the message.
+ */
+export const DRAIN_REFUSAL_NOTICE =
+  'Archon is restarting and is not accepting new work right now. Nothing was started — ' +
+  'please try again in a moment.';
+
+/** Internal drain bookkeeping; `expiresAtMs` is compared against an injectable clock. */
+interface DrainState {
+  requestedAt: string;
+  expiresAtMs: number;
+  refusedCount: number;
+}
+
+function toDrainStatus(state: DrainState): DrainStatus {
+  return {
+    requestedAt: state.requestedAt,
+    expiresAt: new Date(state.expiresAtMs).toISOString(),
+    refusedCount: state.refusedCount,
+  };
 }
 
 /**
@@ -38,6 +74,7 @@ export class ConversationLockManager {
   private activeConversations: Map<string, Promise<void>>;
   private messageQueues: Map<string, QueuedMessage[]>;
   private maxConcurrent: number;
+  private drainState: DrainState | undefined;
 
   /**
    * Creates a new ConversationLockManager
@@ -53,10 +90,33 @@ export class ConversationLockManager {
   /**
    * Acquire lock for conversation and execute handler
    * Non-blocking: returns immediately, handler executes async
+   *
+   * This is the server's external admission point, so it is where drain refuses.
    * @param conversationId - Unique conversation identifier
    * @param handler - Async function to execute
    */
   async acquireLock(
+    conversationId: string,
+    handler: () => Promise<void>
+  ): Promise<LockAcquisitionResult> {
+    const draining = this.currentDrain();
+    if (draining) {
+      draining.refusedCount += 1;
+      getLog().info(
+        { conversationId, refusedCount: draining.refusedCount },
+        'refused_while_draining'
+      );
+      return { status: 'refused-draining' };
+    }
+    return this.admit(conversationId, handler);
+  }
+
+  /**
+   * Admit a message: run it now, or queue it behind the conversation or the global
+   * capacity limit. Callers that already passed admission — the queue drains — reach
+   * this directly so drain never strips a message the manager already accepted.
+   */
+  private async admit(
     conversationId: string,
     handler: () => Promise<void>
   ): Promise<LockAcquisitionResult> {
@@ -142,7 +202,10 @@ export class ConversationLockManager {
     const waitTime = Date.now() - next.timestamp;
     getLog().debug({ conversationId, waitTimeMs: waitTime }, 'queued_message_processing');
 
-    await this.acquireLock(conversationId, next.handler);
+    // admit(), not acquireLock(): this message was accepted before drain began and the
+    // sender was told so. Refusing it here would be the silent drop drain exists to
+    // prevent — and it is what lets drain terminate, since queues only shrink.
+    await this.admit(conversationId, next.handler);
   }
 
   /**
@@ -175,6 +238,72 @@ export class ConversationLockManager {
    */
   private getQueuedCount(): number {
     return Array.from(this.messageQueues.values()).reduce((sum, q) => sum + q.length, 0);
+  }
+
+  /**
+   * Stop admitting new conversation turns so the process can be replaced.
+   *
+   * Unrelated to `drainResourceStartHost`, which drains queued triggers *into*
+   * execution. This stops work entering.
+   *
+   * The budget is mandatory and expires on its own: a deploy that dies mid-drain must
+   * not leave a box that refuses work forever. Re-requesting replaces the budget and
+   * keeps the refusal count, so a deploy can extend its own wait.
+   *
+   * @param budgetSeconds - How long drain stays in effect before lapsing
+   */
+  beginDrain(budgetSeconds: number): DrainStatus {
+    if (!Number.isFinite(budgetSeconds) || budgetSeconds <= 0) {
+      throw new RangeError(`drain budget must be a positive number of seconds: ${budgetSeconds}`);
+    }
+    const now = Date.now();
+    const existing = this.currentDrain(now);
+    const state: DrainState = {
+      requestedAt: existing?.requestedAt ?? new Date(now).toISOString(),
+      expiresAtMs: now + budgetSeconds * 1000,
+      refusedCount: existing?.refusedCount ?? 0,
+    };
+    this.drainState = state;
+    getLog().warn(
+      { budgetSeconds, active: this.activeConversations.size, queued: this.getQueuedCount() },
+      'drain_requested'
+    );
+    return toDrainStatus(state);
+  }
+
+  /** Resume admitting work. Idempotent — a deploy's failure path calls it blind. */
+  cancelDrain(): void {
+    if (!this.drainState) return;
+    this.drainState = undefined;
+    getLog().warn('drain_cancelled');
+  }
+
+  /**
+   * @param nowMs - Injectable clock; the budget lapses lazily on read rather than on a
+   *   timer, so nothing has to be unref'd or cleared.
+   */
+  getDrainStatus(nowMs = Date.now()): DrainStatus | undefined {
+    const state = this.currentDrain(nowMs);
+    return state ? toDrainStatus(state) : undefined;
+  }
+
+  isDraining(nowMs = Date.now()): boolean {
+    return this.currentDrain(nowMs) !== undefined;
+  }
+
+  /** The live drain state, lapsing an expired budget. Mutable so refusals can count. */
+  private currentDrain(nowMs = Date.now()): DrainState | undefined {
+    const state = this.drainState;
+    if (!state) return undefined;
+    if (nowMs >= state.expiresAtMs) {
+      this.drainState = undefined;
+      getLog().warn(
+        { requestedAt: state.requestedAt, refusedCount: state.refusedCount },
+        'drain_budget_expired'
+      );
+      return undefined;
+    }
+    return state;
   }
 
   /**
