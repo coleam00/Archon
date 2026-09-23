@@ -43,6 +43,8 @@ import { createLogger } from '@archon/paths';
 import {
   isRegisteredProvider,
   getRegisteredProviders,
+  getRegistration,
+  InvalidProviderRunConfigError,
   registerBuiltinProviders,
   registerCommunityProviders,
 } from '@archon/providers';
@@ -67,10 +69,21 @@ export type TiersPatch = Partial<Record<TierName, RawAliasEntry | null>>;
 export type AliasesPatch = Record<string, RawAliasEntry | null>;
 
 /**
+ * Populate the provider registry. Idempotent, and called from every config
+ * entrypoint because each one validates `assistants.*` against the registry —
+ * a loader reached directly (not through `loadConfig`) would otherwise see an
+ * empty registry and skip every provider.
+ */
+function ensureProvidersRegistered(): void {
+  registerBuiltinProviders();
+  registerCommunityProviders();
+}
+
+/**
  * Pure read of registered provider IDs. Registration is guaranteed by
- * `loadConfig()`'s bootstrap call before any consumer can observe the
- * registry, so this helper must NOT trigger side-effecting registration
- * itself — that hid the ordering coupling and surprised readers.
+ * `ensureProvidersRegistered()` at each config entrypoint, so this helper must
+ * NOT trigger side-effecting registration itself — that hid the ordering
+ * coupling and surprised readers.
  */
 function getRegisteredProviderNames(): string[] {
   return getRegisteredProviders().map(p => p.id);
@@ -276,6 +289,49 @@ function validateWorkflowContinuationConfig(parsed: unknown, configPath: string)
   config.workflows = result.data;
 }
 
+function isConfigRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Validate `assistants.<provider>` through that provider's own strict parser —
+ * the same one an explicitly selected `--config` run layer uses, so a value is
+ * accepted or refused identically on both paths.
+ *
+ * Deliberately NOT inside the loaders' degrade-and-log `catch`: a setting the
+ * provider would drop must refuse to load, because the run reports it as the
+ * value the node ran at (#2582). Values are checked, not rewritten — narrowing
+ * stays with the defensive parsers at the execution boundary.
+ *
+ * Entries for unregistered providers pass through untouched. There is no owner
+ * to validate them and their current handling is to be ignored, not rejected.
+ */
+function validateAssistantDefaults(parsed: unknown, configPath: string): void {
+  if (!isConfigRecord(parsed)) return;
+  const { assistants } = parsed;
+  // A key written with nothing under it parses to null, which YAML gives no way
+  // to tell from the key being absent. Both mean "no defaults here".
+  if (assistants === undefined || assistants === null) return;
+  const prefix = `Invalid assistants config in '${configPath}'`;
+  if (!isConfigRecord(assistants)) {
+    throw new Error(`${prefix}: 'assistants' must be a map of provider settings.`);
+  }
+  for (const [provider, defaults] of Object.entries(assistants)) {
+    if (defaults === undefined || defaults === null) continue;
+    if (!isRegisteredProvider(provider)) continue;
+    if (!isConfigRecord(defaults)) {
+      throw new Error(`${prefix}: 'assistants.${provider}' must be an object.`);
+    }
+    try {
+      getRegistration(provider).parseConfig(defaults, 'install');
+    } catch (error) {
+      if (!(error instanceof InvalidProviderRunConfigError)) throw error;
+      const suffix = error.fieldPath ? `.${error.fieldPath}` : '';
+      throw new Error(`${prefix}: 'assistants.${provider}${suffix}': ${error.message}.`);
+    }
+  }
+}
+
 function validateModelBindingConfig(parsed: unknown, configPath: string): void {
   if (typeof parsed !== 'object' || parsed === null) return;
   const config = parsed as Record<string, unknown>;
@@ -296,23 +352,18 @@ function validateModelBindingConfig(parsed: unknown, configPath: string): void {
 }
 
 /**
- * Load global config from ~/.archon/config.yaml
- * Creates default config if file doesn't exist
+ * Read ~/.archon/config.yaml, degrading to an empty config when it is missing
+ * or unreadable. A missing file is created from the documented template; any
+ * other failure — permissions, YAML syntax, a rejected `tiers`/`aliases` or
+ * `workflows` block — is logged and the install falls back to defaults.
  */
-export async function loadGlobalConfig(forceReload = false): Promise<GlobalConfig> {
-  if (cachedGlobalConfig && !forceReload) {
-    return cachedGlobalConfig;
-  }
-
-  const configPath = getArchonConfigPath();
-
+async function readGlobalConfigOrDegrade(configPath: string): Promise<GlobalConfig> {
   try {
     const content = await readConfigFile(configPath);
     const parsed = parseYaml(content);
     validateWorkflowContinuationConfig(parsed, configPath);
     validateModelBindingConfig(parsed, configPath);
-    cachedGlobalConfig = parsed as GlobalConfig;
-    return cachedGlobalConfig ?? {};
+    return (parsed as GlobalConfig | null) ?? {};
   } catch (error) {
     const err = error as { code?: string };
     if (err.code === 'ENOENT') {
@@ -322,9 +373,28 @@ export async function loadGlobalConfig(forceReload = false): Promise<GlobalConfi
       // Log specific error message based on error type
       logConfigError(configPath, error);
     }
-    cachedGlobalConfig = {};
+    return {};
+  }
+}
+
+/**
+ * Load global config from ~/.archon/config.yaml
+ * Creates default config if file doesn't exist
+ *
+ * Throws when `assistants.*` names a setting the provider cannot honour; every
+ * other failure degrades to defaults.
+ */
+export async function loadGlobalConfig(forceReload = false): Promise<GlobalConfig> {
+  if (cachedGlobalConfig && !forceReload) {
     return cachedGlobalConfig;
   }
+
+  ensureProvidersRegistered();
+  const configPath = getArchonConfigPath();
+  const parsed = await readGlobalConfigOrDegrade(configPath);
+  validateAssistantDefaults(parsed, configPath);
+  cachedGlobalConfig = parsed;
+  return cachedGlobalConfig;
 }
 
 /**
@@ -352,19 +422,14 @@ function sanitizeRecommendedWorkflows(raw: unknown, configPath: string): string[
   return cleaned;
 }
 
-/**
- * Load repository config from .archon/config.yaml
- * Returns empty object if no config found
- */
-export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
-  const configPath = join(repoPath, '.archon', 'config.yaml');
-
+/** Read .archon/config.yaml, degrading to an empty config when it is missing or unreadable. */
+async function readRepoConfigOrDegrade(configPath: string): Promise<RepoConfig> {
   try {
     const content = await readConfigFile(configPath);
     const raw = parseYaml(content);
     validateWorkflowContinuationConfig(raw, configPath);
     validateModelBindingConfig(raw, configPath);
-    const parsed = (raw as RepoConfig) ?? {};
+    const parsed = (raw as RepoConfig | null) ?? {};
     const recommendedWorkflows = sanitizeRecommendedWorkflows(
       (parsed as { recommendedWorkflows?: unknown }).recommendedWorkflows,
       configPath
@@ -385,6 +450,21 @@ export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
     logConfigError(configPath, error);
     return {};
   }
+}
+
+/**
+ * Load repository config from .archon/config.yaml
+ * Returns empty object if no config found
+ *
+ * Throws when `assistants.*` names a setting the provider cannot honour; every
+ * other failure degrades to defaults.
+ */
+export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
+  ensureProvidersRegistered();
+  const configPath = join(repoPath, '.archon', 'config.yaml');
+  const parsed = await readRepoConfigOrDegrade(configPath);
+  validateAssistantDefaults(parsed, configPath);
+  return parsed;
 }
 
 /**
@@ -666,8 +746,7 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
  * @returns Merged configuration with all overrides applied
  */
 export async function loadConfig(repoPath?: string): Promise<MergedConfig> {
-  registerBuiltinProviders();
-  registerCommunityProviders();
+  ensureProvidersRegistered();
 
   // 1. Start with defaults
   let config = getDefaults();
@@ -785,6 +864,10 @@ export async function updateGlobalConfig(
       }
       merged.aliases = Object.keys(nextAliases).length > 0 ? nextAliases : undefined;
     }
+
+    // Refuse to persist what the loaders would then refuse to read — a bad
+    // value from the settings UI would otherwise brick every later config load.
+    validateAssistantDefaults(merged, configPath);
 
     // Serialize to YAML and write
     const yaml = Bun.YAML.stringify(merged);

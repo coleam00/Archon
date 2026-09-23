@@ -909,6 +909,106 @@ assistants:
     });
   });
 
+  describe('assistants validation', () => {
+    test('global config refuses to load an effort the provider would drop', async () => {
+      mockFsReadFile.mockResolvedValue(`
+assistants:
+  codex:
+    modelReasoningEffort: extreme
+`);
+
+      await expect(loadGlobalConfig()).rejects.toThrow(
+        /assistants\.codex\.modelReasoningEffort.*minimal, low, medium, high, xhigh, max/
+      );
+      await expect(loadGlobalConfig()).rejects.toThrow(join(archonHome, 'config.yaml'));
+    });
+
+    test('repo config refuses to load an unknown provider setting', async () => {
+      mockFsReadFile.mockResolvedValue(`
+assistants:
+  claude:
+    modle: sonnet
+`);
+
+      await expect(loadRepoConfig('/test/repo')).rejects.toThrow(
+        /assistants\.claude\.modle.*unknown provider setting/
+      );
+    });
+
+    test('repo config refuses a settingSources entry Claude does not honour', async () => {
+      mockFsReadFile.mockResolvedValue(`
+assistants:
+  claude:
+    settingSources:
+      - projekt
+`);
+
+      await expect(loadRepoConfig('/test/repo')).rejects.toThrow(
+        /assistants\.claude\.settingSources\.0.*'project' or 'user'/
+      );
+    });
+
+    test('keeps process-scoped Pi defaults loadable from config.yaml', async () => {
+      mockFsReadFile.mockResolvedValue(`
+assistants:
+  pi:
+    env:
+      PLANNOTATOR_REMOTE: '1'
+    maxConcurrent: 4
+`);
+
+      const config = await loadGlobalConfig();
+      expect(config.assistants?.pi).toEqual({
+        env: { PLANNOTATOR_REMOTE: '1' },
+        maxConcurrent: 4,
+      });
+    });
+
+    test('keeps an OpenCode server URL loadable from config.yaml', async () => {
+      mockFsReadFile.mockResolvedValue(`
+assistants:
+  opencode:
+    model: anthropic/claude-3-5-sonnet
+    baseUrl: http://localhost:4096
+`);
+
+      const config = await loadGlobalConfig();
+      expect(config.assistants?.opencode?.baseUrl).toBe('http://localhost:4096');
+    });
+
+    test.each([
+      ['an empty assistants block', 'assistants:\n'],
+      ['an empty provider block', 'assistants:\n  codex:\n'],
+    ])('loads a config with %s', async (_label, yaml) => {
+      mockFsReadFile.mockResolvedValue(yaml);
+
+      await expect(loadGlobalConfig()).resolves.toBeDefined();
+    });
+
+    test('keeps an unregistered provider entry passing through unvalidated', async () => {
+      mockFsReadFile.mockResolvedValue(`
+assistants:
+  nonesuch:
+    modelReasoningEffort: extreme
+`);
+
+      const config = await loadGlobalConfig();
+      expect(config.assistants?.nonesuch).toEqual({ modelReasoningEffort: 'extreme' });
+    });
+
+    // The settings API validates its body as `record(string, unknown)`, so any
+    // key and value can reach updateGlobalConfig at runtime even though the
+    // typed provider defaults would reject a misspelled effort value.
+    test('refuses to persist assistant defaults the loaders would then reject', async () => {
+      mockFsReadFile.mockResolvedValue('');
+
+      await expect(
+        updateGlobalConfig({ assistants: { codex: { modelReasoningEfort: 'high' } } })
+      ).rejects.toThrow(/assistants\.codex\.modelReasoningEfort.*unknown provider setting/);
+      expect(mockFsWriteFile).not.toHaveBeenCalled();
+    });
+  });
+
   describe('updateGlobalConfig', () => {
     test('merges assistant config into existing file', async () => {
       mockFsReadFile.mockResolvedValue(`
