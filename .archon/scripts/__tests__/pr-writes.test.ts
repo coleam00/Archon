@@ -83,7 +83,7 @@ describe('publish-pr opens the pull request at most once', () => {
       forge: {
         kind: 'fake',
         response: [
-          forgeOperation('pr.view', { pr: null }),
+          forgeOperation('pr.view', null),
           forgeOperation('pr.create', {
             target: PR.repo,
             outcome: 'applied',
@@ -108,7 +108,7 @@ describe('publish-pr opens the pull request at most once', () => {
       forge: {
         kind: 'fake',
         response: [
-          forgeOperation('pr.view', { pr: null }),
+          forgeOperation('pr.view', null),
           forgeFailure('pr.create', 'refused', 'the base branch does not exist'),
         ],
       },
@@ -136,7 +136,7 @@ describe('publish-pr opens the pull request at most once', () => {
         kind: 'fake',
         okExitCode: 2,
         response: [
-          forgeOperation('pr.view', { pr: null }),
+          forgeOperation('pr.view', null),
           forgeOperation('pr.create', {
             target: PR.repo,
             outcome: 'applied',

@@ -81,6 +81,8 @@ export type ForgeFake =
   | { readonly kind: 'no-host' }
   /** The real CLI with an empty Archon home: no forge plugin is installed. */
   | { readonly kind: 'no-plugin' }
+  /** This exact host command, as the CLI and server would publish it. */
+  | { readonly kind: 'command'; readonly argv: readonly string[] }
   /** A fake CLI that prints this document, or fails when `response` is omitted. */
   | {
       readonly kind: 'fake';
@@ -269,6 +271,8 @@ export function runPackScript(relative: string, options: ScriptOptions = {}): Sc
       HOME: home,
       ARCHON_TELEMETRY_DISABLED: '1',
     });
+  } else if (forge.kind === 'command') {
+    env.ARCHON_CLI_COMMAND = JSON.stringify(forge.argv);
   } else if (forge.kind === 'fake') {
     const cli = join(root, 'fake-archon.ts');
     const responses =

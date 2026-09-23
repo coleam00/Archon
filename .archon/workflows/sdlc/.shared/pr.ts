@@ -115,6 +115,13 @@ function ghPrView(repo: QualifiedPr['repo'], value: unknown): PrView {
   };
 }
 
+/** A forge operation whose success always carries a result. */
+function forgeResult(op: string, request: Record<string, unknown>): Record<string, unknown> {
+  const value = invokeForge(op, request);
+  if (value === null) throw new Error(`forge ${op} returned no result`);
+  return value;
+}
+
 function forgePrView(value: Record<string, unknown>): PrView {
   return {
     pr: parsePrRecord(record(value)?.pr),
@@ -141,7 +148,7 @@ export function findOpenPrByHead(
     const value = invokeForge('pr.view', {
       selector: { kind: 'head', repo, headRepo, head },
     });
-    return record(value.pr) ? forgePrView(value) : undefined;
+    return value === null ? undefined : forgePrView(value);
   }
   const listed = gh(
     'pr',
@@ -172,7 +179,7 @@ export function findOpenPrByHead(
 
 export function viewPr(ref: QualifiedPr, source: ForgeSource): PrView {
   if (source === 'forge') {
-    const value = invokeForge('pr.view', {
+    const value = forgeResult('pr.view', {
       selector: { kind: 'number', ref: { repo: ref.repo, number: ref.number } },
     });
     return forgePrView(value);
@@ -197,7 +204,7 @@ export function viewPr(ref: QualifiedPr, source: ForgeSource): PrView {
  */
 export function createPr(intent: CreatePrIntent, source: ForgeSource): PrRecord {
   if (source === 'forge') {
-    const value = invokeForge('pr.create', {
+    const value = forgeResult('pr.create', {
       repo: intent.repo,
       headRepo: intent.headRepo,
       head: intent.head,
@@ -254,7 +261,7 @@ export function createPr(intent: CreatePrIntent, source: ForgeSource): PrRecord 
 export function editPrBody(ref: QualifiedPr, bodyPath: string, source: ForgeSource): PrRecord {
   const body = readFileSync(bodyPath, 'utf8');
   if (source === 'forge') {
-    const value = invokeForge('pr.edit-body', {
+    const value = forgeResult('pr.edit-body', {
       ref: { repo: ref.repo, number: ref.number },
       body,
     });
@@ -275,7 +282,7 @@ export function editPrBody(ref: QualifiedPr, bodyPath: string, source: ForgeSour
 /** Take the pull request out of draft, and prove it is no longer a draft. */
 export function markPrReady(ref: QualifiedPr, source: ForgeSource): PrRecord {
   if (source === 'forge') {
-    const value = invokeForge('pr.ready', { ref: { repo: ref.repo, number: ref.number } });
+    const value = forgeResult('pr.ready', { ref: { repo: ref.repo, number: ref.number } });
     return parsePrRecord(value.pr);
   }
   const ready = gh('pr', 'ready', String(ref.number), '--repo', ghRepo(ref.repo));
@@ -339,7 +346,7 @@ export function upsertComment(
 ): { readonly url: string } {
   const body = readFileSync(bodyPath, 'utf8');
   if (source === 'forge') {
-    const value = invokeForge('comment.upsert', {
+    const value = forgeResult('comment.upsert', {
       ref: { repo: ref.repo, number: ref.number },
       marker,
       body,

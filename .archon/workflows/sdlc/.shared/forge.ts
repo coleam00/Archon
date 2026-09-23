@@ -129,7 +129,10 @@ export class ForgeOperationError extends Error {
  * The request travels as a file so authored content — a pull-request body, a
  * review report — never appears in any process's argv.
  */
-export function invokeForge(op: string, request: Record<string, unknown>): Record<string, unknown> {
+export function invokeForge(
+  op: string,
+  request: Record<string, unknown>
+): Record<string, unknown> | null {
   const command = parseCommand(process.env.ARCHON_CLI_COMMAND);
   const directory = mkdtempSync(join(tmpdir(), 'archon-forge-'));
   const path = join(directory, 'request.json');
@@ -166,8 +169,12 @@ export function invokeForge(op: string, request: Record<string, unknown>): Recor
       );
     }
     const body = record(response.result);
-    const value = record(body?.value);
-    if (body?.op !== op || !value) throw new Error(`forge ${op} returned the wrong result`);
+    if (body?.op !== op) throw new Error(`forge ${op} returned the wrong result`);
+    // A read may answer "there is none": `pr.view` by head returns null when the
+    // branch has no open pull request.
+    if (body.value === null) return null;
+    const value = record(body.value);
+    if (!value) throw new Error(`forge ${op} returned the wrong result`);
     return value;
   } finally {
     rmSync(directory, { recursive: true, force: true });
