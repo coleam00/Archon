@@ -974,7 +974,17 @@ describe('a durable wait deadline is enforced by the owning process', () => {
       30_000
     );
     expect(ownerGone).toBe('gone');
-    expect(readRunStatus(fixture.archonHome, runId)).toBe('paused');
+
+    // The owner closes its endpoint in a `finally` whatever the run did, so only the
+    // row proves the run is still parked. Owner close and database lock release are
+    // independent, so the read retries while the status is unreadable; any status it
+    // does read is final and must be `paused`.
+    const statusAfterOwner = await waitFor(
+      'the attention run status after its owner exited',
+      () => readRunStatus(fixture.archonHome, runId),
+      30_000
+    );
+    expect(statusAfterOwner).toBe('paused');
   }, 90_000);
 
   test('does not resume a wait another process released', async () => {
