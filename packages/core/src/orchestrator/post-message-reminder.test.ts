@@ -13,8 +13,11 @@ mock.module('@archon/git', () => ({
   toRepoPath: (p: string) => p,
 }));
 
+// Captured before the module mock replaces the package re-export.
+const { isPathInside } = await import('@archon/paths/archon-paths');
+
 mock.module('@archon/paths', () => ({
-  getArchonWorkspacesPath: () => '/home/test/.archon/workspaces',
+  isInsideArchonWorkspaces: (p: string) => isPathInside('/home/test/.archon/workspaces', p),
   createLogger: () => ({
     warn: mock(() => undefined),
     error: mock(() => undefined),
@@ -65,6 +68,14 @@ describe('reportUnpushedWorkInSource', () => {
     const codebase = makeManagedCodebase({ default_cwd: '/home/user/myrepo' });
     const platform = makePlatform();
     await reportUnpushedWorkInSource('conv-1', codebase, platform);
+    expect(mockGetCurrentBranch).not.toHaveBeenCalled();
+  });
+
+  test('does nothing for a sibling directory that only shares the workspaces prefix', async () => {
+    const codebase = makeManagedCodebase({
+      default_cwd: '/home/test/.archon/workspaces-old/owner/repo/source',
+    });
+    await reportUnpushedWorkInSource('conv-1', codebase, makePlatform());
     expect(mockGetCurrentBranch).not.toHaveBeenCalled();
   });
 

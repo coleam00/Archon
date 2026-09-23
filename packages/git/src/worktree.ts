@@ -1,9 +1,10 @@
 import { readFile, access } from 'fs/promises';
-import { isAbsolute, join, resolve } from 'path';
+import { isAbsolute, join, relative, resolve } from 'path';
 import {
   createLogger,
   getArchonWorkspacesPath,
   getProjectWorktreesPath,
+  isInsideArchonWorkspaces,
   parseOwnerRepo,
   resolveRepoProjectIdentity,
 } from '@archon/paths';
@@ -73,10 +74,8 @@ function resolveOwnerRepo(
     if (parsed) return parsed;
     getLog().warn({ codebaseName }, 'worktree.invalid_codebase_name_format');
   }
-  const workspacesPath = getArchonWorkspacesPath();
-  if (repoPath.startsWith(workspacesPath)) {
-    const relative = repoPath.substring(workspacesPath.length + 1);
-    const parts = relative.split(/[/\\]/).filter(p => p.length > 0);
+  if (isInsideArchonWorkspaces(repoPath)) {
+    const parts = relative(resolve(getArchonWorkspacesPath()), resolve(repoPath)).split(/[/\\]/);
     if (parts.length >= 2) {
       return { owner: parts[0], repo: parts[1] };
     }

@@ -24,7 +24,8 @@
  * For Docker: /.archon/
  */
 
-import { join, dirname, normalize, basename, resolve, sep } from 'path';
+import { join, dirname, normalize, basename, resolve, sep, relative, isAbsolute } from 'path';
+import type { PlatformPath } from 'path';
 import { homedir } from 'os';
 import { access, mkdir, symlink, lstat, readdir, readlink, realpath, rm, stat } from 'fs/promises';
 import { readFileSync } from 'fs';
@@ -167,6 +168,36 @@ export function getArchonHome(env: NodeJS.ProcessEnv = process.env): string {
  */
 export function getArchonWorkspacesPath(): string {
   return join(getArchonHome(), 'workspaces');
+}
+
+const hostPathSemantics = { resolve, relative, isAbsolute, sep };
+
+/**
+ * True when `candidate` resolves strictly inside `root` (the root itself is not inside).
+ *
+ * Compares resolved paths segment by segment, so on Windows either separator
+ * works and the comparison ignores case, and a sibling such as `workspaces-old`
+ * or a `.archon/workspaces` fragment under another root never matches.
+ * `pathApi` defaults to this host's semantics; tests pass `path.win32` or
+ * `path.posix` to evaluate another platform's paths.
+ */
+export function isPathInside(
+  root: string,
+  candidate: string,
+  pathApi: Pick<PlatformPath, 'resolve' | 'relative' | 'isAbsolute' | 'sep'> = hostPathSemantics
+): boolean {
+  const rel = pathApi.relative(pathApi.resolve(root), pathApi.resolve(candidate));
+  return (
+    rel !== '' && rel !== '..' && !rel.startsWith(`..${pathApi.sep}`) && !pathApi.isAbsolute(rel)
+  );
+}
+
+/**
+ * True when `candidate` is inside this host's Archon workspaces root, the tree
+ * Archon clones into and manages. The one answer to "is this path Archon-managed".
+ */
+export function isInsideArchonWorkspaces(candidate: string): boolean {
+  return isPathInside(getArchonWorkspacesPath(), candidate);
 }
 
 /**
@@ -939,23 +970,6 @@ export function getFolderRunArtifactsPath(slug: string, workflowRunId: string): 
 export async function ensureFolderProjectStructure(slug: string): Promise<void> {
   const dirs = [getFolderProjectArtifactsPath(slug), getFolderProjectLogsPath(slug)];
   await Promise.all(dirs.map(dir => mkdir(dir, { recursive: true })));
-}
-
-/**
- * Resolve the project root path from a working directory path.
- * If the path is under ~/.archon/workspaces/owner/repo/..., returns the project root.
- * Returns null if the path is not under the workspaces directory.
- */
-export function resolveProjectRootFromCwd(cwd: string): string | null {
-  const workspacesPath = getArchonWorkspacesPath();
-  if (!cwd.startsWith(workspacesPath)) return null;
-
-  // Path after workspaces/: "owner/repo/..." or "owner/repo"
-  const relative = cwd.substring(workspacesPath.length + 1); // +1 for trailing slash
-  const parts = relative.split(/[/\\]/).filter(p => p.length > 0);
-  if (parts.length < 2) return null;
-
-  return join(workspacesPath, parts[0], parts[1]);
 }
 
 /**

@@ -80,6 +80,7 @@ import {
   getRunArtifactsDirForRoot,
   resolveRunStorageRoot,
   isInsideArchonHome,
+  isInsideArchonWorkspaces,
   getArchonHome,
   isDocker,
   isWSL,
@@ -3186,12 +3187,8 @@ export function registerApiRoutes(
       await codebaseDb.deleteCodebase(id);
 
       // Remove workspace directory from disk — only for Archon-managed repos
-      const workspacesRoot = normalize(getArchonWorkspacesPath());
       const normalizedCwd = normalize(codebase.default_cwd);
-      if (
-        normalizedCwd.startsWith(workspacesRoot + '/') ||
-        normalizedCwd.startsWith(workspacesRoot + '\\')
-      ) {
+      if (isInsideArchonWorkspaces(normalizedCwd)) {
         try {
           await rm(normalizedCwd, { recursive: true, force: true });
           getLog().info({ path: normalizedCwd }, 'workspace_removed');

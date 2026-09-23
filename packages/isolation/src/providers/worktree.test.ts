@@ -4,6 +4,9 @@ import { basename, join } from 'node:path';
 // Fixed test home — path assertions use this constant; no duplication of production isDocker() logic.
 const TEST_ARCHON_HOME = '/test/.archon';
 
+// Captured before the module mock replaces the package re-export.
+const { isPathInside } = await import('@archon/paths/archon-paths');
+
 // Mock @archon/paths: provide getArchonHome + workspaces path helpers so @archon/git (getWorktreeBase,
 // isProjectScopedWorktreeBase) and worktree.ts resolve paths against TEST_ARCHON_HOME consistently.
 mock.module('@archon/paths', () => ({
@@ -18,6 +21,7 @@ mock.module('@archon/paths', () => ({
   }),
   getArchonHome: () => TEST_ARCHON_HOME,
   getArchonWorkspacesPath: () => join(TEST_ARCHON_HOME, 'workspaces'),
+  isInsideArchonWorkspaces: (p: string) => isPathInside(join(TEST_ARCHON_HOME, 'workspaces'), p),
   getArchonWorktreesPath: () => join(TEST_ARCHON_HOME, 'worktrees'),
   getProjectWorktreesPath: (owner: string, repo: string) =>
     join(TEST_ARCHON_HOME, 'workspaces', owner, repo, 'worktrees'),
@@ -3273,6 +3277,23 @@ describe('WorktreeProvider', () => {
         '/test/.archon/workspaces/owner/repo/source',
         undefined,
         { mode: 'reset', remote: 'origin' }
+      );
+    });
+
+    test('keeps fast-forward mode for a checkout that only shares the workspaces prefix', async () => {
+      worktreeExistsSpy.mockResolvedValue(false);
+      const configLoader: RepoConfigLoader = async () => ({});
+      provider = new WorktreeProvider(configLoader);
+
+      await provider.create({
+        ...baseRequest,
+        canonicalRepoPath: git.toRepoPath('/test/.archon/workspaces-old/owner/repo/source'),
+      });
+
+      expect(syncWorkspaceSpy).toHaveBeenCalledWith(
+        '/test/.archon/workspaces-old/owner/repo/source',
+        undefined,
+        { mode: 'fast-forward', remote: 'origin' }
       );
     });
 

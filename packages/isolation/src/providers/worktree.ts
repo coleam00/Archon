@@ -29,7 +29,7 @@ import {
   CanonicalRepoPathUnavailableError,
 } from '@archon/git';
 import type { WorktreeBaseOverride } from '@archon/git';
-import { getArchonWorkspacesPath } from '@archon/paths';
+import { isInsideArchonWorkspaces } from '@archon/paths';
 import type { BranchName, RepoPath, WorktreeInfo } from '@archon/git';
 import { copyWorktreeFiles } from '../worktree-copy';
 import type {
@@ -968,9 +968,7 @@ export class WorktreeProvider implements IIsolationProvider {
       );
       // Only hard-reset for Archon-managed clones when creating isolated worktrees.
       // Locally-registered repos keep the non-destructive fast-forward mode.
-      const isManagedClone = repoPath
-        .replace(/\\/g, '/')
-        .startsWith(getArchonWorkspacesPath().replace(/\\/g, '/'));
+      const isManagedClone = isInsideArchonWorkspaces(repoPath);
       const { branch } = await syncWorkspace(
         repoPath,
         configuredBaseBranch ? toBranchName(configuredBaseBranch) : undefined,

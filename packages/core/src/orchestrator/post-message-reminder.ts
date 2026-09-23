@@ -15,7 +15,7 @@ import {
   hasUncommittedChanges,
   toRepoPath,
 } from '@archon/git';
-import { createLogger, getArchonWorkspacesPath } from '@archon/paths';
+import { createLogger, isInsideArchonWorkspaces } from '@archon/paths';
 import type { Codebase, IPlatformAdapter } from '../types';
 
 const log = createLogger('orchestrator.post_message_reminder');
@@ -29,9 +29,7 @@ export async function reportUnpushedWorkInSource(
 
   // Only meaningful for Archon-managed clones under ~/.archon/workspaces/.
   // Locally-registered repos are the user's working dir — they already see git status.
-  const archonWorkspacesPath = getArchonWorkspacesPath().replace(/\\/g, '/');
-  const cwdNormalized = codebase.default_cwd.replace(/\\/g, '/');
-  if (!cwdNormalized.startsWith(archonWorkspacesPath)) return;
+  if (!isInsideArchonWorkspaces(codebase.default_cwd)) return;
 
   const repoPath = toRepoPath(codebase.default_cwd);
   try {
