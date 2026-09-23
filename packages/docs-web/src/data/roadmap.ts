@@ -140,7 +140,7 @@ export const roadmapItems: RoadmapItem[] = [
     slug: 'persistent-orchestrator',
     title: 'Persistent Project Orchestrator',
     status: 'shipped',
-    version: 'v0.10.1',
+    version: 'v0.5.0',
     description: 'One stateful conversation per codebase that retains context across runs, with project-first navigation and observable subagent activity.',
     bullets: [
       'Persistent orchestrator session bound to each project',

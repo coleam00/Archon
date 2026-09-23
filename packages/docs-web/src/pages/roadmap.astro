@@ -268,9 +268,11 @@ const issueUrl = (n: number) => `${REPO}/issues/${n}`;
             <div class="future-foot mono">
               <span>{item.tags.join(' · ')}</span>
               {item.issues && item.issues.length > 0 && (
-                <a href={`${REPO}/issues`} target="_blank" rel="noopener">
-                  {item.issues.length} {item.issues.length === 1 ? 'issue' : 'issues'}
-                </a>
+                <span class="future-issues">
+                  {item.issues.map((n) => (
+                    <a href={issueUrl(n)} target="_blank" rel="noopener">#{n}</a>
+                  ))}
+                </span>
               )}
             </div>
           </article>
@@ -590,6 +592,7 @@ const issueUrl = (n: number) => `${REPO}/issues/${n}`;
   }
   .future-foot a { color: #94a3b8; text-decoration: none; border-bottom: 1px solid #334155; }
   .future-foot a:hover { color: #f1f5f9; }
+  .future-issues { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.375rem; }
 
   /* 04 SHIPPED */
   .shipped-table {
