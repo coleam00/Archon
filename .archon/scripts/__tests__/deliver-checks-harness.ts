@@ -10,7 +10,7 @@
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import type { ChecksObservation } from '../../../packages/forge/src/operations';
@@ -229,7 +229,12 @@ export function runPackScript(relative: string, options: ScriptOptions = {}): Sc
   const readsLog = join(root, 'forge-reads');
   const artifacts = join(root, 'artifacts');
   mkdirSync(artifacts, { recursive: true });
-  const resolveArtifacts = (value: string): string => value.split('{ARTIFACTS}').join(artifacts);
+  // A substituted path also travels inside JSON artifacts, where a Windows
+  // separator is an invalid string escape. Forward slashes resolve on every
+  // platform and survive JSON.parse.
+  const artifactPath = artifacts.split(sep).join('/');
+  const resolveArtifacts = (value: string): string =>
+    value.split('{ARTIFACTS}').join(artifactPath);
   for (const [name, content] of Object.entries(options.artifacts ?? {})) {
     writeFileSync(join(artifacts, name), resolveArtifacts(content));
   }
