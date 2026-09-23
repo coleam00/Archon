@@ -88,18 +88,24 @@ async function expectRefusedAndUnchanged(fixture: Fixture): Promise<void> {
   expect(error?.message).toContain(`/update-project "${fixture.name}" ${fixture.local}`);
 }
 
-describe('registerRepository with a row another host registered', () => {
-  test('refuses when this host has nothing at the managed path', async () => {
-    // registerRepository itself creates the managed source path here (as a link
-    // to the local clone) before it decides, so "the path exists" proves nothing.
-    await expectRefusedAndUnchanged(await sharedDatabaseFixture('unlinked'));
-  });
+// registerRepoAtPath recognizes a managed path by the POSIX substring
+// `/.archon/workspaces/`, which a Windows path never contains, and the shared
+// `/.archon` home under test is a Docker (Linux) layout.
+describe.skipIf(process.platform === 'win32')(
+  'registerRepository with a row another host registered',
+  () => {
+    test('refuses when this host has nothing at the managed path', async () => {
+      // registerRepository itself creates the managed source path here (as a link
+      // to the local clone) before it decides, so "the path exists" proves nothing.
+      await expectRefusedAndUnchanged(await sharedDatabaseFixture('unlinked'));
+    });
 
-  test('refuses when this host holds its own clone at the same managed path', async () => {
-    const fixture = await sharedDatabaseFixture('cloned');
-    // This host auto-cloned the project earlier: a real, different checkout at
-    // the byte-identical path string the other host's row names.
-    await gitCheckout(fixture.managed, fixture.remote);
-    await expectRefusedAndUnchanged(fixture);
-  });
-});
+    test('refuses when this host holds its own clone at the same managed path', async () => {
+      const fixture = await sharedDatabaseFixture('cloned');
+      // This host auto-cloned the project earlier: a real, different checkout at
+      // the byte-identical path string the other host's row names.
+      await gitCheckout(fixture.managed, fixture.remote);
+      await expectRefusedAndUnchanged(fixture);
+    });
+  }
+);
