@@ -96,6 +96,7 @@
       "src/utils/error.test.ts",
       "src/utils/error-formatter.test.ts",
       "src/utils/github-graphql.test.ts",
+      "src/types/message-metadata.test.ts",
       "src/config/config-loader.test.ts",
       "src/config/resolve-assistant.test.ts",
       "src/state/"

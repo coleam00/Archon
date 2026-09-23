@@ -132,6 +132,7 @@ export class SlackWorkflowBridge {
           await this.onWorkflowStarted(event, conversationId, trigger);
           break;
         case 'node_started':
+        case 'node_suspended':
           this.upsertNode(event.runId, event.nodeId, event.nodeName, 'running');
           this.scheduleStatusUpdate(event.runId);
           break;

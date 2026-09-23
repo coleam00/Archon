@@ -9,6 +9,7 @@
  */
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from '@archon/workflows/deps';
 import { createLogger } from '@archon/paths';
+import { toPersistedMessageMetadata } from '@archon/core/types';
 import * as messageDb from '@archon/core/db/messages';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -33,15 +34,11 @@ export class HeadlessPlatform implements IWorkflowPlatform {
     metadata?: WorkflowMessageMetadata
   ): Promise<void> {
     try {
-      const persistMeta: Record<string, unknown> = {};
-      if (metadata?.category) persistMeta.category = metadata.category;
-      if (metadata?.workflowDispatch) persistMeta.workflowDispatch = metadata.workflowDispatch;
-      if (metadata?.workflowResult) persistMeta.workflowResult = metadata.workflowResult;
       await messageDb.addMessage(
         this.conversationDbId,
         'assistant',
         message,
-        Object.keys(persistMeta).length > 0 ? persistMeta : undefined
+        toPersistedMessageMetadata(metadata)
       );
     } catch (error) {
       getLog().warn(

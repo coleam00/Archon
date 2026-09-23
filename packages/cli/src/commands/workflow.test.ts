@@ -5729,6 +5729,39 @@ describe('workflowGetCommand', () => {
     expect(parsed.transcript_path).toBeNull();
   });
 
+  it('reads attribution and observed duration from a terminal row without a start-row join', async () => {
+    const { startNodeExecution, finishNodeExecution, newNodeInvocation } =
+      await import('@archon/workflows/node-execution');
+    const { serializeNodeStateRecord } =
+      await import('@archon/workflows/node-record-serialization');
+    const completed = finishNodeExecution(
+      startNodeExecution({
+        runId: 'terminal-only',
+        path: 'work',
+        node: { id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'work' } },
+        invocation: newNodeInvocation(),
+        provider: 'codex',
+        model: 'requested-model',
+      }),
+      { status: 'completed' },
+      { durationMs: 17, resolvedModel: 'observed-model', costUsd: 0, output: { text: 'done' } }
+    );
+    const summaries = buildNodeSummaries([
+      {
+        ...serializeNodeStateRecord(completed),
+        id: 'terminal-row',
+        step_index: null,
+        created_at: new Date().toISOString(),
+      },
+    ]);
+    expect(summaries[0]?.durationMs).toBe(17);
+    expect(summaries[0]?.execution?.binding.model?.resolved).toEqual({
+      source: 'provider',
+      value: 'observed-model',
+    });
+    expect(summaries[0]?.execution?.spend.costUsd).toEqual({ source: 'provider', value: 0 });
+  });
+
   it('emits raw events in verbose JSON when events=true', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const eventsDb = await import('@archon/core/db/workflow-events');

@@ -122,6 +122,7 @@ function createMockStore(): IWorkflowStore {
           workflow_run_id: id,
           event_type: 'node_completed' as const,
           step_name: completion.stepName,
+          data: {},
         },
       })
     ),

@@ -469,7 +469,7 @@ If `cwd` is an unregistered Git checkout, the command falls back to install-wide
 
 The normal human and JSON views include every active node without fetching each run's event
 history. In JSON, `active_nodes` is the ordered list of unresolved node starts: `node_started` adds
-an identifier, while `node_completed`, `node_failed`, `node_skipped`, and
+an identifier and `node_suspended` keeps it active, while `node_completed`, `node_failed`, `node_skipped`, and
 `node_skipped_prior_success` remove it. Retries re-add the node in their new start position. This
 is node lifecycle state, not evidence that a process owner is alive.
 
@@ -520,6 +520,23 @@ failed or paused. A null outcome means the workflow did not declare one, the sel
 authored it yet, or the run predates the field. In that case human output keeps its status-only
 presentation. Foreground `workflow run` uses the same labels when an outcome exists, but its exit
 code remains driven by execution success or failure.
+
+Verbose JSON node summaries include `execution` for newly recorded work. It identifies the
+invocation, attempt, provider, requested model and any model the provider reported. Inner retries
+share an invocation; each retry has its own attempt. A new loop-group iteration creates new body
+invocations. Resuming unfinished work keeps its invocation identity.
+
+Each usage observation is either `{ source: "provider", value: ... }` or unavailable. Reasons
+separate unsupported reporting, a supported value not reported, unknown capability, non-provider
+work and invalid reported numbers. A reported zero stays zero. Historical nodes omit `execution`
+when their rows lack these facts; they do not receive a guessed model or start time.
+
+`timing.durationMs` is elapsed wall time, not active compute time. Resumed loop durations can
+include time spent paused; bare approval retains the duration observed before the pause. Public
+records contain at most eight session-ID characters, never the full continuation handle. JSONL
+transcripts retain the names `node_start`, `node_complete` and `node_error`; their `execution`
+metadata describes the same fact as the durable node event. Suspended nodes remain active and
+appear as running until their gate or wait resolves.
 
 Every `workflow get --json` shape includes `terminal_record`. The API detail endpoint,
 `GET /api/workflows/runs/:runId`, exposes the same value as `run.terminal_record`.

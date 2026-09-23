@@ -1,10 +1,61 @@
 ---
-import { roadmapItems, statusConfig } from '../data/roadmap.ts';
+import { roadmapItems, statusConfig, type RoadmapItem } from '../data/roadmap.ts';
+import pkg from '../../package.json';
 
-const isSecondary = (i: typeof roadmapItems[number]) => i.tier === 'secondary';
-const activeItems = roadmapItems.filter(i => i.status !== 'shipped' && !isSecondary(i));
-const futureItems = roadmapItems.filter(i => i.status !== 'shipped' && isSecondary(i));
-const shippedItems = roadmapItems.filter(i => i.status === 'shipped');
+const REPO = 'https://github.com/coleam00/Archon';
+
+const isSecondary = (item: RoadmapItem) => item.tier === 'secondary';
+const primaryItems = roadmapItems.filter((item) => !isSecondary(item));
+
+// Section buckets. "Now & Next" pairs the in-flight work with whatever is queued
+// behind it; everything committed but unscheduled falls to "Planned", and the
+// secondary tier is the exploratory "Future" shelf.
+const activeItems = primaryItems.filter((item) => item.status === 'in-progress' || item.status === 'next');
+const plannedItems = primaryItems.filter((item) => item.status === 'planned');
+const futureItems = roadmapItems.filter((item) => isSecondary(item) && item.status !== 'shipped');
+
+// Newest release first. The list is authored in historical order, which stops
+// matching version order once an item turns out to have shipped earlier than planned.
+const versionKey = (version?: string) => (version ?? '0').replace(/^v/, '').split('.').map(Number);
+const compareVersionsDesc = (a: RoadmapItem, b: RoadmapItem) => {
+  const left = versionKey(a.version);
+  const right = versionKey(b.version);
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    const diff = (right[i] ?? 0) - (left[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+};
+const shippedItems = roadmapItems.filter((item) => item.status === 'shipped').sort(compareVersionsDesc);
+
+// Every stat is derived from the data above, so the summary cannot drift away
+// from the items it summarises.
+const trackedIssueCount = roadmapItems.reduce((total, item) => total + (item.issues?.length ?? 0), 0);
+const inProgressCount = primaryItems.filter((item) => item.status === 'in-progress').length;
+const nextCount = primaryItems.filter((item) => item.status === 'next').length;
+
+const filters = [
+  { id: 'now', label: 'In progress', color: statusConfig['in-progress'].color, count: inProgressCount },
+  { id: 'now', label: 'Next', color: statusConfig.next.color, count: nextCount },
+  { id: 'planned', label: 'Planned', color: statusConfig.planned.color, count: plannedItems.length },
+  { id: 'future', label: 'Future', color: '#64748b', count: futureItems.length },
+  { id: 'shipped', label: 'Shipped', color: statusConfig.shipped.color, count: shippedItems.length },
+].filter((filter) => filter.count > 0);
+
+// Icons are presentation-only; an unmapped slug falls back to a neutral mark
+// rather than breaking when a new future item lands.
+const futureIcons: Record<string, string> = {
+  'multi-model-providers':
+    '<rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><path d="M17.5 14v7M14 17.5h7"></path>',
+  'multi-repo-workspaces':
+    '<circle cx="6" cy="6" r="2.5"></circle><circle cx="18" cy="6" r="2.5"></circle><circle cx="12" cy="18" r="2.5"></circle><path d="M6 8.5v3a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3v-3M12 14.5v1"></path>',
+  'enterprise-github-auth':
+    '<rect x="4" y="10" width="16" height="11" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path>',
+  'production-deployment':
+    '<rect x="3" y="4" width="18" height="6" rx="1.5"></rect><rect x="3" y="14" width="18" height="6" rx="1.5"></rect><path d="M7 7h.01M7 17h.01"></path>',
+};
+const defaultFutureIcon = '<circle cx="12" cy="12" r="9"></circle><path d="M12 8v4l3 2"></path>';
+const issueUrl = (n: number) => `${REPO}/issues/${n}`;
 ---
 <!DOCTYPE html>
 <html lang="en" data-theme="dark">
@@ -16,12 +67,12 @@ const shippedItems = roadmapItems.filter(i => i.status === 'shipped');
   <link rel="icon" href="/favicon.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <script is:inline>
     if(!localStorage.getItem('archon-theme-init')){localStorage.setItem('archon-theme-init','1');localStorage.setItem('starlight-theme','dark');document.documentElement.dataset.theme='dark';}
   </script>
 </head>
-<body>
+<body id="top">
 
 <nav class="nav">
   <div class="nav-inner">
@@ -32,11 +83,11 @@ const shippedItems = roadmapItems.filter(i => i.status === 'shipped');
     <div class="nav-links">
       <a href="/docs/">Docs</a>
       <a href="/roadmap/" class="active">Roadmap</a>
-      <a href="https://github.com/coleam00/Archon" target="_blank" rel="noopener" class="nav-github">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+      <a href={REPO} target="_blank" rel="noopener" class="nav-github">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
           <path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/>
         </svg>
-        GitHub
+        <span>GitHub</span>
       </a>
     </div>
   </div>
@@ -44,132 +95,250 @@ const shippedItems = roadmapItems.filter(i => i.status === 'shipped');
 
 <main>
   <section class="hero">
-    <h1 class="hero-title">
-      Road<span class="gradient-text">map</span>
-    </h1>
-    <p class="hero-sub">What we're building next.</p>
+    <div class="hero-glow" aria-hidden="true"></div>
+    <div class="hero-eyebrow mono">
+      <span class="pulse-dot"></span>
+      Updated September 2026
+    </div>
+    <h1 class="hero-title">Roadmap</h1>
+    <p class="hero-sub">
+      What we're building next, what's planned, and what already shipped.
+      Everything here is tracked in the open on GitHub.
+    </p>
+    <nav class="filters" aria-label="Jump to section">
+      <a href="#top" class="filter filter-all">All</a>
+      {filters.map((filter) => (
+        <a href={`#${filter.id}`} class="filter">
+          <span class="filter-dot" style={`background: ${filter.color};`}></span>
+          {filter.label}
+          <span class="filter-count">{filter.count}</span>
+        </a>
+      ))}
+    </nav>
   </section>
 
-  <div class="content">
-    <!-- Active timeline -->
-    <div class="timeline">
-      {activeItems.map((item) => {
-        const cfg = statusConfig[item.status];
-        return (
-          <div class="timeline-item" data-status={item.status}>
-            <div class="timeline-dot" style={`background: ${cfg.color}; box-shadow: 0 0 12px ${cfg.color}80;`}></div>
-            <div class="timeline-card" style={`border-left-color: ${cfg.color}; background: ${cfg.bg};`}>
-              <div class="card-header">
-                <span class="status-badge" style={`color: ${cfg.color}; background: ${cfg.bg}; border-color: ${cfg.border};`}>
-                  {cfg.symbol} {cfg.label}
-                </span>
-                {item.version && (
-                  <span class="version-tag">{item.version}</span>
-                )}
-              </div>
-              <h2 class="card-title">{item.title}</h2>
-              <p class="card-desc">{item.description}</p>
-              <ul class="card-bullets">
-                {item.bullets.map(b => <li>{b}</li>)}
-              </ul>
-              <div class="card-tags">
-                {item.tags.map(t => <span class="tag">{t}</span>)}
-              </div>
-              {item.issues && item.issues.length > 0 && (
-                <div class="card-issues">
-                  <span class="card-issues-label">Tracked issues</span>
-                  <div class="card-issues-list">
-                    {item.issues.map(n => (
-                      <a class="issue-ref" href={`https://github.com/coleam00/Archon/issues/${n}`} target="_blank" rel="noopener">#{n}</a>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        );
-      })}
+  <section class="stats" aria-label="Roadmap at a glance">
+    <div class="stat">
+      <div class="stat-label mono">Current release</div>
+      <div class="stat-value">
+        v{pkg.version}
+        <span style={`color: ${statusConfig.shipped.color};`}>stable</span>
+      </div>
     </div>
-
-    {futureItems.length > 0 && (
-      <div class="future-section">
-        <div class="future-header">
-          <span class="future-line"></span>
-          <h2 class="future-title">
-            <span style="color: #a855f7;">◇</span> Future
-          </h2>
-          <span class="future-line"></span>
-        </div>
-        <div class="future-grid">
-          {futureItems.map((item) => {
-            const cfg = statusConfig[item.status];
-            return (
-              <div class="future-card" style={`border-left-color: ${cfg.color}; background: ${cfg.bg};`}>
-                <h3 class="future-card-title">{item.title}</h3>
-                <p class="future-card-desc">{item.description}</p>
-                <div class="card-tags">
-                  {item.tags.map(t => <span class="tag">{t}</span>)}
-                </div>
-                {item.issues && item.issues.length > 0 && (
-                  <div class="card-issues">
-                    <div class="card-issues-list">
-                      {item.issues.map(n => (
-                        <a class="issue-ref" href={`https://github.com/coleam00/Archon/issues/${n}`} target="_blank" rel="noopener">#{n}</a>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+    <div class="stat">
+      <div class="stat-label mono">In progress</div>
+      <div class="stat-value">
+        {inProgressCount}
+        <span style={`color: ${statusConfig['in-progress'].color};`}>
+          {nextCount > 0 ? `+ ${nextCount} up next` : 'active now'}
+        </span>
       </div>
-    )}
-
-    <!-- Shipped section -->
-    <div class="shipped-section">
-      <div class="shipped-header">
-        <span class="shipped-line"></span>
-        <h2 class="shipped-title">
-          <span style="color: #22c55e;">✓</span> Shipped
-        </h2>
-        <span class="shipped-line"></span>
+    </div>
+    <div class="stat">
+      <div class="stat-label mono">Planned initiatives</div>
+      <div class="stat-value">
+        {plannedItems.length}
+        <span style={`color: ${statusConfig.planned.color};`}>+ {futureItems.length} future</span>
       </div>
-      <div class="shipped-grid">
-        {shippedItems.map((item) => {
+    </div>
+    <div class="stat">
+      <div class="stat-label mono">Tracked issues</div>
+      <div class="stat-value">
+        {trackedIssueCount}
+        <span><a href={`${REPO}/issues`} target="_blank" rel="noopener">open on GitHub</a></span>
+      </div>
+    </div>
+  </section>
+
+  {activeItems.length > 0 && (
+    <section id="now" class="section">
+      <header class="section-head">
+        <div>
+          <div class="section-index mono">01 — Now &amp; Next</div>
+          <h2 class="section-title">Active work</h2>
+        </div>
+        <p class="section-note">In order. Everything else waits on these.</p>
+      </header>
+      <div class="active-grid">
+        {activeItems.map((item) => {
           const cfg = statusConfig[item.status];
           return (
-            <div class="shipped-card" style={`border-left-color: ${cfg.color}; background: ${cfg.bg};`}>
-              <div class="card-header">
-                <span class="status-badge" style={`color: ${cfg.color}; background: ${cfg.bg}; border-color: ${cfg.border};`}>
-                  {cfg.symbol} {cfg.label}
-                </span>
-                {item.version && (
-                  <span class="version-tag">{item.version}</span>
+            <article class="active-card" style={`--accent: ${cfg.color}; --accent-bg: ${cfg.bg}; --accent-border: ${cfg.border};`}>
+              <span class="active-rule" aria-hidden="true"></span>
+              <div class="card-head">
+                <span class="status-pill mono">{cfg.symbol} {cfg.label}</span>
+                {item.version && <span class="version-tag mono">{item.version}</span>}
+              </div>
+              <div class="card-copy">
+                <h3 class="active-title">{item.title}</h3>
+                <p class="card-desc">{item.description}</p>
+              </div>
+              {item.bullets.length > 0 && (
+                <ul class="checklist">
+                  {item.bullets.map((bullet) => (
+                    <li>
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#475569" stroke-width="2.2" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle></svg>
+                      <span>{bullet}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div class="card-foot">
+                <div class="tags">
+                  {item.tags.map((tag) => <span class="tag mono">{tag}</span>)}
+                </div>
+                {item.issues && item.issues.length > 0 && (
+                  <div class="issue-refs">
+                    {item.issues.map((n) => (
+                      <a class="issue-ref mono" href={issueUrl(n)} target="_blank" rel="noopener">#{n}</a>
+                    ))}
+                  </div>
                 )}
               </div>
-              <h3 class="shipped-card-title">{item.title}</h3>
-              <p class="card-desc">{item.description}</p>
-              <ul class="card-bullets">
-                {item.bullets.map(b => <li>{b}</li>)}
-              </ul>
-              <div class="card-tags">
-                {item.tags.map(t => <span class="tag">{t}</span>)}
-              </div>
-            </div>
+            </article>
           );
         })}
       </div>
+    </section>
+  )}
+
+  {plannedItems.length > 0 && (
+    <section id="planned" class="section">
+      <header class="section-head">
+        <div>
+          <div class="section-index mono">02 — Planned</div>
+          <h2 class="section-title">Committed, not yet scheduled</h2>
+        </div>
+        <p class="section-note">Order reflects priority, not sequence.</p>
+      </header>
+      <div class="planned-grid">
+        {plannedItems.map((item) => {
+          const cfg = statusConfig[item.status];
+          return (
+            <article class="planned-card" style={`--accent: ${cfg.color};`}>
+              <div class="card-head">
+                <span class="planned-pill mono">
+                  <span class="planned-diamond"></span>{cfg.label}
+                </span>
+                {item.version && <span class="version-tag mono">{item.version}</span>}
+              </div>
+              <div class="card-copy">
+                <h3 class="planned-title">{item.title}</h3>
+                <p class="card-desc">{item.description}</p>
+              </div>
+              {item.bullets.length > 0 && (
+                <ul class="dash-list">
+                  {item.bullets.map((bullet) => <li>{bullet}</li>)}
+                </ul>
+              )}
+              <div class="card-foot">
+                <div class="tags">
+                  {item.tags.map((tag) => <span class="tag mono">{tag}</span>)}
+                </div>
+                {item.issues && item.issues.length > 0 && (
+                  <div class="issue-refs">
+                    {item.issues.map((n) => (
+                      <a class="issue-ref mono" href={issueUrl(n)} target="_blank" rel="noopener">#{n}</a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  )}
+
+  {futureItems.length > 0 && (
+    <section id="future" class="section">
+      <header class="section-head">
+        <div>
+          <div class="section-index mono">03 — Future</div>
+          <h2 class="section-title">On the horizon</h2>
+        </div>
+        <p class="section-note">Exploring. Scope will change.</p>
+      </header>
+      <div class="future-grid">
+        {futureItems.map((item) => (
+          <article class="future-card">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" set:html={futureIcons[item.slug] ?? defaultFutureIcon}></svg>
+            <h3 class="future-title">{item.title}</h3>
+            <p class="future-desc">{item.description}</p>
+            <div class="future-foot mono">
+              <span>{item.tags.join(' · ')}</span>
+              {item.issues && item.issues.length > 0 && (
+                <span class="future-issues">
+                  {item.issues.map((n) => (
+                    <a href={issueUrl(n)} target="_blank" rel="noopener">#{n}</a>
+                  ))}
+                </span>
+              )}
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  )}
+
+  {shippedItems.length > 0 && (
+    <section id="shipped" class="section">
+      <header class="section-head">
+        <div>
+          <div class="section-index mono">04 — Shipped</div>
+          <h2 class="section-title">Already in your hands</h2>
+        </div>
+        <a class="section-link" href={`${REPO}/releases`} target="_blank" rel="noopener">
+          Full changelog
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+        </a>
+      </header>
+      <div class="shipped-table">
+        {shippedItems.map((item) => (
+          <article class="shipped-row">
+            <div class="shipped-meta">
+              {item.version && <span class="mono shipped-version">{item.version}</span>}
+              <span class="shipped-flag">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"></path></svg>
+                Shipped
+              </span>
+            </div>
+            <div class="card-copy">
+              <h3 class="shipped-title">{item.title}</h3>
+              <p class="card-desc">{item.description}</p>
+            </div>
+            <div class="shipped-bullets">
+              {item.bullets.map((bullet) => <div>{bullet}</div>)}
+            </div>
+            <div class="tags shipped-tags">
+              {item.tags.map((tag) => <span class="tag mono">{tag}</span>)}
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  )}
+
+  <section class="cta">
+    <div class="cta-copy">
+      <h2>Have a feature request?</h2>
+      <p>Everything on this page started as an issue. Open one, or upvote what matters to you.</p>
     </div>
-  </div>
+    <div class="cta-actions">
+      <a class="btn btn-ghost" href={`${REPO}/issues`} target="_blank" rel="noopener">Browse issues</a>
+      <a class="btn btn-solid" href={`${REPO}/issues/new/choose`} target="_blank" rel="noopener">
+        Open an issue
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17L17 7M9 7h8v8"></path></svg>
+      </a>
+    </div>
+  </section>
 
   <footer class="footer">
-    <p>
-      Have a feature request?{' '}
-      <a href="https://github.com/coleam00/Archon/issues" target="_blank" rel="noopener">
-        Open an issue on GitHub →
-      </a>
-    </p>
+    <span>© 2026 Archon · MIT License</span>
+    <div class="footer-links">
+      <a href="/docs/">Docs</a>
+      <a href={REPO} target="_blank" rel="noopener">GitHub</a>
+    </div>
   </footer>
 </main>
 
@@ -181,400 +350,344 @@ const shippedItems = roadmapItems.filter(i => i.status === 'shipped');
   ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; }
   ::-webkit-scrollbar-thumb:hover { background: #2d3f5c; }
 
+  html { scroll-behavior: smooth; scroll-padding-top: 5rem; }
+
   html, body {
     background: #0f1219;
     color: #e2e8f0;
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     line-height: 1.6;
     min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
   }
+
+  .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+  main { display: flex; flex-direction: column; min-height: 100vh; }
 
   /* NAV */
   .nav {
-    position: sticky;
-    top: 0;
-    z-index: 100;
+    position: sticky; top: 0; z-index: 100;
     background: rgba(15, 18, 25, 0.92);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
     border-bottom: 1px solid #1e293b;
   }
   .nav-inner {
-    max-width: 900px;
-    margin: 0 auto;
+    max-width: 1120px; margin: 0 auto; height: 64px;
     padding: 0 1.5rem;
-    height: 56px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
+    display: flex; align-items: center; justify-content: space-between;
   }
   .nav-logo {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 1.1rem;
-    font-weight: 700;
-    color: #f1f5f9;
-    text-decoration: none;
-    letter-spacing: -0.02em;
+    display: flex; align-items: center; gap: 0.625rem;
+    font-weight: 700; font-size: 1.0625rem; color: #f1f5f9; text-decoration: none;
   }
   .nav-logo img { border-radius: 6px; }
-  .nav-links {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-  }
+  .nav-links { display: flex; align-items: center; gap: 0.375rem; }
   .nav-links a {
-    color: #94a3b8;
-    text-decoration: none;
-    font-size: 0.9rem;
-    font-weight: 500;
-    padding: 0.35rem 0.75rem;
-    border-radius: 6px;
+    padding: 0.5rem 0.875rem; border-radius: 8px;
+    font-size: 0.875rem; font-weight: 500; color: #94a3b8; text-decoration: none;
     transition: color 0.15s, background 0.15s;
   }
   .nav-links a:hover { color: #f1f5f9; background: rgba(255,255,255,0.05); }
-  .nav-links a.active { color: #f1f5f9; background: rgba(59,130,246,0.12); }
-  .nav-github {
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
-    margin-left: 0.5rem;
-  }
+  .nav-links a.active { color: #f1f5f9; font-weight: 600; background: rgba(255,255,255,0.06); }
+  .nav-github { display: flex; align-items: center; gap: 0.5rem; }
 
   /* HERO */
   .hero {
+    position: relative;
+    padding: 6rem 1.5rem 3.5rem;
+    display: flex; flex-direction: column; align-items: center; gap: 1.25rem;
     text-align: center;
-    padding: 5rem 1.5rem 3rem;
+  }
+  .hero-glow {
+    position: absolute; top: -220px; left: 50%; width: min(900px, 120vw); height: 520px;
+    transform: translateX(-50%); border-radius: 999px; pointer-events: none;
+    background: radial-gradient(closest-side, rgba(168,85,247,0.16), rgba(15,18,25,0));
+  }
+  .hero-eyebrow {
+    position: relative;
+    display: flex; align-items: center; gap: 0.625rem;
+    font-size: 0.75rem; letter-spacing: 0.14em; text-transform: uppercase; color: #94a3b8;
+  }
+  .pulse-dot {
+    width: 6px; height: 6px; border-radius: 999px; background: #22c55e;
+    box-shadow: 0 0 0 0 rgba(34,197,94,0.5); animation: pulse 2.4s ease-out infinite;
+  }
+  @keyframes pulse {
+    70% { box-shadow: 0 0 0 7px rgba(34,197,94,0); }
+    100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); }
   }
   .hero-title {
-    font-size: clamp(3rem, 8vw, 5.5rem);
-    font-weight: 800;
-    letter-spacing: -0.04em;
-    line-height: 1;
-    color: #f1f5f9;
-    margin-bottom: 1rem;
-  }
-  .gradient-text {
-    background: linear-gradient(135deg, #3b82f6, #a855f7);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+    position: relative; margin: 0;
+    font-size: clamp(3rem, 9vw, 5.25rem); line-height: 1;
+    font-weight: 800; letter-spacing: -0.03em;
+    background: linear-gradient(90deg, #ffffff 30%, #a855f7 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
   }
   .hero-sub {
-    font-size: 1.2rem;
-    color: #64748b;
-    font-weight: 400;
+    position: relative; margin: 0; max-width: 35rem;
+    font-size: 1.1875rem; line-height: 1.55; color: #94a3b8;
   }
+  .filters {
+    position: relative; margin-top: 0.75rem;
+    display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 0.5rem;
+    padding: 0.375rem; border: 1px solid #1e293b; border-radius: 999px;
+    background: rgba(255,255,255,0.03);
+  }
+  .filter {
+    display: inline-flex; align-items: center; gap: 0.5rem;
+    padding: 0.5rem 1rem; border-radius: 999px;
+    font-size: 0.8125rem; font-weight: 500; color: #cbd5e1; text-decoration: none;
+    transition: background 0.15s, color 0.15s;
+  }
+  .filter:hover { background: rgba(255,255,255,0.06); color: #f1f5f9; }
+  .filter-all { font-weight: 600; color: #0f1219; background: #f1f5f9; }
+  .filter-all:hover { background: #ffffff; color: #0f1219; }
+  .filter-dot { width: 8px; height: 8px; border-radius: 999px; display: inline-block; }
+  .filter-count { font-size: 0.75rem; color: #64748b; }
 
-  /* CONTENT */
-  .content {
-    max-width: 760px;
-    margin: 0 auto;
-    padding: 0 1.5rem 4rem;
+  /* STATS */
+  .stats {
+    width: 100%; max-width: 1120px; margin: 0 auto; padding: 0 1.5rem 4.5rem;
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem;
   }
+  .stat {
+    padding: 1.25rem 1.5rem; border: 1px solid #1e293b; border-radius: 14px;
+    background: rgba(255,255,255,0.03);
+    display: flex; flex-direction: column; gap: 0.375rem;
+  }
+  .stat-label {
+    font-size: 0.6875rem; letter-spacing: 0.12em; text-transform: uppercase; color: #94a3b8;
+  }
+  .stat-value {
+    font-size: 1.75rem; font-weight: 700; color: #f1f5f9;
+    display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.625rem;
+  }
+  .stat-value span { font-size: 0.8125rem; font-weight: 500; color: #94a3b8; }
+  .stat-value a { color: inherit; text-decoration: none; border-bottom: 1px solid #334155; }
+  .stat-value a:hover { color: #f1f5f9; }
 
-  /* TIMELINE */
-  .timeline {
-    position: relative;
-    padding-left: 2.5rem;
+  /* SECTIONS */
+  .section {
+    width: 100%; max-width: 1120px; margin: 0 auto; padding: 0 1.5rem 5rem;
+    display: flex; flex-direction: column; gap: 1.5rem;
   }
-  .timeline::before {
-    content: '';
-    position: absolute;
-    left: 10px;
-    top: 0;
-    bottom: 0;
-    width: 2px;
-    background: linear-gradient(to bottom, #3b82f640, #a855f740, #1e293b);
-    border-radius: 2px;
+  .section-head {
+    display: flex; align-items: flex-end; justify-content: space-between; gap: 1.5rem; flex-wrap: wrap;
   }
-  .timeline-item {
-    position: relative;
-    margin-bottom: 2.5rem;
+  .section-index {
+    font-size: 0.75rem; letter-spacing: 0.14em; text-transform: uppercase; color: #94a3b8;
+    margin-bottom: 0.375rem;
   }
-  .timeline-dot {
-    position: absolute;
-    left: -2.5rem;
-    top: 1.5rem;
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    border: 3px solid #0f1219;
-    transform: translateX(1px);
-    z-index: 1;
+  .section-title {
+    margin: 0; font-size: clamp(1.5rem, 4vw, 2rem); font-weight: 700;
+    letter-spacing: -0.02em; color: #f1f5f9;
   }
-  .timeline-card {
-    border: 1px solid #1e293b;
-    border-left-width: 4px;
-    border-radius: 12px;
-    padding: 1.5rem 1.75rem;
-    background: #131825;
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
-    cursor: default;
+  .section-note { margin: 0; font-size: 0.875rem; color: #64748b; }
+  .section-link {
+    font-size: 0.875rem; color: #94a3b8; text-decoration: none;
+    display: inline-flex; align-items: center; gap: 0.375rem;
   }
-  .timeline-card:hover {
-    transform: translateX(4px);
-    box-shadow: 0 4px 24px rgba(0,0,0,0.3);
-  }
+  .section-link:hover { color: #f1f5f9; }
 
-  /* CARD INTERNALS */
-  .card-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 0.75rem;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
-  .status-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    font-size: 0.75rem;
-    font-weight: 600;
-    padding: 0.25rem 0.65rem;
-    border-radius: 20px;
-    border: 1px solid;
-    letter-spacing: 0.02em;
-    text-transform: uppercase;
+  /* SHARED CARD PARTS */
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+  .card-copy { display: flex; flex-direction: column; gap: 0.625rem; }
+  .card-desc { margin: 0; font-size: 0.9375rem; line-height: 1.6; color: #94a3b8; }
+  .card-foot {
+    margin-top: auto; padding-top: 0.25rem;
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.75rem;
   }
   .version-tag {
-    font-size: 0.72rem;
-    font-weight: 600;
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
-    color: #64748b;
-    background: rgba(255,255,255,0.04);
-    border: 1px solid #1e293b;
-    border-radius: 6px;
-    padding: 0.2rem 0.5rem;
-    letter-spacing: 0.05em;
+    padding: 0.3125rem 0.625rem; border-radius: 8px;
+    font-size: 0.75rem; font-weight: 500; color: #cbd5e1;
+    background: rgba(255,255,255,0.05); border: 1px solid #1e293b;
   }
-  .card-title {
-    font-size: 1.25rem;
-    font-weight: 700;
-    color: #f1f5f9;
-    letter-spacing: -0.02em;
-    margin-bottom: 0.6rem;
-    line-height: 1.3;
-  }
-  .card-desc {
-    font-size: 0.92rem;
-    color: #94a3b8;
-    margin-bottom: 1rem;
-    line-height: 1.65;
-  }
-  .card-bullets {
-    list-style: none;
-    margin-bottom: 1rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-  }
-  .card-bullets li {
-    font-size: 0.88rem;
-    color: #cbd5e1;
-    padding-left: 1.1rem;
-    position: relative;
-  }
-  .card-bullets li::before {
-    content: '—';
-    position: absolute;
-    left: 0;
-    color: #334155;
-  }
-  .card-tags {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.4rem;
-  }
+  .tags { display: flex; flex-wrap: wrap; gap: 0.375rem; }
   .tag {
-    font-size: 0.72rem;
-    font-weight: 500;
-    color: #475569;
-    background: rgba(255,255,255,0.03);
-    border: 1px solid #1e293b;
-    border-radius: 4px;
-    padding: 0.15rem 0.5rem;
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
-    letter-spacing: 0.03em;
+    padding: 0.25rem 0.625rem; border-radius: 6px; font-size: 0.6875rem; color: #94a3b8;
+    background: rgba(255,255,255,0.04); border: 1px solid #1e293b;
   }
-
-  /* CARD ISSUES (linked refs to GitHub issues) */
-  .card-issues {
-    margin-top: 0.85rem;
-    padding-top: 0.85rem;
-    border-top: 1px dashed #1e293b;
-  }
-  .card-issues-label {
-    display: block;
-    font-size: 0.7rem;
-    font-weight: 600;
-    color: #475569;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    margin-bottom: 0.5rem;
-  }
-  .card-issues-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.35rem;
-  }
+  .issue-refs { display: flex; flex-wrap: wrap; gap: 0.375rem; }
   .issue-ref {
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
-    font-size: 0.72rem;
-    font-weight: 500;
-    color: #94a3b8;
-    background: rgba(255,255,255,0.04);
-    border: 1px solid #1e293b;
-    border-radius: 4px;
-    padding: 0.15rem 0.45rem;
-    text-decoration: none;
-    transition: color 0.15s, background 0.15s, border-color 0.15s;
+    padding: 0.25rem 0.5rem; border-radius: 6px; font-size: 0.6875rem;
+    color: #64748b; text-decoration: none; border: 1px solid #1e293b;
+    transition: color 0.15s, border-color 0.15s;
   }
-  .issue-ref:hover {
-    color: #f1f5f9;
-    background: rgba(59,130,246,0.12);
-    border-color: rgba(59,130,246,0.35);
-  }
+  .issue-ref:hover { color: #a855f7; border-color: rgba(168,85,247,0.4); }
 
-  /* FUTURE SECTION (lower-priority planned items) */
-  .future-section {
-    margin-top: 4rem;
+  /* 01 NOW & NEXT */
+  .active-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr)); gap: 1.5rem;
   }
-  .future-header {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    margin-bottom: 2rem;
+  .active-card {
+    position: relative; overflow: hidden;
+    padding: 2rem; border: 1px solid #1e293b; border-radius: 18px;
+    background: linear-gradient(180deg, var(--accent-bg), rgba(255,255,255,0.02));
+    display: flex; flex-direction: column; gap: 1.375rem;
   }
-  .future-line {
-    flex: 1;
-    height: 1px;
-    background: #1e293b;
+  .active-rule {
+    position: absolute; top: 0; left: 2rem; right: 2rem; height: 2px; background: var(--accent);
   }
-  .future-title {
-    font-size: 1rem;
-    font-weight: 600;
-    color: #475569;
-    white-space: nowrap;
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 0.5rem;
+    padding: 0.375rem 0.75rem; border-radius: 999px;
+    font-size: 0.6875rem; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--accent); background: var(--accent-bg); border: 1px solid var(--accent-border);
   }
+  .active-title {
+    margin: 0; font-size: 1.5rem; font-weight: 700; letter-spacing: -0.01em; color: #f1f5f9;
+  }
+  .checklist { list-style: none; display: flex; flex-direction: column; gap: 0.625rem; }
+  .checklist li {
+    display: flex; align-items: flex-start; gap: 0.75rem;
+    font-size: 0.875rem; line-height: 1.5; color: #cbd5e1;
+  }
+  .checklist svg { flex-shrink: 0; margin-top: 0.125rem; }
+
+  /* 02 PLANNED */
+  .planned-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr)); gap: 1.25rem;
+  }
+  .planned-card {
+    padding: 1.75rem; border: 1px solid #1e293b; border-radius: 16px;
+    background: rgba(255,255,255,0.025);
+    display: flex; flex-direction: column; gap: 1.125rem;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .planned-card:hover { border-color: #334155; background: rgba(255,255,255,0.04); }
+  .planned-pill {
+    display: inline-flex; align-items: center; gap: 0.5rem;
+    font-size: 0.6875rem; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--accent);
+  }
+  .planned-diamond {
+    width: 8px; height: 8px; border-radius: 2px; background: var(--accent);
+    display: inline-block; transform: rotate(45deg);
+  }
+  .planned-title { margin: 0; font-size: 1.25rem; font-weight: 700; color: #f1f5f9; }
+  .dash-list { list-style: none; display: flex; flex-direction: column; gap: 0.5rem; }
+  .dash-list li {
+    position: relative; padding-left: 1rem;
+    font-size: 0.875rem; line-height: 1.55; color: #cbd5e1;
+  }
+  .dash-list li::before { content: '–'; position: absolute; left: 0; color: #475569; }
+
+  /* 03 FUTURE */
   .future-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 1.25rem;
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); gap: 1rem;
   }
   .future-card {
-    border: 1px solid #1e293b;
-    border-left-width: 4px;
-    border-radius: 12px;
-    padding: 1.25rem 1.5rem;
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
-    cursor: default;
+    padding: 1.375rem; border: 1px dashed #334155; border-radius: 14px;
+    display: flex; flex-direction: column; gap: 0.75rem;
+    transition: border-color 0.15s;
   }
-  .future-card:hover {
-    transform: translateX(4px);
-    box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+  .future-card:hover { border-color: #475569; }
+  .future-title { margin: 0; font-size: 1rem; font-weight: 600; color: #f1f5f9; }
+  .future-desc { margin: 0; font-size: 0.8125rem; line-height: 1.55; color: #94a3b8; }
+  .future-foot {
+    margin-top: auto; padding-top: 0.5rem;
+    display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+    font-size: 0.6875rem; color: #94a3b8;
   }
-  .future-card-title {
-    font-size: 1.05rem;
-    font-weight: 700;
-    color: #f1f5f9;
-    letter-spacing: -0.01em;
-    margin-bottom: 0.5rem;
-    line-height: 1.3;
-  }
-  .future-card-desc {
-    font-size: 0.88rem;
-    color: #94a3b8;
-    margin-bottom: 0.85rem;
-    line-height: 1.6;
-  }
+  .future-foot a { color: #94a3b8; text-decoration: none; border-bottom: 1px solid #334155; }
+  .future-foot a:hover { color: #f1f5f9; }
+  .future-issues { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.375rem; }
 
-  /* SHIPPED SECTION */
-  .shipped-section {
-    margin-top: 4rem;
+  /* 04 SHIPPED */
+  .shipped-table {
+    border: 1px solid #1e293b; border-radius: 16px; overflow: hidden;
+    display: flex; flex-direction: column;
   }
-  .shipped-header {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    margin-bottom: 2rem;
+  .shipped-row {
+    padding: 1.5rem 1.75rem;
+    display: grid; grid-template-columns: 7.5rem 1fr 1fr 13.75rem; gap: 1.5rem;
+    align-items: start;
+    background: rgba(255,255,255,0.02);
+    transition: background 0.15s;
   }
-  .shipped-line {
-    flex: 1;
-    height: 1px;
-    background: #1e293b;
+  .shipped-row + .shipped-row { border-top: 1px solid #1e293b; }
+  .shipped-row:hover { background: rgba(255,255,255,0.04); }
+  .shipped-meta { display: flex; flex-direction: column; gap: 0.375rem; }
+  .shipped-version { font-size: 0.8125rem; font-weight: 500; color: #f1f5f9; }
+  .shipped-flag {
+    display: inline-flex; align-items: center; gap: 0.375rem;
+    font-size: 0.6875rem; color: #22c55e;
   }
-  .shipped-title {
-    font-size: 1rem;
-    font-weight: 600;
-    color: #475569;
-    white-space: nowrap;
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
+  .shipped-title { margin: 0; font-size: 1rem; font-weight: 600; color: #f1f5f9; }
+  .shipped-bullets {
+    display: flex; flex-direction: column; gap: 0.3125rem;
+    font-size: 0.8125rem; line-height: 1.5; color: #cbd5e1;
   }
-  .shipped-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 1.25rem;
+  .shipped-tags { justify-content: flex-end; }
+
+  /* CTA */
+  .cta {
+    width: 100%; max-width: 1120px; margin: 0 auto 6rem;
+    padding: 2.5rem 3rem;
+    border: 1px solid #1e293b; border-radius: 18px;
+    background: linear-gradient(135deg, rgba(168,85,247,0.12), rgba(59,130,246,0.06) 60%, rgba(255,255,255,0.02));
+    display: flex; align-items: center; justify-content: space-between; gap: 2rem; flex-wrap: wrap;
   }
-  .shipped-card {
-    border: 1px solid #1e293b;
-    border-left-width: 4px;
-    border-radius: 12px;
-    padding: 1.25rem 1.5rem;
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
-    cursor: default;
+  .cta-copy { display: flex; flex-direction: column; gap: 0.5rem; }
+  .cta-copy h2 {
+    margin: 0; font-size: 1.5rem; font-weight: 700; letter-spacing: -0.01em; color: #f1f5f9;
   }
-  .shipped-card:hover {
-    transform: translateX(4px);
-    box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+  .cta-copy p { margin: 0; font-size: 0.9375rem; color: #94a3b8; }
+  .cta-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 0.5rem;
+    padding: 0.75rem 1.25rem; border-radius: 10px;
+    font-size: 0.875rem; font-weight: 600; text-decoration: none;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
   }
-  .shipped-card-title {
-    font-size: 1.05rem;
-    font-weight: 700;
-    color: #f1f5f9;
-    letter-spacing: -0.01em;
-    margin-bottom: 0.5rem;
-    line-height: 1.3;
-  }
+  .btn-ghost { color: #cbd5e1; border: 1px solid #334155; }
+  .btn-ghost:hover { color: #f1f5f9; border-color: #475569; }
+  .btn-solid { color: #0f1219; background: #f1f5f9; }
+  .btn-solid:hover { background: #ffffff; }
 
   /* FOOTER */
   .footer {
-    text-align: center;
-    padding: 2rem 1.5rem 3rem;
-    font-size: 0.875rem;
-    color: #475569;
-    border-top: 1px solid #1e293b;
-    max-width: 760px;
-    margin: 0 auto;
+    margin-top: auto;
+    padding: 1.5rem; border-top: 1px solid #1e293b;
+    display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
+    font-size: 0.8125rem; color: #94a3b8;
   }
-  .footer a {
-    color: #3b82f6;
-    text-decoration: none;
-    transition: color 0.15s;
-  }
-  .footer a:hover { color: #60a5fa; }
+  .footer-links { display: flex; gap: 1.25rem; }
+  .footer a { color: #94a3b8; text-decoration: none; }
+  .footer a:hover { color: #f1f5f9; }
 
   /* RESPONSIVE */
+  @media (max-width: 1024px) {
+    .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .shipped-row { grid-template-columns: 7.5rem 1fr; }
+    .shipped-bullets, .shipped-tags { grid-column: 2; }
+    .shipped-tags { justify-content: flex-start; }
+  }
+
   @media (max-width: 640px) {
+    .nav-inner { padding: 0 1rem; }
     .nav-links { gap: 0; }
-    .nav-links a { padding: 0.35rem 0.5rem; font-size: 0.82rem; }
+    .nav-links a { padding: 0.375rem 0.5rem; font-size: 0.8125rem; }
     .nav-github span { display: none; }
-    .hero { padding: 3rem 1rem 2rem; }
-    .timeline { padding-left: 1.75rem; }
-    .timeline-dot { left: -1.75rem; width: 16px; height: 16px; }
-    .timeline::before { left: 7px; }
-    .shipped-grid { grid-template-columns: 1fr; }
-    .future-grid { grid-template-columns: 1fr; }
-    .timeline-card, .shipped-card, .future-card { padding: 1.25rem; }
+    .hero { padding: 3.5rem 1rem 2.5rem; }
+    .stats { grid-template-columns: minmax(0, 1fr); padding: 0 1rem 3rem; }
+    .section { padding: 0 1rem 3.5rem; }
+    .active-card { padding: 1.5rem; }
+    .active-rule { left: 1.5rem; right: 1.5rem; }
+    .planned-card { padding: 1.375rem; }
+    .shipped-row { grid-template-columns: minmax(0, 1fr); gap: 1rem; padding: 1.375rem; }
+    .shipped-bullets, .shipped-tags { grid-column: auto; }
+    .cta { margin-bottom: 4rem; padding: 1.75rem; }
+    .cta-actions { width: 100%; }
+    .btn { flex: 1; justify-content: center; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .pulse-dot { animation: none; }
+    * { transition: none !important; }
   }
 </style>
-
 </body>
 </html>

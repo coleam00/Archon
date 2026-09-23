@@ -1,5 +1,6 @@
 import { createLogger } from '@archon/paths';
 import type { MessageMetadata } from '@archon/core';
+import { toPersistedMessageMetadata } from '@archon/core/types';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -19,9 +20,7 @@ interface BufferedToolCall {
 interface BufferedSegment {
   content: string;
   toolCalls: BufferedToolCall[];
-  category?: MessageMetadata['category'];
-  workflowDispatch?: MessageMetadata['workflowDispatch'];
-  workflowResult?: MessageMetadata['workflowResult'];
+  metadata?: MessageMetadata;
 }
 
 interface AssistantBuffer {
@@ -71,16 +70,14 @@ export class MessagePersistence {
       (segmentDirective === 'auto' &&
         (lastSeg.toolCalls.length > 0 ||
           isWorkflowStatus ||
-          lastSeg.category === 'workflow_status' ||
-          lastSeg.category === 'workflow_dispatch_status'));
+          lastSeg.metadata?.category === 'workflow_status' ||
+          lastSeg.metadata?.category === 'workflow_dispatch_status'));
 
     if (needsNewSegment) {
       buf.segments.push({
         content: message,
         toolCalls: [],
-        category: metadata?.category,
-        workflowDispatch: metadata?.workflowDispatch,
-        workflowResult: metadata?.workflowResult,
+        metadata,
       });
     } else {
       lastSeg.content += message;
@@ -257,10 +254,8 @@ export class MessagePersistence {
           ...(tc.output !== undefined ? { output: tc.output } : {}),
         }));
         const metadata = {
+          ...toPersistedMessageMetadata(seg.metadata),
           ...(toolCalls.length > 0 ? { toolCalls } : {}),
-          ...(seg.category ? { category: seg.category } : {}),
-          ...(seg.workflowDispatch ? { workflowDispatch: seg.workflowDispatch } : {}),
-          ...(seg.workflowResult ? { workflowResult: seg.workflowResult } : {}),
         };
         await addMessage(dbId, 'assistant', seg.content, metadata);
       }

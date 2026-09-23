@@ -3,6 +3,8 @@
  */
 
 import { getTerminalRecord } from '@archon/workflows/terminal-record';
+import { readNodeRecordEvent } from '@archon/workflows/node-record-reader';
+import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
 import { existsSync, readdirSync, type Dirent } from 'node:fs';
 import * as archonPaths from '@archon/paths';
 import {
@@ -1067,7 +1069,9 @@ function renderWorkflowEvent(event: WorkflowEmitterEvent, verbose: boolean): voi
       break;
     }
     case 'node_completed':
-      process.stderr.write(`[${event.nodeName}] Completed (${formatDuration(event.duration)})\n`);
+      process.stderr.write(
+        `[${event.nodeName}] Completed${event.duration === undefined ? '' : ` (${formatDuration(event.duration)})`}\n`
+      );
       break;
     case 'node_failed':
       process.stderr.write(`[${event.nodeName}] Failed: ${event.error}\n`);
@@ -3763,6 +3767,7 @@ export interface NodeSummary {
   outputPreview?: string;
   error?: string;
   cause?: SkipCause;
+  execution?: NodeExecutionMetadata;
 }
 
 function formatSkipCause(cause: SkipCause): string {
@@ -3802,13 +3807,30 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
   for (const event of events) {
     const nodeId = event.step_name;
     if (!nodeId) continue;
+    const record = readNodeRecordEvent(event);
+    if (!record) continue;
+    const execution = record.metadata;
 
-    switch (event.event_type) {
+    switch (record.eventType) {
       case 'node_started': {
         startTimes.set(nodeId, toHydratedTimestamp(event.created_at).getTime());
         // A retry is a new active attempt, so stale terminal details must not
         // leak into the compact current-state summary.
-        summaries.set(nodeId, { nodeId, state: 'running', startedAt: event.created_at });
+        summaries.set(nodeId, {
+          nodeId,
+          state: 'running',
+          startedAt: event.created_at,
+          ...(execution === undefined ? {} : { execution }),
+        });
+        break;
+      }
+      case 'node_suspended': {
+        summaries.set(nodeId, {
+          nodeId,
+          state: 'running',
+          startedAt: summaries.get(nodeId)?.startedAt,
+          ...(execution === undefined ? {} : { execution }),
+        });
         break;
       }
       case 'node_completed': {
@@ -3818,8 +3840,10 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
           nodeId,
           state: 'completed',
           startedAt: summaries.get(nodeId)?.startedAt,
-          durationMs: started !== undefined ? endTime - started : undefined,
-          outputPreview: outputPreviewOf(event.data.node_output),
+          durationMs:
+            execution?.timing.durationMs ?? (started !== undefined ? endTime - started : undefined),
+          outputPreview: outputPreviewOf(record.data.node_output),
+          ...(execution === undefined ? {} : { execution }),
         });
         break;
       }
@@ -3830,17 +3854,20 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
           nodeId,
           state: 'failed',
           startedAt: summaries.get(nodeId)?.startedAt,
-          durationMs: started !== undefined ? endTime - started : undefined,
-          error: typeof event.data.error === 'string' ? event.data.error : 'Unknown error',
+          durationMs:
+            execution?.timing.durationMs ?? (started !== undefined ? endTime - started : undefined),
+          error: record.data.error ?? 'Unknown error',
+          ...(execution === undefined ? {} : { execution }),
         });
         break;
       }
       case 'node_skipped': {
-        const parsedCause = skipCauseSchema.safeParse(event.data.cause);
+        const parsedCause = skipCauseSchema.safeParse(record.data.cause);
         summaries.set(nodeId, {
           nodeId,
           state: 'skipped',
           ...(parsedCause.success ? { cause: parsedCause.data } : {}),
+          ...(execution === undefined ? {} : { execution }),
         });
         break;
       }
@@ -3858,7 +3885,7 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
         summaries.set(nodeId, {
           nodeId,
           state: 'completed',
-          outputPreview: outputPreviewOf(event.data.node_output),
+          outputPreview: outputPreviewOf(record.data.node_output),
         });
         break;
       }

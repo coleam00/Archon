@@ -213,11 +213,13 @@ function replaceWaitMetadata(paramIndex: number): string {
  * left with no audit trail, which the fast-path guard would then wrongly block
  * from retrying. `workflow_run_id` is supplied by the CAS function.
  */
-export interface GateResolutionEvent {
-  event_type: WorkflowEventType;
-  step_name: string;
-  data: Record<string, unknown>;
-}
+export type GateResolutionEvent =
+  | Omit<NodeStateEventInput, 'workflow_run_id'>
+  | {
+      event_type: Exclude<WorkflowEventType, NodeStateEventInput['event_type']>;
+      step_name: string;
+      data: Record<string, unknown>;
+    };
 
 /**
  * Atomically resolve a paused approval gate (compare-and-swap) and record its

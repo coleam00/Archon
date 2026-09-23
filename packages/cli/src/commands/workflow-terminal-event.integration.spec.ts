@@ -282,22 +282,27 @@ nodes:
         if (!record.artifacts.root) throw new Error('Expected recorded artifact root');
         await removeTempTree(record.artifacts.root);
       }
-      const detail = Bun.spawn(
-        [process.execPath, cliPath, 'workflow', 'get', terminal.id, '--json'],
-        {
-          cwd: projectRoot,
-          env: { ...process.env, ARCHON_HOME: archonHome },
-          stdout: 'pipe',
-          stderr: 'pipe',
-        }
-      );
-      const [detailCode, detailOut, detailErr] = await Promise.all([
-        detail.exited,
-        new Response(detail.stdout).text(),
-        new Response(detail.stderr).text(),
-      ]);
-      if (detailCode !== 0) throw new Error(`CLI get failed: ${detailErr || detailOut}`);
-      const result = JSON.parse(detailOut.trim()) as { terminal_record: unknown };
+      // The terminal row and event are already proved above. This final CLI read is
+      // diagnostic and can overlap the same SQLite commit window as those direct
+      // readers (#2306), including the folder-registration lookup at pre-dispatch.
+      const result = await waitForDetachedRun(async () => {
+        const detail = Bun.spawn(
+          [process.execPath, cliPath, 'workflow', 'get', terminal.id, '--json'],
+          {
+            cwd: projectRoot,
+            env: { ...process.env, ARCHON_HOME: archonHome },
+            stdout: 'pipe',
+            stderr: 'pipe',
+          }
+        );
+        const [detailCode, detailOut, detailErr] = await Promise.all([
+          detail.exited,
+          new Response(detail.stdout).text(),
+          new Response(detail.stderr).text(),
+        ]);
+        if (detailCode !== 0) throw new Error(`CLI get failed: ${detailErr || detailOut}`);
+        return JSON.parse(detailOut.trim()) as { terminal_record: unknown };
+      });
       expect(result.terminal_record).toEqual(record);
     }
   }, 40_000);

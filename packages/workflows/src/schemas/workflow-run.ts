@@ -2,7 +2,14 @@
  * Zod schemas for workflow run state types.
  */
 import { z } from '@hono/zod-openapi';
+import {
+  skipCauseSchema,
+  suspendReasonSchema,
+  type NodeState,
+  type SuspendReason,
+} from './node-state';
 import type { TokenUsage } from '@archon/providers/types';
+import { nodeExecutionMetadataSchema, type NodeExecutionMetadata } from './node-execution';
 // Type-only, so the output-ref ↔ schemas edge stays erased (no runtime cycle).
 import type { JsonValue } from '../output-ref';
 import { isAbsolute } from 'path';
@@ -172,33 +179,8 @@ export type WorkflowStepStatus = z.infer<typeof workflowStepStatusSchema>;
 // NodeState
 // ---------------------------------------------------------------------------
 
-export const nodeStateSchema = z.enum(['pending', 'running', 'completed', 'failed', 'skipped']);
-
-export type NodeState = z.infer<typeof nodeStateSchema>;
-
-// ---------------------------------------------------------------------------
-// NodeOutput
-// ---------------------------------------------------------------------------
-
-export const skipCauseSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('condition'), expr: z.string() }),
-  z.object({ kind: z.literal('condition_parse_error'), expr: z.string() }),
-  z.object({ kind: z.literal('timeout') }),
-  z.object({ kind: z.literal('upstream_failed'), origin: z.string() }),
-  z.object({ kind: z.literal('upstream_skipped'), origin: z.string() }),
-]);
-
-export type SkipCause = z.infer<typeof skipCauseSchema>;
-
-export const nodeSkipReasonSchema = z.enum([
-  'prior_success',
-  'when_condition',
-  'when_condition_parse_error',
-  'trigger_rule',
-  'timeout',
-]);
-
-export type NodeSkipReason = z.infer<typeof nodeSkipReasonSchema>;
+export { nodeStateSchema, skipCauseSchema, nodeSkipReasonSchema } from './node-state';
+export type { NodeState, SkipCause, NodeSkipReason } from './node-state';
 
 /**
  * Captured output from a completed DAG node.
@@ -222,6 +204,7 @@ export type NodeSkipReason = z.infer<typeof nodeSkipReasonSchema>;
  */
 export const nodeOutputSchema = z.discriminatedUnion('state', [
   z.object({
+    execution: nodeExecutionMetadataSchema.optional(),
     state: z.enum(['completed', 'running']),
     output: z.string(),
     sessionId: z.string().optional(),
@@ -233,6 +216,7 @@ export const nodeOutputSchema = z.discriminatedUnion('state', [
     resumed: z.boolean().optional(),
   }),
   z.object({
+    execution: nodeExecutionMetadataSchema.optional(),
     state: z.literal('failed'),
     output: z.string(),
     sessionId: z.string().optional(),
@@ -247,10 +231,12 @@ export const nodeOutputSchema = z.discriminatedUnion('state', [
     retryable: z.literal(false).optional(),
   }),
   z.object({
+    execution: nodeExecutionMetadataSchema.optional(),
     state: z.literal('pending'),
     output: z.string(),
   }),
   z.object({
+    execution: nodeExecutionMetadataSchema.optional(),
     state: z.literal('skipped'),
     output: z.string(),
     cause: skipCauseSchema,
@@ -550,29 +536,8 @@ export function readWorkflowSourceState(
     : { kind: 'unreadable', detail: parsed.error.message };
 }
 
-/**
- * The suspend reason vocabulary (#2489) — a Zod-backed enum, not a renamed union: the
- * values are persisted verbatim into `workflow_runs.metadata.approval.type`, so they
- * cannot change without breaking reads of already-paused runs. Every pause site now
- * writes through one shared helper (`pauseGateRespectingExternalTransition` in
- * dag-executor.ts), but each reason's RESUME path stays deliberately separate and
- * lives at its own named site:
- *  - `'approval'` / `'interactive_loop'` — resolved externally by a human decision:
- *    `approveWorkflow`/`rejectWorkflow` (operations/workflow-operations.ts).
- *  - `'writeback'` — also resolved by `approveWorkflow`/`rejectWorkflow`'s write-back
- *    branch, then applied on parent resume by `runContainerWriteBackGate`
- *    (dag-executor.ts, `raiseWriteBackGate`'s sibling).
- *  - `'child_workflow'` — never resolved by the approve/reject endpoints directly
- *    (redirected instead — `assertApprovable`/`assertRejectable`); re-inspected by
- *    `executeWorkflowNode` re-running on parent resume (dag-executor.ts).
- */
-export const suspendReasonSchema = z.enum([
-  'approval',
-  'interactive_loop',
-  'writeback',
-  'child_workflow',
-]);
-export type SuspendReason = z.infer<typeof suspendReasonSchema>;
+export { suspendReasonSchema } from './node-state';
+export type { SuspendReason } from './node-state';
 
 /**
  * True when `type` is `undefined` (every pause before the field existed, or a plain
@@ -726,6 +691,8 @@ export interface ApprovalContext {
   signaledTokens?: TokenUsage | null;
   /** Cumulative USD cost through this single-node loop pause; paired with signaledTokens. */
   signaledCostUsd?: number | null;
+  /** Original execution facts retained across a gate; no private session handle. */
+  execution?: NodeExecutionMetadata;
   /**
    * Interactive-loop only. Read-once snapshot of the resolved loop prompt
    * template, whether authored as `loop.prompt` or loaded from `loop.command`,

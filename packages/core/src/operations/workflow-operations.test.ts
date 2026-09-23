@@ -1,3 +1,13 @@
+import {
+  startNodeExecution,
+  finishNodeExecution,
+  newNodeInvocation,
+  executionMetadata,
+} from '@archon/workflows/node-execution';
+import {
+  getWorkflowEventEmitter,
+  type WorkflowEmitterEvent,
+} from '@archon/workflows/event-emitter';
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { DashboardWorkflowRun } from '../schemas/workflow-run';
@@ -222,6 +232,67 @@ describe('approveWorkflow', () => {
     // Anonymous telemetry: binary resolution captured exactly once
     expect(mockCaptureApprovalResolved).toHaveBeenCalledTimes(1);
     expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'approved' });
+  });
+
+  test('a gate completion keeps its paused identity and only publishes after the CAS wins', async () => {
+    const execution = executionMetadata(
+      finishNodeExecution(
+        startNodeExecution({
+          runId: 'run-1',
+          path: 'outer.review',
+          invocation: newNodeInvocation(),
+          node: {
+            id: 'review',
+            kind: 'gate',
+            message: 'Review',
+            decisions: [{ id: 'approve' }],
+            decisionsAuthored: true,
+            captureResponse: true,
+          },
+        }),
+        { status: 'suspended', point: 'approval' }
+      )
+    );
+    const run = makePausedRun({
+      metadata: {
+        approval: {
+          nodeId: 'review',
+          message: 'Review',
+          type: 'approval',
+          execution,
+        },
+      },
+    });
+    const observed: WorkflowEmitterEvent[] = [];
+    const unsubscribe = getWorkflowEventEmitter().subscribe(event => observed.push(event));
+    try {
+      mockGetWorkflowRun.mockResolvedValueOnce(run);
+      mockResolveApprovalGate.mockResolvedValueOnce({ resolved: false });
+      await expect(approveWorkflow('run-1')).rejects.toThrow('already resolved');
+      expect(observed).toHaveLength(0);
+      mockGetWorkflowRun.mockResolvedValueOnce(run);
+      await approveWorkflow('run-1');
+      const row = mockResolveApprovalGate.mock.calls.at(-1)?.[2][0];
+      expect(row).toMatchObject({
+        step_name: 'outer.review',
+        data: {
+          invocation: execution.invocation,
+          attempt: execution.attempt,
+          binding: execution.binding,
+        },
+      });
+      expect(observed).toHaveLength(1);
+      expect(observed[0]).toMatchObject({
+        type: 'node_completed',
+        execution: {
+          invocation: execution.invocation,
+          attempt: execution.attempt,
+          path: 'outer.review',
+        },
+      });
+    } finally {
+      unsubscribe();
+    }
   });
 
   test('approves a new-mode gate (decisionsAuthored) — writes node_completed with structured {decision,text} output (#2707)', async () => {
