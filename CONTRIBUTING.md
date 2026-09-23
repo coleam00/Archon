@@ -16,7 +16,7 @@ Thank you for your interest in contributing to Archon!
 
 `bun run validate` is the gate. Run it before opening a pull request: it runs every
 check that gates a pull request except the five listed below, so a green run means CI's
-`test` and `workflow-fixtures` jobs will pass. It needs no network and no
+`static`, `test` and `workflow-fixtures` jobs will pass on your OS. It needs no network and no
 services, takes a couple of minutes, and prints what each check cost so you can see
 where the time goes.
 
