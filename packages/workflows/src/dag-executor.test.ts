@@ -17,7 +17,7 @@ import {
 import { mkdir, writeFile, rm, readFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { existsSync, unlinkSync } from 'fs';
-import { join, normalize, sep } from 'path';
+import { isAbsolute, join, normalize, sep } from 'path';
 import { tmpdir } from 'os';
 import * as git from '@archon/git';
 import { RATE_LIMIT_MAX_RETRIES } from './executor-shared';
@@ -19524,8 +19524,9 @@ describe('executeDagWorkflow -- typed artifacts (output_type)', () => {
     );
 
     const consumerPrompt = mockSendQueryDag.mock.calls.at(-1)?.[0] as string | undefined;
-    expect(consumerPrompt).toMatch(/^Listing: \//);
+    expect(consumerPrompt?.startsWith('Listing: ')).toBe(true);
     const listingPath = (consumerPrompt ?? '').slice('Listing: '.length).trim();
+    expect(isAbsolute(listingPath)).toBe(true);
     const listing = nodeArtifactsListingSchema.parse(
       JSON.parse(await readFile(listingPath, 'utf8'))
     );
