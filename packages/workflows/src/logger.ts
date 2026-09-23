@@ -155,17 +155,23 @@ export const WATCHDOG_RESET_BURST_GAP_MS = 10_000;
 export interface WatchdogResetRecorder {
   /** Observe one renewal. Never delays the stream: writes are queued, not awaited. */
   observe(chunkType: MessageChunk['type'], resetAt: number): void;
-  /** Write the pending burst end, then wait for every queued write. Call once, when the pass ends. */
+  /** Write any pending burst end, then wait for every queued write. Call once, when the pass ends. */
   flush(): Promise<void>;
 }
 
 /**
- * Records a burst's first reset when it arrives, and its last reset when the next burst
- * starts or the pass ends. Each record's `chunk_count` is the number of renewals since
- * the previous record, itself included, so the counts of a pass sum to its renewals.
+ * Records a burst's first reset when it arrives, and its last reset once the stream has
+ * been quiet for the burst gap, or when the pass ends first. Each record's `chunk_count`
+ * is the number of renewals since the previous record, itself included, so the counts
+ * of a pass sum to its renewals.
  *
- * A burst end is written only after the burst is known to have ended, so it can land in
- * the file after rows that happened later. Its `ts` is the renewal time; order by `ts`.
+ * A timer writes the burst end instead of leaving it for `flush`: a stalled node's
+ * process can be killed before its watchdog fires (Ctrl-C and SIGTERM exit without
+ * running the executor's `finally`), and the transcript is then the only record of when
+ * the stream went quiet. The timer is unref'd and never touches the watchdog.
+ *
+ * A burst end lands in the file after rows logged during the burst's final gap. Its
+ * `ts` is the renewal time; order by `ts`.
  */
 export function createWatchdogResetRecorder(
   logDir: string,
@@ -175,6 +181,7 @@ export function createWatchdogResetRecorder(
   let writes = Promise.resolve();
   let lastResetAt: number | undefined;
   let burstEnd: { chunkType: MessageChunk['type']; at: number; count: number } | undefined;
+  let burstEndTimer: ReturnType<typeof setTimeout> | undefined;
 
   const write = (chunkType: MessageChunk['type'], at: number, count: number): void => {
     writes = writes.then(() =>
@@ -187,6 +194,8 @@ export function createWatchdogResetRecorder(
     );
   };
   const writeBurstEnd = (): void => {
+    clearTimeout(burstEndTimer);
+    burstEndTimer = undefined;
     if (burstEnd) write(burstEnd.chunkType, burstEnd.at, burstEnd.count);
     burstEnd = undefined;
   };
@@ -195,6 +204,9 @@ export function createWatchdogResetRecorder(
     observe(chunkType, resetAt): void {
       if (lastResetAt !== undefined && resetAt - lastResetAt < WATCHDOG_RESET_BURST_GAP_MS) {
         burstEnd = { chunkType, at: resetAt, count: (burstEnd?.count ?? 0) + 1 };
+        clearTimeout(burstEndTimer);
+        burstEndTimer = setTimeout(writeBurstEnd, WATCHDOG_RESET_BURST_GAP_MS);
+        burstEndTimer.unref();
       } else {
         writeBurstEnd();
         write(chunkType, resetAt, 1);

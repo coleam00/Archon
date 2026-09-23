@@ -13155,7 +13155,11 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
 
     const toolReset = tool.transcript.filter(event => event.type === 'watchdog_reset');
     const assistantReset = assistant.transcript.filter(event => event.type === 'watchdog_reset');
-    expect(toolReset.map(event => event.chunk_type)).toEqual(['thinking', 'tool']);
+    // One burst: its start, then its end written by the iteration's flush.
+    expect(toolReset.map(event => [event.step, event.chunk_type, event.chunk_count])).toEqual([
+      ['implement-iteration-1', 'thinking', 1],
+      ['implement-iteration-1', 'tool', 1],
+    ]);
     expect(assistantReset.map(event => event.chunk_type)).toEqual(['assistant']);
     expect(toolReset.every(event => !('content' in event) && !('tool_input' in event))).toBe(true);
     expect(assistantReset.every(event => !('content' in event))).toBe(true);

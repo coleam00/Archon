@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
-import { mkdir, rm, readFile, chmod } from 'fs/promises';
+import { describe, it, expect, beforeEach, afterEach, mock, jest } from 'bun:test';
+import { mkdir, rm, readFile, readdir, chmod } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -159,6 +159,37 @@ describe('Workflow Logger', () => {
         [1, iso(t0)],
         [1, iso(t0 + WATCHDOG_RESET_BURST_GAP_MS - 1)],
       ]);
+    });
+
+    it('writes the burst end once the stream goes quiet, without waiting for flush', async () => {
+      // A killed process never reaches flush; the quiet gap alone must persist the burst end.
+      // Queued writes settle through file I/O, which fake timers leave alone.
+      const readAfterWrites = async (): Promise<WorkflowEvent[]> => {
+        for (let i = 0; i < 20; i++) await readdir(testDir);
+        return readLogFile('watchdog-quiet');
+      };
+      jest.useFakeTimers();
+      try {
+        const recorder = createWatchdogResetRecorder(testDir, 'watchdog-quiet', 'review');
+        recorder.observe('thinking', t0);
+        recorder.observe('thinking', t0 + 5);
+        recorder.observe('tool', t0 + 10);
+
+        jest.advanceTimersByTime(WATCHDOG_RESET_BURST_GAP_MS - 1);
+        expect((await readAfterWrites()).map(e => e.chunk_count)).toEqual([1]);
+
+        jest.advanceTimersByTime(1);
+        expect((await readAfterWrites()).map(e => [e.chunk_type, e.chunk_count, e.ts])).toEqual([
+          ['thinking', 1, iso(t0)],
+          ['tool', 2, iso(t0 + 10)],
+        ]);
+
+        // Flush after the timer wrote the burst end adds nothing.
+        await recorder.flush();
+        expect(await readLogFile('watchdog-quiet')).toHaveLength(2);
+      } finally {
+        jest.useRealTimers();
+      }
     });
   });
 
