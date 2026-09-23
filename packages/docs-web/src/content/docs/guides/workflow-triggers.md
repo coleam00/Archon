@@ -134,7 +134,9 @@ A queued request also blocks newer requests for the same resource, so a new arri
 
 A drain processes untouched queued requests assigned to one host and admits them while the resource has free capacity. The server drains its own host continuously. `archon trigger drain --host <hostId>` runs one drain and can run after every earlier Archon process has exited, because the queue is durable. Neither recovers a request that was already admitted to a run.
 
-If a request was admitted but its run remains `pending`, for example because its host stopped before starting it, inspection supplies an explicit `trigger execute` retry. The engine admits only one execution claimant. A drain does not retry it automatically, and the run keeps holding its resource until it runs or is abandoned.
+If a request was admitted but its run remains `pending`, for example because its host stopped before starting it, inspection supplies an explicit `trigger execute` retry. The engine admits only one execution claimant. A drain does not retry it automatically, and the run keeps holding its resource until it runs or is abandoned. When a server-hosted start fails this way, the server logs `resource_start.start_failed` with the run ID and the `archon trigger inspect` command to run.
+
+A `trigger execute` process stopped with SIGTERM or SIGINT marks its own running run failed before it exits, which releases the resource. A crash or SIGKILL cannot do that and leaves ownership ambiguous.
 
 If an admitted run has ambiguous ownership after a crash, inspect the request and its blocking run. Verify that the exact execution owner and its descendants have stopped before using the workflow recovery command named by inspection. Archon does not abandon a run because it is old or unreachable. Automatic queue draining and recovery of ambiguous execution are separate operations.
 
