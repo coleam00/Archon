@@ -310,18 +310,22 @@ describe('run live owner', () => {
     }
   });
 
-  test('does not read an unexpected connection error as an absent owner', async () => {
-    // A regular file at the endpoint path fails with ENOTSOCK. That is not the
-    // no-listener proof abandon needs before it records a run cancelled.
-    if (process.platform === 'win32') return;
-    const runId = `not-a-socket-${crypto.randomUUID()}`;
+  test('does not read a live owner it cannot connect to as an absent owner', async () => {
+    // A live listener whose socket this user may not write to fails with EACCES. Only
+    // ENOENT and ECONNREFUSED prove nothing is listening; anything else must not let
+    // abandon record the run cancelled. Root bypasses the permission check.
+    if (process.platform === 'win32' || process.getuid?.() === 0) return;
+    const runId = `no-access-${crypto.randomUUID()}`;
     const path = runLiveOwnerPath(runId);
-    writeFileSync(path, 'not a socket');
+    const server = createServer(socket => socket.destroy());
+    await listen(server, path);
+    chmodSync(path, 0o000);
     try {
       const refusal = await stopRefusal(runId);
-      expect(refusal.detail).toBe('ENOTSOCK');
+      expect(refusal.detail).toBe('EACCES');
       expect(refusal.reason).toBe('unproven');
     } finally {
+      await close(server);
       rmSync(path, { force: true });
     }
   });
