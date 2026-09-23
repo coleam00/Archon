@@ -110,11 +110,7 @@ export function makeDefaultsMock(): {
 export function makeMockLockManager(
   overrides: Partial<ConversationLockManager> = {}
 ): ConversationLockManager {
-  return {
-    acquireLock: mock(async (_id: string, fn: () => Promise<void>) => {
-      await fn();
-      return { status: 'started' };
-    }),
+  const members: Partial<ConversationLockManager> = {
     getStats: mock(() => ({
       active: 0,
       queuedTotal: 0,
@@ -129,5 +125,16 @@ export function makeMockLockManager(
     getDrainStatus: mock(() => undefined),
     isDraining: mock(() => false),
     ...overrides,
+  };
+  return {
+    // Default admission follows `isDraining`, as the real manager does, so stubbing
+    // drain alone cannot produce a manager that claims to be draining and admits
+    // work anyway — a test built on that pair would prove nothing.
+    acquireLock: mock(async (_id: string, fn: () => Promise<void>) => {
+      if (members.isDraining?.()) return { status: 'refused-draining' };
+      await fn();
+      return { status: 'started' };
+    }),
+    ...members,
   } as unknown as ConversationLockManager;
 }

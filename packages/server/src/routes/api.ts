@@ -2613,7 +2613,15 @@ export function registerApiRoutes(
       // instead rely on implicit resume detection and collide with the
       // ambiguity guard for any non-paused resumable state (#2075).
       const resumeMessage = `/workflow resume ${run.id}`;
-      await dispatchToOrchestrator(platformConvId, resumeMessage, { userId: gateActorUserId });
+      const dispatched = await dispatchToOrchestrator(platformConvId, resumeMessage, {
+        userId: gateActorUserId,
+      });
+      if (!dispatched.accepted) {
+        // Drain can begin between the entry guard above and this dispatch; falling
+        // through to `true` would tell the user the run resumed when nothing started.
+        getLog().info({ runId: run.id, action }, 'api.workflow_gate_auto_resume_skipped_draining');
+        return false;
+      }
       getLog().info(
         { runId: run.id, workflowName: run.workflow_name, platformConvId },
         events.dispatched
@@ -3791,9 +3799,15 @@ export function registerApiRoutes(
       const resumeMessage = `/workflow resume ${run.id}`;
       // Resume executes as the user who clicked resume (sender-first, #1982),
       // not the conversation creator. Undefined on solo installs → fallback.
-      await dispatchToOrchestrator(parentConv.platform_conversation_id, resumeMessage, {
-        userId: await resolveWebUserId(c),
-      });
+      const dispatched = await dispatchToOrchestrator(
+        parentConv.platform_conversation_id,
+        resumeMessage,
+        { userId: await resolveWebUserId(c) }
+      );
+      if (!dispatched.accepted) {
+        // Drain can begin between the entry guard above and this dispatch.
+        return apiError(c, 503, DRAIN_REFUSAL_NOTICE);
+      }
       getLog().info(
         {
           runId,
