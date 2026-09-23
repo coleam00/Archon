@@ -48,7 +48,18 @@ export function createServerResourceStartHost(
         }
       })
       .catch((error: unknown) => {
-        log.error({ err: error as Error, requestId }, 'resource_start.start_failed');
+        // A failure before the engine claims the run leaves it pending and holding its
+        // slot; nothing retries it. Name the run (a request's ID is its run's ID) and
+        // the command that shows the operator's retry and abandon options.
+        log.error(
+          {
+            err: error as Error,
+            requestId,
+            runId: requestId,
+            recoveryCommand: `archon trigger inspect ${requestId}`,
+          },
+          'resource_start.start_failed'
+        );
       });
   };
 

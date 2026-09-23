@@ -15,6 +15,7 @@ import {
   drainResourceStartHost,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
+import { rootLogger } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import type { IWorkflowEngine, WorkflowEngineSubmitInput } from '@archon/workflows/engine-port';
 import { RESOURCE_START_METADATA_KEY } from '@archon/workflows/schemas/resource-start';
@@ -74,7 +75,10 @@ interface Fixture {
   deliver: (delivery: string, overlap: 'skip' | 'queue') => Promise<Response>;
 }
 
-async function fixture(autoDrain = true): Promise<Fixture> {
+async function fixture(
+  autoDrain = true,
+  isolation: { kind: 'in-place' } | { kind: 'worktree' } = { kind: 'in-place' }
+): Promise<Fixture> {
   const project = join(root, 'project');
   await mkdir(join(project, '.archon', 'workflows'), { recursive: true });
   await writeFile(
@@ -82,6 +86,34 @@ async function fixture(autoDrain = true): Promise<Fixture> {
     'name: hosted\ndescription: Server-hosted start.\nnodes:\n  - id: one\n    bash: echo one\n'
   );
   expect(await Bun.spawn(['git', 'init', '-q'], { cwd: project }).exited).toBe(0);
+  if (isolation.kind === 'worktree') {
+    // A worktree syncs from the remote's base branch, so give the project a local one.
+    const origin = join(root, 'origin.git');
+    for (const [cwd, argv] of [
+      [root, ['git', 'init', '-q', '--bare', '-b', 'main', origin]],
+      [project, ['git', 'checkout', '-q', '-b', 'main']],
+      [
+        project,
+        [
+          'git',
+          '-c',
+          'user.name=t',
+          '-c',
+          'user.email=t@t',
+          'commit',
+          '-q',
+          '--allow-empty',
+          '-m',
+          'base',
+        ],
+      ],
+      [project, ['git', 'remote', 'add', 'origin', origin]],
+      [project, ['git', 'push', '-q', 'origin', 'main']],
+      [project, ['git', 'remote', 'set-head', 'origin', 'main']],
+    ] as const) {
+      expect(await Bun.spawn([...argv], { cwd }).exited).toBe(0);
+    }
+  }
 
   // The module is an installed plugin: it trusts nothing but its own config.
   const modulePath = join(root, 'plugin.mjs');
@@ -130,7 +162,7 @@ async function fixture(autoDrain = true): Promise<Fixture> {
                 cwd: project,
                 workflowName: 'hosted',
                 inputs: {},
-                isolation: { kind: 'in-place' },
+                isolation,
               },
             },
           },
@@ -291,4 +323,98 @@ describe('server resource-start host', () => {
     await Promise.allSettled([start(), start()]);
     expect(engine.claimed).toEqual([requestId]);
   });
+
+  test('an unbranched worktree start that failed before submission reuses its checkout on retry', async () => {
+    const { deliver, engine } = await fixture(false, { kind: 'worktree' });
+    expect((await deliver('first', 'queue')).status).toBe(200);
+    const requestId = await admitWithoutStarting();
+    const failing: IWorkflowEngine & { cwd?: string } = {
+      async submit(input) {
+        failing.cwd = input.cwd;
+        throw new Error('engine unavailable');
+      },
+      async resume() {
+        throw new Error('not used');
+      },
+    };
+    const start = (with_: IWorkflowEngine): ReturnType<typeof startAdmittedResourceStart> =>
+      startAdmittedResourceStart({
+        requestId,
+        hostId: HOST_ID,
+        engine: with_,
+        createPlatform: ({ conversationDbId }) => new HeadlessPlatform(conversationDbId),
+      });
+
+    await expect(start(failing)).rejects.toThrow('engine unavailable');
+    expect(failing.cwd).toBeDefined();
+    // The operator's retry of the still-pending run reaches the engine in the same checkout.
+    expect((await start(engine)).success).toBe(true);
+    expect(engine.claimed).toEqual([requestId]);
+    expect(engine.submitted[0]?.cwd).toBe(failing.cwd);
+  });
+
+  test('a start that fails before submission logs its run and the recovery command', async () => {
+    const { deliver } = await fixture(false);
+    expect((await deliver('first', 'queue')).status).toBe(200);
+    const host = createServerResourceStartHost(HOST_ID, {
+      async submit() {
+        throw new Error('engine unavailable');
+      },
+      async resume() {
+        throw new Error('not used');
+      },
+    });
+
+    const logged = captureLogLines();
+    try {
+      await host.requestDrain();
+      const line = await until(() =>
+        logged.lines.find(entry => entry.msg === 'resource_start.start_failed')
+      );
+      const runId = (await bindingOf('first')).disposition?.requestId;
+      expect(line).toMatchObject({
+        runId,
+        recoveryCommand: `archon trigger inspect ${runId ?? ''}`,
+      });
+    } finally {
+      logged.restore();
+    }
+  });
 });
+
+/** Admit the host's pending work without starting it; returns the one admitted request. */
+async function admitWithoutStarting(): Promise<string> {
+  const admitted: string[] = [];
+  await drainResourceStartHost({
+    hostId: HOST_ID,
+    startAdmitted: async requestId => {
+      admitted.push(requestId);
+    },
+  });
+  const [requestId] = admitted;
+  if (!requestId) throw new Error('nothing was admitted');
+  return requestId;
+}
+
+/** Read structured log lines where every child logger writes them: the root's stream. */
+function captureLogLines(): { lines: Record<string, unknown>[]; restore(): void } {
+  const streamKey = Object.getOwnPropertySymbols(rootLogger).find(
+    symbol => symbol.description === 'pino.stream'
+  );
+  const stream = streamKey
+    ? (rootLogger as unknown as Record<symbol, { write(chunk: string): unknown }>)[streamKey]
+    : undefined;
+  if (!stream) throw new Error('logger stream not found');
+  const write = stream.write;
+  const lines: Record<string, unknown>[] = [];
+  stream.write = (chunk: string): unknown => {
+    lines.push(JSON.parse(chunk) as Record<string, unknown>);
+    return write.call(stream, chunk);
+  };
+  return {
+    lines,
+    restore: () => {
+      stream.write = write;
+    },
+  };
+}
