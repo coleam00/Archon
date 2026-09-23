@@ -588,10 +588,10 @@ const orderedFlags: FlagHelp[] = [
   },
   {
     spec: '--quiet, -q',
-    description: 'Reduce log verbosity to warnings and errors only',
+    description: 'Log warnings and errors only (the default except for serve)',
     owners: [],
   },
-  { spec: '--verbose, -v', description: 'Show debug-level output', owners: [] },
+  { spec: '--verbose, -v', description: 'Show debug-level logs on stderr', owners: [] },
   {
     spec: '--json',
     description:

@@ -75,26 +75,6 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 /**
- * Filenames already warned about an inferred workflow-class declaration this process
- * (#2736/#2738's grace period on `validateWorkflowClassPlacement`). `parseWorkflow` runs
- * on every `/workflow list`, chat turn, and CLI invocation — a permanent process-wide
- * latch keeps the WARN a one-time nudge to the author instead of log spam on a
- * long-running server. Mirrors `hasWarnedLegacyHomePath` in `workflow-discovery.ts`: a
- * plain latch (no in-flight-probe dance) is correct here because `parseWorkflow` is fully
- * synchronous, so no concurrent caller can interleave mid-check. Keyed by the bare
- * filename `parseWorkflow` receives (not a scope-qualified path), so two files sharing a
- * basename across bundled/global/project scopes could under-warn on this channel — a
- * cosmetic log-noise tradeoff only, since `parseWarnings` (the channel the workflow's
- * actual author sees, via `/api/workflows` and `/workflow list`) is pushed unconditionally
- * on every parse regardless of this Set.
- */
-const warnedClassPlacementFiles = new Set<string>();
-/** Exported for tests that need to observe the warning fire more than once per process. */
-export function resetClassPlacementWarningForTests(): void {
-  warnedClassPlacementFiles.clear();
-}
-
-/**
  * Parse an optional, schema-validated workflow field with warn-and-drop
  * semantics: a present-but-invalid value is logged and dropped (returns
  * undefined) rather than rejecting the whole workflow, so a typo in one field
@@ -265,9 +245,12 @@ function pushUnknownKeyWarning(
 ): void {
   const message = `${label}: unknown key '${key}' will be ignored.${hint}`;
   warnings.push(message);
-  // Carry the prose, not just the payload: the run path (`archon workflow run`)
-  // reads this log line and never reads the warning string (#2213).
-  getLog().warn({ id, key, warning: message }, event);
+  // `warnings` is how the author hears about this: `validate`, `workflow list`,
+  // `workflow run` (stderr), the API, and the run's `workflow_parse_warnings`
+  // event all read it. Every parse warning in this file is also logged at debug, not
+  // warn: discovery parses every workflow on each list or run, so a warn line
+  // would repeat for workflows the operator did not ask about (#3444).
+  getLog().debug({ id, key, warning: message }, event);
 }
 
 /**
@@ -443,7 +426,7 @@ function collectGateAndLoopDeprecationWarnings(
           `always structured as {decision, text} — read '$${id}.output.text' downstream ` +
           'instead. This field is ignored.';
         warnings.push(message);
-        getLog().warn({ id, warning: message }, 'node_capture_response_deprecated');
+        getLog().debug({ id, warning: message }, 'node_capture_response_deprecated');
       }
       if (approvalObj.on_reject !== undefined) {
         const message =
@@ -452,7 +435,7 @@ function collectGateAndLoopDeprecationWarnings(
           'instead (loop it with loop_group if it should iterate). This gate keeps running ' +
           'via the legacy mechanism until migrated.';
         warnings.push(message);
-        getLog().warn({ id, warning: message }, 'node_on_reject_deprecated');
+        getLog().debug({ id, warning: message }, 'node_on_reject_deprecated');
       }
     }
   }
@@ -465,7 +448,7 @@ function collectGateAndLoopDeprecationWarnings(
       're-expresses the interactive loop as a gate + loop_group composition (#2707 step 3). ' +
       'Continue using it for now.';
     warnings.push(message);
-    getLog().warn({ id, warning: message }, 'node_loop_interactive_deprecated');
+    getLog().debug({ id, warning: message }, 'node_loop_interactive_deprecated');
   }
 
   // The prose `until:` completion channel is deprecated for EVERY loop/loop_group,
@@ -482,7 +465,7 @@ function collectGateAndLoopDeprecationWarnings(
       'in output_format) instead (#2707 step 3). While supported, emit legacy signals as ' +
       "'<promise>SIGNAL</promise>' or a final standalone signal line.";
     warnings.push(message);
-    getLog().warn({ id, warning: message }, 'node_loop_until_deprecated');
+    getLog().debug({ id, warning: message }, 'node_loop_until_deprecated');
   } else if (isLoopGroupNode(node) && node.loop_group.until !== undefined) {
     const message =
       `Node '${id}': the prose 'loop_group.until' completion signal is deprecated. ` +
@@ -491,7 +474,7 @@ function collectGateAndLoopDeprecationWarnings(
       "supported, emit legacy signals as '<promise>SIGNAL</promise>' or a final standalone " +
       'signal line.';
     warnings.push(message);
-    getLog().warn({ id, warning: message }, 'node_loop_group_until_deprecated');
+    getLog().debug({ id, warning: message }, 'node_loop_group_until_deprecated');
   }
 
   // A gate node inside a loop_group body only pauses the enclosing loop when it is
@@ -526,7 +509,7 @@ function collectGateAndLoopDeprecationWarnings(
           'gate is not, so it will not stop loop iteration. Move it to the end of the ' +
           'body with nothing else depending on it, and no other node left un-depended-on.';
         warnings.push(message);
-        getLog().warn({ id: gate.id, warning: message }, 'loop_group_gate_not_terminal_sink');
+        getLog().debug({ id: gate.id, warning: message }, 'loop_group_gate_not_terminal_sink');
       } else {
         // Gate is validly the sole terminal sink. Design A (#2707 step 3) is
         // deliberately unopinionated about what a decision means — the group's own
@@ -553,7 +536,7 @@ function collectGateAndLoopDeprecationWarnings(
             `(e.g. '[ "${gateRef}.decision" = "approve" ]') so the gate's answer actually ` +
             'drives completion (#2707 step 3).';
           warnings.push(message);
-          getLog().warn(
+          getLog().debug(
             { id: gate.id, warning: message },
             'loop_group_gate_completion_not_referenced'
           );
@@ -576,7 +559,7 @@ function collectGateAndLoopDeprecationWarnings(
           'directly as the terminal sink correctly stops the enclosing loop_group ' +
           '(#2707 step 3).';
         warnings.push(message);
-        getLog().warn(
+        getLog().debug(
           { id, sinkId: sink.id, warning: message },
           'loop_group_nested_pause_not_escalated'
         );
@@ -669,14 +652,14 @@ function parseDagNode(
     warnings.push(
       `Node '${id}': 'with' is only supported on command, script, include, and workflow nodes — it is ignored here`
     );
-    getLog().warn({ id: node.id }, 'node_with_ignored');
+    getLog().debug({ id: node.id }, 'node_with_ignored');
   }
 
   if ((raw as Record<string, unknown>).on_timeout !== undefined && node.kind !== 'exec') {
     warnings.push(
       `Node '${id}': 'on_timeout' is only supported on bash and script nodes — it is ignored here`
     );
-    getLog().warn({ id: node.id }, 'node_on_timeout_ignored');
+    getLog().debug({ id: node.id }, 'node_on_timeout_ignored');
   }
 
   // parseWarnings owns author-facing diagnostics; the structured log observes the
@@ -697,7 +680,7 @@ function parseDagNode(
           : `Node '${id}': ${quoted} ${plural ? 'are' : 'is'} not supported on this node type ` +
             `(${nonAiNode.type}) — ${plural ? 'they are' : 'it is'} ignored at run time.`;
       warnings.push(message);
-      getLog().warn(
+      getLog().debug(
         { id: node.id, fields: presentAiFields, warning: message },
         `${nonAiNode.type}_node_ai_fields_ignored`
       );
@@ -1183,7 +1166,7 @@ export function validateDagStructure(
  * existed, including ones that only ever ran in the foreground and were
  * never actually unsafe — the hard error had no transition. `parseWorkflow`
  * instead coerces `interactive` to `true` for the rest of this parse and
- * warns once per file (see `warnedClassPlacementFiles`), which closes #1991
+ * reports a parse warning, which closes #1991
  * for these workflows immediately: every dispatch surface reads the SAME
  * parsed `interactive` value this function's result feeds
  * (`assertInteractiveClassNotBackgrounded`, the fan-out spawn check, the web
@@ -1456,14 +1439,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
         '(this grace period ends in a future release — see #2738); add the declaration to the file to ' +
         'silence this warning.';
       parseWarnings.push(classWarning);
-      if (!warnedClassPlacementFiles.has(filename)) {
-        warnedClassPlacementFiles.add(filename);
-        // Carry the prose, not just the payload, so the warning is legible on both
-        // channels: the log stream, and `parseWarnings` — which `executeWorkflow`
-        // persists verbatim as a `workflow_parse_warnings` event (#2213) and
-        // `/api/workflows` surfaces per-workflow to the author (see AGENTS.md).
-        getLog().warn({ filename, warning: classWarning }, 'workflow_class_placement_inferred');
-      }
+      getLog().debug({ filename, warning: classWarning }, 'workflow_class_placement_inferred');
     }
 
     // Parse workflow-level fields using WorkflowBaseSchema for validation
@@ -1943,7 +1919,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       // Carry the prose, not just the payload, so the warning is legible on both
       // channels: the log stream, and `parseWarnings` — which `executeWorkflow`
       // persists verbatim as a `workflow_parse_warnings` event (#2213).
-      getLog().warn({ filename, warning: message }, 'workflow_model_reasoning_effort_deprecated');
+      getLog().debug({ filename, warning: message }, 'workflow_model_reasoning_effort_deprecated');
     }
     const sandbox = parseOptionalField(
       raw.sandbox,

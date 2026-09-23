@@ -246,8 +246,8 @@ Options:
   --exec-code                Execute trusted bash/script nodes during --dry-run (default: require stubs)
   --pause-at-gates           Stop a dry-run at approval gates instead of auto-approving
   --spawn                    Open setup wizard in a new terminal window (for setup command)
-  --quiet, -q                Reduce log verbosity to warnings and errors only
-  --verbose, -v              Show debug-level output
+  --quiet, -q                Log warnings and errors only (the default except for serve)
+  --verbose, -v              Show debug-level logs on stderr
   --json                     Output machine-readable JSON (list/status/get/wait/runs/approve/reject/respond/cancel/abandon/resume)
   --events                   For verbose JSON status/get: output raw event rows instead of node summaries
   --detach                   Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (returns immediately)

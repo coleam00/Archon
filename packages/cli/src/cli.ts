@@ -19,7 +19,11 @@ import {
   getArchonConfigPath,
   getArchonHome,
   restoreDetachedInstallContext,
+  setLogDestination,
 } from '@archon/paths';
+// A command's stdout is its output (`archon … > file`, `| jq`, an agent reading
+// it); logs are diagnostics. Set before anything below can log.
+setLogDestination('stderr');
 const hasDetachedRunConfigHandoff = process.argv
   .slice(2)
   .includes('--internal-detached-run-config');
@@ -45,9 +49,8 @@ if (inheritedInstallContext) {
 }
 
 // Install the pipe-safe `console.log` shim BEFORE any command module imports.
-// `console.log` reaches fd 1 via a non-blocking pipe (pino opens it that way at
-// module load via `@archon/paths/strip-cwd-env-boot` above), and short writes
-// are silently dropped against a slow reader. The shim delegates through
+// `console.log` can reach fd 1 as a non-blocking pipe, and short writes are
+// silently dropped against a slow reader. The shim delegates through
 // `writeStdout` so the stream layer queues short writes and retries `EAGAIN`
 // instead of dropping the tail — but delivery is fire-and-forget, so the
 // patched `console.log` returns synchronously and the exit path below must
@@ -287,10 +290,13 @@ async function main(): Promise<number> {
   const command = positionals[0];
   const subcommand = positionals[1];
 
-  // setup/doctor/telemetry default to warn to avoid Pino info JSON interleaving with their human-readable output; lazy loggers pick up this level at first creation
-  const isInteractiveCommand =
-    command === 'setup' || command === 'doctor' || command === 'telemetry';
-  const suppressByDefault = isInteractiveCommand && !values.verbose && !isVerboseBoot();
+  // Commands default to warn: info records are engine internals that bury the
+  // command's own output, even on stderr. `serve` is the exception: its logs are
+  // its output, so they stay at info on stdout, as when the server runs directly.
+  // Lazy loggers pick up this level at first creation.
+  const isServe = command === 'serve';
+  if (isServe) setLogDestination('stdout');
+  const suppressByDefault = !isServe && !values.verbose && !isVerboseBoot();
   const rawTranscriptCommand = command === 'workflow' && subcommand === 'logs';
   // Apply output policy before install discovery: its best-effort debug logs
   // must never prefix a machine-readable response.
