@@ -268,7 +268,7 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 | GET | `/api/workflows/runs/{runId}` | Get run details with events |
 | GET | `/api/runs/{runId}/artifacts` | List artifact files produced by a run |
 | GET | `/api/workflows/runs/by-worker/{platformId}` | Look up a run by worker conversation ID |
-| POST | `/api/workflows/runs/{runId}/cancel` | Cancel a running workflow |
+| POST | `/api/workflows/runs/{runId}/cancel` | Cancel a running workflow: a run this server executes stops at its next status check; a run another process owns has that owner stopped first. Returns **409** with the reason, and leaves the run unchanged, when no owner answers (abandon it once its process is gone) or the owner cannot be stopped; **400** for a run that is not running |
 | POST | `/api/workflows/runs/{runId}/resume` | Resume a failed or paused workflow |
 | POST | `/api/workflows/runs/{runId}/abandon` | Abandon a run (running, paused, or failed); stops a live detached owner first and cascade-cancels non-terminal `workflow:` sub-run descendants. Returns **409** with the reason, and leaves the run unchanged, when an owner answers but cannot be stopped |
 | POST | `/api/workflows/runs/{runId}/approve` | Approve a paused workflow (400 if paused blocked on a `workflow:` child — approve the child) |

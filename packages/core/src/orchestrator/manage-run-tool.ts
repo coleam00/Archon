@@ -10,6 +10,8 @@ import { listDashboardRuns, findWorkflowRunsByIdPrefix } from '../db/workflows';
 import { toError } from '../utils/error';
 import {
   abandonWorkflow,
+  cancelWorkflow,
+  CancelRefusedError,
   describeAbandonOwner,
   approveWorkflow,
   rejectWorkflow,
@@ -141,7 +143,7 @@ const HELP_OVERVIEW = [
   '  get      — one run’s detail. Params: runId.',
   '  start    — launch a workflow in the background. Params: workflow, message.',
   '  resume   — check a failed/paused run can resume from completed nodes. Params: runId.',
-  '  cancel   — mark a running run cancelled. Params: runId, confirm=true.',
+  '  cancel   — stop a running run. Params: runId, confirm=true.',
   '  abandon  — discard a paused/failed run. Params: runId, confirm=true.',
   '  approve  — approve a paused human gate. Params: runId, confirm=true, optional accept/message.',
   '  reject   — reject a paused human gate. Params: runId, message=reason, confirm=true.',
@@ -159,7 +161,7 @@ const HELP_BY_ACTION: Record<Exclude<Action, 'help'>, string> = {
   resume:
     'resume — validate that a failed/paused run can resume from its completed nodes. Required: runId. Does NOT re-run it — it stays in its current status; continue it from the run’s controls or by re-invoking the workflow.',
   cancel:
-    'cancel — mark a running (non-terminal) run cancelled. Required: runId, confirm=true. Irreversible. A process already executing may finish its current step before it stops.',
+    'cancel — stop a running run. Required: runId, confirm=true. Irreversible. A run this server executes stops at its next status check; a run another process owns has that process stopped first. When no owner answers, cancel refuses and leaves the run unchanged; abandon is the way to release it once the user confirms its process is gone.',
   abandon:
     'abandon — discard a paused/failed (non-terminal) run. Required: runId, confirm=true. Irreversible: the run becomes cancelled.',
   approve:
@@ -399,7 +401,29 @@ async function handleWrite(
         're-invoking the workflow.'
       );
     }
-    case 'cancel':
+    case 'cancel': {
+      try {
+        const result = await cancelWorkflow(id);
+        if (result.kind === 'cooperative') {
+          return result.cancelled
+            ? `Cancelled run ${id.slice(0, 8)} (${result.run.workflow_name}). Its executor stops at its next status check.`
+            : `Run ${id.slice(0, 8)} (${result.run.workflow_name}) already finished; nothing to cancel.`;
+        }
+        let msg = `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled run ${id.slice(0, 8)} (${result.run.workflow_name}).`;
+        if (result.cascadeFailures > 0) {
+          msg += ` Warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running.`;
+        }
+        if (result.blockedParentRunId) {
+          msg += ` Parent run ${result.blockedParentRunId.slice(0, 8)} was blocked on this sub-run and stays paused — resume it to fail the node cleanly, or abandon it too.`;
+        }
+        return msg;
+      } catch (error) {
+        if (error instanceof CancelRefusedError && error.reason === 'no_owner_answered') {
+          return `${error.message} To release it, call manage_run with action='abandon' once the user confirms its process is gone.`;
+        }
+        throw error;
+      }
+    }
     case 'abandon': {
       const {
         run: cancelled,

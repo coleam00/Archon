@@ -180,7 +180,7 @@ describe('buildRunManagementSection', () => {
     }
     expect(section).toContain('--json');
     expect(section).toContain('--detach');
-    expect(section).toContain('actively stop');
+    expect(section).toContain('its owner process is stopped first');
     expect(section).toContain('discard a run whose owner is gone');
   });
 

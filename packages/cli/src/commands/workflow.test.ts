@@ -144,6 +144,8 @@ function noOwnerAnswers(): Promise<never> {
 
 mock.module('@archon/core/services/run-live-owner', () => ({
   startRunLiveOwner: mockStartRunLiveOwner,
+  // The CLI never executes the run it cancels: cancel is a separate process.
+  isRunOwnedByThisProcess: () => false,
 }));
 
 mock.module(
@@ -9431,7 +9433,7 @@ describe('workflowCancelCommand', () => {
     expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
       ok: false,
       action: 'cancel',
-      error: 'process still exists',
+      error: expect.stringContaining('(pid 4242): process still exists. The run was not changed.'),
     });
   });
 
@@ -9561,11 +9563,6 @@ describe('workflowCancelCommand', () => {
       .mockResolvedValueOnce({
         id: runId,
         workflow_name: 'implement',
-        status: 'running',
-      })
-      .mockResolvedValueOnce({
-        id: runId,
-        workflow_name: 'implement',
         status: 'completed',
       });
     (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValue({
@@ -9593,10 +9590,49 @@ describe('workflowCancelCommand', () => {
     });
 
     await expect(workflowCancelCommand(runId)).rejects.toThrow(
-      "Cannot actively cancel run with status 'cancelled'"
+      "Cannot cancel run with status 'cancelled'"
     );
     expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
     expect(workflowDb.cancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it('points at abandon, with the recorded owner facts, when no owner answers', async () => {
+    const workflowDb = require('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValue({
+      id: runId,
+      workflow_name: 'implement',
+      status: 'running',
+      last_activity_at: null,
+      metadata: { execution_owner: { host: 'build-box', pid: 4242 } },
+    });
+    mockRequestDetachedRunStop.mockImplementation(noOwnerAnswers);
+
+    await workflowCancelCommand(runId, true);
+
+    expect(workflowDb.cancelWorkflowRun).not.toHaveBeenCalled();
+    const { error } = JSON.parse(firstJsonPayload(stdoutSpy)) as { error: string };
+    expect(error).toContain('Recorded owner: host build-box, pid 4242.');
+    expect(error).toContain(`Abandon it: archon workflow abandon ${runId}`);
+  });
+
+  it('cancels a sub-run cooperatively without contacting a process owner', async () => {
+    const workflowDb = require('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValue({
+      id: runId,
+      workflow_name: 'implement',
+      status: 'running',
+      parent_run_id: 'root-run',
+    });
+
+    await workflowCancelCommand(runId, true);
+
+    expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
+    expect(workflowDb.cancelWorkflowRun).toHaveBeenCalledWith(runId);
+    expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
+      ok: true,
+      status: 'cancelled',
+      processStopped: false,
+    });
   });
 });
 

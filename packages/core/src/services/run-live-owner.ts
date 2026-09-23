@@ -89,6 +89,18 @@ export class RunLiveOwnerAlreadyOwnedError extends Error {
   }
 }
 
+/** Runs whose live-owner endpoint this process published and has not closed yet. */
+const ownedByThisProcess = new Set<string>();
+
+/**
+ * True while this process owns execution of `runId`: it published the run's live-owner
+ * endpoint and has not closed it. Lets a server tell a run it executes itself, which it
+ * cancels cooperatively, from one another process owns.
+ */
+export function isRunOwnedByThisProcess(runId: string): boolean {
+  return ownedByThisProcess.has(runId);
+}
+
 function endpointToken(runId: string): string {
   return createHash('sha256').update(runId).digest('hex').slice(0, 32);
 }
@@ -327,6 +339,7 @@ export async function startRunLiveOwner(
     releaseOwnerLock(lockPath, lockFd);
     throw error;
   }
+  ownedByThisProcess.add(runId);
 
   let closePromise: Promise<void> | undefined;
   return {
@@ -358,6 +371,7 @@ export async function startRunLiveOwner(
             })
           );
         }
+        ownedByThisProcess.delete(runId);
         if (process.platform !== 'win32') rmSync(path, { force: true });
         releaseOwnerLock(lockPath, lockFd);
       })();

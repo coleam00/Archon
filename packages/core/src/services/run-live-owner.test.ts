@@ -12,6 +12,7 @@ import { createServer, type Server, Socket } from 'node:net';
 import { dirname } from 'node:path';
 import {
   canConnectToRunLiveOwner,
+  isRunOwnedByThisProcess,
   requestRunLiveOwnerStop,
   runLiveOwnerPath,
   RunLiveOwnerStopUnavailableError,
@@ -95,6 +96,21 @@ describe('run live owner', () => {
       expect(existsSync(path)).toBe(false);
       expect(existsSync(path.replace(/\.sock$/, '.lock'))).toBe(false);
     }
+  });
+
+  // Cancel decides "cooperative" from this: a run whose endpoint this process holds is
+  // executing here. A stale entry after close would let cancel release a run another
+  // process has since claimed.
+  test('reports this process as the owner only while its endpoint is open', async () => {
+    const runId = `this-process-${crypto.randomUUID()}`;
+    expect(isRunOwnedByThisProcess(runId)).toBe(false);
+    const owner = await startRunLiveOwner(runId);
+    try {
+      expect(isRunOwnedByThisProcess(runId)).toBe(true);
+    } finally {
+      await owner.close();
+    }
+    expect(isRunOwnedByThisProcess(runId)).toBe(false);
   });
 
   test('keeps concurrent run owners independent', async () => {

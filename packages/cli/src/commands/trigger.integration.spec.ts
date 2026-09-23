@@ -835,6 +835,121 @@ describe('trigger CLI durable execution', () => {
     }
   }, 60_000);
 
+  /**
+   * Cancel through the shared op from a separate process that does not own the run, the
+   * way the server's API route, chat `/workflow cancel`, Slack, and `manage_run` do.
+   */
+  async function serverSideCancel(
+    fixture: { projectRoot: string; archonHome: string },
+    runId: string
+  ): Promise<{ ok: boolean; kind?: string; pid?: number; reason?: string; message?: string }> {
+    const script = resolve(import.meta.dir, '..', 'utils', 'fixtures', 'cancel-run.ts');
+    const result = await runCli(script, fixture.projectRoot, fixture.archonHome, [runId]);
+    const line = result.stdout.trim().split('\n').at(-1) ?? '';
+    return JSON.parse(line) as {
+      ok: boolean;
+      kind?: string;
+      pid?: number;
+      reason?: string;
+      message?: string;
+    };
+  }
+
+  test('server-side cancel stops a live detached owner before the queued start is admitted', async () => {
+    // Same shape as the abandon spec above: the held node ignores SIGTERM, so a wrong
+    // order (cancelled before the tree is gone) stays visible until the SIGKILL.
+    const fixture = await heldTriggerRun('cancel', "trap '' TERM; ");
+    let pids: number[] = [];
+    try {
+      await fixture.fire();
+      const first = await waitFor(() => {
+        const run = fixture.runs()[0];
+        return run?.status === 'running' ? run : undefined;
+      }, 'trigger execution to start');
+      activeRuns.add(first.id);
+      pids = await recordedPids(fixture.pidFile);
+      const [ownerPid] = pids;
+
+      fixture.writeWorkflow('echo done');
+      await fixture.fire();
+      await waitFor(
+        () => (fixture.requests()[1]?.status === 'queued' ? true : undefined),
+        'second start to queue behind the running one'
+      );
+
+      let watching = true;
+      let releasedWhileOwnerAlive = false;
+      const watch = (async (): Promise<void> => {
+        while (watching) {
+          if (
+            process.platform !== 'win32' &&
+            fixture.runs()[0]?.status === 'cancelled' &&
+            pids.some(processAlive)
+          ) {
+            releasedWhileOwnerAlive = true;
+          }
+          await Bun.sleep(10);
+        }
+      })();
+      const cancel = await serverSideCancel(fixture, first.id);
+      watching = false;
+      await watch;
+      if (!cancel.ok) throw new Error(`cancel refused: ${String(cancel.message)}`);
+      activeRuns.delete(first.id);
+
+      expect(cancel.kind).toBe('stopped');
+      expect(releasedWhileOwnerAlive).toBe(false);
+      expect(fixture.runs()[0]?.status).toBe('cancelled');
+      if (process.platform !== 'win32') {
+        expect(cancel.pid).toBe(ownerPid);
+        for (const pid of pids) expect(processAlive(pid)).toBe(false);
+      }
+
+      await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
+        'trigger',
+        'drain',
+        '--host',
+        fixture.hostId,
+      ]);
+      await waitFor(
+        () => (fixture.runs()[1]?.status === 'completed' ? true : undefined),
+        'queued start to run after the cancel'
+      );
+    } finally {
+      killAll(pids);
+    }
+  }, 60_000);
+
+  test.skipIf(process.platform === 'win32')(
+    'server-side cancel of an owner that is gone refuses and leaves the run holding its slot',
+    async () => {
+      const fixture = await heldTriggerRun('cancel-orphan');
+      let pids: number[] = [];
+      try {
+        await fixture.fire();
+        const first = await waitFor(() => {
+          const run = fixture.runs()[0];
+          return run?.status === 'running' ? run : undefined;
+        }, 'trigger execution to start');
+        pids = await recordedPids(fixture.pidFile);
+        const [ownerPid] = pids;
+        process.kill(ownerPid, 'SIGKILL');
+        await waitFor(() => (processAlive(ownerPid) ? undefined : true), 'owner to die');
+
+        const cancel = await serverSideCancel(fixture, first.id);
+
+        expect(cancel).toMatchObject({ ok: false, reason: 'no_owner_answered' });
+        expect(cancel.message).toContain(
+          `Recorded owner: host ${hostname()}, pid ${String(ownerPid)}.`
+        );
+        expect(fixture.runs()[0]?.status).toBe('running');
+      } finally {
+        killAll(pids);
+      }
+    },
+    60_000
+  );
+
   // An owner killed outright leaves a socket nobody listens on, which is the unreachable
   // case. SIGKILL and real PIDs are POSIX-only.
   test.skipIf(process.platform === 'win32')(
@@ -863,7 +978,7 @@ describe('trigger CLI durable execution', () => {
         ]);
 
         expect(abandon.stdout).toContain(
-          `No live owner answered for this run on this host (${hostname()}).`
+          `No live owner answered for this run on this host (${hostname()}; `
         );
         expect(abandon.stdout).toContain(
           `Recorded owner: host ${hostname()}, pid ${String(ownerPid)}.`

@@ -136,7 +136,7 @@ A drain processes untouched queued requests assigned to one host and admits them
 
 If a request was admitted but its run remains `pending`, for example because its host stopped before starting it, inspection supplies an explicit `trigger execute` retry. The engine admits only one execution claimant. A drain does not retry it automatically, and the run keeps holding its resource until it runs or is abandoned. When a server-hosted start fails this way, the server logs `resource_start.start_failed` with the run ID and the `archon trigger inspect` command to run.
 
-To stop a running run that a `trigger execute` process owns, use `archon workflow cancel <runId>`. Cancel terminates that process and its descendants, then records the run as `cancelled`, which releases the resource. The next drain admits queued work for it. A run the server executes has no detached owner process, so `archon workflow cancel` refuses it and leaves it unchanged.
+To stop a running run that a `trigger execute` process owns, use `archon workflow cancel <runId>`. Cancel terminates that process and its descendants, then records the run as `cancelled`, which releases the resource. The next drain admits queued work for it. A run the server executes has no detached owner process, so `archon workflow cancel` refuses it and leaves it unchanged; cancel it from that server instead (Web UI, API, or chat).
 
 A `trigger execute` process stopped with SIGTERM or SIGINT marks its own running run failed before it exits, which also releases the resource. A crash or SIGKILL cannot do that and leaves ownership ambiguous.
 

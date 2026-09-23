@@ -90,8 +90,23 @@ const mockRespond = mock<
   ) => Promise<ApprovalOperationResult | RejectionOperationResult>
 >(() => Promise.resolve(approvalResult('approval_gate')));
 
+// The shared cancel is proven in workflow-operations; this proves the tool routes to it.
+// Capture the real refusal class before mock.module replaces the module.
+import { CancelRefusedError } from '../operations/workflow-operations';
+const mockCancel = mock((_id: string) =>
+  Promise.resolve({
+    kind: 'stopped' as const,
+    pid: 4242,
+    run: { id: 'r1abcdef-1234', workflow_name: 'archon-assist' },
+    cascadeFailures: 0,
+    blockedParentRunId: null,
+  })
+);
+
 mock.module('../operations/workflow-operations', () => ({
   abandonWorkflow: mockAbandon,
+  cancelWorkflow: mockCancel,
+  CancelRefusedError,
   describeAbandonOwner: mockDescribeAbandonOwner,
   approveWorkflow: mockApprove,
   rejectWorkflow: mockReject,
@@ -415,7 +430,32 @@ describe('manage_run — destructive confirmation gate', () => {
     expect(mockReject).not.toHaveBeenCalled();
   });
 
-  test('cancel with confirm cancels the run using the verified full id', async () => {
+  test('cancel with confirm goes through the shared cancel using the verified full id', async () => {
+    mockFindByPrefix.mockResolvedValue([makeRun()]);
+    mockAbandon.mockClear();
+    const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
+    const out = await tool.handler({ action: 'cancel', runId: 'r1abcdef', confirm: true });
+    expect(out).toContain("Stopped the run's live owner process (pid 4242), then cancelled run");
+    // Operations are called with the resolved full id, not the short prefix.
+    expect(mockCancel).toHaveBeenCalledWith('r1abcdef-1234');
+    expect(mockAbandon).not.toHaveBeenCalled();
+  });
+
+  test('a cancel refused for want of an owner tells the agent to offer abandon', async () => {
+    mockFindByPrefix.mockResolvedValue([makeRun()]);
+    mockCancel.mockRejectedValueOnce(
+      new CancelRefusedError(
+        'no_owner_answered',
+        'No live owner answered. The run was not changed.'
+      )
+    );
+    const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
+    const out = await tool.handler({ action: 'cancel', runId: 'r1abcdef', confirm: true });
+    expect(out).toContain('No live owner answered. The run was not changed.');
+    expect(out).toContain("action='abandon'");
+  });
+
+  test('abandon with confirm relays the owner facts', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun()]);
     mockAbandon.mockResolvedValue({
       run: { id: 'r1abcdef-1234', workflow_name: 'archon-assist' },
@@ -424,11 +464,10 @@ describe('manage_run — destructive confirmation gate', () => {
       owner: noOwnerAnswered,
     });
     const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
-    const out = await tool.handler({ action: 'cancel', runId: 'r1abcdef', confirm: true });
+    const out = await tool.handler({ action: 'abandon', runId: 'r1abcdef', confirm: true });
     expect(out).toContain('Cancelled');
     expect(mockDescribeAbandonOwner).toHaveBeenCalledWith(noOwnerAnswered);
     expect(out).toContain('<owner facts>');
-    // Operations are called with the resolved full id, not the short prefix.
     expect(mockAbandon).toHaveBeenCalledWith('r1abcdef-1234');
   });
 

@@ -830,9 +830,9 @@ When a `nodes:` (DAG) workflow fails, the prior run stays in the database as a c
 
 **Crashed servers / orphaned runs**: Archon does **not** auto-fail `running` rows on server startup — that would kill workflows actively executing in another process (CLI, adapter). If a server crash leaves a row stuck as `running`, it remains visible in the console run list. Transition it to a terminal status explicitly:
 
-- **Web UI**: open a live run and use **Cancel** in the run detail action bar.
+- **Web UI**: open the run and use **Cancel** in the run detail action bar. When no owner answers, Cancel refuses, shows what the run recorded, and offers **Abandon**; use it after verifying the owner is gone.
 - **CLI orphan cleanup**: after verifying the owner is gone, use `archon workflow abandon <run-id>`.
-- **Live detached CLI run**: use `archon workflow cancel <run-id>` to terminate the exact run's host process tree before marking it `cancelled`.
+- **Live detached CLI run**: use `archon workflow cancel <run-id>` (or Cancel on any surface) to terminate the exact run's host process tree before marking it `cancelled`.
 
 Once the row reaches a terminal status, you can resume it explicitly via the paths above. Plain `archon workflow run` never resumes implicitly.
 

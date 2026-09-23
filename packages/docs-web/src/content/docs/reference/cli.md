@@ -709,25 +709,35 @@ Adding `--detach` **inverts** that: the child is re-invoked without `--json`, so
 
 ### `workflow cancel`
 
-Actively stop a running workflow started by the CLI with `--detach`. The command
-contacts the live process that owns that exact run, terminates its host process tree,
-confirms termination, and only then records the run as `cancelled`.
+Stop a running workflow. Every cancel surface (this command, `/workflow cancel` in
+chat, the Web UI's Cancel action, `POST /api/workflows/runs/{runId}/cancel`, the Slack
+Cancel button, and the chat agent's `manage_run` tool) does the same thing, decided by
+who owns the run:
+
+- **The process handling the cancel executes the run** (a run the server started, cancelled
+  from that server): the run is marked `cancelled` and its executor stops at its next
+  status check.
+- **Another live process owns it** (a `--detach` run or a trigger-started run): cancel
+  contacts that process, terminates its host process tree, confirms termination, and
+  only then records the run as `cancelled`.
+- **No owner answers, or the owner cannot be stopped:** cancel fails and leaves the run
+  unchanged. When no owner answers, it prints what the run recorded (host, pid, last
+  activity) and points you at `abandon`. A foreground `archon workflow run` or a run
+  executing in another Archon server answers but cannot be stopped from here; interrupt
+  the foreground command, or cancel the run on the server that executes it.
 
 ```bash
 archon workflow cancel <run-id>
 archon workflow cancel <run-id> --json
 ```
 
-If the detached owner cannot be reached or its process tree cannot be stopped, the
-command fails and leaves the run state unchanged. This is deliberate: a database
-transition cannot prove that host work stopped. After separately verifying that the
-owner process is gone, use `workflow abandon <run-id>` to clean up an orphaned row.
+Refusing is deliberate: `cancelled` releases the run's worktree lock and resource slot,
+and a database transition cannot prove that host work stopped. After verifying that the
+owner process is gone, use `workflow abandon <run-id>`.
 
-`workflow cancel` applies only to a live detached CLI owner. Foreground CLI and
-in-process server runs publish the same liveness endpoint for `workflow wait`, but do
-not expose their process PID or active-stop capability. Foreground runs remain owned
-by their terminal and should be interrupted there; server-owned lifecycle changes
-remain explicit operator actions.
+A `workflow:` sub-run executes inside its root run's process, and the root's row keeps
+the worktree lock and resource slot, so cancelling a sub-run is always the status-check
+cancel. Only a `running` run can be cancelled; abandon a paused or failed run instead.
 
 After termination is confirmed, `cancel` records cancellation through the same run-tree
 operation as `abandon`. Cancelling a parent therefore cancels every non-terminal
@@ -747,9 +757,11 @@ this host:
   abandon can only reach owners on its own host running as its own user. Nothing
   decides the run is dead from its age or pid.
 - **An owner answers but cannot be stopped:** abandon fails with the reason and leaves
-  the run unchanged. This includes a run executing inside a live Archon server, which
-  abandon cannot stop; cancel it on that server instead (the Web UI's Cancel action,
-  `POST /api/workflows/runs/{runId}/cancel`, or `/workflow cancel` in its chat).
+  the run unchanged. This includes a foreground `archon workflow run` (interrupt it in
+  its terminal) and a run executing inside a live Archon server. Cancel a server-executed run
+  from that server (its Web UI Cancel action, `POST /api/workflows/runs/{runId}/cancel`,
+  or `/workflow cancel <run-id>` in its chat): the server executes the run, so it
+  cancels it at the executor's next status check.
 
 ```bash
 archon workflow abandon <run-id>

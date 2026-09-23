@@ -9,7 +9,7 @@ import {
 /*
  * The one path that stops a detached run owner: prove the exact-run owner through its
  * live-owner endpoint, take its termination lease, terminate its process tree, wait.
- * `archon workflow cancel` and every `abandon` surface go through it.
+ * Every cancel and abandon surface goes through it (`cancelWorkflow`, `abandonWorkflow`).
  */
 
 const TERMINATION_GRACE_MS = 5_000;
@@ -25,6 +25,10 @@ export interface DetachedRunStopTarget {
   release(): void;
 }
 
+/**
+ * No termination lease. Callers render the operator message from `reason` and `detail`
+ * (see `cancelWorkflow` and `abandonWorkflow`), so this message only names the facts.
+ */
 export class DetachedRunOwnerUnavailableError extends Error {
   constructor(
     runId: string,
@@ -32,11 +36,7 @@ export class DetachedRunOwnerUnavailableError extends Error {
     /** `undefined` when the request failed before the endpoint could be asked. */
     readonly reason: RunLiveOwnerStopRefusal | undefined
   ) {
-    super(
-      `No live detached CLI owner is reachable for run ${runId}. The run was not changed.` +
-        ` (${detail}) ` +
-        `If you have verified that its process is gone, use 'archon workflow abandon ${runId}' to release its persisted state.`
-    );
+    super(`No live detached owner gave a termination lease for run ${runId} (${detail}).`);
     this.name = 'DetachedRunOwnerUnavailableError';
   }
 }

@@ -276,6 +276,8 @@ import * as userDb from '@archon/core/db/users';
 import {
   abandonWorkflow,
   AbandonOwnerNotStoppedError,
+  cancelWorkflow,
+  CancelRefusedError,
   describeAbandonOwner,
   approveWorkflow,
   rejectWorkflow,
@@ -951,6 +953,9 @@ const cancelWorkflowRunRoute = createRoute({
     },
     400: jsonError('Bad request'),
     404: jsonError('Not found'),
+    409: jsonError(
+      'No live owner answered, or the owner could not be stopped; the run was not changed'
+    ),
     500: jsonError('Server error'),
   },
 });
@@ -3660,26 +3665,38 @@ export function registerApiRoutes(
     }
   });
 
-  // POST /api/workflows/runs/:runId/cancel - Cancel a workflow run
+  // POST /api/workflows/runs/:runId/cancel - Cancel a workflow run through the shared
+  // owner-checked cancel: cooperative for a run this server executes, an owner stop for
+  // one another process owns, and a 409 refusal when no owner answers.
   registerOpenApiRoute(cancelWorkflowRunRoute, async c => {
+    const runId = c.req.param('runId') ?? '';
     try {
-      const runId = c.req.param('runId') ?? '';
       const run = await workflowDb.getWorkflowRun(runId);
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
-      if (run.status !== 'running' && run.status !== 'pending' && run.status !== 'paused') {
-        return apiError(c, 400, `Cannot cancel workflow in '${run.status}' status`);
+      const result = await cancelWorkflow(runId);
+      if (result.kind === 'cooperative') {
+        return c.json({
+          success: true,
+          message: result.cancelled
+            ? `Cancelled workflow: ${run.workflow_name}`
+            : `Workflow ${run.workflow_name} already finished — nothing to cancel.`,
+        });
       }
-      const { cancelled } = await workflowDb.cancelWorkflowRun(runId);
-      return c.json({
-        success: true,
-        message: cancelled
-          ? `Cancelled workflow: ${run.workflow_name}`
-          : `Workflow ${run.workflow_name} already finished — nothing to cancel.`,
-      });
+      let message = `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled workflow: ${run.workflow_name}`;
+      if (result.cascadeFailures > 0) {
+        message += ` — warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running`;
+      }
+      if (result.blockedParentRunId) {
+        message += ` — parent run ${result.blockedParentRunId} was blocked on this sub-run and stays paused; resume it to fail the node cleanly or abandon it too`;
+      }
+      return c.json({ success: true, message });
     } catch (error) {
-      getLog().error({ err: error }, 'cancel_workflow_run_api_failed');
+      if (error instanceof CancelRefusedError) {
+        return apiError(c, error.reason === 'not_running' ? 400 : 409, error.message);
+      }
+      getLog().error({ err: error, runId }, 'cancel_workflow_run_api_failed');
       return apiError(c, 500, 'Failed to cancel workflow run');
     }
   });

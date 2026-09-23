@@ -31,11 +31,13 @@ import type {
 import type { DashboardWorkflowRun } from '../schemas/workflow-run';
 import * as workflowDb from '../db/workflows';
 import * as workflowNodeSessionDb from '../db/workflow-node-sessions';
+import * as isolationDb from '../db/isolation-environments';
 import {
   DetachedRunOwnerUnavailableError,
   requestDetachedRunStop,
   type DetachedRunStopTarget,
 } from '../services/run-owner-stop';
+import { isRunOwnedByThisProcess } from '../services/run-live-owner';
 import { hostname } from 'node:os';
 
 // Lazy logger — NEVER at module scope
@@ -517,10 +519,7 @@ export type AbandonOwnerOutcome =
  * Surfaces show the message as is; it states the reason and what the operator can do.
  */
 export class AbandonOwnerNotStoppedError extends Error {
-  constructor(
-    readonly runId: string,
-    message: string
-  ) {
+  constructor(message: string) {
     super(message);
     this.name = 'AbandonOwnerNotStoppedError';
   }
@@ -534,7 +533,9 @@ export function describeAbandonOwner(outcome: AbandonOwnerOutcome): string[] {
   if (outcome.kind === 'stopped') {
     return [`Stopped the run's live owner process (pid ${String(outcome.pid)}) first.`];
   }
-  const lines = [`No live owner answered for this run on this host (${outcome.thisHost}).`];
+  const lines = [
+    `No live owner answered for this run on this host (${outcome.thisHost}; ${outcome.detail}).`,
+  ];
   const recorded = outcome.recordedOwner;
   lines.push(
     recorded
@@ -631,9 +632,10 @@ function ownerNotStoppedMessage(runId: string, error: DetachedRunOwnerUnavailabl
   switch (error.reason) {
     case 'not_detached':
       return (
-        `Run ${runId} is still executing in a live Archon process that abandon cannot stop, ` +
-        'because it is not a detached CLI run. The run was not changed. ' +
-        'Cancel it from the Archon server that is running it.'
+        `Run ${runId} is executing in another live Archon process that cannot be stopped from here, ` +
+        'because it is not a detached run (a foreground CLI run, or an Archon server). ' +
+        'The run was not changed. Stop it from that process: interrupt the foreground command, ' +
+        'or cancel the run on the server that executes it.'
       );
     case 'unproven':
       return (
@@ -670,13 +672,12 @@ async function stopLiveOwnerForAbandon(run: WorkflowRun): Promise<AbandonOwnerOu
         thisUid: process.getuid?.(),
       };
     }
-    throw new AbandonOwnerNotStoppedError(run.id, ownerNotStoppedMessage(run.id, error));
+    throw new AbandonOwnerNotStoppedError(ownerNotStoppedMessage(run.id, error));
   }
   try {
     await target.stop();
   } catch (error) {
     throw new AbandonOwnerNotStoppedError(
-      run.id,
       `Could not stop the live owner of run ${run.id} (pid ${String(target.pid)}): ` +
         `${(error as Error).message}. The run was not changed.`
     );
@@ -706,13 +707,149 @@ export async function abandonWorkflow(
 }
 
 /**
- * Record `cancelled` for a run whose owner the caller has already stopped through
- * `requestDetachedRunStop`. This is `archon workflow cancel`'s last step.
+ * Why cancel left a run unchanged.
+ *
+ * `not_running`: only a running run has live work to stop.
+ * `no_owner_answered`: nothing answered at the run's live-owner endpoint on this host.
+ *   Cancel never records `cancelled` for a run it cannot prove stopped; abandon is the
+ *   operator's explicit call that the run is dead, so surfaces point there.
+ * `not_stopped`: an owner answered but could not be stopped, or its container could not
+ *   be confirmed.
  */
-export async function cancelStoppedWorkflowRun(runId: string): Promise<AbandonWorkflowResult> {
-  const run = await getRunOrThrow(runId, 'operations.workflow_abandon_lookup_failed');
-  assertAbandonable(run);
-  return recordAbandoned(run);
+export type CancelRefusal = 'not_running' | 'no_owner_answered' | 'not_stopped';
+
+/** Cancel refused; the run is unchanged. The message states why. */
+export class CancelRefusedError extends Error {
+  constructor(
+    readonly reason: CancelRefusal,
+    message: string
+  ) {
+    super(message);
+    this.name = 'CancelRefusedError';
+  }
+}
+
+/**
+ * `cooperative`: the run's executor stops at its next status check. Either this
+ * process executes the run, or the run is a `workflow:` sub-run, which executes
+ * inside its root run's process while the root's row keeps the worktree lock and
+ * resource slot. `cancelled` is false when the run finished first.
+ * `stopped`: another live process owned the run; its process tree was terminated
+ * before the run was recorded `cancelled`.
+ */
+export type CancelWorkflowResult =
+  | { kind: 'cooperative'; run: WorkflowRun; cancelled: boolean }
+  | ({ kind: 'stopped'; pid: number } & Omit<AbandonWorkflowResult, 'cancelled'>);
+
+/**
+ * The container a cancelled run owns, confirmed before its owner is stopped so a run
+ * whose container cannot be accounted for is refused while it is still unchanged.
+ */
+async function confirmedRunContainer(run: WorkflowRun): Promise<string | undefined> {
+  if (run.metadata?.isolation !== 'container') return undefined;
+  const envId = run.metadata.isolation_env_id;
+  if (typeof envId !== 'string' || envId.trim().length === 0) {
+    throw new CancelRefusedError(
+      'not_stopped',
+      `Cannot confirm the isolation container owned by run ${run.id}. ` +
+        'The run was not changed; its container tracking ID is missing.'
+    );
+  }
+  const env = await isolationDb.getById(envId);
+  if (env?.provider !== 'container') {
+    throw new CancelRefusedError(
+      'not_stopped',
+      `Cannot confirm the isolation container owned by run ${run.id}. ` +
+        'The run was not changed; inspect the managed containers before retrying or abandoning it.'
+    );
+  }
+  return envId;
+}
+
+/**
+ * Cancel a running run, the same way on every surface.
+ *
+ * - This process executes it, or it is a sub-run: cooperative cancel (see
+ *   {@link CancelWorkflowResult}).
+ * - Another live process owns it: stop that owner through the shared stop path
+ *   (prove it, terminate its process tree, wait), then record `cancelled`.
+ * - No owner answers, or the owner cannot be stopped: refuse with
+ *   {@link CancelRefusedError} and leave the run unchanged. `cancelled` releases the
+ *   run's worktree lock and resource slot, so it is never recorded on a guess.
+ */
+export async function cancelWorkflow(runId: string): Promise<CancelWorkflowResult> {
+  const run = await getRunOrThrow(runId, 'operations.workflow_cancel_lookup_failed');
+  if (run.status !== 'running') {
+    throw new CancelRefusedError(
+      'not_running',
+      `Cannot cancel run with status '${run.status}'. Only a running run has live work to stop; ` +
+        'abandon a paused or failed run instead.'
+    );
+  }
+
+  if (isRunOwnedByThisProcess(run.id) || run.parent_run_id) {
+    const { cancelled } = await workflowDb.cancelWorkflowRun(run.id);
+    return { kind: 'cooperative', run, cancelled };
+  }
+
+  const containerEnvId = await confirmedRunContainer(run);
+  let target: DetachedRunStopTarget;
+  try {
+    target = await requestDetachedRunStop(run.id);
+  } catch (error) {
+    if (!(error instanceof DetachedRunOwnerUnavailableError)) throw error;
+    if (error.reason === 'unreachable') {
+      const facts = describeAbandonOwner({
+        kind: 'no_owner_answered',
+        detail: error.detail,
+        recordedOwner: readExecutionOwner(run.metadata),
+        lastActivityAt: run.last_activity_at,
+        thisHost: hostname(),
+        thisUid: process.getuid?.(),
+      });
+      throw new CancelRefusedError(
+        'no_owner_answered',
+        [
+          ...facts,
+          `Cancel has nothing to stop, so run ${run.id} was not changed. ` +
+            'If its process is gone, abandon the run to release it.',
+        ].join('\n')
+      );
+    }
+    throw new CancelRefusedError('not_stopped', ownerNotStoppedMessage(run.id, error));
+  }
+  try {
+    await target.stop();
+  } catch (error) {
+    throw new CancelRefusedError(
+      'not_stopped',
+      `Could not stop the live owner of run ${run.id} (pid ${String(target.pid)}): ` +
+        `${(error as Error).message}. The run was not changed.`
+    );
+  }
+
+  if (containerEnvId) {
+    try {
+      const { reclaimContainerEnv } = await import('../services/cleanup-service');
+      await reclaimContainerEnv(containerEnvId);
+    } catch (error) {
+      throw new CancelRefusedError(
+        'not_stopped',
+        'The owner process stopped, but the isolation container could not be confirmed stopped. ' +
+          `Run state was not changed. ${(error as Error).message}`
+      );
+    }
+  }
+
+  const { cancelled, ...recorded } = await recordAbandoned(run);
+  if (!cancelled) {
+    const latest = await workflowDb.getWorkflowRun(run.id);
+    throw new Error(
+      'The owner process stopped, but cancellation did not win the run state transition. ' +
+        `The run status is ${latest?.status ?? 'unknown'}; it was not reported as cancelled.`
+    );
+  }
+  return { kind: 'stopped', pid: target.pid, ...recorded };
 }
 
 async function recordAbandoned(run: WorkflowRun): Promise<AbandonWorkflowResult> {

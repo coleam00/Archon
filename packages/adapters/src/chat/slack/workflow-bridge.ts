@@ -609,30 +609,38 @@ export class SlackWorkflowBridge {
 
     try {
       try {
-        const { owner } = await workflowOperations.abandonWorkflow(runId);
+        const result = await workflowOperations.cancelWorkflow(runId);
         getLog().info({ runId, actorId: maskUserId(actorId) }, 'slack.bridge_cancel_dispatched');
-        // The eventual workflow_cancelled event will repaint the status message. When
-        // no owner answered, the operator also gets the recorded owner facts.
-        if (owner.kind === 'no_owner_answered') {
+        // The eventual workflow_cancelled event repaints the status message.
+        if (result.kind === 'stopped') {
           await this.postCancelNote(
             body,
             runId,
-            workflowOperations.describeAbandonOwner(owner).join('\n')
+            `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled the run.`
+          );
+        } else if (!result.cancelled) {
+          await this.postCancelNote(
+            body,
+            runId,
+            `:information_source: Run \`${runId}\` already finished — nothing to cancel.`
           );
         }
         return;
       } catch (error) {
         const err = error as Error;
         // Full error stays in logs; the user-facing message is intentionally
-        // generic so internal DB / library errors don't leak into a channel. A live
-        // owner that could not be stopped is the exception: that message is written
-        // for the operator and says why the run was left unchanged.
+        // generic so internal DB / library errors don't leak into a channel. A refusal
+        // is the exception: its message is written for the operator and says why the
+        // run was left unchanged.
         getLog().warn({ err, runId }, 'slack.bridge_cancel_failed');
         await this.postCancelNote(
           body,
           runId,
-          error instanceof workflowOperations.AbandonOwnerNotStoppedError
-            ? `:warning: ${error.message}`
+          error instanceof workflowOperations.CancelRefusedError
+            ? `:warning: ${error.message}` +
+                (error.reason === 'no_owner_answered'
+                  ? `\nAbandon it: \`/archon-workflow abandon ${runId}\``
+                  : '')
             : this.runs.has(runId)
               ? `:warning: Could not cancel run \`${runId}\`. Check the server logs or try again.`
               : `:information_source: Run \`${runId}\` already finished — nothing to cancel.`
