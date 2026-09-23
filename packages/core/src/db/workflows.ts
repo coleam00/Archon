@@ -1,7 +1,15 @@
 /**
  * Database operations for workflow runs
  */
+import type { ResourceStartDisposition } from '@archon/workflows/schemas/resource-start';
+
 import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
+import {
+  addResourceSlotHolder,
+  liveResourceSlotHolders,
+  lockResourceSlot,
+  type TransactionQuery,
+} from './resource-slots';
 import { insertWorkflowEvent, listActiveWorkflowNodeIds } from './workflow-events';
 import { insertTerminalWorkflowEvent } from './workflow-terminal-event';
 import { normalizeWorkflowRun } from './workflow-run-normalization';
@@ -39,6 +47,20 @@ import type {
   NodeStateEventInput,
 } from '@archon/workflows/store';
 import { FAN_OUT_CANCEL_REASONS, waitCompletionEvents } from '@archon/workflows/store';
+
+export interface WorkflowRunInsert {
+  id?: string;
+  workflow_name: string;
+  conversation_id: string;
+  codebase_id?: string;
+  user_message: string;
+  metadata?: Record<string, unknown>;
+  working_path?: string;
+  parent_conversation_id?: string;
+  user_id?: string;
+  parent_run_id?: string;
+  adopted_from_run_id?: string;
+}
 
 /** Best-effort ROLLBACK — log but swallow errors since we're already in an error path. */
 function rollback(): Promise<void> {
@@ -191,11 +213,13 @@ function replaceWaitMetadata(paramIndex: number): string {
  * left with no audit trail, which the fast-path guard would then wrongly block
  * from retrying. `workflow_run_id` is supplied by the CAS function.
  */
-export interface GateResolutionEvent {
-  event_type: WorkflowEventType;
-  step_name: string;
-  data: Record<string, unknown>;
-}
+export type GateResolutionEvent =
+  | Omit<NodeStateEventInput, 'workflow_run_id'>
+  | {
+      event_type: Exclude<WorkflowEventType, NodeStateEventInput['event_type']>;
+      step_name: string;
+      data: Record<string, unknown>;
+    };
 
 /**
  * Atomically resolve a paused approval gate (compare-and-swap) and record its
@@ -335,26 +359,22 @@ export class WorkflowNotResumableError extends Error {
   }
 }
 
-export async function createWorkflowRun(data: {
-  /**
-   * Caller-reserved row id. Supplied when something had to exist at this run's own
-   * paths before the row could be written — today that is the workflow-source capture,
-   * which is frozen (and, for a container, bind-mounted) before the workflow is even
-   * selected. Omitted, the database generates one as it always has.
-   */
-  id?: string;
-  workflow_name: string;
-  conversation_id: string;
-  codebase_id?: string;
-  user_message: string;
-  metadata?: Record<string, unknown>;
-  working_path?: string;
-  parent_conversation_id?: string;
-  user_id?: string;
-  parent_run_id?: string;
-  /** Between-run continuation (#2747) — written once at creation, never on resume. */
-  adopted_from_run_id?: string;
-}): Promise<WorkflowRun> {
+export class WorkflowResourceBusyError extends Error {
+  constructor(
+    public readonly runId: string,
+    public readonly blocker: Extract<ResourceStartDisposition, { status: 'queued' }>['blocker']
+  ) {
+    super(
+      `Workflow run '${runId}' cannot resume while ${blocker.kind === 'run' ? 'resource owner' : 'queued request'} '${blocker.id}' has priority.`
+    );
+    this.name = 'WorkflowResourceBusyError';
+  }
+}
+
+export async function insertWorkflowRun(
+  query: TransactionQuery,
+  data: WorkflowRunInsert
+): Promise<WorkflowRun> {
   // Serialize metadata with validation to catch circular references early
   let metadataJson: string;
   try {
@@ -386,7 +406,7 @@ export async function createWorkflowRun(data: {
   }
 
   try {
-    const result = await pool.query<WorkflowRun>(
+    const result = await query<WorkflowRun>(
       data.id === undefined
         ? `INSERT INTO remote_agent_workflow_runs
        (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id)
@@ -418,10 +438,45 @@ export async function createWorkflowRun(data: {
     }
     return normalizeWorkflowRun(row);
   } catch (error) {
+    throw new Error(`Failed to create workflow run: ${(error as Error).message}`);
+  }
+}
+
+export async function createWorkflowRun(data: WorkflowRunInsert): Promise<WorkflowRun> {
+  try {
+    return await insertWorkflowRun((sql, params) => pool.query(sql, params), data);
+  } catch (error) {
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_create_failed');
-    throw new Error(`Failed to create workflow run: ${err.message}`);
+    throw err;
   }
+}
+
+export async function claimPendingWorkflowRun(id: string): Promise<WorkflowRun | null> {
+  return getDatabase().withTransaction(async query => {
+    const claimed = await query(
+      `UPDATE remote_agent_workflow_runs
+          SET status = 'running', last_activity_at = ${getDialect().now()}
+        WHERE id = $1 AND status = 'pending'
+          AND (
+            NOT EXISTS (SELECT 1 FROM remote_agent_resource_start_requests q WHERE q.id = $1)
+            OR EXISTS (
+              SELECT 1
+                FROM remote_agent_resource_start_requests q
+                JOIN remote_agent_resource_slot_holders h
+                  ON h.resource_key = q.resource_key AND h.holder_kind = 'run' AND h.holder_id = CAST(q.id AS TEXT)
+               WHERE q.id = $1 AND q.status = 'admitted'
+            )
+          )`,
+      [id]
+    );
+    if (claimed.rowCount !== 1) return null;
+    const selected = await query<WorkflowRun>(
+      'SELECT * FROM remote_agent_workflow_runs WHERE id = $1',
+      [id]
+    );
+    return selected.rows[0] ? normalizeWorkflowRun(selected.rows[0]) : null;
+  });
 }
 
 export async function getWorkflowRun(id: string): Promise<WorkflowRun | null> {
@@ -804,6 +859,13 @@ export async function findResumableRun(
        WHERE workflow_name = $1
          AND working_path = $2
          AND ${resumableStatusClause(dialect, 3)}
+         AND (
+           status <> 'running'
+           OR NOT EXISTS (
+             SELECT 1 FROM remote_agent_resource_start_requests q
+              WHERE q.id = remote_agent_workflow_runs.id AND q.status = 'admitted'
+           )
+         )
        ORDER BY started_at DESC
        LIMIT 1`,
       [workflowName, workingPath, ORPHAN_RESUME_STALE_DAYS]
@@ -907,8 +969,22 @@ export async function resumeWorkflowRun(
     // Read-then-UPDATE rather than UPDATE…RETURNING because the SQLite adapter
     // rejects RETURNING on UPDATE and points at exactly this pattern.
     updateResult = await getDatabase().withTransaction(async query => {
-      const priorRows = await query<{ status: string; metadata: unknown }>(
-        `SELECT status, metadata FROM remote_agent_workflow_runs WHERE id = $1${rowLockClause()}`,
+      // Acquire the SQLite writer lock before taking a snapshot. Without this,
+      // another process can commit between the SELECT and our first UPDATE and
+      // make the deferred transaction fail its read-to-write upgrade.
+      if (getDatabaseType() === 'sqlite') {
+        await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [id]);
+      }
+      const priorRows = await query<{
+        status: string;
+        metadata: unknown;
+        resource_key?: string | null;
+      }>(
+        `SELECT w.status, w.metadata, q.resource_key
+           FROM remote_agent_workflow_runs w
+           LEFT JOIN remote_agent_resource_start_requests q
+             ON q.id = w.id AND q.status = 'admitted'
+          WHERE w.id = $1${getDatabaseType() === 'postgresql' ? ' FOR UPDATE OF w' : ''}`,
         [id]
       );
       const prior = priorRows.rows[0];
@@ -928,6 +1004,29 @@ export async function resumeWorkflowRun(
               priorMetadata.scheduled_resume.resumeAt === cursor.resumeAt;
         if (!cursorMatches) return { rowCount: 0 };
       }
+      const resourceKey = prior?.resource_key ?? undefined;
+      if (resourceKey !== undefined && (prior?.status === 'failed' || prior?.status === 'paused')) {
+        const { capacity } = await lockResourceSlot(query, resourceKey);
+        const others = (await liveResourceSlotHolders(query, resourceKey)).filter(
+          holder => holder.id !== id
+        );
+        if (others.length >= capacity && others[0]) {
+          throw new WorkflowResourceBusyError(id, { kind: 'run', id: others[0].id });
+        }
+        // A failed run released its slot and must not bypass promised queued work.
+        // A paused run still holds it: refusing that continuation would deadlock the queue.
+        if (prior.status === 'failed') {
+          const queued = await query<{ id: string }>(
+            `SELECT id FROM remote_agent_resource_start_requests
+              WHERE resource_key = $1 AND status = 'queued'
+              ORDER BY queue_position LIMIT 1`,
+            [resourceKey]
+          );
+          const next = queued.rows[0];
+          if (next) throw new WorkflowResourceBusyError(id, { kind: 'request', id: next.id });
+        }
+        await addResourceSlotHolder(query, resourceKey, { kind: 'run', id });
+      }
       const clearedError = readMetadataError(prior?.metadata);
       const scheduled = prior?.status === 'failed' ? readScheduledResume(prior.metadata) : null;
       const triggeredAt = scheduled?.triggeredAt === undefined ? new Date().toISOString() : null;
@@ -946,7 +1045,15 @@ export async function resumeWorkflowRun(
              started_at = ${dialect.now()},
              last_activity_at = ${dialect.now()},
              metadata = ${dialect.jsonMerge('metadata', 3)}
-         WHERE id = $1 AND ${resumableStatusClause(dialect, 2)}`,
+         WHERE id = $1
+           AND ${resumableStatusClause(dialect, 2)}
+           AND (
+             NOT EXISTS (
+               SELECT 1 FROM remote_agent_resource_start_requests q
+                WHERE q.id = $1 AND q.status = 'admitted'
+             )
+             OR status IN ('failed', 'paused')
+           )`,
         [id, ORPHAN_RESUME_STALE_DAYS, JSON.stringify(metadataPatch)]
       );
 
@@ -971,6 +1078,7 @@ export async function resumeWorkflowRun(
     });
   } catch (error) {
     const err = error as Error;
+    if (error instanceof WorkflowResourceBusyError) throw error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_resume_failed');
     throw new Error(`Failed to resume workflow run: ${err.message}`);
   }

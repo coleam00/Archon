@@ -196,8 +196,9 @@ describe('workflow run config argument', () => {
   it('rejects --config outside workflow run before dispatch', () => {
     // Pure pre-dispatch argv guard — no I/O, so asserted in-process.
     const message = rejectConfigOutsideRun('chat', undefined, './does-not-exist.yaml');
-    expect(message).toBeDefined();
-    expect(message).toContain('--config can only be used with workflow run');
+    expect(message).toBe(
+      'Error: --config can only be used with workflow run, trigger fire, or trigger schedule.'
+    );
   });
 
   it('resolves a relative config path from the requested subdirectory cwd', async () => {
@@ -370,8 +371,9 @@ describe('workflow run config argument', () => {
       // Pure pre-dispatch argv guard — no I/O, so asserted in-process instead
       // of through a full interpreter startup.
       const message = rejectConfigOutsideRun(args[0], args[1], './config.minimax.yaml');
-      expect(message).toBeDefined();
-      expect(message).toContain('--config can only be used with workflow run');
+      expect(message).toBe(
+        'Error: --config can only be used with workflow run, trigger fire, or trigger schedule.'
+      );
     });
   }
 });

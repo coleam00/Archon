@@ -133,6 +133,82 @@ describe('substituteWorkflowVariables', () => {
     ).toThrow(/did not adopt a prior run/);
   });
 
+  it("replaces $TYPED_ARTIFACTS_FILE with this invocation's listing", () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Read $TYPED_ARTIFACTS_FILE',
+      'run-1',
+      'msg',
+      '/tmp/artifacts',
+      'main',
+      'docs/',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { typedArtifactsFile: '/tmp/artifacts/.archon/typed-artifacts/list.json' }
+    );
+    expect(prompt).toBe('Read /tmp/artifacts/.archon/typed-artifacts/list.json');
+  });
+
+  it('replaces $TYPED_ARTIFACTS_FILE even under shellSafe (engine-controlled)', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'cat "$TYPED_ARTIFACTS_FILE"',
+      'run-1',
+      'msg',
+      '/tmp/artifacts',
+      'main',
+      'docs/',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { shellSafe: true, typedArtifactsFile: '/listings/l.json' }
+    );
+    expect(prompt).toBe('cat "/listings/l.json"');
+  });
+
+  it('throws when $TYPED_ARTIFACTS_FILE is referenced without a materialized listing', () => {
+    expect(() =>
+      substituteWorkflowVariables(
+        'Read $TYPED_ARTIFACTS_FILE',
+        'run-1',
+        'msg',
+        '/tmp/artifacts',
+        'main',
+        'docs/'
+      )
+    ).toThrow(/has no typed-artifact listing/);
+  });
+
+  it('treats an explicit empty listing as a caller stating it has none (dry run)', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Read [$TYPED_ARTIFACTS_FILE]',
+      'run-1',
+      'msg',
+      '/tmp/artifacts',
+      'main',
+      'docs/',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { typedArtifactsFile: '' }
+    );
+    expect(prompt).toBe('Read []');
+  });
+
+  it('leaves the INPUTS_ variable of an input named typed_artifacts_file alone', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Use $INPUTS_TYPED_ARTIFACTS_FILE',
+      'run-1',
+      'msg',
+      '/tmp/artifacts',
+      'main',
+      'docs/'
+    );
+    expect(prompt).toBe('Use $INPUTS_TYPED_ARTIFACTS_FILE');
+  });
+
   it('throws when $STATE_DIR is referenced but no state dir was resolved', () => {
     expect(() =>
       substituteWorkflowVariables(

@@ -1,3 +1,5 @@
+import { serializeNodeStateRecord, type SerializedNodeEvent } from './node-record-serialization';
+import type { NodeExecutionMetadata, NodeExecutionRecord } from './schemas/node-execution';
 /**
  * IWorkflowStore - trait interface for workflow database operations.
  *
@@ -42,6 +44,8 @@ export interface PersistedNodeOutput {
 }
 
 export interface DagResumeSnapshot {
+  /** Latest unfinished invocation, keyed by canonical path and enclosing loop lineage. */
+  unfinishedInvocations?: Map<string, NodeExecutionMetadata>;
   completedNodeOutputs: Map<string, PersistedNodeOutput>;
   /** First durable ordered snapshot for each instance-qualified composed fan-out scope. */
   fanOutSnapshots: Map<string, readonly FanOutInstanceSnapshot[]>;
@@ -54,6 +58,7 @@ export interface DagResumeSnapshot {
 
 /** Durable wait outcome committed atomically with consumption of its active cursor. */
 export interface WorkflowWaitCompletion {
+  execution?: NodeExecutionRecord;
   stepName: string;
   result: WorkflowWaitResult;
 }
@@ -75,6 +80,7 @@ export interface WorkflowNodeSessionKey {
 
 export const NODE_LIFECYCLE_EVENT_TYPES = [
   'node_started',
+  'node_suspended',
   'node_completed',
   'node_failed',
   'node_skipped',
@@ -188,7 +194,7 @@ export interface WorkflowEventInput<EventType extends WorkflowEventType = Workfl
   data?: Record<string, unknown>;
 }
 
-export type NodeStateEventInput = WorkflowEventInput<NodeStateEventType>;
+export type NodeStateEventInput = SerializedNodeEvent;
 export type ObservabilityEventInput = WorkflowEventInput<
   Exclude<WorkflowEventType, NodeStateEventType>
 >;
@@ -212,17 +218,20 @@ export function waitCompletionEvents(
       step_name: stepName,
       data: result,
     },
-    node: {
-      workflow_run_id: workflowRunId,
-      event_type: 'node_completed',
-      step_name: stepName,
-      data: {
-        type: 'wait',
-        duration_ms: result.waited_ms,
-        node_output: JSON.stringify(result),
-        structured_output: result,
-      },
-    },
+    node:
+      completion.execution !== undefined
+        ? serializeNodeStateRecord(completion.execution)
+        : {
+            workflow_run_id: workflowRunId,
+            event_type: 'node_completed',
+            step_name: stepName,
+            data: {
+              type: 'wait',
+              duration_ms: result.waited_ms,
+              node_output: JSON.stringify(result),
+              structured_output: result,
+            },
+          },
   };
 }
 
@@ -300,6 +309,8 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
      */
     adopted_from_run_id?: string;
   }): Promise<WorkflowRun>;
+  /** Fresh execution must win this pending-to-running CAS before doing any work. */
+  claimPendingWorkflowRun(id: string): Promise<WorkflowRun | null>;
   getWorkflowRun(id: string): Promise<WorkflowRun | null>;
   /**
    * Find the workflow run currently holding the lock on `workingPath`.

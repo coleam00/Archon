@@ -416,7 +416,7 @@ Returns `{ commands: [{ name, source: "bundled" | "project" }] }`.
 Query parameters include status filters, date ranges, and pagination. Used by the Command Center UI.
 
 Each run includes `active_nodes`, ordered by unresolved `node_started` event order. Completion,
-failure, and both skip lifecycle events remove a node; a retrying start adds it again. Concurrent
+failure, and both skip lifecycle events remove a node; `node_suspended` keeps it active; a retrying start adds it again. Concurrent
 nodes remain separate entries. The compatibility fields `current_step_name` and
 `current_step_status` are populated only when exactly one node is active, and are `null` for zero
 or multiple active nodes. `total_steps` is `null`; observed lifecycle events do not define the

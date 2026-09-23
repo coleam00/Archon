@@ -83,7 +83,9 @@ import { WorkflowEventBridge } from './adapters/web/workflow-bridge';
 import { DashboardEventPoller } from './adapters/web/dashboard-event-poller';
 import { PgNotifyListener } from './adapters/web/pg-notify-listener';
 import { registerApiRoutes } from './routes/api';
-import { registerGithubWebhookRoute } from './routes/webhooks';
+import { registerGithubWebhookRoute, registerWebhookSourceRoutes } from './routes/webhooks';
+import { loadWebhookSourcePlugins } from './services/webhook-source-plugins';
+import { createServerResourceStartHost } from './services/resource-start-hosting';
 import {
   startWorkflowContinuationScheduler,
   stopWorkflowContinuationScheduler,
@@ -470,7 +472,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         ? async (userId: string): Promise<string | undefined> =>
             (await getDecryptedAccessToken(userId)) ?? undefined
         : undefined;
-      github = new GitHubAdapter(auth, webhookSecret, lockManager, botMention, { getUserToken });
+      github = new GitHubAdapter(auth, webhookSecret, lockManager, botMention, {
+        getUserToken,
+      });
       await github.start();
       activePlatforms.push('GitHub (App)');
       getLog().info(
@@ -693,6 +697,19 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   const app = new OpenAPIHono({ defaultHook: validationErrorHook });
   const port = opts.port ?? (await getPort());
 
+  const webhookSourcesConfigPath = process.env.ARCHON_WEBHOOK_SOURCES;
+  const webhookSources = webhookSourcesConfigPath
+    ? await loadWebhookSourcePlugins(webhookSourcesConfigPath)
+    : undefined;
+  // Explicit only: bindings choose their execution host, so the server never guesses one.
+  const resourceStartHostId = process.env.ARCHON_TRIGGER_HOST?.trim();
+  const resourceStartHost = resourceStartHostId
+    ? createServerResourceStartHost(resourceStartHostId)
+    : undefined;
+  const requestResourceStartDrain = resourceStartHost
+    ? (): void => void resourceStartHost.requestDrain()
+    : undefined;
+
   // Global error handler for unhandled exceptions
   app.onError((err, c) => {
     getLog().error({ err, path: c.req.path, method: c.req.method }, 'unhandled_request_error');
@@ -743,6 +760,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   if (github) {
     registerGithubWebhookRoute(app, github);
     getLog().info('github_webhook_registered');
+  }
+  if (webhookSources) {
+    registerWebhookSourceRoutes(app, webhookSources, requestResourceStartDrain);
+    getLog().info('webhook_sources_registered');
   }
 
   // Internal endpoint: git credential helper.
@@ -1005,7 +1026,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       );
     }
     return workflowResumeTargetForConversation(conversation, workflowPlatforms);
-  });
+  }, requestResourceStartDrain);
+  if (resourceStartHostId)
+    getLog().info({ hostId: resourceStartHostId }, 'resource_start_host_enabled');
 
   // Graceful shutdown
   const shutdown = (): void => {

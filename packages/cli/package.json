@@ -22,8 +22,9 @@
     "@archon/server": "workspace:*",
     "@archon/workflows": "workspace:*",
     "@clack/prompts": "^1.0.0",
-    "dotenv": "^17.2.3",
-    "@archon/forge": "workspace:*"
+    "@archon/forge": "workspace:*",
+    "@hono/zod-openapi": "^1.4.0",
+    "dotenv": "^17.2.3"
   },
   "devDependencies": {
     "@types/node": "^22.0.0"
@@ -96,6 +97,12 @@
     ],
     [
       "src/commands/forge.test.ts"
+    ],
+    [
+      "src/triggers/native-schedule.test.ts"
+    ],
+    [
+      "src/commands/trigger.integration.spec.ts"
     ]
   ]
 }

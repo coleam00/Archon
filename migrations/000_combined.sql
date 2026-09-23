@@ -521,6 +521,66 @@ CREATE TABLE IF NOT EXISTS remote_agent_schema_version (
   applied_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS remote_agent_start_receipts (
+  id UUID PRIMARY KEY,
+  source_instance_id TEXT NOT NULL,
+  delivery_id TEXT,
+  content_digest TEXT NOT NULL,
+  received_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  occurred_at TIMESTAMP WITH TIME ZONE,
+  source_actor TEXT,
+  outcome VARCHAR(20) NOT NULL CHECK (outcome IN ('matched', 'unmatched', 'unsupported', 'malformed')),
+  reason TEXT,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  UNIQUE(source_instance_id, delivery_id)
+);
+
+CREATE TABLE IF NOT EXISTS remote_agent_start_receipt_bindings (
+  receipt_id UUID NOT NULL REFERENCES remote_agent_start_receipts(id) ON DELETE CASCADE,
+  binding_id TEXT NOT NULL,
+  binding_revision TEXT,
+  host_id TEXT,
+  intent TEXT,
+  preparation_status VARCHAR(20) NOT NULL CHECK (preparation_status IN ('pending', 'preparing', 'failed', 'rejected', 'unmatched', 'complete')),
+  preparation_owner TEXT,
+  preparation_error TEXT,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (receipt_id, binding_id)
+);
+
+CREATE TABLE IF NOT EXISTS remote_agent_resource_slots (
+  resource_key TEXT PRIMARY KEY,
+  capacity INTEGER NOT NULL DEFAULT 1 CHECK (capacity >= 1),
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS remote_agent_resource_slot_holders (
+  resource_key TEXT NOT NULL REFERENCES remote_agent_resource_slots(resource_key),
+  holder_kind VARCHAR(10) NOT NULL CHECK (holder_kind IN ('run')),
+  holder_id TEXT NOT NULL,
+  acquired_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (resource_key, holder_kind, holder_id)
+);
+
+CREATE TABLE IF NOT EXISTS remote_agent_resource_start_requests (
+  id UUID PRIMARY KEY,
+  queue_position BIGSERIAL NOT NULL UNIQUE,
+  resource_key TEXT NOT NULL REFERENCES remote_agent_resource_slots(resource_key),
+  host_id TEXT NOT NULL,
+  overlap_policy VARCHAR(10) NOT NULL CHECK (overlap_policy IN ('skip', 'queue')),
+  status VARCHAR(12) NOT NULL CHECK (status IN ('queued', 'admitted', 'skipped', 'withdrawn')),
+  blocker_run_id UUID,
+  blocker_kind VARCHAR(10) CHECK (blocker_kind IN ('run', 'request')),
+  launch TEXT NOT NULL,
+  receipt_id UUID,
+  binding_id TEXT,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  admitted_at TIMESTAMP WITH TIME ZONE,
+  FOREIGN KEY (receipt_id, binding_id) REFERENCES remote_agent_start_receipt_bindings(receipt_id, binding_id) ON DELETE SET NULL
+);
+
+
 COMMENT ON TABLE remote_agent_schema_version IS
   'Diagnostic schema vintage: the Archon build that created this database and the one that last applied schema to it.';
 
@@ -690,6 +750,13 @@ CREATE INDEX IF NOT EXISTS idx_workflow_runs_adopted_from
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_last_activity
   ON remote_agent_workflow_runs(last_activity_at)
   WHERE status = 'running';
+
+CREATE INDEX IF NOT EXISTS idx_resource_start_queue
+  ON remote_agent_resource_start_requests(resource_key, status, queue_position);
+CREATE INDEX IF NOT EXISTS idx_resource_start_host_queue
+  ON remote_agent_resource_start_requests(host_id, status, resource_key, queue_position);
+CREATE INDEX IF NOT EXISTS idx_start_binding_preparation
+  ON remote_agent_start_receipt_bindings(host_id, preparation_status, created_at);
 
 -- Workflow events
 CREATE INDEX IF NOT EXISTS idx_workflow_events_run_id

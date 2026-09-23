@@ -22,20 +22,36 @@ test('opportunistic discovery failures do not disable a healthy plugin or hide s
       { stdout: 'pipe', stderr: 'pipe' }
     );
     if (built.exitCode !== 0) throw new Error(built.stderr.toString());
-    const dirs = [];
-    for (const name of ['good', 'invalid', 'failed', 'incompatible', 'mismatch', 'timeout']) {
+    const fixtureDir = async (name: string): Promise<string> => {
       const dir = join(root, name);
       await mkdir(dir);
-      dirs.push(dir);
       await link(
         executable,
         join(dir, `archon-forge-${name}${process.platform === 'win32' ? '.exe' : ''}`)
       );
+      return dir;
+    };
+    const dirs = [];
+    for (const name of ['good', 'invalid', 'failed', 'incompatible', 'mismatch']) {
+      dirs.push(await fixtureDir(name));
     }
+    // One timeout budget covers every candidate in a discoverPlugins() call, so the
+    // hung fixture gets its own short-budget call; the others keep the default
+    // budget and cannot be misread as timed out on a loaded machine.
+    const hung = await discoverPlugins({
+      config: { pluginDirs: [await fixtureDir('timeout')], scanPath: false },
+      includeDefaultDir: false,
+      timeoutMs: 500,
+    });
+    expect(hung.plugins).toHaveLength(0);
+    expect(hung.unavailable.map(error => error.message)).toEqual([
+      'plugin-dir:timeout: metadata handshake failed',
+    ]);
     const config = { pluginDirs: dirs, scanPath: false };
-    const found = await discoverPlugins({ config, includeDefaultDir: false, timeoutMs: 1000 });
+    const found = await discoverPlugins({ config, includeDefaultDir: false });
     expect(found.byHost.has('good.example')).toBe(true);
-    expect(found.unavailable).toHaveLength(5);
+    expect(found.unavailable).toHaveLength(4);
+    expect(found.plugins).toHaveLength(1);
     expect(found.plugins[0].source).toBe('plugin-dir:good');
     const selected = await dispatchForge(
       { operationId: 'valid', op: 'resolve', remote: 'https://good.example/a/b' },
@@ -51,7 +67,6 @@ test('opportunistic discovery failures do not disable a healthy plugin or hide s
       discoverPlugins({
         config: { ...config, hosts: { 'selected.example': 'invalid' } },
         includeDefaultDir: false,
-        timeoutMs: 1000,
       })
     ).rejects.toThrow('metadata is not JSON');
     await expect(

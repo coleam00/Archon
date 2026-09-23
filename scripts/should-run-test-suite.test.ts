@@ -3,11 +3,42 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { changedFilesBetween, shouldRunTestSuite } from './should-run-test-suite';
+import {
+  changedFilesBetween,
+  diffRange,
+  shouldRunTestSuite,
+  type EventPayload,
+} from './should-run-test-suite';
 
 const EMPTY_GIT_SHA = '0000000000000000000000000000000000000000';
+const SCRIPT = resolve(import.meta.dir, 'should-run-test-suite.ts');
+
+/** Runs the script the way the workflow does: GitHub names the event and hands over its payload. */
+function runDecision(
+  trackTempRoot: (root: string) => string,
+  eventName: string,
+  payload: EventPayload,
+  cwd = process.cwd()
+): { exitCode: number; stdout: string; stderr: string } {
+  const eventDir = trackTempRoot(mkdtempSync(join(tmpdir(), 'run-suite-event-')));
+  const eventPath = join(eventDir, 'event.json');
+  writeFileSync(eventPath, JSON.stringify(payload));
+  const result = Bun.spawnSync(['bun', SCRIPT], {
+    cwd,
+    env: { ...process.env, GITHUB_EVENT_NAME: eventName, GITHUB_EVENT_PATH: eventPath },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  return {
+    exitCode: result.exitCode,
+    stdout: result.stdout.toString().trim(),
+    stderr: result.stderr.toString(),
+  };
+}
 
 describe('test-suite change decision', () => {
+  const trackTempRoot = trackTempRoots();
+
   test.each(['push', 'pull_request'])('%s skips Markdown-only changes', () => {
     expect(shouldRunTestSuite(['README.md', 'packages/core/notes.md'])).toBe(false);
   });
@@ -75,15 +106,33 @@ describe('test-suite change decision', () => {
     for (const file of imported) expect(shouldRunTestSuite([file])).toBe(true);
   });
 
-  test('runs for a push that creates a branch', () => {
-    const script = resolve(import.meta.dir, 'should-run-test-suite.ts');
-    const result = Bun.spawnSync(['bun', script, 'push', EMPTY_GIT_SHA, 'unavailable-head'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+  test('a push that creates a branch has nothing to compare, so the suite runs', () => {
+    expect(diffRange('push', { before: EMPTY_GIT_SHA, after: 'unavailable-head' })).toBeNull();
+    expect(diffRange('workflow_dispatch', {})).toBeNull();
+  });
 
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout.toString().trim()).toBe('true');
+  test('a push is judged on what it added', () => {
+    expect(diffRange('push', { before: 'previous-tip', after: 'new-tip' })).toEqual({
+      base: 'previous-tip',
+      head: 'new-tip',
+    });
+  });
+
+  test('a pull request is judged on its whole diff, never on the previous push', () => {
+    // A `synchronize` payload carries both. `before` is the previous push's head.
+    const synchronize: EventPayload = {
+      before: 'previous-push-head',
+      after: 'pr-head',
+      pull_request: { base: { sha: 'pr-base' }, head: { sha: 'pr-head' } },
+    };
+    expect(diffRange('pull_request', synchronize)).toEqual({ base: 'pr-base', head: 'pr-head' });
+  });
+
+  test('a payload missing the commits it needs is fatal rather than a skip', () => {
+    expect(() => diffRange('pull_request', { before: 'a', after: 'b' })).toThrow(
+      'pull_request.base.sha'
+    );
+    expect(() => diffRange('push', {})).toThrow('before');
   });
 
   /**
@@ -91,28 +140,20 @@ describe('test-suite change decision', () => {
    * an empty stdout here is read as "skip" by every downstream gate.
    */
   test('an unreadable diff resolves to running the suite, with the cause on stderr', () => {
-    const script = resolve(import.meta.dir, 'should-run-test-suite.ts');
     const unreachable = '1'.repeat(40);
-    const result = Bun.spawnSync(['bun', script, 'push', unreachable, 'HEAD'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+    const result = runDecision(trackTempRoot, 'push', { before: unreachable, after: 'HEAD' });
 
     expect(result.exitCode).toBe(0);
-    expect(result.stdout.toString().trim()).toBe('true');
-    expect(result.stderr.toString()).toContain(`Could not compare ${unreachable}..HEAD`);
+    expect(result.stdout).toBe('true');
+    expect(result.stderr).toContain(`Could not compare ${unreachable}..HEAD`);
   });
 
-  test('a bad argument stays fatal, so the step cannot publish an empty decision', () => {
-    const script = resolve(import.meta.dir, 'should-run-test-suite.ts');
-    const result = Bun.spawnSync(['bun', script, 'not-a-github-event', 'base', 'head'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+  test('a bad event stays fatal, so the step cannot publish an empty decision', () => {
+    const result = runDecision(trackTempRoot, 'not-a-github-event', {});
 
     expect(result.exitCode).not.toBe(0);
-    expect(result.stdout.toString().trim()).toBe('');
-    expect(result.stderr.toString()).toContain('Unsupported GitHub event: not-a-github-event');
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('Unsupported GitHub event: not-a-github-event');
   });
 
   test('the workflow delegates both automatic routes to the complete-diff decision', () => {
@@ -128,26 +169,19 @@ describe('test-suite change decision', () => {
     expect(workflow).toContain('  push:\n');
     expect(workflow).toContain('  pull_request:\n');
     expect(workflow).not.toContain('\n    paths:');
-    expect(changesJob).toContain('EVENT_NAME: ${{ github.event_name }}');
-    expect(changesJob).toContain(
-      'BASE_SHA: ${{ github.event.before || github.event.pull_request.base.sha }}'
-    );
-    expect(changesJob).toContain(
-      'HEAD_SHA: ${{ github.event.after || github.event.pull_request.head.sha }}'
-    );
     expect(changesJob).toContain('fetch-depth: 0');
     expect(changesJob).toContain('uses: oven-sh/setup-bun@v2');
+    // The script picks the commits from the event payload (`diffRange`, tested above). A
+    // workflow expression choosing them instead is how a PR came to be judged by one push.
+    expect(changesJob).not.toContain('github.event.before');
 
-    // Pin the invocation itself, not just its parts. The script reads three positional
-    // arguments, so a reordering that sends a SHA into `eventName` has to fail here — and the
-    // assignment must stay separate from the `echo`, which is what makes a crash fail the step.
-    expect(changesJob).toContain(
-      'run_tests=$(bun scripts/should-run-test-suite.ts "$EVENT_NAME" "$BASE_SHA" "$HEAD_SHA")\n'
-    );
+    // The assignment must stay separate from the `echo`, which is what makes a crash fail the
+    // step instead of publishing an empty decision.
+    expect(changesJob).toContain('run_tests=$(bun scripts/should-run-test-suite.ts)\n');
     expect(changesJob).toContain('echo "run-tests=$run_tests" >> "$GITHUB_OUTPUT"');
   });
 
-  test('the workflow fixture bar runs for every pull request', () => {
+  test('the workflow fixture bar runs for every pull request and push', () => {
     const workflow = readFileSync(
       resolve(import.meta.dir, '../.github/workflows/test.yml'),
       'utf8'
@@ -162,7 +196,8 @@ describe('test-suite change decision', () => {
     );
 
     expect(pullRequestTrigger).toBe('  pull_request:\n    branches: [main, dev]');
-    expect(fixtureJob).toContain("if: github.event_name == 'pull_request'");
+    // No `if:` and no `changes` gate: this job is the only Linux run of the fixtures.
+    expect(fixtureJob).not.toContain('if:');
     expect(fixtureJob).toContain('runs-on: ubuntu-latest');
     expect(fixtureJob).not.toContain('needs:');
     expect(fixtureJob).not.toContain('changes');
@@ -232,6 +267,35 @@ describe('diff mode', () => {
     const head = commit(repo, 'feature.ts', 'real code');
 
     expect(shouldRunTestSuite(changedFilesBetween(base, head, repo))).toBe(true);
+  });
+
+  /**
+   * The PR #3415 shape: a code push, then a docs-only push. Concurrency cancels the first push's
+   * run, so the second push's decision is the only one the PR head gets.
+   */
+  test('a docs-only push on top of a code push still runs the suite for the pull request', () => {
+    const repo = trackTempRoot(mkdtempSync(join(tmpdir(), 'run-suite-diff-')));
+    git(repo, 'init', '-q', '-b', 'main');
+    git(repo, 'config', 'user.email', 'test@example.com');
+    git(repo, 'config', 'user.name', 'Test');
+    const prBase = commit(repo, 'seed.ts', 'seed');
+    git(repo, 'checkout', '-q', '-b', 'feature');
+    const codePush = commit(repo, 'feature.ts', 'real code');
+    const docsPush = commit(repo, 'GUIDE.md', 'docs only');
+
+    const result = runDecision(
+      trackTempRoot,
+      'pull_request',
+      {
+        before: codePush,
+        after: docsPush,
+        pull_request: { base: { sha: prBase }, head: { sha: docsPush } },
+      },
+      repo
+    );
+
+    expect(result.stderr).toBe('');
+    expect(result.stdout).toBe('true');
   });
 });
 

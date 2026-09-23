@@ -96,6 +96,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     findChildRuns: mock(async () => []),
     getRunAncestry: mock(async () => []),
     createWorkflowRun: mock(async () => makeRun()),
+    claimPendingWorkflowRun: mock(async () => makeRun()),
     updateWorkflowRun: mock(async () => {}),
     failWorkflowRun: mock(async () => {}),
     getWorkflowRun: mock(async () => ({ ...makeRun(), status: 'completed' as const })),
@@ -127,6 +128,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
           workflow_run_id: id,
           event_type: 'node_completed' as const,
           step_name: completion.stepName,
+          data: {},
         },
       })
     ),

@@ -3,7 +3,8 @@
  * Handles issue and PR comments with @mention detection
  */
 import { Octokit } from '@octokit/rest';
-import { createHmac, timingSafeEqual } from 'crypto';
+import { randomUUID } from 'crypto';
+import { verifyGitHubWebhookSignature } from './webhook-signature';
 import { readdir, access } from 'fs/promises';
 import { join } from 'path';
 import type { IPlatformAdapter, MessageMetadata, GitHubAuth } from '@archon/core';
@@ -535,39 +536,9 @@ export class GitHubAdapter implements IPlatformAdapter {
    * Verify webhook signature using HMAC SHA-256
    */
   private verifySignature(payload: string, signature: string): boolean {
-    try {
-      const hmac = createHmac('sha256', this.webhookSecret);
-      const digest = 'sha256=' + hmac.update(payload).digest('hex');
-
-      const digestBuffer = Buffer.from(digest);
-      const signatureBuffer = Buffer.from(signature);
-
-      if (digestBuffer.length !== signatureBuffer.length) {
-        getLog().error(
-          { receivedLength: signatureBuffer.length, computedLength: digestBuffer.length },
-          'github.signature_length_mismatch'
-        );
-        return false;
-      }
-
-      const isValid = timingSafeEqual(digestBuffer, signatureBuffer);
-
-      if (!isValid) {
-        getLog().error(
-          {
-            receivedPrefix: signature.substring(0, 15) + '...',
-            computedPrefix: digest.substring(0, 15) + '...',
-          },
-          'github.signature_mismatch'
-        );
-      }
-
-      return isValid;
-    } catch (error) {
-      const err = error as Error;
-      getLog().error({ err }, 'github.signature_verification_error');
-      return false;
-    }
+    const valid = verifyGitHubWebhookSignature(payload, signature, this.webhookSecret);
+    if (!valid) getLog().warn('github.signature_mismatch');
+    return valid;
   }
 
   /**
@@ -1047,6 +1018,41 @@ ${userComment}`;
     }
   }
 
+  /** Receive conversational events and durable-wait signals independently of source plugins. */
+  async receiveWebhook(
+    payload: string,
+    signature: string,
+    deliveryId?: string,
+    eventName?: string
+  ): Promise<'accepted' | 'invalid_signature' | 'malformed'> {
+    if (!this.verifySignature(payload, signature)) {
+      getLog().warn(
+        { attemptId: randomUUID(), reason: 'invalid_signature' },
+        'github.webhook_rejected'
+      );
+      return 'invalid_signature';
+    }
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(payload) as unknown;
+    } catch {
+      getLog().warn({ reason: 'invalid_json' }, 'github.webhook_rejected');
+      return 'malformed';
+    }
+    if (eventName === 'check_run') {
+      if (isCheckRunCompletedEvent(decoded)) await this.handleCompletedCheckRun(decoded);
+    } else {
+      // Chat execution is asynchronous; source-plugin receipt acceptance has its own endpoint.
+      void this.handleWebhook(payload, signature, deliveryId, eventName).catch((error: unknown) => {
+        getLog().error(
+          { err: error as Error, deliveryId, eventName },
+          'github.conversational_webhook_failed'
+        );
+      });
+    }
+    return 'accepted';
+  }
+
   /**
    * Handle incoming webhook event
    * @param deliveryId - GitHub's X-GitHub-Delivery GUID; dedup fallback when
@@ -1062,7 +1068,7 @@ ${userComment}`;
     // 1. Verify signature
     if (!this.verifySignature(payload, signature)) {
       getLog().error(
-        { signaturePrefix: signature?.substring(0, 15) + '...', payloadSize: payload.length },
+        { attemptId: randomUUID(), reason: 'invalid_signature' },
         'github.invalid_webhook_signature'
       );
       return;

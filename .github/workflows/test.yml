@@ -29,21 +29,20 @@ jobs:
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
+      # The script reads the event from GITHUB_EVENT_NAME and GITHUB_EVENT_PATH and picks
+      # the commits to compare itself: a pull request's whole diff, a push's own commits.
+      # Assign before echoing. A failing command substituted into another command's arguments
+      # does not trip `set -e`, so `echo "run-tests=$(...)"` would report success and write an
+      # empty decision that every downstream `== 'true'` gate reads as "skip".
       - name: Decide whether tests are needed
         id: decision
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.before || github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.after || github.event.pull_request.head.sha }}
-        # Assign before echoing. A failing command substituted into another command's arguments
-        # does not trip `set -e`, so `echo "run-tests=$(...)"` would report success and write an
-        # empty decision that every downstream `== 'true'` gate reads as "skip".
         run: |
-          run_tests=$(bun scripts/should-run-test-suite.ts "$EVENT_NAME" "$BASE_SHA" "$HEAD_SHA")
+          run_tests=$(bun scripts/should-run-test-suite.ts)
           echo "run-tests=$run_tests" >> "$GITHUB_OUTPUT"
 
+  # The only Linux run of the fixtures, so it runs for every event. It needs no `changes`
+  # decision and reports in well under a minute, ahead of the matrix.
   workflow-fixtures:
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -59,12 +58,17 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # A dedicated job so fixture breakage reports in ~2 minutes instead of behind the
-      # full matrix. The command itself lives in scripts/validate.ts, which is also what
+      # The command itself lives in scripts/validate.ts, which is also what
       # `bun run validate` runs locally.
       - name: Run workflow fixtures
         run: bun run validate --only workflow-fixtures
 
+  # CI splits `bun run validate` across jobs by check id so the slow checks run side by side
+  # instead of one after another. A check whose result cannot depend on the OS (type-check,
+  # lint, format) runs once, in `static` on Linux; Windows runs only what can differ there.
+  # Every id lands in at least one job and never twice on one OS:
+  # scripts/validate-ci-parity.test.ts enforces both against scripts/validate.ts, which owns
+  # the commands.
   test:
     needs: changes
     if: needs.changes.outputs.run-tests == 'true'
@@ -88,13 +92,9 @@ jobs:
       - name: Setup uv
         uses: astral-sh/setup-uv@v4
 
-      - name: Cache Bun dependencies
-        if: runner.os == 'Windows'
-        uses: actions/cache@v4
-        with:
-          path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-
+      # No Bun download cache on Windows either. Restoring the ~600MB cache took as long
+      # as a plain install (52s + 10s against 53s, measured side by side on PR #3438), and
+      # it took Actions cache space that the Docker layer cache needs.
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
@@ -113,14 +113,60 @@ jobs:
         if: runner.os == 'Windows'
         run: uv run python -c "print('uv warm')"
 
-      # This job used to restate every command in `bun run validate`, which let the
-      # documented local gate and CI drift apart. scripts/validate.ts owns the list;
-      # scripts/validate-ci-parity.test.ts keeps this job and that list aligned. The
-      # installer check skips itself on Windows because scripts/install.sh is POSIX-only.
-      # The Windows test check keeps the 20 s per-test budget in
+      - name: Validate (Linux)
+        if: runner.os == 'Linux'
+        run: bun run validate --only installer,tests
+
+      # The generated-file and import-boundary checks run here as well as in `static`
+      # because their scripts normalize Windows path separators, and only a Windows run
+      # proves that; they cost seconds. The installer check is POSIX-only (validate skips
+      # it on Windows). The test check keeps the Windows 20 s per-test budget in
       # scripts/bun-test-command.ts; see coleam00/Archon#3294.
+      - name: Validate (Windows)
+        if: runner.os == 'Windows'
+        run: bun run validate --only cli-import-boundary,bundled-defaults,bundled-skill,bundled-schema,pi-vendor-map,capability-matrix,api-types,tests
+
+  # Windows fixtures run beside the Windows tests rather than after them: they are the
+  # second-slowest Windows check, and serial they made that leg the critical path.
+  workflow-fixtures-windows:
+    name: workflow-fixtures (windows-latest)
+    needs: changes
+    if: needs.changes.outputs.run-tests == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run workflow fixtures
+        run: bun run validate --only workflow-fixtures
+
+  static:
+    needs: changes
+    if: needs.changes.outputs.run-tests == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
       - name: Validate
-        run: bun run validate
+        run: bun run validate --only cli-import-boundary,bundled-defaults,bundled-skill,bundled-schema,pi-vendor-map,capability-matrix,api-types,type-check,lint,format
 
   schema-upgrade:
     needs: changes
@@ -214,12 +260,18 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # The test creates and drops its own scratch database; the 'postgres'
-      # database named in the URL is only used to reach the server.
+      # Each test creates and drops its own scratch database; the 'postgres'
+      # database named in the URL is only used to reach the server. Each file
+      # replaces the connection module, so each runs in its own process.
       - name: Run Postgres parity test
         env:
           ARCHON_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
         run: bun test packages/core/src/db/isolation-environments.live-run.postgres.integration.test.ts
+
+      - name: Run Postgres resource-slot test
+        env:
+          ARCHON_TEST_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
+        run: bun test packages/core/src/db/resource-slots.postgres.integration.test.ts
 
   docker-build:
     needs: changes
@@ -231,20 +283,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The image build needs ~14GB more scratch space than a stock runner has
-      # free once the provider SDKs' multi-platform vendor binaries are in
-      # node_modules. Cached-layer builds squeak by; any PR that invalidates an
-      # early Dockerfile layer (apt block, base image) rebuilds everything and
-      # hits "no space left on device". Reclaim the big unused toolchains first.
-      - name: Free runner disk space
+      # A full image rebuild (any change to an early Dockerfile layer) once hit
+      # "no space left on device" on runners with ~20GB free, because the provider
+      # SDKs' multi-platform vendor binaries land in node_modules. Deleting the big
+      # unused toolchains fixes that but costs 45-97s, so it runs only when the
+      # runner is short on space; current ubuntu-latest images have far more free.
+      - name: Free runner disk space if needed
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force
           df -h /
+          free_gb=$(df --output=avail -BG / | tail -1 | tr -dc '0-9')
+          if [ "$free_gb" -lt 40 ]; then
+            sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+            sudo docker image prune --all --force
+            df -h /
+          fi
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # Only pushes to main and dev write the layer cache; pull requests read it.
+      # The repository's Actions cache is capped at 10GB, and when every PR wrote a
+      # mode=max copy of the image, PR copies evicted dev's layers ("blob ... not
+      # found", then a rebuild) and the export alone took ~3.5 minutes of each run.
       - name: Build Docker image
         uses: docker/build-push-action@v6
         with:
@@ -253,7 +313,7 @@ jobs:
           load: true
           tags: archon-ci:test
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,mode=max' || '' }}
 
       - name: Smoke test — container starts and serves /api/health
         run: |
@@ -271,26 +331,30 @@ jobs:
 
   test-suite:
     name: Test Suite
-    needs: [changes, test, schema-upgrade, postgres-parity, docker-build]
+    needs:
+      [
+        changes,
+        static,
+        test,
+        workflow-fixtures,
+        workflow-fixtures-windows,
+        schema-upgrade,
+        postgres-parity,
+        docker-build,
+      ]
     if: always()
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      # The script judges every needed job, including on a documentation-only change, and
+      # reads which jobs that change may skip from this file.
       - name: Report test-suite outcome
         env:
-          RUN_TESTS: ${{ needs.changes.outputs.run-tests }}
-          TEST: ${{ needs.test.result }}
-          SCHEMA_UPGRADE: ${{ needs.schema-upgrade.result }}
-          POSTGRES_PARITY: ${{ needs.postgres-parity.result }}
-          DOCKER_BUILD: ${{ needs.docker-build.result }}
-        run: |
-          if [ "$RUN_TESTS" = false ]; then
-            echo "Skipped tests for documentation-only changes."
-            exit 0
-          fi
-
-          for result in "$TEST" "$SCHEMA_UPGRADE" "$POSTGRES_PARITY" "$DOCKER_BUILD"; do
-            if [ "$result" != success ]; then
-              echo "A test-suite job finished with $result."
-              exit 1
-            fi
-          done
+          NEEDS: ${{ toJSON(needs) }}
+        run: bun scripts/test-suite-outcome.ts

@@ -407,4 +407,28 @@ describe('MessagePersistence', () => {
       expect('category' in metadata).toBe(false);
     });
   });
+
+  describe('flush — future MessageMetadata fields persist by derivation (#2709)', () => {
+    test('a new field on the buffered metadata flows through to addMessage', async () => {
+      // Simulates adding a brand-new field to MessageMetadata. With the old
+      // hand-maintained per-field copy, this field would be silently dropped
+      // at flush time. With the shared helper, the new field reaches the DB
+      // without editing this adapter.
+      persistence.setConversationDbId('conv-1', 'db-uuid-1');
+      persistence.appendText('conv-1', 'plain text', {
+        category: 'workflow_status',
+        // Cast widens the input — same trick the production callers will use
+        // when a real new field lands on MessageMetadata.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ...({ traceId: 'trace-abc' } as any),
+      } as Parameters<typeof persistence.appendText>[2]);
+
+      await persistence.flush('conv-1');
+
+      expect(mockAddMessage).toHaveBeenCalledTimes(1);
+      const metadata = mockAddMessage.mock.calls[0][3] as Record<string, unknown>;
+      expect(metadata?.category).toBe('workflow_status');
+      expect(metadata?.traceId).toBe('trace-abc');
+    });
+  });
 });

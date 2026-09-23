@@ -265,6 +265,9 @@ export function normalizeGitHubWebhook(
     const parsed = checkRunSchema.safeParse(payload);
     if (!parsed.success) return malformed(parsed.error);
     const value = parsed.data;
+    if (value.action !== 'created' && value.action !== 'completed') {
+      return { status: 'unsupported', reason: 'Unsupported GitHub check_run action' };
+    }
     sourceActor = actor(value.sender, context.host);
     occurredAt = value.check_run.completed_at ?? value.check_run.started_at ?? null;
     event = {
