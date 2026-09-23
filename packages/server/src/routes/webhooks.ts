@@ -51,7 +51,9 @@ export function registerGithubWebhookRoute(app: OpenAPIHono, github: GithubWebho
 
 export function registerWebhookSourceRoutes(
   app: OpenAPIHono,
-  sources: WebhookSourcePluginHost
+  sources: WebhookSourcePluginHost,
+  /** Called after a receipt commits, without awaiting, so execution never delays the ACK. */
+  onReceiptAccepted?: () => void
 ): void {
   app.post('/webhooks/sources/:sourceInstanceId', async c => {
     const sourceInstanceId = c.req.param('sourceInstanceId');
@@ -66,6 +68,7 @@ export function registerWebhookSourceRoutes(
       });
       if (result === 'unauthenticated') return c.json({ error: 'Unauthenticated' }, 401);
       if (result === 'malformed') return c.json({ error: 'Malformed payload' }, 400);
+      onReceiptAccepted?.();
       return c.text('OK', 200);
     } catch (error) {
       getLog().error(

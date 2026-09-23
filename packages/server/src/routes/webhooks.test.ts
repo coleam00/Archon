@@ -203,7 +203,12 @@ describe('POST /webhooks/sources/:sourceInstanceId', () => {
   ] as const)('maps the durable host result %s to HTTP %s', async (result, status) => {
     const app = new OpenAPIHono();
     const receive = mock(async (_sourceInstanceId: string, _request: unknown) => result);
-    registerWebhookSourceRoutes(app, { hasSource: id => id === 'configured', receive });
+    const onReceiptAccepted = mock(() => undefined);
+    registerWebhookSourceRoutes(
+      app,
+      { hasSource: id => id === 'configured', receive },
+      onReceiptAccepted
+    );
     const response = await app.request('/webhooks/sources/configured', {
       method: 'POST',
       headers: { 'x-source-header': 'value' },
@@ -216,6 +221,8 @@ describe('POST /webhooks/sources/:sourceInstanceId', () => {
       body: 'raw-body',
       headers: { 'x-source-header': 'value' },
     });
+    // Only a committed receipt asks the host to drain.
+    expect(onReceiptAccepted).toHaveBeenCalledTimes(result === 'accepted' ? 1 : 0);
   });
 
   test('does not expose an unconfigured source or read its receiver', async () => {
@@ -233,18 +240,24 @@ describe('POST /webhooks/sources/:sourceInstanceId', () => {
   test('returns 500 and logs the cause when normalization or persistence fails', async () => {
     const app = new OpenAPIHono();
     const cause = new Error('receipt persistence failed');
-    registerWebhookSourceRoutes(app, {
-      hasSource: () => true,
-      receive: async () => {
-        throw cause;
+    const onReceiptAccepted = mock(() => undefined);
+    registerWebhookSourceRoutes(
+      app,
+      {
+        hasSource: () => true,
+        receive: async () => {
+          throw cause;
+        },
       },
-    });
+      onReceiptAccepted
+    );
     mockLogger.error.mockClear();
     const response = await app.request('/webhooks/sources/configured', {
       method: 'POST',
       body: 'raw',
     });
     expect(response.status).toBe(500);
+    expect(onReceiptAccepted).not.toHaveBeenCalled();
     expect(mockLogger.error).toHaveBeenCalledWith(
       expect.objectContaining({ err: cause, sourceInstanceId: 'configured' }),
       'webhook_source_endpoint_error'

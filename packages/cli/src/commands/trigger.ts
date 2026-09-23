@@ -6,24 +6,22 @@ import { z } from '@hono/zod-openapi';
 import { BUNDLED_IS_BINARY, getArchonHome } from '@archon/paths';
 import {
   acceptStartReceipt,
-  claimStartBindingPreparation,
-  completeStartBindingPreparation,
-  drainResourceStarts,
-  failStartBindingPreparation,
   getResourceStartRequest,
   getStartReceipt,
   listStartReceipts,
-  listPendingStartBindings,
-  listQueuedResourceStartsForHost,
   resetStartBindingPreparation,
   withdrawQueuedResourceStart,
-  type ResourceStartRequestInspection,
 } from '@archon/core/db/resource-starts';
 import { getUserById } from '@archon/core/db/users';
-import { loadWorkflowRunConfigFile } from '@archon/core/config';
+import {
+  drainResourceStartHost,
+  startAdmittedResourceStart,
+} from '@archon/core/workflows/resource-start-host';
+import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
+import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { resourceStartBindingIntentSchema } from '@archon/workflows/schemas/resource-start';
 import { readWorkflowSourceState } from '@archon/workflows/schemas/workflow-run';
-import { executePreparedWorkflowLaunch, withPreparedWorkflowLaunch } from '../workflow-launch';
+import { CLIAdapter } from '../adapters/cli-adapter';
 import { writeJsonLine } from '../utils/stdout';
 import { DETACHED_RUN_OWNER_ENV } from '../utils/detached-run-control';
 import { installMacosNativeSchedule, removeMacosNativeSchedule } from '../triggers/native-schedule';
@@ -61,15 +59,18 @@ function cliPrefix(): [string, ...string[]] {
   return BUNDLED_IS_BINARY ? [process.execPath] : [process.execPath, resolve(process.argv[1])];
 }
 
-async function spawnRequest(request: ResourceStartRequestInspection): Promise<void> {
+/** Hand one admitted request to a detached `trigger execute` process with its own log. */
+async function spawnAdmitted(requestId: string, hostId: string): Promise<void> {
+  const request = await getResourceStartRequest(requestId);
+  if (request?.status !== 'admitted') throw new Error('The admitted start request is unavailable.');
   const [executable, ...prefix] = cliPrefix();
   const logDirectory = join(getArchonHome(), 'logs');
   await mkdir(logDirectory, { recursive: true });
-  const log = await open(join(logDirectory, `trigger-run-${request.id}.log`), 'a', 0o600);
+  const log = await open(join(logDirectory, `trigger-run-${requestId}.log`), 'a', 0o600);
   try {
     const child = spawn(
       executable,
-      [...prefix, 'trigger', 'execute', request.id, '--host', request.hostId],
+      [...prefix, 'trigger', 'execute', requestId, '--host', hostId],
       {
         cwd: request.launch.execution.cwd,
         detached: true,
@@ -88,71 +89,11 @@ async function spawnRequest(request: ResourceStartRequestInspection): Promise<vo
   }
 }
 
-async function launchAdmitted(requestId: string): Promise<void> {
-  const request = await getResourceStartRequest(requestId);
-  if (request?.status !== 'admitted') throw new Error('The admitted start request is unavailable.');
-  await spawnRequest(request);
-}
-
-export async function drainTriggerHost(hostId: string): Promise<void> {
-  const failures: unknown[] = [];
-  const pending = await listPendingStartBindings({ hostId });
-  for (const binding of pending) {
-    if (!binding.intent) continue;
-    const ownerId = randomUUID();
-    const identity = { receiptId: binding.receiptId, bindingId: binding.bindingId, ownerId };
-    if (!(await claimStartBindingPreparation(identity))) continue;
-    const intent = binding.intent;
-    let stage: 'run_as_user' | 'run_configuration' | 'launch_preparation' | 'dispatch' =
-      'run_as_user';
-    try {
-      if (!(await getUserById(intent.runAsUserId)))
-        throw new Error('The configured run-as user no longer exists.');
-      stage = 'run_configuration';
-      const runConfig = intent.launch.configSource
-        ? await loadWorkflowRunConfigFile(intent.launch.configSource)
-        : undefined;
-      stage = 'launch_preparation';
-      const disposition = await withPreparedWorkflowLaunch(
-        {
-          ...intent.launch,
-          actingUserId: intent.runAsUserId,
-          userMessage: `Triggered by binding ${intent.bindingId}`,
-          runConfig,
-        },
-        async ({ launch, adoptSource }) => {
-          const result = await completeStartBindingPreparation({ ...identity, launch });
-          if (!result) throw new Error('Preparation ownership changed before durable acceptance.');
-          if (result.status !== 'skipped') adoptSource();
-          return result;
-        }
-      );
-      stage = 'dispatch';
-      if (disposition.status === 'admitted') await launchAdmitted(disposition.requestId);
-    } catch (error) {
-      // Unknown preparation failures are not an implicit retry policy. The receipt remains inspectable.
-      // Configuration and provider errors can contain secret values. Persist the failed
-      // boundary, not arbitrary exception text; the original cause reaches the caller.
-      if (stage !== 'dispatch')
-        await failStartBindingPreparation({
-          ...identity,
-          retryable: false,
-          error: `${stage}_failed`,
-        });
-      failures.push(error);
-    }
-  }
-  const queued = await listQueuedResourceStartsForHost(hostId);
-  for (const resource of new Set(queued.map(request => request.resource))) {
-    for (const decision of await drainResourceStarts({ hostId, resource })) {
-      if (decision.status === 'admitted') await launchAdmitted(decision.requestId);
-    }
-  }
-  if (failures.length)
-    throw new AggregateError(
-      failures,
-      `${String(failures.length)} trigger preparation(s) failed; inspect their receipt records.`
-    );
+function drainHost(hostId: string): Promise<void> {
+  return drainResourceStartHost({
+    hostId,
+    startAdmitted: requestId => spawnAdmitted(requestId, hostId),
+  });
 }
 
 export async function triggerCommand(
@@ -188,7 +129,7 @@ export async function triggerCommand(
       bindings: [binding],
     });
     try {
-      await drainTriggerHost(binding.hostId);
+      await drainHost(binding.hostId);
     } catch (error) {
       throw new Error(
         `Receipt ${receipt.receiptId} is retained, but its host drain failed. Inspect that receipt before recovery.`,
@@ -200,15 +141,26 @@ export async function triggerCommand(
   }
   if (action === 'drain') {
     if (!options.host) throw new Error('Usage: archon trigger drain --host <configured-host>');
-    await drainTriggerHost(options.host);
+    await drainHost(options.host);
     await writeJsonLine({ hostId: options.host, drained: true });
     return;
   }
   if (action === 'execute') {
-    const request = args[0] ? await getResourceStartRequest(args[0]) : null;
-    if (request?.status !== 'admitted' || request.hostId !== options.host)
-      throw new Error('Execution requires an admitted request for this configured host.');
-    await executePreparedWorkflowLaunch(request.launch);
+    if (!args[0] || !options.host)
+      throw new Error(
+        'Usage: archon trigger execute <admitted-request-id> --host <configured-host>'
+      );
+    const adapter = new CLIAdapter();
+    const result = await startAdmittedResourceStart({
+      requestId: args[0],
+      hostId: options.host,
+      engine: new InProcessWorkflowEngine(createWorkflowDeps()),
+      createPlatform: ({ conversationId, conversationDbId }) => {
+        adapter.setConversationDbId(conversationId, conversationDbId);
+        return adapter;
+      },
+    });
+    if (!result.success) throw new Error(`Run ${args[0]} did not complete: ${result.error}`);
     return;
   }
   if (action === 'inspect') {
@@ -312,6 +264,6 @@ export async function triggerCommand(
     return;
   }
   throw new Error(
-    'Usage: archon trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>'
+    'Usage: archon trigger <fire|drain|execute|list|inspect|withdraw|recover-preparation|schedule>'
   );
 }

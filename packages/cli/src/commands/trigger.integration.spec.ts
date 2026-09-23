@@ -201,11 +201,9 @@ describe('trigger CLI durable execution', () => {
       return rows.length === 2 && rows[1]?.status === 'queued' ? rows : undefined;
     }, 'second start to enter the durable queue');
     const queuedLaunch = JSON.parse(queued[1].launch) as {
-      execution: { inputs: { count: unknown } };
       run: { metadata: { inputs?: { count?: unknown }; inputs_values?: { count?: unknown } } };
     };
     expect(queued[1].launch).not.toContain('original-config');
-    expect(queuedLaunch.execution.inputs.count).toBe(7);
     expect(queuedLaunch.run.metadata.inputs?.count).toBe('7');
     expect(queuedLaunch.run.metadata.inputs_values?.count).toBe(7);
 

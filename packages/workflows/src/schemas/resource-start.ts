@@ -22,27 +22,33 @@ export const preparedWorkflowLaunchSchema = z
         id: z.string().uuid(),
         workflow_name: z.string().min(1),
         conversation_id: z.string().min(1),
-        codebase_id: z.string().min(1).optional(),
+        codebase_id: z.string().min(1),
         user_message: z.string(),
         metadata: jsonObjectSchema,
+        // Absent for a worktree lane: the checkout exists only once execution starts.
         working_path: z.string().min(1).optional(),
-        parent_conversation_id: z.string().min(1).optional(),
-        user_id: z.string().min(1).optional(),
+        user_id: z.string().min(1),
       })
       .strict(),
+    // Only what the run row cannot carry: the acting user, conversation, inputs and
+    // sealed run configuration already live on `run`.
     execution: z
       .object({
         cwd: z.string().min(1),
         conversationId: z.string().min(1),
-        conversationDbId: z.string().min(1),
-        actingUserId: z.string().min(1),
-        inputs: z.record(z.string(), jsonValueSchema),
         isolation: preparedIsolationSchema,
       })
       .strict(),
   })
   .strict();
 export type PreparedWorkflowLaunch = z.infer<typeof preparedWorkflowLaunchSchema>;
+
+/** Run metadata key naming the receipt binding that requested a resource start. */
+export const RESOURCE_START_METADATA_KEY = 'resource_start';
+export interface ResourceStartRunMetadata {
+  receiptId: string;
+  bindingId: string;
+}
 
 /**
  * How many admitted holders a resource slot allows at once. It defaults to 1, so a

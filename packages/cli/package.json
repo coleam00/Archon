@@ -40,9 +40,6 @@
       "src/commands/workflow.test.ts"
     ],
     [
-      "src/workflow-launch.test.ts"
-    ],
-    [
       "src/commands/isolation.test.ts"
     ],
     [

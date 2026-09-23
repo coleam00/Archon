@@ -80,6 +80,7 @@ import { PgNotifyListener } from './adapters/web/pg-notify-listener';
 import { registerApiRoutes } from './routes/api';
 import { registerGithubWebhookRoute, registerWebhookSourceRoutes } from './routes/webhooks';
 import { loadWebhookSourcePlugins } from './services/webhook-source-plugins';
+import { createServerResourceStartHost } from './services/resource-start-hosting';
 import {
   startWorkflowContinuationScheduler,
   stopWorkflowContinuationScheduler,
@@ -695,6 +696,14 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   const webhookSources = webhookSourcesConfigPath
     ? await loadWebhookSourcePlugins(webhookSourcesConfigPath)
     : undefined;
+  // Explicit only: bindings choose their execution host, so the server never guesses one.
+  const resourceStartHostId = process.env.ARCHON_TRIGGER_HOST?.trim();
+  const resourceStartHost = resourceStartHostId
+    ? createServerResourceStartHost(resourceStartHostId)
+    : undefined;
+  const requestResourceStartDrain = resourceStartHost
+    ? (): void => void resourceStartHost.requestDrain()
+    : undefined;
 
   // Global error handler for unhandled exceptions
   app.onError((err, c) => {
@@ -748,7 +757,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     getLog().info('github_webhook_registered');
   }
   if (webhookSources) {
-    registerWebhookSourceRoutes(app, webhookSources);
+    registerWebhookSourceRoutes(app, webhookSources, requestResourceStartDrain);
     getLog().info('webhook_sources_registered');
   }
 
@@ -1012,7 +1021,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       );
     }
     return workflowResumeTargetForConversation(conversation, workflowPlatforms);
-  });
+  }, requestResourceStartDrain);
+  if (resourceStartHostId)
+    getLog().info({ hostId: resourceStartHostId }, 'resource_start_host_enabled');
 
   // Graceful shutdown
   const shutdown = (): void => {

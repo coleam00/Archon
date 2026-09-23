@@ -19,6 +19,7 @@ import type { PreparedWorkflowLaunch } from '@archon/workflows/schemas/resource-
 import { claimPendingWorkflowRun, resumeWorkflowRun, WorkflowResourceBusyError } from './workflows';
 
 let root = '';
+const CODEBASE_ID = '33333333-3333-4333-8333-333333333333';
 const originalArchonHome = process.env.ARCHON_HOME;
 const originalDatabaseUrl = process.env.DATABASE_URL;
 
@@ -29,16 +30,14 @@ function launch(id: string): PreparedWorkflowLaunch {
       id,
       workflow_name: 'test',
       conversation_id: '11111111-1111-4111-8111-111111111111',
-      user_message: 'test',
+      codebase_id: CODEBASE_ID,
+      user_message: '',
       metadata: {},
       user_id: '22222222-2222-4222-8222-222222222222',
     },
     execution: {
       cwd: '/tmp/test',
       conversationId: 'conversation',
-      conversationDbId: '11111111-1111-4111-8111-111111111111',
-      actingUserId: '22222222-2222-4222-8222-222222222222',
-      inputs: {},
       isolation: { kind: 'in-place' },
     },
   };
@@ -86,6 +85,10 @@ beforeEach(async () => {
   await db.query(`INSERT INTO remote_agent_users (id, display_name) VALUES ($1, 'Test')`, [
     '22222222-2222-4222-8222-222222222222',
   ]);
+  await db.query(
+    `INSERT INTO remote_agent_codebases (id, name, default_cwd, ai_assistant_type) VALUES ($1, 'test', '/tmp/test', 'claude')`,
+    [CODEBASE_ID]
+  );
   await db.query(
     `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, user_id)
      VALUES ($1, 'test', 'test', $2)`,
