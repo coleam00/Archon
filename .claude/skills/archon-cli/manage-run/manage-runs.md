@@ -103,9 +103,11 @@ Choose deliberately after reading what the gate produced — not by reflex.
 
 ## Cancel vs abandon
 
-- `cancel` stops a running run: a live owner process is stopped, and its tree
-  confirmed gone, before `cancelled` is recorded. It refuses and changes nothing
-  when no owner answers. Use this to kill real work.
+- `cancel` stops a running run. When another process owns it, that process is
+  stopped and its tree confirmed gone before `cancelled` is recorded. A run the
+  cancelling server executes itself, and a `workflow:` sub-run, is marked
+  `cancelled` and stops at its executor's next status check. It refuses and
+  changes nothing when no owner answers. Use this to kill real work.
 - `abandon` is for paused or failed runs, or a "running" row whose owner is gone
   (crashed host). If an owner still answers on this host, it stops it first, like
   `cancel`. If none answers, it records `cancelled` and prints the host and pid the
