@@ -354,7 +354,7 @@ describe('WorktreeProvider', () => {
 
       const env = await provider.create(baseRequest);
 
-      expect(refreshWorktreeIndexSpy.mock.calls).toEqual([[env.workingPath]]);
+      expect(refreshWorktreeIndexSpy.mock.calls).toEqual([[git.toWorktreePath(env.workingPath)]]);
       expect(addedBeforeRefresh).toBe(true);
     });
 
