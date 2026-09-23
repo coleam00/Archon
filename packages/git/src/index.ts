@@ -24,12 +24,20 @@ export {
   findWorktreeByBranch,
   isWorktreePath,
   removeWorktree,
+  lockWorktree,
+  unlockWorktree,
+  readWorktreeLock,
   getCanonicalRepoPath,
   getGitCheckoutIdentity,
   CanonicalRepoPathUnavailableError,
   verifyWorktreeOwnership,
 } from './worktree';
-export type { WorktreeLayout, WorktreeBaseOverride, GitCheckoutIdentity } from './worktree';
+export type {
+  WorktreeLayout,
+  WorktreeBaseOverride,
+  GitCheckoutIdentity,
+  WorktreeLock,
+} from './worktree';
 
 // Branch operations
 export {

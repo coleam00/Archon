@@ -280,6 +280,69 @@ export async function isWorktreePath(path: string): Promise<boolean> {
   }
 }
 
+/** A git worktree lock, with the reason recorded when it was taken (`''` when none was given). */
+export interface WorktreeLock {
+  reason: string;
+}
+
+/**
+ * Lock a worktree, recording `reason` in git's own lock file.
+ *
+ * Git refuses to prune, move, or remove a locked worktree (`remove` needs a
+ * second `--force`), which is what makes a lock usable as a marker other
+ * processes and other tools cannot miss or race past.
+ */
+export async function lockWorktree(
+  repoPath: RepoPath,
+  worktreePath: WorktreePath,
+  reason: string
+): Promise<void> {
+  await execFileAsync(
+    'git',
+    ['-C', repoPath, 'worktree', 'lock', '--reason', reason, worktreePath],
+    { timeout: 15000 }
+  );
+}
+
+/** Release a worktree lock. Throws if the worktree is not locked. */
+export async function unlockWorktree(
+  repoPath: RepoPath,
+  worktreePath: WorktreePath
+): Promise<void> {
+  await execFileAsync('git', ['-C', repoPath, 'worktree', 'unlock', worktreePath], {
+    timeout: 15000,
+  });
+}
+
+/**
+ * Read a worktree's lock, or `null` when it is not locked.
+ *
+ * Reads the `locked` file in the worktree's administrative directory, which
+ * git-worktree(1) documents, instead of matching a path against
+ * `worktree list --porcelain`: git prints paths in its own spelling (forward
+ * slashes on Windows, symlinks resolved on macOS), so the comparison is the
+ * unreliable half of that route.
+ */
+export async function readWorktreeLock(worktreePath: WorktreePath): Promise<WorktreeLock | null> {
+  const { gitDir } = await getGitCheckoutIdentity(worktreePath);
+  try {
+    const reason = await readFile(join(gitDir, 'locked'), 'utf-8');
+    return { reason: reason.trim() };
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') {
+      return null;
+    }
+    getLog().error({ worktreePath, gitDir, err, code: err.code }, 'worktree.lock_read_failed');
+    throw new Error(
+      `Cannot read the lock state of the worktree at ${worktreePath}: ${err.message}`,
+      {
+        cause: err,
+      }
+    );
+  }
+}
+
 /**
  * Remove a git worktree
  * Throws if uncommitted changes exist (git's natural guardrail)

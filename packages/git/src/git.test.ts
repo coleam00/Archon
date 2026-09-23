@@ -3753,4 +3753,82 @@ branch refs/heads/feature/auth
       }
     });
   });
+
+  describe('worktree locks', () => {
+    let root: string;
+    let repoPath: git.RepoPath;
+    let worktreePath: git.WorktreePath;
+
+    const run = async (...args: string[]): Promise<void> => {
+      await git.execFileAsync('git', ['-C', root, ...args]);
+    };
+
+    beforeEach(async () => {
+      root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-worktree-lock-')));
+      repoPath = repo(join(root, 'repo'));
+      worktreePath = worktree(join(root, 'wt'));
+      await realMkdir(repoPath, { recursive: true });
+      await run('init', '-q', '-b', 'main', repoPath);
+      await git.execFileAsync('git', ['-C', repoPath, 'config', 'user.email', 'test@example.com']);
+      await git.execFileAsync('git', ['-C', repoPath, 'config', 'user.name', 'Archon Test']);
+      await writeFile(join(repoPath, 'README.md'), '# fixture\n');
+      await git.execFileAsync('git', ['-C', repoPath, 'add', 'README.md']);
+      await git.execFileAsync('git', ['-C', repoPath, 'commit', '-qm', 'initial commit']);
+      await git.execFileAsync('git', [
+        '-C',
+        repoPath,
+        'worktree',
+        'add',
+        '-q',
+        worktreePath,
+        '-b',
+        'feature',
+      ]);
+    });
+
+    test('an unlocked worktree reads as no lock at all', async () => {
+      expect(await git.readWorktreeLock(worktreePath)).toBeNull();
+    });
+
+    test('round-trips the reason a lock was taken with', async () => {
+      await git.lockWorktree(repoPath, worktreePath, 'archon: worktree setup in progress');
+
+      expect(await git.readWorktreeLock(worktreePath)).toEqual({
+        reason: 'archon: worktree setup in progress',
+      });
+
+      await git.unlockWorktree(repoPath, worktreePath);
+
+      expect(await git.readWorktreeLock(worktreePath)).toBeNull();
+    });
+
+    test('a lock taken without a reason is still a lock', async () => {
+      // `null` means unlocked and nothing else, so a caller can tell the two
+      // apart without inspecting the reason text.
+      await git.execFileAsync('git', ['-C', repoPath, 'worktree', 'lock', worktreePath]);
+
+      expect(await git.readWorktreeLock(worktreePath)).toEqual({ reason: '' });
+    });
+
+    test('git refuses to remove a locked worktree unless forced twice', async () => {
+      await git.lockWorktree(repoPath, worktreePath, 'archon: worktree setup in progress');
+
+      // The lock is only a usable marker because git itself enforces it.
+      await expect(git.removeWorktree(repoPath, worktreePath)).rejects.toThrow(/locked/);
+      await expect(
+        git.execFileAsync('git', ['-C', repoPath, 'worktree', 'remove', '--force', worktreePath])
+      ).rejects.toThrow(/locked/);
+      await expect(
+        git.execFileAsync('git', [
+          '-C',
+          repoPath,
+          'worktree',
+          'remove',
+          '--force',
+          '--force',
+          worktreePath,
+        ])
+      ).resolves.toBeDefined();
+    });
+  });
 });
