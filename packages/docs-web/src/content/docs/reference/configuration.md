@@ -131,7 +131,7 @@ Every `assistants.<provider>` block is checked by that provider when the config 
 
 ```
 Invalid assistants config in '/Users/you/.archon/config.yaml':
-  'assistants.codex.modelReasoningEffort': expected minimal, low, medium, high, xhigh, max.
+  'assistants.claude.settingSources.0': expected 'project' or 'user'.
 ```
 
 `archon doctor` reports the same failure as the **Config files** check. An `assistants:` entry for a provider this install has not registered is ignored, as before — there is no provider to validate it.

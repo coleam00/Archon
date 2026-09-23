@@ -964,7 +964,10 @@ assistants:
       });
     });
 
-    test('keeps an OpenCode server URL loadable from config.yaml', async () => {
+    // OpencodeProvider.sendQuery refuses any baseUrl, so accepting one here
+    // would reopen the defect this validation exists to close: a config that
+    // loads, then crashes every OpenCode run.
+    test('rejects an OpenCode server URL the provider would refuse to use', async () => {
       mockFsReadFile.mockResolvedValue(`
 assistants:
   opencode:
@@ -972,8 +975,9 @@ assistants:
     baseUrl: http://localhost:4096
 `);
 
-      const config = await loadGlobalConfig();
-      expect(config.assistants?.opencode?.baseUrl).toBe('http://localhost:4096');
+      await expect(loadGlobalConfig()).rejects.toThrow(
+        /assistants\.opencode\.baseUrl.*external OpenCode runtimes are not supported/
+      );
     });
 
     test.each([

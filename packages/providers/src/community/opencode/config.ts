@@ -1,4 +1,4 @@
-import type { OpencodeProviderDefaults, ProviderConfigScope } from '../../types';
+import type { OpencodeProviderDefaults } from '../../types';
 import { InvalidProviderRunConfigError } from '../../errors';
 import {
   assertKnownRunConfigKeys,
@@ -45,19 +45,15 @@ export function parseOpencodeConfig(raw: Record<string, unknown>): OpencodeProvi
 }
 
 /** Strict counterpart for authored config: `.archon/config.yaml` and per-run layers. */
-export function parseOpencodeConfigStrict(
-  raw: Record<string, unknown>,
-  scope: ProviderConfigScope
-): OpencodeProviderDefaults {
+export function parseOpencodeConfigStrict(raw: Record<string, unknown>): OpencodeProviderDefaults {
   assertKnownRunConfigKeys(raw, ['model', 'baseUrl', 'agent']);
-  // `agent` names an opencode.json agent that no consumer reads on either
-  // surface; `baseUrl` points the provider at an already-running OpenCode
-  // server, which a single run cannot switch mid-process.
+  // Neither key is honoured on any surface, so neither takes a scope: `agent`
+  // names an opencode.json agent no consumer reads, and `sendQuery` refuses a
+  // `baseUrl` outright because Archon owns the embedded OpenCode runtime.
   if (Object.hasOwn(raw, 'agent')) {
     throw new InvalidProviderRunConfigError('agent', 'default OpenCode agents are not consumed');
   }
-  const baseUrl = normalizeRunConfigString(raw.baseUrl, 'baseUrl');
-  if (baseUrl !== undefined && scope === 'run') {
+  if (Object.hasOwn(raw, 'baseUrl')) {
     throw new InvalidProviderRunConfigError(
       'baseUrl',
       'external OpenCode runtimes are not supported'
@@ -71,8 +67,5 @@ export function parseOpencodeConfigStrict(
     }
     model = `${parsed.providerID}/${parsed.modelID}`;
   }
-  return {
-    ...(model === undefined ? {} : { model }),
-    ...(baseUrl === undefined ? {} : { baseUrl }),
-  };
+  return model === undefined ? {} : { model };
 }
