@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./bundled-build": "./src/bundled-build.ts",
+    "./cli-command": "./src/cli-command.ts",
     "./archon-paths": "./src/archon-paths.ts",
     "./effort": "./src/effort.ts",
     "./logger": "./src/logger.ts",

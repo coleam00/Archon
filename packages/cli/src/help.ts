@@ -68,6 +68,24 @@ interface HelpEntry {
 // live here so the global Commands block does not grow).
 const commandHelp: HelpEntry[] = [
   {
+    command: 'forge',
+    subcommand: 'resolve',
+    spec: 'forge resolve',
+    description: 'Resolve an explicit remote through optional forge plugins',
+    scopedFlags: [
+      { spec: '--data <json>', description: 'JSON object with remote (URL/SSH syntax or null)' },
+    ],
+  },
+  {
+    command: 'forge',
+    subcommand: 'checks',
+    spec: 'forge checks',
+    description: 'Observe checks for an explicit qualified pull request',
+    scopedFlags: [
+      { spec: '--data <json>', description: 'JSON object with ref: {repo: {host, path}, number}' },
+    ],
+  },
+  {
     command: 'trigger',
     spec: 'trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>',
     description: 'Start configured workflows and inspect durable resource admission',

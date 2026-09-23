@@ -60,7 +60,10 @@ export function isVerboseBoot(): boolean {
  * A malformed env file is fatal — matches the pre-existing CLI behavior at
  * packages/cli/src/cli.ts:24-30.
  */
-export function loadArchonEnv(cwd: string = process.cwd()): void {
+export function loadArchonEnv(
+  cwd: string = process.cwd(),
+  options: { afterUserLoad?: () => void } = {}
+): void {
   const homePath = getArchonEnvPath();
   if (existsSync(homePath)) {
     const result = config({ path: homePath, override: true, quiet: true });
@@ -74,6 +77,8 @@ export function loadArchonEnv(cwd: string = process.cwd()): void {
       process.stderr.write(`[archon] loaded ${count} keys from ${displayPath(homePath)}\n`);
     }
   }
+
+  options.afterUserLoad?.();
 
   const repoPath = getRepoArchonEnvPath(cwd);
   if (existsSync(repoPath)) {

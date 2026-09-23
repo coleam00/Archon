@@ -145,6 +145,21 @@ describe('loadArchonEnv', () => {
     expect(process.env.TEST_EL_OVERLAP).toBe('from-repo');
   });
 
+  it('can capture user scope before repo overrides are loaded', () => {
+    writeFileSync(join(archonHomeDir, '.env'), 'TEST_EL_OVERLAP=from-home\n');
+    writeFileSync(join(repoDir, '.archon', '.env'), 'TEST_EL_OVERLAP=from-repo\n');
+    let userValue: string | undefined;
+
+    loadArchonEnv(repoDir, {
+      afterUserLoad: () => {
+        userValue = process.env.TEST_EL_OVERLAP;
+      },
+    });
+
+    expect(userValue).toBe('from-home');
+    expect(process.env.TEST_EL_OVERLAP).toBe('from-repo');
+  });
+
   it('emits nothing when neither file exists', () => {
     loadArchonEnv(repoDir);
     const anyLoaded = stderrWrites.find(s => s.includes('[archon] loaded'));

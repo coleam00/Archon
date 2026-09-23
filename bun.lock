@@ -43,6 +43,7 @@
         "discord.js": "^14.16.0",
         "grammy": "^1.36.0",
         "telegramify-markdown": "^1.3.3",
+        "zod": "^4.4.3",
       },
       "peerDependencies": {
         "typescript": "^5.0.0",
@@ -57,6 +58,7 @@
       "dependencies": {
         "@archon/adapters": "workspace:*",
         "@archon/core": "workspace:*",
+        "@archon/forge": "workspace:*",
         "@archon/git": "workspace:*",
         "@archon/isolation": "workspace:*",
         "@archon/paths": "workspace:*",
@@ -109,6 +111,9 @@
       "version": "0.10.1",
       "dependencies": {
         "zod": "^4.4.3",
+      },
+      "devDependencies": {
+        "@archon/paths": "workspace:*",
       },
       "peerDependencies": {
         "typescript": "^5.0.0",

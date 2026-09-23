@@ -168,6 +168,8 @@ Usage:
   archon <command> [subcommand] [options] [arguments]
 
 Commands:
+  forge resolve              Resolve an explicit remote through optional forge plugins
+  forge checks               Observe checks for an explicit qualified pull request
   trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>
                              Start configured workflows and inspect durable resource admission
   chat <message>             Send a message to the orchestrator

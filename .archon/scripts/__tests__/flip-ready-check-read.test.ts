@@ -1,210 +1,139 @@
 /**
- * Regression test for the deliver pack's final `flip-ready` check-state read.
- *
- * The node's bash body is the unit under test: fixtures stub `flip-ready`'s
- * output directly, so no fixture can observe a failed `gh` read. This test
- * extracts the live bash body from the workflow YAML, substitutes the one
- * template reference, and runs it against fake `gh` and `git` executables so a
- * failed check read must refuse before `gh pr ready` is invoked, and a refused
- * flip is classified on the pull request's structured state rather than on gh's
- * wording.
+ * The ready flip is the one irreversible step, so its own check read must refuse
+ * before `gh pr ready` on anything but green or no checks, and on any failed read,
+ * whichever source the operator selected. Fixtures stub `flip-ready`'s output, so
+ * only a subprocess run of the script can observe this.
  */
 import { describe, expect, it } from 'bun:test';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { trackTempRoots } from '@archon/paths/test-utils';
+import { PR_URL, forgeResponse, runDeliverScript, type GhFake } from './deliver-checks-harness';
 
-const WORKFLOW_YAML = resolve(
-  import.meta.dir,
-  '../../workflows/sdlc/deliver/archon-deliver.yaml'
-);
+const READY_REFUSAL = 'Only draft pull requests can be marked as "ready for review"';
+const flip = runDeliverScript.bind(null, 'flip-ready');
+const readyCalled = (calls: readonly string[]): boolean =>
+  calls.some(call => call.startsWith('pr ready'));
 
-/** gh's own refusal for a pull request that is no longer an open draft. */
-const READY_REFUSAL =
-  'X Pull request example/repo#42 is closed.\nOnly draft pull requests can be marked as "ready for review"';
+describe('flip-ready preflight on the default gh source', () => {
+  it('flips the recorded qualified PR when every check is green or skipped', () => {
+    const result = flip({
+      gh: {
+        checks: [
+          { name: 'build', state: 'SUCCESS', bucket: 'pass' },
+          { name: 'docs', state: 'SKIPPED', bucket: 'skipping' },
+        ],
+      },
+    });
+    expect(result.code).toBe(0);
+    expect(result.gh).toContain('pr ready 42 --repo ghe.example.com/example/repo');
+    expect(JSON.parse(result.stdout)).toEqual({ pr_url: PR_URL });
+    expect(result.forge).toEqual([]);
+  });
 
-const trackTempRoot = trackTempRoots();
+  it('flips on an observed empty check set without leaking gh output', () => {
+    const result = flip({ gh: { rollup: 0 } });
+    expect(result.code).toBe(0);
+    expect(readyCalled(result.gh)).toBe(true);
+    expect(result.stderr).toBe('');
+    expect(JSON.parse(result.stdout)).toEqual({ pr_url: PR_URL });
+  });
 
-function flipReadyBash(): string {
-  const parsed = Bun.YAML.parse(readFileSync(WORKFLOW_YAML, 'utf8'));
-  const node = (parsed as { nodes?: { id?: string; bash?: unknown }[] }).nodes?.find(
-    entry => entry.id === 'flip-ready'
-  );
-  if (typeof node?.bash !== 'string') {
-    throw new Error(`flip-ready node with a bash body not found in ${WORKFLOW_YAML}`);
+  const refusals: [string, GhFake, string][] = [
+    ['a failed check read', { checks: 'fail', rollup: 'fail' }, 'could not read check state'],
+    ['a red check', { checks: [{ name: 'build', state: 'FAILURE', bucket: 'fail' }] }, 'red checks: build (failure)'],
+    ['a running check', { checks: [{ name: 'unit', state: 'IN_PROGRESS', bucket: 'pending' }] }, 'pending checks: unit'],
+    ['a cancelled check', { checks: [{ name: 'e2e', state: 'CANCELLED', bucket: 'cancel' }] }, 'red checks: e2e (cancelled)'],
+  ];
+  for (const [label, gh, reason] of refusals) {
+    it(`refuses ${label} before the ready write`, () => {
+      const result = flip({ gh });
+      expect(result.code).not.toBe(0);
+      expect(readyCalled(result.gh)).toBe(false);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('flip-ready:');
+      expect(result.stderr).toContain(reason);
+    });
   }
-  return node.bash.replace('$pr.output.number', '42');
-}
+});
 
-interface FakeGh {
-  /** stdout when `gh api graphql` succeeds; omit for empty output. */
-  graphqlOut?: string;
-  /** stderr when `gh api graphql` fails (exit 1); omit for success. */
-  graphqlFail?: string;
-  /** stdout when `gh pr checks` succeeds; omit for empty output. */
-  checksOut?: string;
-  /** stderr when `gh pr checks` fails (exit 1); omit for success. */
-  checksFail?: string;
-  /** stderr when `gh pr ready` refuses (exit 1); omit for a flip that succeeds. */
-  readyFail?: string;
-  /** stdout for `gh pr view --json state`; omit to make that read fail (exit 1). */
-  stateOut?: string;
-}
-
-function runFlipReady(gh: FakeGh): {
-  code: number;
-  stdout: string;
-  stderr: string;
-  readyCalled: boolean;
-} {
-  const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'flip-ready-')));
-  const bin = join(root, 'bin');
-  mkdirSync(bin);
-  const marker = join(root, 'ready-marker');
-
-  const ghScript = `#!/bin/sh
-if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
-  if [ -n '${gh.graphqlFail ?? ''}' ]; then echo '${gh.graphqlFail ?? ''}' >&2; exit 1; fi
-  printf '%s' '${gh.graphqlOut ?? ''}'
-  exit 0
-fi
-if [ "$1" = "pr" ] && [ "$2" = "checks" ]; then
-  if [ -n '${gh.checksFail ?? ''}' ]; then echo '${gh.checksFail ?? ''}' >&2; exit 1; fi
-  printf '%s' '${gh.checksOut ?? ''}'
-  exit 0
-fi
-if [ "$1" = "pr" ] && [ "$2" = "ready" ]; then
-  : > '${marker}'
-  if [ -n '${gh.readyFail ?? ''}' ]; then echo '${gh.readyFail ?? ''}' >&2; exit 1; fi
-  echo "PR is ready"
-  exit 0
-fi
-if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
-  case "$*" in
-    *'--json state'*)
-      if [ -n '${gh.stateOut ?? ''}' ]; then echo '${gh.stateOut ?? ''}'; exit 0; fi
-      echo "fake gh: state read failed" >&2
-      exit 1
-      ;;
-    *'--json isDraft'*) echo "false"; exit 0 ;;
-    *'--json url'*) echo "https://github.com/example/repo/pull/42"; exit 0 ;;
-  esac
-  echo "fake gh: unexpected pr view args: $*" >&2
-  exit 1
-fi
-echo "fake gh: unexpected args: $*" >&2
-exit 1
-`;
-  writeFileSync(join(bin, 'gh'), ghScript);
-  chmodSync(join(bin, 'gh'), 0o755);
-
-  const gitScript = `#!/bin/sh
-if [ "$1" = "remote" ] && [ "$2" = "get-url" ] && [ "$3" = "origin" ]; then
-  echo "https://github.com/example/repo.git"
-  exit 0
-fi
-echo "fake git: unexpected args: $*" >&2
-exit 1
-`;
-  writeFileSync(join(bin, 'git'), gitScript);
-  chmodSync(join(bin, 'git'), 0o755);
-
-  const result = spawnSync('bash', ['-c', flipReadyBash()], {
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` },
-    encoding: 'utf8',
-  });
-
-  return {
-    code: result.status ?? -1,
-    stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
-    readyCalled: existsSync(marker),
-  };
-}
-
-describe('flip-ready check-state read', () => {
-  it('refuses before the ready flip when the check read fails', () => {
-    const result = runFlipReady({
-      graphqlFail: 'GraphQL: could not resolve to a Repository',
-      checksFail: 'GraphQL: could not resolve to a Repository',
+describe('flip-ready preflight on the opt-in forge source', () => {
+  it('passes the exact qualified PR and flips only green checks', () => {
+    const result = flip({
+      source: 'forge',
+      forge: { kind: 'fake', response: forgeResponse([{ name: 'build', state: 'green' }]) },
     });
-
-    expect(result.readyCalled).toBe(false);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('flip-ready');
-  });
-
-  it('proceeds on a successfully observed empty check set (no CI)', () => {
-    const result = runFlipReady({ graphqlOut: '0' });
-
     expect(result.code).toBe(0);
-    expect(result.readyCalled).toBe(true);
-    expect(result.stdout.trim()).toBe('https://github.com/example/repo/pull/42');
+    expect(result.forge[0]).toContain('forge checks --json --data');
+    expect(result.forge[0]).toContain('ghe.example.com');
+    expect(result.gh.some(call => call.startsWith('pr checks'))).toBe(false);
+    expect(readyCalled(result.gh)).toBe(true);
+    expect(JSON.parse(result.stdout)).toEqual({ pr_url: PR_URL });
   });
 
-  it('refuses with the non-green check names when checks are not green', () => {
-    const result = runFlipReady({
-      graphqlOut: '1',
-      checksOut: 'build (fail)\nunit (pending)',
-    });
-
-    expect(result.readyCalled).toBe(false);
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('build (fail)');
-    expect(result.stderr).toContain('unit (pending)');
-  });
-
-  it('proceeds when every observed check is green or skipped', () => {
-    const result = runFlipReady({ graphqlOut: '2', checksOut: '' });
-
+  it('allows an empty observation without leaking captured vendor output', () => {
+    const result = flip({ source: 'forge', forge: { kind: 'fake', response: forgeResponse([]) } });
     expect(result.code).toBe(0);
-    expect(result.readyCalled).toBe(true);
+    expect(readyCalled(result.gh)).toBe(true);
+    expect(result.stderr).toBe('');
   });
 
-  it('refuses when checks exist but their classification read fails', () => {
-    const result = runFlipReady({
-      graphqlOut: '1',
-      checksFail: 'GraphQL: could not resolve to a PullRequest',
+  for (const state of ['pending', 'red', 'gated', 'unknown'] as const) {
+    it(`refuses ${state} checks before the ready write`, () => {
+      const result = flip({
+        source: 'forge',
+        forge: { kind: 'fake', response: forgeResponse([{ name: 'build', state }]) },
+      });
+      expect(result.code).not.toBe(0);
+      expect(readyCalled(result.gh)).toBe(false);
+      expect(result.stderr).toContain('refusing to flip');
     });
+  }
 
-    expect(result.readyCalled).toBe(false);
+  it('refuses a failed forge read before the ready write', () => {
+    const result = flip({ source: 'forge', forge: { kind: 'fake' } });
     expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('flip-ready');
+    expect(readyCalled(result.gh)).toBe(false);
+    expect(result.stderr).toContain('forge check read failed');
+  });
+
+  it('fails loudly when forge is selected but no plugin is installed, never falling back to gh', () => {
+    const result = flip({
+      source: 'forge',
+      forge: { kind: 'no-plugin' },
+      gh: { checks: [{ name: 'build', state: 'SUCCESS', bucket: 'pass' }] },
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.gh).toEqual([]);
+    expect(result.stderr).toContain('flip-ready: ARCHON_SDLC_FORGE=forge:');
+    expect(result.stderr).toContain('no forge plugin claims ghe.example.com');
   });
 });
 
 describe('flip-ready terminal-state classification', () => {
-  it('reports the delivery when the refused flip finds the PR already merged', () => {
-    const result = runFlipReady({ graphqlOut: '0', readyFail: READY_REFUSAL, stateOut: 'MERGED' });
+  const green: GhFake = { checks: [{ name: 'build', state: 'SUCCESS', bucket: 'pass' }] };
 
-    expect(result.readyCalled).toBe(true);
+  it('reports the delivery when the refused flip finds the PR already merged', () => {
+    const result = flip({ gh: { ...green, readyFail: READY_REFUSAL, prState: 'MERGED' } });
     expect(result.code).toBe(0);
-    expect(result.stdout.trim()).toBe('https://github.com/example/repo/pull/42');
+    expect(JSON.parse(result.stdout)).toEqual({ pr_url: PR_URL });
     expect(result.stderr).toContain('already merged');
   });
 
   it('refuses a PR closed without a merge and names the state', () => {
-    const result = runFlipReady({ graphqlOut: '0', readyFail: READY_REFUSAL, stateOut: 'CLOSED' });
-
+    const result = flip({ gh: { ...green, readyFail: READY_REFUSAL, prState: 'CLOSED' } });
     expect(result.code).not.toBe(0);
-    expect(result.stdout.trim()).toBe('');
+    expect(result.stdout).toBe('');
     expect(result.stderr).toContain('CLOSED');
     expect(result.stderr).not.toContain('the ready flip failed');
   });
 
   it("keeps a refusal on an open PR a failure carrying gh's own words", () => {
-    const result = runFlipReady({ graphqlOut: '0', readyFail: READY_REFUSAL, stateOut: 'OPEN' });
-
+    const result = flip({ gh: { ...green, readyFail: READY_REFUSAL, prState: 'OPEN' } });
     expect(result.code).toBe(1);
-    expect(result.stdout.trim()).toBe('');
+    expect(result.stdout).toBe('');
     expect(result.stderr).toContain('Only draft pull requests');
   });
 
   it("fails with gh's own words when the state behind a refusal cannot be read", () => {
-    const result = runFlipReady({ graphqlOut: '0', readyFail: READY_REFUSAL });
-
+    const result = flip({ gh: { ...green, readyFail: READY_REFUSAL } });
     expect(result.code).toBe(1);
     expect(result.stderr).toContain('Only draft pull requests');
   });

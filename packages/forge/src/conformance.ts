@@ -45,3 +45,5 @@ export function verifyForgeSourceConformance<T extends ForgeSourceConformanceFix
   }
   return failures;
 }
+
+export { runForgeReadConformance, type ForgeReadConformanceCase } from './outbound-conformance';

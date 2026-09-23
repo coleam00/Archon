@@ -118,6 +118,9 @@
     ],
     [
       "src/discord-mention.test.ts"
+    ],
+    [
+      "src/host-command.test.ts"
     ]
   ]
 }
