@@ -163,8 +163,14 @@ describe('Workflow Logger', () => {
 
     it('writes the burst end once the stream goes quiet, without waiting for flush', async () => {
       // A killed process never reaches flush; the quiet gap alone must persist the burst end.
-      // Queued writes settle through file I/O, which fake timers leave alone.
-      const readAfterWrites = async (): Promise<WorkflowEvent[]> => {
+      // Queued writes settle through file I/O, which fake timers leave alone: poll the file
+      // until it holds `count` records (bounded), then give a stray extra write time to land.
+      const readAfterWrites = async (count: number): Promise<WorkflowEvent[]> => {
+        const path = join(testDir, 'watchdog-quiet.jsonl');
+        for (let i = 0; i < 1_000; i++) {
+          const lines = await readFile(path, 'utf-8').catch(() => '');
+          if (lines.trim().split('\n').filter(Boolean).length >= count) break;
+        }
         for (let i = 0; i < 20; i++) await readdir(testDir);
         return readLogFile('watchdog-quiet');
       };
@@ -176,10 +182,10 @@ describe('Workflow Logger', () => {
         recorder.observe('tool', t0 + 10);
 
         jest.advanceTimersByTime(WATCHDOG_RESET_BURST_GAP_MS - 1);
-        expect((await readAfterWrites()).map(e => e.chunk_count)).toEqual([1]);
+        expect((await readAfterWrites(1)).map(e => e.chunk_count)).toEqual([1]);
 
         jest.advanceTimersByTime(1);
-        expect((await readAfterWrites()).map(e => [e.chunk_type, e.chunk_count, e.ts])).toEqual([
+        expect((await readAfterWrites(2)).map(e => [e.chunk_type, e.chunk_count, e.ts])).toEqual([
           ['thinking', 1, iso(t0)],
           ['tool', 2, iso(t0 + 10)],
         ]);
