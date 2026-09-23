@@ -399,6 +399,12 @@ export interface StartAdmittedResourceStartInput {
    * hosts many runs and must not install process-wide handlers per run.
    */
   guardOwnedRun?: (owned: { runId: string; liveOwner: RunLiveOwner }) => () => void;
+  /**
+   * The PID of a detached process that executes only this run and leads its own process
+   * group. Registering it lets `archon workflow cancel` terminate that tree. The server
+   * omits it: its process hosts many runs and must never be the target of a stop.
+   */
+  detachedProcessPid?: number;
 }
 
 /**
@@ -449,7 +455,9 @@ export async function startAdmittedResourceStart(
 
   const sealed = readWorkflowRunConfigMetadata(run.metadata);
   const baseBranch = codebase.default_branch?.trim() || undefined;
-  const liveOwner = await startRunLiveOwner(run.id);
+  const liveOwner = await startRunLiveOwner(run.id, {
+    detachedProcessPid: input.detachedProcessPid,
+  });
   let releaseGuard: (() => void) | undefined;
   try {
     releaseGuard = input.guardOwnedRun?.({ runId: run.id, liveOwner });

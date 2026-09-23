@@ -496,4 +496,134 @@ describe('trigger CLI durable execution', () => {
     },
     45_000
   );
+
+  test('workflow cancel stops a run executing in a detached trigger execute process', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-trigger-cancel-')));
+    tempRoots.push(root);
+    const archonHome = join(root, 'home');
+    const projectRoot = join(root, 'project');
+    const workflowPath = join(projectRoot, '.archon', 'workflows', 'cancel-proof.yaml');
+    mkdirSync(join(projectRoot, '.archon', 'workflows'), { recursive: true });
+    expect(await Bun.spawn(['git', 'init', '-q'], { cwd: projectRoot }).exited).toBe(0);
+    const pidFile = join(root, 'owner.pid');
+    const writeWorkflow = (body: string): void => {
+      writeFileSync(
+        workflowPath,
+        `name: cancel-proof\ndescription: Cancel proof.\nmutates_checkout: false\nnodes:\n  - id: hold\n    bash: |\n      ${body}\n`
+      );
+    };
+    // A bash node's parent is the `trigger execute` process that owns the run.
+    writeWorkflow(`echo "$PPID $$" > '${pidFile}'; exec sleep 60`);
+
+    const cliPath = resolve(import.meta.dir, '..', 'cli.ts');
+    const databasePath = join(archonHome, 'archon.db');
+    const userId = crypto.randomUUID();
+    const configPath = join(root, 'trigger.json');
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        sourceInstanceId: 'cancel-timer',
+        binding: {
+          bindingId: 'cancel-proof',
+          bindingRevision: null,
+          hostId: 'cancel-host',
+          runAsUserId: userId,
+          resource: 'cancel:resource',
+          overlap: 'queue',
+          launch: {
+            cwd: projectRoot,
+            workflowName: 'cancel-proof',
+            inputs: {},
+            isolation: { kind: 'in-place' },
+          },
+        },
+        schedule: { intervalSeconds: 60, runAtLoad: false },
+      })
+    );
+    const fire = ['trigger', 'fire', '--config', configPath];
+    expect((await runCli(cliPath, projectRoot, archonHome, fire, false)).exitCode).not.toBe(0);
+    const database = new Database(databasePath);
+    try {
+      database
+        .query('INSERT INTO remote_agent_users (id, display_name) VALUES (?, ?)')
+        .run(userId, 'Cancel actor');
+    } finally {
+      database.close();
+    }
+    const runs = (): RunRow[] =>
+      readRows<RunRow>(
+        databasePath,
+        'SELECT id,status,metadata,output_root FROM remote_agent_workflow_runs ORDER BY started_at'
+      );
+    const requests = (): RequestRow[] =>
+      readRows<RequestRow>(
+        databasePath,
+        'SELECT id,status,launch FROM remote_agent_resource_start_requests ORDER BY queue_position'
+      );
+
+    let pids: number[] = [];
+    try {
+      await runCli(cliPath, projectRoot, archonHome, fire);
+      const first = await waitFor(() => {
+        const run = runs()[0];
+        return run?.status === 'running' && existsSync(pidFile) ? run : undefined;
+      }, 'trigger execution to start its node');
+      activeRuns.add(first.id);
+      pids = readFileSync(pidFile, 'utf8').trim().split(' ').map(Number);
+
+      // The next start captures its own source at intake and waits behind the slot.
+      writeWorkflow('echo done');
+      await runCli(cliPath, projectRoot, archonHome, fire);
+      await waitFor(
+        () => (requests()[1]?.status === 'queued' ? true : undefined),
+        'second start to queue behind the running one'
+      );
+
+      const cancel = await runCli(
+        cliPath,
+        projectRoot,
+        archonHome,
+        ['workflow', 'cancel', first.id],
+        false
+      );
+      if (cancel.exitCode !== 0) {
+        throw new Error(`cancel failed: ${cancel.stderr || cancel.stdout}`);
+      }
+      activeRuns.delete(first.id);
+      expect(runs()[0]?.status).toBe('cancelled');
+      // Git Bash reports MSYS PIDs on Windows, so the PID check is POSIX-only; there the
+      // cancel command's own confirmation that the owner's tree stopped is the proof.
+      if (process.platform !== 'win32') {
+        for (const pid of pids) expect(processAlive(pid)).toBe(false);
+      }
+
+      // The cancelled run released the capacity-1 slot, so a drain admits the queue.
+      await runCli(cliPath, projectRoot, archonHome, ['trigger', 'drain', '--host', 'cancel-host']);
+      await waitFor(
+        () => (runs()[1]?.status === 'completed' ? true : undefined),
+        'queued start to run after the cancel'
+      );
+      expect(requests().map(row => row.status)).toEqual(['admitted', 'admitted']);
+    } finally {
+      if (process.platform !== 'win32') {
+        for (const pid of pids) {
+          try {
+            process.kill(pid, 'SIGKILL');
+          } catch {
+            // Already gone.
+          }
+        }
+      }
+    }
+  }, 45_000);
 });
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}

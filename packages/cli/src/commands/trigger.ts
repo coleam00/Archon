@@ -23,7 +23,10 @@ import { resourceStartBindingIntentSchema } from '@archon/workflows/schemas/reso
 import { readWorkflowSourceState } from '@archon/workflows/schemas/workflow-run';
 import { CLIAdapter } from '../adapters/cli-adapter';
 import { writeJsonLine } from '../utils/stdout';
-import { DETACHED_RUN_OWNER_ENV } from '../utils/detached-run-control';
+import {
+  assertDetachedRunProcessOwner,
+  DETACHED_RUN_OWNER_ENV,
+} from '../utils/detached-run-control';
 import { registerOwnedRunTermination } from '../utils/owned-run-termination';
 import { installMacosNativeSchedule, removeMacosNativeSchedule } from '../triggers/native-schedule';
 import { resolveCliUserId } from './auth';
@@ -160,6 +163,14 @@ export async function triggerCommand(
       throw new Error(
         'Usage: archon trigger execute <admitted-request-id> --host <configured-host>'
       );
+    // Read the marker `spawnAdmitted` sets, then clear it before any node subprocess
+    // can inherit it. Only a marked process that leads its own process group registers
+    // its PID, because `archon workflow cancel` terminates that whole group.
+    const detachedProcessOwner = process.env[DETACHED_RUN_OWNER_ENV] === '1';
+    if (detachedProcessOwner) {
+      Reflect.deleteProperty(process.env, DETACHED_RUN_OWNER_ENV);
+      assertDetachedRunProcessOwner();
+    }
     const adapter = new CLIAdapter();
     const result = await startAdmittedResourceStart({
       requestId: args[0],
@@ -170,6 +181,7 @@ export async function triggerCommand(
         return adapter;
       },
       guardOwnedRun: registerOwnedRunTermination,
+      ...(detachedProcessOwner ? { detachedProcessPid: process.pid } : {}),
     });
     if (!result.success) throw new Error(`Run ${args[0]} did not complete: ${result.error}`);
     return;
