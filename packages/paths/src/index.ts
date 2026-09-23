@@ -46,6 +46,7 @@ export {
   resolveRunStorageRoot,
   getRunArtifactsDirForKey,
   getRunArtifactsDirForRoot,
+  RUN_ARTIFACTS_ENGINE_SUBDIR,
   getRunLogPathForRoot,
   getRunWorkflowSourceDirForRoot,
   slugifyFolderName,

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
 import { join, sep } from 'node:path';
-import { createLogger, isPathInside } from '@archon/paths';
+import { createLogger, isPathInside, RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
 import {
   nodeArtifactSchema,
   type NodeArtifact,
@@ -25,7 +25,7 @@ const NODES_SUBDIR = 'nodes';
  * of `nodes/` so the reader never sees its own output, and inside the run's artifact
  * dir so containers that mount that dir read the same bytes at the same path.
  */
-const LISTINGS_SUBDIR = join('.archon', 'typed-artifacts');
+const LISTINGS_SUBDIR = join(RUN_ARTIFACTS_ENGINE_SUBDIR, 'typed-artifacts');
 const nodeArtifactOwnerSchema = nodeArtifactSchema.pick({ nodeId: true, loopGroupPath: true });
 const nodeArtifactWriteParamsSchema = nodeArtifactSchema.omit({ path: true, size: true });
 

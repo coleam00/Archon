@@ -568,6 +568,17 @@ and excluded links. Files may change during the scan, especially during cancella
 this is an observation, not an atomic filesystem snapshot. The separate leave-behind
 file listing reflects the filesystem when you query it.
 
+`leave_behind.artifactFiles` lists the files a person or an agent would open, capped at
+200 for display. Each directory contributes its own files before its subdirectories,
+sorted by name, so a run's top-level reports lead the list. It excludes the engine's
+own `$ARTIFACTS_DIR/.archon/` child — the typed-artifact listings and node-output
+spills the engine writes for itself, which on a long run outnumber the reports.
+Nothing leaves the list quietly: `leave_behind.artifactFilesOmitted` reports how many
+engine-internal files were skipped (`internalFiles`), whether the display cap was
+reached (`truncated`), and any directory the walk could not read (`unreadable`). Human
+output prints the same facts under the file list. The console run page applies the same
+exclusion.
+
 Human output includes `Transcript: <path>`. Every successful JSON shape includes the
 same value as `transcript_path`, including verbose node summaries and raw events. A
 historical run whose storage location can no longer be resolved remains inspectable and
