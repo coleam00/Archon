@@ -13,6 +13,7 @@ import {
   type CloneCredentials,
 } from '@archon/git';
 import { findCodebaseForCheckoutPath } from '../services/codebase-checkout-resolver';
+import { quoteCommandArg } from '../utils/command-args';
 import {
   expandTilde,
   canonicalizeProjectPath,
@@ -204,38 +205,29 @@ async function registerRepoAtPath(
   // Check if a codebase with this name already exists (dedup by project identity)
   const existing = await codebaseDb.findCodebaseByName(name);
   if (existing) {
-    // Determine if the new path is "better" (local > archon-managed clone)
+    // registerRepository reaches here only after findCodebaseForCheckoutPath found no Git
+    // identity match, so a local targetPath is a separate clone, not this row's checkout.
+    // Nothing on this host can prove it owns the managed row either: every Docker host
+    // resolves the Archon home to the literal /.archon, so another host sharing the database
+    // can hold its own checkout at the byte-identical path, and when the path was empty here
+    // registerRepository has just linked it to targetPath itself. Repointing would silently
+    // break that other host (#3403), so the operator moves the project explicitly.
     const isNewPathLocal = !targetPath.includes('/.archon/workspaces/');
     const isExistingPathManaged = existing.default_cwd.includes('/.archon/workspaces/');
-    const shouldUpdateCwd = isNewPathLocal && isExistingPathManaged;
-
-    // A name match plus the managed-path convention does not prove this host owns that
-    // clone: a server sharing the database registers the same name at a path that does not
-    // exist here. Repointing it would break every consumer on that host, so an unreachable
-    // managed path — which the checkout resolver already treats as non-owning — is refused.
-    if (shouldUpdateCwd) {
-      try {
-        await access(existing.default_cwd);
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code ?? 'unknown error';
-        throw new Error(
-          `Project "${existing.name}" is already registered at ${existing.default_cwd}, ` +
-            `which this host cannot reach (${code}). Refusing to repoint it to ${targetPath}. ` +
-            'If that path is gone for good, repoint it explicitly with ' +
-            `/update-project "${existing.name}" ${targetPath}`
-        );
-      }
+    if (isNewPathLocal && isExistingPathManaged) {
+      throw new Error(
+        `Project "${existing.name}" is already registered at ${existing.default_cwd}, ` +
+          `a different checkout than ${targetPath}. Refusing to repoint it: another host ` +
+          'sharing this database may use that path. To make this checkout the project, run ' +
+          `/update-project ${quoteCommandArg(existing.name)} ${targetPath}`
+      );
     }
 
     const updates: {
-      default_cwd?: string;
       repository_url?: string | null;
       default_branch?: string | null;
     } = {};
-    if (shouldUpdateCwd) {
-      updates.default_cwd = targetPath;
-      updates.default_branch = detectedBranch;
-    } else if (!existing.default_branch && detectedBranch) {
+    if (!existing.default_branch && detectedBranch) {
       updates.default_branch = detectedBranch;
     }
     // Fill in repository_url if the existing record doesn't have one
@@ -247,14 +239,13 @@ async function registerRepoAtPath(
     }
 
     // Still reload commands for the existing codebase
-    const effectiveCwd = shouldUpdateCwd ? targetPath : existing.default_cwd;
     const effectiveDefaultBranch =
       updates.default_branch !== undefined
         ? updates.default_branch
         : (existing.default_branch ?? null);
     let commandsLoaded = 0;
     for (const folder of getCommandFolderSearchPaths()) {
-      const commandPath = join(effectiveCwd, folder);
+      const commandPath = join(existing.default_cwd, folder);
       try {
         await access(commandPath);
       } catch {
@@ -279,7 +270,7 @@ async function registerRepoAtPath(
       codebaseId: existing.id,
       name: existing.name,
       repositoryUrl: existing.repository_url,
-      defaultCwd: shouldUpdateCwd ? targetPath : existing.default_cwd,
+      defaultCwd: existing.default_cwd,
       defaultBranch: effectiveDefaultBranch,
       commandCount: commandsLoaded,
       alreadyExisted: true,

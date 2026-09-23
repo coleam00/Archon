@@ -26,6 +26,7 @@ import * as commandHandler from '../handlers/command-handler';
 import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
 import { classifyAndFormatError } from '../utils/error-formatter';
 import { toError } from '../utils/error';
+import { quoteCommandArg } from '../utils/command-args';
 import { safeDeactivateSession } from '../state/session-transitions';
 import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
 import { buildManageRunTool } from './manage-run-tool';
@@ -2087,16 +2088,7 @@ export async function handleMessage(
           `This conversation's project directory no longer exists:\n\`${scoped.default_cwd}\`\n\n` +
             `The project "${scoped.name}" is still registered, but its folder is gone — ` +
             'deleted, moved, or on a volume that is no longer mounted.\n\n' +
-            // The name is quoted, and `"`/`\` inside it escaped, so the suggestion
-            // round-trips back through parseCommand as the same string. Without the
-            // quotes, handleUpdateProject takes only the first token as the name
-            // (`const [projectName, ...pathParts] = args`), so `Client Ops` parses
-            // as `Client` and hands the user a second, wronger error; without the
-            // escaping, a name containing a quote terminates the quoted token early
-            // and does the same thing. parseCommand honours backslash escapes inside
-            // quotes (command-handler.ts:206-212), and both are no-ops for a plain
-            // name.
-            `- \`/update-project "${scoped.name.replace(/[\\"]/g, c => `\\${c}`)}" <new-path>\` ` +
+            `- \`/update-project ${quoteCommandArg(scoped.name)} <new-path>\` ` +
             'to point it at the new location\n' +
             '- `/setproject <name>` to switch this conversation to a different project'
         );

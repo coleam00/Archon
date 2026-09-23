@@ -64,6 +64,9 @@
       "src/handlers/register-folder-lookup.integration.test.ts"
     ],
     [
+      "src/handlers/register-repository-shared-db.integration.test.ts"
+    ],
+    [
       "src/db/adapters/postgres.test.ts"
     ],
     [

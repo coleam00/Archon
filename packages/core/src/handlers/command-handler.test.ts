@@ -438,6 +438,7 @@ mock.module('@archon/paths', () => ({
 }));
 
 import { parseCommand, handleCommand } from './command-handler';
+import { quoteCommandArg } from '../utils/command-args';
 
 // Helper to clear all mocks
 function clearAllMocks(): void {
@@ -584,6 +585,12 @@ describe('CommandHandler', () => {
       const result = parseCommand('/setcwd /workspace/my repo');
       expect(result.command).toBe('setcwd');
       expect(result.args).toEqual(['/workspace/my', 'repo']);
+    });
+
+    test('parses a quoteCommandArg value back to the same string', () => {
+      const name = 'Bob"s \\Ops';
+      const result = parseCommand(`/update-project ${quoteCommandArg(name)} /new/path`);
+      expect(result.args).toEqual([name, '/new/path']);
     });
 
     test('should handle /reset command', () => {
