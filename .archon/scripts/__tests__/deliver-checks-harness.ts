@@ -66,20 +66,12 @@ export interface ScriptRun {
   readonly forge: readonly string[];
 }
 
-export function runDeliverScript(
-  script: 'check-ci' | 'ci-note' | 'flip-ready',
-  options: { source?: string; gh?: GhFake; forge?: ForgeFake } = {}
-): ScriptRun {
-  const root = trackTempRoot(mkdtempSync(join(tmpdir(), `deliver-${script}-`)));
-  const ghLog = join(root, 'gh.log');
-  const forgeLog = join(root, 'forge.log');
-  const readsLog = join(root, 'forge-reads');
-  const fake = options.gh ?? {};
-
-  const preload = join(root, 'preload.ts');
-  writeFileSync(
-    preload,
-    `import { appendFileSync } from 'node:fs';
+/**
+ * A Bun preload that fakes `gh` for one script run and logs every gh argv to
+ * `ghLog`. Shared with the bundled-pack test so both fake the same boundary.
+ */
+export function fakeGhPreload(fake: GhFake, ghLog: string): string {
+  return `import { appendFileSync } from 'node:fs';
 const fake = ${JSON.stringify(fake)};
 const original = Bun.spawnSync.bind(Bun);
 Object.defineProperty(Bun, 'sleepSync', { value: () => {} });
@@ -111,8 +103,19 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   if (text.includes('--json url')) return result(0, ${JSON.stringify(PR_URL)});
   return result(95, '', 'unexpected gh call');
 } });
-`
-  );
+`;
+}
+
+export function runDeliverScript(
+  script: 'check-ci' | 'ci-note' | 'flip-ready',
+  options: { source?: string; gh?: GhFake; forge?: ForgeFake } = {}
+): ScriptRun {
+  const root = trackTempRoot(mkdtempSync(join(tmpdir(), `deliver-${script}-`)));
+  const ghLog = join(root, 'gh.log');
+  const forgeLog = join(root, 'forge.log');
+  const readsLog = join(root, 'forge-reads');
+  const preload = join(root, 'preload.ts');
+  writeFileSync(preload, fakeGhPreload(options.gh ?? {}, ghLog));
 
   const env: NodeJS.ProcessEnv = {
     ...process.env,

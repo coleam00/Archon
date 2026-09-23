@@ -5,6 +5,10 @@ import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import {
+  fakeGhPreload,
+  type GhFake,
+} from '../../../../.archon/scripts/__tests__/deliver-checks-harness';
+import {
   isBinaryBuild,
   BUNDLED_COMMANDS,
   BUNDLED_SCRIPT_PACKS,
@@ -760,10 +764,7 @@ describe('bundled-defaults', () => {
   describe('deliver check source (bundled pack)', () => {
     const runShipped = async (
       script: 'check-ci' | 'flip-ready',
-      options: {
-        source?: string;
-        checks?: { name: string; state: string; bucket: string }[] | 'fail';
-      }
+      options: { source?: string; checks?: GhFake['checks'] }
     ): Promise<{ code: number; stdout: string; stderr: string; gh: string[] }> => {
       const root = mkdtempSync(join(tmpdir(), 'archon-bundled-checks-'));
       try {
@@ -773,27 +774,7 @@ describe('bundled-defaults', () => {
         }
         const ghLog = join(root, 'gh.log');
         const preload = join(root, 'fake-gh.ts');
-        writeFileSync(
-          preload,
-          `import { appendFileSync } from 'node:fs';
-const checks = ${JSON.stringify(options.checks ?? 'fail')};
-const original = Bun.spawnSync.bind(Bun);
-Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
-  if (argv[0] !== 'gh') return original(argv, settings);
-  const text = argv.slice(1).join(' ');
-  appendFileSync(${JSON.stringify(ghLog)}, text + '\\n');
-  const result = (exitCode, stdout = '', stderr = '') =>
-    ({ exitCode, stdout: Buffer.from(stdout), stderr: Buffer.from(stderr) });
-  if (text.startsWith('pr checks'))
-    return checks === 'fail' ? result(1, '', 'HTTP 502') : result(0, JSON.stringify(checks));
-  if (text.includes('statusCheckRollup')) return result(1, '', 'HTTP 502');
-  if (text.startsWith('pr ready')) return result(0, 'ready');
-  if (text.includes('--json isDraft')) return result(0, 'false');
-  if (text.includes('--json url')) return result(0, 'https://github.com/owner/repo/pull/42');
-  return result(95, '', 'unexpected gh call');
-} });
-`
-        );
+        writeFileSync(preload, fakeGhPreload({ checks: options.checks ?? 'fail' }, ghLog));
         const run = spawnSync(
           process.execPath,
           ['--preload', preload, join(root, 'sdlc', 'deliver', 'scripts', `${script}.ts`)],
