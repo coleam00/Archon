@@ -40,7 +40,7 @@ export interface GhFake {
   readonly checks?: readonly GhCheckRow[] | 'fail';
   /** `statusCheckRollup | length`; 'fail' exits 1. */
   readonly rollup?: number | 'fail';
-  /** Active Actions workflow count; 'fail' exits 1. */
+  /** Active Actions workflow count, printed one id per line; 'fail' exits 1. */
   readonly workflows?: number | 'fail';
   /** stderr for a refused `gh pr ready`; omit for a flip that succeeds. */
   readonly readyFail?: string;
@@ -94,8 +94,14 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   }
   if (text.includes('statusCheckRollup'))
     return fake.rollup === 'fail' || fake.rollup === undefined ? result(1, '', 'HTTP 502') : result(0, String(fake.rollup));
+  // Real gh refuses this combination before any request (gh 2.92).
+  if (argv.includes('--slurp') && (argv.includes('--jq') || argv.includes('--template')))
+    return result(1, '', 'the \`--slurp\` option is not supported with \`--jq\` or \`--template\`');
+  // With --paginate, gh applies --jq to each page; the fake prints one id per active workflow.
   if (text.startsWith('api'))
-    return fake.workflows === 'fail' || fake.workflows === undefined ? result(1, '', 'HTTP 404') : result(0, String(fake.workflows));
+    return fake.workflows === 'fail' || fake.workflows === undefined
+      ? result(1, '', 'HTTP 404')
+      : result(0, Array.from({ length: fake.workflows }, (_, index) => index + 1 + '\\n').join(''));
   if (text.startsWith('pr ready'))
     return fake.readyFail === undefined ? result(0, 'ready') : result(1, '', fake.readyFail);
   if (text.includes('--json isDraft')) return result(0, 'false');

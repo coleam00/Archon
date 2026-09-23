@@ -176,20 +176,20 @@ export function readPrChecks(pr: QualifiedPr, selected: string | undefined): Che
  */
 export function hasActiveWorkflows(pr: QualifiedPr): boolean | undefined {
   // Every page: the default read stops at thirty workflows, and an active one on a
-  // later page would otherwise read as "no CI configured".
+  // later page would otherwise read as "no CI configured". gh applies --jq to each
+  // page and refuses --slurp with --jq, so the filter prints one id per active
+  // workflow and the lines are counted here.
   const result = gh(
     'api',
     '--hostname',
     pr.repo.host,
     `repos/${pr.repo.path}/actions/workflows`,
     '--paginate',
-    '--slurp',
     '--jq',
-    '[.[] | .workflows[] | select(.state == "active")] | length'
+    '.workflows[] | select(.state == "active") | .id'
   );
   if (!result.ok) return undefined;
-  const count = Number.parseInt(result.stdout.trim(), 10);
-  return Number.isNaN(count) ? undefined : count > 0;
+  return result.stdout.split('\n').some(line => line.trim() !== '');
 }
 
 /** `name (result)` for each unit, as the operator reads it. */

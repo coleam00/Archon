@@ -88,7 +88,7 @@ describe('check-ci on the default gh source', () => {
       detail: 'no checks configured on this repository — nothing to await',
     });
     expect(result.gh).toContain(
-      'api --hostname ghe.example.com repos/example/repo/actions/workflows --paginate --slurp --jq [.[] | .workflows[] | select(.state == "active")] | length'
+      'api --hostname ghe.example.com repos/example/repo/actions/workflows --paginate --jq .workflows[] | select(.state == "active") | .id'
     );
   });
 
