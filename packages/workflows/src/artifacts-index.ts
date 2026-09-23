@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
-import { isAbsolute, join, relative, sep } from 'node:path';
-import { createLogger } from '@archon/paths';
+import { join, sep } from 'node:path';
+import { createLogger, isPathInside } from '@archon/paths';
 import {
   nodeArtifactSchema,
   type NodeArtifact,
@@ -222,7 +222,7 @@ export async function readNodeArtifacts(
     );
     return empty;
   }
-  if (!isContained(realRoot, realNodes)) {
+  if (!isPathInside(realRoot, realNodes)) {
     errors.push({ path: NODES_SUBDIR, kind: 'unsafe_path' });
     return empty;
   }
@@ -321,11 +321,6 @@ function withCode(
   return err?.code ? { ...error, code: err.code } : error;
 }
 
-function isContained(root: string, candidate: string): boolean {
-  const rel = relative(root, candidate);
-  return rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
-}
-
 type ContainedFile =
   | { status: 'ok' }
   | { status: 'unsafe' }
@@ -341,7 +336,7 @@ async function classifyContainedFile(
   realRoot: string,
   candidate: string
 ): Promise<ContainedFile> {
-  if (!isContained(root, candidate)) return { status: 'unsafe' };
+  if (!isPathInside(root, candidate)) return { status: 'unsafe' };
   let real: string;
   try {
     real = await realpath(candidate);
@@ -350,7 +345,7 @@ async function classifyContainedFile(
     if (code === 'ENOENT') return { status: 'missing', code };
     return code ? { status: 'unreadable', code } : { status: 'unreadable' };
   }
-  if (!isContained(realRoot, real)) return { status: 'unsafe' };
+  if (!isPathInside(realRoot, real)) return { status: 'unsafe' };
   try {
     if (!(await stat(real)).isFile()) return { status: 'unsafe' };
   } catch (err) {

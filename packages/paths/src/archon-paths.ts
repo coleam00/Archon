@@ -24,7 +24,17 @@
  * For Docker: /.archon/
  */
 
-import { join, dirname, normalize, basename, resolve, sep, relative, isAbsolute } from 'path';
+import {
+  join,
+  dirname,
+  normalize,
+  basename,
+  resolve,
+  sep,
+  relative,
+  isAbsolute,
+  parse,
+} from 'path';
 import type { PlatformPath } from 'path';
 import { homedir } from 'os';
 import { access, mkdir, symlink, lstat, readdir, readlink, realpath, rm, stat } from 'fs/promises';
@@ -170,26 +180,57 @@ export function getArchonWorkspacesPath(): string {
   return join(getArchonHome(), 'workspaces');
 }
 
-const hostPathSemantics = { resolve, relative, isAbsolute, sep };
+type PathSemantics = Pick<
+  PlatformPath,
+  'resolve' | 'relative' | 'isAbsolute' | 'sep' | 'normalize' | 'parse'
+>;
+
+const hostPathSemantics: PathSemantics = { resolve, relative, isAbsolute, sep, normalize, parse };
+
+export interface PathInsideOptions {
+  /** Count `candidate` naming `root` itself as inside. Default: only descendants are inside. */
+  includeRoot?: boolean;
+  /**
+   * Compare the normalized spellings instead of resolved paths: no resolution
+   * against the process cwd (a relative path is never inside an absolute root)
+   * and exact case on every platform. Guards whose contract has always been a
+   * spelling comparison use this so moving onto the shared helper cannot make
+   * them admit a path they rejected before, such as a case variant on Windows
+   * that a case-sensitive directory would resolve somewhere else.
+   */
+  lexical?: boolean;
+  /** Defaults to this host; tests pass `path.win32` or `path.posix` to evaluate another platform. */
+  pathApi?: PathSemantics;
+}
 
 /**
- * True when `candidate` resolves strictly inside `root` (the root itself is not inside).
+ * True when `candidate` is inside `root`, compared segment by segment so a
+ * sibling such as `workspaces-old` or a `.archon/workspaces` fragment under
+ * another root never matches.
  *
- * Compares resolved paths segment by segment, so on Windows either separator
- * works and the comparison ignores case, and a sibling such as `workspaces-old`
- * or a `.archon/workspaces` fragment under another root never matches.
- * `pathApi` defaults to this host's semantics; tests pass `path.win32` or
- * `path.posix` to evaluate another platform's paths.
+ * By default both paths are resolved, so on Windows either separator works and
+ * the comparison ignores case. See {@link PathInsideOptions.lexical} for the
+ * spelling comparison.
  */
 export function isPathInside(
   root: string,
   candidate: string,
-  pathApi: Pick<PlatformPath, 'resolve' | 'relative' | 'isAbsolute' | 'sep'> = hostPathSemantics
+  { includeRoot = false, lexical = false, pathApi = hostPathSemantics }: PathInsideOptions = {}
 ): boolean {
+  if (lexical) {
+    const base = trimTrailingSep(pathApi.normalize(root), pathApi);
+    const target = trimTrailingSep(pathApi.normalize(candidate), pathApi);
+    if (target === base) return includeRoot;
+    return target.startsWith(base.endsWith(pathApi.sep) ? base : base + pathApi.sep);
+  }
   const rel = pathApi.relative(pathApi.resolve(root), pathApi.resolve(candidate));
-  return (
-    rel !== '' && rel !== '..' && !rel.startsWith(`..${pathApi.sep}`) && !pathApi.isAbsolute(rel)
-  );
+  if (rel === '') return includeRoot;
+  return rel !== '..' && !rel.startsWith(`..${pathApi.sep}`) && !pathApi.isAbsolute(rel);
+}
+
+/** Drop one trailing separator (normalize has already collapsed repeats), keeping a filesystem root such as `/` or `C:\`. */
+function trimTrailingSep(p: string, pathApi: PathSemantics): string {
+  return p.endsWith(pathApi.sep) && p.length > pathApi.parse(p).root.length ? p.slice(0, -1) : p;
 }
 
 /**
@@ -817,12 +858,11 @@ export function getProjectStoragePaths(key: ProjectStorageKey): ProjectStoragePa
  * on it would let a relative or whitespace root scatter a run's artifacts AND
  * its shared state under whatever the server's cwd happens to be.
  *
- * Rejects relative paths implicitly — they cannot start with the absolute home.
+ * A lexical comparison: a relative path is never inside the absolute home, and
+ * case must match exactly even on Windows.
  */
 export function isInsideArchonHome(candidate: string): boolean {
-  const home = normalize(getArchonHome());
-  const normalised = normalize(candidate);
-  return normalised === home || normalised.startsWith(home + sep);
+  return isPathInside(getArchonHome(), candidate, { includeRoot: true, lexical: true });
 }
 
 /**

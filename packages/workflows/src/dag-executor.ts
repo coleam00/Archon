@@ -33,7 +33,7 @@ import {
 } from './node-event-write';
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { readFile } from 'fs/promises';
-import { basename, isAbsolute, join as joinPath, resolve as resolvePath, sep } from 'path';
+import { basename, isAbsolute, join as joinPath, resolve as resolvePath } from 'path';
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import { isEffortRung } from '@archon/paths/effort';
 import { discoverScriptsForCwd } from './script-discovery';
@@ -132,7 +132,7 @@ import { planGraph, resolvedBodyNodes } from './graph-plan';
 import { FAN_OUT_CANCEL_REASONS, waitCompletionEvents } from './store';
 import type { DagResumeSnapshot, FanOutCancelReason, PersistedNodeOutput } from './store';
 import { formatToolCall } from './utils/tool-formatter';
-import { createLogger, captureWorkflowCompleted } from '@archon/paths';
+import { createLogger, captureWorkflowCompleted, isPathInside } from '@archon/paths';
 import type { WorkflowErrorClass, WorkflowNodeType } from '@archon/paths';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
@@ -1260,7 +1260,7 @@ function checkoutSnapshotExcludes(
 }
 
 function isInsideAny(absPath: string, dirs: readonly string[]): boolean {
-  return dirs.some(d => absPath === d || absPath.startsWith(d + sep));
+  return dirs.some(d => isPathInside(d, absPath, { includeRoot: true, lexical: true }));
 }
 
 /** Path operands of one `git status --porcelain` line (`XY path` or `XY old -> new`). */

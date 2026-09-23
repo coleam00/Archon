@@ -302,9 +302,6 @@ export {
   type UserAliasesPatch,
 } from './db/user-ai-prefs-store';
 
-// Path validation
-export { isPathWithinWorkspace, validateAndResolvePath } from './utils/path-validation';
-
 // Port allocation
 export { getPort } from './utils/port-allocation';
 

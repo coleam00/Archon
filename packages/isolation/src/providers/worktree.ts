@@ -6,7 +6,7 @@
 
 import { createHash } from 'crypto';
 import { access, rm } from 'fs/promises';
-import { isAbsolute, join, normalize as normalizePath, resolve, sep } from 'path';
+import { isAbsolute, join, normalize as normalizePath, resolve } from 'path';
 
 import { createLogger } from '@archon/paths';
 import {
@@ -29,7 +29,7 @@ import {
   CanonicalRepoPathUnavailableError,
 } from '@archon/git';
 import type { WorktreeBaseOverride } from '@archon/git';
-import { isInsideArchonWorkspaces } from '@archon/paths';
+import { isInsideArchonWorkspaces, isPathInside } from '@archon/paths';
 import type { BranchName, RepoPath, WorktreeInfo } from '@archon/git';
 import { copyWorktreeFiles } from '../worktree-copy';
 import type {
@@ -141,10 +141,8 @@ function resolveRepoLocalOverride(
 
   // Double-check via resolved absolute paths — catches edge cases like a path that
   // normalizes clean but still escapes when joined (e.g. leading `./../` on some platforms).
-  // Uses `path.sep` so the "is inside repoRoot" check works on Windows (\\) as well as POSIX (/).
   const resolved = resolve(repoRoot, normalized);
-  const repoRootResolved = resolve(repoRoot);
-  if (resolved !== repoRootResolved && !resolved.startsWith(repoRootResolved + sep)) {
+  if (!isPathInside(resolve(repoRoot), resolved, { includeRoot: true, lexical: true })) {
     throw new Error(
       `.archon/config.yaml worktree.path resolves outside the repo root (got: ${trimmed} → ${resolved}).`
     );

@@ -17,7 +17,7 @@ import {
 import { mkdir, writeFile, rm, readFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { existsSync, unlinkSync } from 'fs';
-import { isAbsolute, join, normalize, sep } from 'path';
+import { isAbsolute, join } from 'path';
 import { tmpdir } from 'os';
 import * as git from '@archon/git';
 import { RATE_LIMIT_MAX_RETRIES } from './executor-shared';
@@ -45,6 +45,8 @@ const mockCaptureWorkflowCompleted = mock<typeof import('@archon/paths').capture
  * this file leaves it on the unreachable default, where no pointer can validate.
  */
 let mockArtifactHome = '/nonexistent/home';
+// Captured before the module mock below replaces the re-export.
+const { isPathInside } = await import('@archon/paths/archon-paths');
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getCommandFolderSearchPaths: (folder?: string) => {
@@ -60,9 +62,9 @@ mock.module('@archon/paths', () => ({
   getArchonHome: () => '/nonexistent/home',
   // Real semantics, rooted at the mutable fake home above, so the artifact-pointer
   // containment rules are exercised rather than stubbed away.
+  isPathInside,
   isInsideArchonHome: (candidate: string): boolean =>
-    normalize(candidate) === normalize(mockArtifactHome) ||
-    normalize(candidate).startsWith(normalize(mockArtifactHome) + sep),
+    isPathInside(mockArtifactHome, candidate, { includeRoot: true, lexical: true }),
   getRunArtifactsDirForRoot: (root: string, runId: string): string =>
     join(root, 'artifacts', 'runs', runId),
   // Telemetry is fire-and-forget; mock as a no-op so terminal sites can call it.
@@ -35135,6 +35137,17 @@ describe('executeDagWorkflow -- node-level mutates_checkout: false (#2771)', () 
       true
     );
     expect(nodeFailedError(deps, 'guarded')).toBeUndefined();
+  });
+
+  it('a write to a sibling that only shares the artifacts dir name prefix still trips it', async () => {
+    await initRepo(testDir);
+    const deps = await runBashNode(
+      'mkdir -p "${ARTIFACTS_DIR}-old" && echo x > "${ARTIFACTS_DIR}-old/out.txt"',
+      true
+    );
+    const error = nodeFailedError(deps, 'guarded');
+    expect(error).toContain('mutates_checkout: false');
+    expect(error).toContain('artifacts-old');
   });
 
   it('outside a git repo the check fails open and the node succeeds', async () => {

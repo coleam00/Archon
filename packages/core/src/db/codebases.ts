@@ -1,10 +1,9 @@
 /**
  * Database operations for codebases
  */
-import { sep as pathSep } from 'path';
 import { pool, getDialect } from './connection';
 import type { Codebase } from '../types';
-import { createLogger, captureCodebaseRegistered } from '@archon/paths';
+import { createLogger, captureCodebaseRegistered, isPathInside } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -130,7 +129,7 @@ export async function findCodebaseByPathPrefix(cwdPath: string): Promise<Codebas
   let best: Codebase | null = null;
   for (const row of result.rows) {
     const base = row.default_cwd;
-    const isMatch = cwdPath === base || cwdPath.startsWith(base + pathSep);
+    const isMatch = isPathInside(base, cwdPath, { includeRoot: true, lexical: true });
     if (isMatch && (best === null || base.length > best.default_cwd.length)) {
       best = row;
     }

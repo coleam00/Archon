@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, spyOn, mock, type Mock } from 'bun:test';
-import { basename, join } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 
 // Fixed test home — path assertions use this constant; no duplication of production isDocker() logic.
 const TEST_ARCHON_HOME = '/test/.archon';
@@ -3596,6 +3596,25 @@ describe('WorktreeProvider', () => {
       expect(() =>
         provider.getWorktreePath(baseRequest, branch, { path: 'nested/../../escape' })
       ).toThrow(/must stay within the repo/);
+    });
+
+    // A drive-relative path such as `Z:worktrees` is not absolute on Windows and has
+    // no `..` segment, so only the resolved containment check sees it leave the repo.
+    // On POSIX the same string is an ordinary directory name inside the repo.
+    test('a drive-relative worktree.path on another drive resolves outside the repo on Windows', () => {
+      const branch = provider.generateBranchName(baseRequest);
+      const repoDrive = resolve('/').slice(0, 1).toUpperCase();
+      const otherDrive = repoDrive === 'Z' ? 'Y' : 'Z';
+      const config = { path: `${otherDrive}:worktrees` };
+      if (process.platform === 'win32') {
+        expect(() => provider.getWorktreePath(baseRequest, branch, config)).toThrow(
+          /resolves outside the repo root/
+        );
+      } else {
+        expect(provider.getWorktreePath(baseRequest, branch, config)).toBe(
+          join('/Users/dev/Projects/myapp', `${otherDrive}:worktrees`, branch)
+        );
+      }
     });
 
     test('accepts a nested relative path without `..`', () => {

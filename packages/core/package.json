@@ -144,9 +144,6 @@
       "src/db/workflows.adoption-timestamp.integration.test.ts"
     ],
     [
-      "src/utils/path-validation.test.ts"
-    ],
-    [
       "src/services/cleanup-service.test.ts"
     ],
     [

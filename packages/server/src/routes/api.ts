@@ -11,7 +11,7 @@ import type { WebAdapter } from '../adapters/web';
 import { boundMetadataToolOutputs } from '../adapters/web/truncate';
 import { rm, readFile, writeFile, unlink, mkdir, readdir, realpath, stat } from 'fs/promises';
 import { existsSync, readFileSync } from 'fs';
-import { normalize, join, sep, basename, dirname, resolve } from 'path';
+import { normalize, join, basename, dirname, resolve } from 'path';
 import { randomUUID } from 'crypto';
 import type { Context } from 'hono';
 import type {
@@ -81,6 +81,7 @@ import {
   resolveRunStorageRoot,
   isInsideArchonHome,
   isInsideArchonWorkspaces,
+  isPathInside,
   getArchonHome,
   isDocker,
   isWSL,
@@ -428,13 +429,6 @@ function resolveRunArtifactDir(
 ): string | null {
   const root = resolveRunStorageRoot(run, codebase);
   return root ? getRunArtifactsDirForRoot(root, runId) : null;
-}
-
-function isPathInside(parent: string, candidate: string): boolean {
-  const normalisedParent = normalize(parent);
-  const normalisedCandidate = normalize(candidate);
-  const parentPrefix = normalisedParent.endsWith(sep) ? normalisedParent : normalisedParent + sep;
-  return normalisedCandidate === normalisedParent || normalisedCandidate.startsWith(parentPrefix);
 }
 
 // =========================================================================
@@ -1694,11 +1688,9 @@ export function registerApiRoutes(
    */
   async function validateCwd(cwd: string): Promise<boolean> {
     const codebases = await codebaseDb.listCodebases();
-    const normalizedCwd = normalize(cwd);
-    return codebases.some(cb => {
-      const base = normalize(cb.default_cwd);
-      return normalizedCwd === base || normalizedCwd.startsWith(base + sep);
-    });
+    return codebases.some(cb =>
+      isPathInside(cb.default_cwd, cwd, { includeRoot: true, lexical: true })
+    );
   }
 
   // CORS for Web UI — allow-all is fine for a single-developer tool.
@@ -2329,7 +2321,7 @@ export function registerApiRoutes(
 
     const archonHome = getArchonHome();
     const uploadDir = join(archonHome, 'artifacts', 'uploads', conversationId);
-    if (!uploadDir.startsWith(archonHome + sep)) {
+    if (!isPathInside(archonHome, uploadDir, { lexical: true })) {
       return { ok: false, status: 400, error: 'Invalid conversation ID' };
     }
 
@@ -4814,7 +4806,7 @@ export function registerApiRoutes(
     const filePath = join(artifactDir, filename);
 
     // Final safety check: ensure resolved path stays within artifact directory
-    if (!isPathInside(artifactDir, filePath)) {
+    if (!isPathInside(artifactDir, filePath, { includeRoot: true, lexical: true })) {
       getLog().warn({ runId, filename, filePath, artifactDir }, 'artifacts.path_escape_blocked');
       return apiError(c, 400, 'Invalid filename');
     }
@@ -4841,7 +4833,7 @@ export function registerApiRoutes(
       getLog().error({ err, runId, filename }, 'artifacts.read_failed');
       return apiError(c, 500, 'Failed to read artifact file');
     }
-    if (!isPathInside(realArtifactDir, realFilePath)) {
+    if (!isPathInside(realArtifactDir, realFilePath, { includeRoot: true, lexical: true })) {
       getLog().warn(
         { runId, filename, realFilePath, realArtifactDir },
         'artifacts.symlink_escape_blocked'

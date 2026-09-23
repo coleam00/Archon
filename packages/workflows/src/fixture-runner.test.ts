@@ -13,7 +13,7 @@ import {
 } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 import { readBundleIndex } from './defaults/bundle-inventory';
 
@@ -861,6 +861,7 @@ describe('runFixtures', () => {
     ]);
     await expect(fixtureLabels('.archon/workflows/sdlc')).resolves.toHaveLength(2);
     await expect(fixtureLabels(packPath)).resolves.toHaveLength(2);
+    await expect(fixtureLabels(`${packPath}${sep}`)).resolves.toHaveLength(2);
     await expect(fixtureLabels(undefined)).resolves.toHaveLength(3);
   });
 
