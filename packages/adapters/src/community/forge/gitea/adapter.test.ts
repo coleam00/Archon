@@ -8,7 +8,7 @@ import { describe, test, expect, mock, spyOn, beforeEach, afterEach } from 'bun:
 import type { Mock } from 'bun:test';
 import { createHmac } from 'node:crypto';
 import type { Codebase, Conversation } from '@archon/core';
-import { DRAIN_REFUSAL_NOTICE } from '@archon/core/utils/conversation-lock';
+import { DRAIN_REFUSAL_NOTICE, notifyDrainRefusal } from '@archon/core/utils/conversation-lock';
 
 // Mock @archon/paths to suppress noisy logger output during tests
 const mockLogger = {
@@ -111,6 +111,7 @@ mock.module('@archon/core', () => ({
   toError: mock((e: unknown) => (e instanceof Error ? e : new Error(String(e)))),
   onConversationClosed: mockOnConversationClosed,
   DRAIN_REFUSAL_NOTICE,
+  notifyDrainRefusal,
   ConversationLockManager: class {
     async acquireLock(_id: string, fn: () => Promise<void>): Promise<{ status: 'started' }> {
       await fn();
@@ -1245,6 +1246,80 @@ describe('GiteaAdapter', () => {
         expect.anything(),
         expect.objectContaining({ userId: undefined })
       );
+    });
+  });
+
+  // Drain: the adapter calls acquireLock itself, so it owns telling the commenter
+  // their comment was refused. Nothing queues a refused comment, so silence here
+  // would be the silent drop drain exists to prevent.
+  describe('drain refusal', () => {
+    let fetchSpy: ReturnType<typeof spyOn<typeof globalThis, 'fetch'>>;
+
+    beforeEach(() => {
+      fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(new Response('[]', { status: 200 }));
+      mockGetOrCreateConversation.mockImplementation(async () => ({
+        id: 'conv-test-uuid',
+        codebase_id: 'codebase-test-uuid',
+        platform_type: 'gitea',
+        platform_conversation_id: 'testuser/testrepo#42',
+      }));
+      mockFindCodebaseByRepoUrl.mockImplementation(async () => ({
+        id: 'codebase-test-uuid',
+        repository_url: 'https://gitea.example.com/testuser/testrepo',
+        default_cwd: '/tmp/test-workspaces/testuser/testrepo/source',
+        name: 'testrepo',
+      }));
+    });
+
+    afterEach(() => {
+      fetchSpy.mockRestore();
+    });
+
+    test('posts the refusal notice and runs no turn when the lock manager is draining', async () => {
+      mockAcquireLock.mockImplementationOnce(async () => ({
+        status: 'refused-draining' as unknown as 'started',
+      }));
+
+      const adapter = new GiteaAdapter(
+        'https://gitea.example.com',
+        'fake-token-for-testing',
+        'fake-webhook-secret',
+        mockLockManager,
+        undefined,
+        { retryDelayMs: () => 1 }
+      );
+      // @ts-expect-error - accessing private method for testing
+      adapter.verifySignature = mock(() => true);
+
+      await adapter.handleWebhook(
+        JSON.stringify({
+          action: 'created',
+          issue: {
+            number: 42,
+            title: 'Test Issue',
+            body: 'Description',
+            user: { login: 'user123' },
+            labels: [],
+            state: 'open',
+          },
+          comment: { body: '@archon fix this', user: { login: 'commenter' } },
+          repository: {
+            owner: { login: 'testuser' },
+            name: 'testrepo',
+            full_name: 'testuser/testrepo',
+            html_url: 'https://gitea.example.com/testuser/testrepo',
+            default_branch: 'main',
+          },
+          sender: { login: 'senderuser' },
+        }),
+        'mock-signature'
+      );
+
+      expect(mockHandleMessage).not.toHaveBeenCalled();
+      const postedBodies = fetchSpy.mock.calls
+        .map(call => (call[1] as RequestInit | undefined)?.body)
+        .filter((body): body is string => typeof body === 'string');
+      expect(postedBodies.some(body => body.includes(DRAIN_REFUSAL_NOTICE))).toBe(true);
     });
   });
 });

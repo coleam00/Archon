@@ -6,7 +6,11 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import type { Mock } from 'bun:test';
 import type { Codebase, Conversation } from '@archon/core';
-import { DRAIN_REFUSAL_NOTICE } from '@archon/core/utils/conversation-lock';
+import {
+  DRAIN_REFUSAL_NOTICE,
+  notifyDrainRefusal,
+  type LockAcquisitionResult,
+} from '@archon/core/utils/conversation-lock';
 
 type FetchCall = (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>;
 type FetchMock = Mock<FetchCall> & Pick<typeof fetch, 'preconnect'>;
@@ -113,6 +117,7 @@ mock.module('@archon/core', () => ({
   onConversationClosed: mockOnConversationClosed,
   ConversationNotFoundError: class extends Error {},
   DRAIN_REFUSAL_NOTICE,
+  notifyDrainRefusal,
   ConversationLockManager: class {
     async acquireLock(_id: string, fn: () => Promise<void>): Promise<{ status: 'started' }> {
       await fn();
@@ -151,8 +156,11 @@ function createAdapter(options?: {
   secret?: string;
   gitlabUrl?: string;
   botMention?: string;
+  lockManager?: {
+    acquireLock: (id: string, handler: () => Promise<void>) => Promise<LockAcquisitionResult>;
+  };
 }): InstanceType<typeof GitLabAdapter> {
-  const lockManager = new ConversationLockManager();
+  const lockManager = options?.lockManager ?? new ConversationLockManager();
   return new GitLabAdapter(
     options?.token ?? 'test-token',
     options?.secret ?? 'test-secret',
@@ -742,6 +750,38 @@ describe('GitLabAdapter', () => {
         expect.anything(),
         expect.objectContaining({ userId: undefined })
       );
+    });
+  });
+
+  // Drain: the adapter calls acquireLock itself, so it owns telling the commenter
+  // their comment was refused. Nothing queues a refused comment, so silence here
+  // would be the silent drop drain exists to prevent.
+  describe('drain refusal', () => {
+    test('posts the refusal notice and runs no turn when the lock manager is draining', async () => {
+      mockGetOrCreateConversation.mockImplementation(async () => ({
+        id: 'conv-test-uuid',
+        codebase_id: 'codebase-test-uuid',
+        platform_type: 'gitlab',
+        platform_conversation_id: 'mygroup/myproject#1',
+      }));
+      mockFindCodebaseByRepoUrl.mockImplementation(async () => ({
+        id: 'codebase-test-uuid',
+        repository_url: 'https://gitlab.example.com/mygroup/myproject',
+        default_cwd: '/tmp/test-workspaces/mygroup/myproject/source',
+        name: 'myproject',
+      }));
+      mockFetch.mockClear();
+
+      const adapter = createAdapter({
+        lockManager: { acquireLock: mock(async () => ({ status: 'refused-draining' as const })) },
+      });
+      await adapter.handleWebhook(createNotePayload({ username: 'testuser' }), 'test-secret');
+
+      expect(mockHandleMessage).not.toHaveBeenCalled();
+      const postedBodies = mockFetch.mock.calls
+        .map(call => (call[1] as RequestInit | undefined)?.body)
+        .filter((body): body is string => typeof body === 'string');
+      expect(postedBodies.some(body => body.includes(DRAIN_REFUSAL_NOTICE))).toBe(true);
     });
   });
 
