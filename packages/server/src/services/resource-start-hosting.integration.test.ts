@@ -328,29 +328,30 @@ describe('server resource-start host', () => {
     const { deliver, engine } = await fixture(false, { kind: 'worktree' });
     expect((await deliver('first', 'queue')).status).toBe(200);
     const requestId = await admitWithoutStarting();
-    const failing: IWorkflowEngine & { cwd?: string } = {
+    const failedCwds: string[] = [];
+    const failing: IWorkflowEngine = {
       async submit(input) {
-        failing.cwd = input.cwd;
+        failedCwds.push(input.cwd);
         throw new Error('engine unavailable');
       },
       async resume() {
         throw new Error('not used');
       },
     };
-    const start = (with_: IWorkflowEngine): ReturnType<typeof startAdmittedResourceStart> =>
+    const start = (target: IWorkflowEngine): ReturnType<typeof startAdmittedResourceStart> =>
       startAdmittedResourceStart({
         requestId,
         hostId: HOST_ID,
-        engine: with_,
+        engine: target,
         createPlatform: ({ conversationDbId }) => new HeadlessPlatform(conversationDbId),
       });
 
     await expect(start(failing)).rejects.toThrow('engine unavailable');
-    expect(failing.cwd).toBeDefined();
     // The operator's retry of the still-pending run reaches the engine in the same checkout.
     expect((await start(engine)).success).toBe(true);
     expect(engine.claimed).toEqual([requestId]);
-    expect(engine.submitted[0]?.cwd).toBe(failing.cwd);
+    expect(engine.submitted.map(input => input.cwd)).toEqual(failedCwds);
+    expect(failedCwds).toHaveLength(1);
   });
 
   test('a start that fails before submission logs its run and the recovery command', async () => {
