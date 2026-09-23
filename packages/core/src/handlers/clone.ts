@@ -519,7 +519,7 @@ export async function registerRepository(localPath: string): Promise<RegisterRes
       `Project "${sameName.name}" is already registered at ${sameName.default_cwd}, ` +
         `a different checkout than ${localPath}. Refusing to repoint it: another host ` +
         'sharing this database may use that path. To make this checkout the project, run ' +
-        `/update-project ${quoteCommandArg(sameName.name)} ${localPath}`
+        `/update-project ${quoteCommandArg(sameName.name)} ${quoteCommandArg(localPath)}`
     );
   }
 

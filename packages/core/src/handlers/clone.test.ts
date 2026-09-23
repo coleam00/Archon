@@ -1474,7 +1474,7 @@ describe('name-based deduplication', () => {
     );
 
     expect(error?.message).toContain('/home/test/.archon/workspaces/owner/repo/source');
-    expect(error?.message).toContain('/update-project "owner/repo" /home/user/repo');
+    expect(error?.message).toContain('/update-project "owner/repo" "/home/user/repo"');
     expect(mockUpdateCodebase).not.toHaveBeenCalled();
     expect(mockCreateCodebase).not.toHaveBeenCalled();
     // The refusal is decided before anything is written to disk.
@@ -1502,10 +1502,10 @@ describe('name-based deduplication', () => {
       (err: unknown) => err as Error
     );
 
-    expect(error?.message).toContain(`/update-project "owner/repo" ${lookalike}`);
+    expect(error?.message).toContain(`/update-project "owner/repo" "${lookalike}"`);
   });
 
-  test('escapes a quote in the project name of the /update-project suggestion', async () => {
+  test('escapes quotes in the project name and path of the /update-project suggestion', async () => {
     // Without a remote the name falls back to the directory basename, which may hold a quote.
     const existingCodebase = makeCodebase({
       id: 'existing-id',
@@ -1524,7 +1524,7 @@ describe('name-based deduplication', () => {
       (err: unknown) => err as Error
     );
 
-    expect(error?.message).toContain('/update-project "we\\"ird" /home/user/we"ird');
+    expect(error?.message).toContain('/update-project "we\\"ird" "/home/user/we\\"ird"');
   });
 
   test('fills missing default_branch on existing local codebase', async () => {
