@@ -11,11 +11,12 @@ export interface ExecNodeEnvironmentContext {
   issueContext?: string;
   adoptedRunDir?: string | undefined;
   /**
-   * This invocation's typed-artifact listing, when one was materialized. Empty for
-   * a dry run, which never observes real artifacts. The path is inside the run's
-   * artifact dir, so a container that mounts it reads the same bytes at the same path.
+   * This invocation's typed-artifact listing. Required so a real invocation cannot
+   * forget it and hand its script an empty pointer; only a caller with no listing
+   * (the dry run) passes `''` explicitly. The path is inside the run's artifact dir,
+   * so a container that mounts it reads the same bytes at the same path.
    */
-  typedArtifactsFile?: string;
+  typedArtifactsFile: string;
 }
 
 export function buildExecNodeEnvironment(context: ExecNodeEnvironmentContext): NodeJS.ProcessEnv {
@@ -40,7 +41,7 @@ export function buildExecNodeEnvironment(context: ExecNodeEnvironmentContext): N
     ISSUE_CONTEXT: issueContext,
     // The listing path, delivered like the other engine-reserved keys: configured
     // project env and node bindings spread before this bag, so neither can shadow it.
-    TYPED_ARTIFACTS_FILE: context.typedArtifactsFile ?? '',
+    TYPED_ARTIFACTS_FILE: context.typedArtifactsFile,
   };
 }
 
@@ -56,6 +57,7 @@ export const EXEC_NODE_ENVIRONMENT_NAMES: ReadonlySet<string> = new Set(
       loopUserInput: '',
       loopPrevOutput: '',
       rejectionReason: '',
+      typedArtifactsFile: '',
     })
   )
 );

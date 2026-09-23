@@ -787,6 +787,8 @@ async function executeCodeNode(
           loopPrevOutput: '',
           rejectionReason: '',
           issueContext: '',
+          // No artifacts are written in a dry run, so there is no listing to point at.
+          typedArtifactsFile: '',
         }),
       },
     });

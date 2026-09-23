@@ -21726,6 +21726,50 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect((await readFile(counterFile, 'utf8')).trim()).toBe('1');
   });
 
+  it('until_bash receives the same reserved environment as an exec node', async () => {
+    const counterFile = join(testDir, 'lg-env-counter');
+    const counterRef = `"${counterFile.replace(/\\/g, '/')}"`;
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        platform: createMockPlatform(),
+        conversationId: 'conv-lg-env',
+        cwd: testDir,
+        workflow: {
+          name: 'lg-env-until',
+          nodes: [
+            {
+              id: 'group',
+              kind: 'loop_group',
+              loop_group: {
+                // Braced forms bypass engine substitution, so this reads the process
+                // environment a script launched from the condition would see.
+                until_bash: 'test "${WORKFLOW_ID}" = lg-env-until && test -d "${ARTIFACTS_DIR}"',
+                max_iterations: 2,
+                fresh_context: false,
+                nodes: [
+                  {
+                    id: 'tick',
+                    kind: 'exec',
+                    runtime: 'sh',
+                    script: `n=$(cat ${counterRef} 2>/dev/null || echo 0); echo $((n+1)) > ${counterRef}`,
+                    depends_on: [],
+                  },
+                ],
+              },
+              depends_on: [],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('lg-env-until'),
+        artifactsDir: join(testDir, 'artifacts'),
+      })
+    );
+
+    expect((await readFile(counterFile, 'utf8')).trim()).toBe('1');
+  });
+
   it('INSTANCE 2: $LOOP_PREV cross-iteration ref sees prior iteration output', async () => {
     // The body prompt references $LOOP_PREV.work.output. We assert the mock receives a
     // prompt that contains the PREVIOUS iteration's output on iteration 2+ (and empty
