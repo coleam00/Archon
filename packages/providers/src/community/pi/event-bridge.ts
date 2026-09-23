@@ -415,15 +415,16 @@ export async function* bridgeSession(
         // Condition: assembled text is strictly longer and starts with what was
         // streamed (an extension, not a replacement); no assistant message in
         // the transcript is treated as clean.
+        // The tail joins the buffered prefix so the executor sees one text block,
+        // not the prefix and the tail joined as two blocks.
         const assembled = extractLastAssistantText(event.messages);
-        flushPendingAssistant();
         if (
           assembled !== undefined &&
           assembled.length > currentTurnText.length &&
           assembled.startsWith(currentTurnText)
         ) {
           const tail = assembled.slice(currentTurnText.length);
-          queue.push({ kind: 'chunk', chunk: { type: 'assistant', content: tail } });
+          pendingAssistant += tail;
           if (wantsStructured) assistantBuffer += tail;
           getLog().warn(
             {
@@ -434,6 +435,7 @@ export async function* bridgeSession(
             'pi.event-bridge.streaming_tail_completed'
           );
         }
+        flushPendingAssistant();
         currentTurnText = '';
         promptMessages.push(...event.messages);
         sawAgentEnd = true;

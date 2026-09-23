@@ -686,7 +686,7 @@ describe('streaming tail completion', () => {
   test('completes a truncated tail from an earlier loop run in the same prompt', async () => {
     // One prompt() can run Pi's loop twice (e.g. compact-and-continue). The first
     // run's final turn lost its tail; the second run streamed cleanly. The first
-    // run's tail must still be recovered, in order, before the second run's text.
+    // run's tail must still be recovered, in its own block, before the second run's text.
     let listener: ((event: AgentSessionEvent) => void) | undefined;
     const mockSession = {
       sessionId: 'session-1',
@@ -710,8 +710,7 @@ describe('streaming tail completion', () => {
     for await (const chunk of bridgeSession(mockSession, 'prompt')) chunks.push(chunk);
 
     expect(chunks.filter(c => c.type === 'assistant').map(c => c.content)).toEqual([
-      'first run lost its ',
-      'tail',
+      'first run lost its tail',
       'second run is clean',
     ]);
     expect(chunks.filter(c => c.type === 'result')).toHaveLength(1);
@@ -744,10 +743,10 @@ describe('streaming tail completion', () => {
       chunks.push(chunk);
     }
 
+    // The recovered tail joins the streamed prefix in one block: the executor
+    // joins separate assistant chunks with a blank line.
     const assistantChunks = chunks.filter(c => c.type === 'assistant');
-    expect(assistantChunks).toHaveLength(2);
-    expect(assistantChunks[0].content).toBe(streamed);
-    expect(assistantChunks[1].content).toBe(tail);
+    expect(assistantChunks.map(c => c.content)).toEqual([streamed + tail]);
     expect(chunks[chunks.length - 1].type).toBe('result');
   });
 
