@@ -1043,8 +1043,11 @@ ${userComment}`;
       if (isCheckRunCompletedEvent(decoded)) await this.handleCompletedCheckRun(decoded);
     } else {
       // Chat execution is asynchronous; source-plugin receipt acceptance has its own endpoint.
-      void this.handleWebhook(payload, signature, deliveryId, eventName).catch(() => {
-        getLog().error({ deliveryId, eventName }, 'github.conversational_webhook_failed');
+      void this.handleWebhook(payload, signature, deliveryId, eventName).catch((error: unknown) => {
+        getLog().error(
+          { err: error as Error, deliveryId, eventName },
+          'github.conversational_webhook_failed'
+        );
       });
     }
     return 'accepted';

@@ -67,9 +67,9 @@ export async function loadWebhookSourcePlugins(
   let parsed: z.infer<typeof sourceConfigSchema>;
   try {
     parsed = sourceConfigSchema.parse(JSON.parse(await readFile(configPath, 'utf8')));
-  } catch {
-    log.error({ stage: 'config' }, 'webhook_source_load_failed');
-    throw new Error('Webhook source configuration is invalid');
+  } catch (error) {
+    log.error({ err: error as Error, stage: 'config' }, 'webhook_source_load_failed');
+    throw new Error('Webhook source configuration is invalid', { cause: error });
   }
   const plugins = new Map<string, WebhookSourcePlugin>();
 
@@ -83,12 +83,14 @@ export async function loadWebhookSourcePlugins(
     let loaded: unknown;
     try {
       loaded = await import(pathToFileURL(source.module).href);
-    } catch {
+    } catch (error) {
       log.error(
-        { sourceInstanceId: source.sourceInstanceId, stage: 'import' },
+        { err: error as Error, sourceInstanceId: source.sourceInstanceId, stage: 'import' },
         'webhook_source_load_failed'
       );
-      throw new Error(`Webhook source '${source.sourceInstanceId}' could not be loaded`);
+      throw new Error(`Webhook source '${source.sourceInstanceId}' could not be loaded`, {
+        cause: error,
+      });
     }
     const factory = (loaded as { default?: unknown }).default;
     if (typeof factory !== 'function') {
@@ -102,12 +104,14 @@ export async function loadWebhookSourcePlugins(
         sourceInstanceId: source.sourceInstanceId,
         config: source.config,
       });
-    } catch {
+    } catch (error) {
       log.error(
-        { sourceInstanceId: source.sourceInstanceId, stage: 'factory' },
+        { err: error as Error, sourceInstanceId: source.sourceInstanceId, stage: 'factory' },
         'webhook_source_load_failed'
       );
-      throw new Error(`Webhook source '${source.sourceInstanceId}' factory failed`);
+      throw new Error(`Webhook source '${source.sourceInstanceId}' factory failed`, {
+        cause: error,
+      });
     }
     if (!isWebhookSourcePlugin(plugin)) {
       throw new Error(
@@ -129,9 +133,14 @@ export async function loadWebhookSourcePlugins(
       let result;
       try {
         result = webhookSourceResultSchema.parse(await plugin.receive(request));
-      } catch {
-        log.error({ sourceInstanceId, stage: 'normalize' }, 'webhook_source_failed');
-        throw new Error(`Webhook source '${sourceInstanceId}' failed to normalize a receipt`);
+      } catch (error) {
+        log.error(
+          { err: error as Error, sourceInstanceId, stage: 'normalize' },
+          'webhook_source_failed'
+        );
+        throw new Error(`Webhook source '${sourceInstanceId}' failed to normalize a receipt`, {
+          cause: error,
+        });
       }
       if (result.status === 'rejected') {
         log.warn(
@@ -159,9 +168,14 @@ export async function loadWebhookSourcePlugins(
       }
       try {
         await dependencies.acceptReceipt(result.acceptance);
-      } catch {
-        log.error({ sourceInstanceId, stage: 'persist' }, 'webhook_source_failed');
-        throw new Error(`Webhook source '${sourceInstanceId}' receipt persistence failed`);
+      } catch (error) {
+        log.error(
+          { err: error as Error, sourceInstanceId, stage: 'persist' },
+          'webhook_source_failed'
+        );
+        throw new Error(`Webhook source '${sourceInstanceId}' receipt persistence failed`, {
+          cause: error,
+        });
       }
       return result.acceptance.outcome === 'malformed' ? 'malformed' : 'accepted';
     },

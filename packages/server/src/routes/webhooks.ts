@@ -42,8 +42,8 @@ export function registerGithubWebhookRoute(app: OpenAPIHono, github: GithubWebho
       if (result === 'malformed') return c.json({ error: 'Malformed payload' }, 400);
 
       return c.text('OK', 200);
-    } catch {
-      getLog().error({ eventType, deliveryId }, 'webhook_endpoint_error');
+    } catch (error) {
+      getLog().error({ err: error as Error, eventType, deliveryId }, 'webhook_endpoint_error');
       return c.json({ error: 'Internal server error' }, 500);
     }
   });
@@ -67,8 +67,11 @@ export function registerWebhookSourceRoutes(
       if (result === 'unauthenticated') return c.json({ error: 'Unauthenticated' }, 401);
       if (result === 'malformed') return c.json({ error: 'Malformed payload' }, 400);
       return c.text('OK', 200);
-    } catch {
-      getLog().error({ sourceInstanceId, stage: 'receive' }, 'webhook_source_endpoint_error');
+    } catch (error) {
+      getLog().error(
+        { err: error as Error, sourceInstanceId, stage: 'receive' },
+        'webhook_source_endpoint_error'
+      );
       return c.json({ error: 'Internal server error' }, 500);
     }
   });

@@ -128,11 +128,13 @@ describe('POST /webhooks/github', () => {
     expect(mockReceiveWebhook).not.toHaveBeenCalled();
   });
 
-  test('returns 500 when durable receipt acceptance fails', async () => {
+  test('returns 500 and logs the cause when durable receipt acceptance fails', async () => {
     const app = createWebhookApp();
+    const cause = new Error('receipt persistence failed');
     mockReceiveWebhook.mockImplementation(async () => {
-      throw new Error('receipt persistence failed');
+      throw cause;
     });
+    mockLogger.error.mockClear();
 
     const res = await postWebhook(app, {
       'x-github-event': 'issue_comment',
@@ -142,6 +144,10 @@ describe('POST /webhooks/github', () => {
 
     expect(res.status).toBe(500);
     expect(mockReceiveWebhook).toHaveBeenCalledTimes(1);
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ err: cause, deliveryId: 'guid-1' }),
+      'webhook_endpoint_error'
+    );
   });
 
   test('returns 500 when check-run processing rejects', async () => {
@@ -224,18 +230,24 @@ describe('POST /webhooks/sources/:sourceInstanceId', () => {
     expect(receive).not.toHaveBeenCalled();
   });
 
-  test('returns 500 when normalization or persistence fails', async () => {
+  test('returns 500 and logs the cause when normalization or persistence fails', async () => {
     const app = new OpenAPIHono();
+    const cause = new Error('receipt persistence failed');
     registerWebhookSourceRoutes(app, {
       hasSource: () => true,
       receive: async () => {
-        throw new Error('secret payload detail');
+        throw cause;
       },
     });
+    mockLogger.error.mockClear();
     const response = await app.request('/webhooks/sources/configured', {
       method: 'POST',
       body: 'raw',
     });
     expect(response.status).toBe(500);
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ err: cause, sourceInstanceId: 'configured' }),
+      'webhook_source_endpoint_error'
+    );
   });
 });

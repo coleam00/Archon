@@ -203,14 +203,15 @@ describe('webhook source plugin host', () => {
 
   test('does not acknowledge a receipt whose durable acceptance fails', async () => {
     const { configPath } = await fixture({ status: 'received', acceptance: acceptance() });
+    const cause = new Error('database detail');
     const host = await loadWebhookSourcePlugins(configPath, {
       acceptReceipt: mock(async () => {
-        throw new Error('database detail');
+        throw cause;
       }),
       isKnownUser: mock(async () => true),
     });
     await expect(
       host.receive('source-1', { body: '', headers: {}, receivedAt: new Date().toISOString() })
-    ).rejects.toThrow('receipt persistence failed');
+    ).rejects.toMatchObject({ message: expect.stringContaining('persistence failed'), cause });
   });
 });
