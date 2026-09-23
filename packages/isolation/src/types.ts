@@ -181,6 +181,12 @@ export interface DestroyOptions {
 
 export interface WorktreeDestroyOptions extends DestroyOptions {
   branchName?: BranchName;
+  /**
+   * Remove the worktree even while it is locked. Implies `force`: `git worktree
+   * remove` refuses a locked worktree unless forced twice. Only the call holding
+   * the lock may pass this — for anyone else, a lock means "not yours".
+   */
+  removeLocked?: boolean;
   /** Required for branch cleanup if worktree path doesn't exist */
   canonicalRepoPath?: RepoPath;
   /** Delete the remote branch (best-effort, e.g., after PR merge) */

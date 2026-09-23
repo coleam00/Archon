@@ -715,9 +715,17 @@ The provider adopts existing worktrees before creating new ones:
 1. **Path match**: If worktree exists at expected path -> adopt
 2. **Branch match**: If a same-repository PR branch or a task request with `taskBranch.kind: 'existing'` has an existing worktree -> adopt
 
-Only a worktree whose setup finished can be adopted: when `create()` fails after
-`git worktree add` (git identity, submodule init, or configured file copies), it removes the
-worktree it just created before rethrowing, so the next run creates a fresh one.
+Only a worktree whose setup finished can be adopted. `create()` locks the worktree it just
+added (`git worktree lock`) and releases the lock once setup — git identity, submodule init,
+configured file copies — completes. A setup failure removes the worktree it locked before
+rethrowing, so the next run creates a fresh one.
+
+A worktree still carrying that lock is refused rather than adopted: either another run is
+setting it up right now, or a run died before finishing and left a checkout with no
+submodules. Both cases need an operator decision, so the error names the path and the command
+that clears it (`git worktree remove --force --force <path>`). The same error carries the path
+when the rollback itself cannot remove the worktree — a locked submodule `.git` file or a
+permission problem — because the leftover is then the operator's to delete.
 
 ```typescript
 // Inside create()

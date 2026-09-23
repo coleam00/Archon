@@ -138,6 +138,18 @@ const ERROR_PATTERNS: { pattern: string; message: string; known: boolean }[] = [
     known: true,
   },
   {
+    // Checked before the generic 'cannot adopt' message below: a worktree whose
+    // setup never finished needs the retry-or-remove action, not "choose a
+    // different branch".
+    pattern: 'its setup did not finish',
+    message:
+      '**Error:** The worktree for this branch was left half-created, or another run is ' +
+      'creating it right now. Retry once that run ends. Otherwise remove the leftover — ' +
+      '`git worktree list` shows it as locked, and ' +
+      '`git worktree remove --force --force <path>` deletes it.',
+    known: true,
+  },
+  {
     pattern: 'cannot adopt',
     message:
       '**Error:** Refused to adopt an existing directory at the worktree path. ' +

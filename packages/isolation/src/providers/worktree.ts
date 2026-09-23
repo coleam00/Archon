@@ -18,8 +18,11 @@ import {
   getDefaultRemote,
   getWorktreeBase,
   listWorktrees,
+  lockWorktree,
   mkdirAsync,
+  readWorktreeLock,
   removeWorktree,
+  unlockWorktree,
   syncWorkspace,
   verifyWorktreeOwnership,
   worktreeExists,
@@ -52,6 +55,17 @@ function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('isolation.worktree');
   return cachedLog;
 }
+
+/**
+ * Lock reason Archon writes while it is still setting up a worktree it created.
+ *
+ * The lock is what separates a usable checkout from a half-built one: git keeps
+ * it out of `prune`, refuses a plain `remove`, and reports the reason, so a
+ * concurrent run sees the marker instead of a directory that merely looks ready.
+ * Matched exactly, it is also the creating call's proof on rollback that the
+ * checkout is still its own to delete (#3448).
+ */
+const SETUP_LOCK_REASON = 'archon: worktree setup in progress';
 
 /**
  * Resolve the anchors from which Git worktree commands should run.
@@ -283,7 +297,11 @@ export class WorktreeProvider implements IIsolationProvider {
     // Only attempt worktree removal if path exists
     if (pathExists) {
       const gitArgs = ['-C', repoPath, 'worktree', 'remove'];
-      if (options?.force) {
+      // Git refuses a locked worktree even with one `--force`; the second one is
+      // its own opt-in for that, so a lock still protects every other caller.
+      if (options?.removeLocked) {
+        gitArgs.push('--force', '--force');
+      } else if (options?.force) {
         gitArgs.push('--force');
       }
       gitArgs.push(worktreePath);
@@ -714,9 +732,7 @@ export class WorktreeProvider implements IIsolationProvider {
         }
       }
 
-      const adoptedBranch = exactBranch ?? toBranchName(branchName);
-      getLog().info({ worktreePath, branchName: adoptedBranch }, 'worktree_adopted');
-      return this.buildAdoptedEnvironment(worktreePath, adoptedBranch, request);
+      return this.adoptWorktree(worktreePath, exactBranch ?? toBranchName(branchName), request);
     }
 
     // Exact-branch requests also search Git's registered worktrees because an
@@ -760,16 +776,24 @@ export class WorktreeProvider implements IIsolationProvider {
       throw err;
     }
 
-    getLog().info({ worktreePath, branchName }, 'worktree_adopted');
-    return this.buildAdoptedEnvironment(worktreePath, branchName, request, 'branch');
+    return this.adoptWorktree(worktreePath, branchName, request, 'branch');
   }
 
-  private buildAdoptedEnvironment(
+  /**
+   * Hand an existing checkout to a run, once it is proven usable.
+   *
+   * Every adoption path goes through here so the setup-completeness check cannot
+   * be reached around: an unfinished worktree is exactly what a run must not be
+   * given (#3448).
+   */
+  private async adoptWorktree(
     path: string,
     branchName: string,
     request: IsolationRequest,
     adoptedFrom?: 'branch'
-  ): WorktreeEnvironment {
+  ): Promise<WorktreeEnvironment> {
+    await this.refuseUnfinishedWorktree(path);
+    getLog().info({ worktreePath: path, branchName }, 'worktree_adopted');
     return {
       id: path,
       provider: 'worktree',
@@ -779,6 +803,28 @@ export class WorktreeProvider implements IIsolationProvider {
       createdAt: new Date(),
       metadata: { adopted: true, ...(adoptedFrom ? { adoptedFrom } : {}), request },
     };
+  }
+
+  /**
+   * Refuse a worktree that still carries Archon's setup lock.
+   *
+   * The marker means one of two things, and neither is adoptable: another
+   * process is setting this checkout up right now and may yet roll it back, or a
+   * setup died before finishing and left a checkout with no submodules, no git
+   * identity, and none of the configured files. Ownership here is ambiguous, so
+   * the operator gets an explicit action instead of a silent handover.
+   */
+  private async refuseUnfinishedWorktree(worktreePath: string): Promise<void> {
+    const lock = await readWorktreeLock(toWorktreePath(worktreePath));
+    if (lock?.reason !== SETUP_LOCK_REASON) {
+      return;
+    }
+    getLog().warn({ worktreePath }, 'worktree.adoption_refused_setup_unfinished');
+    throw new Error(
+      `Cannot adopt the worktree at ${worktreePath}: its setup did not finish. ` +
+        'Another run may be creating it right now — retry once that run ends. ' +
+        `Otherwise remove it with \`git worktree remove --force --force ${worktreePath}\`.`
+    );
   }
 
   /**
@@ -847,22 +893,28 @@ export class WorktreeProvider implements IIsolationProvider {
     }
 
     // Reaching here means this call's own `git worktree add` produced the
-    // directory, so the rollback below can only ever remove a checkout this
-    // attempt created. Without it a half-set-up worktree survives with no
-    // isolation-environment row tracking it, and the next run on the same
-    // branch adopts it as ready (#3448).
+    // directory. The lock marks it unfinished until setup completes, so no other
+    // caller adopts it meanwhile, and the rollback below only ever removes a
+    // checkout this attempt created and still holds. Without both, a half-set-up
+    // worktree survives with no isolation-environment row tracking it, and the
+    // next run on the same branch adopts it as ready (#3448).
+    let lockHeld = false;
     let warnings: string[];
     try {
+      await lockWorktree(repoPath, toWorktreePath(worktreePath), SETUP_LOCK_REASON);
+      lockHeld = true;
       warnings = await this.finishWorktreeSetup(request, repoPath, worktreePath, worktreeConfig);
     } catch (error) {
       const setupError = error instanceof Error ? error : new Error(String(error));
-      await this.rollBackIncompleteWorktree(repoPath, worktreePath, setupError);
+      await this.rollBackIncompleteWorktree(repoPath, worktreePath, setupError, lockHeld);
       throw setupError;
     }
 
+    const lockWarning = await this.releaseSetupLock(repoPath, worktreePath);
+
     return {
       kind: 'created',
-      warnings,
+      warnings: lockWarning ? [...warnings, lockWarning] : warnings,
       ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
     };
   }
@@ -908,44 +960,50 @@ export class WorktreeProvider implements IIsolationProvider {
   }
 
   /**
+   * Drop the setup lock now that the checkout is usable.
+   *
+   * A worktree that stays locked serves this run fine, but a later run refuses
+   * to adopt it and ordinary cleanup cannot remove it, so the failure is
+   * reported with the command that clears it instead of left to surprise the
+   * next run.
+   */
+  private async releaseSetupLock(repoPath: RepoPath, worktreePath: string): Promise<string | null> {
+    try {
+      await unlockWorktree(repoPath, toWorktreePath(worktreePath));
+      return null;
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      getLog().error({ repoPath, worktreePath, err }, 'isolation.setup_lock_release_failed');
+      return (
+        `The worktree at ${worktreePath} is set up but is still marked as unfinished ` +
+        `(${err.message}); run \`git worktree unlock ${worktreePath}\` or a later run will ` +
+        'refuse to reuse it.'
+      );
+    }
+  }
+
+  /**
    * Remove a worktree this call created but could not finish setting up.
    *
-   * Forced removal is required, not a convenience: git refuses to remove a
-   * worktree that contains submodules at all, and a partly initialized submodule
-   * is the common way setup fails here. Nothing has run in the checkout between
-   * `git worktree add` and this point, so there is no user work to force past.
-   *
-   * No branch name is passed. The branch may predate this call — an adopted task
-   * branch always does — and deleting it is never what recovering from a failed
-   * setup requires.
-   *
    * A cleanup that does not finish is recorded on the setup error rather than
-   * replacing it: the operator needs the original cause and needs to know that a
-   * directory the next run could adopt is still there.
+   * replacing it: the operator needs the original cause and needs to know a
+   * checkout was left behind.
    */
   private async rollBackIncompleteWorktree(
     repoPath: RepoPath,
     worktreePath: string,
-    setupError: Error
+    setupError: Error,
+    lockHeld: boolean
   ): Promise<void> {
     getLog().warn(
       { repoPath, worktreePath, err: setupError },
       'isolation.incomplete_worktree_rollback_started'
     );
 
-    let failure: string;
-    try {
-      const result = await this.destroy(worktreePath, {
-        force: true,
-        canonicalRepoPath: repoPath,
-      });
-      if (result.worktreeRemoved && result.directoryClean) {
-        getLog().info({ repoPath, worktreePath }, 'isolation.incomplete_worktree_rolled_back');
-        return;
-      }
-      failure = result.warnings.join(' ') || 'cleanup did not complete';
-    } catch (error) {
-      failure = error instanceof Error ? error.message : String(error);
+    const failure = await this.removeIncompleteWorktree(repoPath, worktreePath, lockHeld);
+    if (!failure) {
+      getLog().info({ repoPath, worktreePath }, 'isolation.incomplete_worktree_rolled_back');
+      return;
     }
 
     getLog().error(
@@ -954,9 +1012,54 @@ export class WorktreeProvider implements IIsolationProvider {
     );
     recordCleanupFailure(
       setupError,
-      `The incomplete workspace at ${worktreePath} could not be removed (${failure}); ` +
-        'delete it manually before retrying, or the next run will adopt it.'
+      `The incomplete workspace at ${worktreePath} was left behind (${failure}); remove it ` +
+        `with \`git worktree remove --force --force ${worktreePath}\` before retrying.`
     );
+  }
+
+  /**
+   * Remove the checkout this call created. Returns null once nothing is left
+   * behind, otherwise why it is still there.
+   *
+   * Forced removal is required, not a convenience: git refuses to remove a
+   * locked worktree without a second `--force`, and refuses one containing
+   * submodules at all — a partly initialized submodule is the common way setup
+   * fails here. Nothing has run in the checkout between `git worktree add` and
+   * this point, so there is no user work to force past.
+   *
+   * The lock is re-read first when this call took one. It is the only evidence
+   * that no one else has claimed the path since; without it the checkout may
+   * already be serving another run, and removing it would delete work in
+   * progress. No branch name is passed either way: the branch may predate this
+   * call — an adopted task branch always does — and deleting it is never what
+   * recovering from a failed setup requires.
+   */
+  private async removeIncompleteWorktree(
+    repoPath: RepoPath,
+    worktreePath: string,
+    lockHeld: boolean
+  ): Promise<string | null> {
+    try {
+      if (lockHeld) {
+        const lock = await readWorktreeLock(toWorktreePath(worktreePath));
+        if (lock?.reason !== SETUP_LOCK_REASON) {
+          return lock === null
+            ? 'the setup lock this call took is gone, so the checkout may already belong to another run'
+            : `the checkout is locked by something else: ${lock.reason}`;
+        }
+      }
+      const result = await this.destroy(worktreePath, {
+        force: true,
+        removeLocked: true,
+        canonicalRepoPath: repoPath,
+      });
+      if (result.worktreeRemoved && result.directoryClean) {
+        return null;
+      }
+      return result.warnings.join(' ') || 'cleanup did not complete';
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
   }
 
   /**

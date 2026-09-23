@@ -4,13 +4,15 @@
  * `worktree.test.ts` replaces `node:fs/promises` and `@archon/paths` for its whole
  * process, so this file gets its own `testGroups` entry. What it proves needs real
  * git: after setup fails, the directory is gone, git no longer lists the worktree,
- * the branch survives, and the next run cannot adopt what is no longer there.
+ * the branch survives, and the next run cannot adopt what is no longer there. The
+ * setup lock is real git state too — git's own refusal to remove or prune a locked
+ * worktree is half of what makes it a usable marker.
  */
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { existsSync, realpathSync } from 'node:fs';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { toBranchName, toRepoPath } from '@archon/git';
 import { setLogLevel } from '@archon/paths';
@@ -62,16 +64,37 @@ describe('WorktreeProvider against real git', () => {
     await git(repoPath, 'checkout', '-q', 'main');
   }
 
-  const registeredWorktrees = async (): Promise<string[]> =>
+  /**
+   * What git knows about each worktree it has registered, with the path in this
+   * platform's own spelling: git prints forward slashes on Windows, so its raw
+   * strings never compare equal to a path built with `join`.
+   */
+  const worktreeRecords = async (): Promise<{ path: string; attributes: string[] }[]> =>
     (await git(repoPath, 'worktree', 'list', '--porcelain'))
-      .split('\n')
-      .filter(line => line.startsWith('worktree '))
-      .map(line => line.slice('worktree '.length).trim());
+      .trim()
+      .split('\n\n')
+      .map(record => record.split('\n').map(line => line.trim()))
+      .map(([first = '', ...attributes]) => ({
+        path: resolve(first.slice('worktree '.length)),
+        attributes,
+      }));
+
+  const registeredWorktrees = async (): Promise<string[]> =>
+    (await worktreeRecords()).map(record => record.path);
+
+  const lockReasonOf = async (path: string): Promise<string | null> => {
+    const record = (await worktreeRecords()).find(entry => entry.path === resolve(path));
+    const locked = record?.attributes.find(line => line.startsWith('locked'));
+    return locked === undefined ? null : locked.slice('locked'.length).trim();
+  };
 
   beforeEach(async () => {
-    // realpath so the paths this test asserts on match the ones git reports
-    // (macOS resolves /var to /private/var).
-    root = trackTempRoot(realpathSync(await mkdtemp(join(tmpdir(), 'archon-worktree-'))));
+    // realpath so the paths this test asserts on match the ones git reports:
+    // macOS resolves /var to /private/var, and Windows expands the 8.3 short
+    // component (`C:\Users\RUNNER~1\…`). `fs/promises.realpath` is the variant
+    // whose short-name expansion this repo has verified — see
+    // `canonicalizeProjectPath` in @archon/paths.
+    root = trackTempRoot(await realpath(await mkdtemp(join(tmpdir(), 'archon-worktree-'))));
     process.env.ARCHON_HOME = join(root, 'archon-home');
 
     repoPath = join(root, 'repo');
@@ -109,7 +132,7 @@ describe('WorktreeProvider against real git', () => {
     await expect(provider.create(request)).rejects.toThrow(/Submodule initialization failed/);
 
     expect(existsSync(worktreePath)).toBe(false);
-    expect(await registeredWorktrees()).not.toContain(worktreePath);
+    expect(await registeredWorktrees()).not.toContain(resolve(worktreePath));
     // The branch predates this attempt: rolling back the checkout must not touch it.
     expect((await git(repoPath, 'rev-parse', TASK_BRANCH)).trim()).toBe(branchHead);
 
@@ -124,7 +147,9 @@ describe('WorktreeProvider against real git', () => {
 
     expect(created.workingPath).toBe(worktreePath);
     expect(existsSync(worktreePath)).toBe(true);
-    expect(await registeredWorktrees()).toContain(worktreePath);
+    expect(await registeredWorktrees()).toContain(resolve(worktreePath));
+    // The setup lock is released, or nothing could adopt or clean up this checkout.
+    expect(await lockReasonOf(worktreePath)).toBeNull();
 
     await writeFile(join(worktreePath, 'work-in-progress.txt'), 'from the first run\n');
     const reused = await provider.create(request);
@@ -133,5 +158,36 @@ describe('WorktreeProvider against real git', () => {
     expect(reused.metadata.adopted).toBe(true);
     // The same checkout, not a fresh one: the first run's file is still here.
     expect(existsSync(join(worktreePath, 'work-in-progress.txt'))).toBe(true);
+  });
+
+  test('a checkout still marked as being set up is refused, not adopted', async () => {
+    // What a setup killed mid-flight leaves behind: the checkout git created,
+    // still carrying the lock the run took before setting it up.
+    await git(repoPath, 'worktree', 'add', '-q', worktreePath, TASK_BRANCH);
+    await git(
+      repoPath,
+      'worktree',
+      'lock',
+      '--reason',
+      'archon: worktree setup in progress',
+      worktreePath
+    );
+
+    await expect(provider.create(request)).rejects.toThrow(/its setup did not finish/);
+
+    // Refusing must not destroy it either: the operator decides, and a live run
+    // may still own it.
+    expect(existsSync(worktreePath)).toBe(true);
+    expect(await lockReasonOf(worktreePath)).toBe('archon: worktree setup in progress');
+  });
+
+  test("a checkout locked for someone else's reason is still adopted", async () => {
+    await git(repoPath, 'worktree', 'add', '-q', worktreePath, TASK_BRANCH);
+    await git(repoPath, 'worktree', 'lock', '--reason', 'on the external drive', worktreePath);
+
+    const adopted = await provider.create(request);
+
+    expect(adopted.workingPath).toBe(worktreePath);
+    expect(adopted.metadata.adopted).toBe(true);
   });
 });
