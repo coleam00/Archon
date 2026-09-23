@@ -3,17 +3,13 @@ import type { RunLiveOwner } from '@archon/core/services/run-live-owner';
 import { createLogger } from '@archon/paths';
 import { exitWithDrain } from './exit-with-drain';
 
-let cachedLog: ReturnType<typeof createLogger> | undefined;
-function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('cli.workflow');
-  return cachedLog;
-}
-
 type TerminationSignal = 'SIGTERM' | 'SIGINT';
 
 export interface OwnedRunTerminationInput {
   /** The one run this process proved it executes. Never a conversation-wide lookup. */
   runId: string;
+  /** Logger module of the command that owns the run, so its lines name that command. */
+  logModule: string;
   liveOwner: Pick<RunLiveOwner, 'close' | 'isStopRequested'>;
   /**
    * Resources the forced exit would otherwise strand, because it skips the caller's
@@ -32,24 +28,25 @@ export interface OwnedRunTerminationInput {
  */
 export function registerOwnedRunTermination(input: OwnedRunTerminationInput): () => void {
   const { runId, liveOwner } = input;
+  const log = createLogger(input.logModule);
   let terminating = false;
   const cleanup = (signal: TerminationSignal): void => {
     if (terminating) return;
     terminating = true;
-    getLog().info({ runId, signal }, 'workflow.process_terminating');
+    log.info({ runId, signal }, 'workflow.process_terminating');
     (async (): Promise<void> => {
       if (liveOwner.isStopRequested()) {
         // The exact-run controller has proved ownership and is terminating this
         // process tree. It records `cancelled` only after termination succeeds;
         // do not race it by translating the operator's stop into generic failure.
-        getLog().info({ runId, signal }, 'workflow.operator_stop_leaves_lifecycle_to_controller');
+        log.info({ runId, signal }, 'workflow.operator_stop_leaves_lifecycle_to_controller');
         return;
       }
       const status = await workflowDb.getWorkflowRunStatus(runId);
       if (status !== 'running') {
         // Externally transitioned (paused at a new gate, completed, cancelled,
         // failed) or never claimed (still pending) — not this handler's to mutate.
-        getLog().info({ runId, status, signal }, 'workflow.termination_skip_not_running');
+        log.info({ runId, status, signal }, 'workflow.termination_skip_not_running');
         return;
       }
       // Genuine interrupt of the run this process is driving. failWorkflowRun's
@@ -60,7 +57,7 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
     })()
       .catch((err: unknown) => {
         const e = err as Error;
-        getLog().error(
+        log.error(
           { err: e, errorType: e.constructor.name, runId },
           'workflow.termination_cleanup_failed'
         );
@@ -74,7 +71,7 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
         if (!liveOwner.isStopRequested()) await liveOwner.close();
       })
       .catch((error: unknown) => {
-        getLog().error({ err: error as Error, runId }, 'workflow.live_owner_close_failed');
+        log.error({ err: error as Error, runId }, 'workflow.live_owner_close_failed');
       })
       .finally(() => {
         // Drain queued output before exiting; a bare process.exit truncates it (#2400).

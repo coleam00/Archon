@@ -180,7 +180,7 @@ export async function triggerCommand(
         adapter.setConversationDbId(conversationId, conversationDbId);
         return adapter;
       },
-      guardOwnedRun: registerOwnedRunTermination,
+      guardOwnedRun: owned => registerOwnedRunTermination({ ...owned, logModule: 'cli.trigger' }),
       ...(detachedProcessOwner ? { detachedProcessPid: process.pid } : {}),
     });
     if (!result.success) throw new Error(`Run ${args[0]} did not complete: ${result.error}`);

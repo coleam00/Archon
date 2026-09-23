@@ -3027,6 +3027,7 @@ async function runWorkflowWithOwnedSource(
   };
   const deregisterTermination = registerOwnedRunTermination({
     runId: ownedRunId,
+    logModule: 'cli.workflow',
     liveOwner: {
       isStopRequested: () => runLiveOwner?.isStopRequested() ?? false,
       close: closeRunLiveOwner,
