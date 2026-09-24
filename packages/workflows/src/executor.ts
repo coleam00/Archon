@@ -3037,7 +3037,7 @@ export async function executeWorkflow(
       usesFreshContext: telemetryNodes.some(n => isLoopNode(n) && n.loop.fresh_context),
       interactive: workflow.interactive ?? false,
       usedIsolation: isolationContext !== undefined,
-      isResume: dagPriorCompletedNodes !== undefined,
+      isResume: isContinuation,
     });
 
     let isolationMode: 'container' | 'worktree' | 'in-place' = 'in-place';

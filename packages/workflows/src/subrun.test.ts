@@ -56,6 +56,9 @@ const realArchonPaths = await import('@archon/paths');
 /** Every `workflow_invoked` telemetry call, in order, so a resumed drive's categorization
  *  can be compared with the dispatch that started the run. */
 const telemetryInvocations: { workflowName: string; workflowSource?: string }[] = [];
+/** Each `workflow_invoked` call's resume flag, kept apart so the categorization records
+ *  above stay comparable as whole objects. */
+const telemetryResumeFlags: { workflowName: string; isResume?: boolean }[] = [];
 /** Every `workflow_completed` telemetry call. A run's two halves are categorized by
  *  separate code paths, so the completion that fires on the resumed half has to be
  *  observed on its own. */
@@ -67,12 +70,15 @@ mock.module('@archon/paths', () => ({
   getDefaultWorkflowsPath: () => join(bundledDefaultsRoot, 'defaults'),
   getDefaultCommandsPath: () => join(bundledDefaultsRoot, 'defaults'),
   createLogger: mock(() => mockLogger),
-  captureWorkflowInvoked: mock((props: { workflowName: string; workflowSource?: string }) => {
-    telemetryInvocations.push({
-      workflowName: props.workflowName,
-      workflowSource: props.workflowSource,
-    });
-  }),
+  captureWorkflowInvoked: mock(
+    (props: { workflowName: string; workflowSource?: string; isResume?: boolean }) => {
+      telemetryInvocations.push({
+        workflowName: props.workflowName,
+        workflowSource: props.workflowSource,
+      });
+      telemetryResumeFlags.push({ workflowName: props.workflowName, isResume: props.isResume });
+    }
+  ),
   captureWorkflowCompleted: mock((props: { workflowName: string; workflowSource?: string }) => {
     telemetryCompletions.push({
       workflowName: props.workflowName,
@@ -856,6 +862,7 @@ nodes:
       const run = [...store.runs.values()].find(r => r.workflow_name === 'resume-boundary')!;
       expect(run.status).toBe('failed');
 
+      telemetryResumeFlags.length = 0;
       const resumeOpts =
         resumeForm === 'hydrated'
           ? await hydrateResumableRun(deps, (await store.getWorkflowRun(run.id))!)
@@ -872,6 +879,8 @@ nodes:
         { ...resumeOpts! }
       );
       expect(r2.success).toBe(true);
+      // Telemetry categorizes the same execution the same way the transcript does.
+      expect(telemetryResumeFlags).toEqual([{ workflowName: 'resume-boundary', isResume: true }]);
 
       const row = (await store.getWorkflowRun(run.id))!;
       const transcript = (

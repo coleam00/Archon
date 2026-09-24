@@ -256,9 +256,11 @@ function resolvedNodeCompletedStepName(approval: ApprovalContext): string {
  * transcript is found the way every out-of-process reader finds it: through the run's
  * persisted `output_root`, then appended through the same writer the executor uses.
  *
- * A run whose identity lookup faulted at start deliberately never persisted its
- * fault-derived location, so no reader can find that transcript. Its rows are skipped,
- * visibly, rather than written to a second file under a guessed root.
+ * With no trusted `output_root` there is no transcript location to find. Usually the
+ * run's identity lookup faulted at start and its fault-derived root was deliberately
+ * never persisted; a persisted root outside `ARCHON_HOME` is refused the same way. Either
+ * way this repeats for every resolution of the run. Its rows are skipped, visibly,
+ * rather than written to a second file under a guessed root.
  */
 async function publishGateExecution(
   run: WorkflowRun,
