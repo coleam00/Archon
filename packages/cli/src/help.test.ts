@@ -200,7 +200,7 @@ Commands:
                              scratch worktree of HEAD
   isolation list             List all active worktrees/environments
   isolation cleanup [days]   Remove stale environments (default: 7 days)
-  isolation cleanup --merged Remove environments with branches merged into main
+  isolation cleanup --merged Remove environments with branches merged into the base branch
   complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
   serve                      Start the web UI server (binary installs download it on first run)
   skill install [path]       Install archon-cli into .claude/skills and .agents/skills

@@ -184,13 +184,13 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<void> {
 }
 
 /**
- * Cleanup merged isolation environments (branches merged into main)
+ * Cleanup merged isolation environments (branches merged into each repo's base branch)
  * Also deletes remote branches for merged environments
  */
 export async function isolationCleanupMergedCommand(
   options: { includeClosed?: boolean } = {}
 ): Promise<void> {
-  console.log('Finding environments with branches merged into main...');
+  console.log('Finding environments with branches merged into their base branch...');
 
   const { codebases } = await listEnvironments();
 
@@ -211,6 +211,10 @@ export async function isolationCleanupMergedCommand(
         codebase.defaultCwd,
         options
       );
+
+      // The base ref comes back from the sweep that compared against it, so the
+      // operator sees the repo's configured base branch rather than an assumed one.
+      console.log(`  Base: ${result.baseRef}`);
 
       for (const branch of result.removed) {
         console.log(`  Cleaned: ${branch}`);
