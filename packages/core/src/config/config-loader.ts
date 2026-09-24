@@ -792,6 +792,59 @@ export function logConfig(config: MergedConfig): void {
 }
 
 /**
+ * Read ~/.archon/config.yaml for a settings write: the file's actual parsed
+ * content, unvalidated, so a patch can repair a bad value and every unrelated
+ * key survives. Unlike the loaders this never degrades — merging into a
+ * fallback `{}` would replace the operator's whole file with just the patch.
+ * Only a missing file starts empty; an unreadable file or invalid YAML throws.
+ */
+async function readGlobalConfigForUpdate(configPath: string): Promise<GlobalConfig> {
+  let content: string;
+  try {
+    content = await readConfigFile(configPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    throw error;
+  }
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(content);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Cannot update '${configPath}': it is not valid YAML (${reason}).`, {
+      cause: error,
+    });
+  }
+  if (parsed === null || parsed === undefined) return {};
+  if (!isConfigRecord(parsed)) {
+    throw new Error(`Cannot update '${configPath}': its top level is not a map of settings.`);
+  }
+  return parsed as GlobalConfig;
+}
+
+/**
+ * Apply a `tiers`/`aliases` patch per key: `null` unsets, a value sets, an
+ * absent key keeps the existing entry as-is. Collapses to `undefined` when
+ * nothing is left, so no empty block is serialized.
+ */
+function mergeBindingPatch<T>(
+  existing: unknown,
+  patch: Record<string, T | null | undefined>
+): Record<string, T> | undefined {
+  // Existing entries are unvalidated file content (see readGlobalConfigForUpdate);
+  // the caller validates the merged result before it is written.
+  const kept = isConfigRecord(existing) ? (existing as Record<string, T>) : {};
+  const next: Record<string, T> = {};
+  for (const [name, entry] of Object.entries(kept)) {
+    if (patch[name] === undefined) next[name] = entry;
+  }
+  for (const [name, entry] of Object.entries(patch)) {
+    if (entry !== null && entry !== undefined) next[name] = entry;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+/**
  * Update global config (~/.archon/config.yaml) with partial updates.
  * Reads current config, deep-merges updates, and writes back to YAML.
  * Invalidates the cached config so next loadConfig() picks up changes.
@@ -805,10 +858,8 @@ export async function updateGlobalConfig(
   const configPath = getArchonConfigPath();
 
   try {
-    // Read without validating `assistants.*`: a patch must be able to repair a
-    // bad value already on disk. The merged result is validated before writing.
     ensureProvidersRegistered();
-    const current = await readGlobalConfigOrDegrade(configPath);
+    const current = await readGlobalConfigForUpdate(configPath);
 
     // Deep-merge: only overwrite defined keys
     const merged: GlobalConfig = { ...current };
@@ -832,45 +883,28 @@ export async function updateGlobalConfig(
     }
 
     if (updates.workflows) {
-      merged.workflows = workflowContinuationConfigSchema.parse({
-        ...current.workflows,
+      merged.workflows = {
+        ...(isConfigRecord(current.workflows) ? current.workflows : {}),
         ...updates.workflows,
-      });
+      };
     }
 
     if (updates.tiers) {
       // Per-key merge: `null` unsets a tier, a value sets it, and an absent key
-      // (`undefined`) preserves the existing tier — so a single-tier PATCH/CLI
-      // set doesn't wipe the others. Rebuilt fresh (no dynamic delete).
-      const nextTiers: RawTiersConfig = {};
-      for (const tier of TIER_NAMES) {
-        const incoming = updates.tiers[tier];
-        if (incoming === null) continue; // explicit unset → omit
-        if (incoming !== undefined) {
-          nextTiers[tier] = incoming;
-        } else {
-          const existing = current.tiers?.[tier];
-          if (existing) nextTiers[tier] = existing;
-        }
-      }
-      merged.tiers = Object.keys(nextTiers).length > 0 ? nextTiers : undefined;
+      // (`undefined`) preserves the existing entry — including one that is not a
+      // valid tier, which validation below then refuses rather than dropping.
+      merged.tiers = mergeBindingPatch(current.tiers, updates.tiers);
     }
 
     if (updates.aliases) {
-      // Same per-key merge semantics as tiers: `null` unsets, a value sets,
-      // an absent key preserves the existing alias. Rebuilt fresh (no dynamic delete).
-      const nextAliases: RawAliasesConfig = {};
-      for (const [name, entry] of Object.entries(current.aliases ?? {})) {
-        if (updates.aliases[name] === undefined) nextAliases[name] = entry;
-      }
-      for (const [name, entry] of Object.entries(updates.aliases)) {
-        if (entry !== null && entry !== undefined) nextAliases[name] = entry;
-      }
-      merged.aliases = Object.keys(nextAliases).length > 0 ? nextAliases : undefined;
+      merged.aliases = mergeBindingPatch(current.aliases, updates.aliases);
     }
 
-    // Refuse to persist what the loaders would then refuse to read — a bad
-    // value from the settings UI would otherwise brick every later config load.
+    // Refuse to persist what the loaders would then refuse to read or silently
+    // degrade: a bad value from the settings UI would otherwise brick every later
+    // config load, and a bad block already on disk must be repaired, not kept.
+    validateWorkflowContinuationConfig(merged, configPath);
+    validateModelBindingConfig(merged, configPath);
     validateAssistantDefaults(merged, configPath);
 
     // Serialize to YAML and write

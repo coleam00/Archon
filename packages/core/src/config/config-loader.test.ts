@@ -1194,6 +1194,120 @@ assistants:
     });
   });
 
+  // The loaders degrade an invalid `tiers`/`aliases`/`workflows` block to an
+  // empty config; a settings write must merge into what is actually on disk,
+  // or it replaces the operator's whole file with just the patch.
+  describe('updateGlobalConfig over an invalid file', () => {
+    const fileWithBadTier = `
+botName: MyBot
+defaultAssistant: codex
+streaming:
+  telegram: batch
+tiers:
+  large:
+    provider: claude
+aliases:
+  fast:
+    provider: claude
+    model: haiku
+`;
+
+    test('refuses an unrelated edit that leaves an invalid tier in place', async () => {
+      mockFsReadFile.mockResolvedValue(fileWithBadTier);
+
+      await expect(
+        updateGlobalConfig({ aliases: { deep: { provider: 'claude', model: 'opus' } } })
+      ).rejects.toThrow(/Invalid model binding config.*tiers\.large\.model/);
+      expect(mockFsWriteFile).not.toHaveBeenCalled();
+    });
+
+    test('a patch that repairs the invalid tier keeps every unrelated key', async () => {
+      mockFsReadFile.mockResolvedValue(fileWithBadTier);
+
+      await updateGlobalConfig({ tiers: { large: { provider: 'claude', model: 'opus' } } });
+
+      const written = Bun.YAML.parse(mockFsWriteFile.mock.calls[0]?.[1] as string);
+      expect(written).toEqual({
+        botName: 'MyBot',
+        defaultAssistant: 'codex',
+        streaming: { telegram: 'batch' },
+        tiers: { large: { provider: 'claude', model: 'opus' } },
+        aliases: { fast: { provider: 'claude', model: 'haiku' } },
+      });
+    });
+
+    // The tier merge must not rebuild the block from the known tier names only,
+    // which would silently drop an entry it cannot represent.
+    test('a tier edit does not silently drop an unknown tier name', async () => {
+      mockFsReadFile.mockResolvedValue(`
+tiers:
+  huge:
+    provider: claude
+    model: opus
+`);
+
+      await expect(
+        updateGlobalConfig({ tiers: { small: { provider: 'claude', model: 'haiku' } } })
+      ).rejects.toThrow(/Invalid model binding config.*tiers\.huge/);
+      expect(mockFsWriteFile).not.toHaveBeenCalled();
+    });
+
+    test('refuses an unrelated edit that leaves an invalid workflows block in place', async () => {
+      mockFsReadFile.mockResolvedValue(`
+botName: MyBot
+workflows:
+  quotaMaxAttempts: many
+`);
+
+      await expect(updateGlobalConfig({ defaultAssistant: 'claude' })).rejects.toThrow(
+        /Invalid workflows config.*quotaMaxAttempts/
+      );
+      expect(mockFsWriteFile).not.toHaveBeenCalled();
+    });
+
+    test('a patch that repairs the invalid workflows block keeps every unrelated key', async () => {
+      mockFsReadFile.mockResolvedValue(`
+botName: MyBot
+workflows:
+  quotaMaxAttempts: many
+`);
+
+      await updateGlobalConfig({ workflows: { quotaMaxAttempts: 3 } });
+
+      const written = Bun.YAML.parse(mockFsWriteFile.mock.calls[0]?.[1] as string);
+      expect(written).toEqual({ botName: 'MyBot', workflows: { quotaMaxAttempts: 3 } });
+    });
+
+    test('never overwrites a file that is not valid YAML', async () => {
+      mockFsReadFile.mockResolvedValue('botName: MyBot\ntiers: [unclosed\n');
+
+      await expect(updateGlobalConfig({ defaultAssistant: 'claude' })).rejects.toThrow(
+        /config\.yaml/
+      );
+      expect(mockFsWriteFile).not.toHaveBeenCalled();
+    });
+
+    test('never overwrites a file whose top level is not a map', async () => {
+      mockFsReadFile.mockResolvedValue('- botName: MyBot\n');
+
+      await expect(updateGlobalConfig({ defaultAssistant: 'claude' })).rejects.toThrow(
+        /top level is not a map/
+      );
+      expect(mockFsWriteFile).not.toHaveBeenCalled();
+    });
+
+    test('never overwrites a file that cannot be read', async () => {
+      const permError = new Error('Permission denied') as NodeJS.ErrnoException;
+      permError.code = 'EACCES';
+      mockFsReadFile.mockRejectedValue(permError);
+
+      await expect(updateGlobalConfig({ defaultAssistant: 'claude' })).rejects.toThrow(
+        'Permission denied'
+      );
+      expect(mockFsWriteFile).not.toHaveBeenCalled();
+    });
+  });
+
   describe('toSafeConfig', () => {
     test('strips paths from MergedConfig', async () => {
       mockFsReadFile.mockResolvedValue('');
