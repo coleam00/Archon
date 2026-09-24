@@ -15,3 +15,18 @@ export const PASSES_RED = ['inherited', 'environment'] as const;
 export function passesRed(cause: string): boolean {
   return (PASSES_RED as readonly string[]).includes(cause);
 }
+
+/**
+ * The refusal for a verdict declared `incomplete`: some checks never ran and none that
+ * ran failed. It is not red, so it never says so — a reader sent hunting for a failure
+ * that does not exist loses the real action, which is to let validation finish. Every
+ * gate that reads a verdict refuses this cause with this one message.
+ */
+export function unfinishedValidation(stage: string, summary: string): string {
+  return (
+    `${stage}: validation didn't finish. Not every check ran, and none that ran ` +
+    `failed.${summary === '' ? '' : ` ${summary}`} Resume the run once whatever ` +
+    'stopped it is cleared, so validation can finish. An unfinished validation ' +
+    'never passes this gate.'
+  );
+}

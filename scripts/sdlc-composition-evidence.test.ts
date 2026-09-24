@@ -19,7 +19,11 @@ import {
   type CompositionRequest,
   type CompositionEvidence,
 } from '../.archon/workflows/sdlc/.shared/composition';
-import { PASSES_RED, passesRed } from '../.archon/workflows/sdlc/.shared/verdict';
+import {
+  PASSES_RED,
+  passesRed,
+  unfinishedValidation,
+} from '../.archon/workflows/sdlc/.shared/verdict';
 
 const track = trackTempRoots();
 
@@ -303,7 +307,29 @@ it('keeps the validation producer schemas and script vocabulary in agreement', (
   ).toEqual(ordinary);
   expect(
     implement.nodes.find(n => n.id === 'implement')!.output_format!.properties.red_cause.enum
-  ).toEqual(ordinary.filter(cause => cause !== 'incomplete'));
+  ).toEqual(ordinary);
+});
+
+it("refuses implement's unfinished validation with the green gates' message", () => {
+  const script = join(
+    import.meta.dir,
+    '..',
+    '.archon/workflows/sdlc/implement/scripts/assert-changed.ts'
+  );
+  const summary = 'A usage limit stopped validation during tests; type-check passed.';
+  const run = Bun.spawnSync([process.execPath, script], {
+    env: {
+      ...process.env,
+      INPUTS_GREEN: 'false',
+      INPUTS_RED_CAUSE: 'incomplete',
+      INPUTS_SUMMARY: summary,
+      INPUTS_BASELINE: '',
+    },
+  });
+  expect(run.exitCode).toBe(1);
+  expect(run.stdout.toString()).toBe('');
+  expect(run.stderr.toString().trim()).toBe(unfinishedValidation('The implementation', summary));
+  expect(run.stderr.toString()).not.toMatch(/\bred\b/);
 });
 
 describe('the green gate on a validation that did not finish', () => {

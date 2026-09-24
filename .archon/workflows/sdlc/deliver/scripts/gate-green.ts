@@ -38,7 +38,7 @@
  */
 
 import { emit, note, refuse, trimmed } from '../../.shared/io.ts';
-import { passesRed } from '../../.shared/verdict.ts';
+import { passesRed, unfinishedValidation } from '../../.shared/verdict.ts';
 
 const green = trimmed(process.env.INPUTS_GREEN);
 const cause = trimmed(process.env.INPUTS_RED_CAUSE);
@@ -46,16 +46,9 @@ const summary = trimmed(process.env.INPUTS_SUMMARY);
 const stage = trimmed(process.env.INPUTS_STAGE) || 'The work';
 
 if (cause === 'incomplete') {
-  // Not every check ran and none that ran failed: there is no verdict to pass or
-  // blame yet. Decided before `green` is read, because a green over checks that
-  // never ran is unsupported. Saying "red" here sends a reader hunting for a
-  // failure that does not exist; the action is to finish validating.
-  refuse(
-    `${stage}: validation didn't finish. Not every check ran, and none that ran ` +
-      `failed.${summary === '' ? '' : ` ${summary}`} Resume the run once whatever ` +
-      'stopped it is cleared, so validation can finish. An unfinished validation ' +
-      'never passes this gate.'
-  );
+  // Decided before `green` is read, because a green over checks that never ran is
+  // unsupported.
+  refuse(unfinishedValidation(stage, summary));
 } else if (green === 'true') {
   emit({ gate: 'green', red_cause: '', stage, summary: '' });
 } else if (cause === '') {
