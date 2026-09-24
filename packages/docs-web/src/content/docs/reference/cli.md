@@ -946,7 +946,8 @@ patch equivalence (single-commit squash-merge via `git cherry`), and GitHub PR s
 `gh` CLI. A squash merge of more than one commit is invisible to git here, so PR state is what
 recognises it. The `gh` CLI is optional — if absent, only git signals are used. The scheduled
 sweep uses the same three signals, so both paths agree on what counts as merged. Each
-codebase's output names the base ref the comparison used, taken from `worktree.baseBranch`.
+codebase's output names the base ref the comparison actually used — the configured
+`worktree.baseBranch`, or the git-detected default branch when that is unset.
 
 Both git signals read the local branch ref. When that ref is gone but the worktree remains,
 the PR decides; if no PR answers for the branch either, the environment is kept and reported
