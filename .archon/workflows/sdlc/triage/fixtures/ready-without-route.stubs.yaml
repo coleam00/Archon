@@ -1,0 +1,19 @@
+# Guard fixture, seen red: a READY contract declared with no engineering route. A
+# well-formed contract whose outcome already holds is NO_ACTION, so the real verdict
+# script must refuse this pair rather than read it as "no work remains".
+triage:
+  contract: READY
+  route: no_action
+  design_first: false
+  complexity: small
+  item: { repository: "", number: 0 }
+  area_labels: []
+  proposed_edits: { title: "", body: "" }
+  blocked_reason: ""
+  blocked_by: []
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+  summary: "stub: an illegal pair the boundary must catch"
+fixture:
+  expect: failed
+  fail-node: verdict
+exec-code: true
