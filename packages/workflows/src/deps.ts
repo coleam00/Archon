@@ -84,15 +84,15 @@ export interface IWorkflowPlatform {
   emitRetract?(conversationId: string): Promise<void>;
 }
 
+/** The part of a surface that decides how an operator types a workflow command there. */
+export type WorkflowCommandSurface = Pick<IWorkflowPlatform, 'formatWorkflowCommand'>;
+
 /**
  * Spell a workflow command (`cancel <id>`) the way the surface rendering the message
  * accepts it. A surface without its own spelling gets `/workflow <command>`, the chat
  * grammar the core command handler parses; this is the one place that fallback lives.
  */
-export function spellWorkflowCommand(
-  surface: Pick<IWorkflowPlatform, 'formatWorkflowCommand'>,
-  command: string
-): string {
+export function spellWorkflowCommand(surface: WorkflowCommandSurface, command: string): string {
   return surface.formatWorkflowCommand?.(command) ?? `/workflow ${command}`;
 }
 

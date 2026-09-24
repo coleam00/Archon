@@ -6779,4 +6779,52 @@ describe('continueResolvedGateRun — chat gate continuation source (#2646)', ()
     expect(messages.some(m => m.includes('final status could not be saved'))).toBe(true);
     expect(messages.some(m => m.includes('retry with `/workflow resume'))).toBe(false);
   });
+
+  describe('recovery commands use the surface spelling', () => {
+    // Mirrors the Slack adapter: its registered slash command is `/archon-workflow`.
+    function makeSlackPlatform(): ReturnType<typeof makePlatform> &
+      Pick<IPlatformAdapter, 'formatWorkflowCommand'> {
+      return {
+        ...makePlatform(),
+        formatWorkflowCommand: (command: string) => `/archon-workflow ${command}`,
+      };
+    }
+
+    function expectSlackSpelling(messages: string[]): void {
+      const text = messages.join('\n');
+      expect(text).toContain('/archon-workflow ');
+      expect(text.replaceAll('/archon-workflow ', '')).not.toContain('/workflow ');
+    }
+
+    test('an ordinary resume failure', async () => {
+      const messages = await continueWithRejection(makeSlackPlatform(), new Error('resume boom'));
+      expect(messages.some(m => m.includes('`/archon-workflow resume run-gated`'))).toBe(true);
+      expectSlackSpelling(messages);
+    });
+
+    test('a rejected terminal write', async () => {
+      const messages = await continueWithRejection(
+        makeSlackPlatform(),
+        new TerminalStatusWriteError(new Error('db is gone'))
+      );
+      expect(messages.some(m => m.includes('`/archon-workflow status run-gated`'))).toBe(true);
+      expectSlackSpelling(messages);
+    });
+
+    test('no project attached', async () => {
+      const platform = makeSlackPlatform();
+      await continueResolvedGateRun(
+        platform,
+        'conv-1',
+        makeConversation(),
+        null,
+        makeGateRun(),
+        'approve'
+      );
+      const messages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(
+        c => (c as unknown[])[1] as string
+      );
+      expectSlackSpelling(messages);
+    });
+  });
 });

@@ -194,7 +194,7 @@ function createMessageErrorHandler(
   return async (error: unknown): Promise<void> => {
     getLog().error({ err: error, platform, conversationId }, 'message_processing_failed');
     try {
-      const userMessage = classifyAndFormatError(error as Error);
+      const userMessage = classifyAndFormatError(error as Error, adapter);
       await adapter.sendMessage(conversationId, userMessage);
     } catch (sendError) {
       getLog().error({ err: sendError, platform, conversationId }, 'error_message_send_failed');

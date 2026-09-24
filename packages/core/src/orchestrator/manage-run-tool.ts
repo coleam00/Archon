@@ -5,6 +5,7 @@ import {
   isContainerRun,
   runAttention,
 } from '@archon/workflows/schemas/workflow-run';
+import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { listDashboardRuns, findWorkflowRunsByIdPrefix } from '../db/workflows';
 import { toError } from '../utils/error';
@@ -50,6 +51,11 @@ export interface ManageRunContext {
    * the tool then says so rather than implying the run moves on by itself.
    */
   onGateResolved?: (run: WorkflowRun, action: 'approve' | 'reject' | 'respond') => boolean;
+  /**
+   * The surface the agent's answer reaches. Spells the commands the tool tells the
+   * agent to hand the user. Omitted means the chat grammar, `/workflow <command>`.
+   */
+  surface?: WorkflowCommandSurface;
 }
 
 /**
@@ -514,7 +520,8 @@ async function signalGateResolved(
       'the same project.'
     );
   }
-  const manualResume = ` The run stays paused — it must be resumed separately (\`/workflow resume ${run.id}\`).`;
+  const cmd = (command: string): string => spellWorkflowCommand(ctx.surface ?? {}, command);
+  const manualResume = ` The run stays paused — it must be resumed separately (\`${cmd(`resume ${run.id}`)}\`).`;
   if (!ctx.onGateResolved) {
     log.info({ runId: run.id, action }, 'manage_run.gate_continuation_unavailable');
     return manualResume;
@@ -527,7 +534,7 @@ async function signalGateResolved(
     log.warn({ err, runId: run.id, action }, 'manage_run.gate_continuation_prepare_failed');
     return (
       ` The decision is recorded, but continuation could not be requested: ${err.message}. ` +
-      `Check \`/workflow status ${run.id}\` before retrying \`/workflow resume ${run.id}\`.`
+      `Check \`${cmd(`status ${run.id}`)}\` before retrying \`${cmd(`resume ${run.id}`)}\`.`
     );
   }
   if (!ctx.onGateResolved(continuationRun, action)) {

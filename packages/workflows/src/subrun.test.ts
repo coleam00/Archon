@@ -1147,6 +1147,62 @@ nodes:
     });
   });
 
+  it('blocked-on-child notice spells the approve command for the surface; the persisted gate stays neutral', async () => {
+    await writeWorkflow(
+      'child-gated-spelling',
+      `
+name: child-gated-spelling
+description: child with an approval gate
+interactive: true
+nodes:
+  - id: review-gate
+    approval:
+      message: "review the sub-run"
+`
+    );
+    await writeWorkflow(
+      'parent-gated-spelling',
+      `
+name: parent-gated-spelling
+description: parent composing a gated child
+interactive: true
+nodes:
+  - id: sub
+    workflow: child-gated-spelling
+`
+    );
+
+    const store = new InMemoryStore();
+    const platform = {
+      ...makePlatform(),
+      // Mirrors the Slack adapter: its registered slash command is `/archon-workflow`.
+      formatWorkflowCommand: (command: string) => `/archon-workflow ${command}`,
+    };
+    await executeWorkflow(
+      makeDeps(store),
+      platform,
+      'conv-plat',
+      cwd,
+      await discover('parent-gated-spelling'),
+      'goal',
+      'conv-db'
+    );
+
+    const parentRun = [...store.runs.values()].find(
+      r => r.workflow_name === 'parent-gated-spelling'
+    );
+    const child = [...store.runs.values()].find(r => r.workflow_name === 'child-gated-spelling');
+    const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+      .map(call => (call as unknown[])[1] as string)
+      .join('\n');
+    expect(sent).toContain(`Approve it by run id: \`/archon-workflow approve ${child!.id}\``);
+    expect(sent.replaceAll('/archon-workflow ', '')).not.toContain('/workflow ');
+    // The persisted gate message is read on every surface, so it keeps the chat grammar.
+    expect((parentRun?.metadata.approval as { message: string }).message).toContain(
+      `\`/workflow approve ${child!.id}\``
+    );
+  });
+
   it('child gate → parent pauses blocked-on-child → approve child → parent auto-resumes → output threads', async () => {
     await writeWorkflow(
       'child-gated',

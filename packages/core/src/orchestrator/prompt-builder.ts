@@ -10,6 +10,7 @@ import {
   isContainerRun,
   runAttention,
 } from '@archon/workflows/schemas/workflow-run';
+import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 
 type PromptWorkflow = Pick<WorkflowDefinition, 'name' | 'description'> & {
@@ -92,6 +93,11 @@ export interface PausedGateContext {
    * dishonesty this issue removed.
    */
   agentCanResolve?: boolean;
+  /**
+   * The surface the user reads the agent's answer on. Spells the explicit commands the
+   * agent may tell the user to type. Omitted means the chat grammar, `/workflow <command>`.
+   */
+  surface?: WorkflowCommandSurface;
 }
 
 /**
@@ -111,6 +117,7 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
   const runId = gate.run.id;
   const workflowName = gate.run.workflow_name;
   const attention = runAttention(gate.run);
+  const cmd = (command: string): string => spellWorkflowCommand(gate.surface ?? {}, command);
 
   // Nothing needs a person: a resolved gate awaiting resume, a durable `wait:`, or a
   // run that already finished. Offering any of those to the agent invites a second
@@ -125,7 +132,7 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
       header +
       `Run \`${runId}\` (**${workflowName}**) is paused, but its approval context is ` +
       'missing or malformed, so the gate cannot be described. Tell the user to resolve it ' +
-      `explicitly with \`/workflow approve ${runId}\` or \`/workflow reject ${runId} <reason>\`.`
+      `explicitly with \`${cmd(`approve ${runId}`)}\` or \`${cmd(`reject ${runId} <reason>`)}\`.`
     );
   }
 
@@ -163,7 +170,7 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
     facts.push(`- Loop iteration: ${String(approval.iteration)}`);
   }
 
-  const explicitCommands = `\`/workflow approve ${runId} [comment]\` or \`/workflow reject ${runId} <reason>\``;
+  const explicitCommands = `\`${cmd(`approve ${runId} [comment]`)}\` or \`${cmd(`reject ${runId} <reason>`)}\``;
 
   const preamble =
     header +

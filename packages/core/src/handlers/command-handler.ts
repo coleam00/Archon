@@ -4,12 +4,7 @@
  */
 import { writeFile, access } from 'fs/promises';
 import { join, relative } from 'path';
-import {
-  type Conversation,
-  type CommandResult,
-  type IPlatformAdapter,
-  ConversationNotFoundError,
-} from '../types';
+import { type Conversation, type CommandResult, ConversationNotFoundError } from '../types';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
@@ -31,7 +26,7 @@ import type {
   ResolvedWorkflow,
 } from '@archon/workflows/schemas/workflow';
 import { isContainerRun, runAttention } from '@archon/workflows/schemas/workflow-run';
-import { spellWorkflowCommand } from '@archon/workflows/deps';
+import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
 import * as workflowDb from '../db/workflows';
 import {
   approveWorkflow,
@@ -48,12 +43,6 @@ import {
 } from '../operations/workflow-operations';
 import { safeDeactivateSession } from '../state/session-transitions';
 import { createLogger } from '@archon/paths';
-
-/**
- * The surface a reply is rendered on. Its adapter owns how an operator types a workflow
- * command there; every suggestion in a reply is spelled through `spellWorkflowCommand`.
- */
-type CommandSurface = Pick<IPlatformAdapter, 'formatWorkflowCommand'>;
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -317,7 +306,7 @@ async function withRunContinuation(
   runId: string,
   headline: string,
   action: 'approve' | 'reject' | 'respond',
-  surface: CommandSurface
+  surface: WorkflowCommandSurface
 ): Promise<CommandResult> {
   let continuation: Awaited<ReturnType<typeof createResumeRequest>>;
   try {
@@ -707,7 +696,7 @@ async function resolveChatRunId(arg: string, conversation: Conversation): Promis
 async function handleWorkflowCommand(
   conversation: Conversation,
   args: string[],
-  surface: CommandSurface
+  surface: WorkflowCommandSurface
 ): Promise<CommandResult> {
   const subcommand = args[0];
   const cmd = (command: string): string => spellWorkflowCommand(surface, command);
@@ -1225,7 +1214,7 @@ async function handleWorkflowCommand(
 export async function handleCommand(
   conversation: Conversation,
   message: string,
-  surface: CommandSurface = {}
+  surface: WorkflowCommandSurface = {}
 ): Promise<CommandResult> {
   const { command, args } = parseCommand(message);
   const cmd = (workflowCommand: string): string => spellWorkflowCommand(surface, workflowCommand);
