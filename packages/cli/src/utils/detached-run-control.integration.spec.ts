@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -185,6 +185,68 @@ describe('detached run control integration', () => {
     } finally {
       await close(server);
       if (process.platform !== 'win32') rmSync(path, { force: true });
+    }
+  });
+
+  it('does not report a Windows tree stopped while a descendant the first kill missed is alive', async () => {
+    // #3466: `taskkill /T` kills the tree it saw when it started. A descendant spawned
+    // while that walk runs survives it, and the old path then confirmed only the root.
+    // The target here spawns a detached child every few milliseconds, so every stop
+    // races at least one spawn. On Windows a detached child also breaks away from the
+    // runtime's kill-on-close job, so nothing but the stop itself can end it. POSIX is
+    // out of scope: a detached child there leaves the process group on purpose.
+    if (process.platform !== 'win32') return;
+
+    const runId = `spawner-${crypto.randomUUID()}`;
+    const path = runLiveOwnerPath(runId);
+    const kidsDir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-spawner-')));
+    // Each child's PID is recorded twice, by the spawner and by the child itself, as the
+    // file's name, so a record can never be read half-written.
+    const spawner = spawn(
+      process.execPath,
+      [
+        '-e',
+        [
+          "const { spawn } = require('node:child_process');",
+          "const fs = require('node:fs');",
+          "const path = require('node:path');",
+          'const dir = process.argv[1];',
+          "const kid = \"require('node:fs').writeFileSync(require('node:path').join(process.argv[1], String(process.pid)), ''); setInterval(() => undefined, 1000);\";",
+          'const loop = () => {',
+          "  const child = spawn(process.execPath, ['-e', kid, dir], { detached: true, stdio: 'ignore' });",
+          "  fs.writeFileSync(path.join(dir, String(child.pid)), '');",
+          '  setTimeout(loop, 10);',
+          '};',
+          'loop();',
+        ].join('\n'),
+        kidsDir,
+      ],
+      { detached: true, stdio: 'ignore' }
+    );
+    if (spawner.pid === undefined) throw new Error('Failed to spawn the spawning target');
+    const recordedKids = (): number[] => readdirSync(kidsDir).map(Number);
+
+    const server = stubOwner(spawner.pid);
+    await listen(server, path);
+    try {
+      // The target is spawning before the stop begins, so the race is live.
+      await waitForFixtureProcess(() => recordedKids().length >= 3);
+      const target = await requestDetachedRunStop(runId);
+      await target.stop();
+
+      // A stop that resolves claims the whole tree is gone. Check that claim against
+      // every child the target ever recorded.
+      expect(processExists(spawner.pid)).toBe(false);
+      expect(recordedKids().filter(pid => processExists(pid))).toEqual([]);
+    } finally {
+      for (const pid of [spawner.pid, ...recordedKids()]) {
+        try {
+          process.kill(pid);
+        } catch {
+          // Already gone: the assertions above report a survivor.
+        }
+      }
+      await close(server);
     }
   });
 
