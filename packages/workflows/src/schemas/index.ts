@@ -236,6 +236,8 @@ export {
   readWorkflowSourceState,
   CONTINUATION_METADATA_KEY,
   readContinuationMode,
+  EXECUTION_OWNER_METADATA_KEY,
+  readExecutionOwner,
   RUN_DISPATCH_METADATA_KEY,
   runDispatchMetadataSchema,
   readRunDispatchMetadata,
@@ -265,6 +267,7 @@ export type {
   WorkflowSourceConfig,
   WorkflowSourceState,
   ContinuationMode,
+  ExecutionOwnerRecord,
   RunDispatchMetadata,
 } from './workflow-run';
 

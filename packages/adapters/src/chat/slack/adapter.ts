@@ -205,6 +205,11 @@ export class SlackAdapter implements IPlatformAdapter {
     return 'slack';
   }
 
+  /** The Slack app registers `/archon-workflow`; Slack rejects an unregistered `/workflow`. */
+  formatWorkflowCommand(command: string): string {
+    return `/archon-workflow ${command}`;
+  }
+
   /**
    * Returns the channel/ts of the inbound user message that triggered the
    * given conversation, if we have it. Workflow bridge uses this to add
