@@ -5632,6 +5632,9 @@ describe('workflowGetCommand', () => {
     mkdirSync(join(artifactsDir, 'review'), { recursive: true });
     for (const report of reports) writeFileSync(join(artifactsDir, report), 'report');
     writeFileSync(join(artifactsDir, 'review', 'report.md'), 'report');
+    // A workflow's own dotfile is its output: only the engine's child is hidden,
+    // by the rule the console's artifacts route shares.
+    writeFileSync(join(artifactsDir, '.pr-number'), '42');
     // Typed-artifact sidecars are real content, so they stay listed — but they
     // sort ahead of most reports and outnumber the 20-line human preview, so a
     // depth-first walk would still hide every report behind them.
@@ -5675,14 +5678,19 @@ describe('workflowGetCommand', () => {
       };
       // A run's own reports sit at the top level, so they lead the list and the
       // cap falls on nested content instead of on them.
-      expect(parsed.leave_behind?.artifactFiles?.slice(0, reports.length)).toEqual([
+      expect(parsed.leave_behind?.artifactFiles?.slice(0, reports.length + 1)).toEqual([
+        '.pr-number',
         'plan.md',
         'pr-action.md',
         'validation.md',
       ]);
       expect(parsed.leave_behind?.artifactFiles).toContain('review/report.md');
-      expect(parsed.leave_behind?.artifactFiles).toHaveLength(reports.length + 31);
-      expect(parsed.leave_behind?.artifactFiles?.every(file => !file.startsWith('.'))).toBe(true);
+      expect(parsed.leave_behind?.artifactFiles).toHaveLength(reports.length + 32);
+      expect(
+        parsed.leave_behind?.artifactFiles?.some(file =>
+          file.startsWith(`${RUN_ARTIFACTS_ENGINE_SUBDIR}/`)
+        )
+      ).toBe(false);
       expect(parsed.leave_behind?.artifactFilesOmitted).toEqual({
         internalFiles,
         truncated: false,
@@ -5750,8 +5758,9 @@ describe('workflowGetCommand', () => {
 
   // A directory the walk cannot read hides everything inside it. ENOENT means
   // the directory is simply gone and dropped nothing an operator could open;
-  // anything else is a real omission that has to reach the operator.
-  it.skipIf(process.platform === 'win32')(
+  // anything else is a real omission that has to reach the operator. Mode 000
+  // cannot make a directory unreadable on Windows or to root, which bypasses it.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
     'names an artifact directory it could not read rather than skipping it silently (#3450)',
     async () => {
       const previousHome = process.env.ARCHON_HOME;

@@ -936,6 +936,19 @@ export function getRunArtifactsDirForRoot(root: string, workflowRunId: string): 
  */
 export const RUN_ARTIFACTS_ENGINE_SUBDIR = '.archon';
 
+/**
+ * Whether an entry in a run's artifacts directory is the engine's own store,
+ * which every listing shown to a person (CLI `workflow get`, the console's
+ * artifacts route) leaves out. `parentRel` is the entry's parent directory
+ * relative to `$ARTIFACTS_DIR`, `''` at the root.
+ *
+ * Only the root child is engine-owned. Any other name, dot-prefixed or not and
+ * at any depth, was written by the workflow and is its output, so it is listed.
+ */
+export function isRunArtifactsEngineEntry(parentRel: string, name: string): boolean {
+  return parentRel === '' && name === RUN_ARTIFACTS_ENGINE_SUBDIR;
+}
+
 /** Get a run's JSONL transcript from an already-resolved project root. */
 export function getRunLogPathForRoot(root: string, workflowRunId: string): string {
   return join(getStoragePathsForRoot(root).logsDir, `${workflowRunId}.jsonl`);

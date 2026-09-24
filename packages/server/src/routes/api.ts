@@ -78,6 +78,7 @@ import {
   getHomeCommandsPath,
   getHomeWorkflowsPath,
   getRunArtifactsDirForRoot,
+  isRunArtifactsEngineEntry,
   resolveRunStorageRoot,
   isInsideArchonHome,
   isInsideArchonWorkspaces,
@@ -870,7 +871,9 @@ const listRunArtifactsRoute = createRoute({
   summary: "List a run's artifact files",
   description:
     "Walks the run's artifact directory and returns relative file paths with size + " +
-    'mtime. Drives the console Artifacts tab. Resolves for every project kind — ' +
+    "mtime. Drives the console Artifacts tab. Leaves out only the engine's own " +
+    '`.archon` child at the root, the same rule `archon workflow get` applies; a ' +
+    "workflow's own dotfiles are listed. Resolves for every project kind — " +
     "`owner/repo`, `_local/<basename>`, and `_folder/<slug>` — preferring the run's " +
     'persisted `output_root` and re-deriving from the codebase when it is absent or ' +
     'no longer inside ARCHON_HOME. Returns `{ files: [] }` only when the location ' +
@@ -4698,8 +4701,9 @@ export function registerApiRoutes(
         throw err;
       }
       for (const entry of entries) {
-        // Skip dotfiles — they're workflow-internal scratch (.pr-number, etc.)
-        if (entry.name.startsWith('.')) continue;
+        // The engine's own store is left out by the rule the CLI's listing shares;
+        // a workflow's own dotfiles are its output and stay listed.
+        if (isRunArtifactsEngineEntry(rel, entry.name)) continue;
         const child = join(dir, entry.name);
         const childRel = rel === '' ? entry.name : `${rel}/${entry.name}`;
         if (entry.isDirectory()) {

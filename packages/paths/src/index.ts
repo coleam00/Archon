@@ -47,6 +47,7 @@ export {
   getRunArtifactsDirForKey,
   getRunArtifactsDirForRoot,
   RUN_ARTIFACTS_ENGINE_SUBDIR,
+  isRunArtifactsEngineEntry,
   getRunLogPathForRoot,
   getRunWorkflowSourceDirForRoot,
   slugifyFolderName,

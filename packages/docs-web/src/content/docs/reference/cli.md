@@ -594,9 +594,8 @@ spills the engine writes for itself, which on a long run outnumber the reports.
 Nothing leaves the list quietly: `leave_behind.artifactFilesOmitted` reports how many
 engine-internal files were skipped (`internalFiles`), whether the display cap was
 reached (`truncated`), and any directory the walk could not read (`unreadable`). Human
-output prints the same facts under the file list. The console run page hides that child
-too, but through a broader rule: it skips every dot-prefixed entry at any depth, so a
-workflow-written dotfile at the artifacts root appears here and not there.
+output prints the same facts under the file list. The console run page leaves out the
+same child and nothing else, so both show a workflow's own dotfiles.
 
 Human output includes `Transcript: <path>`. Every successful JSON shape includes the
 same value as `transcript_path`, including verbose node summaries and raw events. A

@@ -4574,7 +4574,7 @@ function listArtifactFiles(dir: string, maxFiles = 200): ArtifactListing {
     if (!internal) entries.sort((left, right) => left.name.localeCompare(right.name));
     const relative = (entry: Dirent): string => (prefix ? `${prefix}/${entry.name}` : entry.name);
     const isEngineOwned = (entry: Dirent): boolean =>
-      internal || (prefix === '' && entry.name === archonPaths.RUN_ARTIFACTS_ENGINE_SUBDIR);
+      internal || archonPaths.isRunArtifactsEngineEntry(prefix, entry.name);
     for (const entry of entries) {
       if (entry.isDirectory()) continue;
       if (isEngineOwned(entry)) omitted.internalFiles++;
