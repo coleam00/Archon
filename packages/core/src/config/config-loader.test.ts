@@ -1278,6 +1278,18 @@ workflows:
       expect(written).toEqual({ botName: 'MyBot', workflows: { quotaMaxAttempts: 3 } });
     });
 
+    test('an edit to one provider does not overwrite a malformed entry for another', async () => {
+      mockFsReadFile.mockResolvedValue(`
+assistants:
+  codex: high
+`);
+
+      await expect(
+        updateGlobalConfig({ assistants: { claude: { model: 'opus' } } })
+      ).rejects.toThrow(/assistants\.codex' must be an object/);
+      expect(mockFsWriteFile).not.toHaveBeenCalled();
+    });
+
     test('never overwrites a file that is not valid YAML', async () => {
       mockFsReadFile.mockResolvedValue('botName: MyBot\ntiers: [unclosed\n');
 

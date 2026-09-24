@@ -872,6 +872,15 @@ export async function updateGlobalConfig(
         mergeAssistantDefaults(getDefaults().assistants, current.assistants),
         updates.assistants
       );
+      // mergeAssistantDefaults skips a non-object slot, which would let the
+      // built-in default silently replace it. Keep what is on disk for every
+      // provider the patch does not touch so validation below refuses it.
+      if (isConfigRecord(current.assistants)) {
+        for (const [provider, existing] of Object.entries(current.assistants)) {
+          if (existing === null || isConfigRecord(existing)) continue;
+          if (updates.assistants[provider] === undefined) merged.assistants[provider] = existing;
+        }
+      }
     }
 
     if (updates.streaming) {
