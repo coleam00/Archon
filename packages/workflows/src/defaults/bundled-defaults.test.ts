@@ -555,6 +555,15 @@ describe('bundled-defaults', () => {
       );
     });
 
+    // A plan's Out of scope list once dropped required behavior, and delivery built the
+    // narrowed plan. The plan keeps every contract item or stops with the item named.
+    it('plan keeps every accepted contract item or declares not ready', () => {
+      const plan = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:plan::plan'];
+      expect(plan).toContain('## Keep the accepted contract whole');
+      expect(plan).toContain('Every item is in scope.');
+      expect(plan).toContain('nothing the contract requires, or part of it, ever is');
+    });
+
     it('should have valid YAML structure', () => {
       for (const content of Object.values(BUNDLED_WORKFLOWS)) {
         expect(content).toContain('name:');
