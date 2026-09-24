@@ -136,7 +136,12 @@ import { planGraph, resolvedBodyNodes } from './graph-plan';
 import { FAN_OUT_CANCEL_REASONS, waitCompletionEvents } from './store';
 import type { DagResumeSnapshot, FanOutCancelReason, PersistedNodeOutput } from './store';
 import { formatToolCall } from './utils/tool-formatter';
-import { createLogger, captureWorkflowCompleted, isPathInside } from '@archon/paths';
+import {
+  createLogger,
+  captureWorkflowCompleted,
+  isPathInside,
+  RUN_ARTIFACTS_ENGINE_SUBDIR,
+} from '@archon/paths';
 import type { WorkflowErrorClass, WorkflowNodeType } from '@archon/paths';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
@@ -1408,7 +1413,7 @@ function shellQuoteOrFile(
   artifactsDir: string | undefined
 ): string {
   if (artifactsDir && value.length > NODE_OUTPUT_FILE_THRESHOLD) {
-    const spillDir = joinPath(artifactsDir, '.archon', 'node-output-spills');
+    const spillDir = joinPath(artifactsDir, RUN_ARTIFACTS_ENGINE_SUBDIR, 'node-output-spills');
     const filename = field ? `${nodeId}.${field}.nodeoutput` : `${nodeId}.nodeoutput`;
     const filePath = writeSpillFile(spillDir, filename, value);
     if (filePath) return `$(cat ${shellQuote(filePath)})`;
@@ -3599,7 +3604,12 @@ function formatPersistedNodeOutput(
     if (headEnd - sequenceStart < expectedLength) headEnd = sequenceStart;
   }
 
-  const spillDir = joinPath(artifactsDir, '.archon', 'node-output-spills', 'persisted');
+  const spillDir = joinPath(
+    artifactsDir,
+    RUN_ARTIFACTS_ENGINE_SUBDIR,
+    'node-output-spills',
+    'persisted'
+  );
   const spillPath = writeSpillFile(spillDir, `${spillKey}.nodeoutput`, output);
 
   return {
