@@ -3488,6 +3488,18 @@ export interface components {
               error: string;
               /** @enum {boolean} */
               retryable?: false;
+              /** @enum {string} */
+              failureKind?:
+                | 'fatal'
+                | 'transient'
+                | 'unknown'
+                | 'timeout'
+                | 'exec_failed'
+                | 'output_contract'
+                | 'max_iterations'
+                | 'child_failed'
+                | 'cancelled'
+                | 'config';
             }
           | {
               /** @enum {string} */

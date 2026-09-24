@@ -11,7 +11,8 @@ import {
   captureChatTurn,
   captureApprovalResolved,
   captureCodebaseRegistered,
-  captureWorkflowCompleted,
+  captureWorkflowTerminal,
+  runRefForTelemetry,
   classifyWorkflowForTelemetry,
   sanitizeModelForTelemetry,
   shutdownTelemetry,
@@ -290,7 +291,7 @@ describe('first-run notice (via captureWorkflowInvoked)', () => {
   test('does not write the notice when stderr is not a TTY', () => {
     setTTY(false);
     const writeSpy = spyOn(process.stderr, 'write').mockImplementation(() => true);
-    captureWorkflowInvoked({ workflowName: 'w' });
+    captureWorkflowInvoked({ runId: 'run-1', isChild: false, workflowName: 'w' });
     expect(writeSpy).not.toHaveBeenCalled();
     expect(existsSync(stampPath())).toBe(false);
     writeSpy.mockRestore();
@@ -299,7 +300,7 @@ describe('first-run notice (via captureWorkflowInvoked)', () => {
   test('writes the notice once on first invocation (TTY, no stamp) and stamps it', () => {
     setTTY(true);
     const writeSpy = spyOn(process.stderr, 'write').mockImplementation(() => true);
-    captureWorkflowInvoked({ workflowName: 'w' });
+    captureWorkflowInvoked({ runId: 'run-1', isChild: false, workflowName: 'w' });
     expect(writeSpy).toHaveBeenCalledTimes(1);
     expect(String(writeSpy.mock.calls[0]?.[0])).toContain('anonymous usage telemetry');
     expect(existsSync(stampPath())).toBe(true);
@@ -309,8 +310,8 @@ describe('first-run notice (via captureWorkflowInvoked)', () => {
   test('does not write again in the same process (noticeChecked guard)', () => {
     setTTY(true);
     const writeSpy = spyOn(process.stderr, 'write').mockImplementation(() => true);
-    captureWorkflowInvoked({ workflowName: 'w' });
-    captureWorkflowInvoked({ workflowName: 'w2' });
+    captureWorkflowInvoked({ runId: 'run-1', isChild: false, workflowName: 'w' });
+    captureWorkflowInvoked({ runId: 'run-1', isChild: false, workflowName: 'w2' });
     expect(writeSpy).toHaveBeenCalledTimes(1);
     writeSpy.mockRestore();
   });
@@ -320,7 +321,7 @@ describe('first-run notice (via captureWorkflowInvoked)', () => {
     writeFileSync(stampPath(), '2026-01-01T00:00:00.000Z', 'utf8');
     setTTY(true);
     const writeSpy = spyOn(process.stderr, 'write').mockImplementation(() => true);
-    captureWorkflowInvoked({ workflowName: 'w' });
+    captureWorkflowInvoked({ runId: 'run-1', isChild: false, workflowName: 'w' });
     expect(writeSpy).not.toHaveBeenCalled();
     writeSpy.mockRestore();
   });
@@ -330,7 +331,7 @@ describe('first-run notice (via captureWorkflowInvoked)', () => {
     process.env.DO_NOT_TRACK = '1';
     resetTelemetryForTests();
     const writeSpy = spyOn(process.stderr, 'write').mockImplementation(() => true);
-    captureWorkflowInvoked({ workflowName: 'w' });
+    captureWorkflowInvoked({ runId: 'run-1', isChild: false, workflowName: 'w' });
     expect(writeSpy).not.toHaveBeenCalled();
     expect(existsSync(stampPath())).toBe(false);
     writeSpy.mockRestore();
@@ -354,6 +355,8 @@ describe('captureWorkflowInvoked when disabled', () => {
   test('does not throw when telemetry is disabled', () => {
     expect(() => {
       captureWorkflowInvoked({
+        runId: 'run-1',
+        isChild: false,
         workflowName: 'test-workflow',
         platform: 'cli',
       });
@@ -385,7 +388,7 @@ describe('telemetry ID persistence', () => {
   });
 
   test('calling capture while disabled does not create a telemetry-id file', () => {
-    captureWorkflowInvoked({ workflowName: 'w' });
+    captureWorkflowInvoked({ runId: 'run-1', isChild: false, workflowName: 'w' });
     expect(existsSync(join(tmpHome, 'telemetry-id'))).toBe(false);
   });
 
@@ -407,9 +410,8 @@ describe('telemetry ID persistence', () => {
 });
 
 describe('classifyWorkflowForTelemetry', () => {
-  test('bundled workflows report their real name and is_builtin true', () => {
+  test('bundled workflows report their real name', () => {
     expect(classifyWorkflowForTelemetry('implement', 'bundled')).toEqual({
-      is_builtin: true,
       workflow_name: 'implement',
       workflow_source: 'bundled',
     });
@@ -417,7 +419,6 @@ describe('classifyWorkflowForTelemetry', () => {
 
   test('project workflows are redacted to "custom" and report their source', () => {
     expect(classifyWorkflowForTelemetry('deploy-acme-prod', 'project')).toEqual({
-      is_builtin: false,
       workflow_name: 'custom',
       workflow_source: 'project',
     });
@@ -425,7 +426,6 @@ describe('classifyWorkflowForTelemetry', () => {
 
   test('global workflows are also redacted to "custom"', () => {
     expect(classifyWorkflowForTelemetry('my-global', 'global')).toEqual({
-      is_builtin: false,
       workflow_name: 'custom',
       workflow_source: 'global',
     });
@@ -433,7 +433,6 @@ describe('classifyWorkflowForTelemetry', () => {
 
   test('undefined source defaults to the privacy-safe custom/project treatment', () => {
     expect(classifyWorkflowForTelemetry('anything', undefined)).toEqual({
-      is_builtin: false,
       workflow_name: 'custom',
       workflow_source: 'project',
     });
@@ -568,7 +567,7 @@ describe('new capture functions are fire-and-forget no-throw', () => {
   test('captureWorkflowCompleted accepts v5 cache usage fields without throwing (disabled)', () => {
     process.env.ARCHON_TELEMETRY_DISABLED = '1';
     expect(() =>
-      captureWorkflowCompleted({
+      captureWorkflowTerminal({
         outcome: 'completed',
         workflowName: 'implement',
         workflowSource: 'bundled',
@@ -750,7 +749,7 @@ describe('new capture functions are fire-and-forget no-throw', () => {
   test('captureWorkflowCompleted does not throw for completed/failed (disabled)', () => {
     process.env.ARCHON_TELEMETRY_DISABLED = '1';
     expect(() =>
-      captureWorkflowCompleted({
+      captureWorkflowTerminal({
         outcome: 'completed',
         workflowName: 'implement',
         workflowSource: 'bundled',
@@ -760,7 +759,7 @@ describe('new capture functions are fire-and-forget no-throw', () => {
       })
     ).not.toThrow();
     expect(() =>
-      captureWorkflowCompleted({
+      captureWorkflowTerminal({
         outcome: 'failed',
         workflowName: 'x',
         exitReason: 'node_error',
@@ -778,7 +777,7 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     );
     try {
       expect(() =>
-        captureWorkflowCompleted({
+        captureWorkflowTerminal({
           outcome: 'failed',
           workflowName: 'implement',
           workflowSource: 'bundled',
@@ -791,7 +790,7 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     }
   });
 
-  test('captureWorkflowCompleted serializes cache totals and machine context', async () => {
+  test('captureWorkflowTerminal serializes run identity, outcome events, cache totals and machine context', async () => {
     delete process.env.ARCHON_TELEMETRY_DISABLED;
     delete process.env.DO_NOT_TRACK;
     delete process.env.CI;
@@ -807,8 +806,10 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     );
     const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(fetchImpl);
     try {
-      captureWorkflowCompleted({
+      captureWorkflowTerminal({
         outcome: 'completed',
+        runId: 'run-db-id-1',
+        isChild: false,
         workflowName: 'implement',
         workflowSource: 'bundled',
         tokensIn: 100,
@@ -816,7 +817,7 @@ describe('new capture functions are fire-and-forget no-throw', () => {
         cacheReadTokens: 70,
         cacheWriteTokens: 0,
       });
-      captureWorkflowCompleted({
+      captureWorkflowTerminal({
         outcome: 'completed',
         workflowName: 'plan',
         workflowSource: 'bundled',
@@ -825,6 +826,13 @@ describe('new capture functions are fire-and-forget no-throw', () => {
         cacheReadTokens: 70,
         cacheWriteTokens: 0,
         cachePartialTokens: true,
+      });
+      captureWorkflowTerminal({
+        outcome: 'cancelled',
+        runId: 'run-db-id-2',
+        workflowName: 'deploy-acme-prod',
+        workflowSource: 'project',
+        cancelReason: 'operator',
       });
       await shutdownTelemetry();
     } finally {
@@ -848,6 +856,8 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     )?.properties;
     expect(exact).toMatchObject({
       schema_version: TELEMETRY_SCHEMA_VERSION,
+      run_ref: runRefForTelemetry('run-db-id-1'),
+      is_child: false,
       // Super-properties: this test runs from a source checkout.
       install_channel: 'source',
       git_commit: expect.stringMatching(/^[0-9a-f]{7}$/),
@@ -868,6 +878,22 @@ describe('new capture functions are fire-and-forget no-throw', () => {
       cache_write_tokens: 0,
       cache_partial: true,
     });
+    // The event name carries the outcome, so neither it nor is_builtin is repeated.
+    expect(exact).not.toHaveProperty('outcome');
+    expect(exact).not.toHaveProperty('is_builtin');
+    const cancelled = events.find(event => event.event === 'workflow_cancelled')?.properties;
+    expect(cancelled).toMatchObject({ workflow_name: 'custom', cancel_reason: 'operator' });
+    // Only the hashed reference leaves the machine, never the run's database id.
+    expect(JSON.stringify(events)).not.toContain('run-db-id');
+  });
+});
+
+describe('runRefForTelemetry', () => {
+  test('is a stable 16-hex reference per run that differs between runs', () => {
+    const ref = runRefForTelemetry('run-a');
+    expect(ref).toMatch(/^[0-9a-f]{16}$/);
+    expect(runRefForTelemetry('run-a')).toBe(ref);
+    expect(runRefForTelemetry('run-b')).not.toBe(ref);
   });
 });
 

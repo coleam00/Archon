@@ -1,6 +1,7 @@
 import { serializeNodeStateRecord, type SerializedNodeEvent } from './node-record-serialization';
 import type { NodeExecutionMetadata, NodeExecutionRecord } from './schemas/node-execution';
 import type { CheckoutObservation } from './schemas/checkout-observation';
+import type { RunCancelReason, RunExitReason } from './schemas/run-terminal-reason';
 /**
  * IWorkflowStore - trait interface for workflow database operations.
  *
@@ -252,6 +253,8 @@ export type FanOutCancelReason = (typeof FAN_OUT_CANCEL_REASONS)[number];
 export interface WorkflowCancellationEventDetails {
   step_name?: string;
   reason?: string;
+  /** Categorical cause, reported to telemetry; `reason` is free text and never is. */
+  cancel_reason?: RunCancelReason;
 }
 
 /**
@@ -384,11 +387,14 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
     completion: { duration_ms: number },
     metadata?: Record<string, unknown>
   ): Promise<void>;
-  /** Atomically fail the run and persist its matching lifecycle event. */
+  /**
+   * Atomically fail the run and persist its matching lifecycle event. `exitReason`
+   * is recorded on that event as the run's categorical failure cause.
+   */
   failWorkflowRun(
     id: string,
     error: string,
-    scheduledResume?: ScheduledWorkflowResume
+    options?: { scheduledResume?: ScheduledWorkflowResume; exitReason?: RunExitReason }
   ): Promise<void>;
   /**
    * Pause a running run for human review, stamping the approval context. Optional

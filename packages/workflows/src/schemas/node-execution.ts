@@ -99,6 +99,26 @@ export const executionBindingSchema = z.object({
 });
 export type ExecutionBinding = z.infer<typeof executionBindingSchema>;
 
+/**
+ * Why a node failed, recorded where the failure is known rather than re-read from
+ * `error` prose later. `fatal`/`transient`/`unknown` classify a provider error the
+ * way retry does; the rest name engine-detected causes. Absent on records written
+ * before this field existed.
+ */
+export const nodeFailureKindSchema = z.enum([
+  'fatal',
+  'transient',
+  'unknown',
+  'timeout',
+  'exec_failed',
+  'output_contract',
+  'max_iterations',
+  'child_failed',
+  'cancelled',
+  'config',
+]);
+export type NodeFailureKind = z.infer<typeof nodeFailureKindSchema>;
+
 export const executionLifecycleSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('started') }),
   z.object({ status: z.literal('completed') }),
@@ -106,6 +126,7 @@ export const executionLifecycleSchema = z.discriminatedUnion('status', [
     status: z.literal('failed'),
     error: z.string(),
     retryable: z.literal(false).optional(),
+    failureKind: nodeFailureKindSchema.optional(),
   }),
   z.object({ status: z.literal('skipped'), reason: nodeSkipReasonSchema, cause: skipCauseSchema }),
   z.object({

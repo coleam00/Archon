@@ -10,7 +10,7 @@ import { MANAGED_PROVIDER_CREDENTIAL_RELATIVE_PATHS } from './deps';
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
 import type { WorkflowDeps } from './deps';
 import * as archonPaths from '@archon/paths';
-import { createLogger, captureWorkflowInvoked, captureWorkflowCompleted } from '@archon/paths';
+import { createLogger, captureWorkflowInvoked, captureWorkflowTerminal } from '@archon/paths';
 import { recordCheckoutSample, sampleCheckout, type CheckoutSample } from './checkout-observation';
 import { getDefaultBranch, toRepoPath } from '@archon/git';
 import type {
@@ -97,7 +97,6 @@ export type {
 } from './child-isolation';
 import {
   classifyError,
-  toTelemetryErrorClass,
   safeSendMessage,
   runWithAdoptedRunDir,
   type SendMessageContext,
@@ -1567,10 +1566,13 @@ async function runChildWorkflow(
       // failWorkflowRun, whose `WHERE status='running'` would miss the 'pending' case)
       // flips any non-terminal child to 'cancelled' and no-ops on a child that reached
       // completed/cancelled on its own. childRunId is always assigned once step 3 ran.
-      await requireTerminalStatusWrite(deps.store.cancelWorkflowRun(childRunId), {
-        workflowRunId: childRunId,
-        site: 'executor.child_setup_cancel',
-      });
+      await requireTerminalStatusWrite(
+        deps.store.cancelWorkflowRun(childRunId, { cancel_reason: 'precondition_failed' }),
+        {
+          workflowRunId: childRunId,
+          site: 'executor.child_setup_cancel',
+        }
+      );
       return failOutcome(
         `Sub-run '${childWorkflowName}' errored: ${(err as Error).message}`,
         childRunId
@@ -2259,6 +2261,14 @@ export async function executeWorkflow(
         { err, workflowName: workflow.name, conversationId },
         'db_create_workflow_run_failed'
       );
+      // No row, so no store transition will report this run: count it here, the one
+      // terminal telemetry capture outside the run store.
+      captureWorkflowTerminal({
+        outcome: 'failed',
+        workflowName: workflow.name,
+        workflowSource: runSource,
+        exitReason: 'run_not_created',
+      });
       await sendCriticalMessage(
         platform,
         conversationId,
@@ -2456,10 +2466,13 @@ export async function executeWorkflow(
         );
         // The notification explains the block; it does not prove cleanup succeeded.
         // Release our lock token, preserving a rejected write instead of returning.
-        await requireTerminalStatusWrite(deps.store.cancelWorkflowRun(workflowRun.id), {
-          workflowRunId: workflowRun.id,
-          site: 'executor.guard_self_cancel',
-        });
+        await requireTerminalStatusWrite(
+          deps.store.cancelWorkflowRun(workflowRun.id, { cancel_reason: 'precondition_failed' }),
+          {
+            workflowRunId: workflowRun.id,
+            site: 'executor.guard_self_cancel',
+          }
+        );
 
         return {
           success: false,
@@ -2480,10 +2493,13 @@ export async function executeWorkflow(
       );
       // Even if notification delivery failed, release this run's lock token.
       // A rejected cleanup must escape rather than become an ordinary guard result.
-      await requireTerminalStatusWrite(deps.store.cancelWorkflowRun(workflowRun.id), {
-        workflowRunId: workflowRun.id,
-        site: 'executor.guard_query_failure_cleanup',
-      });
+      await requireTerminalStatusWrite(
+        deps.store.cancelWorkflowRun(workflowRun.id, { cancel_reason: 'precondition_failed' }),
+        {
+          workflowRunId: workflowRun.id,
+          site: 'executor.guard_query_failure_cleanup',
+        }
+      );
       return { success: false, error: 'Database error checking for active workflow' };
     }
   }
@@ -2769,10 +2785,13 @@ export async function executeWorkflow(
   const failRunOnSource = async (message: string): Promise<WorkflowExecutionResult> => {
     getLog().error({ workflowRunId: workflowRun.id, message }, 'workflow.source_unavailable');
     await sendCriticalMessage(platform, conversationId, `❌ **Workflow failed**: ${message}`);
-    await requireTerminalStatusWrite(deps.store.failWorkflowRun(workflowRun.id, message), {
-      workflowRunId: workflowRun.id,
-      site: 'workflow.source_fail_db_record_failed',
-    });
+    await requireTerminalStatusWrite(
+      deps.store.failWorkflowRun(workflowRun.id, message, { exitReason: 'source_unavailable' }),
+      {
+        workflowRunId: workflowRun.id,
+        site: 'workflow.source_fail_db_record_failed',
+      }
+    );
     return { success: false, workflowRunId: workflowRun.id, error: message };
   };
 
@@ -3011,6 +3030,8 @@ export async function executeWorkflow(
     // along as super-properties. Opt out: ARCHON_TELEMETRY_DISABLED=1 / DO_NOT_TRACK=1.
     const telemetryNodes = workflow.nodes;
     captureWorkflowInvoked({
+      runId: workflowRun.id,
+      isChild: workflowRun.parent_run_id != null,
       workflowName: workflow.name,
       workflowSource: runSource,
       platform: platform.getPlatformType(),
@@ -3232,7 +3253,6 @@ export async function executeWorkflow(
         configuredCommandFolder,
         issueContext,
         priorCompletedNodes: dagPriorCompletedNodes,
-        source: runSource,
         aiProfile,
         workflowPreset,
         scopeArtifactsDir,
@@ -3331,19 +3351,6 @@ export async function executeWorkflow(
       workflowName: workflow.name,
       error: err.message,
     });
-    // Anonymous telemetry for the unhandled-throw failure path. The DAG-internal
-    // failure paths (no/partial completion) fire their own captureWorkflowCompleted
-    // and return without throwing, so this only covers genuine unhandled errors —
-    // no double-count. Duration/node-counts are not in scope here.
-    captureWorkflowCompleted({
-      outcome: 'failed',
-      workflowName: workflow.name,
-      workflowSource: runSource,
-      provider: resolvedProvider,
-      exitReason: 'unhandled_error',
-      // Categorical class only (fatal/transient/unknown) — err.message never leaves.
-      errorClass: toTelemetryErrorClass(classifyError(err)),
-    });
     emitter.unregisterRun(workflowRun.id);
 
     // Notify user about the failure
@@ -3364,10 +3371,13 @@ export async function executeWorkflow(
     // failed so the finally-block backstop below does not fire a second write over a
     // write channel that just proved unreliable — that write would mask this error.
     try {
-      await requireTerminalStatusWrite(deps.store.failWorkflowRun(workflowRun.id, err.message), {
-        workflowRunId: workflowRun.id,
-        site: 'db_record_failure_failed',
-      });
+      await requireTerminalStatusWrite(
+        deps.store.failWorkflowRun(workflowRun.id, err.message, { exitReason: 'unhandled_error' }),
+        {
+          workflowRunId: workflowRun.id,
+          site: 'db_record_failure_failed',
+        }
+      );
     } catch (writeError) {
       terminalStatusWriteFailed = true;
       throw writeError;
@@ -3392,7 +3402,9 @@ export async function executeWorkflow(
       if (backstopStatus === 'running') {
         getLog().warn({ workflowRunId: runId }, 'executor.backstop_triggered');
         await requireTerminalStatusWrite(
-          deps.store.failWorkflowRun(runId, 'Workflow exited without finalizing — see logs'),
+          deps.store.failWorkflowRun(runId, 'Workflow exited without finalizing — see logs', {
+            exitReason: 'not_finalized',
+          }),
           { workflowRunId: runId, site: 'executor.backstop_fail_failed' }
         );
       }

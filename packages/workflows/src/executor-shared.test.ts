@@ -37,7 +37,7 @@ import {
   RATE_LIMIT_PATTERNS,
   RATE_LIMIT_RETRY_DELAY_MS,
   TRANSIENT_PATTERNS,
-  toTelemetryErrorClass,
+  providerFailureKind,
   safeSendMessage,
   type UnknownErrorTracker,
 } from './executor-shared';
@@ -1106,23 +1106,11 @@ describe('classifyError', () => {
   });
 });
 
-describe('toTelemetryErrorClass', () => {
-  it('maps FATAL to fatal', () => {
-    expect(toTelemetryErrorClass('FATAL')).toBe('fatal');
-  });
-
-  it('maps TRANSIENT to transient', () => {
-    expect(toTelemetryErrorClass('TRANSIENT')).toBe('transient');
-  });
-
-  it('maps UNKNOWN to unknown', () => {
-    expect(toTelemetryErrorClass('UNKNOWN')).toBe('unknown');
-  });
-
-  it('round-trips classifyError output for every ErrorType', () => {
-    expect(toTelemetryErrorClass(classifyError(new Error('401 unauthorized')))).toBe('fatal');
-    expect(toTelemetryErrorClass(classifyError(new Error('rate limit: 429')))).toBe('transient');
-    expect(toTelemetryErrorClass(classifyError(new Error('mystery')))).toBe('unknown');
+describe('providerFailureKind', () => {
+  it('maps the retry classification onto the provider failure kinds', () => {
+    expect(providerFailureKind(new Error('401 unauthorized'))).toBe('fatal');
+    expect(providerFailureKind(new Error('rate limit: 429'))).toBe('transient');
+    expect(providerFailureKind(new Error('mystery'))).toBe('unknown');
   });
 });
 

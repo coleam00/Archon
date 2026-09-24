@@ -1925,7 +1925,7 @@ describe('CommandHandler', () => {
         expect(result.success).toBe(true);
         expect(result.message).toContain('Cancelled workflow');
         expect(result.message).toContain('test-workflow');
-        expect(mockCancelWorkflowRun).toHaveBeenCalledWith('wf-123');
+        expect(mockCancelWorkflowRun).toHaveBeenCalledWith('wf-123', { cancel_reason: 'operator' });
       });
 
       test('should return message when no active workflow exists', async () => {
@@ -2252,7 +2252,9 @@ describe('CommandHandler', () => {
         expect(result.success).toBe(true);
         expect(result.message).toContain('Abandoned');
         expect(result.message).toContain('implement');
-        expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-123');
+        expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-123', {
+          cancel_reason: 'operator',
+        });
         // The cascade walk must actually run against the mock, not merely be
         // survived. cascadeCancelChildren swallows its own errors into a failure
         // count, so a cascade that is broken — or one silently talking to a real

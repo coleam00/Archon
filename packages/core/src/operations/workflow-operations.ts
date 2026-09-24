@@ -552,7 +552,9 @@ export async function abandonWorkflow(runId: string): Promise<AbandonWorkflowRes
       `Cannot abandon run with status '${run.status}'. Only running, paused, or failed runs can be abandoned.`
     );
   }
-  const result = await cancelRunAndCleanup(run, workflowDb.cancelWorkflowRun);
+  const result = await cancelRunAndCleanup(run, id =>
+    workflowDb.cancelWorkflowRun(id, { cancel_reason: 'operator' })
+  );
   return {
     run: result.run,
     cancelled: result.cancelled,

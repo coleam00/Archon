@@ -6488,7 +6488,9 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
 
     await workflowAbandonCommand('0b1ee8da', true, '/repo');
 
-    expect(workflowDb.cancelWorkflowRun).toHaveBeenCalledWith(FULL_ID);
+    expect(workflowDb.cancelWorkflowRun).toHaveBeenCalledWith(FULL_ID, {
+      cancel_reason: 'operator',
+    });
     const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
       ok: boolean;
       runId: string;
@@ -7799,7 +7801,8 @@ describe('workflowRunCommand — detach', () => {
 
     expect(workflowDb.failWorkflowRun).toHaveBeenCalledWith(
       'run-detached-created',
-      expect.stringContaining('Detached launch failed')
+      expect.stringContaining('Detached launch failed'),
+      { exitReason: 'launch_failed' }
     );
     expect(consoleSpy).not.toHaveBeenCalledWith("Started 'assist' in the background.");
   });
@@ -8037,7 +8040,8 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
 
     expect(workflowDb.failWorkflowRun).toHaveBeenCalledWith(
       'run-precreated',
-      expect.stringContaining('Detached run failed to start')
+      expect.stringContaining('Detached run failed to start'),
+      { exitReason: 'launch_failed' }
     );
   });
 
@@ -9524,7 +9528,9 @@ describe('workflowAbandonCommand', () => {
 
     await workflowAbandonCommand('run-1');
 
-    expect(workflowDb.cancelWorkflowRun).toHaveBeenCalledWith('run-1');
+    expect(workflowDb.cancelWorkflowRun).toHaveBeenCalledWith('run-1', {
+      cancel_reason: 'operator',
+    });
     expect(consoleSpy).toHaveBeenCalledWith('Abandoned workflow run: run-1');
   });
 });
@@ -11312,7 +11318,8 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
 
     expect(workflowsDb.failWorkflowRun).toHaveBeenCalledWith(
       'test-run-id',
-      'Process terminated (SIGTERM)'
+      'Process terminated (SIGTERM)',
+      { exitReason: 'process_terminated' }
     );
     expect(shutdownOrder).toEqual(['owner-close', 'exit']);
     expect(exitSpy).toHaveBeenCalledWith(1);
@@ -11397,7 +11404,8 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
 
     expect(workflowsDb.failWorkflowRun).toHaveBeenCalledWith(
       'test-run-id',
-      'Process terminated (SIGTERM)'
+      'Process terminated (SIGTERM)',
+      { exitReason: 'process_terminated' }
     );
     expect(workflowsDb.getActiveWorkflowRun).not.toHaveBeenCalled();
     expect(exitSpy).toHaveBeenCalledWith(1);

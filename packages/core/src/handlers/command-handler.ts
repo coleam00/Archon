@@ -773,7 +773,7 @@ async function handleWorkflowCommand(
           };
         }
 
-        await workflowDb.cancelWorkflowRun(activeWorkflow.id);
+        await workflowDb.cancelWorkflowRun(activeWorkflow.id, { cancel_reason: 'operator' });
         return {
           success: true,
           message: `Cancelled workflow: \`${activeWorkflow.workflow_name}\``,

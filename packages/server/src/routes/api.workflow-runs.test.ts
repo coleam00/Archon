@@ -1132,7 +1132,7 @@ describe('POST /api/workflows/runs/:runId/cancel', () => {
     const body = (await response.json()) as { success: boolean; message: string };
     expect(body.success).toBe(true);
     expect(body.message).toContain('deploy');
-    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-uuid-1');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-uuid-1', { cancel_reason: 'operator' });
   });
 
   test('cancels a pending workflow run and returns success', async () => {
@@ -2180,7 +2180,7 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
     const body = (await response.json()) as { success: boolean; message: string };
     expect(body.success).toBe(true);
     expect(body.message).toContain('Abandoned');
-    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-uuid-1');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-uuid-1', { cancel_reason: 'operator' });
   });
 
   // #1887: a failed run is terminal but resumable, so it must remain
@@ -2196,7 +2196,7 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
     const body = (await response.json()) as { success: boolean; message: string };
     expect(body.success).toBe(true);
     expect(body.message).toContain('Abandoned');
-    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-uuid-4');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-uuid-4', { cancel_reason: 'operator' });
   });
 });
 

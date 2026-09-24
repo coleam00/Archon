@@ -10,6 +10,7 @@
     "./router": "./src/router.ts",
     "./store": "./src/store.ts",
     "./terminal-record": "./src/terminal-record.ts",
+    "./run-terminal-telemetry": "./src/run-terminal-telemetry.ts",
     "./terminal-status-write": "./src/terminal-status-write.ts",
     "./deps": "./src/deps.ts",
     "./event-emitter": "./src/event-emitter.ts",
@@ -152,7 +153,9 @@
     [
       "src/artifacts-index.test.ts",
       "src/artifact-pointer.test.ts",
-      "src/terminal-record.test.ts"
+      "src/terminal-record.test.ts",
+      "src/run-terminal-telemetry.test.ts",
+      "src/telemetry-conformance.test.ts"
     ],
     [
       "src/state-migration.test.ts",

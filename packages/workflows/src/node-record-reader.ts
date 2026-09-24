@@ -69,6 +69,7 @@ function lifecycleFor(
             status: 'failed',
             error: data.error,
             ...(data.retryable === false ? { retryable: false } : {}),
+            ...(data.failure_kind !== undefined ? { failureKind: data.failure_kind } : {}),
           }
         : undefined;
     case 'node_skipped':

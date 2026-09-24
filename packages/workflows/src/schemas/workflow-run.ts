@@ -9,7 +9,11 @@ import {
   type SuspendReason,
 } from './node-state';
 import type { TokenUsage } from '@archon/providers/types';
-import { nodeExecutionMetadataSchema, type NodeExecutionMetadata } from './node-execution';
+import {
+  nodeExecutionMetadataSchema,
+  nodeFailureKindSchema,
+  type NodeExecutionMetadata,
+} from './node-execution';
 import { checkoutObservationSchema } from './checkout-observation';
 import { workflowSourceSchema } from './workflow';
 // Type-only, so the output-ref ↔ schemas edge stays erased (no runtime cycle).
@@ -231,6 +235,8 @@ export const nodeOutputSchema = z.discriminatedUnion('state', [
      *  that stdout and can read as transient. Only `false` is expressible: a producer can
      *  refuse retry, never force one past a FATAL classification. */
     retryable: z.literal(false).optional(),
+    /** Why the node failed, when the producer knows it (see `nodeFailureKindSchema`). */
+    failureKind: nodeFailureKindSchema.optional(),
   }),
   z.object({
     execution: nodeExecutionMetadataSchema.optional(),

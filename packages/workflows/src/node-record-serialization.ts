@@ -8,6 +8,7 @@ import {
   executionBindingSchema,
   executionSpendSchema,
   nodeExecutionMetadataSchema,
+  nodeFailureKindSchema,
   type NodeExecutionRecord,
   type NodeStateRecord,
   type ExecutionOutput,
@@ -38,6 +39,7 @@ export const serializedNodeDataSchema = z.object({
   model_usage: z.object({ requested: z.string().optional(), resolved: z.string() }).optional(),
   error: z.string().optional(),
   retryable: z.literal(false).optional(),
+  failure_kind: nodeFailureKindSchema.optional(),
   reason: z.union([nodeSkipReasonSchema, z.literal('stale_dependency')]).optional(),
   cause: skipCauseSchema.optional(),
   expr: z.string().optional(),
@@ -208,6 +210,7 @@ export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNod
         ? {
             error: lifecycle.error,
             ...(lifecycle.retryable === false ? { retryable: false as const } : {}),
+            ...(lifecycle.failureKind !== undefined ? { failure_kind: lifecycle.failureKind } : {}),
           }
         : {}),
       ...(lifecycle.status === 'skipped'
@@ -274,6 +277,7 @@ export function serializeNodeOutput(
         state: 'failed',
         error: lifecycle.error,
         ...(lifecycle.retryable === false ? { retryable: false } : {}),
+        ...(lifecycle.failureKind !== undefined ? { failureKind: lifecycle.failureKind } : {}),
       };
     case 'skipped':
       return { ...common, state: 'skipped', cause: lifecycle.cause };
