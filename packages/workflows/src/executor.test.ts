@@ -121,6 +121,11 @@ const mockGetDefaultBranch = mock(async () => 'main');
 mock.module('@archon/git', () => ({
   getDefaultBranch: mockGetDefaultBranch,
   toRepoPath: mock((p: string) => p),
+  // The checkout baseline of a container run probes the container through here. Tests use
+  // container ids that do not exist, so answer the way a real `docker exec` would.
+  execFileAsync: mock(async () => {
+    throw new Error('Error response from daemon: No such container');
+  }),
 }));
 
 // --- Mock dag-executor ---
