@@ -17,7 +17,9 @@ describe('terminal run telemetry call sites', () => {
   it('only the run store and the executor run_not_created report call captureWorkflowTerminal', async () => {
     const repoRoot = join(import.meta.dir, '..');
     const callers: string[] = [];
-    for await (const path of new Bun.Glob('packages/*/src/**/*.{ts,tsx}').scan(repoRoot)) {
+    for await (const scanned of new Bun.Glob('packages/*/src/**/*.{ts,tsx}').scan(repoRoot)) {
+      // The scan yields native separators; compare in POSIX form so Windows matches.
+      const path = scanned.replaceAll('\\', '/');
       if (/\.(test|spec)\.tsx?$/.test(path) || path.endsWith('/telemetry.ts')) continue;
       const source = await readFile(join(repoRoot, path), 'utf8');
       if (source.includes('captureWorkflowTerminal(')) callers.push(path);

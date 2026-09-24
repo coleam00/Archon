@@ -8,6 +8,20 @@ import { readRunDispatchMetadata, type WorkflowRun } from './schemas/workflow-ru
 import { telemetryNodeType } from './telemetry-node-type';
 import { getTerminalRecord } from './terminal-record';
 
+/**
+ * The event types {@link buildRunTerminalTelemetry} reads, so a caller can load only
+ * those rows. The terminal record rides on the terminal event itself. Reading another
+ * event type in the projection means adding it here.
+ */
+export const RUN_TELEMETRY_EVENT_TYPES = [
+  'workflow_started',
+  'workflow_completed',
+  'workflow_failed',
+  'workflow_cancelled',
+  'node_failed',
+  'loop_iteration_completed',
+] as const;
+
 export interface RunTelemetryEvent {
   event_type: string;
   step_name?: string | null;

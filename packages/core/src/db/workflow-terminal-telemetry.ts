@@ -1,6 +1,7 @@
 import { captureWorkflowTerminal, createLogger, isTelemetryDisabled } from '@archon/paths';
 import {
   buildRunTerminalTelemetry,
+  RUN_TELEMETRY_EVENT_TYPES,
   type RunTelemetryEvent,
 } from '@archon/workflows/run-terminal-telemetry';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -32,11 +33,14 @@ export async function reportRunTerminal(runId: string): Promise<void> {
     );
     const run = runResult.rows[0];
     if (!run) return;
+    // Only the rows the projection reads: a long run's tool and activity rows would
+    // otherwise be loaded, with their payloads, on every terminal write.
     const events = await pool.query<RunTelemetryEvent>(
       `SELECT event_type, step_name, data, created_at FROM remote_agent_workflow_events
        WHERE workflow_run_id = $1
+         AND event_type IN (${RUN_TELEMETRY_EVENT_TYPES.map((_, i) => `$${String(i + 2)}`).join(', ')})
        ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
-      [runId]
+      [runId, ...RUN_TELEMETRY_EVENT_TYPES]
     );
     const usage = await getDagResumeSnapshot(runId);
     const telemetry = buildRunTerminalTelemetry({
