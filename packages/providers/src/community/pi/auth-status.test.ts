@@ -15,11 +15,12 @@
  *
  * No network probe, no scanning of other tools' credential stores.
  */
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { describe, test, expect, beforeEach } from 'bun:test';
+import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Credential } from '@earendil-works/pi-ai';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { readPiAuthValidity } from './auth-status';
 
 /**
@@ -33,14 +34,18 @@ const SDK_SHAPE_PIN: Credential[] = [
   { type: 'oauth', access: 'a', refresh: 'r', expires: 1_790_000_000_000 },
 ];
 
+/**
+ * One temp root per test, torn down by the shared helper. Registering at
+ * creation rather than removing at the end of the test body means a failed
+ * assertion still gets its fixture cleaned up, and the removal stays off the
+ * test's own time budget.
+ */
+const trackTempRoot = trackTempRoots();
+
 let dir: string;
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'archon-pi-auth-'));
-});
-
-afterEach(() => {
-  rmSync(dir, { recursive: true });
+  dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-pi-auth-')));
 });
 
 /** One OAuth credential, in the shape `pi /login` writes. */
