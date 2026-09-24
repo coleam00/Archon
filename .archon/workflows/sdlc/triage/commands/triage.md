@@ -78,7 +78,7 @@ Write `$ARTIFACTS_DIR/triage.md`. Title it `# Triage: owner/repo#N — <item tit
 - **Source and outcome** — what was requested, the affected behavior, and which source material was considered.
 - **Current truth** — current HEAD/base context and only the evidence that decided the route.
 - **Assumptions checked** — each load-bearing claim or prescribed solution you confirmed, refuted, or could not establish.
-- **Contract** — the verdict, which of the six elements are present or missing, the preconditions checked, and any prerequisite found.
+- **Contract** — the verdict, which of the six elements are present or missing, the preconditions checked, and any prerequisite found. When the verdict is `READY`, quote the source's invariants, acceptance items, and any solution steering here, each item as the source words it. Later steps plan, implement, and review against this section, and an item you only count or summarize is one they cannot check.
 - **Disposition** — exactly one route and why the evidence requires it. When the verdict is not `READY`, name here the route the item would take once it is.
 - **Proposed contract** — only for `NEEDS_CONTRACT_WORK`: the title and body you declare in `proposed_edits`, in the repository's issue template shape when one exists, with only the context that constrains the work. Propose; never apply. A later gated step owns the edit.
 - **Handoff** — the precise investigation question, planning decision, implementation-ready work order, or reason no action should occur.

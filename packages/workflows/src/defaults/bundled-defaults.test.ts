@@ -509,6 +509,24 @@ describe('bundled-defaults', () => {
       expect(synthesize).toContain('keeping the `sources` it was first attributed to');
     });
 
+    // The lenses judge defects in what changed; only synthesis runs on every round, so it
+    // owns holding the change to the contract's acceptance, invariants, and steering. Scope
+    // must carry those items for it to judge, and an unmet one must block like any
+    // Important finding and stay attributable in findings.json.
+    it('review holds the change to the accepted contract on every round', () => {
+      // Triage is where the delivery chain first restates the contract; a count or summary
+      // of acceptance there is where the items were lost.
+      expect(BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:triage::triage']).toContain(
+        "quote the source's invariants, acceptance items, and any solution steering"
+      );
+      const scope = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-scope'];
+      expect(scope).toContain('list every **acceptance** item');
+      const synthesize = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize'];
+      expect(synthesize).toContain('## Judge contract coverage');
+      expect(synthesize).toContain('`sources: [contract]`');
+      expect(synthesize).toContain('An unmet contract item is an Important or Critical finding');
+    });
+
     // The same "does this diff earn a docs review" call is made in two packs — at
     // delivery time by the classifier, and at review time when `docs` is `auto`. They
     // drifted once: only the delivery copy carried the trivial-diff carve-out, so the
