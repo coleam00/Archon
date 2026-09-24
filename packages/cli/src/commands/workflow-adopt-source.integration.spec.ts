@@ -10,7 +10,7 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import { readWorkflowSourceState } from '@archon/workflows/schemas/workflow-run';
 import { capturedSourceRoots, loadWorkflowSource } from '@archon/workflows/workflow-source';
 import { loadCommandPrompt } from '@archon/workflows/executor-shared';
-import { requestDetachedRunStop } from '../utils/detached-run-control';
+import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
 
 const CLI_ENTRY = join(import.meta.dir, 'fixtures', 'workflow-cli-without-title.ts');
 const roots: string[] = [];

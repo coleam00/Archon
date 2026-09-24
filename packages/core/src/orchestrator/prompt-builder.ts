@@ -398,8 +398,8 @@ Run these from within the project's git repo (any subdirectory works — they re
 - \`archon workflow approve <run-id> [comment]\` / \`archon workflow reject <run-id> [reason]\` — resolve a paused approval gate AND continue the run in one step. Pass the user's own words as the comment or reason, never a summary: a workflow may read the comment as the gate node's output, and the reason is what an \`on_reject\` prompt reworks from. Add \`--json\` only when you need a machine-readable ack: \`--json\` records the decision WITHOUT continuing, and you must then drive \`archon workflow resume <run-id>\` yourself or the run stays stranded.
 - \`archon workflow respond <run-id> <decision> [text]\` — same shape as approve/reject, but for a gate that declares decisions beyond the default pair (check the paused run's message for the declared options). \`approve\`/\`reject\` remain the shortcuts above; use \`respond\` only when the gate offers a different vocabulary.
 - \`archon workflow resume <run-id>\` — re-run a failed/paused run, skipping completed nodes (run as a background task; \`--json\` validates only)
-- \`archon workflow cancel <run-id> [--json]\` — actively stop a running CLI \`--detach\` owner, then record \`cancelled\`
-- \`archon workflow abandon <run-id> [--json]\` — state-only cancellation for paused runs or verified orphans; it does not stop host work
+- \`archon workflow cancel <run-id> [--json]\` — stop a running run: a run another process owns has that process stopped first; a sub-run with no owner of its own stops at its root's next status check when the root's owner answers; it refuses (pointing at abandon) when no owner answers
+- \`archon workflow abandon <run-id> [--json]\` — discard a run whose owner is gone: it stops a live detached owner first, and when no owner answers it records \`cancelled\` and prints the host and pid the run recorded
 
 When the user asks what's running, whether a run passed/failed, or to approve / reject / resume / cancel a run, use these commands directly instead of invoking a workflow. The \`manage-run\` skill has the full reference if it is loaded.`;
 }

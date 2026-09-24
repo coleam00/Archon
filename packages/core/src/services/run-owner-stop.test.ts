@@ -5,7 +5,7 @@ import {
   commandTerminatedBySignal,
   DetachedRunOwnerUnavailableError,
   requestDetachedRunStop,
-} from './detached-run-control';
+} from './run-owner-stop';
 
 const execFileAsync = promisify(execFile);
 

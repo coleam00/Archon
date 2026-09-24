@@ -4,7 +4,9 @@
  * Three caches — two visible, one hidden inside `@octokit/auth-app`:
  *   1. lookupCache:  `owner/repo → installationId` (1h TTL; evicted on 401 via
  *      invalidateRepo so an App reinstall — which assigns a NEW installation
- *      id — doesn't lock us into the stale id for the full hour).
+ *      id — doesn't lock us into the stale id for the full hour). An expired
+ *      entry still serves as fallback when the re-lookup fails with a 5xx or
+ *      network error.
  *   2. tokenCache:   `installationId → CachedInstallationToken` (1h GitHub TTL,
  *      we refresh 5min before expiry on access). Used directly for clone-path
  *      URL embedding and the /internal/git-credential endpoint.
@@ -37,6 +39,36 @@ const REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
 /** owner/repo → installationId TTL. App install/uninstall is rare; 1h is plenty. */
 const LOOKUP_CACHE_TTL_MS = 60 * 60 * 1000;
+
+/** Waits before each retry of a transient GitHub failure; its length is the retry count. */
+const TRANSIENT_RETRY_DELAYS_MS = [200, 800];
+
+/**
+ * A GitHub 5xx or a failure with no HTTP status (network error) can clear on
+ * its own. 4xx cannot: 404 means the App is not installed and 401 means the
+ * credential is dead, so those must surface instead of being retried or
+ * papered over with cached state.
+ */
+function isTransientGitHubError(err: unknown): boolean {
+  const status = (err as { status?: number }).status;
+  return status === undefined || status >= 500;
+}
+
+async function withTransientRetry<T>(fn: () => Promise<T>): Promise<T> {
+  for (const delayMs of TRANSIENT_RETRY_DELAYS_MS) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (!isTransientGitHubError(err)) throw err;
+      getLog().warn(
+        { err, status: (err as { status?: number }).status, delayMs },
+        'github_auth.request_retrying'
+      );
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+  }
+  return fn();
+}
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -87,11 +119,12 @@ export function createGitHubAppAuthProvider(config: GitHubAppConfig): IGitHubApp
       return cached.installationId;
     }
     getLog().debug({ owner, repo }, 'github_auth.install_lookup_started');
+    const lookup = (): Promise<{ data: { id: number } }> =>
+      appOctokit.request('GET /repos/{owner}/{repo}/installation', { owner, repo });
     try {
-      const res = await appOctokit.request('GET /repos/{owner}/{repo}/installation', {
-        owner,
-        repo,
-      });
+      // With an expired entry in hand, a failed lookup falls back to it below,
+      // so retrying would only delay every caller for the length of an outage.
+      const res = cached ? await lookup() : await withTransientRetry(lookup);
       const installationId = res.data.id;
       lookupCache.set(key, { installationId, cachedAt: Date.now() });
       getLog().info({ owner, repo, installationId }, 'github_auth.install_lookup_completed');
@@ -101,6 +134,19 @@ export function createGitHubAppAuthProvider(config: GitHubAppConfig): IGitHubApp
       if (status === 404) {
         getLog().warn({ owner, repo }, 'github_auth.install_lookup_not_installed');
         throw new AppNotInstalledError(owner, repo, config.slug);
+      }
+      // GitHub's installation-lookup endpoints can fail with 5xx for minutes
+      // while token issuance keeps working. An installation id only changes
+      // on uninstall/reinstall, which surfaces as 404/401 and evicts the
+      // entry, so an expired id stays the best answer during a transient
+      // outage. The entry keeps its old cachedAt, so every call still
+      // re-tries the lookup and recovers as soon as GitHub does.
+      if (cached && isTransientGitHubError(err)) {
+        getLog().warn(
+          { err, owner, repo, status, installationId: cached.installationId },
+          'github_auth.install_lookup_stale_fallback'
+        );
+        return cached.installationId;
       }
       getLog().error({ err, owner, repo }, 'github_auth.install_lookup_failed');
       throw err;
@@ -114,9 +160,10 @@ export function createGitHubAppAuthProvider(config: GitHubAppConfig): IGitHubApp
     }
     getLog().debug({ installationId }, 'github_auth.token_resolve_started');
     try {
-      const res = await appOctokit.request(
-        'POST /app/installations/{installation_id}/access_tokens',
-        { installation_id: installationId }
+      const res = await withTransientRetry(() =>
+        appOctokit.request('POST /app/installations/{installation_id}/access_tokens', {
+          installation_id: installationId,
+        })
       );
       const token = res.data.token;
       const expiresAtMs = new Date(res.data.expires_at).getTime();
