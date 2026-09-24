@@ -837,7 +837,11 @@ describe('WorktreeProvider', () => {
       );
 
       expect((error as Error).message).toMatch(/its setup did not finish/);
-      expect(classifyIsolationError(error as Error)).toContain('left half-created');
+      // The operator is told which checkout and the command that clears it.
+      const worktreePath = provider.getWorktreePath(baseRequest, 'archon/issue-42');
+      expect(classifyIsolationError(error as Error)).toContain(
+        `git worktree remove --force --force ${worktreePath}`
+      );
       // Refusing is the whole point: nothing may be created over it either.
       expect(
         execSpy.mock.calls.filter((call: unknown[]) => (call[1] as string[]).includes('add'))
@@ -2797,6 +2801,22 @@ describe('WorktreeProvider', () => {
       expect(result?.provider).toBe('worktree');
       expect(result?.branchName).toBe(git.toBranchName('feature/auth'));
       expect(result?.metadata).toHaveProperty('adopted', true);
+    });
+
+    test('refuses a registered worktree whose setup never finished', async () => {
+      worktreeExistsSpy.mockResolvedValue(true);
+      getCanonicalRepoPathSpy.mockResolvedValue(git.toRepoPath('/workspace/repo'));
+      listWorktreesSpy.mockResolvedValue([
+        {
+          path: git.toWorktreePath('/workspace/worktrees/repo/feature-auth'),
+          branch: git.toBranchName('feature/auth'),
+        },
+      ]);
+      readWorktreeLockSpy.mockResolvedValue({ reason: 'archon: worktree setup in progress' });
+
+      await expect(provider.adopt('/workspace/worktrees/repo/feature-auth')).rejects.toThrow(
+        /its setup did not finish/
+      );
     });
 
     test('adopts an external-git-dir linked checkout from its exact path', async () => {

@@ -24,7 +24,12 @@ export class IsolationBlockedError extends Error {
  * it's classifiable (we have a helpful message) but still a programming /
  * user-input bug that should crash rather than be absorbed as blocked state.
  */
-const ERROR_PATTERNS: { pattern: string; message: string; known: boolean }[] = [
+const ERROR_PATTERNS: {
+  pattern: string;
+  /** A function receives the original error message, for errors whose own text is the action. */
+  message: string | ((cause: string) => string);
+  known: boolean;
+}[] = [
   // ─── Container backend (Docker) ──────────────────────────────────────────
   // Checked FIRST: the docker-permission message is more specific than the
   // generic 'permission denied' worktree message below and must win.
@@ -140,13 +145,11 @@ const ERROR_PATTERNS: { pattern: string; message: string; known: boolean }[] = [
   {
     // Checked before the generic 'cannot adopt' message below: a worktree whose
     // setup never finished needs the retry-or-remove action, not "choose a
-    // different branch".
+    // different branch". The refusal already names the checkout and the exact
+    // command that removes it, which a static message cannot: a branch-matched
+    // checkout may live outside the worktree base.
     pattern: 'its setup did not finish',
-    message:
-      '**Error:** The worktree for this branch was left half-created, or another run is ' +
-      'creating it right now. Retry once that run ends. Otherwise remove the leftover — ' +
-      '`git worktree list` shows it as locked, and ' +
-      '`git worktree remove --force --force <path>` deletes it.',
+    message: cause => `**Error:** ${cause}`,
     known: true,
   },
   {
@@ -190,9 +193,13 @@ export function classifyIsolationError(err: Error): string {
   const stderr = (err as Error & { stderr?: string }).stderr ?? '';
   const errorLower = `${err.message} ${stderr}`.toLowerCase();
 
+  const message = ERROR_PATTERNS.find(({ pattern }) => errorLower.includes(pattern))?.message;
   const classified =
-    ERROR_PATTERNS.find(({ pattern }) => errorLower.includes(pattern))?.message ??
-    `**Error:** Could not create isolated workspace (${err.message}).`;
+    message === undefined
+      ? `**Error:** Could not create isolated workspace (${err.message}).`
+      : typeof message === 'string'
+        ? message
+        : message(err.message);
 
   const cleanupFailure = (err as ErrorWithCleanupFailure).cleanupFailure;
   return cleanupFailure ? `${classified} ${cleanupFailure}` : classified;

@@ -600,6 +600,7 @@ export class WorktreeProvider implements IIsolationProvider {
       return null;
     }
 
+    await this.refuseUnfinishedWorktree(path);
     getLog().info({ path, branchName: wt.branch }, 'worktree_adopted');
     return {
       id: path,
@@ -786,8 +787,9 @@ export class WorktreeProvider implements IIsolationProvider {
   /**
    * Hand an existing checkout to a run, once it is proven usable.
    *
-   * Every adoption path goes through here so the setup-completeness check cannot
-   * be reached around: an unfinished worktree is exactly what a run must not be
+   * Every adoption path in `create()` goes through here, and the public
+   * `adopt()` runs the same check, so the setup-completeness check cannot be
+   * reached around: an unfinished worktree is exactly what a run must not be
    * given (#3448).
    */
   private async adoptWorktree(
