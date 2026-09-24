@@ -343,7 +343,7 @@ describe('detached run control integration', () => {
       try {
         const stop = await requestDetachedRunStop(runId);
         const error = await rejectedError(async (): Promise<void> => stop.stop());
-        expect(error.message).toContain('released its termination lease');
+        expect(error.message).toContain('released its termination lease before it was stopped');
         expect(processExists(targetPid)).toBe(true);
       } finally {
         target.kill();
