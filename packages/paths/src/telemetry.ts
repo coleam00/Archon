@@ -79,7 +79,7 @@ const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
 // to `-v5` when install channel and build commit were added.
 // Bumping re-shows the updated first-run notice once per install so existing
 // users re-consent rather than silently getting broader capture.
-const NOTICE_STAMP_FILENAME = 'telemetry-notice-shown-v5';
+export const NOTICE_STAMP_FILENAME = 'telemetry-notice-shown-v5';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {

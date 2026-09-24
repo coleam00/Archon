@@ -34,6 +34,32 @@ describe('bunTestEnv', () => {
   });
 });
 
+describe('every bun test entry point preloads the telemetry opt-out', () => {
+  it('the repo root and every package with tests preload scripts/test-telemetry-off.ts', async () => {
+    const { readdir, readFile } = await import('node:fs/promises');
+    const { existsSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const repoRoot = join(import.meta.dir, '..');
+    const configs = [{ dir: repoRoot, preload: './scripts/test-telemetry-off.ts' }];
+    for (const name of await readdir(join(repoRoot, 'packages'))) {
+      const dir = join(repoRoot, 'packages', name);
+      const manifest = join(dir, 'package.json');
+      if (!existsSync(manifest)) continue;
+      if (!('testGroups' in JSON.parse(await readFile(manifest, 'utf8')))) continue;
+      configs.push({ dir, preload: '../../scripts/test-telemetry-off.ts' });
+    }
+    const missing: string[] = [];
+    for (const { dir, preload } of configs) {
+      const bunfig = join(dir, 'bunfig.toml');
+      // Bun reads bunfig.toml from the cwd only; a package without this preload lets
+      // a direct `bun test <file>` there send live events with the embedded key.
+      if (!existsSync(bunfig) || !(await readFile(bunfig, 'utf8')).includes(`"${preload}"`))
+        missing.push(dir.slice(repoRoot.length + 1) || '.');
+    }
+    expect(missing).toEqual([]);
+  });
+});
+
 describe('every runner assembles its command through bunTestCommand', () => {
   it('no runner script spells out a bun test command by hand', async () => {
     const { readdir, readFile } = await import('node:fs/promises');

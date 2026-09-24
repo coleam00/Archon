@@ -20,6 +20,7 @@ import {
   getTelemetryStatus,
   resetTelemetryId,
   resolveInstallChannel,
+  NOTICE_STAMP_FILENAME,
   TELEMETRY_SCHEMA_VERSION,
 } from './telemetry';
 
@@ -260,7 +261,7 @@ describe('first-run notice (via captureWorkflowInvoked)', () => {
   let saved: Record<string, string | undefined>;
   let tmpHome: string;
   let originalIsTTY: boolean | undefined;
-  const stampPath = (): string => join(tmpHome, 'telemetry-notice-shown-v5');
+  const stampPath = (): string => join(tmpHome, NOTICE_STAMP_FILENAME);
 
   beforeEach(() => {
     saved = saveEnv();

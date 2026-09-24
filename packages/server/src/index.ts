@@ -209,7 +209,8 @@ function createMessageErrorHandler(
  * ("Operation aborted" when the PostToolUse hook writes to a closed pipe after
  * a DAG node abort). Those are logged at error level but do not exit the process.
  * All other unhandled rejections are unexpected bugs — they are logged at fatal
- * level and the process exits immediately (Fail Fast principle).
+ * level and the process exits as soon as queued telemetry flushes (bounded, so
+ * still Fail Fast).
  */
 export function handleUnhandledRejection(reason: unknown): void {
   const message = (reason instanceof Error ? reason.message : String(reason)).toLowerCase();
@@ -222,7 +223,7 @@ export function handleUnhandledRejection(reason: unknown): void {
   // All other unhandled rejections are unexpected — crash loudly so they are
   // not silently swallowed (CLAUDE.md: "Fail Fast + Explicit Errors").
   getLog().fatal({ reason }, 'unhandled_rejection.fatal');
-  process.exit(1);
+  void exitAfterTelemetryFlush(1);
 }
 
 /**
