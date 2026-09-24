@@ -62,8 +62,8 @@ export function parseCodexConfig(raw: Record<string, unknown>): CodexProviderDef
   return result;
 }
 
-/** Strict counterpart used only for an explicitly selected per-run layer. */
-export function parseCodexRunConfig(raw: Record<string, unknown>): CodexProviderDefaults {
+/** Strict counterpart for authored config: `.archon/config.yaml` and per-run layers. */
+export function parseCodexConfigStrict(raw: Record<string, unknown>): CodexProviderDefaults {
   assertKnownRunConfigKeys(raw, [
     'model',
     'modelReasoningEffort',

@@ -69,10 +69,10 @@ No one is watching this run: nothing you print survives unless it lands in this 
 
 ## Declare where things stand (every turn)
 
-- `done` — true when another iteration would not help: the work is complete and green, or you are definitively blocked
-- `green` — true only when the work is complete AND every applicable project check you ran this turn passes
-- `red_cause` — why the checks are red, required whenever a check you ran failed. `introduced`: your change caused it. `inherited`: the same check was already failing at this run's starting commit. `environment`: the machine this run is on caused it, not any code — a database or port a parallel process holds, a missing credential, a network fault. Always declared: use the empty string `""` when `green` is true, and when you are declaring a blocker without having run checks at all
-- `summary` — a few sentences: what you did, what stands, what (if anything) blocks
+- `done` — true when another iteration would not help: the work is complete and green, or you are definitively blocked. Never with `red_cause: incomplete`: the next iteration is how the checks finish, and delivery refuses an unfinished validation
+- `green` — true only when the work is complete AND every applicable project check ran this turn and passed
+- `red_cause` — why the verdict is not green. When a check you ran failed: `introduced`, your change caused it; `inherited`, the same check was already failing at this run's starting commit; `environment`, the machine this run is on caused it, not any code — a database or port a parallel process holds, a missing credential, a network fault. `incomplete` when you validated the work, no check you ran failed, but not every applicable check ran — you were stopped partway (a usage limit, a killed process). A check that ran and failed takes its own cause even when others never ran. Always declared: use the empty string `""` when `green` is true, and when you are declaring a blocker on the work itself without having run checks at all
+- `summary` — a few sentences: what you did, what stands, what (if anything) blocks. For `incomplete`, what stopped validation and which checks ran and passed
 
 `inherited` and `environment` let delivery continue on red, so neither is the comfortable answer — declaring one commits you to evidence. Name the exact failing check and the concrete reason your change cannot have caused it: that check already red at the starting commit, a failure inside a subsystem your diff never touches, a resource another process holds. Put that evidence in `summary` and in your report. Without it the cause is `introduced`. Never relabel a red check to get past a gate; the pull request's real CI checks the same thing again, so a false claim buys nothing and costs a round.
 

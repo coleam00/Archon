@@ -164,6 +164,7 @@ import {
   type RawTiersConfig,
 } from './model-validation';
 import { captureWorkflowSource, capturedSourceRoots } from './workflow-source';
+import { CONTAINER_MARKER_PROBE } from './checkout-observation';
 
 function composeScope(
   nodeId = 'fan',
@@ -468,6 +469,27 @@ function resolveTestWorkflow(workflow: TestWorkflowDefinition): ResolvedWorkflow
     description: workflow.description ?? workflow.name,
     nodes: [...workflow.nodes],
   });
+}
+
+/**
+ * Answer every `execFileAsync` call the way `docker exec` answers for a container that does
+ * not exist. Container-run tests use made-up container ids, and each node start probes the
+ * container's checkout through `execFileAsync`; left alone, that probe spawns a real
+ * `docker`, which can take longer than a test's whole budget on a CI runner.
+ */
+function stubMissingContainer(): ReturnType<typeof spyOn<typeof git, 'execFileAsync'>> {
+  return spyOn(git, 'execFileAsync').mockImplementation(async () => {
+    throw new Error('Error response from daemon: No such container');
+  });
+}
+
+/** The `docker` calls that dispatch node work, leaving out the checkout observation's probe. */
+function nodeDockerCalls(
+  calls: Parameters<typeof git.execFileAsync>[]
+): Parameters<typeof git.execFileAsync>[] {
+  return calls.filter(
+    ([command, args]) => command === 'docker' && args.at(-1) !== CONTAINER_MARKER_PROBE
+  );
 }
 
 /**
@@ -14622,35 +14644,40 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
       getCapabilities: mockClaudeCapabilities,
     });
     const store = createMockStore();
+    const execSpy = stubMissingContainer();
 
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(store),
-        conversationId: 'conv-credit',
-        cwd: testDir,
-        workflow: {
-          name: 'container-credit-resume-test',
-          nodes: [
-            {
-              id: 'investigate',
-              kind: 'agent',
-              source: { kind: 'inline', prompt: 'Investigate the issue' },
-            },
-          ],
-        },
-        workflowRun: makeWorkflowRun('container-credit-resume-run'),
-        config: {
-          ...minimalConfig,
-          workflows: {
-            autoResumeOnQuotaReset: true,
-            quotaFallbackDelayMs: 60_000,
-            quotaMaxAttempts: 1,
-            quotaDeadlineMs: 3_600_000,
+    try {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          conversationId: 'conv-credit',
+          cwd: testDir,
+          workflow: {
+            name: 'container-credit-resume-test',
+            nodes: [
+              {
+                id: 'investigate',
+                kind: 'agent',
+                source: { kind: 'inline', prompt: 'Investigate the issue' },
+              },
+            ],
           },
-        },
-        execContext: { kind: 'container', containerId: 'container-1' },
-      })
-    );
+          workflowRun: makeWorkflowRun('container-credit-resume-run'),
+          config: {
+            ...minimalConfig,
+            workflows: {
+              autoResumeOnQuotaReset: true,
+              quotaFallbackDelayMs: 60_000,
+              quotaMaxAttempts: 1,
+              quotaDeadlineMs: 3_600_000,
+            },
+          },
+          execContext: { kind: 'container', containerId: 'container-1' },
+        })
+      );
+    } finally {
+      execSpy.mockRestore();
+    }
 
     const failRun = store.failWorkflowRun as Mock<IWorkflowStore['failWorkflowRun']>;
     expect(failRun.mock.calls[0]?.[2]).toBeUndefined();
@@ -17504,7 +17531,7 @@ describe('executeDagWorkflow -- script nodes', () => {
   });
 
   it('does not dispatch a named script to a container after the host capture changes', async () => {
-    const dockerSpy = spyOn(git, 'execFileAsync');
+    const dockerSpy = stubMissingContainer();
     const scriptsDir = join(testDir, '.archon', 'scripts');
     const captureRoot = join(testDir, 'capture');
     await mkdir(scriptsDir, { recursive: true });
@@ -17515,21 +17542,25 @@ describe('executeDagWorkflow -- script nodes', () => {
       'console.log("changed")'
     );
 
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(),
-        cwd: testDir,
-        workflow: {
-          name: 'container-capture-integrity',
-          nodes: [{ id: 'run-check', kind: 'exec', runtime: 'bun', script: 'check' }],
-        },
-        workflowRun: makeWorkflowRun('container-capture-integrity-run'),
-        workflowSourceRoots: capturedSourceRoots(capture.anchor),
-        execContext: { kind: 'container', containerId: 'capture-integrity-container' },
-      })
-    );
+    try {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(),
+          cwd: testDir,
+          workflow: {
+            name: 'container-capture-integrity',
+            nodes: [{ id: 'run-check', kind: 'exec', runtime: 'bun', script: 'check' }],
+          },
+          workflowRun: makeWorkflowRun('container-capture-integrity-run'),
+          workflowSourceRoots: capturedSourceRoots(capture.anchor),
+          execContext: { kind: 'container', containerId: 'capture-integrity-container' },
+        })
+      );
 
-    expect(dockerSpy.mock.calls.filter((call: unknown[]) => call[0] === 'docker')).toHaveLength(0);
+      expect(nodeDockerCalls(dockerSpy.mock.calls)).toHaveLength(0);
+    } finally {
+      dockerSpy.mockRestore();
+    }
   });
 
   it('disables Python bytecode caching for script subprocesses', async () => {
@@ -27515,8 +27546,9 @@ describe('subprocess credential redaction', () => {
         })
       );
 
-      expect(execSpy).toHaveBeenCalledTimes(1);
-      const dockerArgs = execSpy.mock.calls[0]?.[1] as string[];
+      const nodeCalls = nodeDockerCalls(execSpy.mock.calls);
+      expect(nodeCalls).toHaveLength(1);
+      const dockerArgs = nodeCalls[0]?.[1] ?? [];
       expect(dockerArgs.join(' ')).toContain(openAiSecret);
       expect(dockerArgs.join(' ')).toContain(otherInjectedSecret);
       expect(dockerArgs.join(' ')).toContain(projectSecret);

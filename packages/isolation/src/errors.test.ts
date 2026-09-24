@@ -65,6 +65,18 @@ describe('classifyIsolationError', () => {
     expect(result).toContain('initSubmodules: false');
   });
 
+  test('an unfinished-setup refusal keeps its path even when the branch slug looks like another error', () => {
+    const path = '/workspace/worktrees/repo/task-fix-timeout-in-parser';
+    const result = classifyIsolationError(
+      new Error(
+        `Cannot adopt the worktree at ${path}: its setup did not finish. ` +
+          `Otherwise remove it with \`git worktree remove --force --force ${path}\`.`
+      )
+    );
+    expect(result).toContain(`git worktree remove --force --force ${path}`);
+    expect(result).not.toContain('Timed out');
+  });
+
   test('matches default branch detection failures with base branch guidance', () => {
     const result = classifyIsolationError(
       new Error('Cannot detect default branch for /repo: neither origin/HEAD nor origin/main exist')

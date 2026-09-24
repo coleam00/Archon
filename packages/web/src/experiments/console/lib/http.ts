@@ -30,6 +30,31 @@ export class HttpError extends Error {
   }
 }
 
+/**
+ * The server's own message from a failed request: apiError's `{ error, detail? }`
+ * body. `bodySnippet` is capped (see HttpError), so a long body may not parse;
+ * the raw snippet is the fallback.
+ */
+export function serverErrorMessage(err: HttpError): string {
+  let message = err.bodySnippet || `Request failed (${String(err.status)})`;
+  try {
+    const parsed = JSON.parse(err.bodySnippet) as { error?: string; detail?: string };
+    if (parsed.error) {
+      message = parsed.detail ? `${parsed.error}: ${parsed.detail}` : parsed.error;
+    }
+  } catch {
+    /* truncated/non-JSON body — keep the raw snippet */
+  }
+  return message;
+}
+
+/** Best-effort human detail from a thrown error (the server message for an HttpError). */
+export function errorDetail(e: unknown): string {
+  if (e instanceof HttpError) return serverErrorMessage(e);
+  if (e instanceof Error) return e.message;
+  return String(e);
+}
+
 function mergeHeaders(
   base: Record<string, string>,
   extra: HeadersInit | undefined

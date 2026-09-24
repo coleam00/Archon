@@ -362,7 +362,7 @@ Supported inline keys are `assistant` or `defaultAssistant`, `assistants`, `tier
 curl http://localhost:3090/api/runs/{runId}/artifacts
 ```
 
-Walks the run's on-disk artifact directory (dotfiles skipped) and returns `{ files: [{ path, size, modifiedAt }] }`. Used by the console UI's Artifacts tab. Returns `{ files: [] }` when the run has no codebase or the codebase name is not in `owner/repo` form; 400 on invalid run id or path-escape attempt, 404 if the run does not exist.
+Walks the run's on-disk artifact directory and returns `{ files: [{ path, size, modifiedAt }] }`. Used by the console UI's Artifacts tab. It leaves out only the engine's own `$ARTIFACTS_DIR/.archon/` child, the same rule `archon workflow get` applies, so a workflow's own dotfiles are listed. Returns 400 on an invalid run id or path-escape attempt, and 404 if the run does not exist or its output location cannot be resolved.
 
 #### Resume a Failed or Paused Run
 
@@ -437,6 +437,8 @@ workflow's total node count. This state describes node lifecycle, not process-ow
 `GET /api/config` returns the safe config subset, now including the configured `tiers`, the built-in `tierDefaults` for the current default provider (what an unset tier resolves to), and the configured `aliases`.
 
 These config routes are **ungated** -- they write non-secret model config to `~/.archon/config.yaml` and work on solo installs (no `TOKEN_ENCRYPTION_KEY` required). Contrast with the [AI Provider Credentials](#ai-provider-credentials) routes below, which require an identity.
+
+A `PATCH` whose resulting config would be invalid is refused with `400` and nothing is written. The `error` field names the refused key, for example `Invalid assistants config: 'assistants.codex.modelReasoningEffort': ...`. This includes an invalid value already in the file that the patch leaves in place: fix that key (in the same request or by editing the file) before other changes save.
 
 ```bash
 # Read current config (includes `tiers` + `tierDefaults`)

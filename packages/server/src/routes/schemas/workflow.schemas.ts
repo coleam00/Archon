@@ -3,7 +3,10 @@ import { terminalRecordSchema } from '@archon/workflows/schemas/terminal-record'
  * Zod schemas for workflow API endpoints.
  */
 import { z } from '@hono/zod-openapi';
-import { workflowDefinitionSchema as engineWorkflowDefinitionSchema } from '@archon/workflows/schemas/workflow';
+import {
+  workflowDefinitionSchema as engineWorkflowDefinitionSchema,
+  workflowSourceSchema as engineWorkflowSourceSchema,
+} from '@archon/workflows/schemas/workflow';
 import {
   workflowRunSchema as engineWorkflowRunSchema,
   workflowRunOutcomeSchema as engineWorkflowRunOutcomeSchema,
@@ -29,9 +32,7 @@ export const workflowLoadErrorSchema = z
  * Workflow source — project-defined, bundled default, or home-scoped (global).
  * Precedence for same-named entries: `bundled` < `global` < `project`.
  */
-export const workflowSourceSchema = z
-  .enum(['project', 'bundled', 'global'])
-  .openapi('WorkflowSource');
+export const workflowSourceSchema = engineWorkflowSourceSchema.openapi('WorkflowSource');
 
 /** A workflow entry in the list response, including its source. */
 export const workflowListEntrySchema = z

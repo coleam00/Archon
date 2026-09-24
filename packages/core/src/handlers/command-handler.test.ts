@@ -386,7 +386,10 @@ mock.module('@archon/isolation', () => ({
     healthCheck: mock(() => Promise.resolve(true)),
   }),
   // Loaded transitively via the orchestrator → child-isolation-resolver (PR-A).
-  classifyIsolationError: (err: Error) => err.message,
+  // Marked rather than reimplemented: a test here proves the reply routes through
+  // the classifier, while what the real one produces is the isolation package's
+  // own test.
+  classifyIsolationError: (err: Error) => `classified: ${err.message}`,
 }));
 
 // Mock cleanup service
@@ -1369,6 +1372,25 @@ describe('CommandHandler', () => {
           expect(result.message).toMatch(/worktrees[\\\/]task-feat-auth/);
           expect(mockUpdateConversation).toHaveBeenCalled();
           expect(mockIsolationCreate).toHaveBeenCalled();
+        });
+
+        test('reports a classified creation failure, not the raw error', async () => {
+          spyExecFileAsync.mockResolvedValue({ stdout: '', stderr: '' });
+          mockGetActiveSession.mockResolvedValue(null);
+          // A submodule failure whose rollback left a directory behind carries the
+          // leftover note beside its message; only the classifier reads it.
+          const failure = Object.assign(new Error('Submodule initialization failed: no network'), {
+            cleanupFailure: 'The incomplete workspace at /workspace/wt was left behind',
+          });
+          mockIsolationCreate.mockRejectedValueOnce(failure);
+
+          const result = await handleCommand(
+            conversationWithCodebase,
+            '/worktree create feat-auth'
+          );
+
+          expect(result.success).toBe(false);
+          expect(result.message).toContain('classified:');
         });
 
         test('should reject if already using a worktree (shows working path, not UUID)', async () => {

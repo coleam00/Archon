@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
-import { parsePiConfig, parsePiRunConfig, resolvePiExtensionSettings } from './config';
+import { InvalidProviderRunConfigError } from '../../errors';
+import { parsePiConfig, parsePiConfigStrict, resolvePiExtensionSettings } from './config';
 
 describe('parsePiConfig', () => {
   test('parses valid model string', () => {
@@ -241,11 +242,32 @@ describe('parsePiConfig', () => {
   });
 });
 
-describe('parsePiRunConfig', () => {
+describe('parsePiConfigStrict', () => {
   test('explains that invalid models need a Pi vendor prefix', () => {
-    expect(() => parsePiRunConfig({ model: 'minimax-m3' })).toThrow(
+    expect(() => parsePiConfigStrict({ model: 'minimax-m3' }, 'run')).toThrow(
       "expected a Pi vendor/model reference such as 'minimax/minimax-m3'"
     );
+  });
+
+  test.each([
+    ['env', { TOKEN: 'secret' }],
+    ['maxConcurrent', 2],
+  ] as const)('accepts process-scoped %s from config.yaml and refuses it per run', (key, value) => {
+    expect(parsePiConfigStrict({ [key]: value }, 'install')).toEqual({ [key]: value });
+    expect(() => parsePiConfigStrict({ [key]: value }, 'run')).toThrow(/process/);
+  });
+
+  test.each([
+    ['env', { TOKEN: 1 }, 'env.TOKEN'],
+    ['maxConcurrent', 0, 'maxConcurrent'],
+    ['maxConcurrent', 1.5, 'maxConcurrent'],
+  ] as const)('rejects a malformed %s in config.yaml', (key, value, field) => {
+    try {
+      parsePiConfigStrict({ [key]: value }, 'install');
+      throw new Error('expected a rejection');
+    } catch (error) {
+      expect((error as InvalidProviderRunConfigError).fieldPath).toBe(field);
+    }
   });
 });
 

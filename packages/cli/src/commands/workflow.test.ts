@@ -17,6 +17,7 @@ import {
 import {
   existsSync,
   appendFileSync,
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -27,7 +28,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { getArchonHome, isDocker } from '@archon/paths';
+import { getArchonHome, isDocker, RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 import {
   getProjectStoragePaths as getProjectStoragePathsReal,
@@ -210,7 +211,10 @@ mock.module('@archon/paths', () => ({
 // Mock @archon/isolation (getIsolationProvider moved here from @archon/core)
 mock.module('@archon/isolation', () => ({
   configureIsolation: mock(() => undefined),
-  classifyIsolationError: (error: Error) => error.message,
+  // Marked rather than reimplemented: these tests prove a failure path routes
+  // through the classifier, while what the real one produces is the isolation
+  // package's own test.
+  classifyIsolationError: (error: Error) => `classified: ${error.message}`,
   getIsolationProvider: mock(() => ({
     create: mock(() =>
       Promise.resolve({
@@ -3378,6 +3382,38 @@ describe('workflowRunCommand', () => {
     expect(findActiveCallsAfter).toBe(findActiveCallsBefore);
   });
 
+  it('surfaces a classified worktree creation failure, not the raw error', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const isolation = await import('@archon/isolation');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-123',
+      default_cwd: '/test/path',
+    });
+    // A setup failure whose rollback left a directory behind carries the leftover
+    // note beside its message; only the classifier reads it (#3448).
+    const failure = Object.assign(new Error('Submodule initialization failed: no network'), {
+      cleanupFailure: 'The incomplete workspace at /test/path/wt was left behind',
+    });
+    (isolation.getIsolationProvider as ReturnType<typeof mock>).mockReturnValueOnce({
+      create: mock(() => Promise.reject(failure)),
+      healthCheck: mock(() => Promise.resolve(true)),
+    });
+
+    await expect(workflowRunCommand('/test/path', 'assist', 'hello', {})).rejects.toThrow(
+      /^classified: Submodule initialization failed/
+    );
+  });
+
   it('skips isolation when --no-worktree flag is set', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const { executeWorkflow } = await import('@archon/workflows/executor');
@@ -5613,6 +5649,210 @@ describe('workflowGetCommand', () => {
       await removeTempTree(archonHome);
     }
   });
+
+  // #3450 — the engine writes one typed-artifact listing per node invocation
+  // under `$ARTIFACTS_DIR/.archon/`, so a pack run buries its reports under
+  // dozens of uuid files and the display cap can drop them entirely. The
+  // leave-behind list is what the archon-cli skill reads to find a run's
+  // results, so it carries operator-facing files only — with a count of what it
+  // left out, never a silent drop.
+  it('keeps engine-internal artifact files out of the leave-behind list and counts them (#3450)', async () => {
+    const previousHome = process.env.ARCHON_HOME;
+    const archonHome = join(tmpdir(), 'archon-get-artifact-internal-home');
+    process.env.ARCHON_HOME = archonHome;
+    const runId = 'run-artifact-internal';
+    const outputRoot = join(archonHome, 'workspaces', 'acme', 'widget');
+    const artifactsDir = join(outputRoot, 'artifacts', 'runs', runId);
+    const reports = ['plan.md', 'validation.md', 'pr-action.md'];
+    mkdirSync(join(artifactsDir, 'review'), { recursive: true });
+    for (const report of reports) writeFileSync(join(artifactsDir, report), 'report');
+    writeFileSync(join(artifactsDir, 'review', 'report.md'), 'report');
+    // A workflow's own dotfile is its output: only the engine's child is hidden,
+    // by the rule the console's artifacts route shares.
+    writeFileSync(join(artifactsDir, '.pr-number'), '42');
+    // Typed-artifact sidecars are real content, so they stay listed — but they
+    // sort ahead of most reports and outnumber the 20-line human preview, so a
+    // depth-first walk would still hide every report behind them.
+    mkdirSync(join(artifactsDir, 'nodes'), { recursive: true });
+    for (let i = 0; i < 30; i++) {
+      writeFileSync(join(artifactsDir, 'nodes', `node-${String(i).padStart(2, '0')}.md`), 'output');
+    }
+    // More listings than the display cap: before the fix they consumed it and
+    // the reports never appeared at all.
+    const listingsDir = join(artifactsDir, RUN_ARTIFACTS_ENGINE_SUBDIR, 'typed-artifacts');
+    mkdirSync(listingsDir, { recursive: true });
+    const internalFiles = 240;
+    for (let i = 0; i < internalFiles; i++) {
+      writeFileSync(join(listingsDir, `${randomUUID()}.json`), '{}');
+    }
+    try {
+      const workflowDb = await import('@archon/core/db/workflows');
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValue({
+        id: runId,
+        workflow_name: 'implement',
+        status: 'completed',
+        working_path: '/tmp/wt',
+        started_at: new Date(),
+        metadata: {},
+        output_root: outputRoot,
+        checkout_baseline: null,
+        codebase_id: 'cb-1',
+      });
+
+      await workflowGetCommand(runId, true);
+
+      const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
+        leave_behind?: {
+          artifactFiles?: string[];
+          artifactFilesOmitted?: {
+            internalFiles: number;
+            truncated: boolean;
+            unreadable: string[];
+          };
+        };
+      };
+      // A run's own reports sit at the top level, so they lead the list and the
+      // cap falls on nested content instead of on them.
+      expect(parsed.leave_behind?.artifactFiles?.slice(0, reports.length + 1)).toEqual([
+        '.pr-number',
+        'plan.md',
+        'pr-action.md',
+        'validation.md',
+      ]);
+      expect(parsed.leave_behind?.artifactFiles).toContain('review/report.md');
+      expect(parsed.leave_behind?.artifactFiles).toHaveLength(reports.length + 32);
+      expect(
+        parsed.leave_behind?.artifactFiles?.some(file =>
+          file.startsWith(`${RUN_ARTIFACTS_ENGINE_SUBDIR}/`)
+        )
+      ).toBe(false);
+      expect(parsed.leave_behind?.artifactFilesOmitted).toEqual({
+        internalFiles,
+        truncated: false,
+        unreadable: [],
+      });
+
+      // Human output draws from the same filtered list and says what it omitted.
+      await workflowGetCommand(runId);
+      const printed = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
+      for (const report of reports) expect(printed).toContain(`- ${report}`);
+      expect(printed).not.toContain(RUN_ARTIFACTS_ENGINE_SUBDIR);
+      expect(printed).toContain(`Engine-internal artifact files (not listed): ${internalFiles}`);
+    } finally {
+      if (previousHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = previousHome;
+      await removeTempTree(archonHome);
+    }
+  });
+
+  it('reports a truncated leave-behind artifact list rather than dropping files silently (#3450)', async () => {
+    const previousHome = process.env.ARCHON_HOME;
+    const archonHome = join(tmpdir(), 'archon-get-artifact-truncated-home');
+    process.env.ARCHON_HOME = archonHome;
+    const runId = 'run-artifact-truncated';
+    const outputRoot = join(archonHome, 'workspaces', 'acme', 'widget');
+    const artifactsDir = join(outputRoot, 'artifacts', 'runs', runId);
+    mkdirSync(artifactsDir, { recursive: true });
+    for (let i = 0; i < 205; i++) {
+      writeFileSync(join(artifactsDir, `report-${String(i).padStart(3, '0')}.md`), 'report');
+    }
+    try {
+      const workflowDb = await import('@archon/core/db/workflows');
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: runId,
+        workflow_name: 'implement',
+        status: 'completed',
+        working_path: '/tmp/wt',
+        started_at: new Date(),
+        metadata: {},
+        output_root: outputRoot,
+        checkout_baseline: null,
+        codebase_id: 'cb-1',
+      });
+
+      await workflowGetCommand(runId, true);
+
+      const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
+        leave_behind?: {
+          artifactFiles?: string[];
+          artifactFilesOmitted?: {
+            internalFiles: number;
+            truncated: boolean;
+            unreadable: string[];
+          };
+        };
+      };
+      expect(parsed.leave_behind?.artifactFiles).toHaveLength(200);
+      expect(parsed.leave_behind?.artifactFilesOmitted?.truncated).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = previousHome;
+      await removeTempTree(archonHome);
+    }
+  });
+
+  // A directory the walk cannot read hides everything inside it. ENOENT means
+  // the directory is simply gone and dropped nothing an operator could open;
+  // anything else is a real omission that has to reach the operator. Mode 000
+  // cannot make a directory unreadable on Windows or to root, which bypasses it.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'names an artifact directory it could not read rather than skipping it silently (#3450)',
+    async () => {
+      const previousHome = process.env.ARCHON_HOME;
+      const archonHome = join(tmpdir(), 'archon-get-artifact-unreadable-home');
+      process.env.ARCHON_HOME = archonHome;
+      const runId = 'run-artifact-unreadable';
+      const outputRoot = join(archonHome, 'workspaces', 'acme', 'widget');
+      const artifactsDir = join(outputRoot, 'artifacts', 'runs', runId);
+      const lockedDir = join(artifactsDir, 'review');
+      mkdirSync(lockedDir, { recursive: true });
+      writeFileSync(join(artifactsDir, 'plan.md'), 'report');
+      writeFileSync(join(lockedDir, 'report.md'), 'report');
+      chmodSync(lockedDir, 0o000);
+      try {
+        const workflowDb = await import('@archon/core/db/workflows');
+        (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValue({
+          id: runId,
+          workflow_name: 'implement',
+          status: 'completed',
+          working_path: '/tmp/wt',
+          started_at: new Date(),
+          metadata: {},
+          output_root: outputRoot,
+          checkout_baseline: null,
+          codebase_id: 'cb-1',
+        });
+
+        await workflowGetCommand(runId, true);
+
+        const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
+          leave_behind?: {
+            artifactFiles?: string[];
+            artifactFilesOmitted?: {
+              internalFiles: number;
+              truncated: boolean;
+              unreadable: string[];
+            };
+          };
+        };
+        expect(parsed.leave_behind?.artifactFiles).toEqual(['plan.md']);
+        expect(parsed.leave_behind?.artifactFilesOmitted).toEqual({
+          internalFiles: 0,
+          truncated: false,
+          unreadable: ['review'],
+        });
+
+        await workflowGetCommand(runId);
+        const printed = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
+        expect(printed).toContain('Unreadable artifact directory: review');
+      } finally {
+        chmodSync(lockedDir, 0o700);
+        if (previousHome === undefined) delete process.env.ARCHON_HOME;
+        else process.env.ARCHON_HOME = previousHome;
+        await removeTempTree(archonHome);
+      }
+    }
+  );
 
   it('emits the full metadata.approval (incl. completionSignaled) in --json for a paused interactive_loop run (#2074 E)', async () => {
     const workflowDb = await import('@archon/core/db/workflows');

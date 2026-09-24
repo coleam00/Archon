@@ -1652,6 +1652,34 @@ describe('getWorktreeStatusBreakdown', () => {
       'origin/main'
     );
   });
+
+  // loadRepoConfig throws when `assistants.*` names a setting the provider
+  // cannot honour (#2582). Cleanup must surface that rather than carrying on
+  // with git detection — catching it here would restore the silent drop this
+  // validation exists to close.
+  test('surfaces an invalid assistants config instead of falling back to git detection', async () => {
+    mockListByCodebaseWithAge.mockResolvedValueOnce([
+      makeEnvironmentWithAge({
+        id: 'env-1',
+        branch_name: 'feature-branch',
+        created_by_platform: 'github',
+        days_since_activity: 1,
+        working_path: '/path1',
+        status: 'active',
+      }),
+    ]);
+    mockLoadRepoConfig.mockRejectedValueOnce(
+      new Error(
+        "Invalid assistants config in '/workspace/repo/.archon/config.yaml': " +
+          "'assistants.claude.settingSources.0': expected 'project' or 'user'."
+      )
+    );
+
+    await expect(getWorktreeStatusBreakdown('codebase-1', '/workspace/repo')).rejects.toThrow(
+      /assistants\.claude\.settingSources\.0/
+    );
+    expect(mockGetDefaultBranch).not.toHaveBeenCalled();
+  });
 });
 
 describe('cleanupMergedWorktrees', () => {
@@ -2118,6 +2146,30 @@ describe('cleanupMergedWorktrees', () => {
 
     expect(result.baseRef).toBe(toBranchName('origin/dev'));
     expect(mockGetDefaultBranch).not.toHaveBeenCalled();
+  });
+
+  // Same contract as the breakdown path: an unhonourable `assistants.*` value
+  // stops the sweep before any worktree is inspected or removed.
+  test('surfaces an invalid assistants config instead of sweeping worktrees', async () => {
+    mockListByCodebase.mockResolvedValueOnce([
+      makeEnvironment({
+        id: 'env-merged',
+        branch_name: 'merged-branch',
+        working_path: '/workspace/repo/worktrees/merged-branch',
+        status: 'active',
+      }),
+    ]);
+    mockLoadRepoConfig.mockRejectedValueOnce(
+      new Error(
+        "Invalid assistants config in '/workspace/repo/.archon/config.yaml': " +
+          "'assistants.claude.settingSources.0': expected 'project' or 'user'."
+      )
+    );
+
+    await expect(cleanupMergedWorktrees('codebase-1', '/workspace/repo')).rejects.toThrow(
+      /assistants\.claude\.settingSources\.0/
+    );
+    expect(mockIsBranchMerged).not.toHaveBeenCalled();
   });
 });
 

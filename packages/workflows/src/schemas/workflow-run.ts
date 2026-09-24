@@ -11,6 +11,7 @@ import {
 import type { TokenUsage } from '@archon/providers/types';
 import { nodeExecutionMetadataSchema, type NodeExecutionMetadata } from './node-execution';
 import { checkoutObservationSchema } from './checkout-observation';
+import { workflowSourceSchema } from './workflow';
 // Type-only, so the output-ref ↔ schemas edge stays erased (no runtime cycle).
 import type { JsonValue } from '../output-ref';
 import { isAbsolute } from 'path';
@@ -453,6 +454,38 @@ export function readIdentityUnresolved(
 ): boolean | undefined {
   const raw = metadata?.[RUN_METADATA_KEYS.identityUnresolved];
   return typeof raw === 'boolean' ? raw : undefined;
+}
+
+/**
+ * Key under which a run records what its DISPATCHING surface resolved for it (#2454).
+ *
+ * A resume re-enters the executor with whatever the resuming surface happens to hold,
+ * and the in-process auto-resume after a child gate holds nothing at all. Re-resolving
+ * these from the environment then lets a run change what it is halfway through: the
+ * same `$BASE_BRANCH` reference answers a different branch after the gate than before
+ * it, and a bundled workflow starts reporting itself as custom. Written once when the
+ * run starts and read back on every continuation, so the run keeps the answers it
+ * began with. Absent on runs created before this key existed — those continue to
+ * re-resolve, which is the behavior they have always had.
+ */
+export const RUN_DISPATCH_METADATA_KEY = 'dispatch';
+
+export const runDispatchMetadataSchema = z.object({
+  /** The resolved `$BASE_BRANCH`. Empty string is a real outcome (folder projects, and
+   *  repos where auto-detection failed), which is why absence is carried by the key. */
+  base_branch: z.string(),
+  /** Discovery source, for run attribution and telemetry categorization. */
+  source: workflowSourceSchema.optional(),
+});
+
+export type RunDispatchMetadata = z.infer<typeof runDispatchMetadataSchema>;
+
+/** Typed view of the dispatch stamp; undefined when the run carries none this build can read. */
+export function readRunDispatchMetadata(
+  metadata: Record<string, unknown> | undefined
+): RunDispatchMetadata | undefined {
+  const parsed = runDispatchMetadataSchema.safeParse(metadata?.[RUN_DISPATCH_METADATA_KEY]);
+  return parsed.success ? parsed.data : undefined;
 }
 
 /**
