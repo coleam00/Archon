@@ -145,6 +145,7 @@ mock.module('./dag-executor', () => ({
 // --- Mock logger functions ---
 mock.module('./logger', () => ({
   logWorkflowStart: mock(async () => {}),
+  logWorkflowResume: mock(async () => {}),
   logWorkflowError: mock(async () => {}),
 }));
 

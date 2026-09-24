@@ -38,7 +38,8 @@
     "./node-record-reader": "./src/node-record-reader.ts",
     "./node-execution": "./src/node-execution.ts",
     "./node-record-serialization": "./src/node-record-serialization.ts",
-    "./node-event-write": "./src/node-event-write.ts"
+    "./node-event-write": "./src/node-event-write.ts",
+    "./logger": "./src/logger.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",

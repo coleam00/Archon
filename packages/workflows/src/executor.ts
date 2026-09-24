@@ -7,7 +7,7 @@ import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
 import { hostname } from 'os';
 import { dirname, join } from 'path';
-import { MANAGED_PROVIDER_CREDENTIAL_RELATIVE_PATHS } from './deps';
+import { MANAGED_PROVIDER_CREDENTIAL_RELATIVE_PATHS, spellWorkflowCommand } from './deps';
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
 import type { WorkflowDeps } from './deps';
 import * as archonPaths from '@archon/paths';
@@ -75,7 +75,7 @@ import { maybeWarnLegacyStatePath, maybeWarnLegacyArtifactsPath } from './state-
 import { formatDeprecationNotice } from './deprecation';
 import { resolveWorkflowName } from './router';
 import { resolveDeclaredInputs, defaultRunInputs } from './workflow-inputs';
-import { logWorkflowStart, logWorkflowError } from './logger';
+import { logWorkflowStart, logWorkflowResume, logWorkflowError } from './logger';
 import { formatDuration, parseDbTimestamp } from './utils/duration';
 import { keepAwake } from './utils/keep-awake';
 import { getWorkflowEventEmitter } from './event-emitter';
@@ -1633,7 +1633,7 @@ async function maybeResumeParentRun(
       conversationId,
       `⚠️ Sub-run \`${childRun.id.slice(0, 8)}\` finished, but its parent run ` +
         `\`${parentRunId.slice(0, 8)}\` couldn't auto-resume (${reason}). ` +
-        `Resume it manually: \`/workflow resume ${parentRunId}\``
+        `Resume it manually: \`${spellWorkflowCommand(platform, `resume ${parentRunId}`)}\``
     );
   };
 
@@ -1786,8 +1786,7 @@ async function maybeResumeParentRun(
 
 /** Spell a workflow action the way the surface rendering the message accepts it. */
 function formatRunCommand(platform: IWorkflowPlatform, action: string, shortId?: string): string {
-  const command = shortId ? `${action} ${shortId}` : action;
-  return platform.formatWorkflowCommand?.(command) ?? `/workflow ${command}`;
+  return spellWorkflowCommand(platform, shortId ? `${action} ${shortId}` : action);
 }
 
 /**
@@ -3043,7 +3042,13 @@ export async function executeWorkflow(
       },
       'workflow_starting'
     );
-    await logWorkflowStart(logDir, workflowRun.id, workflow.name, userMessage);
+    // `isContinuation`, not `priorCompletedNodes`: a failed child re-entered without a
+    // resumable snapshot is still a resume of an existing run.
+    if (isContinuation) {
+      await logWorkflowResume(logDir, workflowRun.id, workflow.name);
+    } else {
+      await logWorkflowStart(logDir, workflowRun.id, workflow.name, userMessage);
+    }
 
     // Register run with emitter and emit workflow_started
     const emitter = getWorkflowEventEmitter();
@@ -3085,7 +3090,7 @@ export async function executeWorkflow(
       usesFreshContext: telemetryNodes.some(n => isLoopNode(n) && n.loop.fresh_context),
       interactive: workflow.interactive ?? false,
       usedIsolation: isolationContext !== undefined,
-      isResume: dagPriorCompletedNodes !== undefined,
+      isResume: isContinuation,
     });
 
     let isolationMode: 'container' | 'worktree' | 'in-place' = 'in-place';

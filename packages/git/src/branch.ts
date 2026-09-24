@@ -278,8 +278,8 @@ export async function isBranchMerged(
  * Throws for unexpected errors (permission denied, corruption).
  */
 export async function isPatchEquivalent(
-  repoPath: RepoPath,
-  branchName: BranchName,
+  repoPath: RepoPath | WorktreePath,
+  branchName: BranchName | 'HEAD',
   baseRef: string,
   options: { throwOnExpectedError?: boolean } = {}
 ): Promise<boolean> {
@@ -320,6 +320,8 @@ export async function isPatchEquivalent(
  * Returns false if it is not (base branch mismatch detected).
  * Returns false for expected errors (branch not found, not a git repo).
  * Throws for unexpected errors (permission denied, corruption).
+ * Kept apart from `isCommitAncestor`: its callers only warn about a base mismatch,
+ * so a missing ref reading as "not an ancestor" is the intended, harmless answer.
  */
 export async function isAncestorOf(
   workingPath: RepoPath | WorktreePath,
@@ -350,6 +352,81 @@ export async function isAncestorOf(
     getLog().error({ err: error, workingPath, ancestorRef }, 'branch.ancestor_check_failed');
     throw new Error(
       `Failed to check if ${ancestorRef} is ancestor of HEAD at ${workingPath}: ${(err as Error).message}`
+    );
+  }
+}
+
+/**
+ * Whether `rev` (a branch ref, or a worktree's `HEAD`) is `headSha` or an ancestor
+ * of it, i.e. whether a PR whose head is `headSha` carried every commit on `rev`.
+ * `workingPath` is the checkout the revision is read in.
+ *
+ * The head commit may have been pushed from elsewhere (a bot fix, a maintainer
+ * push) and never fetched here, so when the object is missing it is fetched by
+ * SHA from `remote` first. A failed fetch or an unanswerable ancestry check
+ * throws: the caller cannot tell "no" from "unknown" and must not guess.
+ */
+export async function isRevCoveredBy(
+  workingPath: RepoPath | WorktreePath,
+  rev: string,
+  headSha: string,
+  remote: string
+): Promise<boolean> {
+  if (!(await hasCommitObject(workingPath, headSha))) {
+    try {
+      await execFileAsync('git', ['-C', workingPath, 'fetch', '--no-tags', remote, headSha], {
+        timeout: 60000,
+      });
+    } catch (error) {
+      throw new Error(
+        `Failed to fetch PR head ${headSha} from ${remote}: ${(error as Error).message}`,
+        { cause: error }
+      );
+    }
+  }
+  return isCommitAncestor(workingPath, rev, headSha);
+}
+
+/** Exit status of `git cat-file -e <sha>^{commit}`: 0 means the commit is here. */
+async function hasCommitObject(repoPath: RepoPath | WorktreePath, sha: string): Promise<boolean> {
+  try {
+    await execFileAsync('git', ['-C', repoPath, 'cat-file', '-e', `${sha}^{commit}`], {
+      timeout: 10000,
+    });
+    return true;
+  } catch {
+    // Any non-zero exit sends us to the fetch, which fails loudly if the
+    // repository itself is the problem.
+    return false;
+  }
+}
+
+/**
+ * Whether `ancestor` is reachable from `descendant` (a commit counts as its own
+ * ancestor). Read from `git merge-base --is-ancestor`'s exit status: 0 yes, 1 no.
+ * Anything else throws. Kept apart from `isAncestorOf`, which maps a missing ref to
+ * false: here false means "unmerged work", and cleanup must not reach it by guessing.
+ */
+async function isCommitAncestor(
+  repoPath: RepoPath | WorktreePath,
+  ancestor: string,
+  descendant: string
+): Promise<boolean> {
+  try {
+    await execFileAsync(
+      'git',
+      ['-C', repoPath, 'merge-base', '--is-ancestor', ancestor, descendant],
+      {
+        timeout: 10000,
+      }
+    );
+    return true;
+  } catch (error) {
+    const err = error as Error & { code?: number | string };
+    if (err.code === 1 || err.code === '1') return false;
+    throw new Error(
+      `Failed to check whether ${ancestor} is an ancestor of ${descendant} at ${repoPath}: ${err.message}`,
+      { cause: error }
     );
   }
 }
