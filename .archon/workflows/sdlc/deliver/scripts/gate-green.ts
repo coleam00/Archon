@@ -15,6 +15,10 @@
  * ready while its real CI is not green. So this fails on `introduced` and lets
  * `inherited` and `environment` through with the claim recorded.
  *
+ * A validation that did not finish is not red at all: `incomplete` means some checks
+ * never ran and none that ran failed. It fails too, since an unfinished gate is no
+ * verdict, but it says so and names resuming the run as the action.
+ *
  * The record is this node's own result. Its node declares `output_type: green-gate`,
  * so the engine keeps the JSON below as a typed artifact under `nodes/`, one file per
  * gate, and every later reader — the pull-request body, the terminal report — finds
@@ -43,6 +47,16 @@ const stage = trimmed(process.env.INPUTS_STAGE) || 'The work';
 
 if (green === 'true') {
   emit({ gate: 'green', red_cause: '', stage, summary: '' });
+} else if (cause === 'incomplete') {
+  // Not every check ran and none that ran failed: there is no verdict to pass or
+  // blame yet. Saying "red" here sends a reader hunting for a failure that does not
+  // exist; the action is to finish validating.
+  refuse(
+    `${stage}: validation didn't finish. Not every check ran, and none that ran ` +
+      `failed.${summary === '' ? '' : ` ${summary}`} Resume the run once whatever ` +
+      'stopped it is cleared, so validation can finish. An unfinished validation ' +
+      'never passes this gate.'
+  );
 } else if (cause === '') {
   refuse(
     `${stage} is red and declared no red_cause. Red that nobody explained is red this ` +

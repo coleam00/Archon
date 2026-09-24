@@ -3,6 +3,12 @@
 `archon-validate` normally discovers and runs the project's checks on the current
 checkout. Its `scope` input narrows that ordinary path.
 
+When ordinary validation stops before every applicable check runs (a usage limit,
+a killed process, a gate that cannot run) and no check that ran failed, it declares
+`green: false` with `red_cause: incomplete`. SDLC delivery refuses that result as
+unfinished rather than red; the action is to resume the run. The comparison path
+never declares `incomplete`.
+
 For an existing workflow that must test a composition, pass `comparison` as the path
 to an explicitly authored JSON request. This selects a deterministic script path;
 it does not call a model, merge a PR, or infer a gate from a message.
