@@ -278,8 +278,8 @@ export async function isBranchMerged(
  * Throws for unexpected errors (permission denied, corruption).
  */
 export async function isPatchEquivalent(
-  repoPath: RepoPath,
-  branchName: BranchName,
+  repoPath: RepoPath | WorktreePath,
+  branchName: BranchName | 'HEAD',
   baseRef: string,
   options: { throwOnExpectedError?: boolean } = {}
 ): Promise<boolean> {

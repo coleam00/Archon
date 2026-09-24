@@ -966,7 +966,8 @@ patch equivalence (single-commit squash-merge via `git cherry`), and GitHub PR s
 recognises it. A merged or closed PR counts only while neither the worktree's HEAD nor the
 local branch has anything past the PR's head commit: run branch names get reused, and new
 commits on a reused branch or a detached HEAD are not covered by the old PR, so that
-environment is kept. A PR head commit pushed from somewhere
+environment is kept. The same goes for a merge git detects: the worktree's HEAD must be
+merged into the base too, not just the branch. A PR head commit pushed from somewhere
 else is fetched from the remote before that comparison; if the fetch fails, the environment is
 kept and reported as a failed merge check. The `gh` CLI is optional — if absent, only git
 signals are used. If `gh` is installed but the lookup fails (auth, rate limit), the environment

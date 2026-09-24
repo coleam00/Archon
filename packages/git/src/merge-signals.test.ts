@@ -103,6 +103,21 @@ describe('merge signals against real git', () => {
     expect(await isBranchMerged(repo, toBranchName('ff-feature'), toBranchName('main'))).toBe(true);
   });
 
+  // Once git proves the branch merged, cleanup asks `git cherry <base> HEAD` in the
+  // worktree: HEAD at the merged tip passes, and a detached commit past it does not.
+  test('isPatchEquivalent judges a worktree HEAD the same way as the merged branch', async () => {
+    const repoPath = repoWithSquashMergedFeature();
+    const worktree = join(repoPath, '..', 'wt-head');
+    git(repoPath, 'worktree', 'add', '-q', '--detach', worktree, 'main');
+    const wt = toWorktreePath(worktree);
+    const main = toBranchName('main');
+
+    expect(await isPatchEquivalent(wt, 'HEAD', main, { throwOnExpectedError: true })).toBe(true);
+
+    commit(worktree, 'detached.txt', 'detached\n');
+    expect(await isPatchEquivalent(wt, 'HEAD', main, { throwOnExpectedError: true })).toBe(false);
+  });
+
   // Cleanup trusts a merged PR only for the commits it carried: the local branch tip
   // must be the PR head or behind it.
   test('isRevCoveredBy tells a branch at its merged PR head from one past it', async () => {

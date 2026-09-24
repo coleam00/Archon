@@ -152,6 +152,11 @@ const mockGetDefaultBranch = mock<typeof Git.getDefaultBranch>(() =>
 );
 const mockIsBranchMerged = mock<typeof Git.isBranchMerged>(() => Promise.resolve(false));
 const mockIsPatchEquivalent = mock<typeof Git.isPatchEquivalent>(() => Promise.resolve(false));
+// Default for the merge judgment: the branch is not patch-equivalent, and the
+// worktree's HEAD (checked once a git signal proves the branch merged) sits at the
+// branch tip, so it is covered by whatever proved the merge.
+const branchUnmergedHeadAtTip: typeof Git.isPatchEquivalent = (_path, rev) =>
+  Promise.resolve(rev === 'HEAD');
 const mockLocalBranchExists = mock<typeof Git.localBranchExists>(() => Promise.resolve(true));
 const mockGetLastCommitDate = mock<typeof Git.getLastCommitDate>(() => Promise.resolve(null));
 // Default: the local branch tip is the PR's head commit (or behind it).
@@ -781,7 +786,7 @@ describe('runScheduledCleanup', () => {
     mockWorktreeExists.mockResolvedValue(false);
     mockGetDefaultBranch.mockResolvedValue(toBranchName('main'));
     mockIsBranchMerged.mockResolvedValue(false);
-    mockIsPatchEquivalent.mockResolvedValue(false);
+    mockIsPatchEquivalent.mockImplementation(branchUnmergedHeadAtTip);
     mockLocalBranchExists.mockResolvedValue(true);
     mockGetPrState.mockResolvedValue(NO_PR);
     mockIsRevCoveredBy.mockReset();
@@ -1813,7 +1818,7 @@ describe('cleanupMergedWorktrees', () => {
     mockIsBranchMerged.mockResolvedValue(false);
     mockLoadRepoConfig.mockResolvedValue({});
     mockIsPatchEquivalent.mockReset();
-    mockIsPatchEquivalent.mockResolvedValue(false);
+    mockIsPatchEquivalent.mockImplementation(branchUnmergedHeadAtTip);
     mockGetPrState.mockReset();
     mockGetPrState.mockResolvedValue(NO_PR);
     mockLocalBranchExists.mockReset();
@@ -1859,6 +1864,34 @@ describe('cleanupMergedWorktrees', () => {
     expect(mockDestroy).toHaveBeenCalledWith(
       '/workspace/repo/worktrees/merged-branch',
       expect.objectContaining({ deleteRemoteBranch: true })
+    );
+  });
+
+  // Git proves the branch merged, but the worktree's HEAD (detached, or a branch
+  // renamed inside it) holds commits the base never received. Removal would delete them.
+  test('keeps a worktree whose HEAD has commits git cannot find in the base', async () => {
+    mockListByCodebase.mockResolvedValueOnce([
+      makeEnvironment({
+        id: 'env-head-ahead',
+        branch_name: 'head-ahead',
+        working_path: '/workspace/repo/worktrees/head-ahead',
+        status: 'active',
+      }),
+    ]);
+    mockIsBranchMerged.mockResolvedValueOnce(true);
+    mockWorktreeExists.mockResolvedValue(true);
+    mockIsPatchEquivalent.mockImplementation(() => Promise.resolve(false));
+
+    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+
+    expect(result.removed).toHaveLength(0);
+    // removeEnvironment's first step: the sweep never tried to remove it.
+    expect(mockGetById).not.toHaveBeenCalled();
+    expect(mockIsPatchEquivalent).toHaveBeenCalledWith(
+      '/workspace/repo/worktrees/head-ahead',
+      'HEAD',
+      'origin/main',
+      { throwOnExpectedError: true }
     );
   });
 

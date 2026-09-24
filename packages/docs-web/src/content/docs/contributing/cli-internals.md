@@ -318,7 +318,8 @@ can fail before either write.
 │  (c) getPrState()        gh CLI      (MERGED/CLOSED/OPEN/NONE/  │
 │                                      UNAVAILABLE)               │
 │                                                                 │
-│  any git signal          → 'reclaimable'                        │
+│  any git signal          → 'reclaimable' if the worktree HEAD   │
+│                            also passes `git cherry <base> HEAD` │
 │  MERGED                  → 'reclaimable' if the worktree HEAD   │
 │                            and the branch ref (where each       │
 │                            exists) are at or behind the PR head │
@@ -350,7 +351,10 @@ failing the check. A MERGED or CLOSED PR only covers the commits it carried. Run
 branch names are reused, and removal deletes both the worktree and the branch, so each
 local tip that still exists, the worktree's HEAD and the branch ref, must be the PR's head
 commit or an ancestor of it (`isRevCoveredBy`). A detached HEAD or a reused branch with
-commits past the PR head is unmerged work. A PR head pushed from elsewhere and never fetched here is
+commits past the PR head is unmerged work. The same holds when git proves the merge: the worktree's
+HEAD must also pass `git cherry <base> HEAD`, which answers for both git signals (an
+ancestor of the base lists nothing, a squash-merged commit lists as `-`). A HEAD it
+cannot answer for is reported as a failed merge check. A PR head pushed from elsewhere and never fetched here is
 fetched by SHA from the branch's remote first; if that fetch fails, the check fails and
 the worktree is kept, with the fetch error in the reason. The scheduled sweep (`runScheduledCleanup`) makes the same call, so
 both paths agree on what counts as merged.

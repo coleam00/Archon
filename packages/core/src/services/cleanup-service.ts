@@ -512,9 +512,24 @@ async function judgeBranchForRemoval(input: {
   // once it is gone, so ask git only while the ref is there. The PR lookup keys off
   // the branch name on the remote and needs no local ref at all.
   const refExists = await localBranchExists(repoPath, branchName);
-  if (refExists) {
-    if (await isBranchMerged(repoPath, branchName, baseRef)) return 'reclaimable';
-    if (await isPatchEquivalent(repoPath, branchName, baseRef)) return 'reclaimable';
+  // Removal deletes the worktree too, so its HEAD must be covered by whatever proved
+  // the merge. It can differ from the branch tip (a detached HEAD, a branch renamed
+  // inside the worktree).
+  const hasWorktree = await worktreeExists(worktreePath);
+  if (
+    refExists &&
+    ((await isBranchMerged(repoPath, branchName, baseRef)) ||
+      (await isPatchEquivalent(repoPath, branchName, baseRef)))
+  ) {
+    // `git cherry <base> HEAD` answers for both git signals: an ancestor of the base
+    // lists no commits, and a squash-merged commit lists as '-'. A HEAD it cannot
+    // settle falls through to the PR, and an unanswerable one throws.
+    if (
+      !hasWorktree ||
+      (await isPatchEquivalent(worktreePath, 'HEAD', baseRef, { throwOnExpectedError: true }))
+    ) {
+      return 'reclaimable';
+    }
   }
 
   const pr = await getPrState(branchName, repoPath, prStateCache, remote);
@@ -525,10 +540,7 @@ async function judgeBranchForRemoval(input: {
   // isRevCoveredBy fetches the PR head when it was pushed from elsewhere, and throws
   // when that fetch or the comparison fails; the callers report it as a failed merge
   // check and keep the worktree.
-  if (
-    (await worktreeExists(worktreePath)) &&
-    !(await isRevCoveredBy(worktreePath, 'HEAD', pr.headSha, remote))
-  ) {
+  if (hasWorktree && !(await isRevCoveredBy(worktreePath, 'HEAD', pr.headSha, remote))) {
     return 'unmerged';
   }
   if (
