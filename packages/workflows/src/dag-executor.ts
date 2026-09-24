@@ -10655,11 +10655,15 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
 
             const err = error as Error;
             getLog().error({ err, nodeId: node.id }, 'dag_node_pre_execution_failed');
+            // Before the node's execution began, this is a preparation fault (provider,
+            // binding, session source). After it, the executor itself threw something
+            // it did not classify, such as a store read failing between iterations.
+            const failureKind = ctx.currentExecution === undefined ? 'config' : 'unknown';
             const failed = await recordNodeState(
               { store: ctx.deps.store, logDir: ctx.logDir },
               finishNodeExecution(
                 ctx.currentExecution ?? beginExecution(ctx, node),
-                { status: 'failed', error: err.message, failureKind: 'config' },
+                { status: 'failed', error: err.message, failureKind },
                 {
                   output: { text: '' },
                   diagnostics: isNodeContextResume(node.context)

@@ -20677,9 +20677,11 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
   });
 
   async function runDag(
-    nodes: DagNode[]
+    nodes: DagNode[],
+    prepareStore?: (store: MockWorkflowStore) => void
   ): Promise<{ store: MockWorkflowStore; failureKinds: Record<string, unknown> }> {
     const store = createMockStore();
+    prepareStore?.(store);
     await executeDagWorkflow(
       dagOptions({
         deps: createMockDeps(store),
@@ -20761,6 +20763,40 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
       },
     ]);
     expect(failureKinds).toEqual({ 'my-loop': 'max_iterations' });
+  });
+
+  it('a node whose provider cannot be prepared is config', async () => {
+    mockGetAgentProviderDag.mockImplementation(() => {
+      throw new Error('provider not registered');
+    });
+    const { failureKinds } = await runDag([
+      { id: 'step', kind: 'agent', source: { kind: 'inline', prompt: 'Do thing.' } },
+    ]);
+    expect(failureKinds).toEqual({ step: 'config' });
+  });
+
+  it('an error escaping a node that already started is unknown, not config', async () => {
+    const { failureKinds } = await runDag(
+      [
+        {
+          id: 'group',
+          kind: 'loop_group',
+          loop_group: {
+            fresh_context: false,
+            until_bash: 'exit 1',
+            max_iterations: 3,
+            nodes: [{ id: 'body', kind: 'exec', runtime: 'sh', script: 'echo hi' }],
+          },
+        },
+      ],
+      store => {
+        // Only the group's own status check fails; the run-level checks still answer.
+        store.getWorkflowRunStatus.mockImplementationOnce(async () => {
+          throw new Error('database is locked');
+        });
+      }
+    );
+    expect(failureKinds.group).toBe('unknown');
   });
 
   it('one completed node and one failed node is a node_error', async () => {
