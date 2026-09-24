@@ -317,10 +317,13 @@ can fail before either write.
 │  (b) isPatchEquivalent() git cherry  (1-commit squash-merge)    │
 │  (c) getPrState()        gh CLI      (MERGED/CLOSED/OPEN/NONE)  │
 │                                                                  │
-│  MERGED or any git-signal → 'reclaimable'                       │
+│  any git signal          → 'reclaimable'                        │
+│  MERGED                  → 'reclaimable' if the local tip is at │
+│                            or behind the PR head (or ref gone)  │
+│  CLOSED                  → same, only if includeClosed          │
 │  OPEN                    → 'open-pr', always kept               │
-│  CLOSED                  → 'reclaimable' only if includeClosed  │
-│  NONE, ref gone          → 'unjudgeable', kept and reported     │
+│  NONE and ref present    → 'unmerged', not reclaimed            │
+│  NONE and ref gone       → 'unjudgeable', kept and reported     │
 └─────────────────────────────────┬───────────────────────────────┘
                                   │ 'reclaimable'
                                   ▼
@@ -338,7 +341,10 @@ only git signals are used and the result degrades gracefully to `NONE`.
 A multi-commit squash merge is invisible to both git signals, so PR state is the only
 one that sees it. Both git signals also need the local branch ref: once it is gone, the
 PR is the only judge, and a branch with no PR is reported as unverifiable instead of
-failing the check. The scheduled sweep (`runScheduledCleanup`) makes the same call, so
+failing the check. A MERGED or CLOSED PR only covers the commits it carried:
+run branch names are reused, so while the local ref exists its tip must be the PR's
+head commit or an ancestor of it (`isCommitAncestor`). A branch with commits past the
+PR head is unmerged work, and a PR head this repository never fetched fails the check. The scheduled sweep (`runScheduledCleanup`) makes the same call, so
 both paths agree on what counts as merged.
 
 **Code:** `packages/core/src/services/cleanup-service.ts` — `judgeBranchForRemoval()`, `cleanupMergedWorktrees()`, `runScheduledCleanup()`, `getRemovalBlocker()`

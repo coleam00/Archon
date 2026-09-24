@@ -355,6 +355,36 @@ export async function isAncestorOf(
 }
 
 /**
+ * Whether `ancestor` is reachable from `descendant` (a commit counts as its own
+ * ancestor). Read from `git merge-base --is-ancestor`'s exit status: 0 yes, 1 no.
+ * Anything else, including a `descendant` object this repository does not hold,
+ * throws: the caller cannot tell "no" from "unknown" and must not guess.
+ */
+export async function isCommitAncestor(
+  repoPath: RepoPath,
+  ancestor: string,
+  descendant: string
+): Promise<boolean> {
+  try {
+    await execFileAsync(
+      'git',
+      ['-C', repoPath, 'merge-base', '--is-ancestor', ancestor, descendant],
+      {
+        timeout: 10000,
+      }
+    );
+    return true;
+  } catch (error) {
+    const err = error as Error & { code?: number | string };
+    if (err.code === 1 || err.code === '1') return false;
+    throw new Error(
+      `Failed to check whether ${ancestor} is an ancestor of ${descendant} at ${repoPath}: ${err.message}`,
+      { cause: error }
+    );
+  }
+}
+
+/**
  * Get the currently checked-out branch name.
  *
  * Returns null for expected errors (detached HEAD, path not found, not a git repo).

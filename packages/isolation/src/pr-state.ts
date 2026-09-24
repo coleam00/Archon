@@ -19,11 +19,21 @@ function getLog(): ReturnType<typeof createLogger> {
 export type PrState = 'MERGED' | 'CLOSED' | 'OPEN' | 'NONE';
 
 /**
- * Look up the PR state for a branch in the GitHub remote.
+ * A PR found for a branch carries the commit it was opened (and, if merged,
+ * merged) at. The branch name alone is not an identity: run branch names are
+ * derived from the run identifier and get reused, so a caller deciding anything
+ * destructive must check the local branch against `headSha`.
+ */
+export type PrLookup = { state: 'NONE' } | { state: Exclude<PrState, 'NONE'>; headSha: string };
+
+const NO_PR: PrLookup = { state: 'NONE' };
+
+/**
+ * Look up the most recent PR for a branch in the GitHub remote.
  *
  * Returns:
- *   - 'MERGED' / 'CLOSED' / 'OPEN' if a PR exists with that head branch
- *   - 'NONE' if no PR exists, gh is unavailable, or the remote is not GitHub
+ *   - MERGED / CLOSED / OPEN with the PR's head commit if a PR exists with that head branch
+ *   - NONE if no PR exists, gh is unavailable, or the remote is not GitHub
  *
  * The optional `cache` map dedupes lookups within a single cleanup invocation.
  * The optional `remote` selects which git remote to inspect (default: 'origin').
@@ -31,9 +41,9 @@ export type PrState = 'MERGED' | 'CLOSED' | 'OPEN' | 'NONE';
 export async function getPrState(
   branch: BranchName,
   repoPath: RepoPath,
-  cache?: Map<string, PrState>,
+  cache?: Map<string, PrLookup>,
   remote = 'origin'
-): Promise<PrState> {
+): Promise<PrLookup> {
   // Keyed by repository as well as branch: the same branch name in two repositories
   // is two different PRs, and the scheduled cleanup sweep spans every registered repo.
   const cacheKey = `${repoPath}\u0000${branch}`;
@@ -54,29 +64,41 @@ export async function getPrState(
       { err: error as Error, repoPath, branch },
       'isolation.pr_state_remote_lookup_failed'
     );
-    cache?.set(cacheKey, 'NONE');
-    return 'NONE';
+    cache?.set(cacheKey, NO_PR);
+    return NO_PR;
   }
 
   if (!remoteUrl.toLowerCase().includes('github.com')) {
     getLog().debug({ repoPath, branch, remoteUrl }, 'isolation.pr_state_github_only');
-    cache?.set(cacheKey, 'NONE');
-    return 'NONE';
+    cache?.set(cacheKey, NO_PR);
+    return NO_PR;
   }
 
-  let result: PrState = 'NONE';
+  let result: PrLookup = NO_PR;
   let ghStdout = '';
   try {
     const { stdout } = await execFileAsync(
       'gh',
-      ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'state', '--limit', '1'],
+      [
+        'pr',
+        'list',
+        '--head',
+        branch,
+        '--state',
+        'all',
+        '--json',
+        'state,headRefOid',
+        '--limit',
+        '1',
+      ],
       { timeout: 15000, cwd: repoPath }
     );
     ghStdout = stdout;
-    const parsed = JSON.parse(stdout) as { state?: string }[];
+    const parsed = JSON.parse(stdout) as { state?: string; headRefOid?: string }[];
     const state = parsed[0]?.state;
-    if (state === 'MERGED' || state === 'CLOSED' || state === 'OPEN') {
-      result = state;
+    const headSha = parsed[0]?.headRefOid;
+    if ((state === 'MERGED' || state === 'CLOSED' || state === 'OPEN') && headSha) {
+      result = { state, headSha };
     }
   } catch (error) {
     const err = error as NodeJS.ErrnoException;

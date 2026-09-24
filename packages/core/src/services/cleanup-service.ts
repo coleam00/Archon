@@ -9,7 +9,7 @@ import { SessionNotFoundError } from '../db/sessions';
 import * as codebaseDb from '../db/codebases';
 import * as workflowDb from '../db/workflows';
 import { getIsolationProvider, getPrState, ContainerBackend } from '@archon/isolation';
-import type { WorktreeStatusBreakdown, PrState, ContainerBackendConfig } from '@archon/isolation';
+import type { WorktreeStatusBreakdown, PrLookup, ContainerBackendConfig } from '@archon/isolation';
 import {
   hasUncommittedChanges,
   worktreeExists,
@@ -17,6 +17,7 @@ import {
   isBranchMerged,
   isPatchEquivalent,
   localBranchExists,
+  isCommitAncestor,
   getLastCommitDate,
   toRepoPath,
   toWorktreePath,
@@ -482,6 +483,12 @@ async function getRemovalBlocker(env: {
  *   (c) the PR's state — the only signal that sees a multi-commit squash merge,
  *       and the only one left once the local branch ref is gone
  *
+ * A MERGED or CLOSED PR only speaks for the commits it carried. Run branch names
+ * are derived from the run identifier and get reused, so while the local ref
+ * exists, its tip must be the PR's head commit or an ancestor of it; a branch
+ * with commits past the PR head is unmerged work. Once the ref is gone there is
+ * no local tip to compare, and the PR's state is taken as is.
+ *
  * 'unjudgeable' is the dead end the git signals hit when the branch ref has been
  * deleted and no PR answers for the branch: the worktree stays, and the caller
  * reports it rather than letting it read as ordinary unmerged work.
@@ -492,7 +499,7 @@ async function judgeBranchForRemoval(input: {
   repoPath: RepoPath;
   branchName: BranchName;
   baseRef: BranchName;
-  prStateCache: Map<string, PrState>;
+  prStateCache: Map<string, PrLookup>;
   includeClosed: boolean;
   remote: string;
 }): Promise<MergeVerdict> {
@@ -508,11 +515,16 @@ async function judgeBranchForRemoval(input: {
 
   // A failed or rate-limited PR lookup comes back as 'NONE', never 'MERGED', so an
   // unanswered branch keeps its worktree.
-  const prState = await getPrState(branchName, repoPath, prStateCache, remote);
-  if (prState === 'MERGED') return 'reclaimable';
-  if (prState === 'CLOSED') return includeClosed ? 'reclaimable' : 'unmerged';
-  if (prState === 'OPEN') return 'open-pr';
-  return refExists ? 'unmerged' : 'unjudgeable';
+  const pr = await getPrState(branchName, repoPath, prStateCache, remote);
+  if (pr.state === 'NONE') return refExists ? 'unmerged' : 'unjudgeable';
+  if (pr.state === 'OPEN') return 'open-pr';
+  if (pr.state === 'CLOSED' && !includeClosed) return 'unmerged';
+  // Throws when the PR head commit is not in this repository; the callers report
+  // that as a failed merge check and keep the worktree.
+  if (refExists && !(await isCommitAncestor(repoPath, `refs/heads/${branchName}`, pr.headSha))) {
+    return 'unmerged';
+  }
+  return 'reclaimable';
 }
 
 /** The operator-facing reason a kept environment is worth reporting, or null when it is ordinary unmerged work. */
@@ -543,7 +555,7 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
 
     // One PR-state cache for the whole cycle; getPrState keys it by repo + branch,
     // and this sweep spans every registered repo.
-    const prStateCache = new Map<string, PrState>();
+    const prStateCache = new Map<string, PrLookup>();
 
     for (const env of environments) {
       try {
@@ -868,7 +880,7 @@ export async function cleanupMergedWorktrees(
   const { remoteMainRef, remote } = await resolveRepoGitContext(repoPath, mainRepoPath);
   const result: MergedCleanupResult = { removed: [], skipped: [], baseRef: remoteMainRef };
   const includeClosed = options.includeClosed ?? false;
-  const prStateCache = new Map<string, PrState>();
+  const prStateCache = new Map<string, PrLookup>();
 
   for (const env of environments) {
     let verdict: MergeVerdict;

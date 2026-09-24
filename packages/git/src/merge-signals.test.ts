@@ -25,7 +25,7 @@ const silentLogger = {
 };
 mock.module('@archon/paths', () => ({ createLogger: mock(() => silentLogger) }));
 
-import { isBranchMerged, isPatchEquivalent, localBranchExists } from './branch';
+import { isBranchMerged, isCommitAncestor, isPatchEquivalent, localBranchExists } from './branch';
 import { toBranchName, toRepoPath } from './types';
 
 const trackTempRoot = trackTempRoots();
@@ -101,5 +101,29 @@ describe('merge signals against real git', () => {
     git(repo, 'merge', '-q', '--ff-only', 'ff-feature');
 
     expect(await isBranchMerged(repo, toBranchName('ff-feature'), toBranchName('main'))).toBe(true);
+  });
+
+  // Cleanup trusts a merged PR only for the commits it carried: the local branch tip
+  // must be the PR head or behind it.
+  test('isCommitAncestor tells a branch at its merged PR head from one past it', async () => {
+    const repoPath = repoWithSquashMergedFeature();
+    const repo = toRepoPath(repoPath);
+    const prHead = git(repoPath, 'rev-parse', 'feature');
+
+    expect(await isCommitAncestor(repo, 'refs/heads/feature', prHead)).toBe(true);
+
+    // The branch name is reused and gains work the merged PR never saw.
+    git(repoPath, 'checkout', '-q', 'feature');
+    commit(repoPath, 'later.txt', 'later\n');
+    expect(await isCommitAncestor(repo, 'refs/heads/feature', prHead)).toBe(false);
+  });
+
+  test('isCommitAncestor throws when the PR head commit is not in the repository', async () => {
+    const repo = toRepoPath(repoWithSquashMergedFeature());
+    const unfetched = '0123456789abcdef0123456789abcdef01234567';
+
+    await expect(isCommitAncestor(repo, 'refs/heads/feature', unfetched)).rejects.toThrow(
+      'Failed to check whether'
+    );
   });
 });
