@@ -1,35 +1,55 @@
 /**
- * `archon plugin install | update | remove | list`.
+ * `archon plugin install | update | remove | list | copy`.
  *
  * GitHub is the registry: a plugin is `owner/repo[/path]` (where its
- * `archon-plugin.json` lives) and a version is a release tag. Resolution uses
- * `git ls-remote` and the `releases/latest` redirect, never the GitHub API, so
- * it needs no token and has no API rate limit. Only `kind: forge` installs
- * today: its executable comes from the release assets and lands in the
- * directory forge discovery scans.
+ * `archon-plugin.json` lives) and a version is a tag. Resolution uses
+ * `git ls-remote`, the `releases/latest` redirect, raw file and codeload
+ * downloads, never the GitHub API, so it needs no token and has no API rate
+ * limit.
+ *
+ * - `kind: forge`: the executable comes from the release assets and lands in
+ *   the directory forge discovery scans. No `@tag` means the latest release.
+ * - `kind: workflow-pack`: the plugin subtree of the commit's tarball becomes
+ *   one installed tree that workflow discovery reads. No `@tag` means the
+ *   default branch head, frozen as a commit.
  */
 import { createHash, randomBytes } from 'node:crypto';
-import { chmod, lstat, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { chmod, cp, lstat, mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { execFileAsync } from '@archon/git';
 import {
+  describeIssues,
   forgeReleaseAsset,
+  isForgeReceipt,
   PLUGIN_MANIFEST_FILE,
   pluginManifestSchema,
   pluginReceiptSchema,
+  type ForgeManifest,
   type PluginManifest,
   type PluginReceipt,
+  type WorkflowPackManifest,
 } from '@archon/plugin-manifest';
+import {
+  packTreePath,
+  readReceipts,
+  receiptPath,
+  RECEIPT_FILE,
+} from '@archon/plugin-manifest/store';
+import { readTar } from './plugin-tar';
 
 export interface PluginEnvironment {
   /** `ARCHON_HOME/plugins`, the directory forge discovery scans. */
   pluginsDir: string;
   archonVersion: string;
+  /** The project `copy` writes into: the working directory, or `--cwd`. */
+  projectDir: string;
   platform?: NodeJS.Platform;
   arch?: string;
-  /** Replaced only by tests, which serve a release fixture over local HTTP. */
+  /** Replaced only by tests, which serve a GitHub fixture over local HTTP. */
   githubUrl?: string;
   rawUrl?: string;
+  codeloadUrl?: string;
 }
 
 interface PluginRef {
@@ -41,7 +61,13 @@ interface PluginRef {
   tag?: string;
 }
 
-const RECEIPT_FILE = 'receipt.json';
+/** What a ref resolved to: the commit, and the manifest at that commit. */
+interface ResolvedSource {
+  tag?: string;
+  commit: string;
+  manifest: PluginManifest;
+}
+
 const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
 const SEGMENT = /^[A-Za-z0-9._-]+$/;
 const TAG = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
@@ -63,50 +89,12 @@ export function parsePluginRef(input: string): PluginRef {
   return { owner, repo, path, id: [owner, repo, ...path].join('/'), tag };
 }
 
-function receiptPath(pluginsDir: string, id: string): string {
-  return join(pluginsDir, 'installed', ...id.split('/'), RECEIPT_FILE);
-}
-
 /**
  * A name forge discovery never treats as a plugin: it does not start with
  * `archon-forge-`, so a half-written binary is never executed by a concurrent scan.
  */
 export function stagingName(fileName: string): string {
   return `.${fileName}.${randomBytes(6).toString('hex')}.partial`;
-}
-
-function issues(error: { issues: { path: PropertyKey[]; message: string }[] }): string {
-  return error.issues
-    .map(issue => `${issue.path.map(String).join('.') || '(root)'}: ${issue.message}`)
-    .join('; ');
-}
-
-async function readReceipts(pluginsDir: string): Promise<PluginReceipt[]> {
-  const root = join(pluginsDir, 'installed');
-  let entries: string[];
-  try {
-    entries = await readdir(root, { recursive: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw error;
-  }
-  const receipts: PluginReceipt[] = [];
-  for (const entry of entries.sort()) {
-    if (basename(entry) !== RECEIPT_FILE) continue;
-    const file = join(root, entry);
-    let raw: unknown;
-    try {
-      raw = JSON.parse(await readFile(file, 'utf8'));
-    } catch (error) {
-      throw new Error(`Cannot read plugin receipt ${file}: ${(error as Error).message}`);
-    }
-    const parsed = pluginReceiptSchema.safeParse(raw);
-    if (!parsed.success) {
-      throw new Error(`Invalid plugin receipt ${file}: ${issues(parsed.error)}`);
-    }
-    receipts.push(parsed.data);
-  }
-  return receipts;
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -136,20 +124,24 @@ async function latestReleaseTag(ref: PluginRef, githubUrl: string): Promise<stri
   return tag;
 }
 
-async function resolveTagCommit(ref: PluginRef, tag: string, githubUrl: string): Promise<string> {
+async function lsRemote(
+  ref: PluginRef,
+  patterns: string[],
+  githubUrl: string
+): Promise<Map<string, string>> {
   const remote = `${githubUrl}/${ref.owner}/${ref.repo}.git`;
   let stdout: string;
   try {
     ({ stdout } = await execFileAsync(
       'git',
-      ['ls-remote', remote, `refs/tags/${tag}`, `refs/tags/${tag}^{}`],
+      ['ls-remote', remote, ...patterns],
       // Never prompt: a missing or private repository must fail, not wait for input.
       { timeout: 60_000, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }
     ));
   } catch (error) {
-    throw new Error(`Could not read tags of ${remote}: ${(error as Error).message}`);
+    throw new Error(`Could not read refs of ${remote}: ${(error as Error).message}`);
   }
-  const refs = new Map(
+  return new Map(
     stdout
       .split('\n')
       .filter(Boolean)
@@ -158,9 +150,19 @@ async function resolveTagCommit(ref: PluginRef, tag: string, githubUrl: string):
         return [name, sha] as const;
       })
   );
+}
+
+async function resolveTagCommit(ref: PluginRef, tag: string, githubUrl: string): Promise<string> {
+  const refs = await lsRemote(ref, [`refs/tags/${tag}`, `refs/tags/${tag}^{}`], githubUrl);
   // An annotated tag lists the tag object and its peeled commit; prefer the commit.
   const commit = refs.get(`refs/tags/${tag}^{}`) ?? refs.get(`refs/tags/${tag}`);
   if (!commit) throw new Error(`${ref.owner}/${ref.repo} has no tag ${tag}`);
+  return commit;
+}
+
+async function resolveHeadCommit(ref: PluginRef, githubUrl: string): Promise<string> {
+  const commit = (await lsRemote(ref, ['HEAD'], githubUrl)).get('HEAD');
+  if (!commit) throw new Error(`${ref.owner}/${ref.repo} has no default branch`);
   return commit;
 }
 
@@ -183,11 +185,48 @@ async function fetchManifest(
     throw new Error(`${url} is not valid JSON`);
   }
   const parsed = pluginManifestSchema.safeParse(raw);
-  if (!parsed.success) throw new Error(`Invalid plugin manifest ${url}: ${issues(parsed.error)}`);
+  if (!parsed.success) {
+    throw new Error(`Invalid plugin manifest ${url}: ${describeIssues(parsed.error)}`);
+  }
   return parsed.data;
 }
 
-async function download(url: string): Promise<Uint8Array | undefined> {
+/**
+ * Resolve a ref to one commit and its manifest. A named tag is used as given.
+ * Without one, the manifest at the default branch head decides: a workflow
+ * pack installs that commit; a forge plugin's binaries exist only as release
+ * assets, so it moves on to the latest release. `update` already knows the
+ * kind from its receipt.
+ */
+async function resolveSource(
+  ref: PluginRef,
+  kind: PluginManifest['kind'] | undefined,
+  env: PluginEnvironment
+): Promise<ResolvedSource> {
+  const githubUrl = env.githubUrl ?? 'https://github.com';
+  const rawUrl = env.rawUrl ?? 'https://raw.githubusercontent.com';
+  const atTag = async (tag: string): Promise<ResolvedSource> => {
+    const commit = await resolveTagCommit(ref, tag, githubUrl);
+    return { tag, commit, manifest: await fetchManifest(ref, commit, rawUrl) };
+  };
+  if (ref.tag) return atTag(ref.tag);
+  if (kind === 'forge') return atTag(await latestReleaseTag(ref, githubUrl));
+  const commit = await resolveHeadCommit(ref, githubUrl);
+  const manifest = await fetchManifest(ref, commit, rawUrl);
+  if (manifest.kind === 'forge') return atTag(await latestReleaseTag(ref, githubUrl));
+  return { commit, manifest };
+}
+
+function assertCompatible(ref: PluginRef, source: ResolvedSource, archonVersion: string): void {
+  const range = source.manifest.compatibility?.archon;
+  if (range && !Bun.semver.satisfies(archonVersion, range)) {
+    throw new Error(
+      `${ref.id}@${source.tag ?? source.commit} requires Archon ${range}; this is Archon ${archonVersion}`
+    );
+  }
+}
+
+async function download(url: string): Promise<Uint8Array<ArrayBuffer> | undefined> {
   const response = await fetch(url);
   if (response.status === 404) return undefined;
   if (!response.ok) throw new Error(`${url} returned ${response.status}`);
@@ -205,41 +244,19 @@ function expectedDigest(checksums: string, asset: string): string | undefined {
 
 async function installForge(
   ref: PluginRef,
-  mode: 'install' | 'update',
+  source: ResolvedSource & { tag: string; manifest: ForgeManifest },
+  receipts: PluginReceipt[],
+  previous: PluginReceipt | undefined,
   env: PluginEnvironment
 ): Promise<void> {
+  const { tag, commit, manifest } = source;
   const githubUrl = env.githubUrl ?? 'https://github.com';
   const platform = env.platform ?? process.platform;
-  const receipts = await readReceipts(env.pluginsDir);
-  const previous = receipts.find(receipt => receipt.id === ref.id);
-  if (mode === 'install' && previous) {
-    throw new Error(
-      `${ref.id} is already installed at ${previous.tag} (${previous.commit}). Use: archon plugin update ${ref.id}`
-    );
-  }
-  if (mode === 'update' && !previous) {
-    throw new Error(`${ref.id} is not installed. Use: archon plugin install ${ref.id}`);
-  }
-
-  // Every check below runs before anything is written, so any failure leaves
-  // the previous install exactly as it was.
-  const tag = ref.tag ?? (await latestReleaseTag(ref, githubUrl));
-  const commit = await resolveTagCommit(ref, tag, githubUrl);
-  const manifest = await fetchManifest(
-    ref,
-    commit,
-    env.rawUrl ?? 'https://raw.githubusercontent.com'
-  );
-  const range = manifest.compatibility?.archon;
-  if (range && !Bun.semver.satisfies(env.archonVersion, range)) {
-    throw new Error(
-      `${ref.id}@${tag} requires Archon ${range}; this is Archon ${env.archonVersion}`
-    );
-  }
-
   const fileName = `${manifest.executable}${platform === 'win32' ? '.exe' : ''}`;
   const target = join(env.pluginsDir, fileName);
-  const owner = receipts.find(receipt => receipt.files.some(file => file.path === fileName));
+  const owner = receipts.find(
+    receipt => isForgeReceipt(receipt) && receipt.files.some(f => f.path === fileName)
+  );
   if (owner && owner.id !== ref.id) {
     throw new Error(
       `${target} belongs to ${owner.id}. Remove it first: archon plugin remove ${owner.id}`
@@ -296,26 +313,249 @@ async function installForge(
     await rm(stagedBinary, { force: true });
     await rm(stagedReceipt, { force: true });
   }
-  for (const file of previous?.files ?? []) {
-    if (file.path !== fileName) await rm(join(env.pluginsDir, file.path), { force: true });
+  if (previous && isForgeReceipt(previous)) {
+    for (const file of previous.files) {
+      if (file.path !== fileName) await rm(join(env.pluginsDir, file.path), { force: true });
+    }
   }
 
-  const source = `github.com/${ref.owner}/${ref.repo} ${tag} (commit ${commit})`;
+  const from = `github.com/${ref.owner}/${ref.repo} ${tag} (commit ${commit})`;
   console.log(
     previous
-      ? `Updated ${ref.id}: ${previous.tag} (commit ${previous.commit}) -> ${source}`
-      : `Installed ${ref.id} from ${source}`
+      ? `Updated ${ref.id}: ${previous.tag} (commit ${previous.commit}) -> ${from}`
+      : `Installed ${ref.id} from ${from}`
   );
   console.log(`  ${target}  sha256 ${digest}`);
   console.log(`  This runs code published by ${ref.owner}.`);
 }
 
+/**
+ * The plugin subtree of a commit tarball, as relative path -> file.
+ *
+ * Refuses, by name, every entry the tree could not hold faithfully: any
+ * absolute or `..` name in the archive (its place is ambiguous), and any
+ * symlink, hard link or special file inside the plugin. Either would let
+ * discovery or run capture read something other than the files at this commit.
+ */
+function packFiles(
+  tarball: Uint8Array<ArrayBuffer>,
+  ref: PluginRef
+): Map<string, { data: Uint8Array; executable: boolean }> {
+  const entries = readTar(Bun.gunzipSync(tarball));
+  const top = entries[0]?.path.split('/')[0];
+  const files = new Map<string, { data: Uint8Array; executable: boolean }>();
+  if (!top) throw new Error(`The tarball of ${ref.owner}/${ref.repo} is empty`);
+  const root = [top, ...ref.path].join('/');
+  for (const entry of entries) {
+    const segments = entry.path.split('/');
+    if (segments[0] !== top || segments.some(s => s === '' || s === '.' || s === '..')) {
+      throw new Error(`Refusing ${ref.id}: the archive entry "${entry.path}" escapes its root`);
+    }
+    if (entry.path !== root && !entry.path.startsWith(`${root}/`)) continue;
+    const relative = entry.path.slice(root.length + 1);
+    if (entry.kind === 'directory') continue;
+    if (entry.kind !== 'file') {
+      throw new Error(
+        `Refusing ${ref.id}: "${relative}" is a ${entry.kind}; a workflow pack may contain only regular files`
+      );
+    }
+    files.set(relative, { data: entry.data, executable: entry.executable });
+  }
+  return files;
+}
+
+/** Proves the tree is the pack its manifest describes before anything is written. */
+function assertPackTree(
+  ref: PluginRef,
+  manifest: WorkflowPackManifest,
+  files: ReadonlyMap<string, { data: Uint8Array }>
+): void {
+  const inTree = files.get(PLUGIN_MANIFEST_FILE);
+  let treeManifest: unknown;
+  try {
+    treeManifest = inTree ? JSON.parse(new TextDecoder().decode(inTree.data)) : undefined;
+  } catch {
+    treeManifest = undefined;
+  }
+  // Discovery reads entrypoints from the installed tree, so it must hold the
+  // manifest this install was checked against.
+  if (!isDeepStrictEqual(pluginManifestSchema.safeParse(treeManifest).data, manifest)) {
+    throw new Error(
+      `Refusing ${ref.id}: the tarball's ${PLUGIN_MANIFEST_FILE} differs from the one at the same commit`
+    );
+  }
+  for (const [name, path] of Object.entries(manifest.entrypoints)) {
+    const folder = `${path.split('/')[0]}/`;
+    const yamls = [...files.keys()].filter(
+      file =>
+        file.startsWith(folder) && !file.slice(folder.length).includes('/') && /\.ya?ml$/.test(file)
+    );
+    if (!files.has(path)) {
+      throw new Error(
+        `Refusing ${ref.id}: entrypoint "${name}" names ${path}, which is not in the pack`
+      );
+    }
+    // The packaged layout loads exactly one YAML per workflow folder.
+    if (yamls.length !== 1) {
+      throw new Error(
+        `Refusing ${ref.id}: entrypoint "${name}" is in ${folder}, which must hold exactly one .yaml file (found ${yamls.length})`
+      );
+    }
+  }
+}
+
+async function installPack(
+  ref: PluginRef,
+  source: ResolvedSource & { manifest: WorkflowPackManifest },
+  receipts: PluginReceipt[],
+  previous: PluginReceipt | undefined,
+  env: PluginEnvironment
+): Promise<void> {
+  const { tag, commit, manifest } = source;
+  // `owner/plugin:entrypoint` is the public identity, so one owner cannot have
+  // two installed packs with the same name. GitHub owners are case-insensitive.
+  const clash = receipts.find(
+    receipt =>
+      receipt.id !== ref.id &&
+      receipt.manifest.kind === 'workflow-pack' &&
+      receipt.manifest.name === manifest.name &&
+      receipt.id.split('/')[0].toLowerCase() === ref.owner.toLowerCase()
+  );
+  if (clash) {
+    throw new Error(
+      `${ref.id} and ${clash.id} are both workflow packs named ${ref.owner}/${manifest.name}. Remove one first: archon plugin remove ${clash.id}`
+    );
+  }
+  if (previous?.commit === commit && previous.tag === tag) {
+    console.log(`${ref.id} is already at ${tag ?? 'the default branch head'} (commit ${commit})`);
+    return;
+  }
+
+  const codeloadUrl = env.codeloadUrl ?? 'https://codeload.github.com';
+  const tarballUrl = `${codeloadUrl}/${ref.owner}/${ref.repo}/tar.gz/${commit}`;
+  const tarball = await download(tarballUrl);
+  if (!tarball) throw new Error(`${tarballUrl} returned 404`);
+  const files = packFiles(tarball, ref);
+  assertPackTree(ref, manifest, files);
+
+  const receipt: PluginReceipt = pluginReceiptSchema.parse({
+    schemaVersion: 1,
+    id: ref.id,
+    manifest,
+    ...(tag ? { tag } : {}),
+    commit,
+    installedAt: new Date().toISOString(),
+  });
+  const tree = packTreePath(env.pluginsDir, ref.id, commit);
+  const stagedTree = join(dirname(tree), `.${commit}.${randomBytes(6).toString('hex')}.partial`);
+  const receiptFile = receiptPath(env.pluginsDir, ref.id);
+  const stagedReceipt = join(dirname(receiptFile), stagingName(RECEIPT_FILE));
+  await mkdir(dirname(receiptFile), { recursive: true });
+  try {
+    for (const [relative, file] of files) {
+      const target = join(stagedTree, ...relative.split('/'));
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, file.data, { mode: file.executable ? 0o755 : 0o644 });
+    }
+    // A tree with no receipt pointing at it is left over from an interrupted
+    // install of this same commit; nothing reads it.
+    await rm(tree, { recursive: true, force: true });
+    await rename(stagedTree, tree);
+    // The receipt is written last, so a reader sees either the old complete
+    // tree or the new one, never a receipt pointing at a partial tree.
+    await writeFile(stagedReceipt, `${JSON.stringify(receipt, null, 2)}\n`);
+    await rename(stagedReceipt, receiptFile);
+  } finally {
+    await rm(stagedTree, { recursive: true, force: true });
+    await rm(stagedReceipt, { force: true });
+  }
+  // Runs already started are unaffected: capture copied the bytes they run.
+  if (previous && previous.commit !== commit) {
+    await rm(packTreePath(env.pluginsDir, ref.id, previous.commit), {
+      recursive: true,
+      force: true,
+    });
+  }
+
+  const at = `${tag ?? 'default branch'} (commit ${commit})`;
+  console.log(
+    previous
+      ? `Updated ${ref.id}: ${previous.tag ?? 'default branch'} (commit ${previous.commit}) -> ${at}`
+      : `Installed ${ref.id} from github.com/${ref.owner}/${ref.repo} ${at}`
+  );
+  for (const name of Object.keys(manifest.entrypoints)) {
+    console.log(`  ${ref.owner}/${manifest.name}:${name}`);
+  }
+  console.log(`  These workflows and their scripts were published by ${ref.owner}.`);
+}
+
+async function installPlugin(
+  ref: PluginRef,
+  mode: 'install' | 'update',
+  env: PluginEnvironment
+): Promise<void> {
+  const receipts = await readReceipts(env.pluginsDir);
+  const previous = receipts.find(receipt => receipt.id === ref.id);
+  if (mode === 'install' && previous) {
+    throw new Error(
+      `${ref.id} is already installed at ${previous.tag ?? 'the default branch head'} (${previous.commit}). Use: archon plugin update ${ref.id}`
+    );
+  }
+  if (mode === 'update' && !previous) {
+    throw new Error(`${ref.id} is not installed. Use: archon plugin install ${ref.id}`);
+  }
+
+  // Every check below runs before anything is written, so any failure leaves
+  // the previous install exactly as it was.
+  const source = await resolveSource(ref, previous?.manifest.kind, env);
+  if (previous && previous.manifest.kind !== source.manifest.kind) {
+    throw new Error(
+      `${ref.id} is now a ${source.manifest.kind} plugin, not ${previous.manifest.kind}. Remove it, then install it again.`
+    );
+  }
+  assertCompatible(ref, source, env.archonVersion);
+  const { manifest } = source;
+  if (manifest.kind === 'forge') {
+    // resolveSource always names the release a forge plugin came from.
+    if (!source.tag) throw new Error(`${ref.id} resolved without a release tag`);
+    await installForge(ref, { ...source, tag: source.tag, manifest }, receipts, previous, env);
+  } else {
+    await installPack(ref, { ...source, manifest }, receipts, previous, env);
+  }
+}
+
 async function removePlugin(ref: PluginRef, env: PluginEnvironment): Promise<void> {
   const receipt = (await readReceipts(env.pluginsDir)).find(candidate => candidate.id === ref.id);
   if (!receipt) throw new Error(`${ref.id} is not installed`);
-  for (const file of receipt.files) await rm(join(env.pluginsDir, file.path), { force: true });
+  let removed: string;
+  if (isForgeReceipt(receipt)) {
+    for (const file of receipt.files) await rm(join(env.pluginsDir, file.path), { force: true });
+    removed = receipt.files.map(file => file.path).join(', ');
+  } else {
+    removed = packTreePath(env.pluginsDir, receipt.id, receipt.commit);
+    await rm(removed, { recursive: true, force: true });
+  }
   await rm(receiptPath(env.pluginsDir, ref.id));
-  console.log(`Removed ${ref.id}: ${receipt.files.map(file => file.path).join(', ')}`);
+  console.log(`Removed ${ref.id}: ${removed}`);
+}
+
+/** Makes an ordinary project copy of an installed pack; the copy is the project's from then on. */
+async function copyPlugin(ref: PluginRef, env: PluginEnvironment): Promise<void> {
+  const receipt = (await readReceipts(env.pluginsDir)).find(candidate => candidate.id === ref.id);
+  if (!receipt) throw new Error(`${ref.id} is not installed`);
+  if (receipt.manifest.kind !== 'workflow-pack') {
+    throw new Error(`${ref.id} is a ${receipt.manifest.kind} plugin; only workflow packs copy`);
+  }
+  const target = join(env.projectDir, '.archon', 'workflows', receipt.manifest.name);
+  if (await pathExists(target)) {
+    throw new Error(`${target} already exists. Move or delete it, then retry.`);
+  }
+  await mkdir(dirname(target), { recursive: true });
+  await cp(packTreePath(env.pluginsDir, receipt.id, receipt.commit), target, { recursive: true });
+  console.log(`Copied ${ref.id} (commit ${receipt.commit}) to ${target}`);
+  console.log(
+    '  Its workflows are now project workflows under their own names. `archon plugin update` does not change this copy.'
+  );
 }
 
 async function listPlugins(env: PluginEnvironment): Promise<void> {
@@ -327,13 +567,13 @@ async function listPlugins(env: PluginEnvironment): Promise<void> {
   for (const receipt of receipts) {
     const archon = receipt.manifest.compatibility?.archon ?? 'any';
     console.log(
-      `${receipt.id}  ${receipt.manifest.kind}  ${receipt.tag}  ${receipt.commit.slice(0, 12)}  archon ${archon}`
+      `${receipt.id}  ${receipt.manifest.kind}  ${receipt.tag ?? '-'}  ${receipt.commit.slice(0, 12)}  archon ${archon}`
     );
   }
 }
 
 const USAGE =
-  'Usage: archon plugin install <owner/repo[/path][@tag]> | update <id>[@tag] | remove <id> | list';
+  'Usage: archon plugin install <owner/repo[/path][@tag]> | update <id>[@tag] | remove <id> | copy <id> | list';
 
 export async function pluginCommand(
   subcommand: string | undefined,
@@ -351,17 +591,17 @@ export async function pluginCommand(
     if (
       !target ||
       args.length !== 1 ||
-      !['install', 'update', 'remove'].includes(subcommand ?? '')
+      !['install', 'update', 'remove', 'copy'].includes(subcommand ?? '')
     ) {
       console.error(USAGE);
       return 1;
     }
     const ref = parsePluginRef(target);
-    if (subcommand === 'remove') {
-      if (ref.tag) throw new Error(`remove takes a plugin id without @tag: ${ref.id}`);
-      await removePlugin(ref, env);
+    if (subcommand === 'remove' || subcommand === 'copy') {
+      if (ref.tag) throw new Error(`${subcommand} takes a plugin id without @tag: ${ref.id}`);
+      await (subcommand === 'remove' ? removePlugin(ref, env) : copyPlugin(ref, env));
     } else {
-      await installForge(ref, subcommand === 'install' ? 'install' : 'update', env);
+      await installPlugin(ref, subcommand === 'install' ? 'install' : 'update', env);
     }
     return 0;
   } catch (error) {

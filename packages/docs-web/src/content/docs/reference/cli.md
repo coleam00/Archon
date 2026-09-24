@@ -124,17 +124,24 @@ Also runs automatically at the end of `archon setup` (optional).
 
 ### `plugin`
 
-Install and manage plugins published on GitHub. A plugin is `owner/repo[/path]`, the directory holding its `archon-plugin.json`; a version is a release tag. Only forge plugins install today.
+Install and manage plugins published on GitHub. A plugin is `owner/repo[/path]`, the directory holding its `archon-plugin.json`; a version is a tag. Two kinds install: forge plugins and workflow packs.
 
 ```bash
-archon plugin install coleam00/Archon/plugins/forge-github         # latest release
+archon plugin install coleam00/Archon/plugins/forge-github         # forge: latest release
 archon plugin install coleam00/Archon/plugins/forge-github@<tag>   # a specific release
-archon plugin update coleam00/Archon/plugins/forge-github[@<tag>]
-archon plugin remove coleam00/Archon/plugins/forge-github
+archon plugin install owner/repo[/path]                             # workflow pack: default branch head
+archon plugin install owner/repo[/path]@<tag>                       # workflow pack: a tag
+archon plugin update <id>[@<tag>]
+archon plugin remove <id>
+archon plugin copy <id>                                             # workflow pack into ./.archon/workflows/
 archon plugin list
 ```
 
-`install` refuses an already-installed plugin (use `update`) and a file it did not install. Every check, including the release checksum and the manifest's `compatibility.archon` range, runs before anything is written. See [Forge operations](/reference/forge/#install-the-github-plugin) for what the command downloads and where it writes.
+`install` refuses an already-installed plugin (use `update`) and a file it did not install. Every check, including the manifest's `compatibility.archon` range, runs before anything is written. Without `@<tag>`, the manifest at the default branch head decides the kind: a workflow pack installs that commit, and a forge plugin installs its latest release, because its executables exist only as release assets. See [Forge operations](/reference/forge/#install-the-github-plugin) for what a forge install downloads and where it writes.
+
+A workflow pack installs complete at one commit. The command downloads the commit's tarball from `codeload.github.com`, keeps the plugin directory, and refuses the pack if that directory holds a symlink, a hard link or an entry whose path escapes it, if an entrypoint is missing, or if another installed pack has the same owner and `name`. The tree is written to `ARCHON_HOME/plugins/packs/<id>/<commit>/` and then the receipt to `ARCHON_HOME/plugins/installed/<id>/receipt.json`, so a reader sees either the previous complete install or the new one. `update` replaces the tree and prints the old and new commit; `remove` deletes the receipt and that tree. Nothing updates in the background.
+
+`copy` writes the installed tree to `.archon/workflows/<name>/` in the current project (or `--cwd`). It refuses when that directory exists. The copy is an ordinary project workflow pack from then on: you own and edit it, and `update` or `remove` do not touch it.
 
 ### `auth github`
 

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import {
+  forgeManifestSchema,
   forgeReleaseAsset,
   PLUGIN_MANIFEST_FILE,
   pluginManifestSchema,
@@ -18,7 +19,7 @@ const manifest = {
 describe('plugin manifest', () => {
   test('the GitHub forge plugin manifest in this repository is valid', async () => {
     const path = join(import.meta.dir, '../../../plugins/forge-github', PLUGIN_MANIFEST_FILE);
-    const parsed = pluginManifestSchema.parse(await Bun.file(path).json());
+    const parsed = forgeManifestSchema.parse(await Bun.file(path).json());
     // release.yml names the release asset after this field.
     expect(parsed.executable).toBe('archon-forge-github');
   });
@@ -26,6 +27,7 @@ describe('plugin manifest', () => {
   test('rejects kinds without an install path, unknown keys and executable names outside discovery', () => {
     expect(pluginManifestSchema.safeParse(manifest).success).toBe(true);
     for (const invalid of [
+      { ...manifest, kind: 'provider' },
       { ...manifest, kind: 'workflow-pack' },
       { ...manifest, install: 'curl | sh' },
       { ...manifest, executable: '../archon-forge-example' },
@@ -34,6 +36,39 @@ describe('plugin manifest', () => {
     ]) {
       expect(pluginManifestSchema.safeParse(invalid).success).toBe(false);
     }
+  });
+});
+
+describe('workflow-pack manifest', () => {
+  const pack = {
+    schemaVersion: 1,
+    kind: 'workflow-pack',
+    name: 'review-kit',
+    description: 'Review workflows',
+    entrypoints: { review: 'review/review.yaml', triage: 'triage/triage.yml' },
+  };
+
+  test('accepts entrypoints that each name one workflow folder YAML', () => {
+    expect(pluginManifestSchema.safeParse(pack).success).toBe(true);
+  });
+
+  test('refuses entrypoints discovery could not load as one packaged workflow', () => {
+    for (const entrypoints of [
+      {},
+      { review: 'review.yaml' },
+      { review: 'review/nested/review.yaml' },
+      { review: '../review/review.yaml' },
+      { review: 'review/../x.yaml' },
+      { review: '.shared/review.yaml' },
+      { review: 'review/review.md' },
+      { Review: 'review/review.yaml' },
+      { 'owner/x': 'review/review.yaml' },
+    ]) {
+      expect(pluginManifestSchema.safeParse({ ...pack, entrypoints }).success).toBe(false);
+    }
+    expect(
+      pluginManifestSchema.safeParse({ ...pack, executable: 'archon-forge-example' }).success
+    ).toBe(false);
   });
 });
 
@@ -87,6 +122,27 @@ describe('plugin receipt', () => {
 
   test('accepts a well-formed receipt', () => {
     expect(pluginReceiptSchema.safeParse(receipt).success).toBe(true);
+  });
+
+  test('a workflow-pack receipt needs no tag or file list, and a forge receipt still needs both', () => {
+    const packReceipt = {
+      schemaVersion: 1,
+      id: 'owner/repo',
+      manifest: {
+        schemaVersion: 1,
+        kind: 'workflow-pack',
+        name: 'review-kit',
+        description: 'Review workflows',
+        entrypoints: { review: 'review/review.yaml' },
+      },
+      commit: 'a'.repeat(40),
+      installedAt: new Date(0).toISOString(),
+    };
+    expect(pluginReceiptSchema.safeParse(packReceipt).success).toBe(true);
+    const { tag: _tag, ...untagged } = receipt;
+    const { files: _files, ...listless } = receipt;
+    expect(pluginReceiptSchema.safeParse(untagged).success).toBe(false);
+    expect(pluginReceiptSchema.safeParse(listless).success).toBe(false);
   });
 
   test('refuses file entries that name anything outside the plugins directory', () => {
