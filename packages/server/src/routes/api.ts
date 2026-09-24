@@ -97,6 +97,7 @@ import {
 } from '@archon/workflows/workflow-discovery';
 import { FIXTURES_DIR } from '@archon/workflows/fixture-layout';
 import { parseWorkflow } from '@archon/workflows/loader';
+import { resolveWorkflowName } from '@archon/workflows/router';
 import { isValidCommandName, isValidWorkflowName } from '@archon/workflows/command-validation';
 import { BUNDLED_WORKFLOWS, BUNDLED_COMMANDS, isBinaryBuild } from '@archon/workflows/defaults';
 import {
@@ -4320,18 +4321,23 @@ export function registerApiRoutes(
       }
 
       // An installed workflow (`owner/plugin:entrypoint`) has no file under a project or
-      // home tree to find by name; it resolves through the catalog like every consumer.
+      // home tree to find by name; it resolves through the catalog, by the same rule the
+      // CLI and chat use for a qualified name. Any other name, including a legacy file
+      // whose name contains `:`, continues to the file lookups below.
       if (name.includes(':')) {
         const { workflows } = await discoverWorkflowsWithConfig(workingDir ?? null, loadConfig);
-        const hit = workflows.find(
-          entry => entry.source === 'installed' && entry.workflow.name === name
+        const hit = resolveWorkflowName(
+          name,
+          workflows.filter(entry => entry.source === 'installed').map(entry => entry.workflow)
         );
-        if (!hit) return apiError(c, 404, `Workflow not found: ${name}`);
-        return c.json({
-          workflow: Object.assign({}, hit.workflow, hit.declared),
-          filename: name,
-          source: hit.source,
-        });
+        const entry = hit && workflows.find(candidate => candidate.workflow === hit);
+        if (entry) {
+          return c.json({
+            workflow: Object.assign({}, entry.workflow, entry.declared),
+            filename: entry.workflow.name,
+            source: entry.source,
+          });
+        }
       }
 
       // 1. Try user-defined workflow in cwd.

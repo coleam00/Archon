@@ -63,6 +63,7 @@ describe('workflow-pack manifest', () => {
       { review: 'review/review.md' },
       { Review: 'review/review.yaml' },
       { 'owner/x': 'review/review.yaml' },
+      { review: 'review/review.yaml', again: 'review/review.yaml' },
     ]) {
       expect(pluginManifestSchema.safeParse({ ...pack, entrypoints }).success).toBe(false);
     }

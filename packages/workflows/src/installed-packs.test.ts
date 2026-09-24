@@ -364,6 +364,20 @@ describe('installed pack boundaries', () => {
     );
   });
 
+  test('a manifest naming one file twice is reported, not silently narrowed to one name', async () => {
+    await install({
+      ...reviewKit(),
+      id: 'acme/twice',
+      name: 'twice',
+      entrypoints: { review: 'review/code-review.yaml', again: 'review/code-review.yaml' },
+    });
+    const { workflows, errors } = await discover();
+    expect(names(workflows).filter(name => name.startsWith('acme/twice:'))).toEqual([]);
+    expect(
+      errors.some(error => error.error.includes('each entrypoint must name a different workflow'))
+    ).toBe(true);
+  });
+
   test('an unreadable pack is reported without hiding the others', async () => {
     await install(reviewKit());
     await install({ ...reviewKit(), id: 'broken/repo', name: 'broken' });
