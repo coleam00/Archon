@@ -474,6 +474,13 @@ describe('checkPi', () => {
   });
 
   it('returns pass when a Pi API key env var is set', async () => {
+    // An explicit probe: without one this reads the real ~/.pi/agent/auth.json,
+    // so a machine that has Pi set up takes the store branch instead of the
+    // env-var branch this test exists to cover.
+    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
+      status: 'missing',
+    });
+
     const result = await checkPi({
       DEFAULT_AI_ASSISTANT: 'pi',
       ANTHROPIC_API_KEY: 'sk-ant-test',
@@ -483,12 +490,21 @@ describe('checkPi', () => {
   });
 
   it('returns fail when DEFAULT_AI_ASSISTANT=pi but no auth found', async () => {
+    // An explicit probe: without one this reads the real ~/.pi/agent/auth.json
+    // and passes or fails by the machine it runs on.
+    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
+      status: 'missing',
+    });
+
     const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
     expect(result.status).toBe('fail');
     expect(result.message).toContain('pi /login');
   });
 
-  it('returns fail when auth.json holds a grant that already expired (#3274)', async () => {
+  it('warns rather than fails when auth.json holds an expired access token (#3274)', async () => {
+    // `expires` is the access token's expiry, and Pi refreshes it on the next
+    // use while the refresh token works. A hard fail here is a false alarm on
+    // a healthy install — worse than the false pass this check replaced.
     piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
       status: 'expired',
       providers: ['anthropic'],
@@ -498,7 +514,7 @@ describe('checkPi', () => {
 
     const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
 
-    expect(result.status).toBe('fail');
+    expect(result.status).toBe('warn');
     expect(result.message).toContain('anthropic');
     expect(result.message).toContain('expired');
   });
@@ -531,7 +547,7 @@ describe('checkPi', () => {
 
     const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
 
-    expect(result.status).toBe('fail');
+    expect(result.status).toBe('warn');
     expect(result.message).toContain('anthropic');
     expect(result.message).not.toContain('github-copilot');
   });
@@ -1115,6 +1131,8 @@ describe('doctorCommand', () => {
     ({ label, status: 'fail', message: 'broken' }) as const;
   const skipping = (label: string) => async () =>
     ({ label, status: 'skip', message: 'no token' }) as const;
+  const warning = (label: string) => async () =>
+    ({ label, status: 'warn', message: 'worth knowing' }) as const;
   const throwing = (label: string) => async (): Promise<never> => {
     throw new Error(`${label} blew up`);
   };
@@ -1148,6 +1166,21 @@ describe('doctorCommand', () => {
       .map(args => String(args[0] ?? ''))
       .filter(s => s.startsWith('✓') || s.startsWith('✗') || s.startsWith('○'));
     expect(renderedLines.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('a warn is not a failure: exit 0, but it is still rendered', async () => {
+    // `warn` reports a defect the operator should see on an install that
+    // works (e.g. an expired-but-refreshable Pi access token). It must not
+    // flip the exit code — that would break CI on healthy installs — yet it
+    // must still reach the operator rather than being swallowed.
+    const exit = await doctorCommand([passing('A'), warning('B')]);
+    expect(exit).toBe(0);
+
+    const warnLine = logSpy.mock.calls
+      .map(args => String(args[0] ?? ''))
+      .find(s => s.startsWith('!'));
+    expect(warnLine).toContain('B');
+    expect(warnLine).toContain('worth knowing');
   });
 });
 

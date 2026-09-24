@@ -57,7 +57,12 @@ function getLog(): ReturnType<typeof createLogger> {
 
 export interface CheckResult {
   label: string;
-  status: 'pass' | 'fail' | 'skip';
+  /**
+   * `warn` is a defect the operator should see that is not a failure: the
+   * install works, but something about it is wrong or worth knowing. It does
+   * not count toward the exit code.
+   */
+  status: 'pass' | 'warn' | 'fail' | 'skip';
   message: string;
 }
 
@@ -414,17 +419,23 @@ export async function checkPi(env: NodeJS.ProcessEnv): Promise<CheckResult> {
   // (`unreadable`), so let it answer for both.
   const validity = probePiAuthValidity(authJsonPath, Date.now());
 
-  // An expired grant is a hard failure naming the provider and the date, so
-  // the operator knows which grant to renew rather than re-running blindly.
-  // Only the grants that actually expired are named: the verdict is
-  // aggregate, but pointing at a still-usable provider sends the operator to
-  // renew a credential that does not need it.
+  // An expired *access* token is not a broken credential. `expires` is the
+  // access token's expiry; Pi refreshes it on the next use as long as the
+  // refresh token still works, and so does Archon's own OAuth mint path. So
+  // an install whose access token lapsed weeks ago still authenticates — and
+  // reporting fail here would be a false alarm on a healthy install, which is
+  // worse than the false pass this check replaced (#3274). Warn instead: name
+  // the provider and the date, and say what happens next.
+  //
+  // Only the grants that actually expired are named: the verdict is aggregate,
+  // but pointing at a still-usable provider sends the operator to renew a
+  // credential that does not need it.
   if (validity.status === 'expired') {
     const expired = validity.expiredProviders;
     return {
       label,
-      status: 'fail',
-      message: `~/.pi/agent/auth.json holds an expired credential for ${expired.join(', ')} (expired ${formatExpiry(validity.expiresAt)}). Run \`pi /login\` to renew it.`,
+      status: 'warn',
+      message: `~/.pi/agent/auth.json holds an expired access token for ${expired.join(', ')} (expired ${formatExpiry(validity.expiresAt)}). Pi refreshes it on the next use; re-run \`pi /login\` if the refresh token has also expired.`,
     };
   }
 
@@ -436,7 +447,7 @@ export async function checkPi(env: NodeJS.ProcessEnv): Promise<CheckResult> {
       label,
       status: 'fail',
       message:
-        '~/.pi/agent/auth.json exists but could not be read as JSON. Re-run `pi /login` to rewrite it.',
+        '~/.pi/agent/auth.json could not be read or holds an unusable credential. Check that the path and permissions are correct, then re-run `pi /login` to rewrite it.',
     };
   }
 
@@ -887,7 +898,8 @@ export async function checkArchonSkill(
 }
 
 function renderResult(r: CheckResult): string {
-  const icon = r.status === 'pass' ? '✓' : r.status === 'fail' ? '✗' : '○';
+  const icon =
+    r.status === 'pass' ? '✓' : r.status === 'fail' ? '✗' : r.status === 'warn' ? '!' : '○';
   return `${icon} ${r.label}: ${r.message}`;
 }
 

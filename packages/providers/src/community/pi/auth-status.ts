@@ -46,6 +46,23 @@ export type PiAuthValidity =
     };
 
 /**
+ * `expired` means the *access* token's expiry has passed — not that the
+ * credential is dead. Pi refreshes an expired access token on the next use
+ * while the refresh token still works, and so does Archon's own mint path
+ * (`mintOAuthApiKey`), so a store reporting `expired` still authenticates.
+ * Callers must not treat it as a hard failure: a false alarm on a healthy
+ * install is worse than the false pass this reader replaced (#3274).
+ *
+ * The reader deliberately does not attempt the refresh itself. `doctor` reads
+ * the store the user's own `pi /login` wrote; Archon's refresh path
+ * (`getOAuthApiKey` → `user-provider-key-store`) reads a *different* store —
+ * the encrypted per-user blob in Archon's database — and a refresh rotates
+ * the token server-side, invalidating the old refresh token. A read-only
+ * diagnostic must not perform a credential-rotating network write it has no
+ * way to persist.
+ */
+
+/**
  * The widest instant a JS `Date` can represent (±8.64e15 ms). `expires` is an
  * external value: a finite number past this bound survives `typeof` and
  * `Number.isFinite`, yet `new Date(n)` is an Invalid Date whose `toISOString()`
