@@ -8072,17 +8072,15 @@ function fanOutAmbiguousChildMessage(
   node: WorkflowNode,
   child: WorkflowRun,
   index: number,
-  stale: boolean,
-  surface: WorkflowCommandSurface
+  stale: boolean
 ): string {
   const ref = `child ${String(index)} (run ${child.id.slice(0, 8)})`;
-  const abandon = spellWorkflowCommand(surface, `abandon ${child.id}`);
   return stale
     ? `fan_out node '${node.id}': ${ref} of '${node.workflow}' is still '${child.status}' with no ` +
-        `recent activity — it appears orphaned by an interrupted run. Abandon it (\`${abandon}\`) ` +
-        'and resume the parent to re-drive it.'
+        'recent activity — it appears orphaned by an interrupted run. Abandon it (`archon workflow ' +
+        `abandon ${child.id}\`) and resume the parent to re-drive it.`
     : `fan_out node '${node.id}': ${ref} of '${node.workflow}' may still be running (recent activity) — ` +
-        `wait for it to finish and resume, or abandon it (\`${abandon}\`) if it is stuck.`;
+        `wait for it to finish and resume, or abandon it (\`archon workflow abandon ${child.id}\`) if it is stuck.`;
 }
 
 /**
@@ -8512,12 +8510,9 @@ async function executeFanOutWorkflowNode(
       },
       'workflow.fan_out_child_nonterminal_on_resume'
     );
-    await notify(
-      `⚠️ **Fan-out blocked** (node \`${node.id}\`): ${fanOutAmbiguousChildMessage(node, child, index, stale, platform)}`
-    );
-    // The recorded failure is read on every surface, so it keeps the surface-neutral
-    // chat grammar, like the persisted blocked-on-child gate message.
-    return failResult(fanOutAmbiguousChildMessage(node, child, index, stale, {}));
+    const msg = fanOutAmbiguousChildMessage(node, child, index, stale);
+    await notify(`⚠️ **Fan-out blocked** (node \`${node.id}\`): ${msg}`);
+    return failResult(msg);
   }
 
   // 5. Shared-checkout preflight (#2180 Defect A) AND interactive-class preflight (#2707
