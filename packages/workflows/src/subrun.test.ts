@@ -4154,16 +4154,14 @@ nodes:
     await store.updateWorkflowRun(child.id, { status: 'running' });
 
     const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun.id))!);
-    const r = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      'conv-db',
-      { ...hydrated! }
-    );
+    const platform = {
+      ...makePlatform(),
+      // Mirrors the Slack adapter: its registered slash command is `/archon-workflow`.
+      formatWorkflowCommand: (command: string) => `/archon-workflow ${command}`,
+    };
+    const r = await executeWorkflow(deps, platform, 'conv-plat', cwd, parent, 'goal', 'conv-db', {
+      ...hydrated!,
+    });
 
     expect(r.success).toBe(false);
     // The ambiguous running child is NOT autonomously cancelled (CLAUDE.md lifecycle rule).
@@ -4173,6 +4171,11 @@ nodes:
       .find(e => e.event_type === 'node_failed' && e.step_name === 'work');
     expect(String(nodeFailed?.data?.error)).toContain('may still be running');
     expect(String(nodeFailed?.data?.error)).not.toContain('gate');
+    // The chat notice suggests the abandon command in the platform's spelling.
+    const blocked = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+      .map(call => (call as unknown[])[1] as string)
+      .find(text => text.includes('Fan-out blocked'));
+    expect(blocked).toContain(`\`/archon-workflow abandon ${child.id}\``);
   });
 
   it('an out-of-range child_index (shrunk items) is warned + a live orphan cancelled (I2)', async () => {

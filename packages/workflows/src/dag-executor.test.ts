@@ -15673,6 +15673,49 @@ describe('executeDagWorkflow -- approval node', () => {
       expect(text).toContain('`/archon-workflow approve loop-run <your feedback>`');
       expectSlackSpelling(text);
     });
+
+    it('interactive loop_group gate prompt', async () => {
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'assistant', content: 'Draft.' };
+        yield { type: 'result', sessionId: 'loop-group-spelling' };
+      });
+      const platform = slackPlatform();
+
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(),
+          platform,
+          cwd: testDir,
+          workflow: {
+            name: 'loop-group-spelling',
+            nodes: [
+              {
+                id: 'refine',
+                kind: 'loop_group',
+                loop_group: {
+                  until: 'DONE',
+                  max_iterations: 3,
+                  interactive: true,
+                  gate_message: 'Review.',
+                  nodes: [
+                    {
+                      id: 'work',
+                      kind: 'agent',
+                      source: { kind: 'inline', prompt: 'draft' },
+                    },
+                  ],
+                },
+              },
+            ] as DagNode[],
+          },
+          workflowRun: makeWorkflowRun('group-run'),
+        })
+      );
+
+      const text = sentText(platform);
+      expect(text).toContain('`/archon-workflow approve group-run <your feedback>`');
+      expectSlackSpelling(text);
+    });
   });
 });
 describe('executeDagWorkflow -- env var injection', () => {
