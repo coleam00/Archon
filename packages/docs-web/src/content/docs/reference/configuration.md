@@ -138,7 +138,7 @@ Invalid assistants config in '/Users/you/.archon/config.yaml':
   'assistants.claude.settingSources.0': expected 'project' or 'user'.
 ```
 
-`archon doctor` reports the same failure as the **Config files** check. An `assistants:` entry for a provider this install has not registered is ignored, as before — there is no provider to validate it.
+`archon doctor` reports the same failure as the **Config files** check. To repair `~/.archon/config.yaml` through Archon, change the invalid value from the console settings; any other settings, `archon ai tier set`, or `archon ai alias set` change is refused until that value is fixed, because Archon validates the whole file before writing it. An `assistants:` entry for a provider this install has not registered is ignored, as before — there is no provider to validate it.
 
 ## Provider concurrency caps
 

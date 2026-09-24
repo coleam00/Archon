@@ -805,8 +805,10 @@ export async function updateGlobalConfig(
   const configPath = getArchonConfigPath();
 
   try {
-    // Force reload to get fresh state
-    const current = await loadGlobalConfig(true);
+    // Read without validating `assistants.*`: a patch must be able to repair a
+    // bad value already on disk. The merged result is validated before writing.
+    ensureProvidersRegistered();
+    const current = await readGlobalConfigOrDegrade(configPath);
 
     // Deep-merge: only overwrite defined keys
     const merged: GlobalConfig = { ...current };

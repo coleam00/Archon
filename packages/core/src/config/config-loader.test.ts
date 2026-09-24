@@ -1011,6 +1011,37 @@ assistants:
       ).rejects.toThrow(/assistants\.codex\.modelReasoningEfort.*unknown provider setting/);
       expect(mockFsWriteFile).not.toHaveBeenCalled();
     });
+
+    // Settings API and `archon ai tier/alias set` all write through
+    // updateGlobalConfig, so validating the file on read would lock the
+    // operator out of repairing it through Archon.
+    test('repairs an invalid assistant default already in the file', async () => {
+      mockFsReadFile.mockResolvedValue(`
+assistants:
+  codex:
+    modelReasoningEffort: extreme
+`);
+
+      await updateGlobalConfig({ assistants: { codex: { modelReasoningEffort: 'high' } } });
+
+      expect(mockFsWriteFile).toHaveBeenCalledTimes(1);
+      const writtenContent = mockFsWriteFile.mock.calls[0]?.[1] as string;
+      expect(writtenContent).toContain('high');
+      expect(writtenContent).not.toContain('extreme');
+    });
+
+    test('refuses an unrelated edit that leaves an invalid assistant default in place', async () => {
+      mockFsReadFile.mockResolvedValue(`
+assistants:
+  codex:
+    modelReasoningEffort: extreme
+`);
+
+      await expect(
+        updateGlobalConfig({ tiers: { large: { provider: 'claude', model: 'opus' } } })
+      ).rejects.toThrow(/assistants\.codex\.modelReasoningEffort/);
+      expect(mockFsWriteFile).not.toHaveBeenCalled();
+    });
   });
 
   describe('updateGlobalConfig', () => {
