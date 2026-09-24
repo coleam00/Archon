@@ -40,6 +40,8 @@ const {
   cancelWorkflowRun,
   cancelFanOutRun,
   cancelResumableRunsForConversation,
+  resolveAndCancelApprovalGate,
+  failPausedAttentionWait,
   resumeWorkflowRun,
 } = await import('./workflows');
 
@@ -118,6 +120,35 @@ describe('terminal writers report each committed transition once', () => {
     expect(captured[3]).toMatchObject({ cancelReason: 'fan_out' });
     // Free-text reasons never reach the payload.
     expect(JSON.stringify(captured)).not.toContain('free text');
+  });
+
+  test('an approval reject and an undeliverable attention wait report on the won CAS only', async () => {
+    await seedRun('t-reject', 'paused', {
+      metadata: { approval: { nodeId: 'review', message: 'Approve?', type: 'approval' } },
+    });
+    const rejection = { step_name: 'review', reason: 'free text' };
+    expect((await resolveAndCancelApprovalGate('t-reject', [], rejection)).resolved).toBe(true);
+    expect((await resolveAndCancelApprovalGate('t-reject', [], rejection)).resolved).toBe(false);
+
+    const attention = {
+      owner: 'node' as const,
+      nodeId: 'rerun-ci',
+      kind: 'attention' as const,
+      waitingSince: '2026-08-24T11:00:00.000Z',
+      message: 'Re-run the failing check, then resume.',
+    };
+    await seedRun('t-attention', 'paused', { metadata: { wait: attention } });
+    expect((await failPausedAttentionWait('t-attention', attention, 'undelivered')).failed).toBe(
+      true
+    );
+    expect((await failPausedAttentionWait('t-attention', attention, 'undelivered')).failed).toBe(
+      false
+    );
+
+    expect(captured.map(p => [p.runId, p.outcome, p.cancelReason])).toEqual([
+      ['t-reject', 'cancelled', 'approval_rejected'],
+      ['t-attention', 'failed', undefined],
+    ]);
   });
 
   test('a conversation reset reports every run it cancelled', async () => {
