@@ -16,7 +16,8 @@ import type * as WorkflowDb from '../db/workflows';
 import type * as WorkflowEventDb from '../db/workflow-events';
 import type * as WorkflowNodeSessionDb from '../db/workflow-node-sessions';
 import type * as CleanupService from '../services/cleanup-service';
-import { startRunLiveOwner } from '../services/run-live-owner';
+import { createServer } from 'node:net';
+import { runLiveOwnerPath, startRunLiveOwner } from '../services/run-live-owner';
 
 // ---------------------------------------------------------------------------
 // Mock DB modules before importing the module under test
@@ -43,6 +44,7 @@ const mockCancelResumableRunsForConversation = mock<
   typeof WorkflowDb.cancelResumableRunsForConversation
 >(() => Promise.resolve([]));
 const mockFindChildRuns = mock<typeof WorkflowDb.findChildRuns>(() => Promise.resolve([]));
+const mockGetRunAncestry = mock<typeof WorkflowDb.getRunAncestry>(() => Promise.resolve([]));
 // CAS gate resolvers (#2113): default to "won the race". Tests that simulate a
 // concurrent loser override with mockResolvedValueOnce({ resolved: false }).
 // resolveApprovalGate = stay-paused resolution (approve, reject stage-rework);
@@ -61,6 +63,7 @@ mock.module('../db/workflows', () => ({
   cancelWorkflowRun: mockCancelWorkflowRun,
   cancelResumableRunsForConversation: mockCancelResumableRunsForConversation,
   findChildRuns: mockFindChildRuns,
+  getRunAncestry: mockGetRunAncestry,
   resolveApprovalGate: mockResolveApprovalGate,
   resolveAndCancelApprovalGate: mockResolveAndCancelApprovalGate,
 }));
@@ -1771,6 +1774,8 @@ describe('cancelWorkflow', () => {
     mockFindChildRuns.mockImplementation(() => Promise.resolve([]));
     mockRequestDetachedRunStop.mockClear();
     mockRequestDetachedRunStop.mockImplementation(noOwnerAnswers);
+    mockGetRunAncestry.mockReset();
+    mockGetRunAncestry.mockImplementation(() => Promise.resolve([]));
   });
 
   async function refusal(runId = 'run-1'): Promise<InstanceType<typeof CancelRefusedError>> {
@@ -1799,16 +1804,81 @@ describe('cancelWorkflow', () => {
     }
   });
 
-  test('cancels a sub-run cooperatively when no owner of its own answers: it runs inside its root', async () => {
+  // A nested sub-run publishes no endpoint of its own, but the executor still stamps it
+  // with an execution owner (its root's process), so the sub-run's own record cannot tell
+  // "runs inside a live root" from "its owner is gone". Only the root's owner can.
+  function nestedSubRun(rootRunId: string): WorkflowRun {
+    mockGetRunAncestry.mockResolvedValueOnce([
+      makePausedRun({ id: 'parent-run', status: 'running', parent_run_id: rootRunId }),
+      makePausedRun({ id: rootRunId, status: 'running' }),
+    ]);
+    return makePausedRun({
+      status: 'running',
+      parent_run_id: 'parent-run',
+      metadata: { execution_owner: { host: 'build-box', pid: 4242 } },
+    });
+  }
+
+  test('cancels a sub-run cooperatively when its root is executed by this process', async () => {
+    const rootRunId = `cancel-root-${crypto.randomUUID()}`;
+    const rootOwner = await startRunLiveOwner(rootRunId);
+    try {
+      mockGetWorkflowRun.mockResolvedValueOnce(nestedSubRun(rootRunId));
+
+      const result = await cancelWorkflow('run-1');
+
+      expect(result).toMatchObject({ kind: 'cooperative', cancelled: true });
+      expect(mockRequestDetachedRunStop).toHaveBeenCalledWith('run-1');
+      expect(mockGetRunAncestry).toHaveBeenCalledWith('run-1');
+      expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
+    } finally {
+      await rootOwner.close();
+    }
+  });
+
+  test("cancels a sub-run cooperatively when its root's owner in another process answers", async () => {
+    const rootRunId = `cancel-root-${crypto.randomUUID()}`;
+    // Something listening at the root's endpoint that this process did not publish.
+    const listener = createServer(socket => socket.destroy());
+    await new Promise<void>(resolve => listener.listen(runLiveOwnerPath(rootRunId), resolve));
+    try {
+      mockGetWorkflowRun.mockResolvedValueOnce(nestedSubRun(rootRunId));
+
+      const result = await cancelWorkflow('run-1');
+
+      expect(result).toMatchObject({ kind: 'cooperative', cancelled: true });
+      expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
+    } finally {
+      await new Promise(resolve => listener.close(resolve));
+    }
+  });
+
+  // #2325: cancel refuses when no owner answers. A sub-run resumed on its own whose
+  // process died, or one inside a root whose process died, has nobody to see the flip.
+  test('refuses a sub-run when no owner answers for it or its root, showing the recorded owner', async () => {
+    const rootRunId = `cancel-root-${crypto.randomUUID()}`;
+    mockGetWorkflowRun.mockResolvedValueOnce(nestedSubRun(rootRunId));
+
+    const error = await refusal();
+
+    expect(error.reason).toBe('no_owner_answered');
+    expect(error.message).toContain('Recorded owner: host build-box, pid 4242.');
+    expect(error.message).toContain(
+      `No live owner answered for its root run ${rootRunId} on this host either.`
+    );
+    expect(error.message).toContain('abandon the run to release it');
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('refuses a sub-run whose ancestor rows are gone: no root is left to answer', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(
-      makePausedRun({ status: 'running', parent_run_id: 'root-run' })
+      makePausedRun({ status: 'running', parent_run_id: 'deleted-parent' })
     );
 
-    const result = await cancelWorkflow('run-1');
+    const error = await refusal();
 
-    expect(result).toMatchObject({ kind: 'cooperative', cancelled: true });
-    expect(mockRequestDetachedRunStop).toHaveBeenCalledWith('run-1');
-    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
+    expect(error.reason).toBe('no_owner_answered');
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
 
   // A sub-run resumed on its own (a durable wait or a scheduled quota resume) has a live

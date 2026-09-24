@@ -142,10 +142,13 @@ function noOwnerAnswers(): Promise<never> {
   return Promise.reject(new RealDetachedRunOwnerUnavailableError('run-1', 'ENOENT', 'unreachable'));
 }
 
+/** Whether a sub-run's root owner answers; cancel asks when the sub-run's own is silent. */
+const mockIsRunOwnerAnswering = mock((_runId: string) => Promise.resolve(false));
 mock.module('@archon/core/services/run-live-owner', () => ({
   startRunLiveOwner: mockStartRunLiveOwner,
   // The CLI never executes the run it cancels: cancel is a separate process.
   isRunOwnedByThisProcess: () => false,
+  isRunOwnerAnswering: mockIsRunOwnerAnswering,
 }));
 
 mock.module(
@@ -551,6 +554,7 @@ mock.module('@archon/core/db/workflows', () => ({
   failWorkflowRun: mock(() => Promise.resolve()),
   cancelWorkflowRun: mock(() => Promise.resolve({ cancelled: true })),
   findChildRuns: mock(() => Promise.resolve([])),
+  getRunAncestry: mock(() => Promise.resolve([])),
   findResumableRun: mock(() => Promise.resolve(null)),
   resumeWorkflowRun: mock(() => Promise.resolve(null)),
   getWorkflowRun: mock(() => Promise.resolve(null)),
@@ -9679,7 +9683,7 @@ describe('workflowCancelCommand', () => {
     expect(error).toContain(`Abandon it: archon workflow abandon ${runId}`);
   });
 
-  it('cancels cooperatively a sub-run with no owner of its own: it runs inside its root', async () => {
+  it("cancels cooperatively a sub-run with no owner of its own whose root's owner answers", async () => {
     const workflowDb = require('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValue({
       id: runId,
@@ -9687,11 +9691,16 @@ describe('workflowCancelCommand', () => {
       status: 'running',
       parent_run_id: 'root-run',
     });
+    (workflowDb.getRunAncestry as ReturnType<typeof mock>).mockResolvedValueOnce([
+      { id: 'root-run', status: 'running', parent_run_id: null },
+    ]);
     mockRequestDetachedRunStop.mockImplementation(noOwnerAnswers);
+    mockIsRunOwnerAnswering.mockResolvedValueOnce(true);
 
     await workflowCancelCommand(runId, true);
 
     expect(mockRequestDetachedRunStop).toHaveBeenCalledWith(runId);
+    expect(mockIsRunOwnerAnswering).toHaveBeenCalledWith('root-run');
     expect(workflowDb.cancelWorkflowRun).toHaveBeenCalledWith(runId);
     expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
       ok: true,

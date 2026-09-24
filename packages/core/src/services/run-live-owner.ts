@@ -101,6 +101,15 @@ export function isRunOwnedByThisProcess(runId: string): boolean {
   return ownedByThisProcess.has(runId);
 }
 
+/**
+ * True when a live process on this host answers for `runId`: this process owns it, or
+ * something accepts a connection at its endpoint. It only proves an owner is listening;
+ * stopping one goes through {@link requestRunLiveOwnerStop}.
+ */
+export async function isRunOwnerAnswering(runId: string): Promise<boolean> {
+  return isRunOwnedByThisProcess(runId) || canConnectToRunLiveOwner(runLiveOwnerPath(runId));
+}
+
 function endpointToken(runId: string): string {
   return createHash('sha256').update(runId).digest('hex').slice(0, 32);
 }

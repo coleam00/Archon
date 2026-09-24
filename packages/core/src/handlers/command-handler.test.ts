@@ -1938,19 +1938,23 @@ describe('CommandHandler', () => {
       });
 
       test('cancels the run the id names, not the active one (and resolves a short id)', async () => {
-        const target = runningRun('abcd1234-0000-4000-8000-000000000000', {
-          parent_run_id: 'root',
-        });
-        mockFindWorkflowRunsByIdPrefix.mockResolvedValueOnce([target]);
-        mockGetWorkflowRun.mockResolvedValueOnce(target);
-        mockGetActiveWorkflowRun.mockClear();
+        const target = runningRun(`abcd1234-${crypto.randomUUID()}`);
+        // Executed by this process, so cancel is cooperative and needs no stop request.
+        const owner = await startRunLiveOwner(target.id);
+        try {
+          mockFindWorkflowRunsByIdPrefix.mockResolvedValueOnce([target]);
+          mockGetWorkflowRun.mockResolvedValueOnce(target);
+          mockGetActiveWorkflowRun.mockClear();
 
-        const result = await handleCommand(conversationWithCodebase, '/workflow cancel abcd1234');
+          const result = await handleCommand(conversationWithCodebase, '/workflow cancel abcd1234');
 
-        expect(result.success).toBe(true);
-        expect(mockFindWorkflowRunsByIdPrefix).toHaveBeenCalledWith('abcd1234', 'codebase-123');
-        expect(mockCancelWorkflowRun).toHaveBeenCalledWith(target.id);
-        expect(mockGetActiveWorkflowRun).not.toHaveBeenCalled();
+          expect(result.success).toBe(true);
+          expect(mockFindWorkflowRunsByIdPrefix).toHaveBeenCalledWith('abcd1234', 'codebase-123');
+          expect(mockCancelWorkflowRun).toHaveBeenCalledWith(target.id);
+          expect(mockGetActiveWorkflowRun).not.toHaveBeenCalled();
+        } finally {
+          await owner.close();
+        }
       });
 
       test('refuses a short id that matches more than one run instead of picking one', async () => {
@@ -2925,7 +2929,7 @@ describe('CommandHandler', () => {
         expect(result.workflow).toBeUndefined();
       });
 
-      // Refusal messages print the 8-character short id; approve and reject accept it.
+      // Refusal messages print the 8-character short id; every run-id verb accepts it.
       const projectConversation = makeConversation({
         id: 'conv-approve',
         platform_conversation_id: 'chat-approve',
@@ -2960,15 +2964,56 @@ describe('CommandHandler', () => {
         expect(mockGetWorkflowRun).toHaveBeenCalledWith(run.id);
       });
 
-      for (const verb of ['approve', 'reject'] as const) {
-        test(`${verb} refuses a short id that matches more than one run`, async () => {
+      test('respond resolves a short run id within the project', async () => {
+        const run = pausedRun({ id: 'abcd1234-0000-4000-8000-000000000000' });
+        mockFindWorkflowRunsByIdPrefix.mockResolvedValueOnce([run]);
+        stubRunReads(run);
+        stubWorkflowDiscovery();
+        mockGetWorkflowRun.mockClear();
+
+        const result = await handleCommand(
+          projectConversation,
+          '/workflow respond abcd1234 approve LGTM'
+        );
+
+        expect(result.success).toBe(true);
+        expect(mockFindWorkflowRunsByIdPrefix).toHaveBeenCalledWith('abcd1234', 'codebase-123');
+        expect(mockGetWorkflowRun).toHaveBeenCalledWith(run.id);
+        expect(resumeRequest(result.workflow).run).toBe(run);
+      });
+
+      test('resume resolves a short run id within the project', async () => {
+        const run = pausedRun({
+          id: 'abcd1234-0000-4000-8000-000000000000',
+          status: 'failed' as const,
+        });
+        mockFindWorkflowRunsByIdPrefix.mockResolvedValueOnce([run]);
+        mockGetWorkflowRun.mockClear();
+        mockGetWorkflowRun.mockResolvedValueOnce(run);
+        stubWorkflowDiscovery();
+
+        const result = await handleCommand(projectConversation, '/workflow resume abcd1234');
+
+        expect(result.success).toBe(true);
+        expect(result.message).toBe('Resume requested');
+        expect(mockGetWorkflowRun).toHaveBeenCalledWith(run.id);
+        expect(resumeRequest(result.workflow).run).toBe(run);
+      });
+
+      for (const command of [
+        'approve abcd1234',
+        'reject abcd1234',
+        'respond abcd1234 approve',
+        'resume abcd1234',
+      ]) {
+        test(`/workflow ${command} refuses a short id that matches more than one run`, async () => {
           mockFindWorkflowRunsByIdPrefix.mockResolvedValueOnce([
             pausedRun({ id: 'abcd1234-0000-4000-8000-000000000001' }),
             pausedRun({ id: 'abcd1234-0000-4000-8000-000000000002' }),
           ]);
           mockGetWorkflowRun.mockClear();
 
-          const result = await handleCommand(projectConversation, `/workflow ${verb} abcd1234`);
+          const result = await handleCommand(projectConversation, `/workflow ${command}`);
 
           expect(result.success).toBe(false);
           expect(result.message).toContain("Run id 'abcd1234' matches more than one run");

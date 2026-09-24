@@ -764,10 +764,12 @@ and a database transition cannot prove that host work stopped. After verifying t
 owner process is gone, use `workflow abandon <run-id>`.
 
 A `workflow:` sub-run normally executes inside its root run's process, and the root's row
-keeps the worktree lock and resource slot. When no owner answers for the sub-run itself,
-cancel records `cancelled` and the root's executor stops the sub-run at its next status
-check. A sub-run resumed on its own (after a durable wait or a scheduled resume) has its
-own owner, and cancel treats it like any other run. Only a `running` run can be
+keeps the worktree lock and resource slot. When no owner answers for the sub-run itself
+but one answers for its root, cancel records `cancelled` and the root's executor stops the
+sub-run at its next status check. When no owner answers for the root either, cancel
+refuses and points at abandon, as for any other run. A sub-run resumed on its own (after a
+durable wait or a scheduled resume) has its own owner, and cancel stops that owner like
+any other run's. Only a `running` run can be
 cancelled; abandon a paused or failed run instead.
 
 After termination is confirmed, `cancel` records cancellation through the same run-tree

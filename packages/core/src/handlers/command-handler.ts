@@ -873,7 +873,7 @@ async function handleWorkflowCommand(
     }
 
     case 'resume': {
-      const runId = args[1];
+      let runId = args[1];
       if (!runId) {
         return {
           success: false,
@@ -882,6 +882,7 @@ async function handleWorkflowCommand(
         };
       }
       try {
+        runId = await resolveChatRunId(runId, conversation);
         const continuation = await createResumeRequest(runId);
         if (!continuation.ok) {
           return { success: false, message: continuation.message };
@@ -1032,7 +1033,7 @@ async function handleWorkflowCommand(
       // dedicated commands above — respondToWorkflow delegates those two ids to the
       // exact same approveWorkflow/rejectWorkflow functions — this handler just
       // formats whichever result shape comes back.
-      const runId = args[1];
+      let runId = args[1];
       const decision = args[2];
       if (!runId || !decision) {
         return {
@@ -1050,6 +1051,7 @@ async function handleWorkflowCommand(
       // (including 'approve', which stays optional/undefined) are unaffected.
       const text = rawText.length > 0 ? rawText : decision === 'reject' ? 'Rejected' : undefined;
       try {
+        runId = await resolveChatRunId(runId, conversation);
         const result = await respondToWorkflow(runId, decision, text);
         if ('cancelled' in result) {
           if (result.cancelled) {

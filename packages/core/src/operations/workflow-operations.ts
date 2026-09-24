@@ -37,7 +37,7 @@ import {
   requestDetachedRunStop,
   type DetachedRunStopTarget,
 } from '../services/run-owner-stop';
-import { isRunOwnedByThisProcess } from '../services/run-live-owner';
+import { isRunOwnedByThisProcess, isRunOwnerAnswering } from '../services/run-live-owner';
 import { hostname } from 'node:os';
 
 // Lazy logger — NEVER at module scope
@@ -738,8 +738,8 @@ export class CancelRefusedError extends Error {
 /**
  * `cooperative`: the run's executor stops at its next status check. Either this
  * process executes the run, or the run is a `workflow:` sub-run with no live owner of
- * its own, which executes inside its root run's process while the root's row keeps the
- * worktree lock and resource slot. `cancelled` is false when the run finished first.
+ * its own whose root run's owner answers: it executes inside that process while the
+ * root's row keeps the worktree lock and resource slot. `cancelled` is false when the run finished first.
  * `stopped`: another live process owned the run; its process tree was terminated
  * before the run was recorded `cancelled`.
  */
@@ -775,8 +775,8 @@ async function confirmedRunContainer(run: WorkflowRun): Promise<string | undefin
 /**
  * Cancel a running run, the same way on every surface.
  *
- * - This process executes it, or it is a sub-run with no live owner of its own:
- *   cooperative cancel (see {@link CancelWorkflowResult}).
+ * - This process executes it, or it is a sub-run with no live owner of its own whose
+ *   root's owner answers: cooperative cancel (see {@link CancelWorkflowResult}).
  * - Another live process owns it, sub-run or not: stop that owner through the shared stop path
  *   (prove it, terminate its process tree, wait), then record `cancelled`.
  * - No owner answers, or the owner cannot be stopped: refuse with
@@ -799,16 +799,20 @@ export async function cancelWorkflow(runId: string): Promise<CancelWorkflowResul
   const owner = await stopLiveOwner(run);
   if (owner.kind === 'not_stopped') throw new CancelRefusedError('not_stopped', owner.message);
   if (owner.kind === 'no_owner_answered') {
-    // A sub-run normally executes inside its root's process and has no endpoint of its
-    // own, so nothing answering for it is the ordinary case: the root's executor sees the
-    // status change at its next check, and the root's row keeps the worktree lock and
-    // resource slot. A sub-run resumed on its own (a durable wait or a scheduled resume)
-    // publishes its own endpoint, and an owner there is handled like any other run's.
-    if (run.parent_run_id) return cooperativeCancel(run);
+    // A sub-run normally executes inside its root run's process and publishes no endpoint
+    // of its own, so its own silence proves nothing either way. The root's owner decides:
+    // when it answers, the root's executor sees the status change at its next check, and
+    // the root's row keeps the worktree lock and resource slot. The sub-run's recorded
+    // owner cannot decide this: the executor stamps every run it executes, nested or not.
+    const rootRunId = run.parent_run_id ? await rootRunIdOf(run.id) : undefined;
+    if (rootRunId && (await isRunOwnerAnswering(rootRunId))) return cooperativeCancel(run);
     throw new CancelRefusedError(
       'no_owner_answered',
       [
         ...describeAbandonOwner(owner),
+        ...(rootRunId
+          ? [`No live owner answered for its root run ${rootRunId} on this host either.`]
+          : []),
         `Cancel has nothing to stop, so run ${run.id} was not changed. ` +
           'If its process is gone, abandon the run to release it.',
       ].join('\n')
@@ -837,6 +841,11 @@ export async function cancelWorkflow(runId: string): Promise<CancelWorkflowResul
     );
   }
   return { kind: 'stopped', pid: owner.pid, ...recorded };
+}
+
+/** The top of `runId`'s `parent_run_id` chain; undefined when no ancestor row remains. */
+async function rootRunIdOf(runId: string): Promise<string | undefined> {
+  return (await workflowDb.getRunAncestry(runId)).at(-1)?.id;
 }
 
 async function cooperativeCancel(run: WorkflowRun): Promise<CancelWorkflowResult> {
