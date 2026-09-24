@@ -360,6 +360,7 @@ async function main(): Promise<number> {
       const { forgeCommand } = await loadRoute(() => import('./commands/forge'));
       return await forgeCommand(subcommand, {
         data: typeof values.data === 'string' ? values.data : undefined,
+        dataFile: typeof values['data-file'] === 'string' ? values['data-file'] : undefined,
         configPath: forgeConfigPath,
         trustedEnv: forgeTrustedEnv,
       });
@@ -379,6 +380,17 @@ async function main(): Promise<number> {
           'Use: archon workflow run <name> --adopt <run-id> <input>\n' +
           'Find a prior run id with: archon workflow runs --open (or workflow get <run-id>)'
       );
+    }
+    if (command === 'plugin') {
+      const { pluginCommand } = await loadRoute(() => import('./commands/plugin'));
+      const { getArchonVersion } = await loadRoute(() => import('./commands/version'));
+      const { defaultPluginDir } = await import('@archon/forge/discovery');
+      return await pluginCommand(subcommand, positionals.slice(2), {
+        // The same trusted ARCHON_HOME forge discovery scans, so repo env cannot
+        // redirect where an install lands.
+        pluginsDir: defaultPluginDir(forgeTrustedEnv),
+        archonVersion: await getArchonVersion(),
+      });
     }
     // Note: orphaned run cleanup moved to `workflow cleanup` command only.
     // Running it on every CLI startup killed parallel workflow runs (all
@@ -1184,6 +1196,8 @@ async function main(): Promise<number> {
           aiAliasListCommand,
           aiAliasUnsetCommand,
           aiDefaultCommand,
+          aiCapacityListCommand,
+          aiCapacityReleaseCommand,
         } = await loadRoute(() => import('./commands/ai'), {
           providers: true,
           database: true,
@@ -1248,6 +1262,16 @@ async function main(): Promise<number> {
                 );
             }
           }
+          case 'capacity': {
+            const action = positionals[2];
+            if (action === undefined || action === 'list')
+              return await aiCapacityListCommand(jsonFlag);
+            if (action === 'release') return await aiCapacityReleaseCommand(positionals[3]);
+            return await fail(
+              jsonFlag,
+              'Usage: archon ai capacity [list] [--json] | capacity release <attempt-id>'
+            );
+          }
           case 'default':
             return await aiDefaultCommand(
               positionals[2],
@@ -1261,7 +1285,7 @@ async function main(): Promise<number> {
                 : `Unknown ai subcommand: ${subcommand}`;
             return await fail(
               jsonFlag,
-              `${problem}\nAvailable: key set <provider>, login <provider>, list, logout <provider>, tier set|list|unset, alias set|list|unset, default <provider> [<model>]`
+              `${problem}\nAvailable: key set <provider>, login <provider>, list, logout <provider>, tier set|list|unset, alias set|list|unset, capacity [list]|release <attempt-id>, default <provider> [<model>]`
             );
           }
         }

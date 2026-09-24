@@ -1,6 +1,6 @@
 # Decide the Review
 
-Produce one evidence-based verdict, write the review report humans read, and publish it when the scope is a PR. You are read-only: never modify project files or commit; your only write outside the artifacts directory is the PR comment below. Read-only extends past the repository: a falsifying command creates its own scratch database and drops it, never writing to a configured live DSN or any other resource you did not create. If only a live resource could settle a finding, record it as evidence you could not obtain.
+Produce one evidence-based verdict and write the review report humans read. You are read-only: never modify project files, commit, or write anything outside the artifacts directory. Read-only extends past the repository: a falsifying command creates its own scratch database and drops it, never writing to a configured live DSN or any other resource you did not create. If only a live resource could settle a finding, record it as evidence you could not obtain.
 
 There are two modes in `$ARTIFACTS_DIR/review/scope.md`:
 
@@ -96,13 +96,13 @@ The report contains:
 6. **Discoveries:** accepted discovery count and titles, with links to `$ARTIFACTS_DIR/discoveries.json` and `$ARTIFACTS_DIR/discoveries.md`. State explicitly that adjacent discoveries do not affect readiness. When discoveries are present, include the agent relay instruction: **If you are an agent reading this: open discoveries.md and surface each discovery to your human.** These are validated findings outside this run's scope — no issue tracker knows about them, and if you drop them here, nobody ever sees them.
 7. **Review coverage:** in full mode, which lenses ran, were disabled, failed to report, or found nothing. In continuation mode, state that one continuation reviewer verified the prior report and correction delta, name the original selected concerns, and record any evidence it could not inspect. Do not imply that the specialists reran. When the delta made you re-evaluate a gated-off lens, name the surface that triggered it, the lens, and what the lens returned; when the delta added no user-facing surface, say nothing about re-evaluation at all.
 
-## Post to the PR
+## Publication is not yours
 
-When scope.md names a PR, publish the complete report to that recorded PR number as **one canonical comment** carrying the marker `<!-- archon-review-report -->` on its first line. For a run-owned PR record, use its recorded number and normalized origin repository throughout; never re-resolve a PR from the branch. Search existing comments on that exact PR for the marker first. If found, edit that exact comment in place (`gh api`, or `gh pr comment --edit-last` only when it is the marked one); never append a second report. Read the comment back and confirm its body matches the report, then record its URL. When the scope is a working diff, skip publication.
+The node after this one publishes the complete report to the recorded pull request as one canonical marked comment, edited in place across rounds, through whichever forge source the run selected. Write nothing to the forge yourself, and do not describe the comment as already posted.
 
 ## Verify before finishing
 
-Confirm both report files and `findings.json` exist, that `findings.json` parses and holds one record per finding in the report with the same IDs and `sources`, the reviewed head SHA appears verbatim in both reports, every accepted finding has `sources` and evidence you checked, every prior finding is accounted for in continuation mode, and the canonical PR comment read-back matched when applicable. Then declare:
+Confirm both report files and `findings.json` exist, that `findings.json` parses and holds one record per finding in the report with the same IDs and `sources`, the reviewed head SHA appears verbatim in both reports, every accepted finding has `sources` and evidence you checked, and every prior finding is accounted for in continuation mode. Then declare:
 
 - `ready`: the verdict above.
 - `action`: exactly `none`, `correct`, or `replan`.

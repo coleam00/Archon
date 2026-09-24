@@ -572,6 +572,16 @@ docker compose exec app gh auth login
 
 When `GH_TOKEN` is set, the container resets the `https://github.com` git credential helper to the `GH_TOKEN` helper on every start, so a helper installed by `gh auth login` only applies without `GH_TOKEN`.
 
+### Forge plugins
+
+Install the GitHub forge plugin inside the running container:
+
+```bash
+docker compose exec -u appuser app bun run cli plugin install coleam00/Archon/plugins/forge-github
+```
+
+It lands in `/.archon/plugins`, which is on the `archon_data` volume (or your `ARCHON_DATA` bind mount), so it survives restarts and image rebuilds. `-u appuser` keeps the files owned by the user the server runs as. Update, remove and list the same way with `plugin update`, `plugin remove` and `plugin list`. See [Forge operations](/reference/forge/#install-the-github-plugin).
+
 ---
 
 ## GitHub Webhooks

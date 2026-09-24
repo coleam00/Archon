@@ -62,6 +62,7 @@
         "@archon/git": "workspace:*",
         "@archon/isolation": "workspace:*",
         "@archon/paths": "workspace:*",
+        "@archon/plugin-manifest": "workspace:*",
         "@archon/providers": "workspace:*",
         "@archon/server": "workspace:*",
         "@archon/workflows": "workspace:*",
@@ -149,6 +150,16 @@
         "pino": "^9",
         "pino-pretty": "^13",
         "posthog-node": "^5.29.2",
+      },
+      "peerDependencies": {
+        "typescript": "^5.0.0",
+      },
+    },
+    "packages/plugin-manifest": {
+      "name": "@archon/plugin-manifest",
+      "version": "0.10.1",
+      "dependencies": {
+        "zod": "^4.4.3",
       },
       "peerDependencies": {
         "typescript": "^5.0.0",
@@ -304,6 +315,8 @@
     "@archon/isolation": ["@archon/isolation@workspace:packages/isolation"],
 
     "@archon/paths": ["@archon/paths@workspace:packages/paths"],
+
+    "@archon/plugin-manifest": ["@archon/plugin-manifest@workspace:packages/plugin-manifest"],
 
     "@archon/providers": ["@archon/providers@workspace:packages/providers"],
 
