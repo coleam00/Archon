@@ -73,20 +73,14 @@ async function getDevGitCommit(): Promise<string> {
   }
 }
 
-export async function versionCommand(): Promise<void> {
-  let version: string;
-  let gitCommit: string;
+/** The running Archon version: embedded in a binary, read from package.json from source. */
+export async function getArchonVersion(): Promise<string> {
+  return BUNDLED_IS_BINARY ? BUNDLED_VERSION : (await getDevVersion()).version;
+}
 
-  if (BUNDLED_IS_BINARY) {
-    // Compiled binary: use embedded version and commit
-    version = BUNDLED_VERSION;
-    gitCommit = BUNDLED_GIT_COMMIT;
-  } else {
-    // Development mode: read from package.json and git
-    const devInfo = await getDevVersion();
-    version = devInfo.version;
-    gitCommit = await getDevGitCommit();
-  }
+export async function versionCommand(): Promise<void> {
+  const version = await getArchonVersion();
+  const gitCommit = BUNDLED_IS_BINARY ? BUNDLED_GIT_COMMIT : await getDevGitCommit();
 
   const platform = process.platform;
   const arch = process.arch;

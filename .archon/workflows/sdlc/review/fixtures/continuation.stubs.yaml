@@ -13,8 +13,15 @@
 mode: '{"continuation":true}'
 scope:
   docs: true
+  # A standalone review of the working diff: no pull request to publish to.
+  pr: {}
 review-complete: "settled"
 synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: prior findings verified against the delta; nothing open"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+publish:
   ready: true
   action: none
   findings_summary: "stub: prior findings verified against the delta; nothing open"

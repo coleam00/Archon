@@ -19,6 +19,7 @@ import {
   getWorktreeBase,
   listWorktrees,
   mkdirAsync,
+  refreshWorktreeIndex,
   removeWorktree,
   syncWorkspace,
   verifyWorktreeOwnership,
@@ -868,6 +869,8 @@ export class WorktreeProvider implements IIsolationProvider {
       worktreeConfig
     );
 
+    await this.refreshIndex(worktreePath);
+
     const warnings: string[] = [];
     if (configLoadFailed) {
       warnings.push(
@@ -879,6 +882,20 @@ export class WorktreeProvider implements IIsolationProvider {
       warnings,
       ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
     };
+  }
+
+  /**
+   * Refresh the index of a worktree this provider just created, once, so checkout
+   * observation at each node start does not re-hash the whole tree (see
+   * `refreshWorktreeIndex`). A failure leaves observations correct but slower, so it is
+   * logged and creation continues.
+   */
+  private async refreshIndex(worktreePath: string): Promise<void> {
+    try {
+      await refreshWorktreeIndex(toWorktreePath(worktreePath));
+    } catch (err) {
+      getLog().warn({ err: err as Error, worktreePath }, 'worktree.index_refresh_failed');
+    }
   }
 
   /**

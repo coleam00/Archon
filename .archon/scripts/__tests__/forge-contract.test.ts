@@ -11,15 +11,22 @@ import {
   CHECK_STATES,
   CONCLUDED_CHECK_STATES,
   type ChecksObservation as PackObservation,
+  type PrRecord,
   type QualifiedPr,
 } from '../../workflows/sdlc/.shared/forge';
 import type { PrRef } from '../../../packages/forge/src/identity';
+import {
+  forgePrRecordSchema,
+  type ForgePrRecord,
+} from '../../../packages/forge/src/lifecycle';
 
 // The pack is standalone and cannot import runtime packages. These assignments
 // check that its consumed projection stays compatible with the owning wire type.
 const consumesObservation = (value: ContractObservation): PackObservation => value;
 const consumesPr = (value: PrRef): QualifiedPr => value;
 const producesPr = (value: QualifiedPr): PrRef => value;
+const consumesPrRecord = (value: ForgePrRecord): PrRecord => value;
+const producesPrRecord = (value: PrRecord): ForgePrRecord => value;
 
 test('standalone pack consumes the owning forge vocabulary and qualified identity', () => {
   expect([...CHECK_STATES]).toEqual(checksStateSchema.options);
@@ -36,6 +43,25 @@ test('standalone pack consumes the owning forge vocabulary and qualified identit
     },
   };
   expect(consumesObservation(observation)).toBe(observation);
+
+  // parsePrRecord validates every pull-request result the pack's write nodes
+  // read, so a field the owning schema grows must reach it or the pack starts
+  // rejecting records @archon/forge produced.
+  const pr: ForgePrRecord = forgePrRecordSchema.parse({
+    schemaVersion: 1,
+    repo: ref.repo,
+    number: ref.number,
+    url: 'https://forge.example/group/team/repo/pull/42',
+    head: 'feature',
+    base: 'dev',
+    is_draft: true,
+    state: 'open',
+    head_repo: ref.repo,
+    head_revision: 'headsha',
+    base_revision: 'basesha',
+    maintainer_can_modify: null,
+  });
+  expect(producesPrRecord(consumesPrRecord(pr))).toEqual(pr);
 });
 
 // The deliver pack reads GitHub checks through gh by default and through the

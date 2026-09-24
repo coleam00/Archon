@@ -24,6 +24,7 @@ export {
   findWorktreeByBranch,
   isWorktreePath,
   removeWorktree,
+  refreshWorktreeIndex,
   getCanonicalRepoPath,
   getGitCheckoutIdentity,
   CanonicalRepoPathUnavailableError,

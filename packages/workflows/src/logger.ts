@@ -56,6 +56,12 @@ export interface WorkflowEvent {
   error?: string;
   /** `watchdog_reset` only. The chunk content is deliberately never retained. */
   chunk_type?: MessageChunk['type'];
+  /**
+   * `watchdog_reset` only: renewals this record stands for, see
+   * {@link createWatchdogResetRecorder}. Absent on transcripts written before sampling,
+   * where every renewal had its own record.
+   */
+  chunk_count?: number;
   /** `exec_output` only — see {@link logExecOutput}. Absent means the stream was empty. */
   stdout_tail?: string;
   /** `exec_output` only — see {@link logExecOutput}. Absent means the stream was empty. */
@@ -137,24 +143,81 @@ export async function logWorkflowEvent(
   }
 }
 
-/** Retain the privacy-safe evidence for one watchdog renewal. */
-export async function logWatchdogReset(
+/**
+ * Watchdog resets closer together than this belong to one burst, and the transcript
+ * records a burst by its two ends. A gap at least this long is always visible as the
+ * distance between two records; a shorter one is not a liveness question when the
+ * watchdog itself waits minutes.
+ */
+export const WATCHDOG_RESET_BURST_GAP_MS = 10_000;
+
+/** Samples one stream pass's watchdog renewals into `watchdog_reset` transcript records. */
+export interface WatchdogResetRecorder {
+  /** Observe one renewal. Never delays the stream: writes are queued, not awaited. */
+  observe(chunkType: MessageChunk['type'], resetAt: number): void;
+  /** Write any pending burst end, then wait for every queued write. Call once, when the pass ends. */
+  flush(): Promise<void>;
+}
+
+/**
+ * Records a burst's first reset when it arrives, and its last reset once the stream has
+ * been quiet for the burst gap, or when the pass ends first. Each record's `chunk_count`
+ * is the number of renewals since the previous record, itself included, so the counts
+ * of a pass sum to its renewals.
+ *
+ * A timer writes the burst end instead of leaving it for `flush`: a stalled node's
+ * process can be killed before its watchdog fires (Ctrl-C and SIGTERM exit without
+ * running the executor's `finally`), and the transcript is then the only record of when
+ * the stream went quiet. The timer is unref'd and never touches the watchdog.
+ *
+ * A burst end lands in the file after rows logged during the burst's final gap. Its
+ * `ts` is the renewal time; order by `ts`.
+ */
+export function createWatchdogResetRecorder(
   logDir: string,
   workflowRunId: string,
-  nodeId: string,
-  chunkType: MessageChunk['type'],
-  resetAt: number
-): Promise<void> {
-  await logWorkflowEvent(
-    logDir,
-    workflowRunId,
-    {
-      type: 'watchdog_reset',
-      step: nodeId,
-      chunk_type: chunkType,
+  nodeId: string
+): WatchdogResetRecorder {
+  let writes = Promise.resolve();
+  let lastResetAt: number | undefined;
+  let burstEnd: { chunkType: MessageChunk['type']; at: number; count: number } | undefined;
+  let burstEndTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const write = (chunkType: MessageChunk['type'], at: number, count: number): void => {
+    writes = writes.then(() =>
+      logWorkflowEvent(
+        logDir,
+        workflowRunId,
+        { type: 'watchdog_reset', step: nodeId, chunk_type: chunkType, chunk_count: count },
+        at
+      )
+    );
+  };
+  const writeBurstEnd = (): void => {
+    clearTimeout(burstEndTimer);
+    burstEndTimer = undefined;
+    if (burstEnd) write(burstEnd.chunkType, burstEnd.at, burstEnd.count);
+    burstEnd = undefined;
+  };
+
+  return {
+    observe(chunkType, resetAt): void {
+      if (lastResetAt !== undefined && resetAt - lastResetAt < WATCHDOG_RESET_BURST_GAP_MS) {
+        burstEnd = { chunkType, at: resetAt, count: (burstEnd?.count ?? 0) + 1 };
+        clearTimeout(burstEndTimer);
+        burstEndTimer = setTimeout(writeBurstEnd, WATCHDOG_RESET_BURST_GAP_MS);
+        burstEndTimer.unref();
+      } else {
+        writeBurstEnd();
+        write(chunkType, resetAt, 1);
+      }
+      lastResetAt = resetAt;
     },
-    resetAt
-  );
+    flush(): Promise<void> {
+      writeBurstEnd();
+      return writes;
+    },
+  };
 }
 
 /**

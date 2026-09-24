@@ -7,8 +7,19 @@ import {
   type ForgeResponse,
   type PluginMetadata,
   concludedCheckStates,
+  isMutationRequest,
+  mutationTarget,
   summarizeChecks,
 } from '@archon/forge/operations';
+import {
+  githubErrorDetail,
+  githubPages,
+  githubRequest,
+  location,
+  parseRemote,
+  type Fetch,
+} from './api';
+import { handleGithubMutation, handleGithubPrView, handleGithubWorkItemView } from './lifecycle';
 
 export const githubPluginMetadata = {
   protocol: 1,
@@ -16,13 +27,22 @@ export const githubPluginMetadata = {
   version: '1',
   forge: 'github',
   hosts: ['github.com'],
-  capabilities: ['resolve', 'checks.state'],
+  capabilities: [
+    'resolve',
+    'checks.state',
+    'workitem.view',
+    'pr.view',
+    'pr.create',
+    'pr.edit-body',
+    'pr.ready',
+    'comment.upsert',
+  ],
   token_env: ['GH_TOKEN', 'GITHUB_TOKEN'],
 } satisfies PluginMetadata;
 
 export interface GitHubOperationOptions {
   readonly token: string | undefined;
-  readonly fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+  readonly fetch?: Fetch;
 }
 
 const pullRequestSchema = z.object({ head: z.object({ sha: z.string().min(1) }) });
@@ -40,150 +60,8 @@ const statusSchema = z.object({
 });
 const statusesPageSchema = z.array(statusSchema);
 
-class GitHubOperationError extends Error {
-  constructor(
-    readonly error: ForgeError,
-    options?: ErrorOptions
-  ) {
-    super(error.message, options);
-  }
-}
-
 function failure(operationId: string, error: ForgeError): ForgeResponse {
   return { operationId, ok: false, error };
-}
-
-function repositoryPath(path: string): { owner: string; repo: string } | null {
-  const parts = path.replace(/^\/+|\/+$/g, '').split('/');
-  if (parts.length !== 2 || parts.some(part => part === '' || part === '.' || part === '..')) {
-    return null;
-  }
-  const owner = parts[0];
-  const repo = parts[1].endsWith('.git') ? parts[1].slice(0, -4) : parts[1];
-  return owner && repo ? { owner, repo } : null;
-}
-
-function parseRemote(remote: string | null): { host: string; path: string } | null {
-  if (remote === null || remote.trim() === '') return null;
-  const value = remote.trim();
-
-  if (value.includes('://')) {
-    let url: URL;
-    try {
-      url = new URL(value);
-    } catch (cause) {
-      throw new GitHubOperationError(
-        { kind: 'invalid_request', message: 'GitHub remote is not a valid URL' },
-        { cause }
-      );
-    }
-    if (!['https:', 'ssh:'].includes(url.protocol)) return null;
-    if (url.password !== '' || (url.protocol === 'https:' && url.username !== '')) {
-      throw new GitHubOperationError({
-        kind: 'invalid_request',
-        message: 'GitHub remote must not contain credentials',
-      });
-    }
-    if (url.search !== '' || url.hash !== '') {
-      throw new GitHubOperationError({
-        kind: 'invalid_request',
-        message: 'GitHub remote must not contain a query or fragment',
-      });
-    }
-    const repository = repositoryPath(decodeURIComponent(url.pathname));
-    if (!repository) return null;
-    return { host: url.host.toLowerCase(), path: `${repository.owner}/${repository.repo}` };
-  }
-
-  // Git's SCP-like SSH form has no URL scheme. Its optional user is transport identity,
-  // not an HTTP credential, and is deliberately discarded at this normalization boundary.
-  const match = /^(?:[^@/:\s]+@)?([^/:\s]+):(.+)$/.exec(value);
-  if (!match) return null;
-  const repository = repositoryPath(match[2]);
-  if (!repository) return null;
-  return { host: match[1].toLowerCase(), path: `${repository.owner}/${repository.repo}` };
-}
-
-function apiRoot(host: string): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(`https://${host}`);
-  } catch (cause) {
-    throw new GitHubOperationError(
-      { kind: 'invalid_request', message: `Invalid GitHub host: ${host}` },
-      { cause }
-    );
-  }
-  if (
-    parsed.username ||
-    parsed.password ||
-    parsed.pathname !== '/' ||
-    parsed.search ||
-    parsed.hash
-  ) {
-    throw new GitHubOperationError({
-      kind: 'invalid_request',
-      message: `Invalid GitHub host: ${host}`,
-    });
-  }
-  return parsed.hostname.toLowerCase() === 'github.com'
-    ? 'https://api.github.com'
-    : `https://${parsed.host}/api/v3`;
-}
-
-async function githubJson(
-  fetchImpl: (input: string | URL | Request, init?: RequestInit) => Promise<Response>,
-  token: string,
-  url: string
-): Promise<unknown> {
-  let response: Response;
-  try {
-    response = await fetchImpl(url, {
-      headers: {
-        accept: 'application/vnd.github+json',
-        authorization: `Bearer ${token}`,
-        'x-github-api-version': '2022-11-28',
-        'user-agent': 'archon-forge-github',
-      },
-    });
-  } catch (cause) {
-    throw new GitHubOperationError(
-      { kind: 'forge_error', message: 'GitHub API request failed' },
-      { cause }
-    );
-  }
-  if (!response.ok) {
-    throw new GitHubOperationError({
-      kind: response.status === 404 ? 'not_found' : 'forge_error',
-      message: `GitHub API request failed with HTTP ${String(response.status)}`,
-      status: response.status,
-    });
-  }
-  try {
-    return await response.json();
-  } catch (cause) {
-    throw new GitHubOperationError(
-      { kind: 'forge_error', message: 'GitHub API returned invalid JSON' },
-      { cause }
-    );
-  }
-}
-
-async function paginated<T>(
-  fetchImpl: (input: string | URL | Request, init?: RequestInit) => Promise<Response>,
-  token: string,
-  baseUrl: string,
-  readPage: (value: unknown) => readonly T[]
-): Promise<T[]> {
-  const values: T[] = [];
-  for (let page = 1; ; page++) {
-    const separator = baseUrl.includes('?') ? '&' : '?';
-    const rows = readPage(
-      await githubJson(fetchImpl, token, `${baseUrl}${separator}per_page=100&page=${String(page)}`)
-    );
-    values.push(...rows);
-    if (rows.length < 100) return values;
-  }
 }
 
 function checkRunObservation(run: z.infer<typeof checkRunSchema>): CheckObservation {
@@ -265,38 +143,45 @@ export async function handleGithubOperation(
     }
 
     if (!options.token) {
-      return failure(request.operationId, {
-        kind: 'no_credential',
+      const error = {
+        kind: 'no_credential' as const,
         message: 'ARCHON_FORGE_TOKEN is required for GitHub operations',
-      });
+      };
+      // A mutation refused for want of a credential never reached GitHub.
+      return isMutationRequest(request)
+        ? {
+            operationId: request.operationId,
+            ok: false,
+            error,
+            mutation: { op: request.op, target: mutationTarget(request), outcome: 'refused' },
+          }
+        : failure(request.operationId, error);
     }
     const fetchImpl = options.fetch ?? globalThis.fetch;
-    const repository = repositoryPath(request.ref.repo.path);
-    if (!repository) {
-      return failure(request.operationId, {
-        kind: 'invalid_request',
-        message: `Invalid GitHub repository path: ${request.ref.repo.path}`,
-      });
-    }
-    const root = apiRoot(request.ref.repo.host);
-    const path = `${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}`;
+    const token = options.token;
+    if (isMutationRequest(request)) return await handleGithubMutation(request, fetchImpl, token);
+    if (request.op === 'workitem.view')
+      return await handleGithubWorkItemView(request, fetchImpl, token);
+    if (request.op === 'pr.view') return await handleGithubPrView(request, fetchImpl, token);
+
+    const { root, path } = location(request.ref.repo);
     const pull = pullRequestSchema.parse(
-      await githubJson(
+      await githubRequest(
         fetchImpl,
-        options.token,
+        token,
         `${root}/repos/${path}/pulls/${String(request.ref.number)}`
       )
     );
     const revision = pull.head.sha;
     const ref = encodeURIComponent(revision);
     const [runs, allStatuses] = await Promise.all([
-      paginated(
+      githubPages(
         fetchImpl,
-        options.token,
+        token,
         `${root}/repos/${path}/commits/${ref}/check-runs?filter=latest`,
         value => checkRunsPageSchema.parse(value).check_runs
       ),
-      paginated(fetchImpl, options.token, `${root}/repos/${path}/commits/${ref}/statuses`, value =>
+      githubPages(fetchImpl, token, `${root}/repos/${path}/commits/${ref}/statuses`, value =>
         statusesPageSchema.parse(value)
       ),
     ]);
@@ -327,16 +212,6 @@ export async function handleGithubOperation(
       },
     };
   } catch (cause) {
-    if (cause instanceof GitHubOperationError) return failure(request.operationId, cause.error);
-    if (cause instanceof z.ZodError) {
-      return failure(request.operationId, {
-        kind: 'forge_error',
-        message: `GitHub API response did not match its documented shape: ${cause.issues[0]?.message ?? 'invalid response'}`,
-      });
-    }
-    return failure(request.operationId, {
-      kind: 'forge_error',
-      message: cause instanceof Error ? cause.message : String(cause),
-    });
+    return failure(request.operationId, githubErrorDetail(cause));
   }
 }

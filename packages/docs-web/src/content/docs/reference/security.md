@@ -68,9 +68,9 @@ Archon uses structured logging (Pino) with explicit rules about what is and is n
 - Unauthorized access attempts (with masked user IDs, e.g., `abc***`)
 
 **Log levels:**
-- Default: `info` (operational events only)
-- Set `LOG_LEVEL=debug` for detailed execution traces
-- CLI: `--quiet` (errors only) or `--verbose` (debug)
+- Server and `archon serve`: `info` (operational events only)
+- Other CLI commands: `warn` (warnings and errors), on stderr
+- Set `LOG_LEVEL=debug` or pass `--verbose` for detailed execution traces
 
 ## Anonymous Telemetry
 

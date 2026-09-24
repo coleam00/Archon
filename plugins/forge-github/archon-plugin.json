@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "kind": "forge",
+  "name": "forge-github",
+  "description": "Resolves GitHub repositories and reads qualified pull-request checks.",
+  "executable": "archon-forge-github"
+}

@@ -177,7 +177,7 @@ import {
   logWorkflowComplete,
   logWorkflowError,
   logWorkflowEvent,
-  logWatchdogReset,
+  createWatchdogResetRecorder,
   type WorkflowUsage,
 } from './logger';
 import { withIdleTimeout, STEP_IDLE_TIMEOUT_MS } from './utils/idle-timeout';
@@ -2369,7 +2369,7 @@ async function executeNodeInternal(
   };
   let nodeIdleTimedOut = false;
   let lastWatchdogReset: WatchdogReset | undefined;
-  let watchdogResetLog = Promise.resolve();
+  let watchdogResets = createWatchdogResetRecorder(logDir, workflowRun.id, node.id);
   const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
   const runningTools = new Map<string, RunningTool>();
   let anonymousToolSequence = 0;
@@ -2408,7 +2408,7 @@ async function executeNodeInternal(
     nodeTokens = undefined;
     nodeIdleTimedOut = false;
     lastWatchdogReset = undefined;
-    watchdogResetLog = Promise.resolve();
+    watchdogResets = createWatchdogResetRecorder(logDir, workflowRun.id, node.id);
     backgroundTasksIncomplete = [];
     const backgroundTasks = createBackgroundTaskTracker();
     for await (const msg of withIdleTimeout(
@@ -2435,9 +2435,7 @@ async function executeNodeInternal(
       (msg, resetAt) => {
         const type = msg.type;
         lastWatchdogReset = { type, at: resetAt };
-        watchdogResetLog = watchdogResetLog.then(() =>
-          logWatchdogReset(logDir, workflowRun.id, node.id, type, resetAt)
-        );
+        watchdogResets.observe(type, resetAt);
       }
     )) {
       const tickNow = Date.now();
@@ -3049,7 +3047,7 @@ async function executeNodeInternal(
       try {
         await runStreamPass(reaskPrompt, reaskResumeSessionId);
       } finally {
-        await watchdogResetLog;
+        await watchdogResets.flush();
         if (nodeCostUsd !== undefined) {
           accumulatedCostUsd = (accumulatedCostUsd ?? 0) + nodeCostUsd;
         }
@@ -6117,7 +6115,11 @@ async function executeLoopNode(
         iterationTokens = undefined;
         iterationNumTurns = undefined;
         iterationUsageFolded = false;
-        let watchdogResetLog = Promise.resolve();
+        const watchdogResets = createWatchdogResetRecorder(
+          logDir,
+          workflowRun.id,
+          `${node.id}-iteration-${String(i)}`
+        );
 
         try {
           // Build prompt — substituteWorkflowVariables throws if $BASE_BRANCH referenced but empty
@@ -6192,15 +6194,7 @@ async function executeLoopNode(
             (msg, resetAt) => {
               const type = msg.type;
               lastWatchdogReset = { type, at: resetAt };
-              watchdogResetLog = watchdogResetLog.then(() =>
-                logWatchdogReset(
-                  logDir,
-                  workflowRun.id,
-                  `${node.id}-iteration-${String(i)}`,
-                  type,
-                  resetAt
-                )
-              );
+              watchdogResets.observe(type, resetAt);
             }
           )) {
             // Mid-stream cancel/pause check (every CANCEL_CHECK_INTERVAL_MS) —
@@ -6572,7 +6566,7 @@ async function executeLoopNode(
             data: { iteration: i },
           });
         } finally {
-          await watchdogResetLog;
+          await watchdogResets.flush();
         }
 
         // Cancelled mid-stream (not idle timeout): stop the node before signal
