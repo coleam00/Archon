@@ -1,10 +1,9 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import {
   requestRunLiveOwnerStop,
   RunLiveOwnerStopUnavailableError,
   type RunLiveOwnerStopRefusal,
 } from './run-live-owner';
+import { terminateWindowsProcessTree } from './windows-process-tree';
 
 /*
  * The one path that stops a detached run owner: prove the exact-run owner through its
@@ -15,8 +14,6 @@ import {
 const TERMINATION_GRACE_MS = 5_000;
 const TERMINATION_CONFIRM_MS = 1_000;
 const POLL_INTERVAL_MS = 50;
-
-const execFileAsync = promisify(execFile);
 
 export interface DetachedRunStopTarget {
   /** The detached owner's PID, as the owner itself reported it. */
@@ -100,25 +97,6 @@ async function waitUntilGone(exists: () => boolean, timeoutMs: number): Promise<
   return true;
 }
 
-/**
- * Did a child command die by signal instead of exiting with a status of its own?
- *
- * This is the line between a command that ran to completion and reported something,
- * and one that was cut off part-way. Node makes it structural rather than textual:
- * a `timeout` kill sets `killed: true` with `signal: 'SIGTERM'`, an ordinary non-zero
- * exit reports `killed: false` with a numeric `code`, and a command that never started
- * carries neither. Nothing here reads message text, so it holds under any locale.
- *
- * Exported for testing: the Windows termination path tolerates a completed-but-failed
- * command and must never tolerate an interrupted one, and that decision cannot be
- * exercised from a platform where the path does not run.
- */
-export function commandTerminatedBySignal(error: unknown): boolean {
-  if (typeof error !== 'object' || error === null) return false;
-  const { killed, signal } = error as { killed?: unknown; signal?: unknown };
-  return killed === true || typeof signal === 'string';
-}
-
 /** Terminate the process tree while its exact-run owner holds the IPC lease open. */
 async function terminateDetachedProcessTree(
   pid: number,
@@ -132,35 +110,7 @@ async function terminateDetachedProcessTree(
   }
 
   if (process.platform === 'win32') {
-    // `taskkill /T` walks the tree PID by PID and exits non-zero when any of them is
-    // already gone — the outcome this function wants, reached early. Nothing in that
-    // exit code separates it from a kill that genuinely failed, so it is not the
-    // proof: the confirmation below is, the same way the POSIX branch tolerates ESRCH
-    // and then re-checks. A tree that is still running throws there, carrying the
-    // command's own error as the evidence.
-    //
-    // A walk that never finished is a different case and is rethrown here. The root
-    // check can only stand in for the whole tree when every descendant was visited,
-    // and a `timeout` kill leaves taskkill part-way through: the root can be gone
-    // while a descendant the walk never reached is still alive. `/T` is what takes
-    // the descendants with the root, and that they actually die is proved by the
-    // descendant-leak case in the integration spec, not by any exit code.
-    let killFailure: Error | undefined;
-    try {
-      await execFileAsync('taskkill', ['/PID', String(pid), '/T', '/F'], {
-        timeout: TERMINATION_GRACE_MS,
-        windowsHide: true,
-      });
-    } catch (error) {
-      if (commandTerminatedBySignal(error)) throw error;
-      killFailure = error instanceof Error ? error : new Error(String(error));
-    }
-    if (!(await waitUntilGone(() => processExists(pid), TERMINATION_CONFIRM_MS))) {
-      throw new Error(
-        `Detached workflow process tree ${String(pid)} is still running` +
-          (killFailure ? `: ${killFailure.message}` : '')
-      );
-    }
+    await terminateWindowsProcessTree(pid);
     return;
   }
 
