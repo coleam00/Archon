@@ -66,6 +66,11 @@ export const workflowListResponseSchema = z
 export const getWorkflowResponseSchema = z
   .object({
     workflow: workflowDefinitionSchema,
+    /**
+     * The file's YAML mapping before normalization — the shape an editor must
+     * send back to PUT/validate. Absent when the top level is not a mapping.
+     */
+    authored: z.record(z.string(), z.unknown()).optional(),
     filename: z.string(),
     source: workflowSourceSchema,
   })

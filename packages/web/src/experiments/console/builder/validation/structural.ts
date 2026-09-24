@@ -208,6 +208,10 @@ function checkRequiredFields(node: BuilderNode): Issue[] {
     case 'cancel':
       if (node.data.reason.trim().length === 0) missing('cancel', 'cancel requires a reason');
       break;
+    case 'opaque':
+      // Carried verbatim from a file the engine already parsed; the server's
+      // validate re-checks it on save. Nothing here the builder could fix.
+      break;
   }
   return issues;
 }

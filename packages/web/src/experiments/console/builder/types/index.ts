@@ -19,6 +19,8 @@ export type {
   VariantDataMap,
   VariantData,
   BuilderNode,
+  OpaqueKind,
+  OpaqueBuilderNode,
   WorkflowMeta,
   BuilderWorkflow,
 } from './variant';
