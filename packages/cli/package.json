@@ -64,9 +64,6 @@
       "src/utils/safe-console.test.ts"
     ],
     [
-      "src/utils/detached-run-control.test.ts"
-    ],
-    [
       "src/utils/detached-run-control.integration.spec.ts"
     ],
     [

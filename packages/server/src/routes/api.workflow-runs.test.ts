@@ -408,6 +408,17 @@ const mockResolveRunWorkflow = mock<typeof resolveRunWorkflow>(async () => ({
   ok: true,
   workflow: makeTestResolvedWorkflow({ name: 'deploy' }),
 }));
+// Capture the real class before mock.module replaces the module.
+import { DetachedRunOwnerUnavailableError as RealDetachedRunOwnerUnavailableError } from '@archon/core/services/run-owner-stop';
+// Abandon asks the run's live-owner endpoint first (#2325). Default: nothing answers.
+const mockRequestDetachedRunStop = mock<
+  typeof import('@archon/core/services/run-owner-stop').requestDetachedRunStop
+>(() => Promise.reject(new RealDetachedRunOwnerUnavailableError('run', 'ENOENT', 'unreachable')));
+mock.module('@archon/core/services/run-owner-stop', () => ({
+  requestDetachedRunStop: mockRequestDetachedRunStop,
+  DetachedRunOwnerUnavailableError: RealDetachedRunOwnerUnavailableError,
+}));
+
 mock.module('@archon/core/operations', () => ({
   resumeWorkflow: mockResumeWorkflow,
 }));
@@ -432,6 +443,7 @@ mock.module('@archon/workflows/executor', () => ({
 }));
 
 import { registerApiRoutes } from './api';
+import { startRunLiveOwner } from '@archon/core/services/run-live-owner';
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -1117,53 +1129,135 @@ describe('POST /api/workflows/runs/:runId/cancel', () => {
   beforeEach(() => {
     mockGetWorkflowRun.mockReset();
     mockCancelWorkflowRun.mockReset();
+    mockCancelWorkflowRun.mockResolvedValue({ cancelled: true });
+    mockFindChildRuns.mockReset();
+    mockFindChildRuns.mockResolvedValue([]);
+    mockRequestDetachedRunStop.mockReset();
+    mockRequestDetachedRunStop.mockImplementation(() =>
+      Promise.reject(new RealDetachedRunOwnerUnavailableError('run', 'ENOENT', 'unreachable'))
+    );
   });
 
-  test('cancels a running workflow run and returns success', async () => {
-    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
-    mockCancelWorkflowRun.mockImplementationOnce(async () => ({ cancelled: true }));
+  /** A running run this server process executes: it holds the run's real endpoint. */
+  async function withRunInThisProcess(body: (runId: string) => Promise<void>): Promise<void> {
+    const runId = `api-cancel-${crypto.randomUUID()}`;
+    const owner = await startRunLiveOwner(runId);
+    try {
+      mockGetWorkflowRun.mockResolvedValue({ ...MOCK_RUNNING_RUN, id: runId });
+      await body(runId);
+    } finally {
+      await owner.close();
+    }
+  }
+
+  test('cancels cooperatively a run this server executes', async () => {
+    await withRunInThisProcess(async runId => {
+      const { app } = makeApp();
+      const response = await app.request(`/api/workflows/runs/${runId}/cancel`, {
+        method: 'POST',
+      });
+      expect(response.status).toBe(200);
+
+      const body = (await response.json()) as { success: boolean; message: string };
+      expect(body.success).toBe(true);
+      expect(body.message).toBe('Cancelled workflow: deploy');
+      expect(mockCancelWorkflowRun).toHaveBeenCalledWith(runId);
+      expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
+    });
+  });
+
+  test('reports "nothing to cancel" when the run finished in the cancel TOCTOU window', async () => {
+    // The run passes the status check (running), but cancelWorkflowRun no-ops
+    // because the run reached a terminal state first — the route must not claim
+    // a false "Cancelled" (#1830 I1).
+    await withRunInThisProcess(async runId => {
+      mockCancelWorkflowRun.mockResolvedValue({ cancelled: false });
+      const { app } = makeApp();
+      const response = await app.request(`/api/workflows/runs/${runId}/cancel`, {
+        method: 'POST',
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { success: boolean; message: string };
+      expect(body.success).toBe(true);
+      expect(body.message).toContain('nothing to cancel');
+    });
+  });
+
+  test('stops an owner in another process before recording cancelled', async () => {
+    mockGetWorkflowRun.mockResolvedValue(MOCK_RUNNING_RUN);
+    const order: string[] = [];
+    mockRequestDetachedRunStop.mockImplementationOnce(async () => ({
+      pid: 4242,
+      stop: async () => {
+        order.push('stop');
+      },
+      release: () => undefined,
+    }));
+    mockCancelWorkflowRun.mockImplementationOnce(async () => {
+      order.push('cancel');
+      return { cancelled: true };
+    });
 
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-uuid-1/cancel', {
       method: 'POST',
     });
-    expect(response.status).toBe(200);
 
-    const body = (await response.json()) as { success: boolean; message: string };
-    expect(body.success).toBe(true);
-    expect(body.message).toContain('deploy');
-    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-uuid-1');
+    expect(response.status).toBe(200);
+    expect(order).toEqual(['stop', 'cancel']);
+    const body = (await response.json()) as { message: string };
+    expect(body.message).toContain("Stopped the run's live owner process (pid 4242)");
   });
 
-  test('cancels a pending workflow run and returns success', async () => {
-    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_PENDING_RUN);
-    mockCancelWorkflowRun.mockImplementationOnce(async () => ({ cancelled: true }));
+  test('returns 409 with the recorded owner facts when no owner answers, run unchanged', async () => {
+    mockGetWorkflowRun.mockResolvedValue({
+      ...MOCK_RUNNING_RUN,
+      metadata: { execution_owner: { host: 'build-box', pid: 4242 } },
+    });
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1/cancel', {
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(409);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('Recorded owner: host build-box, pid 4242.');
+    expect(body.error).toContain('abandon the run');
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('returns 409 when an owner answers but cannot be stopped, run unchanged', async () => {
+    mockGetWorkflowRun.mockResolvedValue(MOCK_RUNNING_RUN);
+    mockRequestDetachedRunStop.mockImplementationOnce(async () => ({
+      pid: 4242,
+      stop: () => Promise.reject(new Error('process still exists')),
+      release: () => undefined,
+    }));
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1/cancel', {
+      method: 'POST',
+    });
+
+    expect(response.status).toBe(409);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('Could not stop the live owner of run run-uuid-1 (pid 4242)');
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('returns 400 for a pending run: nothing executes it yet, so abandon is the action', async () => {
+    mockGetWorkflowRun.mockResolvedValue(MOCK_PENDING_RUN);
 
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-uuid-3/cancel', {
       method: 'POST',
     });
-    expect(response.status).toBe(200);
 
-    const body = (await response.json()) as { success: boolean };
-    expect(body.success).toBe(true);
-  });
-
-  test('reports "nothing to cancel" when the run finished in the cancel TOCTOU window', async () => {
-    // Run passes the status pre-check (running), but cancelWorkflowRun no-ops
-    // because the run reached a terminal state first — the route must not claim
-    // a false "Cancelled" (#1830 I1).
-    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
-    mockCancelWorkflowRun.mockImplementationOnce(async () => ({ cancelled: false }));
-
-    const { app } = makeApp();
-    const response = await app.request('/api/workflows/runs/run-uuid-1/cancel', {
-      method: 'POST',
-    });
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { success: boolean; message: string };
-    expect(body.success).toBe(true);
-    expect(body.message).toContain('nothing to cancel');
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain("status 'pending'");
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
 
   test('returns 404 when run not found', async () => {
@@ -1180,7 +1274,7 @@ describe('POST /api/workflows/runs/:runId/cancel', () => {
   });
 
   test('returns 400 when trying to cancel a completed run', async () => {
-    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_COMPLETED_RUN);
+    mockGetWorkflowRun.mockImplementation(async () => MOCK_COMPLETED_RUN);
 
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-uuid-2/cancel', {
@@ -1193,7 +1287,7 @@ describe('POST /api/workflows/runs/:runId/cancel', () => {
   });
 
   test('returns 400 when trying to cancel an already-cancelled run', async () => {
-    mockGetWorkflowRun.mockImplementationOnce(async () => ({
+    mockGetWorkflowRun.mockImplementation(async () => ({
       ...MOCK_RUNNING_RUN,
       status: 'cancelled' as const,
     }));
@@ -1209,7 +1303,7 @@ describe('POST /api/workflows/runs/:runId/cancel', () => {
   });
 
   test('returns 400 when trying to cancel a failed run', async () => {
-    mockGetWorkflowRun.mockImplementationOnce(async () => ({
+    mockGetWorkflowRun.mockImplementation(async () => ({
       ...MOCK_RUNNING_RUN,
       status: 'failed' as const,
     }));
@@ -1222,19 +1316,20 @@ describe('POST /api/workflows/runs/:runId/cancel', () => {
   });
 
   test('returns 500 when DB throws during cancel', async () => {
-    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_RUNNING_RUN);
-    mockCancelWorkflowRun.mockImplementationOnce(async () => {
-      throw new Error('DB locked');
-    });
+    await withRunInThisProcess(async runId => {
+      mockCancelWorkflowRun.mockImplementationOnce(async () => {
+        throw new Error('DB locked');
+      });
 
-    const { app } = makeApp();
-    const response = await app.request('/api/workflows/runs/run-uuid-1/cancel', {
-      method: 'POST',
-    });
-    expect(response.status).toBe(500);
+      const { app } = makeApp();
+      const response = await app.request(`/api/workflows/runs/${runId}/cancel`, {
+        method: 'POST',
+      });
+      expect(response.status).toBe(500);
 
-    const body = (await response.json()) as { error: string };
-    expect(body.error).toContain('Failed to cancel');
+      const body = (await response.json()) as { error: string };
+      expect(body.error).toContain('Failed to cancel');
+    });
   });
 });
 
@@ -2181,6 +2276,39 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
     expect(body.success).toBe(true);
     expect(body.message).toContain('Abandoned');
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-uuid-1');
+  });
+
+  test('returns 409 with the reason and leaves the run when a live owner cannot be stopped', async () => {
+    mockGetWorkflowRun.mockResolvedValue(MOCK_RUNNING_RUN);
+    mockRequestDetachedRunStop.mockImplementationOnce(async () => ({
+      pid: 4242,
+      stop: () => Promise.reject(new Error('process still exists')),
+      release: () => undefined,
+    }));
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1/abandon', {
+      method: 'POST',
+    });
+    expect(response.status).toBe(409);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('Could not stop the live owner of run run-uuid-1 (pid 4242)');
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('reports the stopped owner in the success message', async () => {
+    mockGetWorkflowRun.mockResolvedValue(MOCK_RUNNING_RUN);
+    mockRequestDetachedRunStop.mockImplementationOnce(async () => ({
+      pid: 4242,
+      stop: () => Promise.resolve(),
+      release: () => undefined,
+    }));
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1/abandon', {
+      method: 'POST',
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { message: string };
+    expect(body.message).toContain("Stopped the run's live owner process (pid 4242) first.");
   });
 
   // #1887: a failed run is terminal but resumable, so it must remain

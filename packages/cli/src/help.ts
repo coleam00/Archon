@@ -155,13 +155,13 @@ const commandHelp: HelpEntry[] = [
     command: 'workflow',
     subcommand: 'cancel',
     spec: 'workflow cancel <run-id>',
-    description: 'Stop a running workflow started with --detach',
+    description: 'Stop a running workflow (stops an owning process first)',
   },
   {
     command: 'workflow',
     subcommand: 'abandon',
     spec: 'workflow abandon <run-id>',
-    description: 'Mark a run cancelled without stopping host work',
+    description: 'Mark a run cancelled, stopping a live owner first',
   },
   {
     command: 'workflow',

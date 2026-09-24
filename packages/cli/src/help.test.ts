@@ -55,12 +55,12 @@ describe('CLI help output', () => {
     expect(help).toContain('Use <name> --full for one exact description');
   });
 
-  it('distinguishes active cancel from state-only abandon', () => {
+  it('describes cancel and abandon', () => {
     expect(help).toContain(
-      'workflow cancel <run-id>   Stop a running workflow started with --detach'
+      'workflow cancel <run-id>   Stop a running workflow (stops an owning process first)'
     );
     expect(help).toContain(
-      'workflow abandon <run-id>  Mark a run cancelled without stopping host work'
+      'workflow abandon <run-id>  Mark a run cancelled, stopping a live owner first'
     );
   });
 
@@ -184,8 +184,8 @@ Commands:
   workflow logs <run-id>     Print or follow a run's JSONL transcript
   workflow wait <run-id>     Block until the run ends or needs a human decision
   workflow resume <run-id>   Resume a failed or paused run from completed nodes
-  workflow cancel <run-id>   Stop a running workflow started with --detach
-  workflow abandon <run-id>  Mark a run cancelled without stopping host work
+  workflow cancel <run-id>   Stop a running workflow (stops an owning process first)
+  workflow abandon <run-id>  Mark a run cancelled, stopping a live owner first
   workflow respond <run-id> <decision> [text]
                              Resolve a paused gate with any of its declared decisions
                              ('approve'/'reject' are sugar for the dedicated commands)

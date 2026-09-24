@@ -74,6 +74,12 @@ export interface IWorkflowPlatform {
   ): Promise<void>;
   getStreamingMode(): 'stream' | 'batch';
   getPlatformType(): string;
+  /**
+   * Optional: how an operator types a workflow command on this surface, given the
+   * command after the verb prefix (`cancel <id>`). Absent means the chat grammar the
+   * core command handler parses, `/workflow <command>`.
+   */
+  formatWorkflowCommand?(command: string): string;
   sendStructuredEvent?(conversationId: string, event: MessageChunk): Promise<void>;
   emitRetract?(conversationId: string): Promise<void>;
 }

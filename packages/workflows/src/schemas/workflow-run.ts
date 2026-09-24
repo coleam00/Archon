@@ -448,6 +448,37 @@ export function readContinuationMode(
   return mode === 'adopt' || mode === 'supersede' ? mode : undefined;
 }
 
+/**
+ * The host, process and user that last took over executing this run, stamped by the
+ * executor each time it starts or resumes execution. The live-owner endpoint is
+ * local to one host and one user, so when no owner answers, this record is what
+ * `abandon` shows the operator, including whether the owner ran on another host or
+ * as another user. It is a report, never a liveness signal: nothing decides a run is
+ * dead from it.
+ */
+export const EXECUTION_OWNER_METADATA_KEY = 'execution_owner';
+
+export interface ExecutionOwnerRecord {
+  host: string;
+  pid: number;
+  /** POSIX user id; absent on Windows, where the endpoint is not scoped by uid. */
+  uid?: number;
+}
+
+/** Typed view of the execution-owner stamp; undefined on runs that predate it. */
+export function readExecutionOwner(
+  metadata: Record<string, unknown> | undefined
+): ExecutionOwnerRecord | undefined {
+  const raw = metadata?.[EXECUTION_OWNER_METADATA_KEY];
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const { host, pid, uid } = raw as { host?: unknown; pid?: unknown; uid?: unknown };
+  if (typeof host !== 'string' || host.length === 0) return undefined;
+  if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return undefined;
+  return typeof uid === 'number' && Number.isInteger(uid) && uid >= 0
+    ? { host, pid, uid }
+    : { host, pid };
+}
+
 /** Typed view of the run-lifecycle keys on a run's metadata; undefined when unset. */
 export function readIdentityUnresolved(
   metadata: Record<string, unknown> | undefined

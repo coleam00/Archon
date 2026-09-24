@@ -8,7 +8,7 @@ import { NodeEventWriteError } from './node-event-write';
 import { describe, it, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'path';
 
 // --- Mock logger ---
@@ -351,6 +351,56 @@ describe('executeWorkflow', () => {
       resume ? { preCreatedRun: makeRun(), priorCompletedNodes: new Map() } : {}
     );
     expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  describe('execution owner record (#2325)', () => {
+    const uid = process.getuid?.();
+    const owner = {
+      execution_owner: {
+        host: hostname(),
+        pid: process.pid,
+        ...(uid === undefined ? {} : { uid }),
+      },
+    };
+
+    it('stamps this process on a run it creates', async () => {
+      const store = makeStore();
+      await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'msg',
+        'db-conv-1'
+      );
+      expect(store.createWorkflowRun).toHaveBeenCalledWith(
+        expect.objectContaining({ metadata: expect.objectContaining(owner) })
+      );
+    });
+
+    it.each([
+      ['a row a launcher pre-created', makeRun({ status: 'pending' }), undefined],
+      ['a resumed run', makeRun({ status: 'running' }), new Map()],
+    ])('restamps this process on %s', async (_label, preCreatedRun, priorCompletedNodes) => {
+      const store = makeStore({
+        claimPendingWorkflowRun: mock(async () => makeRun({ status: 'running' })),
+      });
+      await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'msg',
+        'db-conv-1',
+        { preCreatedRun, ...(priorCompletedNodes ? { priorCompletedNodes } : {}) }
+      );
+      expect(store.updateWorkflowRun).toHaveBeenCalledWith(
+        preCreatedRun.id,
+        expect.objectContaining({ metadata: expect.objectContaining(owner) })
+      );
+    });
   });
 
   it('rejects a structurally valid but semantically invalid outcome declaration before side effects', async () => {
@@ -1146,6 +1196,7 @@ describe('executeWorkflow', () => {
       // Concrete next actions — every line tells the user something to do.
       expect(sentMessage).toContain('/workflow status');
       expect(sentMessage).toContain('/workflow cancel abc12345');
+      expect(sentMessage).toContain('/workflow abandon abc12345');
       expect(sentMessage).toContain('--branch');
     });
 
@@ -1268,6 +1319,118 @@ describe('executeWorkflow', () => {
         expect(store.failWorkflowRun).not.toHaveBeenCalled();
       }
     );
+
+    it('spells commands the way the platform says (the CLI adapter)', async () => {
+      const otherRun = makeRun({
+        id: 'abc12345-rest-of-uuid',
+        workflow_name: 'archon-implement',
+        status: 'running',
+        started_at: new Date(Date.now() - 125000),
+      });
+      const sendMessageSpy = mock<IWorkflowPlatform['sendMessage']>(
+        async (_conversationId, _message, _metadata) => {}
+      );
+      const platform = {
+        sendMessage: sendMessageSpy,
+        getPlatformType: mock(() => 'cli' as const),
+        formatWorkflowCommand: (command: string) => `archon workflow ${command}`,
+      } as unknown as IWorkflowPlatform;
+      const store = makeStore({
+        getActiveWorkflowRunByPath: mock(async () => otherRun),
+      });
+      const deps = makeDeps(store);
+
+      await executeWorkflow(
+        deps,
+        platform,
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1'
+      );
+
+      expect(sendMessageSpy).toHaveBeenCalled();
+      const sentMessage = (sendMessageSpy.mock.calls[0] as [string, string])[1];
+      expect(sentMessage).toContain('archon workflow cancel abc12345');
+      expect(sentMessage).toContain('archon workflow abandon abc12345');
+      // The non-CLI `/workflow` prefix should not appear in a CLI message.
+      expect(sentMessage).not.toContain('/workflow cancel');
+      expect(sentMessage).not.toContain('/workflow status');
+    });
+
+    it('offers no cancel for a pending blocker, which has nothing executing yet', async () => {
+      const otherRun = makeRun({
+        id: 'abc12345-rest-of-uuid',
+        workflow_name: 'archon-implement',
+        status: 'pending',
+        started_at: new Date(Date.now() - 5000),
+      });
+      const sendMessageSpy = mock<IWorkflowPlatform['sendMessage']>(
+        async (_conversationId, _message, _metadata) => {}
+      );
+      const platform = {
+        sendMessage: sendMessageSpy,
+        getPlatformType: mock(() => 'cli' as const),
+        formatWorkflowCommand: (command: string) => `archon workflow ${command}`,
+      } as unknown as IWorkflowPlatform;
+      const store = makeStore({
+        getActiveWorkflowRunByPath: mock(async () => otherRun),
+      });
+
+      await executeWorkflow(
+        makeDeps(store),
+        platform,
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1'
+      );
+
+      const sentMessage = (sendMessageSpy.mock.calls[0] as [string, string])[1];
+      expect(sentMessage).toContain('archon workflow abandon abc12345');
+      expect(sentMessage).not.toContain('workflow cancel');
+    });
+
+    it('spells paused-run commands the way the platform says (the CLI adapter)', async () => {
+      const otherRun = makeRun({
+        id: 'abc12345-rest-of-uuid',
+        workflow_name: 'archon-implement',
+        status: 'paused',
+        started_at: new Date(Date.now() - 125000),
+      });
+      const sendMessageSpy = mock<IWorkflowPlatform['sendMessage']>(
+        async (_conversationId, _message, _metadata) => {}
+      );
+      const platform = {
+        sendMessage: sendMessageSpy,
+        getPlatformType: mock(() => 'cli' as const),
+        formatWorkflowCommand: (command: string) => `archon workflow ${command}`,
+      } as unknown as IWorkflowPlatform;
+      const store = makeStore({
+        getActiveWorkflowRunByPath: mock(async () => otherRun),
+      });
+      const deps = makeDeps(store);
+
+      await executeWorkflow(
+        deps,
+        platform,
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1'
+      );
+
+      expect(sendMessageSpy).toHaveBeenCalled();
+      const sentMessage = (sendMessageSpy.mock.calls[0] as [string, string])[1];
+      expect(sentMessage).toContain('archon workflow approve abc12345');
+      expect(sentMessage).toContain('archon workflow reject abc12345');
+      // A paused run has no live work for cancel to stop; abandon discards it.
+      expect(sentMessage).toContain('archon workflow abandon abc12345');
+      expect(sentMessage).not.toContain('workflow cancel');
+    });
   });
 
   // -------------------------------------------------------------------------
