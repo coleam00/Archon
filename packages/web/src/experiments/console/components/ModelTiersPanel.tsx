@@ -17,6 +17,7 @@ import { K } from '../store/keys';
 import { providerOptionHint } from '../lib/agent-status';
 import { effortOptionsForAgent, normalizeEffortForAgent } from '../lib/model-options';
 import { useCancelledRef } from '../lib/use-cancelled-ref';
+import { errorDetail } from '../lib/http';
 import { SettingsSection } from './SettingsSection';
 import { ScopeToggle } from './ScopeToggle';
 import { SELECT_CLASS, SelectShell } from './SettingsFormPrimitives';
@@ -139,7 +140,7 @@ export function ModelTiersPanel(): ReactElement {
       }
     } catch (e: unknown) {
       if (cancelledRef.current) return;
-      setSaveError(e instanceof Error ? e.message : 'Failed to save tiers.');
+      setSaveError(e instanceof Error ? errorDetail(e) : 'Failed to save tiers.');
     } finally {
       if (!cancelledRef.current) setSaving(false);
     }

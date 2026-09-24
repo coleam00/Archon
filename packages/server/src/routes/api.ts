@@ -64,7 +64,7 @@ import {
   setUserDefault,
 } from '@archon/core';
 import type { UserTiersPatch, UserAliasesPatch, AliasesPatch } from '@archon/core';
-import { parseWorkflowRunConfig } from '@archon/core/config';
+import { InvalidConfigError, parseWorkflowRunConfig } from '@archon/core/config';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import type { EffortLevel } from '@archon/workflows/schemas/effort';
 import { findRepoRoot, removeWorktree, toRepoPath, toWorktreePath } from '@archon/git';
@@ -1171,7 +1171,7 @@ const patchAssistantConfigRoute = createRoute({
       content: { 'application/json': { schema: updateAssistantConfigResponseSchema } },
       description: 'Updated configuration',
     },
-    400: jsonError('Invalid request body'),
+    400: jsonError('Invalid request body, or the resulting config is invalid'),
     500: jsonError('Server error'),
   },
 });
@@ -1195,7 +1195,7 @@ const patchTiersConfigRoute = createRoute({
       content: { 'application/json': { schema: configResponseSchema } },
       description: 'Updated configuration',
     },
-    400: jsonError('Invalid request body'),
+    400: jsonError('Invalid request body, or the resulting config is invalid'),
     500: jsonError('Server error'),
   },
 });
@@ -1219,7 +1219,9 @@ const patchAliasesConfigRoute = createRoute({
       content: { 'application/json': { schema: configResponseSchema } },
       description: 'Updated configuration',
     },
-    400: jsonError('Invalid alias name, unknown provider, or invalid effort'),
+    400: jsonError(
+      'Invalid alias name, unknown provider, invalid effort, or the resulting config is invalid'
+    ),
     500: jsonError('Server error'),
   },
 });
@@ -4875,6 +4877,23 @@ export function registerApiRoutes(
     }
   });
 
+  /**
+   * A write the config validators refused is the caller's to fix: return it as a
+   * 400 with the refused key. Anything else is a server fault and stays opaque.
+   */
+  function configUpdateFailed(
+    c: Context,
+    error: unknown,
+    logEvent: string,
+    message: string
+  ): Response {
+    if (error instanceof InvalidConfigError) {
+      return apiError(c, 400, error.summary);
+    }
+    getLog().error({ err: error }, logEvent);
+    return apiError(c, 500, message);
+  }
+
   // PATCH /api/config/assistants - Update assistant configuration
   registerOpenApiRoute(patchAssistantConfigRoute, async c => {
     try {
@@ -4917,8 +4936,12 @@ export function registerApiRoutes(
         database: getDatabaseType(),
       });
     } catch (error) {
-      getLog().error({ err: error }, 'config.assistants_update_failed');
-      return apiError(c, 500, 'Failed to update assistant configuration');
+      return configUpdateFailed(
+        c,
+        error,
+        'config.assistants_update_failed',
+        'Failed to update assistant configuration'
+      );
     }
   });
 
@@ -4949,8 +4972,12 @@ export function registerApiRoutes(
         database: getDatabaseType(),
       });
     } catch (error) {
-      getLog().error({ err: error }, 'config.tiers_update_failed');
-      return apiError(c, 500, 'Failed to update tier configuration');
+      return configUpdateFailed(
+        c,
+        error,
+        'config.tiers_update_failed',
+        'Failed to update tier configuration'
+      );
     }
   });
 
@@ -4979,8 +5006,12 @@ export function registerApiRoutes(
         database: getDatabaseType(),
       });
     } catch (error) {
-      getLog().error({ err: error }, 'config.aliases_update_failed');
-      return apiError(c, 500, 'Failed to update alias configuration');
+      return configUpdateFailed(
+        c,
+        error,
+        'config.aliases_update_failed',
+        'Failed to update alias configuration'
+      );
     }
   });
 

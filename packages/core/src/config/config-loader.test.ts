@@ -36,6 +36,7 @@ import {
   clearConfigCache,
   toSafeConfig,
   updateGlobalConfig,
+  InvalidConfigError,
 } from './config-loader';
 
 describe('config-loader', () => {
@@ -1288,6 +1289,21 @@ assistants:
         updateGlobalConfig({ assistants: { claude: { model: 'opus' } } })
       ).rejects.toThrow(/assistants\.codex' must be an object/);
       expect(mockFsWriteFile).not.toHaveBeenCalled();
+    });
+
+    // The settings API returns 400 for this class and 500 for anything else, and
+    // shows `summary` to the web client, so it must not carry the server's path.
+    test('a refused edit is an InvalidConfigError whose summary names the key, not the path', async () => {
+      mockFsReadFile.mockResolvedValue(fileWithBadTier);
+
+      const error = await updateGlobalConfig({ defaultAssistant: 'claude' }).catch(
+        (e: unknown) => e
+      );
+
+      expect(error).toBeInstanceOf(InvalidConfigError);
+      const { summary } = error as InvalidConfigError;
+      expect(summary).toMatch(/^Invalid model binding config: tiers\.large\.model/);
+      expect(summary).not.toContain('config.yaml');
     });
 
     test('never overwrites a file that is not valid YAML', async () => {

@@ -277,6 +277,23 @@ async function createDefaultConfig(configPath: string): Promise<void> {
   }
 }
 
+/**
+ * A config value the validators refuse. `updateGlobalConfig` throws it before
+ * writing, which is how the settings API tells a refused value (the caller's to
+ * fix) from a server fault. `summary` names the refused key without the
+ * server's filesystem path, so it is safe to return to a web client; `message`
+ * adds the path for logs and the CLI.
+ */
+export class InvalidConfigError extends Error {
+  readonly summary: string;
+
+  constructor(label: string, configPath: string, detail: string) {
+    super(`${label} in '${configPath}': ${detail}`);
+    this.name = 'InvalidConfigError';
+    this.summary = `${label}: ${detail}`;
+  }
+}
+
 function validateWorkflowContinuationConfig(parsed: unknown, configPath: string): void {
   if (typeof parsed !== 'object' || parsed === null || !('workflows' in parsed)) return;
   const config = parsed as { workflows?: unknown };
@@ -286,7 +303,7 @@ function validateWorkflowContinuationConfig(parsed: unknown, configPath: string)
     const issues = result.error.issues
       .map(issue => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
       .join('; ');
-    throw new Error(`Invalid workflows config in '${configPath}': ${issues}`);
+    throw new InvalidConfigError('Invalid workflows config', configPath, issues);
   }
   config.workflows = result.data;
 }
@@ -314,22 +331,34 @@ function validateAssistantDefaults(parsed: unknown, configPath: string): void {
   // A key written with nothing under it parses to null, which YAML gives no way
   // to tell from the key being absent. Both mean "no defaults here".
   if (assistants === undefined || assistants === null) return;
-  const prefix = `Invalid assistants config in '${configPath}'`;
+  const label = 'Invalid assistants config';
   if (!isConfigRecord(assistants)) {
-    throw new Error(`${prefix}: 'assistants' must be a map of provider settings.`);
+    throw new InvalidConfigError(
+      label,
+      configPath,
+      "'assistants' must be a map of provider settings."
+    );
   }
   for (const [provider, defaults] of Object.entries(assistants)) {
     if (defaults === undefined || defaults === null) continue;
     if (!isRegisteredProvider(provider)) continue;
     if (!isConfigRecord(defaults)) {
-      throw new Error(`${prefix}: 'assistants.${provider}' must be an object.`);
+      throw new InvalidConfigError(
+        label,
+        configPath,
+        `'assistants.${provider}' must be an object.`
+      );
     }
     try {
       getRegistration(provider).parseConfig(defaults, 'install');
     } catch (error) {
       if (!(error instanceof InvalidProviderRunConfigError)) throw error;
       const suffix = error.fieldPath ? `.${error.fieldPath}` : '';
-      throw new Error(`${prefix}: 'assistants.${provider}${suffix}': ${error.message}.`);
+      throw new InvalidConfigError(
+        label,
+        configPath,
+        `'assistants.${provider}${suffix}': ${error.message}.`
+      );
     }
   }
 }
@@ -347,7 +376,7 @@ function validateModelBindingConfig(parsed: unknown, configPath: string): void {
       const issues = result.error.issues
         .map(issue => `${field}.${issue.path.join('.') || '<root>'}: ${issue.message}`)
         .join('; ');
-      throw new Error(`Invalid model binding config in '${configPath}': ${issues}`);
+      throw new InvalidConfigError('Invalid model binding config', configPath, issues);
     }
     config[field] = result.data;
   }
@@ -928,7 +957,9 @@ export async function updateGlobalConfig(
   } catch (error) {
     const err = error as { code?: string; message?: string };
 
-    if (err.code === 'EACCES' || err.code === 'EPERM') {
+    if (error instanceof InvalidConfigError) {
+      getLog().warn({ configPath, err: error }, 'config.update_refused');
+    } else if (err.code === 'EACCES' || err.code === 'EPERM') {
       getLog().error({ configPath, err: error, code: err.code }, 'config.update_permission_denied');
     } else {
       getLog().error({ configPath, err: error }, 'config.update_failed');
