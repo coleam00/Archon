@@ -3,6 +3,8 @@
 # that ran passed, the rest never ran. The verdict declares `incomplete`, not an
 # empty cause, so the gate reports an unfinished validation rather than red nobody
 # explained — and still stops the run, because an unfinished gate is no verdict.
+# gate-green and gate-validated are deliberately unstubbed: the real script
+# passes the green implementation and refuses the unfinished validation.
 impl__implement:
   done: true
   green: true

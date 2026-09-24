@@ -31,7 +31,7 @@ Write `$ARTIFACTS_DIR/validation.md`: each command run, its outcome, any applica
 
 ## Declare the verdict
 
-- `green` — true only when every applicable check you ran passed.
+- `green` — true only when every applicable check ran and passed.
 - `red_cause` — why the verdict is not green. When a check you ran failed: `introduced`, the change under validation caused it; `inherited`, the same check was already failing at the base this branch came from; `environment`, the machine caused it, not any code — a database or port a parallel process holds, a missing credential, a network fault. `incomplete` when no check you ran failed but not every applicable check ran — you were stopped partway (a usage limit, a killed process) or the gate could not run at all. An unfinished gate is no evidence about the change, and delivery stops there until the run is resumed. A check that ran and failed takes its own cause even when others never ran. Always declared: use the empty string `""` only when `green` is true.
 - `summary` — a few sentences: what ran, what passed, and for a red verdict the failing checks by name. For `incomplete`, what stopped validation and which checks ran and passed.
 

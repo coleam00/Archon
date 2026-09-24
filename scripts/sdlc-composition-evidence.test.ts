@@ -312,11 +312,11 @@ describe('the green gate on a validation that did not finish', () => {
     '..',
     '.archon/workflows/sdlc/deliver/scripts/gate-green.ts'
   );
-  function gate(cause: string, summary: string) {
+  function gate(cause: string, summary: string, green = 'false') {
     const run = Bun.spawnSync([process.execPath, script], {
       env: {
         ...process.env,
-        INPUTS_GREEN: 'false',
+        INPUTS_GREEN: green,
         INPUTS_RED_CAUSE: cause,
         INPUTS_SUMMARY: summary,
         INPUTS_STAGE: 'The project gate',
@@ -334,6 +334,13 @@ describe('the green gate on a validation that did not finish', () => {
     expect(result.stderr).toContain(summary);
     expect(result.stderr).toContain('Resume the run');
     expect(result.stderr).not.toMatch(/\bred\b/);
+  });
+
+  it('refuses incomplete even when the verdict also claims green', () => {
+    const result = gate('incomplete', 'type-check never ran', 'true');
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain("validation didn't finish");
   });
 
   it('still refuses red with no declared cause as unexplained red', () => {

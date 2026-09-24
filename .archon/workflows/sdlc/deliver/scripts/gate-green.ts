@@ -45,18 +45,19 @@ const cause = trimmed(process.env.INPUTS_RED_CAUSE);
 const summary = trimmed(process.env.INPUTS_SUMMARY);
 const stage = trimmed(process.env.INPUTS_STAGE) || 'The work';
 
-if (green === 'true') {
-  emit({ gate: 'green', red_cause: '', stage, summary: '' });
-} else if (cause === 'incomplete') {
+if (cause === 'incomplete') {
   // Not every check ran and none that ran failed: there is no verdict to pass or
-  // blame yet. Saying "red" here sends a reader hunting for a failure that does not
-  // exist; the action is to finish validating.
+  // blame yet. Decided before `green` is read, because a green over checks that
+  // never ran is unsupported. Saying "red" here sends a reader hunting for a
+  // failure that does not exist; the action is to finish validating.
   refuse(
     `${stage}: validation didn't finish. Not every check ran, and none that ran ` +
       `failed.${summary === '' ? '' : ` ${summary}`} Resume the run once whatever ` +
       'stopped it is cleared, so validation can finish. An unfinished validation ' +
       'never passes this gate.'
   );
+} else if (green === 'true') {
+  emit({ gate: 'green', red_cause: '', stage, summary: '' });
 } else if (cause === '') {
   refuse(
     `${stage} is red and declared no red_cause. Red that nobody explained is red this ` +
