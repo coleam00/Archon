@@ -268,9 +268,10 @@ function resolvedNodeCompletedStepName(approval: ApprovalContext): string {
  *
  * With no trusted `output_root` there is no transcript location to find. Usually the
  * run's identity lookup faulted at start and its fault-derived root was deliberately
- * never persisted; a persisted root outside `ARCHON_HOME` is refused the same way. Either
- * way this repeats for every resolution of the run. Its rows are skipped, visibly,
- * rather than written to a second file under a guessed root.
+ * never persisted; that lasts until a later resume resolves identity and records the
+ * root. A persisted root outside `ARCHON_HOME` is refused the same way, for the life of
+ * the run. Either way the rows are skipped, visibly, rather than written to a second
+ * file under a guessed root.
  */
 async function publishGateExecution(
   run: WorkflowRun,
