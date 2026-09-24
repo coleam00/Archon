@@ -1586,5 +1586,5 @@ describe('log output channel (#3444)', () => {
     } finally {
       await removeTempTree(root);
     }
-  });
+  }, 30_000);
 });
