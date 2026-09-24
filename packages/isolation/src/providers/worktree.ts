@@ -1328,8 +1328,11 @@ export class WorktreeProvider implements IIsolationProvider {
     } catch (error) {
       // Clean up a git-registered worktree left behind by a partial failure.
       await this.cleanOrphanWorktreeIfExists(repoPath, worktreePath);
-      const err = error as Error;
-      throw new Error(`Failed to create worktree for PR #${prNumber}: ${err.message}`);
+      const err = error instanceof Error ? error : new Error(String(error));
+      const wrapped = new Error(`Failed to create worktree for PR #${prNumber}: ${err.message}`);
+      const { cleanupFailure } = err as Error & { cleanupFailure?: string };
+      if (cleanupFailure) recordCleanupFailure(wrapped, cleanupFailure);
+      throw wrapped;
     }
   }
 
@@ -1440,15 +1443,24 @@ export class WorktreeProvider implements IIsolationProvider {
 
       await this.addLockedWorktree(repoPath, [worktreePath, prSha]);
 
-      // Create a local tracking branch so it's not detached HEAD
-      await this.createBranchWithStaleRetry(
-        repoPath,
-        () =>
-          execFileAsync('git', ['-C', worktreePath, 'checkout', '-b', reviewBranch, prSha], {
-            timeout: GIT_OPERATION_TIMEOUT_MS,
-          }),
-        reviewBranch
-      );
+      // From here the checkout is this call's own and still locked, so the
+      // unforced orphan cleanup in `createFromPR` would refuse it. Only this
+      // step is covered: a failed add may mean another attempt holds the path.
+      try {
+        // Create a local tracking branch so it's not detached HEAD
+        await this.createBranchWithStaleRetry(
+          repoPath,
+          () =>
+            execFileAsync('git', ['-C', worktreePath, 'checkout', '-b', reviewBranch, prSha], {
+              timeout: GIT_OPERATION_TIMEOUT_MS,
+            }),
+          reviewBranch
+        );
+      } catch (error) {
+        const setupError = error instanceof Error ? error : new Error(String(error));
+        await this.rollBackIncompleteWorktree(toRepoPath(repoPath), worktreePath, setupError);
+        throw setupError;
+      }
     } else {
       // No SHA: fetch and create review branch. The refspec's destination is the
       // local branch refs/heads/pr-<n>-review, so concurrent fork-PR launches

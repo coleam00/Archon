@@ -1417,6 +1417,53 @@ describe('WorktreeProvider', () => {
       expect(checkoutAttempts).toBe(2);
     });
 
+    describe('fork PR with SHA whose review-branch checkout fails', () => {
+      const request: IsolationRequest = {
+        ...baseRequest,
+        workflowType: 'pr',
+        identifier: '42',
+        prBranch: git.toBranchName('feature/auth'),
+        prSha: 'abc123',
+        isForkPR: true,
+      };
+      const failCheckout = (removeError?: Error): void => {
+        execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+          if (args.includes('checkout') && args.includes('-b')) {
+            throw new Error('fatal: reference is not a tree: abc123');
+          }
+          if (removeError && args.includes('remove')) throw removeError;
+          return { stdout: '', stderr: '' };
+        });
+        readWorktreeLockSpy.mockResolvedValue({ reason: 'archon: worktree setup in progress' });
+      };
+
+      test('removes the locked checkout it added', async () => {
+        failCheckout();
+
+        await expect(provider.create(request)).rejects.toThrow(
+          /Failed to create worktree for PR #42: fatal: reference is not a tree/
+        );
+        // Forced twice: git refuses to remove a locked worktree otherwise.
+        expect(execSpy).toHaveBeenCalledWith(
+          'git',
+          expect.arrayContaining(['worktree', 'remove', '--force', '--force']),
+          expect.any(Object)
+        );
+      });
+
+      test('reports a rollback that could not finish', async () => {
+        failCheckout(new Error('permission denied'));
+
+        const error = await provider.create(request).then(
+          () => undefined,
+          (cause: unknown) => cause as Error
+        );
+
+        expect(error).toBeInstanceOf(Error);
+        expect(classifyIsolationError(error as Error)).toContain('was left behind');
+      });
+    });
+
     test('handles stale branch when creating fork PR without SHA', async () => {
       const request: IsolationRequest = {
         ...baseRequest,
