@@ -9,6 +9,7 @@
     "./conformance": "./src/conformance.ts",
     "./operations": "./src/operations.ts",
     "./dispatch": "./src/dispatch.ts",
+    "./discovery": "./src/discovery.ts",
     "./plugin-config": "./src/plugin-config.ts"
   },
   "scripts": {

@@ -204,6 +204,11 @@ Commands:
   complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
   serve                      Start the web UI server (binary installs download it on first run)
   skill install [path]       Install archon-cli into .claude/skills and .agents/skills
+  plugin install <owner/repo[/path][@tag]>
+                             Install a forge plugin from a GitHub release (default: latest)
+  plugin update <id>[@tag]   Reinstall an installed plugin from another release
+  plugin remove <id>         Delete the files an installed plugin wrote
+  plugin list                Show installed plugins with release tag and commit
   doctor [--full]            Verify your Archon setup (Claude/Codex binaries, gh auth, DB, adapters; --full also probes the OpenCode runtime SDK)
   auth github                Connect your GitHub identity via device flow (multi-user installs)
   ai key set <provider>      Connect an AI provider API key (multi-user installs; key read from prompt/stdin)
@@ -216,6 +221,8 @@ Commands:
   ai alias set <@n> <p> <m>  Set a @custom model alias [--effort <e>] [--scope user|install]
   ai alias list [--json]     Show configured @custom aliases (install + yours)
   ai alias unset <@name>     Remove a @custom alias [--scope user|install]
+  ai capacity [--json]       Show provider attempts holding concurrency.providers capacity
+  ai capacity release <id>   Release a held attempt whose owner process you verified is gone
   ai default <p> [<model>]   Set the default assistant (+ chat model) [--scope user|install]
   telemetry status           Show anonymous telemetry state (enabled, reason, ID, host)
   telemetry reset            Rotate the anonymous install UUID
@@ -283,6 +290,7 @@ Examples:
   archon workflow run archon-smart-pr-review --adopt <run-id> "Review the changes"
   archon skill install
   archon skill install /path/to/project
+  archon plugin install coleam00/Archon/plugins/forge-github
   archon workflow search "pr review"
   archon workflow install archon-piv-loop
 

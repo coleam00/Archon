@@ -8,7 +8,8 @@ impl__implement:
   summary: "stub: implemented inside the accepted contract"
 impl__assert-changed: "2 files changed"
 gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
-pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 3, url: "https://github.com/example/repo/pull/3", head: "fixture-branch", base: "dev", is_draft: true }
+pr__pr: { intent: "/fixture/pr-intent.json" }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 3, url: "https://github.com/example/repo/pull/3", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
 classify:
   errors: false
   docs: false
@@ -20,11 +21,17 @@ review__mode: '{"continuation":false}'
 review__scope:
   # accepted contract and scope conflict recorded
   docs: false
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 3 }
 review__code: "1 Important scope conflict"
 review__seams: "0 findings"
 review__simplify: "0 findings"
 review__tests: "0 findings"
 review__synthesize:
+  ready: false
+  action: replan
+  findings_summary: "stub: requested outcome requires crossing an explicit boundary"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+review__publish:
   ready: false
   action: replan
   findings_summary: "stub: requested outcome requires crossing an explicit boundary"

@@ -4,12 +4,19 @@
 mode: '{"continuation":false}'
 scope:
   docs: false
+  # A standalone review of the working diff: no pull request to publish to.
+  pr: {}
 code: "0 findings"
 seams: "0 findings"
 simplify: "0 findings"
 tests: "0 findings"
 review-complete: "settled"
 synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: clean, docs lens skipped"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+publish:
   ready: true
   action: none
   findings_summary: "stub: clean, docs lens skipped"

@@ -235,6 +235,30 @@ const commandHelp: HelpEntry[] = [
     description: 'Install archon-cli into .claude/skills and .agents/skills',
   },
   {
+    command: 'plugin',
+    subcommand: 'install',
+    spec: 'plugin install <owner/repo[/path][@tag]>',
+    description: 'Install a forge plugin from a GitHub release (default: latest)',
+  },
+  {
+    command: 'plugin',
+    subcommand: 'update',
+    spec: 'plugin update <id>[@tag]',
+    description: 'Reinstall an installed plugin from another release',
+  },
+  {
+    command: 'plugin',
+    subcommand: 'remove',
+    spec: 'plugin remove <id>',
+    description: 'Delete the files an installed plugin wrote',
+  },
+  {
+    command: 'plugin',
+    subcommand: 'list',
+    spec: 'plugin list',
+    description: 'Show installed plugins with release tag and commit',
+  },
+  {
     command: 'doctor',
     spec: 'doctor [--full]',
     description:
@@ -309,6 +333,18 @@ const commandHelp: HelpEntry[] = [
   },
   {
     command: 'ai',
+    subcommand: 'capacity',
+    spec: 'ai capacity [--json]',
+    description: 'Show provider attempts holding concurrency.providers capacity',
+  },
+  {
+    command: 'ai',
+    subcommand: 'capacity',
+    spec: 'ai capacity release <id>',
+    description: 'Release a held attempt whose owner process you verified is gone',
+  },
+  {
+    command: 'ai',
     subcommand: 'default',
     spec: 'ai default <p> [<model>]',
     description: 'Set the default assistant (+ chat model) [--scope user|install]',
@@ -354,6 +390,28 @@ const commandHelp: HelpEntry[] = [
 // "no flag documentation is lost" invariant honest — nothing here ships in
 // global help that was not in the original.
 const scopedOnlyHelp: HelpEntry[] = [
+  ...(
+    [
+      ['workitem.view', 'Read a qualified work item'],
+      ['pr.view', 'Read a pull request by number or by qualified head'],
+      ['pr.create', 'Open a pull request and verify it by reading it back'],
+      ['pr.edit-body', 'Replace a pull request body and verify the result'],
+      ['pr.ready', 'Take a pull request out of draft and verify the result'],
+      ['comment.upsert', 'Write the one marked comment on a pull request'],
+    ] as const
+  ).map(([subcommand, description]) => ({
+    command: 'forge',
+    subcommand,
+    spec: `forge ${subcommand}`,
+    description,
+    scopedFlags: [
+      { spec: '--data <json>', description: 'Structured request without operationId or op' },
+      {
+        spec: '--data-file <path>',
+        description: 'Read that request from a file, keeping authored content out of argv',
+      },
+    ],
+  })),
   {
     command: 'trigger',
     subcommand: 'list',
@@ -738,6 +796,10 @@ const orderedExamples: ExampleHelp[] = [
   {
     text: 'archon skill install /path/to/project',
     owner: { command: 'skill', subcommand: 'install' },
+  },
+  {
+    text: 'archon plugin install coleam00/Archon/plugins/forge-github',
+    owner: { command: 'plugin', subcommand: 'install' },
   },
   {
     text: 'archon workflow search "pr review"',

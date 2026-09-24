@@ -790,6 +790,40 @@ describe('OpencodeProvider', () => {
     );
   });
 
+  test('retry backoff runs inside the admission release, never while the slot is held', async () => {
+    const events: string[] = [];
+    const retryRuntime = makeRuntime({
+      promptAsync: mock(async () => {
+        events.push('attempt');
+        throw new Error('429 rate limit exceeded');
+      }),
+    });
+    const successRuntime = makeRuntime({
+      promptAsync: mock(async () => {
+        events.push('attempt');
+      }),
+    });
+    runtimeQueue.push(retryRuntime, successRuntime);
+    scriptedEvents = [{ type: 'session.idle', properties: { sessionID: 'session-1' } }];
+    const admission = {
+      releaseDuring: async (wait: () => Promise<void>): Promise<void> => {
+        events.push('released');
+        await wait();
+        events.push('reacquired');
+      },
+    };
+
+    const { error } = await consume(
+      new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+        admission,
+      })
+    );
+
+    expect(error).toBeUndefined();
+    expect(events).toEqual(['attempt', 'released', 'reacquired', 'attempt']);
+  });
+
   test('retries a structured 429 from the single-agent session stream', async () => {
     const sdkError = {
       name: 'APIError',

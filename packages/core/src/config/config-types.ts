@@ -175,6 +175,12 @@ export interface GlobalConfig {
      * @default 10
      */
     maxConversations?: number;
+    /**
+     * Opt-in install-wide cap on simultaneous provider attempts, keyed by provider
+     * registration ID (e.g. `claude: 4`). A provider without an entry is unlimited.
+     * Read fresh and strictly at every attempt by `loadProviderConcurrencyCaps`.
+     */
+    providers?: Record<string, number>;
   };
 
   /**
