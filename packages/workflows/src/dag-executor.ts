@@ -109,6 +109,8 @@ import {
   isExecNode,
   isAgentNode,
   isLoopGroupNode,
+  loopGroupBodySinks,
+  loopGroupSoleTerminalSink,
   isGateNode,
   isWorkflowWaitContext,
   isScheduledWorkflowResume,
@@ -4543,11 +4545,8 @@ async function finalizeLoopFromSignal(
 function findLoopGroupTerminalSuspendNode(
   bodyNodes: readonly DagNode[]
 ): GateNode | WaitNode | undefined {
-  const dependedOn = new Set(bodyNodes.flatMap(n => n.depends_on ?? []));
-  const sinks = bodyNodes.filter(n => !dependedOn.has(n.id));
-  return sinks.length === 1 && (isGateNode(sinks[0]) || sinks[0]?.kind === 'wait')
-    ? sinks[0]
-    : undefined;
+  const sink = loopGroupSoleTerminalSink(bodyNodes);
+  return sink !== undefined && (isGateNode(sink) || sink.kind === 'wait') ? sink : undefined;
 }
 
 /**
@@ -5266,9 +5265,7 @@ async function executeLoopGroupBody(
     // the iteration's own result, not a caller contract — `returns:` selects a WORKFLOW's
     // result and only rebinds a child run's terminal output (see executeDagWorkflow). Leave
     // this positional scan as-is; do not "fix" the inconsistency.
-    const allDeps = new Set(iterBodyNodes.flatMap(n => n.depends_on ?? []));
-    const terminalSink = iterBodyNodes
-      .filter(n => !allDeps.has(n.id))
+    const terminalSink = loopGroupBodySinks(iterBodyNodes)
       .map(n => scopedNodeOutputs.get(n.id))
       .find(o => o?.state === 'completed' && o.output.trim().length > 0);
     const iterationOutput = terminalSink?.output ?? '';
