@@ -227,6 +227,108 @@ describe('resolveInstallationId', () => {
       AppNotInstalledError
     );
   });
+
+  test('retries a cold-cache lookup on 5xx and succeeds', async () => {
+    const provider = makeProvider();
+    mockRequest
+      .mockRejectedValueOnce(Object.assign(new Error('Server Error'), { status: 500 }))
+      .mockResolvedValueOnce({ status: 200, data: { id: 42 } });
+
+    expect(await provider.resolveInstallationId('o', 'r')).toBe(42);
+    expect(mockRequest).toHaveBeenCalledTimes(2);
+  });
+
+  test('throws after exhausting retries on a cold-cache 5xx', async () => {
+    const provider = makeProvider();
+    const err = Object.assign(new Error('Server Error'), { status: 502 });
+    mockRequest.mockRejectedValue(err);
+
+    await expect(provider.resolveInstallationId('o', 'r')).rejects.toBe(err);
+    expect(mockRequest).toHaveBeenCalledTimes(3);
+  });
+
+  test('does not retry a 4xx other than 404', async () => {
+    const provider = makeProvider();
+    const err = Object.assign(new Error('Bad credentials'), { status: 401 });
+    mockRequest.mockRejectedValueOnce(err);
+
+    await expect(provider.resolveInstallationId('o', 'r')).rejects.toBe(err);
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('expired lookup fallback', () => {
+  const baseTime = 1_700_000_000_000;
+  let mockedNow = baseTime;
+  let nowSpy: ReturnType<typeof spyOn>;
+
+  beforeEach(() => {
+    mockedNow = baseTime;
+    nowSpy = spyOn(Date, 'now').mockImplementation(() => mockedNow);
+  });
+
+  afterEach(() => {
+    nowSpy.mockRestore();
+  });
+
+  async function primeThenExpire(): Promise<ReturnType<typeof makeProvider>> {
+    const provider = makeProvider();
+    mockRequest.mockResolvedValueOnce({ status: 200, data: { id: 555 } });
+    await provider.resolveInstallationId('o', 'r');
+    mockedNow = baseTime + 60 * 60 * 1000 + 1;
+    return provider;
+  }
+
+  test('serves the expired id without retrying when the re-lookup fails with 5xx', async () => {
+    const provider = await primeThenExpire();
+    mockRequest.mockRejectedValueOnce(Object.assign(new Error('Server Error'), { status: 500 }));
+
+    expect(await provider.resolveInstallationId('o', 'r')).toBe(555);
+    expect(mockRequest).toHaveBeenCalledTimes(2);
+  });
+
+  test('keeps re-trying the lookup and adopts the new id once GitHub recovers', async () => {
+    const provider = await primeThenExpire();
+    mockRequest
+      .mockRejectedValueOnce(Object.assign(new Error('Server Error'), { status: 500 }))
+      .mockResolvedValueOnce({ status: 200, data: { id: 777 } });
+
+    expect(await provider.resolveInstallationId('o', 'r')).toBe(555);
+    expect(await provider.resolveInstallationId('o', 'r')).toBe(777);
+    expect(await provider.resolveInstallationId('o', 'r')).toBe(777);
+    expect(mockRequest).toHaveBeenCalledTimes(3);
+  });
+
+  test('still throws AppNotInstalledError on 404 instead of serving the expired id', async () => {
+    const provider = await primeThenExpire();
+    mockRequest.mockRejectedValueOnce(Object.assign(new Error('Not Found'), { status: 404 }));
+
+    await expect(provider.resolveInstallationId('o', 'r')).rejects.toBeInstanceOf(
+      AppNotInstalledError
+    );
+  });
+
+  test('mints a token for the expired id when the lookup is down', async () => {
+    const provider = await primeThenExpire();
+    mockRequest
+      .mockRejectedValueOnce(Object.assign(new Error('Server Error'), { status: 500 }))
+      .mockResolvedValueOnce(tokenResponse('ghs_during_outage', 3600));
+
+    expect(await provider.getInstallationToken('o', 'r')).toBe('ghs_during_outage');
+    expect(mockRequest.mock.calls[2]?.[1]).toEqual({ installation_id: 555 });
+  });
+});
+
+describe('token issuance retry', () => {
+  test('retries access_tokens on 5xx', async () => {
+    const provider = makeProvider({ defaultInstallationId: 9 });
+    mockRequest
+      .mockRejectedValueOnce(Object.assign(new Error('Server Error'), { status: 503 }))
+      .mockResolvedValueOnce(tokenResponse('ghs_retry', 3600));
+
+    expect(await provider.getInstallationToken('o', 'r')).toBe('ghs_retry');
+    expect(mockRequest).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('primeInstallationLookup', () => {
