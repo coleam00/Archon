@@ -101,8 +101,7 @@
     ],
     [
       "src/commands/plugin.test.ts",
-      "src/commands/plugin-pack.test.ts",
-      "src/commands/plugin-tar.test.ts"
+      "src/commands/plugin-pack.test.ts"
     ],
     [
       "src/triggers/native-schedule.test.ts"

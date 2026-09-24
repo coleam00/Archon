@@ -2,16 +2,18 @@ import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import { packTreePath, readReceipts } from '@archon/plugin-manifest/store';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 import { pluginCommand, type PluginEnvironment } from './plugin';
-import { tarGz, type FixtureEntry } from './plugin-tar-fixture';
 
-// A local stand-in for GitHub serving one real repository of workflow packs:
-// git's dumb HTTP protocol for `git ls-remote`, `git show` for raw files and
-// `git archive` for codeload tarballs, so every install reads real git output.
-// `craftedTarballs` replaces a commit's tarball with entries git never writes.
+// One real git repository of workflow packs stands in for GitHub. The installer
+// resolves and fetches it with git over a file URL (`<root>/owner/packs.git`), exactly
+// the path it takes against github.com; a small HTTP server answers the raw
+// manifest reads with `git show`. Trees git would never produce from a working
+// directory (links, escaping or Windows-unsafe names) are built with plumbing and
+// tagged, so every refusal is exercised against real git output.
 
 const tempRoot = trackTempRoots();
 const ID = 'owner/packs/packs/review-kit';
@@ -25,18 +27,18 @@ const TREE_FILES = [
   'review/scripts/check.ts',
 ];
 
+let root: string;
 let repo: string;
 let server: ReturnType<typeof Bun.serve>;
 const commits = new Map<string, string>();
-const craftedTarballs = new Map<string, Uint8Array>();
 
 const manifest = (name: string, entrypoints: Record<string, string>): string =>
   `${JSON.stringify({ schemaVersion: 1, kind: 'workflow-pack', name, description: 'fixture', entrypoints }, null, 2)}\n`;
 
-function git(...args: string[]): string {
+function git(args: string[], input?: string): string {
   const result = Bun.spawnSync(
     ['git', '-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args],
-    { cwd: repo }
+    { cwd: repo, stdin: input === undefined ? 'ignore' : new TextEncoder().encode(input) }
   );
   if (result.exitCode !== 0) throw new Error(`git ${args.join(' ')}: ${result.stderr.toString()}`);
   return result.stdout.toString().trim();
@@ -47,9 +49,38 @@ async function write(path: string, content: string): Promise<void> {
   await writeFile(join(repo, path), content);
 }
 
+type Tree = { [name: string]: Tree | { mode: string; oid: string } };
+
+/** Commit a tree built with `git mktree`, which accepts entry names a checkout never would. */
+function commitTree(entries: Record<string, { mode: string; oid: string }>, tag: string): void {
+  const tree: Tree = {};
+  for (const [path, entry] of Object.entries(entries)) {
+    const parts = path.split('/');
+    let node = tree;
+    for (const part of parts.slice(0, -1)) node = (node[part] ??= {}) as Tree;
+    node[parts[parts.length - 1]] = entry;
+  }
+  const build = (node: Tree): string =>
+    git(
+      ['mktree'],
+      Object.entries(node)
+        .map(([name, child]) =>
+          'mode' in child && typeof child.mode === 'string'
+            ? `${child.mode} ${child.mode === '160000' ? 'commit' : 'blob'} ${String(child.oid)}\t${name}\n`
+            : `040000 tree ${build(child as Tree)}\t${name}\n`
+        )
+        .join('')
+    );
+  const commit = git(['commit-tree', build(tree), '-m', tag]);
+  git(['tag', tag, commit]);
+  commits.set(tag, commit);
+}
+
 beforeAll(async () => {
-  repo = await mkdtemp(join(tmpdir(), 'plugin-pack-fixture-'));
-  git('init', '-q');
+  root = await mkdtemp(join(tmpdir(), 'plugin-pack-fixture-'));
+  repo = join(root, 'owner', 'packs.git');
+  await mkdir(repo, { recursive: true });
+  git(['init', '-q']);
   await write('README.md', 'not part of any plugin\n');
   const kit = 'packs/review-kit';
   await write(
@@ -72,59 +103,77 @@ beforeAll(async () => {
   await write('packs/crowded/archon-plugin.json', manifest('crowded', { go: 'go/go.yaml' }));
   await write('packs/crowded/go/go.yaml', 'name: go\n');
   await write('packs/crowded/go/other.yml', 'name: other\n');
-  await write('packs/linked/archon-plugin.json', manifest('linked', { go: 'go/go.yaml' }));
-  await write('packs/linked/go/go.yaml', 'name: go\n');
-  git('add', '.');
-  git('update-index', '--chmod=+x', `${kit}/review/scripts/check.ts`);
-  // A symlink inside a plugin, staged directly so no filesystem symlink is needed.
-  await writeFile(join(repo, 'link-target'), '../../README.md');
-  const blob = git('hash-object', '-w', 'link-target');
-  git('update-index', '--add', '--cacheinfo', `120000,${blob},packs/linked/go/readme`);
-  git('commit', '-q', '-m', 'v1');
-  git('tag', 'v1');
-  commits.set('v1', git('rev-parse', 'HEAD'));
+  git(['add', '.']);
+  git(['update-index', '--chmod=+x', `${kit}/review/scripts/check.ts`]);
+  git(['commit', '-q', '-m', 'v1']);
+  git(['tag', 'v1']);
+  commits.set('v1', git(['rev-parse', 'HEAD']));
   await write(`${kit}/review/review.yaml`, 'name: review\n# v2\n');
-  git('add', `${kit}/review/review.yaml`);
-  git('commit', '-q', '-m', 'v2');
-  commits.set('head', git('rev-parse', 'HEAD'));
-  git('tag', 'v2');
-  git('update-server-info');
+  git(['add', `${kit}/review/review.yaml`]);
+  git(['commit', '-q', '-m', 'v2']);
+  commits.set('head', git(['rev-parse', 'HEAD']));
+  git(['tag', 'v2']);
+
+  // Crafted trees, each a valid review-kit pack plus one entry. Tags only: the
+  // default branch head stays the ordinary v2 commit.
+  const blob = (content: string): { mode: string; oid: string } => ({
+    mode: '100644',
+    oid: git(['hash-object', '-w', '--stdin'], content),
+  });
+  const pack = {
+    'packs/review-kit/archon-plugin.json': blob(
+      manifest('review-kit', { review: 'review/review.yaml' })
+    ),
+    'packs/review-kit/review/review.yaml': blob('name: review\n'),
+  };
+  const link = { mode: '120000', oid: git(['hash-object', '-w', '--stdin'], '../../README.md') };
+  commitTree({ ...pack, 'packs/review-kit/review/readme': link }, 'crafted-symlink');
+  commitTree(
+    { ...pack, 'packs/review-kit/vendor': { mode: '160000', oid: commits.get('v1') ?? '' } },
+    'crafted-submodule'
+  );
+  commitTree({ ...pack, 'packs/review-kit/review/../../evil.txt': blob('x') }, 'crafted-escape');
+  commitTree(
+    { ...pack, 'packs/review-kit/review/..\\..\\evil.cmd': blob('x') },
+    'crafted-backslash'
+  );
+  commitTree({ ...pack, 'packs/review-kit/review/C:evil': blob('x') }, 'crafted-colon');
+  commitTree({ ...pack, 'elsewhere/notes:file\\x.txt': blob('x') }, 'crafted-outside');
+  commitTree(
+    {
+      ...pack,
+      'packs/review-kit/archon-plugin.json': blob(
+        `${JSON.stringify({
+          schemaVersion: 1,
+          kind: 'workflow-pack',
+          name: 'review-kit',
+          description: 'fixture',
+          compatibility: { archon: '>=99.0.0' },
+          entrypoints: { review: 'review/review.yaml' },
+        })}\n`
+      ),
+    },
+    'crafted-compat'
+  );
 
   server = Bun.serve({
     hostname: '127.0.0.1',
     port: 0,
-    async fetch(request) {
+    fetch(request) {
       const path = decodeURIComponent(new URL(request.url).pathname);
-      const gitFile = /^\/owner\/packs\.git\/(.+)$/.exec(path);
-      if (gitFile) {
-        const file = Bun.file(join(repo, '.git', gitFile[1]));
-        return (await file.exists()) ? new Response(file) : new Response(null, { status: 404 });
-      }
       const raw = /^\/raw\/owner\/packs\/([0-9a-f]{40})\/(.+)$/.exec(path);
-      if (raw) {
-        const shown = Bun.spawnSync(['git', 'show', `${raw[1]}:${raw[2]}`], { cwd: repo });
-        return shown.exitCode === 0
-          ? new Response(shown.stdout)
-          : new Response(null, { status: 404 });
-      }
-      const codeload = /^\/codeload\/owner\/packs\/tar\.gz\/([0-9a-f]{40})$/.exec(path);
-      if (codeload) {
-        const crafted = craftedTarballs.get(codeload[1]);
-        if (crafted) return new Response(crafted);
-        const archive = Bun.spawnSync(
-          ['git', 'archive', '--format=tar.gz', `--prefix=packs-${codeload[1]}/`, codeload[1]],
-          { cwd: repo }
-        );
-        return new Response(archive.stdout);
-      }
-      return new Response(null, { status: 404 });
+      if (!raw) return new Response(null, { status: 404 });
+      const shown = Bun.spawnSync(['git', 'show', `${raw[1]}:${raw[2]}`], { cwd: repo });
+      return shown.exitCode === 0
+        ? new Response(shown.stdout)
+        : new Response(null, { status: 404 });
     },
   });
 });
 
 afterAll(async () => {
   await server.stop(true);
-  await removeTempTree(repo);
+  await removeTempTree(root);
 });
 
 async function environment(): Promise<PluginEnvironment> {
@@ -133,9 +182,9 @@ async function environment(): Promise<PluginEnvironment> {
     pluginsDir: join(home, 'plugins'),
     archonVersion: '0.11.0',
     projectDir: join(home, 'project'),
-    githubUrl: server.url.origin,
+    // `file:///C:/...` on Windows; git reads a file URL the same way it reads https.
+    githubUrl: pathToFileURL(root).href,
     rawUrl: `${server.url.origin}/raw`,
-    codeloadUrl: `${server.url.origin}/codeload`,
   };
 }
 
@@ -182,23 +231,6 @@ async function snapshot(dir: string): Promise<Record<string, string>> {
 
 const commit = (name: string): string => commits.get(name) ?? '';
 
-/** A codeload-shaped tarball of the review-kit pack, plus `extra` entries. */
-function craftedPack(
-  extra: FixtureEntry[],
-  manifestOverride?: string,
-  at: string = commit('v1')
-): Uint8Array {
-  const root = `packs-${at}/packs/review-kit`;
-  return tarGz([
-    {
-      path: `${root}/archon-plugin.json`,
-      data: manifestOverride ?? manifest('review-kit', { review: 'review/review.yaml' }),
-    },
-    { path: `${root}/review/review.yaml`, data: 'name: review\n' },
-    ...extra.map(entry => ({ ...entry, path: entry.path.replace('<root>', root) })),
-  ]);
-}
-
 describe('archon plugin: workflow packs', () => {
   test('installs the default branch head as one complete tree, then updates, lists and removes it', async () => {
     const env = await environment();
@@ -212,12 +244,15 @@ describe('archon plugin: workflow packs', () => {
     expect(await readFile(join(tree, 'review/review.yaml'), 'utf8')).toContain('# v2');
     if (process.platform !== 'win32') {
       expect((await stat(join(tree, 'review/scripts/check.ts'))).mode & 0o111).not.toBe(0);
+      expect((await stat(join(tree, 'review/review.yaml'))).mode & 0o111).toBe(0);
     }
-    // The pack's own `receipt.json` sits outside the receipts tree.
+    // The pack's own `receipt.json` sits outside the receipts tree, and nothing of
+    // the fetch is left behind.
     const receipts = await readReceipts(env.pluginsDir);
     expect(receipts).toHaveLength(1);
     expect(receipts[0]).toMatchObject({ id: ID, commit: commit('head') });
     expect(receipts[0].tag).toBeUndefined();
+    expect((await readdir(env.pluginsDir)).sort()).toEqual(['installed', 'packs']);
     expect((await run(env, 'list')).out).toBe(
       `${ID}  workflow-pack  -  ${commit('head').slice(0, 12)}  archon any`
     );
@@ -239,22 +274,17 @@ describe('archon plugin: workflow packs', () => {
     expect(await snapshot(env.pluginsDir)).toEqual({});
   });
 
-  test('an update to another tag on the installed commit rewrites only the receipt', async () => {
+  test('an update to another tag on the installed commit keeps the live tree and rewrites the receipt', async () => {
     const env = await environment();
     expect((await run(env, 'install', ID)).code).toBe(0);
     const tree = packTreePath(env.pluginsDir, ID, commit('head'));
     const files = await snapshot(tree);
-    // The tarball is never fetched again: replacing the live tree with the same bytes
-    // would leave the receipt pointing at no tree while it happened.
-    craftedTarballs.set(commit('head'), craftedPack([{ path: '<root>/x', type: '1', link: 'y' }]));
-    try {
-      const updated = await run(env, 'update', `${ID}@v2`);
-      expect(updated.err).toBe('');
-      expect(updated.out).toContain('-> v2 (commit');
-      expect(updated.out).toContain('files unchanged');
-    } finally {
-      craftedTarballs.delete(commit('head'));
-    }
+    // Replacing the live tree with the same bytes would delete it on the way out,
+    // since the old and new tree are the same directory.
+    const updated = await run(env, 'update', `${ID}@v2`);
+    expect(updated.err).toBe('');
+    expect(updated.out).toContain('-> v2 (commit');
+    expect(updated.out).toContain('files unchanged');
     expect(await snapshot(tree)).toEqual(files);
     expect((await readReceipts(env.pluginsDir))[0]).toMatchObject({
       tag: 'v2',
@@ -306,7 +336,6 @@ describe('archon plugin: workflow packs', () => {
   });
 
   test.each([
-    ['a symlink', 'owner/packs/packs/linked@v1', '"go/readme" is a symlink'],
     [
       'a missing entrypoint',
       'owner/packs/packs/missing@v1',
@@ -317,6 +346,17 @@ describe('archon plugin: workflow packs', () => {
       'owner/packs/packs/crowded@v1',
       'must hold exactly one .yaml file (found 2)',
     ],
+    ['a symlink', `${ID}@crafted-symlink`, '"review/readme" is a symlink'],
+    ['a submodule', `${ID}@crafted-submodule`, '"vendor" is a submodule'],
+    ['an escaping path', `${ID}@crafted-escape`, 'escapes the plugin directory'],
+    // Git keeps these names; Windows would read them as a path outside the pack.
+    ['a backslash name', `${ID}@crafted-backslash`, 'which Windows reads as path syntax'],
+    ['a drive-letter name', `${ID}@crafted-colon`, '"review/C:evil" contains \\ or :'],
+    [
+      'an incompatible Archon range',
+      `${ID}@crafted-compat`,
+      'requires Archon >=99.0.0; this is Archon 0.11.0',
+    ],
   ])('refuses a pack with %s and writes nothing', async (_case, target, message) => {
     const env = await environment();
     const result = await run(env, 'install', target);
@@ -325,63 +365,38 @@ describe('archon plugin: workflow packs', () => {
     expect(await snapshot(env.pluginsDir)).toEqual({});
   });
 
-  test.each([
-    [
-      'an entry escaping the archive',
-      [{ path: '<root>/../../../../evil.txt', data: 'x' }],
-      'escapes its root',
-    ],
-    [
-      'a hard link',
-      [{ path: '<root>/review/hard', type: '1' as const, link: 'etc/passwd' }],
-      '"review/hard" is a hardlink',
-    ],
-    // Git and `git archive` accept this name; Windows would write it outside the pack.
-    [
-      'a backslash path',
-      [{ path: '<root>/review/..\\..\\..\\evil.cmd', data: 'x' }],
-      'which Windows reads as path syntax',
-    ],
-    ['a drive-letter name', [{ path: '<root>/review/C:evil', data: 'x' }], 'contains \\ or :'],
-  ])('refuses a tarball with %s and writes nothing', async (_case, extra, message) => {
+  // Windows runners and many Windows users set core.autocrlf=true globally. The
+  // installed tree must hold the committed bytes regardless.
+  test("installs the committed bytes even when the user's git converts line endings", async () => {
     const env = await environment();
-    craftedTarballs.set(commit('v1'), craftedPack(extra));
+    const saved = { ...process.env };
+    Object.assign(process.env, {
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'core.autocrlf',
+      GIT_CONFIG_VALUE_0: 'true',
+    });
     try {
-      const result = await run(env, 'install', `${ID}@v1`);
-      expect(result.err).toContain(message);
-      expect(await snapshot(env.pluginsDir)).toEqual({});
+      expect((await run(env, 'install', `${ID}@v1`)).code).toBe(0);
     } finally {
-      craftedTarballs.delete(commit('v1'));
+      for (const key of ['GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0']) {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      }
     }
+    const installed = await readFile(
+      join(packTreePath(env.pluginsDir, ID, commit('v1')), 'review/review.yaml'),
+      'utf8'
+    );
+    expect(installed).toBe('name: review\n# v1\n');
   });
 
   test('a file outside the plugin never blocks the install, whatever its name', async () => {
     const env = await environment();
-    craftedTarballs.set(
-      commit('v1'),
-      craftedPack([{ path: `packs-${commit('v1')}/elsewhere/notes:file\\x.txt`, data: 'x' }])
-    );
-    try {
-      const result = await run(env, 'install', `${ID}@v1`);
-      expect(result.err).toBe('');
-      expect(result.code).toBe(0);
-    } finally {
-      craftedTarballs.delete(commit('v1'));
-    }
-  });
-
-  test('refuses a tarball whose manifest differs from the one at the same commit', async () => {
-    const env = await environment();
-    craftedTarballs.set(
-      commit('v1'),
-      craftedPack([], manifest('review-kit', { review: 'review/review.yaml', more: 'more/m.yaml' }))
-    );
-    try {
-      const result = await run(env, 'install', `${ID}@v1`);
-      expect(result.err).toContain('differs from the one at the same commit');
-      expect(await snapshot(env.pluginsDir)).toEqual({});
-    } finally {
-      craftedTarballs.delete(commit('v1'));
-    }
+    const result = await run(env, 'install', `${ID}@crafted-outside`);
+    expect(result.err).toBe('');
+    expect(result.code).toBe(0);
+    expect(
+      Object.keys(await snapshot(packTreePath(env.pluginsDir, ID, commit('crafted-outside'))))
+    ).toEqual(['archon-plugin.json', 'review/review.yaml']);
   });
 });
