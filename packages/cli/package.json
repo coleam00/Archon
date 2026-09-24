@@ -42,6 +42,9 @@
       "src/commands/workflow.test.ts"
     ],
     [
+      "src/commands/setup-exit.test.ts"
+    ],
+    [
       "src/commands/isolation.test.ts"
     ],
     [
@@ -61,7 +64,8 @@
       "src/help.test.ts",
       "src/default-cwd-canonicalization.test.ts",
       "src/utils/stdout.test.ts",
-      "src/utils/safe-console.test.ts"
+      "src/utils/safe-console.test.ts",
+      "src/utils/cli-start-telemetry.test.ts"
     ],
     [
       "src/utils/detached-run-control.test.ts"

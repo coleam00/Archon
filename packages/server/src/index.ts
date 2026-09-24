@@ -225,6 +225,15 @@ export function handleUnhandledRejection(reason: unknown): void {
   process.exit(1);
 }
 
+/**
+ * Exit after flushing queued telemetry. Boot failures after `archon_started`
+ * otherwise drop that event, since `process.exit` skips pending async work.
+ */
+export async function exitAfterTelemetryFlush(code: number): Promise<never> {
+  await shutdownTelemetry();
+  process.exit(code);
+}
+
 export interface ServerOptions {
   /**
    * Override the web dist path (for CLI binary with downloaded web-dist).
@@ -305,7 +314,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       },
       'no_ai_credentials'
     );
-    process.exit(1);
+    await exitAfterTelemetryFlush(1);
   }
 
   if (!hasClaudeCredentials) {
@@ -327,7 +336,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     getLog().info('database_connected');
   } catch (error) {
     getLog().fatal({ err: error }, 'database_connection_failed');
-    process.exit(1);
+    await exitAfterTelemetryFlush(1);
   }
 
   const config = await loadConfig();
@@ -1118,8 +1127,8 @@ async function checkGhAuth(): Promise<void> {
 
 // Run the application when executed directly (not imported as a library)
 if (import.meta.main) {
-  startServer().catch(error => {
+  startServer().catch(async (error: unknown) => {
     getLog().fatal({ err: error }, 'startup_failed');
-    process.exit(1);
+    await exitAfterTelemetryFlush(1);
   });
 }

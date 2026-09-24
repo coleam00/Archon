@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { bunTestCommand, WINDOWS_TEST_TIMEOUT_MS } from './bun-test-command';
+import { bunTestCommand, bunTestEnv, WINDOWS_TEST_TIMEOUT_MS } from './bun-test-command';
 
 describe('bunTestCommand', () => {
   it('widens the default per-test budget on Windows only', () => {
@@ -26,6 +26,14 @@ describe('bunTestCommand', () => {
   });
 });
 
+describe('bunTestEnv', () => {
+  it('disables telemetry unless the caller chose explicitly', () => {
+    expect(bunTestEnv({}).ARCHON_TELEMETRY_DISABLED).toBe('1');
+    expect(bunTestEnv({ ARCHON_TELEMETRY_DISABLED: '' }).ARCHON_TELEMETRY_DISABLED).toBe('');
+    expect(bunTestEnv({ PATH: '/bin' }).PATH).toBe('/bin');
+  });
+});
+
 describe('every runner assembles its command through bunTestCommand', () => {
   it('no runner script spells out a bun test command by hand', async () => {
     const { readdir, readFile } = await import('node:fs/promises');
@@ -36,6 +44,9 @@ describe('every runner assembles its command through bunTestCommand', () => {
         continue;
       const source = await readFile(join(import.meta.dir, entry), 'utf8');
       if (/\[\s*'bun'\s*,\s*'test'/.test(source)) offenders.push(entry);
+      // A runner that spawns tests without bunTestEnv lets them send telemetry.
+      if (source.includes('bunTestCommand(') && !source.includes('env: bunTestEnv()'))
+        offenders.push(`${entry} (env)`);
     }
     // A hand-built command on any runner path silently drops the Windows budget for that path.
     expect(offenders).toEqual([]);

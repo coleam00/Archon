@@ -5,7 +5,7 @@ import {
   RunLiveOwnerStopUnavailableError,
 } from '@archon/core/services/run-live-owner';
 
-export const DETACHED_RUN_OWNER_ENV = 'ARCHON_DETACHED_RUN_OWNER';
+export { DETACHED_RUN_OWNER_ENV } from './detached-run-env';
 
 const TERMINATION_GRACE_MS = 5_000;
 const TERMINATION_CONFIRM_MS = 1_000;

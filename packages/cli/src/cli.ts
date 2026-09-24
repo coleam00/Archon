@@ -74,6 +74,7 @@ installPipeSafeConsole();
 
 import { parseArgs } from 'util';
 import { cliArgOptions } from './args';
+import { shouldReportCliStart } from './utils/cli-start-telemetry';
 import { renderHelp } from './help';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
@@ -213,12 +214,12 @@ function isVersionRequest(args: string[]): boolean {
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
 
-  // Anonymous once-per-invocation startup event (self-gates on opt-out).
-  // Emitted before any early return so EVERY invocation — including bare
-  // `archon`, `--help`, and `--version` — is counted, matching the
-  // "once per CLI invocation" contract. Each early-return path below flushes
-  // via shutdownTelemetry(); the main command path flushes in its finally.
-  captureArchonStarted({ surface: 'cli' });
+  // Anonymous startup event (self-gates on opt-out). Emitted before any early
+  // return so every invocation — including bare `archon`, `--help`, and
+  // `--version` — is counted once; `serve` and detached run owners are counted
+  // by another process (see shouldReportCliStart). Each early-return path below
+  // flushes via shutdownTelemetry(); the main command path flushes in its finally.
+  if (shouldReportCliStart(args, process.env)) captureArchonStarted({ surface: 'cli' });
 
   // Handle no arguments - show help and exit successfully
   if (args.length === 0) {
@@ -589,7 +590,13 @@ async function main(): Promise<number> {
           providers: true,
           database: true,
         });
-        await setupCommand({ spawn: spawnFlag, repoPath, scope, force: forceFlag });
+        const setupExitCode = await setupCommand({
+          spawn: spawnFlag,
+          repoPath,
+          scope,
+          force: forceFlag,
+        });
+        if (setupExitCode !== 0) return setupExitCode;
         break;
       }
 
