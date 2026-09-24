@@ -441,20 +441,14 @@ describe('checkGhAuth', () => {
 });
 
 describe('checkPi', () => {
-  // Spy on the exported `probeAuthJsonExists` wrapper rather than `fsModule.existsSync`.
-  // Named imports from 'fs' cannot be intercepted by spying on the namespace object
-  // due to ESM rebinding — the wrapper pattern (same as `probeFileExists` in setup.ts)
-  // is the correct way to make this testable.
-  let authJsonSpy: ReturnType<typeof spyOn<typeof doctorModule, 'probeAuthJsonExists'>>;
+  // Spy on the exported `probePiAuthValidity` wrapper rather than reaching into
+  // 'fs'. Named imports from 'fs' cannot be intercepted by spying on the
+  // namespace object due to ESM rebinding — the wrapper pattern (same as
+  // `probeFileExists` in setup.ts) is the correct way to make this testable.
   let piAuthReaderSpy: ReturnType<typeof spyOn<typeof doctorModule, 'probePiAuthValidity'>> | null =
     null;
 
-  beforeEach(() => {
-    authJsonSpy = spyOn(doctorModule, 'probeAuthJsonExists');
-  });
-
   afterEach(() => {
-    authJsonSpy.mockRestore();
     piAuthReaderSpy?.mockRestore();
   });
 
@@ -466,7 +460,6 @@ describe('checkPi', () => {
   });
 
   it('returns pass when ~/.pi/agent/auth.json exists', async () => {
-    authJsonSpy.mockReturnValue(true);
     // The store has to hold a usable credential too — presence alone is no
     // longer a pass (#3274), so this pins the "exists AND valid" path.
     piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
@@ -481,7 +474,6 @@ describe('checkPi', () => {
   });
 
   it('returns pass when a Pi API key env var is set', async () => {
-    authJsonSpy.mockReturnValue(false);
     const result = await checkPi({
       DEFAULT_AI_ASSISTANT: 'pi',
       ANTHROPIC_API_KEY: 'sk-ant-test',
@@ -491,14 +483,12 @@ describe('checkPi', () => {
   });
 
   it('returns fail when DEFAULT_AI_ASSISTANT=pi but no auth found', async () => {
-    authJsonSpy.mockReturnValue(false);
     const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
     expect(result.status).toBe('fail');
     expect(result.message).toContain('pi /login');
   });
 
   it('returns fail when auth.json holds a grant that already expired (#3274)', async () => {
-    authJsonSpy.mockReturnValue(true);
     piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
       status: 'expired',
       providers: ['anthropic'],
@@ -514,7 +504,6 @@ describe('checkPi', () => {
   });
 
   it('reports the expiry date rather than any credential value', async () => {
-    authJsonSpy.mockReturnValue(true);
     piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
       status: 'expired',
       providers: ['anthropic'],
@@ -533,7 +522,6 @@ describe('checkPi', () => {
     // Two grants, one dead since June and one good until next year. The verdict
     // is aggregate, but the message must not send the operator to renew a
     // credential that does not need it.
-    authJsonSpy.mockReturnValue(true);
     piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
       status: 'expired',
       providers: ['anthropic', 'github-copilot'],
@@ -548,23 +536,7 @@ describe('checkPi', () => {
     expect(result.message).not.toContain('github-copilot');
   });
 
-  it('falls back to the full provider list when no expired subset is reported', async () => {
-    // A caller that predates `expiredProviders` still gets a usable message.
-    authJsonSpy.mockReturnValue(true);
-    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
-      status: 'expired',
-      providers: ['anthropic'],
-      expiresAt: Date.UTC(2026, 5, 8),
-    } as unknown as ReturnType<typeof doctorModule.probePiAuthValidity>);
-
-    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
-
-    expect(result.status).toBe('fail');
-    expect(result.message).toContain('anthropic');
-  });
-
   it('returns pass when auth.json holds a grant that is still valid', async () => {
-    authJsonSpy.mockReturnValue(true);
     piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
       status: 'valid',
       providers: ['anthropic'],
@@ -578,7 +550,6 @@ describe('checkPi', () => {
   });
 
   it('does not turn an unreadable store into an expired-credential failure', async () => {
-    authJsonSpy.mockReturnValue(true);
     piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
       status: 'unreadable',
     });
@@ -595,7 +566,6 @@ describe('checkPi', () => {
     // `{}` on disk means the file is present but holds no credential, so `pi`
     // has nothing to authenticate with. It must fall through to the env-var
     // check rather than report a green doctor for a Pi-default user.
-    authJsonSpy.mockReturnValue(true);
     piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
       status: 'empty',
     });
@@ -609,7 +579,6 @@ describe('checkPi', () => {
   it('an empty store still passes when an API key env var is set', async () => {
     // The reason `empty` falls through instead of failing outright: the env-var
     // path is a legitimate answer for the same store.
-    authJsonSpy.mockReturnValue(true);
     piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
       status: 'empty',
     });
@@ -626,14 +595,12 @@ describe('checkPi', () => {
   it('returns skip for Claude-only users who have ANTHROPIC_API_KEY but Pi is not default', async () => {
     // Regression guard for M2: shared keys like ANTHROPIC_API_KEY must not be treated
     // as Pi evidence unless DEFAULT_AI_ASSISTANT=pi.
-    authJsonSpy.mockReturnValue(false);
     const result = await checkPi({ ANTHROPIC_API_KEY: 'sk-ant-test' });
     expect(result.status).toBe('skip');
     expect(result.message).toContain('not configured');
   });
 
   it('returns skip for users with OPENROUTER_API_KEY set but Pi not configured as default', async () => {
-    authJsonSpy.mockReturnValue(false);
     const result = await checkPi({ OPENROUTER_API_KEY: 'or-key' });
     expect(result.status).toBe('skip');
     expect(result.message).toContain('not configured');

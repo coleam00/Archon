@@ -1,20 +1,37 @@
 /**
- * Credential-validity half of the Pi provider check (#3274).
+ * Credential-validity reader for the Pi auth store (#3274).
  *
- * `probeAuthJsonExists` answers "is the file on disk", which is what `checkPi`
- * used to report as `pass`. A Pi OAuth grant that expired months ago also has
- * its file on disk, so an install whose every Pi workflow fails still got a
- * green doctor. The file's presence is necessary, not sufficient.
+ * `checkPi` used to report `pass` when `~/.pi/agent/auth.json` merely existed.
+ * A Pi OAuth grant that expired months ago also has its file on disk, so an
+ * install whose every Pi workflow failed still got a green doctor — the file's
+ * presence is necessary, not sufficient.
  *
- * These tests pin the parsing half only: read the store Archon already reads
- * (`~/.pi/agent/auth.json`) and report what the credential in it says. No
- * network probe, no scanning of other tools' stores.
+ * The reader lives in `@archon/providers`, next to the Pi SDK whose shapes and
+ * acceptance rules it mirrors; the CLI deliberately has no Pi SDK dependency.
+ * These tests therefore pin the SDK-facing half: every shape the SDK's
+ * `auth-storage.ts` `load()` refuses must land on `unreadable`, and every shape
+ * it accepts — including a keyless `api_key` record whose key comes from
+ * provider-scoped env — must stay `valid`.
+ *
+ * No network probe, no scanning of other tools' credential stores.
  */
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readPiAuthValidity } from './doctor-pi-auth';
+import type { Credential } from '@earendil-works/pi-ai';
+import { readPiAuthValidity } from './auth-status';
+
+/**
+ * The credential shapes are imported from the SDK, not copied. If Pi renames a
+ * field or drops one, this literal stops compiling and the drift fails a build
+ * instead of shipping a reader that quietly disagrees with the runtime.
+ */
+const SDK_SHAPE_PIN: Credential[] = [
+  { type: 'api_key', key: 'sk-stored' },
+  { type: 'api_key', env: { ANTHROPIC_API_KEY: 'value' } },
+  { type: 'oauth', access: 'a', refresh: 'r', expires: 1_790_000_000_000 },
+];
 
 let dir: string;
 
@@ -27,7 +44,7 @@ afterEach(() => {
 });
 
 /** One OAuth credential, in the shape `pi /login` writes. */
-function oauthEntry(expires: number): unknown {
+function oauthEntry(expires: number): Credential {
   return {
     type: 'oauth',
     access: 'stored-access-token',
@@ -35,6 +52,15 @@ function oauthEntry(expires: number): unknown {
     expires,
   };
 }
+
+test('the copied credential shape still matches the SDK', () => {
+  // `auth-status.ts` imports its types from `@earendil-works/pi-ai`, so this
+  // literal is the only copy left in the repo. Compiling it against the SDK's
+  // `Credential` is what keeps the reader from drifting out of sync with what
+  // the runtime loads.
+  expect(SDK_SHAPE_PIN).toHaveLength(3);
+  expect(SDK_SHAPE_PIN.map(entry => entry.type)).toEqual(['api_key', 'api_key', 'oauth']);
+});
 
 describe('readPiAuthValidity', () => {
   test('an OAuth grant that expired in the past is reported expired, naming the date', () => {
@@ -329,5 +355,165 @@ describe('readPiAuthValidity', () => {
     if (result.status !== 'valid') throw new Error('unreachable');
     expect(result.expiresAt).toBe(Number.POSITIVE_INFINITY);
     expect(result.providers).toEqual(['anthropic']);
+  });
+
+  // --- Shapes the SDK refuses to load -------------------------------------
+  //
+  // Every case below is a store `auth-storage.ts`'s `load()` throws away, so Pi
+  // cannot authenticate against it. Before this reader moved into providers,
+  // checking only the `type` tag let all of them through as `valid`.
+
+  test('an OAuth entry with no access or refresh token is unreadable', () => {
+    // The SDK requires string `access` and `refresh`. A grant that carries only
+    // a future `expires` has no token to spend, yet the `type`-only check read
+    // it as a usable API-key-only store.
+    writeFileSync(
+      join(dir, 'auth.json'),
+      JSON.stringify({ anthropic: { type: 'oauth', expires: Date.UTC(2027, 0, 1) } })
+    );
+
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('unreadable');
+  });
+
+  test('an OAuth entry whose tokens are not strings is unreadable', () => {
+    writeFileSync(
+      join(dir, 'auth.json'),
+      JSON.stringify({
+        anthropic: { type: 'oauth', access: 17, refresh: 'r', expires: Date.UTC(2027, 0, 1) },
+      })
+    );
+
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('unreadable');
+  });
+
+  test('an api_key entry whose key is not a string is unreadable', () => {
+    writeFileSync(
+      join(dir, 'auth.json'),
+      JSON.stringify({ anthropic: { type: 'api_key', key: 17 } })
+    );
+
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('unreadable');
+  });
+
+  test('an api_key entry whose env values are not strings is unreadable', () => {
+    writeFileSync(
+      join(dir, 'auth.json'),
+      JSON.stringify({ anthropic: { type: 'api_key', key: 'sk-ant', env: { ACCOUNT: 1 } } })
+    );
+
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('unreadable');
+  });
+
+  test('an api_key entry that is an array is unreadable', () => {
+    writeFileSync(
+      join(dir, 'auth.json'),
+      JSON.stringify({ anthropic: ['not', 'a', 'credential'] })
+    );
+
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('unreadable');
+  });
+
+  test('a null credential is unreadable', () => {
+    writeFileSync(join(dir, 'auth.json'), JSON.stringify({ anthropic: null }));
+
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('unreadable');
+  });
+
+  // --- Shapes the SDK accepts that must stay valid ------------------------
+
+  test('a keyless api_key entry stays valid: the SDK permits it', () => {
+    // `ApiKeyCredential.key` is optional, and the key can be supplied at
+    // resolution time from the provider-scoped `env` or a `!command` value.
+    // Rejecting it here would make doctor stricter than the runtime and fail a
+    // store that works.
+    writeFileSync(join(dir, 'auth.json'), JSON.stringify({ anthropic: { type: 'api_key' } }));
+
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('valid');
+  });
+
+  test('an api_key entry with an empty-string key stays valid', () => {
+    // `typeof '' === 'string'`, so the SDK accepts the shape. Whether the empty
+    // key authenticates is the runtime's business, not a doctor verdict.
+    writeFileSync(
+      join(dir, 'auth.json'),
+      JSON.stringify({ anthropic: { type: 'api_key', key: '' } })
+    );
+
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('valid');
+  });
+
+  test('an api_key entry with an empty env map stays valid', () => {
+    writeFileSync(
+      join(dir, 'auth.json'),
+      JSON.stringify({ anthropic: { type: 'api_key', env: {} } })
+    );
+
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('valid');
+  });
+
+  test('an api_key entry carrying provider-scoped env stays valid', () => {
+    writeFileSync(
+      join(dir, 'auth.json'),
+      JSON.stringify({
+        cloudflare: { type: 'api_key', env: { CLOUDFLARE_ACCOUNT_ID: 'account' } },
+      })
+    );
+
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('valid');
+  });
+
+  test('a store whose every entry is usable is valid even when mixed', () => {
+    // A usable OAuth grant next to a keyless api_key record: the aggregate
+    // verdict is `valid` and only the OAuth grant can go stale.
+    writeFileSync(
+      join(dir, 'auth.json'),
+      JSON.stringify({
+        anthropic: oauthEntry(Date.UTC(2027, 0, 1)),
+        openrouter: { type: 'api_key' },
+      })
+    );
+
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('valid');
+    if (result.status !== 'valid') throw new Error('unreachable');
+    expect(result.expiresAt).toBe(Date.UTC(2027, 0, 1));
+    expect(result.expiredProviders).toEqual([]);
+  });
+
+  test('one unusable entry poisons the whole store', () => {
+    // A broken record next to a good grant is still a store the SDK refuses to
+    // load, so neither grant can be reported usable.
+    writeFileSync(
+      join(dir, 'auth.json'),
+      JSON.stringify({
+        anthropic: oauthEntry(Date.UTC(2027, 0, 1)),
+        broken: { type: 'oauth', expires: Date.UTC(2027, 0, 1) },
+      })
+    );
+
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('unreadable');
   });
 });

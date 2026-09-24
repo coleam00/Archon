@@ -24,8 +24,11 @@ import {
   resolveClaudeBinaryWithSource,
   type ClaudeBinaryResolution,
 } from '@archon/providers/claude/binary-resolver';
+import {
+  readPiAuthValidity,
+  type PiAuthValidity,
+} from '@archon/providers/community/pi/auth-status';
 import type { Codebase, MergedConfig, SchemaVersionInfo } from '@archon/core';
-import { readPiAuthValidity, type PiAuthValidity } from './doctor-pi-auth';
 
 // Vendor-canonical credential id for Codex (since #1955 credentials are keyed
 // by vendor, not agent). A connected `openai` key signals Codex intent even
@@ -369,21 +372,13 @@ export async function checkGhAuth(env: NodeJS.ProcessEnv): Promise<CheckResult> 
 }
 
 /**
- * Thin wrapper around `existsSync` so tests can spy on it by name without
- * fighting ESM named-import rebinding limitations.  Matches the `probeFileExists`
- * pattern in `setup.ts`.
- */
-export function probeAuthJsonExists(path: string): boolean {
-  return existsSync(path);
-}
-
-/**
  * Read the Pi credential store and report what the credential in it says
  * (#3274). A file on disk is not a usable credential — an OAuth grant that
  * expired months ago still has its file, and every Pi workflow on that install
  * failed while `doctor` reported pass.
  *
- * Wrapped for the same spy-by-name reason as `probeAuthJsonExists`.
+ * Wrapped so tests can spy on it by name without fighting ESM named-import
+ * rebinding limitations.
  */
 export function probePiAuthValidity(authJsonPath: string, now: number): PiAuthValidity {
   return readPiAuthValidity(authJsonPath, { now });
@@ -411,47 +406,50 @@ export async function checkPi(env: NodeJS.ProcessEnv): Promise<CheckResult> {
   // Pi reads OAuth credentials from ~/.pi/agent/auth.json (written by `pi /login`)
   // or API key env vars; either path is sufficient.
   const authJsonPath = join(homedir(), '.pi', 'agent', 'auth.json');
-  if (probeAuthJsonExists(authJsonPath)) {
-    const validity = probePiAuthValidity(authJsonPath, Date.now());
+  // No existence gate in front of the read. `existsSync` swallows every errno
+  // and answers `false`, so a store the current user cannot traverse (EACCES on
+  // the parent directory, ENOTDIR when a path component is a file) used to skip
+  // the validity read entirely and surface as generic missing auth. The reader
+  // already separates ENOENT (`missing`) from every other read failure
+  // (`unreadable`), so let it answer for both.
+  const validity = probePiAuthValidity(authJsonPath, Date.now());
 
-    // An expired grant is a hard failure naming the provider and the date, so
-    // the operator knows which grant to renew rather than re-running blindly.
-    // Only the grants that actually expired are named: the verdict is
-    // aggregate, but pointing at a still-usable provider sends the operator to
-    // renew a credential that does not need it.
-    if (validity.status === 'expired') {
-      const expired = validity.expiredProviders ?? validity.providers;
-      return {
-        label,
-        status: 'fail',
-        message: `~/.pi/agent/auth.json holds an expired credential for ${expired.join(', ')} (expired ${formatExpiry(validity.expiresAt)}). Run \`pi /login\` to renew it.`,
-      };
-    }
-
-    // The file exists but says nothing usable. Reported on its own line: an
-    // unreadable store is not an expired credential, and conflating them sends
-    // the operator looking for a renewal that cannot help.
-    if (validity.status === 'unreadable') {
-      return {
-        label,
-        status: 'fail',
-        message:
-          '~/.pi/agent/auth.json exists but could not be read as JSON. Re-run `pi /login` to rewrite it.',
-      };
-    }
-
-    // 'empty' must not claim a pass: the file is present but holds no
-    // credential, so `pi` has nothing to authenticate with. Falling through
-    // lets the env-var check below answer, and a Pi-default user with neither
-    // gets the failure instead of a green doctor.
-    if (validity.status === 'valid') {
-      return { label, status: 'pass', message: '~/.pi/agent/auth.json found' };
-    }
-
-    // 'missing' with the probe reporting existence is a race (the file vanished
-    // between the two calls); fall through to the env-var check rather than
-    // claiming either state.
+  // An expired grant is a hard failure naming the provider and the date, so
+  // the operator knows which grant to renew rather than re-running blindly.
+  // Only the grants that actually expired are named: the verdict is
+  // aggregate, but pointing at a still-usable provider sends the operator to
+  // renew a credential that does not need it.
+  if (validity.status === 'expired') {
+    const expired = validity.expiredProviders;
+    return {
+      label,
+      status: 'fail',
+      message: `~/.pi/agent/auth.json holds an expired credential for ${expired.join(', ')} (expired ${formatExpiry(validity.expiresAt)}). Run \`pi /login\` to renew it.`,
+    };
   }
+
+  // The file exists but says nothing usable. Reported on its own line: an
+  // unreadable store is not an expired credential, and conflating them sends
+  // the operator looking for a renewal that cannot help.
+  if (validity.status === 'unreadable') {
+    return {
+      label,
+      status: 'fail',
+      message:
+        '~/.pi/agent/auth.json exists but could not be read as JSON. Re-run `pi /login` to rewrite it.',
+    };
+  }
+
+  // 'empty' must not claim a pass: the file is present but holds no
+  // credential, so `pi` has nothing to authenticate with. Falling through
+  // lets the env-var check below answer, and a Pi-default user with neither
+  // gets the failure instead of a green doctor.
+  if (validity.status === 'valid') {
+    return { label, status: 'pass', message: '~/.pi/agent/auth.json found' };
+  }
+
+  // 'missing' and 'empty' both fall through to the env-var check below: no
+  // stored credential, so a configured API key is the answer.
 
   const foundKey = PI_API_KEY_VARS.find(v => (env[v] ?? '').trim().length > 0);
   if (foundKey) {
