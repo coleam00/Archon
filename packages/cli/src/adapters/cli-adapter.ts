@@ -78,6 +78,10 @@ export class CLIAdapter implements IPlatformAdapter {
     return 'cli';
   }
 
+  formatWorkflowCommand(command: string): string {
+    return `archon workflow ${command}`;
+  }
+
   async start(): Promise<void> {
     // No-op for CLI
   }

@@ -180,8 +180,8 @@ describe('buildRunManagementSection', () => {
     }
     expect(section).toContain('--json');
     expect(section).toContain('--detach');
-    expect(section).toContain('actively stop');
-    expect(section).toContain('state-only cancellation');
+    expect(section).toContain('has that process stopped first');
+    expect(section).toContain('discard a run whose owner is gone');
   });
 
   test('states the status fallback without weakening the non-repository boundary', () => {

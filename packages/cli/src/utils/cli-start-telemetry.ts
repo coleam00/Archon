@@ -1,6 +1,6 @@
 import { parseArgs } from 'util';
 import { cliArgOptions } from '../args';
-import { DETACHED_RUN_OWNER_ENV } from './detached-run-env';
+import { DETACHED_RUN_OWNER_ENV } from './detached-run-control';
 
 /**
  * Whether this CLI process reports its own `archon_started`. Every invocation

@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { requestRunLiveOwnerStop } from '@archon/core/services/run-live-owner';
-import { requestDetachedRunStop } from '../utils/detached-run-control';
+import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
 
 const cleanupPaths: string[] = [];
 const activeRunIds = new Set<string>();

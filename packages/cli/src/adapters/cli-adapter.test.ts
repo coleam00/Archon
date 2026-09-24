@@ -196,6 +196,14 @@ describe('CLIAdapter', () => {
     });
   });
 
+  describe('formatWorkflowCommand', () => {
+    it('spells workflow commands as archon CLI subcommands', () => {
+      expect(adapter.formatWorkflowCommand('abandon abc12345')).toBe(
+        'archon workflow abandon abc12345'
+      );
+    });
+  });
+
   describe('start', () => {
     it('should be a no-op (returns void)', async () => {
       const result = await adapter.start();

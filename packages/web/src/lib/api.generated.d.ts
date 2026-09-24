@@ -1664,6 +1664,15 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description No live owner answered, or the owner could not be stopped; the run was not changed */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
           headers: {
@@ -1861,6 +1870,15 @@ export interface paths {
         };
         /** @description Not found */
         404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description A live owner answered but could not be stopped; the run was not changed */
+        409: {
           headers: {
             [name: string]: unknown;
           };

@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { canConnectToRunLiveOwner, runLiveOwnerPath } from '@archon/core/services/run-live-owner';
-import { requestDetachedRunStop } from '../utils/detached-run-control';
+import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
 
 const cleanupPaths: string[] = [];
 const activeRunIds = new Set<string>();

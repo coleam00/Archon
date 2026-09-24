@@ -129,6 +129,15 @@ describe('SlackAdapter', () => {
       const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
       expect(adapter.getPlatformType()).toBe('slack');
     });
+
+    // The worktree-in-use refusal prints commands through this; `/workflow` is not a
+    // command this Slack app registers.
+    test('spells workflow commands as the registered /archon-workflow command', () => {
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      expect(adapter.formatWorkflowCommand('cancel abc12345')).toBe(
+        '/archon-workflow cancel abc12345'
+      );
+    });
   });
 
   describe('thread detection', () => {

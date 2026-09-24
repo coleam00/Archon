@@ -68,9 +68,6 @@
       "src/utils/cli-start-telemetry.test.ts"
     ],
     [
-      "src/utils/detached-run-control.test.ts"
-    ],
-    [
       "src/utils/detached-run-control.integration.spec.ts"
     ],
     [

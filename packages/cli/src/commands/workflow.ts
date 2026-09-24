@@ -74,7 +74,6 @@ import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import { toHydratedTimestamp } from '@archon/core/db/timestamps';
 import { createChildWorktreeResolver } from '@archon/core/workflows/child-isolation-resolver';
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
-import { reclaimContainerEnv } from '@archon/core/services/cleanup-service';
 import { waitForRunAttention } from '@archon/core/services/run-attention-watch';
 import type { RunWaitResult } from '@archon/core/services/run-attention-watch';
 import {
@@ -152,6 +151,10 @@ import {
   respondToWorkflow,
   resumeWorkflow as resumeWorkflowOp,
   abandonWorkflow,
+  cancelWorkflow,
+  CancelRefusedError,
+  type CancelWorkflowResult,
+  describeAbandonOwner,
   getWorkflowStatus,
   resetWorkflowNodeSessions,
   assertApprovable,
@@ -181,7 +184,6 @@ export {
 import {
   assertDetachedRunProcessOwner,
   DETACHED_RUN_OWNER_ENV,
-  requestDetachedRunStop,
 } from '../utils/detached-run-control';
 import { resolveCliUserId } from './auth';
 import { RESUME_RUN_CONFIG_CONFLICT } from '../dispatch-guards';
@@ -5057,19 +5059,30 @@ export async function workflowAbandonCommand(
   json?: boolean,
   cwd?: string
 ): Promise<void> {
-  // The container reclaim (M2) now lives in the shared `abandonWorkflow` op, so EVERY
-  // surface reclaims — the CLI just reports the cancellation. Keeps `--json` a clean
-  // one-line contract (no reclaim text before the payload).
+  // The container reclaim (M2) and the live-owner stop both live in the shared
+  // `abandonWorkflow` op, so EVERY surface does them — the CLI reports the outcome.
+  // Keeps `--json` a clean one-line contract (no reclaim text before the payload).
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const { run, cascadeFailures, blockedParentRunId } = await abandonWorkflow(resolvedId);
+      const { run, cascadeFailures, blockedParentRunId, owner } = await abandonWorkflow(resolvedId);
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
         action: 'abandon',
         status: 'cancelled',
         workflowName: run.workflow_name,
+        owner:
+          owner.kind === 'stopped'
+            ? { outcome: 'stopped', pid: owner.pid }
+            : {
+                outcome: 'no_owner_answered',
+                thisHost: owner.thisHost,
+                recordedHost: owner.recordedOwner?.host ?? null,
+                recordedPid: owner.recordedOwner?.pid ?? null,
+                recordedUid: owner.recordedOwner?.uid ?? null,
+                lastActivityAt: owner.lastActivityAt?.toISOString() ?? null,
+              },
         ...(cascadeFailures > 0 ? { cascadeFailures } : {}),
         ...(blockedParentRunId ? { blockedParentRunId } : {}),
       });
@@ -5080,7 +5093,8 @@ export async function workflowAbandonCommand(
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
-  const { run, cascadeFailures, blockedParentRunId } = await abandonWorkflow(resolvedId);
+  const { run, cascadeFailures, blockedParentRunId, owner } = await abandonWorkflow(resolvedId);
+  for (const line of describeAbandonOwner(owner)) console.log(line);
   console.log(`Abandoned workflow run: ${resolvedId}`);
   console.log(`Workflow: ${run.workflow_name}`);
   printRunTreeCancellationWarnings(cascadeFailures, blockedParentRunId);
@@ -5106,94 +5120,51 @@ function printRunTreeCancellationWarnings(
 }
 
 /**
- * Actively cancel a run owned by a detached CLI child.
+ * Cancel a running run through the shared `cancelWorkflow` op.
  *
  * Ordering is the contract: prove the live exact-run owner, terminate its process
  * tree, then record `cancelled`. An unreachable owner never falls back to a DB-only
- * transition — operators use `abandon` separately after verifying an orphan.
+ * transition — the refusal points at `abandon` for an orphan the operator has verified.
  */
 export async function workflowCancelCommand(
   runId: string,
   json?: boolean,
   cwd?: string
 ): Promise<void> {
-  const cancel = async (): Promise<{
-    resolvedId: string;
-    workflowName: string;
-    cascadeFailures: number;
-    blockedParentRunId: string | null;
-  }> => {
+  const cancel = async (): Promise<{ resolvedId: string; result: CancelWorkflowResult }> => {
     const resolvedId = await resolveRunIdArg(runId, cwd);
-    const current = await workflowDb.getWorkflowRun(resolvedId);
-    if (!current) throw new Error(`Workflow run not found: ${resolvedId}`);
-    if (current.status !== 'running') {
-      throw new Error(
-        `Cannot actively cancel run with status '${current.status}'. Only a running detached CLI run has live work to stop.`
-      );
-    }
-
-    let containerEnvId: string | undefined;
-    if (current.metadata?.isolation === 'container') {
-      const isolationEnvId = current.metadata.isolation_env_id;
-      if (typeof isolationEnvId !== 'string' || isolationEnvId.trim().length === 0) {
-        throw new Error(
-          `Cannot confirm the isolation container owned by run ${resolvedId}. ` +
-            'The run was not changed; its container tracking ID is missing.'
-        );
+    try {
+      const result = await cancelWorkflow(resolvedId);
+      if (result.kind === 'cooperative' && !result.cancelled) {
+        throw new Error(`Workflow run ${resolvedId} already finished; nothing to cancel.`);
       }
-      containerEnvId = isolationEnvId;
-      const containerEnv = await isolationDb.getById(containerEnvId);
-      if (containerEnv?.provider !== 'container') {
-        throw new Error(
-          `Cannot confirm the isolation container owned by run ${resolvedId}. ` +
-            'The run was not changed; inspect the managed containers before retrying or abandoning it.'
-        );
+      return { resolvedId, result };
+    } catch (error) {
+      if (error instanceof CancelRefusedError && error.reason === 'no_owner_answered') {
+        throw new Error(`${error.message}\nAbandon it: archon workflow abandon ${resolvedId}`, {
+          cause: error,
+        });
       }
+      throw error;
     }
-
-    const target = await requestDetachedRunStop(resolvedId);
-    await target.stop();
-
-    if (containerEnvId) {
-      try {
-        await reclaimContainerEnv(containerEnvId);
-      } catch (error) {
-        throw new Error(
-          'Detached owner process stopped, but the isolation container could not be confirmed stopped. ' +
-            `Run state was not changed. ${(error as Error).message}`
-        );
-      }
-    }
-
-    const { run, cancelled, cascadeFailures, blockedParentRunId } =
-      await abandonWorkflow(resolvedId);
-    if (!cancelled) {
-      const latest = await workflowDb.getWorkflowRun(resolvedId);
-      throw new Error(
-        'Detached work stopped, but cancellation did not win the run state transition. ' +
-          `The run status is ${latest?.status ?? 'unknown'}; it was not reported as cancelled.`
-      );
-    }
-    return {
-      resolvedId,
-      workflowName: run.workflow_name,
-      cascadeFailures,
-      blockedParentRunId,
-    };
   };
 
   if (json) {
     try {
-      const result = await cancel();
+      const { resolvedId, result } = await cancel();
       await writeJsonLine({
         ok: true,
-        runId: result.resolvedId,
+        runId: resolvedId,
         action: 'cancel',
         status: 'cancelled',
-        processStopped: true,
-        workflowName: result.workflowName,
-        ...(result.cascadeFailures > 0 ? { cascadeFailures: result.cascadeFailures } : {}),
-        ...(result.blockedParentRunId ? { blockedParentRunId: result.blockedParentRunId } : {}),
+        processStopped: result.kind === 'stopped',
+        workflowName: result.run.workflow_name,
+        ...(result.kind === 'stopped' && result.cascadeFailures > 0
+          ? { cascadeFailures: result.cascadeFailures }
+          : {}),
+        ...(result.kind === 'stopped' && result.blockedParentRunId
+          ? { blockedParentRunId: result.blockedParentRunId }
+          : {}),
       });
     } catch (error) {
       await printJsonWriteError(runId, 'cancel', error);
@@ -5201,9 +5172,15 @@ export async function workflowCancelCommand(
     return;
   }
 
-  const result = await cancel();
-  console.log(`Cancelled detached workflow run: ${result.resolvedId}`);
-  console.log(`Workflow: ${result.workflowName}`);
+  const { resolvedId, result } = await cancel();
+  if (result.kind === 'cooperative') {
+    console.log(`Cancelled workflow run: ${resolvedId}`);
+    console.log(`Workflow: ${result.run.workflow_name}`);
+    console.log("It runs inside its parent run's process and stops at its next status check.");
+    return;
+  }
+  console.log(`Cancelled detached workflow run: ${resolvedId}`);
+  console.log(`Workflow: ${result.run.workflow_name}`);
   console.log('Host process tree stopped before run state was changed.');
   printRunTreeCancellationWarnings(result.cascadeFailures, result.blockedParentRunId);
 }
