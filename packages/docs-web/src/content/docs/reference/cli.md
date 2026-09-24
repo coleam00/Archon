@@ -141,7 +141,7 @@ archon plugin list
 
 A workflow pack installs complete at one commit. The command downloads the commit's tarball from `codeload.github.com`, keeps the plugin directory, and refuses the pack if that directory holds a symlink, a hard link or an entry whose path escapes it, if an entrypoint is missing, or if another installed pack has the same owner and `name`. The tree is written to `ARCHON_HOME/plugins/packs/<id>/<commit>/` and then the receipt to `ARCHON_HOME/plugins/installed/<id>/receipt.json`, so a reader sees either the previous complete install or the new one. `update` replaces the tree and prints the old and new commit; `remove` deletes the receipt and that tree. Nothing updates in the background.
 
-`copy` writes the installed tree to `.archon/workflows/<name>/` in the current project (or `--cwd`). It refuses when that directory exists. The copy is an ordinary project workflow pack from then on: you own and edit it, and `update` or `remove` do not touch it.
+`copy` writes the installed tree to `.archon/workflows/<name>/` at the root of the repository you run it in (or `--cwd`); in a folder project, the directory itself. It refuses when that directory exists. The copy is an ordinary project workflow pack from then on: you own and edit it, and `update` or `remove` do not touch it.
 
 ### `auth github`
 

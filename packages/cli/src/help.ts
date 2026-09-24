@@ -245,7 +245,7 @@ const commandHelp: HelpEntry[] = [
     command: 'plugin',
     subcommand: 'update',
     spec: 'plugin update <id>[@tag]',
-    description: 'Reinstall an installed plugin at another tag or commit',
+    description: 'Reinstall an installed plugin at a tag, or its latest release or default branch',
   },
   {
     command: 'plugin',

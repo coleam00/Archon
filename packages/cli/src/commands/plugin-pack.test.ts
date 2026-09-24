@@ -87,6 +87,7 @@ beforeAll(async () => {
   git('add', `${kit}/review/review.yaml`);
   git('commit', '-q', '-m', 'v2');
   commits.set('head', git('rev-parse', 'HEAD'));
+  git('tag', 'v2');
   git('update-server-info');
 
   server = Bun.serve({
@@ -181,9 +182,13 @@ async function snapshot(dir: string): Promise<Record<string, string>> {
 
 const commit = (name: string): string => commits.get(name) ?? '';
 
-/** A codeload-shaped tarball of the review-kit pack at v1, plus `extra` entries. */
-function craftedPack(extra: FixtureEntry[], manifestOverride?: string): Uint8Array {
-  const root = `packs-${commit('v1')}/packs/review-kit`;
+/** A codeload-shaped tarball of the review-kit pack, plus `extra` entries. */
+function craftedPack(
+  extra: FixtureEntry[],
+  manifestOverride?: string,
+  at: string = commit('v1')
+): Uint8Array {
+  const root = `packs-${at}/packs/review-kit`;
   return tarGz([
     {
       path: `${root}/archon-plugin.json`,
@@ -234,9 +239,47 @@ describe('archon plugin: workflow packs', () => {
     expect(await snapshot(env.pluginsDir)).toEqual({});
   });
 
+  test('an update to another tag on the installed commit rewrites only the receipt', async () => {
+    const env = await environment();
+    expect((await run(env, 'install', ID)).code).toBe(0);
+    const tree = packTreePath(env.pluginsDir, ID, commit('head'));
+    const files = await snapshot(tree);
+    // The tarball is never fetched again: replacing the live tree with the same bytes
+    // would leave the receipt pointing at no tree while it happened.
+    craftedTarballs.set(commit('head'), craftedPack([{ path: '<root>/x', type: '1', link: 'y' }]));
+    try {
+      const updated = await run(env, 'update', `${ID}@v2`);
+      expect(updated.err).toBe('');
+      expect(updated.out).toContain('-> v2 (commit');
+      expect(updated.out).toContain('files unchanged');
+    } finally {
+      craftedTarballs.delete(commit('head'));
+    }
+    expect(await snapshot(tree)).toEqual(files);
+    expect((await readReceipts(env.pluginsDir))[0]).toMatchObject({
+      tag: 'v2',
+      commit: commit('head'),
+    });
+  });
+
+  test('copy writes to the repository root when run from a subdirectory', async () => {
+    const env = await environment();
+    expect((await run(env, 'install', `${ID}@v1`)).code).toBe(0);
+    const project = join(env.projectDir, '..', 'repo');
+    await mkdir(join(project, 'src', 'deep'), { recursive: true });
+    Bun.spawnSync(['git', 'init', '-q'], { cwd: project });
+    const copied = await run({ ...env, projectDir: join(project, 'src', 'deep') }, 'copy', ID);
+    expect(copied.err).toBe('');
+    expect(
+      Object.keys(await snapshot(join(project, '.archon', 'workflows', 'review-kit')))
+    ).toEqual(TREE_FILES);
+    expect(await snapshot(join(project, 'src'))).toEqual({});
+  });
+
   test('copy makes a project-owned copy and refuses an existing destination', async () => {
     const env = await environment();
     expect((await run(env, 'install', `${ID}@v1`)).code).toBe(0);
+    await mkdir(env.projectDir, { recursive: true });
     const copied = await run(env, 'copy', ID);
     expect(copied.err).toBe('');
     const target = join(env.projectDir, '.archon', 'workflows', 'review-kit');
@@ -293,6 +336,13 @@ describe('archon plugin: workflow packs', () => {
       [{ path: '<root>/review/hard', type: '1' as const, link: 'etc/passwd' }],
       '"review/hard" is a hardlink',
     ],
+    // Git and `git archive` accept this name; Windows would write it outside the pack.
+    [
+      'a backslash path',
+      [{ path: '<root>/review/..\\..\\..\\evil.cmd', data: 'x' }],
+      'which Windows reads as path syntax',
+    ],
+    ['a drive-letter name', [{ path: '<root>/review/C:evil', data: 'x' }], 'contains \\ or :'],
   ])('refuses a tarball with %s and writes nothing', async (_case, extra, message) => {
     const env = await environment();
     craftedTarballs.set(commit('v1'), craftedPack(extra));

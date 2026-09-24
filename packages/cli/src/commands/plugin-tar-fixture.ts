@@ -47,11 +47,12 @@ function padded(data: Uint8Array): Uint8Array {
   return out;
 }
 
-/** A pax `path=` record; its decimal length prefix counts itself. */
+/** A pax `path=` record; its decimal length prefix counts itself, in UTF-8 bytes. */
 function paxRecord(path: string): Uint8Array {
   const body = ` path=${path}\n`;
-  let length = body.length + 1;
-  while (`${length}${body}`.length !== length) length += 1;
+  const bytes = (text: string): number => encoder.encode(text).length;
+  let length = bytes(body) + 1;
+  while (bytes(`${length}${body}`) !== length) length += 1;
   return encoder.encode(`${length}${body}`);
 }
 

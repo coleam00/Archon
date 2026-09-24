@@ -17,7 +17,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { chmod, cp, lstat, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { execFileAsync } from '@archon/git';
+import { execFileAsync, findRepoRoot } from '@archon/git';
 import {
   describeIssues,
   forgeReleaseAsset,
@@ -42,7 +42,7 @@ export interface PluginEnvironment {
   /** `ARCHON_HOME/plugins`, the directory forge discovery scans. */
   pluginsDir: string;
   archonVersion: string;
-  /** The project `copy` writes into: the working directory, or `--cwd`. */
+  /** Where `copy` starts looking for its project: the working directory, or `--cwd`. */
   projectDir: string;
   platform?: NodeJS.Platform;
   arch?: string;
@@ -61,11 +61,25 @@ interface PluginRef {
   tag?: string;
 }
 
-/** What a ref resolved to: the commit, and the manifest at that commit. */
-interface ResolvedSource {
-  tag?: string;
-  commit: string;
-  manifest: PluginManifest;
+/**
+ * What a ref resolved to: the commit and the manifest at that commit. A forge plugin's
+ * files are release assets, so it always resolves to a tag; a pack may resolve to the
+ * default branch head.
+ */
+type ResolvedSource =
+  | { kind: 'forge'; tag: string; commit: string; manifest: ForgeManifest }
+  | { kind: 'workflow-pack'; tag?: string; commit: string; manifest: WorkflowPackManifest };
+
+function resolved(
+  tag: string | undefined,
+  commit: string,
+  manifest: PluginManifest
+): ResolvedSource {
+  if (manifest.kind === 'workflow-pack') {
+    return { kind: manifest.kind, ...(tag !== undefined ? { tag } : {}), commit, manifest };
+  }
+  if (tag === undefined) throw new Error(`forge plugin ${manifest.name} resolved without a tag`);
+  return { kind: manifest.kind, tag, commit, manifest };
 }
 
 const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
@@ -207,14 +221,14 @@ async function resolveSource(
   const rawUrl = env.rawUrl ?? 'https://raw.githubusercontent.com';
   const atTag = async (tag: string): Promise<ResolvedSource> => {
     const commit = await resolveTagCommit(ref, tag, githubUrl);
-    return { tag, commit, manifest: await fetchManifest(ref, commit, rawUrl) };
+    return resolved(tag, commit, await fetchManifest(ref, commit, rawUrl));
   };
   if (ref.tag) return atTag(ref.tag);
   if (kind === 'forge') return atTag(await latestReleaseTag(ref, githubUrl));
   const commit = await resolveHeadCommit(ref, githubUrl);
   const manifest = await fetchManifest(ref, commit, rawUrl);
   if (manifest.kind === 'forge') return atTag(await latestReleaseTag(ref, githubUrl));
-  return { commit, manifest };
+  return resolved(undefined, commit, manifest);
 }
 
 function assertCompatible(ref: PluginRef, source: ResolvedSource, archonVersion: string): void {
@@ -244,7 +258,7 @@ function expectedDigest(checksums: string, asset: string): string | undefined {
 
 async function installForge(
   ref: PluginRef,
-  source: ResolvedSource & { tag: string; manifest: ForgeManifest },
+  source: Extract<ResolvedSource, { kind: 'forge' }>,
   receipts: PluginReceipt[],
   previous: PluginReceipt | undefined,
   env: PluginEnvironment
@@ -333,7 +347,8 @@ async function installForge(
  * The plugin subtree of a commit tarball, as relative path -> file.
  *
  * Refuses, by name, every entry the tree could not hold faithfully: any
- * absolute or `..` name in the archive (its place is ambiguous), and any
+ * absolute or `..` name in the archive, or one containing `\` or `:` (its
+ * place is ambiguous, or differs on Windows), and any
  * symlink, hard link or special file inside the plugin. Either would let
  * discovery or run capture read something other than the files at this commit.
  */
@@ -350,6 +365,13 @@ function packFiles(
     const segments = entry.path.split('/');
     if (segments[0] !== top || segments.some(s => s === '' || s === '.' || s === '..')) {
       throw new Error(`Refusing ${ref.id}: the archive entry "${entry.path}" escapes its root`);
+    }
+    // Git allows `\` and `:` in a file name; Windows reads them as a path separator and
+    // a drive or stream, so `..\x` would land outside the pack there.
+    if (/[\\:]/.test(entry.path)) {
+      throw new Error(
+        `Refusing ${ref.id}: the archive entry "${entry.path}" contains \\ or :, which Windows reads as path syntax`
+      );
     }
     if (entry.path !== root && !entry.path.startsWith(`${root}/`)) continue;
     const relative = entry.path.slice(root.length + 1);
@@ -406,7 +428,7 @@ function assertPackTree(
 
 async function installPack(
   ref: PluginRef,
-  source: ResolvedSource & { manifest: WorkflowPackManifest },
+  source: Extract<ResolvedSource, { kind: 'workflow-pack' }>,
   receipts: PluginReceipt[],
   previous: PluginReceipt | undefined,
   env: PluginEnvironment
@@ -431,13 +453,6 @@ async function installPack(
     return;
   }
 
-  const codeloadUrl = env.codeloadUrl ?? 'https://codeload.github.com';
-  const tarballUrl = `${codeloadUrl}/${ref.owner}/${ref.repo}/tar.gz/${commit}`;
-  const tarball = await download(tarballUrl);
-  if (!tarball) throw new Error(`${tarballUrl} returned 404`);
-  const files = packFiles(tarball, ref);
-  assertPackTree(ref, manifest, files);
-
   const receipt: PluginReceipt = pluginReceiptSchema.parse({
     schemaVersion: 1,
     id: ref.id,
@@ -446,10 +461,35 @@ async function installPack(
     commit,
     installedAt: new Date().toISOString(),
   });
+  const receiptFile = receiptPath(env.pluginsDir, ref.id);
+  const writeReceipt = async (): Promise<void> => {
+    const staged = join(dirname(receiptFile), stagingName(RECEIPT_FILE));
+    try {
+      await writeFile(staged, `${JSON.stringify(receipt, null, 2)}\n`);
+      await rename(staged, receiptFile);
+    } finally {
+      await rm(staged, { force: true });
+    }
+  };
+  const at = `${tag ?? 'default branch'} (commit ${commit})`;
+
+  // Same commit under another tag: the installed tree already holds these bytes, and
+  // replacing it would briefly leave the receipt pointing at no tree.
+  if (previous?.commit === commit) {
+    await writeReceipt();
+    console.log(`Updated ${ref.id}: ${previous.tag ?? 'default branch'} -> ${at}; files unchanged`);
+    return;
+  }
+
+  const codeloadUrl = env.codeloadUrl ?? 'https://codeload.github.com';
+  const tarballUrl = `${codeloadUrl}/${ref.owner}/${ref.repo}/tar.gz/${commit}`;
+  const tarball = await download(tarballUrl);
+  if (!tarball) throw new Error(`${tarballUrl} returned 404`);
+  const files = packFiles(tarball, ref);
+  assertPackTree(ref, manifest, files);
+
   const tree = packTreePath(env.pluginsDir, ref.id, commit);
   const stagedTree = join(dirname(tree), `.${commit}.${randomBytes(6).toString('hex')}.partial`);
-  const receiptFile = receiptPath(env.pluginsDir, ref.id);
-  const stagedReceipt = join(dirname(receiptFile), stagingName(RECEIPT_FILE));
   await mkdir(dirname(receiptFile), { recursive: true });
   try {
     for (const [relative, file] of files) {
@@ -457,27 +497,24 @@ async function installPack(
       await mkdir(dirname(target), { recursive: true });
       await writeFile(target, file.data, { mode: file.executable ? 0o755 : 0o644 });
     }
-    // A tree with no receipt pointing at it is left over from an interrupted
-    // install of this same commit; nothing reads it.
+    // No receipt points at this commit (the same-commit case returned above), so a
+    // tree here is left over from an interrupted install and nothing reads it.
     await rm(tree, { recursive: true, force: true });
     await rename(stagedTree, tree);
-    // The receipt is written last, so a reader sees either the old complete
-    // tree or the new one, never a receipt pointing at a partial tree.
-    await writeFile(stagedReceipt, `${JSON.stringify(receipt, null, 2)}\n`);
-    await rename(stagedReceipt, receiptFile);
   } finally {
     await rm(stagedTree, { recursive: true, force: true });
-    await rm(stagedReceipt, { force: true });
   }
+  // The receipt is written last, so a reader sees either the old complete tree or
+  // the new one, never a receipt pointing at a partial tree.
+  await writeReceipt();
   // Runs already started are unaffected: capture copied the bytes they run.
-  if (previous && previous.commit !== commit) {
+  if (previous) {
     await rm(packTreePath(env.pluginsDir, ref.id, previous.commit), {
       recursive: true,
       force: true,
     });
   }
 
-  const at = `${tag ?? 'default branch'} (commit ${commit})`;
   console.log(
     previous
       ? `Updated ${ref.id}: ${previous.tag ?? 'default branch'} (commit ${previous.commit}) -> ${at}`
@@ -508,20 +545,14 @@ async function installPlugin(
   // Every check below runs before anything is written, so any failure leaves
   // the previous install exactly as it was.
   const source = await resolveSource(ref, previous?.manifest.kind, env);
-  if (previous && previous.manifest.kind !== source.manifest.kind) {
+  if (previous && previous.manifest.kind !== source.kind) {
     throw new Error(
-      `${ref.id} is now a ${source.manifest.kind} plugin, not ${previous.manifest.kind}. Remove it, then install it again.`
+      `${ref.id} is now a ${source.kind} plugin, not ${previous.manifest.kind}. Remove it, then install it again.`
     );
   }
   assertCompatible(ref, source, env.archonVersion);
-  const { manifest } = source;
-  if (manifest.kind === 'forge') {
-    // resolveSource always names the release a forge plugin came from.
-    if (!source.tag) throw new Error(`${ref.id} resolved without a release tag`);
-    await installForge(ref, { ...source, tag: source.tag, manifest }, receipts, previous, env);
-  } else {
-    await installPack(ref, { ...source, manifest }, receipts, previous, env);
-  }
+  if (source.kind === 'forge') await installForge(ref, source, receipts, previous, env);
+  else await installPack(ref, source, receipts, previous, env);
 }
 
 async function removePlugin(ref: PluginRef, env: PluginEnvironment): Promise<void> {
@@ -546,7 +577,10 @@ async function copyPlugin(ref: PluginRef, env: PluginEnvironment): Promise<void>
   if (receipt.manifest.kind !== 'workflow-pack') {
     throw new Error(`${ref.id} is a ${receipt.manifest.kind} plugin; only workflow packs copy`);
   }
-  const target = join(env.projectDir, '.archon', 'workflows', receipt.manifest.name);
+  // Where discovery reads project workflows: the repository root, not the subdirectory
+  // the command ran in. A folder project has no repository; its directory is the project.
+  const project = (await findRepoRoot(env.projectDir)) ?? env.projectDir;
+  const target = join(project, '.archon', 'workflows', receipt.manifest.name);
   if (await pathExists(target)) {
     throw new Error(`${target} already exists. Move or delete it, then retry.`);
   }
