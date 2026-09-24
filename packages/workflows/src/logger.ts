@@ -29,12 +29,14 @@ export interface WorkflowEvent {
   execution?: NodeExecutionMetadata;
   type:
     | 'workflow_start'
+    | 'workflow_resume'
     | 'workflow_complete'
     | 'workflow_error'
     | 'assistant'
     | 'tool'
     | 'validation'
     | 'node_suspended'
+    | 'gate_decision'
     | 'node_start'
     | 'node_complete'
     | 'node_skipped'
@@ -54,6 +56,8 @@ export interface WorkflowEvent {
   result?: 'pass' | 'fail' | 'warn' | 'unknown';
   cause?: SkipCause;
   error?: string;
+  /** `gate_decision` only: the resolution the gate's `approval_received` event records. */
+  decision?: string;
   /** `watchdog_reset` only. The chunk content is deliberately never retained. */
   chunk_type?: MessageChunk['type'];
   /**
@@ -233,6 +237,41 @@ export async function logWorkflowStart(
     type: 'workflow_start',
     workflow_name: workflowName,
     content: userMessage,
+  });
+}
+
+/**
+ * Mark where a resumed execution picks the run back up. Written instead of a second
+ * `workflow_start`, so that row keeps meaning "the run began" and every resume leaves
+ * exactly one boundary: the n-th `workflow_resume` row starts the run's (n+1)-th segment.
+ */
+export async function logWorkflowResume(
+  logDir: string,
+  workflowRunId: string,
+  workflowName: string
+): Promise<void> {
+  await logWorkflowEvent(logDir, workflowRunId, {
+    type: 'workflow_resume',
+    workflow_name: workflowName,
+  });
+}
+
+/**
+ * Record how a gate was resolved. The caller derives it from the `approval_received`
+ * event its gate transaction already committed, so the row never claims a decision the
+ * database does not hold, and `content` is exactly the comment or rejection reason that
+ * event stores. That event records no actor, so neither does this row.
+ */
+export async function logGateDecision(
+  logDir: string,
+  workflowRunId: string,
+  gate: { step: string; decision: string; comment?: string }
+): Promise<void> {
+  await logWorkflowEvent(logDir, workflowRunId, {
+    type: 'gate_decision',
+    step: gate.step,
+    decision: gate.decision,
+    ...(gate.comment !== undefined ? { content: gate.comment } : {}),
   });
 }
 

@@ -635,7 +635,10 @@ Without `--follow`, the command copies the snapshot that exists at invocation ti
 stdout and exits. With `--follow`, it announces the resolved local path on stderr, waits
 for a live run's file to appear, and streams appended bytes until the run becomes
 `completed`, `failed`, or `cancelled`. A paused run is still live: the follower stays
-attached across approval gates and resumes, reading the same file.
+attached across approval gates and resumes, reading the same file. Each resume appends one
+`workflow_resume` row (the run's first execution writes `workflow_start`), and each gate
+approval or rejection appends a `gate_decision` row with the gate's `step`, the
+`decision`, and the operator's comment or rejection reason in `content`.
 
 Stdout is the transcript's exact JSONL, with no log messages or wrapper document. Each
 line is one persisted event and fields may be added over time, so consumers should parse

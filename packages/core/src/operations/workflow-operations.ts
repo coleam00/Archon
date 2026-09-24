@@ -1,4 +1,5 @@
 import { recordDerivedExecution } from '@archon/workflows/node-event-write';
+import { logGateDecision } from '@archon/workflows/logger';
 import { readNodeRecordEvent } from '@archon/workflows/node-record-reader';
 import { serializeNodeEmitter } from '@archon/workflows/node-record-serialization';
 import { getWorkflowEventEmitter } from '@archon/workflows/event-emitter';
@@ -257,26 +258,63 @@ function resolvedNodeCompletedStepName(approval: ApprovalContext): string {
     : approval.nodeId;
 }
 
-/** Publish only after the gate transaction wins; its inserted rows remain authoritative. */
+/**
+ * Mirror a won gate transaction into the run's own transcript. Publish only after the
+ * CAS wins; the inserted rows remain authoritative and every sink derives from them.
+ *
+ * This usually runs in the approving process, not the one executing the run, so the
+ * transcript is found the way every out-of-process reader finds it: through the run's
+ * persisted `output_root`, then appended through the same writer the executor uses.
+ *
+ * With no trusted `output_root` there is no transcript location to find. Usually the
+ * run's identity lookup faulted at start and its fault-derived root was deliberately
+ * never persisted; that lasts until a later resume resolves identity and records the
+ * root. A persisted root outside `ARCHON_HOME` is refused the same way, for the life of
+ * the run. Either way the rows are skipped, visibly, rather than written to a second
+ * file under a guessed root.
+ */
 async function publishGateExecution(
   run: WorkflowRun,
   events: readonly workflowDb.GateResolutionEvent[]
 ): Promise<void> {
+  const root = resolveRunStorageRoot(run, null);
+  const logDir = root === null ? null : getStoragePathsForRoot(root).logsDir;
+  if (logDir === null) {
+    getLog().warn(
+      {
+        runId: run.id,
+        steps: events.map(event => event.step_name),
+        eventTypes: events.map(event => event.event_type),
+      },
+      'workflow.gate_transcript_root_missing'
+    );
+  }
   for (const event of events) {
+    if (event.event_type === 'approval_received') {
+      if (logDir === null) continue;
+      const { decision, comment, reason } = event.data;
+      if (typeof decision !== 'string') continue;
+      // Approve and respond record `comment`, reject records `reason`; a write-back
+      // reject records neither. Carried verbatim, like the run's own prompt on
+      // `workflow_start`: this is the run record the DB already holds, not an
+      // operational log line.
+      const text = typeof comment === 'string' ? comment : reason;
+      await logGateDecision(logDir, run.id, {
+        step: event.step_name,
+        decision,
+        ...(typeof text === 'string' ? { comment: text } : {}),
+      });
+      continue;
+    }
     if (event.event_type !== 'node_completed') continue;
     const record = readNodeRecordEvent({ workflow_run_id: run.id, ...event })?.metadata;
     if (record === undefined) continue;
-    const root = resolveRunStorageRoot(run, null);
-    if (root === null) {
-      getLog().warn(
-        { runId: run.id, nodePath: record.path },
-        'workflow.gate_transcript_root_missing'
-      );
+    if (logDir === null) {
       const emitted = serializeNodeEmitter(record);
       if (emitted !== undefined) getWorkflowEventEmitter().emit(emitted);
       continue;
     }
-    await recordDerivedExecution({ logDir: getStoragePathsForRoot(root).logsDir }, record);
+    await recordDerivedExecution({ logDir }, record);
   }
 }
 
@@ -1115,6 +1153,7 @@ export async function rejectWorkflow(
         if (!won) {
           throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
         }
+        await publishGateExecution(run, [rejectionEvent]);
         captureApprovalResolved({ resolution: 'rejected' });
         return {
           workflowName: run.workflow_name,
@@ -1239,7 +1278,10 @@ export async function rejectWorkflow(
     throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
   }
 
-  if (completedGateEvent !== undefined) await publishGateExecution(run, [completedGateEvent]);
+  await publishGateExecution(
+    run,
+    completedGateEvent === undefined ? [rejectionEvent] : [completedGateEvent, rejectionEvent]
+  );
 
   // Won the CAS — resolution/status + audit event already committed atomically.
   // Anonymous telemetry: binary resolution only — no ids/reasons/names.

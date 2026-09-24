@@ -56,6 +56,9 @@ const realArchonPaths = await import('@archon/paths');
 /** Every `workflow_invoked` telemetry call, in order, so a resumed drive's categorization
  *  can be compared with the dispatch that started the run. */
 const telemetryInvocations: { workflowName: string; workflowSource?: string }[] = [];
+/** Each `workflow_invoked` call's resume flag, kept apart so the categorization records
+ *  above stay comparable as whole objects. */
+const telemetryResumeFlags: { workflowName: string; isResume?: boolean }[] = [];
 /** Every `workflow_completed` telemetry call. A run's two halves are categorized by
  *  separate code paths, so the completion that fires on the resumed half has to be
  *  observed on its own. */
@@ -67,12 +70,15 @@ mock.module('@archon/paths', () => ({
   getDefaultWorkflowsPath: () => join(bundledDefaultsRoot, 'defaults'),
   getDefaultCommandsPath: () => join(bundledDefaultsRoot, 'defaults'),
   createLogger: mock(() => mockLogger),
-  captureWorkflowInvoked: mock((props: { workflowName: string; workflowSource?: string }) => {
-    telemetryInvocations.push({
-      workflowName: props.workflowName,
-      workflowSource: props.workflowSource,
-    });
-  }),
+  captureWorkflowInvoked: mock(
+    (props: { workflowName: string; workflowSource?: string; isResume?: boolean }) => {
+      telemetryInvocations.push({
+        workflowName: props.workflowName,
+        workflowSource: props.workflowSource,
+      });
+      telemetryResumeFlags.push({ workflowName: props.workflowName, isResume: props.isResume });
+    }
+  ),
   captureWorkflowCompleted: mock((props: { workflowName: string; workflowSource?: string }) => {
     telemetryCompletions.push({
       workflowName: props.workflowName,
@@ -820,6 +826,81 @@ nodes:
       'different resolution settings'
     );
   });
+
+  // `hydrated` resumes from the completed-node snapshot; `bare` re-enters the existing run
+  // with no snapshot, the way a failed child is re-driven. Both are resumes.
+  it.each(['hydrated', 'bare'] as const)(
+    "marks a %s resume's boundary in its transcript, distinct from the original start",
+    async resumeForm => {
+      await writeWorkflow(
+        'resume-boundary',
+        `
+name: resume-boundary
+description: fails on the first drive, succeeds on the resume
+nodes:
+  - id: first
+    bash: "echo first"
+  - id: flaky
+    bash: "if [ -f resumed.marker ]; then echo ok; else touch resumed.marker; exit 1; fi"
+    depends_on: [first]
+`
+      );
+      const store = new InMemoryStore();
+      const deps = makeDeps(store);
+      const workflow = await discover('resume-boundary');
+
+      const r1 = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        workflow,
+        'goal',
+        'conv-db'
+      );
+      expect(r1.success).toBe(false);
+      const run = [...store.runs.values()].find(r => r.workflow_name === 'resume-boundary')!;
+      expect(run.status).toBe('failed');
+
+      telemetryResumeFlags.length = 0;
+      const resumeOpts =
+        resumeForm === 'hydrated'
+          ? await hydrateResumableRun(deps, (await store.getWorkflowRun(run.id))!)
+          : { preCreatedRun: await store.resumeWorkflowRun(run.id) };
+      expect(resumeOpts).not.toBeNull();
+      const r2 = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        workflow,
+        'goal',
+        'conv-db',
+        { ...resumeOpts! }
+      );
+      expect(r2.success).toBe(true);
+      // Telemetry categorizes the same execution the same way the transcript does.
+      expect(telemetryResumeFlags).toEqual([{ workflowName: 'resume-boundary', isResume: true }]);
+
+      const row = (await store.getWorkflowRun(run.id))!;
+      const transcript = (
+        await readFile(join(row.output_root!, 'logs', `${run.id}.jsonl`), 'utf-8')
+      )
+        .trim()
+        .split('\n')
+        .map(line => JSON.parse(line) as { type: string; workflow_name?: string });
+      const types = transcript.map(r => r.type);
+      // The original start stays the first row and is written once; the resume writes its
+      // own boundary row after the first attempt's failure, before the second attempt's work.
+      expect(types.filter(t => t === 'workflow_start')).toHaveLength(1);
+      expect(types[0]).toBe('workflow_start');
+      expect(types.filter(t => t === 'workflow_resume')).toHaveLength(1);
+      const resumeAt = types.indexOf('workflow_resume');
+      expect(types.indexOf('workflow_error')).toBeLessThan(resumeAt);
+      expect(types.lastIndexOf('workflow_complete')).toBeGreaterThan(resumeAt);
+      expect(transcript[resumeAt]).toMatchObject({ workflow_name: 'resume-boundary' });
+    }
+  );
 
   it('runs a gateless child synchronously, threads output + cost + tokens, links parent_run_id', async () => {
     await writeWorkflow(
