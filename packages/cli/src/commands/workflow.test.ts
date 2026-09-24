@@ -211,7 +211,10 @@ mock.module('@archon/paths', () => ({
 // Mock @archon/isolation (getIsolationProvider moved here from @archon/core)
 mock.module('@archon/isolation', () => ({
   configureIsolation: mock(() => undefined),
-  classifyIsolationError: (error: Error) => error.message,
+  // Marked rather than reimplemented: these tests prove a failure path routes
+  // through the classifier, while what the real one produces is the isolation
+  // package's own test.
+  classifyIsolationError: (error: Error) => `classified: ${error.message}`,
   getIsolationProvider: mock(() => ({
     create: mock(() =>
       Promise.resolve({
@@ -3377,6 +3380,38 @@ describe('workflowRunCommand', () => {
     const findActiveCallsAfter = (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mock
       .calls.length;
     expect(findActiveCallsAfter).toBe(findActiveCallsBefore);
+  });
+
+  it('surfaces a classified worktree creation failure, not the raw error', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const isolation = await import('@archon/isolation');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-123',
+      default_cwd: '/test/path',
+    });
+    // A setup failure whose rollback left a directory behind carries the leftover
+    // note beside its message; only the classifier reads it (#3448).
+    const failure = Object.assign(new Error('Submodule initialization failed: no network'), {
+      cleanupFailure: 'The incomplete workspace at /test/path/wt was left behind',
+    });
+    (isolation.getIsolationProvider as ReturnType<typeof mock>).mockReturnValueOnce({
+      create: mock(() => Promise.reject(failure)),
+      healthCheck: mock(() => Promise.resolve(true)),
+    });
+
+    await expect(workflowRunCommand('/test/path', 'assist', 'hello', {})).rejects.toThrow(
+      /^classified: Submodule initialization failed/
+    );
   });
 
   it('skips isolation when --no-worktree flag is set', async () => {
