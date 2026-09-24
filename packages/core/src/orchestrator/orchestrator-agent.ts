@@ -1959,7 +1959,7 @@ export async function handleMessage(
         }
 
         getLog().debug({ command, conversationId }, 'deterministic_command');
-        const result = await commandHandler.handleCommand(conversation, message);
+        const result = await commandHandler.handleCommand(conversation, message, platform);
         await platform.sendMessage(conversationId, result.message);
 
         if (result.workflow) {

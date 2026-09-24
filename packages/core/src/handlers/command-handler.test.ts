@@ -2624,6 +2624,130 @@ describe('CommandHandler', () => {
       });
     });
 
+    describe('command suggestions use the surface spelling', () => {
+      // Mirrors the Slack adapter: its registered slash command is `/archon-workflow`.
+      const slack = { formatWorkflowCommand: (command: string) => `/archon-workflow ${command}` };
+      const projectConversation = makeConversation({
+        ...baseConversation,
+        codebase_id: 'codebase-123',
+      });
+
+      /** Every suggestion is spelled for Slack; none is the bare chat grammar. */
+      function expectSlackSpelling(message: string): void {
+        expect(message).toContain('/archon-workflow ');
+        expect(message.replaceAll('/archon-workflow ', '')).not.toContain('/workflow ');
+      }
+
+      beforeEach(() => {
+        stubWorkflowCodebase();
+      });
+
+      for (const command of [
+        '/help',
+        '/workflow invalid',
+        '/workflow run',
+        '/workflow resume',
+        '/workflow abandon',
+        '/workflow approve',
+        '/workflow reject',
+        '/workflow respond',
+        '/workflow reset-sessions',
+      ]) {
+        test(`${command} reply`, async () => {
+          const result = await handleCommand(projectConversation, command, slack);
+          expectSlackSpelling(result.message);
+        });
+      }
+
+      test('/workflow run with an unknown workflow', async () => {
+        spyDiscoverWorkflows?.mockResolvedValue({ workflows: [], errors: [] });
+        const result = await handleCommand(projectConversation, '/workflow run nope', slack);
+        expectSlackSpelling(result.message);
+      });
+
+      test('/status with an active workflow', async () => {
+        mockGetActiveWorkflowRun.mockResolvedValueOnce(
+          makeWorkflowRun({ id: 'wf-active', workflow_name: 'investigate', user_message: 'x' })
+        );
+        const result = await handleCommand(baseConversation, '/status', slack);
+        expectSlackSpelling(result.message);
+      });
+
+      test('/workflow status with runs needing action', async () => {
+        mockListDashboardRuns.mockResolvedValueOnce({
+          runs: [
+            makeDashboardRun({ id: 'run-live', status: 'running' }),
+            makeDashboardRun({
+              id: 'run-attention',
+              status: 'paused',
+              metadata: {
+                wait: {
+                  owner: 'node',
+                  nodeId: 'rerun-ci',
+                  kind: 'attention',
+                  waitingSince: '2026-08-31T10:00:00.000Z',
+                  message: 'Re-run the check.',
+                },
+              },
+            }),
+            makeDashboardRun({
+              id: 'run-approval',
+              status: 'paused',
+              metadata: { approval: { nodeId: 'gate', message: 'Approve?' } },
+            }),
+          ],
+          total: 3,
+          counts: { ...EMPTY_DASHBOARD_COUNTS, all: 3, running: 1, paused: 2 },
+        });
+        const result = await handleCommand(baseConversation, '/workflow status', slack);
+        expectSlackSpelling(result.message);
+        expect(result.message).toContain('/archon-workflow resume run-attention');
+        expect(result.message).toContain('/archon-workflow approve run-approval');
+        expect(result.message).toContain('/archon-workflow cancel <id>');
+      });
+
+      test('/workflow cancel refused with no owner answering', async () => {
+        const orphan = makeWorkflowRun({
+          id: 'wf-orphan',
+          status: 'running' as const,
+          user_message: 'x',
+          last_activity_at: new Date(),
+        });
+        mockGetActiveWorkflowRun.mockResolvedValueOnce(orphan);
+        mockGetWorkflowRun.mockResolvedValueOnce(orphan);
+        const result = await handleCommand(projectConversation, '/workflow cancel', slack);
+        expect(result.success).toBe(false);
+        expect(result.message).toContain('Abandon it: `/archon-workflow abandon wf-orphan`');
+        expectSlackSpelling(result.message);
+      });
+
+      test('an approval whose continuation cannot be resolved', async () => {
+        const run = makeWorkflowRun({
+          id: 'run-gate',
+          workflow_name: 'gated-wf',
+          status: 'paused' as const,
+          user_message: 'x',
+          metadata: { approval: { type: 'approval', nodeId: 'review', message: 'Approve?' } },
+          last_activity_at: new Date(),
+        });
+        mockGetWorkflowRun.mockResolvedValueOnce(run).mockResolvedValueOnce(null);
+        const result = await handleCommand(
+          approveConversation,
+          '/workflow approve run-gate',
+          slack
+        );
+        expect(result.message).toContain('could not be continued');
+        expect(result.message).toContain('/archon-workflow resume run-gate');
+        expectSlackSpelling(result.message);
+      });
+
+      test('a surface without its own spelling keeps /workflow', async () => {
+        const result = await handleCommand(projectConversation, '/workflow invalid', {});
+        expect(result.message).toContain('/workflow status');
+        expect(result.message).not.toContain('/archon-workflow');
+      });
+    });
+
     describe('/status with active workflow', () => {
       test('should show active workflow info in status', async () => {
         const startedAt = new Date(Date.now() - 3 * 60 * 1000); // 3 minutes ago

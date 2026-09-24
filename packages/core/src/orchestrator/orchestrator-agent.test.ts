@@ -4109,7 +4109,8 @@ describe('paused approval gate routing', () => {
 
     expect(mockGetPausedWorkflowRun).not.toHaveBeenCalled();
     expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
-    expect(mockHandleCommand).toHaveBeenCalledWith(conversation, '   /status');
+    // The platform rides along so command suggestions use its spelling.
+    expect(mockHandleCommand).toHaveBeenCalledWith(conversation, '   /status', platform);
     expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', 'status ok');
   });
 

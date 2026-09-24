@@ -525,6 +525,28 @@ describe('SlackAdapter', () => {
       }
     });
 
+    test('/archon-workflow acknowledges the command in the spelling the user typed', async () => {
+      mockPostMessage.mockClear();
+      mockCommand.mockClear();
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      adapter.onMessage(async () => {});
+      await adapter.start();
+
+      mockPostMessage.mockResolvedValueOnce({ ts: '1.0' });
+      const args = makeSlashArgs({ text: 'status' });
+      await findCommandHandler('/archon-workflow')(args);
+
+      expect(mockPostMessage.mock.calls[0]?.[0]?.text).toBe(
+        '<@U123> ran `/archon-workflow status`'
+      );
+      const respondCalls = (
+        args.respond as Mock<(r: { response_type: string; text: string }) => Promise<void>>
+      ).mock.calls;
+      expect(respondCalls[0]?.[0]?.text).toBe(
+        'Running `/archon-workflow status` — see thread for output.'
+      );
+    });
+
     test('seed-post failure surfaces ephemeral error and skips message handler', async () => {
       mockPostMessage.mockClear();
       mockCommand.mockClear();
