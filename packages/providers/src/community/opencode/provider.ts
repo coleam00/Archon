@@ -209,7 +209,10 @@ export class OpencodeProvider implements IAgentProvider {
 
         const delayMs = this.retryBaseDelayMs * 2 ** attempt;
         getLog().info({ attempt, delayMs, errorClass }, 'opencode.retrying_query');
-        await delay(delayMs);
+        // A capped provider's slot is not held through the backoff.
+        await (requestOptions?.admission
+          ? requestOptions.admission.releaseDuring(() => delay(delayMs))
+          : delay(delayMs));
         if (lastError) {
           enrichedError.cause = lastError;
         }
