@@ -320,6 +320,8 @@ export async function isPatchEquivalent(
  * Returns false if it is not (base branch mismatch detected).
  * Returns false for expected errors (branch not found, not a git repo).
  * Throws for unexpected errors (permission denied, corruption).
+ * Kept apart from `isCommitAncestor`: its callers only warn about a base mismatch,
+ * so a missing ref reading as "not an ancestor" is the intended, harmless answer.
  */
 export async function isAncestorOf(
   workingPath: RepoPath | WorktreePath,
@@ -402,7 +404,8 @@ async function hasCommitObject(repoPath: RepoPath | WorktreePath, sha: string): 
 /**
  * Whether `ancestor` is reachable from `descendant` (a commit counts as its own
  * ancestor). Read from `git merge-base --is-ancestor`'s exit status: 0 yes, 1 no.
- * Anything else throws.
+ * Anything else throws. Kept apart from `isAncestorOf`, which maps a missing ref to
+ * false: here false means "unmerged work", and cleanup must not reach it by guessing.
  */
 async function isCommitAncestor(
   repoPath: RepoPath | WorktreePath,
