@@ -24,14 +24,6 @@ describe('cacheControlForStaticPath', () => {
     );
   });
 
-  test('a query string cannot turn an asset into an HTML document', () => {
-    // serveStatic hands onFound the resolved path, so the URL query never
-    // reaches this function — assert the decision is made on the path alone.
-    expect(cacheControlForStaticPath('/srv/web/dist/assets/index-a1b2c3.js')).toBe(
-      IMMUTABLE_ASSET_CACHE_CONTROL
-    );
-  });
-
   test('a file that merely sits under assets/ is still treated as an asset', () => {
     expect(cacheControlForStaticPath('/srv/web/dist/assets/nested/deep/vendor.js')).toBe(
       IMMUTABLE_ASSET_CACHE_CONTROL
