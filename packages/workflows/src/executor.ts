@@ -55,6 +55,8 @@ import {
   recordSelectedWorkflow,
   resolveRunSourceCapture,
   resolveChildDiscoveryRoot,
+  resolveChildInstalledPacks,
+  type InstalledPacksRoot,
   workflowSourceConfigFrom,
   type WorkflowSourceManifest,
   type WorkflowSourceAnchor,
@@ -1022,6 +1024,8 @@ export async function prepareWorkflowSource(
      * whose parent created the row (#2872) — so the capture and the row still agree.
      */
     runId?: string;
+    /** Installed packs to freeze instead of the live installs; see `captureWorkflowSource`. */
+    installedFrom?: InstalledPacksRoot;
   }
 ): Promise<PreparedWorkflowSource> {
   // Read the SOURCE's command policy, not the target's. A repo may point `commands.folder`
@@ -1051,6 +1055,7 @@ export async function prepareWorkflowSource(
     captureRoot: join(archonPaths.getArchonHome(), 'staged-source', runId),
     commandFolder: sourceConfig.command_folder,
     sourceConfig,
+    ...(opts.installedFrom !== undefined ? { installedFrom: opts.installedFrom } : {}),
   });
   return {
     runId,
@@ -1241,12 +1246,17 @@ async function runChildWorkflow(
   // workflow — removing a gate, say — and have a resumed parent pick the fix up; and
   // discovering from the capture rather than from the live directory is what stops the
   // child executing one moment's YAML against another moment's scripts.
+  // Installed packs are the exception: the child takes them from the parent's capture.
   const parentSourceRoot = await resolveChildDiscoveryRoot(parentRun.metadata);
+  const installedFrom = await resolveChildInstalledPacks(parentRun.metadata);
   // Refusals and recursive execution share one owner until adoption or disposal.
   return withCapturedSource(async owner => {
     let childSource: PreparedWorkflowSource | undefined;
     try {
-      childSource = await prepareWorkflowSource(deps, { sourceRoot: parentSourceRoot ?? cwd });
+      childSource = await prepareWorkflowSource(deps, {
+        sourceRoot: parentSourceRoot ?? cwd,
+        ...(installedFrom !== undefined ? { installedFrom } : {}),
+      });
       owner.hold(childSource);
     } catch (err) {
       return failOutcome(

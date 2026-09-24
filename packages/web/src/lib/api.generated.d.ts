@@ -4198,7 +4198,7 @@ export interface components {
       with?: unknown;
     };
     /** @enum {string} */
-    WorkflowSource: 'project' | 'bundled' | 'global';
+    WorkflowSource: 'project' | 'bundled' | 'global' | 'installed';
     WorkflowLoadError: {
       filename: string;
       error: string;

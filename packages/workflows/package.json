@@ -46,6 +46,7 @@
   "dependencies": {
     "@archon/git": "workspace:*",
     "@archon/paths": "workspace:*",
+    "@archon/plugin-manifest": "workspace:*",
     "@archon/providers": "workspace:*",
     "@hono/zod-openapi": "^1.4.0",
     "zod": "^4.4.3"
@@ -136,6 +137,9 @@
     ],
     [
       "src/workflow-source.test.ts"
+    ],
+    [
+      "src/installed-packs.test.ts"
     ],
     [
       "src/workflow-source-binary.test.ts"

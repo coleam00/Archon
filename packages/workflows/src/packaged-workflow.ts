@@ -1,12 +1,14 @@
-import { join } from 'path';
 import type { WorkflowDefinition, WorkflowSource } from './schemas';
 import {
   isAgentNode,
+  isComposeFanOutNode,
   isExecNode,
   isIncludeDirective,
   isLoopGroupNode,
   isLoopNode,
+  isWorkflowNode,
 } from './schemas';
+import { workflowSourceSchema } from './schemas/workflow';
 import { isValidCommandName } from './command-validation';
 
 export const PACK_SHARED_DIRECTORY = '.shared';
@@ -63,30 +65,16 @@ export function parsePackagedResourceReference(
   if (ownerParts.length !== 3) return null;
   const [source, pack, workflow] = ownerParts;
   const name = reference.slice(resourceMarker + RESOURCE_SEPARATOR.length);
+  const parsedSource = workflowSourceSchema.safeParse(source);
   if (
-    (source !== 'bundled' && source !== 'global' && source !== 'project') ||
+    !parsedSource.success ||
     !isValidWorkflowFolderSegment(pack) ||
     !isValidWorkflowFolderSegment(workflow) ||
     !isValidCommandName(name)
   ) {
     return null;
   }
-  return { owner: { source, pack, workflow }, name };
-}
-
-export function getPackagedWorkflowPath(
-  workflowsRoot: string,
-  owner: Pick<WorkflowResourceOwner, 'pack' | 'workflow'>
-): string {
-  return join(workflowsRoot, owner.pack, owner.workflow);
-}
-
-export function getPackagedResourceDirectory(
-  workflowsRoot: string,
-  owner: Pick<WorkflowResourceOwner, 'pack' | 'workflow'>,
-  kind: 'commands' | 'scripts'
-): string {
-  return join(getPackagedWorkflowPath(workflowsRoot, owner), kind);
+  return { owner: { source: parsedSource.data, pack, workflow }, name };
 }
 
 function isNamedScript(script: string): boolean {
@@ -125,4 +113,39 @@ export function qualifyWorkflowResources(
 ): WorkflowDefinition {
   for (const node of workflow.nodes) qualifyNodeResources(node, owner);
   return workflow;
+}
+
+/**
+ * Rewrite an installed pack workflow's references to workflows of the same pack from
+ * their `name:` to the `owner/plugin:<name>` discovery gives them: `include:` targets
+ * (a fan-out's too) and `workflow:` targets. A target outside the pack stays as
+ * written, so an `include:` of it fails in the pack's own name map and a `workflow:`
+ * child resolves through the catalog like any other.
+ *
+ * Returns the `workflow:` targets that name a support workflow. A child run is
+ * dispatch, and support workflows are never dispatched; they compose through
+ * `include:` only.
+ */
+export function qualifyPackReferences(
+  workflow: WorkflowDefinition,
+  qualifiedByName: ReadonlyMap<string, string>,
+  entrypoints: ReadonlySet<string>
+): string[] {
+  const supportChildren: string[] = [];
+  const visit = (nodes: WorkflowDefinition['nodes']): void => {
+    for (const node of nodes) {
+      if (isIncludeDirective(node) || isComposeFanOutNode(node)) {
+        node.include = qualifiedByName.get(node.include) ?? node.include;
+        continue;
+      }
+      if (isWorkflowNode(node)) {
+        const target = qualifiedByName.get(node.workflow);
+        if (target !== undefined && !entrypoints.has(target)) supportChildren.push(node.workflow);
+        else if (target !== undefined) node.workflow = target;
+      }
+      if (isLoopGroupNode(node)) visit(node.loop_group.nodes);
+    }
+  };
+  visit(workflow.nodes);
+  return supportChildren;
 }

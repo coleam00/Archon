@@ -32,10 +32,14 @@
  * project scope would leave a hole: a project workflow that includes a global one would
  * still change shape across a resume. Bundled content is selected by the same inventory
  * in source and binary builds, then written into the run's capture so an engine upgrade
- * cannot replace its executable source.
+ * cannot replace its executable source. Installed workflow packs are copied too, each at
+ * the commit its receipt records, so `archon plugin update` or `remove` affects only
+ * runs that start afterwards.
  *
  * Runtime `workflow:` children are deliberately NOT part of the closure. A child is not a
  * run until it starts and freezes its own source — see {@link resolveChildDiscoveryRoot}.
+ * The exception is installed packs: a child copies them from its parent's capture, so a
+ * pack's children run at the revision its parent started with.
  */
 import {
   mkdir,
@@ -72,7 +76,14 @@ import {
   workflowSourceConfigSchema,
   type WorkflowSourceConfig,
 } from './schemas/workflow-run';
-import { parsePackagedResourceReference } from './packaged-workflow';
+import {
+  describeIssues,
+  PLUGIN_MANIFEST_FILE,
+  workflowPackManifestSchema,
+  type WorkflowPackManifest,
+} from '@archon/plugin-manifest';
+import { packTreePath, readReceipts } from '@archon/plugin-manifest/store';
+import { parsePackagedResourceReference, type WorkflowResourceOwner } from './packaged-workflow';
 import type { WorkflowConfig } from './deps';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -85,6 +96,7 @@ function getLog(): ReturnType<typeof createLogger> {
 const PROJECT_SCOPE_DIR = 'project';
 const GLOBAL_SCOPE_DIR = 'global';
 const BUNDLED_SCOPE_DIR = 'bundled';
+const INSTALLED_SCOPE_DIR = 'installed';
 const MANIFEST_FILE = 'manifest.json';
 
 /**
@@ -130,7 +142,19 @@ interface WorkflowSourceRootPaths {
   readonly bundledWorkflows: string;
   /** Directory holding bundled default commands. */
   readonly bundledCommands: string;
+  /** Where installed workflow packs are read from. */
+  readonly installed: InstalledPacksRoot;
 }
+
+/**
+ * Installed packs come either from the live receipts under `ARCHON_HOME/plugins`, or
+ * from a capture's `installed/` directory (one directory per pack, named by its
+ * {@link InstalledPack.key}). A `workflow:` child reads live project source with its
+ * parent's captured packs, so this is chosen apart from the rest of the roots.
+ */
+export type InstalledPacksRoot =
+  | { readonly kind: 'receipts'; readonly pluginsDir: string }
+  | { readonly kind: 'captured'; readonly captureRoot: string };
 
 export { workflowSourceConfigSchema, type WorkflowSourceConfig } from './schemas/workflow-run';
 
@@ -181,7 +205,11 @@ export function workflowSourceConfigFrom(config: WorkflowConfig): WorkflowSource
 /** Roots for reading source live off disk, exactly as Archon always has. */
 export function liveSourceRoots(
   project: string | null,
-  config: WorkflowSourceConfig = DEFAULT_WORKFLOW_SOURCE_CONFIG
+  config: WorkflowSourceConfig = DEFAULT_WORKFLOW_SOURCE_CONFIG,
+  installed: InstalledPacksRoot = {
+    kind: 'receipts',
+    pluginsDir: join(archonPaths.getArchonHome(), 'plugins'),
+  }
 ): LiveWorkflowSourceRoots {
   return {
     project,
@@ -190,6 +218,7 @@ export function liveSourceRoots(
     globalScripts: archonPaths.getHomeScriptsPath(),
     bundledWorkflows: dirname(archonPaths.getDefaultWorkflowsPath()),
     bundledCommands: archonPaths.getDefaultCommandsPath(),
+    installed,
     kind: 'live',
     config,
   };
@@ -213,9 +242,162 @@ export function capturedSourceRoots(anchor: WorkflowSourceAnchor): CapturedWorkf
     // instead of failing because its bundled bytes could not be verified.
     bundledWorkflows: join(captureRoot, BUNDLED_SCOPE_DIR, 'workflows'),
     bundledCommands: join(captureRoot, BUNDLED_SCOPE_DIR, 'commands', 'defaults'),
+    installed: { kind: 'captured', captureRoot },
     kind: 'captured',
     anchor,
   };
+}
+
+/** Where an installed pack came from, as its receipt recorded it. */
+export const installedPluginRecordSchema = z.object({
+  /** {@link InstalledPack.key}: the pack's directory in a capture. */
+  key: z.string(),
+  /** `owner/repo[/path]` */
+  id: z.string(),
+  commit: z.string(),
+  tag: z.string().optional(),
+});
+
+export type InstalledPluginRecord = z.infer<typeof installedPluginRecordSchema>;
+
+/** One installed workflow pack, read from receipts (live) or from a capture. */
+export interface InstalledPack {
+  /** The install id's owner: the `owner` of `owner/plugin:entrypoint`. */
+  readonly owner: string;
+  /** The manifest `name`: the `plugin` of `owner/plugin:entrypoint`. */
+  readonly name: string;
+  /**
+   * `<owner>.<name>`, unique per install because the installer refuses a second pack
+   * with the same owner and name. Neither part can contain `.`, so it splits back
+   * unambiguously. It is the pack segment of the pack's resource references and the
+   * pack's directory in a capture.
+   */
+  readonly key: string;
+  /** The pack root, holding `archon-plugin.json`. */
+  readonly dir: string;
+  /** Read from the tree itself, so a capture and a live listing agree on entrypoints. */
+  readonly manifest: WorkflowPackManifest;
+  /** Present for a live pack; a capture's manifest keeps the records of its packs. */
+  readonly record?: InstalledPluginRecord;
+}
+
+export function installedPackKey(owner: string, name: string): string {
+  return `${owner}.${name}`;
+}
+
+/** The public name of a workflow in an installed pack: `owner/plugin:<name>`. */
+export function installedWorkflowName(
+  pack: Pick<InstalledPack, 'owner' | 'name'>,
+  name: string
+): string {
+  return `${pack.owner}/${pack.name}:${name}`;
+}
+
+async function readPackManifest(dir: string): Promise<WorkflowPackManifest> {
+  const file = join(dir, PLUGIN_MANIFEST_FILE);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await readFile(file, 'utf-8'));
+  } catch (error) {
+    throw new Error(`Cannot read ${file}: ${(error as Error).message}`);
+  }
+  const parsed = workflowPackManifestSchema.safeParse(raw);
+  if (!parsed.success) throw new Error(`Invalid ${file}: ${describeIssues(parsed.error)}`);
+  return parsed.data;
+}
+
+/**
+ * Every installed workflow pack under `roots`. A pack that cannot be read is reported,
+ * not thrown: one broken install must not take the rest of the catalog down with it.
+ */
+export async function listInstalledPacks(
+  root: InstalledPacksRoot
+): Promise<{ packs: InstalledPack[]; errors: { path: string; message: string }[] }> {
+  const packs: InstalledPack[] = [];
+  const errors: { path: string; message: string }[] = [];
+  if (root.kind === 'receipts') {
+    let receipts: Awaited<ReturnType<typeof readReceipts>>;
+    try {
+      receipts = await readReceipts(root.pluginsDir);
+    } catch (error) {
+      errors.push({ path: root.pluginsDir, message: (error as Error).message });
+      return { packs, errors };
+    }
+    for (const receipt of receipts) {
+      if (receipt.manifest.kind !== 'workflow-pack') continue;
+      const owner = receipt.id.split('/')[0];
+      const dir = packTreePath(root.pluginsDir, receipt.id, receipt.commit);
+      try {
+        const manifest = await readPackManifest(dir);
+        const key = installedPackKey(owner, manifest.name);
+        packs.push({
+          owner,
+          name: manifest.name,
+          key,
+          dir,
+          manifest,
+          record: {
+            key,
+            id: receipt.id,
+            commit: receipt.commit,
+            ...(receipt.tag !== undefined ? { tag: receipt.tag } : {}),
+          },
+        });
+      } catch (error) {
+        errors.push({ path: dir, message: (error as Error).message });
+      }
+    }
+    return { packs, errors };
+  }
+
+  const installedDir = join(root.captureRoot, INSTALLED_SCOPE_DIR);
+  let keys: string[];
+  try {
+    keys = await readdir(installedDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { packs, errors };
+    throw error;
+  }
+  for (const key of keys.sort()) {
+    const dir = join(installedDir, key);
+    const separator = key.indexOf('.');
+    try {
+      const manifest = await readPackManifest(dir);
+      if (separator < 1 || key.slice(separator + 1) !== manifest.name) {
+        throw new Error(`Captured pack ${key} does not match its manifest name ${manifest.name}`);
+      }
+      packs.push({ owner: key.slice(0, separator), name: manifest.name, key, dir, manifest });
+    } catch (error) {
+      errors.push({ path: dir, message: (error as Error).message });
+    }
+  }
+  return { packs, errors };
+}
+
+/**
+ * The directory of one packaged workflow (`<pack>/<workflow>/`) under `roots`, or null
+ * when its scope has no source here. Command, script and validation lookups all map a
+ * resource owner to disk through this, so a new scope is added in one place.
+ */
+export async function packagedWorkflowDirectory(
+  roots: WorkflowSourceRoots,
+  owner: WorkflowResourceOwner
+): Promise<string | null> {
+  switch (owner.source) {
+    case 'project':
+      return roots.project === null
+        ? null
+        : join(roots.project, '.archon', 'workflows', owner.pack, owner.workflow);
+    case 'global':
+      return join(roots.globalWorkflows, owner.pack, owner.workflow);
+    case 'bundled':
+      return join(roots.bundledWorkflows, owner.pack, owner.workflow);
+    case 'installed': {
+      const { packs } = await listInstalledPacks(roots.installed);
+      const pack = packs.find(p => p.key === owner.pack);
+      return pack ? join(pack.dir, owner.workflow) : null;
+    }
+  }
 }
 
 /**
@@ -235,19 +417,34 @@ export function capturedSourceRoots(anchor: WorkflowSourceAnchor): CapturedWorkf
  * the capture is taken BEFORE discovery. That ordering is what stops a run executing one
  * moment's YAML against another moment's scripts.
  */
-export const workflowSourceManifestSchema = z.object({
-  version: z.literal(1),
+const manifestFields = {
   engine_version: z.string(),
   origin: z.string(),
   captured_at: z.string(),
   digest: z.string(),
   file_count: z.number(),
   byte_count: z.number(),
-  scopes: z.array(z.enum([PROJECT_SCOPE_DIR, GLOBAL_SCOPE_DIR, BUNDLED_SCOPE_DIR])),
+  scopes: z.array(
+    z.enum([PROJECT_SCOPE_DIR, GLOBAL_SCOPE_DIR, BUNDLED_SCOPE_DIR, INSTALLED_SCOPE_DIR])
+  ),
   source_config: workflowSourceConfigSchema,
   /** Absent until the caller has selected which workflow this run executes. */
   workflow_name: z.string().optional(),
-});
+};
+
+/**
+ * Version 2 is written only when installed packs were captured, and records the plugin
+ * and commit each came from. A capture without packs stays version 1, so an older
+ * Archon can still resume it.
+ */
+export const workflowSourceManifestSchema = z.discriminatedUnion('version', [
+  z.object({ version: z.literal(1), ...manifestFields }),
+  z.object({
+    version: z.literal(2),
+    ...manifestFields,
+    installed_plugins: z.array(installedPluginRecordSchema).min(1),
+  }),
+]);
 
 export type WorkflowSourceManifest = z.infer<typeof workflowSourceManifestSchema>;
 
@@ -697,6 +894,12 @@ export async function captureWorkflowSource(opts: {
   captureRoot: string;
   commandFolder?: string;
   sourceConfig?: WorkflowSourceConfig;
+  /**
+   * Where installed packs are copied from. Omitted, the live installs. A `workflow:`
+   * child passes its parent's capture, so a pack updated or removed after the parent
+   * started cannot give the child a different revision from its parent.
+   */
+  installedFrom?: InstalledPacksRoot;
 }): Promise<WorkflowSourceCapture> {
   const {
     sourceRoot,
@@ -708,7 +911,7 @@ export async function captureWorkflowSource(opts: {
   // (relative destination, absolute origin) pairs, one per MUTABLE directory worth copying.
   // The bundled scope is not among them: it is this build's own, read once into a
   // {@link BundledScope} and written from there.
-  const jobs: { dest: string; from: string; scope: 'project' | 'global' }[] = [];
+  const jobs: { dest: string; from: string; scope: 'project' | 'global' | 'installed' }[] = [];
 
   for (const dir of projectSourceDirs(commandFolder)) {
     const from = join(sourceRoot, dir);
@@ -724,12 +927,31 @@ export async function captureWorkflowSource(opts: {
       jobs.push({ dest: join(GLOBAL_SCOPE_DIR, name), from, scope: 'global' });
   }
 
+  // Each installed pack at the one commit its receipt names (or its parent froze). A
+  // pack that cannot be listed is not in the catalog either, so no run can select it.
+  const installedFrom = opts.installedFrom ?? liveSourceRoots(sourceRoot).installed;
+  const { packs } = await listInstalledPacks(installedFrom);
+  for (const pack of packs) {
+    jobs.push({ dest: join(INSTALLED_SCOPE_DIR, pack.key), from: pack.dir, scope: 'installed' });
+  }
+  let installedRecords: InstalledPluginRecord[];
+  if (installedFrom.kind === 'receipts') {
+    installedRecords = packs.flatMap(pack => (pack.record ? [pack.record] : []));
+  } else {
+    const parent = await readManifest(installedFrom.captureRoot);
+    const keys = new Set(packs.map(pack => pack.key));
+    installedRecords =
+      parent.version === 2 ? parent.installed_plugins.filter(record => keys.has(record.key)) : [];
+  }
+
   const staging = `${captureRoot}.partial`;
   await rm(staging, { recursive: true, force: true });
 
   let fileCount = 0;
   let byteCount = 0;
-  const scopesCaptured = new Set<'project' | 'global' | 'bundled'>(jobs.map(j => j.scope));
+  const scopesCaptured = new Set<'project' | 'global' | 'bundled' | 'installed'>(
+    jobs.map(j => j.scope)
+  );
   try {
     await mkdir(staging, { recursive: true });
     for (const job of jobs) {
@@ -756,8 +978,7 @@ export async function captureWorkflowSource(opts: {
     // them back would restate what the scope already carries. Everything else is read.
     const entries = await digestEntries(staging, bundled ? BUNDLED_SCOPE_DIR : undefined);
     const digest = foldDigest([...entries, ...(bundled?.files ?? [])]);
-    const manifest: WorkflowSourceManifest = {
-      version: 1,
+    const fields = {
       engine_version: BUNDLED_VERSION,
       origin: sourceRoot,
       captured_at: new Date().toISOString(),
@@ -767,6 +988,10 @@ export async function captureWorkflowSource(opts: {
       scopes: [...scopesCaptured],
       source_config: sourceConfig,
     };
+    const manifest: WorkflowSourceManifest =
+      installedRecords.length > 0
+        ? { version: 2, ...fields, installed_plugins: installedRecords }
+        : { version: 1, ...fields };
     await writeManifest(staging, manifest);
 
     // Replace rather than merge: a stale capture at this path would silently mix two
@@ -980,6 +1205,21 @@ export async function resolveRunSourceCapture(
  * records an authoring directory, an unreadable record or unavailable directory fails
  * closed so a child cannot silently capture a same-named workflow from the target cwd.
  */
+/**
+ * The installed packs a not-yet-started `workflow:` child reads: its parent's verified
+ * capture, so the child cannot run a pack at a different revision from its parent after
+ * `archon plugin update` or `remove`. Undefined for a parent with no source record,
+ * which reads the live installs. Unlike project source (see
+ * {@link resolveChildDiscoveryRoot}), there is no mid-run authoring to pick up here: an
+ * installed pack changes only through the installer.
+ */
+export async function resolveChildInstalledPacks(
+  metadata: Record<string, unknown> | undefined
+): Promise<InstalledPacksRoot | undefined> {
+  const capture = await resolveRunSourceCapture(metadata);
+  return capture ? { kind: 'captured', captureRoot: capture.anchor.root } : undefined;
+}
+
 export async function resolveChildDiscoveryRoot(
   metadata: Record<string, unknown> | undefined
 ): Promise<string | undefined> {

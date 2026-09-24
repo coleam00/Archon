@@ -102,7 +102,7 @@ export async function getWorkflowGraph(name: string, cwd?: string): Promise<Work
 // ---------------------------------------------------------------------------
 
 /**
- * Where a loaded workflow lives. Read-only iff `source === 'bundled'`.
+ * Where a loaded workflow lives. Read-only for `bundled` and `installed` (see `isReadOnlySource`).
  * Re-exported from `primitives/workflow` (single source of truth) so the union
  * cannot silently diverge between the list primitive and the CRUD verbs.
  */

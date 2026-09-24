@@ -362,6 +362,40 @@ describe('GET /api/workflows/:name', () => {
     expect(body.error).toContain('nonexistent-workflow');
   });
 
+  test('an installed workflow resolves through discovery; a support name or project copy does not', async () => {
+    const app = createTestApp();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+    const catalog = async (): Promise<{
+      workflows: ReturnType<typeof makeTestWorkflowWithSource>[];
+      support: ReturnType<typeof makeTestWorkflowWithSource>[];
+      errors: never[];
+    }> => ({
+      workflows: [
+        makeTestWorkflowWithSource({ name: 'acme/kit:review', description: 'Review' }, 'installed'),
+        // A project file declaring the same name is dropped by discovery; this one is
+        // here to prove the route never answers with a non-installed entry.
+        makeTestWorkflowWithSource({ name: 'acme/kit:copied', description: 'Copy' }, 'project'),
+      ],
+      support: [
+        makeTestWorkflowWithSource({ name: 'acme/kit:helper', description: 'H' }, 'installed'),
+      ],
+      errors: [],
+    });
+    mockDiscoverWorkflows.mockImplementationOnce(catalog);
+    const found = await app.request(`/api/workflows/${encodeURIComponent('acme/kit:review')}`);
+    expect(found.status).toBe(200);
+    expect(await found.json()).toMatchObject({
+      source: 'installed',
+      filename: 'acme/kit:review',
+      workflow: { name: 'acme/kit:review' },
+    });
+    for (const name of ['acme/kit:helper', 'acme/kit:copied', 'acme/kit:missing']) {
+      mockDiscoverWorkflows.mockImplementationOnce(catalog);
+      const refused = await app.request(`/api/workflows/${encodeURIComponent(name)}`);
+      expect(refused.status).toBe(404);
+    }
+  });
+
   test('returns bundled workflow with source:bundled', async () => {
     const app = createTestApp();
     registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);

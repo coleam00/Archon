@@ -308,6 +308,7 @@ import {
   resetWorkflowNodeSessionsQuerySchema,
   resetWorkflowNodeSessionsResponseSchema,
   listArtifactsResponseSchema,
+  workflowSourceSchema,
 } from './schemas/workflow.schemas';
 import {
   conversationListResponseSchema,
@@ -409,7 +410,7 @@ if (BUNDLED_IS_BINARY) {
   }
 }
 
-type WorkflowSource = 'project' | 'bundled' | 'global';
+type WorkflowSource = z.infer<typeof workflowSourceSchema>;
 
 /**
  * Resolve the on-disk artifact directory for a run, for EVERY project kind
@@ -4316,6 +4317,21 @@ export function registerApiRoutes(
       } else {
         const codebases = await codebaseDb.listCodebases();
         if (codebases.length > 0) workingDir = codebases[0].default_cwd;
+      }
+
+      // An installed workflow (`owner/plugin:entrypoint`) has no file under a project or
+      // home tree to find by name; it resolves through the catalog like every consumer.
+      if (name.includes(':')) {
+        const { workflows } = await discoverWorkflowsWithConfig(workingDir ?? null, loadConfig);
+        const hit = workflows.find(
+          entry => entry.source === 'installed' && entry.workflow.name === name
+        );
+        if (!hit) return apiError(c, 404, `Workflow not found: ${name}`);
+        return c.json({
+          workflow: Object.assign({}, hit.workflow, hit.declared),
+          filename: name,
+          source: hit.source,
+        });
       }
 
       // 1. Try user-defined workflow in cwd.

@@ -269,6 +269,7 @@ const CAPTURED_SOURCE_ROOTS: WorkflowExecutor.WorkflowSourceRoots = {
   globalScripts: '/capture/global/scripts',
   bundledWorkflows: '/capture/bundled/workflows',
   bundledCommands: '/capture/bundled/commands/defaults',
+  installed: { kind: 'captured', captureRoot: '/capture' },
   kind: 'captured',
   anchor: {
     root: '/capture',
@@ -2506,6 +2507,7 @@ describe('workflow dispatch routing — interactive flag', () => {
           globalScripts: '/capture-branch/global/scripts',
           bundledWorkflows: '/capture-branch/bundled/workflows',
           bundledCommands: '/capture-branch/bundled/commands/defaults',
+          installed: { kind: 'captured', captureRoot: '/capture-branch' },
           kind: 'captured',
           anchor: {
             root: '/capture-branch',

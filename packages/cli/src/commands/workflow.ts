@@ -1179,7 +1179,7 @@ function countWorkflowSources(
       counts[entry.source] += 1;
       return counts;
     },
-    { bundled: 0, global: 0, project: 0 }
+    { bundled: 0, global: 0, project: 0, installed: 0 }
   );
 }
 
@@ -1729,7 +1729,7 @@ async function runWorkflowWithOwnedSource(
     console.log(
       `Discovery: root=${effectiveDiscoveryCwd} workflows=${String(workflowEntries.length)} ` +
         `bundled=${String(sourceCounts.bundled)} global=${String(sourceCounts.global)} ` +
-        `project=${String(sourceCounts.project)}`
+        `project=${String(sourceCounts.project)} installed=${String(sourceCounts.installed)}`
     );
   }
 
