@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
@@ -12,8 +12,9 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import * as archonGit from '@archon/git';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { observeCheckout, readContainerProbe, sampleCheckout } from './checkout-observation';
+import { observeCheckout, sampleCheckout } from './checkout-observation';
 import {
   checkoutManifestSchema,
   type CheckoutManifest,
@@ -309,18 +310,30 @@ describe('checkout observation', () => {
   });
 
   test('a container probe answers only with its own output; any other result is unknown', async () => {
-    expect(readContainerProbe(0, 'marker\n')).toBe('marker');
-    expect(readContainerProbe(0, 'none\n')).toBe('none');
-    // docker exec exits 1 for "No such container", the same status a shell's "false" has.
-    expect(readContainerProbe(1, '')).toBe('failed');
-    expect(readContainerProbe(0, '')).toBe('failed');
-    expect(readContainerProbe(-1, '')).toBe('failed');
-    const observation = await observeCheckout(
-      scratch(),
-      { kind: 'container', containerId: 'archon-test-no-such-container' },
-      { runId: 'run-1', artifactsDir: scratch() }
-    );
-    expect(observation).toMatchObject({ kind: 'unavailable', reason: 'probe_failed' });
+    const cases: [{ stdout: string } | Error, Partial<CheckoutObservation>][] = [
+      [{ stdout: 'marker\n' }, { kind: 'unavailable', reason: 'unsupported_backend' }],
+      [{ stdout: 'none\n' }, { kind: 'not_git' }],
+      [{ stdout: '' }, { kind: 'unavailable', reason: 'probe_failed' }],
+      // docker exec exits 1 for "No such container", the same status a shell's "false" has.
+      [new Error('No such container'), { kind: 'unavailable', reason: 'probe_failed' }],
+    ];
+    for (const [result, expected] of cases) {
+      const exec = spyOn(archonGit, 'execFileAsync').mockImplementation(async () => {
+        if (result instanceof Error) throw result;
+        return { stdout: result.stdout, stderr: '' };
+      });
+      try {
+        const { observation } = await sampleCheckout('/work', {
+          kind: 'container',
+          containerId: 'container-1',
+        });
+        expect(observation).toMatchObject(expected);
+        expect(exec.mock.calls[0]?.[0]).toBe('docker');
+        expect(exec.mock.calls[0]?.[1].slice(0, 4)).toEqual(['exec', '-w', '/work', 'container-1']);
+      } finally {
+        exec.mockRestore();
+      }
+    }
   });
 
   describe('a HEAD that moves while the checkout is read', () => {
