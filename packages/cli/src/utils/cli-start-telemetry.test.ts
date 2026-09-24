@@ -14,6 +14,11 @@ describe('shouldReportCliStart', () => {
     expect(shouldReportCliStart(['--cwd', '/tmp/x', 'serve', '--port', '3090'], {})).toBe(false);
   });
 
+  test('counts a serve that never boots the server', () => {
+    expect(shouldReportCliStart(['serve', '--help'], {})).toBe(true);
+    expect(shouldReportCliStart(['serve', '--download-only'], {})).toBe(true);
+  });
+
   test('a flag value named serve is not the serve command', () => {
     expect(shouldReportCliStart(['--cwd', 'serve', 'version'], {})).toBe(true);
   });
