@@ -406,7 +406,9 @@ export type WorkflowExecutionResult =
  *
  * Precedence for same-named files: `bundled` < `global` < `project`.
  */
-export type WorkflowSource = 'bundled' | 'global' | 'project';
+export const workflowSourceSchema = z.enum(['project', 'bundled', 'global']);
+
+export type WorkflowSource = z.infer<typeof workflowSourceSchema>;
 
 /**
  * The workflow-level configuration an author WROTE, captured before composition

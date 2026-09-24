@@ -454,6 +454,14 @@ no worktree was ever cut from.
 or `--resume` continuing a prior run -- the cut-from is already fixed, so `--base`
 changes only the PR target. Archon warns in both cases.
 
+**A continuation keeps the base it started with.** A run records its resolved
+`$BASE_BRANCH` when it starts, and every continuation of it -- `--resume`, an approved
+gate, or the automatic resume of a parent whose sub-run gate was approved -- reports that
+value rather than re-running levels 2--4 against whatever config and git say later.
+Passing `--base` again still retargets the PR, as above. A run started before Archon
+recorded this re-resolves through levels 2--4 and logs
+`workflow.dispatch_not_recorded_resolving_live` when it does.
+
 #### Continuing an existing estate
 
 Use structured continuation whenever a workflow must work on an existing branch or pull request. If you have the prior run id, `--adopt <run-id>` is the authoritative form. Archon reuses the prior worktree as-is. If the prior worktree is gone, Archon reuses a same-repository checkout already holding that branch, or creates one on the exact local branch. It does not fetch, reset, or synchronize the branch; update it first if the remote advanced.
