@@ -110,7 +110,7 @@ export const checkoutObservationSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('not_git'), sampledAt: z.string().datetime({ offset: true }) }),
   /**
    * The engine could not observe the checkout. `git_failed`: a Git repository is present
-   * but a read failed. `unsupported_backend`: the execution backend holds a Git checkout
+   * but a read failed, or HEAD kept moving while it was read. `unsupported_backend`: the execution backend holds a Git checkout
    * the engine cannot read from inside it. `probe_failed`: whether a repository exists
    * could not be established.
    */
