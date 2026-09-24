@@ -174,7 +174,7 @@ describe('terminal writers report each committed transition once', () => {
 });
 
 describe('the projected payload', () => {
-  test('accumulates duration and loop iterations across a failed-then-resumed run', async () => {
+  test('accumulates duration, loop iterations and cost across a failed-then-resumed run', async () => {
     await seedRun('t-resume', 'running', {
       metadata: { dispatch: { base_branch: 'main', source: 'bundled' } },
     });
@@ -185,6 +185,7 @@ describe('the projected payload', () => {
     });
     await seedEvent('t-resume', 'loop_iteration_completed', ago(119));
     await seedEvent('t-resume', 'loop_iteration_completed', ago(118));
+    await seedEvent('t-resume', 'node_completed', ago(118), { cost_usd: 0.25 }, 'plan');
     await seedEvent(
       't-resume',
       'node_failed',
@@ -197,6 +198,7 @@ describe('the projected payload', () => {
     await resumeWorkflowRun('t-resume');
     await seedEvent('t-resume', 'workflow_started', ago(2), { origin: 'api' });
     await seedEvent('t-resume', 'loop_iteration_completed', ago(1));
+    await seedEvent('t-resume', 'node_completed', ago(1), { cost_usd: 0.5 }, 'build');
     await completeWorkflowRun('t-resume', { duration_ms: 60_000 });
 
     expect(captured).toHaveLength(2);
@@ -211,6 +213,7 @@ describe('the projected payload', () => {
       model: 'opus[1m]',
       platform: 'cli',
       loopIterations: 2,
+      costUsd: 0.25,
       exitReason: 'node_error',
       errorClass: 'exec_failed',
     });
@@ -220,6 +223,7 @@ describe('the projected payload', () => {
       runId: 't-resume',
       platform: 'cli',
       loopIterations: 3,
+      costUsd: 0.75,
     });
     // Wall-clock from the first start (120 minutes ago) to the completion just now.
     expect(completed?.durationMs).toBeGreaterThanOrEqual(119 * 60_000);

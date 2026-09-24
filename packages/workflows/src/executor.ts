@@ -3364,7 +3364,8 @@ export async function executeWorkflow(
     // Everything below is independent of the terminal write and used to run whether
     // or not it succeeded (it was try/caught here before #2910). The write moved to
     // the end of this block so a rejection cannot silence the log file, the live
-    // event, telemetry, or the user's failure notification.
+    // event, or the user's failure notification. Terminal telemetry is reported by
+    // the run store after the write commits.
     //
     // Log to file (separate from database - non-blocking)
     try {

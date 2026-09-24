@@ -20615,6 +20615,21 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
     expect(failureKinds).toEqual({ step: 'fatal' });
   });
 
+  it('a loop that exhausts max_iterations is max_iterations', async () => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'assistant', content: 'Still working...' };
+      yield { type: 'result', sessionId: 'loop-session' };
+    });
+    const { failureKinds } = await runDag([
+      {
+        id: 'my-loop',
+        kind: 'loop',
+        loop: { fresh_context: false, prompt: 'Do task.', until: 'COMPLETE', max_iterations: 2 },
+      },
+    ]);
+    expect(failureKinds).toEqual({ 'my-loop': 'max_iterations' });
+  });
+
   it('one completed node and one failed node is a node_error', async () => {
     const { store } = await runDag([
       { id: 'ok', kind: 'exec', runtime: 'sh', script: 'echo fine' },

@@ -10686,15 +10686,15 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
     for (const result of layerResults) {
       if (result.status === 'fulfilled') {
         const { nodeId, output, sessionProvider } = result.value;
-        // SINGLE aggregation point for run-level usage telemetry. Per-node
-        // cost/tokens must be summed here and ONLY here — adding a per-node
-        // telemetry capture elsewhere would double-count against the totals
-        // sent on workflow_completed/workflow_failed.
+        // SINGLE aggregation point for this segment's run-level usage: the run
+        // row's persisted totals and the transcript. Per-node cost/tokens must be
+        // summed here and ONLY here. Terminal telemetry does not read this: it
+        // folds the persisted node events (getDagResumeSnapshot) across segments.
         if (output.costUsd !== undefined) {
           // Same guard as tokens below, and for the same reason: cost comes from
           // providers (incl. community ones), and one NaN poisons the run total for
           // every other node — NaN > 0 is false, so the cost is dropped from the run
-          // row and telemetry with no trace. Exactly the silent loss #2469 exists to
+          // row with no trace. Exactly the silent loss #2469 exists to
           // remove. Guarded here, at the single aggregation point, so one bad node
           // costs only its own contribution.
           if (Number.isFinite(output.costUsd)) {
@@ -11915,7 +11915,8 @@ export async function executeDagWorkflow(
     });
     // Terminal write LAST: nothing above depends on it and all of it used to run
     // unconditionally, so a rejection must not silence the log file, the live event,
-    // the telemetry, or the user's notification.
+    // or the user's notification. Terminal telemetry is reported by the run store
+    // after this write commits, so a rejected write sends none.
     await requireTerminalStatusWrite(
       deps.store.failWorkflowRun(workflowRun.id, failMsg, {
         scheduledResume,
@@ -11962,7 +11963,8 @@ export async function executeDagWorkflow(
     });
     // Terminal write LAST: nothing above depends on it and all of it used to run
     // unconditionally, so a rejection must not silence the log file, the live event,
-    // the telemetry, or the user's notification.
+    // or the user's notification. Terminal telemetry is reported by the run store
+    // after this write commits, so a rejected write sends none.
     await requireTerminalStatusWrite(
       deps.store.failWorkflowRun(workflowRun.id, failMsg, {
         scheduledResume,
@@ -12152,9 +12154,10 @@ export async function executeDagWorkflow(
 
   const duration = Date.now() - dagStartTime;
 
-  // Emit completion, then record it. The transcript, the live event, and the telemetry
-  // do not depend on the status write and used to run whether or not it succeeded, so
-  // the (now-throwing) write goes last.
+  // Emit completion, then record it. The transcript and the live event do not depend
+  // on the status write and used to run whether or not it succeeded, so the
+  // (now-throwing) write goes last. Terminal telemetry is reported by the run store
+  // after the write commits.
   await logWorkflowComplete(logDir, workflowRun.id, runTranscriptUsage);
   const emitter = getWorkflowEventEmitter();
   emitter.emit({

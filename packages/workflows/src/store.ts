@@ -381,7 +381,15 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
   ): Promise<void>;
   updateWorkflowActivity(id: string): Promise<void>;
   getWorkflowRunStatus(id: string): Promise<WorkflowRunStatus | null>;
-  /** Atomically complete the run and persist its matching lifecycle event. */
+  /**
+   * Atomically complete the run and persist its matching lifecycle event.
+   *
+   * Every terminal writer (complete, fail, cancel, fan-out cancel, and the failure of a
+   * paused attention wait) also owes terminal telemetry: after its write commits and
+   * only when it won the status change, it reports `buildRunTerminalTelemetry` over the
+   * run's row and event log. The engine sends no terminal event itself. The SQL store
+   * does this in `packages/core/src/db/workflow-terminal-telemetry.ts`.
+   */
   completeWorkflowRun(
     id: string,
     completion: { duration_ms: number },
