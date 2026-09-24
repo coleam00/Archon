@@ -17,7 +17,7 @@ import {
   isBranchMerged,
   isPatchEquivalent,
   localBranchExists,
-  isCommitAncestor,
+  isBranchTipCoveredBy,
   getLastCommitDate,
   toRepoPath,
   toWorktreePath,
@@ -519,9 +519,9 @@ async function judgeBranchForRemoval(input: {
   if (pr.state === 'NONE') return refExists ? 'unmerged' : 'unjudgeable';
   if (pr.state === 'OPEN') return 'open-pr';
   if (pr.state === 'CLOSED' && !includeClosed) return 'unmerged';
-  // Throws when the PR head commit is not in this repository; the callers report
-  // that as a failed merge check and keep the worktree.
-  if (refExists && !(await isCommitAncestor(repoPath, `refs/heads/${branchName}`, pr.headSha))) {
+  // Fetches the PR head when it was pushed from elsewhere. Throws when that fetch
+  // fails; the callers report it as a failed merge check and keep the worktree.
+  if (refExists && !(await isBranchTipCoveredBy(repoPath, branchName, pr.headSha, remote))) {
     return 'unmerged';
   }
   return 'reclaimable';

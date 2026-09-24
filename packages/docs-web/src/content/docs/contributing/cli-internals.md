@@ -343,8 +343,10 @@ one that sees it. Both git signals also need the local branch ref: once it is go
 PR is the only judge, and a branch with no PR is reported as unverifiable instead of
 failing the check. A MERGED or CLOSED PR only covers the commits it carried:
 run branch names are reused, so while the local ref exists its tip must be the PR's
-head commit or an ancestor of it (`isCommitAncestor`). A branch with commits past the
-PR head is unmerged work, and a PR head this repository never fetched fails the check. The scheduled sweep (`runScheduledCleanup`) makes the same call, so
+head commit or an ancestor of it (`isBranchTipCoveredBy`). A branch with commits past
+the PR head is unmerged work. A PR head pushed from elsewhere and never fetched here is
+fetched by SHA from the branch's remote first; if that fetch fails, the check fails and
+the worktree is kept, with the fetch error in the reason. The scheduled sweep (`runScheduledCleanup`) makes the same call, so
 both paths agree on what counts as merged.
 
 **Code:** `packages/core/src/services/cleanup-service.ts` — `judgeBranchForRemoval()`, `cleanupMergedWorktrees()`, `runScheduledCleanup()`, `getRemovalBlocker()`

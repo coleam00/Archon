@@ -25,7 +25,12 @@ const silentLogger = {
 };
 mock.module('@archon/paths', () => ({ createLogger: mock(() => silentLogger) }));
 
-import { isBranchMerged, isCommitAncestor, isPatchEquivalent, localBranchExists } from './branch';
+import {
+  isBranchMerged,
+  isBranchTipCoveredBy,
+  isPatchEquivalent,
+  localBranchExists,
+} from './branch';
 import { toBranchName, toRepoPath } from './types';
 
 const trackTempRoot = trackTempRoots();
@@ -105,25 +110,64 @@ describe('merge signals against real git', () => {
 
   // Cleanup trusts a merged PR only for the commits it carried: the local branch tip
   // must be the PR head or behind it.
-  test('isCommitAncestor tells a branch at its merged PR head from one past it', async () => {
+  test('isBranchTipCoveredBy tells a branch at its merged PR head from one past it', async () => {
     const repoPath = repoWithSquashMergedFeature();
     const repo = toRepoPath(repoPath);
+    const feature = toBranchName('feature');
     const prHead = git(repoPath, 'rev-parse', 'feature');
 
-    expect(await isCommitAncestor(repo, 'refs/heads/feature', prHead)).toBe(true);
+    expect(await isBranchTipCoveredBy(repo, feature, prHead, 'origin')).toBe(true);
 
     // The branch name is reused and gains work the merged PR never saw.
     git(repoPath, 'checkout', '-q', 'feature');
     commit(repoPath, 'later.txt', 'later\n');
-    expect(await isCommitAncestor(repo, 'refs/heads/feature', prHead)).toBe(false);
+    expect(await isBranchTipCoveredBy(repo, feature, prHead, 'origin')).toBe(false);
   });
 
-  test('isCommitAncestor throws when the PR head commit is not in the repository', async () => {
-    const repo = toRepoPath(repoWithSquashMergedFeature());
-    const unfetched = '0123456789abcdef0123456789abcdef01234567';
+  // A bot or a maintainer pushed the last PR commit from another checkout, so the
+  // PR head exists only on the remote until it is fetched.
+  test('isBranchTipCoveredBy fetches a PR head that exists only on the remote', async () => {
+    const { local, elsewhere } = cloneWithRemoteFeature();
+    commit(elsewhere, 'bot-fix.txt', 'fix\n');
+    git(elsewhere, 'push', '-q', 'origin', 'feature');
+    const prHead = git(elsewhere, 'rev-parse', 'HEAD');
+    expect(() => git(local, 'cat-file', '-e', `${prHead}^{commit}`)).toThrow();
 
-    await expect(isCommitAncestor(repo, 'refs/heads/feature', unfetched)).rejects.toThrow(
-      'Failed to check whether'
+    const covered = await isBranchTipCoveredBy(
+      toRepoPath(local),
+      toBranchName('feature'),
+      prHead,
+      'origin'
     );
+
+    expect(covered).toBe(true);
+  });
+
+  test('isBranchTipCoveredBy throws with the fetch failure when the remote lacks the PR head', async () => {
+    const { local } = cloneWithRemoteFeature();
+    const unknown = '0123456789abcdef0123456789abcdef01234567';
+
+    await expect(
+      isBranchTipCoveredBy(toRepoPath(local), toBranchName('feature'), unknown, 'origin')
+    ).rejects.toThrow(`Failed to fetch PR head ${unknown} from origin`);
   });
 });
+
+/**
+ * A bare remote with a pushed `feature` branch, a `local` clone that has it checked
+ * out, and a second clone (`elsewhere`) on the same branch that can push past it.
+ */
+function cloneWithRemoteFeature(): { local: string; elsewhere: string } {
+  const seed = repoOnMain();
+  const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'merge-signals-remote-')));
+  const remote = join(root, 'remote.git');
+  git(root, 'clone', '-q', '--bare', seed, remote);
+  const local = join(root, 'local');
+  git(root, 'clone', '-q', remote, local);
+  git(local, 'checkout', '-q', '-b', 'feature');
+  commit(local, 'one.txt', 'one\n');
+  git(local, 'push', '-q', 'origin', 'feature');
+  const elsewhere = join(root, 'elsewhere');
+  git(root, 'clone', '-q', '-b', 'feature', remote, elsewhere);
+  return { local, elsewhere };
+}

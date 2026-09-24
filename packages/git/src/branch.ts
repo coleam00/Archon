@@ -355,12 +355,55 @@ export async function isAncestorOf(
 }
 
 /**
- * Whether `ancestor` is reachable from `descendant` (a commit counts as its own
- * ancestor). Read from `git merge-base --is-ancestor`'s exit status: 0 yes, 1 no.
- * Anything else, including a `descendant` object this repository does not hold,
+ * Whether a local branch's tip is `headSha` or an ancestor of it, i.e. whether a
+ * PR whose head is `headSha` carried every commit on the branch.
+ *
+ * The head commit may have been pushed from elsewhere (a bot fix, a maintainer
+ * push) and never fetched here, so when the object is missing it is fetched by
+ * SHA from `remote` first. A failed fetch or an unanswerable ancestry check
  * throws: the caller cannot tell "no" from "unknown" and must not guess.
  */
-export async function isCommitAncestor(
+export async function isBranchTipCoveredBy(
+  repoPath: RepoPath,
+  branchName: BranchName,
+  headSha: string,
+  remote: string
+): Promise<boolean> {
+  if (!(await hasCommitObject(repoPath, headSha))) {
+    try {
+      await execFileAsync('git', ['-C', repoPath, 'fetch', '--no-tags', remote, headSha], {
+        timeout: 60000,
+      });
+    } catch (error) {
+      throw new Error(
+        `Failed to fetch PR head ${headSha} from ${remote}: ${(error as Error).message}`,
+        { cause: error }
+      );
+    }
+  }
+  return isCommitAncestor(repoPath, `refs/heads/${branchName}`, headSha);
+}
+
+/** Exit status of `git cat-file -e <sha>^{commit}`: 0 means the commit is here. */
+async function hasCommitObject(repoPath: RepoPath, sha: string): Promise<boolean> {
+  try {
+    await execFileAsync('git', ['-C', repoPath, 'cat-file', '-e', `${sha}^{commit}`], {
+      timeout: 10000,
+    });
+    return true;
+  } catch {
+    // Any non-zero exit sends us to the fetch, which fails loudly if the
+    // repository itself is the problem.
+    return false;
+  }
+}
+
+/**
+ * Whether `ancestor` is reachable from `descendant` (a commit counts as its own
+ * ancestor). Read from `git merge-base --is-ancestor`'s exit status: 0 yes, 1 no.
+ * Anything else throws.
+ */
+async function isCommitAncestor(
   repoPath: RepoPath,
   ancestor: string,
   descendant: string

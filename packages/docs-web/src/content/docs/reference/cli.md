@@ -965,7 +965,9 @@ patch equivalence (single-commit squash-merge via `git cherry`), and GitHub PR s
 `gh` CLI. A squash merge of more than one commit is invisible to git here, so PR state is what
 recognises it. A merged or closed PR counts only while the local branch has nothing past the
 PR's head commit: run branch names get reused, and new commits on a reused branch are not
-covered by the old PR, so that environment is kept. The `gh` CLI is optional — if absent, only git signals are used. The scheduled
+covered by the old PR, so that environment is kept. A PR head commit pushed from somewhere
+else is fetched from the remote before that comparison; if the fetch fails, the environment is
+kept and reported as a failed merge check. The `gh` CLI is optional — if absent, only git signals are used. The scheduled
 sweep uses the same three signals, so both paths agree on what counts as merged. Each
 codebase's output names the base ref the comparison actually used — the configured
 `worktree.baseBranch`, or the git-detected default branch when that is unset.

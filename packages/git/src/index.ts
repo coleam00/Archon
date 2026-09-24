@@ -53,7 +53,7 @@ export {
   isBranchMerged,
   isPatchEquivalent,
   isAncestorOf,
-  isCommitAncestor,
+  isBranchTipCoveredBy,
   getLastCommitDate,
 } from './branch';
 
