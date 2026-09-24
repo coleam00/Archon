@@ -83,8 +83,8 @@ export function parseCopilotConfig(raw: Record<string, unknown>): CopilotProvide
   return config;
 }
 
-/** Strict counterpart used only for an explicitly selected per-run layer. */
-export function parseCopilotRunConfig(raw: Record<string, unknown>): CopilotProviderDefaults {
+/** Strict counterpart for authored config: `.archon/config.yaml` and per-run layers. */
+export function parseCopilotConfigStrict(raw: Record<string, unknown>): CopilotProviderDefaults {
   assertKnownRunConfigKeys(raw, [
     'model',
     'modelReasoningEffort',

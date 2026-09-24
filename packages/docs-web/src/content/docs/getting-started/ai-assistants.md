@@ -286,8 +286,6 @@ OpenCode delegates to the underlying LLM provider (Anthropic, OpenAI, Google, et
 assistants:
   opencode:
     model: anthropic/claude-3-5-sonnet  # Required: '<provider>/<model>' format
-    # or build-in agent
-    agent: general
 ```
 
 ### Model reference format

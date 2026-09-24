@@ -82,8 +82,8 @@ export function parseClaudeConfig(raw: Record<string, unknown>): ClaudeProviderD
   return result;
 }
 
-/** Strict counterpart used only for an explicitly selected per-run layer. */
-export function parseClaudeRunConfig(raw: Record<string, unknown>): ClaudeProviderDefaults {
+/** Strict counterpart for authored config: `.archon/config.yaml` and per-run layers. */
+export function parseClaudeConfigStrict(raw: Record<string, unknown>): ClaudeProviderDefaults {
   assertKnownRunConfigKeys(raw, ['model', 'settingSources', 'claudeBinaryPath']);
   const model = normalizeRunConfigString(raw.model, 'model');
   const claudeBinaryPath = normalizeRunConfigString(raw.claudeBinaryPath, 'claudeBinaryPath');

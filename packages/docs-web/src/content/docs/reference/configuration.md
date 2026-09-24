@@ -129,6 +129,17 @@ The `tiers:` block above is no longer hand-edit-only -- you can also set the `sm
 
 These files are persistent layers. For one invocation, use repeatable [`workflow run --model <name>=<spec>`](/reference/cli/#workflow-run-name-message), [`workflow run --config <path>`](/reference/cli/#per-run-config-files), or the run API's inline `config`, `tiers`, and `aliases` fields. Each run layer is sparse and sits above user, repository, global, and built-in values without editing a persistent config file.
 
+### How `assistants:` is validated
+
+Every `assistants.<provider>` block is checked by that provider when the config loads, in both `~/.archon/config.yaml` and a repository `.archon/config.yaml`. A misspelled key, an unsupported value, or a wrong type stops the load with a message naming the file, the provider, the key, and the accepted values. A `--config` run layer is checked by the same provider parser, with one difference: settings that apply to the whole process, such as `assistants.pi.env` and `assistants.pi.maxConcurrent`, are accepted in a config file and refused in a run layer. Values the provider would have quietly discarded used to reach a run and be reported as the setting the node ran at:
+
+```
+Invalid assistants config in '/Users/you/.archon/config.yaml':
+  'assistants.claude.settingSources.0': expected 'project' or 'user'.
+```
+
+`archon doctor` reports the same failure as the **Config files** check. To repair `~/.archon/config.yaml` through Archon, change the invalid value from the console settings; any other settings, `archon ai tier set`, or `archon ai alias set` change is refused until that value is fixed, because Archon validates the whole file before writing it. An `assistants:` entry for a provider this install has not registered is ignored, as before — there is no provider to validate it.
+
 ## Provider concurrency caps
 
 `concurrency.providers.<provider-id>: N` limits how many attempts against that provider run at once across every Archon process sharing this database: server, CLI, detached runs, chat, and title generation. There are no default caps. A provider without an entry is unlimited, so many runs across Claude, Codex, and Pi keep running in parallel. Set a cap only when the provider cannot take more, such as a local model on one GPU or an account with a hard concurrency limit.

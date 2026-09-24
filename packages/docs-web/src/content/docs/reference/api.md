@@ -438,6 +438,8 @@ workflow's total node count. This state describes node lifecycle, not process-ow
 
 These config routes are **ungated** -- they write non-secret model config to `~/.archon/config.yaml` and work on solo installs (no `TOKEN_ENCRYPTION_KEY` required). Contrast with the [AI Provider Credentials](#ai-provider-credentials) routes below, which require an identity.
 
+A `PATCH` whose resulting config would be invalid is refused with `400` and nothing is written. The `error` field names the refused key, for example `Invalid assistants config: 'assistants.codex.modelReasoningEffort': ...`. This includes an invalid value already in the file that the patch leaves in place: fix that key (in the same request or by editing the file) before other changes save.
+
 ```bash
 # Read current config (includes `tiers` + `tierDefaults`)
 curl http://localhost:3090/api/config
