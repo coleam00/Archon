@@ -7,7 +7,7 @@ import { randomUUID } from 'crypto';
 import { existsSync } from 'fs';
 import { hostname } from 'os';
 import { dirname, join } from 'path';
-import { MANAGED_PROVIDER_CREDENTIAL_RELATIVE_PATHS } from './deps';
+import { MANAGED_PROVIDER_CREDENTIAL_RELATIVE_PATHS, spellWorkflowCommand } from './deps';
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
 import type { WorkflowDeps } from './deps';
 import * as archonPaths from '@archon/paths';
@@ -1631,7 +1631,7 @@ async function maybeResumeParentRun(
       conversationId,
       `⚠️ Sub-run \`${childRun.id.slice(0, 8)}\` finished, but its parent run ` +
         `\`${parentRunId.slice(0, 8)}\` couldn't auto-resume (${reason}). ` +
-        `Resume it manually: \`/workflow resume ${parentRunId}\``
+        `Resume it manually: \`${spellWorkflowCommand(platform, `resume ${parentRunId}`)}\``
     );
   };
 
@@ -1784,8 +1784,7 @@ async function maybeResumeParentRun(
 
 /** Spell a workflow action the way the surface rendering the message accepts it. */
 function formatRunCommand(platform: IWorkflowPlatform, action: string, shortId?: string): string {
-  const command = shortId ? `${action} ${shortId}` : action;
-  return platform.formatWorkflowCommand?.(command) ?? `/workflow ${command}`;
+  return spellWorkflowCommand(platform, shortId ? `${action} ${shortId}` : action);
 }
 
 /**

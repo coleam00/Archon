@@ -90,6 +90,7 @@ mock.module('@archon/workflows/executor', () => ({
 }));
 
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
+import { HeadlessPlatform } from '../adapters/headless';
 
 import {
   resumeWorkflowRunFromServer,
@@ -460,7 +461,11 @@ describe('workflow continuation scanner', () => {
     await expect(resumeWorkflowRunFromServer(selected)).resolves.toBe(true);
 
     expect(mockResumeWorkflow).toHaveBeenCalledWith(selected.id);
-    expect(mockResolveRunWorkflow).toHaveBeenCalledWith(refreshed, '/tmp/workspaces');
+    expect(mockResolveRunWorkflow).toHaveBeenCalledWith(
+      refreshed,
+      '/tmp/workspaces',
+      expect.any(HeadlessPlatform)
+    );
     expect(mockHydrateResumableRun).toHaveBeenCalledWith(expect.anything(), refreshed, undefined);
     expect(mockExecuteWorkflow.mock.calls[0]?.[2]).toBe('refreshed-conversation');
     expect(mockExecuteWorkflow.mock.calls[0]?.[3]).toBe('/tmp/refreshed-worktree');
@@ -480,7 +485,11 @@ describe('workflow continuation scanner', () => {
 
     await expect(resumeWorkflowRunFromServer(paused)).resolves.toBe(false);
 
-    expect(mockResolveRunWorkflow).toHaveBeenCalledWith(paused, '/tmp/workspaces');
+    expect(mockResolveRunWorkflow).toHaveBeenCalledWith(
+      paused,
+      '/tmp/workspaces',
+      expect.any(HeadlessPlatform)
+    );
     expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
     expect(mockHydrateResumableRun).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();

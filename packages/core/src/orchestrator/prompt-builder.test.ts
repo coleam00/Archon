@@ -356,6 +356,17 @@ describe('formatPausedGateSection', () => {
     expect(section).not.toContain('no separate resume step');
   });
 
+  test('gives the agent the surface spelling of the explicit commands', () => {
+    const section = formatPausedGateSection({
+      ...openGate,
+      agentCanResolve: false,
+      surface: { formatWorkflowCommand: command => `/archon-workflow ${command}` },
+    });
+
+    expect(section).toContain('`/archon-workflow approve run-abc [comment]`');
+    expect(section.replaceAll('/archon-workflow ', '')).not.toContain('/workflow ');
+  });
+
   test('falls back to the explicit commands when the approval context is unusable', () => {
     for (const approval of [undefined, null, {}, { nodeId: 'x' }, 'garbage']) {
       const section = formatPausedGateSection(pausedRun(approval));

@@ -3,6 +3,7 @@ import { createLogger } from '@archon/paths';
 import { resolveContinuationWorkflow } from '@archon/workflows/executor';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import type { ResolvedWorkflow, WorkflowLoadError } from '@archon/workflows/schemas/workflow';
+import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { createWorkflowDeps } from './store-adapter';
@@ -19,7 +20,8 @@ function findWorkflowLoadError(
 
 export async function resolveRunWorkflow(
   run: WorkflowRun,
-  workflowCwd: string
+  workflowCwd: string,
+  surface: WorkflowCommandSurface
 ): Promise<
   { ok: true; workflow: ResolvedWorkflow } | { ok: false; message: string; resumeHint?: string }
 > {
@@ -65,6 +67,6 @@ export async function resolveRunWorkflow(
     ok: false,
     message:
       `Workflow \`${run.workflow_name}\` for run ${run.id} was not found.\n\n` +
-      'Use /workflow list to check available workflows.',
+      `Use ${spellWorkflowCommand(surface, 'list')} to check available workflows.`,
   };
 }

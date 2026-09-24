@@ -53,7 +53,9 @@ import type {
   WorkflowMessageMetadata,
   WorkflowConfig,
   WorkflowDeps,
+  WorkflowCommandSurface,
 } from './deps';
+import { spellWorkflowCommand } from './deps';
 import type {
   SendQueryOptions,
   NodeConfig,
@@ -5486,7 +5488,8 @@ async function executeLoopGroupBody(
       const gateMsg =
         `⏸ **Input required** (loop_group \`${node.id}\`, iteration ${String(i)}): ${honestMessage}\n\n` +
         `Run ID: \`${workflowRun.id}\`\n` +
-        `Respond: \`/workflow approve ${workflowRun.id} <your feedback>\` | Cancel: \`/workflow reject ${workflowRun.id}\``;
+        `Respond: \`${spellWorkflowCommand(platform, `approve ${workflowRun.id} <your feedback>`)}\` | ` +
+        `Cancel: \`${spellWorkflowCommand(platform, `reject ${workflowRun.id}`)}\``;
       const gateSent = await safeSendMessage(platform, conversationId, gateMsg, {
         workflowId: workflowRun.id,
         nodeName: node.id,
@@ -7062,7 +7065,8 @@ async function executeLoopNode(
       const gateMsg =
         `\u23f8 **Input required** (loop \`${node.id}\`, iteration ${String(i)}): ${honestMessage}\n\n` +
         `Run ID: \`${workflowRun.id}\`\n` +
-        `Respond: \`/workflow approve ${workflowRun.id} <your feedback>\` | Cancel: \`/workflow reject ${workflowRun.id}\``;
+        `Respond: \`${spellWorkflowCommand(platform, `approve ${workflowRun.id} <your feedback>`)}\` | ` +
+        `Cancel: \`${spellWorkflowCommand(platform, `reject ${workflowRun.id}`)}\``;
       const gateSent = await safeSendMessage(platform, conversationId, gateMsg, {
         workflowId: workflowRun.id,
         nodeName: node.id,
@@ -7617,7 +7621,8 @@ async function executeApprovalNode(
   const approvalMsg =
     `⏸ **Approval required**: ${renderedMessage}\n\n` +
     `Run ID: \`${workflowRun.id}\`\n` +
-    `Approve: \`/workflow approve ${workflowRun.id}\` | Reject: \`/workflow reject ${workflowRun.id}\``;
+    `Approve: \`${spellWorkflowCommand(platform, `approve ${workflowRun.id}`)}\` | ` +
+    `Reject: \`${spellWorkflowCommand(platform, `reject ${workflowRun.id}`)}\``;
   await safeSendMessage(platform, conversationId, approvalMsg, msgContext);
 
   deps.store
@@ -7860,11 +7865,13 @@ async function executeWorkflowNode(
     // re-pauses on it. A retry can't fix this (there is nowhere to record a second
     // simultaneous block); the real fix is a gate queue or a load-time reject of
     // multiple gate-pausing nodes per layer — tracked in #2180.
-    const message =
-      `Sub-run \`${node.workflow}\` (run \`${childRunId.slice(0, 8)}\`) is paused awaiting review. ` +
-      `Approve it by run id: \`/workflow approve ${childRunId}\``;
+    const blocked = `Sub-run \`${node.workflow}\` (run \`${childRunId.slice(0, 8)}\`) is paused awaiting review. `;
+    // The persisted gate message is read on every surface (web, CLI status, chat), so it
+    // keeps the surface-neutral chat grammar; the notice below goes to this platform only.
+    const approveChild = (surface: WorkflowCommandSurface): string =>
+      `${blocked}Approve it by run id: \`${spellWorkflowCommand(surface, `approve ${childRunId}`)}\``;
     const paused = await pauseGateRespectingExternalTransition(deps, parentRun.id, {
-      message,
+      message: approveChild({}),
       nodeId: executionNodeId,
       type: 'child_workflow',
       childRunId,
@@ -7873,7 +7880,7 @@ async function executeWorkflowNode(
       await safeSendMessage(
         platform,
         conversationId,
-        `⏸ **Blocked on sub-run** \`${node.workflow}\`: ${message}`,
+        `⏸ **Blocked on sub-run** \`${node.workflow}\`: ${approveChild(platform)}`,
         msgContext
       );
     } else {
@@ -10490,7 +10497,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   await safeSendMessage(
                     ctx.platform,
                     ctx.conversationId,
-                    `⚠️ Could not load the persisted session for node \`${node.id}\` — it will run without prior context. Session continuity may be broken; if this recurs, check server logs or run \`/workflow reset-sessions ${ctx.workflowName}\`.`,
+                    `⚠️ Could not load the persisted session for node \`${node.id}\` — it will run without prior context. Session continuity may be broken; if this recurs, check server logs or run \`${spellWorkflowCommand(ctx.platform, `reset-sessions ${ctx.workflowName}`)}\`.`,
                     { workflowId: ctx.workflowRun.id, nodeName: node.id }
                   );
                 }
