@@ -240,6 +240,8 @@ const DEFAULT_CONFIG_CONTENT = `# Archon Global Configuration
 # Concurrency settings
 # concurrency:
 #   maxConversations: 10
+#   providers:        # optional cap on simultaneous attempts per provider; unlisted = unlimited
+#     pi: 1
 `;
 
 /**

@@ -21,7 +21,16 @@ describe('GitHub outbound producer', () => {
       version: '1',
       forge: 'github',
       hosts: ['github.com'],
-      capabilities: ['resolve', 'checks.state'],
+      capabilities: [
+        'resolve',
+        'checks.state',
+        'workitem.view',
+        'pr.view',
+        'pr.create',
+        'pr.edit-body',
+        'pr.ready',
+        'comment.upsert',
+      ],
       token_env: ['GH_TOKEN', 'GITHUB_TOKEN'],
     });
   });

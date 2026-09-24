@@ -100,6 +100,10 @@ paths:
 # Concurrency limits
 concurrency:
   maxConversations: 10
+  # Optional install-wide cap on simultaneous provider attempts, by provider ID.
+  # Unlisted providers are unlimited. See "Provider concurrency caps" below.
+  # providers:
+  #   pi: 1
 
 # Optional continuation for provider quota-window exhaustion. Off by default.
 workflows:
@@ -135,6 +139,16 @@ Invalid assistants config in '/Users/you/.archon/config.yaml':
 ```
 
 `archon doctor` reports the same failure as the **Config files** check. An `assistants:` entry for a provider this install has not registered is ignored, as before — there is no provider to validate it.
+
+## Provider concurrency caps
+
+`concurrency.providers.<provider-id>: N` limits how many attempts against that provider run at once across every Archon process sharing this database: server, CLI, detached runs, chat, and title generation. There are no default caps. A provider without an entry is unlimited, so many runs across Claude, Codex, and Pi keep running in parallel. Set a cap only when the provider cannot take more, such as a local model on one GPU or an account with a hard concurrency limit.
+
+- **Attempts, not runs.** One attempt holds one slot from the moment the provider starts until its stream has closed. Retry backoff between attempts, including the internal retries of Claude, Codex, and OpenCode, holds no slot. A rate limit is retried with backoff as before; it never lowers the cap.
+- **Waiting.** An attempt that finds the cap full waits and checks again about once a second. Cancelling the run stops the wait without starting the attempt. Until queue visibility lands, a waiting node looks idle, and a wait longer than the node's `idle_timeout` ends the node like any other idle node.
+- **Changes apply immediately.** The cap is re-read on every admission check, including by attempts already waiting. Lowering it blocks new attempts until enough running ones finish; running attempts are never cancelled.
+- **Strict.** A key that is not a registered provider ID, a value that is not a positive integer, or a config file that cannot be parsed refuses every provider attempt with an error naming the problem, instead of silently running uncapped.
+- **Process loss.** A slot belongs to the process that took it. When that process dies, the next admission on the same host releases the slot. A holder from another host is never released by time or guesswork: list it with `archon ai capacity` and, once you have verified that process is gone, release it with `archon ai capacity release <attempt-id>`. Hosts that share one PostgreSQL database need distinct hostnames. A recreated Docker container gets a new hostname unless the compose service sets `hostname:`, so holders left by the old container need an explicit release.
 
 ## Run-scoped configuration
 

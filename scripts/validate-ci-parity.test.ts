@@ -66,6 +66,11 @@ const NOT_IN_VALIDATE: readonly { command: string; reason: string }[] = [
     reason: 'Proves the Postgres slot-release query against a live PostgreSQL service.',
   },
   {
+    command: 'bun test packages/core/src/db/provider-attempts.postgres.integration.test.ts',
+    reason:
+      'Proves provider-attempt admission contention and holder-kind convergence against a live PostgreSQL service.',
+  },
+  {
     command: 'bun run build:docs',
     reason:
       "Astro's CLI runs under Node, not Bun, so a checkout with only Bun cannot build the docs " +

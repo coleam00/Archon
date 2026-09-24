@@ -1080,6 +1080,9 @@ blob id of its content, its mode, and its type. Retries and the turns of a `loop
 their invocation's first observation; the next invocation (for example, the next iteration
 of an enclosing `loop_group`) records a new one. A resumed run reads the same recorded
 value. Observation never changes the checkout: no stash, no index write, no `git add`.
+The recorded commit is the one `git status` reported comparing the worktree against; if
+HEAD keeps moving while the checkout is read, the observation is `unavailable` rather than a
+guess.
 
 The reference is valid only as the whole value of a `command:` or `script:` binding, and
 only for a producer that executes against the checkout. Anything else is a load error.
