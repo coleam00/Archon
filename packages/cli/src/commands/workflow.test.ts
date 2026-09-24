@@ -9947,7 +9947,7 @@ describe('workflowCancelCommand', () => {
 
     expect(mockRequestDetachedRunStop).toHaveBeenCalledWith(runId);
     expect(mockIsRunOwnerAnswering).toHaveBeenCalledWith('root-run');
-    expect(workflowDb.cancelWorkflowRun).toHaveBeenCalledWith(runId);
+    expect(workflowDb.cancelWorkflowRun).toHaveBeenCalledWith(runId, { cancel_reason: 'operator' });
     expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
       ok: true,
       status: 'cancelled',
