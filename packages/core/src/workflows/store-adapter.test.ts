@@ -85,8 +85,8 @@ mock.module('@archon/providers', () => ({
   getAgentProvider: mock(() => ({})),
   getRegisteredProviders: mock(() => []),
   getRegistration: mock(
-    (): { parseRunConfig: (raw: Record<string, unknown>) => Record<string, unknown> } => ({
-      parseRunConfig: (raw: Record<string, unknown>): Record<string, unknown> => raw,
+    (): { parseConfig: (raw: Record<string, unknown>) => Record<string, unknown> } => ({
+      parseConfig: (raw: Record<string, unknown>): Record<string, unknown> => raw,
     })
   ),
   parseProviderRunModel: mock((_provider: string, model: string): string => model),

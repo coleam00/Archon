@@ -129,6 +129,17 @@ The `tiers:` block above is no longer hand-edit-only -- you can also set the `sm
 
 These files are persistent layers. For one invocation, use repeatable [`workflow run --model <name>=<spec>`](/reference/cli/#workflow-run-name-message), [`workflow run --config <path>`](/reference/cli/#per-run-config-files), or the run API's inline `config`, `tiers`, and `aliases` fields. Each run layer is sparse and sits above user, repository, global, and built-in values without editing a persistent config file.
 
+### How `assistants:` is validated
+
+Every `assistants.<provider>` block is checked by that provider when the config loads, in both `~/.archon/config.yaml` and a repository `.archon/config.yaml`. A misspelled key, an unsupported value, or a wrong type stops the load with a message naming the file, the provider, the key, and the accepted values. A `--config` run layer is checked by the same provider parser, with one difference: settings that apply to the whole process, such as `assistants.pi.env` and `assistants.pi.maxConcurrent`, are accepted in a config file and refused in a run layer. Values the provider would have quietly discarded used to reach a run and be reported as the setting the node ran at:
+
+```
+Invalid assistants config in '/Users/you/.archon/config.yaml':
+  'assistants.claude.settingSources.0': expected 'project' or 'user'.
+```
+
+`archon doctor` reports the same failure as the **Config files** check. To repair `~/.archon/config.yaml` through Archon, change the invalid value from the console settings; any other settings, `archon ai tier set`, or `archon ai alias set` change is refused until that value is fixed, because Archon validates the whole file before writing it. An `assistants:` entry for a provider this install has not registered is ignored, as before — there is no provider to validate it.
+
 ## Provider concurrency caps
 
 `concurrency.providers.<provider-id>: N` limits how many attempts against that provider run at once across every Archon process sharing this database: server, CLI, detached runs, chat, and title generation. There are no default caps. A provider without an entry is unlimited, so many runs across Claude, Codex, and Pi keep running in parallel. Set a cap only when the provider cannot take more, such as a local model on one GPU or an account with a hard concurrency limit.
@@ -336,7 +347,7 @@ worktree:
 
 **Defaults behavior:** The app's bundled default commands and workflows are loaded at runtime and merged with repo-specific ones. Repo commands/workflows override app defaults by name. Set `defaults.loadDefaultCommands: false` or `defaults.loadDefaultWorkflows: false` to disable runtime loading.
 
-**Submodule behavior:** When a repo contains `.gitmodules`, submodules are initialized in new worktrees by default (git's `worktree add` does not do this). The check is a cheap filesystem probe — repos without submodules pay zero cost. Submodule init failure throws a classified error (credentials, network, timeout) rather than silently producing a worktree with empty submodule directories. Set `worktree.initSubmodules: false` to opt out.
+**Submodule behavior:** When a repo contains `.gitmodules`, submodules are initialized in new worktrees by default (git's `worktree add` does not do this). The check is a cheap filesystem probe — repos without submodules pay zero cost. Submodule init failure throws a classified error (credentials, network, timeout) rather than silently producing a worktree with empty submodule directories, and the worktree whose setup did not finish is removed so a retry starts from a fresh checkout instead of adopting it. If that removal cannot finish, the error names the leftover path, and later runs refuse to adopt it until you delete it. Set `worktree.initSubmodules: false` to opt out.
 
 **Remote behavior:** By default, all git operations (fetch, push, branch tracking) use the `origin` remote. If your repo uses a different remote name, configure `worktree.remote`. Resolution order:
 1. If `worktree.remote` is set: Uses the configured remote name for all operations.

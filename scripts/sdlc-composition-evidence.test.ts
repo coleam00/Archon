@@ -19,7 +19,11 @@ import {
   type CompositionRequest,
   type CompositionEvidence,
 } from '../.archon/workflows/sdlc/.shared/composition';
-import { PASSES_RED, passesRed } from '../.archon/workflows/sdlc/.shared/verdict';
+import {
+  PASSES_RED,
+  passesRed,
+  unfinishedValidation,
+} from '../.archon/workflows/sdlc/.shared/verdict';
 
 const track = trackTempRoots();
 
@@ -304,6 +308,72 @@ it('keeps the validation producer schemas and script vocabulary in agreement', (
   expect(
     implement.nodes.find(n => n.id === 'implement')!.output_format!.properties.red_cause.enum
   ).toEqual(ordinary);
+});
+
+it("refuses implement's unfinished validation with the green gates' message", () => {
+  const script = join(
+    import.meta.dir,
+    '..',
+    '.archon/workflows/sdlc/implement/scripts/assert-changed.ts'
+  );
+  const summary = 'A usage limit stopped validation during tests; type-check passed.';
+  const run = Bun.spawnSync([process.execPath, script], {
+    env: {
+      ...process.env,
+      INPUTS_GREEN: 'false',
+      INPUTS_RED_CAUSE: 'incomplete',
+      INPUTS_SUMMARY: summary,
+      INPUTS_BASELINE: '',
+    },
+  });
+  expect(run.exitCode).toBe(1);
+  expect(run.stdout.toString()).toBe('');
+  expect(run.stderr.toString().trim()).toBe(unfinishedValidation('The implementation', summary));
+  expect(run.stderr.toString()).not.toMatch(/\bred\b/);
+});
+
+describe('the green gate on a validation that did not finish', () => {
+  const script = join(
+    import.meta.dir,
+    '..',
+    '.archon/workflows/sdlc/deliver/scripts/gate-green.ts'
+  );
+  function gate(cause: string, summary: string, green = 'false') {
+    const run = Bun.spawnSync([process.execPath, script], {
+      env: {
+        ...process.env,
+        INPUTS_GREEN: green,
+        INPUTS_RED_CAUSE: cause,
+        INPUTS_SUMMARY: summary,
+        INPUTS_STAGE: 'The project gate',
+      },
+    });
+    return { exitCode: run.exitCode, stdout: run.stdout.toString(), stderr: run.stderr.toString() };
+  }
+
+  it('refuses incomplete as unfinished, never as red, and carries the reason', () => {
+    const summary = 'A usage limit stopped validation during type-check; lint passed.';
+    const result = gate('incomplete', summary);
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain("The project gate: validation didn't finish.");
+    expect(result.stderr).toContain(summary);
+    expect(result.stderr).toContain('Resume the run');
+    expect(result.stderr).not.toMatch(/\bred\b/);
+  });
+
+  it('refuses incomplete even when the verdict also claims green', () => {
+    const result = gate('incomplete', 'type-check never ran', 'true');
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain("validation didn't finish");
+  });
+
+  it('still refuses red with no declared cause as unexplained red', () => {
+    const result = gate('', 'tests failed');
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('is red and declared no red_cause');
+  });
 });
 
 it('forwards interaction through the CI projection without making it an accepted-red attention route', () => {

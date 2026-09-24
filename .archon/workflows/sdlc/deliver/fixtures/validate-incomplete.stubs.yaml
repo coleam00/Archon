@@ -1,0 +1,50 @@
+# Dry-run fixture: the project gate did not finish (--exec-code, so the real gate
+# script decides). A provider limit stopped validation partway through; every check
+# that ran passed, the rest never ran. The verdict declares `incomplete`, not an
+# empty cause, so the gate reports an unfinished validation rather than red nobody
+# explained — and still stops the run, because an unfinished gate is no verdict.
+# gate-green and gate-validated are deliberately unstubbed: the real script
+# passes the green implementation and refuses the unfinished validation.
+impl__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: implemented and green on the checks it ran"
+impl__assert-changed: "3 files changed"
+pr__pr: { intent: "/fixture/pr-intent.json" }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 9, url: "https://github.com/example/repo/pull/9", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+classify:
+  errors: false
+  docs: false
+  reasons:
+    errors: "stub: no failure paths"
+    docs: "stub: no doc-facing changes"
+resolve-scope: '{"errors":"false"}'
+review__mode: '{"continuation":false}'
+review__scope:
+  # PR diff in scope; head sha stubbed
+  docs: false
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 9 }
+review__code: "0 findings"
+review__seams: "0 findings"
+review__simplify: "0 findings"
+review__tests: "0 findings"
+review__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: clean on initial review"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+review__publish:
+  ready: true
+  action: none
+  findings_summary: "stub: clean on initial review"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+validate__validate:
+  green: false
+  red_cause: incomplete
+  summary: "stub: a provider limit stopped validation during type-check. lint and format passed; type-check, tests and build never ran."
+fixture:
+  expect: failed
+  fail-node: gate-validated
+  reached: [pr__pr, review__synthesize, validate__result]
+exec-code: true

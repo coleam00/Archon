@@ -46,7 +46,12 @@ import {
   resolveFolderBackend,
   classifyIsolationError,
 } from '@archon/isolation';
-import type { ExecutionContext, ContainerBackend, ContainerBackendConfig } from '@archon/isolation';
+import type {
+  ExecutionContext,
+  ContainerBackend,
+  ContainerBackendConfig,
+  IsolatedEnvironment,
+} from '@archon/isolation';
 import type { TaskBranchSelection } from '@archon/isolation';
 import {
   createLogger,
@@ -2890,31 +2895,41 @@ async function runWorkflowWithOwnedSource(
         'worktree_creating'
       );
 
-      const isolatedEnv = await provider.create({
-        workflowType: 'task',
-        identifier: branchIdentifier,
-        taskBranch: adoptedTaskBranch
-          ? adoptedTaskBranch
-          : options.branchName
-            ? {
-                kind: 'new',
-                branch: git.toBranchName(options.branchName),
-                ...(options.fromBranch?.trim()
-                  ? { fromBranch: git.toBranchName(options.fromBranch.trim()) }
-                  : {}),
-              }
-            : options.fromBranch?.trim()
-              ? { kind: 'new', fromBranch: git.toBranchName(options.fromBranch.trim()) }
-              : undefined,
-        baseBranch: codebaseDefaultBranch ? git.toBranchName(codebaseDefaultBranch) : undefined,
-        baseOverride: flagBase ? git.toBranchName(flagBase) : undefined,
-        codebaseId: codebase.id,
-        // owner/repo name lets resolveOwnerRepo use the registered identity
-        // instead of the _local/<basename> path fallback (#2022, #2227)
-        codebaseName: codebase.name,
-        canonicalRepoPath: git.toRepoPath(codebase.default_cwd),
-        description: `CLI workflow: ${workflowName}`,
-      });
+      let isolatedEnv: IsolatedEnvironment;
+      try {
+        isolatedEnv = await provider.create({
+          workflowType: 'task',
+          identifier: branchIdentifier,
+          taskBranch: adoptedTaskBranch
+            ? adoptedTaskBranch
+            : options.branchName
+              ? {
+                  kind: 'new',
+                  branch: git.toBranchName(options.branchName),
+                  ...(options.fromBranch?.trim()
+                    ? { fromBranch: git.toBranchName(options.fromBranch.trim()) }
+                    : {}),
+                }
+              : options.fromBranch?.trim()
+                ? { kind: 'new', fromBranch: git.toBranchName(options.fromBranch.trim()) }
+                : undefined,
+          baseBranch: codebaseDefaultBranch ? git.toBranchName(codebaseDefaultBranch) : undefined,
+          baseOverride: flagBase ? git.toBranchName(flagBase) : undefined,
+          codebaseId: codebase.id,
+          // owner/repo name lets resolveOwnerRepo use the registered identity
+          // instead of the _local/<basename> path fallback (#2022, #2227)
+          codebaseName: codebase.name,
+          canonicalRepoPath: git.toRepoPath(codebase.default_cwd),
+          description: `CLI workflow: ${workflowName}`,
+        });
+      } catch (createError) {
+        // Same translation the container branches above apply. The classified
+        // message also carries the note a failed cleanup records outside
+        // `err.message`, which the raw error would drop on this path.
+        const err = createError as Error;
+        getLog().error({ err, branch: branchIdentifier }, 'worktree.create_failed');
+        throw new Error(classifyIsolationError(err), { cause: err });
+      }
 
       // Track in database
       const envRecord = await isolationDb.create({

@@ -15,6 +15,10 @@
  * ready while its real CI is not green. So this fails on `introduced` and lets
  * `inherited` and `environment` through with the claim recorded.
  *
+ * A validation that did not finish is not red at all: `incomplete` means some checks
+ * never ran and none that ran failed. It fails too, since an unfinished gate is no
+ * verdict, but it says so and names resuming the run as the action.
+ *
  * The record is this node's own result. Its node declares `output_type: green-gate`,
  * so the engine keeps the JSON below as a typed artifact under `nodes/`, one file per
  * gate, and every later reader — the pull-request body, the terminal report — finds
@@ -34,14 +38,18 @@
  */
 
 import { emit, note, refuse, trimmed } from '../../.shared/io.ts';
-import { passesRed } from '../../.shared/verdict.ts';
+import { passesRed, unfinishedValidation } from '../../.shared/verdict.ts';
 
 const green = trimmed(process.env.INPUTS_GREEN);
 const cause = trimmed(process.env.INPUTS_RED_CAUSE);
 const summary = trimmed(process.env.INPUTS_SUMMARY);
 const stage = trimmed(process.env.INPUTS_STAGE) || 'The work';
 
-if (green === 'true') {
+if (cause === 'incomplete') {
+  // Decided before `green` is read, because a green over checks that never ran is
+  // unsupported.
+  refuse(unfinishedValidation(stage, summary));
+} else if (green === 'true') {
   emit({ gate: 'green', red_cause: '', stage, summary: '' });
 } else if (cause === '') {
   refuse(

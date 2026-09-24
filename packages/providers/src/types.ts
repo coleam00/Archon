@@ -159,8 +159,22 @@ export interface OpencodeProviderDefaults {
 /** Generic per-provider defaults bag used by config surfaces and UI. */
 export type ProviderDefaults = Record<string, unknown>;
 
-/** Strict parser for an explicitly selected, run-scoped provider config layer. */
-export type ProviderRunConfigParser = (raw: ProviderDefaults) => ProviderDefaults;
+/**
+ * Which authored surface a strict provider-config parse is validating.
+ *
+ * `install` is `assistants.<provider>` in a global or repository
+ * `.archon/config.yaml`; `run` is an explicitly selected per-run layer. They
+ * share one parser so both paths reject the same bad values, and the scope
+ * lets a provider refuse a key whose consumer owns process-lifetime state and
+ * therefore cannot be re-decided per run.
+ */
+export type ProviderConfigScope = 'install' | 'run';
+
+/** Strict parser for an authored provider config layer. */
+export type ProviderConfigParser = (
+  raw: ProviderDefaults,
+  scope: ProviderConfigScope
+) => ProviderDefaults;
 
 /** Provider-keyed defaults map. Built-ins may refine individual entries. */
 export type ProviderDefaultsMap = Record<string, ProviderDefaults>;
@@ -881,11 +895,12 @@ export interface ProviderRegistration {
   credentials: ProviderCredentialCatalog;
 
   /**
-   * Validate and normalize provider defaults selected for one workflow run.
-   * Ordinary config remains defensive and tolerant; explicit run config must
-   * reject values the provider would otherwise silently discard.
+   * Validate and normalize authored provider defaults, for `.archon/config.yaml`
+   * and for a per-run config layer alike. Execution-time parsing stays defensive
+   * and tolerant; an authored setting must reject values the provider would
+   * otherwise silently discard.
    */
-  parseRunConfig: ProviderRunConfigParser;
+  parseConfig: ProviderConfigParser;
 }
 
 /**

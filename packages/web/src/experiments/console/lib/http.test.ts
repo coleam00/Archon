@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { HttpError, requestJson } from './http';
+import { HttpError, errorDetail, requestJson } from './http';
 
 const originalFetch = globalThis.fetch;
 const originalWindow = (globalThis as { window?: unknown }).window;
@@ -46,5 +46,17 @@ describe('requestJson errors', () => {
 
     expect(error.serverError).toBeUndefined();
     expect(error.bodySnippet).toBe('<html>Bad gateway</html>');
+  });
+});
+
+describe('errorDetail', () => {
+  test('HttpError → parsed server message', () => {
+    const err = new HttpError(403, '/api/workflows/foo', JSON.stringify({ error: 'denied' }));
+    expect(errorDetail(err)).toBe('denied');
+  });
+
+  test('generic Error → message; non-Error → String()', () => {
+    expect(errorDetail(new Error('boom'))).toBe('boom');
+    expect(errorDetail(42)).toBe('42');
   });
 });

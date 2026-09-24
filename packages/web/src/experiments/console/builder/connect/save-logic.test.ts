@@ -5,7 +5,6 @@ import {
   validationFailureToIssues,
   clientIssue,
   errorToIssues,
-  errorDetail,
   blockingErrors,
   isReadOnlySource,
   saveTargetFor,
@@ -120,18 +119,6 @@ describe('errorToIssues', () => {
   test('non-Error thrown value uses the fallback string', () => {
     const issues = errorToIssues('string literal', 'save.failed', 'unknown error');
     expect(issues[0]?.message).toBe('unknown error');
-  });
-});
-
-describe('errorDetail', () => {
-  test('HttpError → parsed server message', () => {
-    const err = new HttpError(403, '/api/workflows/foo', JSON.stringify({ error: 'denied' }));
-    expect(errorDetail(err)).toBe('denied');
-  });
-
-  test('generic Error → message; non-Error → String()', () => {
-    expect(errorDetail(new Error('boom'))).toBe('boom');
-    expect(errorDetail(42)).toBe('42');
   });
 });
 

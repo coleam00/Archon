@@ -9,7 +9,7 @@ import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
 import { listWorktrees, execFileAsync, listChildRepos, toRepoPath } from '@archon/git';
-import { getIsolationProvider } from '@archon/isolation';
+import { classifyIsolationError, getIsolationProvider } from '@archon/isolation';
 import * as isolationEnvDb from '../db/isolation-environments';
 import {
   cleanupMergedWorktrees,
@@ -449,7 +449,9 @@ async function handleWorktreeCommand(
             message: `Branch '${branchName}' already exists. Use a different name.`,
           };
         }
-        return { success: false, message: `Failed to create worktree: ${err.message}` };
+        // Classified, not raw: the note an isolation failure carries about a
+        // leftover workspace lives outside `err.message`.
+        return { success: false, message: classifyIsolationError(err) };
       }
     }
 

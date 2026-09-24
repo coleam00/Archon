@@ -6758,7 +6758,7 @@ nodes:
         displayName: 'No Resume Skip Test',
         builtIn: false,
         credentials: { kind: 'static', specs: [] },
-        parseRunConfig: (raw: ProviderDefaults): ProviderDefaults => raw,
+        parseConfig: (raw: ProviderDefaults): ProviderDefaults => raw,
         capabilities: {
           sessionResume: false,
           mcp: false,
@@ -6828,7 +6828,7 @@ nodes:
         displayName: 'No Resume Test',
         builtIn: false,
         credentials: { kind: 'static', specs: [] },
-        parseRunConfig: (raw: ProviderDefaults): ProviderDefaults => raw,
+        parseConfig: (raw: ProviderDefaults): ProviderDefaults => raw,
         capabilities: {
           sessionResume: false,
           mcp: false,

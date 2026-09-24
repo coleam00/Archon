@@ -2812,7 +2812,7 @@ export interface paths {
             'application/json': components['schemas']['ConfigResponse'];
           };
         };
-        /** @description Invalid request body */
+        /** @description Invalid request body, or the resulting config is invalid */
         400: {
           headers: {
             [name: string]: unknown;
@@ -2873,7 +2873,7 @@ export interface paths {
             'application/json': components['schemas']['ConfigResponse'];
           };
         };
-        /** @description Invalid request body */
+        /** @description Invalid request body, or the resulting config is invalid */
         400: {
           headers: {
             [name: string]: unknown;
@@ -2934,7 +2934,7 @@ export interface paths {
             'application/json': components['schemas']['ConfigResponse'];
           };
         };
-        /** @description Invalid alias name, unknown provider, or invalid effort */
+        /** @description Invalid alias name, unknown provider, invalid effort, or the resulting config is invalid */
         400: {
           headers: {
             [name: string]: unknown;

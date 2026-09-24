@@ -364,7 +364,9 @@ nodes:
   # still stops the run. Inherited or environment red proceeds to await-checks,
   # where the pull request's own CI decides — an inherited break is red there
   # too, is classified once more by the convergence pass below, and pauses for
-  # explicit operator action before any ready flip can run.
+  # explicit operator action before any ready flip can run. A validation that
+  # did not finish (`incomplete`) also stops the run, reported as unfinished
+  # rather than red, so resuming is the action.
   - id: gate-validated
     script: gate-green
     runtime: bun

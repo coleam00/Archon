@@ -54,7 +54,7 @@ nodes:
         green: { type: boolean }
         red_cause:
           type: string
-          enum: [introduced, inherited, environment, interaction, ""]
+          enum: [introduced, inherited, environment, interaction, incomplete, ""]
         summary: { type: string }
         evidence:
           anyOf:
@@ -77,13 +77,14 @@ nodes:
       properties:
         green:
           type: boolean
-        # Why the checks are red, when they are. Carries the empty string
-        # when there is no red to explain, for the same reason implement's does:
+        # Why the verdict is not green: a failing check's cause, or
+        # `incomplete` when the checks did not all run. Carries the empty string
+        # when the gate is green, for the same reason implement's does:
         # OpenAI strict mode rejects a schema whose `required` omits a declared
         # property, so the absent form lives in the enum.
         red_cause:
           type: string
-          enum: [introduced, inherited, environment, ""]
+          enum: [introduced, inherited, environment, incomplete, ""]
         summary:
           type: string
       required: [green, red_cause, summary]
