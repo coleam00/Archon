@@ -16,6 +16,7 @@ import {
   getDefaultBranch,
   isBranchMerged,
   isPatchEquivalent,
+  localBranchExists,
   getLastCommitDate,
   toRepoPath,
   toWorktreePath,
@@ -473,6 +474,59 @@ async function getRemovalBlocker(env: {
 }
 
 /**
+ * How a branch's merge state came out, from the union of signals both cleanup
+ * sweeps share:
+ *   (a) git ancestry  — `git branch --merged` (fast-forward / merge commit)
+ *   (b) git cherry    — patch-equivalent commits (single-commit squash merge)
+ *   (c) the PR's state — the only signal that sees a multi-commit squash merge,
+ *       and the only one left once the local branch ref is gone
+ *
+ * 'unjudgeable' is the dead end the git signals hit when the branch ref has been
+ * deleted and no PR answers for the branch: the worktree stays, and the caller
+ * reports it rather than letting it read as ordinary unmerged work.
+ */
+type MergeVerdict = 'reclaimable' | 'open-pr' | 'unmerged' | 'unjudgeable';
+
+async function judgeBranchForRemoval(input: {
+  repoPath: RepoPath;
+  branchName: BranchName;
+  baseRef: BranchName;
+  prStateCache: Map<string, PrState>;
+  includeClosed: boolean;
+  remote: string;
+}): Promise<MergeVerdict> {
+  const { repoPath, branchName, baseRef, prStateCache, includeClosed, remote } = input;
+  // Both git signals resolve the local branch ref, and `git cherry` fails outright
+  // once it is gone, so ask git only while the ref is there. The PR lookup keys off
+  // the branch name on the remote and needs no local ref at all.
+  const refExists = await localBranchExists(repoPath, branchName);
+  if (refExists) {
+    if (await isBranchMerged(repoPath, branchName, baseRef)) return 'reclaimable';
+    if (await isPatchEquivalent(repoPath, branchName, baseRef)) return 'reclaimable';
+  }
+
+  // A failed or rate-limited PR lookup comes back as 'NONE', never 'MERGED', so an
+  // unanswered branch keeps its worktree.
+  const prState = await getPrState(branchName, repoPath, prStateCache, remote);
+  if (prState === 'MERGED') return 'reclaimable';
+  if (prState === 'CLOSED') return includeClosed ? 'reclaimable' : 'unmerged';
+  if (prState === 'OPEN') return 'open-pr';
+  return refExists ? 'unmerged' : 'unjudgeable';
+}
+
+/** The operator-facing reason a kept environment is worth reporting, or null when it is ordinary unmerged work. */
+function skipReasonFor(verdict: Exclude<MergeVerdict, 'reclaimable'>): string | null {
+  switch (verdict) {
+    case 'open-pr':
+      return 'PR is open (active review)';
+    case 'unjudgeable':
+      return 'branch ref is gone and no PR was found — merge state unverifiable';
+    case 'unmerged':
+      return null;
+  }
+}
+
+/**
  * Run full scheduled cleanup cycle
  * 1. Find and remove merged branches
  * 2. Find and remove stale environments
@@ -485,6 +539,10 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
     // Get all active environments with their codebase info
     const environments = await isolationEnvDb.listAllActiveWithCodebase();
     getLog().info({ count: environments.length }, 'active_environments_found');
+
+    // One PR-state cache for the whole cycle; getPrState keys it by repo + branch,
+    // and this sweep spans every registered repo.
+    const prStateCache = new Map<string, PrState>();
 
     for (const env of environments) {
       try {
@@ -518,35 +576,33 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
           continue;
         }
 
-        // Check if branch is merged
+        // Same merged decision the `--merged` sweep uses, PR state included: this
+        // repository squash-merges every PR, and git alone cannot see that.
         const mainRepoPath = toRepoPath(env.codebase_default_cwd);
-        const { remoteMainRef } = await resolveRepoGitContext(
+        const { remoteMainRef, remote } = await resolveRepoGitContext(
           mainRepoPath,
           env.codebase_default_cwd
         );
-        let merged = await isBranchMerged(
-          mainRepoPath,
-          toBranchName(env.branch_name),
-          remoteMainRef
-        );
-
-        // Fallback to patch-equivalence for squash-merge detection.
-        // git cherry via isPatchEquivalent detects single-commit squash-merges.
-        // Multi-commit squash-merges need the PR-state (gh) fallback, which this
-        // scheduled-cleanup loop lacks — that is a known limitation.
-        if (!merged) {
-          try {
-            merged = await isPatchEquivalent(
-              mainRepoPath,
-              toBranchName(env.branch_name),
-              remoteMainRef
-            );
-          } catch {
-            // Patch-equivalence is best-effort; a failure doesn't change the result.
-          }
+        let verdict: MergeVerdict = 'unmerged';
+        try {
+          verdict = await judgeBranchForRemoval({
+            repoPath: mainRepoPath,
+            branchName: toBranchName(env.branch_name),
+            baseRef: remoteMainRef,
+            prStateCache,
+            includeClosed: false,
+            remote,
+          });
+        } catch (error) {
+          // An unreadable repo or ref must not also cost the environment the staleness
+          // sweep below, which is what still reclaims a worktree whose repo moved away.
+          getLog().warn(
+            { err: error as Error, envId: env.id, branchName: env.branch_name },
+            'cleanup.merge_check_failed'
+          );
         }
 
-        if (merged) {
+        if (verdict === 'reclaimable') {
           const blocker = await getRemovalBlocker(env);
           if (blocker) {
             report.skipped.push({ id: env.id, reason: `merged but ${blocker.display}` });
@@ -673,6 +729,15 @@ export interface CleanupOperationResult {
 }
 
 /**
+ * A merged-cleanup result. Carries the base ref the merge decision actually
+ * compared against so callers report the repo's configured base branch instead
+ * of guessing at one.
+ */
+export interface MergedCleanupResult extends CleanupOperationResult {
+  baseRef: BranchName;
+}
+
+/**
  * Get detailed worktree status breakdown for a codebase
  * Includes git operations to detect merged branches
  */
@@ -786,39 +851,6 @@ export async function cleanupStaleWorktrees(
 }
 
 /**
- * Decide whether a branch is safe to remove using a union of signals:
- *   (a) git ancestry  — `git branch --merged` (catches fast-forward / merge-commit)
- *   (b) git cherry    — patch-equivalent commits (catches squash-merge)
- *   (c) GitHub PR state via `gh` CLI — MERGED/CLOSED/OPEN
- *
- * Returns `{ safe, openPr }`. `openPr=true` only when the PR state is OPEN —
- * callers use this to surface a clearer skip reason.
- */
-async function isSafeToRemove(
-  repoPath: RepoPath,
-  branchName: BranchName,
-  mainBranch: BranchName,
-  prStateCache: Map<string, PrState>,
-  includeClosed: boolean,
-  remote?: string
-): Promise<{ safe: boolean; openPr: boolean }> {
-  // (a) Fast path — fast-forward / merge-commit ancestry
-  if (await isBranchMerged(repoPath, branchName, mainBranch)) {
-    return { safe: true, openPr: false };
-  }
-  // (b) Squash-merge detection via patch equivalence
-  if (await isPatchEquivalent(repoPath, branchName, mainBranch)) {
-    return { safe: true, openPr: false };
-  }
-  // (c) GitHub PR state
-  const prState = await getPrState(branchName, repoPath, prStateCache, remote);
-  if (prState === 'MERGED') return { safe: true, openPr: false };
-  if (prState === 'CLOSED') return { safe: includeClosed, openPr: false };
-  if (prState === 'OPEN') return { safe: false, openPr: true };
-  return { safe: false, openPr: false };
-}
-
-/**
  * Clean up merged worktrees for a codebase
  * Respects uncommitted changes and live workflow runs
  */
@@ -826,30 +858,25 @@ export async function cleanupMergedWorktrees(
   codebaseId: string,
   mainRepoPath: string,
   options: { includeClosed?: boolean } = {}
-): Promise<CleanupOperationResult> {
-  const result: CleanupOperationResult = { removed: [], skipped: [] };
+): Promise<MergedCleanupResult> {
   const environments = await isolationEnvDb.listByCodebase(codebaseId);
   const repoPath = toRepoPath(mainRepoPath);
   const { remoteMainRef, remote } = await resolveRepoGitContext(repoPath, mainRepoPath);
+  const result: MergedCleanupResult = { removed: [], skipped: [], baseRef: remoteMainRef };
   const includeClosed = options.includeClosed ?? false;
   const prStateCache = new Map<string, PrState>();
 
   for (const env of environments) {
-    // Check if safe to remove via union of signals (skip env on unexpected errors)
-    let safe = false;
-    let openPr = false;
+    let verdict: MergeVerdict;
     try {
-      const branchName = toBranchName(env.branch_name);
-      const decision = await isSafeToRemove(
+      verdict = await judgeBranchForRemoval({
         repoPath,
-        branchName,
-        remoteMainRef,
+        branchName: toBranchName(env.branch_name),
+        baseRef: remoteMainRef,
         prStateCache,
         includeClosed,
-        remote
-      );
-      safe = decision.safe;
-      openPr = decision.openPr;
+        remote,
+      });
     } catch (error) {
       const err = error as Error;
       // Log before skipping — silent skips make transient git/network failures
@@ -864,13 +891,9 @@ export async function cleanupMergedWorktrees(
       });
       continue;
     }
-    if (!safe) {
-      if (openPr) {
-        result.skipped.push({
-          branchName: env.branch_name,
-          reason: 'PR is open (active review)',
-        });
-      }
+    if (verdict !== 'reclaimable') {
+      const reason = skipReasonFor(verdict);
+      if (reason) result.skipped.push({ branchName: env.branch_name, reason });
       continue;
     }
 

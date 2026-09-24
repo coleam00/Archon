@@ -108,6 +108,17 @@ describe('getPrState', () => {
     expect(mockExecFileAsync.mock.calls.length).toBe(callsAfterFirst);
   });
 
+  // The scheduled cleanup sweep shares one cache across every registered repository,
+  // where the same branch name is two different PRs.
+  test('does not serve one repository a cached state from another', async () => {
+    const cache = new Map<string, PrState>();
+    setupGhResponse('https://github.com/owner/repo.git', '[{"state":"MERGED"}]');
+    expect(await getPrState(BRANCH, REPO, cache)).toBe('MERGED');
+
+    setupGhResponse('https://github.com/owner/other.git', '[{"state":"OPEN"}]');
+    expect(await getPrState(BRANCH, toRepoPath('/workspace/other-repo'), cache)).toBe('OPEN');
+  });
+
   test('returns NONE and warns on non-ENOENT gh error (e.g. auth failure)', async () => {
     const authError = Object.assign(new Error('gh: authentication required'), {
       code: 'ERR_CMD_FAILED',

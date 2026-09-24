@@ -34,7 +34,10 @@ export async function getPrState(
   cache?: Map<string, PrState>,
   remote = 'origin'
 ): Promise<PrState> {
-  const cached = cache?.get(branch);
+  // Keyed by repository as well as branch: the same branch name in two repositories
+  // is two different PRs, and the scheduled cleanup sweep spans every registered repo.
+  const cacheKey = `${repoPath}\u0000${branch}`;
+  const cached = cache?.get(cacheKey);
   if (cached !== undefined) {
     return cached;
   }
@@ -51,13 +54,13 @@ export async function getPrState(
       { err: error as Error, repoPath, branch },
       'isolation.pr_state_remote_lookup_failed'
     );
-    cache?.set(branch, 'NONE');
+    cache?.set(cacheKey, 'NONE');
     return 'NONE';
   }
 
   if (!remoteUrl.toLowerCase().includes('github.com')) {
     getLog().debug({ repoPath, branch, remoteUrl }, 'isolation.pr_state_github_only');
-    cache?.set(branch, 'NONE');
+    cache?.set(cacheKey, 'NONE');
     return 'NONE';
   }
 
@@ -88,6 +91,6 @@ export async function getPrState(
     }
   }
 
-  cache?.set(branch, result);
+  cache?.set(cacheKey, result);
   return result;
 }

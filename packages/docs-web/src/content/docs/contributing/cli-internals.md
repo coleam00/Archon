@@ -311,16 +311,18 @@ can fail before either write.
                                   │
                                   ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ isSafeToRemove() — three-signal union                           │
+│ judgeBranchForRemoval() — three-signal union                    │
+│  localBranchExists()     gate: (a) and (b) need the local ref   │
 │  (a) isBranchMerged()    git ancestry (fast-forward/merge)      │
-│  (b) isPatchEquivalent() git cherry  (squash-merge)             │
+│  (b) isPatchEquivalent() git cherry  (1-commit squash-merge)    │
 │  (c) getPrState()        gh CLI      (MERGED/CLOSED/OPEN/NONE)  │
 │                                                                  │
-│  OPEN   → always skip                                           │
-│  CLOSED → skip unless includeClosed=true                        │
-│  MERGED or any git-signal → proceed to remove                   │
+│  MERGED or any git-signal → 'reclaimable'                       │
+│  OPEN                    → 'open-pr', always kept               │
+│  CLOSED                  → 'reclaimable' only if includeClosed  │
+│  NONE, ref gone          → 'unjudgeable', kept and reported     │
 └─────────────────────────────────┬───────────────────────────────┘
-                                  │ safe=true
+                                  │ 'reclaimable'
                                   ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │ Guard checks: no uncommitted changes, no run can still claim    │
@@ -333,9 +335,15 @@ Signals are evaluated in order — the first positive match short-circuits to av
 unnecessary `gh` API calls. The `gh` CLI is a soft dependency: if missing or failing,
 only git signals are used and the result degrades gracefully to `NONE`.
 
-**Code:** `packages/core/src/services/cleanup-service.ts` — `isSafeToRemove()`, `cleanupMergedWorktrees()`, `getRemovalBlocker()`
+A multi-commit squash merge is invisible to both git signals, so PR state is the only
+one that sees it. Both git signals also need the local branch ref: once it is gone, the
+PR is the only judge, and a branch with no PR is reported as unverifiable instead of
+failing the check. The scheduled sweep (`runScheduledCleanup`) makes the same call, so
+both paths agree on what counts as merged.
+
+**Code:** `packages/core/src/services/cleanup-service.ts` — `judgeBranchForRemoval()`, `cleanupMergedWorktrees()`, `runScheduledCleanup()`, `getRemovalBlocker()`
 **Code:** `packages/isolation/src/pr-state.ts` — `getPrState()`
-**Code:** `packages/git/src/branch.ts` — `isPatchEquivalent()`
+**Code:** `packages/git/src/branch.ts` — `isPatchEquivalent()`, `localBranchExists()`
 
 ---
 

@@ -934,7 +934,7 @@ archon isolation cleanup
 # Custom threshold
 archon isolation cleanup 14
 
-# Remove environments with branches merged into main (also deletes remote branches)
+# Remove environments with branches merged into the base branch (also deletes remote branches)
 archon isolation cleanup --merged
 
 # Also remove environments whose PRs were closed without merging
@@ -942,8 +942,15 @@ archon isolation cleanup --merged --include-closed
 ```
 
 Merge detection uses three signals in order: git branch ancestry (fast-forward / merge commit),
-patch equivalence (squash-merge via `git cherry`), and GitHub PR state via the `gh` CLI.
-The `gh` CLI is optional — if absent, only git signals are used.
+patch equivalence (single-commit squash-merge via `git cherry`), and GitHub PR state via the
+`gh` CLI. A squash merge of more than one commit is invisible to git here, so PR state is what
+recognises it. The `gh` CLI is optional — if absent, only git signals are used. The scheduled
+sweep uses the same three signals, so both paths agree on what counts as merged. Each
+codebase's output names the base ref the comparison used, taken from `worktree.baseBranch`.
+
+Both git signals read the local branch ref. When that ref is gone but the worktree remains,
+the PR decides; if no PR answers for the branch either, the environment is kept and reported
+as `merge state unverifiable` rather than removed on an unverified guess.
 
 By default, branches with a **CLOSED** PR are skipped. Pass `--include-closed` to clean
 those up as well. Branches with an **OPEN** PR are always skipped.

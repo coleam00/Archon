@@ -20,7 +20,12 @@
   },
   "testGroups": [
     [
-      "src/"
+      "src/forge.test.ts",
+      "src/git.test.ts",
+      "src/refresh-worktree-index.test.ts"
+    ],
+    [
+      "src/merge-signals.test.ts"
     ]
   ]
 }
