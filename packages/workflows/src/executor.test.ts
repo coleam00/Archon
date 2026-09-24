@@ -2713,6 +2713,32 @@ describe('executeWorkflow', () => {
       expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].baseBranch).toBe('hotfix/urgent');
     });
 
+    it('a continuation whose record holds no source keeps it absent instead of adopting a live one (#2454)', async () => {
+      // The original dispatch never knew a source, so the record omits it. A CLI `--resume`
+      // re-resolves one and passes it in; adopting it would report a guess as the run's
+      // original attribution.
+      const deps = makeDeps();
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp/worktree',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1',
+        {
+          preCreatedRun: makeRun({
+            metadata: { [RUN_DISPATCH_METADATA_KEY]: { base_branch: 'release-2026' } },
+          }),
+          priorCompletedNodes: new Map(),
+          source: 'bundled',
+        }
+      );
+
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].source).toBeUndefined();
+    });
+
     it('reports a continuation that has nothing recorded to restore (#2454)', async () => {
       // A run started before the record existed re-resolves, exactly as it always has —
       // but silently doing so is what let $BASE_BRANCH change value mid-run unnoticed.

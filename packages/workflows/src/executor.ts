@@ -2019,8 +2019,13 @@ export async function executeWorkflow(
     }
   }
 
-  /** Discovery source of the workflow this run started from — telemetry attribution. */
-  const runSource = recordedDispatch?.source ?? source;
+  /**
+   * Discovery source of the workflow this run started from — telemetry attribution.
+   * A record is authoritative even when it holds no source: that dispatch never knew one,
+   * and a source the resuming surface resolves now would be a guess passed off as the
+   * original. Only a run with no record at all (warned above) takes the live value.
+   */
+  const runSource = recordedDispatch ? recordedDispatch.source : source;
   const dispatchMetadata: RunDispatchMetadata = {
     base_branch: baseBranch,
     ...(runSource ? { source: runSource } : {}),

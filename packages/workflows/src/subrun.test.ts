@@ -2659,6 +2659,10 @@ nodes:
     // completion fires the in-process parent auto-resume, which re-enters executeWorkflow
     // with nothing but what the run itself recorded.
     store.approveGate(child!.id);
+    // Give the child a user of its own so the two post-gate drives are told apart by the
+    // user they resolve, not by counting calls: the child's resume looks up 'user-child',
+    // and only the parent's own restore can produce the 'user-alpha' lookup below.
+    store.runs.get(child!.id)!.user_id = 'user-child';
     const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(child!.id))!);
     expect(hydrated).not.toBeNull();
     await executeWorkflow(
@@ -2678,11 +2682,13 @@ nodes:
     )?.data?.node_output;
     expect(postGateBase).toBe(preGateBase);
 
-    // Execution identity: the per-user AI prefs resolution ran again on the post-gate
-    // drive, and for the same user. A dropped userId is silent — the guarded lookup
-    // simply never happens — so the call count matters as much as the value.
-    expect(prefsUserIds.length).toBeGreaterThan(preGatePrefsCalls);
-    expect([...new Set(prefsUserIds)]).toEqual(['user-alpha']);
+    // Execution identity: the parent's post-gate drive resolved per-user AI prefs for the
+    // user that started it. A dropped userId is silent -- the guarded lookup simply never
+    // happens -- so the parent's lookup has to be present, not merely unchallenged.
+    expect(prefsUserIds.slice(0, preGatePrefsCalls)).toEqual(
+      Array(preGatePrefsCalls).fill('user-alpha')
+    );
+    expect(prefsUserIds.slice(preGatePrefsCalls)).toEqual(['user-child', 'user-alpha']);
 
     // The resumed half of the run reports the same workflow source, so a bundled
     // workflow is not recategorized as custom halfway through. Completion is the half
