@@ -30,6 +30,16 @@ const ERROR_PATTERNS: {
   message: string | ((cause: string) => string);
   known: boolean;
 }[] = [
+  {
+    // Checked FIRST: this refusal's message embeds the worktree path, and a
+    // branch slug in that path can contain any generic pattern below
+    // ('timeout', 'cannot adopt'). The refusal already names the checkout and
+    // the exact command that removes it, which a static message cannot: a
+    // branch-matched checkout may live outside the worktree base.
+    pattern: 'its setup did not finish',
+    message: cause => `**Error:** ${cause}`,
+    known: true,
+  },
   // ─── Container backend (Docker) ──────────────────────────────────────────
   // Checked FIRST: the docker-permission message is more specific than the
   // generic 'permission denied' worktree message below and must win.
@@ -140,16 +150,6 @@ const ERROR_PATTERNS: {
     message:
       '**Error:** Cannot verify ownership of an existing worktree at the target path. ' +
       'Check file system permissions and remove any unrelated git directories at that path.',
-    known: true,
-  },
-  {
-    // Checked before the generic 'cannot adopt' message below: a worktree whose
-    // setup never finished needs the retry-or-remove action, not "choose a
-    // different branch". The refusal already names the checkout and the exact
-    // command that removes it, which a static message cannot: a branch-matched
-    // checkout may live outside the worktree base.
-    pattern: 'its setup did not finish',
-    message: cause => `**Error:** ${cause}`,
     known: true,
   },
   {
