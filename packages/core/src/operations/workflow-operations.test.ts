@@ -1226,6 +1226,52 @@ describe('gate decisions in the run transcript', () => {
     expect(rows[0]).not.toHaveProperty('content');
   });
 
+  test('a declared decision writes its decision row with the response text', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        output_root: root,
+        metadata: {
+          approval: {
+            nodeId: 'review',
+            message: 'Continue?',
+            type: 'approval',
+            decisions: [{ id: 'approve' }, { id: 'revise' }],
+            decisionsAuthored: true,
+          },
+        },
+      })
+    );
+
+    await respondToWorkflow('run-1', 'revise', 'tighten the tests');
+
+    const rows = await decisionRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      step: 'review',
+      decision: 'revise',
+      content: 'tighten the tests',
+    });
+  });
+
+  test('a run with no recorded transcript location skips the row and says so', async () => {
+    // A run whose identity lookup faulted never persisted its location; guessing a root
+    // would start a second transcript no reader connects to the run.
+    mockLogger.warn.mockClear();
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ output_root: null }));
+
+    await approveWorkflow('run-1', 'Looks good');
+
+    expect(await decisionRows()).toEqual([]);
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      {
+        runId: 'run-1',
+        steps: ['review', 'review'],
+        eventTypes: ['node_completed', 'approval_received'],
+      },
+      'workflow.gate_transcript_root_missing'
+    );
+  });
+
   test('a resolution that loses the race writes no decision row', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ output_root: root }));
     mockResolveApprovalGate.mockResolvedValueOnce({ resolved: false });

@@ -255,6 +255,10 @@ function resolvedNodeCompletedStepName(approval: ApprovalContext): string {
  * This usually runs in the approving process, not the one executing the run, so the
  * transcript is found the way every out-of-process reader finds it: through the run's
  * persisted `output_root`, then appended through the same writer the executor uses.
+ *
+ * A run whose identity lookup faulted at start deliberately never persisted its
+ * fault-derived location, so no reader can find that transcript. Its rows are skipped,
+ * visibly, rather than written to a second file under a guessed root.
  */
 async function publishGateExecution(
   run: WorkflowRun,
@@ -262,6 +266,16 @@ async function publishGateExecution(
 ): Promise<void> {
   const root = resolveRunStorageRoot(run, null);
   const logDir = root === null ? null : getStoragePathsForRoot(root).logsDir;
+  if (logDir === null) {
+    getLog().warn(
+      {
+        runId: run.id,
+        steps: events.map(event => event.step_name),
+        eventTypes: events.map(event => event.event_type),
+      },
+      'workflow.gate_transcript_root_missing'
+    );
+  }
   for (const event of events) {
     if (event.event_type === 'approval_received') {
       if (logDir === null) continue;
@@ -283,10 +297,6 @@ async function publishGateExecution(
     const record = readNodeRecordEvent({ workflow_run_id: run.id, ...event })?.metadata;
     if (record === undefined) continue;
     if (logDir === null) {
-      getLog().warn(
-        { runId: run.id, nodePath: record.path },
-        'workflow.gate_transcript_root_missing'
-      );
       const emitted = serializeNodeEmitter(record);
       if (emitted !== undefined) getWorkflowEventEmitter().emit(emitted);
       continue;

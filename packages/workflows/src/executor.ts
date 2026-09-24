@@ -2991,7 +2991,9 @@ export async function executeWorkflow(
       },
       'workflow_starting'
     );
-    if (dagPriorCompletedNodes !== undefined) {
+    // `isContinuation`, not `priorCompletedNodes`: a failed child re-entered without a
+    // resumable snapshot is still a resume of an existing run.
+    if (isContinuation) {
       await logWorkflowResume(logDir, workflowRun.id, workflow.name);
     } else {
       await logWorkflowStart(logDir, workflowRun.id, workflow.name, userMessage);
