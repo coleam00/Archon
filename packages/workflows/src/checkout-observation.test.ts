@@ -157,6 +157,38 @@ describe('checkout observation', () => {
     expect(statSync(join(dir, '.git', 'index')).mtimeMs).toBe(indexMtime);
   });
 
+  posixOnly('a path Git would read as quoted hashes as the file it names', async () => {
+    const { dir, artifacts } = repo();
+    const names = ['"quoted.txt', 'back\\slash.txt', 'line\nbreak.txt', 'plain.txt'];
+    for (const name of names) writeFileSync(join(dir, name), `${name}\n`);
+    const observation = await observe(dir, artifacts);
+    expect(readManifest(observation, artifacts)?.entries).toEqual(
+      names.sort().map(name => ({
+        path: name,
+        kind: 'file',
+        mode: '100644',
+        blob: git(dir, 'hash-object', `--path=${name}`, '--', name),
+      }))
+    );
+  });
+
+  posixOnly(
+    'a file Git cannot read is named unreadable and the others are identified',
+    async () => {
+      if (process.getuid?.() === 0) return; // root reads a mode-000 file
+      const { dir, artifacts } = repo();
+      for (const name of ['a.txt', 'b.txt', 'c.txt']) writeFileSync(join(dir, name), `${name}\n`);
+      chmodSync(join(dir, 'b.txt'), 0o000);
+      const observation = await observe(dir, artifacts);
+      chmodSync(join(dir, 'b.txt'), 0o644);
+      expect(readManifest(observation, artifacts)?.entries).toEqual([
+        { path: 'a.txt', kind: 'file', mode: '100644', blob: git(dir, 'hash-object', 'a.txt') },
+        { path: 'b.txt', kind: 'incomplete', reason: 'unreadable' },
+        { path: 'c.txt', kind: 'file', mode: '100644', blob: git(dir, 'hash-object', 'c.txt') },
+      ]);
+    }
+  );
+
   test('worktree bytes hash under the repository clean conversion', async () => {
     const { dir, artifacts } = repo();
     writeFileSync(join(dir, '.gitattributes'), '*.txt text eol=crlf\n');
@@ -289,6 +321,86 @@ describe('checkout observation', () => {
       { runId: 'run-1', artifactsDir: scratch() }
     );
     expect(observation).toMatchObject({ kind: 'unavailable', reason: 'probe_failed' });
+  });
+
+  describe('a HEAD that moves while the checkout is read', () => {
+    /**
+     * Put a `git` first on PATH that runs the real one, but before its Nth `status` call
+     * points `main` at the Nth line of the plan (an empty line leaves it alone). This moves
+     * HEAD at an exact point in the sampler's sequence of Git calls, with no timing.
+     */
+    function moveHeadBeforeStatus(dir: string, plan: string[]): () => void {
+      const realGit = Bun.which('git');
+      if (realGit === null) throw new Error('git is not on PATH');
+      const bin = scratch();
+      writeFileSync(join(bin, 'plan'), plan.map(line => `${line}\n`).join(''));
+      writeFileSync(join(bin, 'count'), '0');
+      writeFileSync(
+        join(bin, 'git'),
+        [
+          '#!/bin/sh',
+          'for arg in "$@"; do',
+          '  if [ "$arg" = status ]; then',
+          `    n=$(($(cat '${bin}/count') + 1)); echo "$n" > '${bin}/count'`,
+          `    target=$(sed -n "\${n}p" '${bin}/plan')`,
+          `    if [ -n "$target" ]; then '${realGit}' -C '${dir}' update-ref refs/heads/main "$target"; fi`,
+          '    break',
+          '  fi',
+          'done',
+          `exec '${realGit}' "$@"`,
+          '',
+        ].join('\n')
+      );
+      chmodSync(join(bin, 'git'), 0o755);
+      const previous = process.env.PATH;
+      process.env.PATH = `${bin}:${previous ?? ''}`;
+      return () => {
+        process.env.PATH = previous;
+      };
+    }
+
+    /** A checkout holding commit B's bytes, index, and HEAD, and B's parent A. */
+    function twoCommits(): { dir: string; artifacts: string; a: string; b: string } {
+      const { dir, artifacts } = repo();
+      writeFileSync(join(dir, 'f.txt'), 'a\n');
+      commitAll(dir, 'A');
+      const a = git(dir, 'rev-parse', 'HEAD');
+      writeFileSync(join(dir, 'f.txt'), 'b\n');
+      commitAll(dir, 'B');
+      return { dir, artifacts, a, b: git(dir, 'rev-parse', 'HEAD') };
+    }
+
+    posixOnly('HEAD moving after the commit is read never mislabels the commit', async () => {
+      const { dir, artifacts, a, b } = twoCommits();
+      // HEAD reads A until the first status, which then compares B's index against B.
+      git(dir, 'update-ref', 'refs/heads/main', a);
+      const restore = moveHeadBeforeStatus(dir, [b]);
+      let observation: CheckoutObservation;
+      try {
+        observation = await observe(dir, artifacts);
+      } finally {
+        restore();
+      }
+      expect(observation).toMatchObject({
+        kind: 'git',
+        commit: b,
+        tree: git(dir, 'rev-parse', `${b}^{tree}`),
+        worktree: { status: 'clean' },
+      });
+    });
+
+    posixOnly('a HEAD that keeps moving is unavailable, never a guessed commit', async () => {
+      const { dir, artifacts, a, b } = twoCommits();
+      git(dir, 'update-ref', 'refs/heads/main', a);
+      const restore = moveHeadBeforeStatus(dir, [b, a, b, a, b, a, b, a]);
+      let observation: CheckoutObservation;
+      try {
+        observation = await observe(dir, artifacts);
+      } finally {
+        restore();
+      }
+      expect(observation).toMatchObject({ kind: 'unavailable', reason: 'git_failed' });
+    });
   });
 
   test('sampling writes nothing until the sample is recorded', async () => {

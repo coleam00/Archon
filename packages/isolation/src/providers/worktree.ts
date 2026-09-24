@@ -20,6 +20,7 @@ import {
   listWorktrees,
   mkdirAsync,
   readWorktreeLock,
+  refreshWorktreeIndex,
   removeWorktree,
   unlockWorktree,
   syncWorkspace,
@@ -953,6 +954,11 @@ export class WorktreeProvider implements IIsolationProvider {
       worktreeConfig
     );
 
+    // Last, so the refresh sees the tree the rest of setup leaves, and while the
+    // setup lock is still held: no adopter can start git work in the checkout
+    // and contend with the refresh for the index lock.
+    await this.refreshIndex(worktreePath);
+
     return configLoadFailed
       ? [
           'Config file could not be loaded — copyFiles configuration was not applied. Check your .archon/config.yaml for syntax errors.',
@@ -1056,6 +1062,20 @@ export class WorktreeProvider implements IIsolationProvider {
       return result.warnings.join(' ') || 'cleanup did not complete';
     } catch (error) {
       return error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  /**
+   * Refresh the index of a worktree this provider just created, once, so checkout
+   * observation at each node start does not re-hash the whole tree (see
+   * `refreshWorktreeIndex`). A failure leaves observations correct but slower, so it is
+   * logged and creation continues.
+   */
+  private async refreshIndex(worktreePath: string): Promise<void> {
+    try {
+      await refreshWorktreeIndex(toWorktreePath(worktreePath));
+    } catch (err) {
+      getLog().warn({ err: err as Error, worktreePath }, 'worktree.index_refresh_failed');
     }
   }
 

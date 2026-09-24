@@ -40,7 +40,11 @@ describe('forge plugin discovery and dispatch', () => {
     });
     expect(result.plugin).toEqual({ name: 'test', version: '1.0.0' });
     expect(result.audit.operationId).toBe('resolve-ü');
-    expect(result.audit.result).toEqual(result.response);
+    expect(result.audit.result).toEqual({
+      operationId: 'resolve-ü',
+      ok: true,
+      result: { op: 'resolve', value: { kind: 'none', forge: 'none' } },
+    });
   });
 
   test('returns malformed stdout and exit classes as distinct protocol/process failures', async () => {

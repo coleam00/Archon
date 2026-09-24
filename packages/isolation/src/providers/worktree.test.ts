@@ -72,6 +72,7 @@ import type { IIsolationStore } from '../store';
 let getDefaultBranchSpy: Mock<typeof git.getDefaultBranch>;
 let getDefaultRemoteSpy: Mock<typeof git.getDefaultRemote>;
 let syncWorkspaceSpy: Mock<typeof git.syncWorkspace>;
+let refreshWorktreeIndexSpy: Mock<typeof git.refreshWorktreeIndex>;
 
 // Mock fs.promises.access for destroy() existence check
 const mockAccess = mock((_path?: unknown): Promise<void> => Promise.resolve());
@@ -121,6 +122,8 @@ describe('WorktreeProvider', () => {
     getDefaultBranchSpy = spyOn(git, 'getDefaultBranch');
     getDefaultRemoteSpy = spyOn(git, 'getDefaultRemote');
     syncWorkspaceSpy = spyOn(git, 'syncWorkspace');
+    // The real refresh waits for the next wall-clock second.
+    refreshWorktreeIndexSpy = spyOn(git, 'refreshWorktreeIndex').mockResolvedValue(undefined);
 
     // Default mocks
     execSpy.mockResolvedValue({ stdout: '', stderr: '' });
@@ -176,6 +179,7 @@ describe('WorktreeProvider', () => {
     getDefaultBranchSpy.mockRestore();
     getDefaultRemoteSpy.mockRestore();
     syncWorkspaceSpy.mockRestore();
+    refreshWorktreeIndexSpy.mockRestore();
     mockAccess.mockClear();
     mockReadFile.mockClear();
     mockRm.mockClear();
@@ -348,6 +352,38 @@ describe('WorktreeProvider', () => {
         ['-C', env.workingPath, 'rev-parse', '--verify', 'HEAD^{commit}'],
         expect.any(Object)
       );
+    });
+
+    test('refreshes the index of a worktree it created, once, after creating it', async () => {
+      let addedBeforeRefresh = false;
+      refreshWorktreeIndexSpy.mockImplementation(async () => {
+        addedBeforeRefresh = execSpy.mock.calls.some(
+          call => call[1].includes('worktree') && call[1].includes('add')
+        );
+      });
+
+      const env = await provider.create(baseRequest);
+
+      expect(refreshWorktreeIndexSpy.mock.calls).toEqual([[git.toWorktreePath(env.workingPath)]]);
+      expect(addedBeforeRefresh).toBe(true);
+    });
+
+    test('a failed index refresh still creates the worktree', async () => {
+      refreshWorktreeIndexSpy.mockRejectedValue(new Error('index.lock exists'));
+
+      const env = await provider.create(baseRequest);
+
+      expect(env.status).toBe('active');
+    });
+
+    test('never refreshes the index of a worktree it adopts', async () => {
+      worktreeExistsSpy.mockResolvedValue(true);
+      mockReadFile.mockResolvedValue('gitdir: /workspace/repo/.git/worktrees/archon/issue-42\n');
+
+      const env = await provider.create(baseRequest);
+
+      expect(env.metadata).toHaveProperty('adopted', true);
+      expect(refreshWorktreeIndexSpy).not.toHaveBeenCalled();
     });
 
     test('does not run git checkout or reset --hard on canonical repo', async () => {
@@ -2093,6 +2129,7 @@ describe('WorktreeProvider', () => {
           worktreePath,
         ]);
         expect(argsOfCallContaining('-D')).toBeUndefined();
+        expect(refreshWorktreeIndexSpy).not.toHaveBeenCalled();
         // A rollback that worked must not claim it left something behind.
         expect(classifyIsolationError(error)).not.toContain('was left behind');
         expect((error as { cleanupFailure?: string }).cleanupFailure).toBeUndefined();
@@ -2104,6 +2141,9 @@ describe('WorktreeProvider', () => {
         const steps: string[] = [];
         unlockWorktreeSpy.mockImplementation(async () => {
           steps.push('unlock');
+        });
+        refreshWorktreeIndexSpy.mockImplementation(async () => {
+          steps.push('refresh');
         });
         execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
           if (args[2] === 'worktree' && args[3] === 'add') steps.push('add');
@@ -2117,8 +2157,10 @@ describe('WorktreeProvider', () => {
         // No 'lock' step: git takes the lock as part of the add, so the checkout
         // is marked unfinished from the first instant it exists. A separate lock
         // afterwards would leave a window in which another caller adopts a
-        // half-built checkout — and rolls it back under the run using it.
-        expect(steps).toEqual(['add', 'submodule', 'unlock']);
+        // half-built checkout — and rolls it back under the run using it. The
+        // index refresh runs while the lock still holds, so no adopter's git
+        // command can contend with it for the index lock.
+        expect(steps).toEqual(['add', 'submodule', 'refresh', 'unlock']);
         expect(execSpy).toHaveBeenCalledWith(
           'git',
           expect.arrayContaining([

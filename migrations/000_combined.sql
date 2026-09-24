@@ -565,9 +565,13 @@ CREATE TABLE IF NOT EXISTS remote_agent_resource_slots (
 
 CREATE TABLE IF NOT EXISTS remote_agent_resource_slot_holders (
   resource_key TEXT NOT NULL REFERENCES remote_agent_resource_slots(resource_key),
-  holder_kind VARCHAR(10) NOT NULL CHECK (holder_kind IN ('run')),
+  holder_kind VARCHAR(10) NOT NULL CHECK (holder_kind IN ('run', 'attempt')),
   holder_id TEXT NOT NULL,
   acquired_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  -- The owner process of an 'attempt' holder; NULL for 'run' holders.
+  owner_host TEXT,
+  owner_pid INTEGER,
+  owner_instance TEXT,
   PRIMARY KEY (resource_key, holder_kind, holder_id)
 );
 
@@ -588,6 +592,21 @@ CREATE TABLE IF NOT EXISTS remote_agent_resource_start_requests (
   FOREIGN KEY (receipt_id, binding_id) REFERENCES remote_agent_start_receipt_bindings(receipt_id, binding_id) ON DELETE SET NULL
 );
 
+-- Provider-attempt holders on the shared resource slot (#2816): owner process
+-- columns, and the holder-kind CHECK widened from ('run'). Unreleased dev databases
+-- created the narrow CHECK; re-adding the named constraint converges them. Every
+-- existing row is a 'run' holder, so the new constraint always validates.
+ALTER TABLE remote_agent_resource_slot_holders
+  ADD COLUMN IF NOT EXISTS owner_host TEXT;
+ALTER TABLE remote_agent_resource_slot_holders
+  ADD COLUMN IF NOT EXISTS owner_pid INTEGER;
+ALTER TABLE remote_agent_resource_slot_holders
+  ADD COLUMN IF NOT EXISTS owner_instance TEXT;
+ALTER TABLE remote_agent_resource_slot_holders
+  DROP CONSTRAINT IF EXISTS remote_agent_resource_slot_holders_holder_kind_check;
+ALTER TABLE remote_agent_resource_slot_holders
+  ADD CONSTRAINT remote_agent_resource_slot_holders_holder_kind_check
+    CHECK (holder_kind IN ('run', 'attempt'));
 
 COMMENT ON TABLE remote_agent_schema_version IS
   'Diagnostic schema vintage: the Archon build that created this database and the one that last applied schema to it.';

@@ -51,6 +51,18 @@ export interface ResourceStartRunMetadata {
 }
 
 /**
+ * Resource keys under this prefix are provider-attempt slots owned by core provider
+ * admission. An operator-named resource cannot use it, so a trigger resource never
+ * shares a slot, or its capacity, with a provider cap.
+ */
+export const PROVIDER_RESOURCE_PREFIX = 'provider:';
+
+const notProviderResource = {
+  check: (name: string): boolean => !name.startsWith(PROVIDER_RESOURCE_PREFIX),
+  message: `Resource names starting with '${PROVIDER_RESOURCE_PREFIX}' are reserved for provider admission`,
+};
+
+/**
  * How many admitted holders a resource slot allows at once. It defaults to 1, so a
  * resource means "must not overlap" unless configured otherwise. Every binding that
  * names a resource must declare the same capacity; admission refuses a mismatch.
@@ -59,7 +71,11 @@ export const resourceSlotCapacitySchema = z.number().int().min(1).default(1);
 
 export const resourceStartIntentSchema = z
   .object({
-    resource: z.string().trim().min(1),
+    resource: z
+      .string()
+      .trim()
+      .min(1)
+      .refine(notProviderResource.check, notProviderResource.message),
     capacity: resourceSlotCapacitySchema,
     hostId: z.string().trim().min(1),
     overlap: z.enum(['skip', 'queue']),
@@ -123,7 +139,7 @@ export const resourceStartBindingIntentSchema = z
     bindingRevision: z.string().min(1).nullable(),
     hostId: z.string().min(1),
     runAsUserId: z.string().min(1),
-    resource: z.string().min(1),
+    resource: z.string().min(1).refine(notProviderResource.check, notProviderResource.message),
     capacity: resourceSlotCapacitySchema,
     overlap: z.enum(['skip', 'queue']),
     launch: z

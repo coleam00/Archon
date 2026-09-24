@@ -18,6 +18,24 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+/**
+ * The resource slot holders table. One definition serves fresh creation and the
+ * one-time rebuild that widens a dev database's narrow holder-kind CHECK.
+ * `owner_*` name the process that owns an 'attempt' holder and are NULL for 'run'.
+ */
+function resourceSlotHoldersTable(name: string): string {
+  return `CREATE TABLE IF NOT EXISTS ${name} (
+        resource_key TEXT NOT NULL REFERENCES remote_agent_resource_slots(resource_key),
+        holder_kind TEXT NOT NULL CHECK (holder_kind IN ('run', 'attempt')),
+        holder_id TEXT NOT NULL,
+        acquired_at TEXT NOT NULL DEFAULT (datetime('now')),
+        owner_host TEXT,
+        owner_pid INTEGER,
+        owner_instance TEXT,
+        PRIMARY KEY (resource_key, holder_kind, holder_id)
+      );`;
+}
+
 export class SqliteAdapter implements IDatabase {
   private db: Database;
   readonly dialect = 'sqlite' as const;
@@ -575,6 +593,42 @@ export class SqliteAdapter implements IDatabase {
       allApplied = false;
     }
 
+    // Resource slot holders gained the 'attempt' kind and its owner columns (#2816).
+    // SQLite cannot alter a CHECK, so a table created with the narrow ('run') CHECK is
+    // rebuilt once. Only unreleased dev builds created that shape. BEGIN IMMEDIATE and
+    // the re-check make a concurrent opener skip instead of rebuilding twice.
+    try {
+      const holdersSql = (): string =>
+        this.prepareGet<{ sql: string }>(
+          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'remote_agent_resource_slot_holders'"
+        )?.sql ?? '';
+      if (!holdersSql().includes("'attempt'")) {
+        this.db.run('BEGIN IMMEDIATE');
+        try {
+          if (!holdersSql().includes("'attempt'")) {
+            this.db.run(resourceSlotHoldersTable('remote_agent_resource_slot_holders_next'));
+            this.db.run(
+              `INSERT INTO remote_agent_resource_slot_holders_next
+                 (resource_key, holder_kind, holder_id, acquired_at)
+               SELECT resource_key, holder_kind, holder_id, acquired_at
+                 FROM remote_agent_resource_slot_holders`
+            );
+            this.db.run('DROP TABLE remote_agent_resource_slot_holders');
+            this.db.run(
+              'ALTER TABLE remote_agent_resource_slot_holders_next RENAME TO remote_agent_resource_slot_holders'
+            );
+          }
+          this.db.run('COMMIT');
+        } catch (inner: unknown) {
+          this.db.run('ROLLBACK');
+          throw inner;
+        }
+      }
+    } catch (e: unknown) {
+      getLog().warn({ err: e as Error }, 'db.sqlite_migration_resource_slot_holders_failed');
+      allApplied = false;
+    }
+
     return allApplied;
   }
 
@@ -814,13 +868,7 @@ export class SqliteAdapter implements IDatabase {
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
 
-      CREATE TABLE IF NOT EXISTS remote_agent_resource_slot_holders (
-        resource_key TEXT NOT NULL REFERENCES remote_agent_resource_slots(resource_key),
-        holder_kind TEXT NOT NULL CHECK (holder_kind IN ('run')),
-        holder_id TEXT NOT NULL,
-        acquired_at TEXT NOT NULL DEFAULT (datetime('now')),
-        PRIMARY KEY (resource_key, holder_kind, holder_id)
-      );
+      ${resourceSlotHoldersTable('remote_agent_resource_slot_holders')}
 
       CREATE TABLE IF NOT EXISTS remote_agent_resource_start_requests (
         queue_position INTEGER PRIMARY KEY AUTOINCREMENT,

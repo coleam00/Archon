@@ -26,6 +26,7 @@ export {
   removeWorktree,
   unlockWorktree,
   readWorktreeLock,
+  refreshWorktreeIndex,
   getCanonicalRepoPath,
   getGitCheckoutIdentity,
   CanonicalRepoPathUnavailableError,

@@ -100,6 +100,10 @@ paths:
 # Concurrency limits
 concurrency:
   maxConversations: 10
+  # Optional install-wide cap on simultaneous provider attempts, by provider ID.
+  # Unlisted providers are unlimited. See "Provider concurrency caps" below.
+  # providers:
+  #   pi: 1
 
 # Optional continuation for provider quota-window exhaustion. Off by default.
 workflows:
@@ -124,6 +128,16 @@ aliases:
 The `tiers:` block above is no longer hand-edit-only -- you can also set the `small`/`medium`/`large` presets from the console **AI Settings** -> **Model Tiers** panel, or from the CLI with [`archon ai tier set`](/reference/cli/#ai). Connecting your own provider API key or subscription is covered in [Per-user credentials and AI Settings](/getting-started/ai-assistants/#per-user-credentials-and-ai-settings).
 
 These files are persistent layers. For one invocation, use repeatable [`workflow run --model <name>=<spec>`](/reference/cli/#workflow-run-name-message), [`workflow run --config <path>`](/reference/cli/#per-run-config-files), or the run API's inline `config`, `tiers`, and `aliases` fields. Each run layer is sparse and sits above user, repository, global, and built-in values without editing a persistent config file.
+
+## Provider concurrency caps
+
+`concurrency.providers.<provider-id>: N` limits how many attempts against that provider run at once across every Archon process sharing this database: server, CLI, detached runs, chat, and title generation. There are no default caps. A provider without an entry is unlimited, so many runs across Claude, Codex, and Pi keep running in parallel. Set a cap only when the provider cannot take more, such as a local model on one GPU or an account with a hard concurrency limit.
+
+- **Attempts, not runs.** One attempt holds one slot from the moment the provider starts until its stream has closed. Retry backoff between attempts, including the internal retries of Claude, Codex, and OpenCode, holds no slot. A rate limit is retried with backoff as before; it never lowers the cap.
+- **Waiting.** An attempt that finds the cap full waits and checks again about once a second. Cancelling the run stops the wait without starting the attempt. Until queue visibility lands, a waiting node looks idle, and a wait longer than the node's `idle_timeout` ends the node like any other idle node.
+- **Changes apply immediately.** The cap is re-read on every admission check, including by attempts already waiting. Lowering it blocks new attempts until enough running ones finish; running attempts are never cancelled.
+- **Strict.** A key that is not a registered provider ID, a value that is not a positive integer, or a config file that cannot be parsed refuses every provider attempt with an error naming the problem, instead of silently running uncapped.
+- **Process loss.** A slot belongs to the process that took it. When that process dies, the next admission on the same host releases the slot. A holder from another host is never released by time or guesswork: list it with `archon ai capacity` and, once you have verified that process is gone, release it with `archon ai capacity release <attempt-id>`. Hosts that share one PostgreSQL database need distinct hostnames. A recreated Docker container gets a new hostname unless the compose service sets `hostname:`, so holders left by the old container need an explicit release.
 
 ## Run-scoped configuration
 
@@ -424,7 +438,7 @@ Environment variables override all other configuration. They are organized by ca
 | --- | --- | --- |
 | `ARCHON_HOME` | Base directory for all Archon-managed files. **Ignored in Docker** — the container always uses `/.archon`. | `~/.archon` |
 | `PORT` | HTTP server listen port | `3090` (auto-allocated in worktrees) |
-| `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`) | `info` |
+| `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`). CLI commands other than `archon serve` log at `warn` unless `--verbose` or `LOG_LEVEL=debug`/`trace` is set (a quieter `LOG_LEVEL` such as `error` is kept); see [CLI logs](/reference/cli/#logs). | `info` |
 | `BOT_DISPLAY_NAME` | Bot name shown in batch-mode "starting" messages | `Archon` |
 | `DEFAULT_AI_ASSISTANT` | Fallback AI assistant when no config file sets the assistant. Overridden by `defaultAssistant` in global config or `assistant` in repo config. Must match a registered provider id — currently `claude`, `codex`, `pi`, or `copilot`. | `claude` |
 | `MAX_CONCURRENT_CONVERSATIONS` | Maximum concurrent AI conversations | `10` |

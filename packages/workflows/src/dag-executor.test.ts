@@ -13015,18 +13015,73 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     expect(yielded).toBe(3);
     const transcript = await readTranscript(join(testDir, 'logs'), workflowRun.id);
     const resetEvents = transcript.filter(event => event.type === 'watchdog_reset');
-    expect(resetEvents).toHaveLength(3);
-    expect(resetEvents.map(event => event.chunk_type)).toEqual([
-      'thinking',
-      'thinking',
-      'thinking',
+    // Three renewals 30ms apart are one burst: its first and last renewal.
+    expect(resetEvents.map(event => [event.chunk_type, event.chunk_count])).toEqual([
+      ['thinking', 1],
+      ['thinking', 2],
     ]);
     expect(resetEvents.every(event => !('content' in event))).toBe(true);
     expect(resetEvents.every(event => !Number.isNaN(Date.parse(String(event.ts))))).toBe(true);
     expect(JSON.stringify(transcript)).not.toContain(privateThinking);
 
     const failed = transcript.find(event => event.type === 'node_error' && event.step === 'review');
-    expect(failed?.error).toContain("chunk type 'thinking'");
+    // The transcript's last record is the renewal the stall diagnostic names.
+    expect(failed?.error).toContain(
+      `Last watchdog reset: ${String(resetEvents.at(-1)?.ts)} from chunk type 'thinking'.`
+    );
+  });
+
+  it('a stream of many chunks writes a bounded number of reset records with every renewal counted', async () => {
+    const chunkCount = 300;
+    mockSendQueryDag.mockImplementation(async function* (
+      _prompt: string,
+      _cwd: string,
+      _resumeSessionId?: string,
+      options?: { abortSignal?: AbortSignal }
+    ) {
+      for (let i = 0; i < chunkCount; i++) {
+        if (i % 50 === 0) await new Promise(resolve => setTimeout(resolve, 1));
+        yield { type: 'thinking', content: 'private reasoning' };
+      }
+      yield { type: 'tool', toolName: 'Bash', toolInput: { command: 'private tool input' } };
+      await new Promise<void>(resolve => {
+        if (options?.abortSignal?.aborted) resolve();
+        else options?.abortSignal?.addEventListener('abort', () => resolve(), { once: true });
+      });
+    });
+
+    const store = createMockStore();
+    const workflowRun = makeWorkflowRun('many-chunks-timeout');
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: {
+          name: 'many-chunks-timeout',
+          nodes: [
+            {
+              id: 'review',
+              kind: 'agent',
+              source: { kind: 'command', name: 'my-cmd' },
+              idle_timeout: 50,
+              retry: { max_attempts: 0 },
+            },
+          ],
+        },
+        workflowRun,
+      })
+    );
+
+    const transcript = await readTranscript(join(testDir, 'logs'), workflowRun.id);
+    const resetEvents = transcript.filter(event => event.type === 'watchdog_reset');
+    expect(resetEvents.map(event => [event.step, event.chunk_type, event.chunk_count])).toEqual([
+      ['review', 'thinking', 1],
+      ['review', 'tool', chunkCount],
+    ]);
+    const failed = transcript.find(event => event.type === 'node_error' && event.step === 'review');
+    expect(failed?.error).toContain(
+      `Last watchdog reset: ${String(resetEvents.at(-1)?.ts)} from chunk type 'tool'.`
+    );
   });
 
   it('loop timeout diagnostics retain the latest reset and distinguish tool progress from assistant output', async () => {
@@ -13100,7 +13155,11 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
 
     const toolReset = tool.transcript.filter(event => event.type === 'watchdog_reset');
     const assistantReset = assistant.transcript.filter(event => event.type === 'watchdog_reset');
-    expect(toolReset.map(event => event.chunk_type)).toEqual(['thinking', 'tool']);
+    // One burst: its start, then its end written by the iteration's flush.
+    expect(toolReset.map(event => [event.step, event.chunk_type, event.chunk_count])).toEqual([
+      ['implement-iteration-1', 'thinking', 1],
+      ['implement-iteration-1', 'tool', 1],
+    ]);
     expect(assistantReset.map(event => event.chunk_type)).toEqual(['assistant']);
     expect(toolReset.every(event => !('content' in event) && !('tool_input' in event))).toBe(true);
     expect(assistantReset.every(event => !('content' in event))).toBe(true);

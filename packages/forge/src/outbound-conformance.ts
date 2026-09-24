@@ -1,8 +1,13 @@
+import { matchesForgeOperationResponse } from './dispatch';
 import {
   forgeResponseSchema,
+  mutationTarget,
+  type ChecksState,
+  type ForgeMutationFailure,
+  type ForgeMutationRequest,
   type ForgeRequest,
   type ForgeResponse,
-  type ChecksState,
+  type PluginMetadata,
 } from './operations';
 
 export interface ForgeReadConformanceCase {
@@ -43,6 +48,44 @@ export async function runForgeReadConformance(
     const expected = fixture.expected.units.map(unit => `${unit.kind}:${unit.id}`).sort();
     if (JSON.stringify(identities) !== JSON.stringify(expected))
       failures.push(`${fixture.name}: enumerated unit identities differ`);
+  }
+  return failures;
+}
+
+export interface ForgeMutationConformanceCase {
+  name: string;
+  request: ForgeMutationRequest;
+  expectedOutcome: 'applied' | ForgeMutationFailure['outcome'];
+}
+
+/**
+ * Run an adapter's controlled mutation fixtures through its real operation
+ * boundary. The fixture owns the remote state; this runner checks only that the
+ * public evidence answers the request and names the outcome the fixture set up.
+ */
+export async function runForgeMutationConformance(
+  invoke: (request: ForgeMutationRequest) => Promise<ForgeResponse>,
+  metadata: PluginMetadata,
+  cases: readonly ForgeMutationConformanceCase[]
+): Promise<string[]> {
+  const failures: string[] = [];
+  for (const fixture of cases) {
+    const target = mutationTarget(fixture.request);
+    const host = 'repo' in target ? target.repo.host : target.host;
+    const parsed = forgeResponseSchema.safeParse(await invoke(fixture.request));
+    if (
+      !parsed.success ||
+      parsed.data.operationId !== fixture.request.operationId ||
+      !matchesForgeOperationResponse(fixture.request, parsed.data, metadata, host)
+    ) {
+      failures.push(`${fixture.name}: invalid mutation correlation, target or read-back evidence`);
+      continue;
+    }
+    const outcome = parsed.data.ok ? 'applied' : parsed.data.mutation?.outcome;
+    if (outcome !== fixture.expectedOutcome)
+      failures.push(
+        `${fixture.name}: expected ${fixture.expectedOutcome}, received ${String(outcome)}`
+      );
   }
   return failures;
 }

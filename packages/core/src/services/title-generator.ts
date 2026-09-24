@@ -5,7 +5,7 @@
  * Optionally uses TITLE_GENERATION_MODEL env var for a cheaper/faster model.
  * Designed to be fire-and-forget — never throws, all errors logged internally.
  */
-import { getAgentProvider } from '@archon/providers';
+import { getAgentProvider } from './provider-admission';
 import type { SendQueryOptions } from '@archon/providers/types';
 import * as conversationDb from '../db/conversations';
 import { createLogger } from '@archon/paths';

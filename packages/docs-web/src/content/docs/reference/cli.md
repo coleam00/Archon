@@ -34,9 +34,9 @@ Run AI-powered workflows from your terminal.
 
 **Note:** Examples below use `archon` (after `bun link`). If you skip step 2, use `bun run cli` from the repo directory instead.
 
-## Forge reads
+## Forge operations
 
-Use `archon forge resolve --data <json>` for an explicit remote and `archon forge checks --data <json>` for a qualified PR. Both return structured observations. See [Forge operations](/reference/forge/) for request shapes, plugin configuration, credentials and audit behavior. The bundled SDLC deliver pack still reads checks through `gh` by default; set `ARCHON_SDLC_FORGE=forge` to read them through `archon forge checks` instead.
+Use `archon forge resolve --data <json>` for an explicit remote, `archon forge checks --data <json>` for a qualified PR, and `workitem.view`, `pr.view`, `pr.create`, `pr.edit-body`, `pr.ready` or `comment.upsert` for the rest. Reads return structured observations; writes report whether they were applied and verified, refused, applied but unverified, or left with an unknown outcome. Pass a request carrying authored text with `--data-file <path>` so it stays out of argv. See [Forge operations](/reference/forge/) for request shapes, plugin configuration, credentials and audit behavior. The bundled SDLC pack still uses `gh` by default; set `ARCHON_SDLC_FORGE=forge` to read and write through the plugin instead.
 
 ## Quick Start
 
@@ -122,6 +122,20 @@ Exit code 0 if all checks pass or are skipped; 1 if any critical check fails. Ad
 
 Also runs automatically at the end of `archon setup` (optional).
 
+### `plugin`
+
+Install and manage plugins published on GitHub. A plugin is `owner/repo[/path]`, the directory holding its `archon-plugin.json`; a version is a release tag. Only forge plugins install today.
+
+```bash
+archon plugin install coleam00/Archon/plugins/forge-github         # latest release
+archon plugin install coleam00/Archon/plugins/forge-github@<tag>   # a specific release
+archon plugin update coleam00/Archon/plugins/forge-github[@<tag>]
+archon plugin remove coleam00/Archon/plugins/forge-github
+archon plugin list
+```
+
+`install` refuses an already-installed plugin (use `update`) and a file it did not install. Every check, including the release checksum and the manifest's `compatibility.archon` range, runs before anything is written. See [Forge operations](/reference/forge/#install-the-github-plugin) for what the command downloads and where it writes.
+
 ### `auth github`
 
 Connect the current CLI user's GitHub identity via the GitHub device flow, so workflow commits, PR comments, and pushes attribute to you instead of the bot.
@@ -155,6 +169,10 @@ archon ai alias set <@name> <provider> <model> [--effort <effort>] [--scope user
 archon ai alias list [--json]    # show @custom aliases (install + yours)
 archon ai alias unset <@name> [--scope user|install]
 archon ai default <provider> [<model>] [--scope user|install]   # set the default assistant (+ optional chat model)
+
+# --- Provider concurrency caps ---
+archon ai capacity [list] [--json]         # provider attempts holding concurrency.providers slots
+archon ai capacity release <attempt-id>    # release one whose owner process you verified is gone
 ```
 
 Credential ids are **vendor-keyed** (`anthropic`, `openai`, `github-copilot`, plus the Pi backends like `openrouter`); legacy `claude`/`codex`/`copilot` are accepted and normalized with a printed notice. `ai login` supports subscription login for **`anthropic`**, **`openai`** (ChatGPT/Codex), and **`github-copilot`**. The `openai` login is an Archon-owned PKCE flow ([#1924](https://github.com/coleam00/Archon/issues/1924)): authorize in the browser, then paste the authorization code or the full `localhost:1455` redirect URL back at the prompt — nothing needs to listen on that port. The API key is never read from argv (it would leak into shell history): pipe it (`echo "$KEY" | archon ai key set openrouter`) or type it at the masked prompt.
@@ -1063,13 +1081,31 @@ archon version
 | Option | Effect |
 |--------|--------|
 | `--cwd <path>` | Override working directory (default: current directory) |
-| `--quiet`, `-q` | Reduce log verbosity to warnings and errors only |
-| `--verbose`, `-v` | Show debug-level output |
+| `--quiet`, `-q` | Log warnings and errors only (the default for every command except `archon serve`) |
+| `--verbose`, `-v` | Show debug-level logs on stderr (on stdout for `archon serve`) |
 | `--json` | Output machine-readable JSON (workflow `list`, `status`, `runs`, `get`, `wait`, and the write commands `approve`/`reject`/`abandon`/`resume`). Implies log suppression so stdout is exactly the JSON payload. |
 | `--timeout <seconds>` | For `workflow wait`: give up after N seconds and exit `3`. Omitted means wait indefinitely. |
 | `--follow` | For `workflow logs`: wait for the transcript and stream appended rows until the run ends. |
 | `--events` | With verbose JSON workflow `status`/`get`, return raw event rows instead of ordered node summaries. |
 | `--help`, `-h` | Show help message |
+
+### Logs
+
+A command's stdout carries only its output, so `archon workflow list --full > out.txt`
+captures the listing and nothing else. Engine logs go to stderr, and by default only
+warnings and errors appear. `--verbose` (or `LOG_LEVEL=debug`) adds debug logs, still on
+stderr. `--json` and `workflow logs` print no logs at all.
+
+`archon serve` is the exception: its logs are its output, so it logs at `info` (or debug with `--verbose`) on stdout,
+as the server does when started directly.
+
+Workflow definition problems, such as deprecated or unknown keys, are reported by
+`archon validate workflows`, inline under the workflow in `workflow list`, and on stderr
+before `workflow run` starts. A file that fails to load is listed with its error by
+`workflow list` and `validate workflows`, and `workflow run` names the error. These problems
+are logged only at debug, not for every workflow a command happens to discover. An invalid
+value for an optional workflow field (for example a malformed `tags:` block) is dropped with
+a warning log, because no other report names it.
 
 ## Working Directory
 
