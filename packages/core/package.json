@@ -55,6 +55,12 @@
       "src/db/resource-starts.integration.test.ts"
     ],
     [
+      "src/services/provider-admission.integration.test.ts"
+    ],
+    [
+      "src/db/provider-attempts.postgres.integration.test.ts"
+    ],
+    [
       "src/handlers/command-handler.test.ts"
     ],
     [
@@ -142,6 +148,9 @@
     ],
     [
       "src/db/workflows.adoption-timestamp.integration.test.ts"
+    ],
+    [
+      "src/db/workflows.checkout-baseline.integration.test.ts"
     ],
     [
       "src/services/cleanup-service.test.ts"

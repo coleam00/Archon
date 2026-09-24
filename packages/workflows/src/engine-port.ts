@@ -20,6 +20,7 @@ export const RESUME_FORBIDDEN_OPTIONS = [
   'capturedSourceOwner',
   'adoptedFromRunId',
   'continuationMode',
+  'cutFromCommit',
 ] as const satisfies readonly (keyof ExecuteWorkflowOptions)[];
 
 type WithoutOptions<Key extends keyof ExecuteWorkflowOptions> = Omit<ExecuteWorkflowOptions, Key> &

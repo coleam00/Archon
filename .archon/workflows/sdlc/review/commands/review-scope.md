@@ -22,7 +22,7 @@ $ARGUMENTS
 
 ## Resolve the target
 
-- When the requested scope is a bare PR number, delivery recorded it — review exactly that PR. Derive the normalized `owner/repo` from `origin` without writing its raw URL into an artifact, and use `gh ... --repo <owner/repo>` with that number for every GitHub read. Do not resolve a PR from the current branch, and do not accept a different target. The review object is that PR's diff, exactly.
+- When the requested scope is a recorded pull request — delivery passes its verified record as JSON, carrying `repo`, `number`, `head` and `base` — review exactly that pull request. The record already names the target, so read nothing from a forge to establish it: the review object is the diff of that head against that base. Fetch the base first (`git fetch origin <base>`) and diff against the fetched ref (`git diff origin/<base>...HEAD`): a local `<base>` branch can lag the forge's base during a long run, and a stale base reviews a diff the pull request does not have. Do not resolve a PR from the current branch, and do not accept a different target.
 - A PR number, URL, or branch → resolve it with `gh pr view` (title, body, base, head, state, files) and `gh pr diff`. Make sure the PR's head is what the local checkout reflects; note the head SHA. **In PR mode the review object is the PR's diff, exactly — uncommitted or untracked local state is out of scope and must not appear in the scope file.**
 - Empty scope → first check whether the current branch has an open PR (`gh pr view`); if it does, that PR is the target (PR mode, as above). Otherwise the working diff: uncommitted changes plus commits ahead of the merge-base with the default/base branch (`git merge-base`, `git diff`, `git log`). Note the current HEAD SHA.
 
@@ -52,9 +52,12 @@ Write `$ARTIFACTS_DIR/review/scope.md` containing:
 2. **Target** — PR reference or "working diff", base branch, and the **head SHA under review** (this becomes the next round's cursor).
 3. **Mode** — full review, or light (delta since `<cursor>`).
 4. **Changed files** — path list with a one-line shape of the change per file (added/modified/deleted, rough size).
-5. **The diff to review** — inline when small; for a large diff, the exact commands a reviewer runs to see it (`git diff <range>`, `gh pr diff <n>`).
+5. **The diff to review** — inline when small; for a large diff, the exact commands a reviewer runs to see it (`git diff <range>`).
 6. **Prior report** — continuation mode only: its path and reviewed-head cursor. Do not duplicate its findings or coverage.
 
 ## Verify before finishing
 
-Confirm `$ARTIFACTS_DIR/review/scope.md` exists, names the accepted contract and head SHA, and that the diff commands in it actually produce output in this checkout. Return `docs` as the boolean selected above.
+Confirm `$ARTIFACTS_DIR/review/scope.md` exists, names the accepted contract and head SHA, and that the diff commands in it actually produce output in this checkout. Then declare:
+
+- `docs`: the boolean selected above.
+- `pr`: the qualified pull request this round reviews, as `{"repo": {"host": ..., "path": "owner/repo"}, "number": N}` — the same identity scope.md records. For a working-diff target, `{}`. The node that publishes the review report writes to this record and to nothing else, so a wrong or guessed identity would put the report on the wrong pull request.

@@ -94,7 +94,7 @@ ${indent(script)}
 name: loop-example
 description: Validate the documented loop completion channel
 nodes:
-  - id: record-start
+  - id: plan
     bash: echo start
 ${indent(loop)}
 `);

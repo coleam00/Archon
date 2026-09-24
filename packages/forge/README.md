@@ -14,6 +14,8 @@ A missing direct field rejects that binding. Source actors record forge provenan
 
 ## Outbound operations
 
-`@archon/forge/operations` owns read-operation requests, results, metadata and audit payloads. `@archon/forge/dispatch` executes optional plugins; generic workflow execution imports neither. The independently executable GitHub plugin in `packages/adapters/src/forge/github/plugin.ts` implements `resolve` and `checks.state` through the same handshake as installed plugins.
+`@archon/forge/operations` owns operation requests, results, metadata and audit payloads, re-exporting the work-item and pull-request lifecycle contract from `./lifecycle`. `@archon/forge/dispatch` executes optional plugins; generic workflow execution imports neither. The independently executable GitHub plugin in `packages/adapters/src/forge/github/plugin.ts` implements every operation through the same handshake as installed plugins.
+
+Writes carry evidence rather than a bare failure. `pr.create`, `pr.edit-body`, `pr.ready` and `comment.upsert` each resolve to exactly one of four outcomes — applied and read back, refused before anything was written, applied but unverified, or unknown — so a caller can tell a refusal from a write whose fate it does not know, and never retries blindly past the last one. Dispatch checks an applied result against the request that asked for it instead of trusting the plugin's claim.
 
 See the [forge reference](../docs-web/src/content/docs/reference/forge.md) for the CLI, trusted configuration, UTF-8 process protocol, credentials and check semantics. Run `bun run test` and `bun run type-check` from this package to exercise contract, mapping and process conformance.

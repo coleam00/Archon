@@ -60,7 +60,13 @@ import type {
 import { INPUT_NAME_PATTERN, inputEnvKey } from './schemas/dag-node';
 import { workflowNodeHooksSchema } from './schemas/hooks';
 import { parseLoopPrevWhenAtom, parseWhenAtom, whenAtoms, WHEN_INPUTS_SCOPE } from './when-atom';
-import { declaredFieldsFromSchema, OUTPUT_REF_SOURCE, parseWholeOutputRef } from './output-ref';
+import {
+  declaredFieldsFromSchema,
+  EXECUTION_CHECKOUT_REF_SOURCE,
+  OUTPUT_REF_SOURCE,
+  parseWholeExecutionCheckoutRef,
+  parseWholeOutputRef,
+} from './output-ref';
 import { isBindingDirective } from './schemas/dag-node';
 import { readComposedBindings } from './compiled-command';
 import { visitNodeTemplateSlots } from './template-walker';
@@ -72,26 +78,6 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('workflow.loader');
   return cachedLog;
-}
-
-/**
- * Filenames already warned about an inferred workflow-class declaration this process
- * (#2736/#2738's grace period on `validateWorkflowClassPlacement`). `parseWorkflow` runs
- * on every `/workflow list`, chat turn, and CLI invocation — a permanent process-wide
- * latch keeps the WARN a one-time nudge to the author instead of log spam on a
- * long-running server. Mirrors `hasWarnedLegacyHomePath` in `workflow-discovery.ts`: a
- * plain latch (no in-flight-probe dance) is correct here because `parseWorkflow` is fully
- * synchronous, so no concurrent caller can interleave mid-check. Keyed by the bare
- * filename `parseWorkflow` receives (not a scope-qualified path), so two files sharing a
- * basename across bundled/global/project scopes could under-warn on this channel — a
- * cosmetic log-noise tradeoff only, since `parseWarnings` (the channel the workflow's
- * actual author sees, via `/api/workflows` and `/workflow list`) is pushed unconditionally
- * on every parse regardless of this Set.
- */
-const warnedClassPlacementFiles = new Set<string>();
-/** Exported for tests that need to observe the warning fire more than once per process. */
-export function resetClassPlacementWarningForTests(): void {
-  warnedClassPlacementFiles.clear();
 }
 
 /**
@@ -265,9 +251,12 @@ function pushUnknownKeyWarning(
 ): void {
   const message = `${label}: unknown key '${key}' will be ignored.${hint}`;
   warnings.push(message);
-  // Carry the prose, not just the payload: the run path (`archon workflow run`)
-  // reads this log line and never reads the warning string (#2213).
-  getLog().warn({ id, key, warning: message }, event);
+  // `warnings` is how the author hears about this: `validate`, `workflow list`,
+  // `workflow run` (stderr), the API, and the run's `workflow_parse_warnings`
+  // event all read it. Every parse warning in this file is also logged at debug, not
+  // warn: discovery parses every workflow on each list or run, so a warn line
+  // would repeat for workflows the operator did not ask about (#3444).
+  getLog().debug({ id, key, warning: message }, event);
 }
 
 /**
@@ -443,7 +432,7 @@ function collectGateAndLoopDeprecationWarnings(
           `always structured as {decision, text} — read '$${id}.output.text' downstream ` +
           'instead. This field is ignored.';
         warnings.push(message);
-        getLog().warn({ id, warning: message }, 'node_capture_response_deprecated');
+        getLog().debug({ id, warning: message }, 'node_capture_response_deprecated');
       }
       if (approvalObj.on_reject !== undefined) {
         const message =
@@ -452,7 +441,7 @@ function collectGateAndLoopDeprecationWarnings(
           'instead (loop it with loop_group if it should iterate). This gate keeps running ' +
           'via the legacy mechanism until migrated.';
         warnings.push(message);
-        getLog().warn({ id, warning: message }, 'node_on_reject_deprecated');
+        getLog().debug({ id, warning: message }, 'node_on_reject_deprecated');
       }
     }
   }
@@ -465,7 +454,7 @@ function collectGateAndLoopDeprecationWarnings(
       're-expresses the interactive loop as a gate + loop_group composition (#2707 step 3). ' +
       'Continue using it for now.';
     warnings.push(message);
-    getLog().warn({ id, warning: message }, 'node_loop_interactive_deprecated');
+    getLog().debug({ id, warning: message }, 'node_loop_interactive_deprecated');
   }
 
   // The prose `until:` completion channel is deprecated for EVERY loop/loop_group,
@@ -482,7 +471,7 @@ function collectGateAndLoopDeprecationWarnings(
       'in output_format) instead (#2707 step 3). While supported, emit legacy signals as ' +
       "'<promise>SIGNAL</promise>' or a final standalone signal line.";
     warnings.push(message);
-    getLog().warn({ id, warning: message }, 'node_loop_until_deprecated');
+    getLog().debug({ id, warning: message }, 'node_loop_until_deprecated');
   } else if (isLoopGroupNode(node) && node.loop_group.until !== undefined) {
     const message =
       `Node '${id}': the prose 'loop_group.until' completion signal is deprecated. ` +
@@ -491,7 +480,7 @@ function collectGateAndLoopDeprecationWarnings(
       "supported, emit legacy signals as '<promise>SIGNAL</promise>' or a final standalone " +
       'signal line.';
     warnings.push(message);
-    getLog().warn({ id, warning: message }, 'node_loop_group_until_deprecated');
+    getLog().debug({ id, warning: message }, 'node_loop_group_until_deprecated');
   }
 
   // A gate node inside a loop_group body only pauses the enclosing loop when it is
@@ -526,7 +515,7 @@ function collectGateAndLoopDeprecationWarnings(
           'gate is not, so it will not stop loop iteration. Move it to the end of the ' +
           'body with nothing else depending on it, and no other node left un-depended-on.';
         warnings.push(message);
-        getLog().warn({ id: gate.id, warning: message }, 'loop_group_gate_not_terminal_sink');
+        getLog().debug({ id: gate.id, warning: message }, 'loop_group_gate_not_terminal_sink');
       } else {
         // Gate is validly the sole terminal sink. Design A (#2707 step 3) is
         // deliberately unopinionated about what a decision means — the group's own
@@ -553,7 +542,7 @@ function collectGateAndLoopDeprecationWarnings(
             `(e.g. '[ "${gateRef}.decision" = "approve" ]') so the gate's answer actually ` +
             'drives completion (#2707 step 3).';
           warnings.push(message);
-          getLog().warn(
+          getLog().debug(
             { id: gate.id, warning: message },
             'loop_group_gate_completion_not_referenced'
           );
@@ -576,7 +565,7 @@ function collectGateAndLoopDeprecationWarnings(
           'directly as the terminal sink correctly stops the enclosing loop_group ' +
           '(#2707 step 3).';
         warnings.push(message);
-        getLog().warn(
+        getLog().debug(
           { id, sinkId: sink.id, warning: message },
           'loop_group_nested_pause_not_escalated'
         );
@@ -669,14 +658,14 @@ function parseDagNode(
     warnings.push(
       `Node '${id}': 'with' is only supported on command, script, include, and workflow nodes — it is ignored here`
     );
-    getLog().warn({ id: node.id }, 'node_with_ignored');
+    getLog().debug({ id: node.id }, 'node_with_ignored');
   }
 
   if ((raw as Record<string, unknown>).on_timeout !== undefined && node.kind !== 'exec') {
     warnings.push(
       `Node '${id}': 'on_timeout' is only supported on bash and script nodes — it is ignored here`
     );
-    getLog().warn({ id: node.id }, 'node_on_timeout_ignored');
+    getLog().debug({ id: node.id }, 'node_on_timeout_ignored');
   }
 
   // parseWarnings owns author-facing diagnostics; the structured log observes the
@@ -697,7 +686,7 @@ function parseDagNode(
           : `Node '${id}': ${quoted} ${plural ? 'are' : 'is'} not supported on this node type ` +
             `(${nonAiNode.type}) — ${plural ? 'they are' : 'it is'} ignored at run time.`;
       warnings.push(message);
-      getLog().warn(
+      getLog().debug(
         { id: node.id, fields: presentAiFields, warning: message },
         `${nonAiNode.type}_node_ai_fields_ignored`
       );
@@ -1091,6 +1080,18 @@ export function validateDagStructure(
     // otherwise filter a compose_fan_out node out of the binding check entirely.
     const composeFanOut = isComposeFanOutNode(node) ? node : undefined;
     if (isIncludeDirective(node)) continue;
+    if (isWorkflowNode(node)) {
+      // A child run's inputs resolve through the launch path, which has no execution
+      // records to read; forwarding the reference would hand the child a literal string.
+      const misuse = Object.entries(node.with ?? {}).find(
+        ([, value]) =>
+          typeof value === 'string' && new RegExp(EXECUTION_CHECKOUT_REF_SOURCE).test(value)
+      );
+      if (misuse) {
+        return `Node '${node.id}' binding 'with.${misuse[0]}' reads '$<node>.execution.checkoutStart', which a workflow: node cannot pass to its child run; only a command or script node's binding can read it`;
+      }
+      continue;
+    }
     const nodeWith = isExecNode(node)
       ? node.with
       : isAgentNode(node)
@@ -1103,7 +1104,30 @@ export function validateDagStructure(
     if (nodeWith === undefined) continue;
     for (const [name, value] of Object.entries(nodeWith)) {
       const producerIds: string[] = [];
-      if (typeof value === 'string') {
+      const readsExecution =
+        typeof value === 'string' && new RegExp(EXECUTION_CHECKOUT_REF_SOURCE).test(value);
+      if (typeof value === 'string' && readsExecution) {
+        const producerId = parseWholeExecutionCheckoutRef(value);
+        if (composeFanOut) {
+          return `Node '${node.id}' binding 'with.${name}' reads '$<node>.execution.checkoutStart', which a composed fan-out cannot pass to its instances; only a command or script node's binding can read it`;
+        }
+        if (producerId === undefined) {
+          return `Node '${node.id}' binding 'with.${name}' uses '$<node>.execution.checkoutStart' inside other text; it is only valid as the whole value of a command or script node's binding`;
+        }
+        const producer = nodesById.get(producerId) ?? enclosingNodes?.get(producerId);
+        if (producer === undefined) {
+          return `Node '${node.id}' binding 'with.${name}' reads '$${producerId}.execution.checkoutStart', but no node '${producerId}' exists in this workflow`;
+        }
+        if (
+          !isIncludeDirective(producer) &&
+          !isAgentNode(producer) &&
+          !isExecNode(producer) &&
+          !isLoopNode(producer)
+        ) {
+          return `Node '${node.id}' binding 'with.${name}' reads '$${producerId}.execution.checkoutStart', but '${producerId}' is a ${producer.kind} node, which does not execute against the checkout and records no checkout start`;
+        }
+        producerIds.push(producerId);
+      } else if (typeof value === 'string') {
         const refPattern = new RegExp(OUTPUT_REF_SOURCE, 'g');
         let refMatch: RegExpExecArray | null;
         while ((refMatch = refPattern.exec(value)) !== null) {
@@ -1116,7 +1140,7 @@ export function validateDagStructure(
       for (const producerId of producerIds) {
         if (!nodesById.has(producerId)) continue; // enclosing scope, or already rejected above
         if (!transitiveDepsOf(node.id).has(producerId)) {
-          return `Node '${node.id}' binding 'with.${name}' references '$${producerId}.output', which is not an upstream dependency — add '${producerId}' to '${node.id}'.depends_on so its value is produced first`;
+          return `Node '${node.id}' binding 'with.${name}' references '$${producerId}.${readsExecution ? 'execution.checkoutStart' : 'output'}', which is not an upstream dependency — add '${producerId}' to '${node.id}'.depends_on so its value is produced first`;
         }
       }
     }
@@ -1183,7 +1207,7 @@ export function validateDagStructure(
  * existed, including ones that only ever ran in the foreground and were
  * never actually unsafe — the hard error had no transition. `parseWorkflow`
  * instead coerces `interactive` to `true` for the rest of this parse and
- * warns once per file (see `warnedClassPlacementFiles`), which closes #1991
+ * reports a parse warning, which closes #1991
  * for these workflows immediately: every dispatch surface reads the SAME
  * parsed `interactive` value this function's result feeds
  * (`assertInteractiveClassNotBackgrounded`, the fan-out spawn check, the web
@@ -1349,15 +1373,19 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       };
     }
 
+    // A load failure reaches the author through the returned `error`, which discovery
+    // collects for `workflow list`, `validate workflows`, `workflow run`, and the API.
+    // Like parse warnings, the log line is debug so a broken file is not repeated on
+    // every discovery (#3444).
     if (!raw.name || typeof raw.name !== 'string') {
-      getLog().warn({ filename }, 'workflow_missing_name');
+      getLog().debug({ filename }, 'workflow_missing_name');
       return {
         workflow: null,
         error: { filename, error: "Missing required field 'name'", errorType: 'validation_error' },
       };
     }
     if (!raw.description || typeof raw.description !== 'string') {
-      getLog().warn({ filename }, 'workflow_missing_description');
+      getLog().debug({ filename }, 'workflow_missing_description');
       return {
         workflow: null,
         error: {
@@ -1392,7 +1420,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     }
 
     if (!hasNodes) {
-      getLog().warn({ filename }, 'workflow_missing_nodes');
+      getLog().debug({ filename }, 'workflow_missing_nodes');
       return {
         workflow: null,
         error: {
@@ -1411,7 +1439,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       .filter((n): n is DagNode | IncludeDirective => n !== null);
 
     if (dagNodes.length !== (raw.nodes as unknown[]).length) {
-      getLog().warn({ filename, validationErrors }, 'dag_node_validation_failed');
+      getLog().debug({ filename, validationErrors }, 'dag_node_validation_failed');
       return {
         workflow: null,
         error: {
@@ -1424,7 +1452,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
 
     const structureError = validateDagStructure(dagNodes);
     if (structureError) {
-      getLog().warn({ filename, structureError }, 'dag_structure_invalid');
+      getLog().debug({ filename, structureError }, 'dag_structure_invalid');
       return {
         workflow: null,
         error: { filename, error: structureError, errorType: 'validation_error' },
@@ -1433,7 +1461,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
 
     const outputFormatError = validateNodeOutputFormats(dagNodes);
     if (outputFormatError) {
-      getLog().warn({ filename, outputFormatError }, 'output_format_rejected');
+      getLog().debug({ filename, outputFormatError }, 'output_format_rejected');
       return {
         workflow: null,
         error: { filename, error: outputFormatError, errorType: 'validation_error' },
@@ -1456,14 +1484,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
         '(this grace period ends in a future release — see #2738); add the declaration to the file to ' +
         'silence this warning.';
       parseWarnings.push(classWarning);
-      if (!warnedClassPlacementFiles.has(filename)) {
-        warnedClassPlacementFiles.add(filename);
-        // Carry the prose, not just the payload, so the warning is legible on both
-        // channels: the log stream, and `parseWarnings` — which `executeWorkflow`
-        // persists verbatim as a `workflow_parse_warnings` event (#2213) and
-        // `/api/workflows` surfaces per-workflow to the author (see AGENTS.md).
-        getLog().warn({ filename, warning: classWarning }, 'workflow_class_placement_inferred');
-      }
+      getLog().debug({ filename, warning: classWarning }, 'workflow_class_placement_inferred');
     }
 
     // Parse workflow-level fields using WorkflowBaseSchema for validation
@@ -1848,7 +1869,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     if (typeof raw.returns === 'string' && raw.returns.trim().length > 0) {
       returns = raw.returns.trim();
     } else if (raw.returns !== undefined) {
-      getLog().warn({ filename, value: raw.returns }, 'invalid_workflow_returns_value_rejected');
+      getLog().debug({ filename, value: raw.returns }, 'invalid_workflow_returns_value_rejected');
       return {
         workflow: null,
         error: {
@@ -1882,7 +1903,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     if (typeof raw.outcome_field === 'string' && raw.outcome_field.trim().length > 0) {
       outcomeField = raw.outcome_field.trim();
     } else if (raw.outcome_field !== undefined) {
-      getLog().warn(
+      getLog().debug(
         { filename, value: raw.outcome_field },
         'invalid_workflow_outcome_field_value_rejected'
       );
@@ -1943,7 +1964,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       // Carry the prose, not just the payload, so the warning is legible on both
       // channels: the log stream, and `parseWarnings` — which `executeWorkflow`
       // persists verbatim as a `workflow_parse_warnings` event (#2213).
-      getLog().warn({ filename, warning: message }, 'workflow_model_reasoning_effort_deprecated');
+      getLog().debug({ filename, warning: message }, 'workflow_model_reasoning_effort_deprecated');
     }
     const sandbox = parseOptionalField(
       raw.sandbox,
@@ -2079,7 +2100,9 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     const linePattern = /line (\d+)/i;
     const lineMatch = linePattern.exec(err.message);
     const lineInfo = lineMatch ? ` (near line ${lineMatch[1]})` : '';
-    getLog().error(
+    // Debug for the same reason as the validation failures above: the returned
+    // parse_error is what the author sees, and discovery re-parses on every command.
+    getLog().debug(
       {
         err,
         filename,

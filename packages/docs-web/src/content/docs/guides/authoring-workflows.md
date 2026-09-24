@@ -914,7 +914,7 @@ The resolved provider must declare `sessionResume: true` in its capabilities. Th
 
 `persist_session` applies to `command:` and `prompt:` nodes only. Other node types skip it:
 
-- **`bash:` / `script:`** — never invoke a provider, so the field is meaningless. Setting it produces a warning at load time and is ignored.
+- **`bash:` / `script:`** — never invoke a provider, so the field is meaningless. Setting it produces a parse warning (shown by `archon validate workflows`) and is ignored.
 - **`approval:` / `cancel:`** — same: no AI call, no session to persist.
 - **`loop:` / `loop_group:`** — have their own per-iteration session threading. Cross-run persistence isn't wired for them in this release; the field is warn-and-dropped on loop and loop_group nodes. Use a `prompt:` node if you need cross-run memory.
 
@@ -1057,6 +1057,39 @@ layer — they win over a composed block's inputs, which win over the run's `$IN
 Bindings carry *values*. For documents — a plan, a findings report, a diff — keep using the
 artifact chain below; a path in a binding plus a file on disk is still the right shape for
 anything big enough to have structure of its own.
+
+### Reading where a node started: `$node.execution.checkoutStart`
+
+The engine observes the checkout when each invocation of a prompt, command, bash, script,
+or loop node starts, and records it on that node's execution record. A binding can read the
+observation of an upstream node's invocation:
+
+```yaml
+  - id: assert-changed
+    script: assert-changed
+    runtime: bun
+    depends_on: [implement]
+    with:
+      baseline: "$implement.execution.checkoutStart"   # arrives as INPUTS_BASELINE (JSON)
+```
+
+The value is the checkout observation from the start of `implement`'s invocation: the
+commit, that commit's tree, and whether the worktree was clean. A dirty start also names a
+manifest under `$ARTIFACTS_DIR` listing each path that differed from the commit with Git's
+blob id of its content, its mode, and its type. Retries and the turns of a `loop:` node keep
+their invocation's first observation; the next invocation (for example, the next iteration
+of an enclosing `loop_group`) records a new one. A resumed run reads the same recorded
+value. Observation never changes the checkout: no stash, no index write, no `git add`.
+The recorded commit is the one `git status` reported comparing the worktree against; if
+HEAD keeps moving while the checkout is read, the observation is `unavailable` rather than a
+guess.
+
+The reference is valid only as the whole value of a `command:` or `script:` binding, and
+only for a producer that executes against the checkout. Anything else is a load error.
+Every `bash:` and `script:` node also receives its own execution identity, including this
+attempt's observation, as JSON in the `ARCHON_NODE_EXECUTION` environment variable. The
+implement workflow compares these two observations to decide whether an invocation
+changed anything since it started.
 
 ---
 

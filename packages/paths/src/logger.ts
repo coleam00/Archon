@@ -19,12 +19,13 @@
  *
  * Configuration:
  *   LOG_LEVEL env var or setLogLevel() at startup
- *   Pretty-printed when stdout is a TTY and NODE_ENV !== 'production'
+ *   stdout by default; setLogDestination('stderr') moves every logger there
+ *   Pretty-printed when the destination is a TTY and NODE_ENV !== 'production'
  *   Newline-delimited JSON otherwise (piped, redirected, or production)
  */
 
 import pino from 'pino';
-import type { Logger } from 'pino';
+import type { DestinationStream, Logger } from 'pino';
 import pretty from 'pino-pretty';
 
 export type { Logger } from 'pino';
@@ -48,42 +49,71 @@ function getInitialLevel(): string {
   return 'info';
 }
 
+export type LogDestination = 'stdout' | 'stderr';
+
+let destination: LogDestination = 'stdout';
+const streams: Partial<Record<LogDestination, DestinationStream>> = {};
+
 /**
- * Build the root Pino logger.
+ * Build the stream for one destination.
  *
  * Uses `pino-pretty` as a **destination stream** (not a worker-thread transport)
- * when stdout is a TTY and NODE_ENV !== 'production'. Running pino-pretty as a
- * destination stream keeps the formatter on the main thread, which avoids the
- * `require.resolve('pino-pretty')` lookup that crashes inside Bun's `/$bunfs/`
- * virtual filesystem in compiled binaries (see GitHub issue #960 / #979).
+ * when that destination is a TTY and NODE_ENV !== 'production'. Running
+ * pino-pretty as a destination stream keeps the formatter on the main thread,
+ * which avoids the `require.resolve('pino-pretty')` lookup that crashes inside
+ * Bun's `/$bunfs/` virtual filesystem in compiled binaries (see GitHub issue
+ * #960 / #979).
  *
  * The same code path runs in dev and compiled binaries — no environment
  * detection required.
  */
-function buildLogger(): Logger {
-  const level = getInitialLevel();
-  const usePretty = process.stdout.isTTY && process.env.NODE_ENV !== 'production';
+function buildStream(target: LogDestination): DestinationStream {
+  const fd = target === 'stdout' ? 1 : 2;
+  const isTTY = target === 'stdout' ? process.stdout.isTTY : process.stderr.isTTY;
 
-  if (usePretty) {
+  if (isTTY && process.env.NODE_ENV !== 'production') {
     try {
-      const stream = pretty({
+      return pretty({
         colorize: true,
         levelFirst: true,
         translateTime: 'SYS:standard',
         ignore: 'pid,hostname',
+        destination: fd,
       });
-      return pino({ level }, stream);
     } catch (err) {
       // pino-pretty failed to initialize (missing peer, broken TTY descriptor,
       // or incompatible runtime). Fall back to plain JSON so logging keeps
-      // working instead of crashing the entire process at module import time.
+      // working instead of crashing the process on its first log line.
       console.warn(
         `[logger] pino-pretty failed to initialize, falling back to JSON output: ${(err as Error).message}`
       );
     }
   }
 
-  return pino({ level });
+  // The process stream, not `pino.destination(fd)`: it is what pino picks by
+  // default under Bun, and it keeps log lines in order with `console` output
+  // written to the same stream.
+  return target === 'stdout' ? process.stdout : process.stderr;
+}
+
+/**
+ * Build the root Pino logger.
+ *
+ * Child loggers share the root's stream, and modules create them at import
+ * time, before the CLI has parsed its arguments. So the destination is resolved
+ * on each write rather than when the logger is built, and each destination's
+ * stream is built on its first write.
+ */
+function buildLogger(): Logger {
+  return pino(
+    { level: getInitialLevel() },
+    {
+      write(line: string): void {
+        const stream = (streams[destination] ??= buildStream(destination));
+        stream.write(line);
+      },
+    }
+  );
 }
 
 /**
@@ -120,4 +150,14 @@ export function setLogLevel(level: string): void {
 
 export function getLogLevel(): string {
   return rootLogger.level;
+}
+
+/**
+ * Choose where every logger writes from now on, including loggers already
+ * created. The server keeps the default, stdout, which container runtimes
+ * collect. The CLI moves logs to stderr so a command's stdout carries only
+ * that command's output.
+ */
+export function setLogDestination(target: LogDestination): void {
+  destination = target;
 }

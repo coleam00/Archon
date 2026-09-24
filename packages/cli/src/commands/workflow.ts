@@ -2482,6 +2482,8 @@ async function runWorkflowWithOwnedSource(
   // Handle isolation (worktree creation)
   let workingCwd = cwd;
   let isolationEnvId: string | undefined;
+  // Set only when this invocation created the run's branch (#3305).
+  let cutFromCommit: string | undefined;
   // Execution context for the run. Repo/worktree and folder-in-place both run on
   // the host; the folder-backend seam sets this and is where `--container` flips
   // it to a container context.
@@ -2928,6 +2930,7 @@ async function runWorkflowWithOwnedSource(
 
       workingCwd = isolatedEnv.workingPath;
       isolationEnvId = envRecord.id;
+      if (!isolatedEnv.metadata.adopted) cutFromCommit = isolatedEnv.metadata.cutFromCommit;
       getLog().info({ path: workingCwd }, 'worktree_created');
     }
   } else if (options.noWorktree) {
@@ -3220,6 +3223,7 @@ async function runWorkflowWithOwnedSource(
         // continuation fields above are still passed: the executor consumes them only
         // when IT creates the row, and this row already carries them.
         ...(detachedPreCreatedRun ? { preCreatedRun: detachedPreCreatedRun } : {}),
+        ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
       };
       result = await engine.submit({
         platform: adapter,
@@ -4219,6 +4223,28 @@ export async function workflowLogsCommand(
   }
 }
 
+/** One line for the checkout a run started from (#3305); `--json` carries the full record. */
+export function describeCheckoutBaseline(baseline: WorkflowRun['checkout_baseline']): string {
+  if (baseline === null) return '(not recorded)';
+  switch (baseline.kind) {
+    case 'not_git':
+      return 'not a Git checkout';
+    case 'unavailable':
+      return `checkout unavailable (${baseline.reason})`;
+    case 'git': {
+      const worktree = baseline.worktree;
+      const state =
+        worktree.status === 'clean'
+          ? 'clean'
+          : `dirty: ${String(worktree.staged)} staged, ${String(worktree.unstaged)} unstaged, ${String(worktree.untracked)} untracked` +
+            (worktree.content === 'incomplete' ? ', content not fully identified' : '');
+      const cut =
+        baseline.cutFromCommit !== undefined ? `, branch cut from ${baseline.cutFromCommit}` : '';
+      return `${baseline.commit ?? '(unborn branch)'} (${state}${cut})`;
+    }
+  }
+}
+
 /**
  * Show detail for a single workflow run by ID (any status).
  *
@@ -4331,6 +4357,7 @@ export async function workflowGetCommand(
   console.log(`  ID:     ${run.id}`);
   console.log(`  Name:   ${run.workflow_name}`);
   console.log(`  Path:   ${run.working_path ?? '(none)'}`);
+  console.log(`  Start:  ${describeCheckoutBaseline(run.checkout_baseline)}`);
   console.log(`  Transcript: ${transcriptPath ?? '(unavailable)'}`);
   console.log(`  Status: ${run.status}`);
   if (run.outcome) console.log(`  Authored outcome: ${run.outcome}`);

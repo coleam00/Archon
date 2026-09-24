@@ -193,6 +193,48 @@ export function parseWholeOutputRef(text: string): { nodeId: string; field?: str
 }
 
 /**
+ * `$<node>.execution.checkoutStart` (#3375): the checkout observation the engine recorded
+ * when the producer's invocation started. It reads an engine-owned execution fact, never
+ * producer output, and is valid only as a whole `with:` binding value. It is the only
+ * `.execution` member; the grammar names it in full so nothing else parses as one.
+ */
+export const EXECUTION_CHECKOUT_REF_SOURCE = String.raw`\$([a-zA-Z_][a-zA-Z0-9_-]*)\.execution\.checkoutStart`;
+
+const WHOLE_EXECUTION_CHECKOUT_REF_PATTERN = new RegExp(`^${EXECUTION_CHECKOUT_REF_SOURCE}$`);
+
+/** The producer id of a string that is exactly one whole execution checkout reference. */
+export function parseWholeExecutionCheckoutRef(text: string): string | undefined {
+  return WHOLE_EXECUTION_CHECKOUT_REF_PATTERN.exec(text.trim())?.[1];
+}
+
+/**
+ * Read the producer invocation's checkout start from the producer's own execution record
+ * (live, or the persisted completion on resume). There is no fallback: a producer that
+ * did not execute against the checkout has no start to read, and the consumer fails.
+ */
+export function resolveExecutionCheckoutStart(
+  producer: NodeOutput | undefined,
+  nodeId: string
+): JsonValue {
+  const ref = `$${nodeId}.execution.checkoutStart`;
+  if (producer === undefined) {
+    throw new Error(
+      `'${ref}' references node '${nodeId}', which has not run before this reference. Add '${nodeId}' to depends_on.`
+    );
+  }
+  const start = producer.execution?.invocation.checkoutStart;
+  if (start === undefined) {
+    throw new Error(
+      producer.state === 'skipped' || producer.state === 'pending'
+        ? `'${ref}' references node '${nodeId}', which did not run, so it has no checkout start.`
+        : `'${ref}' references node '${nodeId}', whose execution record carries no checkout start. ` +
+            'Only prompt, command, bash, script, and loop nodes record one, and runs recorded before this field existed have none.'
+    );
+  }
+  return start as JsonValue;
+}
+
+/**
  * Thrown when a `$nodeId.output.field` reference cannot be honored under the
  * no-silent-drop contract. Propagates to fail the consuming node (both call
  * sites run inside the dag-executor's per-node try/catch).

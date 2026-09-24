@@ -19,6 +19,7 @@ import {
   getWorktreeBase,
   listWorktrees,
   mkdirAsync,
+  refreshWorktreeIndex,
   removeWorktree,
   syncWorkspace,
   verifyWorktreeOwnership,
@@ -65,7 +66,7 @@ interface GitCommandAnchors {
 }
 
 type WorktreeCreationResult =
-  | { kind: 'created'; warnings: string[] }
+  | { kind: 'created'; warnings: string[]; cutFromCommit?: string }
   | { kind: 'adopted'; environment: WorktreeEnvironment };
 
 function getForkReviewBranch(prNumber: string): BranchName {
@@ -210,7 +211,13 @@ export class WorktreeProvider implements IIsolationProvider {
       createdAt: new Date(),
       metadata: existingTaskBranch
         ? { adopted: true, adoptedFrom: 'branch', request }
-        : { adopted: false, request },
+        : {
+            adopted: false,
+            request,
+            ...(creation.cutFromCommit !== undefined
+              ? { cutFromCommit: creation.cutFromCommit }
+              : {}),
+          },
       ...(creation.warnings.length > 0 ? { warnings: creation.warnings } : {}),
     };
   }
@@ -799,6 +806,8 @@ export class WorktreeProvider implements IIsolationProvider {
     // recursively is enough.
     await mkdirAsync(worktreeBase, { recursive: true });
 
+    // Only a branch this call creates has a cut-from commit; reuse and adoption never do.
+    let cutFromCommit: string | undefined;
     if (request.workflowType === 'task' && request.taskBranch?.kind === 'existing') {
       // Adoption continues the local branch exactly as the prior run left it.
       // Do not fetch, sync, reset, or create a child branch here.
@@ -826,7 +835,14 @@ export class WorktreeProvider implements IIsolationProvider {
         }
       } else {
         // For issues, tasks, threads: create new branch
-        await this.createNewBranch(request, repoPath, worktreePath, branchName, baseBranch, remote);
+        cutFromCommit = await this.createNewBranch(
+          request,
+          repoPath,
+          worktreePath,
+          branchName,
+          baseBranch,
+          remote
+        );
       }
     }
 
@@ -853,13 +869,33 @@ export class WorktreeProvider implements IIsolationProvider {
       worktreeConfig
     );
 
+    await this.refreshIndex(worktreePath);
+
     const warnings: string[] = [];
     if (configLoadFailed) {
       warnings.push(
         'Config file could not be loaded — copyFiles configuration was not applied. Check your .archon/config.yaml for syntax errors.'
       );
     }
-    return { kind: 'created', warnings };
+    return {
+      kind: 'created',
+      warnings,
+      ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
+    };
+  }
+
+  /**
+   * Refresh the index of a worktree this provider just created, once, so checkout
+   * observation at each node start does not re-hash the whole tree (see
+   * `refreshWorktreeIndex`). A failure leaves observations correct but slower, so it is
+   * logged and creation continues.
+   */
+  private async refreshIndex(worktreePath: string): Promise<void> {
+    try {
+      await refreshWorktreeIndex(toWorktreePath(worktreePath));
+    } catch (err) {
+      getLog().warn({ err: err as Error, worktreePath }, 'worktree.index_refresh_failed');
+    }
   }
 
   /**
@@ -1304,7 +1340,7 @@ export class WorktreeProvider implements IIsolationProvider {
   }
 
   /**
-   * Create worktree with new branch
+   * Create worktree with new branch. Returns the commit the branch was cut from.
    */
   private async createNewBranch(
     request: IsolationRequest,
@@ -1313,7 +1349,7 @@ export class WorktreeProvider implements IIsolationProvider {
     branchName: string,
     baseBranch: string,
     remote = 'origin'
-  ): Promise<void> {
+  ): Promise<string> {
     // Clean up any orphan directory before creating worktree
     await this.cleanOrphanDirectoryIfExists(worktreePath);
 
@@ -1377,6 +1413,15 @@ export class WorktreeProvider implements IIsolationProvider {
         throw error;
       }
     }
+    // The branch was created at its start point a moment ago and nothing has written to
+    // it since, so its commit IS the cut-from commit -- read from the branch itself rather
+    // than re-resolving a start ref that may have moved in between.
+    const { stdout: cutFrom } = await execFileAsync(
+      'git',
+      ['-C', worktreePath, 'rev-parse', '--verify', 'HEAD^{commit}'],
+      { timeout: GIT_OPERATION_TIMEOUT_MS }
+    );
+    return cutFrom.trim();
   }
 
   /**

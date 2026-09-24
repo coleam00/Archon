@@ -293,6 +293,22 @@ export async function removeWorktree(
   });
 }
 
+/**
+ * Refresh the stat data in the index of a worktree the caller just created. `git worktree
+ * add` writes files and index within the same second, and Git's racy-clean check compares
+ * whole seconds, so it re-hashes every such entry on each later `git status`. Read-only
+ * callers (`--no-optional-locks`) never write the result back, so the cost repeats. The
+ * refresh waits for the clock to leave the second the checkout finished in, so the index it
+ * writes is newer than every file. It re-hashes before it marks an entry clean, so it never
+ * hides a change. Call it only on a worktree nobody else is using yet.
+ */
+export async function refreshWorktreeIndex(worktreePath: WorktreePath): Promise<void> {
+  await new Promise(resolve => setTimeout(resolve, 1000 - (Date.now() % 1000)));
+  await execFileAsync('git', ['-C', worktreePath, 'update-index', '-q', '--refresh'], {
+    timeout: 120000,
+  });
+}
+
 export interface GitCheckoutIdentity {
   gitDir: string;
   commonGitDir: string;

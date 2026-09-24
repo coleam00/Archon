@@ -72,6 +72,7 @@ import type { IIsolationStore } from '../store';
 let getDefaultBranchSpy: Mock<typeof git.getDefaultBranch>;
 let getDefaultRemoteSpy: Mock<typeof git.getDefaultRemote>;
 let syncWorkspaceSpy: Mock<typeof git.syncWorkspace>;
+let refreshWorktreeIndexSpy: Mock<typeof git.refreshWorktreeIndex>;
 
 // Mock fs.promises.access for destroy() existence check
 const mockAccess = mock((_path?: unknown): Promise<void> => Promise.resolve());
@@ -116,6 +117,8 @@ describe('WorktreeProvider', () => {
     getDefaultBranchSpy = spyOn(git, 'getDefaultBranch');
     getDefaultRemoteSpy = spyOn(git, 'getDefaultRemote');
     syncWorkspaceSpy = spyOn(git, 'syncWorkspace');
+    // The real refresh waits for the next wall-clock second.
+    refreshWorktreeIndexSpy = spyOn(git, 'refreshWorktreeIndex').mockResolvedValue(undefined);
 
     // Default mocks
     execSpy.mockResolvedValue({ stdout: '', stderr: '' });
@@ -166,6 +169,7 @@ describe('WorktreeProvider', () => {
     getDefaultBranchSpy.mockRestore();
     getDefaultRemoteSpy.mockRestore();
     syncWorkspaceSpy.mockRestore();
+    refreshWorktreeIndexSpy.mockRestore();
     mockAccess.mockClear();
     mockReadFile.mockClear();
     mockRm.mockClear();
@@ -322,6 +326,56 @@ describe('WorktreeProvider', () => {
       );
     });
 
+    test('records the commit a new branch was cut from, read from the created branch', async () => {
+      const cutFrom = 'a'.repeat(40);
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) =>
+        args.includes('rev-parse') && args.includes('HEAD^{commit}')
+          ? { stdout: `${cutFrom}\n`, stderr: '' }
+          : { stdout: '', stderr: '' }
+      );
+
+      const env = await provider.create(baseRequest);
+
+      expect(env.metadata).toMatchObject({ adopted: false, cutFromCommit: cutFrom });
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        ['-C', env.workingPath, 'rev-parse', '--verify', 'HEAD^{commit}'],
+        expect.any(Object)
+      );
+    });
+
+    test('refreshes the index of a worktree it created, once, after creating it', async () => {
+      let addedBeforeRefresh = false;
+      refreshWorktreeIndexSpy.mockImplementation(async () => {
+        addedBeforeRefresh = execSpy.mock.calls.some(
+          call => call[1].includes('worktree') && call[1].includes('add')
+        );
+      });
+
+      const env = await provider.create(baseRequest);
+
+      expect(refreshWorktreeIndexSpy.mock.calls).toEqual([[git.toWorktreePath(env.workingPath)]]);
+      expect(addedBeforeRefresh).toBe(true);
+    });
+
+    test('a failed index refresh still creates the worktree', async () => {
+      refreshWorktreeIndexSpy.mockRejectedValue(new Error('index.lock exists'));
+
+      const env = await provider.create(baseRequest);
+
+      expect(env.status).toBe('active');
+    });
+
+    test('never refreshes the index of a worktree it adopts', async () => {
+      worktreeExistsSpy.mockResolvedValue(true);
+      mockReadFile.mockResolvedValue('gitdir: /workspace/repo/.git/worktrees/archon/issue-42\n');
+
+      const env = await provider.create(baseRequest);
+
+      expect(env.metadata).toHaveProperty('adopted', true);
+      expect(refreshWorktreeIndexSpy).not.toHaveBeenCalled();
+    });
+
     test('does not run git checkout or reset --hard on canonical repo', async () => {
       worktreeExistsSpy.mockResolvedValue(false);
       await provider.create(baseRequest);
@@ -384,6 +438,8 @@ describe('WorktreeProvider', () => {
 
       expect(env.branchName).toBe(git.toBranchName('feature/live-pr'));
       expect(env.metadata).toMatchObject({ adopted: true, adoptedFrom: 'branch' });
+      // Adoption continues an existing branch; it never claims a cut-from commit.
+      expect(Object.hasOwn(env.metadata, 'cutFromCommit')).toBe(false);
       expect(syncWorkspaceSpy).not.toHaveBeenCalled();
       expect(execSpy).toHaveBeenCalledWith(
         'git',

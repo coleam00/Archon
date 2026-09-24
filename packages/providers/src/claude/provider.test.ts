@@ -1403,6 +1403,30 @@ describe('ClaudeProvider', () => {
       expect(chunks[0]).toEqual({ type: 'assistant', content: 'Recovered!' });
     }, 5_000);
 
+    test('retry backoff runs inside the admission release, never while the slot is held', async () => {
+      const events: string[] = [];
+      mockQuery.mockImplementation(async function* () {
+        events.push('attempt');
+        if (events.filter(e => e === 'attempt').length === 1) {
+          throw new Error('process exited with code 1');
+        }
+        yield { type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } };
+      });
+      const admission = {
+        releaseDuring: async (wait: () => Promise<void>): Promise<void> => {
+          events.push('released');
+          await wait();
+          events.push('reacquired');
+        },
+      };
+
+      for await (const _ of client.sendQuery('test', '/workspace', undefined, { admission })) {
+        // consume
+      }
+
+      expect(events).toEqual(['attempt', 'released', 'reacquired', 'attempt']);
+    }, 5_000);
+
     test('classifies auth errors as fatal (no retry)', async () => {
       const error = new Error('unauthorized');
       mockQuery.mockImplementation(async function* () {

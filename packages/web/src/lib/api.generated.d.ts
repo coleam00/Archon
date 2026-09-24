@@ -3298,11 +3298,107 @@ export interface components {
             groupId: string;
             iteration: number;
           }[];
+          checkoutStart?:
+            | {
+                /** @enum {string} */
+                kind: 'git';
+                /** Format: date-time */
+                sampledAt: string;
+                commit: string | null;
+                tree: string | null;
+                worktree:
+                  | {
+                      /** @enum {string} */
+                      status: 'clean';
+                    }
+                  | {
+                      /** @enum {string} */
+                      status: 'dirty';
+                      /** @enum {string} */
+                      content: 'complete' | 'incomplete';
+                      staged: number;
+                      unstaged: number;
+                      untracked: number;
+                      manifest: {
+                        pointer: {
+                          /** @enum {string} */
+                          type: 'archon_artifact';
+                          run_id: string;
+                          path: string;
+                        };
+                        sha256: string;
+                        entries: number;
+                      };
+                    };
+                cutFromCommit?: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'not_git';
+                /** Format: date-time */
+                sampledAt: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'unavailable';
+                /** Format: date-time */
+                sampledAt: string;
+                /** @enum {string} */
+                reason: 'git_failed' | 'unsupported_backend' | 'probe_failed';
+              };
         };
         attempt: {
           id: string;
           /** Format: date-time */
           startedAt: string;
+          checkoutStart?:
+            | {
+                /** @enum {string} */
+                kind: 'git';
+                /** Format: date-time */
+                sampledAt: string;
+                commit: string | null;
+                tree: string | null;
+                worktree:
+                  | {
+                      /** @enum {string} */
+                      status: 'clean';
+                    }
+                  | {
+                      /** @enum {string} */
+                      status: 'dirty';
+                      /** @enum {string} */
+                      content: 'complete' | 'incomplete';
+                      staged: number;
+                      unstaged: number;
+                      untracked: number;
+                      manifest: {
+                        pointer: {
+                          /** @enum {string} */
+                          type: 'archon_artifact';
+                          run_id: string;
+                          path: string;
+                        };
+                        sha256: string;
+                        entries: number;
+                      };
+                    };
+                cutFromCommit?: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'not_git';
+                /** Format: date-time */
+                sampledAt: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'unavailable';
+                /** Format: date-time */
+                sampledAt: string;
+                /** @enum {string} */
+                reason: 'git_failed' | 'unsupported_backend' | 'probe_failed';
+              };
         };
         binding: {
           provider?: string;
@@ -4160,6 +4256,55 @@ export interface components {
       parent_run_id: string | null;
       adopted_from_run_id: string | null;
       output_root: string | null;
+      checkout_baseline:
+        | {
+            /** @enum {string} */
+            kind: 'git';
+            /** Format: date-time */
+            sampledAt: string;
+            commit: string | null;
+            tree: string | null;
+            worktree:
+              | {
+                  /** @enum {string} */
+                  status: 'clean';
+                }
+              | {
+                  /** @enum {string} */
+                  status: 'dirty';
+                  /** @enum {string} */
+                  content: 'complete' | 'incomplete';
+                  staged: number;
+                  unstaged: number;
+                  untracked: number;
+                  manifest: {
+                    pointer: {
+                      /** @enum {string} */
+                      type: 'archon_artifact';
+                      run_id: string;
+                      path: string;
+                    };
+                    sha256: string;
+                    entries: number;
+                  };
+                };
+            cutFromCommit?: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'not_git';
+            /** Format: date-time */
+            sampledAt: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'unavailable';
+            /** Format: date-time */
+            sampledAt: string;
+            /** @enum {string} */
+            reason: 'git_failed' | 'unsupported_backend' | 'probe_failed';
+          }
+        | unknown;
       codebase_name: string | null;
       platform_type: string | null;
       worker_platform_id: string | null;
@@ -4307,6 +4452,55 @@ export interface components {
       parent_run_id: string | null;
       adopted_from_run_id: string | null;
       output_root: string | null;
+      checkout_baseline:
+        | {
+            /** @enum {string} */
+            kind: 'git';
+            /** Format: date-time */
+            sampledAt: string;
+            commit: string | null;
+            tree: string | null;
+            worktree:
+              | {
+                  /** @enum {string} */
+                  status: 'clean';
+                }
+              | {
+                  /** @enum {string} */
+                  status: 'dirty';
+                  /** @enum {string} */
+                  content: 'complete' | 'incomplete';
+                  staged: number;
+                  unstaged: number;
+                  untracked: number;
+                  manifest: {
+                    pointer: {
+                      /** @enum {string} */
+                      type: 'archon_artifact';
+                      run_id: string;
+                      path: string;
+                    };
+                    sha256: string;
+                    entries: number;
+                  };
+                };
+            cutFromCommit?: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'not_git';
+            /** Format: date-time */
+            sampledAt: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'unavailable';
+            /** Format: date-time */
+            sampledAt: string;
+            /** @enum {string} */
+            reason: 'git_failed' | 'unsupported_backend' | 'probe_failed';
+          }
+        | unknown;
     };
     /** @enum {string|null} */
     WorkflowRunOutcome: 'succeeded' | 'failed' | null;

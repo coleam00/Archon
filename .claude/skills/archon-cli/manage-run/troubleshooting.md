@@ -19,9 +19,10 @@ Each line is a structured event. The discriminator is the `type` field. Values (
 | `assistant` | AI assistant message — has `content` field with the full AI output |
 | `tool` | SDK tool invocation — has `tool_name` and `tool_input` |
 | `exec_output` | What a `bash`/`script` node or `until_bash` probe printed — `stdout_tail`, `stderr_tail`, `exit_code` |
+| `watchdog_reset` | A streamed chunk renewed a node's idle watchdog — `chunk_type` only, never content. Renewals closer together than `WATCHDOG_RESET_BURST_GAP_MS` form a burst, recorded as its first and last renewal; `chunk_count` is the renewals since the node's previous record (absent on older transcripts, which wrote one row per renewal). A burst's last record can land after later rows, so order by `ts` |
 | `validation` | Historical compatibility only; current runs do not emit this type |
 
-> **Loop iteration lifecycle events are NOT in the JSONL file.** `loop_iteration_started` / `loop_iteration_completed` go through the workflow event emitter (WebSocket / `workflow_events` DB table) — query the DB or the Web UI dashboard for those. Per-iteration rows that DO reach the JSONL are keyed `<node-id>-iteration-<n>`: a loop's `node_complete` row, and the `exec_output` row for each `until_bash` probe.
+> **Loop iteration lifecycle events are NOT in the JSONL file.** `loop_iteration_started` / `loop_iteration_completed` go through the workflow event emitter (WebSocket / `workflow_events` DB table) — query the DB or the Web UI dashboard for those. Per-iteration rows that DO reach the JSONL are keyed `<node-id>-iteration-<n>`: a loop's `node_complete` row, its `watchdog_reset` rows, and the `exec_output` row for each `until_bash` probe.
 
 Find the run ID from `archon workflow runs --status failed` (or `archon workflow runs` for the most recent run of any status; `workflow status` only shows active runs). Then:
 
@@ -34,6 +35,9 @@ jq 'select(.type == "node_error" or .type == "workflow_error")' <log-file>
 
 # What a specific node actually printed (evidence for "did this really do X?")
 jq 'select(.type == "exec_output" and .step == "<node-id>")' <log-file>
+
+# When a node's stream last renewed its watchdog, and with what chunk type
+jq -s 'map(select(.type == "watchdog_reset" and .step == "<node-id>")) | sort_by(.ts) | last' <log-file>
 
 # Full event stream
 cat <log-file> | jq .
@@ -152,7 +156,7 @@ Common causes:
 
 ### A workflow-level field seems to have no effect
 
-Invalid values for optional workflow-level fields (`interactive`, `effort`, `thinking`, `sandbox`, `fallbackModel`, `betas`, `tags`, `worktree.enabled`, `mutates_checkout`) are **warn-and-drop**: the workflow still loads and runs, the field is discarded, and a loader warning is logged. Same for AI-only fields on bash/script nodes (`*_node_ai_fields_ignored`). Grep the server/CLI logs for `_ignored` / warn entries before assuming the field is broken.
+Invalid values for optional workflow-level fields (`interactive`, `effort`, `sandbox`, `fallbackModel`, `betas`, `tags`, `worktree.enabled`, `mutates_checkout`) are **warn-and-drop**: the workflow still loads and runs, the field is discarded, and a warn-level `*_ignored` loader log is written (stderr for CLI commands, the server log for `archon serve`). AI-only fields on bash/script nodes, unknown keys, and deprecations are parse warnings instead: run `archon validate workflows` or `archon workflow list` to see them, or set `LOG_LEVEL=debug` to see them in the logs. Check both before assuming the field is broken.
 
 ### Persisted session didn't restore (cold resume)
 

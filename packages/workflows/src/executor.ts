@@ -12,6 +12,7 @@ import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
 import type { WorkflowDeps } from './deps';
 import * as archonPaths from '@archon/paths';
 import { createLogger, captureWorkflowInvoked, captureWorkflowCompleted } from '@archon/paths';
+import { recordCheckoutSample, sampleCheckout, type CheckoutSample } from './checkout-observation';
 import { getDefaultBranch, toRepoPath } from '@archon/git';
 import type {
   DagNode,
@@ -712,6 +713,12 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    * Ignored on a resume: the run resolves the source it recorded at start.
    */
   preparedSource?: PreparedWorkflowSource;
+  /**
+   * The commit the run's worktree branch was cut from, supplied only by a caller whose
+   * isolation step created that branch for this run (#3305). Recorded on the run's
+   * checkout baseline; never inferred when absent. Ignored on a resume.
+   */
+  cutFromCommit?: string;
   /**
    * The owner's adopt/hold handle from the surrounding `withCapturedSource`. When set,
    * `executeWorkflow` calls `adopt()` itself — at the rename success site — so a rename
@@ -1508,6 +1515,9 @@ async function runChildWorkflow(
           resolveChildIsolation,
           preparedSource: childSource,
           ...(runConfig ? { runConfig } : {}),
+          ...(childIsolationEnv?.cutFromCommit !== undefined
+            ? { cutFromCommit: childIsolationEnv.cutFromCommit }
+            : {}),
         };
         childRunId = childRun.id;
       }
@@ -1824,6 +1834,7 @@ export async function executeWorkflow(
     preparedSource,
     adoptedFromRunId,
     continuationMode,
+    cutFromCommit,
   } = opts;
 
   const executionUserId = preCreatedRun ? (preCreatedRun.user_id ?? undefined) : userId;
@@ -2241,6 +2252,7 @@ export async function executeWorkflow(
     }
   }
 
+  let checkoutBaselineSample: CheckoutSample | undefined;
   if (!isContinuation) {
     const pendingRun = workflowRun;
     let claimed: WorkflowRun | null;
@@ -2275,6 +2287,11 @@ export async function executeWorkflow(
     pendingRun.status = claimed.status;
     pendingRun.started_at = claimed.started_at;
     workflowRun = pendingRun;
+    // The run's starting checkout is sampled the moment execution ownership is won, with
+    // the final cwd and backend bound and before anything else can touch the checkout.
+    // Its manifest is written, and the baseline persisted, once the artifacts directory
+    // exists below. A resume never samples: it keeps the baseline the run started with.
+    checkoutBaselineSample = await sampleCheckout(cwd, execContext);
   }
 
   if (preCreatedRun) {
@@ -2620,6 +2637,45 @@ export async function executeWorkflow(
     };
   }
   getLog().debug({ artifactsDir, logDir, stateDir, outputRoot }, 'workflow_paths_resolved');
+
+  if (checkoutBaselineSample !== undefined) {
+    // Persisting the baseline is run infrastructure: a run that cannot record where it
+    // started fails here, before its first node. An unobservable checkout is not a
+    // failure — it is recorded as an `unavailable` observation.
+    try {
+      workflowRun.checkout_baseline = await deps.store.recordWorkflowRunCheckoutBaseline(
+        workflowRun.id,
+        await recordCheckoutSample(
+          checkoutBaselineSample,
+          { runId: workflowRun.id, artifactsDir },
+          cutFromCommit !== undefined ? { cutFromCommit } : {}
+        )
+      );
+    } catch (error) {
+      const err = error as Error;
+      getLog().error(
+        { err, workflowRunId: workflowRun.id },
+        'workflow.checkout_baseline_persist_failed'
+      );
+      await sendCriticalMessage(
+        platform,
+        conversationId,
+        '❌ **Workflow failed**: Unable to record the run checkout baseline.'
+      );
+      await requireTerminalStatusWrite(
+        deps.store.failWorkflowRun(
+          workflowRun.id,
+          `Checkout baseline could not be recorded: ${err.message}`
+        ),
+        { workflowRunId: workflowRun.id, site: 'workflow.checkout_baseline_fail_db_record_failed' }
+      );
+      return {
+        success: false,
+        workflowRunId: workflowRun.id,
+        error: `Checkout baseline could not be recorded: ${err.message}`,
+      };
+    }
+  }
 
   // Between-run continuation (#2747): resolve $ADOPTED_RUN_DIR through the
   // adopted run's persisted `output_root` (rename-safe per #2200) and announce

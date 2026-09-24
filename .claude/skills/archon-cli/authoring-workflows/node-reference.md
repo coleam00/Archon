@@ -153,7 +153,7 @@ contracts gives the full composition examples.
     command: implement
     until_field: done        # boolean in this node's output_format
     max_iterations: 5
-  depends_on: [record-start]
+  depends_on: [plan]
   output_format:
     type: object
     properties:

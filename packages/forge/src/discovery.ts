@@ -162,6 +162,11 @@ async function readMetadata(
   return parsed.data;
 }
 
+/** `ARCHON_HOME/plugins`: scanned by discovery, written by `archon plugin install`. */
+export function defaultPluginDir(env: NodeJS.ProcessEnv): string {
+  return join(env.ARCHON_HOME ?? join(homedir(), '.archon'), 'plugins');
+}
+
 export async function discoverPlugins(
   options: {
     config?: ForgePluginConfig;
@@ -174,9 +179,7 @@ export async function discoverPlugins(
   const config = forgePluginConfigSchema.parse(options.config ?? {});
   const env = options.env ?? process.env;
   const dirs = [
-    ...(options.includeDefaultDir === false
-      ? []
-      : [join(env.ARCHON_HOME ?? join(homedir(), '.archon'), 'plugins')]),
+    ...(options.includeDefaultDir === false ? [] : [defaultPluginDir(env)]),
     ...config.pluginDirs,
     ...(config.scanPath ? (env.PATH ?? env.Path ?? '').split(delimiter).filter(Boolean) : []),
   ];

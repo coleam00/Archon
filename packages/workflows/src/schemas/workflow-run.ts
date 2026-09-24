@@ -10,6 +10,7 @@ import {
 } from './node-state';
 import type { TokenUsage } from '@archon/providers/types';
 import { nodeExecutionMetadataSchema, type NodeExecutionMetadata } from './node-execution';
+import { checkoutObservationSchema } from './checkout-observation';
 // Type-only, so the output-ref ↔ schemas edge stays erased (no runtime cycle).
 import type { JsonValue } from '../output-ref';
 import { isAbsolute } from 'path';
@@ -295,6 +296,13 @@ export const workflowRunSchema = z.object({
    * created before the column existed.
    */
   output_root: z.string().nullable(),
+  /**
+   * The checkout this run started from (#3305): observed once, immediately after the run
+   * won its execution claim and before its first node, then never rewritten. A resume
+   * keeps it. Null means not recorded — a run from before this column, or one that never
+   * started — which is different from a recorded `not_git` or `unavailable` observation.
+   */
+  checkout_baseline: checkoutObservationSchema.nullable(),
 });
 
 export type WorkflowRun = z.infer<typeof workflowRunSchema>;

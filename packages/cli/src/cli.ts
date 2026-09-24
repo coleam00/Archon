@@ -19,7 +19,11 @@ import {
   getArchonConfigPath,
   getArchonHome,
   restoreDetachedInstallContext,
+  setLogDestination,
 } from '@archon/paths';
+// A command's stdout is its output (`archon … > file`, `| jq`, an agent reading
+// it); logs are diagnostics. Set before anything below can log.
+setLogDestination('stderr');
 const hasDetachedRunConfigHandoff = process.argv
   .slice(2)
   .includes('--internal-detached-run-config');
@@ -45,9 +49,8 @@ if (inheritedInstallContext) {
 }
 
 // Install the pipe-safe `console.log` shim BEFORE any command module imports.
-// `console.log` reaches fd 1 via a non-blocking pipe (pino opens it that way at
-// module load via `@archon/paths/strip-cwd-env-boot` above), and short writes
-// are silently dropped against a slow reader. The shim delegates through
+// `console.log` can reach fd 1 as a non-blocking pipe, and short writes are
+// silently dropped against a slow reader. The shim delegates through
 // `writeStdout` so the stream layer queues short writes and retries `EAGAIN`
 // instead of dropping the tail — but delivery is fire-and-forget, so the
 // patched `console.log` returns synchronously and the exit path below must
@@ -86,6 +89,7 @@ if (!process.env.CLAUDE_API_KEY && !process.env.CLAUDE_CODE_OAUTH_TOKEN) {
 
 import {
   setLogLevel,
+  getLogLevel,
   createLogger,
   checkForUpdate,
   BUNDLED_IS_BINARY,
@@ -287,17 +291,21 @@ async function main(): Promise<number> {
   const command = positionals[0];
   const subcommand = positionals[1];
 
-  // setup/doctor/telemetry default to warn to avoid Pino info JSON interleaving with their human-readable output; lazy loggers pick up this level at first creation
-  const isInteractiveCommand =
-    command === 'setup' || command === 'doctor' || command === 'telemetry';
-  const suppressByDefault = isInteractiveCommand && !values.verbose && !isVerboseBoot();
+  // Commands default to warn: info records are engine internals that bury the
+  // command's own output, even on stderr. `serve` is the exception: its logs are
+  // its output, so they stay at info on stdout, as when the server runs directly.
+  // Lazy loggers pick up this level at first creation.
+  const isServe = command === 'serve';
+  if (isServe) setLogDestination('stdout');
+  const suppressByDefault = !isServe && !values.verbose && !isVerboseBoot();
   const rawTranscriptCommand = command === 'workflow' && subcommand === 'logs';
   // Apply output policy before install discovery: its best-effort debug logs
   // must never prefix a machine-readable response.
   if (jsonFlag || rawTranscriptCommand) {
     setLogLevel('silent');
   } else if (values.quiet || suppressByDefault) {
-    setLogLevel('warn');
+    // Only ever quieter: an explicit LOG_LEVEL of error, fatal, or silent stays.
+    if (['trace', 'debug', 'info'].includes(getLogLevel())) setLogLevel('warn');
   } else if (values.verbose) {
     setLogLevel('debug');
   }
@@ -352,6 +360,7 @@ async function main(): Promise<number> {
       const { forgeCommand } = await loadRoute(() => import('./commands/forge'));
       return await forgeCommand(subcommand, {
         data: typeof values.data === 'string' ? values.data : undefined,
+        dataFile: typeof values['data-file'] === 'string' ? values['data-file'] : undefined,
         configPath: forgeConfigPath,
         trustedEnv: forgeTrustedEnv,
       });
@@ -371,6 +380,17 @@ async function main(): Promise<number> {
           'Use: archon workflow run <name> --adopt <run-id> <input>\n' +
           'Find a prior run id with: archon workflow runs --open (or workflow get <run-id>)'
       );
+    }
+    if (command === 'plugin') {
+      const { pluginCommand } = await loadRoute(() => import('./commands/plugin'));
+      const { getArchonVersion } = await loadRoute(() => import('./commands/version'));
+      const { defaultPluginDir } = await import('@archon/forge/discovery');
+      return await pluginCommand(subcommand, positionals.slice(2), {
+        // The same trusted ARCHON_HOME forge discovery scans, so repo env cannot
+        // redirect where an install lands.
+        pluginsDir: defaultPluginDir(forgeTrustedEnv),
+        archonVersion: await getArchonVersion(),
+      });
     }
     // Note: orphaned run cleanup moved to `workflow cleanup` command only.
     // Running it on every CLI startup killed parallel workflow runs (all
@@ -1176,6 +1196,8 @@ async function main(): Promise<number> {
           aiAliasListCommand,
           aiAliasUnsetCommand,
           aiDefaultCommand,
+          aiCapacityListCommand,
+          aiCapacityReleaseCommand,
         } = await loadRoute(() => import('./commands/ai'), {
           providers: true,
           database: true,
@@ -1240,6 +1262,16 @@ async function main(): Promise<number> {
                 );
             }
           }
+          case 'capacity': {
+            const action = positionals[2];
+            if (action === undefined || action === 'list')
+              return await aiCapacityListCommand(jsonFlag);
+            if (action === 'release') return await aiCapacityReleaseCommand(positionals[3]);
+            return await fail(
+              jsonFlag,
+              'Usage: archon ai capacity [list] [--json] | capacity release <attempt-id>'
+            );
+          }
           case 'default':
             return await aiDefaultCommand(
               positionals[2],
@@ -1253,7 +1285,7 @@ async function main(): Promise<number> {
                 : `Unknown ai subcommand: ${subcommand}`;
             return await fail(
               jsonFlag,
-              `${problem}\nAvailable: key set <provider>, login <provider>, list, logout <provider>, tier set|list|unset, alias set|list|unset, default <provider> [<model>]`
+              `${problem}\nAvailable: key set <provider>, login <provider>, list, logout <provider>, tier set|list|unset, alias set|list|unset, capacity [list]|release <attempt-id>, default <provider> [<model>]`
             );
           }
         }

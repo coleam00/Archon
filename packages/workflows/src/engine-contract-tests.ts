@@ -78,6 +78,7 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     user_id: null,
     parent_run_id: null,
     output_root: null,
+    checkout_baseline: null,
     adopted_from_run_id: null,
     ...overrides,
   };
@@ -100,6 +101,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     getRunAncestry: async () => [],
     createWorkflowRun: async () => makeRun(),
     claimPendingWorkflowRun: async () => makeRun(),
+    recordWorkflowRunCheckoutBaseline: async (_id, baseline) => baseline,
     updateWorkflowRun: noop,
     failWorkflowRun: noop,
     getWorkflowRun: async () => ({ ...makeRun(), status: 'completed' as const }),

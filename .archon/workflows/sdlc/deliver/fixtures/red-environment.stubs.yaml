@@ -6,14 +6,14 @@
 # The initial gate takes the ordinary green route; the correction gate takes the
 # passed-red route. Contention is transient, so the later project gate is green
 # and the run flips the PR — the whole outcome the boolean gate used to destroy.
-impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true
   red_cause: ""
   summary: "stub: implemented and green"
 impl__assert-changed: "3 files changed"
-pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 7, url: "https://github.com/example/repo/pull/7", head: "fixture-branch", base: "dev", is_draft: true }
+pr__pr: { intent: "/fixture/pr-intent.json" }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 7, url: "https://github.com/example/repo/pull/7", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
 classify:
   errors: false
   docs: false
@@ -25,6 +25,7 @@ review__mode: '{"continuation":false}'
 review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
 review__code: "1 Important finding"
 review__seams: "0 findings"
 review__simplify: "0 findings"
@@ -34,8 +35,12 @@ review__synthesize:
   action: correct
   findings_summary: "stub: one Important finding open"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+review__publish:
+  ready: false
+  action: correct
+  findings_summary: "stub: one Important finding open"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 ci-note: "CI state for this pull request (head abc123def456): No concluded failures."
-fix__record-start: '{"start":"recorded"}'
 fix__implement:
   done: true
   green: false
@@ -48,12 +53,20 @@ recheck__mode: '{"continuation":true}'
 recheck__scope:
   # light mode; delta since cursor
   docs: false
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
 recheck__synthesize:
   ready: true
   action: none
   findings_summary: "stub: the correction closed the finding"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
-sync-pr-body: "body resynced, and the environment red disclosed"
+recheck__publish:
+  ready: true
+  action: none
+  findings_summary: "stub: the correction closed the finding"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+read-pr-body: { body: "/fixture/pr-body-current.md", url: "https://github.com/example/repo/pull/7" }
+publish-pr-body: {}
+sync-pr-body: { intent: "/fixture/pr-body-intent.json" }
 validate__validate:
   green: true
   red_cause: ""

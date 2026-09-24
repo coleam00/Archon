@@ -1336,6 +1336,54 @@ describe('workflow-events', () => {
       });
     });
 
+    test('a reusable output keeps its completion facts across prior-success replays', async () => {
+      const checkoutStart = {
+        kind: 'git',
+        sampledAt: '2026-09-22T10:00:00Z',
+        commit: 'a'.repeat(40),
+        tree: 'b'.repeat(40),
+        worktree: { status: 'clean' },
+      };
+      const completed = {
+        node: { id: 'implement', kind: 'loop' },
+        invocation: {
+          id: 'impl-1',
+          startedAt: '2026-09-22T10:00:00Z',
+          loopPath: [],
+          checkoutStart,
+        },
+        attempt: { id: 'impl-1-attempt', startedAt: '2026-09-22T10:00:00Z', checkoutStart },
+        binding: {},
+        timing: { startedAt: '2026-09-22T10:00:00Z' },
+        spend: {
+          tokens: { source: 'unavailable', reason: 'not_applicable' },
+          costUsd: { source: 'unavailable', reason: 'not_applicable' },
+          stopReason: { source: 'unavailable', reason: 'not_applicable' },
+          numTurns: { source: 'unavailable', reason: 'not_applicable' },
+        },
+        accounting: 'node',
+        node_output: 'done',
+      };
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          { step_name: 'implement', event_type: 'node_completed', data: completed },
+          // A first resume replayed it; the replay row carries no execution facts itself.
+          {
+            step_name: 'implement',
+            event_type: 'node_skipped_prior_success',
+            data: { node: { id: 'implement', kind: 'loop' }, node_output: 'done' },
+          },
+        ])
+      );
+
+      const result = await getDagResumeSnapshot('run-replayed');
+
+      expect(result.completedNodeOutputs.get('implement')?.execution).toMatchObject({
+        path: 'implement',
+        invocation: { id: 'impl-1', checkoutStart },
+      });
+    });
+
     test('keeps the first valid fan-out instance snapshot authoritative', async () => {
       const first = [
         { ordinal: 0, identity: 'a-0', item: { id: 'a' }, inputs: { item: { id: 'a' } } },

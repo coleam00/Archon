@@ -1,5 +1,6 @@
 import { serializeNodeStateRecord, type SerializedNodeEvent } from './node-record-serialization';
 import type { NodeExecutionMetadata, NodeExecutionRecord } from './schemas/node-execution';
+import type { CheckoutObservation } from './schemas/checkout-observation';
 /**
  * IWorkflowStore - trait interface for workflow database operations.
  *
@@ -41,6 +42,12 @@ export interface PersistedNodeOutput {
   /** Present only when resume recovered a preview rather than the full text.
    * Replay must retain this original provenance instead of certifying the preview. */
   outputTruncation?: { originalBytes: number | null; spillPath: string | null };
+  /**
+   * The execution facts of the completion this output came from, carried across prior-
+   * success replays so a resumed consumer reads the same producer record a fresh run
+   * would (`$node.execution.checkoutStart`). Absent on rows written before those facts.
+   */
+  execution?: NodeExecutionMetadata;
 }
 
 export interface DagResumeSnapshot {
@@ -311,6 +318,14 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
   }): Promise<WorkflowRun>;
   /** Fresh execution must win this pending-to-running CAS before doing any work. */
   claimPendingWorkflowRun(id: string): Promise<WorkflowRun | null>;
+  /**
+   * Record the run's checkout baseline (#3305). Write-once in the store: the first value
+   * sticks and a later call returns it unchanged. Returns the persisted baseline.
+   */
+  recordWorkflowRunCheckoutBaseline(
+    id: string,
+    baseline: CheckoutObservation
+  ): Promise<CheckoutObservation>;
   getWorkflowRun(id: string): Promise<WorkflowRun | null>;
   /**
    * Find the workflow run currently holding the lock on `workingPath`.

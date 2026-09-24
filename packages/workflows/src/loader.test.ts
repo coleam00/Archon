@@ -45,7 +45,7 @@ import {
   isWorkflowNode,
   isIncludeDirective,
 } from './schemas';
-import { parseWorkflow, resetClassPlacementWarningForTests, type ParseResult } from './loader';
+import { parseWorkflow, type ParseResult } from './loader';
 import { COMPILED_LOOP_COMMAND, type LoopWithCompiledCommand } from './compiled-command';
 import { KNOWN_WORKFLOW_KEYS } from './schemas/workflow';
 import type { WorkflowDefinition } from './schemas/workflow';
@@ -725,11 +725,7 @@ ${nodeYaml}
         );
         expect(result.error).toBeNull();
         expect(
-          mockLogger.warn.mock.calls.some(
-            call =>
-              call[1] === `${kind}_node_ai_fields_ignored` &&
-              JSON.stringify(call[0]).includes('mutates_checkout')
-          )
+          result.warnings?.some(w => w.includes("'mutates_checkout'") && w.includes(`(${kind})`))
         ).toBe(true);
       }
     });
@@ -2363,7 +2359,7 @@ nodes:
 `
       );
 
-      mockLogger.warn.mockClear();
+      mockLogger.debug.mockClear();
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toHaveLength(0);
       expect(result.workflows).toHaveLength(1);
@@ -2372,7 +2368,7 @@ nodes:
       expect(isLoopNode(node)).toBe(true);
 
       // model and provider should NOT trigger a warning
-      const warnCalls = mockLogger.warn.mock.calls;
+      const warnCalls = mockLogger.debug.mock.calls;
       const aiFieldWarnings = warnCalls.filter(
         call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
       );
@@ -2397,12 +2393,12 @@ nodes:
 `
       );
 
-      mockLogger.warn.mockClear();
+      mockLogger.debug.mockClear();
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toHaveLength(0);
 
       // Should warn about mcp but NOT about model
-      const warnCalls = mockLogger.warn.mock.calls;
+      const warnCalls = mockLogger.debug.mock.calls;
       const aiFieldWarnings = warnCalls.filter(
         call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
       );
@@ -2438,11 +2434,11 @@ nodes:
 `
       );
 
-      mockLogger.warn.mockClear();
+      mockLogger.debug.mockClear();
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toHaveLength(0);
 
-      const aiFieldWarnings = mockLogger.warn.mock.calls.filter(
+      const aiFieldWarnings = mockLogger.debug.mock.calls.filter(
         call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
       );
       expect(aiFieldWarnings).toHaveLength(0);
@@ -2482,13 +2478,13 @@ nodes:
 `
       );
 
-      mockLogger.warn.mockClear();
+      mockLogger.debug.mockClear();
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toHaveLength(0);
       expect(result.workflows).toHaveLength(1);
       expect(isLoopGroupNode((result.workflows[0].workflow.nodes as DagNode[])[0])).toBe(true);
 
-      const aiFieldWarnings = mockLogger.warn.mock.calls.filter(
+      const aiFieldWarnings = mockLogger.debug.mock.calls.filter(
         call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
       );
       expect(aiFieldWarnings).toHaveLength(1);
@@ -2531,11 +2527,11 @@ nodes:
 `
       );
 
-      mockLogger.warn.mockClear();
+      mockLogger.debug.mockClear();
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toHaveLength(0);
 
-      const warnedFields = mockLogger.warn.mock.calls
+      const warnedFields = mockLogger.debug.mock.calls
         .filter(call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored'))
         .flatMap(call => (call[0] as { fields: string[] }).fields);
       expect(warnedFields).not.toContain('output_format');
@@ -2575,7 +2571,7 @@ nodes:
 `
       );
 
-      mockLogger.warn.mockClear();
+      mockLogger.debug.mockClear();
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toHaveLength(0);
       expect(result.workflows).toHaveLength(1);
@@ -2587,7 +2583,7 @@ nodes:
         extensionFlags: { plan: false },
       });
 
-      const warnCalls = mockLogger.warn.mock.calls;
+      const warnCalls = mockLogger.debug.mock.calls;
       const aiFieldWarnings = warnCalls.filter(
         call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
       );
@@ -2624,7 +2620,7 @@ nodes:
 `
       );
 
-      mockLogger.warn.mockClear();
+      mockLogger.debug.mockClear();
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toHaveLength(0);
 
@@ -2640,7 +2636,7 @@ nodes:
       expect(expandedNode).toBeDefined();
       expect(expandedNode?.denied_tools).toBeUndefined();
 
-      const aiFieldWarnings = mockLogger.warn.mock.calls.filter(
+      const aiFieldWarnings = mockLogger.debug.mock.calls.filter(
         call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
       );
       expect(aiFieldWarnings).toHaveLength(1);
@@ -2668,7 +2664,7 @@ nodes:
 `
       );
 
-      mockLogger.warn.mockClear();
+      mockLogger.debug.mockClear();
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toHaveLength(0);
       expect(result.workflows).toHaveLength(1);
@@ -2679,7 +2675,7 @@ nodes:
       expect(node.allowed_tools).toEqual(['Read', 'Grep']);
 
       expect(
-        mockLogger.warn.mock.calls.filter(
+        mockLogger.debug.mock.calls.filter(
           call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
         )
       ).toHaveLength(0);
@@ -2707,7 +2703,7 @@ nodes:
 `
       );
 
-      mockLogger.warn.mockClear();
+      mockLogger.debug.mockClear();
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toHaveLength(0);
 
@@ -2719,7 +2715,7 @@ nodes:
       expect(parseWarnings[0]).toContain('ignored at run time');
 
       // The structured log line keeps its payload and now carries the same prose.
-      const aiFieldWarnings = mockLogger.warn.mock.calls.filter(
+      const aiFieldWarnings = mockLogger.debug.mock.calls.filter(
         call => typeof call[1] === 'string' && call[1].includes('ai_fields_ignored')
       );
       expect(aiFieldWarnings).toHaveLength(1);
@@ -5046,49 +5042,35 @@ nodes:
     });
   });
 
-  describe('workflow-class placement inference — log dedup (#2736/#2738)', () => {
-    beforeEach(() => {
-      resetClassPlacementWarningForTests();
+  describe('parse warnings channel (#3444)', () => {
+    it('reports parse warnings to the author without logging them at warn', () => {
+      // Discovery parses every workflow on each list or run, so a warn log here
+      // would repeat for workflows nobody asked about. The warnings array is the
+      // channel validate, list, run, and the API read.
       mockLogger.warn.mockClear();
-    });
-
-    const undeclaredGateYaml = `
-name: warn-once-test
-description: Non-interactive workflow with a native gate
+      const yaml = `
+name: parse-warnings
+description: Non-interactive workflow with a native gate, a legacy loop, and a typo
 nodes:
   - id: gate
     approval:
       message: "Review?"
+  - id: legacy
+    loop:
+      prompt: p
+      until: DONE
+      max_iterations: 2
+  - id: typo
+    bash: echo hi
+    contxt: fresh
 `;
-
-    it('warns on the log channel exactly once per filename across repeated parses, but coerces every time', () => {
-      const first = parseWorkflow(undeclaredGateYaml, 'warn-once-test.yaml');
-      const second = parseWorkflow(undeclaredGateYaml, 'warn-once-test.yaml');
-      const third = parseWorkflow(undeclaredGateYaml, 'warn-once-test.yaml');
-
-      for (const result of [first, second, third]) {
+      for (let parse = 0; parse < 2; parse++) {
+        const result = parseWorkflow(yaml, 'parse-warnings.yaml');
         expect(result.error).toBeNull();
         expect(result.workflow?.interactive).toBe(true);
-        expect(result.warnings).toHaveLength(1);
+        expect(result.warnings).toHaveLength(3);
       }
-
-      const warnCalls = mockLogger.warn.mock.calls.filter(
-        call => call[1] === 'workflow_class_placement_inferred'
-      );
-      expect(warnCalls).toHaveLength(1);
-    });
-
-    it('warns again for a different filename with the same violation', () => {
-      parseWorkflow(undeclaredGateYaml, 'warn-once-test.yaml');
-      parseWorkflow(
-        undeclaredGateYaml.replace('warn-once-test', 'a-different-workflow'),
-        'other.yaml'
-      );
-
-      const warnCalls = mockLogger.warn.mock.calls.filter(
-        call => call[1] === 'workflow_class_placement_inferred'
-      );
-      expect(warnCalls).toHaveLength(2);
+      expect(mockLogger.warn).not.toHaveBeenCalled();
     });
   });
 
@@ -6052,6 +6034,28 @@ nodes:
       expect(call).toBeUndefined();
     });
 
+    it('does not warn that an included block dropped its deprecated: notice', async () => {
+      await writeWorkflowFile(
+        testDir,
+        'deprecated-block.yaml',
+        `name: deprecated-block\ndescription: Superseded block\ndeprecated:\n  message: Use the new block.\nnodes:\n  - id: work\n    bash: "echo work"\n`
+      );
+      await writeWorkflowFile(
+        testDir,
+        'deprecated-parent.yaml',
+        `name: deprecated-parent\ndescription: Includes the deprecated block\nnodes:\n  - id: old-sub\n    include: deprecated-block\n`
+      );
+
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors.filter(e => e.filename === 'deprecated-parent.yaml')).toHaveLength(0);
+      const call = (mockLogger.warn as Mock<(...args: unknown[]) => unknown>).mock.calls.find(
+        c =>
+          c[1] === 'include.workflow_level_fields_dropped' &&
+          (c[0] as { include?: string }).include === 'old-sub'
+      );
+      expect(call).toBeUndefined();
+    });
+
     it('should compile a block command file and namespace a local sibling ref', async () => {
       const commandsDir = join(testDir, '.archon', 'commands');
       await mkdir(commandsDir, { recursive: true });
@@ -6349,8 +6353,9 @@ nodes:
 
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toHaveLength(0);
-      // AI fields should produce a warning log
-      expect(mockLogger.warn).toHaveBeenCalled();
+      expect(result.workflows[0].parseWarnings?.[0]).toContain(
+        "'provider', 'model' are not supported"
+      );
     });
   });
 
@@ -8853,5 +8858,64 @@ nodes:
     expect(schemaless !== undefined && isExecNode(schemaless)).toBe(true);
     if (schemaless === undefined || !isExecNode(schemaless)) throw new Error('unreachable');
     expect(schemaless.output_format).toBeUndefined();
+  });
+});
+
+describe('$node.execution.checkoutStart bindings (#3375)', () => {
+  const load = (withValue: string, producerBody = 'prompt: work'): ParseResult =>
+    parseWorkflow(
+      `
+name: checkout-binding
+description: binds a producer's recorded checkout start
+nodes:
+  - id: implement
+    ${producerBody}
+  - id: guard
+    script: guard
+    runtime: bun
+    depends_on: [implement]
+    with:
+      baseline: ${JSON.stringify(withValue)}
+`,
+      'checkout-binding.yaml'
+    );
+
+  it('accepts a whole binding to an upstream node that executes against the checkout', () => {
+    const result = load('$implement.execution.checkoutStart');
+    expect(result.error).toBeNull();
+  });
+
+  it('rejects the reference inside other text', () => {
+    const result = load('start: $implement.execution.checkoutStart');
+    expect(result.error?.error).toContain('only valid as the whole value');
+  });
+
+  it('rejects a producer that records no checkout start', () => {
+    const result = load('$implement.execution.checkoutStart', 'cancel: stop here');
+    expect(result.error?.error).toContain('records no checkout start');
+  });
+
+  it('rejects an unknown producer', () => {
+    const result = load('$ghost.execution.checkoutStart');
+    expect(result.error?.error).toContain("no node 'ghost' exists");
+  });
+
+  it('rejects the reference on a workflow: node, which cannot pass it to the child run', () => {
+    const result = parseWorkflow(
+      `
+name: checkout-binding-child
+description: a child launch cannot carry an execution fact
+nodes:
+  - id: implement
+    prompt: work
+  - id: child
+    workflow: some-child
+    depends_on: [implement]
+    with:
+      baseline: "$implement.execution.checkoutStart"
+`,
+      'checkout-binding-child.yaml'
+    );
+    expect(result.error?.error).toContain('a workflow: node cannot pass to its child run');
   });
 });
