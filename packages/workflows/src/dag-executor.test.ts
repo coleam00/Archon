@@ -21534,6 +21534,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
       data: expect.objectContaining({
         type: 'loop_group',
         aggregate: true,
+        failure_kind: 'max_iterations',
         error: expect.stringContaining("Loop-group node 'fixer' exceeded max iterations (2)"),
       }),
     });

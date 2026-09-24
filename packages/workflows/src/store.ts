@@ -397,7 +397,7 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
   ): Promise<void>;
   /**
    * Atomically fail the run and persist its matching lifecycle event. `exitReason`
-   * is recorded on that event as the run's categorical failure cause.
+   * is recorded on that event as the run's categorical failure cause. Reports terminal telemetry after a won commit (see completeWorkflowRun).
    */
   failWorkflowRun(
     id: string,
@@ -421,7 +421,10 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
     waitContext: WorkflowWaitContext,
     pause: WorkflowWaitPause
   ): Promise<void>;
-  /** Fail the exact paused action-required cursor after its required notification is lost. */
+  /**
+   * Fail the exact paused action-required cursor after its required notification is lost.
+   * Reports terminal telemetry after a won commit (see completeWorkflowRun).
+   */
   failPausedAttentionWait(
     id: string,
     waitContext: WorkflowAttentionWaitContext,
@@ -470,11 +473,18 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
    * re-claim and retry. Best-effort (never throws in the caller's critical path).
    */
   releaseWritebackClaim(id: string): Promise<void>;
+  /**
+   * Atomically cancel the run and persist its matching lifecycle event.
+   * Reports terminal telemetry after a won commit (see completeWorkflowRun).
+   */
   cancelWorkflowRun(
     id: string,
     event?: WorkflowCancellationEventDetails
   ): Promise<{ cancelled: boolean }>;
-  /** Atomically identify and cancel a fan-out child owned by the engine. */
+  /**
+   * Atomically identify and cancel a fan-out child owned by the engine.
+   * Reports terminal telemetry after a won commit (see completeWorkflowRun).
+   */
   cancelFanOutRun(id: string, reason: FanOutCancelReason): Promise<{ cancelled: boolean }>;
 
   /**
