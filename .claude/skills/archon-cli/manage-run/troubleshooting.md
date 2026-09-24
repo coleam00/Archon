@@ -15,7 +15,10 @@ Each line is a structured event. The discriminator is the `type` field. Values (
 | `type` | Meaning |
 |--------|---------|
 | `workflow_start` / `workflow_complete` / `workflow_error` | Run lifecycle |
+| `workflow_resume` | A resumed execution picked the run back up here. The first execution writes `workflow_start`; every resume writes one `workflow_resume` instead, so the rows after the n-th one belong to the run's (n+1)-th segment. Transcripts written before this row existed repeat `workflow_start` on resume |
 | `node_start` / `node_complete` / `node_error` / `node_skipped` | Node lifecycle |
+| `node_suspended` | A node paused the run; `content` names why (a gate kind such as `approval`, or `wait`) |
+| `gate_decision` | How a gate was resolved — `step` (the gate node), `decision` (`approved`, `rejected`, or an author-declared decision), and `content` (the operator's comment or rejection reason, as the run's `approval_received` event stores it: an approve without a comment records `Approved`, and the field is absent when the event stores neither). No actor is recorded. Written by the process that approved or rejected, which is often not the one running the workflow |
 | `assistant` | AI assistant message — has `content` field with the full AI output |
 | `tool` | SDK tool invocation — has `tool_name` and `tool_input` |
 | `exec_output` | What a `bash`/`script` node or `until_bash` probe printed — `stdout_tail`, `stderr_tail`, `exit_code` |
@@ -35,6 +38,9 @@ jq 'select(.type == "node_error" or .type == "workflow_error")' <log-file>
 
 # What a specific node actually printed (evidence for "did this really do X?")
 jq 'select(.type == "exec_output" and .step == "<node-id>")' <log-file>
+
+# Where the run was resumed, and how each gate was decided
+jq 'select(.type == "workflow_resume" or .type == "gate_decision")' <log-file>
 
 # When a node's stream last renewed its watchdog, and with what chunk type
 jq -s 'map(select(.type == "watchdog_reset" and .step == "<node-id>")) | sort_by(.ts) | last' <log-file>

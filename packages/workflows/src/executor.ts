@@ -72,7 +72,7 @@ import { maybeWarnLegacyStatePath, maybeWarnLegacyArtifactsPath } from './state-
 import { formatDeprecationNotice } from './deprecation';
 import { resolveWorkflowName } from './router';
 import { resolveDeclaredInputs, defaultRunInputs } from './workflow-inputs';
-import { logWorkflowStart, logWorkflowError } from './logger';
+import { logWorkflowStart, logWorkflowResume, logWorkflowError } from './logger';
 import { formatDuration, parseDbTimestamp } from './utils/duration';
 import { keepAwake } from './utils/keep-awake';
 import { getWorkflowEventEmitter } from './event-emitter';
@@ -2991,7 +2991,11 @@ export async function executeWorkflow(
       },
       'workflow_starting'
     );
-    await logWorkflowStart(logDir, workflowRun.id, workflow.name, userMessage);
+    if (dagPriorCompletedNodes !== undefined) {
+      await logWorkflowResume(logDir, workflowRun.id, workflow.name);
+    } else {
+      await logWorkflowStart(logDir, workflowRun.id, workflow.name, userMessage);
+    }
 
     // Register run with emitter and emit workflow_started
     const emitter = getWorkflowEventEmitter();

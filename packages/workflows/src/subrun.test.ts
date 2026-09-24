@@ -821,6 +821,68 @@ nodes:
     );
   });
 
+  it("marks a resumed run's boundary in its transcript, distinct from the original start", async () => {
+    await writeWorkflow(
+      'resume-boundary',
+      `
+name: resume-boundary
+description: fails on the first drive, succeeds on the resume
+nodes:
+  - id: first
+    bash: "echo first"
+  - id: flaky
+    bash: "if [ -f resumed.marker ]; then echo ok; else touch resumed.marker; exit 1; fi"
+    depends_on: [first]
+`
+    );
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const workflow = await discover('resume-boundary');
+
+    const r1 = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      workflow,
+      'goal',
+      'conv-db'
+    );
+    expect(r1.success).toBe(false);
+    const run = [...store.runs.values()].find(r => r.workflow_name === 'resume-boundary')!;
+    expect(run.status).toBe('failed');
+
+    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(run.id))!);
+    expect(hydrated).not.toBeNull();
+    const r2 = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      workflow,
+      'goal',
+      'conv-db',
+      { ...hydrated! }
+    );
+    expect(r2.success).toBe(true);
+
+    const row = (await store.getWorkflowRun(run.id))!;
+    const transcript = (await readFile(join(row.output_root!, 'logs', `${run.id}.jsonl`), 'utf-8'))
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as { type: string; workflow_name?: string });
+    const types = transcript.map(r => r.type);
+    // The original start stays the first row and is written once; the resume writes its
+    // own boundary row after the first attempt's failure, before the second attempt's work.
+    expect(types.filter(t => t === 'workflow_start')).toHaveLength(1);
+    expect(types[0]).toBe('workflow_start');
+    expect(types.filter(t => t === 'workflow_resume')).toHaveLength(1);
+    const resumeAt = types.indexOf('workflow_resume');
+    expect(types.indexOf('workflow_error')).toBeLessThan(resumeAt);
+    expect(types.lastIndexOf('workflow_complete')).toBeGreaterThan(resumeAt);
+    expect(transcript[resumeAt]).toMatchObject({ workflow_name: 'resume-boundary' });
+  });
+
   it('runs a gateless child synchronously, threads output + cost + tokens, links parent_run_id', async () => {
     await writeWorkflow(
       'child-plain',
