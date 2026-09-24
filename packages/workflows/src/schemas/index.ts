@@ -121,6 +121,8 @@ export {
   isWaitNode,
   isLoopNode,
   isLoopGroupNode,
+  loopGroupBodySinks,
+  loopGroupSoleTerminalSink,
   isWorkflowNode,
   isComposeFanOutNode,
   isIncludeDirective,
