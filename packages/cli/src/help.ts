@@ -235,6 +235,30 @@ const commandHelp: HelpEntry[] = [
     description: 'Install archon-cli into .claude/skills and .agents/skills',
   },
   {
+    command: 'plugin',
+    subcommand: 'install',
+    spec: 'plugin install <owner/repo[/path][@tag]>',
+    description: 'Install a forge plugin from a GitHub release (default: latest)',
+  },
+  {
+    command: 'plugin',
+    subcommand: 'update',
+    spec: 'plugin update <id>[@tag]',
+    description: 'Reinstall an installed plugin from another release',
+  },
+  {
+    command: 'plugin',
+    subcommand: 'remove',
+    spec: 'plugin remove <id>',
+    description: 'Delete the files an installed plugin wrote',
+  },
+  {
+    command: 'plugin',
+    subcommand: 'list',
+    spec: 'plugin list',
+    description: 'Show installed plugins with release tag and commit',
+  },
+  {
     command: 'doctor',
     spec: 'doctor [--full]',
     description:
@@ -772,6 +796,10 @@ const orderedExamples: ExampleHelp[] = [
   {
     text: 'archon skill install /path/to/project',
     owner: { command: 'skill', subcommand: 'install' },
+  },
+  {
+    text: 'archon plugin install coleam00/Archon/plugins/forge-github',
+    owner: { command: 'plugin', subcommand: 'install' },
   },
   {
     text: 'archon workflow search "pr review"',

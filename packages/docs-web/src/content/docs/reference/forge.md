@@ -13,15 +13,30 @@ Forge operations load only when a caller invokes `archon forge`. Local workflows
 
 GitHub is an optional, independently executable plugin. Its source is temporarily housed under `packages/adapters/src/forge/github`; the entry point imports the public forge contract and its own vendor code, not Archon's engine or adapter host. The CLI does not inject or require a GitHub implementation.
 
-From an Archon source checkout on POSIX:
+Each Archon release publishes the plugin as a native executable for every platform the CLI ships on. Install it with:
 
 ```sh
-bun run --cwd packages/adapters build:github-plugin
-mkdir -p "${ARCHON_HOME:-$HOME/.archon}/plugins"
-cp packages/adapters/dist/archon-forge-github "${ARCHON_HOME:-$HOME/.archon}/plugins/"
+archon plugin install coleam00/Archon/plugins/forge-github
 ```
 
-On Windows, compile the same entry point with `bun build --compile packages/adapters/src/forge/github/plugin.ts --outfile <plugin-directory>/archon-forge-github.exe`. The plugin directory must exist. The resulting native executable runs without the source checkout. Alternatively, configure its absolute executable path under `forge.plugins` below.
+This works the same for the release binary, a source checkout, and [Docker](/deployment/docker/#forge-plugins). Without `@<tag>` it installs from the latest Archon release; `coleam00/Archon/plugins/forge-github@<tag>` pins one. The command:
+
+- resolves the tag to a commit with `git ls-remote` and reads `plugins/forge-github/archon-plugin.json` at that commit. It calls no GitHub API and needs no token.
+- downloads `archon-forge-github-<os>-<arch>[.exe]` from that release and checks it against the release's `checksums.txt`. A mismatch installs nothing.
+- writes it to `ARCHON_HOME/plugins/`, where discovery finds it, and records a receipt under `ARCHON_HOME/plugins/installed/`.
+- refuses to replace an `archon-forge-github` file that it did not install. Move a hand-built copy away first.
+
+The checksum catches a corrupted download or an asset that does not belong to the release. It does not vouch for the publisher: installing runs code from the repository owner, and the command prints that owner and the commit.
+
+Manage the install with:
+
+```sh
+archon plugin list                                                 # id, kind, tag, commit, compatibility
+archon plugin update coleam00/Archon/plugins/forge-github          # latest release; add @<tag> to pick one
+archon plugin remove coleam00/Archon/plugins/forge-github          # deletes only the files the receipt lists
+```
+
+Nothing updates in the background. To build the plugin yourself instead, compile `packages/adapters/src/forge/github/plugin.ts` from a source checkout (`bun run --cwd packages/adapters build:github-plugin`, or `bun build --compile <entry> --outfile archon-forge-github.exe` on Windows) and copy the executable into `ARCHON_HOME/plugins/`, or configure its absolute path under `forge.plugins` below. `archon plugin` leaves such a file alone.
 
 The eventual single marketplace will distribute forge plugins, agent providers, workflow packs, chat integrations, webhook sources, themes and other plugin kinds. The Archon-maintained GitHub plugin will move to its own repository and install through that marketplace, optionally during setup. That changes packaging and location, not this runtime protocol. The marketplace and a mandatory setup install are not prerequisites today. Other production forges are community-maintained; the existing bundled Gitea/GitLab transition is not settled by this contract.
 

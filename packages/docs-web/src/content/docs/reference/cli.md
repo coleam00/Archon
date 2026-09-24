@@ -122,6 +122,20 @@ Exit code 0 if all checks pass or are skipped; 1 if any critical check fails. Ad
 
 Also runs automatically at the end of `archon setup` (optional).
 
+### `plugin`
+
+Install and manage plugins published on GitHub. A plugin is `owner/repo[/path]`, the directory holding its `archon-plugin.json`; a version is a release tag. Only forge plugins install today.
+
+```bash
+archon plugin install coleam00/Archon/plugins/forge-github         # latest release
+archon plugin install coleam00/Archon/plugins/forge-github@<tag>   # a specific release
+archon plugin update coleam00/Archon/plugins/forge-github[@<tag>]
+archon plugin remove coleam00/Archon/plugins/forge-github
+archon plugin list
+```
+
+`install` refuses an already-installed plugin (use `update`) and a file it did not install. Every check, including the release checksum and the manifest's `compatibility.archon` range, runs before anything is written. See [Forge operations](/reference/forge/#install-the-github-plugin) for what the command downloads and where it writes.
+
 ### `auth github`
 
 Connect the current CLI user's GitHub identity via the GitHub device flow, so workflow commits, PR comments, and pushes attribute to you instead of the bot.
