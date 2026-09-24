@@ -194,7 +194,7 @@ import {
   getRetryDelayMs,
   isRateLimitError,
   RATE_LIMIT_MAX_RETRIES,
-  toTelemetryErrorClass,
+  toWorkflowErrorClass,
   detectCreditExhaustion,
   isQuotaExhaustionError,
   extractQuotaResetAt,
@@ -625,7 +625,7 @@ function firstFailedNodeTaxonomy(
     if (output.state !== 'failed') continue;
     const node = nodes.find(n => n.id === nodeId);
     const taxonomy: { errorClass: WorkflowErrorClass; failedNodeType?: WorkflowNodeType } = {
-      errorClass: toTelemetryErrorClass(classifyError(new Error(output.error))),
+      errorClass: toWorkflowErrorClass(classifyError(new Error(output.error))),
     };
     if (node) {
       taxonomy.failedNodeType = dagNodeTelemetryType(node);

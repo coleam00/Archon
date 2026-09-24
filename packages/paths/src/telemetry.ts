@@ -628,7 +628,8 @@ export type WorkflowExitReason =
  * Categorical failure class derived from the engine's error classifier
  * (`classifyError` in `@archon/workflows`): `fatal` = auth/permission/credit,
  * `transient` = timeout/network/rate-limit, `unknown` = everything else.
- * A fixed enum — raw error text never leaves the machine.
+ * Durable node-failure events and anonymous telemetry use the same fixed enum;
+ * telemetry still never receives raw error text.
  */
 export type WorkflowErrorClass = 'fatal' | 'transient' | 'unknown';
 

@@ -174,10 +174,11 @@ export function extractQuotaResetAt(error: string, now = new Date()): Date | nul
 }
 
 /**
- * Map the retry-oriented {@link ErrorType} to the telemetry wire enum. The
- * telemetry event carries ONLY this fixed-enum class — never error text.
+ * Map the retry-oriented {@link ErrorType} to the workflow failure wire enum.
+ * Durable events and anonymous telemetry share this categorical value; neither
+ * mapping adds error text to a new surface.
  */
-export function toTelemetryErrorClass(errorType: ErrorType): archonPaths.WorkflowErrorClass {
+export function toWorkflowErrorClass(errorType: ErrorType): archonPaths.WorkflowErrorClass {
   switch (errorType) {
     case 'FATAL':
       return 'fatal';
