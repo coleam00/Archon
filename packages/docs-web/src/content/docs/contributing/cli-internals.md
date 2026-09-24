@@ -315,13 +315,16 @@ can fail before either write.
 │  localBranchExists()     gate: (a) and (b) need the local ref   │
 │  (a) isBranchMerged()    git ancestry (fast-forward/merge)      │
 │  (b) isPatchEquivalent() git cherry  (1-commit squash-merge)    │
-│  (c) getPrState()        gh CLI      (MERGED/CLOSED/OPEN/NONE)  │
-│                                                                  │
+│  (c) getPrState()        gh CLI      (MERGED/CLOSED/OPEN/NONE/  │
+│                                      UNAVAILABLE)               │
+│                                                                 │
 │  any git signal          → 'reclaimable'                        │
-│  MERGED                  → 'reclaimable' if the local tip is at │
-│                            or behind the PR head (or ref gone)  │
+│  MERGED                  → 'reclaimable' if the worktree HEAD   │
+│                            and the branch ref (where each       │
+│                            exists) are at or behind the PR head │
 │  CLOSED                  → same, only if includeClosed          │
 │  OPEN                    → 'open-pr', always kept               │
+│  UNAVAILABLE             → 'pr-unavailable', kept and reported  │
 │  NONE and ref present    → 'unmerged', not reclaimed            │
 │  NONE and ref gone       → 'unjudgeable', kept and reported     │
 └─────────────────────────────────┬───────────────────────────────┘
@@ -335,16 +338,19 @@ can fail before either write.
 ```
 
 Signals are evaluated in order — the first positive match short-circuits to avoid
-unnecessary `gh` API calls. The `gh` CLI is a soft dependency: if missing or failing,
-only git signals are used and the result degrades gracefully to `NONE`.
+unnecessary `gh` API calls. The `gh` CLI is a soft dependency: when it is not installed or
+the remote is not GitHub, only git signals are used (`NONE`). When `gh` is there but fails
+(auth, rate limit, unreadable output) the result is `UNAVAILABLE`, and the environment is
+kept and reported rather than passed to the staleness sweep.
 
 A multi-commit squash merge is invisible to both git signals, so PR state is the only
 one that sees it. Both git signals also need the local branch ref: once it is gone, the
 PR is the only judge, and a branch with no PR is reported as unverifiable instead of
-failing the check. A MERGED or CLOSED PR only covers the commits it carried:
-run branch names are reused, so while the local ref exists its tip must be the PR's
-head commit or an ancestor of it (`isBranchTipCoveredBy`). A branch with commits past
-the PR head is unmerged work. A PR head pushed from elsewhere and never fetched here is
+failing the check. A MERGED or CLOSED PR only covers the commits it carried. Run
+branch names are reused, and removal deletes both the worktree and the branch, so each
+local tip that still exists, the worktree's HEAD and the branch ref, must be the PR's head
+commit or an ancestor of it (`isRevCoveredBy`). A detached HEAD or a reused branch with
+commits past the PR head is unmerged work. A PR head pushed from elsewhere and never fetched here is
 fetched by SHA from the branch's remote first; if that fetch fails, the check fails and
 the worktree is kept, with the fetch error in the reason. The scheduled sweep (`runScheduledCleanup`) makes the same call, so
 both paths agree on what counts as merged.

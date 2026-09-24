@@ -17,13 +17,13 @@ import {
   isBranchMerged,
   isPatchEquivalent,
   localBranchExists,
-  isBranchTipCoveredBy,
+  isRevCoveredBy,
   getLastCommitDate,
   toRepoPath,
   toWorktreePath,
   toBranchName,
 } from '@archon/git';
-import type { RepoPath, BranchName } from '@archon/git';
+import type { RepoPath, BranchName, WorktreePath } from '@archon/git';
 import { createLogger } from '@archon/paths';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
 import { ConversationNotFoundError } from '../types';
@@ -484,16 +484,18 @@ async function getRemovalBlocker(env: {
  *       and the only one left once the local branch ref is gone
  *
  * A MERGED or CLOSED PR only speaks for the commits it carried. Run branch names
- * are derived from the run identifier and get reused, so while the local ref
- * exists, its tip must be the PR's head commit or an ancestor of it; a branch
- * with commits past the PR head is unmerged work. Once the ref is gone there is
- * no local tip to compare, and the PR's state is taken as is.
+ * are derived from the run identifier and get reused, and removal deletes both the
+ * worktree and the branch, so every local tip that still exists (the worktree's
+ * HEAD, and the branch ref) must be the PR's head commit or an ancestor of it.
+ * Anything past the PR head is unmerged work. With neither left, the PR's state
+ * stands alone.
  *
  * 'unjudgeable' is the dead end the git signals hit when the branch ref has been
- * deleted and no PR answers for the branch: the worktree stays, and the caller
- * reports it rather than letting it read as ordinary unmerged work.
+ * deleted and no PR answers for the branch; 'pr-unavailable' is a PR lookup that
+ * failed. Either way the worktree stays, and the caller reports it rather than
+ * letting it read as ordinary unmerged work.
  */
-type MergeVerdict = 'reclaimable' | 'open-pr' | 'unmerged' | 'unjudgeable';
+type MergeVerdict = 'reclaimable' | 'open-pr' | 'unmerged' | 'unjudgeable' | 'pr-unavailable';
 
 async function judgeBranchForRemoval(input: {
   repoPath: RepoPath;
@@ -502,8 +504,10 @@ async function judgeBranchForRemoval(input: {
   prStateCache: Map<string, PrLookup>;
   includeClosed: boolean;
   remote: string;
+  worktreePath: WorktreePath;
 }): Promise<MergeVerdict> {
-  const { repoPath, branchName, baseRef, prStateCache, includeClosed, remote } = input;
+  const { repoPath, branchName, baseRef, prStateCache, includeClosed, remote, worktreePath } =
+    input;
   // Both git signals resolve the local branch ref, and `git cherry` fails outright
   // once it is gone, so ask git only while the ref is there. The PR lookup keys off
   // the branch name on the remote and needs no local ref at all.
@@ -513,15 +517,24 @@ async function judgeBranchForRemoval(input: {
     if (await isPatchEquivalent(repoPath, branchName, baseRef)) return 'reclaimable';
   }
 
-  // A failed or rate-limited PR lookup comes back as 'NONE', never 'MERGED', so an
-  // unanswered branch keeps its worktree.
   const pr = await getPrState(branchName, repoPath, prStateCache, remote);
+  if (pr.state === 'UNAVAILABLE') return 'pr-unavailable';
   if (pr.state === 'NONE') return refExists ? 'unmerged' : 'unjudgeable';
   if (pr.state === 'OPEN') return 'open-pr';
   if (pr.state === 'CLOSED' && !includeClosed) return 'unmerged';
-  // Fetches the PR head when it was pushed from elsewhere. Throws when that fetch
-  // fails; the callers report it as a failed merge check and keep the worktree.
-  if (refExists && !(await isBranchTipCoveredBy(repoPath, branchName, pr.headSha, remote))) {
+  // isRevCoveredBy fetches the PR head when it was pushed from elsewhere, and throws
+  // when that fetch or the comparison fails; the callers report it as a failed merge
+  // check and keep the worktree.
+  if (
+    (await worktreeExists(worktreePath)) &&
+    !(await isRevCoveredBy(worktreePath, 'HEAD', pr.headSha, remote))
+  ) {
+    return 'unmerged';
+  }
+  if (
+    refExists &&
+    !(await isRevCoveredBy(repoPath, `refs/heads/${branchName}`, pr.headSha, remote))
+  ) {
     return 'unmerged';
   }
   return 'reclaimable';
@@ -534,6 +547,8 @@ function skipReasonFor(verdict: Exclude<MergeVerdict, 'reclaimable'>): string | 
       return 'PR is open (active review)';
     case 'unjudgeable':
       return 'branch ref is gone and no PR was found — merge state unverifiable';
+    case 'pr-unavailable':
+      return 'PR state lookup failed — merge state unverifiable';
     case 'unmerged':
       return null;
   }
@@ -607,6 +622,7 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
           prStateCache,
           includeClosed: false,
           remote,
+          worktreePath: toWorktreePath(env.working_path),
         });
 
         if (verdict === 'reclaimable') {
@@ -892,6 +908,7 @@ export async function cleanupMergedWorktrees(
         prStateCache,
         includeClosed,
         remote,
+        worktreePath: toWorktreePath(env.working_path),
       });
     } catch (error) {
       const err = error as Error;

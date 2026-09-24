@@ -162,19 +162,27 @@ describe('getPrState', () => {
     });
   });
 
-  test('returns NONE and warns on non-ENOENT gh error (e.g. auth failure)', async () => {
+  // A failed lookup is not "no PR": cleanup must keep and report the branch rather
+  // than treat it as settled unmerged work.
+  test('returns UNAVAILABLE and warns on non-ENOENT gh error (e.g. auth failure)', async () => {
     const authError = Object.assign(new Error('gh: authentication required'), {
       code: 'ERR_CMD_FAILED',
     });
     setupGhResponse('https://github.com/owner/repo.git', authError);
     const result = await getPrState(BRANCH, REPO);
-    expect(result).toEqual({ state: 'NONE' });
+    expect(result).toEqual({ state: 'UNAVAILABLE' });
     expect(mockLogger.warn).toHaveBeenCalled();
   });
 
-  test('returns NONE when gh returns malformed JSON (e.g. auth error mixed with output)', async () => {
+  test('returns UNAVAILABLE when gh returns malformed JSON (e.g. auth error mixed with output)', async () => {
     setupGhResponse('https://github.com/owner/repo.git', 'error: not logged into github.com\n[]');
     const result = await getPrState(BRANCH, REPO);
-    expect(result).toEqual({ state: 'NONE' });
+    expect(result).toEqual({ state: 'UNAVAILABLE' });
+  });
+
+  test('returns UNAVAILABLE when a PR entry lacks its head commit', async () => {
+    setupGhResponse('https://github.com/owner/repo.git', '[{"state":"MERGED"}]');
+    const result = await getPrState(BRANCH, REPO);
+    expect(result).toEqual({ state: 'UNAVAILABLE' });
   });
 });

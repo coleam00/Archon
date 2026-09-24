@@ -2,8 +2,10 @@
  * PR state lookup via the `gh` CLI.
  *
  * Used by cleanup to detect squash-merged or closed PRs that git ancestry
- * checks miss. The `gh` CLI is a soft dependency — if it's missing or fails,
- * we return 'NONE' and let callers fall back to git-only signals.
+ * checks miss. The `gh` CLI is a soft dependency: when it is not installed or the
+ * remote is not GitHub there is no PR to ask about ('NONE'), and callers fall back
+ * to git-only signals. When `gh` is there but fails (auth, rate limit, unreadable
+ * output) the answer is 'UNAVAILABLE', which callers must not read as "no PR".
  */
 import { execFileAsync } from '@archon/git';
 import type { BranchName, RepoPath } from '@archon/git';
@@ -24,16 +26,21 @@ export type PrState = 'MERGED' | 'CLOSED' | 'OPEN' | 'NONE';
  * derived from the run identifier and get reused, so a caller deciding anything
  * destructive must check the local branch against `headSha`.
  */
-export type PrLookup = { state: 'NONE' } | { state: Exclude<PrState, 'NONE'>; headSha: string };
+export type PrLookup =
+  | { state: 'NONE' }
+  | { state: 'UNAVAILABLE' }
+  | { state: Exclude<PrState, 'NONE'>; headSha: string };
 
 const NO_PR: PrLookup = { state: 'NONE' };
+const UNAVAILABLE: PrLookup = { state: 'UNAVAILABLE' };
 
 /**
  * Look up the most recent PR for a branch in the GitHub remote.
  *
  * Returns:
  *   - MERGED / CLOSED / OPEN with the PR's head commit if a PR exists with that head branch
- *   - NONE if no PR exists, gh is unavailable, or the remote is not GitHub
+ *   - NONE if no PR exists, gh is not installed, or the remote is not GitHub
+ *   - UNAVAILABLE if gh failed or its output could not be read
  *
  * The optional `cache` map dedupes lookups within a single cleanup invocation.
  * The optional `remote` selects which git remote to inspect (default: 'origin').
@@ -95,10 +102,16 @@ export async function getPrState(
     );
     ghStdout = stdout;
     const parsed = JSON.parse(stdout) as { state?: string; headRefOid?: string }[];
-    const state = parsed[0]?.state;
-    const headSha = parsed[0]?.headRefOid;
-    if ((state === 'MERGED' || state === 'CLOSED' || state === 'OPEN') && headSha) {
+    const first = parsed[0];
+    const state = first?.state;
+    const headSha = first?.headRefOid;
+    if (!first) {
+      result = NO_PR;
+    } else if ((state === 'MERGED' || state === 'CLOSED' || state === 'OPEN') && headSha) {
       result = { state, headSha };
+    } else {
+      getLog().warn({ branch, repoPath, ghStdout }, 'isolation.pr_state_unreadable');
+      result = UNAVAILABLE;
     }
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
@@ -110,6 +123,7 @@ export async function getPrState(
         { err, branch, repoPath, ghStdout: ghStdout || undefined },
         'isolation.pr_state_lookup_failed'
       );
+      result = UNAVAILABLE;
     }
   }
 

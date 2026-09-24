@@ -25,13 +25,8 @@ const silentLogger = {
 };
 mock.module('@archon/paths', () => ({ createLogger: mock(() => silentLogger) }));
 
-import {
-  isBranchMerged,
-  isBranchTipCoveredBy,
-  isPatchEquivalent,
-  localBranchExists,
-} from './branch';
-import { toBranchName, toRepoPath } from './types';
+import { isBranchMerged, isRevCoveredBy, isPatchEquivalent, localBranchExists } from './branch';
+import { toBranchName, toRepoPath, toWorktreePath } from './types';
 
 const trackTempRoot = trackTempRoots();
 
@@ -110,45 +105,52 @@ describe('merge signals against real git', () => {
 
   // Cleanup trusts a merged PR only for the commits it carried: the local branch tip
   // must be the PR head or behind it.
-  test('isBranchTipCoveredBy tells a branch at its merged PR head from one past it', async () => {
+  test('isRevCoveredBy tells a branch at its merged PR head from one past it', async () => {
     const repoPath = repoWithSquashMergedFeature();
     const repo = toRepoPath(repoPath);
-    const feature = toBranchName('feature');
     const prHead = git(repoPath, 'rev-parse', 'feature');
 
-    expect(await isBranchTipCoveredBy(repo, feature, prHead, 'origin')).toBe(true);
+    expect(await isRevCoveredBy(repo, 'refs/heads/feature', prHead, 'origin')).toBe(true);
 
     // The branch name is reused and gains work the merged PR never saw.
     git(repoPath, 'checkout', '-q', 'feature');
     commit(repoPath, 'later.txt', 'later\n');
-    expect(await isBranchTipCoveredBy(repo, feature, prHead, 'origin')).toBe(false);
+    expect(await isRevCoveredBy(repo, 'refs/heads/feature', prHead, 'origin')).toBe(false);
+  });
+
+  // With the branch ref gone, a worktree's HEAD is the only local tip left, and a
+  // detached HEAD can hold committed work no ref points at.
+  test('isRevCoveredBy reads a worktree HEAD past the PR head after the branch ref is gone', async () => {
+    const repoPath = repoWithSquashMergedFeature();
+    const prHead = git(repoPath, 'rev-parse', 'feature');
+    const worktree = join(repoPath, '..', 'wt');
+    git(repoPath, 'worktree', 'add', '-q', '--detach', worktree, 'feature');
+    commit(worktree, 'detached.txt', 'detached\n');
+    git(repoPath, 'branch', '-D', 'feature');
+
+    expect(await isRevCoveredBy(toWorktreePath(worktree), 'HEAD', prHead, 'origin')).toBe(false);
   });
 
   // A bot or a maintainer pushed the last PR commit from another checkout, so the
   // PR head exists only on the remote until it is fetched.
-  test('isBranchTipCoveredBy fetches a PR head that exists only on the remote', async () => {
+  test('isRevCoveredBy fetches a PR head that exists only on the remote', async () => {
     const { local, elsewhere } = cloneWithRemoteFeature();
     commit(elsewhere, 'bot-fix.txt', 'fix\n');
     git(elsewhere, 'push', '-q', 'origin', 'feature');
     const prHead = git(elsewhere, 'rev-parse', 'HEAD');
     expect(() => git(local, 'cat-file', '-e', `${prHead}^{commit}`)).toThrow();
 
-    const covered = await isBranchTipCoveredBy(
-      toRepoPath(local),
-      toBranchName('feature'),
-      prHead,
-      'origin'
-    );
+    const covered = await isRevCoveredBy(toRepoPath(local), 'refs/heads/feature', prHead, 'origin');
 
     expect(covered).toBe(true);
   });
 
-  test('isBranchTipCoveredBy throws with the fetch failure when the remote lacks the PR head', async () => {
+  test('isRevCoveredBy throws with the fetch failure when the remote lacks the PR head', async () => {
     const { local } = cloneWithRemoteFeature();
     const unknown = '0123456789abcdef0123456789abcdef01234567';
 
     await expect(
-      isBranchTipCoveredBy(toRepoPath(local), toBranchName('feature'), unknown, 'origin')
+      isRevCoveredBy(toRepoPath(local), 'refs/heads/feature', unknown, 'origin')
     ).rejects.toThrow(`Failed to fetch PR head ${unknown} from origin`);
   });
 });

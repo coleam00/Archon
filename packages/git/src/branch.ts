@@ -355,23 +355,24 @@ export async function isAncestorOf(
 }
 
 /**
- * Whether a local branch's tip is `headSha` or an ancestor of it, i.e. whether a
- * PR whose head is `headSha` carried every commit on the branch.
+ * Whether `rev` (a branch ref, or a worktree's `HEAD`) is `headSha` or an ancestor
+ * of it, i.e. whether a PR whose head is `headSha` carried every commit on `rev`.
+ * `workingPath` is the checkout the revision is read in.
  *
  * The head commit may have been pushed from elsewhere (a bot fix, a maintainer
  * push) and never fetched here, so when the object is missing it is fetched by
  * SHA from `remote` first. A failed fetch or an unanswerable ancestry check
  * throws: the caller cannot tell "no" from "unknown" and must not guess.
  */
-export async function isBranchTipCoveredBy(
-  repoPath: RepoPath,
-  branchName: BranchName,
+export async function isRevCoveredBy(
+  workingPath: RepoPath | WorktreePath,
+  rev: string,
   headSha: string,
   remote: string
 ): Promise<boolean> {
-  if (!(await hasCommitObject(repoPath, headSha))) {
+  if (!(await hasCommitObject(workingPath, headSha))) {
     try {
-      await execFileAsync('git', ['-C', repoPath, 'fetch', '--no-tags', remote, headSha], {
+      await execFileAsync('git', ['-C', workingPath, 'fetch', '--no-tags', remote, headSha], {
         timeout: 60000,
       });
     } catch (error) {
@@ -381,11 +382,11 @@ export async function isBranchTipCoveredBy(
       );
     }
   }
-  return isCommitAncestor(repoPath, `refs/heads/${branchName}`, headSha);
+  return isCommitAncestor(workingPath, rev, headSha);
 }
 
 /** Exit status of `git cat-file -e <sha>^{commit}`: 0 means the commit is here. */
-async function hasCommitObject(repoPath: RepoPath, sha: string): Promise<boolean> {
+async function hasCommitObject(repoPath: RepoPath | WorktreePath, sha: string): Promise<boolean> {
   try {
     await execFileAsync('git', ['-C', repoPath, 'cat-file', '-e', `${sha}^{commit}`], {
       timeout: 10000,
@@ -404,7 +405,7 @@ async function hasCommitObject(repoPath: RepoPath, sha: string): Promise<boolean
  * Anything else throws.
  */
 async function isCommitAncestor(
-  repoPath: RepoPath,
+  repoPath: RepoPath | WorktreePath,
   ancestor: string,
   descendant: string
 ): Promise<boolean> {
