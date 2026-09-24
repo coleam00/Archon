@@ -347,9 +347,9 @@ async function installForge(
  * The plugin subtree of a commit tarball, as relative path -> file.
  *
  * Refuses, by name, every entry the tree could not hold faithfully: any
- * absolute or `..` name in the archive, or one containing `\` or `:` (its
- * place is ambiguous, or differs on Windows), and any
- * symlink, hard link or special file inside the plugin. Either would let
+ * absolute or `..` name in the archive (its place is ambiguous), and inside
+ * the plugin any name containing `\` or `:` (its place differs on Windows) and
+ * any symlink, hard link or special file. Any of these would let
  * discovery or run capture read something other than the files at this commit.
  */
 function packFiles(
@@ -366,15 +366,16 @@ function packFiles(
     if (segments[0] !== top || segments.some(s => s === '' || s === '.' || s === '..')) {
       throw new Error(`Refusing ${ref.id}: the archive entry "${entry.path}" escapes its root`);
     }
-    // Git allows `\` and `:` in a file name; Windows reads them as a path separator and
-    // a drive or stream, so `..\x` would land outside the pack there.
-    if (/[\\:]/.test(entry.path)) {
-      throw new Error(
-        `Refusing ${ref.id}: the archive entry "${entry.path}" contains \\ or :, which Windows reads as path syntax`
-      );
-    }
     if (entry.path !== root && !entry.path.startsWith(`${root}/`)) continue;
     const relative = entry.path.slice(root.length + 1);
+    // Git allows `\` and `:` in a file name; Windows reads them as a path separator and
+    // a drive or stream, so `..\x` would land outside the pack there. Checked only
+    // inside the plugin: the rest of the repository is never written.
+    if (/[\\:]/.test(relative)) {
+      throw new Error(
+        `Refusing ${ref.id}: "${relative}" contains \\ or :, which Windows reads as path syntax`
+      );
+    }
     if (entry.kind === 'directory') continue;
     if (entry.kind !== 'file') {
       throw new Error(

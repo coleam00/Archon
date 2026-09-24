@@ -355,6 +355,21 @@ describe('archon plugin: workflow packs', () => {
     }
   });
 
+  test('a file outside the plugin never blocks the install, whatever its name', async () => {
+    const env = await environment();
+    craftedTarballs.set(
+      commit('v1'),
+      craftedPack([{ path: `packs-${commit('v1')}/elsewhere/notes:file\\x.txt`, data: 'x' }])
+    );
+    try {
+      const result = await run(env, 'install', `${ID}@v1`);
+      expect(result.err).toBe('');
+      expect(result.code).toBe(0);
+    } finally {
+      craftedTarballs.delete(commit('v1'));
+    }
+  });
+
   test('refuses a tarball whose manifest differs from the one at the same commit', async () => {
     const env = await environment();
     craftedTarballs.set(
