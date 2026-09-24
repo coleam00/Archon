@@ -19,6 +19,9 @@ import {
   getOrCreateTelemetryId,
   getTelemetryStatus,
   resetTelemetryId,
+  resolveInstallChannel,
+  NOTICE_STAMP_FILENAME,
+  TELEMETRY_SCHEMA_VERSION,
 } from './telemetry';
 
 const ENV_VARS = [
@@ -258,7 +261,7 @@ describe('first-run notice (via captureWorkflowInvoked)', () => {
   let saved: Record<string, string | undefined>;
   let tmpHome: string;
   let originalIsTTY: boolean | undefined;
-  const stampPath = (): string => join(tmpHome, 'telemetry-notice-shown-v4');
+  const stampPath = (): string => join(tmpHome, NOTICE_STAMP_FILENAME);
 
   beforeEach(() => {
     saved = saveEnv();
@@ -788,7 +791,7 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     }
   });
 
-  test('captureWorkflowCompleted serializes cache totals with schema version 6', async () => {
+  test('captureWorkflowCompleted serializes cache totals and machine context', async () => {
     delete process.env.ARCHON_TELEMETRY_DISABLED;
     delete process.env.DO_NOT_TRACK;
     delete process.env.CI;
@@ -844,7 +847,10 @@ describe('new capture functions are fire-and-forget no-throw', () => {
       event => event.properties.workflow_name === 'implement'
     )?.properties;
     expect(exact).toMatchObject({
-      schema_version: 6,
+      schema_version: TELEMETRY_SCHEMA_VERSION,
+      // Super-properties: this test runs from a source checkout.
+      install_channel: 'source',
+      git_commit: expect.stringMatching(/^[0-9a-f]{7}$/),
       tokens_in: 100,
       tokens_out: 10,
       cache_read_tokens: 70,
@@ -857,11 +863,18 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     // and bias aggregate cache figures low across installs (#2662).
     const floor = completed.find(event => event.properties.workflow_name === 'plan')?.properties;
     expect(floor).toMatchObject({
-      schema_version: 6,
+      schema_version: TELEMETRY_SCHEMA_VERSION,
       cache_read_tokens: 70,
       cache_write_tokens: 0,
       cache_partial: true,
     });
+  });
+});
+
+describe('resolveInstallChannel', () => {
+  test('a source build is docker only when running in the Archon image', () => {
+    expect(resolveInstallChannel({})).toBe('source');
+    expect(resolveInstallChannel({ ARCHON_DOCKER: 'true' })).toBe('docker');
   });
 });
 
@@ -874,6 +887,8 @@ describe('sanitizeModelForTelemetry', () => {
       'gpt-5.6-sol',
       'anthropic/claude-haiku-4-5',
       'openrouter/qwen/qwen3-coder',
+      'opus[1m]',
+      'claude-opus-4-7[1m]',
     ]) {
       expect(sanitizeModelForTelemetry(model)).toBe(model);
     }
@@ -884,6 +899,9 @@ describe('sanitizeModelForTelemetry', () => {
     expect(sanitizeModelForTelemetry('john.doe@example.com is testing')).toBeUndefined();
     expect(sanitizeModelForTelemetry('x'.repeat(100))).toBeUndefined();
     expect(sanitizeModelForTelemetry('')).toBeUndefined();
+    expect(sanitizeModelForTelemetry('opus[1 m]')).toBeUndefined();
+    expect(sanitizeModelForTelemetry('opus[<script>]')).toBeUndefined();
+    expect(sanitizeModelForTelemetry('opus[1m][2m]')).toBeUndefined();
   });
 
   test('passes through undefined', () => {

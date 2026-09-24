@@ -60,6 +60,8 @@ describe('telemetry exit transport', () => {
         [['--help'], 0],
         [['--version'], 0],
         [['--not-a-valid-flag'], 1],
+        // Help never boots the server, so the CLI counts it.
+        [['serve', '--help'], 0],
       ] as const) {
         const before = events.length;
         const result = await runChild(
@@ -79,7 +81,15 @@ describe('telemetry exit transport', () => {
         ARCHON_TELEMETRY_DISABLED: '1',
       });
       expect(result.code).toBe(0);
-      expect(events).toHaveLength(3);
+      expect(events).toHaveLength(4);
+
+      // The parent CLI already reported a detached run owner's invocation.
+      const owner = await runChild([join(import.meta.dir, 'cli.ts'), '--help'], {
+        ...childEnv(server.url.href),
+        ARCHON_DETACHED_RUN_OWNER: '1',
+      });
+      expect(owner.code).toBe(0);
+      expect(events).toHaveLength(4);
     } finally {
       await server.stop(true);
     }

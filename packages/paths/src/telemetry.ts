@@ -1,7 +1,7 @@
 /**
  * Anonymous PostHog telemetry for Archon.
  *
- * Emits a small set of anonymous events — `archon_started` (once per process),
+ * Emits a small set of anonymous events — `archon_started` (once per invocation),
  * `archon_active` (daily server heartbeat), `chat_turn_handled` (each direct
  * AI chat turn), `workflow_invoked` (each workflow start), `workflow_completed`
  * / `workflow_failed` (each terminal run), `workflow_approval_resolved` (each
@@ -14,9 +14,9 @@
  * Every event carries the privacy invariants `$process_person_profile: false`
  * (anonymous tier — no person profile ever created) and `$ip: ''` (PostHog
  * drops the source IP at ingest). Machine context (os, arch, version,
- * is_binary, runtime, is_ci, is_tty) rides along on every event via PostHog
- * super-properties. What is collected is categorical only: workflow name (real
- * for bundled workflows, `"custom"` for user-authored), platform, provider,
+ * is_binary, install channel, build commit, runtime, is_ci, is_tty) rides along
+ * on every event via PostHog super-properties. What is collected is categorical
+ * only: workflow name (real for bundled workflows, `"custom"` for user-authored), platform, provider,
  * model, node shape, run outcome/duration, a fixed-enum error class (never
  * raw error text), chat-turn activity (platform + provider + model + outcome),
  * aggregate usage numbers (token counts, cost USD, turn/run duration, loop
@@ -41,12 +41,16 @@ import { randomUUID } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { PostHog } from 'posthog-node';
-import { getArchonHome } from './archon-paths';
-import { BUNDLED_IS_BINARY, BUNDLED_VERSION } from './bundled-build';
+import { getArchonHome, isDocker } from './archon-paths';
+import { BUNDLED_GIT_COMMIT, BUNDLED_IS_BINARY, BUNDLED_VERSION } from './bundled-build';
+import { readSourceCommit } from './source-commit';
 import { createLogger } from './logger';
 
-/** Bumped when the captured property set changes (documented in README). */
-export const TELEMETRY_SCHEMA_VERSION = 6;
+/**
+ * Bumped when the captured property set changes (documented in README). 7 is
+ * skipped: a fork shipping this embedded key already sends it.
+ */
+export const TELEMETRY_SCHEMA_VERSION = 8;
 
 type PostHogFetch = NonNullable<NonNullable<ConstructorParameters<typeof PostHog>[1]>['fetch']>;
 type PostHogFetchOptions = Parameters<PostHogFetch>[1];
@@ -71,10 +75,11 @@ const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
 // Bumped to `-v2` when the captured property set expanded (machine context +
 // run outcomes), to `-v3` when chat-turn activity, deployment shape, and
 // registration counts were added, and to `-v4` when aggregate usage totals
-// (tokens/cost/duration/loop iterations) and approval decisions were added.
+// (tokens/cost/duration/loop iterations) and approval decisions were added, and
+// to `-v5` when install channel and build commit were added.
 // Bumping re-shows the updated first-run notice once per install so existing
 // users re-consent rather than silently getting broader capture.
-const NOTICE_STAMP_FILENAME = 'telemetry-notice-shown-v4';
+export const NOTICE_STAMP_FILENAME = 'telemetry-notice-shown-v5';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -117,19 +122,45 @@ const PRIVACY_INVARIANTS = {
   $ip: '',
 } as const;
 
+/** How this Archon was installed, from build constants and the Docker env marker. */
+export type InstallChannel = 'binary' | 'docker' | 'source';
+
+/**
+ * `binary` wins because a compiled build can also run inside a container;
+ * `docker` means the source tree running in Archon's image (`ARCHON_DOCKER`).
+ * Never derived from a filesystem path.
+ * @internal exported for tests
+ */
+export function resolveInstallChannel(env: NodeJS.ProcessEnv = process.env): InstallChannel {
+  if (BUNDLED_IS_BINARY) return 'binary';
+  return isDocker(env) ? 'docker' : 'source';
+}
+
+/**
+ * Short commit of the running build: stamped into binaries at build time, read
+ * from the source checkout's git metadata otherwise. Public source identity,
+ * not user data; omitted when unknown (e.g. a Docker image built without .git).
+ */
+function resolveGitCommit(): string | undefined {
+  if (BUNDLED_IS_BINARY) return BUNDLED_GIT_COMMIT === 'unknown' ? undefined : BUNDLED_GIT_COMMIT;
+  return readSourceCommit(import.meta.dir);
+}
+
 /**
  * Stable machine/runtime context registered once as PostHog super-properties
  * (attached to every event from this client). Categorical only — no
- * identifiers, no paths. `install_method` is intentionally omitted until a
- * build-time channel constant exists (never derive it from a filesystem path).
+ * identifiers, no paths.
  */
 function collectMachineProperties(): Record<string, string | boolean> {
   const bunVersion = typeof Bun !== 'undefined' ? Bun.version : undefined;
+  const gitCommit = resolveGitCommit();
   return {
     os: process.platform,
     arch: process.arch,
     archon_version: BUNDLED_VERSION,
     is_binary: BUNDLED_IS_BINARY,
+    install_channel: resolveInstallChannel(),
+    ...(gitCommit ? { git_commit: gitCommit } : {}),
     runtime_version: bunVersion ? `bun-${bunVersion}` : process.version,
     // Mirrors the CI auto-disable check; when telemetry is enabled this is
     // effectively always false, but it's cheap and future-proof.
@@ -170,15 +201,16 @@ export function classifyWorkflowForTelemetry(
  * Model ids are user-supplied (forwarded verbatim from workflow/`config.yaml`
  * YAML), so unlike `provider` they're not structurally categorical. Forward a
  * value only when it looks like a real model ref (alphanumerics plus `/._:-`,
- * bounded length — covers `sonnet`, `gpt-5.6-sol`, `anthropic/claude-haiku-4-5`,
- * `openrouter/qwen/qwen3-coder`). Anything else is dropped so a stray free-text
- * value can't slip through the "categorical only" telemetry contract.
+ * bounded length, and an optional short bracketed variant — covers `sonnet`,
+ * `gpt-5.6-sol`, `anthropic/claude-haiku-4-5`, `openrouter/qwen/qwen3-coder`,
+ * `opus[1m]`). Anything else is dropped so a stray free-text value can't slip
+ * through the "categorical only" telemetry contract.
  *
  * Exported for direct testing of the privacy guard. @internal
  */
 export function sanitizeModelForTelemetry(model: string | undefined): string | undefined {
   if (model === undefined) return undefined;
-  return /^[a-zA-Z0-9/._:-]{1,64}$/.test(model) ? model : undefined;
+  return /^[a-zA-Z0-9/._:-]{1,64}(\[[a-zA-Z0-9]{1,8}\])?$/.test(model) ? model : undefined;
 }
 
 /** Why telemetry is currently disabled. `null` means it's enabled. */
@@ -376,11 +408,12 @@ function maybeShowFirstRunNotice(): void {
   }
 
   const message =
-    'Archon collects anonymous usage telemetry — now also chat activity\n' +
-    '(platform/provider/model, never message content), aggregate usage totals\n' +
-    '(token counts, cost, durations, loop iterations), approval decisions\n' +
-    '(approved/rejected only), deployment shape, and a categorical failure\n' +
-    'class, alongside workflow name, run outcome, OS/arch, and version.\n' +
+    'Archon collects anonymous usage telemetry — now also how Archon was\n' +
+    'installed (binary, Docker, or source) and the build commit, alongside\n' +
+    'chat activity (platform/provider/model, never message content), aggregate\n' +
+    'usage totals (token counts, cost, durations, loop iterations), approval\n' +
+    'decisions (approved/rejected only), deployment shape, a categorical failure\n' +
+    'class, workflow name, run outcome, OS/arch, and version.\n' +
     'Still no code, prompts, file paths, IP, or personal data — see README "Telemetry".\n' +
     'Opt out anytime: DO_NOT_TRACK=1 or ARCHON_TELEMETRY_DISABLED=1\n';
   try {
@@ -736,8 +769,8 @@ function deploymentShapeWireProps(
 /**
  * Fire-and-forget capture of an `archon_started` event. Call once per CLI
  * invocation and per server boot (the single call sites in `cli.ts` / the
- * server entrypoint enforce the "once per process" contract — there is no
- * in-function dedup guard). This (not just `workflow_invoked`) is what makes
+ * server entrypoint enforce that — there is no in-function dedup guard; the CLI
+ * leaves `serve` and detached run owners to the process that reports them). This (not just `workflow_invoked`) is what makes
  * active-install / DAU metrics honest, since users who only run
  * `doctor`/`serve`/chat would otherwise be invisible. Machine context rides
  * along via the registered super-properties. Also shows the first-run notice.
