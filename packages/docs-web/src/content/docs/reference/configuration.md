@@ -131,7 +131,7 @@ These files are persistent layers. For one invocation, use repeatable [`workflow
 
 ### How `assistants:` is validated
 
-Every `assistants.<provider>` block is checked by that provider when the config loads, in both `~/.archon/config.yaml` and a repository `.archon/config.yaml`. A misspelled key, an unsupported value, or a wrong type stops the load with a message naming the file, the provider, the key, and the accepted values — the same check a `--config` run layer gets. Values the provider would have quietly discarded used to reach a run and be reported as the setting the node ran at:
+Every `assistants.<provider>` block is checked by that provider when the config loads, in both `~/.archon/config.yaml` and a repository `.archon/config.yaml`. A misspelled key, an unsupported value, or a wrong type stops the load with a message naming the file, the provider, the key, and the accepted values. A `--config` run layer is checked by the same provider parser, with one difference: settings that apply to the whole process, such as `assistants.pi.env` and `assistants.pi.maxConcurrent`, are accepted in a config file and refused in a run layer. Values the provider would have quietly discarded used to reach a run and be reported as the setting the node ran at:
 
 ```
 Invalid assistants config in '/Users/you/.archon/config.yaml':
