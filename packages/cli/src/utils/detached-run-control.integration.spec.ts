@@ -99,8 +99,11 @@ async function rejectedError(action: () => Promise<unknown>): Promise<Error> {
  * The handshake is not what these tests are about: committing it puts the terminator
  * itself in front of a PID the test chose, which is the only way to stage a target
  * that is already gone, or one that is alive and out of reach.
+ *
+ * `leaseMs` closes the lease that long after committing it, as a real owner does when
+ * its termination lease lapses.
  */
-function stubOwner(pid: number): Server {
+function stubOwner(pid: number, leaseMs?: number): Server {
   return createServer((socket: Socket): void => {
     socket.setEncoding('utf8');
     let request = '';
@@ -113,6 +116,7 @@ function stubOwner(pid: number): Server {
       if (request.includes('terminate\n')) {
         socket.write('ready\n');
         request = request.replace('terminate\n', '');
+        if (leaseMs !== undefined) setTimeout(() => socket.destroy(), leaseMs);
       }
     });
   });
@@ -312,6 +316,37 @@ describe('detached run control integration', () => {
         } catch {
           // Already gone: the assertion above reports it.
         }
+        await close(server);
+      }
+    },
+    STOP_TEST_TIMEOUT_MS
+  );
+
+  it(
+    'kills nothing on Windows when the lease lapses before the kill',
+    async () => {
+      // The first process listing takes hundreds of milliseconds at least. A lease that
+      // closes during it no longer proves the listed root is the owner, so the stop must
+      // refuse rather than kill whatever now holds that PID.
+      if (process.platform !== 'win32') return;
+
+      const runId = `lapsed-${crypto.randomUUID()}`;
+      const path = runLiveOwnerPath(runId);
+      const target = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 1000)'], {
+        stdio: 'ignore',
+      });
+      if (target.pid === undefined) throw new Error('Failed to spawn the target');
+      const targetPid = target.pid;
+
+      const server = stubOwner(targetPid, 50);
+      await listen(server, path);
+      try {
+        const stop = await requestDetachedRunStop(runId);
+        const error = await rejectedError(async (): Promise<void> => stop.stop());
+        expect(error.message).toContain('released its termination lease');
+        expect(processExists(targetPid)).toBe(true);
+      } finally {
+        target.kill();
         await close(server);
       }
     },

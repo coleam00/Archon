@@ -110,7 +110,7 @@ async function terminateDetachedProcessTree(
   }
 
   if (process.platform === 'win32') {
-    await terminateWindowsProcessTree(pid);
+    await terminateWindowsProcessTree(pid, ownsLiveLease);
     return;
   }
 

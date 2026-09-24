@@ -16,8 +16,8 @@ const execFileAsync = promisify(execFile);
 const COMMAND_TIMEOUT_MS = 30_000;
 
 /**
- * How many times the stop lists the tree and kills what is still there before it gives
- * up and reports that it could not confirm the tree exited. A bound on attempts, not on
+ * How many listings the stop takes after `taskkill`, killing what each one still shows,
+ * before it reports that it could not confirm the tree exited. A bound on attempts, not on
  * time: running out never counts as proof that anything died.
  */
 const MAX_CONFIRM_ROUNDS = 5;
@@ -158,8 +158,13 @@ async function listWindowsProcesses(): Promise<WindowsProcessListing> {
 /**
  * Kill `pid`'s process tree and return only once a listing shows no member of it.
  * Throws when that cannot be shown, so the caller leaves the run as it was.
+ *
+ * `ownsLiveLease` reports whether the owner still holds its termination lease open.
  */
-export async function terminateWindowsProcessTree(pid: number): Promise<void> {
+export async function terminateWindowsProcessTree(
+  pid: number,
+  ownsLiveLease: () => boolean
+): Promise<void> {
   const before = await listWindowsProcesses();
   const tree = WindowsProcessTree.fromRoot(pid, before);
 
@@ -176,6 +181,15 @@ export async function terminateWindowsProcessTree(pid: number): Promise<void> {
       );
     }
     return;
+  }
+
+  // The owner's lease socket closes when the owner exits, so a lease still open after
+  // the listing proves the listed root is the owner and not a later holder of its PID.
+  // The first listing can take seconds, which is long enough for the lease to lapse.
+  if (!ownsLiveLease()) {
+    throw new Error(
+      `Detached workflow owner ${String(pid)} released its termination lease before it was stopped`
+    );
   }
 
   // `taskkill /T` does most of the work in one call. Its exit code is not the proof:
@@ -196,6 +210,8 @@ export async function terminateWindowsProcessTree(pid: number): Promise<void> {
   for (let round = 0; round < MAX_CONFIRM_ROUNDS; round++) {
     survivors = tree.observe(await listWindowsProcesses());
     if (survivors.length === 0) return;
+    // Every kill is followed by a listing, so the last round only lists.
+    if (round === MAX_CONFIRM_ROUNDS - 1) break;
     for (const survivor of survivors) {
       try {
         process.kill(survivor);
