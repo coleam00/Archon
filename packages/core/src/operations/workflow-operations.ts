@@ -652,11 +652,14 @@ function ownerNotStoppedMessage(runId: string, error: DetachedRunOwnerUnavailabl
 }
 
 /**
- * Stop the run's live owner through the same stop path `cancel` uses, or report that
- * none answered. Throws {@link AbandonOwnerNotStoppedError} when an owner answered but
- * could not be stopped, before anything about the run has changed.
+ * Stop the run's live owner through the shared stop path, or report that none answered.
+ * `not_stopped` means an owner answered but could not be stopped, or the endpoint could
+ * not be asked; nothing about the run has changed. Cancel and abandon each translate it
+ * into their own error.
  */
-async function stopLiveOwnerForAbandon(run: WorkflowRun): Promise<AbandonOwnerOutcome> {
+async function stopLiveOwner(
+  run: WorkflowRun
+): Promise<AbandonOwnerOutcome | { kind: 'not_stopped'; message: string }> {
   let target: DetachedRunStopTarget;
   try {
     target = await requestDetachedRunStop(run.id);
@@ -672,15 +675,17 @@ async function stopLiveOwnerForAbandon(run: WorkflowRun): Promise<AbandonOwnerOu
         thisUid: process.getuid?.(),
       };
     }
-    throw new AbandonOwnerNotStoppedError(ownerNotStoppedMessage(run.id, error));
+    return { kind: 'not_stopped', message: ownerNotStoppedMessage(run.id, error) };
   }
   try {
     await target.stop();
   } catch (error) {
-    throw new AbandonOwnerNotStoppedError(
-      `Could not stop the live owner of run ${run.id} (pid ${String(target.pid)}): ` +
-        `${(error as Error).message}. The run was not changed.`
-    );
+    return {
+      kind: 'not_stopped',
+      message:
+        `Could not stop the live owner of run ${run.id} (pid ${String(target.pid)}): ` +
+        `${(error as Error).message}. The run was not changed.`,
+    };
   }
   return { kind: 'stopped', pid: target.pid };
 }
@@ -702,7 +707,8 @@ export async function abandonWorkflow(
 ): Promise<AbandonWorkflowResult & { owner: AbandonOwnerOutcome }> {
   const run = await getRunOrThrow(runId, 'operations.workflow_abandon_lookup_failed');
   assertAbandonable(run);
-  const owner = await stopLiveOwnerForAbandon(run);
+  const owner = await stopLiveOwner(run);
+  if (owner.kind === 'not_stopped') throw new AbandonOwnerNotStoppedError(owner.message);
   return { ...(await recordAbandoned(run)), owner };
 }
 
@@ -731,9 +737,9 @@ export class CancelRefusedError extends Error {
 
 /**
  * `cooperative`: the run's executor stops at its next status check. Either this
- * process executes the run, or the run is a `workflow:` sub-run, which executes
- * inside its root run's process while the root's row keeps the worktree lock and
- * resource slot. `cancelled` is false when the run finished first.
+ * process executes the run, or the run is a `workflow:` sub-run with no live owner of
+ * its own, which executes inside its root run's process while the root's row keeps the
+ * worktree lock and resource slot. `cancelled` is false when the run finished first.
  * `stopped`: another live process owned the run; its process tree was terminated
  * before the run was recorded `cancelled`.
  */
@@ -769,9 +775,9 @@ async function confirmedRunContainer(run: WorkflowRun): Promise<string | undefin
 /**
  * Cancel a running run, the same way on every surface.
  *
- * - This process executes it, or it is a sub-run: cooperative cancel (see
- *   {@link CancelWorkflowResult}).
- * - Another live process owns it: stop that owner through the shared stop path
+ * - This process executes it, or it is a sub-run with no live owner of its own:
+ *   cooperative cancel (see {@link CancelWorkflowResult}).
+ * - Another live process owns it, sub-run or not: stop that owner through the shared stop path
  *   (prove it, terminate its process tree, wait), then record `cancelled`.
  * - No owner answers, or the owner cannot be stopped: refuse with
  *   {@link CancelRefusedError} and leave the run unchanged. `cancelled` releases the
@@ -787,44 +793,25 @@ export async function cancelWorkflow(runId: string): Promise<CancelWorkflowResul
     );
   }
 
-  if (isRunOwnedByThisProcess(run.id) || run.parent_run_id) {
-    const { cancelled } = await workflowDb.cancelWorkflowRun(run.id);
-    return { kind: 'cooperative', run, cancelled };
-  }
+  if (isRunOwnedByThisProcess(run.id)) return cooperativeCancel(run);
 
   const containerEnvId = await confirmedRunContainer(run);
-  let target: DetachedRunStopTarget;
-  try {
-    target = await requestDetachedRunStop(run.id);
-  } catch (error) {
-    if (!(error instanceof DetachedRunOwnerUnavailableError)) throw error;
-    if (error.reason === 'unreachable') {
-      const facts = describeAbandonOwner({
-        kind: 'no_owner_answered',
-        detail: error.detail,
-        recordedOwner: readExecutionOwner(run.metadata),
-        lastActivityAt: run.last_activity_at,
-        thisHost: hostname(),
-        thisUid: process.getuid?.(),
-      });
-      throw new CancelRefusedError(
-        'no_owner_answered',
-        [
-          ...facts,
-          `Cancel has nothing to stop, so run ${run.id} was not changed. ` +
-            'If its process is gone, abandon the run to release it.',
-        ].join('\n')
-      );
-    }
-    throw new CancelRefusedError('not_stopped', ownerNotStoppedMessage(run.id, error));
-  }
-  try {
-    await target.stop();
-  } catch (error) {
+  const owner = await stopLiveOwner(run);
+  if (owner.kind === 'not_stopped') throw new CancelRefusedError('not_stopped', owner.message);
+  if (owner.kind === 'no_owner_answered') {
+    // A sub-run normally executes inside its root's process and has no endpoint of its
+    // own, so nothing answering for it is the ordinary case: the root's executor sees the
+    // status change at its next check, and the root's row keeps the worktree lock and
+    // resource slot. A sub-run resumed on its own (a durable wait or a scheduled resume)
+    // publishes its own endpoint, and an owner there is handled like any other run's.
+    if (run.parent_run_id) return cooperativeCancel(run);
     throw new CancelRefusedError(
-      'not_stopped',
-      `Could not stop the live owner of run ${run.id} (pid ${String(target.pid)}): ` +
-        `${(error as Error).message}. The run was not changed.`
+      'no_owner_answered',
+      [
+        ...describeAbandonOwner(owner),
+        `Cancel has nothing to stop, so run ${run.id} was not changed. ` +
+          'If its process is gone, abandon the run to release it.',
+      ].join('\n')
     );
   }
 
@@ -849,7 +836,12 @@ export async function cancelWorkflow(runId: string): Promise<CancelWorkflowResul
         `The run status is ${latest?.status ?? 'unknown'}; it was not reported as cancelled.`
     );
   }
-  return { kind: 'stopped', pid: target.pid, ...recorded };
+  return { kind: 'stopped', pid: owner.pid, ...recorded };
+}
+
+async function cooperativeCancel(run: WorkflowRun): Promise<CancelWorkflowResult> {
+  const { cancelled } = await workflowDb.cancelWorkflowRun(run.id);
+  return { kind: 'cooperative', run, cancelled };
 }
 
 async function recordAbandoned(run: WorkflowRun): Promise<AbandonWorkflowResult> {

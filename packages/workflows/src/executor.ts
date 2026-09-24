@@ -1779,13 +1779,10 @@ async function maybeResumeParentRun(
   }
 }
 
-/** Pick the surface-appropriate command spelling for a workflow action. */
+/** Spell a workflow action the way the surface rendering the message accepts it. */
 function formatRunCommand(platform: IWorkflowPlatform, action: string, shortId?: string): string {
-  const suffix = shortId ? ` ${shortId}` : '';
-  if (platform.getPlatformType() === 'cli') {
-    return `archon workflow ${action}${suffix}`;
-  }
-  return `/workflow ${action}${suffix}`;
+  const command = shortId ? `${action} ${shortId}` : action;
+  return platform.formatWorkflowCommand?.(command) ?? `/workflow ${command}`;
 }
 
 /**

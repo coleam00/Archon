@@ -628,13 +628,38 @@ describe('SlackWorkflowBridge', () => {
     });
 
     test('a stopped owner is reported in the run thread', async () => {
-      mockCancelWorkflow.mockResolvedValue({ kind: 'stopped', pid: 4242 });
+      mockCancelWorkflow.mockResolvedValue({
+        kind: 'stopped',
+        pid: 4242,
+        cascadeFailures: 0,
+        blockedParentRunId: null,
+      });
 
       const posted = await clickCancel();
 
       expect(posted).toHaveLength(1);
       expect(posted[0]?.thread_ts).toBe('111.0');
       expect(posted[0]?.text).toContain("Stopped the run's live owner process (pid 4242)");
+      expect(posted[0]?.text).not.toContain(':warning:');
+    });
+
+    // The workflow_cancelled event cannot carry these, so the note is the only channel.
+    test('a stop that left sub-runs running or a parent paused says so', async () => {
+      mockCancelWorkflow.mockResolvedValue({
+        kind: 'stopped',
+        pid: 4242,
+        cascadeFailures: 2,
+        blockedParentRunId: 'parent-run',
+      });
+
+      const posted = await clickCancel();
+
+      expect(posted).toHaveLength(1);
+      expect(posted[0]?.text).toContain('2 sub-run(s) could not be cancelled');
+      expect(posted[0]?.text).toContain('`/archon-workflow status`');
+      expect(posted[0]?.text).toContain(
+        'Parent run `parent-run` was blocked on this sub-run and stays paused.'
+      );
     });
 
     test('no owner answering posts the refusal and the abandon command', async () => {

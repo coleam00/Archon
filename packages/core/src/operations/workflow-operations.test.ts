@@ -1799,7 +1799,7 @@ describe('cancelWorkflow', () => {
     }
   });
 
-  test('cancels a sub-run cooperatively: its root holds the lock and slot', async () => {
+  test('cancels a sub-run cooperatively when no owner of its own answers: it runs inside its root', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(
       makePausedRun({ status: 'running', parent_run_id: 'root-run' })
     );
@@ -1807,7 +1807,50 @@ describe('cancelWorkflow', () => {
     const result = await cancelWorkflow('run-1');
 
     expect(result).toMatchObject({ kind: 'cooperative', cancelled: true });
-    expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
+    expect(mockRequestDetachedRunStop).toHaveBeenCalledWith('run-1');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
+  });
+
+  // A sub-run resumed on its own (a durable wait or a scheduled quota resume) has a live
+  // owner of its own, in whatever process resumed it. Its parent id says nothing about that.
+  test('refuses a sub-run whose own live owner answered and cannot be stopped from here', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({ status: 'running', parent_run_id: 'root-run' })
+    );
+    mockRequestDetachedRunStop.mockImplementationOnce(() =>
+      Promise.reject(new RealDetachedRunOwnerUnavailableError('run-1', 'detail', 'not_detached'))
+    );
+
+    const error = await refusal();
+
+    expect(error.reason).toBe('not_stopped');
+    expect(error.message).toContain('The run was not changed.');
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('stops a sub-run whose own detached owner answered before recording cancelled', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({ status: 'running', parent_run_id: 'root-run' })
+    );
+    const order: string[] = [];
+    mockRequestDetachedRunStop.mockImplementationOnce(() =>
+      Promise.resolve({
+        pid: 42,
+        stop: async () => {
+          order.push('stop');
+        },
+        release: () => undefined,
+      })
+    );
+    mockCancelWorkflowRun.mockImplementationOnce(() => {
+      order.push('cancel');
+      return Promise.resolve({ cancelled: true });
+    });
+
+    const result = await cancelWorkflow('run-1');
+
+    expect(order).toEqual(['stop', 'cancel']);
+    expect(result).toMatchObject({ kind: 'stopped', pid: 42 });
   });
 
   test('stops an owner in another process before recording cancelled', async () => {
@@ -1881,6 +1924,25 @@ describe('cancelWorkflow', () => {
 
     expect(error.reason).toBe('not_stopped');
     expect(error.message).toContain('(pid 42): process group 42 is still running');
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  // Invariant (#2325): no timer, age or PID decides liveness. An owner recorded as this
+  // very process, active a moment ago, is still not an owner that answered.
+  test('a recent, live-looking recorded owner does not stand in for an owner that answered', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        status: 'running',
+        last_activity_at: new Date(),
+        metadata: {
+          execution_owner: { host: hostname(), pid: process.pid, uid: process.getuid?.() },
+        },
+      })
+    );
+
+    const error = await refusal();
+
+    expect(error.reason).toBe('no_owner_answered');
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
 

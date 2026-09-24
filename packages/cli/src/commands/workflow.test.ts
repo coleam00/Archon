@@ -9679,7 +9679,7 @@ describe('workflowCancelCommand', () => {
     expect(error).toContain(`Abandon it: archon workflow abandon ${runId}`);
   });
 
-  it('cancels a sub-run cooperatively without contacting a process owner', async () => {
+  it('cancels cooperatively a sub-run with no owner of its own: it runs inside its root', async () => {
     const workflowDb = require('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValue({
       id: runId,
@@ -9687,10 +9687,11 @@ describe('workflowCancelCommand', () => {
       status: 'running',
       parent_run_id: 'root-run',
     });
+    mockRequestDetachedRunStop.mockImplementation(noOwnerAnswers);
 
     await workflowCancelCommand(runId, true);
 
-    expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
+    expect(mockRequestDetachedRunStop).toHaveBeenCalledWith(runId);
     expect(workflowDb.cancelWorkflowRun).toHaveBeenCalledWith(runId);
     expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
       ok: true,

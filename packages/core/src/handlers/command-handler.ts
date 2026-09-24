@@ -956,7 +956,7 @@ async function handleWorkflowCommand(
     }
 
     case 'approve': {
-      const runId = args[1];
+      let runId = args[1];
       if (!runId) {
         return {
           success: false,
@@ -971,6 +971,7 @@ async function handleWorkflowCommand(
       const rawComment = args.slice(2).join(' ');
       const comment = rawComment.length > 0 ? rawComment : undefined;
       try {
+        runId = await resolveChatRunId(runId, conversation);
         const result = await approveWorkflow(runId, comment);
         const pathInfo = result.workingPath ? `\nPath: \`${result.workingPath}\`` : '';
         const headline =
@@ -989,7 +990,7 @@ async function handleWorkflowCommand(
     }
 
     case 'reject': {
-      const runId = args[1];
+      let runId = args[1];
       if (!runId) {
         return {
           success: false,
@@ -998,6 +999,7 @@ async function handleWorkflowCommand(
       }
       const reason = args.slice(2).join(' ') || 'Rejected';
       try {
+        runId = await resolveChatRunId(runId, conversation);
         const result = await rejectWorkflow(runId, reason);
         if (result.cancelled) {
           const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';

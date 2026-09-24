@@ -763,9 +763,12 @@ Refusing is deliberate: `cancelled` releases the run's worktree lock and resourc
 and a database transition cannot prove that host work stopped. After verifying that the
 owner process is gone, use `workflow abandon <run-id>`.
 
-A `workflow:` sub-run executes inside its root run's process, and the root's row keeps
-the worktree lock and resource slot, so cancelling a sub-run is always the status-check
-cancel. Only a `running` run can be cancelled; abandon a paused or failed run instead.
+A `workflow:` sub-run normally executes inside its root run's process, and the root's row
+keeps the worktree lock and resource slot. When no owner answers for the sub-run itself,
+cancel records `cancelled` and the root's executor stops the sub-run at its next status
+check. A sub-run resumed on its own (after a durable wait or a scheduled resume) has its
+own owner, and cancel treats it like any other run. Only a `running` run can be
+cancelled; abandon a paused or failed run instead.
 
 After termination is confirmed, `cancel` records cancellation through the same run-tree
 operation as `abandon`. Cancelling a parent therefore cancels every non-terminal

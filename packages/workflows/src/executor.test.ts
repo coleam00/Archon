@@ -1310,7 +1310,7 @@ describe('executeWorkflow', () => {
       }
     );
 
-    it('uses CLI command syntax when the platform is cli', async () => {
+    it('spells commands the way the platform says (the CLI adapter)', async () => {
       const otherRun = makeRun({
         id: 'abc12345-rest-of-uuid',
         workflow_name: 'archon-implement',
@@ -1323,6 +1323,7 @@ describe('executeWorkflow', () => {
       const platform = {
         sendMessage: sendMessageSpy,
         getPlatformType: mock(() => 'cli' as const),
+        formatWorkflowCommand: (command: string) => `archon workflow ${command}`,
       } as unknown as IWorkflowPlatform;
       const store = makeStore({
         getActiveWorkflowRunByPath: mock(async () => otherRun),
@@ -1361,6 +1362,7 @@ describe('executeWorkflow', () => {
       const platform = {
         sendMessage: sendMessageSpy,
         getPlatformType: mock(() => 'cli' as const),
+        formatWorkflowCommand: (command: string) => `archon workflow ${command}`,
       } as unknown as IWorkflowPlatform;
       const store = makeStore({
         getActiveWorkflowRunByPath: mock(async () => otherRun),
@@ -1381,7 +1383,7 @@ describe('executeWorkflow', () => {
       expect(sentMessage).not.toContain('workflow cancel');
     });
 
-    it('uses CLI command syntax for paused runs when platform is cli', async () => {
+    it('spells paused-run commands the way the platform says (the CLI adapter)', async () => {
       const otherRun = makeRun({
         id: 'abc12345-rest-of-uuid',
         workflow_name: 'archon-implement',
@@ -1394,6 +1396,7 @@ describe('executeWorkflow', () => {
       const platform = {
         sendMessage: sendMessageSpy,
         getPlatformType: mock(() => 'cli' as const),
+        formatWorkflowCommand: (command: string) => `archon workflow ${command}`,
       } as unknown as IWorkflowPlatform;
       const store = makeStore({
         getActiveWorkflowRunByPath: mock(async () => otherRun),
