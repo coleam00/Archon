@@ -121,6 +121,8 @@ export {
   isWaitNode,
   isLoopNode,
   isLoopGroupNode,
+  loopGroupBodySinks,
+  loopGroupSoleTerminalSink,
   isWorkflowNode,
   isComposeFanOutNode,
   isIncludeDirective,
@@ -236,6 +238,9 @@ export {
   readContinuationMode,
   EXECUTION_OWNER_METADATA_KEY,
   readExecutionOwner,
+  RUN_DISPATCH_METADATA_KEY,
+  runDispatchMetadataSchema,
+  readRunDispatchMetadata,
 } from './workflow-run';
 export type {
   WorkflowRunStatus,
@@ -263,6 +268,7 @@ export type {
   WorkflowSourceState,
   ContinuationMode,
   ExecutionOwnerRecord,
+  RunDispatchMetadata,
 } from './workflow-run';
 
 // Per-node persisted provider sessions

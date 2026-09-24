@@ -925,6 +925,30 @@ export function getRunArtifactsDirForRoot(root: string, workflowRunId: string): 
   return join(getStoragePathsForRoot(root).artifactsRoot, 'runs', workflowRunId);
 }
 
+/**
+ * The engine-private child of a run's artifacts directory.
+ *
+ * The executor keeps its own bookkeeping here — typed-artifact listings, node
+ * output spills — so a workflow's own files stay at the root of
+ * `$ARTIFACTS_DIR`. It is the single name shared by the WRITERS that put state
+ * under it and the READERS that list a run's artifacts for a person: a writer
+ * that chose its own name would land in a listing no reader excludes.
+ */
+export const RUN_ARTIFACTS_ENGINE_SUBDIR = '.archon';
+
+/**
+ * Whether an entry in a run's artifacts directory is the engine's own store,
+ * which every listing shown to a person (CLI `workflow get`, the console's
+ * artifacts route) leaves out. `parentRel` is the entry's parent directory
+ * relative to `$ARTIFACTS_DIR`, `''` at the root.
+ *
+ * Only the root child is engine-owned. Any other name, dot-prefixed or not and
+ * at any depth, was written by the workflow and is its output, so it is listed.
+ */
+export function isRunArtifactsEngineEntry(parentRel: string, name: string): boolean {
+  return parentRel === '' && name === RUN_ARTIFACTS_ENGINE_SUBDIR;
+}
+
 /** Get a run's JSONL transcript from an already-resolved project root. */
 export function getRunLogPathForRoot(root: string, workflowRunId: string): string {
   return join(getStoragePathsForRoot(root).logsDir, `${workflowRunId}.jsonl`);

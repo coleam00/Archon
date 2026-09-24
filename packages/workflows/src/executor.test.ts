@@ -181,7 +181,12 @@ import type {
   WorkflowRun,
   WorkflowRunNodeSession,
 } from './schemas';
-import { RUN_METADATA_KEYS, workflowDefinitionSchema } from './schemas';
+import {
+  RUN_DISPATCH_METADATA_KEY,
+  RUN_METADATA_KEYS,
+  readRunDispatchMetadata,
+  workflowDefinitionSchema,
+} from './schemas';
 import type { WorkflowRunConfigMetadata } from './schemas/run-config';
 import { substituteWorkflowVariables } from './executor-shared';
 import { TerminalStatusWriteError } from './terminal-status-write';
@@ -2748,6 +2753,177 @@ describe('executeWorkflow', () => {
 
       expect(mockGetDefaultBranch).toHaveBeenCalledWith('/tmp/worktree');
       expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].baseBranch).toBe('main');
+    });
+
+    it('records what it resolved on the fresh run row (#2454)', async () => {
+      const store = makeStore();
+      const deps = makeDeps(store);
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp/worktree',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1',
+        { baseBranch: 'develop', source: 'bundled' }
+      );
+
+      const created = (store.createWorkflowRun as ReturnType<typeof mock>).mock.calls[0]?.[0] as {
+        metadata?: Record<string, unknown>;
+      };
+      expect(readRunDispatchMetadata(created.metadata)).toEqual({
+        base_branch: 'develop',
+        source: 'bundled',
+      });
+    });
+
+    it('a continuation reads the branch the run recorded, not the current environment (#2454)', async () => {
+      // The gate-resumed half of a run must answer $BASE_BRANCH the way its first half
+      // did. Repo config and the caller's codebase default both changed since the start;
+      // neither may move the run.
+      const deps = makeDeps();
+      deps.loadConfig = mock(
+        async (): Promise<WorkflowConfig> => ({
+          assistant: 'claude' as const,
+          assistants: { claude: {}, codex: {} },
+          baseBranch: 'main',
+          commands: { folder: '' },
+        })
+      ) as unknown as WorkflowDeps['loadConfig'];
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp/worktree',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1',
+        {
+          preCreatedRun: makeRun({
+            metadata: { [RUN_DISPATCH_METADATA_KEY]: { base_branch: 'release-2026' } },
+          }),
+          priorCompletedNodes: new Map(),
+          baseBranch: 'develop',
+        }
+      );
+
+      expect(mockGetDefaultBranch).not.toHaveBeenCalled();
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].baseBranch).toBe('release-2026');
+    });
+
+    it('a continuation keeps a recorded empty base branch (#2454)', async () => {
+      // Empty is a resolved answer, not a missing one: folder projects and repos where
+      // auto-detection failed both record it. Absence is carried by the key, so the
+      // restore must branch on the record's presence, never on its value -- a truthiness
+      // check here silently reopens the bug for exactly the runs that cannot re-resolve.
+      const deps = makeDeps();
+      deps.loadConfig = mock(
+        async (): Promise<WorkflowConfig> => ({
+          assistant: 'claude' as const,
+          assistants: { claude: {}, codex: {} },
+          baseBranch: 'main',
+          commands: { folder: '' },
+        })
+      ) as unknown as WorkflowDeps['loadConfig'];
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp/worktree',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1',
+        {
+          preCreatedRun: makeRun({
+            metadata: { [RUN_DISPATCH_METADATA_KEY]: { base_branch: '' } },
+          }),
+          priorCompletedNodes: new Map(),
+          baseBranch: 'develop',
+        }
+      );
+
+      expect(mockGetDefaultBranch).not.toHaveBeenCalled();
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].baseBranch).toBe('');
+    });
+
+    it('a resume that re-passes --base still retargets $BASE_BRANCH (#2454)', async () => {
+      // `--base` on a resume is a deliberate act by whoever is resuming, and the CLI
+      // already tells them it applies to the PR target only. The run record restores what
+      // was dropped; it does not overrule what this invocation asked for.
+      const deps = makeDeps();
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp/worktree',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1',
+        {
+          preCreatedRun: makeRun({
+            metadata: { [RUN_DISPATCH_METADATA_KEY]: { base_branch: 'release-2026' } },
+          }),
+          priorCompletedNodes: new Map(),
+          baseOverride: 'hotfix/urgent',
+        }
+      );
+
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].baseBranch).toBe('hotfix/urgent');
+    });
+
+    it('a continuation whose record holds no source keeps it absent instead of adopting a live one (#2454)', async () => {
+      // The original dispatch never knew a source, so the record omits it. A CLI `--resume`
+      // re-resolves one and passes it in; adopting it would report a guess as the run's
+      // original attribution.
+      const deps = makeDeps();
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp/worktree',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1',
+        {
+          preCreatedRun: makeRun({
+            metadata: { [RUN_DISPATCH_METADATA_KEY]: { base_branch: 'release-2026' } },
+          }),
+          priorCompletedNodes: new Map(),
+          source: 'bundled',
+        }
+      );
+
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].source).toBeUndefined();
+    });
+
+    it('reports a continuation that has nothing recorded to restore (#2454)', async () => {
+      // A run started before the record existed re-resolves, exactly as it always has —
+      // but silently doing so is what let $BASE_BRANCH change value mid-run unnoticed.
+      const deps = makeDeps();
+
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp/worktree',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1',
+        { preCreatedRun: makeRun({ metadata: {} }), priorCompletedNodes: new Map() }
+      );
+
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].baseBranch).toBe('main');
+      expect(
+        (mockLogFn.mock.calls as unknown[][]).some(
+          args => args[1] === 'workflow.dispatch_not_recorded_resolving_live'
+        )
+      ).toBe(true);
     });
   });
 

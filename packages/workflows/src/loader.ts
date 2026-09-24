@@ -13,6 +13,7 @@ import {
   isAgentNode,
   isLoopNode,
   isLoopGroupNode,
+  loopGroupSoleTerminalSink,
   isGateNode,
   isWaitNode,
   isWorkflowNode,
@@ -378,9 +379,9 @@ function collectUnknownNodeKeys(raw: unknown, id: string, label: string, warning
  * terminal sink recurses into this same case, following a chain of well-formed
  * sole-terminal-sink nesting to any depth). A gate that is mid-body or
  * co-terminal with another sink breaks the chain here too — the placement
- * check in `collectGateAndLoopDeprecationWarnings` below already warns about
- * that misplacement on its own. Mirrors `findLoopGroupTerminalGate`'s doc comment
- * (dag-executor.ts:4153-4164): the runtime has no unambiguous way to escalate
+ * check in `collectLoopGroupSinkWarnings` below already warns about that
+ * misplacement on its own. Mirrors `findLoopGroupTerminalSuspendNode`'s doc
+ * comment (dag-executor.ts): the runtime has no unambiguous way to escalate
  * a pause through a sink that isn't a bare gate, so this only makes that gap
  * visible at load time.
  */
@@ -390,9 +391,120 @@ function isUnescalatableInteractiveSink(node: DagNode | IncludeDirective): boole
   if (isLoopNode(node)) return node.loop.interactive === true;
   if (!isLoopGroupNode(node)) return false;
   if (node.loop_group.interactive === true) return true;
-  const dependedOn = new Set(node.loop_group.nodes.flatMap(n => n.depends_on ?? []));
-  const sinks = node.loop_group.nodes.filter(n => !dependedOn.has(n.id));
-  return sinks.length === 1 && isUnescalatableInteractiveSink(sinks[0]);
+  const soleSink = loopGroupSoleTerminalSink(node.loop_group.nodes);
+  return soleSink !== undefined && isUnescalatableInteractiveSink(soleSink);
+}
+
+/**
+ * Loop-group sink-shape warnings, judged against the EXPANDED node graph (#2756).
+ *
+ * Both checks below read resolved nodes only — `depends_on` edges and node kinds —
+ * never the raw YAML, so they describe the graph the executor will run rather than
+ * what the author typed. That is the point: an `include:` is a legal `loop_group`
+ * body entry, and before expansion it is an opaque target name no sink check can
+ * classify, so a composed terminal sink is invisible at parse time. This therefore
+ * runs once per workflow AFTER `expandWorkflowIncludes`, from the discovery site
+ * that pairs warnings with the expanded definition (`workflow-discovery.ts`) — a
+ * directly-authored sink keeps its id and its verdict through expansion, so it
+ * still warns exactly once.
+ */
+export function collectLoopGroupSinkWarnings(
+  nodes: readonly (DagNode | IncludeDirective)[],
+  warnings: string[]
+): void {
+  for (const node of nodes) {
+    if (isIncludeDirective(node) || !isLoopGroupNode(node)) continue;
+
+    // An `include:` is already gone from the body here — expansion replaced it with the
+    // block's namespaced nodes, which is what makes a composed terminal sink visible to
+    // these checks at all. The body type still admits one, so it stays a participant in
+    // the sink count and is never itself classified as a gate or an interactive sink.
+    const soleSink = loopGroupSoleTerminalSink(node.loop_group.nodes);
+
+    // A gate node inside a loop_group body only pauses the enclosing loop when it is
+    // the body's SOLE terminal sink (#2707 step 3, target-model decision (b)) — a
+    // mid-body or co-terminal gate has no defined resume semantics and silently does
+    // not stop iteration (mid-body resume-to-node is deferred to #2708). Guidance for
+    // the new authoring pattern, not a rejection: the workflow keeps loading either
+    // way. A gate placed here by the legacy `on_reject` mechanism predates this
+    // pattern and is equally unable to stop the loop from this position, so it gets
+    // the same verdict.
+    //
+    // Every gate in the body, not just the first: a body may legitimately contain
+    // more than one (e.g. an "approve to start" gate followed by work followed by
+    // a "review the result" gate) — only ONE can validly be the sole terminal sink,
+    // but each needs its own placement/completion-reference verdict, not just the
+    // first one found.
+    const gatesInBody = node.loop_group.nodes.filter(n => !isIncludeDirective(n) && isGateNode(n));
+    for (const gate of gatesInBody) {
+      if (gate !== soleSink) {
+        const message =
+          `Node '${gate.id}': a gate node inside a loop_group body must be the ` +
+          "body's sole terminal sink to pause the enclosing loop (#2707 step 3) — this " +
+          'gate is not, so it will not stop loop iteration. Move it to the end of the ' +
+          'body with nothing else depending on it, and no other node left un-depended-on.';
+        warnings.push(message);
+        getLog().debug({ id: gate.id, warning: message }, 'loop_group_gate_not_terminal_sink');
+      } else {
+        // Gate is validly the sole terminal sink. Design A (#2707 step 3) is
+        // deliberately unopinionated about what a decision means — the group's own
+        // 'until_bash' is the completion channel, and it either reads the gate's
+        // '$<gateId>.output.decision'/'.text' or it doesn't. If it doesn't, the
+        // human's answer is captured (every resolution still writes node_completed)
+        // but never consulted for completion — the loop just runs to max_iterations,
+        // silently ignoring every response. Structural check (does the until_bash
+        // string reference the gate's node id), not prose-sniffing — no judgment
+        // about what the check DOES with it, only whether it looks at it at all.
+        const untilBash = node.loop_group.until_bash;
+        const untilBashRefsGate =
+          untilBash !== undefined &&
+          Array.from(untilBash.matchAll(new RegExp(OUTPUT_REF_SOURCE, 'g'))).some(
+            m => m[1] === gate.id
+          );
+        if (!untilBashRefsGate) {
+          const gateRef = `$${gate.id}.output`;
+          const message =
+            `Node '${gate.id}': this gate is the loop_group's terminal sink, but ` +
+            `'loop_group.until_bash' does not reference '${gateRef}' — the human's ` +
+            'decision is captured but never consulted for completion, so the loop only ' +
+            `ends via max_iterations. Declare 'until_bash' checking '${gateRef}.decision' ` +
+            `(e.g. '[ "${gateRef}.decision" = "approve" ]') so the gate's answer actually ` +
+            'drives completion (#2707 step 3).';
+          warnings.push(message);
+          getLog().debug(
+            { id: gate.id, warning: message },
+            'loop_group_gate_completion_not_referenced'
+          );
+        }
+      }
+    }
+
+    // A body-terminal sink that is itself an interactive loop/loop_group can pause
+    // without stopping THIS group (#2753) — a bare gate sink is excluded here since
+    // that case is already correctly handled above (and by #2707 step 3 at runtime);
+    // this covers a sink whose own pause is trapped one level down instead.
+    if (
+      soleSink !== undefined &&
+      !isIncludeDirective(soleSink) &&
+      !isGateNode(soleSink) &&
+      isUnescalatableInteractiveSink(soleSink)
+    ) {
+      const message =
+        `Node '${node.id}': this loop_group's terminal sink ('${soleSink.id}') is itself an ` +
+        'interactive loop/loop_group — a pause inside it does not escalate to stop ' +
+        "this loop_group's own iteration (#2753). The outer loop can run further iterations " +
+        "while a human's answer to the inner pause is still pending. Only a gate node " +
+        'directly as the terminal sink correctly stops the enclosing loop_group ' +
+        '(#2707 step 3).';
+      warnings.push(message);
+      getLog().debug(
+        { id: node.id, sinkId: soleSink.id, warning: message },
+        'loop_group_nested_pause_not_escalated'
+      );
+    }
+
+    collectLoopGroupSinkWarnings(node.loop_group.nodes, warnings);
+  }
 }
 
 /**
@@ -405,6 +517,11 @@ function isUnescalatableInteractiveSink(node: DagNode | IncludeDirective): boole
  * loop body respectively, so warning on the enabling key covers their only
  * sanctioned usage — any other usage was already a dead (always-empty)
  * reference before this PR, with no behavior for a new warning to explain.
+ *
+ * Every notice here is about one node as its author wrote it — the gate ones read
+ * the RAW node to see a key Zod already normalized away. Verdicts about graph
+ * SHAPE are not here: the loop_group sink-shape checks live in
+ * `collectLoopGroupSinkWarnings`, which judges the expanded graph (#2756).
  */
 function collectGateAndLoopDeprecationWarnings(
   node: DagNode | IncludeDirective,
@@ -412,9 +529,9 @@ function collectGateAndLoopDeprecationWarnings(
   id: string,
   warnings: string[]
 ): void {
-  // An include directive has no gate/loop shape of its own — its expanded
-  // contents are scanned once inlined, like collectUnknownNodeKeys's own
-  // 'with:' handling for include nodes.
+  // An include directive has no gate/loop shape of its own, and its target is a
+  // workflow file in its own right: discovery parses that file and warns on what it
+  // declares there, so the inlined copy needs no second notice.
   if (isIncludeDirective(node)) return;
   if (isGateNode(node) && raw !== null && typeof raw === 'object') {
     const rawApproval = (raw as Record<string, unknown>).approval;
@@ -481,96 +598,6 @@ function collectGateAndLoopDeprecationWarnings(
       'signal line.';
     warnings.push(message);
     getLog().debug({ id, warning: message }, 'node_loop_group_until_deprecated');
-  }
-
-  // A gate node inside a loop_group body only pauses the enclosing loop when it is
-  // the body's SOLE terminal sink (#2707 step 3, target-model decision (b)) — a
-  // mid-body or co-terminal gate has no defined resume semantics and silently does
-  // not stop iteration (mid-body resume-to-node is deferred to #2708). This is
-  // guidance for the new authoring pattern, not a rejection: the file keeps loading
-  // either way, matching the grow-then-deprecate posture used throughout this
-  // function — including for a gate placed here via the legacy `on_reject`
-  // mechanism, which predates and is unrelated to this pattern but is equally
-  // unable to stop the loop from this position.
-  if (isLoopGroupNode(node)) {
-    // Every body entry — including an unexpanded `include:` directive, which has
-    // the identical `depends_on` shape (both extend dagNodeBaseSchema) and is a
-    // real graph participant here, not yet inlined — contributes to and can BE a
-    // terminal sink. Excluding it would silently misclassify a gate a downstream
-    // include node depends on as "terminal", and miss an include node that is
-    // itself a second, co-terminal sink.
-    const bodyDependedOn = new Set(node.loop_group.nodes.flatMap(n => n.depends_on ?? []));
-    const bodySinks = node.loop_group.nodes.filter(n => !bodyDependedOn.has(n.id));
-    // Every gate in the body, not just the first: a body may legitimately contain
-    // more than one (e.g. an "approve to start" gate followed by work followed by
-    // a "review the result" gate) — only ONE can validly be the sole terminal sink,
-    // but each needs its own placement/completion-reference verdict, not just the
-    // first one found.
-    const gatesInBody = node.loop_group.nodes.filter(n => !isIncludeDirective(n) && isGateNode(n));
-    for (const gate of gatesInBody) {
-      if (bodyDependedOn.has(gate.id) || bodySinks.length > 1) {
-        const message =
-          `Node '${gate.id}': a gate node inside a loop_group body must be the ` +
-          "body's sole terminal sink to pause the enclosing loop (#2707 step 3) — this " +
-          'gate is not, so it will not stop loop iteration. Move it to the end of the ' +
-          'body with nothing else depending on it, and no other node left un-depended-on.';
-        warnings.push(message);
-        getLog().debug({ id: gate.id, warning: message }, 'loop_group_gate_not_terminal_sink');
-      } else {
-        // Gate is validly the sole terminal sink. Design A (#2707 step 3) is
-        // deliberately unopinionated about what a decision means — the group's own
-        // 'until_bash' is the completion channel, and it either reads the gate's
-        // '$<gateId>.output.decision'/'.text' or it doesn't. If it doesn't, the
-        // human's answer is captured (every resolution still writes node_completed)
-        // but never consulted for completion — the loop just runs to max_iterations,
-        // silently ignoring every response. Structural check (does the until_bash
-        // string reference the gate's node id), not prose-sniffing — no judgment
-        // about what the check DOES with it, only whether it looks at it at all.
-        const untilBash = node.loop_group.until_bash;
-        const untilBashRefsGate =
-          untilBash !== undefined &&
-          Array.from(untilBash.matchAll(new RegExp(OUTPUT_REF_SOURCE, 'g'))).some(
-            m => m[1] === gate.id
-          );
-        if (!untilBashRefsGate) {
-          const gateRef = `$${gate.id}.output`;
-          const message =
-            `Node '${gate.id}': this gate is the loop_group's terminal sink, but ` +
-            `'loop_group.until_bash' does not reference '${gateRef}' — the human's ` +
-            'decision is captured but never consulted for completion, so the loop only ' +
-            `ends via max_iterations. Declare 'until_bash' checking '${gateRef}.decision' ` +
-            `(e.g. '[ "${gateRef}.decision" = "approve" ]') so the gate's answer actually ` +
-            'drives completion (#2707 step 3).';
-          warnings.push(message);
-          getLog().debug(
-            { id: gate.id, warning: message },
-            'loop_group_gate_completion_not_referenced'
-          );
-        }
-      }
-    }
-
-    // A body-terminal sink that is itself an interactive loop/loop_group can pause
-    // without stopping THIS group (#2753) — a bare gate sink is excluded here since
-    // that case is already correctly handled above (and by #2707 step 3 at runtime);
-    // this covers a sink whose own pause is trapped one level down instead.
-    if (bodySinks.length === 1) {
-      const sink = bodySinks[0];
-      if (!isIncludeDirective(sink) && !isGateNode(sink) && isUnescalatableInteractiveSink(sink)) {
-        const message =
-          `Node '${id}': this loop_group's terminal sink ('${sink.id}') is itself an ` +
-          'interactive loop/loop_group — a pause inside it does not escalate to stop ' +
-          "this loop_group's own iteration (#2753). The outer loop can run further iterations " +
-          "while a human's answer to the inner pause is still pending. Only a gate node " +
-          'directly as the terminal sink correctly stops the enclosing loop_group ' +
-          '(#2707 step 3).';
-        warnings.push(message);
-        getLog().debug(
-          { id, sinkId: sink.id, warning: message },
-          'loop_group_nested_pause_not_escalated'
-        );
-      }
-    }
   }
 
   // Recurse into a loop_group body — mirrors collectUnknownNodeKeys's own body
@@ -1167,10 +1194,9 @@ export function validateDagStructure(
       if (workflowInBody) {
         return `loop_group '${node.id}' body: 'workflow' (sub-run) is not supported inside a loop_group body`;
       }
-      const dependedOn = new Set(node.loop_group.nodes.flatMap(n => n.depends_on ?? []));
-      const sinks = node.loop_group.nodes.filter(n => !dependedOn.has(n.id));
+      const soleSink = loopGroupSoleTerminalSink(node.loop_group.nodes);
       const misplacedWait = node.loop_group.nodes.find(
-        n => !isIncludeDirective(n) && isWaitNode(n) && (dependedOn.has(n.id) || sinks.length !== 1)
+        n => !isIncludeDirective(n) && isWaitNode(n) && n !== soleSink
       );
       if (misplacedWait) {
         return `loop_group '${node.id}' body: wait node '${misplacedWait.id}' must be the body's sole terminal sink`;

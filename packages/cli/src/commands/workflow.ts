@@ -4432,6 +4432,16 @@ export async function workflowGetCommand(
       for (const f of leaveBehind.artifactFiles.slice(0, 20)) console.log(`      - ${f}`);
       if (leaveBehind.artifactFiles.length > 20) console.log('      …');
     }
+    const omitted = leaveBehind.artifactFilesOmitted;
+    if (omitted.internalFiles > 0) {
+      console.log(
+        `    Engine-internal artifact files (not listed): ${String(omitted.internalFiles)}`
+      );
+    }
+    if (omitted.truncated) console.log('    Artifact list truncated at the display cap');
+    for (const path of omitted.unreadable) {
+      console.log(`    Unreadable artifact directory: ${path === '' ? '$ARTIFACTS_DIR' : path}`);
+    }
   }
   if (verbose) {
     const parseWarnings = readParseWarningEvents(events);
@@ -4465,6 +4475,20 @@ interface LeaveBehind {
   adopted_from?: string;
   adopted_by: string[];
   artifactFiles: string[];
+  artifactFilesOmitted: ArtifactOmissions;
+}
+
+/**
+ * What the artifact walk left out of `artifactFiles`, so a reader is never
+ * quietly handed a partial list (#3450).
+ */
+interface ArtifactOmissions {
+  /** Files under the engine's own artifacts child, summarized rather than listed. */
+  internalFiles: number;
+  /** The display cap stopped the listing before the run's files ran out. */
+  truncated: boolean;
+  /** Directories the walk could not read, relative to `$ARTIFACTS_DIR`. */
+  unreadable: string[];
 }
 
 async function resolveRunTranscriptPath(run: WorkflowRun): Promise<string | null> {
@@ -4476,7 +4500,11 @@ async function resolveRunTranscriptPath(run: WorkflowRun): Promise<string | null
 async function buildLeaveBehind(run: WorkflowRun): Promise<LeaveBehind> {
   const codebase = run.codebase_id ? await codebaseDb.getCodebase(run.codebase_id) : null;
 
-  const leaveBehind: LeaveBehind = { adopted_by: [], artifactFiles: [] };
+  const leaveBehind: LeaveBehind = {
+    adopted_by: [],
+    artifactFiles: [],
+    artifactFilesOmitted: { internalFiles: 0, truncated: false, unreadable: [] },
+  };
 
   if (run.working_path) {
     leaveBehind.worktree = run.working_path;
@@ -4496,7 +4524,7 @@ async function buildLeaveBehind(run: WorkflowRun): Promise<LeaveBehind> {
     }
   }
 
-  // Artifact file list — capped walk so `get` stays cheap on big runs.
+  // Artifact file list — operator-facing files, capped for display.
   // #3097: route the persisted `output_root` through the shared resolver so
   // the same `ARCHON_HOME` containment check every other persisted-root
   // reader in this file already enforces applies here. An unresolvable root
@@ -4506,7 +4534,9 @@ async function buildLeaveBehind(run: WorkflowRun): Promise<LeaveBehind> {
   if (artifactsRoot) {
     try {
       const artifactsDir = archonPaths.getRunArtifactsDirForRoot(artifactsRoot, run.id);
-      leaveBehind.artifactFiles = listArtifactFiles(artifactsDir);
+      const listing = listArtifactFiles(artifactsDir);
+      leaveBehind.artifactFiles = listing.files;
+      leaveBehind.artifactFilesOmitted = listing.omitted;
     } catch (error) {
       getLog().debug({ err: error as Error }, 'cli.workflow_get_artifact_walk_failed');
     }
@@ -4514,26 +4544,57 @@ async function buildLeaveBehind(run: WorkflowRun): Promise<LeaveBehind> {
   return leaveBehind;
 }
 
-/** Relative paths under `dir`, shallow-walked with a hard cap (#2747 display). */
-function listArtifactFiles(dir: string, maxFiles = 200): string[] {
-  const out: string[] = [];
-  const walk = (current: string, prefix: string): void => {
-    if (out.length >= maxFiles) return;
+/**
+ * The operator-facing files under `dir`, relative and capped for display (#2747).
+ *
+ * The engine writes its own bookkeeping under `RUN_ARTIFACTS_ENGINE_SUBDIR` —
+ * one typed-artifact listing per node invocation, node-output spills — which on
+ * a pack run outnumbers the reports a person reads and used to consume the whole
+ * cap. Those files are counted rather than listed (#3450); their content is
+ * already reachable through the engine's own `nodes/` sidecars.
+ *
+ * The walk stays exhaustive so the counts are true: it is the same tree the
+ * console's artifacts route already walks in full on every run page. Each
+ * directory yields its own files before its subdirectories, sorted, so the cap
+ * and the human preview fall on nested content rather than on whichever entries
+ * `readdir` happened to return first — a run's reports sit at the top level.
+ */
+function listArtifactFiles(dir: string, maxFiles = 200): ArtifactListing {
+  const files: string[] = [];
+  const omitted: ArtifactOmissions = { internalFiles: 0, truncated: false, unreadable: [] };
+  const walk = (current: string, prefix: string, internal: boolean): void => {
     let entries: Dirent[];
     try {
       entries = readdirSync(current, { withFileTypes: true });
-    } catch {
+    } catch (error) {
+      // A directory that is simply gone dropped nothing an operator could open.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') omitted.unreadable.push(prefix);
       return;
     }
+    // Order only matters where entries reach the list; inside the engine's child
+    // they are counted, and a pack run leaves hundreds of them there.
+    if (!internal) entries.sort((left, right) => left.name.localeCompare(right.name));
+    const relative = (entry: Dirent): string => (prefix ? `${prefix}/${entry.name}` : entry.name);
+    const isEngineOwned = (entry: Dirent): boolean =>
+      internal || archonPaths.isRunArtifactsEngineEntry(prefix, entry.name);
     for (const entry of entries) {
-      if (out.length >= maxFiles) return;
-      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) walk(join(current, entry.name), rel);
-      else out.push(rel);
+      if (entry.isDirectory()) continue;
+      if (isEngineOwned(entry)) omitted.internalFiles++;
+      else if (files.length >= maxFiles) omitted.truncated = true;
+      else files.push(relative(entry));
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      walk(join(current, entry.name), relative(entry), isEngineOwned(entry));
     }
   };
-  walk(dir, '');
-  return out;
+  walk(dir, '', false);
+  return { files, omitted };
+}
+
+interface ArtifactListing {
+  files: string[];
+  omitted: ArtifactOmissions;
 }
 
 function readParseWarningEvents(events: readonly WorkflowEventRow[]): string[] {

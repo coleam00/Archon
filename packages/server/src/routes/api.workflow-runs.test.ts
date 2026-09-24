@@ -3531,6 +3531,38 @@ describe('GET /api/runs/:runId/artifacts', () => {
     expect(body.files.map(f => f.path)).toEqual(['report.md']);
   });
 
+  // Same rule as `archon workflow get`: only the engine's own root child is
+  // left out, so the console and the CLI list the same files.
+  test("hides only the engine's own store and lists a workflow's dotfiles", async () => {
+    const runId = 'run-dotfiles-listing';
+    const dir = join(wsRoot(), '_local', 'workspace', 'artifacts', 'runs', runId);
+    await mkdir(join(dir, '.archon', 'typed-artifacts'), { recursive: true });
+    await mkdir(join(dir, 'review', '.archon'), { recursive: true });
+    await writeFile(join(dir, '.archon', 'typed-artifacts', 'listing.json'), '{}');
+    await writeFile(join(dir, '.pr-number'), '42');
+    await writeFile(join(dir, 'review', '.archon', 'notes.md'), 'notes');
+    await writeFile(join(dir, 'plan.md'), '# plan');
+    mockGetWorkflowRun.mockImplementationOnce(async () => ({
+      ...MOCK_RUNNING_RUN,
+      id: runId,
+      codebase_id: 'cb-1',
+    }));
+    mockGetCodebase.mockImplementationOnce(async () => ({
+      name: 'workspace',
+      kind: 'repo',
+      default_cwd: '/home/u/workspace',
+    }));
+    const { app } = makeApp();
+    const response = await app.request(`/api/runs/${runId}/artifacts`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { files: { path: string }[] };
+    expect(body.files.map(f => f.path).sort()).toEqual([
+      '.pr-number',
+      'plan.md',
+      'review/.archon/notes.md',
+    ]);
+  });
+
   test('a persisted output_root wins over a codebase renamed since the run', async () => {
     const runId = 'run-persisted-root';
     const root = join(wsRoot(), 'acme', 'original');

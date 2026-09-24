@@ -34,8 +34,9 @@ Archon provides a unified directory and configuration system with:
 │       ├── worktrees/              # Git worktrees for this project (repo kinds only)
 │       ├── artifacts/              # Workflow artifacts — NEVER in git
 │       │   ├── runs/<run-id>/      #   $ARTIFACTS_DIR for one run
-│       │   │   ├── .archon/node-output-spills/  # engine-owned oversized shell handoffs
-│       │   │   │   └── *.nodeoutput
+│       │   │   ├── .archon/        #     engine-owned bookkeeping, never listed as artifacts
+│       │   │   │   ├── node-output-spills/  # oversized shell handoffs (*.nodeoutput)
+│       │   │   │   └── typed-artifacts/     # one listing per node invocation
 │       │   │   └── nodes/          #     typed output sidecars (<id>.md + <id>.meta.json)
 │       │   ├── scopes/<workflow>/<scope>/   # cross-invocation artifacts (persist_session)
 │       │   └── uploads/<conv-id>/  #   Web UI file uploads (ephemeral)
@@ -63,10 +64,11 @@ Archon provides a unified directory and configuration system with:
   projects and `_cwd` projects have no `source/` or `worktrees/` — they run in place.
 - `workspaces/<project>/artifacts/` - Run output. `$ARTIFACTS_DIR` is
   `artifacts/runs/<run-id>/`. Oversized values passed to shell nodes are retained in the
-  engine-owned `.archon/node-output-spills/` child so concurrent runs never share the deferred
-  read and workflow-authored root files remain untouched. Archon currently retains filesystem
-  run artifacts until the operator removes them; `archon workflow cleanup` deletes old database
-  run records, not these directories.
+  engine-owned `.archon/` child so concurrent runs never share the deferred read and
+  workflow-authored root files remain untouched. That child is the engine's own bookkeeping:
+  `archon workflow get` and the console run page list a run's artifacts without it. Archon
+  currently retains filesystem run artifacts until the operator removes them;
+  `archon workflow cleanup` deletes old database run records, not these directories.
 - `workspaces/<project>/logs/` - One JSONL execution log per run.
 - `workspaces/<project>/state/` - `$STATE_DIR`. Cross-run workflow state, shared by every
   workflow in the project. Survives worktree teardown; never visible to git.
