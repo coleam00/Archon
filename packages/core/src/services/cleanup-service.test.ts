@@ -1339,6 +1339,10 @@ describe('runScheduledCleanup', () => {
     const report = await runScheduledCleanup();
 
     expect(report.removed).toHaveLength(0);
+    expect(report.skipped).toContainEqual({
+      id: 'env-ref-gone-open',
+      reason: 'PR is open (active review)',
+    });
     expect(mockDestroy).not.toHaveBeenCalled();
     expect(mockUpdateStatus).not.toHaveBeenCalled();
   });
@@ -1361,9 +1365,9 @@ describe('runScheduledCleanup', () => {
     expect(mockDestroy).not.toHaveBeenCalled();
   });
 
-  // A broken repo path must not cost the environment the staleness sweep that is the
-  // only thing left that can reclaim it.
-  test('falls through to the staleness sweep when the merge check throws', async () => {
+  // A merge check that never resolved is not an answer. Letting it reach the staleness
+  // sweep would delete an old branch on age alone, which no signal called unmerged.
+  test('reports the environment and skips the staleness sweep when the merge check throws', async () => {
     mockListAllActiveWithCodebase.mockResolvedValueOnce([
       makeEnvironmentWithCodebase({
         id: 'env-unreadable',
@@ -1374,23 +1378,90 @@ describe('runScheduledCleanup', () => {
     ]);
     mockWorktreeExists.mockResolvedValue(true);
     mockLocalBranchExists.mockRejectedValue(new Error('repository is unreadable'));
+
+    const report = await runScheduledCleanup();
+
+    expect(report.errors).toContainEqual({
+      id: 'env-unreadable',
+      error: 'repository is unreadable',
+    });
+    expect(report.removed).toHaveLength(0);
+    expect(mockDestroy).not.toHaveBeenCalled();
+    expect(mockUpdateStatus).not.toHaveBeenCalled();
+  });
+
+  // An open PR is active work. Age must not decide it, and the operator needs to see why
+  // the worktree stayed.
+  test('reports and keeps a stale environment whose PR is open', async () => {
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([
+      makeEnvironmentWithCodebase({
+        id: 'env-stale-open-pr',
+        working_path: '/workspace/repo/worktrees/stale-open-pr',
+        branch_name: 'stale-open-pr',
+        created_at: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+      }),
+    ]);
+    mockWorktreeExists.mockResolvedValue(true);
+    mockGetPrState.mockResolvedValue('OPEN');
+
+    const report = await runScheduledCleanup();
+
+    expect(report.skipped).toContainEqual({
+      id: 'env-stale-open-pr',
+      reason: 'PR is open (active review)',
+    });
+    expect(report.removed).toHaveLength(0);
+    expect(mockDestroy).not.toHaveBeenCalled();
+  });
+
+  test('reports and keeps a stale environment whose merge state is unverifiable', async () => {
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([
+      makeEnvironmentWithCodebase({
+        id: 'env-stale-unjudgeable',
+        working_path: '/workspace/repo/worktrees/stale-unjudgeable',
+        branch_name: 'stale-unjudgeable',
+        created_at: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+      }),
+    ]);
+    mockWorktreeExists.mockResolvedValue(true);
+    mockLocalBranchExists.mockResolvedValue(false);
+    mockGetPrState.mockResolvedValue('NONE');
+
+    const report = await runScheduledCleanup();
+
+    expect(report.skipped).toContainEqual({
+      id: 'env-stale-unjudgeable',
+      reason: 'branch ref is gone and no PR was found — merge state unverifiable',
+    });
+    expect(report.removed).toHaveLength(0);
+    expect(mockDestroy).not.toHaveBeenCalled();
+  });
+
+  // The pre-existing staleness policy still applies to work git actually settled as
+  // unmerged — the fix above narrows what reaches it, it does not remove it.
+  test('still stale-sweeps an environment git confirms is unmerged', async () => {
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([
+      makeEnvironmentWithCodebase({
+        id: 'env-stale-unmerged',
+        working_path: '/workspace/repo/worktrees/stale-unmerged',
+        branch_name: 'stale-unmerged',
+        created_at: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+      }),
+    ]);
+    mockWorktreeExists.mockResolvedValue(true);
     mockGetById.mockResolvedValueOnce(
       makeEnvironment({
-        id: 'env-unreadable',
+        id: 'env-stale-unmerged',
         codebase_id: 'codebase-1',
-        working_path: '/workspace/repo/worktrees/unreadable',
-        branch_name: 'unreadable',
+        working_path: '/workspace/repo/worktrees/stale-unmerged',
+        branch_name: 'stale-unmerged',
       })
     );
     mockGetCodebase.mockResolvedValueOnce(makeCodebase({ id: 'codebase-1' }));
 
     const report = await runScheduledCleanup();
 
-    expect(report.removed).toContain('env-unreadable (stale)');
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ envId: 'env-unreadable', branchName: 'unreadable' }),
-      'cleanup.merge_check_failed'
-    );
+    expect(report.removed).toContain('env-stale-unmerged (stale)');
   });
 });
 

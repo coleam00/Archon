@@ -583,24 +583,18 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
           mainRepoPath,
           env.codebase_default_cwd
         );
-        let verdict: MergeVerdict = 'unmerged';
-        try {
-          verdict = await judgeBranchForRemoval({
-            repoPath: mainRepoPath,
-            branchName: toBranchName(env.branch_name),
-            baseRef: remoteMainRef,
-            prStateCache,
-            includeClosed: false,
-            remote,
-          });
-        } catch (error) {
-          // An unreadable repo or ref must not also cost the environment the staleness
-          // sweep below, which is what still reclaims a worktree whose repo moved away.
-          getLog().warn(
-            { err: error as Error, envId: env.id, branchName: env.branch_name },
-            'cleanup.merge_check_failed'
-          );
-        }
+        // A throw here reaches the per-environment catch below, which records the
+        // failure and leaves the environment for the next cycle. It must not fall
+        // through to the staleness sweep: an unresolved merge check would then be
+        // indistinguishable from confirmed-unmerged work and lose its branch to age.
+        const verdict = await judgeBranchForRemoval({
+          repoPath: mainRepoPath,
+          branchName: toBranchName(env.branch_name),
+          baseRef: remoteMainRef,
+          prStateCache,
+          includeClosed: false,
+          remote,
+        });
 
         if (verdict === 'reclaimable') {
           const blocker = await getRemovalBlocker(env);
@@ -627,6 +621,15 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
           } else {
             report.removed.push(`${env.id} (merged)`);
           }
+          continue;
+        }
+
+        // The staleness sweep below deletes the branch on age alone, so only work
+        // git or the PR settled as unmerged may reach it. An open PR or an
+        // unverifiable merge state is reported and kept.
+        const skipReason = skipReasonFor(verdict);
+        if (skipReason) {
+          report.skipped.push({ id: env.id, reason: skipReason });
           continue;
         }
 
