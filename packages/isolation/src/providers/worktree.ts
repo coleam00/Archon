@@ -905,14 +905,9 @@ export class WorktreeProvider implements IIsolationProvider {
     // and still holds. Without both, a half-set-up worktree survives with no
     // isolation-environment row tracking it, and the next run on the same branch
     // adopts it as ready (#3448).
-    let warnings: string[];
-    try {
-      warnings = await this.finishWorktreeSetup(request, repoPath, worktreePath, worktreeConfig);
-    } catch (error) {
-      const setupError = error instanceof Error ? error : new Error(String(error));
-      await this.rollBackIncompleteWorktree(repoPath, worktreePath, setupError);
-      throw setupError;
-    }
+    const warnings = await this.rollBackOnFailure(repoPath, worktreePath, () =>
+      this.finishWorktreeSetup(request, repoPath, worktreePath, worktreeConfig)
+    );
 
     const lockWarning = await this.releaseSetupLock(repoPath, worktreePath);
 
@@ -988,6 +983,25 @@ export class WorktreeProvider implements IIsolationProvider {
         `(${err.message}); run \`git worktree unlock ${worktreePath}\` or a later run will ` +
         'refuse to reuse it.'
       );
+    }
+  }
+
+  /**
+   * Run a step on a checkout this call just added, rolling the checkout back if
+   * the step fails. Every step between a successful locked add and the unlock
+   * runs through here, so none can leave a locked leftover behind.
+   */
+  private async rollBackOnFailure<T>(
+    repoPath: RepoPath,
+    worktreePath: string,
+    step: () => Promise<T>
+  ): Promise<T> {
+    try {
+      return await step();
+    } catch (error) {
+      const setupError = error instanceof Error ? error : new Error(String(error));
+      await this.rollBackIncompleteWorktree(repoPath, worktreePath, setupError);
+      throw setupError;
     }
   }
 
@@ -1446,21 +1460,17 @@ export class WorktreeProvider implements IIsolationProvider {
       // From here the checkout is this call's own and still locked, so the
       // unforced orphan cleanup in `createFromPR` would refuse it. Only this
       // step is covered: a failed add may mean another attempt holds the path.
-      try {
+      await this.rollBackOnFailure(toRepoPath(repoPath), worktreePath, () =>
         // Create a local tracking branch so it's not detached HEAD
-        await this.createBranchWithStaleRetry(
+        this.createBranchWithStaleRetry(
           repoPath,
           () =>
             execFileAsync('git', ['-C', worktreePath, 'checkout', '-b', reviewBranch, prSha], {
               timeout: GIT_OPERATION_TIMEOUT_MS,
             }),
           reviewBranch
-        );
-      } catch (error) {
-        const setupError = error instanceof Error ? error : new Error(String(error));
-        await this.rollBackIncompleteWorktree(toRepoPath(repoPath), worktreePath, setupError);
-        throw setupError;
-      }
+        )
+      );
     } else {
       // No SHA: fetch and create review branch. The refspec's destination is the
       // local branch refs/heads/pr-<n>-review, so concurrent fork-PR launches
@@ -1608,10 +1618,13 @@ export class WorktreeProvider implements IIsolationProvider {
     // The branch was created at its start point a moment ago and nothing has written to
     // it since, so its commit IS the cut-from commit -- read from the branch itself rather
     // than re-resolving a start ref that may have moved in between.
-    const { stdout: cutFrom } = await execFileAsync(
-      'git',
-      ['-C', worktreePath, 'rev-parse', '--verify', 'HEAD^{commit}'],
-      { timeout: GIT_OPERATION_TIMEOUT_MS }
+    const { stdout: cutFrom } = await this.rollBackOnFailure(
+      toRepoPath(repoPath),
+      worktreePath,
+      () =>
+        execFileAsync('git', ['-C', worktreePath, 'rev-parse', '--verify', 'HEAD^{commit}'], {
+          timeout: GIT_OPERATION_TIMEOUT_MS,
+        })
     );
     return cutFrom.trim();
   }

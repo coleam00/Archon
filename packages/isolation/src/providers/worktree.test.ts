@@ -1417,6 +1417,23 @@ describe('WorktreeProvider', () => {
       expect(checkoutAttempts).toBe(2);
     });
 
+    test('removes the locked checkout when reading its cut-from commit fails', async () => {
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('rev-parse') && args.includes('HEAD^{commit}')) {
+          throw new Error('fatal: not a valid object name HEAD');
+        }
+        return { stdout: '', stderr: '' };
+      });
+      readWorktreeLockSpy.mockResolvedValue({ reason: 'archon: worktree setup in progress' });
+
+      await expect(provider.create(baseRequest)).rejects.toThrow(/not a valid object name/);
+      expect(execSpy).toHaveBeenCalledWith(
+        'git',
+        expect.arrayContaining(['worktree', 'remove', '--force', '--force']),
+        expect.any(Object)
+      );
+    });
+
     describe('fork PR with SHA whose review-branch checkout fails', () => {
       const request: IsolationRequest = {
         ...baseRequest,
