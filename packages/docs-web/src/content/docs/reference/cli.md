@@ -986,7 +986,7 @@ archon isolation cleanup
 # Custom threshold
 archon isolation cleanup 14
 
-# Remove environments with branches merged into main (also deletes remote branches)
+# Remove environments with branches merged into the base branch (also deletes remote branches)
 archon isolation cleanup --merged
 
 # Also remove environments whose PRs were closed without merging
@@ -994,8 +994,24 @@ archon isolation cleanup --merged --include-closed
 ```
 
 Merge detection uses three signals in order: git branch ancestry (fast-forward / merge commit),
-patch equivalence (squash-merge via `git cherry`), and GitHub PR state via the `gh` CLI.
-The `gh` CLI is optional — if absent, only git signals are used.
+patch equivalence (single-commit squash-merge via `git cherry`), and GitHub PR state via the
+`gh` CLI. A squash merge of more than one commit is invisible to git here, so PR state is what
+recognises it. A merged or closed PR counts only while neither the worktree's HEAD nor the
+local branch has anything past the PR's head commit: run branch names get reused, and new
+commits on a reused branch or a detached HEAD are not covered by the old PR, so that
+environment is kept. The same goes for a merge git detects: the worktree's HEAD must be
+merged into the base too, not just the branch. A PR head commit pushed from somewhere
+else is fetched from the remote before that comparison; if the fetch fails, the environment is
+kept and reported as a failed merge check. The `gh` CLI is optional — if absent, only git
+signals are used. If `gh` is installed but the lookup fails (auth, rate limit), the environment
+is kept and reported as `PR state lookup failed`. The scheduled
+sweep uses the same three signals, so both paths agree on what counts as merged. Each
+codebase's output names the base ref the comparison actually used — the configured
+`worktree.baseBranch`, or the git-detected default branch when that is unset.
+
+Both git signals read the local branch ref. When that ref is gone but the worktree remains,
+the PR decides, checked against the worktree's HEAD; if no PR answers for the branch either, the environment is kept and reported
+as `merge state unverifiable` rather than removed on an unverified guess.
 
 By default, branches with a **CLOSED** PR are skipped. Pass `--include-closed` to clean
 those up as well. Branches with an **OPEN** PR are always skipped.
