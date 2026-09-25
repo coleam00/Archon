@@ -238,6 +238,7 @@ gh pr view <N> --repo coleam00/Archon --json title,body
 ```
 
 **Categorize into Keep a Changelog sections:**
+- **Breaking** — changes that break existing behavior users may rely on (only when there are any)
 - **Added** — new features, new files, new capabilities
 - **Changed** — modifications to existing behavior
 - **Fixed** — bug fixes
@@ -275,6 +276,10 @@ gh pr view <N> --repo coleam00/Archon --json title,body
 
 One-line summary of the release.
 
+### Breaking
+
+- Entry one (#PR)
+
 ### Added
 
 - Entry one (#PR)
@@ -288,6 +293,12 @@ One-line summary of the release.
 
 - Entry one (#PR)
 ```
+
+Omit the `### Breaking` section entirely when the release has no breaking changes.
+**`### Breaking` must come first**, immediately after the one-line summary and before
+Added/Changed/Fixed/Removed — Step 9's release workflow reads this section verbatim
+into the GitHub release body, so this file's own section order is what makes breaking
+changes appear first on the release page.
 
 Move any content under `[Unreleased]` into the new version section. Leave `[Unreleased]` header with nothing under it.
 
@@ -342,8 +353,15 @@ git fetch origin main
 git tag vx.y.z origin/main
 git push origin vx.y.z
 
-# Create a GitHub Release from the tag (uses changelog content as release notes)
-gh release create vx.y.z --title "vx.y.z" --notes "{changelog section content without the ## header}"
+# Create a GitHub Release from the tag. --generate-notes is a placeholder: the
+# push above already triggered .github/workflows/release.yml, and once its
+# `release` job finishes building binaries (5-10 min), its "Build release
+# notes" step overwrites this release's body with CHANGELOG.md's own
+# `## [x.y.z]` section (Breaking first, per Step 6) plus install instructions.
+# That job is the single source of truth for the body, so it does not matter
+# that this step's placeholder is throwaway, or which of the two finishes
+# first — do NOT hand-craft curated notes here, they would just be discarded.
+gh release create vx.y.z --title "vx.y.z" --generate-notes
 
 # Sync dev with main so both branches are identical
 git checkout dev
