@@ -73,6 +73,7 @@ import {
   clearRegistry,
   getProviderCapabilities,
 } from '@archon/providers';
+import type { ProviderFailure } from '@archon/provider-contract';
 import type { SendQueryOptions } from '@archon/providers';
 import { mergeTokenUsage, type MessageChunk, type TokenUsage } from '@archon/providers/types';
 clearRegistry();
@@ -4300,6 +4301,130 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
     );
     expect(retryMessages.length).toBeGreaterThan(0);
   }, 5_000);
+
+  // A provider that classified its own failure reports it as `failure` on the result. The
+  // legacy `errors` text below reads as fatal to the prose classifier, which is exactly the
+  // decision the typed class must override (#3520).
+  async function attemptsForTypedFailure(
+    failure: ProviderFailure,
+    errors: string[] = [failure.evidence]
+  ): Promise<{ calls: number; failedKinds: unknown[]; runFailed: boolean }> {
+    const realSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+    try {
+      let calls = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        calls++;
+        if (calls === 1) {
+          yield {
+            type: 'result',
+            isError: true,
+            errorSubtype: 'error_during_execution',
+            errors,
+            failure,
+          };
+          return;
+        }
+        yield { type: 'assistant', content: 'Recovered' };
+        yield { type: 'result', sessionId: 'typed-recovered' };
+      });
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
+      await executeDagWorkflow(
+        dagOptions({
+          deps: mockDeps,
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: {
+            name: 'dag-typed-failure',
+            nodes: [
+              {
+                id: 'my-node',
+                kind: 'agent',
+                source: { kind: 'command', name: 'my-cmd' },
+                retry: { max_attempts: 1, delay_ms: 1 },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('dag-typed-failure-run'),
+        })
+      );
+      const failedKinds = store.persistWorkflowEvent.mock.calls
+        .map(([event]) => event)
+        .filter(event => event.event_type === 'node_failed')
+        .map(event => event.data?.failure_kind);
+      return { calls, failedKinds, runFailed: store.failWorkflowRun.mock.calls.length > 0 };
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+  }
+
+  it('retries a typed transient failure whose text reads as fatal — #3520', async () => {
+    const result = await attemptsForTypedFailure({
+      class: 'transient',
+      evidence: 'upstream proxy returned 401 unauthorized while the backend restarted',
+    });
+    expect(result.calls).toBe(2);
+    expect(result.failedKinds).toEqual(['transient']);
+    expect(result.runFailed).toBe(false);
+  }, 5_000);
+
+  it.each([
+    'upstream proxy returned 401 unauthorized while the backend restarted',
+    'connection reset by peer (econnreset)',
+    'the provider reported a problem',
+  ])(
+    'a typed class decides retry whatever the text says: %s — #3520',
+    async evidence => {
+      // Transient retries once and recovers; auth never retries; neither depends on the text.
+      expect((await attemptsForTypedFailure({ class: 'transient', evidence })).calls).toBe(2);
+      const auth = await attemptsForTypedFailure({ class: 'auth', evidence });
+      expect(auth.calls).toBe(1);
+      expect(auth.failedKinds).toEqual(['fatal']);
+    },
+    5_000
+  );
+
+  it('a typed rate limit earns the widened budget without rate-limit wording — #3520', async () => {
+    const realSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+    try {
+      let calls = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        calls++;
+        yield {
+          type: 'result',
+          isError: true,
+          errorSubtype: 'error_during_execution',
+          errors: ['request refused'],
+          failure: { class: 'rate_limited', evidence: 'request refused' },
+        };
+      });
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: {
+            name: 'dag-typed-rate-limit',
+            nodes: [
+              {
+                id: 'my-node',
+                kind: 'agent',
+                source: { kind: 'command', name: 'my-cmd' },
+                retry: { max_attempts: 1, delay_ms: 1 },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('dag-typed-rate-limit-run'),
+        })
+      );
+      expect(calls).toBe(1 + RATE_LIMIT_MAX_RETRIES);
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+  }, 10_000);
 });
 
 describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#2088)', () => {
@@ -7377,6 +7502,60 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         );
 
         // The failed attempt is re-streamed within iteration 1 and the run completes.
+        expect(callCount).toBe(2);
+        expect(store.completeWorkflowRun).toHaveBeenCalled();
+        expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      } finally {
+        globalThis.setTimeout = realSetTimeout;
+      }
+    }, 10_000);
+
+    it('retries an iteration whose typed transient failure reads as fatal — #3520', async () => {
+      const realSetTimeout = globalThis.setTimeout;
+      globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+      try {
+        let callCount = 0;
+        mockSendQueryDag.mockImplementation(async function* () {
+          callCount++;
+          if (callCount === 1) {
+            yield {
+              type: 'result',
+              isError: true,
+              errorSubtype: 'error_during_execution',
+              errors: ['403 forbidden from the upstream gateway'],
+              failure: { class: 'transient', evidence: '403 forbidden from the upstream gateway' },
+            };
+            return;
+          }
+          yield { type: 'assistant', content: 'Did the task. <promise>COMPLETE</promise>' };
+          yield { type: 'result', sessionId: 'loop-typed-retry-sess' };
+        });
+
+        const store = createMockStore();
+        await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            platform: createMockPlatform(),
+            cwd: testDir,
+            workflow: {
+              name: 'loop-typed-retry',
+              nodes: [
+                {
+                  id: 'my-loop',
+                  kind: 'loop',
+                  loop: {
+                    fresh_context: false,
+                    prompt: 'Complete the task.',
+                    until: 'COMPLETE',
+                    max_iterations: 3,
+                  },
+                },
+              ],
+            },
+            workflowRun: makeWorkflowRun('loop-typed-retry-run'),
+          })
+        );
+
         expect(callCount).toBe(2);
         expect(store.completeWorkflowRun).toHaveBeenCalled();
         expect(store.failWorkflowRun).not.toHaveBeenCalled();

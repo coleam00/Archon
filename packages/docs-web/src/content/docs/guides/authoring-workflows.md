@@ -783,6 +783,8 @@ Archon classifies errors into three buckets before deciding whether to retry:
 | **TRANSIENT** | Process crashed (`exited with code`), rate limit, network timeout | Yes |
 | **UNKNOWN** | Unrecognised error messages | No (unless `on_error: all`) |
 
+A provider that reports a typed failure class on its result decides the bucket itself, whatever its error message says: `auth`, `quota_exhausted` and `budget_exceeded` are FATAL, `transient` and `rate_limited` are TRANSIENT (rate limits get a longer retry budget and backoff), and `unknown` is UNKNOWN. The message examples in the table above apply only to errors a provider has not classified.
+
 ### Retry Notifications
 
 Before each retry the platform receives a message like:

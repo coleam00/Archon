@@ -3,6 +3,15 @@
 // HARD RULE: This file must never import SDK packages.
 
 import type { EffortRung } from '@archon/paths/effort';
+import type {
+  ProviderCapabilities,
+  ProviderResult,
+  ResolvedModel,
+  TokenUsage,
+} from '@archon/provider-contract';
+
+// The contract package owns these shapes; they are re-exported so existing imports keep one type.
+export type { ProviderCapabilities, ProviderResult, ResolvedModel, TokenUsage };
 
 // ─── Provider Config Defaults ──────────────────────────────────────────────
 // Canonical definitions — @archon/core/config/config-types.ts imports from here.
@@ -180,31 +189,6 @@ export type ProviderConfigParser = (
 export type ProviderDefaultsMap = Record<string, ProviderDefaults>;
 
 /**
- * Token usage statistics from AI provider responses.
- */
-export interface TokenUsage {
-  /** Gross prompt input, including cache reads and writes reported separately. */
-  input: number;
-  output: number;
-  /** Provider-reported cached input. Absent means unsupported or unknown; zero is known. */
-  cacheRead?: number;
-  /** Provider-reported cache-creation input. Absent means unsupported or unknown; zero is known. */
-  cacheWrite?: number;
-  /**
-   * Set only by aggregation ({@link mergeTokenUsage}), never by a provider. When true the
-   * cache axes on this usage are a FLOOR: at least one contributing usage did not report
-   * that axis, so true cache use is at least the reported total and
-   * `input - cacheRead - cacheWrite` is an UPPER bound on full-price input rather than an
-   * exact figure. Absent means the cache totals are complete, or that no axis is present
-   * at all (#2662).
-   */
-  cachePartial?: true;
-  /** Total of gross input, output, and any provider-reported reasoning tokens. */
-  total?: number;
-  cost?: number;
-}
-
-/**
  * Sum usages into one aggregate, keeping every cache figure that was actually reported.
  *
  * `input` and `output` always sum across every entry. Each cache axis sums over only the
@@ -240,11 +224,6 @@ export function mergeTokenUsage(usages: readonly TokenUsage[]): TokenUsage | und
   return merged;
 }
 
-/** Concrete model identifier reported by a provider after a request completes. */
-export interface ResolvedModel {
-  id: string;
-}
-
 /**
  * Message chunk from AI assistant.
  * Discriminated union with per-type required fields for type safety.
@@ -261,31 +240,7 @@ export type MessageChunk =
     }
   | { type: 'system'; content: string }
   | { type: 'thinking'; content: string }
-  | {
-      type: 'result';
-      sessionId?: string;
-      tokens?: TokenUsage;
-      structuredOutput?: unknown;
-      isError?: boolean;
-      errorSubtype?: string;
-      /** SDK-provided error detail strings. Populated when isError is true. */
-      errors?: string[];
-      cost?: number;
-      stopReason?: string;
-      numTurns?: number;
-      /** Concrete model reported by the provider; omitted when its SDK does not expose one. */
-      resolvedModel?: ResolvedModel;
-      /**
-       * Outcome of a session-resume attempt, so a failed resume is observable
-       * instead of silently continuing with a fresh (cold) session:
-       *   - `true`   a resume was requested and the prior session was restored
-       *   - `false`  a resume was requested but the provider fell back to fresh
-       *   - omitted  no resume was requested
-       * Set only when `resumeSessionId` was passed. Consumers (the dag-executor)
-       * use `false` to surface a warning rather than swallow the loss.
-       */
-      resumed?: boolean;
-    }
+  | ({ type: 'result' } & ProviderResult)
   | { type: 'rate_limit'; rateLimitInfo: Record<string, unknown> }
   | {
       type: 'tool';
@@ -714,115 +669,6 @@ export interface SendQueryOptions extends AgentRequestOptions {
    * value can never reach a provider that cannot honor it.
    */
   execContext?: ExecutionContext;
-}
-
-/**
- * Provider capability flags. The dag-executor uses these for capability warnings
- * when a node specifies features the target provider doesn't support.
- */
-export interface ProviderCapabilities {
-  sessionResume: boolean;
-  /**
-   * Given a session ID, create a new session containing the source history
-   * while leaving the source unchanged. Omission means unsupported.
-   */
-  sessionFork?: boolean;
-  mcp: boolean;
-  hooks: boolean;
-  skills: boolean;
-  /** Whether the provider supports inline sub-agent definitions (Claude SDK's options.agents). */
-  agents: boolean;
-  toolRestrictions: boolean;
-  /**
-   * Built-in tool-name vocabulary for advisory validation of
-   * `allowed_tools`/`denied_tools` entries. When present, workflow validation
-   * warns (never errors) on entries not in this list — after stripping a
-   * `Tool(specifier)` suffix and skipping `mcp__*` names, which are dynamic
-   * per-install. When absent, the check is skipped entirely: providers without
-   * a stable audited vocabulary opt out simply by not declaring one, keeping
-   * their tool names out of the shared schema.
-   */
-  knownToolNames?: readonly string[];
-  /**
-   * Old tool name → current tool name, for tools the provider's SDK has
-   * renamed (e.g. Claude's `Task` → `Agent`). Lets validation give a precise
-   * "renamed" hint instead of a generic unknown-name warning, since a stale
-   * name is a silent no-op at runtime.
-   */
-  renamedTools?: Readonly<Record<string, string>>;
-  /**
-   * Structured-output guarantee tier for `output_format`:
-   *  - `'enforced'`    — SDK/backend grammar-constrains decoding (Claude, Codex,
-   *    OpenCode). The request path is native; Archon still validates post-parse
-   *    as a net for the refusal / `max_tokens`-truncation edges.
-   *  - `'best-effort'` — prompt-augmentation + repair + post-parse validate (Pi,
-   *    Copilot). No backend grammar; on a validation miss the executor re-asks up
-   *    to 3× (prompt + schema errors), then fails the node.
-   *  - `false`         — the provider cannot produce structured output at all.
-   */
-  structuredOutput: 'enforced' | 'best-effort' | false;
-  /**
-   * Whether the provider enforces OpenAI Structured Outputs strict-mode's
-   * required-coverage rule: every key declared in `properties` MUST also
-   * appear in `required`. A schema that violates this rule is rejected by the
-   * provider's API with HTTP 400 `invalid_json_schema` before any work starts.
-   *
-   * Only relevant when `structuredOutput` is `'enforced'`. Among enforced
-   * providers, only Codex (OpenAI) enforces this rule; Claude accepts
-   * optional-by-omission. Best-effort providers never reject schemas at the
-   * API level and declare `false`.
-   */
-  requiresAllPropertiesRequired: boolean;
-  envInjection: boolean;
-  /**
-   * Whether the provider enforces the per-run spend limit (`maxBudgetUsd`) — it
-   * can stop a run once the limit is exceeded. Says nothing about whether a turn
-   * reports what it cost; see {@link costReporting}.
-   */
-  costControl: boolean;
-  /**
-   * Whether the provider emits a monetary `cost` on a turn's usage, which the
-   * engine surfaces as `costUsd` on node results and rolls up into run totals.
-   * True means the translation from the SDK's cost field exists; a turn may still
-   * omit the figure when the SDK reports none. The other reporting flags follow
-   * the same rule: they describe an available translation, not a guarantee that
-   * every result contains the field or that usage covers every nested agent.
-   * Omitted reporting flags on older providers mean unknown, not unsupported.
-   *
-   * Independent of {@link costControl}: an uncappable provider still prices every
-   * turn, and a cappable one is not made cheaper by reporting.
-   */
-  costReporting: boolean;
-  /** Whether the provider translates SDK token usage into result tokens. */
-  tokenReporting?: boolean;
-  /** Whether the provider translates an SDK stop reason into the terminal result. */
-  stopReasonReporting?: boolean;
-  /** Whether the provider reports the SDK's turn count, without counting events. */
-  turnCountReporting?: boolean;
-  /** Whether the provider translates a reported model identity, not the requested alias. */
-  resolvedModelReporting?: boolean;
-  effortControl: boolean;
-  fallbackModel: boolean;
-  sandbox: boolean;
-  /**
-   * Whether the provider honors the per-node `settingSources` override (which
-   * filesystem setting sources the agent loads: CLAUDE.md, skills, commands,
-   * agents). `true` for Claude only — the Claude Agent SDK's `settingSources`
-   * option; other providers have no equivalent knob.
-   */
-  settingSources: boolean;
-  /** Whether the provider can register in-process `NativeTool`s for a turn. */
-  nativeTools: boolean;
-  /**
-   * Whether the provider can execute inside the folder-project container backend
-   * (`execContext.kind === 'container'`) — i.e. it knows how to spawn its CLI via
-   * `docker exec` rather than a local process. `true` for Claude
-   * (`spawnClaudeCodeProcess` hook). The engine's pre-dispatch fail-fast rejects
-   * a container run whose resolved provider has this `false`, so an unsupported
-   * provider can never silently downgrade to running on the host. Codex/Pi/
-   * community providers set `false` until they implement their in-container path.
-   */
-  containerExec: boolean;
 }
 
 /**

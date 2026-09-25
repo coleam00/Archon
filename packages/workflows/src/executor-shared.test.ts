@@ -1,3 +1,4 @@
+import { providerFailureClassSchema } from '@archon/provider-contract';
 import { describe, it, expect, mock } from 'bun:test';
 
 // Mock logger before importing module under test
@@ -38,6 +39,8 @@ import {
   RATE_LIMIT_RETRY_DELAY_MS,
   TRANSIENT_PATTERNS,
   providerFailureKind,
+  nodeFailureKindOf,
+  retryClassOf,
   safeSendMessage,
   type UnknownErrorTracker,
 } from './executor-shared';
@@ -1065,12 +1068,12 @@ describe('classifyError', () => {
 
   it('backs off flat + jitter on rate limits, exponential otherwise — #2706', () => {
     for (let i = 0; i < 20; i++) {
-      const delay = getRetryDelayMs('429 too many requests', i, 3000);
+      const delay = getRetryDelayMs('rate_limited', i, 3000);
       expect(delay).toBeGreaterThanOrEqual(RATE_LIMIT_RETRY_DELAY_MS / 2);
       expect(delay).toBeLessThanOrEqual((RATE_LIMIT_RETRY_DELAY_MS * 3) / 2);
     }
-    expect(getRetryDelayMs('econnreset', 0, 3000)).toBe(3000);
-    expect(getRetryDelayMs('econnreset', 2, 3000)).toBe(12000);
+    expect(getRetryDelayMs('transient', 0, 3000)).toBe(3000);
+    expect(getRetryDelayMs('transient', 2, 3000)).toBe(12000);
   });
 
   it('parses only unambiguous quota reset timestamps', () => {
@@ -1109,8 +1112,33 @@ describe('classifyError', () => {
 describe('providerFailureKind', () => {
   it('maps the retry classification onto the provider failure kinds', () => {
     expect(providerFailureKind(new Error('401 unauthorized'))).toBe('fatal');
-    expect(providerFailureKind(new Error('rate limit: 429'))).toBe('transient');
+    expect(providerFailureKind(new Error('rate limit: 429'))).toBe('rate_limited');
+    expect(providerFailureKind(new Error('socket hang up'))).toBe('transient');
     expect(providerFailureKind(new Error('mystery'))).toBe('unknown');
+  });
+});
+
+describe('typed provider failures decide retry — #3520', () => {
+  it('maps every failure class onto a retry kind', () => {
+    const kinds = providerFailureClassSchema.options.map(cls =>
+      nodeFailureKindOf({ class: cls, evidence: 'x' })
+    );
+    expect(kinds).toEqual(['fatal', 'fatal', 'fatal', 'rate_limited', 'transient', 'unknown']);
+  });
+
+  it('a recorded provider kind wins over text that reads the other way', () => {
+    expect(retryClassOf({ failureKind: 'transient', error: '401 unauthorized' })).toBe('transient');
+    expect(retryClassOf({ failureKind: 'fatal', error: 'socket hang up' })).toBe('fatal');
+    expect(retryClassOf({ failureKind: 'rate_limited', error: 'mystery' })).toBe('rate_limited');
+    expect(retryClassOf({ failureKind: 'unknown', error: '503' })).toBe('unknown');
+  });
+
+  it('engine kinds and unkinded records keep the text classification', () => {
+    expect(retryClassOf({ failureKind: 'exec_failed', error: 'curl: econnrefused' })).toBe(
+      'transient'
+    );
+    expect(retryClassOf({ error: '429 too many requests' })).toBe('rate_limited');
+    expect(retryClassOf({ failureKind: 'config', error: 'bad input' })).toBe('unknown');
   });
 });
 

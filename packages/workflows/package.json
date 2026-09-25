@@ -48,6 +48,7 @@
   "dependencies": {
     "@archon/git": "workspace:*",
     "@archon/paths": "workspace:*",
+    "@archon/provider-contract": "workspace:*",
     "@archon/plugin-manifest": "workspace:*",
     "@archon/providers": "workspace:*",
     "@hono/zod-openapi": "^1.4.0",

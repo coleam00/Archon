@@ -1,0 +1,244 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "AUTO-GENERATED from packages/provider-contract/src by packages/provider-contract/src/scripts/generate-schema.ts. Do not edit.",
+  "$defs": {
+    "ProviderFailure": {
+      "type": "object",
+      "properties": {
+        "class": {
+          "type": "string",
+          "enum": [
+            "auth",
+            "quota_exhausted",
+            "budget_exceeded",
+            "rate_limited",
+            "transient",
+            "unknown"
+          ]
+        },
+        "retryAfterMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "resetAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "class",
+        "evidence"
+      ]
+    },
+    "TokenUsage": {
+      "type": "object",
+      "properties": {
+        "input": {
+          "type": "number"
+        },
+        "output": {
+          "type": "number"
+        },
+        "cacheRead": {
+          "type": "number"
+        },
+        "cacheWrite": {
+          "type": "number"
+        },
+        "cachePartial": {
+          "type": "boolean",
+          "const": true
+        },
+        "total": {
+          "type": "number"
+        },
+        "cost": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "input",
+        "output"
+      ]
+    },
+    "ResolvedModel": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "ProviderResult": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        },
+        "tokens": {
+          "$ref": "#/$defs/TokenUsage"
+        },
+        "structuredOutput": {},
+        "failure": {
+          "$ref": "#/$defs/ProviderFailure"
+        },
+        "isError": {
+          "type": "boolean"
+        },
+        "errorSubtype": {
+          "type": "string"
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cost": {
+          "type": "number"
+        },
+        "stopReason": {
+          "type": "string"
+        },
+        "numTurns": {
+          "type": "number"
+        },
+        "resolvedModel": {
+          "$ref": "#/$defs/ResolvedModel"
+        },
+        "resumed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ProviderCapabilities": {
+      "type": "object",
+      "properties": {
+        "sessionResume": {
+          "type": "boolean"
+        },
+        "sessionFork": {
+          "type": "boolean"
+        },
+        "mcp": {
+          "type": "boolean"
+        },
+        "hooks": {
+          "type": "boolean"
+        },
+        "skills": {
+          "type": "boolean"
+        },
+        "agents": {
+          "type": "boolean"
+        },
+        "toolRestrictions": {
+          "type": "boolean"
+        },
+        "knownToolNames": {
+          "readOnly": true,
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "renamedTools": {
+          "readOnly": true,
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "structuredOutput": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "enforced"
+            },
+            {
+              "type": "string",
+              "const": "best-effort"
+            },
+            {
+              "type": "boolean",
+              "const": false
+            }
+          ]
+        },
+        "requiresAllPropertiesRequired": {
+          "type": "boolean"
+        },
+        "envInjection": {
+          "type": "boolean"
+        },
+        "costControl": {
+          "type": "boolean"
+        },
+        "costReporting": {
+          "type": "boolean"
+        },
+        "tokenReporting": {
+          "type": "boolean"
+        },
+        "stopReasonReporting": {
+          "type": "boolean"
+        },
+        "turnCountReporting": {
+          "type": "boolean"
+        },
+        "resolvedModelReporting": {
+          "type": "boolean"
+        },
+        "effortControl": {
+          "type": "boolean"
+        },
+        "fallbackModel": {
+          "type": "boolean"
+        },
+        "sandbox": {
+          "type": "boolean"
+        },
+        "settingSources": {
+          "type": "boolean"
+        },
+        "nativeTools": {
+          "type": "boolean"
+        },
+        "containerExec": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "sessionResume",
+        "mcp",
+        "hooks",
+        "skills",
+        "agents",
+        "toolRestrictions",
+        "structuredOutput",
+        "requiresAllPropertiesRequired",
+        "envInjection",
+        "costControl",
+        "costReporting",
+        "effortControl",
+        "fallbackModel",
+        "sandbox",
+        "settingSources",
+        "nativeTools",
+        "containerExec"
+      ]
+    }
+  }
+}

@@ -17,6 +17,7 @@
     "@archon/core": "workspace:*",
     "@archon/git": "workspace:*",
     "@archon/paths": "workspace:*",
+    "@archon/provider-contract": "workspace:*",
     "@archon/providers": "workspace:*",
     "@archon/workflows": "workspace:*",
     "@hono/zod-openapi": "^1.4.0",
