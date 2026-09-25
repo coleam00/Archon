@@ -370,6 +370,17 @@ describe('archon plugin: workflow packs', () => {
     expect(await snapshot(join(project, 'src'))).toEqual({});
   });
 
+  // Workflow discovery reads the same receipts on every call, so "nothing installed"
+  // must be empty on every platform. On Windows, Bun's recursive readdir reports a
+  // missing directory as EINVAL rather than ENOENT.
+  test('an install that never ran `archon plugin` has no plugins, on every platform', async () => {
+    const env = await environment();
+    expect(await readReceipts(env.pluginsDir)).toEqual([]);
+    expect((await run(env, 'list')).out).toBe('No plugins installed.');
+    await mkdir(join(env.pluginsDir, 'installed'), { recursive: true });
+    expect(await readReceipts(env.pluginsDir)).toEqual([]);
+  });
+
   test('copy makes a project-owned copy and refuses an existing destination', async () => {
     const env = await environment();
     expect((await run(env, 'install', `${ID}@v1`)).code).toBe(0);
