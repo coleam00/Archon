@@ -1,0 +1,4 @@
+# Package-local Bun config (Bun reads bunfig.toml from the cwd only, so the
+# repo root preload does not apply here). Tests never send telemetry.
+[test]
+preload = ["../../scripts/test-telemetry-off.ts"]

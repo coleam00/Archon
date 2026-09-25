@@ -5,6 +5,7 @@
  * without leaking sensitive information
  */
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
+import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
 import { TierResolutionError } from '@archon/workflows/model-validation';
 import { WorkflowAdoptionError } from '../operations/workflow-adoption';
 
@@ -12,9 +13,10 @@ import { WorkflowAdoptionError } from '../operations/workflow-adoption';
  * Classify an error and return a user-friendly message
  *
  * @param error - The error to classify
+ * @param surface - The surface the message is shown on; spells any command it suggests
  * @returns User-friendly error message with actionable guidance
  */
-export function classifyAndFormatError(error: Error): string {
+export function classifyAndFormatError(error: Error, surface: WorkflowCommandSurface = {}): string {
   const message = error.message || '';
 
   // Adoption refusals are authored user guidance (fail-loud contract in
@@ -31,7 +33,7 @@ export function classifyAndFormatError(error: Error): string {
   if (error instanceof TerminalStatusWriteError) {
     return (
       '⚠️ The workflow ran, but its final status could not be saved, so it may still show ' +
-      'as running. Check `/workflow status` before starting another run on this project.'
+      `as running. Check \`${spellWorkflowCommand(surface, 'status')}\` before starting another run on this project.`
     );
   }
 

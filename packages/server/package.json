@@ -87,6 +87,9 @@
       "src/adapters/web/workflow-bridge.test.ts"
     ],
     [
+      "src/exit-after-telemetry-flush.test.ts"
+    ],
+    [
       "src/resolve-user-id.test.ts"
     ],
     [

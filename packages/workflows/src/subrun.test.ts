@@ -56,10 +56,9 @@ const realArchonPaths = await import('@archon/paths');
 /** Every `workflow_invoked` telemetry call, in order, so a resumed drive's categorization
  *  can be compared with the dispatch that started the run. */
 const telemetryInvocations: { workflowName: string; workflowSource?: string }[] = [];
-/** Every `workflow_completed` telemetry call. A run's two halves are categorized by
- *  separate code paths, so the completion that fires on the resumed half has to be
- *  observed on its own. */
-const telemetryCompletions: { workflowName: string; workflowSource?: string }[] = [];
+/** Each `workflow_invoked` call's resume flag, kept apart so the categorization records
+ *  above stay comparable as whole objects. */
+const telemetryResumeFlags: { workflowName: string; isResume?: boolean }[] = [];
 mock.module('@archon/paths', () => ({
   ...realArchonPaths,
   // NB: point these one level DEEP (`<root>/defaults`) — captureWorkflowSource copies
@@ -67,18 +66,15 @@ mock.module('@archon/paths', () => ({
   getDefaultWorkflowsPath: () => join(bundledDefaultsRoot, 'defaults'),
   getDefaultCommandsPath: () => join(bundledDefaultsRoot, 'defaults'),
   createLogger: mock(() => mockLogger),
-  captureWorkflowInvoked: mock((props: { workflowName: string; workflowSource?: string }) => {
-    telemetryInvocations.push({
-      workflowName: props.workflowName,
-      workflowSource: props.workflowSource,
-    });
-  }),
-  captureWorkflowCompleted: mock((props: { workflowName: string; workflowSource?: string }) => {
-    telemetryCompletions.push({
-      workflowName: props.workflowName,
-      workflowSource: props.workflowSource,
-    });
-  }),
+  captureWorkflowInvoked: mock(
+    (props: { workflowName: string; workflowSource?: string; isResume?: boolean }) => {
+      telemetryInvocations.push({
+        workflowName: props.workflowName,
+        workflowSource: props.workflowSource,
+      });
+      telemetryResumeFlags.push({ workflowName: props.workflowName, isResume: props.isResume });
+    }
+  ),
   captureApprovalResolved: mock(() => {}),
 }));
 
@@ -186,7 +182,11 @@ import { validateWorkflowResources } from './validator';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
 import { waitCompletionEvents } from './store';
-import type { WorkflowRun, WorkflowWaitContext } from './schemas/workflow-run';
+import {
+  readRunDispatchMetadata,
+  type WorkflowRun,
+  type WorkflowWaitContext,
+} from './schemas/workflow-run';
 import type { ResolvedWorkflow } from './schemas/workflow';
 import type { WorkflowRunConfigMetadata } from './schemas/run-config';
 import type {
@@ -821,6 +821,81 @@ nodes:
     );
   });
 
+  // `hydrated` resumes from the completed-node snapshot; `bare` re-enters the existing run
+  // with no snapshot, the way a failed child is re-driven. Both are resumes.
+  it.each(['hydrated', 'bare'] as const)(
+    "marks a %s resume's boundary in its transcript, distinct from the original start",
+    async resumeForm => {
+      await writeWorkflow(
+        'resume-boundary',
+        `
+name: resume-boundary
+description: fails on the first drive, succeeds on the resume
+nodes:
+  - id: first
+    bash: "echo first"
+  - id: flaky
+    bash: "if [ -f resumed.marker ]; then echo ok; else touch resumed.marker; exit 1; fi"
+    depends_on: [first]
+`
+      );
+      const store = new InMemoryStore();
+      const deps = makeDeps(store);
+      const workflow = await discover('resume-boundary');
+
+      const r1 = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        workflow,
+        'goal',
+        'conv-db'
+      );
+      expect(r1.success).toBe(false);
+      const run = [...store.runs.values()].find(r => r.workflow_name === 'resume-boundary')!;
+      expect(run.status).toBe('failed');
+
+      telemetryResumeFlags.length = 0;
+      const resumeOpts =
+        resumeForm === 'hydrated'
+          ? await hydrateResumableRun(deps, (await store.getWorkflowRun(run.id))!)
+          : { preCreatedRun: await store.resumeWorkflowRun(run.id) };
+      expect(resumeOpts).not.toBeNull();
+      const r2 = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        workflow,
+        'goal',
+        'conv-db',
+        { ...resumeOpts! }
+      );
+      expect(r2.success).toBe(true);
+      // Telemetry categorizes the same execution the same way the transcript does.
+      expect(telemetryResumeFlags).toEqual([{ workflowName: 'resume-boundary', isResume: true }]);
+
+      const row = (await store.getWorkflowRun(run.id))!;
+      const transcript = (
+        await readFile(join(row.output_root!, 'logs', `${run.id}.jsonl`), 'utf-8')
+      )
+        .trim()
+        .split('\n')
+        .map(line => JSON.parse(line) as { type: string; workflow_name?: string });
+      const types = transcript.map(r => r.type);
+      // The original start stays the first row and is written once; the resume writes its
+      // own boundary row after the first attempt's failure, before the second attempt's work.
+      expect(types.filter(t => t === 'workflow_start')).toHaveLength(1);
+      expect(types[0]).toBe('workflow_start');
+      expect(types.filter(t => t === 'workflow_resume')).toHaveLength(1);
+      const resumeAt = types.indexOf('workflow_resume');
+      expect(types.indexOf('workflow_error')).toBeLessThan(resumeAt);
+      expect(types.lastIndexOf('workflow_complete')).toBeGreaterThan(resumeAt);
+      expect(transcript[resumeAt]).toMatchObject({ workflow_name: 'resume-boundary' });
+    }
+  );
+
   it('runs a gateless child synchronously, threads output + cost + tokens, links parent_run_id', async () => {
     await writeWorkflow(
       'child-plain',
@@ -1145,6 +1220,62 @@ nodes:
         aliases: { large: { provider: 'codex', model: 'gpt-5.6-sol' } },
       },
     });
+  });
+
+  it('blocked-on-child notice spells the approve command for the surface; the persisted gate stays neutral', async () => {
+    await writeWorkflow(
+      'child-gated-spelling',
+      `
+name: child-gated-spelling
+description: child with an approval gate
+interactive: true
+nodes:
+  - id: review-gate
+    approval:
+      message: "review the sub-run"
+`
+    );
+    await writeWorkflow(
+      'parent-gated-spelling',
+      `
+name: parent-gated-spelling
+description: parent composing a gated child
+interactive: true
+nodes:
+  - id: sub
+    workflow: child-gated-spelling
+`
+    );
+
+    const store = new InMemoryStore();
+    const platform = {
+      ...makePlatform(),
+      // Mirrors the Slack adapter: its registered slash command is `/archon-workflow`.
+      formatWorkflowCommand: (command: string) => `/archon-workflow ${command}`,
+    };
+    await executeWorkflow(
+      makeDeps(store),
+      platform,
+      'conv-plat',
+      cwd,
+      await discover('parent-gated-spelling'),
+      'goal',
+      'conv-db'
+    );
+
+    const parentRun = [...store.runs.values()].find(
+      r => r.workflow_name === 'parent-gated-spelling'
+    );
+    const child = [...store.runs.values()].find(r => r.workflow_name === 'child-gated-spelling');
+    const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+      .map(call => (call as unknown[])[1] as string)
+      .join('\n');
+    expect(sent).toContain(`Approve it by run id: \`/archon-workflow approve ${child!.id}\``);
+    expect(sent.replaceAll('/archon-workflow ', '')).not.toContain('/workflow ');
+    // The persisted gate message is read on every surface, so it keeps the chat grammar.
+    expect((parentRun?.metadata.approval as { message: string }).message).toContain(
+      `\`/workflow approve ${child!.id}\``
+    );
   });
 
   it('child gate → parent pauses blocked-on-child → approve child → parent auto-resumes → output threads', async () => {
@@ -2620,7 +2751,6 @@ nodes:
     };
     const parent = await discover('identity-parent');
     telemetryInvocations.length = 0;
-    telemetryCompletions.length = 0;
 
     // Dispatch as the CLI does: the codebase's default branch as the `$BASE_BRANCH`
     // fallback, the starting user, and the workflow's discovery source.
@@ -2691,16 +2821,14 @@ nodes:
     expect(prefsUserIds.slice(preGatePrefsCalls)).toEqual(['user-child', 'user-alpha']);
 
     // The resumed half of the run reports the same workflow source, so a bundled
-    // workflow is not recategorized as custom halfway through. Completion is the half
-    // that only the resumed drive reaches -- the pre-gate drive pauses instead -- so it
-    // is the one place a dropped source would land in every ordinary run's telemetry.
+    // workflow is not recategorized as custom halfway through. Terminal telemetry reads
+    // the source the run recorded at dispatch, so that record must still say bundled.
     expect(telemetryInvocations.filter(t => t.workflowName === 'identity-parent')).toEqual([
       { workflowName: 'identity-parent', workflowSource: 'bundled' },
       { workflowName: 'identity-parent', workflowSource: 'bundled' },
     ]);
-    expect(telemetryCompletions.filter(t => t.workflowName === 'identity-parent')).toEqual([
-      { workflowName: 'identity-parent', workflowSource: 'bundled' },
-    ]);
+    const completedParent = await store.getWorkflowRun(parentRun!.id);
+    expect(readRunDispatchMetadata(completedParent?.metadata)?.source).toBe('bundled');
   });
 
   // --- slice 2, PR-C: dynamic fan-out -------------------------------------------

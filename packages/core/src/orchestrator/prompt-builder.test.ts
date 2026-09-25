@@ -180,8 +180,8 @@ describe('buildRunManagementSection', () => {
     }
     expect(section).toContain('--json');
     expect(section).toContain('--detach');
-    expect(section).toContain('actively stop');
-    expect(section).toContain('state-only cancellation');
+    expect(section).toContain('has that process stopped first');
+    expect(section).toContain('discard a run whose owner is gone');
   });
 
   test('states the status fallback without weakening the non-repository boundary', () => {
@@ -354,6 +354,17 @@ describe('formatPausedGateSection', () => {
     // It must not hand out the decision policy for verbs it cannot reach.
     expect(section).not.toContain('resolve the gate as APPROVED');
     expect(section).not.toContain('no separate resume step');
+  });
+
+  test('gives the agent the surface spelling of the explicit commands', () => {
+    const section = formatPausedGateSection({
+      ...openGate,
+      agentCanResolve: false,
+      surface: { formatWorkflowCommand: command => `/archon-workflow ${command}` },
+    });
+
+    expect(section).toContain('`/archon-workflow approve run-abc [comment]`');
+    expect(section.replaceAll('/archon-workflow ', '')).not.toContain('/workflow ');
   });
 
   test('falls back to the explicit commands when the approval context is unusable', () => {

@@ -1,6 +1,7 @@
 import { serializeNodeStateRecord, type SerializedNodeEvent } from './node-record-serialization';
 import type { NodeExecutionMetadata, NodeExecutionRecord } from './schemas/node-execution';
 import type { CheckoutObservation } from './schemas/checkout-observation';
+import type { RunCancelReason, RunExitReason } from './schemas/run-terminal-reason';
 /**
  * IWorkflowStore - trait interface for workflow database operations.
  *
@@ -252,6 +253,8 @@ export type FanOutCancelReason = (typeof FAN_OUT_CANCEL_REASONS)[number];
 export interface WorkflowCancellationEventDetails {
   step_name?: string;
   reason?: string;
+  /** Categorical cause, reported to telemetry; `reason` is free text and never is. */
+  cancel_reason?: RunCancelReason;
 }
 
 /**
@@ -378,17 +381,28 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
   ): Promise<void>;
   updateWorkflowActivity(id: string): Promise<void>;
   getWorkflowRunStatus(id: string): Promise<WorkflowRunStatus | null>;
-  /** Atomically complete the run and persist its matching lifecycle event. */
+  /**
+   * Atomically complete the run and persist its matching lifecycle event.
+   *
+   * Every terminal writer (complete, fail, cancel, fan-out cancel, and the failure of a
+   * paused attention wait) also owes terminal telemetry: after its write commits and
+   * only when it won the status change, it reports `buildRunTerminalTelemetry` over the
+   * run's row and event log. The engine sends no terminal event itself. The SQL store
+   * does this in `packages/core/src/db/workflow-terminal-telemetry.ts`.
+   */
   completeWorkflowRun(
     id: string,
     completion: { duration_ms: number },
     metadata?: Record<string, unknown>
   ): Promise<void>;
-  /** Atomically fail the run and persist its matching lifecycle event. */
+  /**
+   * Atomically fail the run and persist its matching lifecycle event. `exitReason`
+   * is recorded on that event as the run's categorical failure cause. Reports terminal telemetry after a won commit (see completeWorkflowRun).
+   */
   failWorkflowRun(
     id: string,
     error: string,
-    scheduledResume?: ScheduledWorkflowResume
+    options?: { scheduledResume?: ScheduledWorkflowResume; exitReason?: RunExitReason }
   ): Promise<void>;
   /**
    * Pause a running run for human review, stamping the approval context. Optional
@@ -407,7 +421,10 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
     waitContext: WorkflowWaitContext,
     pause: WorkflowWaitPause
   ): Promise<void>;
-  /** Fail the exact paused action-required cursor after its required notification is lost. */
+  /**
+   * Fail the exact paused action-required cursor after its required notification is lost.
+   * Reports terminal telemetry after a won commit (see completeWorkflowRun).
+   */
   failPausedAttentionWait(
     id: string,
     waitContext: WorkflowAttentionWaitContext,
@@ -456,11 +473,18 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
    * re-claim and retry. Best-effort (never throws in the caller's critical path).
    */
   releaseWritebackClaim(id: string): Promise<void>;
+  /**
+   * Atomically cancel the run and persist its matching lifecycle event.
+   * Reports terminal telemetry after a won commit (see completeWorkflowRun).
+   */
   cancelWorkflowRun(
     id: string,
     event?: WorkflowCancellationEventDetails
   ): Promise<{ cancelled: boolean }>;
-  /** Atomically identify and cancel a fan-out child owned by the engine. */
+  /**
+   * Atomically identify and cancel a fan-out child owned by the engine.
+   * Reports terminal telemetry after a won commit (see completeWorkflowRun).
+   */
   cancelFanOutRun(id: string, reason: FanOutCancelReason): Promise<{ cancelled: boolean }>;
 
   /**
