@@ -334,6 +334,7 @@ describe('workflow run config argument', () => {
             ARCHON_DOCKER: 'true',
             WORKSPACE_PATH: '/workspace',
             HOME: '/root',
+            USERPROFILE: '',
           },
         }
       );
@@ -350,6 +351,7 @@ describe('workflow run config argument', () => {
           ARCHON_DOCKER: 'true',
           WORKSPACE_PATH: '/workspace',
           HOME: '/root',
+          USERPROFILE: '',
         },
       });
     } finally {

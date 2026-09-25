@@ -244,6 +244,29 @@ describe('loadArchonEnv', () => {
     });
   }
 
+  it('refuses a refused key in any case on Windows, where env names ignore case', () => {
+    const repoEnv = join(repoDir, '.archon', '.env');
+    writeFileSync(repoEnv, `path=${join(tmpRoot, 'elsewhere')}\n`);
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    const errors: string[] = [];
+    const errorSpy = spyOn(console, 'error').mockImplementation((msg: unknown) => {
+      errors.push(String(msg));
+    });
+    const exitSpy = spyOn(process, 'exit').mockImplementation((() => {
+      throw new Error('process.exit called');
+    }) as never);
+    try {
+      expect(() => loadArchonEnv(repoDir)).toThrow('process.exit called');
+      expect(errors.join('\n')).toContain(`${repoEnv} sets path`);
+    } finally {
+      if (platform) Object.defineProperty(process, 'platform', platform);
+      errorSpy.mockRestore();
+      exitSpy.mockRestore();
+      delete process.env.path;
+    }
+  });
+
   it('lets the user-scope .env set the keys a repo may not', () => {
     const userPath = join(tmpRoot, 'user-bin');
     writeFileSync(join(archonHomeDir, '.env'), `PATH=${userPath}\n`);
