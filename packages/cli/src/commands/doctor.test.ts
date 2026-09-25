@@ -1238,6 +1238,19 @@ describe('checkConnectedProviders', () => {
     expect(result.message).toContain('anthropic');
   });
 
+  it('reports a connected credential as unvalidated, not proven to work', async () => {
+    // A row here means a credential file exists, not that it authenticates —
+    // the wording must not read as a validity check.
+    const result = await checkConnectedProviders({ USER: 'testuser' }, async () => ({
+      listUserProviderKeys: async () => [
+        { provider: 'anthropic', kind: 'oauth', label: 'subscription' },
+      ],
+      findOrCreateUserByPlatformIdentity: async () => mockUser,
+    }));
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('not validated');
+  });
+
   it('returns skip (not fail) when loadDeps throws', async () => {
     const result = await checkConnectedProviders({ USER: 'testuser' }, async () => {
       throw new Error('module load failed');

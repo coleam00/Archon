@@ -687,7 +687,13 @@ export async function checkConnectedProviders(
       };
     }
     const summary = rows.map(r => `${r.provider}(${r.kind})`).join(', ');
-    return { label, status: 'pass', message: `${rows.length} connected: ${summary}` };
+    // A row here means a credential is stored, not that it authenticates —
+    // say what was checked, not that it works. See #3274.
+    return {
+      label,
+      status: 'pass',
+      message: `${rows.length} connected (not validated): ${summary}`,
+    };
   } catch (err) {
     return {
       label,
