@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'bun:test';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
+import { promisify } from 'node:util';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { runLiveOwnerPath } from '@archon/core/services/run-live-owner';
 import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
@@ -66,6 +67,36 @@ function processExists(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * PIDs of the live Windows processes whose command line contains `marker`, read through
+ * `Get-CimInstance` as the stop itself reads the process table. The marker travels in
+ * the environment so that this listing's own command line does not match it.
+ */
+async function windowsProcessesNaming(marker: string): Promise<number[]> {
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    '$pids = @(Get-CimInstance -ClassName Win32_Process | Where-Object { $null -ne $_.CommandLine -and $_.CommandLine.Contains($env:ARCHON_SPEC_MARKER) } | ForEach-Object { [int]$_.ProcessId })',
+    'ConvertTo-Json -Compress -InputObject $pids',
+  ].join('\n');
+  const { stdout } = await execFileAsync(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-EncodedCommand',
+      Buffer.from(script, 'utf16le').toString('base64'),
+    ],
+    { env: { ...process.env, ARCHON_SPEC_MARKER: marker }, windowsHide: true }
+  );
+  const pids: unknown = JSON.parse(stdout);
+  if (!Array.isArray(pids) || !pids.every(pid => Number.isInteger(pid))) {
+    throw new Error(`Unexpected process listing: ${stdout}`);
+  }
+  return pids as number[];
 }
 
 async function listen(server: Server, path: string): Promise<void> {
@@ -137,7 +168,6 @@ describe('detached run control integration', () => {
         stdio: 'ignore',
       });
       if (owner.pid === undefined) throw new Error('Failed to spawn detached owner fixture');
-      const exited = waitForExit(owner);
 
       try {
         await waitForFixtureProcess(() => existsSync(readyPath));
@@ -152,10 +182,19 @@ describe('detached run control integration', () => {
         expect(processExists(pids.leakWriter)).toBe(true);
         const target = await requestDetachedRunStop(runId);
         await target.stop();
-        await exited;
+        // The deadline starts once the stop resolves, so it measures the stop's effect
+        // and not fixture startup plus a slow first process listing on a loaded runner.
+        await waitForFixtureProcess(() => owner.exitCode !== null || owner.signalCode !== null);
         // Event-driven proof instead of a fixed sleep: wait for the descendant's
-        // observable death. A dead process cannot act on any future signal.
-        await waitForFixtureProcess(() => !processExists(pids.leakWriter));
+        // observable death. A dead process cannot act on any future signal. Windows
+        // reuses a dead PID fast enough that the recorded one may already name an
+        // unrelated process, so there the descendant is found by the fixture directory
+        // on its command line instead.
+        if (process.platform === 'win32') {
+          expect(await windowsProcessesNaming(basename(fixtureDir))).toEqual([]);
+        } else {
+          await waitForFixtureProcess(() => !processExists(pids.leakWriter));
+        }
         writeFileSync(goPath, 'go');
         expect(existsSync(leakPath)).toBe(false);
       } finally {
@@ -220,8 +259,13 @@ describe('detached run control integration', () => {
       const runId = `spawner-${crypto.randomUUID()}`;
       const path = runLiveOwnerPath(runId);
       const kidsDir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-spawner-')));
-      // Each child's PID is recorded twice, by the spawner and by the child itself, as the
-      // file's name, so a record can never be read half-written.
+      // Every process in the tree carries this unique directory on its command line, which
+      // is how the check below finds a survivor. A recorded PID cannot: Windows hands a
+      // killed child's PID to unrelated processes within the stop's own runtime, and one
+      // such reuser (TrustedInstaller.exe) once failed this test as a "survivor".
+      const marker = basename(kidsDir);
+      // The spawner records each child's PID as a file name, so the test can wait until
+      // the target is spawning before the stop begins.
       const spawner = spawn(
         process.execPath,
         [
@@ -231,7 +275,7 @@ describe('detached run control integration', () => {
             "const fs = require('node:fs');",
             "const path = require('node:path');",
             'const dir = process.argv[1];',
-            "const kid = \"require('node:fs').writeFileSync(require('node:path').join(process.argv[1], String(process.pid)), ''); setInterval(() => undefined, 1000);\";",
+            "const kid = 'setInterval(() => undefined, 1000);';",
             'const loop = () => {',
             "  const child = spawn(process.execPath, ['-e', kid, dir], { detached: true, stdio: 'ignore' });",
             "  fs.writeFileSync(path.join(dir, String(child.pid)), '');",
@@ -244,26 +288,25 @@ describe('detached run control integration', () => {
         { detached: true, stdio: 'ignore' }
       );
       if (spawner.pid === undefined) throw new Error('Failed to spawn the spawning target');
-      const recordedKids = (): number[] => readdirSync(kidsDir).map(Number);
 
       const server = stubOwner(spawner.pid);
       await listen(server, path);
       try {
         // The target is spawning before the stop begins, so the race is live.
-        await waitForFixtureProcess(() => recordedKids().length >= 3);
+        await waitForFixtureProcess(() => readdirSync(kidsDir).length >= 3);
         const target = await requestDetachedRunStop(runId);
         await target.stop();
 
         // A stop that resolves claims the whole tree is gone. Check that claim against
-        // every child the target ever recorded.
-        expect(processExists(spawner.pid)).toBe(false);
-        expect(recordedKids().filter(pid => processExists(pid))).toEqual([]);
+        // every process that belongs to the tree, the spawner included.
+        expect(await windowsProcessesNaming(marker)).toEqual([]);
       } finally {
-        for (const pid of [spawner.pid, ...recordedKids()]) {
+        spawner.kill();
+        for (const pid of await windowsProcessesNaming(marker)) {
           try {
             process.kill(pid);
           } catch {
-            // Already gone: the assertions above report a survivor.
+            // Already gone: the assertion above reports a survivor.
           }
         }
         await close(server);
