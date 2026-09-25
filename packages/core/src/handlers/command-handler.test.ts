@@ -2749,8 +2749,13 @@ describe('CommandHandler', () => {
 
       // The child-run redirect is built by core, which has no surface. #3488: it used
       // to reach Slack as the raw chat grammar the operations wrote.
-      for (const verb of ['approve', 'reject'] as const) {
-        test(`/workflow ${verb} on a parent blocked on a sub-run`, async () => {
+      // Each verb reports through its own catch block, so each is asserted.
+      for (const { args, redirect } of [
+        { args: 'approve parent-stuck', redirect: 'approve child-77' },
+        { args: 'reject parent-stuck', redirect: 'reject child-77' },
+        { args: 'respond parent-stuck approve', redirect: 'approve child-77' },
+      ]) {
+        test(`/workflow ${args} on a parent blocked on a sub-run`, async () => {
           mockGetWorkflowRun.mockResolvedValueOnce(
             makeWorkflowRun({
               id: 'parent-stuck',
@@ -2766,13 +2771,9 @@ describe('CommandHandler', () => {
               },
             })
           );
-          const result = await handleCommand(
-            projectConversation,
-            `/workflow ${verb} parent-stuck`,
-            slack
-          );
+          const result = await handleCommand(projectConversation, `/workflow ${args}`, slack);
           expect(result.success).toBe(false);
-          expect(result.message).toContain(`/archon-workflow ${verb} child-77`);
+          expect(result.message).toContain(`/archon-workflow ${redirect}`);
           expectSlackSpelling(result.message);
         });
       }

@@ -10760,6 +10760,30 @@ describe('workflowRespondCommand', () => {
     expect(resolveGateSpy).not.toHaveBeenCalled();
   });
 
+  it('spells the child-run redirect for the CLI', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-respond-blocked',
+      workflow_name: 'guided',
+      status: 'paused',
+      user_message: 'go',
+      working_path: '/repo',
+      codebase_id: null,
+      metadata: {
+        approval: {
+          type: 'child_workflow',
+          nodeId: 'sub',
+          message: 'blocked',
+          childRunId: 'child-55',
+        },
+      },
+    });
+
+    await expect(
+      workflowRespondCommand('run-respond-blocked', 'revise', 'needs more detail')
+    ).rejects.toThrow('Approve it by run id: `archon workflow approve child-55`');
+  });
+
   it('--detach validates read-only via assertRespondable before forking', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
