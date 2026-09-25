@@ -1039,8 +1039,7 @@ export async function discoverWorkflows(
               appResult.errors.push(parsed.error);
               continue;
             }
-            if (file.owner)
-              qualifyWorkflowResources(parsed.workflow, { source: 'bundled', ...file.owner });
+            qualifyWorkflowResources(parsed.workflow, { source: 'bundled', ...file.owner });
             appResult.workflows.set(filename, {
               workflow: parsed.workflow,
               parseWarnings: parsed.warnings,
