@@ -541,7 +541,11 @@ describe('toRun — durable wait', () => {
 });
 
 describe('stop reason', () => {
-  const interrupted = (stopReason: Record<string, unknown> | undefined): ReturnType<typeof toRun> =>
+  // Typed against the generated metadata contract, so a test cannot assert on a stop
+  // reason the API could never return.
+  const interrupted = (
+    stopReason: NonNullable<Raw['metadata']>['stop_reason']
+  ): ReturnType<typeof toRun> =>
     toRun(
       raw({
         id: 'r1',

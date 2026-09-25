@@ -804,6 +804,22 @@ describe('terminal workflow transitions — real SQLite', () => {
     });
   });
 
+  test('a new failure replaces a prior stop reason instead of merging into it', async () => {
+    // SQLite's json_patch is RFC 7396 and RECURSES into a nested object, so merging a
+    // reason-only record over a signalled one would leave the old signal attached to the
+    // new reason — the #2673 defect through the same mechanism. A row can reach 'running'
+    // again still carrying a stop reason: recoverCancelledFanOutRun puts a 'cancelled' run
+    // back without touching metadata, and cancelWorkflowRun accepts a 'failed' run.
+    await seed('terminal-restopped', 'running', "datetime('now')", {
+      stop_reason: { reason: 'process_terminated', signal: 'SIGINT' },
+    });
+
+    await failWorkflowRun('terminal-restopped', 'Bash node failed', { exitReason: 'node_error' });
+
+    const run = await getWorkflowRun('terminal-restopped');
+    expect(readRunStopReason(run?.metadata)).toEqual({ reason: 'node_error' });
+  });
+
   test('only the winning terminal transition inserts an event', async () => {
     await seed('terminal-race', 'running', "datetime('now')");
 

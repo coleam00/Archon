@@ -1402,8 +1402,8 @@ export async function failWorkflowRun(
   // a new reason, the #2673 defect through the same mechanism.
   const metadataWithoutPriorFailure =
     getDatabaseType() === 'postgresql'
-      ? "metadata - 'scheduled_resume' - 'stop_reason'"
-      : "json_remove(metadata, '$.scheduled_resume', '$.stop_reason')";
+      ? `metadata - 'scheduled_resume' - '${RUN_STOP_REASON_METADATA_KEY}'`
+      : `json_remove(metadata, '$.scheduled_resume', '$.${RUN_STOP_REASON_METADATA_KEY}')`;
   let result: Awaited<ReturnType<IDatabase['query']>>;
   try {
     result = await getDatabase().withTransaction(async query => {
