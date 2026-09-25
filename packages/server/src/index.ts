@@ -66,6 +66,7 @@ registerCommunityProviders();
 getVendorCatalog();
 
 import { OpenAPIHono, z } from '@hono/zod-openapi';
+import { serveWebUi } from './static-cache';
 import { validationErrorHook } from './routes/openapi-defaults';
 import {
   TelegramAdapter,
@@ -893,7 +894,6 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   // Serve web UI static files in production
   if (process.env.NODE_ENV === 'production' || !process.env.WEB_UI_DEV) {
-    const { serveStatic } = await import('hono/bun');
     // Without an explicit path this is a source checkout or the Docker image,
     // where the web UI is whatever `bun run build:web` produced. The resolved
     // path is absolute because CWD varies with `bun --filter`.
@@ -903,10 +903,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       getLog().warn({ webDistPath }, 'web_dist_not_found');
     }
 
-    app.use('/assets/*', serveStatic({ root: webDistPath }));
-    app.use('/favicon.png', serveStatic({ root: webDistPath, path: 'favicon.png' }));
-    // SPA fallback - serve index.html for unmatched routes (after all API routes)
-    app.get('*', serveStatic({ root: webDistPath, path: 'index.html' }));
+    serveWebUi(app, webDistPath);
   }
 
   const hostname = process.env.HOST || '0.0.0.0';

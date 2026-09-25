@@ -124,6 +124,9 @@
     ],
     [
       "src/host-command.test.ts"
+    ],
+    [
+      "src/static-cache.test.ts"
     ]
   ]
 }
