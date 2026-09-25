@@ -5282,6 +5282,47 @@ describe('workflowGetCommand', () => {
     expect(consoleSpy).toHaveBeenCalledWith('    - publish (upstream failed: validate)');
   });
 
+  // #3488 acceptance: the stored failure is command-free, so the CLI writes the abandon
+  // command in the spelling its own operator can type.
+  it('renders the abandon command for a fan-out node blocked on a live child', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const workflowEventsDb = await import('@archon/core/db/workflow-events');
+
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-fanout-blocked',
+      checkout_baseline: null,
+      workflow_name: 'deliver',
+      working_path: '/repo',
+      status: 'failed',
+      started_at: new Date(),
+      metadata: {},
+    });
+    (workflowEventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce([
+      {
+        id: 'fanout-failed',
+        workflow_run_id: 'run-fanout-blocked',
+        event_type: 'node_failed',
+        step_name: 'work',
+        step_index: 1,
+        data: {
+          error: "fan_out node 'work': child 0 (run c9d8e7f6) may still be running.",
+          blocked_on_child_run_id: 'c9d8e7f6-1111-2222-3333-444455556666',
+        },
+        created_at: new Date().toISOString(),
+      },
+    ]);
+
+    await workflowGetCommand('run-fanout-blocked', false, true);
+
+    const printed: string = consoleSpy.mock.calls
+      .map((call: unknown[]) => String(call[0]))
+      .join('\n');
+    expect(printed).toContain(
+      'Abandon: archon workflow abandon c9d8e7f6-1111-2222-3333-444455556666'
+    );
+    expect(printed).not.toContain('/workflow ');
+  });
+
   it('renders a persisted timeout skip cause in workflow get', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const workflowEventsDb = await import('@archon/core/db/workflow-events');

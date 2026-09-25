@@ -8045,8 +8045,10 @@ function fanOutAutonomousGateMessage(
 
 /**
  * A `running`/`pending` fan-out child found on re-entry — ambiguous ownership, so NOT
- * auto-cancelled (CLAUDE.md lifecycle rule). Surfaces the state + a one-click action, with
- * wording keyed to `last_activity_at` staleness (fresh → likely live; stale → likely orphaned).
+ * auto-cancelled (CLAUDE.md lifecycle rule). Names the state and the run to act on, with
+ * wording keyed to `last_activity_at` staleness (fresh → likely live; stale → likely
+ * orphaned). This text is persisted as the node failure and read on every surface, so it
+ * names the run in full and leaves the abandon command to whichever surface renders it.
  */
 function fanOutAmbiguousChildMessage(
   node: WorkflowNode,
@@ -8057,10 +8059,10 @@ function fanOutAmbiguousChildMessage(
   const ref = `child ${String(index)} (run ${child.id.slice(0, 8)})`;
   return stale
     ? `fan_out node '${node.id}': ${ref} of '${node.workflow}' is still '${child.status}' with no ` +
-        'recent activity — it appears orphaned by an interrupted run. Abandon it (`archon workflow ' +
-        `abandon ${child.id}\`) and resume the parent to re-drive it.`
+        'recent activity — it appears orphaned by an interrupted run. Abandon run ' +
+        `${child.id}, then resume the parent to re-drive it.`
     : `fan_out node '${node.id}': ${ref} of '${node.workflow}' may still be running (recent activity) — ` +
-        `wait for it to finish and resume, or abandon it (\`archon workflow abandon ${child.id}\`) if it is stuck.`;
+        `wait for it to finish and resume, or abandon run ${child.id} if it is stuck.`;
 }
 
 /**
@@ -8234,7 +8236,8 @@ async function executeFanOutWorkflowNode(
     error: string,
     failureKind: NodeFailureKind,
     costUsd?: number,
-    tokens?: TokenUsage
+    tokens?: TokenUsage,
+    blockedOnChildRunId?: string
   ): Promise<NodeExecutionResult> => {
     return recordNodeState(
       { store: deps.store, logDir: ctx.logDir },
@@ -8245,7 +8248,10 @@ async function executeFanOutWorkflowNode(
           output: { text: '' },
           costUsd,
           tokens,
-          diagnostics: { fanOut: true },
+          diagnostics: {
+            fanOut: true,
+            ...(blockedOnChildRunId !== undefined ? { blockedOnChildRunId } : {}),
+          },
         }
       )
     );
@@ -8492,8 +8498,11 @@ async function executeFanOutWorkflowNode(
       'workflow.fan_out_child_nonterminal_on_resume'
     );
     const msg = fanOutAmbiguousChildMessage(node, child, index, stale);
-    await notify(`⚠️ **Fan-out blocked** (node \`${node.id}\`): ${msg}`);
-    return failResult(msg, 'unknown');
+    await notify(
+      `⚠️ **Fan-out blocked** (node \`${node.id}\`): ${msg} ` +
+        `Abandon: \`${spellWorkflowCommand(platform, `abandon ${child.id}`)}\``
+    );
+    return failResult(msg, 'unknown', undefined, undefined, child.id);
   }
 
   // 5. Shared-checkout preflight (#2180 Defect A) AND interactive-class preflight (#2707

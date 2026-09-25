@@ -222,6 +222,25 @@ describe('buildNodeSummaries durations', () => {
     expect(summary?.durationMs).toBe(7_200_000);
   });
 
+  // A fan-out node blocked on a live child stores the run to abandon as data, so each
+  // surface spells the abandon command itself rather than reading one out of the prose.
+  it('carries a fan-out failure\u2019s blocking child run id, and only when present', () => {
+    const [blocked] = buildNodeSummaries([
+      event('blocked-start', 'node_started', 'work', '2026-03-08T01:00:00.000Z'),
+      event('blocked-end', 'node_failed', 'work', '2026-03-08T01:00:01.000Z', {
+        error: 'child 0 may still be running',
+        blocked_on_child_run_id: 'child-abc',
+      }),
+    ]);
+    expect(blocked?.blockedOnChildRunId).toBe('child-abc');
+
+    const [plain] = buildNodeSummaries([
+      event('plain-start', 'node_started', 'work', '2026-03-08T01:00:00.000Z'),
+      event('plain-end', 'node_failed', 'work', '2026-03-08T01:00:01.000Z', { error: 'boom' }),
+    ]);
+    expect(plain?.blockedOnChildRunId).toBeUndefined();
+  });
+
   it('trusts timestamps that already carry a zone marker', () => {
     // PostgreSQL and other paths hand over zoned strings; a `+05:30` and a `Z`
     // naming instants two hours apart must still measure two hours.

@@ -174,6 +174,7 @@ import type { WorkflowEventRow } from '@archon/core/db/workflow-events';
 import * as userDb from '@archon/core/db/users';
 import * as git from '@archon/git';
 import { CLIAdapter } from '../adapters/cli-adapter';
+import { spellWorkflowCommand } from '@archon/workflows/deps';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
 import { registerOwnedRunTermination } from '../utils/owned-run-termination';
@@ -3709,6 +3710,8 @@ export interface NodeSummary {
   durationMs?: number;
   outputPreview?: string;
   error?: string;
+  /** Set when the failure is "a live child run blocks this node"; abandoning it unblocks. */
+  blockedOnChildRunId?: string;
   cause?: SkipCause;
   execution?: NodeExecutionMetadata;
 }
@@ -3800,6 +3803,9 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
           durationMs:
             execution?.timing.durationMs ?? (started !== undefined ? endTime - started : undefined),
           error: record.data.error ?? 'Unknown error',
+          ...(record.data.blocked_on_child_run_id === undefined
+            ? {}
+            : { blockedOnChildRunId: record.data.blocked_on_child_run_id }),
           ...(execution === undefined ? {} : { execution }),
         });
         break;
@@ -3882,6 +3888,13 @@ function printVerboseNodes(events: WorkflowEventRow[]): void {
     }
     if (node.error !== undefined) {
       console.log(`        Error:  ${node.error}`);
+    }
+    if (node.blockedOnChildRunId !== undefined) {
+      const abandon = spellWorkflowCommand(
+        CLI_WORKFLOW_SURFACE,
+        `abandon ${node.blockedOnChildRunId}`
+      );
+      console.log(`        Abandon: ${abandon}`);
     }
   }
 }

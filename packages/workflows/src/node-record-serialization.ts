@@ -66,6 +66,7 @@ export const serializedNodeDataSchema = z.object({
   session_forked: z.boolean().optional(),
   background_tasks_incomplete: z.array(z.string()).optional(),
   child_run_id: z.string().optional(),
+  blocked_on_child_run_id: z.string().optional(),
   fan_out: z.boolean().optional(),
   identity: z.string().optional(),
   ordinal: z.number().optional(),
@@ -234,6 +235,9 @@ export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNod
         ? { background_tasks_incomplete: d.backgroundTasksIncomplete }
         : {}),
       ...(d?.childRunId !== undefined ? { child_run_id: d.childRunId } : {}),
+      ...(d?.blockedOnChildRunId !== undefined
+        ? { blocked_on_child_run_id: d.blockedOnChildRunId }
+        : {}),
       ...(d?.fanOut !== undefined ? { fan_out: d.fanOut } : {}),
       ...(d?.identity !== undefined ? { identity: d.identity } : {}),
       ...(d?.ordinal !== undefined ? { ordinal: d.ordinal } : {}),
