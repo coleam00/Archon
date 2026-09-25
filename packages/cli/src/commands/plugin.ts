@@ -581,15 +581,22 @@ async function installPack(
     await rm(tree, { recursive: true, force: true });
     await rename(stagedTree, tree);
     // The receipt is written last, so a reader sees either the old complete tree or
-    // the new one, never a receipt pointing at a partial tree.
-    await writeReceipt({
-      schemaVersion: 1,
-      id: ref.id,
-      manifest,
-      ...(tag ? { tag } : {}),
-      commit,
-      installedAt: new Date().toISOString(),
-    });
+    // the new one, never a receipt pointing at a partial tree. If it cannot be written,
+    // the new tree has no owner; no receipt points at this commit, so removing it leaves
+    // the previous install exactly as it was.
+    try {
+      await writeReceipt({
+        schemaVersion: 1,
+        id: ref.id,
+        manifest,
+        ...(tag ? { tag } : {}),
+        commit,
+        installedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      await rm(tree, { recursive: true, force: true });
+      throw error;
+    }
     // Runs already started are unaffected: capture copied the bytes they run.
     if (previous) {
       await rm(packTreePath(env.pluginsDir, ref.id, previous.commit), {

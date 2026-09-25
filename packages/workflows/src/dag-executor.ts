@@ -45,6 +45,7 @@ import {
   assertWorkflowSourceIntegrity,
   liveSourceRoots,
   resolveChildDiscoveryRoot,
+  resolveChildInstalledPacks,
   WorkflowSourceIntegrityError,
   type WorkflowSourceRoots,
 } from './workflow-source';
@@ -8100,10 +8101,15 @@ function fanOutSharedCheckoutMessage(node: WorkflowNode, concurrency: number): s
  * is the unresolvable target, and pointing them at `mutates_checkout` would send them to
  * the wrong file. It fails closed with a message about the resolution instead.
  */
-async function resolveFanOutChildDefinition(
+export async function resolveFanOutChildDefinition(
   deps: WorkflowDeps,
   cwd: string,
   targetName: string,
+  /**
+   * `include` for a composed body, which may be a support workflow of its own installed
+   * pack; `workflow` for a child run, which must be dispatchable.
+   */
+  target: 'include' | 'workflow',
   /** Frozen source roots owned by composed execution, or a live child authoring root. */
   source?: WorkflowSourceRoots | string
 ): Promise<
@@ -8117,13 +8123,18 @@ async function resolveFanOutChildDefinition(
   try {
     const sourceRoots =
       typeof source === 'string' ? liveSourceRoots(source) : (source ?? liveSourceRoots(cwd));
-    const { workflows, errors } = await discoverWorkflowsWithConfig(
+    const { workflows, support, errors } = await discoverWorkflowsWithConfig(
       cwd,
       deps.loadConfig,
       sourceRoots
     );
-    const definitions = workflows.map(w => w.workflow);
-    const definition = resolveWorkflowName(targetName, definitions);
+    // Discovery qualified a pack's composed targets to that pack, so a support workflow
+    // is reachable here only by the composition that names it.
+    const definitions = [...workflows, ...(support ?? [])].map(w => w.workflow);
+    const definition = resolveWorkflowName(
+      targetName,
+      target === 'include' ? definitions : workflows.map(w => w.workflow)
+    );
     // resolveWorkflowName returns undefined for an unknown name and THROWS only on
     // ambiguity, so the undefined branch is ordinary rather than exceptional.
     if (!definition) {
@@ -8525,11 +8536,14 @@ async function executeFanOutWorkflowNode(
     // The fan-out target is a not-yet-started child, so it resolves from the parent's
     // AUTHORING directory (live) rather than the parent's frozen copy — same rule as a
     // 1:1 `workflow:` child. See resolveChildDiscoveryRoot.
+    const origin = await resolveChildDiscoveryRoot(parentRun.metadata);
+    const installed = await resolveChildInstalledPacks(parentRun.metadata);
     const resolved = await resolveFanOutChildDefinition(
       deps,
       cwd,
       node.workflow,
-      await resolveChildDiscoveryRoot(parentRun.metadata)
+      'workflow',
+      installed === undefined ? origin : liveSourceRoots(origin ?? cwd, undefined, installed)
     );
     if ('unresolved' in resolved) {
       // Fail CLOSED. Skipping the check here would let either hazard through unguarded on
@@ -8946,6 +8960,7 @@ async function executeComposeFanOutNode(
     deps,
     cwd,
     node.include,
+    'include',
     ctx.workflowSourceRoots
   );
   if ('unresolved' in resolved) {

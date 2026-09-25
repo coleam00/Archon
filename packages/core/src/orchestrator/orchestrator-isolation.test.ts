@@ -261,6 +261,7 @@ const mockPrepareWorkflowSource = mock<typeof WorkflowExecutor.prepareWorkflowSo
         globalScripts: '/capture/global/scripts',
         bundledWorkflows: '/capture/bundled/workflows',
         bundledCommands: '/capture/bundled/commands/defaults',
+        installed: { kind: 'captured', captureRoot: '/capture' },
         kind: 'captured',
         anchor: {
           root: '/capture',

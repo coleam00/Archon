@@ -70,7 +70,13 @@ export const workflowPackManifestSchema = z
      */
     entrypoints: z
       .record(pluginName, entrypointPath)
-      .refine(entries => Object.keys(entries).length > 0, 'must declare at least one entrypoint'),
+      .refine(entries => Object.keys(entries).length > 0, 'must declare at least one entrypoint')
+      // One workflow has one public name; two names for one file would leave one of
+      // them unresolvable.
+      .refine(
+        entries => new Set(Object.values(entries)).size === Object.keys(entries).length,
+        'each entrypoint must name a different workflow file'
+      ),
   })
   .strict();
 

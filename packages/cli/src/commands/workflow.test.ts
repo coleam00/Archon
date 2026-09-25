@@ -323,6 +323,7 @@ const CAPTURED_SOURCE_ROOTS: WorkflowExecutor.WorkflowSourceRoots = {
   globalScripts: '/test/capture/global/scripts',
   bundledWorkflows: '/test/capture/bundled/workflows',
   bundledCommands: '/test/capture/bundled/commands/defaults',
+  installed: { kind: 'captured', captureRoot: '/test/capture' },
   kind: 'captured',
   anchor: {
     root: '/test/capture',
@@ -2569,7 +2570,7 @@ describe('workflowRunCommand', () => {
     await workflowRunCommand('/repo/root', 'assist', 'hello', { noWorktree: true });
 
     expect(consoleSpy).toHaveBeenCalledWith(
-      'Discovery: root=/repo/root workflows=3 bundled=1 global=1 project=1'
+      'Discovery: root=/repo/root workflows=3 bundled=1 global=1 project=1 installed=0'
     );
   });
 
@@ -2598,7 +2599,7 @@ describe('workflowRunCommand', () => {
       expect.objectContaining({ project: '/test/capture/project' })
     );
     expect(consoleSpy).toHaveBeenCalledWith(
-      'Discovery: root=/repo/source workflows=1 bundled=0 global=0 project=1'
+      'Discovery: root=/repo/source workflows=1 bundled=0 global=0 project=1 installed=0'
     );
   });
 
@@ -12239,6 +12240,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
       globalScripts: join(captureRoot, 'global', 'scripts'),
       bundledWorkflows: join(captureRoot, 'bundled', 'workflows'),
       bundledCommands: join(captureRoot, 'bundled', 'commands', 'defaults'),
+      installed: { kind: 'captured', captureRoot },
       kind: 'captured',
       anchor,
     };

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { getArchonConfigPath } from '@archon/paths/archon-paths';
+import { getPluginsPath } from '@archon/paths';
 import { dispatchForge, type ForgeOperationAudit } from '@archon/forge/dispatch';
 import { forgePluginConfigSchema } from '@archon/forge/plugin-config';
 import {
@@ -86,6 +87,8 @@ export async function forgeCommand(
     const result = await (dependencies.dispatch ?? dispatchForge)(request, {
       config,
       env: options.trustedEnv ?? env,
+      // The trusted directory `archon plugin install` writes; repo env cannot move it.
+      pluginsDir: getPluginsPath(),
       // Repo scope may supply the credential named by trusted user config. It
       // cannot replace executable discovery or the plugin's runtime identity.
       credentialEnv: env,

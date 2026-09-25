@@ -49,7 +49,7 @@ Shared commands/scripts and legacy grouped workflows support one grouping folder
         └── personal.yaml       # exactly one direct YAML is required
 ```
 
-YAML nested below the workflow folder is not loaded. A package folder without exactly one direct YAML is reported as invalid rather than ignored silently.
+YAML nested below the workflow folder is not loaded. Inside a pack, a folder with no direct YAML (tests, docs, assets) and any dot directory (`.shared`, `.github`) are not workflow folders and are skipped. A folder with two or more direct YAML files is reported as invalid rather than ignored silently.
 
 Resolution is by **filename without extension** (for commands) or **exact filename** (for workflows), regardless of which subfolder the file lives in. Duplicate basenames within the same scope are a user error -- keep each name unique within `~/.archon/commands/` (or `<repoRoot>/.archon/commands/`), across whatever subfolders you use.
 
@@ -60,6 +60,47 @@ Resolution is by **filename without extension** (for commands) or **exact filena
 3. **Repo-specific** -- `<repoRoot>/.archon/workflows/`, `<repoRoot>/.archon/commands/`, `<repoRoot>/.archon/scripts/` (override global by filename).
 
 Same-named legacy/shared files at a higher scope win. Packaged commands and scripts resolve only within their owning package and never fall through to another scope.
+
+## Installed workflow packs
+
+A workflow pack published on GitHub installs for every project on this Archon with [`archon plugin install`](/reference/cli/#plugin). Installed packs are a fourth source next to bundled, global and project, outside the precedence above.
+
+A pack repository holds one pack in the packaged layout, with an `archon-plugin.json` at its root (the repository root, or a subdirectory named in the install id):
+
+```text
+review-kit/                     # plugin root: owner/repo or owner/repo/<path>
+├── archon-plugin.json
+├── .shared/                    # modules the pack's scripts import
+│   └── util.ts
+├── .github/workflows/ci.yml    # a dot directory: never a workflow folder
+├── tests/                      # no direct YAML: not a workflow folder
+├── review/                     # an entrypoint
+│   ├── review.yaml
+│   ├── commands/scope.md
+│   └── scripts/check.ts
+└── helper/                     # a support workflow
+    ├── helper.yaml
+    └── commands/summarize.md
+```
+
+The whole plugin directory is installed, so a pack at the repository root can keep its CI configuration, tests and README next to its workflows. Only folders holding exactly one direct YAML file load as workflows.
+
+```json
+{
+  "schemaVersion": 1,
+  "kind": "workflow-pack",
+  "name": "review-kit",
+  "description": "Review workflows",
+  "compatibility": { "archon": ">=0.11.0" },
+  "entrypoints": { "review": "review/review.yaml" }
+}
+```
+
+- **Identity.** An entrypoint is listed and run as `owner/plugin:entrypoint`: `owner` is the GitHub owner from the install id and `plugin` is the manifest `name`, so the pack above installed from `acme/review-kit` runs as `archon workflow run acme/review-kit:review`. The YAML `name:` is how workflows refer to each other inside the pack.
+- **Support workflows.** Every workflow that is not an entrypoint is support. An entrypoint uses it with `include:` (by its YAML `name:`), and nothing else can run it: not the CLI, chat, the router, the API, another pack, or a project workflow. Inside a pack, a `workflow:` child run may launch another entrypoint of the pack by its YAML `name:`, but not a support workflow, because a child run is dispatch.
+- **Names.** A qualified name matches exactly (ignoring case) and never by suffix or substring, and a project or global workflow that declares an installed name is not loaded.
+- **Runs keep their revision.** A run freezes the pack at the commit it started with, and a `workflow:` child takes the packs its parent froze. `archon plugin update` or `remove` affects only runs that start afterwards.
+- **Installed or copied.** An installed pack is read-only and changes only through `archon plugin update`. To change one for a single project, `archon plugin copy <id>` writes it to `.archon/workflows/<name>/`, where it is an ordinary project pack: its workflows run under their own `name:`, and `update` no longer touches it.
 
 ## Practical Examples
 

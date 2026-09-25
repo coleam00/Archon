@@ -232,7 +232,7 @@ describe('archon plugin', () => {
     expect(receipt).toMatchObject({ id: ID, tag: 'v1.0.0', commit: commits.get('v1.0.0') });
     const discovery = await discoverPlugins({
       config: { scanPath: false },
-      env: { ARCHON_HOME: join(env.pluginsDir, '..') },
+      pluginsDir: env.pluginsDir,
     });
     expect(discovery.plugins.map(plugin => plugin.metadata.name)).toEqual(['github']);
 
@@ -323,7 +323,7 @@ describe('archon plugin', () => {
     try {
       const discovery = await discoverPlugins({
         config: { scanPath: false },
-        env: { ARCHON_HOME: join(env.pluginsDir, '..') },
+        pluginsDir: env.pluginsDir,
       });
       expect(discovery.plugins).toEqual([]);
       expect(discovery.unavailable).toEqual([]);

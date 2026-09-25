@@ -15,6 +15,10 @@
  *   3. `project` — repo-local at `<cwd>/.archon/workflows/`.
  *
  * Same-named files at a higher scope override those at lower scopes.
+ *
+ * Installed workflow packs (`archon plugin install`) are a fourth source outside that
+ * precedence: each pack resolves its includes within itself, and only its manifest
+ * entrypoints are dispatchable, as `owner/plugin:<entrypoint>`.
  */
 import { readFile, readdir, access, stat } from 'fs/promises';
 import { basename, dirname, join } from 'path';
@@ -32,7 +36,10 @@ import { isComposeFanOutNode, isIncludeDirective, isLoopGroupNode } from './sche
 import * as archonPaths from '@archon/paths';
 import {
   assertWorkflowSourceIntegrity,
+  installedWorkflowName,
+  listInstalledPacks,
   liveSourceRoots,
+  packagedWorkflowDirectory,
   workflowSourceConfigForRoots,
   type WorkflowSourceRoots,
 } from './workflow-source';
@@ -58,10 +65,9 @@ import { parseWorkflow, collectLoopGroupSinkWarnings } from './loader';
 import { expandWorkflowIncludes } from './include-expander';
 import { collectFileBackedCommandNames } from './command-file';
 import {
-  getPackagedResourceDirectory,
-  PACK_SHARED_DIRECTORY,
   isValidWorkflowFolderSegment,
   parsePackagedResourceReference,
+  qualifyPackReferences,
   qualifyWorkflowResources,
 } from './packaged-workflow';
 import type { IncludeCommandContent } from './compiled-command';
@@ -138,6 +144,9 @@ interface ParsedWorkflowFile {
   /** Empty for a clean file. */
   parseWarnings: readonly string[];
 }
+
+/** A discovered workflow file with the scope it came from. */
+type ScopeFile = ParsedWorkflowFile & { source: WorkflowSource };
 
 interface DirLoadResult {
   workflows: Map<string, ParsedWorkflowFile>;
@@ -237,6 +246,130 @@ async function loadWorkflowsFromDir(dirPath: string, depth = 0): Promise<DirLoad
   return { workflows, errors };
 }
 
+/** One workflow loaded from a pack's `<workflow>/` folder. */
+interface PackWorkflowFile {
+  folder: string;
+  filename: string;
+  parsed: ParsedWorkflowFile;
+}
+
+/**
+ * Load every `<workflow>/<one>.yaml` of one pack directory, qualifying each workflow's
+ * commands and scripts to its own folder. `label` names the pack in errors.
+ */
+async function loadPackWorkflows(
+  packPath: string,
+  pack: string,
+  source: WorkflowSource,
+  label = pack
+): Promise<{ files: PackWorkflowFile[]; errors: WorkflowLoadError[] }> {
+  const files: PackWorkflowFile[] = [];
+  const errors: WorkflowLoadError[] = [];
+  let workflowFolders: string[];
+  try {
+    workflowFolders = await readdir(packPath);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    errors.push({
+      filename: label,
+      error: `Directory read error: ${err.message} (${err.code ?? 'unknown'})`,
+      errorType: 'read_error',
+    });
+    return { files, errors };
+  }
+  for (const workflowFolder of workflowFolders.sort((a, b) => a.localeCompare(b))) {
+    // A dot directory (`.shared`, `.github`, ...) is never a workflow folder: a workflow
+    // folder name cannot start with a dot. A pack installed from a repository root
+    // carries that repository's other directories, so these are expected, not errors.
+    if (workflowFolder.startsWith('.')) continue;
+    if (workflowFolder === FIXTURES_DIR) continue;
+    const workflowPath = join(packPath, workflowFolder);
+    try {
+      if (!(await stat(workflowPath)).isDirectory()) continue;
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code !== 'ENOENT') {
+        getLog().warn({ err, workflowPath }, 'packaged_workflow_path_read_error');
+        errors.push({
+          filename: `${label}/${workflowFolder}`,
+          error: `Path read error: ${err.message} (${err.code ?? 'unknown'})`,
+          errorType: 'read_error',
+        });
+      }
+      continue;
+    }
+    if (!isValidWorkflowFolderSegment(workflowFolder)) {
+      errors.push({
+        filename: `${label}/${workflowFolder}`,
+        error: `Invalid packaged workflow directory '${label}/${workflowFolder}'.`,
+        errorType: 'validation_error',
+      });
+      continue;
+    }
+
+    let workflowEntries: string[];
+    try {
+      workflowEntries = await readdir(workflowPath);
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      errors.push({
+        filename: `${label}/${workflowFolder}`,
+        error: `Directory read error: ${err.message} (${err.code ?? 'unknown'})`,
+        errorType: 'read_error',
+      });
+      continue;
+    }
+    const yamlFiles = workflowEntries
+      .filter(entry => entry.endsWith('.yaml') || entry.endsWith('.yml'))
+      .sort((a, b) => a.localeCompare(b));
+    // A folder with no YAML (tests, docs, assets) holds no workflow. Two or more is an
+    // ambiguous workflow folder, and stays an error.
+    if (yamlFiles.length === 0) continue;
+    if (yamlFiles.length !== 1) {
+      errors.push({
+        filename: `${label}/${workflowFolder}`,
+        error: `Packaged workflow '${label}/${workflowFolder}' must contain exactly one .yaml or .yml file (found ${yamlFiles.length}).`,
+        errorType: 'validation_error',
+      });
+      continue;
+    }
+
+    const filename = yamlFiles[0];
+    let content: string;
+    try {
+      content = await readFile(join(workflowPath, filename), 'utf-8');
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      errors.push({
+        filename: `${label}/${workflowFolder}/${filename}`,
+        error: `File read error: ${err.message} (${err.code ?? 'unknown'})`,
+        errorType: 'read_error',
+      });
+      continue;
+    }
+    const parsed = parseWorkflow(content, filename);
+    if (!parsed.workflow) {
+      // A scope file's error keeps its bare filename, which resume matches against a
+      // run's workflow name. An installed pack's error names the pack and folder.
+      errors.push(
+        source === 'installed'
+          ? { ...parsed.error, filename: `${label}/${workflowFolder}/${filename}` }
+          : parsed.error
+      );
+      continue;
+    }
+    qualifyWorkflowResources(parsed.workflow, { source, pack, workflow: workflowFolder });
+
+    files.push({
+      folder: workflowFolder,
+      filename,
+      parsed: { workflow: parsed.workflow, parseWarnings: parsed.warnings },
+    });
+  }
+
+  return { files, errors };
+}
+
 async function loadPackagedWorkflowsFromDir(
   workflowsRoot: string,
   source: WorkflowSource
@@ -291,89 +424,9 @@ async function loadPackagedWorkflowsFromDir(
       continue;
     }
 
-    let workflowFolders: string[];
-    try {
-      workflowFolders = await readdir(packPath);
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException;
-      errors.push({
-        filename: pack,
-        error: `Directory read error: ${err.message} (${err.code ?? 'unknown'})`,
-        errorType: 'read_error',
-      });
-      continue;
-    }
-    for (const workflowFolder of workflowFolders.sort((a, b) => a.localeCompare(b))) {
-      if (workflowFolder === PACK_SHARED_DIRECTORY) continue;
-      if (workflowFolder === FIXTURES_DIR) continue;
-      const workflowPath = join(packPath, workflowFolder);
-      try {
-        if (!(await stat(workflowPath)).isDirectory()) continue;
-      } catch (error) {
-        const err = error as NodeJS.ErrnoException;
-        if (err.code !== 'ENOENT') {
-          getLog().warn({ err, workflowPath }, 'packaged_workflow_path_read_error');
-          errors.push({
-            filename: `${pack}/${workflowFolder}`,
-            error: `Path read error: ${err.message} (${err.code ?? 'unknown'})`,
-            errorType: 'read_error',
-          });
-        }
-        continue;
-      }
-      if (!isValidWorkflowFolderSegment(workflowFolder)) {
-        errors.push({
-          filename: `${pack}/${workflowFolder}`,
-          error: `Invalid packaged workflow directory '${pack}/${workflowFolder}'.`,
-          errorType: 'validation_error',
-        });
-        continue;
-      }
-
-      let workflowEntries: string[];
-      try {
-        workflowEntries = await readdir(workflowPath);
-      } catch (error) {
-        const err = error as NodeJS.ErrnoException;
-        errors.push({
-          filename: `${pack}/${workflowFolder}`,
-          error: `Directory read error: ${err.message} (${err.code ?? 'unknown'})`,
-          errorType: 'read_error',
-        });
-        continue;
-      }
-      const yamlFiles = workflowEntries
-        .filter(entry => entry.endsWith('.yaml') || entry.endsWith('.yml'))
-        .sort((a, b) => a.localeCompare(b));
-      if (yamlFiles.length !== 1) {
-        errors.push({
-          filename: `${pack}/${workflowFolder}`,
-          error: `Packaged workflow '${pack}/${workflowFolder}' must contain exactly one .yaml or .yml file (found ${yamlFiles.length}).`,
-          errorType: 'validation_error',
-        });
-        continue;
-      }
-
-      const filename = yamlFiles[0];
-      let content: string;
-      try {
-        content = await readFile(join(workflowPath, filename), 'utf-8');
-      } catch (error) {
-        const err = error as NodeJS.ErrnoException;
-        errors.push({
-          filename: `${pack}/${workflowFolder}/${filename}`,
-          error: `File read error: ${err.message} (${err.code ?? 'unknown'})`,
-          errorType: 'read_error',
-        });
-        continue;
-      }
-      const parsed = parseWorkflow(content, filename);
-      if (!parsed.workflow) {
-        errors.push(parsed.error);
-        continue;
-      }
-      qualifyWorkflowResources(parsed.workflow, { source, pack, workflow: workflowFolder });
-
+    const loaded = await loadPackWorkflows(packPath, pack, source);
+    errors.push(...loaded.errors);
+    for (const { filename, parsed } of loaded.files) {
       if (workflows.has(filename) || collided.has(filename)) {
         workflows.delete(filename);
         collided.add(filename);
@@ -384,7 +437,7 @@ async function loadPackagedWorkflowsFromDir(
         });
         continue;
       }
-      workflows.set(filename, { workflow: parsed.workflow, parseWarnings: parsed.warnings });
+      workflows.set(filename, parsed);
     }
   }
 
@@ -464,19 +517,9 @@ async function resolveCommandContentForScan(
         return null;
     }
 
-    let workflowsRoot: string;
-    if (packaged.owner.source === 'project') {
-      if (roots.project === null) return null;
-      workflowsRoot = join(roots.project, '.archon', 'workflows');
-    } else if (packaged.owner.source === 'global') {
-      workflowsRoot = roots.globalWorkflows;
-    } else {
-      workflowsRoot = roots.bundledWorkflows;
-    }
-    const commandPath = join(
-      getPackagedResourceDirectory(workflowsRoot, packaged.owner, 'commands'),
-      `${packaged.name}.md`
-    );
+    const workflowDir = await packagedWorkflowDirectory(roots, packaged.owner);
+    if (workflowDir === null) return null;
+    const commandPath = join(workflowDir, 'commands', `${packaged.name}.md`);
     try {
       return await readFile(commandPath, 'utf-8');
     } catch (error) {
@@ -663,15 +706,15 @@ export async function discoverWorkflows(
   // Map of filename -> workflow + source + parse warnings, for deduplication.
   // A later scope's `set()` replaces all three together, so a clean project file
   // can never inherit the bundled file's warnings (see ParsedWorkflowFile).
-  const workflowsByFile = new Map<string, ParsedWorkflowFile & { source: WorkflowSource }>();
+  const workflowsByFile = new Map<string, ScopeFile>();
   const allErrors: WorkflowLoadError[] = [];
 
-  const validateNamedScripts = async (): Promise<void> => {
+  const validateNamedScripts = async (files: Map<string, ScopeFile>): Promise<void> => {
     const targetsByFile = new Map<
       string,
       { workflow: WorkflowDefinition; targets: readonly ExecInputValidationTarget[] }
     >();
-    for (const [filename, { workflow }] of workflowsByFile) {
+    for (const [filename, { workflow }] of files) {
       const targets = collectExecInputValidationTargets(workflow).filter(
         target => inlineExecInputSource(target) === undefined
       );
@@ -711,7 +754,7 @@ export async function discoverWorkflows(
             error: `Named packaged script '${target.slot.value}' was not found in its workflow's scripts directory.`,
             errorType: 'validation_error',
           });
-          workflowsByFile.delete(filename);
+          files.delete(filename);
           unreadable = true;
           break;
         }
@@ -728,7 +771,7 @@ export async function discoverWorkflows(
             error: `Script file read error at '${script.path}': ${err.message} (${err.code ?? 'unknown'})`,
             errorType: 'read_error',
           });
-          workflowsByFile.delete(filename);
+          files.delete(filename);
           unreadable = true;
           break;
         }
@@ -742,13 +785,13 @@ export async function discoverWorkflows(
           error: validation.errors.join(' '),
           errorType: 'validation_error',
         });
-        workflowsByFile.delete(filename);
+        files.delete(filename);
         continue;
       }
       if (validation.warnings.length > 0) {
-        const parsed = workflowsByFile.get(filename);
+        const parsed = files.get(filename);
         if (parsed !== undefined) {
-          workflowsByFile.set(filename, {
+          files.set(filename, {
             ...parsed,
             parseWarnings: [...parsed.parseWarnings, ...validation.warnings],
           });
@@ -760,12 +803,12 @@ export async function discoverWorkflows(
   /**
    * Final discovery step: inline every `include:` node (see include-expander.ts).
    * Resolves include targets against the full name map (bundled < global < project
-   * precedence already applied to `workflowsByFile`), then swaps each workflow for
+   * precedence already applied to `files`), then swaps each workflow for
    * its flattened, namespaced form. A workflow that fails to expand is dropped and
    * its error surfaced via `allErrors`. Only `.workflow` changes — `source` is kept.
    */
-  const expandIncludes = async (): Promise<WorkflowWithSource[]> => {
-    await validateNamedScripts();
+  const expandScope = async (files: Map<string, ScopeFile>): Promise<WorkflowWithSource[]> => {
+    await validateNamedScripts(files);
     // Overrides are by FILENAME, but include targets resolve by workflow NAME. Two
     // surviving files (after filename-precedence) declaring the same `name:` would
     // silently collapse in the name map — last-writer-wins, emitting the same expanded
@@ -775,7 +818,7 @@ export async function discoverWorkflows(
     // Same-name shadowing was already ambiguous before `include:`; the name map just made
     // it load-bearing, so this hardens a pre-existing gap.
     const filenamesByName = new Map<string, string[]>();
-    for (const [filename, { workflow }] of workflowsByFile) {
+    for (const [filename, { workflow }] of files) {
       const existing = filenamesByName.get(workflow.name);
       if (existing) existing.push(filename);
       else filenamesByName.set(workflow.name, [filename]);
@@ -803,7 +846,7 @@ export async function discoverWorkflows(
     // pure expander) can be reported against the includer's actual file. Duplicate names
     // are excluded from expansion above, so first-seen is unambiguous for the rest.
     const filenameByName = new Map<string, string>();
-    for (const [filename, { workflow }] of workflowsByFile) {
+    for (const [filename, { workflow }] of files) {
       if (duplicateNames.has(workflow.name)) continue; // ambiguous — errored above, excluded
       rawByName.set(workflow.name, workflow);
       if (!filenameByName.has(workflow.name)) filenameByName.set(workflow.name, filename);
@@ -827,7 +870,7 @@ export async function discoverWorkflows(
     );
 
     const result: WorkflowWithSource[] = [];
-    for (const { workflow, source, parseWarnings } of workflowsByFile.values()) {
+    for (const { workflow, source, parseWarnings } of files.values()) {
       if (duplicateNames.has(workflow.name)) continue; // dropped as a duplicate-name collision
       const expanded = expandedByName.get(workflow.name);
       if (!expanded) continue; // expansion failed for this workflow — drop it
@@ -856,6 +899,108 @@ export async function discoverWorkflows(
       });
     }
     return result;
+  };
+
+  /**
+   * Installed workflow packs, each expanded against its own name map, so its support
+   * workflows compose inside the pack and nowhere else. Only manifest entrypoints come
+   * back as dispatchable, named `owner/plugin:<entrypoint>`; the rest are support.
+   */
+  const discoverInstalled = async (): Promise<{
+    workflows: WorkflowWithSource[];
+    support: WorkflowWithSource[];
+  }> => {
+    const workflows: WorkflowWithSource[] = [];
+    const support: WorkflowWithSource[] = [];
+    const listed = await listInstalledPacks(roots.installed);
+    for (const { path, message } of listed.errors) {
+      allErrors.push({ filename: path, error: message, errorType: 'read_error' });
+    }
+    for (const pack of listed.packs) {
+      const label = `${pack.owner}/${pack.name}`;
+      const loaded = await loadPackWorkflows(pack.dir, pack.key, 'installed', label);
+      allErrors.push(...loaded.errors);
+      const entrypointByPath = new Map(
+        Object.entries(pack.manifest.entrypoints).map(([entry, path]) => [path, entry])
+      );
+      // A pack workflow is referred to inside its pack by its `name:`. It is known
+      // outside as owner/plugin:<entrypoint> (entrypoints) or owner/plugin:<name> (support).
+      const qualifiedByName = new Map<string, string>();
+      const entrypoints = new Set<string>();
+      for (const file of loaded.files) {
+        const entry = entrypointByPath.get(`${file.folder}/${file.filename}`);
+        const qualified = installedWorkflowName(pack, entry ?? file.parsed.workflow.name);
+        if (entry !== undefined) entrypoints.add(qualified);
+        qualifiedByName.set(file.parsed.workflow.name, qualified);
+      }
+      for (const [path, entry] of entrypointByPath) {
+        if (!loaded.files.some(file => `${file.folder}/${file.filename}` === path)) {
+          allErrors.push({
+            filename: `${label}/${path}`,
+            error: `Entrypoint '${entry}' of installed plugin ${label} did not load from ${path}.`,
+            errorType: 'validation_error',
+          });
+        }
+      }
+      const files = new Map<string, ScopeFile>();
+      for (const file of loaded.files) {
+        const { workflow } = file.parsed;
+        const filename = `${label}/${file.folder}/${file.filename}`;
+        const supportChildren = qualifyPackReferences(workflow, qualifiedByName, entrypoints);
+        if (supportChildren.length > 0) {
+          allErrors.push({
+            filename,
+            error: `'workflow:' launches support workflow ${supportChildren.map(name => `'${name}'`).join(', ')} as a child run. A child run is dispatch, and only entrypoints are dispatchable: compose it with 'include:', or declare it as an entrypoint in archon-plugin.json.`,
+            errorType: 'validation_error',
+          });
+          continue;
+        }
+        files.set(filename, {
+          ...file.parsed,
+          workflow: { ...workflow, name: qualifiedByName.get(workflow.name) ?? workflow.name },
+          source: 'installed',
+        });
+      }
+      for (const expanded of await expandScope(files)) {
+        (entrypoints.has(expanded.workflow.name) ? workflows : support).push(expanded);
+      }
+    }
+    return { workflows, support };
+  };
+
+  /**
+   * Assemble the catalog: the legacy scopes, then installed entrypoints. A qualified
+   * installed name wins over a legacy workflow declaring the same name, so no project or
+   * global file can shadow an installed workflow.
+   */
+  const finish = async (scope?: string): Promise<WorkflowLoadResult> => {
+    const legacy = await expandScope(workflowsByFile);
+    const installed = await discoverInstalled();
+    const installedNames = new Set(
+      [...installed.workflows, ...installed.support].map(entry => entry.workflow.name)
+    );
+    const workflows: WorkflowWithSource[] = [];
+    for (const entry of legacy) {
+      if (installedNames.has(entry.workflow.name)) {
+        allErrors.push({
+          filename: entry.workflow.name,
+          error: `The ${entry.source} workflow named '${entry.workflow.name}' is not loaded: that name belongs to an installed plugin. Rename it.`,
+          errorType: 'validation_error',
+        });
+        continue;
+      }
+      workflows.push(entry);
+    }
+    workflows.push(...installed.workflows);
+    getLog().info(
+      {
+        count: workflows.length,
+        errorCount: allErrors.length,
+        ...(scope !== undefined ? { scope } : {}),
+      },
+      'workflows_discovery_completed'
+    );
+    return { workflows, support: installed.support, errors: allErrors };
   };
 
   // 1. Load from app's bundled defaults (unless opted out)
@@ -971,14 +1116,7 @@ export async function discoverWorkflows(
   // 3. Load from repo's workflow folder (overrides app defaults AND home scope by exact filename).
   // Skipped when cwd is null — surfaces bundled + home scopes only, which is the right answer
   // for callers without a project context (e.g. UI listing workflows before any codebase is registered).
-  if (cwd === null) {
-    const workflows = await expandIncludes();
-    getLog().info(
-      { count: workflows.length, errorCount: allErrors.length, scope: 'no_project_context' },
-      'workflows_discovery_completed'
-    );
-    return { workflows, errors: allErrors };
-  }
+  if (cwd === null) return finish('no_project_context');
 
   const [workflowFolder] = archonPaths.getWorkflowFolderSearchPaths();
   const workflowPath = join(projectRoot ?? cwd, workflowFolder);
@@ -1047,12 +1185,7 @@ export async function discoverWorkflows(
     getLog().debug({ workflowPath }, 'workflow_folder_not_found');
   }
 
-  const workflows = await expandIncludes();
-  getLog().info(
-    { count: workflows.length, errorCount: allErrors.length },
-    'workflows_discovery_completed'
-  );
-  return { workflows, errors: allErrors };
+  return finish();
 }
 
 /**

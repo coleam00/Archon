@@ -13,10 +13,9 @@ import { join, basename, dirname, extname } from 'path';
 import { createLogger, getArchonHome } from '@archon/paths';
 import { BUNDLED_SCRIPT_PACKS, isBinaryBuild } from './defaults/bundled-defaults';
 import { collectInstalledBundleSources } from './defaults/bundle-inventory';
-import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
+import { listInstalledPacks, liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
 import {
   formatPackagedResourceReference,
-  getPackagedResourceDirectory,
   isValidWorkflowFolderSegment,
   parsePackagedResourceReference,
 } from './packaged-workflow';
@@ -176,38 +175,57 @@ async function discoverPackagedScripts(
         cause: err,
       });
     }
-    let workflowFolders: string[];
+    await discoverPackScripts(packPath, pack, source, scripts);
+  }
+  return scripts;
+}
+
+/** Add one pack's per-workflow scripts to `scripts`, owner-qualified. */
+async function discoverPackScripts(
+  packPath: string,
+  pack: string,
+  source: WorkflowSource,
+  scripts: Map<string, ScriptDefinition>
+): Promise<void> {
+  let workflowFolders: string[];
+  try {
+    workflowFolders = await readdir(packPath);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') return;
+    throw new Error(`Failed to read packaged workflow pack "${packPath}": ${err.message}`, {
+      cause: err,
+    });
+  }
+  for (const workflow of workflowFolders) {
+    if (workflow === FIXTURES_DIR) continue;
+    if (!isValidWorkflowFolderSegment(workflow)) continue;
     try {
-      workflowFolders = await readdir(packPath);
+      if (!(await stat(join(packPath, workflow))).isDirectory()) continue;
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code === 'ENOENT') continue;
-      throw new Error(`Failed to read packaged workflow pack "${packPath}": ${err.message}`, {
-        cause: err,
-      });
-    }
-    for (const workflow of workflowFolders) {
-      if (workflow === FIXTURES_DIR) continue;
-      if (!isValidWorkflowFolderSegment(workflow)) continue;
-      try {
-        if (!(await stat(join(packPath, workflow))).isDirectory()) continue;
-      } catch (error) {
-        const err = error as NodeJS.ErrnoException;
-        if (err.code === 'ENOENT') continue;
-        throw new Error(
-          `Failed to inspect packaged workflow "${join(packPath, workflow)}": ${err.message}`,
-          { cause: err }
-        );
-      }
-      const owner = { source, pack, workflow };
-      const localScripts = await discoverScripts(
-        getPackagedResourceDirectory(workflowsRoot, owner, 'scripts')
+      throw new Error(
+        `Failed to inspect packaged workflow "${join(packPath, workflow)}": ${err.message}`,
+        { cause: err }
       );
-      for (const [name, definition] of localScripts) {
-        const qualifiedName = formatPackagedResourceReference(owner, name);
-        scripts.set(qualifiedName, { ...definition, name: qualifiedName });
-      }
     }
+    const owner = { source, pack, workflow };
+    const localScripts = await discoverScripts(join(packPath, workflow, 'scripts'));
+    for (const [name, definition] of localScripts) {
+      const qualifiedName = formatPackagedResourceReference(owner, name);
+      scripts.set(qualifiedName, { ...definition, name: qualifiedName });
+    }
+  }
+}
+
+/** Installed packs' scripts, from the same receipts or capture discovery reads. */
+async function discoverInstalledPackScripts(
+  roots: WorkflowSourceRoots
+): Promise<Map<string, ScriptDefinition>> {
+  const scripts = new Map<string, ScriptDefinition>();
+  for (const pack of (await listInstalledPacks(roots.installed)).packs) {
+    await discoverPackScripts(pack.dir, pack.key, 'installed', scripts);
   }
   return scripts;
 }
@@ -340,6 +358,7 @@ export async function discoverScriptsForCwd(
     merged.set(name, def);
   }
   for (const [name, def] of repoPackagedScripts) merged.set(name, def);
+  for (const [name, def] of await discoverInstalledPackScripts(roots)) merged.set(name, def);
   return merged;
 }
 

@@ -17,7 +17,8 @@ import { loadArchonEnv } from '@archon/paths/env-loader';
 import {
   captureDetachedInstallContext,
   getArchonConfigPath,
-  getArchonHome,
+  getPluginsPath,
+  getTrustedArchonHome,
   restoreDetachedInstallContext,
   setLogDestination,
 } from '@archon/paths';
@@ -35,10 +36,10 @@ let forgeTrustedEnv: NodeJS.ProcessEnv = {};
 loadArchonEnv(process.cwd(), {
   afterUserLoad: () => {
     forgeConfigPath = getArchonConfigPath();
-    // Discovery receives this snapshot only through its constrained process
-    // boundary. Resolve ARCHON_HOME so Docker and HOME-based installs keep the
-    // same user-scoped plugin location after repo env loads.
-    forgeTrustedEnv = { ...process.env, ARCHON_HOME: getArchonHome() };
+    // Forge plugin processes receive this snapshot only through their constrained
+    // process boundary. Pin ARCHON_HOME to the trusted home so repo env cannot
+    // change it.
+    forgeTrustedEnv = { ...process.env, ARCHON_HOME: getTrustedArchonHome() };
   },
 });
 // The detached parent sealed this payload with its effective install key. Repo
@@ -385,11 +386,10 @@ async function main(): Promise<number> {
     if (command === 'plugin') {
       const { pluginCommand } = await loadRoute(() => import('./commands/plugin'));
       const { getArchonVersion } = await loadRoute(() => import('./commands/version'));
-      const { defaultPluginDir } = await import('@archon/forge/discovery');
       return await pluginCommand(subcommand, positionals.slice(2), {
-        // The same trusted ARCHON_HOME forge discovery scans, so repo env cannot
-        // redirect where an install lands.
-        pluginsDir: defaultPluginDir(forgeTrustedEnv),
+        // The trusted plugins directory forge and workflow-pack discovery read, so repo
+        // env cannot redirect where an install lands.
+        pluginsDir: getPluginsPath(),
         archonVersion: await getArchonVersion(),
         projectDir: cwd,
       });

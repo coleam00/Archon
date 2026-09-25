@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { getPluginsPath } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { forgeCommand } from './forge';
 import {
@@ -165,7 +166,9 @@ test('the CLI does not inject a built-in producer into explicit plugin configura
 });
 
 test('uses trusted discovery/runtime values while retaining repo credential values', async () => {
-  let dispatchedOptions: { env?: NodeJS.ProcessEnv; credentialEnv?: NodeJS.ProcessEnv } | undefined;
+  let dispatchedOptions:
+    | { env?: NodeJS.ProcessEnv; credentialEnv?: NodeJS.ProcessEnv; pluginsDir?: string }
+    | undefined;
   await forgeCommand(
     'resolve',
     { data: '{"remote":null}', trustedEnv: { ARCHON_HOME: '/trusted', PATH: '/trusted/bin' } },
@@ -202,6 +205,7 @@ test('uses trusted discovery/runtime values while retaining repo credential valu
 
   expect(dispatchedOptions).toMatchObject({
     env: { ARCHON_HOME: '/trusted', PATH: '/trusted/bin' },
+    pluginsDir: getPluginsPath(),
     credentialEnv: {
       ARCHON_HOME: '/repo-controlled',
       PATH: '/repo-controlled/bin',

@@ -181,12 +181,12 @@ function collectMachineProperties(): Record<string, string | boolean> {
 
 /** Discovery source of a workflow, mirrored from `@archon/workflows` as a
  * plain string union so `@archon/paths` keeps zero `@archon/*` dependencies. */
-export type WorkflowTelemetrySource = 'bundled' | 'global' | 'project';
+export type WorkflowTelemetrySource = 'bundled' | 'global' | 'project' | 'installed';
 
 /**
  * Apply the workflow-name privacy rule: bundled (Archon-authored) workflows
  * report their real name so maintainers can see which defaults are popular;
- * user-authored (global/project) workflows report `"custom"` so private names
+ * user-authored (global/project) and installed-pack workflows report `"custom"` so private names
  * (e.g. "deploy-acme-prod") never leave the machine. `workflow_source` is
  * always reported for the custom-vs-default split.
  */

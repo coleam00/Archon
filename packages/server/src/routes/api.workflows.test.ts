@@ -362,6 +362,73 @@ describe('GET /api/workflows/:name', () => {
     expect(body.error).toContain('nonexistent-workflow');
   });
 
+  test('an installed workflow resolves through discovery; a support name or project copy does not', async () => {
+    const app = createTestApp();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+    const catalog = async (): Promise<{
+      workflows: ReturnType<typeof makeTestWorkflowWithSource>[];
+      support: ReturnType<typeof makeTestWorkflowWithSource>[];
+      errors: never[];
+    }> => ({
+      workflows: [
+        makeTestWorkflowWithSource({ name: 'acme/kit:review', description: 'Review' }, 'installed'),
+        // A project file declaring the same name is dropped by discovery; this one is
+        // here to prove the route never answers with a non-installed entry.
+        makeTestWorkflowWithSource({ name: 'acme/kit:copied', description: 'Copy' }, 'project'),
+      ],
+      support: [
+        makeTestWorkflowWithSource({ name: 'acme/kit:helper', description: 'H' }, 'installed'),
+      ],
+      errors: [],
+    });
+    // Exact, or ignoring case, as the CLI and chat resolve a qualified name.
+    for (const name of ['acme/kit:review', 'ACME/Kit:Review']) {
+      mockDiscoverWorkflows.mockImplementationOnce(catalog);
+      const found = await app.request(`/api/workflows/${encodeURIComponent(name)}`);
+      expect(found.status).toBe(200);
+      expect(await found.json()).toMatchObject({
+        source: 'installed',
+        filename: 'acme/kit:review',
+        workflow: { name: 'acme/kit:review' },
+      });
+    }
+    // No file exists for these either, so the file lookups that follow also miss.
+    for (const name of ['acme/kit:helper', 'acme/kit:copied', 'acme/kit:missing']) {
+      mockDiscoverWorkflows.mockImplementationOnce(catalog);
+      const refused = await app.request(`/api/workflows/${encodeURIComponent(name)}`);
+      expect(refused.status).toBe(404);
+    }
+  });
+
+  // Windows forbids `:` in a file name, so this workflow cannot exist there.
+  test.skipIf(process.platform === 'win32')(
+    'a project workflow whose name contains a colon still opens from its file',
+    async () => {
+      const testDir = join(tmpdir(), `wf-get-colon-${Date.now()}`);
+      const workflowDir = join(testDir, '.archon', 'workflows');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(
+        join(workflowDir, 'build:prod.yaml'),
+        'name: build:prod\ndescription: d\nnodes:\n  - id: a\n    bash: echo\n'
+      );
+      try {
+        const app = createTestApp();
+        registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+        mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
+        const response = await app.request(
+          `/api/workflows/${encodeURIComponent('build:prod')}?cwd=${testDir}`
+        );
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({
+          source: 'project',
+          filename: 'build:prod.yaml',
+        });
+      } finally {
+        await removeTempTree(testDir);
+      }
+    }
+  );
+
   test('returns bundled workflow with source:bundled', async () => {
     const app = createTestApp();
     registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
