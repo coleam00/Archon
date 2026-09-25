@@ -24,7 +24,11 @@ function config(overrides: Partial<NativeScheduleConfig> = {}): NativeScheduleCo
     id: 'source-refresh',
     programArguments: ['/opt/archon/bin/archon', 'trigger', 'fire', '--config', '/tmp/a&b.json'],
     workingDirectory: '/Users/example/Project <one>',
-    archonHome: '/Users/example/.archon',
+    environment: {
+      ARCHON_HOME: '/Users/example/.archon',
+      ARCHON_TRUSTED_HOME:
+        '{"home":"/Users/example/.archon","archonHome":"/Users/example/.archon"}',
+    },
     schedule: { intervalSeconds: 37, runAtLoad: false },
     ...overrides,
   };
@@ -37,13 +41,19 @@ async function scratchDirectory(): Promise<string> {
 }
 
 describe('renderMacosLaunchAgent', () => {
-  it('renders escaped arguments as an argv array with only ARCHON_HOME in the environment', () => {
+  it('renders escaped arguments as an argv array with only the Archon home handoff in the environment', () => {
     const rendered = renderMacosLaunchAgent(config());
 
     expect(rendered.label).toBe('com.archon.trigger.source-refresh');
     expect(rendered.plist).toContain('<string>/tmp/a&amp;b.json</string>');
     expect(rendered.plist).toContain('<string>/Users/example/Project &lt;one&gt;</string>');
-    expect(rendered.plist).toContain('<key>ARCHON_HOME</key>');
+    expect(rendered.plist).toContain(
+      '<key>EnvironmentVariables</key>\n    <dict>\n' +
+        '      <key>ARCHON_HOME</key>\n      <string>/Users/example/.archon</string>\n' +
+        '      <key>ARCHON_TRUSTED_HOME</key>\n' +
+        '      <string>{&quot;home&quot;:&quot;/Users/example/.archon&quot;,&quot;archonHome&quot;:&quot;/Users/example/.archon&quot;}</string>\n' +
+        '    </dict>'
+    );
     expect(rendered.plist).toContain('<integer>37</integer>');
     expect(rendered.plist).toContain('<false/>');
     expect(rendered.plist).not.toContain('<key>Program</key>');

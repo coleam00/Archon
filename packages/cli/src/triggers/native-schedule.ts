@@ -4,6 +4,7 @@ import { access, link, mkdir, readFile, unlink, writeFile } from 'node:fs/promis
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
+import type { childArchonHomeEnv } from '@archon/paths';
 
 export const MACOS_TRIGGER_JOB_LABEL_PREFIX = 'com.archon.trigger.';
 
@@ -11,7 +12,8 @@ export interface NativeScheduleConfig {
   id: string;
   programArguments: readonly [string, ...string[]];
   workingDirectory: string;
-  archonHome: string;
+  /** ARCHON_HOME and the trusted-home handoff issued for it; the job's only environment. */
+  environment: ReturnType<typeof childArchonHomeEnv>;
   schedule: {
     intervalSeconds: number;
     runAtLoad: boolean;
@@ -62,7 +64,7 @@ export function renderMacosLaunchAgent(config: NativeScheduleConfig): RenderedMa
   const [executable, ...args] = config.programArguments;
   assertAbsolute('Native schedule executable', executable);
   assertAbsolute('Native schedule working directory', config.workingDirectory);
-  assertAbsolute('Native schedule ARCHON_HOME', config.archonHome);
+  assertAbsolute('Native schedule ARCHON_HOME', config.environment.ARCHON_HOME);
 
   if (config.programArguments.some(argument => argument.length === 0)) {
     throw new Error('Native schedule program arguments must not be empty');
@@ -77,6 +79,12 @@ export function renderMacosLaunchAgent(config: NativeScheduleConfig): RenderedMa
     throw new Error('Native schedule runAtLoad must be a boolean');
   }
 
+  const environment = Object.entries(config.environment)
+    .map(
+      ([key, value]) =>
+        `      <key>${escapeXml(key)}</key>\n      <string>${escapeXml(value)}</string>`
+    )
+    .join('\n');
   const programArguments = [executable, ...args]
     .map(argument => `      <string>${escapeXml(argument)}</string>`)
     .join('\n');
@@ -97,8 +105,7 @@ ${programArguments}
     <string>${escapeXml(config.workingDirectory)}</string>
     <key>EnvironmentVariables</key>
     <dict>
-      <key>ARCHON_HOME</key>
-      <string>${escapeXml(config.archonHome)}</string>
+${environment}
     </dict>
     <key>StartInterval</key>
     <integer>${String(config.schedule.intervalSeconds)}</integer>

@@ -10,4 +10,9 @@
  */
 import { stripCwdEnv } from './strip-cwd-env';
 
-stripCwdEnv();
+try {
+  stripCwdEnv();
+} catch (error) {
+  process.stderr.write(`[archon] ${(error as Error).message}\n`);
+  process.exit(1);
+}

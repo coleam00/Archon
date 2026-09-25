@@ -26,6 +26,7 @@ import {
   captureDetachedInstallContext,
   restoreDetachedInstallContext,
 } from './detached-install-context';
+import { TRUSTED_ARCHON_HOME_ENV } from './trusted-home-env';
 
 /** The four filenames Bun auto-loads from CWD (in loading order). */
 const BUN_AUTO_LOADED_ENV_FILES = ['.env', '.env.local', '.env.development', '.env.production'];
@@ -78,6 +79,15 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
         }
       }
     }
+  }
+
+  // Stripping this key would delete the trusted home a parent Archon process handed
+  // over, and the child would then pin its inherited ARCHON_HOME, which a repository
+  // can choose. No legitimate repository sets an Archon-internal handoff variable.
+  if (cwdKeys.has(TRUSTED_ARCHON_HOME_ENV)) {
+    throw new Error(
+      `An env file in ${cwd} (${strippedFiles.join(', ')}) sets ${TRUSTED_ARCHON_HOME_ENV}, which only Archon sets. Remove it.`
+    );
   }
 
   for (const key of cwdKeys) {

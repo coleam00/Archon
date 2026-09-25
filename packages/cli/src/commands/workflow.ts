@@ -63,6 +63,7 @@ import {
   expandTilde,
   isDocker,
   captureDetachedInstallContext,
+  childArchonHomeEnv,
   type DetachedInstallContext,
 } from '@archon/paths';
 import { isAbsolute, join, resolve } from 'node:path';
@@ -605,6 +606,9 @@ async function spawnDetachedWorkflowRun(
   }
 
   try {
+    // Empty strings preserve meaningful absence: Bun will not fill these from the
+    // target repo's auto-loaded .env.
+    const installContext = runConfigPayload ? resolveDetachedRunEncryptionEnv() : undefined;
     // Node's spawn with `detached: true` puts the child in its own process
     // group so it survives the parent's exit. Bun.spawn + unref() does NOT
     // detach on Windows — the child was killed ~1s in (at worktree_creating)
@@ -617,12 +621,8 @@ async function spawnDetachedWorkflowRun(
       env: {
         ...process.env,
         [DETACHED_RUN_OWNER_ENV]: '1',
-        ...(runConfigPayload
-          ? {
-              // Empty strings preserve meaningful absence: Bun will not fill
-              // these from the target repo's auto-loaded .env.
-              ...resolveDetachedRunEncryptionEnv(),
-            }
+        ...(installContext
+          ? { ...installContext, ...childArchonHomeEnv(installContext.ARCHON_HOME) }
           : {}),
       },
       stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],

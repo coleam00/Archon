@@ -147,8 +147,8 @@ getArchonWorktreesPath(): string
 // Returns: ${ARCHON_HOME}/worktrees
 
 // Get global config path
-getArchonConfigPath(): string
-// Returns: ${ARCHON_HOME}/config.yaml
+getArchonConfigPath(archonHome?: string): string
+// Returns: ${archonHome ?? ARCHON_HOME}/config.yaml
 
 // Get the compiled CLI discovery manifest path
 getInstallManifestPath(): string

@@ -77,7 +77,7 @@ The command returns a durable receipt and disposition, then runs accepted work i
 archon trigger schedule install --config /Users/alice/.archon/triggers/repository-refresh.json
 ```
 
-Archon installs only jobs in the `com.archon.trigger.*` namespace. The plist contains the absolute executable and arguments, working directory, and `ARCHON_HOME`. It does not copy provider credentials or other environment variables. Scheduled runs use the same native provider configuration and credentials available to the configured user.
+Archon installs only jobs in the `com.archon.trigger.*` namespace. The plist contains the absolute executable and arguments, working directory, `ARCHON_HOME`, and `ARCHON_TRUSTED_HOME`, which keeps a scheduled run reading plugins from the home you installed the schedule under. It does not copy provider credentials or other environment variables. Scheduled runs use the same native provider configuration and credentials available to the configured user.
 
 Use `archon trigger list` to find recent native or webhook receipts, then inspect a receipt or resource-start request by its UUID:
 
