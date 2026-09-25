@@ -72,14 +72,16 @@ function processExists(pid: number): boolean {
 const execFileAsync = promisify(execFile);
 
 /**
- * PIDs of the live Windows processes whose command line contains `marker`, read through
- * `Get-CimInstance` as the stop itself reads the process table. The marker travels in
- * the environment so that this listing's own command line does not match it.
+ * PIDs of the live Windows processes whose command line contains `marker`. The marker
+ * travels in the environment so that this query's own command line does not match it,
+ * and the filter runs inside WMI so that a loaded runner is not made to serialize the
+ * whole process table: the stop being checked has already spent most of the test's
+ * budget listing it. `marker` must hold no WQL wildcard (`%`, `_`, `[`).
  */
 async function windowsProcessesNaming(marker: string): Promise<number[]> {
   const script = [
     "$ErrorActionPreference = 'Stop'",
-    '$pids = @(Get-CimInstance -ClassName Win32_Process | Where-Object { $null -ne $_.CommandLine -and $_.CommandLine.Contains($env:ARCHON_SPEC_MARKER) } | ForEach-Object { [int]$_.ProcessId })',
+    '$pids = @(Get-CimInstance -ClassName Win32_Process -Filter "CommandLine LIKE \'%$($env:ARCHON_SPEC_MARKER)%\'" | ForEach-Object { [int]$_.ProcessId })',
     'ConvertTo-Json -Compress -InputObject $pids',
   ].join('\n');
   const { stdout } = await execFileAsync(
