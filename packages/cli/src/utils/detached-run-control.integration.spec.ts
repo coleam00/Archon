@@ -31,11 +31,11 @@ const STOP_TEST_TIMEOUT_MS = 30_000;
 
 /**
  * For the stop that races a spawning target. That stop takes up to six process listings
- * before it gives up (one before `taskkill`, five to confirm), and a listing took about
- * 4.5 s on a Windows runner under CPU load, so a correct stop there can by itself outlast
- * `STOP_TEST_TIMEOUT_MS`. This bounds a hang, not the stop's speed.
+ * before it gives up (one before `taskkill`, five to confirm), and on a Windows runner
+ * under CPU load a listing took 4-8 s and this test up to 55 s, so a correct stop there
+ * can by itself outlast `STOP_TEST_TIMEOUT_MS`. This bounds a hang, not the stop's speed.
  */
-const RACING_STOP_TEST_TIMEOUT_MS = 60_000;
+const RACING_STOP_TEST_TIMEOUT_MS = 90_000;
 
 async function waitFor(check: () => boolean, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
