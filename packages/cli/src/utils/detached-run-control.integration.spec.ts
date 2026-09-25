@@ -29,6 +29,14 @@ const FIXTURE_STATE_DEADLINE_MS = 5_000;
  */
 const STOP_TEST_TIMEOUT_MS = 30_000;
 
+/**
+ * For the stop that races a spawning target. That stop takes up to six process listings
+ * before it gives up (one before `taskkill`, five to confirm), and a listing took about
+ * 4.5 s on a Windows runner under CPU load, so a correct stop there can by itself outlast
+ * `STOP_TEST_TIMEOUT_MS`. This bounds a hang, not the stop's speed.
+ */
+const RACING_STOP_TEST_TIMEOUT_MS = 60_000;
+
 async function waitFor(check: () => boolean, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!check()) {
@@ -293,6 +301,7 @@ describe('detached run control integration', () => {
 
       const server = stubOwner(spawner.pid);
       await listen(server, path);
+      let survivors: number[] | undefined;
       try {
         // The target is spawning before the stop begins, so the race is live.
         await waitForFixtureProcess(() => readdirSync(kidsDir).length >= 3);
@@ -301,10 +310,12 @@ describe('detached run control integration', () => {
 
         // A stop that resolves claims the whole tree is gone. Check that claim against
         // every process that belongs to the tree, the spawner included.
-        expect(await windowsProcessesNaming(marker)).toEqual([]);
+        survivors = await windowsProcessesNaming(marker);
+        expect(survivors).toEqual([]);
       } finally {
         spawner.kill();
-        for (const pid of await windowsProcessesNaming(marker)) {
+        // Listed again only when the stop threw before the check did.
+        for (const pid of survivors ?? (await windowsProcessesNaming(marker))) {
           try {
             process.kill(pid);
           } catch {
@@ -314,7 +325,7 @@ describe('detached run control integration', () => {
         await close(server);
       }
     },
-    STOP_TEST_TIMEOUT_MS
+    RACING_STOP_TEST_TIMEOUT_MS
   );
 
   it(
