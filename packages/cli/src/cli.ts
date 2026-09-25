@@ -233,9 +233,11 @@ async function main(): Promise<number> {
   // `archon --version` works the same as `archon version` from any directory.
   if (isVersionRequest(args)) {
     try {
+      const json = args.includes('--json');
+      if (json) setLogLevel('silent');
       refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
       const { versionCommand } = await loadRoute(() => import('./commands/version'));
-      await versionCommand();
+      await versionCommand({ json });
       return 0;
     } finally {
       await shutdownTelemetry();
@@ -535,7 +537,7 @@ async function main(): Promise<number> {
 
       case 'version': {
         const { versionCommand } = await loadRoute(() => import('./commands/version'));
-        await versionCommand();
+        await versionCommand({ json: jsonFlag });
         break;
       }
 

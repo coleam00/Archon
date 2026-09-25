@@ -1141,10 +1141,12 @@ authoring, and prompt guidance. It is also installed automatically during
 
 ### `version`
 
-Show version, build type, and database info.
+Show version, build type, and database info. Pass `--json` to receive the exact
+engine revision and its declared machine-readable contracts.
 
 ```bash
 archon version
+archon version --json
 ```
 
 ## Global Options
@@ -1154,7 +1156,7 @@ archon version
 | `--cwd <path>` | Override working directory (default: current directory) |
 | `--quiet`, `-q` | Log warnings and errors only (the default for every command except `archon serve`) |
 | `--verbose`, `-v` | Show debug-level logs on stderr (on stdout for `archon serve`) |
-| `--json` | Output machine-readable JSON (workflow `list`, `status`, `runs`, `get`, `wait`, and the write commands `approve`/`reject`/`abandon`/`resume`). Implies log suppression so stdout is exactly the JSON payload. |
+| `--json` | Output machine-readable JSON (`version`; workflow `list`, `status`, `runs`, `get`, `wait`; and the write commands `approve`/`reject`/`abandon`/`resume`). Implies log suppression so stdout is exactly the JSON payload. |
 | `--timeout <seconds>` | For `workflow wait`: give up after N seconds and exit `3`. Omitted means wait indefinitely. |
 | `--follow` | For `workflow logs`: wait for the transcript and stream appended rows until the run ends. |
 | `--events` | With verbose JSON workflow `status`/`get`, return raw event rows instead of ordered node summaries. |

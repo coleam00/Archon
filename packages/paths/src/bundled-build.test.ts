@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'bun:test';
-import { BUNDLED_GIT_COMMIT, BUNDLED_IS_BINARY, BUNDLED_VERSION } from './bundled-build';
+import {
+  BUNDLED_GIT_COMMIT,
+  BUNDLED_GIT_REVISION,
+  BUNDLED_IS_BINARY,
+  BUNDLED_VERSION,
+} from './bundled-build';
 
 describe('bundled-build', () => {
   // In dev/test mode the placeholders must be the dev defaults.
@@ -15,5 +20,9 @@ describe('bundled-build', () => {
 
   it('BUNDLED_GIT_COMMIT is the dev placeholder', () => {
     expect(BUNDLED_GIT_COMMIT).toBe('unknown');
+  });
+
+  it('BUNDLED_GIT_REVISION is the dev placeholder', () => {
+    expect(BUNDLED_GIT_REVISION).toBe('unknown');
   });
 });
