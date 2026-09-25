@@ -205,10 +205,11 @@ Commands:
   serve                      Start the web UI server (binary installs download it on first run)
   skill install [path]       Install archon-cli into .claude/skills and .agents/skills
   plugin install <owner/repo[/path][@tag]>
-                             Install a forge plugin from a GitHub release (default: latest)
-  plugin update <id>[@tag]   Reinstall an installed plugin from another release
+                             Install a plugin from GitHub (default: forge plugins the latest release, workflow packs the default branch)
+  plugin update <id>[@tag]   Reinstall an installed plugin at a tag, or its latest release or default branch
   plugin remove <id>         Delete the files an installed plugin wrote
-  plugin list                Show installed plugins with release tag and commit
+  plugin copy <id>           Copy an installed workflow pack into this project's .archon/workflows/
+  plugin list                Show installed plugins with tag and commit
   doctor [--full]            Verify your Archon setup (Claude/Codex binaries, gh auth, DB, adapters; --full also probes the OpenCode runtime SDK)
   auth github                Connect your GitHub identity via device flow (multi-user installs)
   ai key set <provider>      Connect an AI provider API key (multi-user installs; key read from prompt/stdin)

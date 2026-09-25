@@ -101,7 +101,8 @@
       "src/commands/forge.test.ts"
     ],
     [
-      "src/commands/plugin.test.ts"
+      "src/commands/plugin.test.ts",
+      "src/commands/plugin-pack.test.ts"
     ],
     [
       "src/triggers/native-schedule.test.ts"

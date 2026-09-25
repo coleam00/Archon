@@ -391,6 +391,7 @@ async function main(): Promise<number> {
         // redirect where an install lands.
         pluginsDir: defaultPluginDir(forgeTrustedEnv),
         archonVersion: await getArchonVersion(),
+        projectDir: cwd,
       });
     }
     // Note: orphaned run cleanup moved to `workflow cleanup` command only.

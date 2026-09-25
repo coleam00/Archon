@@ -83,7 +83,10 @@ beforeAll(async () => {
   const repo = join(fixtureRoot, 'repo');
   await mkdir(repo);
   await git(repo, 'init', '-q');
+  // HEAD stays v4.0.0, a forge manifest; pack-0.1.0 is an older commit whose
+  // manifest turned the plugin into a workflow pack.
   for (const [tag, annotated] of [
+    ['pack-0.1.0', false],
     ['v1.0.0', true],
     ['v2.0.0', false],
     ['v3.0.0', false],
@@ -134,6 +137,13 @@ beforeAll(async () => {
   manifests.set(commit('v2.0.0'), manifest());
   manifests.set(commit('v3.0.0'), manifest({ compatibility: { archon: '>=99.0.0' } }));
   manifests.set(commit('v4.0.0'), manifest());
+  manifests.set(commit('pack-0.1.0'), {
+    schemaVersion: 1,
+    kind: 'workflow-pack',
+    name: 'forge-github',
+    description: 'fixture',
+    entrypoints: { review: 'review/review.yaml' },
+  });
   releases.set('v1.0.0', {
     assets: {
       [hostAsset]: pluginBinary,
@@ -159,6 +169,7 @@ async function environment(overrides: Partial<PluginEnvironment> = {}): Promise<
   return {
     pluginsDir: join(home, 'plugins'),
     archonVersion: '0.11.0',
+    projectDir: home,
     githubUrl: server.url.origin,
     rawUrl: `${server.url.origin}/raw`,
     ...overrides,
@@ -320,6 +331,17 @@ describe('archon plugin', () => {
     } finally {
       stderr.mockRestore();
     }
+  });
+
+  test('update refuses a tag whose manifest is another kind, and copy refuses a forge plugin', async () => {
+    const env = await environment();
+    expect((await run(env, 'install', `${ID}@v1.0.0`)).code).toBe(0);
+    const before = await snapshot(env.pluginsDir);
+    expect((await run(env, 'update', `${ID}@pack-0.1.0`)).err).toContain(
+      'is now a workflow-pack plugin, not forge'
+    );
+    expect((await run(env, 'copy', ID)).err).toContain('only workflow packs copy');
+    expect(await snapshot(env.pluginsDir)).toEqual(before);
   });
 
   test('refuses malformed plugin ids and extra arguments before touching the network', async () => {

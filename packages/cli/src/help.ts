@@ -241,13 +241,14 @@ const commandHelp: HelpEntry[] = [
     command: 'plugin',
     subcommand: 'install',
     spec: 'plugin install <owner/repo[/path][@tag]>',
-    description: 'Install a forge plugin from a GitHub release (default: latest)',
+    description:
+      'Install a plugin from GitHub (default: forge plugins the latest release, workflow packs the default branch)',
   },
   {
     command: 'plugin',
     subcommand: 'update',
     spec: 'plugin update <id>[@tag]',
-    description: 'Reinstall an installed plugin from another release',
+    description: 'Reinstall an installed plugin at a tag, or its latest release or default branch',
   },
   {
     command: 'plugin',
@@ -257,9 +258,15 @@ const commandHelp: HelpEntry[] = [
   },
   {
     command: 'plugin',
+    subcommand: 'copy',
+    spec: 'plugin copy <id>',
+    description: "Copy an installed workflow pack into this project's .archon/workflows/",
+  },
+  {
+    command: 'plugin',
     subcommand: 'list',
     spec: 'plugin list',
-    description: 'Show installed plugins with release tag and commit',
+    description: 'Show installed plugins with tag and commit',
   },
   {
     command: 'doctor',
