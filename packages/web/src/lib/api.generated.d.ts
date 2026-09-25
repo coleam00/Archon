@@ -3511,6 +3511,7 @@ export interface components {
                 | 'fatal'
                 | 'transient'
                 | 'unknown'
+                | 'rate_limited'
                 | 'timeout'
                 | 'exec_failed'
                 | 'output_contract'

@@ -4,8 +4,8 @@ import type { DagNode } from './schemas/dag-node';
 import type { EffortLevel } from './schemas/effort';
 import type { TierName } from './schemas/model-binding';
 import type { CheckoutObservation } from './schemas/checkout-observation';
+import { tokenUsageSchema } from '@archon/provider-contract';
 import {
-  executionTokenUsageSchema,
   nodeExecutionMetadataSchema,
   type ExecutionBinding,
   type ExecutionOutput,
@@ -196,7 +196,7 @@ export function finishNodeExecution(
       tokens: observed(
         result.tokens,
         start.spend.tokens,
-        value => executionTokenUsageSchema.safeParse(value).success
+        value => tokenUsageSchema.safeParse(value).success
       ),
       costUsd: observed(result.costUsd, start.spend.costUsd, Number.isFinite),
       stopReason: observed(result.stopReason, start.spend.stopReason),

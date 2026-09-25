@@ -69,6 +69,7 @@ import type {
   OverlayChangeSummary,
 } from '@archon/providers/types';
 import { CONTAINER_ENV_DENYLIST, mergeTokenUsage } from '@archon/providers/types';
+import type { ProviderFailure } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
 import { WRITEBACK_GATE_NODE_ID } from './container-context';
 import {
@@ -184,10 +185,11 @@ import { mapWithLimit } from './utils/map-with-limit';
 import { collectComposedSuspensionPaths, instantiateResolvedInclude } from './include-expander';
 import { buildInstanceSnapshots, composeFanOutScopeSegment } from './fan-out-identity';
 import {
-  classifyError,
+  nodeFailureKindOf,
+  retryClassOf,
+  type RetryClass,
   currentAdoptedRunDir,
   getRetryDelayMs,
-  isRateLimitError,
   RATE_LIMIT_MAX_RETRIES,
   providerFailureKind,
   detectCreditExhaustion,
@@ -1027,35 +1029,31 @@ function getExplicitNodeRetryConfig(
 }
 
 /**
- * Decide whether a failed node output warrants another retry attempt.
+ * The retry class of a failed node output that warrants another attempt, or
+ * `undefined` when it does not.
  *
  * Shared by {@link runNodeRetryLoop} for every node type so the retry decision
- * cannot drift. Decisive FATAL errors (credentials, authorization, quota/limit
- * windows) are never retried, even when `on_error: all`; generic "auth error"
- * text is fatal only when no transient signal matches. Also returns `isTransient`
- * so callers can label the notification.
+ * cannot drift. The class comes from {@link retryClassOf}: a provider failure is
+ * decided by the kind recorded where it failed, never by its text. Fatal failures
+ * (credentials, authorization, quota and spend windows) are never retried, even
+ * when `on_error: all`; `unknown` is retried only under `on_error: all`.
  */
-function shouldRetryNodeFailure(
+function retryableFailureClass(
   output: NodeOutput,
   onError: 'transient' | 'all'
-): { shouldRetry: boolean; isTransient: boolean } {
+): RetryClass | undefined {
   // Only failed outputs carry `error` (discriminated union); a non-failed output
   // is never retried. Callers already guard on `state === 'failed'`, but narrow
   // here too so `output.error` type-checks and the helper is safe standalone.
-  if (output.state !== 'failed') {
-    return { shouldRetry: false, isTransient: false };
-  }
+  if (output.state !== 'failed') return undefined;
   // A producer that diagnosed its own output (an exec contract failure, #2453) says so
   // in the type; its error text quotes stdout, so classifying that text would let a
   // transient-looking excerpt re-run a script whose stdout is deterministically wrong.
-  if (output.retryable === false) {
-    return { shouldRetry: false, isTransient: false };
-  }
-  const errorType = output.error ? classifyError(new Error(output.error)) : undefined;
-  const isFatal = errorType === 'FATAL';
-  const isTransient = errorType === 'TRANSIENT';
-  const shouldRetry = !isFatal && (onError === 'all' || (onError === 'transient' && isTransient));
-  return { shouldRetry, isTransient };
+  if (output.retryable === false) return undefined;
+  const retryClass = retryClassOf(output);
+  if (retryClass === 'fatal') return undefined;
+  if (retryClass === 'unknown' && onError !== 'all') return undefined;
+  return retryClass;
 }
 
 /**
@@ -1102,15 +1100,14 @@ async function runNodeRetryLoop(
     }
     if (output.state !== 'failed') break;
 
-    if (output.error !== undefined && isRateLimitError(output.error)) sawRateLimit = true;
+    const retryClass = retryableFailureClass(output, retryConfig.onError);
+    if (retryClass === 'rate_limited') sawRateLimit = true;
     const effectiveMaxRetries = sawRateLimit
       ? Math.max(retryConfig.maxRetries, RATE_LIMIT_MAX_RETRIES)
       : retryConfig.maxRetries;
+    if (retryClass === undefined || attempt >= effectiveMaxRetries) break;
 
-    const { shouldRetry, isTransient } = shouldRetryNodeFailure(output, retryConfig.onError);
-    if (!shouldRetry || attempt >= effectiveMaxRetries) break;
-
-    const delayMs = getRetryDelayMs(output.error ?? '', attempt, retryConfig.delayMs);
+    const delayMs = getRetryDelayMs(retryClass, attempt, retryConfig.delayMs);
     getLog().warn(
       {
         nodeId: node.id,
@@ -1122,7 +1119,7 @@ async function runNodeRetryLoop(
       'dag_node_transient_retry'
     );
 
-    const errorKind = isTransient ? 'transient error' : 'error';
+    const errorKind = retryClass === 'unknown' ? 'error' : 'transient error';
     await safeSendMessage(
       platform,
       conversationId,
@@ -2588,6 +2585,9 @@ async function executeNodeInternal(
         // is the exact defect #2314 exists to prevent; absence must stay absence.
         nodeResolvedModel = msg.resolvedModel;
         if (msg.structuredOutput !== undefined) structuredOutput = msg.structuredOutput;
+        if (msg.failure !== undefined) {
+          throw providerReportedFailure(`Node '${node.id}'`, msg.failure);
+        }
         // Fail the node if the SDK reports a cost cap exceeded error
         if (msg.isError && msg.errorSubtype === 'error_max_budget_usd') {
           const cap = nodeOptions?.maxBudgetUsd;
@@ -3598,6 +3598,17 @@ class NodeFailure extends Error {
   ) {
     super(message);
   }
+}
+
+/**
+ * A provider's typed failure on its result chunk. The kind comes from the class, so retry
+ * never reads the evidence text, which stays in the message for the operator.
+ */
+function providerReportedFailure(subject: string, failure: ProviderFailure): NodeFailure {
+  return new NodeFailure(
+    nodeFailureKindOf(failure),
+    `${subject} failed: provider reported ${failure.class}: ${failure.evidence}`
+  );
 }
 
 async function recordExecTimeoutSkip(
@@ -5969,16 +5980,18 @@ async function executeLoopNode(
     // classification and delay policy, same widened rate-limit budget.
     let iterSawRateLimit = false;
     const tryIterationTransientRetry = async (
-      message: string,
+      failure: { failureKind: NodeFailureKind; error: string },
       attempt: number
     ): Promise<boolean> => {
-      if (isRateLimitError(message)) iterSawRateLimit = true;
-      if (classifyError(new Error(message)) !== 'TRANSIENT') return false;
+      const retryClass = retryClassOf(failure);
+      if (retryClass === 'rate_limited') iterSawRateLimit = true;
+      if (retryClass !== 'transient' && retryClass !== 'rate_limited') return false;
+      const message = failure.error;
       const maxRetries = iterSawRateLimit
         ? Math.max(DEFAULT_NODE_MAX_RETRIES, RATE_LIMIT_MAX_RETRIES)
         : DEFAULT_NODE_MAX_RETRIES;
       if (attempt >= maxRetries) return false;
-      const delayMs = getRetryDelayMs(message, attempt, DEFAULT_NODE_RETRY_DELAY_MS);
+      const delayMs = getRetryDelayMs(retryClass, attempt, DEFAULT_NODE_RETRY_DELAY_MS);
       getLog().warn(
         {
           nodeId: node.id,
@@ -6282,6 +6295,12 @@ async function executeLoopNode(
               if (msg.structuredOutput !== undefined) {
                 attemptStructured = msg.structuredOutput;
               }
+              if (msg.failure !== undefined) {
+                throw providerReportedFailure(
+                  `Loop '${node.id}' iteration ${String(i)}`,
+                  msg.failure
+                );
+              }
               // Fail the iteration loudly on SDK error results. Previously we broke
               // silently, producing empty output and continuing to the next iteration —
               // which made `error_during_execution` on resumed interactive loops look
@@ -6517,11 +6536,13 @@ async function executeLoopNode(
             .catch((evtErr: Error) => {
               logEventStoreError(evtErr, i);
             });
-          if (await tryIterationTransientRetry(err.message, iterRetry)) {
+          const failureKind: NodeFailureKind =
+            err instanceof NodeFailure ? err.kind : providerFailureKind(err);
+          if (await tryIterationTransientRetry({ failureKind, error: err.message }, iterRetry)) {
             continue iterationAttempt;
           }
           return await failLoopNode(`Loop iteration ${String(i)} failed: ${err.message}`, {
-            failureKind: providerFailureKind(err),
+            failureKind,
             costUsd: loopTotalCostUsd,
             ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
             loopIterations: i,
@@ -6605,11 +6626,12 @@ async function executeLoopNode(
             .catch((evtErr: Error) => {
               logEventStoreError(evtErr, i);
             });
-          if (await tryIterationTransientRetry(emptyError, iterRetry)) {
+          const failureKind: NodeFailureKind = iterationIdleTimedOut ? 'timeout' : 'transient';
+          if (await tryIterationTransientRetry({ failureKind, error: emptyError }, iterRetry)) {
             continue iterationAttempt;
           }
           return failLoopNode(`Loop iteration ${String(i)} failed: ${emptyError}`, {
-            failureKind: iterationIdleTimedOut ? 'timeout' : 'transient',
+            failureKind,
             costUsd: loopTotalCostUsd,
             ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
             loopIterations: i,

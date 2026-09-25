@@ -691,6 +691,7 @@ export type WorkflowErrorClass =
   | 'fatal'
   | 'transient'
   | 'unknown'
+  | 'rate_limited'
   | 'timeout'
   | 'exec_failed'
   | 'output_contract'

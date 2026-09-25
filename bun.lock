@@ -165,12 +165,23 @@
         "typescript": "^5.0.0",
       },
     },
+    "packages/provider-contract": {
+      "name": "@archon/provider-contract",
+      "version": "0.11.0",
+      "dependencies": {
+        "zod": "^4.4.3",
+      },
+      "peerDependencies": {
+        "typescript": "^5.0.0",
+      },
+    },
     "packages/providers": {
       "name": "@archon/providers",
       "version": "0.11.0",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.3.282",
         "@archon/paths": "workspace:*",
+        "@archon/provider-contract": "workspace:*",
         "@earendil-works/pi-ai": "^0.87.1",
         "@earendil-works/pi-coding-agent": "^0.87.1",
         "@github/copilot-sdk": "~1.0.1",
@@ -196,6 +207,7 @@
         "@archon/core": "workspace:*",
         "@archon/git": "workspace:*",
         "@archon/paths": "workspace:*",
+        "@archon/provider-contract": "workspace:*",
         "@archon/providers": "workspace:*",
         "@archon/workflows": "workspace:*",
         "@hono/zod-openapi": "^1.4.0",
@@ -258,6 +270,7 @@
         "@archon/git": "workspace:*",
         "@archon/paths": "workspace:*",
         "@archon/plugin-manifest": "workspace:*",
+        "@archon/provider-contract": "workspace:*",
         "@archon/providers": "workspace:*",
         "@hono/zod-openapi": "^1.4.0",
         "zod": "^4.4.3",
@@ -316,6 +329,8 @@
     "@archon/paths": ["@archon/paths@workspace:packages/paths"],
 
     "@archon/plugin-manifest": ["@archon/plugin-manifest@workspace:packages/plugin-manifest"],
+
+    "@archon/provider-contract": ["@archon/provider-contract@workspace:packages/provider-contract"],
 
     "@archon/providers": ["@archon/providers@workspace:packages/providers"],
 

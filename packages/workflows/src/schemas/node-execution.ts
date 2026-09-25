@@ -1,5 +1,5 @@
 import { z } from '@hono/zod-openapi';
-import type { TokenUsage } from '@archon/providers/types';
+import { tokenUsageSchema } from '@archon/provider-contract';
 import {
   agentNodeSchema,
   execNodeSchema,
@@ -15,17 +15,6 @@ import { effortLevelSchema } from './effort';
 import { tierNameSchema } from './model-binding';
 import { nodeSkipReasonSchema, skipCauseSchema, suspendReasonSchema } from './node-state';
 import { checkoutObservationSchema } from './checkout-observation';
-
-/** Conforms to the provider owner; no alternate token vocabulary at this boundary. */
-export const executionTokenUsageSchema = z.object({
-  input: z.number(),
-  output: z.number(),
-  cacheRead: z.number().optional(),
-  cacheWrite: z.number().optional(),
-  cachePartial: z.literal(true).optional(),
-  total: z.number().optional(),
-  cost: z.number().optional(),
-}) satisfies z.ZodType<TokenUsage>;
 
 export const unavailableMeasurementSchema = z.object({
   source: z.literal('unavailable'),
@@ -46,7 +35,7 @@ export function reportedMeasurementSchema<T extends z.ZodType>(
   ]);
 }
 export const executionSpendSchema = z.object({
-  tokens: reportedMeasurementSchema(executionTokenUsageSchema),
+  tokens: reportedMeasurementSchema(tokenUsageSchema),
   costUsd: reportedMeasurementSchema(z.number()),
   stopReason: reportedMeasurementSchema(z.string()),
   numTurns: reportedMeasurementSchema(z.number()),
@@ -101,14 +90,15 @@ export type ExecutionBinding = z.infer<typeof executionBindingSchema>;
 
 /**
  * Why a node failed, recorded where the failure is known rather than re-read from
- * `error` prose later. `fatal`/`transient`/`unknown` classify a provider error the
- * way retry does; the rest name engine-detected causes. Absent on records written
- * before this field existed.
+ * `error` prose later. `fatal`/`transient`/`rate_limited`/`unknown` classify a provider
+ * error and decide its retry; the rest name engine-detected causes. Absent on records
+ * written before this field existed.
  */
 export const nodeFailureKindSchema = z.enum([
   'fatal',
   'transient',
   'unknown',
+  'rate_limited',
   'timeout',
   'exec_failed',
   'output_contract',

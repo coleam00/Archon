@@ -21,6 +21,7 @@ import { bundledDefaultCommandPath, bundlesPackagedResources } from './defaults/
 import { createLogger } from '@archon/paths';
 import { isValidCommandName } from './command-validation';
 import type { LoadCommandResult } from './schemas';
+import type { ProviderFailure } from '@archon/provider-contract';
 import type { NodeFailureKind } from './schemas/node-execution';
 import { substituteInputRefs, type JsonValue } from './output-ref';
 import { parsePackagedResourceReference } from './packaged-workflow';
@@ -132,7 +133,7 @@ export function isRateLimitError(error: string): boolean {
 }
 
 /**
- * Delay before retry attempt N for a failed attempt with this error message.
+ * Delay before retry attempt N for a failed attempt of this retry class.
  *
  * Rate-limit failures back off FLAT at ~45s ±50% jitter: providers shedding load
  * recover on a minutes-scale window with no retry-after signal (#2706), so exponential
@@ -141,11 +142,11 @@ export function isRateLimitError(error: string): boolean {
  * Everything else keeps the caller's base × 2^attempt exponential shape.
  */
 export function getRetryDelayMs(
-  errorMessage: string,
+  retryClass: RetryClass,
   attempt: number,
   baseDelayMs: number
 ): number {
-  if (isRateLimitError(errorMessage)) {
+  if (retryClass === 'rate_limited') {
     return Math.round(RATE_LIMIT_RETRY_DELAY_MS * (0.5 + Math.random()));
   }
   return baseDelayMs * Math.pow(2, attempt);
@@ -175,23 +176,69 @@ export function extractQuotaResetAt(error: string, now = new Date()): Date | nul
   return null;
 }
 
+/** The failure kinds a provider error can have. Each one decides retry by itself. */
+export type RetryClass = Extract<
+  NodeFailureKind,
+  'fatal' | 'transient' | 'rate_limited' | 'unknown'
+>;
+
 /**
- * Failure kind of a provider error, from the same classification retry uses.
- * Only for errors a provider raised; engine-detected causes carry their own kind.
+ * Failure kind of an untyped provider error, classified once from its text. This is the
+ * fallback for providers that do not report a typed `ProviderFailure` yet; a typed failure
+ * goes through {@link nodeFailureKindOf} instead.
  */
-export function providerFailureKind(error: Error): NodeFailureKind {
+export function providerFailureKind(error: Error): RetryClass {
   const errorType = classifyError(error);
   switch (errorType) {
     case 'FATAL':
       return 'fatal';
     case 'TRANSIENT':
-      return 'transient';
+      return isRateLimitError(error.message) ? 'rate_limited' : 'transient';
     case 'UNKNOWN':
       return 'unknown';
     default: {
       const exhaustive: never = errorType;
       return exhaustive;
     }
+  }
+}
+
+/** The node failure kind a provider's typed failure class maps to. */
+export function nodeFailureKindOf(failure: ProviderFailure): RetryClass {
+  switch (failure.class) {
+    case 'auth':
+    case 'quota_exhausted':
+    case 'budget_exceeded':
+      return 'fatal';
+    case 'rate_limited':
+    case 'transient':
+    case 'unknown':
+      return failure.class;
+    default: {
+      const exhaustive: never = failure.class;
+      return exhaustive;
+    }
+  }
+}
+
+/**
+ * How retry treats a failed attempt. A provider-error kind recorded at the failure site is
+ * the answer. Engine-detected kinds (timeout, exec_failed, config and the rest) and records
+ * without a kind still classify their error text, as they did before provider failures were
+ * typed: giving each engine kind its own retry rule is a separate decision.
+ */
+export function retryClassOf(failure: {
+  failureKind?: NodeFailureKind;
+  error: string;
+}): RetryClass {
+  switch (failure.failureKind) {
+    case 'fatal':
+    case 'transient':
+    case 'rate_limited':
+    case 'unknown':
+      return failure.failureKind;
+    default:
+      return providerFailureKind(new Error(failure.error));
   }
 }
 

@@ -124,7 +124,7 @@ jobs:
       # scripts/bun-test-command.ts; see coleam00/Archon#3294.
       - name: Validate (Windows)
         if: runner.os == 'Windows'
-        run: bun run validate --only cli-import-boundary,bundled-defaults,bundled-skill,bundled-schema,pi-vendor-map,capability-matrix,api-types,tests
+        run: bun run validate --only cli-import-boundary,bundled-defaults,bundled-skill,bundled-schema,pi-vendor-map,capability-matrix,provider-contract-schema,api-types,tests
 
   # Windows fixtures run beside the Windows tests rather than after them: they are the
   # second-slowest Windows check, and serial they made that leg the critical path.
@@ -166,7 +166,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Validate
-        run: bun run validate --only cli-import-boundary,bundled-defaults,bundled-skill,bundled-schema,pi-vendor-map,capability-matrix,api-types,type-check,lint,format
+        run: bun run validate --only cli-import-boundary,bundled-defaults,bundled-skill,bundled-schema,pi-vendor-map,capability-matrix,provider-contract-schema,api-types,type-check,lint,format
 
   schema-upgrade:
     needs: changes
