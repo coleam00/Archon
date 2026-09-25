@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-agent';
-import type { StopReason } from '@earendil-works/pi-ai';
+import type {
+  AgentSession,
+  AgentSessionEvent,
+  SessionEntry,
+} from '@earendil-works/pi-coding-agent';
+import type { StopReason, Usage } from '@earendil-works/pi-ai';
 
 import type { MessageChunk } from '../../types';
 import {
@@ -1207,15 +1211,30 @@ describe('bridgeSession usage covers every model call of the prompt', () => {
     // Pi keeps the prompt cache warm during a long tool run by calling the model
     // itself. The call adds no assistant message; Pi records its usage as a session
     // entry, announced through entry_appended.
-    const entryAppended = (entry: Record<string, unknown>): AgentSessionEvent =>
-      ({ type: 'entry_appended', entry }) as unknown as AgentSessionEvent;
-    const warm = assistant(
-      { input: 5, output: 1, cacheRead: 9000, cacheWrite: 0, cost: 0.003 },
-      'stop'
-    );
+    const entryAppended = (entry: SessionEntry): AgentSessionEvent => ({
+      type: 'entry_appended',
+      entry,
+    });
+    const base = { parentId: null, timestamp: '2026-09-25T00:00:00.000Z' };
+    const warm: Usage = {
+      input: 5,
+      output: 1,
+      cacheRead: 9000,
+      cacheWrite: 0,
+      totalTokens: 9006,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.003 },
+    };
     const result = await lastResult([
-      entryAppended({ type: 'usage', kind: 'cache_warm', usage: warm.usage }),
-      entryAppended({ type: 'session_info', name: 'not usage' }),
+      entryAppended({
+        ...base,
+        type: 'usage',
+        id: 'warm',
+        kind: 'cache_warm',
+        provider: 'anthropic',
+        model: 'claude-opus-5-5',
+        usage: warm,
+      }),
+      entryAppended({ ...base, type: 'session_info', id: 'info', name: 'not usage' }),
       agentEnd([
         assistant({ input: 500, output: 50, cacheRead: 0, cacheWrite: 0, cost: 0.05 }, 'stop'),
       ]),
