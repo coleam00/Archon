@@ -21,6 +21,9 @@ mock.module('@archon/paths', () => ({
     trace() {},
     fatal() {},
   }),
+  // Terminal writers report telemetry; covered by workflow-terminal-telemetry tests.
+  isTelemetryDisabled: () => true,
+  captureWorkflowTerminal: () => undefined,
 }));
 
 const { SqliteAdapter, sqliteDialect } = await import('./adapters/sqlite');

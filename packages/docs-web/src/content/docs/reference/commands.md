@@ -33,7 +33,7 @@ These commands are handled deterministically by the orchestrator — they always
 | `/workflow list` | Show available workflows |
 | `/workflow reload` | Reload workflow definitions |
 | `/workflow status` | Show active workflows |
-| `/workflow cancel` | Cancel running workflow |
+| `/workflow cancel [id]` | Cancel a running workflow (default: this conversation's). Refuses when no owner answers; check the recorded host and pid, verify the owner has stopped, then use `/workflow abandon <id>` |
 | `/workflow resume <id>` | Resume a failed or paused run (re-runs, skipping completed nodes) |
 | `/workflow abandon <id>` | Discard a run (running, paused, or failed) |
 | `/workflow approve <id> [comment]` | Approve a paused workflow run at an approval gate (interactive-loop gates: no comment on a signal-bearing gate = accept & complete; a comment runs another iteration) |

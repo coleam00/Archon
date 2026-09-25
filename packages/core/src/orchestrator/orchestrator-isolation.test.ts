@@ -716,7 +716,9 @@ describe('dispatchBackgroundWorkflow', () => {
     await dispatchBackgroundWorkflow(makeRoutingCtx(), workflow);
     await flushBackgroundExecution();
 
-    expect(mockFailWorkflowRun).toHaveBeenCalledWith('run-1', 'invalid run config provider');
+    expect(mockFailWorkflowRun).toHaveBeenCalledWith('run-1', 'invalid run config provider', {
+      exitReason: 'unhandled_error',
+    });
   });
 
   test('default policy still resolves isolation for the worker', async () => {

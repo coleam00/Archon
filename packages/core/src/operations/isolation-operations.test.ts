@@ -1,4 +1,5 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { toBranchName } from '@archon/git';
 import type * as IsolationDb from '../db/isolation-environments';
 import type * as CleanupService from '../services/cleanup-service';
 
@@ -33,8 +34,9 @@ mock.module('../db/isolation-environments', () => ({
 const mockCleanupStale = mock<typeof CleanupService.cleanupStaleWorktrees>(() =>
   Promise.resolve({ removed: [], skipped: [] })
 );
+const MERGED_BASE_REF = toBranchName('origin/main');
 const mockCleanupMerged = mock<typeof CleanupService.cleanupMergedWorktrees>(() =>
-  Promise.resolve({ removed: [], skipped: [] })
+  Promise.resolve({ removed: [], skipped: [], baseRef: MERGED_BASE_REF })
 );
 mock.module('../services/cleanup-service', () => ({
   cleanupStaleWorktrees: mockCleanupStale,
@@ -238,7 +240,11 @@ describe('cleanupMergedEnvironments', () => {
   });
 
   test('delegates to cleanupMergedWorktrees', async () => {
-    mockCleanupMerged.mockResolvedValueOnce({ removed: ['feat-a', 'feat-b'], skipped: [] });
+    mockCleanupMerged.mockResolvedValueOnce({
+      removed: ['feat-a', 'feat-b'],
+      skipped: [],
+      baseRef: MERGED_BASE_REF,
+    });
 
     const result = await cleanupMergedEnvironments('cb-1', '/main');
 
@@ -250,6 +256,7 @@ describe('cleanupMergedEnvironments', () => {
     mockCleanupMerged.mockResolvedValueOnce({
       removed: [],
       skipped: [{ branchName: 'branch-a', reason: 'git error' }],
+      baseRef: MERGED_BASE_REF,
     });
 
     const result = await cleanupMergedEnvironments('cb-1', '/main');
@@ -258,7 +265,11 @@ describe('cleanupMergedEnvironments', () => {
   });
 
   test('forwards includeClosed option to cleanupMergedWorktrees', async () => {
-    mockCleanupMerged.mockResolvedValueOnce({ removed: ['feat'], skipped: [] });
+    mockCleanupMerged.mockResolvedValueOnce({
+      removed: ['feat'],
+      skipped: [],
+      baseRef: MERGED_BASE_REF,
+    });
 
     await cleanupMergedEnvironments('cb-1', '/main', { includeClosed: true });
 

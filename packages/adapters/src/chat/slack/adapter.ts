@@ -205,6 +205,11 @@ export class SlackAdapter implements IPlatformAdapter {
     return 'slack';
   }
 
+  /** The Slack app registers `/archon-workflow`; Slack rejects an unregistered `/workflow`. */
+  formatWorkflowCommand(command: string): string {
+    return `/archon-workflow ${command}`;
+  }
+
   /**
    * Returns the channel/ts of the inbound user message that triggered the
    * given conversation, if we have it. Workflow bridge uses this to add
@@ -536,7 +541,7 @@ export class SlackAdapter implements IPlatformAdapter {
     try {
       const seedText =
         kind === 'archon-workflow'
-          ? `<@${actorId}> ran \`/archon-workflow ${raw}\``
+          ? `<@${actorId}> ran \`${this.formatWorkflowCommand(raw)}\``
           : `<@${actorId}> via /archon: ${raw}`;
       const posted = await client.chat.postMessage({
         channel: command.channel_id,
@@ -580,7 +585,7 @@ export class SlackAdapter implements IPlatformAdapter {
       response_type: 'ephemeral',
       text:
         kind === 'archon-workflow'
-          ? `Running \`/workflow ${raw}\` — see thread for output.`
+          ? `Running \`${this.formatWorkflowCommand(raw)}\` — see thread for output.`
           : `Running \`${raw}\` — see thread for output.`,
     });
 

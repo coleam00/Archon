@@ -164,6 +164,13 @@ export interface IPlatformAdapter {
   emitRetract?(conversationId: string): Promise<void>;
 
   /**
+   * Optional: how an operator types a workflow command on this surface, given the
+   * command after the verb prefix (`cancel <id>`). Absent means the chat grammar the
+   * core command handler parses, `/workflow <command>`.
+   */
+  formatWorkflowCommand?(command: string): string;
+
+  /**
    * Optional: Append a small footer summarising cost / token usage / stop reason
    * after a direct-chat assistant turn. Implemented by adapters that surface
    * usage info in-band (e.g. Slack posts an italic context line). No-op for

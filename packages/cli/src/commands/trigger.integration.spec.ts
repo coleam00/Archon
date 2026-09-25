@@ -8,12 +8,12 @@ import {
   realpathSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { JsonValue } from '@archon/workflows/output-ref';
 import { getRunArtifactsDirForRoot } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { requestDetachedRunStop } from '../utils/detached-run-control';
+import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
 
 const tempRoots: string[] = [];
 const activeRuns = new Set<string>();
@@ -626,6 +626,372 @@ describe('trigger CLI durable execution', () => {
       }
     }
   }, 45_000);
+
+  /**
+   * A trigger binding on a capacity-1 resource whose run holds its node in `sleep`, in a
+   * scratch ARCHON_HOME. `fire()` starts a detached `trigger execute` owner; the bash
+   * node records `$PPID $$`, which is that owner and the node. `holdPrefix` runs first
+   * in the node's shell.
+   */
+  async function heldTriggerRun(
+    label: string,
+    holdPrefix = ''
+  ): Promise<{
+    projectRoot: string;
+    archonHome: string;
+    cliPath: string;
+    hostId: string;
+    pidFile: string;
+    writeWorkflow: (body: string) => void;
+    fire: () => Promise<void>;
+    runs: () => RunRow[];
+    requests: () => RequestRow[];
+  }> {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), `archon-trigger-${label}-`)));
+    tempRoots.push(root);
+    const archonHome = join(root, 'home');
+    const projectRoot = join(root, 'project');
+    const workflowPath = join(projectRoot, '.archon', 'workflows', `${label}-proof.yaml`);
+    mkdirSync(join(projectRoot, '.archon', 'workflows'), { recursive: true });
+    expect(await Bun.spawn(['git', 'init', '-q'], { cwd: projectRoot }).exited).toBe(0);
+    const pidFile = join(root, 'owner.pid');
+    const writeWorkflow = (body: string): void => {
+      writeFileSync(
+        workflowPath,
+        `name: ${label}-proof\ndescription: ${label} proof.\nmutates_checkout: false\nnodes:\n  - id: hold\n    bash: |\n      ${body}\n`
+      );
+    };
+    writeWorkflow(`${holdPrefix}echo "$PPID $$" > '${pidFile}'; exec sleep 60`);
+
+    const cliPath = resolve(import.meta.dir, '..', 'cli.ts');
+    const databasePath = join(archonHome, 'archon.db');
+    const userId = crypto.randomUUID();
+    const hostId = `${label}-host`;
+    const configPath = join(root, 'trigger.json');
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        sourceInstanceId: `${label}-timer`,
+        binding: {
+          bindingId: `${label}-proof`,
+          bindingRevision: null,
+          hostId,
+          runAsUserId: userId,
+          resource: `${label}:resource`,
+          overlap: 'queue',
+          launch: {
+            cwd: projectRoot,
+            workflowName: `${label}-proof`,
+            inputs: {},
+            isolation: { kind: 'in-place' },
+          },
+        },
+        schedule: { intervalSeconds: 60, runAtLoad: false },
+      })
+    );
+    const fireArgs = ['trigger', 'fire', '--config', configPath];
+    // The first DB-backed command creates the scratch schema, then fails closed because
+    // the configured actor does not exist yet. Seed only that actor.
+    expect((await runCli(cliPath, projectRoot, archonHome, fireArgs, false)).exitCode).not.toBe(0);
+    const database = new Database(databasePath);
+    try {
+      database
+        .query('INSERT INTO remote_agent_users (id, display_name) VALUES (?, ?)')
+        .run(userId, `${label} actor`);
+    } finally {
+      database.close();
+    }
+    return {
+      projectRoot,
+      archonHome,
+      cliPath,
+      hostId,
+      pidFile,
+      writeWorkflow,
+      fire: async (): Promise<void> => {
+        await runCli(cliPath, projectRoot, archonHome, fireArgs);
+      },
+      runs: (): RunRow[] =>
+        readRows<RunRow>(
+          databasePath,
+          'SELECT id,status,metadata,output_root FROM remote_agent_workflow_runs ORDER BY started_at'
+        ),
+      requests: (): RequestRow[] =>
+        readRows<RequestRow>(
+          databasePath,
+          'SELECT id,status,launch FROM remote_agent_resource_start_requests ORDER BY queue_position'
+        ),
+    };
+  }
+
+  /** Both PIDs the held node records, parsed only from a complete record (never PID 0). */
+  function recordedPids(pidFile: string): Promise<[owner: number, node: number]> {
+    return waitFor(() => {
+      if (!existsSync(pidFile)) return undefined;
+      const record = readFileSync(pidFile, 'utf8').trim().split(' ').map(Number);
+      return record.length === 2 && record.every(pid => Number.isInteger(pid) && pid > 0)
+        ? ([record[0], record[1]] as [number, number])
+        : undefined;
+    }, 'trigger node to record its PIDs');
+  }
+
+  function killAll(pids: number[]): void {
+    if (process.platform === 'win32') return;
+    for (const pid of pids.filter(pid => pid > 0)) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // Already gone.
+      }
+    }
+  }
+
+  test('workflow abandon stops a live detached owner before the queued start is admitted', async () => {
+    // The held node ignores SIGTERM, so its process group outlives the terminator's
+    // first signal until the SIGKILL escalation. That keeps a wrong order (cancelled
+    // before the tree is gone) visible for seconds instead of milliseconds.
+    const fixture = await heldTriggerRun('abandon', "trap '' TERM; ");
+    let pids: number[] = [];
+    try {
+      await fixture.fire();
+      const first = await waitFor(() => {
+        const run = fixture.runs()[0];
+        return run?.status === 'running' ? run : undefined;
+      }, 'trigger execution to start');
+      activeRuns.add(first.id);
+      pids = await recordedPids(fixture.pidFile);
+      const [ownerPid] = pids;
+
+      // The next start waits behind the slot. A drain while the owner is alive must
+      // leave it queued: the slot is still held.
+      fixture.writeWorkflow('echo done');
+      await fixture.fire();
+      await waitFor(
+        () => (fixture.requests()[1]?.status === 'queued' ? true : undefined),
+        'second start to queue behind the running one'
+      );
+      await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
+        'trigger',
+        'drain',
+        '--host',
+        fixture.hostId,
+      ]);
+      expect(fixture.requests()[1]?.status).toBe('queued');
+
+      // Watch the row while abandon runs. `cancelled` is what releases the slot, so it
+      // must never be visible while the owner or its node is still alive. PIDs are MSYS
+      // values under Git Bash, so the watch is POSIX-only.
+      let watching = true;
+      let releasedWhileOwnerAlive = false;
+      const watch = (async (): Promise<void> => {
+        while (watching) {
+          if (
+            process.platform !== 'win32' &&
+            fixture.runs()[0]?.status === 'cancelled' &&
+            pids.some(processAlive)
+          ) {
+            releasedWhileOwnerAlive = true;
+          }
+          await Bun.sleep(10);
+        }
+      })();
+      const abandon = await runCli(
+        fixture.cliPath,
+        fixture.projectRoot,
+        fixture.archonHome,
+        ['workflow', 'abandon', first.id],
+        false
+      );
+      watching = false;
+      await watch;
+      if (abandon.exitCode !== 0) {
+        throw new Error(`abandon failed: ${abandon.stderr || abandon.stdout}`);
+      }
+      activeRuns.delete(first.id);
+
+      expect(releasedWhileOwnerAlive).toBe(false);
+      expect(fixture.runs()[0]?.status).toBe('cancelled');
+      expect(abandon.stdout).toContain("Stopped the run's live owner process");
+      if (process.platform !== 'win32') {
+        expect(abandon.stdout).toContain(`(pid ${String(ownerPid)})`);
+        for (const pid of pids) expect(processAlive(pid)).toBe(false);
+      }
+
+      // With the owner gone and the run cancelled, the queued start is admitted.
+      await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
+        'trigger',
+        'drain',
+        '--host',
+        fixture.hostId,
+      ]);
+      await waitFor(
+        () => (fixture.runs()[1]?.status === 'completed' ? true : undefined),
+        'queued start to run after the abandon'
+      );
+      expect(fixture.requests().map(row => row.status)).toEqual(['admitted', 'admitted']);
+    } finally {
+      killAll(pids);
+    }
+  }, 60_000);
+
+  /**
+   * Cancel through the shared op from a separate process that does not own the run, the
+   * way the server's API route, chat `/workflow cancel`, Slack, and `manage_run` do.
+   */
+  async function serverSideCancel(
+    fixture: { projectRoot: string; archonHome: string },
+    runId: string
+  ): Promise<{ ok: boolean; kind?: string; pid?: number; reason?: string; message?: string }> {
+    const script = resolve(import.meta.dir, '..', 'utils', 'fixtures', 'cancel-run.ts');
+    const result = await runCli(script, fixture.projectRoot, fixture.archonHome, [runId]);
+    const line = result.stdout.trim().split('\n').at(-1) ?? '';
+    return JSON.parse(line) as {
+      ok: boolean;
+      kind?: string;
+      pid?: number;
+      reason?: string;
+      message?: string;
+    };
+  }
+
+  test('server-side cancel stops a live detached owner before the queued start is admitted', async () => {
+    // Same shape as the abandon spec above: the held node ignores SIGTERM, so a wrong
+    // order (cancelled before the tree is gone) stays visible until the SIGKILL.
+    const fixture = await heldTriggerRun('cancel', "trap '' TERM; ");
+    let pids: number[] = [];
+    try {
+      await fixture.fire();
+      const first = await waitFor(() => {
+        const run = fixture.runs()[0];
+        return run?.status === 'running' ? run : undefined;
+      }, 'trigger execution to start');
+      activeRuns.add(first.id);
+      pids = await recordedPids(fixture.pidFile);
+      const [ownerPid] = pids;
+
+      fixture.writeWorkflow('echo done');
+      await fixture.fire();
+      await waitFor(
+        () => (fixture.requests()[1]?.status === 'queued' ? true : undefined),
+        'second start to queue behind the running one'
+      );
+
+      let watching = true;
+      let releasedWhileOwnerAlive = false;
+      const watch = (async (): Promise<void> => {
+        while (watching) {
+          if (
+            process.platform !== 'win32' &&
+            fixture.runs()[0]?.status === 'cancelled' &&
+            pids.some(processAlive)
+          ) {
+            releasedWhileOwnerAlive = true;
+          }
+          await Bun.sleep(10);
+        }
+      })();
+      const cancel = await serverSideCancel(fixture, first.id);
+      watching = false;
+      await watch;
+      if (!cancel.ok) throw new Error(`cancel refused: ${String(cancel.message)}`);
+      activeRuns.delete(first.id);
+
+      expect(cancel.kind).toBe('stopped');
+      expect(releasedWhileOwnerAlive).toBe(false);
+      expect(fixture.runs()[0]?.status).toBe('cancelled');
+      if (process.platform !== 'win32') {
+        expect(cancel.pid).toBe(ownerPid);
+        for (const pid of pids) expect(processAlive(pid)).toBe(false);
+      }
+
+      await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
+        'trigger',
+        'drain',
+        '--host',
+        fixture.hostId,
+      ]);
+      await waitFor(
+        () => (fixture.runs()[1]?.status === 'completed' ? true : undefined),
+        'queued start to run after the cancel'
+      );
+    } finally {
+      killAll(pids);
+    }
+  }, 60_000);
+
+  test.skipIf(process.platform === 'win32')(
+    'server-side cancel of an owner that is gone refuses and leaves the run holding its slot',
+    async () => {
+      const fixture = await heldTriggerRun('cancel-orphan');
+      let pids: number[] = [];
+      try {
+        await fixture.fire();
+        const first = await waitFor(() => {
+          const run = fixture.runs()[0];
+          return run?.status === 'running' ? run : undefined;
+        }, 'trigger execution to start');
+        pids = await recordedPids(fixture.pidFile);
+        const [ownerPid] = pids;
+        process.kill(ownerPid, 'SIGKILL');
+        await waitFor(() => (processAlive(ownerPid) ? undefined : true), 'owner to die');
+
+        const cancel = await serverSideCancel(fixture, first.id);
+
+        expect(cancel).toMatchObject({ ok: false, reason: 'no_owner_answered' });
+        expect(cancel.message).toContain(
+          `Recorded owner: host ${hostname()}, pid ${String(ownerPid)}.`
+        );
+        expect(fixture.runs()[0]?.status).toBe('running');
+      } finally {
+        killAll(pids);
+      }
+    },
+    60_000
+  );
+
+  // An owner killed outright leaves a socket nobody listens on, which is the unreachable
+  // case. SIGKILL and real PIDs are POSIX-only.
+  test.skipIf(process.platform === 'win32')(
+    'workflow abandon of an owner that is gone prints what the run recorded, then cancels',
+    async () => {
+      const fixture = await heldTriggerRun('orphan');
+      let pids: number[] = [];
+      try {
+        await fixture.fire();
+        const first = await waitFor(() => {
+          const run = fixture.runs()[0];
+          return run?.status === 'running' ? run : undefined;
+        }, 'trigger execution to start');
+        pids = await recordedPids(fixture.pidFile);
+        const [ownerPid] = pids;
+
+        process.kill(ownerPid, 'SIGKILL');
+        await waitFor(() => (processAlive(ownerPid) ? undefined : true), 'owner to die');
+        // Nothing settled the row: SIGKILL gives the owner no chance to.
+        expect(fixture.runs()[0]?.status).toBe('running');
+
+        const abandon = await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
+          'workflow',
+          'abandon',
+          first.id,
+        ]);
+
+        expect(abandon.stdout).toContain(
+          `No live owner answered for this run on this host (${hostname()}; `
+        );
+        expect(abandon.stdout).toContain(
+          `Recorded owner: host ${hostname()}, pid ${String(ownerPid)}.`
+        );
+        expect(abandon.stdout).toMatch(/Last activity: \d{4}-\d{2}-\d{2}T/);
+        expect(abandon.stdout).not.toContain('another host');
+        expect(fixture.runs()[0]?.status).toBe('cancelled');
+      } finally {
+        killAll(pids);
+      }
+    },
+    60_000
+  );
 });
 
 function processAlive(pid: number): boolean {

@@ -129,6 +129,15 @@ describe('SlackAdapter', () => {
       const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
       expect(adapter.getPlatformType()).toBe('slack');
     });
+
+    // The worktree-in-use refusal prints commands through this; `/workflow` is not a
+    // command this Slack app registers.
+    test('spells workflow commands as the registered /archon-workflow command', () => {
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      expect(adapter.formatWorkflowCommand('cancel abc12345')).toBe(
+        '/archon-workflow cancel abc12345'
+      );
+    });
   });
 
   describe('thread detection', () => {
@@ -514,6 +523,28 @@ describe('SlackAdapter', () => {
         if (original === undefined) delete process.env.SLACK_ALLOWED_USER_IDS;
         else process.env.SLACK_ALLOWED_USER_IDS = original;
       }
+    });
+
+    test('/archon-workflow acknowledges the command in the spelling the user typed', async () => {
+      mockPostMessage.mockClear();
+      mockCommand.mockClear();
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      adapter.onMessage(async () => {});
+      await adapter.start();
+
+      mockPostMessage.mockResolvedValueOnce({ ts: '1.0' });
+      const args = makeSlashArgs({ text: 'status' });
+      await findCommandHandler('/archon-workflow')(args);
+
+      expect(mockPostMessage.mock.calls[0]?.[0]?.text).toBe(
+        '<@U123> ran `/archon-workflow status`'
+      );
+      const respondCalls = (
+        args.respond as Mock<(r: { response_type: string; text: string }) => Promise<void>>
+      ).mock.calls;
+      expect(respondCalls[0]?.[0]?.text).toBe(
+        'Running `/archon-workflow status` — see thread for output.'
+      );
     });
 
     test('seed-post failure surfaces ephemeral error and skips message handler', async () => {

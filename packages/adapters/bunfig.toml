@@ -10,4 +10,4 @@
 # forgotten stub turns into a live request and an intermittent CI timeout.
 # See src/test/no-network.ts and #2186.
 [test]
-preload = ["./src/test/no-network.ts"]
+preload = ["../../scripts/test-telemetry-off.ts", "./src/test/no-network.ts"]

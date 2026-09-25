@@ -1135,7 +1135,7 @@ describe('workflows database', () => {
         maxAttempts: 2,
       };
 
-      await failWorkflowRun('workflow-run-123', 'Quota exhausted', scheduled);
+      await failWorkflowRun('workflow-run-123', 'Quota exhausted', { scheduledResume: scheduled });
 
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("SET status = 'failed'");
@@ -1166,11 +1166,13 @@ describe('workflows database', () => {
 
       await expect(
         failWorkflowRun('workflow-run-123', 'Quota exhausted', {
-          reason: 'quota',
-          resumeAt: '2026-08-25T10:00:00.000Z',
-          deadlineAt: '2026-08-26T10:00:00.000Z',
-          attempt: 1,
-          maxAttempts: 2,
+          scheduledResume: {
+            reason: 'quota',
+            resumeAt: '2026-08-25T10:00:00.000Z',
+            deadlineAt: '2026-08-26T10:00:00.000Z',
+            attempt: 1,
+            maxAttempts: 2,
+          },
         })
       ).rejects.toThrow('audit unavailable');
     });
@@ -1178,11 +1180,13 @@ describe('workflows database', () => {
     test('rejects an invalid quota continuation before writing the failed row', async () => {
       await expect(
         failWorkflowRun('workflow-run-123', 'Quota exhausted', {
-          reason: 'quota',
-          resumeAt: '2026-08-27T10:00:00.000Z',
-          deadlineAt: '2026-08-26T10:00:00.000Z',
-          attempt: 3,
-          maxAttempts: 2,
+          scheduledResume: {
+            reason: 'quota',
+            resumeAt: '2026-08-27T10:00:00.000Z',
+            deadlineAt: '2026-08-26T10:00:00.000Z',
+            attempt: 3,
+            maxAttempts: 2,
+          },
         })
       ).rejects.toThrow();
       expect(mockQuery).not.toHaveBeenCalled();

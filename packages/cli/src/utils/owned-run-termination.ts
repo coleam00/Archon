@@ -53,7 +53,9 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
       // status CAS closes the read-then-write window: if the executor commits a gate
       // pause between the read above and this write, the CAS misses and the run
       // stays paused.
-      await workflowDb.failWorkflowRun(runId, `Process terminated (${signal})`);
+      await workflowDb.failWorkflowRun(runId, `Process terminated (${signal})`, {
+        exitReason: 'process_terminated',
+      });
     })()
       .catch((err: unknown) => {
         const e = err as Error;

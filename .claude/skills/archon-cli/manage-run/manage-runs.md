@@ -57,8 +57,8 @@ For reusable alternate setups, prefer a config layer instead of long flag lists
 | Resolve a gate with any declared decision | `archon workflow respond <run-id> <decision> [text]` |
 | Approve (default vocabulary) | `archon workflow approve <run-id> [text]` |
 | Reject (default vocabulary) | `archon workflow reject <run-id> "<reason>"` |
-| Stop a live detached run | `archon workflow cancel <run-id>` |
-| Mark paused/orphaned run cancelled (state only) | `archon workflow abandon <run-id>` |
+| Stop a running run (its live owner first) | `archon workflow cancel <run-id>` |
+| Mark paused/failed/orphaned run cancelled | `archon workflow abandon <run-id>` |
 | Resume failed/paused from completed nodes | `archon workflow resume <run-id>` |
 
 ## The approve/resume two-step
@@ -103,10 +103,16 @@ Choose deliberately after reading what the gate produced — not by reflex.
 
 ## Cancel vs abandon
 
-- `cancel` actively stops a live CLI-detached owner: it verifies the process tree
-  is gone before recording `cancelled`. Use this to kill real work.
-- `abandon` is state-only: for runs already paused, or after you have independently
-  verified a "running" row is orphaned (crashed host). It never kills anything.
+- `cancel` stops a running run. When another process owns it, that process is
+  stopped and its tree confirmed gone before `cancelled` is recorded. A run the
+  cancelling server executes itself, and a `workflow:` sub-run with no owner of
+  its own (it runs inside its root), is marked `cancelled` and stops at its
+  executor's next status check. Otherwise it refuses and changes nothing when no
+  owner answers. Use this to kill real work.
+- `abandon` is for paused or failed runs, or a "running" row whose owner is gone
+  (crashed host). If an owner still answers on this host, it stops it first, like
+  `cancel`. If none answers, it records `cancelled` and prints the host and pid the
+  run recorded; when that host is another machine, check there before abandoning.
 
 ## Respond: gates beyond approve/reject
 

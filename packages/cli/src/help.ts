@@ -155,13 +155,13 @@ const commandHelp: HelpEntry[] = [
     command: 'workflow',
     subcommand: 'cancel',
     spec: 'workflow cancel <run-id>',
-    description: 'Stop a running workflow started with --detach',
+    description: 'Stop a running workflow (stops an owning process first)',
   },
   {
     command: 'workflow',
     subcommand: 'abandon',
     spec: 'workflow abandon <run-id>',
-    description: 'Mark a run cancelled without stopping host work',
+    description: 'Mark a run cancelled, stopping a live owner first',
   },
   {
     command: 'workflow',
@@ -205,13 +205,16 @@ const commandHelp: HelpEntry[] = [
     command: 'isolation',
     subcommand: 'cleanup',
     spec: 'isolation cleanup --merged',
-    description: 'Remove environments with branches merged into main',
+    description: 'Remove environments with branches merged into the base branch',
     // `--merged` and `--include-closed` are documented via the Commands-block
     // alias above in the legacy template literal; they live here so scoped
     // `isolation cleanup --help` can list them without changing the global
     // Options block.
     scopedFlags: [
-      { spec: '--merged', description: 'Remove environments with branches merged into main' },
+      {
+        spec: '--merged',
+        description: 'Remove environments with branches merged into the base branch',
+      },
       {
         spec: '--include-closed',
         description: 'Also remove environments whose PRs were closed without merging',

@@ -15,6 +15,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
 import { lstat, mkdir, readlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { execFileAsync } from '@archon/git';
 import type { ExecutionContext } from '@archon/providers/types';
 import { ARTIFACT_POINTER_TYPE } from './schemas/artifact-pointer';
 import {
@@ -112,33 +113,33 @@ function hasGitMarker(cwd: string): boolean {
  * exit status, because `docker exec` exits 1 for its own failures too ("No such
  * container"), which would be indistinguishable from "no .git found".
  */
-const CONTAINER_MARKER_PROBE =
+export const CONTAINER_MARKER_PROBE =
   'd=$(pwd -P); while :; do if [ -e "$d/.git" ]; then echo marker; exit 0; fi; if [ "$d" = / ]; then echo none; exit 0; fi; d=$(dirname "$d"); done';
 
-export type ContainerProbe = 'marker' | 'none' | 'failed';
+type ContainerProbe = 'marker' | 'none' | 'failed';
 
-/** Only a successful exit with exactly one of the probe's own answers is an answer. */
-export function readContainerProbe(exitCode: number, stdout: string): ContainerProbe {
-  if (exitCode !== 0) return 'failed';
-  const answer = stdout.trim();
-  return answer === 'marker' || answer === 'none' ? answer : 'failed';
-}
-
-function probeContainerMarker(
+/**
+ * Runs through `@archon/git`'s `execFileAsync`, like the executor's other `docker exec`
+ * calls, so tests can answer for a container that does not exist instead of spawning
+ * `docker`.
+ */
+async function probeContainerMarker(
   cwd: string,
   execContext: Extract<ExecutionContext, { kind: 'container' }>
 ): Promise<ContainerProbe> {
   const args = ['exec', '-w', cwd];
   if (execContext.execUser) args.push('-u', execContext.execUser);
   args.push(execContext.containerId, 'sh', '-c', CONTAINER_MARKER_PROBE);
-  return new Promise(resolve => {
-    execFile('docker', args, { timeout: GIT_TIMEOUT_MS, windowsHide: true }, (error, stdout) => {
-      const exit: unknown = error?.code;
-      resolve(
-        readContainerProbe(error === null ? 0 : typeof exit === 'number' ? exit : -1, stdout)
-      );
-    });
-  });
+  let stdout: string;
+  try {
+    ({ stdout } = await execFileAsync('docker', args, { timeout: GIT_TIMEOUT_MS }));
+  } catch {
+    // A non-zero exit, a spawn error, or a timeout kill is a failed probe, never an answer.
+    return 'failed';
+  }
+  // Only a successful exit with exactly one of the probe's own answers is an answer.
+  const answer = stdout.trim();
+  return answer === 'marker' || answer === 'none' ? answer : 'failed';
 }
 
 /** Encode raw path bytes: UTF-8 text when lossless, base64 otherwise. */

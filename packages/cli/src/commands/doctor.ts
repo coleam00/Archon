@@ -24,6 +24,10 @@ import {
   resolveClaudeBinaryWithSource,
   type ClaudeBinaryResolution,
 } from '@archon/providers/claude/binary-resolver';
+import {
+  readPiAuthValidity,
+  type PiAuthValidity,
+} from '@archon/providers/community/pi/auth-status';
 import type { Codebase, MergedConfig, SchemaVersionInfo } from '@archon/core';
 
 // Vendor-canonical credential id for Codex (since #1955 credentials are keyed
@@ -53,7 +57,12 @@ function getLog(): ReturnType<typeof createLogger> {
 
 export interface CheckResult {
   label: string;
-  status: 'pass' | 'fail' | 'skip';
+  /**
+   * `warn` is a defect the operator should see that is not a failure: the
+   * install works, but something about it is wrong or worth knowing. It does
+   * not count toward the exit code.
+   */
+  status: 'pass' | 'warn' | 'fail' | 'skip';
   message: string;
 }
 
@@ -394,12 +403,25 @@ export async function checkGhAuth(env: NodeJS.ProcessEnv): Promise<CheckResult> 
 }
 
 /**
- * Thin wrapper around `existsSync` so tests can spy on it by name without
- * fighting ESM named-import rebinding limitations.  Matches the `probeFileExists`
- * pattern in `setup.ts`.
+ * Read the Pi credential store and report what the credential in it says
+ * (#3274). A file on disk is not a usable credential — an OAuth grant that
+ * expired months ago still has its file, and every Pi workflow on that install
+ * failed while `doctor` reported pass.
+ *
+ * Wrapped so tests can spy on it by name without fighting ESM named-import
+ * rebinding limitations.
  */
-export function probeAuthJsonExists(path: string): boolean {
-  return existsSync(path);
+export function probePiAuthValidity(authJsonPath: string, now: number): PiAuthValidity {
+  return readPiAuthValidity(authJsonPath, { now });
+}
+
+/** Format an expiry instant for a doctor line, without leaking a credential. */
+function formatExpiry(expiresAt: number): string {
+  const date = new Date(expiresAt);
+  // A non-finite or out-of-range instant yields an Invalid Date, whose
+  // toISOString() throws — and this runs inside a doctor line, not a crash path.
+  if (Number.isNaN(date.getTime())) return 'an unknown date';
+  return date.toISOString().slice(0, 10);
 }
 
 export async function checkPi(env: NodeJS.ProcessEnv): Promise<CheckResult> {
@@ -415,9 +437,56 @@ export async function checkPi(env: NodeJS.ProcessEnv): Promise<CheckResult> {
   // Pi reads OAuth credentials from ~/.pi/agent/auth.json (written by `pi /login`)
   // or API key env vars; either path is sufficient.
   const authJsonPath = join(homedir(), '.pi', 'agent', 'auth.json');
-  if (probeAuthJsonExists(authJsonPath)) {
+  // No existence gate in front of the read. `existsSync` swallows every errno
+  // and answers `false`, so a store the current user cannot traverse (EACCES on
+  // the parent directory, ENOTDIR when a path component is a file) used to skip
+  // the validity read entirely and surface as generic missing auth. The reader
+  // already separates ENOENT (`missing`) from every other read failure
+  // (`unreadable`), so let it answer for both.
+  const validity = probePiAuthValidity(authJsonPath, Date.now());
+
+  // An expired *access* token is not a broken credential. `expires` is the
+  // access token's expiry; Pi refreshes it on the next use as long as the
+  // refresh token still works, and so does Archon's own OAuth mint path. So
+  // an install whose access token lapsed weeks ago still authenticates — and
+  // reporting fail here would be a false alarm on a healthy install, which is
+  // worse than the false pass this check replaced (#3274). Warn instead: name
+  // the provider and the date, and say what happens next.
+  //
+  // Only the grants that actually expired are named: the verdict is aggregate,
+  // but pointing at a still-usable provider sends the operator to renew a
+  // credential that does not need it.
+  if (validity.status === 'expired') {
+    const expired = validity.expiredProviders;
+    return {
+      label,
+      status: 'warn',
+      message: `~/.pi/agent/auth.json holds an expired access token for ${expired.join(', ')} (expired ${formatExpiry(validity.expiresAt)}). Pi refreshes it on the next use; re-run \`pi /login\` if the refresh token has also expired.`,
+    };
+  }
+
+  // The file exists but says nothing usable. Reported on its own line: an
+  // unreadable store is not an expired credential, and conflating them sends
+  // the operator looking for a renewal that cannot help.
+  if (validity.status === 'unreadable') {
+    return {
+      label,
+      status: 'fail',
+      message:
+        '~/.pi/agent/auth.json could not be read or holds an unusable credential. Check that the path and permissions are correct, then re-run `pi /login` to rewrite it.',
+    };
+  }
+
+  // 'empty' must not claim a pass: the file is present but holds no
+  // credential, so `pi` has nothing to authenticate with. Falling through
+  // lets the env-var check below answer, and a Pi-default user with neither
+  // gets the failure instead of a green doctor.
+  if (validity.status === 'valid') {
     return { label, status: 'pass', message: '~/.pi/agent/auth.json found' };
   }
+
+  // 'missing' and 'empty' both fall through to the env-var check below: no
+  // stored credential, so a configured API key is the answer.
 
   const foundKey = PI_API_KEY_VARS.find(v => (env[v] ?? '').trim().length > 0);
   if (foundKey) {
@@ -855,7 +924,8 @@ export async function checkArchonSkill(
 }
 
 function renderResult(r: CheckResult): string {
-  const icon = r.status === 'pass' ? '✓' : r.status === 'fail' ? '✗' : '○';
+  const icon =
+    r.status === 'pass' ? '✓' : r.status === 'fail' ? '✗' : r.status === 'warn' ? '!' : '○';
   return `${icon} ${r.label}: ${r.message}`;
 }
 

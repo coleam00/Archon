@@ -21,6 +21,7 @@ import { bundledDefaultCommandPath, bundlesPackagedResources } from './defaults/
 import { createLogger } from '@archon/paths';
 import { isValidCommandName } from './command-validation';
 import type { LoadCommandResult } from './schemas';
+import type { NodeFailureKind } from './schemas/node-execution';
 import { substituteInputRefs, type JsonValue } from './output-ref';
 import { parsePackagedResourceReference } from './packaged-workflow';
 
@@ -175,10 +176,11 @@ export function extractQuotaResetAt(error: string, now = new Date()): Date | nul
 }
 
 /**
- * Map the retry-oriented {@link ErrorType} to the telemetry wire enum. The
- * telemetry event carries ONLY this fixed-enum class — never error text.
+ * Failure kind of a provider error, from the same classification retry uses.
+ * Only for errors a provider raised; engine-detected causes carry their own kind.
  */
-export function toTelemetryErrorClass(errorType: ErrorType): archonPaths.WorkflowErrorClass {
+export function providerFailureKind(error: Error): NodeFailureKind {
+  const errorType = classifyError(error);
   switch (errorType) {
     case 'FATAL':
       return 'fatal';
@@ -187,8 +189,6 @@ export function toTelemetryErrorClass(errorType: ErrorType): archonPaths.Workflo
     case 'UNKNOWN':
       return 'unknown';
     default: {
-      // Exhaustiveness guard: a future ErrorType variant fails compilation
-      // here instead of silently sending `undefined` to the telemetry wire.
       const exhaustive: never = errorType;
       return exhaustive;
     }

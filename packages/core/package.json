@@ -129,6 +129,9 @@
       "src/db/workflows.resume-cas.integration.test.ts"
     ],
     [
+      "src/db/workflow-terminal-telemetry.integration.test.ts"
+    ],
+    [
       "src/db/workflow-events.since.integration.test.ts"
     ],
     [
@@ -160,6 +163,10 @@
     ],
     [
       "src/services/run-live-owner.test.ts"
+    ],
+    [
+      "src/services/run-owner-stop.test.ts",
+      "src/services/windows-process-tree.test.ts"
     ],
     [
       "src/services/run-attention-watch.test.ts"

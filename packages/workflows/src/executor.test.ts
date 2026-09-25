@@ -8,7 +8,7 @@ import { NodeEventWriteError } from './node-event-write';
 import { describe, it, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'path';
 
 // --- Mock logger ---
@@ -26,11 +26,11 @@ const mockLogger = {
   level: 'info',
 };
 // Telemetry is fire-and-forget; mock as no-ops so the executor can call them.
-// Hoisted so tests can assert on the completion call (outcome / exit reason).
+// Hoisted so tests can assert what the executor reports.
 const mockCaptureWorkflowInvoked = mock<typeof import('@archon/paths').captureWorkflowInvoked>(
   _props => {}
 );
-const mockCaptureWorkflowCompleted = mock<typeof import('@archon/paths').captureWorkflowCompleted>(
+const mockCaptureWorkflowTerminal = mock<typeof import('@archon/paths').captureWorkflowTerminal>(
   _props => {}
 );
 /**
@@ -113,7 +113,7 @@ mock.module('@archon/paths', () => ({
     join(root, 'scopes', wf, scope)
   ),
   captureWorkflowInvoked: mockCaptureWorkflowInvoked,
-  captureWorkflowCompleted: mockCaptureWorkflowCompleted,
+  captureWorkflowTerminal: mockCaptureWorkflowTerminal,
 }));
 
 // --- Mock git ---
@@ -121,6 +121,11 @@ const mockGetDefaultBranch = mock(async () => 'main');
 mock.module('@archon/git', () => ({
   getDefaultBranch: mockGetDefaultBranch,
   toRepoPath: mock((p: string) => p),
+  // The checkout baseline of a container run probes the container through here. Tests use
+  // container ids that do not exist, so answer the way a real `docker exec` would.
+  execFileAsync: mock(async () => {
+    throw new Error('Error response from daemon: No such container');
+  }),
 }));
 
 // --- Mock dag-executor ---
@@ -140,6 +145,7 @@ mock.module('./dag-executor', () => ({
 // --- Mock logger functions ---
 mock.module('./logger', () => ({
   logWorkflowStart: mock(async () => {}),
+  logWorkflowResume: mock(async () => {}),
   logWorkflowError: mock(async () => {}),
 }));
 
@@ -346,6 +352,56 @@ describe('executeWorkflow', () => {
       resume ? { preCreatedRun: makeRun(), priorCompletedNodes: new Map() } : {}
     );
     expect(mockExecuteDagWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  describe('execution owner record (#2325)', () => {
+    const uid = process.getuid?.();
+    const owner = {
+      execution_owner: {
+        host: hostname(),
+        pid: process.pid,
+        ...(uid === undefined ? {} : { uid }),
+      },
+    };
+
+    it('stamps this process on a run it creates', async () => {
+      const store = makeStore();
+      await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'msg',
+        'db-conv-1'
+      );
+      expect(store.createWorkflowRun).toHaveBeenCalledWith(
+        expect.objectContaining({ metadata: expect.objectContaining(owner) })
+      );
+    });
+
+    it.each([
+      ['a row a launcher pre-created', makeRun({ status: 'pending' }), undefined],
+      ['a resumed run', makeRun({ status: 'running' }), new Map()],
+    ])('restamps this process on %s', async (_label, preCreatedRun, priorCompletedNodes) => {
+      const store = makeStore({
+        claimPendingWorkflowRun: mock(async () => makeRun({ status: 'running' })),
+      });
+      await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'msg',
+        'db-conv-1',
+        { preCreatedRun, ...(priorCompletedNodes ? { priorCompletedNodes } : {}) }
+      );
+      expect(store.updateWorkflowRun).toHaveBeenCalledWith(
+        preCreatedRun.id,
+        expect.objectContaining({ metadata: expect.objectContaining(owner) })
+      );
+    });
   });
 
   it('rejects a structurally valid but semantically invalid outcome declaration before side effects', async () => {
@@ -1101,7 +1157,9 @@ describe('executeWorkflow', () => {
 
       // Without this, every guard-blocked dispatch would leak a `pending`
       // row that briefly blocks future dispatches via the lock query.
-      expect(cancelSpy).toHaveBeenCalledWith('self-run-789');
+      expect(cancelSpy).toHaveBeenCalledWith('self-run-789', {
+        cancel_reason: 'precondition_failed',
+      });
     });
 
     it('uses the actionable "in use" message format with workflow name, duration, and short id', async () => {
@@ -1141,6 +1199,7 @@ describe('executeWorkflow', () => {
       // Concrete next actions — every line tells the user something to do.
       expect(sentMessage).toContain('/workflow status');
       expect(sentMessage).toContain('/workflow cancel abc12345');
+      expect(sentMessage).toContain('/workflow abandon abc12345');
       expect(sentMessage).toContain('--branch');
     });
 
@@ -1263,6 +1322,118 @@ describe('executeWorkflow', () => {
         expect(store.failWorkflowRun).not.toHaveBeenCalled();
       }
     );
+
+    it('spells commands the way the platform says (the CLI adapter)', async () => {
+      const otherRun = makeRun({
+        id: 'abc12345-rest-of-uuid',
+        workflow_name: 'archon-implement',
+        status: 'running',
+        started_at: new Date(Date.now() - 125000),
+      });
+      const sendMessageSpy = mock<IWorkflowPlatform['sendMessage']>(
+        async (_conversationId, _message, _metadata) => {}
+      );
+      const platform = {
+        sendMessage: sendMessageSpy,
+        getPlatformType: mock(() => 'cli' as const),
+        formatWorkflowCommand: (command: string) => `archon workflow ${command}`,
+      } as unknown as IWorkflowPlatform;
+      const store = makeStore({
+        getActiveWorkflowRunByPath: mock(async () => otherRun),
+      });
+      const deps = makeDeps(store);
+
+      await executeWorkflow(
+        deps,
+        platform,
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1'
+      );
+
+      expect(sendMessageSpy).toHaveBeenCalled();
+      const sentMessage = (sendMessageSpy.mock.calls[0] as [string, string])[1];
+      expect(sentMessage).toContain('archon workflow cancel abc12345');
+      expect(sentMessage).toContain('archon workflow abandon abc12345');
+      // The non-CLI `/workflow` prefix should not appear in a CLI message.
+      expect(sentMessage).not.toContain('/workflow cancel');
+      expect(sentMessage).not.toContain('/workflow status');
+    });
+
+    it('offers no cancel for a pending blocker, which has nothing executing yet', async () => {
+      const otherRun = makeRun({
+        id: 'abc12345-rest-of-uuid',
+        workflow_name: 'archon-implement',
+        status: 'pending',
+        started_at: new Date(Date.now() - 5000),
+      });
+      const sendMessageSpy = mock<IWorkflowPlatform['sendMessage']>(
+        async (_conversationId, _message, _metadata) => {}
+      );
+      const platform = {
+        sendMessage: sendMessageSpy,
+        getPlatformType: mock(() => 'cli' as const),
+        formatWorkflowCommand: (command: string) => `archon workflow ${command}`,
+      } as unknown as IWorkflowPlatform;
+      const store = makeStore({
+        getActiveWorkflowRunByPath: mock(async () => otherRun),
+      });
+
+      await executeWorkflow(
+        makeDeps(store),
+        platform,
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1'
+      );
+
+      const sentMessage = (sendMessageSpy.mock.calls[0] as [string, string])[1];
+      expect(sentMessage).toContain('archon workflow abandon abc12345');
+      expect(sentMessage).not.toContain('workflow cancel');
+    });
+
+    it('spells paused-run commands the way the platform says (the CLI adapter)', async () => {
+      const otherRun = makeRun({
+        id: 'abc12345-rest-of-uuid',
+        workflow_name: 'archon-implement',
+        status: 'paused',
+        started_at: new Date(Date.now() - 125000),
+      });
+      const sendMessageSpy = mock<IWorkflowPlatform['sendMessage']>(
+        async (_conversationId, _message, _metadata) => {}
+      );
+      const platform = {
+        sendMessage: sendMessageSpy,
+        getPlatformType: mock(() => 'cli' as const),
+        formatWorkflowCommand: (command: string) => `archon workflow ${command}`,
+      } as unknown as IWorkflowPlatform;
+      const store = makeStore({
+        getActiveWorkflowRunByPath: mock(async () => otherRun),
+      });
+      const deps = makeDeps(store);
+
+      await executeWorkflow(
+        deps,
+        platform,
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1'
+      );
+
+      expect(sendMessageSpy).toHaveBeenCalled();
+      const sentMessage = (sendMessageSpy.mock.calls[0] as [string, string])[1];
+      expect(sentMessage).toContain('archon workflow approve abc12345');
+      expect(sentMessage).toContain('archon workflow reject abc12345');
+      // A paused run has no live work for cancel to stop; abandon discards it.
+      expect(sentMessage).toContain('archon workflow abandon abc12345');
+      expect(sentMessage).not.toContain('workflow cancel');
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -2736,7 +2907,7 @@ describe('executeWorkflow', () => {
         }
       );
 
-      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].source).toBeUndefined();
+      expect(mockCaptureWorkflowInvoked.mock.calls.at(-1)?.[0].workflowSource).toBeUndefined();
     });
 
     it('reports a continuation that has nothing recorded to restore (#2454)', async () => {
@@ -3873,19 +4044,18 @@ describe('finally backstop', () => {
 // ───────────────────────────────────────────────────────────────────────────
 // Telemetry wiring
 //
-// captureWorkflowCompleted is mocked as a no-op; these tests assert it actually
-// fires on the unhandled-throw path (and only there from the executor) and that
-// the WorkflowSource is threaded into executeDagWorkflow. Telemetry regressions
-// are otherwise invisible — a dropped call leaves no failing assertion.
+// Terminal telemetry is reported by the run store when a terminal write commits; the
+// executor records the exit reason on that write and reports only a run that never got
+// a row. These tests pin both halves plus what workflow_invoked carries.
 // ───────────────────────────────────────────────────────────────────────────
 describe('telemetry wiring', () => {
   beforeEach(() => {
     mockExecuteDagWorkflow.mockClear();
-    mockCaptureWorkflowCompleted.mockClear();
+    mockCaptureWorkflowTerminal.mockClear();
     mockExecuteDagWorkflow.mockImplementation(async (): Promise<string | undefined> => undefined);
   });
 
-  it('captures workflow_failed with unhandled_error when executeDagWorkflow throws', async () => {
+  it('records unhandled_error on the terminal write when executeDagWorkflow throws', async () => {
     mockExecuteDagWorkflow.mockRejectedValueOnce(new Error('dag boom'));
     const store = makeStore();
     const deps = makeDeps(store);
@@ -3900,12 +4070,12 @@ describe('telemetry wiring', () => {
       'db-conv-1'
     );
 
-    // Exactly once — the executor catch must not double-emit with the DAG paths.
-    expect(mockCaptureWorkflowCompleted).toHaveBeenCalledTimes(1);
-    expect(mockCaptureWorkflowCompleted).toHaveBeenCalledWith(
-      expect.objectContaining({ outcome: 'failed', exitReason: 'unhandled_error' })
-    );
+    // The store reports the committed transition; the executor only states the reason.
+    expect(mockCaptureWorkflowTerminal).not.toHaveBeenCalled();
     expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowRun).toHaveBeenCalledWith(expect.any(String), 'dag boom', {
+      exitReason: 'unhandled_error',
+    });
     expect(store.createWorkflowEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'workflow_failed' })
     );
@@ -3935,7 +4105,8 @@ describe('telemetry wiring', () => {
     );
     expect(store.failWorkflowRun).toHaveBeenCalledWith(
       expect.any(String),
-      expect.stringContaining('storage unavailable; original node failure: build exited 3')
+      expect.stringContaining('storage unavailable; original node failure: build exited 3'),
+      { exitReason: 'unhandled_error' }
     );
   });
 
@@ -4054,10 +4225,11 @@ describe('telemetry wiring', () => {
     );
   });
 
-  it('does not fire executor-level completion telemetry on the success path', async () => {
-    // The DAG executor owns success/partial-failure telemetry; the executor's
-    // own captureWorkflowCompleted must fire only from the unhandled-throw catch.
+  it('reports a run whose row could not be created as run_not_created, with no run_ref', async () => {
     const store = makeStore();
+    store.createWorkflowRun = mock(async () => {
+      throw new Error('db down');
+    });
     const deps = makeDeps(store);
 
     await executeWorkflow(
@@ -4067,13 +4239,21 @@ describe('telemetry wiring', () => {
       '/tmp',
       makeWorkflow(),
       'msg',
-      'db-conv-1'
+      'db-conv-1',
+      { source: 'bundled' }
     );
 
-    expect(mockCaptureWorkflowCompleted).not.toHaveBeenCalled();
+    expect(mockCaptureWorkflowTerminal).toHaveBeenCalledTimes(1);
+    const props = mockCaptureWorkflowTerminal.mock.calls[0][0];
+    expect(props).toMatchObject({
+      outcome: 'failed',
+      exitReason: 'run_not_created',
+      workflowSource: 'bundled',
+    });
+    expect(props.runId).toBeUndefined();
   });
 
-  it('threads source through to executeDagWorkflow', async () => {
+  it('reports the run and its dispatch source on workflow_invoked', async () => {
     const store = makeStore();
     const deps = makeDeps(store);
 
@@ -4090,7 +4270,10 @@ describe('telemetry wiring', () => {
       }
     );
 
-    expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].source).toBe('bundled');
+    const invoked = mockCaptureWorkflowInvoked.mock.calls.at(-1)?.[0];
+    expect(invoked?.workflowSource).toBe('bundled');
+    expect(invoked?.runId).toBe(makeRun().id);
+    expect(invoked?.isChild).toBe(false);
   });
 
   it('resolves top-level workflow tier refs before calling the DAG executor', async () => {
@@ -4277,7 +4460,7 @@ describe('telemetry wiring', () => {
       'db-conv-1'
     );
 
-    expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].source).toBeUndefined();
+    expect(mockCaptureWorkflowInvoked.mock.calls.at(-1)?.[0].workflowSource).toBeUndefined();
   });
 });
 

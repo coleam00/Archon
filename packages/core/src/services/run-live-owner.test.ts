@@ -1,9 +1,18 @@
 import { describe, expect, test } from 'bun:test';
-import { chmodSync, existsSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  linkSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { createServer, type Server, Socket } from 'node:net';
 import { dirname } from 'node:path';
 import {
   canConnectToRunLiveOwner,
+  isRunOwnedByThisProcess,
   requestRunLiveOwnerStop,
   runLiveOwnerPath,
   RunLiveOwnerStopUnavailableError,
@@ -33,6 +42,21 @@ async function waitFor(check: () => boolean, timeoutMs: number): Promise<void> {
     if (Date.now() >= deadline) throw new Error('Timed out waiting for live-owner event');
     await Bun.sleep(5);
   }
+}
+
+/** The typed refusal a stop request for `runId` rejects with. */
+async function stopRefusal(runId: string): Promise<RunLiveOwnerStopUnavailableError> {
+  const outcome = await requestRunLiveOwnerStop(runId).then(
+    lease => {
+      lease.release();
+      return undefined;
+    },
+    (error: unknown) => error
+  );
+  if (!(outcome instanceof RunLiveOwnerStopUnavailableError)) {
+    throw new Error(`Expected a RunLiveOwnerStopUnavailableError, got ${String(outcome)}`);
+  }
+  return outcome;
 }
 
 /** Wait for an in-process live-owner event at the deadline this file owns. */
@@ -72,6 +96,21 @@ describe('run live owner', () => {
       expect(existsSync(path)).toBe(false);
       expect(existsSync(path.replace(/\.sock$/, '.lock'))).toBe(false);
     }
+  });
+
+  // Cancel decides "cooperative" from this: a run whose endpoint this process holds is
+  // executing here. A stale entry after close would let cancel release a run another
+  // process has since claimed.
+  test('reports this process as the owner only while its endpoint is open', async () => {
+    const runId = `this-process-${crypto.randomUUID()}`;
+    expect(isRunOwnedByThisProcess(runId)).toBe(false);
+    const owner = await startRunLiveOwner(runId);
+    try {
+      expect(isRunOwnedByThisProcess(runId)).toBe(true);
+    } finally {
+      await owner.close();
+    }
+    expect(isRunOwnedByThisProcess(runId)).toBe(false);
   });
 
   test('keeps concurrent run owners independent', async () => {
@@ -137,9 +176,9 @@ describe('run live owner', () => {
     const runId = `foreground-${crypto.randomUUID()}`;
     const owner = await startRunLiveOwner(runId);
     try {
-      await expect(requestRunLiveOwnerStop(runId)).rejects.toBeInstanceOf(
-        RunLiveOwnerStopUnavailableError
-      );
+      const refusal = await stopRefusal(runId);
+      // A live owner answered: abandon must not read this as an absent owner (#2325).
+      expect(refusal.reason).toBe('not_detached');
       expect(owner.isStopRequested()).toBe(false);
     } finally {
       await owner.close();
@@ -198,9 +237,10 @@ describe('run live owner', () => {
     });
     await listen(server, path);
     try {
-      await expect(requestRunLiveOwnerStop(runId)).rejects.toThrow(
-        /owner (?:ended|closed) before identifying itself/
-      );
+      const refusal = await stopRefusal(runId);
+      expect(refusal.message).toMatch(/owner (?:ended|closed) before identifying itself/);
+      // Something accepted the connection, so this is not proof that no owner exists.
+      expect(refusal.reason).toBe('unproven');
     } finally {
       await close(server);
       if (process.platform !== 'win32') rmSync(path, { force: true });
@@ -260,6 +300,49 @@ describe('run live owner', () => {
       expect(events).toEqual(['disconnected']);
     } finally {
       await close(server);
+    }
+  });
+
+  test('reports an unreachable owner only when nothing accepts the connection', async () => {
+    // No endpoint at all: the path does not exist.
+    expect((await stopRefusal(`absent-${crypto.randomUUID()}`)).reason).toBe('unreachable');
+
+    // A socket left behind by an owner that died without closing refuses the
+    // connection. A second link keeps the socket inode when close() unlinks the path,
+    // which stages that residue without killing a process.
+    if (process.platform === 'win32') return;
+    const runId = `stale-stop-${crypto.randomUUID()}`;
+    const path = runLiveOwnerPath(runId);
+    const residue = `${path}.residue`;
+    const server = createServer(() => undefined);
+    await listen(server, path);
+    linkSync(path, residue);
+    await close(server);
+    renameSync(residue, path);
+    try {
+      expect((await stopRefusal(runId)).reason).toBe('unreachable');
+    } finally {
+      rmSync(path, { force: true });
+    }
+  });
+
+  test('does not read a live owner it cannot connect to as an absent owner', async () => {
+    // A live listener whose socket this user may not write to fails with EACCES. Only
+    // ENOENT and ECONNREFUSED prove nothing is listening; anything else must not let
+    // abandon record the run cancelled. Root bypasses the permission check.
+    if (process.platform === 'win32' || process.getuid?.() === 0) return;
+    const runId = `no-access-${crypto.randomUUID()}`;
+    const path = runLiveOwnerPath(runId);
+    const server = createServer(socket => socket.destroy());
+    await listen(server, path);
+    chmodSync(path, 0o000);
+    try {
+      const refusal = await stopRefusal(runId);
+      expect(refusal.detail).toBe('EACCES');
+      expect(refusal.reason).toBe('unproven');
+    } finally {
+      await close(server);
+      rmSync(path, { force: true });
     }
   });
 
