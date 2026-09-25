@@ -6,6 +6,7 @@ import type { EffortRung } from '@archon/paths/effort';
 import type {
   ProviderCapabilities,
   ProviderResult,
+  ProviderSettled,
   ResolvedModel,
   TokenUsage,
 } from '@archon/provider-contract';
@@ -241,6 +242,8 @@ export type MessageChunk =
   | { type: 'system'; content: string }
   | { type: 'thinking'; content: string }
   | ({ type: 'result' } & ProviderResult)
+  // The turn is over and nothing more runs for it; always the last chunk (see ProviderSettled).
+  | ProviderSettled
   | { type: 'rate_limit'; rateLimitInfo: Record<string, unknown> }
   | {
       type: 'tool';

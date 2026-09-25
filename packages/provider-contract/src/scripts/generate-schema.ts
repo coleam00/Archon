@@ -15,6 +15,7 @@ import {
   providerCapabilitiesSchema,
   providerFailureSchema,
   providerResultSchema,
+  providerSettledSchema,
   resolvedModelSchema,
   tokenUsageSchema,
 } from '../index';
@@ -29,6 +30,7 @@ const CONTRACT_SCHEMAS = {
   TokenUsage: tokenUsageSchema,
   ResolvedModel: resolvedModelSchema,
   ProviderResult: providerResultSchema,
+  ProviderSettled: providerSettledSchema,
   ProviderCapabilities: providerCapabilitiesSchema,
 };
 
