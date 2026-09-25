@@ -2041,9 +2041,9 @@ export async function claimWriteback(id: string): Promise<{ claimed: boolean }> 
 
 /**
  * Release a previously-claimed write-back apply (R2-F4) after the apply FAILED, so a
- * subsequent `workflow resume` can re-claim and retry. Explicit-null so SQLite's
- * json_patch removes the key (Postgres `||` sets JSON null); `claimWriteback`'s
- * `IS NULL` check treats both as unclaimed. Best-effort — a failure here leaves the
+ * subsequent `workflow resume` can re-claim and retry. The explicit null removes the
+ * key on both dialects (see jsonMerge), so `claimWriteback`'s `IS NULL` check sees an
+ * unclaimed run. Best-effort — a failure here leaves the
  * claim set (the volume is preserved regardless; the operator reconciles manually).
  */
 export async function releaseWritebackClaim(id: string): Promise<void> {

@@ -5413,6 +5413,28 @@ describe('workflowGetCommand', () => {
     expect(consoleSpy).toHaveBeenCalledWith('  Error:  Bash node failed');
   });
 
+  it('prints no Stopped line once an interrupted run is no longer failed', async () => {
+    // Abandoning a failed run cancels it without clearing metadata, so the key outlives
+    // the stop it described.
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-abandoned',
+      checkout_baseline: null,
+      workflow_name: 'implement',
+      status: 'cancelled',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {
+        error: 'Process terminated (SIGINT)',
+        stop_reason: { reason: 'process_terminated', signal: 'SIGINT' },
+      },
+    });
+
+    await workflowGetCommand('run-abandoned');
+
+    expect(consoleSpy).not.toHaveBeenCalledWith(expect.stringContaining('Stopped:'));
+  });
+
   it('carries the stop reason through --json', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({

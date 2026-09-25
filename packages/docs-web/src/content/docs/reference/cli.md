@@ -576,8 +576,8 @@ started. Node execution records carry the same observation as `invocation.checko
 Pressing Ctrl-C on a foreground run stops it without losing it. The process that owns the
 run records why it stopped, and the run stays `failed`, which is the resumable status: it is
 still found by `workflow run <name> --resume` and accepted by `workflow resume <run-id>`.
-Human output adds a `Stopped:` line naming the interrupt and the signal, above the usual
-`Error:` line. JSON carries the same fact as `metadata.stop_reason`, an object with the
+For a `failed` run, human output adds a `Stopped:` line naming the interrupt and the
+signal, above the usual `Error:` line. JSON carries the same fact as `metadata.stop_reason`, an object with the
 categorical `reason` and the `signal` that arrived. Resuming the run clears it, so a run
 that resumed and then completed does not keep reporting an interrupt. Runs that stopped
 before this field existed carry no `stop_reason`.

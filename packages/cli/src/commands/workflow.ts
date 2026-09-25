@@ -4437,7 +4437,10 @@ export async function workflowGetCommand(
       `  Resume: scheduled for ${scheduledResume.resumeAt} (attempt ${String(scheduledResume.attempt)}/${String(scheduledResume.maxAttempts)})`
     );
   }
-  const stopped = describeRunStopReason(run.metadata);
+  // Only a failed run's stop reason describes how it ended. A run can leave 'failed'
+  // with the key still set (cancelWorkflowRun abandons a failed run without touching
+  // metadata), and the console's runStatusLabel applies the same rule.
+  const stopped = run.status === 'failed' ? describeRunStopReason(run.metadata) : null;
   if (stopped) {
     console.log(`  Stopped: ${stopped}`);
   }
