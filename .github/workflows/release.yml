@@ -328,6 +328,102 @@ jobs:
             echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
           fi
 
+      - name: Build release notes
+        id: notes
+        run: |
+          RAW_VERSION="${{ steps.version.outputs.version }}"
+          RAW_VERSION="${RAW_VERSION#v}"
+          NOTES_FILE="$RUNNER_TEMP/release-notes.md"
+          HEADER="## [$RAW_VERSION]"
+
+          # CHANGELOG.md at this tag's commit is the one source of truth for the
+          # release body — the same curated text the /release skill's Step 6
+          # wrote there (Breaking, if any, first, then Added/Changed/Fixed/
+          # Removed). This step always (re)writes the body from it, so it does
+          # not matter whether the skill already created the release with its
+          # own placeholder notes: this step's output wins, every time.
+          # Previously `body:` was hardcoded to install instructions and
+          # `generate_release_notes: true` appended a one-line "What's Changed"
+          # summary — softprops/action-gh-release replaces the release's body
+          # with those two when the release already exists, silently discarding
+          # curated notes the skill had set (see v0.11.0, hand-fixed after the
+          # fact). Reading from one file removes that race entirely.
+          if grep -qF -- "$HEADER" CHANGELOG.md; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            awk -v hdr="$HEADER" '
+              index($0, hdr) == 1 { found=1; next }
+              found && index($0, "## [") == 1 { exit }
+              found { print }
+            ' CHANGELOG.md > "$NOTES_FILE"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No CHANGELOG.md section for $RAW_VERSION — falling back to GitHub's auto-generated notes"
+            : > "$NOTES_FILE"
+          fi
+
+          cat >> "$NOTES_FILE" << 'EOF'
+
+          ## Installation
+
+          ### Quick Install (Recommended)
+
+          **macOS / Linux**
+          ```bash
+          curl -fsSL https://archon.diy/install | bash
+          ```
+
+          **Windows (PowerShell)**
+          ```powershell
+          irm https://archon.diy/install.ps1 | iex
+          ```
+
+          **Homebrew (macOS / Linux)**
+          ```bash
+          brew install coleam00/archon/archon
+          ```
+
+          **Docker**
+          ```bash
+          docker run --rm -v "$PWD:/workspace" ghcr.io/coleam00/archon:latest workflow list
+          ```
+
+          ### Manual Installation
+
+          **macOS (Apple Silicon)**
+          ```bash
+          curl -fsSL https://github.com/coleam00/Archon/releases/latest/download/archon-darwin-arm64 -o /usr/local/bin/archon
+          chmod +x /usr/local/bin/archon
+          ```
+
+          **macOS (Intel)**
+          ```bash
+          curl -fsSL https://github.com/coleam00/Archon/releases/latest/download/archon-darwin-x64 -o /usr/local/bin/archon
+          chmod +x /usr/local/bin/archon
+          ```
+
+          **Linux (x64)**
+          ```bash
+          curl -fsSL https://github.com/coleam00/Archon/releases/latest/download/archon-linux-x64 -o /usr/local/bin/archon
+          chmod +x /usr/local/bin/archon
+          ```
+
+          **Linux (ARM64)**
+          ```bash
+          curl -fsSL https://github.com/coleam00/Archon/releases/latest/download/archon-linux-arm64 -o /usr/local/bin/archon
+          chmod +x /usr/local/bin/archon
+          ```
+
+          **Windows (Manual)**
+          Download `archon-windows-x64.exe` from the assets below, rename to `archon.exe`, and add to your PATH.
+
+          ### Verify installation
+          ```bash
+          archon version
+          ```
+          EOF
+
+          echo "file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -335,69 +431,12 @@ jobs:
           name: Archon CLI ${{ steps.version.outputs.version }}
           draft: false
           prerelease: ${{ contains(steps.version.outputs.version, '-') }}
-          generate_release_notes: true
+          generate_release_notes: ${{ steps.notes.outputs.found != 'true' }}
+          body_path: ${{ steps.notes.outputs.file }}
           files: |
             dist/archon-*
             dist/archon-web.tar.gz
             dist/checksums.txt
-          body: |
-            ## Installation
-
-            ### Quick Install (Recommended)
-
-            **macOS / Linux**
-            ```bash
-            curl -fsSL https://archon.diy/install | bash
-            ```
-
-            **Windows (PowerShell)**
-            ```powershell
-            irm https://archon.diy/install.ps1 | iex
-            ```
-
-            **Homebrew (macOS / Linux)**
-            ```bash
-            brew install coleam00/archon/archon
-            ```
-
-            **Docker**
-            ```bash
-            docker run --rm -v "$PWD:/workspace" ghcr.io/coleam00/archon:latest workflow list
-            ```
-
-            ### Manual Installation
-
-            **macOS (Apple Silicon)**
-            ```bash
-            curl -fsSL https://github.com/coleam00/Archon/releases/latest/download/archon-darwin-arm64 -o /usr/local/bin/archon
-            chmod +x /usr/local/bin/archon
-            ```
-
-            **macOS (Intel)**
-            ```bash
-            curl -fsSL https://github.com/coleam00/Archon/releases/latest/download/archon-darwin-x64 -o /usr/local/bin/archon
-            chmod +x /usr/local/bin/archon
-            ```
-
-            **Linux (x64)**
-            ```bash
-            curl -fsSL https://github.com/coleam00/Archon/releases/latest/download/archon-linux-x64 -o /usr/local/bin/archon
-            chmod +x /usr/local/bin/archon
-            ```
-
-            **Linux (ARM64)**
-            ```bash
-            curl -fsSL https://github.com/coleam00/Archon/releases/latest/download/archon-linux-arm64 -o /usr/local/bin/archon
-            chmod +x /usr/local/bin/archon
-            ```
-
-            **Windows (Manual)**
-            Download `archon-windows-x64.exe` from the assets below, rename to `archon.exe`, and add to your PATH.
-
-            ### Verify installation
-            ```bash
-            archon version
-            ```
 
   update-homebrew:
     needs: release
