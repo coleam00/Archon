@@ -937,28 +937,22 @@ const STRUCTURED_OUTPUT_MAX_REASKS = 3;
  *
  * Since Claude SDK 0.3.193 the model can delegate work to asynchronous
  * background agents, so a `result` chunk only means "top-level turn done" —
- * NOT "all work done". Breaking out of the stream loop at a result while
- * background tasks are live calls `.return()` on the generator chain, which
- * tears down the SDK subprocess (SIGTERM) and kills the tasks — the artifacts
- * they were producing silently never appear.
+ * NOT "all work done". The stream loops therefore finish on the provider's
+ * `settled` chunk, never on a result; stopping at a result would `.return()`
+ * the generator chain, tear down the SDK subprocess and kill the tasks.
  *
  * Fed by the provider's `background_tasks` chunk (SDK `background_tasks_changed`,
  * v0.3.209+): a level signal carrying the FULL live set, REPLACE semantics.
- * Both dag-executor stream loops (AI node + loop iteration) instantiate one
- * tracker per stream pass and gate their break-on-result on it: when the set
- * is non-empty, keep consuming — the SDK keeps the subprocess alive until the
- * tasks drain, gives the agent a follow-up turn to integrate their output, and
- * emits a final `result` (verified empirically against SDK 0.3.209). The wait
- * is bounded by the existing idle-timeout machinery: `task_progress` chunks
- * (~30s cadence while subagents run) reset the idle timer, and a genuinely
- * hung task hits the normal idle-timeout path.
- *
- * Providers that never emit the chunk (Codex/Pi/OpenCode/Copilot, older Claude
- * CLIs) leave the set empty → break-on-first-result behavior is unchanged.
+ * Both dag-executor stream loops (AI node + loop iteration) keep one tracker per
+ * stream pass. It no longer decides when the node ends; it tells the operator a
+ * result arrived while tasks still run, and records the tasks still live when a
+ * stream ends without settling (idle timeout, subprocess death). The wait for
+ * `settled` is bounded by the idle-timeout machinery: `task_progress` chunks
+ * (~30s cadence while subagents run) reset the idle timer.
  */
 function createBackgroundTaskTracker(): {
   update(tasks: { taskId: string; description: string }[]): void;
-  shouldBreakOnResult(): boolean;
+  hasLiveTasks(): boolean;
   count(): number;
   ids(): string[];
   /** True exactly once — lets the caller announce the wait a single time per pass. */
@@ -971,8 +965,8 @@ function createBackgroundTaskTracker(): {
       live.clear();
       for (const t of tasks) live.set(t.taskId, t.description);
     },
-    shouldBreakOnResult(): boolean {
-      return live.size === 0;
+    hasLiveTasks(): boolean {
+      return live.size > 0;
     },
     count(): number {
       return live.size;
@@ -2631,17 +2625,12 @@ async function executeNodeInternal(
           );
           throw new Error(`Node '${node.id}' failed: SDK returned ${subtype}${errorsDetail}`);
         }
-        if (backgroundTasks.shouldBreakOnResult()) {
-          break; // Result is the "I'm done" signal — don't wait for subprocess to exit
-        }
-        // Result arrived with background Agent tasks still live (#2083).
-        // Breaking here would .return() the generator chain → SDK cleanup →
-        // SIGTERM the CLI → kill the tasks and lose their pending artifacts.
-        // Keep consuming: the SDK holds the subprocess open until the tasks
-        // drain, runs a follow-up turn to integrate their output, and emits a
-        // final result (whose fields overwrite the captures above — correct,
-        // since SDK cost/usage are session-cumulative). Bounded by the
-        // existing idle timeout; task_progress chunks reset it.
+        // A result is not the end of the node: work the turn started may still run,
+        // and a later result can follow (its fields overwrite the captures above —
+        // correct, since SDK cost/usage are session-cumulative). The node finishes on
+        // `settled` below. The wait is bounded by the idle timeout; task_progress
+        // chunks reset it.
+        if (!backgroundTasks.hasLiveTasks()) continue;
         getLog().warn(
           {
             nodeId: node.id,
@@ -2658,6 +2647,8 @@ async function executeNodeInternal(
             nodeContext
           );
         }
+      } else if (msg.type === 'settled') {
+        break; // The provider says the turn is over and nothing more runs for it.
       } else if (msg.type === 'background_tasks') {
         // Level signal (REPLACE semantics): swap the live set for the payload.
         backgroundTasks.update(msg.tasks);
@@ -2888,7 +2879,7 @@ async function executeNodeInternal(
     // record the incompleteness (surfaced on the node_completed event) and warn
     // loudly instead of silently completing (#2083). Cancellation is exempt:
     // the node returns 'failed — Cancelled by user' and the warning would be noise.
-    if (!backgroundTasks.shouldBreakOnResult()) {
+    if (backgroundTasks.hasLiveTasks()) {
       backgroundTasksIncomplete = backgroundTasks.ids();
       const cancelled = nodeAbortController.signal.aborted && !nodeIdleTimedOut;
       getLog().warn(
@@ -6355,12 +6346,9 @@ async function executeLoopNode(
                   `Loop '${node.id}' iteration ${String(i)} failed: SDK returned ${subtype}${errorsDetail}`
                 );
               }
-              if (backgroundTasks.shouldBreakOnResult()) {
-                break; // Result is the "I'm done" signal — don't wait for subprocess to exit
-              }
-              // Result with live background Agent tasks (#2083): breaking would
-              // SIGTERM the SDK subprocess and kill them. Keep consuming until the
-              // final result — see the AI-node stream loop for the full rationale.
+              // A result is not the end of the iteration; `settled` is. See the
+              // AI-node stream loop for the full rationale.
+              if (!backgroundTasks.hasLiveTasks()) continue;
               getLog().warn(
                 {
                   nodeId: node.id,
@@ -6378,6 +6366,8 @@ async function executeLoopNode(
                   msgContext
                 );
               }
+            } else if (msg.type === 'settled') {
+              break; // The provider says the turn is over and nothing more runs for it.
             } else if (msg.type === 'background_tasks') {
               // Level signal (REPLACE semantics): swap the live set for the payload.
               backgroundTasks.update(msg.tasks);
@@ -6518,7 +6508,7 @@ async function executeLoopNode(
           // user-facing warning (the mid-stream check above returns the node as
           // failed with its own message just below), but still recorded in the
           // union — the audit trail should not depend on why the stream ended.
-          if (!backgroundTasks.shouldBreakOnResult()) {
+          if (backgroundTasks.hasLiveTasks()) {
             const danglingTaskIds = backgroundTasks.ids();
             for (const id of danglingTaskIds) loopBackgroundTasksIncomplete.add(id);
             const cancelled = iterationAbortController.signal.aborted && !iterationIdleTimedOut;

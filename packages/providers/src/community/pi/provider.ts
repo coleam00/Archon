@@ -291,7 +291,7 @@ export class PiProvider implements IAgentProvider {
   /**
    * One call is one Pi prompt. A failure, including one thrown while setting the
    * session up, ends in a `result` carrying a typed `failure`, and the engine decides
-   * whether to try again. Cancellation still throws.
+   * whether to try again. Every turn ends in `settled`. Cancellation still throws.
    */
   async *sendQuery(
     prompt: string,
@@ -309,12 +309,12 @@ export class PiProvider implements IAgentProvider {
       if (requestOptions?.abortSignal?.aborted === true) throw error;
       const err = error as Error;
       // The turn already reported its one result; a later error does not change it.
-      if (resultReported) {
-        getLog().error({ err }, 'pi.error_after_result');
-        return;
-      }
-      yield piFailureResult('pi_query_failed', err.message);
+      if (resultReported) getLog().error({ err }, 'pi.error_after_result');
+      else yield piFailureResult('pi_query_failed', err.message);
     }
+    // The bridge ends when `prompt()` resolves, after every run of Pi's agent loop
+    // (auto-retry, compaction, queued follow-ups) has finished: nothing more runs.
+    yield { type: 'settled' };
   }
 
   private async *streamTurn(

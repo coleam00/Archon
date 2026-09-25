@@ -7345,11 +7345,43 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(sent.some(m => m.includes('background agent'))).toBe(false);
     });
 
-    it('breaks at the first result when no background_tasks chunk was seen (unchanged behavior)', async () => {
+    it('does not finish at a result that arrives before its background work is reported — #3524', async () => {
+      // The race `settled` exists for: the turn-level result arrives BEFORE the
+      // provider reports the background task, so nothing at result time says to
+      // wait. Only `settled` says the turn is over.
+      let settledReached = false;
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'assistant', content: 'spawned agents' };
+        yield { type: 'result', sessionId: 'sid', cost: 0.1 };
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't-1', taskType: 'local_agent', description: 'bg research' }],
+        };
+        yield { type: 'assistant', content: ' + integrated task output' };
+        yield { type: 'background_tasks', tasks: [] };
+        yield { type: 'result', sessionId: 'sid', cost: 0.3 };
+        yield { type: 'settled' };
+        settledReached = true;
+      });
+
+      const store = createMockStore();
+      const platform = createMockPlatform();
+      await runSingleNode(store, platform, 'bg-late-report-run');
+
+      const completed = findCompletedEvent(store);
+      expect(completed!.data.node_output).toBe('spawned agents + integrated task output');
+      expect(completed!.data.cost_usd).toBe(0.3);
+      expect(completed!.data.background_tasks_incomplete).toBeUndefined();
+      // The engine stopped reading at `settled`, not before and not after.
+      expect(settledReached).toBe(false);
+    });
+
+    it('stops reading at settled', async () => {
       mockSendQueryDag.mockImplementation(async function* () {
         yield { type: 'assistant', content: 'normal output' };
         yield { type: 'result', sessionId: 'sid' };
-        // Anything after the result must NOT be consumed
+        yield { type: 'settled' };
+        // Anything after settled must NOT be consumed
         yield { type: 'assistant', content: ' MUST NOT APPEAR' };
       });
 
@@ -7909,6 +7941,55 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       );
       expect(completedEvent).toBeDefined();
       expect(completedEvent?.[0].data).not.toHaveProperty('model_usage');
+    });
+
+    it('ends an iteration on settled, not at a result reported before its background work — #3524', async () => {
+      // The completion signal only arrives after the first result; an iteration that
+      // stopped at that result would never see it and burn another iteration.
+      let settledReached = false;
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'assistant', content: 'Working.' };
+        yield { type: 'result', sessionId: 'loop-sid' };
+        yield {
+          type: 'background_tasks',
+          tasks: [{ taskId: 't-1', taskType: 'local_agent', description: 'bg work' }],
+        };
+        yield { type: 'background_tasks', tasks: [] };
+        yield { type: 'assistant', content: ' Done. <promise>COMPLETE</promise>' };
+        yield { type: 'result', sessionId: 'loop-sid' };
+        yield { type: 'settled' };
+        settledReached = true;
+      });
+
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: {
+            name: 'dag-loop-late-report',
+            nodes: [
+              {
+                id: 'my-loop',
+                kind: 'loop',
+                loop: {
+                  fresh_context: false,
+                  prompt: 'Do a task. When done, output <promise>COMPLETE</promise>.',
+                  until: 'COMPLETE',
+                  max_iterations: 1,
+                },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('loop-late-report-run'),
+        })
+      );
+
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+      expect(store.completeWorkflowRun).toHaveBeenCalled();
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(settledReached).toBe(false);
     });
 
     it('does not double-count cost when an iteration sees two results (background-task wait, #2083)', async () => {
@@ -12822,7 +12903,7 @@ describe('executeDagWorkflow -- prior-success cache invalidated by dep re-execut
   });
 });
 
-describe('executeDagWorkflow -- break after result (no hang on subprocess exit)', () => {
+describe('executeDagWorkflow -- break at settled (no hang on subprocess exit)', () => {
   let testDir: string;
 
   beforeEach(async () => {
@@ -12859,11 +12940,12 @@ describe('executeDagWorkflow -- break after result (no hang on subprocess exit)'
     }
   });
 
-  it('command/prompt node completes immediately after result — does not block on post-result messages', async () => {
-    // Generator yields result then hangs forever (simulates subprocess that won't exit)
+  it('command/prompt node completes at settled — does not block on a subprocess that never exits', async () => {
+    // Generator settles then hangs forever (simulates subprocess that won't exit)
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'assistant', content: 'response' };
       yield { type: 'result', sessionId: 'sess-break' };
+      yield { type: 'settled' };
       // Subprocess hangs — without break, this blocks until idle timeout
       await new Promise<void>(() => {});
     });
@@ -12887,18 +12969,19 @@ describe('executeDagWorkflow -- break after result (no hang on subprocess exit)'
         })
       ).then(() => 'completed'),
       new Promise<string>((_, reject) =>
-        setTimeout(() => reject(new Error('Timed out — break after result not working')), 5000)
+        setTimeout(() => reject(new Error('Timed out — break at settled not working')), 5000)
       ),
     ]);
 
     expect(result).toBe('completed');
   });
 
-  it('loop node completes immediately after result — does not block on post-result messages', async () => {
-    // Generator yields result then hangs forever
+  it('loop node completes at settled — does not block on a subprocess that never exits', async () => {
+    // Generator settles then hangs forever
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'assistant', content: 'All done. COMPLETE' };
       yield { type: 'result', sessionId: 'sess-loop-break' };
+      yield { type: 'settled' };
       await new Promise<void>(() => {});
     });
 
@@ -12931,7 +13014,7 @@ describe('executeDagWorkflow -- break after result (no hang on subprocess exit)'
         })
       ).then(() => 'completed'),
       new Promise<string>((_, reject) =>
-        setTimeout(() => reject(new Error('Timed out — break after result not working')), 5000)
+        setTimeout(() => reject(new Error('Timed out — break at settled not working')), 5000)
       ),
     ]);
 

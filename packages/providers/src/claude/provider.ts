@@ -1017,6 +1017,9 @@ async function* streamClaudeMessages(
   // The last subscription-window report; a failure reads it to tell an exhausted
   // window (`status: 'rejected'`) from load shedding.
   let lastRateLimit: SDKRateLimitInfo | undefined;
+  // A result can arrive while background agents still run; only the session going idle
+  // after a result means the turn is over.
+  let resultSeen = false;
   // Progress frames carry no visibility marker, so retain the start decision
   // for the lifetime of this query and suppress the complete hidden lifecycle.
   const hiddenTaskIds = new Set<string>();
@@ -1095,6 +1098,8 @@ async function* streamClaudeMessages(
         ambient?: boolean;
         // Background-task set (Claude SDK v0.3.209+ `background_tasks_changed`)
         tasks?: { task_id: string; task_type: string; description: string; ambient?: boolean }[];
+        // Session state (CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS)
+        state?: string;
         // Hook lifecycle (Claude SDK v0.2.89+)
         hook_id?: string;
         hook_name?: string;
@@ -1103,7 +1108,13 @@ async function* streamClaudeMessages(
         exit_code?: number;
       };
       const subtype = sysMsg.subtype;
-      if (subtype === 'init' && sysMsg.mcp_servers) {
+      if (subtype === 'session_state_changed') {
+        // The SDK documents `idle` as its authoritative turn-over signal: it fires after
+        // the held-back result flushes and background agents drain. Stop reading there
+        // rather than waiting for the subprocess to exit, which can hang (#854).
+        if (sysMsg.state === 'idle' && resultSeen) break;
+        getLog().debug({ state: sysMsg.state, resultSeen }, 'claude.session_state_changed');
+      } else if (subtype === 'init' && sysMsg.mcp_servers) {
         const failed = sysMsg.mcp_servers.filter(s => s.status !== 'connected');
         if (failed.length > 0) {
           const names = failed.map(s => `${s.name} (${s.status})`).join(', ');
@@ -1345,6 +1356,7 @@ async function* streamClaudeMessages(
       if (resultMsg.stop_reason != null) result.stopReason = resultMsg.stop_reason;
       if (resultMsg.num_turns !== undefined) result.numTurns = resultMsg.num_turns;
       if (resolvedModelId) result.resolvedModel = { id: resolvedModelId };
+      resultSeen = true;
       yield result;
       // A failed turn is over: nothing after it belongs to this query.
       if (failure !== undefined) break;
@@ -1412,7 +1424,7 @@ export class ClaudeProvider implements IAgentProvider {
   /**
    * Send a query to Claude and stream responses. One call is one SDK query: a failure
    * ends in a `result` carrying a typed `failure`, and the engine decides whether to
-   * try again. Only cancellation throws.
+   * try again. Every turn ends in `settled`. Only cancellation throws.
    */
   // No security gate lives here on purpose. Env hygiene for a target repo is
   // structural (the platform strips what must not reach a subprocess before a
@@ -1455,6 +1467,9 @@ export class ClaudeProvider implements IAgentProvider {
       // process.env never crosses the boundary (the isolation invariant); the host
       // path inherits the (already-cleaned) process env.
       const env = buildRequestSubprocessEnv(requestOptions);
+      // Ask the CLI for its session-state events: `idle` is what tells a finished turn
+      // from a result that arrived while background agents still run.
+      env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS = '1';
       const settingSources =
         requestOptions?.nodeConfig?.settingSources ??
         assistantDefaults.settingSources ??
@@ -1556,11 +1571,11 @@ export class ClaudeProvider implements IAgentProvider {
       );
       // The turn already reported its one result; an error while the subprocess
       // shut down afterwards does not change that outcome.
-      if (resultReported) return;
-      yield failureResultChunk(failure);
+      if (!resultReported) yield failureResultChunk(failure);
     } finally {
       requestOptions?.abortSignal?.removeEventListener('abort', onAbort);
     }
+    yield { type: 'settled' };
   }
 
   getType(): string {
