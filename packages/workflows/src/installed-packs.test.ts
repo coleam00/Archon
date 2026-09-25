@@ -7,7 +7,7 @@
  * `plugins/installed/` and a tree under `plugins/packs/`) into a temp ARCHON_HOME.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { cp, mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { packTreePath, receiptPath } from '@archon/plugin-manifest/store';
@@ -401,6 +401,35 @@ describe('installed pack boundaries', () => {
         errorType: 'validation_error',
       },
     ]);
+  });
+
+  test('files at a pack root are not workflows, installed or copied into a project', async () => {
+    const pack = {
+      ...reviewKit(),
+      files: {
+        ...reviewKit().files,
+        'README.md': '# review-kit\n',
+        'example.yaml': 'model: sonnet\n',
+      },
+    };
+    // Bundled defaults report their own errors in this isolated process; only the pack's count.
+    const packErrors = (errors: readonly { filename: string }[]): unknown[] =>
+      errors.filter(error => !error.filename.startsWith('archon-'));
+    await install(pack);
+    const installed = await discover();
+    expect(packErrors(installed.errors)).toEqual([]);
+    expect(names(installed.workflows)).toContain(REVIEW);
+
+    // `archon plugin copy`: the installed tree, verbatim, at `.archon/workflows/<name>/`.
+    await cp(
+      packTreePath(join(home, 'plugins'), pack.id, pack.commit),
+      join(project, '.archon', 'workflows', pack.name),
+      { recursive: true }
+    );
+    await uninstall(pack.id, pack.commit);
+    const copied = await discover();
+    expect(packErrors(copied.errors)).toEqual([]);
+    expect(names(copied.workflows)).toEqual(expect.arrayContaining(['code-review', 'helper']));
   });
 
   test('an unreadable pack is reported without hiding the others', async () => {

@@ -28,7 +28,7 @@
     },
     "packages/adapters": {
       "name": "@archon/adapters",
-      "version": "0.11.0",
+      "version": "0.11.1",
       "dependencies": {
         "@archon/core": "workspace:*",
         "@archon/forge": "workspace:*",
@@ -51,7 +51,7 @@
     },
     "packages/cli": {
       "name": "@archon/cli",
-      "version": "0.11.0",
+      "version": "0.11.1",
       "bin": {
         "archon": "./src/cli.ts",
       },
@@ -76,7 +76,7 @@
     },
     "packages/core": {
       "name": "@archon/core",
-      "version": "0.11.0",
+      "version": "0.11.1",
       "dependencies": {
         "@archon/git": "workspace:*",
         "@archon/isolation": "workspace:*",
@@ -99,7 +99,7 @@
     },
     "packages/docs-web": {
       "name": "@archon/docs-web",
-      "version": "0.11.0",
+      "version": "0.11.1",
       "dependencies": {
         "@astrojs/starlight": "^0.38.0",
         "astro": "^6.1.0",
@@ -109,7 +109,7 @@
     },
     "packages/forge": {
       "name": "@archon/forge",
-      "version": "0.11.0",
+      "version": "0.11.1",
       "dependencies": {
         "zod": "^4.4.3",
       },
@@ -122,7 +122,7 @@
     },
     "packages/git": {
       "name": "@archon/git",
-      "version": "0.11.0",
+      "version": "0.11.1",
       "dependencies": {
         "@archon/paths": "workspace:*",
       },
@@ -132,7 +132,7 @@
     },
     "packages/isolation": {
       "name": "@archon/isolation",
-      "version": "0.11.0",
+      "version": "0.11.1",
       "dependencies": {
         "@archon/git": "workspace:*",
         "@archon/paths": "workspace:*",
@@ -144,7 +144,7 @@
     },
     "packages/paths": {
       "name": "@archon/paths",
-      "version": "0.11.0",
+      "version": "0.11.1",
       "dependencies": {
         "dotenv": "^17",
         "pino": "^9",
@@ -157,7 +157,7 @@
     },
     "packages/plugin-manifest": {
       "name": "@archon/plugin-manifest",
-      "version": "0.11.0",
+      "version": "0.11.1",
       "dependencies": {
         "zod": "^4.4.3",
       },
@@ -167,7 +167,7 @@
     },
     "packages/providers": {
       "name": "@archon/providers",
-      "version": "0.11.0",
+      "version": "0.11.1",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.3.282",
         "@archon/paths": "workspace:*",
@@ -190,7 +190,7 @@
     },
     "packages/server": {
       "name": "@archon/server",
-      "version": "0.11.0",
+      "version": "0.11.1",
       "dependencies": {
         "@archon/adapters": "workspace:*",
         "@archon/core": "workspace:*",
@@ -212,7 +212,7 @@
     },
     "packages/web": {
       "name": "@archon/web",
-      "version": "0.11.0",
+      "version": "0.11.1",
       "dependencies": {
         "@dagrejs/dagre": "^2.0.4",
         "@tanstack/react-query": "^5.0.0",
@@ -253,7 +253,7 @@
     },
     "packages/workflows": {
       "name": "@archon/workflows",
-      "version": "0.11.0",
+      "version": "0.11.1",
       "dependencies": {
         "@archon/git": "workspace:*",
         "@archon/paths": "workspace:*",

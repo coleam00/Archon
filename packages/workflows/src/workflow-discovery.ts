@@ -34,6 +34,7 @@ import type {
 } from './schemas';
 import { isComposeFanOutNode, isIncludeDirective, isLoopGroupNode } from './schemas';
 import * as archonPaths from '@archon/paths';
+import { PLUGIN_MANIFEST_FILE } from '@archon/plugin-manifest';
 import {
   assertWorkflowSourceIntegrity,
   installedWorkflowName,
@@ -178,6 +179,16 @@ function mergeScopeResults(base: DirLoadResult, packaged: DirLoadResult): DirLoa
 // one level deliberately — deeper nesting has never been part of the documented
 // convention and adds only routing ambiguity.
 
+async function isPackDirectory(dirPath: string): Promise<boolean> {
+  try {
+    await access(join(dirPath, PLUGIN_MANIFEST_FILE));
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
 /**
  * Load workflows from a directory, descending at most `MAX_DISCOVERY_DEPTH`
  * folders deep. Files deeper than the cap are silently skipped.
@@ -203,6 +214,9 @@ async function loadWorkflowsFromDir(dirPath: string, depth = 0): Promise<DirLoad
           // subdirectories are ignored (same convention as the paths-package
           // `findCommandFiles` depth cap).
           if (depth >= MAX_DISCOVERY_DEPTH) continue;
+          // A directory holding a pack manifest is a pack, read only by the pack loader,
+          // so a copied pack loads the same tree the same way as when it was installed.
+          if (await isPackDirectory(entryPath)) continue;
           const subResult = await loadWorkflowsFromDir(entryPath, depth + 1);
           for (const [filename, parsed] of subResult.workflows) {
             workflows.set(filename, parsed);

@@ -9,14 +9,16 @@
  * asserts the upgrade converges on the fresh-install shape — the SQLite mirror
  * of check:schema-upgrades.
  *
- * Extraction is textual on purpose. `createSchema()` is, in every released tag,
- * a single uninterpolated backtick literal, so slicing it out of
- * `git show <tag>:…/sqlite.ts` recovers the vintage DDL exactly — without
+ * Extraction is textual on purpose: slicing `createSchema()`'s backtick literal
+ * out of `git show <tag>:…/sqlite.ts` recovers the vintage DDL exactly — without
  * checking out each tag or executing old code against its own dependency tree.
- * That single-literal shape is this extractor's validity condition: if the
- * extracted text ever contains `${…}` or the signature can no longer be found,
- * this script FAILS instead of writing a wrong fixture. The fix is a deliberate
- * extractor change, never a workaround.
+ * Up to v0.10.0 that literal is uninterpolated. From v0.11.0 it may interpolate
+ * `${helper('literal')}`, where `helper` is a module-level function in the same
+ * file whose whole body returns one template that interpolates only its single
+ * string parameter; the extractor substitutes that call from the tag's own
+ * source. Any other `${…}`, or a missing signature, makes this script FAIL
+ * instead of writing a wrong fixture. The fix is a deliberate extractor change,
+ * never a workaround.
  *
  * Fixtures are checked in (unlike the Postgres baselines, read at CI time)
  * because the test that consumes them must also run in the shallow checkout of
@@ -55,36 +57,63 @@ function git(...args: string[]): { ok: boolean; stdout: string; stderr: string }
 }
 
 /**
- * Recover the exact SQL `createSchema()` ran on `tag`.
+ * The body of `function name(param: string): string { return `…`; }` in `source`,
+ * with `arg` substituted for `${param}`. Throws when the helper is absent or its
+ * body is anything but that single template return — an unresolvable call.
+ */
+function resolveHelperCall(tag: string, source: string, name: string, arg: string): string {
+  const header = new RegExp(`\\nfunction ${name}\\((\\w+): string\\): string \\{\\s*return \``);
+  const match = header.exec(source);
+  const unresolvable = new Error(
+    `${tag}: cannot resolve \${${name}(…)} in createSchema() — extractor must be revisited`
+  );
+  if (!match) throw unresolvable;
+  const bodyStart = match.index + match[0].length;
+  const bodyEnd = source.indexOf('`', bodyStart);
+  if (bodyEnd === -1 || !/^;\s*\}/.test(source.slice(bodyEnd + 1))) throw unresolvable;
+  const pieces = source.slice(bodyStart, bodyEnd).split(`\${${match[1]}}`);
+  if (pieces.some(piece => piece.includes('${'))) throw unresolvable;
+  return pieces.join(arg);
+}
+
+/**
+ * Recover the exact SQL `createSchema()` ran on `tag`, given that tag's
+ * `sqlite.ts` source.
  *
  * The schema lives between the first backtick after the method signature and the
- * next backtick. A `${` inside that span means the "schema is one static
- * literal" premise is broken and extraction would be silently unfaithful —
- * refuse rather than emit a fixture nobody could trust.
+ * next backtick. Each `${…}` inside it must be a `helper('literal')` call that
+ * resolves from the same source (see the file header); anything else means
+ * extraction would be silently unfaithful — refuse rather than emit a fixture
+ * nobody could trust.
  */
-function extractSchemaSql(tag: string): string {
-  const show = git('show', `${tag}:${ADAPTER_REPO_PATH}`);
-  if (!show.ok) throw new Error(`${tag}: cannot read ${ADAPTER_REPO_PATH} (broken tag?)`);
-
-  const sigAt = show.stdout.indexOf(SCHEMA_SIGNATURE);
+export function extractSchemaSql(tag: string, source: string): string {
+  const sigAt = source.indexOf(SCHEMA_SIGNATURE);
   if (sigAt === -1) {
     throw new Error(`${tag}: ${SCHEMA_SIGNATURE} not found — extractor must be revisited`);
   }
-  const start = show.stdout.indexOf('`', sigAt + SCHEMA_SIGNATURE.length);
-  const end = start === -1 ? -1 : show.stdout.indexOf('`', start + 1);
+  const start = source.indexOf('`', sigAt + SCHEMA_SIGNATURE.length);
+  const end = start === -1 ? -1 : source.indexOf('`', start + 1);
   if (start === -1 || end === -1) {
     throw new Error(
       `${tag}: createSchema() is not a single backtick literal — extractor must be revisited`
     );
   }
 
-  const sql = show.stdout.slice(start + 1, end);
-  if (sql.includes('${')) {
-    throw new Error(
-      `${tag}: extracted schema contains \${…} interpolation — the single-literal premise is broken, extractor must be revisited`
-    );
-  }
-  return sql;
+  return source.slice(start + 1, end).replace(/\$\{([^}]*)\}/g, (_whole, expr: string) => {
+    const call = /^(\w+)\('([^'\\]*)'\)$/.exec(expr);
+    if (!call) {
+      throw new Error(
+        `${tag}: extracted schema contains \${${expr}} interpolation that is not a resolvable helper('literal') call — extractor must be revisited`
+      );
+    }
+    return resolveHelperCall(tag, source, call[1], call[2]);
+  });
+}
+
+function readAdapterSource(tag: string): string {
+  const show = git('show', `${tag}:${ADAPTER_REPO_PATH}`);
+  if (!show.ok) throw new Error(`${tag}: cannot read ${ADAPTER_REPO_PATH} (broken tag?)`);
+  return show.stdout;
 }
 
 /**
@@ -129,7 +158,7 @@ function vintages(): Map<string, string> {
       continue;
     }
     seenAdapter = true;
-    const sql = extractSchemaSql(tag);
+    const sql = extractSchemaSql(tag, readAdapterSource(tag));
     if (!oldestTagPerSchema.has(sql)) oldestTagPerSchema.set(sql, tag);
   }
 
@@ -197,9 +226,11 @@ function main(): void {
   console.log(`sqlite vintage fixtures up to date (${expected.size} vintage(s)).`);
 }
 
-try {
-  main();
-} catch (err: unknown) {
-  console.error(err instanceof Error ? err.message : String(err));
-  process.exit(1);
+if (import.meta.main) {
+  try {
+    main();
+  } catch (err: unknown) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
 }
