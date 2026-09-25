@@ -13,6 +13,7 @@
 import { describe, test, expect, mock } from 'bun:test';
 
 mock.module('@archon/paths', () => ({
+  BUNDLED_IS_BINARY: false,
   createLogger: () => ({
     info() {},
     warn() {},
