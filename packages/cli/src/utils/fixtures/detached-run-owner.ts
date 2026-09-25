@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { renameSync, writeFileSync } from 'node:fs';
 import { startRunLiveOwner } from '@archon/core/services/run-live-owner';
 import { assertDetachedRunProcessOwner } from '../detached-run-control';
 
@@ -33,5 +33,11 @@ leakWriter.on('error', error => {
 });
 
 await startRunLiveOwner(runId, { detachedProcessPid: process.pid });
-writeFileSync(readyPath, JSON.stringify({ owner: process.pid, leakWriter: leakWriter.pid }));
+// Written aside and renamed into place: the spec reads the file as soon as it exists,
+// and a direct write can be observed empty.
+writeFileSync(
+  `${readyPath}.tmp`,
+  JSON.stringify({ owner: process.pid, leakWriter: leakWriter.pid })
+);
+renameSync(`${readyPath}.tmp`, readyPath);
 setInterval(() => undefined, 1_000);
