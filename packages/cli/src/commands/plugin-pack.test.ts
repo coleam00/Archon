@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
-import { packTreePath, readReceipts } from '@archon/plugin-manifest/store';
+import { packTreePath, readReceipts, receiptPath } from '@archon/plugin-manifest/store';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 import { pluginCommand, type PluginEnvironment } from './plugin';
 
@@ -333,6 +333,28 @@ describe('archon plugin: workflow packs', () => {
       commit: commit('head'),
     });
   });
+
+  // A read-only receipt directory makes publishing the receipt fail after the new tree
+  // was renamed into place. Windows ignores the mode, so the failure cannot be staged there.
+  test.skipIf(process.platform === 'win32')(
+    'a failed receipt write removes the new tree and keeps the previous install',
+    async () => {
+      const env = await environment();
+      expect((await run(env, 'install', ID)).code).toBe(0);
+      const before = await snapshot(env.pluginsDir);
+      const receiptDir = dirname(receiptPath(env.pluginsDir, ID));
+      await chmod(receiptDir, 0o555);
+      let result: Awaited<ReturnType<typeof run>>;
+      try {
+        result = await run(env, 'update', `${ID}@v1`);
+      } finally {
+        await chmod(receiptDir, 0o755);
+      }
+      expect(result.code).toBe(1);
+      expect(await snapshot(packTreePath(env.pluginsDir, ID, commit('v1')))).toEqual({});
+      expect(await snapshot(env.pluginsDir)).toEqual(before);
+    }
+  );
 
   test('copy writes to the repository root when run from a subdirectory', async () => {
     const env = await environment();
