@@ -179,6 +179,32 @@ describe('run-checks', () => {
     }
   );
 
+  it('never overwrites a path a check recreated, and the next attempt still starts', () => {
+    const f = checkout();
+    mkdirSync(join(f.cwd, '.archon', 'second'));
+    writeFileSync(join(f.cwd, '.archon', 'second', 'workflow.yaml'), 'moved\n');
+    const quarantine = ['.archon/injected', '.archon/second'];
+    const first = run(
+      f,
+      [{ name: 'gate', argv: sh('mkdir .archon/second && echo recreated > .archon/second/x') }],
+      quarantine
+    );
+    expect(first.output?.status).toBe('green');
+    expect(readFileSync(join(f.cwd, '.archon', 'injected', 'workflow.yaml'), 'utf8')).toBe(
+      'injected\n'
+    );
+    expect(readFileSync(join(f.cwd, '.archon', 'second', 'x'), 'utf8')).toBe('recreated\n');
+    const keptCopy = join(f.artifacts, 'validation', 'quarantine', '.archon', 'second');
+    expect(readFileSync(join(keptCopy, 'workflow.yaml'), 'utf8')).toBe('moved\n');
+    expect(report(f.artifacts)).toContain(keptCopy);
+
+    // Every restore settled, so a later attempt of the same run starts cleanly.
+    expect(existsSync(join(f.artifacts, 'validation', 'quarantine.json'))).toBe(false);
+    const second = run(f, [{ name: 'gate', argv: sh('exit 0') }], ['.archon/injected']);
+    expect(second.output?.status).toBe('green');
+    expect(existsSync(join(f.cwd, '.archon', 'injected', 'workflow.yaml'))).toBe(true);
+  });
+
   it('refuses to quarantine a tracked path or one outside .archon/, before moving anything', () => {
     for (const path of ['.archon/tracked', 'README.md', '.archon/../x', '/etc']) {
       const f = checkout();

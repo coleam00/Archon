@@ -25,7 +25,8 @@ whole process tree, restores anything it moved aside, and records the stop in
 `validation.md`. On Windows, or after SIGKILL, the script gets no signal it can
 catch: the check's process tree may outlive the timeout, and anything moved aside
 stays in the run's artifacts until the next attempt of the run puts it back before
-it starts. SDLC delivery refuses an incomplete result as unfinished rather
+it starts. Restoring never overwrites a path the checkout has again; that moved
+copy stays in the artifacts, and `validation.md` names where. SDLC delivery refuses an incomplete result as unfinished rather
 than red; the action is to resume the run. The comparison path never declares
 `incomplete`.
 

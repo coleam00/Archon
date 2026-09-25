@@ -100,6 +100,13 @@ function render(entries: readonly Entry[], quarantined: readonly string[]): void
       ''
     );
   }
+  if (kept.length > 0) {
+    lines.push(
+      'Not restored, because the checkout already had the path again. The moved copy is kept at:',
+      ...kept.map(path => `- \`${path}\``),
+      ''
+    );
+  }
   for (const [index, entry] of entries.entries()) {
     const seconds = entry.seconds === null ? '' : ` after ${entry.seconds.toFixed(0)}s`;
     lines.push(`## ${String(index + 1)}. ${entry.check.name}`, '');
@@ -144,40 +151,48 @@ function quarantinable(path: string): string {
   return normal;
 }
 
-// Every path currently moved aside, written before each move completes, so an
-// attempt that dies without restoring leaves a record the next attempt can act on.
+// The paths currently moved aside, mirrored to disk on every change. An attempt that
+// dies without restoring (on Windows, or after SIGKILL, the engine stops this script
+// with no signal to catch) leaves the list for the next attempt of the run.
 const manifest = join(logDir, 'quarantine.json');
+const pending: string[] = existsSync(manifest)
+  ? (JSON.parse(readFileSync(manifest, 'utf8')) as string[])
+  : [];
 
-function putBack(path: string): void {
-  if (existsSync(join(cwd, path))) {
-    throw new Error(
-      `Cannot restore quarantined '${path}': the checkout has it again. ` +
-        `The moved copy is kept at '${join(quarantineDir, path)}'.`
-    );
+function savePending(): void {
+  if (pending.length === 0) rmSync(manifest, { force: true });
+  else writeFileSync(manifest, JSON.stringify(pending));
+}
+
+/** Moved copies left in place because the checkout already had the path again. */
+const kept: string[] = [];
+
+/**
+ * Put every pending path back. A path the checkout has again is never overwritten:
+ * its moved copy stays where it is and the record names it, since a stop here would
+ * block every later attempt until someone intervened by hand.
+ */
+function restorePending(): void {
+  while (pending.length > 0) {
+    const path = pending[0];
+    if (existsSync(join(cwd, path))) {
+      kept.push(join(quarantineDir, path));
+    } else {
+      cpSync(join(quarantineDir, path), join(cwd, path), { recursive: true });
+      rmSync(join(quarantineDir, path), { recursive: true, force: true });
+    }
+    pending.shift();
+    savePending();
   }
-  cpSync(join(quarantineDir, path), join(cwd, path), { recursive: true });
-  rmSync(join(quarantineDir, path), { recursive: true, force: true });
 }
 
-// An earlier attempt of this run ended without restoring what it moved aside: on
-// Windows, or after SIGKILL, the engine stops this script with no signal to catch.
-// Put that scaffolding back before anything is validated or moved again.
-if (existsSync(manifest)) {
-  for (const path of JSON.parse(readFileSync(manifest, 'utf8')) as string[]) putBack(path);
-  rmSync(manifest);
-}
+// An earlier attempt left paths moved aside. Put them back before anything is
+// validated or moved again.
+restorePending();
 
 // Validate every path before moving any, so a refusal leaves the checkout untouched.
 const toQuarantine = discovery.quarantine.map(quarantinable);
 const quarantined: string[] = [];
-let restored = false;
-
-function restore(): void {
-  if (restored) return;
-  restored = true;
-  for (const path of quarantined) putBack(path);
-  rmSync(manifest, { force: true });
-}
 
 const entries: Entry[] = discovery.checks.map((check, index) => ({
   check,
@@ -209,7 +224,7 @@ function stopCurrent(signal: NodeJS.Signals): void {
 function onSignal(signal: NodeJS.Signals): void {
   stopCurrent(signal);
   try {
-    restore();
+    restorePending();
   } finally {
     render(entries, quarantined);
     // Re-raise with default handling, so the engine sees the node stopped by its
@@ -261,7 +276,8 @@ try {
   for (const path of toQuarantine) {
     cpSync(join(cwd, path), join(quarantineDir, path), { recursive: true });
     quarantined.push(path);
-    writeFileSync(manifest, JSON.stringify(quarantined));
+    pending.push(path);
+    savePending();
     rmSync(join(cwd, path), { recursive: true, force: true });
   }
   for (const entry of entries) {
@@ -269,7 +285,7 @@ try {
     if (entry.outcome.kind !== 'passed') break;
   }
 } finally {
-  restore();
+  restorePending();
   render(entries, quarantined);
 }
 
