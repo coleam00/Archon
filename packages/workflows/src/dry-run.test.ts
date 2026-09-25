@@ -29,12 +29,10 @@ async function captureProjectSource(options: Parameters<typeof captureWorkflowSo
     mkdirSync(join(dirname(bundled), pack), { recursive: true });
   }
   const workflows = spyOn(archonPaths, 'getDefaultWorkflowsPath').mockReturnValue(bundled);
-  const commands = spyOn(archonPaths, 'getDefaultCommandsPath').mockReturnValue(bundled);
   try {
     return await captureWorkflowSource(options);
   } finally {
     workflows.mockRestore();
-    commands.mockRestore();
   }
 }
 
@@ -1908,8 +1906,7 @@ describe('dryRunWorkflow', () => {
     // Behaviour CHANGE, recorded deliberately (#2563). Before, this combination
     // simulated as a max-iterations failure because only `until` was evaluated. Now
     // the unevaluable `until_bash` triggers the documented assumption, because the
-    // real run's check may well have fired. The shipped `archon-adversarial-dev`
-    // default declares exactly this pair, so the old verdict was a failure the real
+    // real run's check may well have fired, so the old verdict was a failure the real
     // run would not produce. The trade: a dry run can no longer prove a prose stub
     // trips `until:` on a loop that also declares `until_bash`.
     const workflow = makeTestWorkflow({

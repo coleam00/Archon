@@ -199,7 +199,7 @@ jobs:
             exit 1
           fi
           echo "$OUTPUT"
-          if echo "$OUTPUT" | grep -q "archon-assist"; then
+          if echo "$OUTPUT" | grep -q "archon-deliver"; then
             echo "::notice::Bundled workflows loaded correctly"
           else
             echo "::error::Bundled workflows did not load — embedded JSON may be missing from the binary"
@@ -225,7 +225,7 @@ jobs:
           # in #1310 first and fail on "neither origin/HEAD nor origin/main exist"
           # because the fresh `git init` tmp repo has no origin configured.
           set +e
-          OUTPUT=$(env -u CLAUDE_BIN_PATH "$BIN" workflow run archon-assist --no-worktree "hello" 2>&1)
+          OUTPUT=$(env -u CLAUDE_BIN_PATH "$BIN" workflow run archon-investigate --no-worktree "hello" 2>&1)
           EXIT_CODE=$?
           set -e
           echo "$OUTPUT"
@@ -270,7 +270,7 @@ jobs:
           # --no-worktree: same rationale as the negative-case test above — this
           # test exercises the Claude subprocess spawn path, not worktree setup.
           set +e
-          OUTPUT=$(CLAUDE_BIN_PATH="$CLI_PATH" "$BIN" workflow run archon-assist --no-worktree "hello" 2>&1)
+          OUTPUT=$(CLAUDE_BIN_PATH="$CLI_PATH" "$BIN" workflow run archon-investigate --no-worktree "hello" 2>&1)
           EXIT_CODE=$?
           set -e
           echo "$OUTPUT"

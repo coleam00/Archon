@@ -278,9 +278,9 @@ Examples:
   archon workflow run plan --cwd /path/to/repo "Add dark mode"
   archon workflow run implement --branch feature-auth "Implement auth"
   archon workflow run quick-fix --no-worktree "Fix typo"
-  archon workflow run assist --folder "List every repo under this multi-repo root"
-  archon workflow run archon-assist --detach "Investigate the flaky test"
-  archon workflow run assist --dry-run --stubs ./stubs.yaml --json
+  archon workflow run investigate --folder "Explain how the repos under this root fit together"
+  archon workflow run archon-investigate --detach "Investigate the flaky test"
+  archon workflow run investigate --dry-run --stubs ./stubs.yaml --json
   archon workflow runs --json
   archon workflow get <run-id> --json
   archon workflow logs <run-id> --follow
@@ -288,7 +288,7 @@ Examples:
   archon workflow resume <run-id>
   archon workflow cancel <run-id>
   archon workflow runs --open
-  archon workflow run archon-smart-pr-review --adopt <run-id> "Review the changes"
+  archon workflow run archon-review --adopt <run-id> "Review the changes"
   archon skill install
   archon skill install /path/to/project
   archon plugin install coleam00/Archon/plugins/forge-github

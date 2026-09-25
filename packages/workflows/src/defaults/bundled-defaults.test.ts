@@ -20,7 +20,8 @@ import {
   parsePackagedResourceReference,
 } from '../packaged-workflow';
 import { parseWorkflow } from '../loader';
-import { formatDeprecationNotice } from '../deprecation';
+import { resolveWorkflowName } from '../router';
+import { collectInstalledBundleSources } from './bundle-inventory';
 import {
   isExecNode,
   isIncludeDirective,
@@ -41,11 +42,6 @@ registerBuiltinProviders();
 // tests work regardless of cwd. From packages/workflows/src/defaults go up
 // four levels to the repo root, then into .archon/.
 const REPO_ROOT = join(import.meta.dir, '..', '..', '..', '..');
-const COMMANDS_DIR = join(REPO_ROOT, '.archon/commands/defaults');
-const WORKFLOWS_DIR = join(REPO_ROOT, '.archon/workflows/defaults');
-// `legacy/` holds the deprecated-window defaults (#2781): same flat file
-// convention, one grouping subfolder within the discovery depth cap.
-const LEGACY_WORKFLOWS_DIR = join(WORKFLOWS_DIR, 'legacy');
 
 describe('bundled-defaults', () => {
   describe('isBinaryBuild', () => {
@@ -58,100 +54,41 @@ describe('bundled-defaults', () => {
     });
   });
 
+  describe('fresh install', () => {
+    // A binary reads the embedded records; a source install reads the indexed tree.
+    // Both must offer exactly the sdlc pack, so neither can still ship a flat default.
+    it('ships only the sdlc pack, in the binary and from source', async () => {
+      const embedded = Object.keys(BUNDLED_WORKFLOWS).sort();
+      expect(embedded.filter(name => BUNDLED_WORKFLOW_OWNERS[name]?.pack !== 'sdlc')).toEqual([]);
+      expect(
+        Object.keys(BUNDLED_COMMANDS).filter(
+          name => parsePackagedResourceReference(name)?.owner.pack !== 'sdlc'
+        )
+      ).toEqual([]);
+
+      const sources = await collectInstalledBundleSources(join(REPO_ROOT, '.archon/workflows'));
+      const fromSource = (sources ?? []).flatMap(file =>
+        file.kind === 'workflow' ? [{ name: file.name, pack: file.owner.pack }] : []
+      );
+      expect(fromSource.filter(file => file.pack !== 'sdlc')).toEqual([]);
+      expect(fromSource.map(file => file.name).sort()).toEqual(embedded);
+    });
+
+    it('resolves every bundled workflow by its short name without ambiguity', () => {
+      const workflows = Object.keys(BUNDLED_WORKFLOWS).map(name => ({ name }));
+      for (const { name } of workflows) {
+        const short = name.replace(/^archon-/, '');
+        expect(resolveWorkflowName(short, workflows)?.name).toBe(name);
+      }
+    });
+  });
+
   describe('bundle completeness', () => {
     // These assertions are the canary for bundle drift: if someone adds a
     // default file without regenerating bundled-defaults.generated.ts, the
     // bundle would be missing in compiled binaries (see #979 context). The
     // generator is `scripts/generate-bundled-defaults.ts`, and
     // `bun run check:bundled` verifies the generated file is up to date.
-
-    it('BUNDLED_COMMANDS contains every .md file in .archon/commands/defaults/', () => {
-      const onDisk = readdirSync(COMMANDS_DIR)
-        .filter(f => f.endsWith('.md'))
-        .map(f => f.slice(0, -'.md'.length))
-        .sort();
-      expect(
-        Object.keys(BUNDLED_COMMANDS)
-          .filter(name => parsePackagedResourceReference(name) === null)
-          .sort()
-      ).toEqual(onDisk);
-    });
-
-    it('BUNDLED_WORKFLOWS contains every .yaml/.yml file in .archon/workflows/defaults/', () => {
-      const readFlat = (dir: string): string[] => {
-        if (!existsSync(dir)) return [];
-        return readdirSync(dir)
-          .filter(f => f.endsWith('.yaml') || f.endsWith('.yml'))
-          .map(f => f.replace(/\.ya?ml$/, ''));
-      };
-      const onDisk = [...readFlat(WORKFLOWS_DIR), ...readFlat(LEGACY_WORKFLOWS_DIR)].sort();
-      expect(
-        Object.keys(BUNDLED_WORKFLOWS)
-          .filter(name => BUNDLED_WORKFLOW_OWNERS[name] === undefined)
-          .sort()
-      ).toEqual(onDisk);
-    });
-
-    it('bundled content matches on-disk file content (defense against generator corruption)', () => {
-      // Bundled content is LF-normalized by the generator so it stays identical
-      // regardless of the checkout's line-ending policy. Match that here.
-      const readLF = (path: string): string => readFileSync(path, 'utf-8').replace(/\r\n/g, '\n');
-
-      // Packaged (pack-owned) entries live under .archon/workflows/<pack>/<workflow>/,
-      // not the flat defaults directories — their content parity is proven by
-      // 'packaged bundle metadata is internally consistent' below.
-      for (const [name, content] of Object.entries(BUNDLED_COMMANDS)) {
-        if (parsePackagedResourceReference(name) !== null) continue;
-        const diskContent = readLF(join(COMMANDS_DIR, `${name}.md`));
-        expect(content).toBe(diskContent);
-      }
-      for (const [name, content] of Object.entries(BUNDLED_WORKFLOWS)) {
-        if (BUNDLED_WORKFLOW_OWNERS[name] !== undefined) continue;
-        // Workflows may be .yaml or .yml — prefer .yaml, fall back. The name may
-        // live in the flat defaults dir or the legacy/ deprecation window.
-        let diskContent: string | undefined;
-        for (const dir of [WORKFLOWS_DIR, LEGACY_WORKFLOWS_DIR]) {
-          try {
-            diskContent = readLF(join(dir, `${name}.yaml`));
-            break;
-          } catch {}
-          try {
-            diskContent = readLF(join(dir, `${name}.yml`));
-            break;
-          } catch {}
-        }
-        // The completeness test above pins the file existing; here we only
-        // compare content parity.
-        expect(diskContent).toBeDefined();
-        expect(content).toBe(diskContent as string);
-      }
-    });
-
-    it('every flat bundled default is in the legacy deprecation window (#2781, #3525)', () => {
-      // Pack-owned workflows are the replacement; every flat default is legacy
-      // and announces its removal. No flat default is exempt.
-      const flat = Object.keys(BUNDLED_WORKFLOWS).filter(
-        name => BUNDLED_WORKFLOW_OWNERS[name] === undefined
-      );
-      expect(flat).toContain('archon-assist');
-      for (const name of flat) {
-        const parsed = parseWorkflow(BUNDLED_WORKFLOWS[name]!, `${name}.yaml`);
-        if (parsed.error) throw new Error(`${name} failed to parse: ${parsed.error.error}`);
-        expect(parsed.workflow.deprecated, `${name} is not deprecated`).toBeDefined();
-      }
-      expect(existsSync(join(LEGACY_WORKFLOWS_DIR, 'archon-assist.yaml'))).toBe(true);
-    });
-
-    it('archon-assist announces removal with the copy escape hatch (#3525)', () => {
-      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-assist']!, 'archon-assist.yaml');
-      if (parsed.error) throw new Error(parsed.error.error);
-      expect(formatDeprecationNotice(parsed.workflow)).toBe(
-        '⚠️ `archon-assist` is deprecated and will be removed in an upcoming release. ' +
-          'Switch to the sdlc pack instead. ' +
-          'To keep using this workflow after removal, copy the workflow file into your project ' +
-          '`.archon/workflows/` or your global `~/.archon/workflows/`.'
-      );
-    });
 
     it('packaged bundle metadata is internally consistent', () => {
       for (const [workflow, owner] of Object.entries(BUNDLED_WORKFLOW_OWNERS)) {
@@ -210,23 +147,12 @@ describe('bundled-defaults', () => {
       }
     });
 
-    it('archon-pr-review-scope should read .pr-number before other discovery', () => {
-      const content = BUNDLED_COMMANDS['archon-pr-review-scope'];
-      expect(content).toContain('$ARTIFACTS_DIR/.pr-number');
-      expect(content).toContain('PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number');
-    });
-
     it('classify-review-scope declares only its structured output fields', () => {
       const content =
         BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:deliver::classify-review-scope'];
       expect(content).toContain('- `errors`, `docs` — booleans');
       expect(content).toContain('- `reasons` — `{errors, docs}`');
       expect(content).not.toContain('`tests`, `errors`, `comments`, `types`, `docs`');
-    });
-
-    it('archon-create-pr should write .pr-number to artifacts', () => {
-      const content = BUNDLED_COMMANDS['archon-create-pr'];
-      expect(content).toContain('echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"');
     });
 
     it('the SDLC implementation and every review lens own separate discovery records', () => {
@@ -299,24 +225,6 @@ describe('bundled-defaults', () => {
       for (const content of Object.values(BUNDLED_WORKFLOWS)) {
         expect(content.length).toBeGreaterThan(50);
       }
-    });
-
-    it('archon-workflow-builder should have validate-before-save node ordering and key constraints', () => {
-      const content = BUNDLED_WORKFLOWS['archon-workflow-builder'];
-      expect(content).toContain('id: validate-yaml');
-      expect(content).toContain('depends_on: [validate-yaml]');
-      expect(content).toContain('denied_tools: [Edit, Bash]');
-      expect(content).toContain('output_format:');
-      expect(content).toContain('workflow_name');
-    });
-
-    it('archon-adversarial-dev init-workspace should avoid non-portable sed -i', () => {
-      const content = BUNDLED_WORKFLOWS['archon-adversarial-dev'];
-      expect(content).toContain('STATE_TMP="$ARTIFACTS/state.json.tmp"');
-      expect(content).toContain(
-        'sed "s/SPRINT_COUNT_PLACEHOLDER/$SPRINT_COUNT/" "$ARTIFACTS/state.json" > "$STATE_TMP"'
-      );
-      expect(content).not.toContain('sed -i "s/SPRINT_COUNT_PLACEHOLDER/$SPRINT_COUNT/"');
     });
 
     it('archon-ship carries its target through triage.md without downstream target prose', () => {
@@ -667,8 +575,8 @@ describe('bundled-defaults', () => {
     // discover or mutate the just-created PR (an empty/unset --repo value does
     // NOT fail: gh silently falls back to its default resolution, verified).
     // `gh pr view` is intentionally NOT guarded here: review-path commands
-    // (archon-pr-review-scope etc.) view explicit PR numbers supplied as
-    // workflow input — pinning those is a separate concern.
+    // view explicit PR numbers supplied as workflow input — pinning those is a
+    // separate concern.
 
     // Join backslash-continued shell lines so multi-line `gh pr create \`
     // blocks are checked as a single command.

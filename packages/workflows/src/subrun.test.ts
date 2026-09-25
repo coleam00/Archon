@@ -64,7 +64,6 @@ mock.module('@archon/paths', () => ({
   // NB: point these one level DEEP (`<root>/defaults`) — captureWorkflowSource copies
   // dirname(getDefault*Path()), so the getter's PARENT must be the owned empty tree.
   getDefaultWorkflowsPath: () => join(bundledDefaultsRoot, 'defaults'),
-  getDefaultCommandsPath: () => join(bundledDefaultsRoot, 'defaults'),
   createLogger: mock(() => mockLogger),
   captureWorkflowInvoked: mock(
     (props: { workflowName: string; workflowSource?: string; isResume?: boolean }) => {

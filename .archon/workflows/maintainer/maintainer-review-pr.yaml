@@ -12,7 +12,7 @@ description: |
   Provider: Pi (Minimax M3) — runs cheaper than Claude. Each review aspect
   is its own Archon node, so Pi handles them as independent calls.
   NOT for: Comprehensive review of a PR you've already decided to merge
-           (use archon-comprehensive-pr-review). Quick triage of all open PRs
+           (use archon-review). Quick triage of all open PRs
            (use maintainer-standup). Direction/scope gating on
            unfiltered PRs — that path was removed; the maintainer is expected
            to have done that filtering when picking the PR.

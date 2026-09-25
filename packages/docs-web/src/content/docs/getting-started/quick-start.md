@@ -22,11 +22,11 @@ sidebar:
 # List available workflows
 archon workflow list
 
-# Ask Archon to assist with your codebase
-archon workflow run assist "What does this codebase do?"
+# Find the cause of a bug before anyone fixes it
+archon workflow run investigate "Why does the login test fail?"
 
-# Run a code review
-archon workflow run smart-pr-review
+# Review the changes on your branch
+archon workflow run review
 ```
 
 ## The input is the contract

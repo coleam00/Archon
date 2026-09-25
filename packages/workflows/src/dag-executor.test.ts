@@ -51,7 +51,6 @@ mock.module('@archon/paths', () => ({
     return paths;
   },
   getWorkflowFolderSearchPaths: () => ['.archon/workflows'],
-  getDefaultCommandsPath: () => '/nonexistent/defaults',
   getDefaultWorkflowsPath: () => '/nonexistent/defaults/workflows',
   getHomeWorkflowsPath: () => '/nonexistent/home/workflows',
   getLegacyHomeWorkflowsPath: () => '/nonexistent/home/.archon/workflows',
@@ -19747,54 +19746,6 @@ describe('provider resolution -- regression for #1610', () => {
   });
 });
 
-describe('bundled opus nodes -- provider annotation invariant (#1610)', () => {
-  it('every bundled node with an opus model has provider: claude at the node or workflow level', async () => {
-    // Resolve the defaults directory relative to this package (same logic as getAppArchonBasePath).
-    // import.meta.dir = packages/workflows/src → go up 3 levels to repo root → .archon/workflows/defaults
-    const repoRoot = join(import.meta.dir, '..', '..', '..');
-    const defaultsDir = join(repoRoot, '.archon', 'workflows', 'defaults');
-    // The invariant covers the legacy deprecation-window folder too (#2781).
-    const dirs = [defaultsDir, join(defaultsDir, 'legacy')];
-
-    const { readdir, readFile: readFileFs } = await import('fs/promises');
-    const files: { dir: string; file: string }[] = [];
-    for (const dir of dirs) {
-      if (!(await readdir(dir).catch(() => null))) continue;
-      for (const f of await readdir(dir)) {
-        if (f.endsWith('.yaml')) files.push({ dir, file: f });
-      }
-    }
-    expect(files.length).toBeGreaterThan(0);
-
-    for (const { dir, file } of files) {
-      const src = await readFileFs(join(dir, file), 'utf-8');
-      const result = parseWorkflow(src, file);
-      if (!('workflow' in result)) continue; // skip load errors
-
-      const wf = result.workflow;
-      if (!wf || !('nodes' in wf) || !wf.nodes) continue; // skip non-DAG workflows
-
-      const workflowProvider: string | undefined = (wf as { provider?: string }).provider;
-
-      for (const n of wf.nodes) {
-        const nodeModel: string | undefined = (n as { model?: string }).model;
-        if (!nodeModel || !nodeModel.toLowerCase().includes('opus')) continue;
-
-        const nodeProvider: string | undefined = (n as { provider?: string }).provider;
-        const hasExplicitClaude = nodeProvider === 'claude' || workflowProvider === 'claude';
-
-        expect(hasExplicitClaude).toBe(true);
-        if (!hasExplicitClaude) {
-          // Surface which file+node is missing the annotation
-          throw new Error(
-            `${file}: node '${(n as { id?: string }).id ?? '?'}' has model '${nodeModel}' but no provider: claude at node or workflow level`
-          );
-        }
-      }
-    }
-  });
-});
-
 describe('executeDagWorkflow -- typed artifacts (output_type)', () => {
   let testDir: string;
 
@@ -29405,7 +29356,7 @@ describe('executeDagWorkflow -- a workflow runs as authored, standalone or compo
   });
 
   it('AC2 — a block declaring NOTHING resolves from config, not from the parent', async () => {
-    // The `archon-review-block` shape, and the case naive push-down gets wrong: with
+    // A bare include block, and the case naive push-down gets wrong: with
     // nothing of its own to push, the block's nodes would still inherit the parent's
     // workflow-level values unless that layer is REMOVED.
     const bare = wfDef('bare-blk', [{ id: 'work', prompt: 'work' }]);

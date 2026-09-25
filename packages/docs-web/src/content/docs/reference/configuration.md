@@ -235,8 +235,8 @@ defaults:
 
 # Recommended workflows for this project (declared order = pin order in the UI)
 # recommendedWorkflows:
-#   - archon-fix-github-issue
-#   - archon-idea-to-pr
+#   - archon-ship
+#   - archon-review
 #   - archon-plan
 
 # Per-project environment variables for workflow execution (Claude SDK only)
@@ -369,8 +369,8 @@ Repo owners curate an **ordered list of recommended workflows** in the project's
 
 ```yaml
 recommendedWorkflows:
-  - archon-fix-github-issue
-  - archon-idea-to-pr
+  - archon-ship
+  - archon-review
   - archon-plan
 ```
 

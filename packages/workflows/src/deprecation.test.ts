@@ -4,7 +4,7 @@ import type { WorkflowDefinition } from './schemas/workflow';
 
 const deprecatedWorkflow = (overrides: Partial<WorkflowDefinition> = {}): WorkflowDefinition =>
   ({
-    name: 'archon-fix-github-issue',
+    name: 'acme-old-flow',
     description: 'test workflow',
     nodes: [{ id: 'n', prompt: 'p' }],
     deprecated: { message: 'Switch to the sdlc pack instead.' },
@@ -21,7 +21,7 @@ describe('formatDeprecationNotice (#2781)', () => {
     // must be present verbatim in structure: removal announcement + the declared
     // replacement pointer + both keep/copy exits.
     expect(formatDeprecationNotice(deprecatedWorkflow())).toBe(
-      '⚠️ `archon-fix-github-issue` is deprecated and will be removed in an upcoming release. ' +
+      '⚠️ `acme-old-flow` is deprecated and will be removed in an upcoming release. ' +
         'Switch to the sdlc pack instead. ' +
         'To keep using this workflow after removal, copy the workflow file into your project ' +
         '`.archon/workflows/` or your global `~/.archon/workflows/`.'

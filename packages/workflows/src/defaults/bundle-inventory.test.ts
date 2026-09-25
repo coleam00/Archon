@@ -7,19 +7,6 @@ import { collectBundleSources, readBundleContent, readBundleIndex } from './bund
 
 const track = trackTempRoots();
 
-test.each(['workflows/defaults/__proto__.yaml', 'commands/defaults/Uppercase.md'])(
-  'retains the strict legacy default filename contract for %s',
-  async path => {
-    const root = track(await mkdtemp(join(tmpdir(), 'archon-bundle-name-')));
-    await mkdir(join(root, 'workflows/defaults'), { recursive: true });
-    await mkdir(join(root, 'commands/defaults'), { recursive: true });
-    await writeFile(join(root, path), 'invalid default');
-    await expect(
-      collectBundleSources(join(root, 'workflows'), join(root, 'commands'), ['defaults'])
-    ).rejects.toThrow('Names must be kebab-case');
-  }
-);
-
 test('dereferences a linked workflow directory instead of silently omitting its runtime files', async () => {
   const root = track(await mkdtemp(join(tmpdir(), 'archon-bundle-link-')));
   const target = join(root, 'authored-flow');
@@ -30,9 +17,7 @@ test('dereferences a linked workflow directory instead of silently omitting its 
   await writeFile(join(target, 'scripts/run.ts'), 'console.log(1);\n');
   // A directory junction exercises Windows link traversal without administrator rights.
   await symlink(target, join(pack, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
-  const selected = await collectBundleSources(join(root, 'workflows'), join(root, 'commands'), [
-    'selected',
-  ]);
+  const selected = await collectBundleSources(join(root, 'workflows'), ['selected']);
   expect(selected.map(file => file.relativePath)).toEqual([
     'workflows/selected/linked/main.yaml',
     'workflows/selected/linked/scripts/run.ts',
@@ -64,7 +49,6 @@ test('the index selects exact runtime files, preserving authored paths and exclu
   await writeFile(indexPath, JSON.stringify({ packs: ['selected'] }));
   const selected = await collectBundleSources(
     join(root, 'workflows'),
-    join(root, 'commands'),
     await readBundleIndex(indexPath)
   );
   expect(selected.map(file => file.relativePath).sort()).toEqual([
@@ -77,9 +61,9 @@ test('the index selects exact runtime files, preserving authored paths and exclu
   ]);
   for (const file of selected)
     expect(await readBundleContent(file)).toBe(authored[file.relativePath].replace(/\r\n/g, '\n'));
-  await expect(
-    collectBundleSources(join(root, 'workflows'), join(root, 'commands'), ['missing'])
-  ).rejects.toThrow('Indexed bundle pack "missing" directory not found');
+  await expect(collectBundleSources(join(root, 'workflows'), ['missing'])).rejects.toThrow(
+    'Indexed bundle pack "missing" directory not found'
+  );
   await writeFile(indexPath, JSON.stringify({ packs: ['selected', 'selected'] }));
   await expect(readBundleIndex(indexPath)).rejects.toThrow('Duplicate bundle pack');
   await writeFile(indexPath, JSON.stringify({ packs: ['../outside'] }));

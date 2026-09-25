@@ -90,7 +90,7 @@ Interact by @mentioning the bot in issue or PR **comments**:
 ```
 @archon can you analyze this bug?
 @archon review this implementation
-@archon /workflow run assist "explain the auth flow"
+@archon /workflow run investigate "why does the auth flow reject valid tokens?"
 ```
 
 **First mention behavior:**

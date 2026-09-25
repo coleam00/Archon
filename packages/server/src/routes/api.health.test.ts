@@ -90,7 +90,6 @@ mock.module('@archon/paths', () => ({
   }),
   getWorkflowFolderSearchPaths: mock(() => ['.archon/workflows']),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands']),
-  getDefaultCommandsPath: mock(() => '/tmp/.archon-test-nonexistent/commands/defaults'),
   getDefaultWorkflowsPath: mock(() => '/tmp/.archon-test-nonexistent/workflows/defaults'),
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
   isDocker: mockIsDocker,
@@ -104,7 +103,7 @@ mock.module('@archon/workflows/command-validation', makeCommandValidationMock);
 mock.module('@archon/workflows/defaults', () => ({
   BUNDLED_WORKFLOWS: {},
   BUNDLED_COMMANDS: {
-    'archon-assist': '# archon-assist command',
+    'archon-investigate': '# archon-investigate command',
     plan: '# plan command',
     implement: '# implement command',
   },
@@ -572,13 +571,13 @@ describe('GET /api/commands', () => {
     expect(bundledCommands.length).toBeGreaterThan(0);
   });
 
-  test('includes archon-assist as bundled command', async () => {
+  test('includes archon-investigate as bundled command', async () => {
     const app = makeApp();
     const response = await app.request('/api/commands');
     expect(response.status).toBe(200);
 
     const body = (await response.json()) as { commands: Array<{ name: string; source: string }> };
-    const archonAssist = body.commands.find(c => c.name === 'archon-assist');
+    const archonAssist = body.commands.find(c => c.name === 'archon-investigate');
     expect(archonAssist).toBeDefined();
     expect(archonAssist?.source).toBe('bundled');
   });

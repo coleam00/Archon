@@ -8,8 +8,8 @@
  * Imports parseWorkflow from loader.ts (parsing concern stays there).
  *
  * Scopes (precedence lowest → highest):
- *   1. `bundled` — embedded in the Archon binary (or read from the app's
- *      defaults folder in source mode).
+ *   1. `bundled` — embedded in the Archon binary (or read from the packs
+ *      `bundle-index.json` names, under the app's `.archon/workflows/`, in source mode).
  *   2. `global`  — home-scoped at `~/.archon/workflows/`. Applies to every
  *      repo; discovered automatically (no caller option needed).
  *   3. `project` — repo-local at `<cwd>/.archon/workflows/`.
@@ -21,7 +21,7 @@
  * entrypoints are dispatchable, as `owner/plugin:<entrypoint>`.
  */
 import { readFile, readdir, access, stat } from 'fs/promises';
-import { basename, dirname, join } from 'path';
+import { basename, join } from 'path';
 import type {
   WorkflowDefinition,
   WorkflowLoadError,
@@ -55,7 +55,6 @@ import {
   isBinaryBuild,
 } from './defaults/bundled-defaults';
 import {
-  bundledDefaultCommandPath,
   bundlesPackagedResources,
   collectInstalledBundleSources,
   readBundleContent,
@@ -173,7 +172,7 @@ function mergeScopeResults(base: DirLoadResult, packaged: DirLoadResult): DirLoa
 }
 
 // `MAX_DISCOVERY_DEPTH` (= 1: one level of grouping, e.g.
-// `.archon/workflows/defaults/foo.yaml`) is imported from `command-validation`,
+// `.archon/workflows/team/foo.yaml`) is imported from `command-validation`,
 // the dependency-free leaf module, so the loader here and the workflow-name
 // validator there share one source of truth and cannot drift apart. We stop at
 // one level deliberately — deeper nesting has never been part of the documented
@@ -422,11 +421,10 @@ async function loadPackagedWorkflowsFromDir(
       }
       continue;
     }
-    // `defaults` is the flat-bundled-defaults convention, not a pack (its files
-    // are read by loadWorkflowsFromDir, including the `legacy/` subfolder during
-    // the #2781 deprecation window). Packaged scanning cannot interpret it —
-    // `defaults/legacy` would fail "must contain exactly one .yaml" and surface
-    // a bogus error on every discovery pass.
+    // `defaults` is the flat-defaults convention, not a pack: loadWorkflowsFromDir
+    // reads its files. Captures taken by builds that still bundled flat defaults
+    // hold `defaults/legacy/`, which packaged scanning would misread and fail with
+    // "must contain exactly one .yaml" on every discovery pass.
     if (pack === 'defaults') continue;
     if (pack === FIXTURES_DIR) continue;
     if (!isValidWorkflowFolderSegment(pack)) {
@@ -508,7 +506,7 @@ interface CommandScanConfig {
 /**
  * Resolve a command name to its file CONTENT, mirroring the runtime/validator search
  * order (repo `.archon/commands/` + configured `commandFolder` → `~/.archon/commands/` →
- * bundled defaults, unless `loadDefaultCommands` is false). Returns `null` when no candidate
+ * a capture's frozen flat defaults, unless `loadDefaultCommands` is false). Returns `null` when no candidate
  * resolves, and a path-bearing error when a higher-precedence scope cannot be inspected or a
  * matched candidate cannot be read. Read-only; used so the include expander can compile a
  * block's command body while proving its lexical reference boundary.
@@ -574,38 +572,26 @@ async function resolveCommandContentForScan(
     }
   }
 
-  // Bundled defaults — skipped when the repo opts out (loadDefaultCommands: false), matching
-  // the workflow/command discovery opt-out so the scan doesn't resolve a command the repo
-  // has disabled.
-  if (config.loadDefaultCommands === false) return null;
-  if (isBinaryBuild() && roots.kind === 'live') {
-    return BUNDLED_COMMANDS[commandName] ?? null;
-  }
-  // Live defaults are the flat files the index selects, so they resolve by direct path.
-  // A capture keeps whatever command layout it froze and keeps the basename walk.
+  // Every bundled command a build ships now is packaged and resolved above. A run captured
+  // by an older build may have frozen flat bundled commands and keeps the basename walk
+  // over them — unless the repo opted out (loadDefaultCommands: false), matching discovery.
+  if (config.loadDefaultCommands === false || roots.kind !== 'captured') return null;
   const defaultsDir = roots.bundledCommands;
-  let commandPath: string | null;
-  if (roots.kind === 'captured') {
-    let entries: Awaited<ReturnType<typeof archonPaths.findCommandFiles>>;
-    try {
-      entries = await archonPaths.findCommandFiles(defaultsDir);
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException;
-      if (err.code === 'ENOENT') return null;
-      return { path: defaultsDir, message: err.message, operation: 'inspect' };
-    }
-    const match = entries.find(e => e.commandName === commandName);
-    commandPath = match ? join(defaultsDir, match.relativePath) : null;
-  } else {
-    commandPath = await bundledDefaultCommandPath(defaultsDir, commandName);
+  let entries: Awaited<ReturnType<typeof archonPaths.findCommandFiles>>;
+  try {
+    entries = await archonPaths.findCommandFiles(defaultsDir);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') return null;
+    return { path: defaultsDir, message: err.message, operation: 'inspect' };
   }
-  if (commandPath === null) return null;
+  const match = entries.find(e => e.commandName === commandName);
+  if (!match) return null;
+  const commandPath = join(defaultsDir, match.relativePath);
   try {
     return await readFile(commandPath, 'utf-8');
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
-    // The direct path is a candidate, not a hit: an absent file is an ordinary miss.
-    if (err.code === 'ENOENT') return null;
     return { path: commandPath, message: err.message, operation: 'read' };
   }
 }
@@ -1044,11 +1030,7 @@ export async function discoverWorkflows(
         let appResult: DirLoadResult;
         if (roots.kind === 'live') {
           appResult = { workflows: new Map(), errors: [] };
-          const files =
-            (await collectInstalledBundleSources(
-              appWorkflowsPath,
-              dirname(roots.bundledCommands)
-            )) ?? [];
+          const files = (await collectInstalledBundleSources(appWorkflowsPath)) ?? [];
           for (const file of files) {
             if (file.kind !== 'workflow') continue;
             const filename = basename(file.sourcePath);
@@ -1057,8 +1039,7 @@ export async function discoverWorkflows(
               appResult.errors.push(parsed.error);
               continue;
             }
-            if (file.owner)
-              qualifyWorkflowResources(parsed.workflow, { source: 'bundled', ...file.owner });
+            qualifyWorkflowResources(parsed.workflow, { source: 'bundled', ...file.owner });
             appResult.workflows.set(filename, {
               workflow: parsed.workflow,
               parseWarnings: parsed.warnings,

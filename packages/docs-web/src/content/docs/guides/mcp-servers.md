@@ -317,10 +317,10 @@ nodes:
 
 ## Push Notifications (ntfy)
 
-Some built-in workflows (like `archon-smart-pr-review`) include an optional
-notification node that sends a push notification to your phone when the workflow
-completes. It's gated behind a `when:` condition — if you haven't configured ntfy,
-the node is silently skipped.
+A workflow can end with an optional notification node that sends a push
+notification to your phone when the workflow completes. Gate it behind a `when:`
+condition so the node is skipped when ntfy isn't configured. No bundled workflow
+includes one; add the nodes below to your own workflows.
 
 ### Setup (30 seconds)
 
@@ -378,8 +378,8 @@ to generate a meaningful summary.
 # Verify your phone receives notifications
 curl -d "Hello from Archon" ntfy.sh/YOUR_TOPIC_NAME
 
-# Run a workflow with notifications
-bun run cli workflow run archon-smart-pr-review "Review PR #123"
+# Run one of your workflows that includes the notify node
+bun run cli workflow run my-workflow "Review PR #123"
 ```
 
 ## MCP vs allowed_tools/denied_tools vs hooks

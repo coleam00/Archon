@@ -42,9 +42,11 @@ export const tagConfig: Record<
 
 export const VALID_HOSTS = ['github.com'] as const;
 
-const SHA = '69b2c8978b589a30e2b01ee77897a770d714d630';
-const BASE = 'https://github.com/coleam00/Archon/blob/main';
-const BASE_PATH = '.archon/workflows/defaults';
+// Former bundled workflows that Archon no longer ships. Pinned to the v0.11.1
+// release commit, the last one that bundled them.
+const SHA = 'aa095446cf1915901e777433e043b8b8b77dfbe1';
+const BASE = 'https://github.com/coleam00/Archon/blob/v0.11.1';
+const BASE_PATH = '.archon/workflows/defaults/legacy';
 
 export const marketplaceEntries: MarketplaceEntry[] = [
   {

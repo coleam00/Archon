@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock, type Mock } from 'bun:test';
-import { mkdir, mkdtemp, writeFile, rm, readdir, readFile } from 'fs/promises';
+import { mkdir, writeFile, rm, readdir, readFile } from 'fs/promises';
 import { join, basename } from 'path';
 import { tmpdir } from 'os';
 
@@ -35,7 +35,6 @@ clearRegistry();
 registerBuiltinProviders();
 
 import { discoverWorkflows, discoverWorkflowsWithConfig } from './workflow-discovery';
-import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
 import {
   isExecNode,
   isHaltNode,
@@ -52,7 +51,6 @@ import type { WorkflowDefinition } from './schemas/workflow';
 import type { DagNode, IncludeDirective, BindingDirective } from './schemas';
 import type { JsonValue } from './output-ref';
 import * as bundledDefaults from './defaults/bundled-defaults';
-import { readBundleIndex } from './defaults/bundle-inventory';
 import { parsePackagedResourceReference } from './packaged-workflow';
 import { discoverScriptsForCwd } from './script-discovery';
 
@@ -1415,8 +1413,8 @@ nodes:
       // Should load the real archon-* prefixed app defaults
       expect(workflows.length).toBeGreaterThanOrEqual(1);
       // Check for at least one of the known app defaults
-      const archonAssist = workflows.find(w => w.name === 'archon-assist');
-      expect(archonAssist).toBeDefined();
+      const archonReview = workflows.find(w => w.name === 'archon-review');
+      expect(archonReview).toBeDefined();
     });
 
     it('should override app defaults with repo workflows of same filename', async () => {
@@ -1424,25 +1422,25 @@ nodes:
       const repoWorkflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(repoWorkflowDir, { recursive: true });
       const repoWorkflowYaml = `name: my-custom-assist
-description: My custom assist (overrides archon-assist)
+description: My custom assist (overrides archon-review)
 nodes:
   - id: custom
     command: custom-command
 `;
       // Use exact same filename as app default to override
-      await writeFile(join(repoWorkflowDir, 'archon-assist.yaml'), repoWorkflowYaml);
+      await writeFile(join(repoWorkflowDir, 'archon-review.yaml'), repoWorkflowYaml);
 
       const result = await discoverWorkflows(testDir, { loadDefaults: true });
       const workflows = result.workflows.map(ws => ws.workflow);
 
       // Should have the repo version, not the app default
       const assistWorkflow = workflows.find(
-        w => w.name === 'my-custom-assist' || w.name === 'archon-assist'
+        w => w.name === 'my-custom-assist' || w.name === 'archon-review'
       );
       expect(assistWorkflow).toBeDefined();
       // Repo version should win (has custom name)
       expect(assistWorkflow?.name).toBe('my-custom-assist');
-      expect(assistWorkflow?.description).toBe('My custom assist (overrides archon-assist)');
+      expect(assistWorkflow?.description).toBe('My custom assist (overrides archon-review)');
     });
 
     it('should skip app defaults when loadDefaults is false', async () => {
@@ -1470,9 +1468,9 @@ nodes:
       const workflows = result.workflows.map(ws => ws.workflow);
 
       // Should have both app defaults and repo workflows
-      const archonAssist = workflows.find(w => w.name === 'archon-assist');
+      const archonReview = workflows.find(w => w.name === 'archon-review');
       const customWorkflow = workflows.find(w => w.name === 'my-custom-workflow');
-      expect(archonAssist).toBeDefined();
+      expect(archonReview).toBeDefined();
       expect(customWorkflow).toBeDefined();
     });
   });
@@ -1721,7 +1719,7 @@ nodes:
       const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig);
 
       // With config failure, defaults to true, so archon-* should appear
-      const archonWorkflow = result.workflows.find(w => w.workflow.name === 'archon-assist');
+      const archonWorkflow = result.workflows.find(w => w.workflow.name === 'archon-review');
       expect(archonWorkflow).toBeDefined();
     });
 
@@ -1791,8 +1789,8 @@ nodes:
       // Should load bundled workflows
       expect(workflows.length).toBeGreaterThanOrEqual(1);
       // Check that known bundled workflows are loaded
-      const archonAssist = workflows.find(w => w.name === 'archon-assist');
-      expect(archonAssist).toBeDefined();
+      const archonReview = workflows.find(w => w.name === 'archon-review');
+      expect(archonReview).toBeDefined();
       expect(workflows.some(w => w.name === 'archon-stabilize')).toBe(false);
     });
 
@@ -1816,19 +1814,19 @@ nodes:
       const repoWorkflowDir = join(testDir, '.archon', 'workflows');
       await mkdir(repoWorkflowDir, { recursive: true });
       const repoWorkflowYaml = `name: custom-assist-override
-description: Custom override of archon-assist
+description: Custom override of archon-review
 nodes:
   - id: custom
     command: custom
 `;
-      await writeFile(join(repoWorkflowDir, 'archon-assist.yaml'), repoWorkflowYaml);
+      await writeFile(join(repoWorkflowDir, 'archon-review.yaml'), repoWorkflowYaml);
 
       const result = await discoverWorkflows(testDir, { loadDefaults: true });
       const workflows = result.workflows.map(ws => ws.workflow);
 
       // Repo workflow should override bundled default
       const assistWorkflow = workflows.find(
-        w => w.name === 'custom-assist-override' || w.name === 'archon-assist'
+        w => w.name === 'custom-assist-override' || w.name === 'archon-review'
       );
       expect(assistWorkflow).toBeDefined();
       expect(assistWorkflow?.name).toBe('custom-assist-override');
@@ -1853,9 +1851,9 @@ nodes:
       const workflows = result.workflows.map(ws => ws.workflow);
 
       // Should have both bundled and repo workflows
-      const archonAssist = workflows.find(w => w.name === 'archon-assist');
+      const archonReview = workflows.find(w => w.name === 'archon-review');
       const repoWorkflow = workflows.find(w => w.name === 'my-repo-workflow');
-      expect(archonAssist).toBeDefined();
+      expect(archonReview).toBeDefined();
       expect(repoWorkflow).toBeDefined();
     });
   });
@@ -7247,109 +7245,6 @@ nodes:
     });
   });
 
-  describe('defaults/legacy discovery (#2781)', () => {
-    /** A temp project whose bundled root carries a legacy deprecation-window default. */
-    const setupLegacyProject = async (): Promise<string> => {
-      const tmp = await mkdtemp(join(tmpdir(), 'archon-legacy-'));
-      const defaultsDir = join(tmp, 'bundled', 'defaults', 'legacy');
-      await mkdir(defaultsDir, { recursive: true });
-      for (const pack of await readBundleIndex()) {
-        await mkdir(join(tmp, 'bundled', pack), { recursive: true });
-      }
-      await mkdir(join(tmp, 'bundled-commands', 'defaults'), { recursive: true });
-      await writeFile(
-        join(defaultsDir, 'legacy-wf.yaml'),
-        [
-          'name: legacy-wf',
-          'description: legacy default',
-          'deprecated:',
-          '  message: Switch to the sdlc pack instead.',
-          'nodes:',
-          '  - id: n',
-          '    command: archon-parse-user-request', // plain ref against bundled commands/defaults',
-        ].join('\n')
-      );
-      return tmp;
-    };
-
-    const rootsFor = (tmp: string): WorkflowSourceRoots => {
-      const roots = liveSourceRoots(tmp);
-      return {
-        ...roots,
-        bundledWorkflows: join(tmp, 'bundled'),
-        bundledCommands: join(tmp, 'bundled-commands', 'defaults'),
-        globalWorkflows: join(tmp, '.empty-global'),
-      };
-    };
-
-    it('loads a legacy default as bundled with unqualified command refs and the marker', async () => {
-      const tmp = await setupLegacyProject();
-      try {
-        const result = await discoverWorkflows(tmp, { sourceRoots: rootsFor(tmp) });
-        expect(result.errors).toEqual([]);
-        const entry = result.workflows.find(w => w.workflow.name === 'legacy-wf');
-        expect(entry).toBeDefined();
-        expect(entry!.source).toBe('bundled');
-        expect(entry!.workflow.deprecated?.message).toBe('Switch to the sdlc pack instead.');
-        // Flat loading must NOT qualify resource refs (that happens only for
-        // packaged packs) — the plain name still resolves against the shared
-        // `.archon/commands/defaults/` + BUNDLED_COMMANDS tiers.
-        expect(JSON.stringify(entry!.workflow)).not.toContain('__archon_pack__');
-      } finally {
-        await rm(tmp, { recursive: true, force: true });
-      }
-    });
-
-    it('packaged scanning of the workflows root produces no error for defaults/legacy', async () => {
-      const tmp = await setupLegacyProject();
-      try {
-        // Without the reserved-name guard, loadPackagedWorkflowsFromDir reads
-        // `defaults/legacy` as pack/workflow and fails "must contain exactly
-        // one .yaml" on every discovery pass.
-        const result = await discoverWorkflows(tmp, { sourceRoots: rootsFor(tmp) });
-        expect(result.errors).toEqual([]);
-      } finally {
-        await rm(tmp, { recursive: true, force: true });
-      }
-    });
-
-    it('a project copy with the same filename overrides and clears the notice', async () => {
-      const tmp = await setupLegacyProject();
-      try {
-        const projectWfDir = join(tmp, '.archon', 'workflows');
-        await mkdir(projectWfDir, { recursive: true });
-        // The copy a user makes to keep the workflow after removal: same
-        // filename, marker stripped — discovery pins by filename and wins.
-        await writeFile(
-          join(projectWfDir, 'legacy-wf.yaml'),
-          [
-            'name: legacy-wf',
-            'description: user copy',
-            'nodes:',
-            '  - id: n',
-            '    command: archon-parse-user-request',
-          ].join('\n')
-        );
-        const result = await discoverWorkflows(tmp, { sourceRoots: rootsFor(tmp) });
-        expect(result.errors).toEqual([]);
-        const entry = result.workflows.find(w => w.workflow.name === 'legacy-wf');
-        expect(entry).toBeDefined();
-        // Content override is what matters: the user's copy — without the
-        // marker — wins by filename, so the notice disappears.
-        expect(entry!.workflow.description).toBe('user copy');
-        expect(entry!.workflow.deprecated).toBeUndefined();
-        // Known discovery quirk (not new here): a same-filename project file
-        // matching a bundled default keeps the 'bundled' SOURCE LABEL because
-        // the repo-scope scanner cannot distinguish "re-discovering the app's
-        // own defaults" from "an intentional override". Content overrode above,
-        // so only the label, not behavior, rides on this.
-        expect(['bundled', 'project']).toContain(entry!.source);
-      } finally {
-        await rm(tmp, { recursive: true, force: true });
-      }
-    });
-  });
-
   describe('deprecated marker (#2781)', () => {
     /** Write a single workflow and return its parsed definition + warnings. */
     const parseSingle = async (lines: string[]) => {
@@ -7536,21 +7431,9 @@ nodes:
       // `agent:` at workflow and node level — a real bug, silently dropped since
       // April. Remove from this list when the file is fixed.
       'e2e-opencode-smoke',
-      // #2707 step 1: these bundled workflows use the deprecated legacy
-      // approval.on_reject/capture_response mechanism and (for archon-piv-loop)
-      // node-level loop interactive:. They still run unmodified (grow-then-
-      // deprecate) — the warning is expected here, not a false positive.
-      // Remove from this list once #2123's defaults rewrite migrates them.
-      'archon-interactive-prd',
-      'archon-piv-loop',
-      // #2707 step 3: these bundled workflows declare the now-deprecated prose
-      // 'until:' completion channel on a loop/loop_group — still fully
-      // functional (grow-then-deprecate); the warning is expected, not a false
-      // positive. Remove from this list once #2123's defaults rewrite migrates
-      // them to 'until_bash'/'until_field'.
-      'archon-adversarial-dev',
-      'archon-test-loop-dag',
-      'archon-ralph-dag',
+      // #2707 step 3: declares the now-deprecated prose 'until:' completion
+      // channel on a loop — still fully functional (grow-then-deprecate); the
+      // warning is expected, not a false positive.
       't1-fix-issue',
     ]);
 

@@ -1,7 +1,7 @@
 name: minimax-isolate
 description: |
   RCA isolation for the MiniMax-M3 / Pi stall (the classify hang in
-  archon-fix-github-issue-minimax). Four independent nodes, each with a 90s
+  a MiniMax issue-fix workflow). Four independent nodes, each with a 90s
   idle_timeout so a stall fails fast instead of waiting 30 min. Disambiguates
   whether the trigger is `output_format` (structured-output augmentation) or
   prompt size — and whether forcing low thinking unblocks it.

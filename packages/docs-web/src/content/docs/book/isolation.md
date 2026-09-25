@@ -14,7 +14,7 @@ You noticed in Chapter 4 that most workflows accept a `--branch` flag. That flag
 
 ## Why Isolation Matters
 
-Imagine you're running `archon-fix-github-issue` on issue #42 and ask it to also start working on issue #43. Without isolation, both tasks share the same files in your repository. Task A edits `auth.ts`. Task B also edits `auth.ts`. You now have a conflict mid-run, and Archon can't make sense of which changes belong to which task.
+Imagine you're running `archon-ship` on issue #42 and ask it to also start working on issue #43. Without isolation, both tasks share the same files in your repository. Task A edits `auth.ts`. Task B also edits `auth.ts`. You now have a conflict mid-run, and Archon can't make sense of which changes belong to which task.
 
 With isolation, each task gets its own **worktree** — a completely separate directory with its own files. Task A works in one directory, Task B works in another. Neither one sees the other's in-progress changes. Your main repo is never touched during the run.
 
@@ -52,7 +52,7 @@ You control isolation behavior with flags on the `workflow run` command:
 
 **The default is isolation.** If you don't pass `--no-worktree`, Archon creates a worktree for you.
 
-Use `--no-worktree` only for tasks that don't modify code — questions, exploration, running `archon-assist`. For anything that touches files, isolation is the right choice.
+Use `--no-worktree` only for tasks that don't modify code — questions, exploration, or read-only workflows such as `archon-investigate`. For anything that touches files, isolation is the right choice.
 
 > **Recommendation**: Always use `--branch` with a descriptive name for code-changing workflows. It makes it easy to identify worktrees later and creates clean branch names on GitHub.
 

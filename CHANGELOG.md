@@ -7,9 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- The legacy bundled workflows are removed. A fresh install ships only the `sdlc` pack, so `run pr` and `run review` each resolve to one workflow again. The legacy `archon-*` workflows deprecated since v0.10.1 and `archon-assist` no longer ship, and neither do the commands under `.archon/commands/defaults/` or the `archon-review-block` include block. A run paused before the upgrade still resumes from the source it captured. To keep one, copy its YAML from [`.archon/workflows/defaults/legacy/` at v0.11.1](https://github.com/coleam00/Archon/tree/v0.11.1/.archon/workflows/defaults/legacy) into your project or global `.archon/workflows/`, and copy every command it names from [`.archon/commands/defaults/` at v0.11.1](https://github.com/coleam00/Archon/tree/v0.11.1/.archon/commands/defaults) into the matching `.archon/commands/`. `archon-idea-to-pr`, `archon-plan-to-pr` and `archon-issue-review-full` also need `archon-review-block.yaml` from the same folder, which they include. A copied workflow whose commands are missing fails with a command-not-found error. (#3526)
+
+  | Removed workflow | Use instead |
+  | --- | --- |
+  | `archon-adversarial-dev` | None |
+  | `archon-architect` | None |
+  | `archon-assist` | None. Ask in chat: the router answers questions directly. At v0.11.1 its YAML is [`.archon/workflows/defaults/archon-assist.yaml`](https://github.com/coleam00/Archon/blob/v0.11.1/.archon/workflows/defaults/archon-assist.yaml). |
+  | `archon-comprehensive-pr-review` | `archon-review` |
+  | `archon-create-issue` | None |
+  | `archon-feature-development` | `archon-deliver`, with the plan as its input |
+  | `archon-fix-github-issue` | `archon-ship` |
+  | `archon-idea-to-pr` | `archon-ship` |
+  | `archon-interactive-prd` | None |
+  | `archon-issue-review-full` | `archon-ship` |
+  | `archon-piv-loop` | None with human checkpoints. `archon-plan` then `archon-deliver` covers the same phases without them. |
+  | `archon-plan-to-pr` | `archon-deliver`, with the plan as its input |
+  | `archon-ralph-dag` | `archon-implement` |
+  | `archon-refactor-safely` | None |
+  | `archon-remotion-generate` | None |
+  | `archon-resolve-conflicts` | None |
+  | `archon-smart-pr-review` | `archon-review` |
+  | `archon-test-loop-dag` | None |
+  | `archon-validate-pr` | `archon-validate` runs the project's checks. Nothing replaces the base-versus-branch end-to-end comparison. |
+  | `archon-workflow-builder` | None |
+
 ### Changed
 
-- `archon-assist` is deprecated like the rest of the legacy bundled workflows. Every run announces its removal in an upcoming release, and a copy in your project or global `.archon/workflows/` keeps it. The chat router no longer uses it as its example or describes it as the fallback: its examples now name `archon-ship`, `archon-plan` and `archon-investigate`, and questions still get a direct answer. (#3525)
+- The chat router no longer uses `archon-assist` as its example or describes it as the fallback: its examples now name `archon-ship`, `archon-plan` and `archon-investigate`, and questions still get a direct answer. (#3525)
 
 ## [0.11.1] - 2026-09-25
 

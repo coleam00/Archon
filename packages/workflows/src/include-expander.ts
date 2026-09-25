@@ -424,7 +424,7 @@ function pushWorkflowScopeOntoNodes(
  * The removal is the load-bearing half, not a tidy-up. Push-down alone leaves a node
  * that declares nothing free to fall back to `workflowLevelOptions`, which after
  * inlining belongs to whichever file composed it — so a block declaring no provider at
- * all (the `archon-review-block` shape) still runs on the parent's. With the layer gone
+ * all still runs on the parent's. With the layer gone
  * such a node resolves from config, tier presets and user prefs at run time, exactly as
  * it would standalone.
  *

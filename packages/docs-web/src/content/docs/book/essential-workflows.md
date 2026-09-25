@@ -1,6 +1,6 @@
 ---
 title: The Essential Workflows
-description: A catalog of every built-in Archon workflow with usage examples and guidance on when to use each one.
+description: A catalog of the workflows bundled with Archon, with usage examples and guidance on when to use each one.
 category: book
 part: core-workflows
 audience: [user]
@@ -10,7 +10,7 @@ sidebar:
 
 You now know how Archon works. The question becomes: which workflow do I reach for?
 
-Archon ships with workflows for every major development activity. This chapter maps your intent to the right workflow — and gives you enough detail to use each one confidently.
+Archon bundles one workflow pack, `sdlc`, that covers the software development lifecycle from an incoming issue to a reviewed pull request. This chapter maps your intent to the right workflow and gives you enough detail to use each one confidently.
 
 ---
 
@@ -20,365 +20,201 @@ Archon ships with workflows for every major development activity. This chapter m
 What do you want to do?
 │
 ├── Ask a question or explore the codebase
-│   └── archon-assist
+│   └── No workflow: ask in chat and the router answers directly
 │
-├── File a bug issue with reproduction evidence
-│   └── archon-create-issue
+├── Take an issue or request all the way to a reviewed PR
+│   └── archon-ship
 │
-├── Fix a bug from a GitHub issue
-│   ├── Smart routing (conditional review)   →  archon-fix-github-issue
-│   └── Full parallel review (all 5 agents)  →  archon-issue-review-full
+├── Work one stage at a time
+│   ├── Decide what an issue needs next          →  archon-triage
+│   ├── Find the root cause of a bug             →  archon-investigate
+│   ├── Turn decided intent into a plan          →  archon-plan
+│   ├── Build decided work (commits, no PR)      →  archon-implement
+│   ├── Open a PR for committed work             →  archon-pr
+│   └── Take a plan to a ready-to-merge PR       →  archon-deliver
 │
-├── Build a new feature
-│   ├── Interactive (3 human approval gates)  →  archon-piv-loop
-│   ├── From an idea or description           →  archon-idea-to-pr
-│   ├── From an existing plan file            →  archon-plan-to-pr
-│   ├── Simple implement + PR                 →  archon-feature-development
-│   └── New standalone app (GAN loop)         →  archon-adversarial-dev
+├── Review or validate a change
+│   ├── Review a PR or the working diff          →  archon-review
+│   └── Run the project's own checks             →  archon-validate
 │
-├── Review or validate a pull request
-│   ├── Adaptive (skips irrelevant agents)      →  archon-smart-pr-review
-│   ├── All agents, always                      →  archon-comprehensive-pr-review
-│   └── Dual-branch validation + E2E testing    →  archon-validate-pr
-│
-├── Improve codebase architecture
-│   └── archon-architect
-│
-├── Safely refactor or extract code
-│   └── archon-refactor-safely
-│
-├── Create a PRD through structured conversation
-│   └── archon-interactive-prd
-│
-├── Implement a PRD story by story
-│   └── archon-ralph-dag
-│
-├── Build a reusable automation workflow
-│   └── archon-workflow-builder
-│
-├── Generate a Remotion video composition
-│   └── archon-remotion-generate
-│
-└── Resolve merge conflicts
-    └── archon-resolve-conflicts
+└── Update one dependency
+    └── archon-upkeep
 ```
 
 ---
 
 ## Workflow Catalog
 
-### For Questions and Exploration
+### End to end
 
-#### `archon-assist`
+#### `archon-ship`
 
-Deprecated: it will be removed in an upcoming release. It runs a single full-capability Claude Code session against your live checkout, with no gates or review.
+Grounds an issue or request against the current repository before spending on it, then takes the least speculative path: investigate an unknown cause, plan an undecided shape, deliver an implementation-ready work order, or stop when no work remains. Every actionable path ends in the same reviewed delivery tail as `archon-deliver`.
 
-**When to use it**: Questions about the codebase, debugging sessions, one-off tasks. In chat you rarely need it: questions get a direct answer without starting a workflow.
+**When to use it**: A GitHub issue or request should go from a current-truth check to a reviewed PR. This is your default for bugs, features, and enhancements.
 
 ```bash
-archon workflow run archon-assist "What does the orchestrator do?"
-archon workflow run archon-assist "Why are tests failing in the auth module?"
-archon workflow run archon-assist "Explain the isolation system to me"
+archon workflow run archon-ship --branch fix/login-crash "#142"
 ```
 
-**What it produces**: A direct answer. No PR, no artifacts — just the AI working through your question with full access to your code.
+**What it produces**: A PR flipped ready for review once review findings are closed and checks pass, or an explained stop when triage finds no work is owed. The workflow never merges; merging stays with you.
 
 ---
 
-### For Bug Fixes
+### One stage at a time
 
-#### `archon-fix-github-issue`
+#### `archon-triage`
 
-The workflow you ran in Chapter 2. Classifies the issue first (bug vs. feature vs. enhancement), then routes to investigation (bugs) or planning (features). Implements, validates, creates a draft PR, runs smart conditional review agents, auto-fixes findings, simplifies changes, and posts a completion report back to the GitHub issue.
+Reconciles an issue, plan, or request with the current code, tracker history, and stated direction, judges whether it is a contract a run can start from, then routes it to investigate, plan, deliver, or no action.
 
-**When to use it**: Any GitHub issue. This is your default for bugs, features, and enhancements alike.
+**When to use it**: An item may be stale or may prescribe an unverified solution, and you want to know what it needs next before paying for the work.
 
 ```bash
-archon workflow run archon-fix-github-issue --branch fix/login-crash "#142"
+archon workflow run archon-triage "#142"
 ```
 
-**What it produces**: A draft PR with the fix, conditional review (code review always runs; error handling, test coverage, docs impact, and comment quality run only when needed), auto-fixes applied, and a summary comment on the issue.
+**What it produces**: A verdict with the recommended next step. It leaves the checkout unchanged. Pass `--input publish=true` to write the derived labels to the issue.
 
 ---
 
-#### `archon-create-issue`
+#### `archon-investigate`
 
-Investigates a reported bug, attempts to reproduce it using area-specific playbooks (browser, API, CLI, database, and more), and creates a GitHub issue only if it can reproduce the problem — otherwise reports back what was tried and asks for more detail.
+Establishes the proven causal chain for a bug, unexplained behavior, or open question, down to the root cause whose fix prevents the symptom.
 
-**When to use it**: When you've found a bug and want the issue filed with reproduction evidence already attached. For bugs and problems only — the workflow explicitly rejects feature requests and enhancements. Give it your description of what's wrong; Archon classifies the problem area, searches the relevant code, and attempts reproduction before touching GitHub.
+**When to use it**: The cause is not yet known and you want it proven before anyone writes a fix.
 
 ```bash
-archon workflow run archon-create-issue "The workflow list shows a spinner forever when no workflows exist"
+archon workflow run archon-investigate "Why does the workflow list spin forever when no workflows exist?"
 ```
 
-**What it produces**: One of two outcomes, determined by whether reproduction succeeds:
-- **Reproduced** (or partially reproduced): a GitHub issue with full context — title, structured body using the repo's issue template if one exists, reproduction steps with evidence files (screenshots, command output, logs), suggested labels, and a duplicate-check against existing issues.
-- **Not reproduced**: a failure report explaining what was tried, what the investigation found in the code, and next steps to help you provide better reproduction information. No issue is created.
+**What it produces**: An evidence-backed report a fixer or planner can act on. The repository is left as it was found.
 
 ---
 
-#### `archon-issue-review-full`
+#### `archon-plan`
 
-Fixes a GitHub issue end-to-end — investigate, implement, create a PR — then runs all five review agents in parallel unconditionally before auto-fixing findings and writing a final summary.
+Turns decided intent, such as a feature request, an investigation report, or an idea, into an implementable plan: the chosen approach with rejected alternatives, verifiable steps, and the validation that proves it.
 
-**When to use it**: When you need the most thorough review possible and are willing to pay the extra time cost. Unlike `archon-fix-github-issue`, which skips review agents that aren't relevant to the change, this workflow always runs all five agents (code review, error handling, test coverage, comment quality, docs impact) regardless of what changed. Reach for this on high-stakes fixes, security-sensitive changes, or any time you want a complete audit trail rather than a smart-but-partial review.
+**When to use it**: You know what to build but not how.
 
 ```bash
-archon workflow run archon-issue-review-full "#142"
+archon workflow run archon-plan "Add CSV export to the reports page"
 ```
 
-**What it produces**: A draft PR with the fix applied; a full parallel review from all five agents (code-review, error-handling, test-coverage, comment-quality, docs-impact — none skipped); auto-fixes applied for any critical or high findings from the review; and a final summary artifact written by `archon-workflow-summary` covering the decision matrix and follow-up recommendations.
+**What it produces**: A plan artifact. Pass `--input report=<path>` to build on a prior investigation report. The repository is left as it was found.
 
 ---
 
-### For Feature Development
+#### `archon-implement`
 
-#### `archon-piv-loop`
+Implements a change and keeps working until it is complete and the project's own checks pass. It commits as it goes and opens no PR.
 
-A fully interactive Plan-Implement-Validate development cycle that requires human input at three separate gates — explore, plan approval, and validation approval — before it pushes code and creates a draft PR.
-
-**When to use it**: When you want to stay in the driver's seat throughout development. Unlike `archon-idea-to-pr` or `archon-feature-development`, which run autonomously once started, this workflow stops and waits for you at three points: after exploration (you confirm the approach), after planning (you approve the task list), and after implementation (you test and approve the result). Use it for features where the approach isn't obvious, the scope needs negotiation, or you want to review the plan before any code is written. Requires an interactive session — cannot be run as a background job.
+**When to use it**: The work is decided and needs building: a plan, review findings, a CI failure, or a plain description.
 
 ```bash
-archon workflow run archon-piv-loop "Add paginated export to the reports page"
+archon workflow run archon-implement --branch feat/export-csv "Implement the plan in .archon/plans/csv-export.md"
 ```
 
-**What it produces**: A `plan.md` artifact in the run's artifact directory, written after the exploration phase and refined based on your feedback; a series of commits (one per task) pushed to the feature branch after you approve the plan; and a draft PR created once you approve the implementation after the built-in code review. The plan file remains as a permanent artifact alongside the PR.
+**What it produces**: Commits on the run's branch.
 
 ---
 
-#### `archon-idea-to-pr`
+#### `archon-pr`
 
-End-to-end feature development from a description. Creates a plan, verifies it's still valid against the current codebase, implements, validates, creates a PR, runs five parallel review agents, fixes findings, and posts a final summary.
+Opens a pull request for the committed work on the current branch. It uses the repository's PR template when one exists and reads the created PR back to verify it.
 
-**When to use it**: You have a feature idea and want Archon to handle everything from plan to reviewed PR.
+**When to use it**: A branch has committed work and needs a PR. Run it with `--no-worktree` from the checkout that holds the branch.
 
 ```bash
-archon workflow run archon-idea-to-pr --branch feat/export-csv "Add CSV export to the reports page"
+archon workflow run archon-pr --no-worktree --input draft=false
 ```
 
-**What it produces**: A PR ready for merge — plan artifact, implementation artifact, validation results, five-agent review, and a decision matrix posted as a GitHub comment.
+**What it produces**: A pull request, draft unless you pass `--input draft=false`. It never sweeps in unrelated changes and never force-pushes.
 
 ---
 
-#### `archon-plan-to-pr`
+#### `archon-deliver`
 
-The same pipeline as `archon-idea-to-pr` — but it skips the planning phase. It takes an existing plan file and executes it.
+The delivery tail: implement the work, gate on green checks, open a draft PR, review it, correct and close the findings, validate, wait for CI, then flip the PR ready for review. There is no approval gate inside the run; your gate is PR review and merge.
 
-**When to use it**: You already have a plan (from a previous `archon-assist` session, an `.agents/plans/` file, or a planning workflow) and want to execute it.
+**When to use it**: The work is decided, for example an approved plan, and should become a reviewed, ready-to-merge PR.
 
 ```bash
-archon workflow run archon-plan-to-pr --branch feat/export-csv "Execute .archon/plans/csv-export.md"
+archon workflow run archon-deliver --branch feat/export-csv "Deliver the plan in .archon/plans/csv-export.md"
 ```
 
-**What it produces**: The same PR and review output as `archon-idea-to-pr`, minus the planning step.
+**What it produces**: A PR marked ready for review, with one canonical review comment.
 
 ---
 
-#### `archon-feature-development`
+### Review and validation
 
-A lighter-weight alternative. Two steps: implement from a plan, then create a PR. No review pipeline.
+#### `archon-review`
 
-**When to use it**: When you need a quick implement-and-ship without the full review overhead. Good for straightforward changes with an existing plan.
+Reviews a change through parallel specialist lenses (code, seams, simplification, and tests always; docs when shipped documentation changes; error handling with `--input errors=true`) and produces one evidence-based verdict. It also holds the change to its stated contract, taken from the PR description or a work order you pass: each stated acceptance item and invariant is met with cited evidence or raised as a blocking finding.
+
+**When to use it**: A PR or your working diff needs judging. It is read-only and never edits code.
 
 ```bash
-archon workflow run archon-feature-development --branch feat/update-readme "Implement .archon/plans/readme-update.md"
+archon workflow run archon-review --input scope=87
 ```
 
-**What it produces**: A PR with committed changes.
+**What it produces**: A synthesized review report. When reviewing a PR, the report is posted as one comment and edited in place on re-review. Leave `scope` empty to review the current branch's PR or the working diff.
 
 ---
 
-#### `archon-adversarial-dev`
+#### `archon-validate`
 
-Builds a new standalone application from a description using a GAN-inspired loop: a Generator writes code sprint by sprint while an Evaluator actively tries to break it, scoring each criterion out of 10 — a sprint only passes when all scores reach 7 or above.
+Discovers and runs the project's own checks, such as types, lint, tests, and build, and reports a structured verdict. It judges nothing and fixes nothing.
 
-**When to use it**: When you want to build a new application from scratch and have the quality adversarially tested at each step. The Generator and Evaluator run as separate agents with no shared context, so the evaluator has no incentive to be charitable — it runs the code, tries to break it, and scores honestly. The built application ends up in the run's artifact directory, not in your current repository — no PR is opened against your existing code. Not for bug fixes, refactoring, or PR work on an existing codebase.
+**When to use it**: You want to know whether your checkout is green.
 
 ```bash
-archon workflow run archon-adversarial-dev "A task management app with a REST API and a React frontend"
+archon workflow run archon-validate --no-worktree
 ```
 
-**What it produces**: A working application committed to an isolated git repository at `$ARTIFACTS_DIR/app/` (separate from your current repo); a `spec.md` with the full product specification and sprint plan; and a `report.md` summarizing the build result — per-sprint breakdown, criteria scores, retry counts, and instructions for running the finished application. If a sprint fails all retry attempts (default 3), the report records the failure and stops.
+**What it produces**: A structured verdict on the project's checks. Pass `--input scope=<package or check>` to narrow the run.
 
 ---
 
-### For Code Review
+### Maintenance
 
-#### `archon-smart-pr-review`
+#### `archon-upkeep`
 
-Reviews the current PR with adaptive agent selection. Classifies the PR complexity first (trivial/small/medium/large), then runs only the agents that matter for that PR. A three-line typo fix skips test-coverage and docs-impact analysis.
+Keeps one dependency current. It grounds the update against the repository (locked version, blast radius, breaking changes that touch real usage), then either stops with the reason or takes the bump through the reviewed delivery tail.
 
-**When to use it**: Most PR reviews. Faster than comprehensive because it skips irrelevant agents.
-
-```bash
-archon workflow run archon-smart-pr-review "Review PR #87"
-```
-
-**What it produces**: Synthesized review findings, auto-fixes for critical/high issues, and an optional push notification when complete.
-
----
-
-#### `archon-comprehensive-pr-review`
-
-Always runs all five review agents in parallel — code review, error handling, test coverage, comment quality, and docs impact — regardless of PR size.
-
-**When to use it**: Pre-merge reviews on significant PRs where you want every angle covered. Also useful when you want a consistent baseline for a team review process.
+**When to use it**: A dependency update or security advisory should become a reviewed PR. One target per run.
 
 ```bash
-archon workflow run archon-comprehensive-pr-review "Review PR #87"
+archon workflow run archon-upkeep "Address the undici advisory"
 ```
 
-**What it produces**: Parallel five-agent review, synthesized findings, and auto-fixes applied.
-
----
-
-#### `archon-validate-pr`
-
-Validates a pull request by running code review on both the base branch (bug present) and feature branch (fix applied), then — for UI changes — running end-to-end browser tests on both branches to confirm the bug reproduces on main and the fix works on the feature branch.
-
-**When to use it**: When you have a PR that fixes a bug and want proof it works — not just a code read. Runs code review on both sides of the change so you can see exactly what regressed vs. what improved. The E2E test step is conditional: it runs only when the PR touches UI code (components, hooks, API routes the frontend consumes, SSE events). For backend-only or non-UI PRs, it stops after code review. Multiple instances can run simultaneously without port conflicts — each run allocates its own ports automatically. Use `archon-fix-github-issue` or `archon-issue-review-full` when you need to *fix* an issue rather than validate a PR that already exists.
-
-```bash
-archon workflow run archon-validate-pr "#89"
-```
-
-**What it produces**: A validation report (`archon-validate-pr-report`) covering code review findings on both the base branch and feature branch; E2E test results from both branches when the PR is classified as UI-testable (with browser evidence that the bug reproduces on main and the fix holds on the feature branch); and a cleanup confirmation that all test processes were terminated. For non-UI changes, the report covers code review only.
-
----
-
-### For Codebase Health
-
-#### `archon-architect`
-
-Scans for complexity hotspots (large files, import fan-out, function length), analyzes them with an architectural lens, plans targeted simplifications, makes changes with quality feedback hooks, validates, and opens a PR.
-
-**When to use it**: Periodic codebase health passes. When a specific area has grown unwieldy. When you want principled simplification, not just cleanup.
-
-```bash
-archon workflow run archon-architect --branch refactor/simplify-orchestrator "Focus on the orchestrator package"
-```
-
-**What it produces**: A PR with targeted simplifications, each justified and independently revertible.
-
----
-
-#### `archon-refactor-safely`
-
-Splits or extracts code into smaller modules with a layered safety architecture: two read-only analysis nodes map the impact before any file is touched, a hook forces a type-check after every single edit, and a third read-only node verifies no logic was changed before the PR is created.
-
-**When to use it**: When you need to split a large file, extract a module, or decompose a tightly-coupled component — and you cannot afford behavior changes. The analysis and verification phases are denied write access by design, and the execution phase commits one task at a time so each extraction is independently revertible. Not for bug fixes or feature development; not for architectural sweeps or simplification (use `archon-architect` for those). Purely structural: code moves, no logic changes.
-
-```bash
-archon workflow run archon-refactor-safely "Split the orchestrator into smaller modules"
-```
-
-**What it produces**: A PR with a before/after file structure comparison in the body and one commit per extraction task (each independently revertible); an artifact confirming behavior verification passed (read-only audit that no function logic changed); and validation results showing type-check, lint, format, and tests all pass after the refactor.
-
----
-
-### For PRD Creation
-
-#### `archon-interactive-prd`
-
-Guides you through three rounds of structured conversation — foundation, research, and scope — before generating a PRD, then validates every technical claim in the document against the actual codebase and edits the file directly to fix any inaccuracies.
-
-**When to use it**: When you want a PRD that reflects real decisions, not guesswork. Unlike autonomous PRD generation, this workflow doesn't write anything until you've answered three sets of questions — who has the problem, what you saw in the research, and what the MVP scope is. The final document is then validated against file paths, API endpoints, database schemas, and UI components before it's handed to you. Requires an interactive session where you can respond to the three conversation gates.
-
-```bash
-archon workflow run archon-interactive-prd "Export conversation history as CSV"
-```
-
-**What it produces**: A `.prd.md` file saved to the run's artifact directory under `prds/{kebab-name}.prd.md`, with 12 required sections filled from your conversation answers; a `Validation Notes` section at the bottom documenting every technical reference checked against the codebase (file paths, endpoints, DB schemas, UI components) and any corrections that were applied directly to the document.
-
----
-
-### For PRD Implementation
-
-#### `archon-ralph-dag`
-
-Implements a **product requirements document** (PRD) story by story, in a loop, until all stories pass.
-
-**When to use it**: Executing a PRD end-to-end with iterative progress tracking.
-
-```bash
-archon workflow run archon-ralph-dag "Implement .archon/ralph/notifications/prd.md"
-```
-
-**What it produces**: Committed stories one by one, a final PR when all stories pass.
-
----
-
-### For Merge Conflicts
-
-#### `archon-resolve-conflicts`
-
-Fetches the latest base branch, analyzes conflicts, auto-resolves simple cases, and presents options for complex ones. Commits and pushes the resolution.
-
-**When to use it**: Your PR has merge conflicts and you want help resolving them with full codebase context.
-
-```bash
-archon workflow run archon-resolve-conflicts "Resolve conflicts on PR #94"
-```
-
-**What it produces**: A committed conflict resolution pushed to the PR branch.
-
----
-
-### For Tooling & Automation
-
-#### `archon-workflow-builder`
-
-Generates a new Archon workflow YAML for your project — scans your existing commands and workflows, extracts structured intent from your description, writes the YAML, validates it, and saves it to `.archon/workflows/`.
-
-**When to use it**: When you want to automate a multi-step process as a reusable workflow for your project. Describe what the workflow should do; Archon will figure out the node types, DAG structure, and trigger phrases. For creating new workflows only — it cannot edit or modify existing ones.
-
-```bash
-archon workflow run archon-workflow-builder "Run lint and type-check, then run tests, and post a Slack message with the results"
-```
-
-**What it produces**: A validated `.yaml` file saved to `.archon/workflows/{name}.yaml`, immediately usable; the trigger phrases that will invoke it via the router; and the exact `workflow run` command to test it right away.
-
----
-
-#### `archon-remotion-generate`
-
-Generates or modifies a Remotion video composition in an existing Remotion project — writes React/TypeScript code using Remotion's animation APIs, renders three preview stills, then renders the full video to `out/video.mp4`.
-
-**When to use it**: When you're inside an existing Remotion project directory and want to generate or change a composition with AI assistance. The workflow checks for `src/index.ts` and `src/Root.tsx` at startup and exits immediately if either is missing — it requires a Remotion project, it does not create one. For best results, install the optional `remotion-best-practices` skill first (`npx skills add remotion-dev/skills`), which guides the AI to follow Remotion-specific coding conventions.
-
-```bash
-# Run from inside a Remotion project directory
-archon workflow run archon-remotion-generate "A 10-second animated title card with a fade-in headline"
-```
-
-**What it produces**: Modified or new composition source files in `src/` (using `useCurrentFrame`, `interpolate`, `spring`, and `AbsoluteFill`); three preview still images — `out/preview-early.png`, `out/preview-mid.png`, `out/preview-late.png` — rendered at the start, middle, and late points of the video; and `out/video.mp4` rendered with the h264 codec.
+**What it produces**: A PR marked ready for review, or an explained stop when the locked version is already current.
 
 ---
 
 ## Quick Reference
 
-| Workflow | Use When | Creates PR? | Uses Isolation? |
-|----------|----------|-------------|-----------------|
-| `archon-assist` | Questions, exploration, debugging | No | No |
-| `archon-fix-github-issue` | Fix a GitHub issue (smart routing) | Yes (draft) | Yes |
-| `archon-create-issue` | File a bug with automated reproduction | No | No |
-| `archon-issue-review-full` | Fix a GitHub issue, full 5-agent review | Yes (draft) | Yes |
-| `archon-piv-loop` | Interactive feature development (3 human gates) | Yes (draft) | Yes |
-| `archon-idea-to-pr` | Feature from description | Yes | Yes |
-| `archon-plan-to-pr` | Execute an existing plan | Yes | Yes |
-| `archon-feature-development` | Implement + ship (lightweight) | Yes | Yes |
-| `archon-adversarial-dev` | Build a new standalone app from scratch | No | Yes (own repo) |
-| `archon-smart-pr-review` | Review current PR (adaptive) | No | No |
-| `archon-comprehensive-pr-review` | Review current PR (all agents) | No | No |
-| `archon-validate-pr` | Validate a PR: dual-branch review + conditional E2E | No | Yes |
-| `archon-architect` | Architectural sweep | Yes | Yes |
-| `archon-refactor-safely` | Structural extraction/splitting (no behavior change) | Yes | Yes |
-| `archon-interactive-prd` | Create a PRD through 3 conversation rounds | No | No |
-| `archon-ralph-dag` | PRD implementation loop | Yes | Yes |
-| `archon-workflow-builder` | Generate a new Archon workflow YAML | No | No |
-| `archon-remotion-generate` | Generate a Remotion video (existing project required) | No | No |
-| `archon-resolve-conflicts` | Resolve merge conflicts | No | No |
+| Workflow | Use When | Creates PR? | Changes code? |
+|----------|----------|-------------|---------------|
+| `archon-ship` | Issue or request to reviewed PR | Yes | Yes |
+| `archon-triage` | Decide what an item needs next | No | No |
+| `archon-investigate` | Root-cause a bug or question | No | No |
+| `archon-plan` | Plan decided intent | No | No |
+| `archon-implement` | Build decided work | No | Yes (commits) |
+| `archon-pr` | Open a PR for committed work | Yes | No |
+| `archon-deliver` | Decided work to reviewed PR | Yes | Yes |
+| `archon-review` | Review a PR or the working diff | No (comments on a PR) | No |
+| `archon-validate` | Run the project's checks | No | No |
+| `archon-upkeep` | Update one dependency | Yes | Yes |
+
+---
+
+## Workflows that no longer ship
+
+Archon 0.12.0 stopped bundling the older `archon-*` workflows, such as `archon-fix-github-issue`, `archon-idea-to-pr`, `archon-smart-pr-review`, and `archon-assist`. Most have an `sdlc` replacement: use `archon-ship` for issue fixing and idea-to-PR work, `archon-review` for PR review, `archon-plan` followed by `archon-deliver` for plan-to-PR, and `archon-validate` for running checks. For questions, ask in chat.
+
+To keep using one of the old workflows, copy its YAML from [`.archon/workflows/defaults/` at v0.11.1](https://github.com/coleam00/Archon/tree/v0.11.1/.archon/workflows/defaults) (most are in its `legacy/` folder) into your project's `.archon/workflows/`, and the commands it uses from [`.archon/commands/defaults/` at v0.11.1](https://github.com/coleam00/Archon/tree/v0.11.1/.archon/commands/defaults) into `.archon/commands/`.
 
 ---
 
@@ -390,8 +226,8 @@ To see all workflows available in your current directory:
 archon workflow list
 ```
 
-The list shows both Archon's bundled defaults and any custom workflows in your repo's `.archon/workflows/` directory. Custom workflows override bundled ones by name — if you create a workflow named `archon-assist`, it replaces the built-in.
+The list shows both Archon's bundled workflows and any custom workflows in your repo's `.archon/workflows/` directory. Custom workflows override bundled ones by name: if you create a workflow named `archon-review`, it replaces the bundled one.
 
-Ready to build your own? In [Chapter 7: Creating Your First Workflow →](/book/first-workflow/), you'll build one from scratch — incrementally, version by version, until you've got a mini version of `archon-idea-to-pr`.
+Ready to build your own? In [Chapter 7: Creating Your First Workflow →](/book/first-workflow/), you'll build one from scratch, incrementally, version by version, until you have a plan, implement, and review pipeline of your own.
 
 But first, let's cover the isolation system that makes parallel workflows safe. Continue to [Chapter 5: Isolation and Worktrees →](/book/isolation/)

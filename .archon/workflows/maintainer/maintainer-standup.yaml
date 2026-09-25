@@ -10,8 +10,8 @@ description: |
         compares against prior run state to surface progress (merged, closed,
         what you shipped), produces a prioritized P1-P4 brief. Saves dated
         brief + state for next-run continuity.
-  NOT for: Fixing issues (use archon-fix-github-issue), reviewing a specific
-           PR (use archon-comprehensive-pr-review), repo-wide triage automation
+  NOT for: Fixing issues (use archon-ship), reviewing a specific
+           PR (use archon-review), repo-wide triage automation
            (use repo-triage).
 
 provider: claude

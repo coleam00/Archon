@@ -11,7 +11,7 @@ const EMPTY_GIT_SHA = '0000000000000000000000000000000000000000';
  *
  * An entry ending in `/` matches a directory, anything else matches one file. Each is here
  * because a named check reads it:
- *   - `.archon/commands/`, `.archon/workflows/` are compiled into
+ *   - `.archon/workflows/` holds the bundled packs, compiled into
  *     `packages/workflows/src/defaults/bundled-defaults.generated.ts` (`check:bundled`).
  *   - `.claude/skills/` is imported as text by `packages/cli/src/bundled-skill.ts`, so it is
  *     compiled into the CLI itself (`check:bundled-skill`).
@@ -23,7 +23,6 @@ const EMPTY_GIT_SHA = '0000000000000000000000000000000000000000';
  *   - The docs manifest is copied by the Docker dependency layer.
  */
 const BUILD_INPUTS = [
-  '.archon/commands/',
   '.archon/workflows/',
   '.claude/skills/',
   'packages/docs-web/src/content/docs/reference/provider-capabilities.md',

@@ -17,7 +17,7 @@ From the multi-repo root, run any workflow with `--folder`. The first run regist
 
 ```bash
 cd ~/platform          # contains auth-service/, billing-service/, ... — NOT itself a git repo
-archon workflow run assist --folder "List every service and its current branch"
+archon workflow run investigate --folder "How do these services call each other?"
 # → Registered folder project "platform" (~/platform)
 # → Folder project — running in place (no worktree isolation).
 ```
