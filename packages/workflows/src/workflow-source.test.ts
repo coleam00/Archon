@@ -21,7 +21,6 @@ const realArchonPaths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
   ...realArchonPaths,
   getDefaultWorkflowsPath: () => join(bundledDefaultsRoot, 'defaults'),
-  getDefaultCommandsPath: () => join(bundledDefaultsRoot, 'defaults'),
 }));
 
 import {
@@ -45,7 +44,7 @@ import { loadCommandPrompt } from './executor-shared';
 import { withCapturedSource } from './executor';
 import { discoverWorkflows } from './workflow-discovery';
 import type { WorkflowDeps } from './deps';
-import { trackTempRoots } from '@archon/paths/test-utils';
+import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 
 /** One test's paths. Created by the test, never shared with another. */
 interface Sandbox {
@@ -384,9 +383,18 @@ describe('the bundled scope is hoisted out of the per-capture path', () => {
    */
   test('a later capture in the same process sees a bundled-scope edit', async () => {
     const { source, runArtifacts, root } = await createSandbox();
-    const bundledFile = join(bundledDefaultsRoot, 'defaults', 'late-bundled-edit.yaml');
+    const [pack] = await readBundleIndex();
+    const bundledDir = join(bundledDefaultsRoot, pack, 'late-flow');
+    const bundledFile = join(bundledDir, 'late-bundled-edit.yaml');
     const capturedAt = (capture: { anchor: { root: string } }): string =>
-      join(capture.anchor.root, 'bundled', 'workflows', 'defaults', 'late-bundled-edit.yaml');
+      join(
+        capture.anchor.root,
+        'bundled',
+        'workflows',
+        pack,
+        'late-flow',
+        'late-bundled-edit.yaml'
+      );
     // The digests below are compared to each other, so the global scope has to be a tree
     // this test owns rather than whatever `~/.archon` holds while the suite runs.
     const previousHome = process.env.ARCHON_HOME;
@@ -399,7 +407,8 @@ describe('the bundled scope is hoisted out of the per-capture path', () => {
       });
       await expect(readFile(capturedAt(before), 'utf-8')).rejects.toThrow();
 
-      // A file that did not exist when the first capture ran.
+      // A workflow that did not exist when the first capture ran.
+      await mkdir(bundledDir, { recursive: true });
       await writeFile(bundledFile, 'name: late-bundled-edit\n');
       const added = await captureWorkflowSource({
         sourceRoot: source,
@@ -420,7 +429,7 @@ describe('the bundled scope is hoisted out of the per-capture path', () => {
       expect(edited.manifest.digest).not.toBe(added.manifest.digest);
 
       // And a removal.
-      await rm(bundledFile, { force: true });
+      await removeTempTree(bundledDir);
       const removed = await captureWorkflowSource({
         sourceRoot: source,
         captureRoot: captureRootIn(runArtifacts, 'removed'),
@@ -428,7 +437,7 @@ describe('the bundled scope is hoisted out of the per-capture path', () => {
       await expect(readFile(capturedAt(removed), 'utf-8')).rejects.toThrow();
       expect(removed.manifest.digest).toBe(before.manifest.digest);
     } finally {
-      await rm(bundledFile, { force: true });
+      await removeTempTree(bundledDir);
       if (previousHome === undefined) delete process.env.ARCHON_HOME;
       else process.env.ARCHON_HOME = previousHome;
     }

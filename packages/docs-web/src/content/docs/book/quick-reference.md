@@ -379,9 +379,9 @@ archon --verbose workflow run my-workflow "..."
 archon workflow run my-workflow --no-worktree "..."
 ```
 
-**Test a command directly** before embedding it in a workflow:
+**Test a command on its own** before embedding it in a larger workflow: wrap it in a one-node workflow (`nodes: [{ id: run, command: my-command }]`) and run that:
 ```bash
-archon workflow run archon-assist "/command-invoke my-command some-arg"
+archon workflow run try-my-command --no-worktree "some-arg"
 ```
 
 ### Getting Help

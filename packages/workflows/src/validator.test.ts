@@ -226,7 +226,7 @@ describe('validateWorkflowResources — command nodes', () => {
 describe('validateWorkflowResources — bundled workflow: target check', () => {
   test('bundled workflow with a real bundled workflow: target passes', async () => {
     const workflow = makeWorkflow('test', [
-      { id: 'sub', kind: 'workflow', workflow: 'archon-assist' } as DagNode,
+      { id: 'sub', kind: 'workflow', workflow: 'archon-review' } as DagNode,
     ]);
     const issues = await validateWorkflowResources(workflow, tmpDir, {
       workflowSource: 'bundled',
@@ -455,12 +455,15 @@ describe('validateWorkflowResources — loop.command', () => {
     expect(errors[0].message).toContain('Invalid command name');
   });
 
-  test('no issues when loop.command resolves to a bundled default', async () => {
-    // Bundled-default fallback: a `loop.command` referencing a known bundled
-    // command (e.g. `archon-ralph-generate`) must resolve when defaults are
-    // loaded, even with an empty repo `.archon/commands/`. This is the same
-    // precedence command-nodes already get (repo → home → bundled).
-    const workflow = makeWorkflow('test', [makeLoopCommandNode('step1', 'archon-ralph-generate')]);
+  test('no issues when loop.command resolves to a bundled packaged command', async () => {
+    // A `loop.command` naming a shipped pack command must resolve when defaults are
+    // loaded, even with an empty repo `.archon/commands/` — the same resolution
+    // command-nodes already get.
+    const command = formatPackagedResourceReference(
+      { source: 'bundled', pack: 'sdlc', workflow: 'deliver' },
+      'classify-review-scope'
+    );
+    const workflow = makeWorkflow('test', [makeLoopCommandNode('step1', command)]);
     const issues = await validateWorkflowResources(workflow, tmpDir);
     const errors = issues.filter(i => i.level === 'error' && i.field === 'loop.command');
     expect(errors).toHaveLength(0);

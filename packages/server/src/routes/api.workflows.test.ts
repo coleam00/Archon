@@ -44,8 +44,7 @@ mock.module('@archon/core', () => ({
   loadConfig: mock(async () => ({})),
   loadRepoConfig: mockLoadRepoConfig,
   getWorkflowFolderSearchPaths: mock(() => ['.archon/workflows']),
-  getCommandFolderSearchPaths: mock(() => ['.archon/commands', '.archon/commands/defaults']),
-  getDefaultCommandsPath: mock(() => '/tmp/.archon-test-nonexistent/commands/defaults'),
+  getCommandFolderSearchPaths: mock(() => ['.archon/commands']),
   getDefaultWorkflowsPath: mock(() => '/tmp/.archon-test-nonexistent/workflows/defaults'),
   cloneRepository: mock(async () => {}),
   registerRepository: mock(async () => ({ success: true })),
@@ -100,12 +99,12 @@ mock.module('@archon/workflows/command-validation', () => {
 });
 mock.module('@archon/workflows/defaults', () => ({
   BUNDLED_WORKFLOWS: {
-    'archon-assist': 'name: archon-assist\ndescription: Archon Assist\nnodes: []',
+    'archon-review': 'name: archon-review\ndescription: Archon Review\nnodes: []',
     test: 'name: legacy\ndescription: Filename collision\nnodes: []',
     'definition-file': 'name: test\ndescription: Declared name match\nnodes: []',
   },
   BUNDLED_COMMANDS: {
-    'archon-assist': '# archon-assist command',
+    'archon-review': '# archon-review command',
   },
   isBinaryBuild: mock(() => false),
 }));
@@ -433,14 +432,14 @@ describe('GET /api/workflows/:name', () => {
     const app = createTestApp();
     registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
 
-    // No cwd → no readFile attempt → checks BUNDLED_WORKFLOWS → archon-assist found
+    // No cwd → no readFile attempt → checks BUNDLED_WORKFLOWS → archon-review found
     mockListCodebases.mockImplementationOnce(async () => []);
 
-    const response = await app.request('/api/workflows/archon-assist');
+    const response = await app.request('/api/workflows/archon-review');
     expect(response.status).toBe(200);
     const body = (await response.json()) as { source: string; filename: string; workflow: unknown };
     expect(body.source).toBe('bundled');
-    expect(body.filename).toBe('archon-assist.yaml');
+    expect(body.filename).toBe('archon-review.yaml');
     expect(body.workflow).toBeDefined();
   });
 
@@ -608,17 +607,19 @@ describe('GET /api/workflows/:name', () => {
     }
   });
 
-  test('returns source-build default workflow when file uses .yml extension', async () => {
+  test('returns a source-build bundled pack workflow when its file uses .yml extension', async () => {
     const testDir = join(tmpdir(), `wf-defaults-yml-test-${Date.now()}`);
+    // The bundled root is the parent of this path; packs live beneath it.
     const defaultsDir = join(testDir, 'workflows', 'defaults');
-    await mkdir(defaultsDir, { recursive: true });
+    const flowDir = join(testDir, 'workflows', 'some-pack', 'flow');
+    await mkdir(flowDir, { recursive: true });
     await writeFile(
-      join(defaultsDir, 'default-yml-wf.yml'),
+      join(flowDir, 'default-yml-wf.yml'),
       'name: default-yml-wf\ndescription: Default .yml workflow\nnodes:\n  - id: plan\n    command: plan\n'
     );
 
-    // Point the defaults lookup at the temp dir; keep home-scope at a
-    // nonexistent path so the handler falls through to the defaults source.
+    // Point the bundled lookup at the temp dir; keep home-scope at a
+    // nonexistent path so the handler falls through to the bundled source.
     const defaultsPathSpy = spyOn(archonPaths, 'getDefaultWorkflowsPath').mockReturnValue(
       defaultsDir
     );
@@ -637,7 +638,7 @@ describe('GET /api/workflows/:name', () => {
         workflow: unknown;
       };
       expect(body.source).toBe('bundled');
-      expect(body.filename).toBe('default-yml-wf.yml');
+      expect(body.filename).toBe('some-pack/flow/default-yml-wf.yml');
       expect(body.workflow).toBeDefined();
     } finally {
       defaultsPathSpy.mockRestore();
@@ -776,7 +777,7 @@ describe('GET /api/workflows/:name', () => {
 
     mockListCodebases.mockImplementationOnce(async () => []);
 
-    const response = await app.request('/api/workflows/archon-assist');
+    const response = await app.request('/api/workflows/archon-review');
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
       workflow: Record<string, unknown>;
@@ -900,7 +901,7 @@ describe('GET /api/workflows/:name - cwd validation', () => {
     registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
 
     // default mock returns /tmp/project; /etc/secrets is not registered
-    const response = await app.request('/api/workflows/archon-assist?cwd=/etc/secrets');
+    const response = await app.request('/api/workflows/archon-review?cwd=/etc/secrets');
     expect(response.status).toBe(400);
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain('Invalid cwd');
@@ -1188,11 +1189,11 @@ describe('DELETE /api/workflows/:name', () => {
     const app = createTestApp();
     registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
 
-    // archon-assist is in the real BUNDLED_WORKFLOWS
-    const response = await app.request('/api/workflows/archon-assist', { method: 'DELETE' });
+    // archon-review is in the real BUNDLED_WORKFLOWS
+    const response = await app.request('/api/workflows/archon-review', { method: 'DELETE' });
     expect(response.status).toBe(400);
     const body = (await response.json()) as { error: string };
-    expect(body.error).toContain('archon-assist');
+    expect(body.error).toContain('archon-review');
   });
 
   test('returns 404 when workflow file not found', async () => {
@@ -1586,8 +1587,8 @@ describe('GET /api/commands', () => {
     const response = await app.request('/api/commands');
     expect(response.status).toBe(200);
     const body = (await response.json()) as { commands: Array<{ name: string; source: string }> };
-    // archon-assist is in the real BUNDLED_COMMANDS
-    const archonAssist = body.commands.find(c => c.name === 'archon-assist');
+    // archon-review is in the real BUNDLED_COMMANDS
+    const archonAssist = body.commands.find(c => c.name === 'archon-review');
     expect(archonAssist).toBeDefined();
     expect(archonAssist?.source).toBe('bundled');
   });
@@ -1601,9 +1602,9 @@ describe('GET /api/commands', () => {
     try {
       const commandsDir = join(projectDir, '.archon', 'commands');
       await mkdir(commandsDir, { recursive: true });
-      // Created in reverse-alphabetical order. `archon-assist` also exists as a
+      // Created in reverse-alphabetical order. `archon-review` also exists as a
       // bundled command, so it exercises precedence as well as ordering.
-      for (const name of ['zz-order', 'mm-order', 'archon-assist', 'aa-order']) {
+      for (const name of ['zz-order', 'mm-order', 'archon-review', 'aa-order']) {
         await writeFile(join(commandsDir, `${name}.md`), `# ${name}`);
       }
       mockListCodebases.mockImplementation(async () => [{ default_cwd: projectDir }]);
@@ -1632,12 +1633,12 @@ describe('GET /api/commands', () => {
       const bundledOnly = (await (await app.request('/api/commands')).json()) as {
         commands: Array<{ name: string; source: string }>;
       };
-      const bundledIndex = bundledOnly.commands.findIndex(c => c.name === 'archon-assist');
+      const bundledIndex = bundledOnly.commands.findIndex(c => c.name === 'archon-review');
       expect(bundledOnly.commands[bundledIndex]).toEqual({
-        name: 'archon-assist',
+        name: 'archon-review',
         source: 'bundled',
       });
-      expect(first.commands[bundledIndex]).toEqual({ name: 'archon-assist', source: 'project' });
+      expect(first.commands[bundledIndex]).toEqual({ name: 'archon-review', source: 'project' });
     } finally {
       mockListCodebases.mockReset();
       await removeTempTree(projectDir);

@@ -27,43 +27,10 @@ export async function readBundleIndex(
   return indexSchema.parse(JSON.parse(await readFile(path, 'utf8'))).packs;
 }
 
-/**
- * Whether a bundled `pack/workflow` reference can resolve from live source. A pack the
- * index no longer names has stopped shipping, and `defaults` ships flat workflows and
- * commands rather than packaged resources, so it never owns one.
- */
+/** Whether a bundled `pack/workflow` reference can resolve from live source. A pack the
+ * index no longer names has stopped shipping. */
 export async function bundlesPackagedResources(pack: string): Promise<boolean> {
-  return pack !== 'defaults' && (await readBundleIndex()).includes(pack);
-}
-
-/**
- * Where a live bundled default command lives, or null when the index no longer ships
- * `defaults`. The scope is exactly the flat files `defaultCommandFiles` selects, so a
- * command resolves by direct path. Routing it through a recursive, basename-deduped walk
- * instead lets a same-named file one folder deeper take the name's slot, which drops the
- * root command from the walk and turns it into a bare "not found".
- *
- * The path is not proof the file exists. The caller reads or stats it and owns that error.
- */
-export async function bundledDefaultCommandPath(
-  commandsDefaultsRoot: string,
-  commandName: string
-): Promise<string | null> {
-  return (await readBundleIndex()).includes('defaults')
-    ? join(commandsDefaultsRoot, `${commandName}.md`)
-    : null;
-}
-
-/** The live bundled default command names — the same flat selection, listed. Empty when
- * the index no longer ships `defaults` or the directory is absent. */
-export async function listBundledDefaultCommands(commandsDefaultsRoot: string): Promise<string[]> {
-  if (!(await readBundleIndex()).includes('defaults')) return [];
-  try {
-    return (await defaultCommandFiles(commandsDefaultsRoot)).map(file => file.name);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw error;
-  }
+  return (await readBundleIndex()).includes(pack);
 }
 
 type Owner = Pick<WorkflowResourceOwner, 'pack' | 'workflow'>;
@@ -76,7 +43,7 @@ export type BundleSourceFile = {
   /** Path beneath the capture's bundled scope, always using forward slashes. */
   readonly relativePath: string;
 } & (
-  | { readonly kind: 'workflow'; readonly name: string; readonly owner?: Owner }
+  | { readonly kind: 'workflow'; readonly name: string; readonly owner: Owner }
   | { readonly kind: 'command'; readonly name: string }
   | {
       readonly kind: 'script';
@@ -95,18 +62,13 @@ async function isDirectory(path: string): Promise<boolean> {
   }
 }
 
-/** SDK consumers may have no installed source tree. Once either root exists, the
- * complete indexed selection must be valid; a partial installation is an error. */
+/** SDK consumers may have no installed source tree. Once the root exists, the complete
+ * indexed selection must be valid; a partial installation is an error. */
 export async function collectInstalledBundleSources(
-  workflowsRoot: string,
-  commandsRoot: string
+  workflowsRoot: string
 ): Promise<BundleSourceFile[] | undefined> {
-  const [hasWorkflows, hasCommands] = await Promise.all([
-    installedRootExists(workflowsRoot),
-    installedRootExists(commandsRoot),
-  ]);
-  if (!hasWorkflows && !hasCommands) return undefined;
-  return collectBundleSources(workflowsRoot, commandsRoot, await readBundleIndex());
+  if (!(await installedRootExists(workflowsRoot))) return undefined;
+  return collectBundleSources(workflowsRoot, await readBundleIndex());
 }
 
 async function installedRootExists(path: string): Promise<boolean> {
@@ -126,14 +88,6 @@ function validateName(name: string, path: string): void {
     throw new Error(`Invalid bundled filename or directory "${path}".`);
 }
 
-function validateDefaultName(name: string, path: string): void {
-  if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) {
-    throw new Error(
-      `Bundled default has invalid filename "${path}". Names must be kebab-case (lowercase letters, digits, hyphens).`
-    );
-  }
-}
-
 function runtime(extension: string): Script['runtime'] | undefined {
   if (extension === '.py') return 'uv';
   if (extension === '.ts' || extension === '.js') return 'bun';
@@ -147,20 +101,6 @@ async function entryType(
   entry: Dirent
 ): Promise<Pick<Dirent, 'isFile' | 'isDirectory'>> {
   return entry.isSymbolicLink() ? await stat(join(directory, entry.name)) : entry;
-}
-
-/** The bundled `defaults` command scope: the flat `.md` files directly under the commands
- * defaults root. Selection and live resolution read the scope through this one walk, so a
- * file a capture would never carry can never resolve as a command either. */
-async function defaultCommandFiles(
-  directory: string
-): Promise<{ name: string; fileName: string }[]> {
-  const files: { name: string; fileName: string }[] = [];
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    if (!entry.name.endsWith('.md') || !(await entryType(directory, entry)).isFile()) continue;
-    files.push({ name: basename(entry.name, '.md'), fileName: entry.name });
-  }
-  return files;
 }
 
 async function sharedModules(directory: string): Promise<string[]> {
@@ -182,7 +122,6 @@ async function sharedModules(directory: string): Promise<string[]> {
  * enter the bundle merely because they live beside a workflow. A named missing pack fails. */
 export async function collectBundleSources(
   workflowsRoot: string,
-  commandsRoot: string,
   packs: readonly string[]
 ): Promise<BundleSourceFile[]> {
   const files: BundleSourceFile[] = [];
@@ -197,10 +136,9 @@ export async function collectBundleSources(
     }
     files.push(file);
   };
-  const workflowFile = (path: string, owner?: Owner): void => {
+  const workflowFile = (path: string, owner: Owner): void => {
     const name = basename(path, extname(path));
-    if (owner === undefined) validateDefaultName(name, path);
-    else validateName(name, path);
+    validateName(name, path);
     add({
       kind: 'workflow',
       name,
@@ -209,38 +147,11 @@ export async function collectBundleSources(
       relativePath: `workflows/${relative(workflowsRoot, path).replaceAll('\\', '/')}`,
     });
   };
-  const flatWorkflows = async (directory: string): Promise<void> => {
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
-      if (
-        (await entryType(directory, entry)).isFile() &&
-        ['.yaml', '.yml'].includes(extname(entry.name))
-      )
-        workflowFile(join(directory, entry.name));
-    }
-  };
   for (const pack of [...packs].sort()) {
     validateName(pack, pack);
     const packRoot = join(workflowsRoot, pack);
     if (!(await isDirectory(packRoot)))
       throw new Error(`Indexed bundle pack "${pack}" directory not found: ${packRoot}`);
-    if (pack === 'defaults') {
-      await flatWorkflows(packRoot);
-      if (await isDirectory(join(packRoot, 'legacy')))
-        await flatWorkflows(join(packRoot, 'legacy'));
-      const defaults = join(commandsRoot, 'defaults');
-      if (!(await isDirectory(defaults)))
-        throw new Error(`Commands defaults directory not found: ${defaults}`);
-      for (const { name, fileName } of await defaultCommandFiles(defaults)) {
-        validateDefaultName(name, fileName);
-        add({
-          kind: 'command',
-          name,
-          sourcePath: join(defaults, fileName),
-          relativePath: `commands/defaults/${fileName}`,
-        });
-      }
-      continue;
-    }
     const shared = join(packRoot, PACK_SHARED_DIRECTORY);
     if (await isDirectory(shared)) {
       for (const path of await sharedModules(shared)) {

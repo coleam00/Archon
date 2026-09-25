@@ -35,13 +35,11 @@ nodes:
     context: fresh
 ```
 
-> **Using defaults as templates:** Archon ships default workflows in `.archon/workflows/defaults/` (21 bundled into the binary; source builds also load them from disk). Browse them for real-world examples, then copy and modify:
+> **Bundled workflows as templates:** Archon bundles the `sdlc` pack from `.archon/workflows/sdlc/` in its repository (compiled into the binary; source builds also load it from disk). Browse it for real-world examples, then copy and modify. Copy the whole pack folder: its workflows include each other and share modules in `sdlc/.shared/`.
 > ```bash
-> cp .archon/workflows/defaults/archon-fix-github-issue.yaml .archon/workflows/my-fix-issue.yaml
+> cp -R /path/to/Archon/.archon/workflows/sdlc .archon/workflows/
 > ```
-> Same-named files in `.archon/workflows/` override the bundled defaults.
-
-> **Legacy bundled defaults:** The flat `.archon/workflows/defaults/` and `.archon/commands/defaults/` directories contain Archon's existing bundled files. `defaults` is not a reserved pack name in the packaged layout below; authors may choose any safe pack and workflow directory names.
+> Same-named workflows in `.archon/workflows/` override the bundled ones. Bundled commands live inside each workflow's own `commands/` folder; there is no shared bundled command directory.
 
 ---
 
@@ -1313,20 +1311,20 @@ own. The composing workflow contributes ordering and gates; it does not reach in
 
 ```yaml
 nodes:
-  - id: finalize-pr
-    command: archon-finalize-pr
+  - id: pr
+    include: archon-pr
 
-  # Inlines every node from archon-review-block, attached after finalize-pr.
+  # Inlines every node from archon-review, attached after pr.
   - id: review
-    include: archon-review-block
-    depends_on: [finalize-pr]
+    include: archon-review
+    depends_on: [pr]
 
   - id: summary
-    command: archon-workflow-summary
-    depends_on: [review]   # resolves to the review block's terminal node
+    prompt: "Summarize the review findings for the PR author."
+    depends_on: [review]   # resolves to the included workflow's terminal node
 ```
 
-The include target (`archon-review-block` here) is an ordinary workflow file discovered by
+The include target (`archon-review` here) is an ordinary workflow file discovered by
 name, honoring the usual precedence (`bundled` < `~/.archon/workflows/` < repo
 `.archon/workflows/`).
 
@@ -1372,8 +1370,8 @@ behave exactly as if you had written the nodes by hand. A top-level include prod
 nodes; an include in a `loop_group` body produces body-local nodes. There is no separate child run.
 
 - **Namespacing.** Each included node `n` receives id `<includeId>__<n.id>` (double
-  underscore) within that scope. Including `archon-review-block` under `id: review` yields
-  `review__verify-pr-base`, `review__sync`, `review__implement-fixes`, and so on. These
+  underscore) within that scope. Including `archon-review` under `id: review` yields
+  `review__scope`, `review__code`, `review__synthesize`, and so on. These
   namespaced ids are what appear in the event stream and in `archon workflow get <id>`;
   body-local events additionally carry their enclosing group prefix.
 - **Edges and command bodies.** Internal `depends_on` edges and `$id.output` references are
@@ -1500,7 +1498,7 @@ in the child's run metadata.
   (`A` includes `B` includes `A`) and over-deep chains are load errors that drop only the
   offending workflow — other workflows still load.
 
-A workflow used purely as a building block (like `archon-review-block`) still appears in
+A workflow used purely as a building block still appears in
 `archon workflow list`. Mark it as a building block in its `description:` so it isn't picked
 for a standalone run.
 
@@ -3278,5 +3276,5 @@ Before deploying a workflow:
 17. **`sandbox`** — OS-level filesystem/network restrictions per node or workflow (Claude only)
 18. **`output_type`** — tag a node's output with a semantic type; the engine writes a typed sidecar for cross-node/cross-run lookup by type (any node type). Top-level nodes use `$ARTIFACTS_DIR/nodes/<id>.md` + `.meta.json`; loop-body executions use [iteration-specific paths](#the-artifact-chain)
 19. **Loop nodes** — use `loop:` within a DAG node for iterative execution until a declared completion condition is met
-20. **Defaults as templates** — browse `.archon/workflows/defaults/` for real examples to copy and modify
+20. **Bundled workflows as templates** — browse `.archon/workflows/sdlc/` in the Archon repository for real examples to copy and modify
 21. **Test thoroughly** — each command, the artifact flow, and edge cases

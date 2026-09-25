@@ -164,7 +164,7 @@ describe('installed packs in the catalog', () => {
     expect(names(workflows)).not.toContain('code-review');
     expect(names(support ?? [])).toEqual([HELPER]);
     // Bundled workflows are still there, as before.
-    expect(workflows.find(entry => entry.workflow.name === 'archon-assist')?.source).toBe(
+    expect(workflows.find(entry => entry.workflow.name === 'archon-review')?.source).toBe(
       'bundled'
     );
   });

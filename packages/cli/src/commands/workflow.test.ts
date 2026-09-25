@@ -970,14 +970,14 @@ describe('workflowListCommand', () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
-        makeTestWorkflowWithSource({ name: 'archon-assist' }),
+        makeTestWorkflowWithSource({ name: 'acme-assist' }),
         makeTestWorkflowWithSource({ name: 'archon-plan' }),
       ],
       errors: [],
     });
 
     await expect(workflowListCommand('/test/path', { name: 'missing' })).rejects.toThrow(
-      "Workflow 'missing' not found.\n\nAvailable workflows:\n  - archon-assist\n  - archon-plan"
+      "Workflow 'missing' not found.\n\nAvailable workflows:\n  - acme-assist\n  - archon-plan"
     );
   });
 
@@ -2797,7 +2797,7 @@ describe('workflowRunCommand', () => {
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
-        makeTestWorkflowWithSource({ name: 'archon-assist', description: 'Help' }),
+        makeTestWorkflowWithSource({ name: 'acme-assist', description: 'Help' }),
         makeTestWorkflowWithSource({ name: 'archon-plan', description: 'Plan' }),
       ],
       errors: [],
@@ -2816,12 +2816,12 @@ describe('workflowRunCommand', () => {
       default_cwd: '/test/path',
     });
 
-    // Should resolve successfully — "assist" suffix-matches "archon-assist"
+    // Should resolve successfully — "assist" suffix-matches "acme-assist"
     await workflowRunCommand('/test/path', 'assist', 'hello');
 
     // Verify suffix matching tier was used
     expect(mockLogger.info).toHaveBeenCalledWith(
-      expect.objectContaining({ requested: 'assist', matched: 'archon-assist' }),
+      expect.objectContaining({ requested: 'assist', matched: 'acme-assist' }),
       'workflow.resolve_suffix_match'
     );
   });
@@ -2831,13 +2831,13 @@ describe('workflowRunCommand', () => {
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
-        makeTestWorkflowWithSource({ name: 'archon-smart-pr-review', description: 'Smart review' }),
-        makeTestWorkflowWithSource({ name: 'archon-assist', description: 'Help' }),
+        makeTestWorkflowWithSource({ name: 'acme-smart-pr-review', description: 'Smart review' }),
+        makeTestWorkflowWithSource({ name: 'acme-assist', description: 'Help' }),
       ],
       errors: [],
     });
 
-    // "smart" substring-matches only "archon-smart-pr-review"
+    // "smart" substring-matches only "acme-smart-pr-review"
     // Will fail downstream at executeWorkflow mock, but must NOT throw "not found"
     const error = await workflowRunCommand('/test/path', 'smart', 'hello').catch(
       (e: unknown) => e as Error
@@ -2855,7 +2855,7 @@ describe('workflowRunCommand', () => {
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
         makeTestWorkflowWithSource({ name: 'assist', description: 'Help' }),
-        makeTestWorkflowWithSource({ name: 'archon-assist', description: 'Long' }),
+        makeTestWorkflowWithSource({ name: 'acme-assist', description: 'Long' }),
       ],
       errors: [],
     });
@@ -2907,10 +2907,10 @@ describe('workflowRunCommand', () => {
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
         makeTestWorkflowWithSource({
-          name: 'archon-comprehensive-pr-review',
+          name: 'acme-comprehensive-pr-review',
           description: 'Full review',
         }),
-        makeTestWorkflowWithSource({ name: 'archon-smart-pr-review', description: 'Smart review' }),
+        makeTestWorkflowWithSource({ name: 'acme-smart-pr-review', description: 'Smart review' }),
       ],
       errors: [],
     });
@@ -2928,7 +2928,7 @@ describe('workflowRunCommand', () => {
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
         makeTestWorkflowWithSource({ name: 'assist', description: 'Short name' }),
-        makeTestWorkflowWithSource({ name: 'archon-assist', description: 'Long name' }),
+        makeTestWorkflowWithSource({ name: 'acme-assist', description: 'Long name' }),
       ],
       errors: [],
     });

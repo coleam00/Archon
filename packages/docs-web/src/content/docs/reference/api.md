@@ -215,7 +215,7 @@ Returns `{ workflows: [...], recommended: [...], errors?: [...] }`.
 #### Get a Workflow
 
 ```bash
-curl http://localhost:3090/api/workflows/archon-assist
+curl http://localhost:3090/api/workflows/archon-investigate
 ```
 
 Query parameters:
@@ -286,12 +286,12 @@ runs. The list, detail, by-worker, and dashboard run endpoints preserve both fie
 
 ```bash
 # JSON (no attachments)
-curl -X POST http://localhost:3090/api/workflows/archon-assist/run \
+curl -X POST http://localhost:3090/api/workflows/archon-investigate/run \
   -H "Content-Type: application/json" \
-  -d '{"message": "Explain the auth module", "conversationId": "conv-123"}'
+  -d '{"message": "Why does login fail after a password reset?", "conversationId": "conv-123"}'
 
 # multipart (with file attachments — max 5 files, ≤10 MB each)
-curl -X POST http://localhost:3090/api/workflows/archon-assist/run \
+curl -X POST http://localhost:3090/api/workflows/archon-investigate/run \
   -F "conversationId=conv-123" \
   -F "message=Investigate this trace" \
   -F "files=@stacktrace.txt" \
@@ -618,9 +618,9 @@ CONV_ID=$(curl -s -X POST http://localhost:3090/api/conversations \
   -d '{"codebase_id": "your-codebase-id"}' | jq -r '.platform_conversation_id')
 
 # 2. Start the workflow
-curl -X POST http://localhost:3090/api/workflows/archon-assist/run \
+curl -X POST http://localhost:3090/api/workflows/archon-investigate/run \
   -H "Content-Type: application/json" \
-  -d "{\"message\": \"How does auth work?\", \"conversationId\": \"$CONV_ID\"}"
+  -d "{\"message\": \"Why does login fail after a password reset?\", \"conversationId\": \"$CONV_ID\"}"
 
 # 3. Monitor via SSE
 curl -N http://localhost:3090/api/stream/$CONV_ID

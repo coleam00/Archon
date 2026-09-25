@@ -17,7 +17,7 @@ import {
   type WorkflowSourceRoots,
 } from './workflow-source';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
-import { bundledDefaultCommandPath, bundlesPackagedResources } from './defaults/bundle-inventory';
+import { bundlesPackagedResources } from './defaults/bundle-inventory';
 import { createLogger } from '@archon/paths';
 import { isValidCommandName } from './command-validation';
 import type { LoadCommandResult } from './schemas';
@@ -559,7 +559,7 @@ export async function loadCommandPrompt(
   // Use command folder paths with optional configured folder.
   // Each scope is walked 1 subfolder deep so `triage/review.md` resolves as
   // `review` — matching the workflows/scripts convention. Resolution
-  // precedence: repo > home (~/.archon/commands/) > bundled/app defaults.
+  // precedence: repo > home (~/.archon/commands/) > a capture's frozen flat defaults.
   // The SOURCE's command folder, when a capture supplied one. `configuredFolder` is the
   // target's, which is the right answer only for an in-place run — for a captured run it
   // would search folders the frozen source never used.
@@ -612,60 +612,45 @@ export async function loadCommandPrompt(
     }
   }
 
-  // If not found in repo/home and app defaults enabled, search app defaults
-  if (loadDefaultCommands) {
-    // A captured run reads the bundled command bytes IT froze; see the note above.
-    if (isBinaryBuild() && roots.kind === 'live') {
-      // Binary: check bundled commands
-      const bundledContent = BUNDLED_COMMANDS[commandName];
-      if (bundledContent) {
-        getLog().debug({ commandName }, 'command_loaded_bundled');
-        return { success: true, content: bundledContent };
-      }
-      getLog().debug({ commandName }, 'command_bundled_not_found');
-    } else {
-      // Live defaults are the flat files the index selects, so they resolve by direct
-      // path. Old captures retain whatever command layout they froze — subfolders
-      // included — so they keep the basename walk, independently of the current index.
-      const appDefaultsPath = roots.bundledCommands;
-      let filePath: string | null;
-      if (roots.kind === 'captured') {
-        const entries = await archonPaths.findCommandFiles(appDefaultsPath);
-        const match = entries.find(e => e.commandName === commandName);
-        filePath = match ? join(appDefaultsPath, match.relativePath) : null;
-      } else {
-        filePath = await bundledDefaultCommandPath(appDefaultsPath, commandName);
-      }
-      if (filePath !== null) {
-        try {
-          const content = await readFile(filePath, 'utf-8');
-          if (!content.trim()) {
-            getLog().error({ commandName }, 'command_app_default_empty');
-            return {
-              success: false,
-              reason: 'empty_file',
-              message: `App default command file is empty: ${commandName}.md`,
-            };
-          }
-          getLog().debug({ commandName }, 'command_loaded_app_defaults');
-          return { success: true, content };
-        } catch (error) {
-          const err = error as NodeJS.ErrnoException;
-          if (err.code !== 'ENOENT') {
-            getLog().warn({ err, commandName }, 'command_app_default_read_error');
-          } else {
-            getLog().debug({ commandName }, 'command_app_default_not_found');
-          }
-          // Fall through to not found
+  // Every bundled command a build ships now is packaged and resolved above. A run captured
+  // by an older build may have frozen flat bundled commands; it keeps reading those bytes,
+  // with the basename walk, so it can resume across the upgrade.
+  if (loadDefaultCommands && roots.kind === 'captured') {
+    const appDefaultsPath = roots.bundledCommands;
+    const entries = await archonPaths.findCommandFiles(appDefaultsPath);
+    const match = entries.find(e => e.commandName === commandName);
+    if (match) {
+      try {
+        const content = await readFile(join(appDefaultsPath, match.relativePath), 'utf-8');
+        if (!content.trim()) {
+          getLog().error({ commandName }, 'command_app_default_empty');
+          return {
+            success: false,
+            reason: 'empty_file',
+            message: `App default command file is empty: ${commandName}.md`,
+          };
         }
-      } else {
-        getLog().debug({ commandName }, 'command_app_default_not_found');
+        getLog().debug({ commandName }, 'command_loaded_app_defaults');
+        return { success: true, content };
+      } catch (error) {
+        const err = error as NodeJS.ErrnoException;
+        if (err.code !== 'ENOENT') {
+          getLog().warn({ err, commandName }, 'command_app_default_read_error');
+        } else {
+          getLog().debug({ commandName }, 'command_app_default_not_found');
+        }
+        // Fall through to not found
       }
+    } else {
+      getLog().debug({ commandName }, 'command_app_default_not_found');
     }
   }
 
   // Not found anywhere
-  const allSearchPaths = loadDefaultCommands ? [...searchPaths, 'app defaults'] : searchPaths;
+  const allSearchPaths =
+    loadDefaultCommands && roots.kind === 'captured'
+      ? [...searchPaths, 'app defaults']
+      : searchPaths;
   getLog().error({ commandName, searchPaths: allSearchPaths }, 'command_not_found');
   return {
     success: false,

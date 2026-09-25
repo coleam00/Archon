@@ -14,17 +14,12 @@ import { access, readFile, stat } from 'fs/promises';
 import {
   createLogger,
   getCommandFolderSearchPaths,
-  getDefaultCommandsPath,
   getHomeCommandsPath,
   findCommandFiles,
 } from '@archon/paths';
 import { execFileAsync } from '@archon/git';
 import { BUNDLED_COMMANDS, BUNDLED_WORKFLOWS, isBinaryBuild } from './defaults/bundled-defaults';
-import {
-  bundledDefaultCommandPath,
-  bundlesPackagedResources,
-  listBundledDefaultCommands,
-} from './defaults/bundle-inventory';
+import { bundlesPackagedResources } from './defaults/bundle-inventory';
 import { isValidCommandName } from './command-validation';
 import { levenshtein, findSimilar } from './utils/fuzzy-match';
 import {
@@ -142,7 +137,7 @@ async function fileExists(path: string): Promise<boolean> {
 }
 
 /**
- * Discover all available command names from search paths and bundled defaults.
+ * Discover all available flat command names from the project and home search paths.
  * Returns deduplicated, sorted list of command names.
  */
 export async function discoverAvailableCommands(
@@ -166,7 +161,7 @@ export async function discoverAvailableCommands(
 
   // 2. Home-scoped commands (~/.archon/commands/) — personal helpers reusable across repos.
   // ENOENT already returns []; we only catch other errors (EACCES/EPERM/EIO) so a broken
-  // home-scope doesn't take down repo/bundled discovery.
+  // home-scope doesn't take down repo discovery.
   const homePath = getHomeCommandsPath();
   try {
     const homeCommands = await findCommandFiles(homePath);
@@ -175,20 +170,6 @@ export async function discoverAvailableCommands(
     }
   } catch (err) {
     getLog().warn({ err, path: homePath }, 'commands.home_discovery_failed');
-  }
-
-  // 3. Bundled defaults
-  const loadDefaults = config?.loadDefaultCommands !== false;
-  if (loadDefaults) {
-    if (isBinaryBuild()) {
-      for (const name of Object.keys(BUNDLED_COMMANDS)) {
-        if (parsePackagedResourceReference(name) === null) names.add(name);
-      }
-    } else {
-      for (const name of await listBundledDefaultCommands(getDefaultCommandsPath())) {
-        names.add(name);
-      }
-    }
   }
 
   return [...names].sort();
@@ -216,7 +197,8 @@ async function resolveCommandInDir(rootDir: string, commandName: string): Promis
  * Resolution precedence (first hit wins):
  *   1. Repo-local — `<cwd>/.archon/commands/` and configured folders
  *   2. Home-scoped — `~/.archon/commands/` (personal helpers, reusable across repos)
- *   3. Bundled defaults — embedded in the binary or the app's defaults folder
+ *
+ * Bundled commands are always packaged (`pack/workflow/name`) and resolve above.
  */
 async function resolveCommand(
   commandName: string,
@@ -261,38 +243,12 @@ async function resolveCommand(
 
   // 2. Home-scoped commands (~/.archon/commands/).
   // ENOENT on the home dir already returns null; only wrap for other errors so a
-  // broken home-scope doesn't prevent bundled-default resolution.
+  // broken home-scope reads as unresolved rather than failing validation.
   try {
     const homeResolved = await resolveCommandInDir(getHomeCommandsPath(), commandName);
     if (homeResolved) return homeResolved;
   } catch (err) {
     getLog().warn({ err, commandName }, 'commands.home_resolve_failed');
-  }
-
-  // 3. Bundled defaults
-  const loadDefaults = config?.loadDefaultCommands !== false;
-  if (loadDefaults) {
-    if (isBinaryBuild()) {
-      if (commandName in BUNDLED_COMMANDS) {
-        return `[bundled:${commandName}]`;
-      }
-    } else {
-      const path = await bundledDefaultCommandPath(getDefaultCommandsPath(), commandName);
-      // A miss is ENOENT; any other stat failure belongs to the caller, not to a silent null.
-      if (path !== null) {
-        try {
-          if ((await stat(path)).isFile()) return path;
-        } catch (error) {
-          const err = error as NodeJS.ErrnoException;
-          if (err.code !== 'ENOENT') {
-            getLog().error({ err, path, commandName }, 'bundled_default_command_inspection_failed');
-            throw new Error(`Cannot inspect bundled default '${commandName}': ${err.message}`, {
-              cause: err,
-            });
-          }
-        }
-      }
-    }
   }
 
   return null;

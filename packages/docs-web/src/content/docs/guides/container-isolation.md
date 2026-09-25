@@ -48,7 +48,7 @@ The overlay's upper layer **is** the diff by overlayfs construction, so computin
 ```bash
 # Register the folder + run in a container in one go
 cd /path/to/ops-root
-bun run cli workflow run assist --folder --container "reorganize the invoices"
+bun run cli workflow run <your-workflow> --folder --container "reorganize the invoices"
 ```
 
 You'll see the container come up, nodes execute inside it, and — when the run finishes with changes — a **write-back gate**:

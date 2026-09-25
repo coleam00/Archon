@@ -41,8 +41,6 @@ import type { WorkflowResourceOwner } from '../packages/workflows/src/packaged-w
 const REPO_ROOT = process.env.BUNDLED_DEFAULTS_REPO_ROOT
   ? resolve(process.env.BUNDLED_DEFAULTS_REPO_ROOT)
   : resolve(import.meta.dir, '..');
-const COMMANDS_REL = '.archon/commands/defaults';
-const WORKFLOWS_REL = '.archon/workflows/defaults';
 const WORKFLOWS_ROOT_REL = '.archon/workflows';
 const WORKFLOWS_ROOT = join(REPO_ROOT, WORKFLOWS_ROOT_REL);
 const OUTPUT_PATH = join(
@@ -59,51 +57,9 @@ interface BundledFile {
 
 type BundledWorkflowOwner = Pick<WorkflowResourceOwner, 'pack' | 'workflow'>;
 
-/**
- * Refuse to embed files that git does not track (#1578). An untracked file in
- * defaults/ would silently ship inside locally built binaries while being
- * absent from every other checkout and from CI builds — fail loudly instead.
- *
- * Intentionally stricter than the selected inventory: `git ls-files` recurses into
- * subdirectories and reports every untracked path, while the embedder only
- * reads top-level files with matching extensions. The asymmetry is deliberate
- * — anything untracked under defaults/ is a mistake worth flagging, even if
- * the embedder would ignore it today.
- */
-async function assertNoUntrackedFiles(
-  relDir: string,
-  label: string,
-  suggestedDest: string
-): Promise<void> {
-  let stdout: string;
-  try {
-    ({ stdout } = await execFileAsync(
-      'git',
-      ['ls-files', '--others', '--exclude-standard', relDir],
-      { cwd: REPO_ROOT }
-    ));
-  } catch (e) {
-    const err = e as Error & { stderr?: string };
-    const detail = err.stderr?.trim() || err.message;
-    // No fallback on purpose: skipping the check would re-introduce the exact
-    // failure mode this guard exists to catch (embedding untracked files).
-    throw new Error(
-      `Failed to run \`git ls-files\` to verify ${label} is fully tracked: ${detail}\n` +
-        'Is git installed and on PATH?',
-      { cause: err }
-    );
-  }
-  const untracked = stdout.trim().split('\n').filter(Boolean);
-  if (untracked.length > 0) {
-    const list = untracked.map(f => `  ${f}`).join('\n');
-    throw new Error(
-      `${label} contains untracked files that would be embedded into the binary bundle:\n${list}\n\n` +
-        'Untracked files in defaults/ — stage and commit them (git add + git commit),\n' +
-        `or move them to ${suggestedDest}.`
-    );
-  }
-}
-
+/** Refuse to embed files that git does not track (#1578). An untracked selected file would
+ * silently ship inside locally built binaries while being absent from every other checkout
+ * and from CI builds — fail loudly instead. */
 async function assertTrackedPackagedFiles(paths: readonly string[]): Promise<void> {
   if (paths.length === 0) return;
   const relativePaths = paths.map(path => relative(REPO_ROOT, path).replaceAll('\\', '/'));
@@ -217,34 +173,8 @@ async function main(): Promise<void> {
   const packs = await readBundleIndex(
     join(REPO_ROOT, 'packages/workflows/src/defaults/bundle-index.json')
   );
-  const files = await collectBundleSources(
-    WORKFLOWS_ROOT,
-    join(REPO_ROOT, '.archon/commands'),
-    packs
-  );
-  if (packs.includes('defaults')) {
-    await Promise.all([
-      assertNoUntrackedFiles(
-        COMMANDS_REL,
-        'Commands defaults (.archon/commands/defaults/)',
-        '.archon/commands/ (project-scope) or ~/.archon/commands/ (home-scope)'
-      ),
-      assertNoUntrackedFiles(
-        WORKFLOWS_REL,
-        'Workflows defaults (.archon/workflows/defaults/)',
-        '.archon/workflows/ (project-scope) or ~/.archon/workflows/ (home-scope)'
-      ),
-    ]);
-  }
-  await assertTrackedPackagedFiles(
-    files
-      .filter(
-        file =>
-          !file.relativePath.startsWith('workflows/defaults/') &&
-          !file.relativePath.startsWith('commands/defaults/')
-      )
-      .map(file => file.sourcePath)
-  );
+  const files = await collectBundleSources(WORKFLOWS_ROOT, packs);
+  await assertTrackedPackagedFiles(files.map(file => file.sourcePath));
 
   const commands: BundledFile[] = [];
   const workflows: BundledFile[] = [];
@@ -257,7 +187,7 @@ async function main(): Promise<void> {
     else if (file.kind === 'workflow') {
       workflows.push({ name: file.name, content });
       workflowPaths.set(file.name, file.relativePath);
-      if (file.owner) workflowOwners.set(file.name, file.owner);
+      workflowOwners.set(file.name, file.owner);
     } else {
       const prior = scriptPacks.get(file.pack) ?? { files: {}, scripts: {} };
       scriptPacks.set(file.pack, {

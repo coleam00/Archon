@@ -354,21 +354,16 @@ export function getRepoArchonEnvPath(cwd: string): string {
  * Returns folders in priority order (first match wins)
  *
  * Order:
- * 1. .archon/commands (always - user's custom commands)
- * 2. .archon/commands/defaults (bundled default commands)
- * 3. configuredFolder (if specified in config)
+ * 1. .archon/commands (always - user's custom commands, one subfolder deep)
+ * 2. configuredFolder (if specified in config)
  *
  * @param configuredFolder - Optional additional folder from config
  */
 export function getCommandFolderSearchPaths(configuredFolder?: string): string[] {
-  const paths = ['.archon/commands', '.archon/commands/defaults'];
+  const paths = ['.archon/commands'];
 
   // Add configured folder if specified (and not already in paths)
-  if (
-    configuredFolder &&
-    configuredFolder !== '.archon/commands' &&
-    configuredFolder !== '.archon/commands/defaults'
-  ) {
+  if (configuredFolder && configuredFolder !== '.archon/commands') {
     paths.push(configuredFolder);
   }
 
@@ -566,13 +561,6 @@ export function getAppArchonBasePath(): string {
  */
 export function getSourceWebDistDir(): string {
   return join(getSourceRepoRoot(), 'packages', 'web', 'dist');
-}
-
-/**
- * Get the path to the app's bundled default commands directory
- */
-export function getDefaultCommandsPath(): string {
-  return join(getAppArchonBasePath(), 'commands', 'defaults');
 }
 
 /**
@@ -1110,22 +1098,14 @@ export function logArchonPaths(): void {
 }
 
 /**
- * Validate that app defaults paths exist and are accessible (for startup)
- * Logs verification status and warnings if paths don't exist
+ * Validate that the bundled packs root exists and is accessible (for startup).
+ * Every bundled pack, with its commands and scripts, lives under it.
  */
 export async function validateAppDefaultsPaths(): Promise<void> {
-  const commandsPath = getDefaultCommandsPath();
-  const workflowsPath = getDefaultWorkflowsPath();
-
-  const commandsOk = await checkPathAccessible(commandsPath, 'commands');
-  const workflowsOk = await checkPathAccessible(workflowsPath, 'workflows');
-
-  if (!commandsOk && !workflowsOk) {
-    getLog().warn('app_defaults_not_available');
-  } else if (commandsOk && workflowsOk) {
-    getLog().info({ commands: commandsPath, workflows: workflowsPath }, 'app_defaults_verified');
+  const workflowsPath = dirname(getDefaultWorkflowsPath());
+  if (await checkPathAccessible(workflowsPath, 'workflows')) {
+    getLog().info({ workflows: workflowsPath }, 'app_defaults_verified');
   }
-  // Partial availability already logged warnings above for individual paths
 }
 
 /**

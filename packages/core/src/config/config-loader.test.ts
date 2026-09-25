@@ -11,7 +11,6 @@ mock.module('@archon/paths', () => ({
   getArchonConfigPath: mock(() => join(archonHome, 'config.yaml')),
   getArchonWorkspacesPath: mock(() => join(archonHome, 'workspaces')),
   getArchonWorktreesPath: mock(() => join(archonHome, 'worktrees')),
-  getDefaultCommandsPath: mock(() => '/app/.archon/commands/defaults'),
   getDefaultWorkflowsPath: mock(() => '/app/.archon/workflows/defaults'),
 }));
 
@@ -325,18 +324,14 @@ ${field}:
     test('parses recommendedWorkflows as an ordered string array', async () => {
       mockFsReadFile.mockResolvedValue(`
 recommendedWorkflows:
-  - archon-fix-github-issue
-  - archon-idea-to-pr
+  - archon-ship
+  - archon-deliver
   - archon-plan
 `);
 
       const config = await loadRepoConfig('/test/repo');
 
-      expect(config.recommendedWorkflows).toEqual([
-        'archon-fix-github-issue',
-        'archon-idea-to-pr',
-        'archon-plan',
-      ]);
+      expect(config.recommendedWorkflows).toEqual(['archon-ship', 'archon-deliver', 'archon-plan']);
     });
 
     test('omits recommendedWorkflows when key is absent', async () => {
@@ -353,12 +348,12 @@ recommendedWorkflows:
   - "  archon-plan  "
   - ""
   - 42
-  - archon-fix-github-issue
+  - archon-ship
 `);
 
       const config = await loadRepoConfig('/test/repo');
 
-      expect(config.recommendedWorkflows).toEqual(['archon-plan', 'archon-fix-github-issue']);
+      expect(config.recommendedWorkflows).toEqual(['archon-plan', 'archon-ship']);
     });
 
     test('coerces non-array recommendedWorkflows to undefined without throwing', async () => {

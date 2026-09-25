@@ -81,7 +81,7 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
     {
       ...base,
       id: 'demo-paused-1',
-      workflow: 'archon-interactive-prd',
+      workflow: 'prd-intake',
       origin: 'web',
       status: 'paused',
       startedAt: iso(14 * 60 + 22),

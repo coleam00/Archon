@@ -31,7 +31,6 @@ const realArchonPaths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
   ...realArchonPaths,
   getDefaultWorkflowsPath: () => join(bundledDefaultsRoot, 'defaults'),
-  getDefaultCommandsPath: () => join(bundledDefaultsRoot, 'defaults'),
 }));
 
 import { execFileAsync, resolveBashPath } from '@archon/git';

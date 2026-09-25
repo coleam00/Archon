@@ -771,15 +771,15 @@ const orderedExamples: ExampleHelp[] = [
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
-    text: 'archon workflow run assist --folder "List every repo under this multi-repo root"',
+    text: 'archon workflow run investigate --folder "Explain how the repos under this root fit together"',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
-    text: 'archon workflow run archon-assist --detach "Investigate the flaky test"',
+    text: 'archon workflow run archon-investigate --detach "Investigate the flaky test"',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
-    text: 'archon workflow run assist --dry-run --stubs ./stubs.yaml --json',
+    text: 'archon workflow run investigate --dry-run --stubs ./stubs.yaml --json',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   { text: 'archon workflow runs --json', owner: { command: 'workflow', subcommand: 'runs' } },
@@ -799,7 +799,7 @@ const orderedExamples: ExampleHelp[] = [
   { text: 'archon workflow cancel <run-id>', owner: { command: 'workflow', subcommand: 'cancel' } },
   { text: 'archon workflow runs --open', owner: { command: 'workflow', subcommand: 'runs' } },
   {
-    text: 'archon workflow run archon-smart-pr-review --adopt <run-id> "Review the changes"',
+    text: 'archon workflow run archon-review --adopt <run-id> "Review the changes"',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   { text: 'archon skill install', owner: { command: 'skill', subcommand: 'install' } },

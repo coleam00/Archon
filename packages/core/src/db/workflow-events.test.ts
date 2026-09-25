@@ -17,7 +17,6 @@ mock.module('@archon/paths', () => ({
   getArchonConfigPath: mock(() => '/home/test/.archon/config.yaml'),
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
   getArchonWorktreesPath: mock(() => '/home/test/.archon/worktrees'),
-  getDefaultCommandsPath: mock(() => '/app/.archon/commands/defaults'),
   getDefaultWorkflowsPath: mock(() => '/app/.archon/workflows/defaults'),
 }));
 

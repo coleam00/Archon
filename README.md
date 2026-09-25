@@ -78,14 +78,14 @@ Tell your coding agent what you want, and Archon handles the rest:
 ```
 You: Use archon to add dark mode to the settings page
 
-Agent: I'll run the archon-idea-to-pr workflow for this.
+Agent: I'll run the archon-ship workflow for this.
        → Creating isolated worktree on branch archon/task-dark-mode...
+       → Triage: needs a plan
        → Planning...
-       → Implementing (task 1/4)...
-       → Implementing (task 2/4)...
+       → Implementing...
        → Tests failing - iterating...
        → Tests passing after 2 iterations
-       → Code review complete - 0 issues
+       → Draft PR opened, review complete - 0 blocking findings
        → PR ready: https://github.com/you/project/pull/47
 ```
 
@@ -230,31 +230,24 @@ See the [Web UI Guide](https://archon.diy/adapters/web/) for full documentation.
 
 ## What Can You Automate?
 
-Archon ships with workflows for common development tasks:
+Archon ships the `sdlc` workflow pack for the software development lifecycle:
 
 | Workflow | What it does |
 |----------|-------------|
-| `archon-assist` | General Q&A, debugging, exploration - full Claude Code agent with all tools |
-| `archon-fix-github-issue` | Classify issue → investigate/plan → implement → validate → PR → smart review → self-fix |
-| `archon-create-issue` | Classify problem → gather context → investigate → create GitHub issue |
-| `archon-issue-review-full` | Comprehensive fix + full multi-agent review pipeline for GitHub issues |
-| `archon-piv-loop` | Guided Plan-Implement-Validate loop with human review between iterations |
-| `archon-idea-to-pr` | Feature idea → plan → implement → validate → PR → 5 parallel reviews → self-fix |
-| `archon-plan-to-pr` | Execute existing plan → implement → validate → PR → review → self-fix |
-| `archon-feature-development` | Implement feature from plan → validate → create PR |
-| `archon-adversarial-dev` | Build a complete application from scratch using adversarial development |
-| `archon-smart-pr-review` | Classify PR complexity → run targeted review agents → synthesize findings |
-| `archon-comprehensive-pr-review` | Multi-agent PR review (5 parallel reviewers) with automatic fixes |
-| `archon-validate-pr` | Thorough PR validation testing both main and feature branches |
-| `archon-architect` | Architectural sweep, complexity reduction, codebase health improvement |
-| `archon-refactor-safely` | Safe refactoring with type-check hooks and behavior verification |
-| `archon-interactive-prd` | Create a PRD through guided conversation |
-| `archon-ralph-dag` | PRD implementation loop - iterate through stories until done |
-| `archon-workflow-builder` | Generate a new Archon workflow YAML for your project |
-| `archon-remotion-generate` | Generate or modify Remotion video compositions with AI |
-| `archon-resolve-conflicts` | Detect merge conflicts → analyze both sides → resolve → validate → commit |
+| `archon-ship` | Issue or request → triage → investigate or plan → deliver a reviewed PR |
+| `archon-triage` | Check an issue against the current code and decide what it needs next |
+| `archon-investigate` | Prove the root cause of a bug or open question and write a report |
+| `archon-plan` | Turn decided intent into an implementable plan |
+| `archon-implement` | Build decided work until the project's checks pass; commits, no PR |
+| `archon-pr` | Open a pull request for committed work on the current branch |
+| `archon-deliver` | Implement → draft PR → review → fix findings → validate → CI → ready for review |
+| `archon-review` | Review a PR or the working diff through parallel specialist lenses |
+| `archon-validate` | Run the project's own checks and report a structured verdict |
+| `archon-upkeep` | Update one dependency through the reviewed delivery tail |
 
-Archon ships 19 default workflows - run `archon workflow list` or describe what you want and the router picks the right one.
+Run `archon workflow list` to see them, or describe what you want and the router picks the right one. For a plain question, just ask: the router answers directly.
+
+The older `archon-*` workflows (`archon-fix-github-issue`, `archon-idea-to-pr`, `archon-smart-pr-review`, `archon-assist`, and others) no longer ship. To keep using one, copy it from [`.archon/workflows/defaults/` at v0.11.1](https://github.com/coleam00/Archon/tree/v0.11.1/.archon/workflows/defaults) (most are in its `legacy/` folder) into your project's `.archon/workflows/`, along with the [commands](https://github.com/coleam00/Archon/tree/v0.11.1/.archon/commands/defaults) it uses into `.archon/commands/`.
 
 **Or define your own.** Keep a workflow copyable by placing its YAML, commands, and scripts together under `.archon/workflows/<pack>/<workflow>/`; both directory names are yours. The same tree works in target repos and under `~/.archon/workflows/`. Existing flat workflows and shared `.archon/commands/` / `.archon/scripts/` remain supported. Same-named workflow files in your repo override bundled defaults.
 

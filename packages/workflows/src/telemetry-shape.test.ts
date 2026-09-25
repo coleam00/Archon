@@ -37,7 +37,8 @@ function resolve(yaml: string): ResolvedWorkflow {
 function resolveProjectCopy(
   bundledKey: string,
   name: string,
-  commands: ReadonlyMap<string, string> = new Map(Object.entries(BUNDLED_COMMANDS))
+  commands: ReadonlyMap<string, string> = new Map(Object.entries(BUNDLED_COMMANDS)),
+  edit: (yaml: string) => string = yaml => yaml
 ): ResolvedWorkflow {
   const rawByName = new Map<string, WorkflowDefinition>();
   for (const [key, content] of Object.entries(BUNDLED_WORKFLOWS)) {
@@ -51,7 +52,7 @@ function resolveProjectCopy(
   const yaml = BUNDLED_WORKFLOWS[bundledKey];
   if (yaml === undefined) throw new Error(`${bundledKey} is not bundled`);
   const parsed = parseWorkflow(
-    yaml.replace(new RegExp(`^name: ${bundledKey}$`, 'm'), `name: ${name}`),
+    edit(yaml.replace(new RegExp(`^name: ${bundledKey}$`, 'm'), `name: ${name}`)),
     `${name}.yaml`
   );
   if (!parsed.workflow) throw new Error(parsed.error.error);
@@ -64,43 +65,23 @@ function resolveProjectCopy(
   return resolved;
 }
 
-const BUNDLED = 'archon-create-issue';
-const bundledYaml = (): string => {
-  const yaml = BUNDLED_WORKFLOWS[BUNDLED];
-  if (yaml === undefined) throw new Error(`${BUNDLED} is not bundled`);
-  return yaml;
-};
-const renamed = (yaml: string, name: string): string =>
-  yaml.replace(new RegExp(`^name: ${BUNDLED}$`, 'm'), `name: ${name}`);
-
 describe('deriveBundledAncestry', () => {
-  test('an unchanged copy under a custom name is identical to its original', () => {
-    const copy = resolve(renamed(bundledYaml(), 'acme-issue-intake'));
+  test('a copy with a node added is modified', () => {
+    const copy = resolveProjectCopy('archon-implement', 'acme-implement', undefined, yaml =>
+      yaml.replace(/^nodes:\n/m, 'nodes:\n  - id: acme-extra\n    bash: echo acme\n')
+    );
+    expect(copy.nodes.some(node => node.id === 'acme-extra')).toBe(true);
     expect(deriveBundledAncestry(copy)).toEqual({
-      derivedFrom: BUNDLED,
-      derivedSimilarity: 'identical',
+      derivedFrom: 'archon-implement',
+      derivedSimilarity: 'modified',
     });
   });
 
-  test('a copy with a node added and a prompt edited is modified', () => {
-    const original = resolve(bundledYaml());
-    const firstPrompt = original.nodes.find(
-      node => node.kind === 'agent' && node.source.kind === 'inline'
-    );
-    if (firstPrompt?.kind !== 'agent' || firstPrompt.source.kind !== 'inline')
-      throw new Error('fixture needs an inline prompt node');
-    const edited = renamed(bundledYaml(), 'acme-issue-intake')
-      .replace(firstPrompt.source.prompt.split('\n')[0], 'Acme-specific instructions.')
-      .replace(/^nodes:\n/m, 'nodes:\n  - id: acme-extra\n    bash: echo acme\n');
-    expect(edited).toContain('Acme-specific instructions.');
-    const ancestry = deriveBundledAncestry(resolve(edited));
-    expect(ancestry).toEqual({ derivedFrom: BUNDLED, derivedSimilarity: 'modified' });
-  });
-
   test('an unchanged copy of a workflow that includes another bundled workflow is identical', () => {
-    expect(
-      deriveBundledAncestry(resolveProjectCopy('archon-issue-review-full', 'acme-review'))
-    ).toEqual({ derivedFrom: 'archon-issue-review-full', derivedSimilarity: 'identical' });
+    expect(deriveBundledAncestry(resolveProjectCopy('archon-deliver', 'acme-deliver'))).toEqual({
+      derivedFrom: 'archon-deliver',
+      derivedSimilarity: 'identical',
+    });
   });
 
   test('an unchanged project copy of a pack workflow is identical despite its project owner', () => {
@@ -108,18 +89,6 @@ describe('deriveBundledAncestry', () => {
       derivedFrom: 'archon-plan',
       derivedSimilarity: 'identical',
     });
-  });
-
-  test('a copy that runs an overridden command is compared with the shipped workflow', () => {
-    // The override changes the prompt an included block node runs, so the copy no longer
-    // runs what Archon ships: modified, not identical.
-    const overridden = new Map(Object.entries(BUNDLED_COMMANDS));
-    overridden.set('archon-code-review-agent', 'Acme review instructions.');
-    expect(
-      deriveBundledAncestry(
-        resolveProjectCopy('archon-issue-review-full', 'acme-review', overridden)
-      )
-    ).toEqual({ derivedFrom: 'archon-issue-review-full', derivedSimilarity: 'modified' });
   });
 
   test('an unrelated custom workflow has no ancestry', () => {
@@ -178,8 +147,8 @@ describe('describeWorkflowShape', () => {
   });
 
   test('nothing that describes a custom workflow carries its ids, names or text', () => {
-    const custom = resolve(
-      renamed(bundledYaml(), 'acme-secret-intake').replace(
+    const custom = resolveProjectCopy('archon-implement', 'acme-secret-intake', undefined, yaml =>
+      yaml.replace(
         /^nodes:\n/m,
         'nodes:\n  - id: acme-secret-node\n    prompt: Acme secret prompt text.\n'
       )

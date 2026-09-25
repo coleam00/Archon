@@ -227,18 +227,18 @@ function broken() {
 
     it('should return suffix match', () => {
       const workflows: WorkflowDefinition[] = [
-        { name: 'archon-assist', description: 'General assistant', nodes: [] },
+        { name: 'acme-assist', description: 'General assistant', nodes: [] },
       ];
       const result = resolveWorkflowName('assist', workflows);
-      expect(result?.name).toBe('archon-assist');
+      expect(result?.name).toBe('acme-assist');
     });
 
     it('should return substring match', () => {
       const workflows: WorkflowDefinition[] = [
-        { name: 'archon-smart-pr-review', description: 'Smart PR review', nodes: [] },
+        { name: 'acme-smart-pr-review', description: 'Smart PR review', nodes: [] },
       ];
       const result = resolveWorkflowName('smart', workflows);
-      expect(result?.name).toBe('archon-smart-pr-review');
+      expect(result?.name).toBe('acme-smart-pr-review');
     });
 
     it('should return undefined for no match', () => {
@@ -254,34 +254,6 @@ function broken() {
       expect(() => resolveWorkflowName('review', workflows)).toThrow('Ambiguous workflow');
     });
 
-    it('throws with a candidate list for the pre-existing shorthand ambiguity during the window (#2781)', () => {
-      // With BOTH packs bundled, `run pr` / `run review` stay ambiguous:
-      // the sdlc pack ships archon-pr/archon-review while the legacy defaults
-      // carry names sharing those suffixes (archon-idea-to-pr,
-      // archon-comprehensive-pr-review, ...). The resolver must refuse loudly
-      // at the suffix tier with every candidate, never silently substring-match.
-      const windowWorkflows: WorkflowDefinition[] = [
-        { name: 'archon-pr', description: 'sdlc pack', nodes: [] },
-        { name: 'archon-review', description: 'sdlc pack', nodes: [] },
-        { name: 'archon-idea-to-pr', description: 'legacy default', nodes: [] },
-        { name: 'archon-plan-to-pr', description: 'legacy default', nodes: [] },
-        { name: 'archon-validate-pr', description: 'legacy default', nodes: [] },
-        { name: 'archon-smart-pr-review', description: 'legacy default', nodes: [] },
-        { name: 'archon-comprehensive-pr-review', description: 'legacy default', nodes: [] },
-      ] as unknown as WorkflowDefinition[];
-      for (const shorthand of ['pr', 'review']) {
-        try {
-          resolveWorkflowName(shorthand, windowWorkflows);
-          throw new Error(`expected '${shorthand}' to be ambiguous`);
-        } catch (err) {
-          const message = String((err as Error).message);
-          if (message.includes(`expected '${shorthand}' to be ambiguous`)) throw err;
-          expect(message).toContain("Ambiguous workflow '" + shorthand + "'");
-          expect(message).toContain('- archon-' + shorthand);
-        }
-      }
-    });
-
     it('should throw on ambiguous substring match', () => {
       const workflows: WorkflowDefinition[] = [
         { name: 'alpha-one', description: 'One', nodes: [] },
@@ -294,7 +266,7 @@ function broken() {
     it('should prefer exact match over suffix match', () => {
       const workflows: WorkflowDefinition[] = [
         { name: 'assist', description: 'Short name', nodes: [] },
-        { name: 'archon-assist', description: 'Long name', nodes: [] },
+        { name: 'acme-assist', description: 'Long name', nodes: [] },
       ];
       const result = resolveWorkflowName('assist', workflows);
       expect(result?.name).toBe('assist');
@@ -302,13 +274,13 @@ function broken() {
 
     it('should prefer suffix match over substring match', () => {
       const workflows: WorkflowDefinition[] = [
-        { name: 'archon-assist', description: 'Suffix match', nodes: [] },
+        { name: 'acme-assist', description: 'Suffix match', nodes: [] },
         { name: 'assist-helper', description: 'Substring match', nodes: [] },
       ];
       const result = resolveWorkflowName('assist', workflows);
-      // "assist" is a suffix of "archon-assist" (ends with -assist)
+      // "assist" is a suffix of "acme-assist" (ends with -assist)
       // and a substring of both, but suffix tier wins
-      expect(result?.name).toBe('archon-assist');
+      expect(result?.name).toBe('acme-assist');
     });
   });
 
