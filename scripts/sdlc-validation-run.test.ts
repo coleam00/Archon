@@ -136,6 +136,49 @@ describe('run-checks', () => {
     expect(report(f.artifacts)).toContain('- `.archon/injected`');
   });
 
+  it.skipIf(process.platform === 'win32')(
+    'puts back scaffolding an attempt killed without a catchable signal left moved aside',
+    async () => {
+      const f = checkout();
+      mkdirSync(f.artifacts, { recursive: true });
+      const started = join(f.artifacts, 'gate-started');
+      // SIGKILL is the stand-in for a Windows timeout: no handler runs, nothing is restored.
+      const killed = Bun.spawn([process.execPath, join(PACK, 'run-checks.ts')], {
+        cwd: f.cwd,
+        env: env(f.artifacts, {
+          INPUTS_DISCOVERY: JSON.stringify({
+            // `$$` is the check's shell, which leads the check's process group.
+            checks: [{ name: 'slow gate', argv: sh(`echo $$ > '${started}'; sleep 600`) }],
+            quarantine: ['.archon/injected'],
+            notes: '',
+          }),
+        }),
+        stdout: 'ignore',
+        stderr: 'ignore',
+      });
+      const group = (): number =>
+        existsSync(started) ? Number(readFileSync(started, 'utf8').trim()) : 0;
+      for (let i = 0; i < 250 && group() <= 0; i++) await Bun.sleep(20);
+      killed.kill('SIGKILL');
+      await killed.exited;
+      // Nothing stops the orphaned check after SIGKILL; the test does, by its group.
+      // A pid of 0 would name this test's own group, so it must be a real one.
+      expect(group()).toBeGreaterThan(0);
+      process.kill(-group(), 'SIGKILL');
+      expect(existsSync(join(f.cwd, '.archon', 'injected'))).toBe(false);
+
+      const result = run(
+        f,
+        [{ name: 'gate', argv: sh('test ! -e .archon/injected') }],
+        ['.archon/injected']
+      );
+      expect(result.output?.status).toBe('green');
+      expect(readFileSync(join(f.cwd, '.archon', 'injected', 'workflow.yaml'), 'utf8')).toBe(
+        'injected\n'
+      );
+    }
+  );
+
   it('refuses to quarantine a tracked path or one outside .archon/, before moving anything', () => {
     for (const path of ['.archon/tracked', 'README.md', '.archon/../x', '/etc']) {
       const f = checkout();

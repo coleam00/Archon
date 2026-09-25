@@ -144,6 +144,29 @@ function quarantinable(path: string): string {
   return normal;
 }
 
+// Every path currently moved aside, written before each move completes, so an
+// attempt that dies without restoring leaves a record the next attempt can act on.
+const manifest = join(logDir, 'quarantine.json');
+
+function putBack(path: string): void {
+  if (existsSync(join(cwd, path))) {
+    throw new Error(
+      `Cannot restore quarantined '${path}': the checkout has it again. ` +
+        `The moved copy is kept at '${join(quarantineDir, path)}'.`
+    );
+  }
+  cpSync(join(quarantineDir, path), join(cwd, path), { recursive: true });
+  rmSync(join(quarantineDir, path), { recursive: true, force: true });
+}
+
+// An earlier attempt of this run ended without restoring what it moved aside: on
+// Windows, or after SIGKILL, the engine stops this script with no signal to catch.
+// Put that scaffolding back before anything is validated or moved again.
+if (existsSync(manifest)) {
+  for (const path of JSON.parse(readFileSync(manifest, 'utf8')) as string[]) putBack(path);
+  rmSync(manifest);
+}
+
 // Validate every path before moving any, so a refusal leaves the checkout untouched.
 const toQuarantine = discovery.quarantine.map(quarantinable);
 const quarantined: string[] = [];
@@ -152,10 +175,8 @@ let restored = false;
 function restore(): void {
   if (restored) return;
   restored = true;
-  for (const path of quarantined) {
-    cpSync(join(quarantineDir, path), join(cwd, path), { recursive: true, errorOnExist: true, force: false });
-    rmSync(join(quarantineDir, path), { recursive: true, force: true });
-  }
+  for (const path of quarantined) putBack(path);
+  rmSync(manifest, { force: true });
 }
 
 const entries: Entry[] = discovery.checks.map((check, index) => ({
@@ -239,8 +260,9 @@ mkdirSync(logDir, { recursive: true });
 try {
   for (const path of toQuarantine) {
     cpSync(join(cwd, path), join(quarantineDir, path), { recursive: true });
-    rmSync(join(cwd, path), { recursive: true, force: true });
     quarantined.push(path);
+    writeFileSync(manifest, JSON.stringify(quarantined));
+    rmSync(join(cwd, path), { recursive: true, force: true });
   }
   for (const entry of entries) {
     await runOne(entry);

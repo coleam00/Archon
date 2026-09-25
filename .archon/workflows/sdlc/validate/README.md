@@ -22,7 +22,10 @@ failed but not every check ran, the result is `green: false` with
 `red_cause: incomplete`. That happens when a check cannot start, or when the `run`
 node's timeout stops the gate. On that timeout the runner kills the running check's
 whole process tree, restores anything it moved aside, and records the stop in
-`validation.md`. SDLC delivery refuses an incomplete result as unfinished rather
+`validation.md`. On Windows, or after SIGKILL, the script gets no signal it can
+catch: the check's process tree may outlive the timeout, and anything moved aside
+stays in the run's artifacts until the next attempt of the run puts it back before
+it starts. SDLC delivery refuses an incomplete result as unfinished rather
 than red; the action is to resume the run. The comparison path never declares
 `incomplete`.
 
