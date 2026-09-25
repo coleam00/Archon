@@ -16,9 +16,7 @@ import '@archon/paths/strip-cwd-env-boot';
 import { loadArchonEnv } from '@archon/paths/env-loader';
 import {
   captureDetachedInstallContext,
-  getArchonConfigPath,
   getPluginsPath,
-  getTrustedArchonHome,
   restoreDetachedInstallContext,
   setLogDestination,
 } from '@archon/paths';
@@ -31,15 +29,13 @@ const hasDetachedRunConfigHandoff = process.argv
 const inheritedInstallContext = hasDetachedRunConfigHandoff
   ? captureDetachedInstallContext()
   : undefined;
-let forgeConfigPath = '';
 let forgeTrustedEnv: NodeJS.ProcessEnv = {};
 loadArchonEnv(process.cwd(), {
   afterUserLoad: () => {
-    forgeConfigPath = getArchonConfigPath();
-    // Forge plugin processes receive this snapshot only through their constrained
-    // process boundary. Pin ARCHON_HOME to the trusted home so repo env cannot
-    // change it.
-    forgeTrustedEnv = { ...process.env, ARCHON_HOME: getTrustedArchonHome() };
+    // Forge plugin processes run with the environment as the user scope left it, so
+    // the repository's `.archon/.env` can supply a credential (passed separately) but
+    // cannot change the environment an executable plugin runs in.
+    forgeTrustedEnv = { ...process.env };
   },
 });
 // The detached parent sealed this payload with its effective install key. Repo
@@ -363,7 +359,6 @@ async function main(): Promise<number> {
       return await forgeCommand(subcommand, {
         data: typeof values.data === 'string' ? values.data : undefined,
         dataFile: typeof values['data-file'] === 'string' ? values['data-file'] : undefined,
-        configPath: forgeConfigPath,
         trustedEnv: forgeTrustedEnv,
       });
     }
