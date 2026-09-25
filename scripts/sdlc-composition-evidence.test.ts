@@ -302,9 +302,11 @@ it('keeps the validation producer schemas and script vocabulary in agreement', (
     validate.returns,
   ]);
   const ordinary = VALIDATION_RED_CAUSES.filter(cause => cause !== 'interaction');
+  // Ordinary validation's result script derives green ('') and `incomplete` from
+  // exit statuses; classify declares only the causes of a check that failed.
   expect(
-    validate.nodes.find(n => n.id === 'validate')!.output_format!.properties.red_cause.enum
-  ).toEqual(ordinary);
+    validate.nodes.find(n => n.id === 'classify')!.output_format!.properties.red_cause.enum
+  ).toEqual(ordinary.filter(cause => cause !== 'incomplete' && cause !== ''));
   expect(
     implement.nodes.find(n => n.id === 'implement')!.output_format!.properties.red_cause.enum
   ).toEqual(ordinary);

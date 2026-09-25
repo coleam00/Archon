@@ -194,7 +194,7 @@ describe('run-checks', () => {
       expect(existsSync(join(f.cwd, '.archon', 'injected', 'workflow.yaml'))).toBe(true);
       expect(existsSync(join(f.cwd, 'built'))).toBe(false);
       const text = report(f.artifacts);
-      expect(text).toContain("stopped by the node's time limit (SIGTERM) before it finished");
+      expect(text).toContain("did not finish: the node's time limit stopped it (SIGTERM)");
       expect(text).toMatch(/## 3\. build\n\n`bash -c touch built` never ran\./);
     }
   );

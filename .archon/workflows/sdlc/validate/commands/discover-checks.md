@@ -21,7 +21,7 @@ You may read files and run read-only commands to find these out — list scripts
 
 ## Declare
 
-- `checks` — each check as `{ name, argv }`, in the order to run. `argv` is the command and its arguments as separate strings, run from the repository root with no shell. When a check genuinely needs a shell (a pipeline, `&&`, an environment assignment), name the shell explicitly, as in `["bash", "-c", "<the project's own command>"]`. The first failing check ends the run, so order matters.
+- `checks` — each check as `{ name, argv }`, in the order to run. `argv` is the command and its arguments as separate strings, run from the repository root with no shell. When a check genuinely needs a shell (a pipeline, `&&`, an environment assignment), name the shell explicitly, as in `["bash", "-c", "<the project's own command>"]`. On Windows, a command installed as a `.cmd` shim (such as `npm` or `pnpm`) also needs a shell to start. The first failing check ends the run, so order matters.
 - `quarantine` — see below; usually empty.
 - `notes` — one or two sentences: where the gate is defined and why these checks. When the repository genuinely defines no checks, `checks` is empty and `notes` says what you looked at to establish that. An empty list reads as green, so declare it only when there is truly nothing to run, never because the gate looked hard to run.
 

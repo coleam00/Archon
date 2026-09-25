@@ -72,7 +72,7 @@ function describe(outcome: Outcome): string {
     case 'not-started':
       return `could not start: ${outcome.error}`;
     case 'stopped':
-      return `stopped by the node's time limit (${outcome.signal}) before it finished`;
+      return `did not finish: the node's time limit stopped it (${outcome.signal})`;
     case 'running':
       return 'running';
     case 'never-ran':
@@ -98,7 +98,7 @@ function render(entries: readonly Entry[], quarantined: readonly string[]): void
     );
   }
   for (const [index, entry] of entries.entries()) {
-    const seconds = entry.seconds === null ? '' : ` in ${entry.seconds.toFixed(0)}s`;
+    const seconds = entry.seconds === null ? '' : ` after ${entry.seconds.toFixed(0)}s`;
     lines.push(`## ${String(index + 1)}. ${entry.check.name}`, '');
     lines.push(`\`${entry.check.argv.join(' ')}\` ${describe(entry.outcome)}${seconds}.`);
     const kind = entry.outcome.kind;
