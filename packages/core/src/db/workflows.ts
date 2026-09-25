@@ -2,6 +2,7 @@
  * Database operations for workflow runs
  */
 import type { ResourceStartDisposition } from '@archon/workflows/schemas/resource-start';
+import type { RunExitReason } from '@archon/workflows/schemas/run-terminal-reason';
 import type { CheckoutObservation } from '@archon/workflows/schemas/checkout-observation';
 
 import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
@@ -13,6 +14,7 @@ import {
 } from './resource-slots';
 import { insertWorkflowEvent, listActiveWorkflowNodeIds } from './workflow-events';
 import { insertTerminalWorkflowEvent } from './workflow-terminal-event';
+import { reportRunTerminal } from './workflow-terminal-telemetry';
 import { normalizeWorkflowRun } from './workflow-run-normalization';
 import type { IDatabase, SqlDialect } from './adapters/types';
 import type {
@@ -311,8 +313,9 @@ export async function resolveAndCancelApprovalGate(
   cancellation: WorkflowCancellationEventDetails
 ): Promise<{ resolved: boolean }> {
   const dialect = getDialect();
+  let outcome: { resolved: boolean };
   try {
-    return await getDatabase().withTransaction(async query => {
+    outcome = await getDatabase().withTransaction(async query => {
       const result = await query(
         `UPDATE remote_agent_workflow_runs
          SET status = 'cancelled',
@@ -329,7 +332,10 @@ export async function resolveAndCancelApprovalGate(
           workflow_run_id: id,
           event_type: 'workflow_cancelled',
           step_name: cancellation.step_name,
-          data: cancellation.reason === undefined ? undefined : { reason: cancellation.reason },
+          data: {
+            cancel_reason: 'approval_rejected',
+            ...(cancellation.reason === undefined ? {} : { reason: cancellation.reason }),
+          },
         });
       }
       return { resolved };
@@ -339,6 +345,8 @@ export async function resolveAndCancelApprovalGate(
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_resolve_cancel_gate_failed');
     throw new Error(`Failed to resolve and cancel approval gate: ${err.message}`);
   }
+  if (outcome.resolved) await reportRunTerminal(id);
+  return outcome;
 }
 
 /**
@@ -655,8 +663,9 @@ export async function cancelResumableRunsForConversation(
   conversationId: string
 ): Promise<WorkflowRun[]> {
   const dialect = getDialect();
+  let cancelledRuns: WorkflowRun[];
   try {
-    return await getDatabase().withTransaction(async query => {
+    cancelledRuns = await getDatabase().withTransaction(async query => {
       const snapshot = await query<WorkflowRun>(
         `SELECT * FROM remote_agent_workflow_runs
          WHERE conversation_id = $1 OR parent_conversation_id = $2
@@ -684,6 +693,7 @@ export async function cancelResumableRunsForConversation(
         await insertTerminalWorkflowEvent(query, {
           workflow_run_id: run.id,
           event_type: 'workflow_cancelled',
+          data: { cancel_reason: 'conversation_reset' },
         });
       }
       return resumable.map(run => normalizeWorkflowRun(run));
@@ -693,6 +703,8 @@ export async function cancelResumableRunsForConversation(
     getLog().error({ err, conversationId }, 'db.workflow_run_cancel_resumable_for_conv_failed');
     throw new Error(`Failed to cancel resumable runs for conversation: ${err.message}`);
   }
+  for (const run of cancelledRuns) await reportRunTerminal(run.id);
+  return cancelledRuns;
 }
 
 /**
@@ -1345,6 +1357,7 @@ export async function completeWorkflowRun(
     getLog().warn({ workflowRunId: id }, 'db.workflow_run_complete_no_match');
     throw new Error(`Workflow run not found or not in running state (id: ${id})`);
   }
+  await reportRunTerminal(id);
 }
 
 /**
@@ -1360,8 +1373,9 @@ export async function completeWorkflowRun(
 export async function failWorkflowRun(
   id: string,
   error: string,
-  scheduledResume?: ScheduledWorkflowResume
+  options: { scheduledResume?: ScheduledWorkflowResume; exitReason?: RunExitReason } = {}
 ): Promise<void> {
+  const { scheduledResume, exitReason } = options;
   const dialect = getDialect();
   const parsedSchedule =
     scheduledResume === undefined
@@ -1402,7 +1416,7 @@ export async function failWorkflowRun(
         await insertTerminalWorkflowEvent(query, {
           workflow_run_id: id,
           event_type: 'workflow_failed',
-          data: { error },
+          data: { error, ...(exitReason !== undefined ? { exit_reason: exitReason } : {}) },
         });
       }
       return update;
@@ -1416,6 +1430,7 @@ export async function failWorkflowRun(
     getLog().warn({ workflowRunId: id }, 'db.workflow_run_fail_no_match');
     throw new Error(`Workflow run not found or already terminal (id: ${id})`);
   }
+  await reportRunTerminal(id);
 }
 
 export async function cancelWorkflowRun(
@@ -1444,7 +1459,10 @@ export async function cancelWorkflowRun(
           workflow_run_id: id,
           event_type: 'workflow_cancelled',
           step_name: event?.step_name,
-          data: event?.reason === undefined ? undefined : { reason: event.reason },
+          data: {
+            ...(event?.reason === undefined ? {} : { reason: event.reason }),
+            ...(event?.cancel_reason === undefined ? {} : { cancel_reason: event.cancel_reason }),
+          },
         });
       }
       return update;
@@ -1460,6 +1478,8 @@ export async function cancelWorkflowRun(
     // report "nothing to cancel" instead of a false "Cancelled" (see #1830 I1).
     // Same info level as the resume CAS-miss signal for consistency (S2).
     getLog().info({ workflowRunId: id }, 'db.workflow_run_cancel_noop');
+  } else {
+    await reportRunTerminal(id);
   }
   return { cancelled };
 }
@@ -1484,7 +1504,7 @@ export async function cancelFanOutRun(
         await insertTerminalWorkflowEvent(query, {
           workflow_run_id: id,
           event_type: 'workflow_cancelled',
-          data: { reason },
+          data: { reason, cancel_reason: 'fan_out' },
         });
       }
       return update;
@@ -1497,6 +1517,8 @@ export async function cancelFanOutRun(
   const cancelled = (result.rowCount ?? 0) > 0;
   if (!cancelled) {
     getLog().info({ workflowRunId: id, reason }, 'db.workflow_run_fan_out_cancel_noop');
+  } else {
+    await reportRunTerminal(id);
   }
   return { cancelled };
 }
@@ -1622,8 +1644,9 @@ export async function failPausedAttentionWait(
     ? "metadata - 'scheduled_resume'"
     : "json_remove(metadata, '$.scheduled_resume')";
 
+  let outcome: { failed: boolean };
   try {
-    return await getDatabase().withTransaction(async query => {
+    outcome = await getDatabase().withTransaction(async query => {
       const result = await query(
         `UPDATE remote_agent_workflow_runs
          SET status = 'failed', completed_at = ${dialect.now()}, metadata = ${dialect.jsonMerge(metadataWithoutScheduledResume, 2)}
@@ -1650,6 +1673,8 @@ export async function failPausedAttentionWait(
     getLog().error({ err, workflowRunId: id }, 'db.workflow_attention_notification_fail_error');
     throw new Error(`Failed to fail paused attention wait: ${err.message}`);
   }
+  if (outcome.failed) await reportRunTerminal(id);
+  return outcome;
 }
 
 /** Atomically consume one exact wait cursor and persist its completed node snapshot. */

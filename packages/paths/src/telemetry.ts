@@ -3,11 +3,14 @@
  *
  * Emits a small set of anonymous events — `archon_started` (once per invocation),
  * `archon_active` (daily server heartbeat), `chat_turn_handled` (each direct
- * AI chat turn), `workflow_invoked` (each workflow start), `workflow_completed`
- * / `workflow_failed` (each terminal run), `workflow_approval_resolved` (each
- * human approve/reject decision), and `codebase_registered` (count only) — so
- * maintainers can see active installs, which surfaces and workflows get real
- * usage, and run outcomes. No PII, no user identity.
+ * AI chat turn), `workflow_invoked` (each workflow start or resume segment),
+ * `workflow_completed` / `workflow_failed` / `workflow_cancelled` (each committed
+ * terminal transition, reported by the run store), `workflow_approval_resolved`
+ * (each human approve/reject decision), and `codebase_registered` (count only) —
+ * so maintainers can see active installs, which surfaces and workflows get real
+ * usage, and run outcomes. Run events carry `run_ref`, a hash of the install id
+ * and the run id, so one run's events join without the run id leaving the
+ * machine. No PII, no user identity.
  * A random UUID is persisted to `${ARCHON_HOME}/telemetry-id` so we can count
  * distinct installs.
  *
@@ -16,8 +19,8 @@
  * drops the source IP at ingest). Machine context (os, arch, version,
  * is_binary, install channel, build commit, runtime, is_ci, is_tty) rides along
  * on every event via PostHog super-properties. What is collected is categorical
- * only: workflow name (real for bundled workflows, `"custom"` for user-authored), platform, provider,
- * model, node shape, run outcome/duration, a fixed-enum error class (never
+ * only: workflow name (real for bundled workflows, `"custom"` for user-authored),
+ * platform, provider, model, node shape, run outcome/duration, a fixed-enum error class (never
  * raw error text), chat-turn activity (platform + provider + model + outcome),
  * aggregate usage numbers (token counts, cost USD, turn/run duration, loop
  * iterations — numeric totals only), approval decisions (approved/rejected,
@@ -37,7 +40,7 @@
  * also logged at `warn` so self-hosters notice typo'd hosts). Capture must
  * never crash Archon.
  */
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { PostHog } from 'posthog-node';
@@ -50,7 +53,7 @@ import { createLogger } from './logger';
  * Bumped when the captured property set changes (documented in README). 7 is
  * skipped: a fork shipping this embedded key already sends it.
  */
-export const TELEMETRY_SCHEMA_VERSION = 8;
+export const TELEMETRY_SCHEMA_VERSION = 9;
 
 type PostHogFetch = NonNullable<NonNullable<ConstructorParameters<typeof PostHog>[1]>['fetch']>;
 type PostHogFetchOptions = Parameters<PostHogFetch>[1];
@@ -76,10 +79,11 @@ const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
 // run outcomes), to `-v3` when chat-turn activity, deployment shape, and
 // registration counts were added, and to `-v4` when aggregate usage totals
 // (tokens/cost/duration/loop iterations) and approval decisions were added, and
-// to `-v5` when install channel and build commit were added.
+// to `-v5` when install channel and build commit were added, and to `-v6` when
+// runs gained an anonymous per-run reference and cancellations were reported.
 // Bumping re-shows the updated first-run notice once per install so existing
 // users re-consent rather than silently getting broader capture.
-export const NOTICE_STAMP_FILENAME = 'telemetry-notice-shown-v5';
+export const NOTICE_STAMP_FILENAME = 'telemetry-notice-shown-v6';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -188,11 +192,9 @@ export type WorkflowTelemetrySource = 'bundled' | 'global' | 'project';
 export function classifyWorkflowForTelemetry(
   name: string,
   source: WorkflowTelemetrySource | undefined
-): { workflow_name: string; is_builtin: boolean; workflow_source: WorkflowTelemetrySource } {
-  const isBuiltin = source === 'bundled';
+): { workflow_name: string; workflow_source: WorkflowTelemetrySource } {
   return {
-    is_builtin: isBuiltin,
-    workflow_name: isBuiltin ? name : 'custom',
+    workflow_name: source === 'bundled' ? name : 'custom',
     workflow_source: source ?? 'project',
   };
 }
@@ -408,8 +410,9 @@ function maybeShowFirstRunNotice(): void {
   }
 
   const message =
-    'Archon collects anonymous usage telemetry — now also how Archon was\n' +
-    'installed (binary, Docker, or source) and the build commit, alongside\n' +
+    'Archon collects anonymous usage telemetry — now also an anonymous per-run\n' +
+    'reference (a hash, never the run id) and cancelled runs, alongside how\n' +
+    'Archon was installed (binary, Docker, or source), the build commit,\n' +
     'chat activity (platform/provider/model, never message content), aggregate\n' +
     'usage totals (token counts, cost, durations, loop iterations), approval\n' +
     'decisions (approved/rejected only), deployment shape, a categorical failure\n' +
@@ -542,6 +545,10 @@ async function initClient(): Promise<{ client: PostHog; abortController: AbortCo
 }
 
 export interface WorkflowInvokedProperties {
+  /** Run row id, hashed into `run_ref` here; never sent raw. */
+  runId: string;
+  /** True for a run started by a parent run's `workflow:` node. */
+  isChild: boolean;
   workflowName: string;
   /** Discovery source — drives the custom-vs-default split and name redaction. */
   workflowSource?: WorkflowTelemetrySource;
@@ -615,22 +622,49 @@ export interface ChatTurnProperties {
   tokensOut?: number;
 }
 
-/** Categorical terminal exit reason — a fixed enum, never raw error text. */
+/**
+ * Why a failed run ended — a fixed enum, never raw error text. Mirrored from the
+ * engine's terminal-reason type in `@archon/workflows` (conformance-tested there).
+ */
 export type WorkflowExitReason =
   | 'no_nodes_completed'
   | 'node_error'
   | 'unhandled_error'
   // File-presence gate (#2230): all nodes succeeded but `evidence_policy.required`
   // found no conventional `$ARTIFACTS_DIR/evidence.json` marker, so the run failed.
-  | 'evidence_missing';
+  | 'evidence_missing'
+  | 'source_unavailable'
+  | 'not_finalized'
+  | 'process_terminated'
+  | 'launch_failed'
+  | 'run_not_created';
+
+/** Why a run was cancelled — a fixed enum. Mirrored from `@archon/workflows`. */
+export type WorkflowCancelReason =
+  | 'approval_rejected'
+  | 'operator'
+  | 'halt_node'
+  | 'precondition_failed'
+  | 'conversation_reset'
+  | 'fan_out';
 
 /**
- * Categorical failure class derived from the engine's error classifier
- * (`classifyError` in `@archon/workflows`): `fatal` = auth/permission/credit,
- * `transient` = timeout/network/rate-limit, `unknown` = everything else.
+ * Why the first failed node failed, as recorded where the failure happened.
+ * `fatal`/`transient`/`unknown` classify a provider error; the rest are
+ * engine-detected causes. Mirrored from `NodeFailureKind` in `@archon/workflows`.
  * A fixed enum — raw error text never leaves the machine.
  */
-export type WorkflowErrorClass = 'fatal' | 'transient' | 'unknown';
+export type WorkflowErrorClass =
+  | 'fatal'
+  | 'transient'
+  | 'unknown'
+  | 'timeout'
+  | 'exec_failed'
+  | 'output_contract'
+  | 'max_iterations'
+  | 'child_failed'
+  | 'cancelled'
+  | 'config';
 
 /** Closed set of DAG node types, mirrored from `@archon/workflows` schemas. */
 export type WorkflowNodeType =
@@ -647,35 +681,44 @@ export type WorkflowNodeType =
   | 'compose_fan_out';
 
 /**
- * Terminal workflow-run event (`workflow_completed` / `workflow_failed`).
- * Cancellation is intentionally not tracked: external `/workflow cancel` exits
- * via the `skipIfStatusChanged` paths in the DAG executor, which emit no
- * telemetry by design (see "No Autonomous Lifecycle Mutation" in CLAUDE.md).
+ * One terminal workflow-run event: `workflow_completed`, `workflow_failed`, or
+ * `workflow_cancelled`. Sent once per committed terminal transition by the run
+ * store (see `buildRunTerminalTelemetry` in `@archon/workflows`), so every path
+ * that ends a run reports it — plus `run_not_created` from the executor when no
+ * run row could be written.
  */
-export interface WorkflowCompletedProperties {
-  outcome: 'completed' | 'failed';
+export interface WorkflowTerminalProperties {
+  outcome: 'completed' | 'failed' | 'cancelled';
+  /** Run row id, hashed into `run_ref` here; never sent raw. Absent without a row. */
+  runId?: string;
+  isChild?: boolean;
   workflowName: string;
   workflowSource?: WorkflowTelemetrySource;
   provider?: string;
+  /** Model ref — passed through {@link sanitizeModelForTelemetry}. */
+  model?: string;
+  /** Surface the run started on (a child reports `workflow`). */
+  platform?: string;
+  /** Wall-clock from the run's first start to the terminal transition, waits included. */
   durationMs?: number;
   nodesCompleted?: number;
   nodesFailed?: number;
   nodesSkipped?: number;
   nodesTotal?: number;
   exitReason?: WorkflowExitReason;
-  /** Failure taxonomy (failed runs only): fixed-enum class, never error text. */
+  cancelReason?: WorkflowCancelReason;
+  /** Failure class of the first failed node: fixed enum, never error text. */
   errorClass?: WorkflowErrorClass;
-  /** Type of the first failed node (failed runs only). */
+  /** Type of the first failed node. */
   failedNodeType?: WorkflowNodeType;
-  /** Aggregate provider-reported cost (USD) for the run. Numeric total only. */
+  /** Provider-reported cost (USD) across every segment, a child's spend included. */
   costUsd?: number;
-  /** Aggregate provider-reported gross input tokens for the run. */
+  /** Provider-reported gross input tokens across every segment. */
   tokensIn?: number;
-  /** Aggregate provider-reported output tokens for the run. */
   tokensOut?: number;
-  /** Aggregate cache-read input tokens; absent when no contribution reported the axis. */
+  /** Cache-read input tokens; absent when no contribution reported the axis. */
   cacheReadTokens?: number;
-  /** Aggregate cache-write input tokens; absent when no contribution reported the axis. */
+  /** Cache-write input tokens; absent when no contribution reported the axis. */
   cacheWriteTokens?: number;
   /**
    * True when the two cache totals above are a FLOOR because at least one contributing
@@ -683,7 +726,7 @@ export interface WorkflowCompletedProperties {
    * from a complete one and would bias aggregate cache figures low (#2662).
    */
   cachePartialTokens?: true;
-  /** Total loop iterations across all loop nodes in the run. */
+  /** Completed loop iterations across every segment. */
   loopIterations?: number;
 }
 
@@ -722,6 +765,8 @@ export function captureWorkflowInvoked(props: WorkflowInvokedProperties): void {
         ...PRIVACY_INVARIANTS,
         ...classifyWorkflowForTelemetry(props.workflowName, props.workflowSource),
         schema_version: TELEMETRY_SCHEMA_VERSION,
+        run_ref: runRefForTelemetry(props.runId),
+        is_child: props.isChild,
         ...(props.platform ? { platform: props.platform } : {}),
         ...(props.provider ? { provider: props.provider } : {}),
         ...(model ? { model } : {}),
@@ -893,31 +938,48 @@ export function captureCodebaseRegistered(): void {
   });
 }
 
+const TERMINAL_EVENT = {
+  completed: 'workflow_completed',
+  failed: 'workflow_failed',
+  cancelled: 'workflow_cancelled',
+} as const satisfies Record<WorkflowTerminalProperties['outcome'], string>;
+
 /**
- * Fire-and-forget capture of a terminal workflow run. Emits `workflow_completed`
- * when `outcome === 'completed'`, otherwise `workflow_failed`. Carries run
- * outcome, duration, node counts, and a categorical exit reason so maintainers
- * can measure success rates and funnels — not just intent. Intentionally does
- * not show the first-run notice (that fires on start events, not completion).
+ * Anonymous per-run reference: the same for every segment of one run on one
+ * install, unlinkable to the run's database id without that install's id.
+ * @internal exported for tests
  */
-export function captureWorkflowCompleted(props: WorkflowCompletedProperties): void {
+export function runRefForTelemetry(runId: string): string {
+  return createHash('sha256').update(`${getTelemetryId()}:${runId}`).digest('hex').slice(0, 16);
+}
+
+/**
+ * Fire-and-forget capture of a terminal workflow run. Intentionally does not
+ * show the first-run notice (that fires on start events, not completion).
+ */
+export function captureWorkflowTerminal(props: WorkflowTerminalProperties): void {
   if (isTelemetryDisabled()) return;
+  const model = sanitizeModelForTelemetry(props.model);
   fireAndForget(client => {
     client.capture({
       distinctId: getTelemetryId(),
-      event: props.outcome === 'completed' ? 'workflow_completed' : 'workflow_failed',
+      event: TERMINAL_EVENT[props.outcome],
       properties: {
         ...PRIVACY_INVARIANTS,
         ...classifyWorkflowForTelemetry(props.workflowName, props.workflowSource),
-        outcome: props.outcome,
         schema_version: TELEMETRY_SCHEMA_VERSION,
+        ...(props.runId !== undefined ? { run_ref: runRefForTelemetry(props.runId) } : {}),
+        ...(props.isChild !== undefined ? { is_child: props.isChild } : {}),
         ...(props.provider ? { provider: props.provider } : {}),
+        ...(model ? { model } : {}),
+        ...(props.platform ? { platform: props.platform } : {}),
         ...(props.durationMs !== undefined ? { duration_ms: props.durationMs } : {}),
         ...(props.nodesCompleted !== undefined ? { nodes_completed: props.nodesCompleted } : {}),
         ...(props.nodesFailed !== undefined ? { nodes_failed: props.nodesFailed } : {}),
         ...(props.nodesSkipped !== undefined ? { nodes_skipped: props.nodesSkipped } : {}),
         ...(props.nodesTotal !== undefined ? { nodes_total: props.nodesTotal } : {}),
         ...(props.exitReason ? { exit_reason: props.exitReason } : {}),
+        ...(props.cancelReason ? { cancel_reason: props.cancelReason } : {}),
         ...(props.errorClass ? { error_class: props.errorClass } : {}),
         ...(props.failedNodeType ? { failed_node_type: props.failedNodeType } : {}),
         ...(props.costUsd !== undefined ? { cost_usd: props.costUsd } : {}),

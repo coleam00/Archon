@@ -1605,7 +1605,7 @@ describe('abandonWorkflow', () => {
     expect(cancelled).toBe(true);
     expect(cascadeFailures).toBe(0);
     expect(blockedParentRunId).toBeNull();
-    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', { cancel_reason: 'operator' });
   });
 
   // #2121 Phase 2 (D7): abandoning a parent cascade-cancels its non-terminal
@@ -1770,7 +1770,7 @@ describe('abandonWorkflow', () => {
     mockReclaimContainerEnv.mockImplementationOnce(() => Promise.reject(new Error('docker down')));
     const { run } = await abandonWorkflow('run-1'); // resolves despite the reclaim throw
     expect(run.id).toBe('run-1');
-    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', { cancel_reason: 'operator' });
   });
 
   test('cancels a failed run', async () => {
@@ -1780,7 +1780,7 @@ describe('abandonWorkflow', () => {
     expect(run.id).toBe('run-1');
     expect(cascadeFailures).toBe(0);
     expect(blockedParentRunId).toBeNull();
-    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', { cancel_reason: 'operator' });
   });
 
   test('throws on completed run', async () => {
@@ -1903,7 +1903,7 @@ describe('abandonWorkflow', () => {
 
     expect(cancelled).toBe(true);
     expect(owner.kind).toBe('no_owner_answered');
-    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', { cancel_reason: 'operator' });
   });
 });
 
@@ -1940,7 +1940,7 @@ describe('cancelWorkflow', () => {
 
       expect(result).toMatchObject({ kind: 'cooperative', cancelled: true });
       expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
-      expect(mockCancelWorkflowRun).toHaveBeenCalledWith(runId);
+      expect(mockCancelWorkflowRun).toHaveBeenCalledWith(runId, { cancel_reason: 'operator' });
     } finally {
       await owner.close();
     }
@@ -1972,7 +1972,7 @@ describe('cancelWorkflow', () => {
       expect(result).toMatchObject({ kind: 'cooperative', cancelled: true });
       expect(mockRequestDetachedRunStop).toHaveBeenCalledWith('run-1');
       expect(mockGetRunAncestry).toHaveBeenCalledWith('run-1');
-      expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
+      expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', { cancel_reason: 'operator' });
     } finally {
       await rootOwner.close();
     }
@@ -1989,7 +1989,7 @@ describe('cancelWorkflow', () => {
       const result = await cancelWorkflow('run-1');
 
       expect(result).toMatchObject({ kind: 'cooperative', cancelled: true });
-      expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
+      expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', { cancel_reason: 'operator' });
     } finally {
       await new Promise(resolve => listener.close(resolve));
     }

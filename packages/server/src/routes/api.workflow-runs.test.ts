@@ -1161,7 +1161,7 @@ describe('POST /api/workflows/runs/:runId/cancel', () => {
       const body = (await response.json()) as { success: boolean; message: string };
       expect(body.success).toBe(true);
       expect(body.message).toBe('Cancelled workflow: deploy');
-      expect(mockCancelWorkflowRun).toHaveBeenCalledWith(runId);
+      expect(mockCancelWorkflowRun).toHaveBeenCalledWith(runId, { cancel_reason: 'operator' });
       expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
     });
   });
@@ -2275,7 +2275,7 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
     const body = (await response.json()) as { success: boolean; message: string };
     expect(body.success).toBe(true);
     expect(body.message).toContain('Abandoned');
-    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-uuid-1');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-uuid-1', { cancel_reason: 'operator' });
   });
 
   test('returns 409 with the reason and leaves the run when a live owner cannot be stopped', async () => {
@@ -2324,7 +2324,7 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
     const body = (await response.json()) as { success: boolean; message: string };
     expect(body.success).toBe(true);
     expect(body.message).toContain('Abandoned');
-    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-uuid-4');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-uuid-4', { cancel_reason: 'operator' });
   });
 });
 

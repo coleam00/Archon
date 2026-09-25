@@ -59,10 +59,6 @@ const telemetryInvocations: { workflowName: string; workflowSource?: string }[] 
 /** Each `workflow_invoked` call's resume flag, kept apart so the categorization records
  *  above stay comparable as whole objects. */
 const telemetryResumeFlags: { workflowName: string; isResume?: boolean }[] = [];
-/** Every `workflow_completed` telemetry call. A run's two halves are categorized by
- *  separate code paths, so the completion that fires on the resumed half has to be
- *  observed on its own. */
-const telemetryCompletions: { workflowName: string; workflowSource?: string }[] = [];
 mock.module('@archon/paths', () => ({
   ...realArchonPaths,
   // NB: point these one level DEEP (`<root>/defaults`) — captureWorkflowSource copies
@@ -79,12 +75,6 @@ mock.module('@archon/paths', () => ({
       telemetryResumeFlags.push({ workflowName: props.workflowName, isResume: props.isResume });
     }
   ),
-  captureWorkflowCompleted: mock((props: { workflowName: string; workflowSource?: string }) => {
-    telemetryCompletions.push({
-      workflowName: props.workflowName,
-      workflowSource: props.workflowSource,
-    });
-  }),
   captureApprovalResolved: mock(() => {}),
 }));
 
@@ -192,7 +182,11 @@ import { validateWorkflowResources } from './validator';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
 import { waitCompletionEvents } from './store';
-import type { WorkflowRun, WorkflowWaitContext } from './schemas/workflow-run';
+import {
+  readRunDispatchMetadata,
+  type WorkflowRun,
+  type WorkflowWaitContext,
+} from './schemas/workflow-run';
 import type { ResolvedWorkflow } from './schemas/workflow';
 import type { WorkflowRunConfigMetadata } from './schemas/run-config';
 import type {
@@ -2757,7 +2751,6 @@ nodes:
     };
     const parent = await discover('identity-parent');
     telemetryInvocations.length = 0;
-    telemetryCompletions.length = 0;
 
     // Dispatch as the CLI does: the codebase's default branch as the `$BASE_BRANCH`
     // fallback, the starting user, and the workflow's discovery source.
@@ -2828,16 +2821,14 @@ nodes:
     expect(prefsUserIds.slice(preGatePrefsCalls)).toEqual(['user-child', 'user-alpha']);
 
     // The resumed half of the run reports the same workflow source, so a bundled
-    // workflow is not recategorized as custom halfway through. Completion is the half
-    // that only the resumed drive reaches -- the pre-gate drive pauses instead -- so it
-    // is the one place a dropped source would land in every ordinary run's telemetry.
+    // workflow is not recategorized as custom halfway through. Terminal telemetry reads
+    // the source the run recorded at dispatch, so that record must still say bundled.
     expect(telemetryInvocations.filter(t => t.workflowName === 'identity-parent')).toEqual([
       { workflowName: 'identity-parent', workflowSource: 'bundled' },
       { workflowName: 'identity-parent', workflowSource: 'bundled' },
     ]);
-    expect(telemetryCompletions.filter(t => t.workflowName === 'identity-parent')).toEqual([
-      { workflowName: 'identity-parent', workflowSource: 'bundled' },
-    ]);
+    const completedParent = await store.getWorkflowRun(parentRun!.id);
+    expect(readRunDispatchMetadata(completedParent?.metadata)?.source).toBe('bundled');
   });
 
   // --- slice 2, PR-C: dynamic fan-out -------------------------------------------

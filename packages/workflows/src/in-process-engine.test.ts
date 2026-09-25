@@ -59,7 +59,6 @@ mock.module('@archon/paths', () => ({
     (root: string, wf: string, scope: string) => `${root}/scopes/${wf}/${scope}`
   ),
   captureWorkflowInvoked: mock(() => {}),
-  captureWorkflowCompleted: mock(() => {}),
 }));
 
 mock.module('@archon/git', () => ({

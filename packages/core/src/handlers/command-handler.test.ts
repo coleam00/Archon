@@ -1952,7 +1952,7 @@ describe('CommandHandler', () => {
 
           expect(result.success).toBe(true);
           expect(result.message).toBe('Cancelled workflow: `test-workflow`');
-          expect(mockCancelWorkflowRun).toHaveBeenCalledWith(runId);
+          expect(mockCancelWorkflowRun).toHaveBeenCalledWith(runId, { cancel_reason: 'operator' });
           expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
         } finally {
           await owner.close();
@@ -1972,7 +1972,9 @@ describe('CommandHandler', () => {
 
           expect(result.success).toBe(true);
           expect(mockFindWorkflowRunsByIdPrefix).toHaveBeenCalledWith('abcd1234', 'codebase-123');
-          expect(mockCancelWorkflowRun).toHaveBeenCalledWith(target.id);
+          expect(mockCancelWorkflowRun).toHaveBeenCalledWith(target.id, {
+            cancel_reason: 'operator',
+          });
           expect(mockGetActiveWorkflowRun).not.toHaveBeenCalled();
         } finally {
           await owner.close();
@@ -2008,7 +2010,9 @@ describe('CommandHandler', () => {
 
         expect(result.success).toBe(true);
         expect(result.message).toContain("Stopped the run's live owner process (pid 4242)");
-        expect(mockCancelWorkflowRun).toHaveBeenCalledWith('wf-detached');
+        expect(mockCancelWorkflowRun).toHaveBeenCalledWith('wf-detached', {
+          cancel_reason: 'operator',
+        });
       });
 
       test('refuses when no owner answers and points at abandon with the recorded facts', async () => {
@@ -2352,7 +2356,9 @@ describe('CommandHandler', () => {
         expect(result.success).toBe(true);
         expect(result.message).toContain('Abandoned');
         expect(result.message).toContain('implement');
-        expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-123');
+        expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-123', {
+          cancel_reason: 'operator',
+        });
         // The cascade walk must actually run against the mock, not merely be
         // survived. cascadeCancelChildren swallows its own errors into a failure
         // count, so a cascade that is broken — or one silently talking to a real

@@ -886,13 +886,18 @@ async function rootRunIdOf(runId: string): Promise<string | undefined> {
   return (await workflowDb.getRunAncestry(runId)).at(-1)?.id;
 }
 
+/** Every cancel and abandon here is an operator's request, whichever surface sent it. */
+function cancelByOperator(runId: string): ReturnType<CancelWorkflowRun> {
+  return workflowDb.cancelWorkflowRun(runId, { cancel_reason: 'operator' });
+}
+
 async function cooperativeCancel(run: WorkflowRun): Promise<CancelWorkflowResult> {
-  const { cancelled } = await workflowDb.cancelWorkflowRun(run.id);
+  const { cancelled } = await cancelByOperator(run.id);
   return { kind: 'cooperative', run, cancelled };
 }
 
 async function recordAbandoned(run: WorkflowRun): Promise<AbandonWorkflowResult> {
-  const result = await cancelRunAndCleanup(run, workflowDb.cancelWorkflowRun);
+  const result = await cancelRunAndCleanup(run, cancelByOperator);
   return {
     run: result.run,
     cancelled: result.cancelled,

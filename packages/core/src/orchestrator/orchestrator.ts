@@ -734,12 +734,14 @@ async function dispatchBackgroundWorkflowOwned(
         // with a second failWorkflowRun over the write channel that just failed, and do
         // not tell the user the workflow "failed" — its real outcome is unknown.
         if (preCreatedRun && !terminalWriteFailed) {
-          await workflowDeps.store.failWorkflowRun(preCreatedRun.id, err.message).catch(dbError => {
-            getLog().error(
-              { err: toError(dbError), workflowRunId: preCreatedRun.id },
-              'background_workflow_fail_db_record_failed'
-            );
-          });
+          await workflowDeps.store
+            .failWorkflowRun(preCreatedRun.id, err.message, { exitReason: 'unhandled_error' })
+            .catch(dbError => {
+              getLog().error(
+                { err: toError(dbError), workflowRunId: preCreatedRun.id },
+                'background_workflow_fail_db_record_failed'
+              );
+            });
         }
         getLog().error(
           {

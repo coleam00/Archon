@@ -2401,7 +2401,9 @@ async function runWorkflowWithOwnedSource(
       // records why instead of leaving a `pending` row nobody can explain.
       if (launchedRunId !== undefined) {
         await workflowDb
-          .failWorkflowRun(launchedRunId, `Detached launch failed: ${(error as Error).message}`)
+          .failWorkflowRun(launchedRunId, `Detached launch failed: ${(error as Error).message}`, {
+            exitReason: 'launch_failed',
+          })
           .catch((dbError: Error) => {
             getLog().error(
               { err: dbError, workflowRunId: launchedRunId },
@@ -3658,7 +3660,8 @@ async function recordDetachedChildStartupFailure(
     if (status !== 'pending') return;
     await workflowDb.failWorkflowRun(
       detachedRunId,
-      `Detached run failed to start: ${error.message}`
+      `Detached run failed to start: ${error.message}`,
+      { exitReason: 'launch_failed' }
     );
   } catch (dbError) {
     getLog().error(

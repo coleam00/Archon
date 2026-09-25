@@ -26,7 +26,7 @@ mock.module('./connection', () => ({
 const { getDagResumeSnapshot } = await import('./workflow-events');
 const { createWorkflowStore } = await import('../workflows/store-adapter');
 registerBuiltinProviders();
-const telemetry = spyOn(paths, 'captureWorkflowCompleted').mockImplementation(() => {});
+const telemetry = spyOn(paths, 'captureWorkflowTerminal').mockImplementation(() => {});
 let scratch: string | undefined;
 afterEach(async () => {
   telemetry.mockRestore();
