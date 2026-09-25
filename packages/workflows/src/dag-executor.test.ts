@@ -7602,6 +7602,54 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(failed?.data?.provider_failure).toEqual(failure);
     });
 
+    it('names the cost cap when a loop iteration hits its spend limit', async () => {
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield {
+          type: 'result',
+          isError: true,
+          errorSubtype: 'error_max_budget_usd',
+          failure: { class: 'budget_exceeded', evidence: 'error_max_budget_usd' },
+        };
+      });
+
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: {
+            name: 'loop-budget',
+            nodes: [
+              {
+                id: 'my-loop',
+                kind: 'loop',
+                maxBudgetUsd: 1.5,
+                loop: {
+                  fresh_context: false,
+                  prompt: 'Complete the task.',
+                  until: 'COMPLETE',
+                  max_iterations: 3,
+                },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('loop-budget-run'),
+        })
+      );
+
+      const failed = persistedEvents(store).find(
+        event => event.event_type === 'node_failed' && event.step_name === 'my-loop'
+      );
+      expect(failed?.data?.error).toContain(
+        "Loop 'my-loop' iteration 1 exceeded cost cap of $1.50."
+      );
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ nodeId: 'my-loop', iteration: 1, maxBudgetUsd: 1.5 }),
+        'dag.node_budget_cap_exceeded'
+      );
+    });
+
     it('correlates interleaved loop tool lifecycles by toolCallId', async () => {
       const store = createMockStore();
       const mockDeps = createMockDeps(store);

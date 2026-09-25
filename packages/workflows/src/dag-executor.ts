@@ -2591,20 +2591,14 @@ async function executeNodeInternal(
         nodeResolvedModel = msg.resolvedModel;
         if (msg.structuredOutput !== undefined) structuredOutput = msg.structuredOutput;
         if (msg.failure !== undefined) {
-          if (msg.failure.class === 'budget_exceeded') {
-            getLog().warn(
-              {
-                nodeId: node.id,
-                maxBudgetUsd: nodeOptions?.maxBudgetUsd,
-                durationMs: Date.now() - nodeStartTime,
-              },
-              'dag.node_budget_cap_exceeded'
-            );
-          }
           throw providerReportedFailure(
             `Node '${node.id}'`,
             msg.failure,
-            nodeOptions?.maxBudgetUsd
+            nodeOptions?.maxBudgetUsd,
+            {
+              nodeId: node.id,
+              durationMs: Date.now() - nodeStartTime,
+            }
           );
         }
         // Fail loudly on any other SDK error result. Previously we broke out of
@@ -3621,8 +3615,12 @@ class NodeFailure extends Error {
 function providerReportedFailure(
   subject: string,
   failure: ProviderFailure,
-  maxBudgetUsd?: number
+  maxBudgetUsd: number | undefined,
+  logContext: Record<string, unknown>
 ): NodeFailure {
+  if (failure.class === 'budget_exceeded') {
+    getLog().warn({ ...logContext, maxBudgetUsd }, 'dag.node_budget_cap_exceeded');
+  }
   const message =
     failure.class === 'budget_exceeded'
       ? `${subject} exceeded cost cap${maxBudgetUsd !== undefined ? ` of $${maxBudgetUsd.toFixed(2)}` : ''}.`
@@ -6325,7 +6323,9 @@ async function executeLoopNode(
               if (msg.failure !== undefined) {
                 throw providerReportedFailure(
                   `Loop '${node.id}' iteration ${String(i)}`,
-                  msg.failure
+                  msg.failure,
+                  resolvedOptions?.maxBudgetUsd,
+                  { nodeId: node.id, iteration: i }
                 );
               }
               // Fail the iteration loudly on SDK error results. Previously we broke
@@ -11822,11 +11822,13 @@ export async function executeDagWorkflow(
       : undefined;
     // Only a provider's typed class says a quota window is spent; the error text never does.
     const quotaFailure = [...runCtx.nodeOutputs.values()].find(
-      output => output.state === 'failed' && output.providerFailure?.class === 'quota_exhausted'
+      (
+        output
+      ): output is Extract<NodeOutput, { state: 'failed' }> & {
+        providerFailure: ProviderFailure;
+      } => output.state === 'failed' && output.providerFailure?.class === 'quota_exhausted'
     );
-    if (quotaFailure?.state !== 'failed' || quotaFailure.providerFailure === undefined) {
-      return undefined;
-    }
+    if (quotaFailure === undefined) return undefined;
     const quotaResetAt = quotaFailure.providerFailure.resetAt;
     const now = new Date();
     const maxAttempts = policy.quotaMaxAttempts;

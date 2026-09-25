@@ -20,7 +20,7 @@ import type {
   ProviderCapabilities,
   CodexProviderDefaults,
 } from '../types';
-import type { ProviderFailure } from '@archon/provider-contract';
+import { unknownFailureResult } from '../shared/failure';
 import { clampEffort } from '@archon/paths/effort';
 import { CODEX_EFFORTS, parseCodexConfig } from './config';
 import { CODEX_CAPABILITIES } from './capabilities';
@@ -793,25 +793,16 @@ async function* streamCodexEvents(
 }
 
 /**
- * A failed Codex turn as the one `result` chunk the contract requires. The Codex SDK
- * reports every failure as a message string (`turn.failed`, `error` events and thrown
- * errors carry no code, status or error type), so nothing structured can classify it:
- * every Codex failure is `unknown`, with the vendor text kept as evidence. The engine
- * decides whether an unknown failure is worth another attempt.
+ * A failed Codex turn. The Codex SDK reports every failure as a message string
+ * (`turn.failed`, `error` events and thrown errors carry no code, status or error type),
+ * so every Codex failure is `unknown`; the thread id rides along for resume.
  */
 function codexFailureResult(
   errorSubtype: string,
   evidence: string,
   sessionId: string | null | undefined
 ): ResultChunk {
-  const failure: ProviderFailure = { class: 'unknown', evidence: evidence.trim() || errorSubtype };
-  const result: ResultChunk = {
-    type: 'result',
-    isError: true,
-    errorSubtype,
-    errors: [failure.evidence],
-    failure,
-  };
+  const result = unknownFailureResult(errorSubtype, evidence);
   if (sessionId) result.sessionId = sessionId;
   return result;
 }

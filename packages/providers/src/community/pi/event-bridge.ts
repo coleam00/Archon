@@ -3,7 +3,7 @@ import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-
 import type { AssistantMessage, Usage } from '@earendil-works/pi-ai';
 
 import type { MessageChunk, ResultChunk, TokenUsage } from '../../types';
-import { piFailureResult } from './failure';
+import { unknownFailureResult } from '../../shared/failure';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -218,7 +218,7 @@ export function buildResultChunk(
     // rather than a silent success so orchestrators don't treat a broken
     // session as a clean completion.
     getLog().warn('pi.event-bridge.result_missing_assistant_message');
-    return piFailureResult(
+    return unknownFailureResult(
       'missing_assistant_message',
       'Pi ended the turn without an assistant message'
     );
@@ -229,7 +229,7 @@ export function buildResultChunk(
 
   // Built by assignment on a typed value so a misspelled key fails to compile.
   const chunk: ResultChunk = isError
-    ? piFailureResult(last.stopReason, last.errorMessage)
+    ? unknownFailureResult(last.stopReason, last.errorMessage)
     : { type: 'result' };
   if (tokens) chunk.tokens = tokens;
   if (tokens?.cost !== undefined) chunk.cost = tokens.cost;

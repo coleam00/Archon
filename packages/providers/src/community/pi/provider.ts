@@ -21,7 +21,7 @@ import { parsePiConfig, resolvePiExtensionSettings } from './config';
 import { parsePiModelRef } from './model-ref';
 import { buildCustomProviderModelsPath } from './request-auth';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
-import { piFailureResult } from './failure';
+import { unknownFailureResult } from '../../shared/failure';
 
 // IMPORTANT: Do NOT add static `import { ... } from '@earendil-works/*'` here,
 // and do NOT statically import sibling modules that themselves import runtime
@@ -313,7 +313,7 @@ export class PiProvider implements IAgentProvider {
         getLog().error({ err }, 'pi.error_after_result');
         return;
       }
-      yield piFailureResult('pi_query_failed', err.message);
+      yield unknownFailureResult('pi_query_failed', err.message);
     }
   }
 
