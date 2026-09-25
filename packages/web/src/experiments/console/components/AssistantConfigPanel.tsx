@@ -10,8 +10,9 @@ import type {
 } from '../skills';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
-import { CODEX_CONFIG_EFFORT_OPTIONS } from '../lib/model-options';
+import { effortOptionsForAgent } from '../lib/model-options';
 import { useCancelledRef } from '../lib/use-cancelled-ref';
+import { errorDetail } from '../lib/http';
 import { SettingsSection } from './SettingsSection';
 import { SELECT_CLASS_COMPACT, SelectShell } from './SettingsFormPrimitives';
 import { ModelPickerField } from './ModelPickerField';
@@ -150,7 +151,7 @@ export function AssistantConfigPanel(): ReactElement {
       await skill.updateAssistantConfig(skill.buildAssistantUpdate(form));
       invalidate(K.config); // refetch re-seeds the form and clears `dirty`
     } catch (e: unknown) {
-      setSaveError(e instanceof Error ? e.message : 'Failed to save settings.');
+      setSaveError(e instanceof Error ? errorDetail(e) : 'Failed to save settings.');
     } finally {
       setSaving(false);
     }
@@ -323,7 +324,7 @@ export function AssistantConfigPanel(): ReactElement {
                           className={SELECT_CLASS_COMPACT}
                         >
                           <option value="">inherit</option>
-                          {CODEX_CONFIG_EFFORT_OPTIONS.map(o => (
+                          {effortOptionsForAgent('codex', providers)?.map(o => (
                             <option key={o} value={o}>
                               {o}
                             </option>

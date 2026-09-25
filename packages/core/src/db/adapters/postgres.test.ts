@@ -580,16 +580,12 @@ describe('postgresDialect', () => {
   });
 
   describe('jsonMerge()', () => {
-    test('returns correct merge expression', () => {
-      expect(postgresDialect.jsonMerge('metadata', 1)).toBe('metadata || $1::jsonb');
-    });
-
-    test('uses provided param index', () => {
-      expect(postgresDialect.jsonMerge('data', 3)).toBe('data || $3::jsonb');
-    });
-
-    test('uses provided column name', () => {
-      expect(postgresDialect.jsonMerge('extra_fields', 2)).toBe('extra_fields || $2::jsonb');
+    // Behavior (null removes the key) is proven against a real server in
+    // workflows.metadata-merge.postgres.integration.test.ts.
+    test('merges the bound patch into the given column', () => {
+      const sql = postgresDialect.jsonMerge('extra_fields', 3);
+      expect(sql).toStartWith('(extra_fields || $3::jsonb)');
+      expect(sql).not.toContain('$1');
     });
   });
 

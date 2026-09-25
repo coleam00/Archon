@@ -44,3 +44,47 @@ export interface WebhookEvent {
    */
   installation?: { id: number };
 }
+
+export interface CheckRunCompletedEvent {
+  action: 'completed';
+  check_run: {
+    status: 'completed';
+    conclusion: string;
+    completed_at: string;
+    pull_requests: { number: number }[];
+  };
+  repository: { full_name: string };
+  sender?: { login: string };
+  installation?: { id: number };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export function isCheckRunCompletedEvent(value: unknown): value is CheckRunCompletedEvent {
+  if (!isRecord(value) || value.action !== 'completed') return false;
+  const checkRun = value.check_run;
+  const repository = value.repository;
+  if (!isRecord(checkRun) || !isRecord(repository)) return false;
+  if (
+    checkRun.status !== 'completed' ||
+    typeof checkRun.conclusion !== 'string' ||
+    checkRun.conclusion === '' ||
+    typeof checkRun.completed_at !== 'string' ||
+    !Number.isFinite(Date.parse(checkRun.completed_at)) ||
+    typeof repository.full_name !== 'string' ||
+    repository.full_name === '' ||
+    !Array.isArray(checkRun.pull_requests) ||
+    checkRun.pull_requests.length === 0
+  ) {
+    return false;
+  }
+  return checkRun.pull_requests.every(
+    pullRequest =>
+      isRecord(pullRequest) &&
+      typeof pullRequest.number === 'number' &&
+      Number.isInteger(pullRequest.number) &&
+      pullRequest.number > 0
+  );
+}

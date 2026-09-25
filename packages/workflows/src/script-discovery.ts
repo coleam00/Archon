@@ -7,18 +7,19 @@
  * internal keys. Runtime is inferred from the extension: .ts/.js -> bun,
  * .py -> uv.
  */
-import { access, mkdir, readdir, rename, rm, stat, writeFile } from 'fs/promises';
+import { mkdir, readdir, rename, rm, stat, writeFile } from 'fs/promises';
 import { createHash, randomUUID } from 'crypto';
-import { join, basename, extname } from 'path';
+import { join, basename, dirname, extname } from 'path';
 import { createLogger, getArchonHome } from '@archon/paths';
-import { BUNDLED_SCRIPTS, isBinaryBuild } from './defaults/bundled-defaults';
-import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
+import { BUNDLED_SCRIPT_PACKS, isBinaryBuild } from './defaults/bundled-defaults';
+import { collectInstalledBundleSources } from './defaults/bundle-inventory';
+import { listInstalledPacks, liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
 import {
   formatPackagedResourceReference,
-  getPackagedResourceDirectory,
   isValidWorkflowFolderSegment,
   parsePackagedResourceReference,
 } from './packaged-workflow';
+import { FIXTURES_DIR } from './fixture-layout';
 import type { WorkflowSource } from './schemas';
 
 /** Normalize path separators to forward slashes for cross-platform consistency */
@@ -162,6 +163,7 @@ async function discoverPackagedScripts(
   }
 
   for (const pack of packs) {
+    if (pack === FIXTURES_DIR) continue;
     if (!isValidWorkflowFolderSegment(pack)) continue;
     const packPath = join(workflowsRoot, pack);
     try {
@@ -173,77 +175,119 @@ async function discoverPackagedScripts(
         cause: err,
       });
     }
-    let workflowFolders: string[];
+    await discoverPackScripts(packPath, pack, source, scripts);
+  }
+  return scripts;
+}
+
+/** Add one pack's per-workflow scripts to `scripts`, owner-qualified. */
+async function discoverPackScripts(
+  packPath: string,
+  pack: string,
+  source: WorkflowSource,
+  scripts: Map<string, ScriptDefinition>
+): Promise<void> {
+  let workflowFolders: string[];
+  try {
+    workflowFolders = await readdir(packPath);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') return;
+    throw new Error(`Failed to read packaged workflow pack "${packPath}": ${err.message}`, {
+      cause: err,
+    });
+  }
+  for (const workflow of workflowFolders) {
+    if (workflow === FIXTURES_DIR) continue;
+    if (!isValidWorkflowFolderSegment(workflow)) continue;
     try {
-      workflowFolders = await readdir(packPath);
+      if (!(await stat(join(packPath, workflow))).isDirectory()) continue;
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code === 'ENOENT') continue;
-      throw new Error(`Failed to read packaged workflow pack "${packPath}": ${err.message}`, {
-        cause: err,
-      });
-    }
-    for (const workflow of workflowFolders) {
-      if (!isValidWorkflowFolderSegment(workflow)) continue;
-      try {
-        if (!(await stat(join(packPath, workflow))).isDirectory()) continue;
-      } catch (error) {
-        const err = error as NodeJS.ErrnoException;
-        if (err.code === 'ENOENT') continue;
-        throw new Error(
-          `Failed to inspect packaged workflow "${join(packPath, workflow)}": ${err.message}`,
-          { cause: err }
-        );
-      }
-      const owner = { source, pack, workflow };
-      const localScripts = await discoverScripts(
-        getPackagedResourceDirectory(workflowsRoot, owner, 'scripts')
+      throw new Error(
+        `Failed to inspect packaged workflow "${join(packPath, workflow)}": ${err.message}`,
+        { cause: err }
       );
-      for (const [name, definition] of localScripts) {
-        const qualifiedName = formatPackagedResourceReference(owner, name);
-        scripts.set(qualifiedName, { ...definition, name: qualifiedName });
-      }
     }
+    const owner = { source, pack, workflow };
+    const localScripts = await discoverScripts(join(packPath, workflow, 'scripts'));
+    for (const [name, definition] of localScripts) {
+      const qualifiedName = formatPackagedResourceReference(owner, name);
+      scripts.set(qualifiedName, { ...definition, name: qualifiedName });
+    }
+  }
+}
+
+/** Installed packs' scripts, from the same receipts or capture discovery reads. */
+async function discoverInstalledPackScripts(
+  roots: WorkflowSourceRoots
+): Promise<Map<string, ScriptDefinition>> {
+  const scripts = new Map<string, ScriptDefinition>();
+  for (const pack of (await listInstalledPacks(roots.installed)).packs) {
+    await discoverPackScripts(pack.dir, pack.key, 'installed', scripts);
   }
   return scripts;
 }
 
 async function materializeBundledScripts(): Promise<Map<string, ScriptDefinition>> {
   const scripts = new Map<string, ScriptDefinition>();
-  for (const [name, bundled] of Object.entries(BUNDLED_SCRIPTS)) {
-    const packaged = parsePackagedResourceReference(name);
-    if (packaged?.owner.source !== 'bundled') {
-      throw new Error(`Invalid bundled packaged script key: ${name}`);
-    }
-    const contentHash = createHash('sha256').update(bundled.content).digest('hex').slice(0, 16);
-    const scriptDir = join(
-      getArchonHome(),
-      'cache',
-      'workflow-scripts',
-      packaged.owner.pack,
-      packaged.owner.workflow
-    );
-    const scriptPath = join(scriptDir, `${packaged.name}-${contentHash}${bundled.extension}`);
+  for (const [pack, bundled] of Object.entries(BUNDLED_SCRIPT_PACKS)) {
+    const files = Object.entries(bundled.files).sort(([a], [b]) => a.localeCompare(b));
+    const contentHash = createHash('sha256')
+      .update(JSON.stringify(files))
+      .digest('hex')
+      .slice(0, 16);
+    const packCache = join(getArchonHome(), 'cache', 'workflow-scripts', pack);
+    const unitDir = join(packCache, contentHash);
+    let exists = false;
     try {
-      await access(scriptPath);
-    } catch {
-      await mkdir(scriptDir, { recursive: true });
-      const tempPath = `${scriptPath}.${process.pid}.${randomUUID()}.tmp`;
-      await writeFile(tempPath, bundled.content, 'utf-8');
+      if (!(await stat(unitDir)).isDirectory()) {
+        throw new Error(`Bundled script cache is not a directory: ${unitDir}`);
+      }
+      exists = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    if (!exists) {
+      // Publish the complete tree at once; another discovery must never see half a pack.
+      const staging = `${unitDir}.${process.pid}.${randomUUID()}.tmp`;
       try {
-        await rename(tempPath, scriptPath);
-      } catch (error) {
-        const err = error as NodeJS.ErrnoException;
-        try {
-          await access(scriptPath);
-          await rm(tempPath, { force: true });
-        } catch {
-          await rm(tempPath, { force: true });
-          throw err;
+        await mkdir(staging, { recursive: true });
+        for (const [relativePath, content] of files) {
+          const target = join(staging, relativePath);
+          await mkdir(dirname(target), { recursive: true });
+          await writeFile(target, content, 'utf-8');
         }
+        try {
+          await rename(staging, unitDir);
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          // Windows reports EPERM for an existing directory. Accept a competing
+          // publisher only when its complete unit is present; other permission
+          // failures must retain the original rename error.
+          if (code !== 'EEXIST' && code !== 'ENOTEMPTY' && code !== 'EPERM') throw error;
+          const published = await stat(unitDir).then(
+            info => info.isDirectory(),
+            () => false
+          );
+          if (!published) throw error;
+        }
+      } finally {
+        await rm(staging, { recursive: true, force: true });
       }
     }
-    scripts.set(name, { name, path: normalizeSep(scriptPath), runtime: bundled.runtime });
+    for (const [name, entry] of Object.entries(bundled.scripts)) {
+      const packaged = parsePackagedResourceReference(name);
+      if (packaged?.owner.source !== 'bundled' || packaged.owner.pack !== pack) {
+        throw new Error(`Invalid bundled packaged script key: ${name}`);
+      }
+      scripts.set(name, {
+        name,
+        path: normalizeSep(join(unitDir, entry.path)),
+        runtime: entry.runtime,
+      });
+    }
   }
   return scripts;
 }
@@ -253,9 +297,21 @@ async function discoverBundledPackagedScripts(
 ): Promise<Map<string, ScriptDefinition>> {
   // A captured run reads the bundled scripts IT froze — the capture materialized a
   // binary's embedded ones to files, so the filesystem path serves both builds.
-  return isBinaryBuild() && roots.kind === 'live'
-    ? await materializeBundledScripts()
-    : await discoverPackagedScripts(roots.bundledWorkflows, 'bundled');
+  if (roots.kind === 'captured') return discoverPackagedScripts(roots.bundledWorkflows, 'bundled');
+  if (isBinaryBuild()) return materializeBundledScripts();
+  const files =
+    (await collectInstalledBundleSources(roots.bundledWorkflows, dirname(roots.bundledCommands))) ??
+    [];
+  const scripts = new Map<string, ScriptDefinition>();
+  for (const file of files) {
+    if (file.kind !== 'script' || file.entry === undefined) continue;
+    scripts.set(file.entry.name, {
+      name: file.entry.name,
+      path: normalizeSep(file.sourcePath),
+      runtime: file.entry.runtime,
+    });
+  }
+  return scripts;
 }
 
 /**
@@ -302,6 +358,7 @@ export async function discoverScriptsForCwd(
     merged.set(name, def);
   }
   for (const [name, def] of repoPackagedScripts) merged.set(name, def);
+  for (const [name, def] of await discoverInstalledPackScripts(roots)) merged.set(name, def);
   return merged;
 }
 

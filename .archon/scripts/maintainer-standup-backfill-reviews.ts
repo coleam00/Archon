@@ -28,19 +28,19 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-type GhComment = {
+interface GhComment {
   user?: { login?: string };
   created_at?: string;
   body?: string;
   issue_url?: string;
-};
+}
 
-type ReviewedEntry = {
+interface ReviewedEntry {
   reviewed_at: string;
   gate_verdict: 'review' | 'decline' | 'needs_split' | 'unclear';
   run_id?: string;
   source?: 'workflow' | 'backfill';
-};
+}
 
 const baseDir = resolve(process.cwd(), '.archon/maintainer-standup');
 
@@ -50,7 +50,7 @@ if (!existsSync(profilePath)) {
   console.error('No profile.md found — run from repo root, with .archon/maintainer-standup/profile.md present.');
   process.exit(1);
 }
-const ghHandleMatch = readFileSync(profilePath, 'utf8').match(/^gh_handle:\s*(\S+)/m);
+const ghHandleMatch = /^gh_handle:\s*(\S+)/m.exec(readFileSync(profilePath, 'utf8'));
 if (!ghHandleMatch) {
   console.error('No gh_handle in profile.md frontmatter');
   process.exit(1);
@@ -63,7 +63,7 @@ const remote = execFileSync('git', ['remote', 'get-url', 'origin'], {
 })
   .toString()
   .trim();
-const repoMatch = remote.match(/[:/]([^:/]+)\/([^/]+?)(?:\.git)?$/);
+const repoMatch = /[:/]([^:/]+)\/([^/]+?)(?:\.git)?$/.exec(remote);
 if (!repoMatch) {
   console.error(`Could not parse owner/repo from origin remote: ${remote}`);
   process.exit(1);
@@ -113,7 +113,7 @@ function inferVerdict(body: string): ReviewedEntry['gate_verdict'] | null {
 
 function extractPrNumber(issueUrl: string | undefined): string | null {
   if (!issueUrl) return null;
-  const m = issueUrl.match(/\/(\d+)$/);
+  const m = /\/(\d+)$/.exec(issueUrl);
   return m ? m[1] : null;
 }
 
@@ -124,7 +124,7 @@ let mineMatching = 0;
 for (const c of allComments) {
   scanned++;
   const author = c.user?.login;
-  if (!author || author.toLowerCase() !== ghHandle.toLowerCase()) continue;
+  if (author?.toLowerCase() !== ghHandle.toLowerCase()) continue;
   const body = c.body ?? '';
   const verdict = inferVerdict(body);
   if (!verdict) continue;

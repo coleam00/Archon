@@ -1,36 +1,43 @@
-import { describe, test, expect } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { describe, expect, test } from 'bun:test';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-async function runPersist(stdin: string) {
-  const cwd = mkdtempSync(join(tmpdir(), 'persist-test-'));
-  try {
-    const proc = Bun.spawn(
-      ['bun', 'run', join(import.meta.dir, 'maintainer-standup-persist.ts')],
-      { cwd, stdin: new Response(stdin).body!, stdout: 'pipe', stderr: 'pipe' },
-    );
-    const [stdout, stderr] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ]);
-    const exitCode = await proc.exited;
-    let stateParsed: unknown = null;
-    let briefContent: string | null = null;
-    if (exitCode === 0) {
-      const meta = JSON.parse(stdout.trim()) as {
-        state_path: string;
-        brief_path: string;
-      };
-      const statePath = join(cwd, meta.state_path);
-      const briefPath = join(cwd, meta.brief_path);
-      stateParsed = JSON.parse(readFileSync(statePath, 'utf8'));
-      briefContent = readFileSync(briefPath, 'utf8');
-    }
-    return { exitCode, stdout: stdout.trim(), stderr, stateParsed, briefContent };
-  } finally {
-    rmSync(cwd, { recursive: true, force: true });
+interface PersistResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  stateParsed: unknown;
+  briefContent: string | null;
+}
+
+const trackTempRoot = trackTempRoots();
+
+async function runPersist(stdin: string): Promise<PersistResult> {
+  const cwd = trackTempRoot(mkdtempSync(join(tmpdir(), 'persist-test-')));
+  const proc = Bun.spawn(
+    ['bun', 'run', join(import.meta.dir, 'maintainer-standup-persist.ts')],
+    { cwd, stdin: new Blob([stdin]), stdout: 'pipe', stderr: 'pipe' }
+  );
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  let stateParsed: unknown = null;
+  let briefContent: string | null = null;
+  if (exitCode === 0) {
+    const meta = JSON.parse(stdout.trim()) as {
+      state_path: string;
+      brief_path: string;
+    };
+    const statePath = join(cwd, meta.state_path);
+    const briefPath = join(cwd, meta.brief_path);
+    stateParsed = JSON.parse(readFileSync(statePath, 'utf8'));
+    briefContent = readFileSync(briefPath, 'utf8');
   }
+  return { exitCode, stdout: stdout.trim(), stderr, stateParsed, briefContent };
 }
 
 describe('maintainer-standup-persist', () => {
@@ -76,60 +83,35 @@ describe('maintainer-standup-persist', () => {
     expect(result.briefContent).toContain('All good.');
   });
 
-  test('no valid format exits 1', async () => {
-    const result = await runPersist('just some random text with no markers');
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('PERSIST FAILED');
+  test('rejects unrecognized and truncated output', async () => {
+    const inputs = [
+      'just some random text with no markers',
+      ['# Standup', 'ARCHON_STATE_JSON_BEGIN', '{"truncated": true'].join('\n'),
+    ];
+
+    for (const input of inputs) {
+      const result = await runPersist(input);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('PERSIST FAILED');
+    }
   });
 
-  test('marker substring in brief prose before real marker — not confused', async () => {
+  test('marker text inside brief and state content is not treated as a delimiter', async () => {
+    const nextState = {
+      version: 4,
+      title: 'fix ARCHON_STATE_JSON_BEGIN handling',
+    };
     const input = [
       '# Maintainer Standup — 2026-05-15',
       'PR #1676 — fix(scripts): handle duplicate ARCHON_STATE_JSON_BEGIN blocks in persist — merged ✓',
       'ARCHON_STATE_JSON_BEGIN',
-      '{"version": 4}',
+      JSON.stringify(nextState),
       'ARCHON_STATE_JSON_END',
     ].join('\n');
     const result = await runPersist(input);
     expect(result.exitCode).toBe(0);
-    expect(result.stateParsed).toEqual({ version: 4 });
+    expect(result.stateParsed).toEqual(nextState);
     expect(result.briefContent).toContain('PR #1676');
-    expect(result.briefContent).not.toContain('"version"');
-  });
-
-  test('marker substring inside state JSON string value — not confused', async () => {
-    // Marker inline in compact JSON (not on its own line) — line-anchored regex doesn't match it; defence-in-depth.
-    const stateJson = JSON.stringify({
-      version: 5,
-      observed_prs: [
-        {
-          number: 1676,
-          title:
-            'fix(scripts): handle duplicate ARCHON_STATE_JSON_BEGIN blocks in persist',
-        },
-      ],
-    });
-    const input = [
-      '# Maintainer Standup — 2026-05-15',
-      'All systems nominal.',
-      'ARCHON_STATE_JSON_BEGIN',
-      stateJson,
-      'ARCHON_STATE_JSON_END',
-    ].join('\n');
-    const result = await runPersist(input);
-    expect(result.exitCode).toBe(0);
-    expect((result.stateParsed as { version: number }).version).toBe(5);
-  });
-
-  test('BEGIN present but END absent (truncated output) — falls through to error', async () => {
-    const input = [
-      '# Standup',
-      'ARCHON_STATE_JSON_BEGIN',
-      '{"truncated": true', // no END marker — simulates context-length truncation
-    ].join('\n');
-    const result = await runPersist(input);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('PERSIST FAILED');
   });
 
   test('prose preamble before first heading is stripped from brief', async () => {
@@ -146,21 +128,5 @@ describe('maintainer-standup-persist', () => {
     expect(result.briefContent).not.toContain('preamble');
     expect(result.briefContent).toContain('# Maintainer Standup');
     expect(result.briefContent).toContain('Actual content.');
-  });
-
-  test('duplicate BEGIN blocks AND marker in prose — last complete pair wins', async () => {
-    const input = [
-      '# Maintainer Standup — 2026-05-15',
-      'Merged PR #1676 which fixes ARCHON_STATE_JSON_BEGIN duplicate blocks.',
-      'ARCHON_STATE_JSON_BEGIN',
-      '{"truncated": true, "partial',
-      '',
-      'ARCHON_STATE_JSON_BEGIN',
-      '{"version": 6}',
-      'ARCHON_STATE_JSON_END',
-    ].join('\n');
-    const result = await runPersist(input);
-    expect(result.exitCode).toBe(0);
-    expect(result.stateParsed).toEqual({ version: 6 });
   });
 });

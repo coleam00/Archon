@@ -5,19 +5,66 @@ How to discover, select, and invoke Archon workflows against real work.
 ## Discover what exists
 
 ```bash
-archon workflow list              # human-readable, includes descriptions and errors
-archon workflow list --json       # machine-readable
+archon workflow list                 # human-readable compact descriptions and errors
+archon workflow list --json          # compact descriptions + descriptionTruncated state
+archon workflow list <name> --full   # exact description for one candidate
 archon workflow search "pr review"  # search the marketplace (installable packs)
 ```
 
 The live list is authoritative. Bundled workflows ship under the `archon-` prefix
 (e.g. `archon-ship`, `archon-review`, `archon-deliver`, `archon-investigate`,
-`archon-triage`, `archon-upkeep`, `archon-stabilize`); user-authored workflows may
+`archon-triage`, `archon-upkeep`); user-authored workflows may
 claim any name and override a bundled one in that repo.
 
-Map intent to workflow by reading the listed descriptions — never from memory of
-names you have seen elsewhere. If two names plausibly match, say which you picked
-and why in one line.
+In JSON output, `descriptionTruncated: true` means `description` is a discovery preview,
+not the complete routing contract. Human output marks the same state with `[truncated]`.
+Use the previews to identify plausible candidates, then run `archon workflow list <name>
+--full` for each candidate before choosing or launching. Map intent from those full
+descriptions — never from memory of names you have seen elsewhere. If two names plausibly
+match, read both full descriptions, then say which you picked and why in one line.
+
+## The input is the contract
+
+Everything the run does is measured against its input — the message, the issue body, or the
+document it reads. Archon governs how the work happens; it cannot supply what the user
+actually wanted. This is the highest-leverage moment in the whole flow, and it is before any
+money is spent.
+
+Check the input names all six. Solution steering is a seventh, optional, and last:
+
+1. **Problem to solve** — what is wrong today, concretely.
+2. **Why it is worth solving** — the cost of leaving it.
+3. **Why now** — what makes this the moment.
+4. **Desired outcome** — what is observably different afterwards.
+5. **Invariants** — what must stay true across any acceptable implementation.
+6. **Acceptance** — how completion is checked.
+
+**When something is missing, do not fix it silently and do not launch anyway.** Tell the user
+which of the six is absent, propose concrete wording, and let them decide. They own the
+contract; your job is to notice it is thin before it costs them a run.
+
+A useful shape:
+
+> Before I launch: this brief states the problem and the outcome, but not the invariants or
+> acceptance. Without acceptance the run decides for itself when it is done. Suggest adding:
+> "Acceptance: X passes, Y is covered by a test, Z is unchanged." Want me to run it with that,
+> or would you rather word it yourself?
+
+Two failure modes worth naming, because they look like diligence:
+
+- **Naming a solution before the problem is settled.** It narrows the run to the first guess
+  and hides better answers. If the user supplied one, keep it, but make sure the problem is
+  stated too — a run that only knows the proposed fix cannot tell you it was the wrong fix.
+- **Dropping steering the user actually holds.** Optional does not mean unwanted. If they have
+  said anywhere in the conversation how they want this done — reuse a primitive, avoid a
+  dependency, migrate rather than rewrite — carry it into the input as explicit steering. An
+  unstated preference cannot be honoured, and the user discovers it only in the diff.
+- **Silence about uncertainty.** An assumption stated in the brief is something the run can
+  contradict. An assumption left out is one it will quietly inherit.
+
+If the input is a GitHub issue, read the actual body before launching rather than trusting the
+title. Recommend edits to the issue itself when it is thin — the issue is the durable contract,
+and the next run against it inherits whatever you leave there.
 
 ## Invocation
 
@@ -67,19 +114,40 @@ Rules:
 ## Monitoring
 
 ```bash
+archon workflow wait <run-id> --json        # block until the run ends or needs a human decision
 archon workflow runs --json                 # recent runs for this project
-archon workflow status --json               # active only (running/paused)
+archon workflow status --json               # active only for this project (running/paused)
+archon workflow status --all --json         # active across all projects
 archon workflow get <run-id> --json         # one run: status, error, metadata
 archon workflow get <run-id> --verbose --json  # + per-node detail
 ```
 
-Terminal statuses: `completed`, `failed`, `cancelled`. Poll `get` between other
-work rather than sleeping in a tight loop.
+Terminal statuses: `completed`, `failed`, `cancelled`.
+
+**Prefer `wait` over polling.** Immediately after a detached launch, arm
+`archon workflow wait <run-id> --json` as a *background task of your harness*:
+it blocks until the run reaches a terminal state or pauses needing a human
+decision, so you are woken exactly when there is something to act on instead of
+polling or forgetting the run. The wait is indefinite by default; `--timeout
+<seconds>` makes the *wait* give up — it never affects the run itself, and an
+indefinite wait is usually right because a killed wait silently orphans your
+attention, not the run. Fall back to polling `get` only when you cannot hold a
+background task open.
+
+**Batches: one wait per run.** `wait` takes a single run id. When you launch
+several runs in parallel, arm one background wait per run id — each completes
+independently, so you are woken per run, in whatever order they need attention.
+Never chain waits in one shell (`wait A && wait B` sleeps on A while B pauses
+unattended), and never funnel a batch through a single polling loop.
 
 **Status is not verdict.** A `completed` run can carry a normalized negative
 `outcome`. Read it with `get --json`, locate the report under
 `leave_behind.artifactFiles`, and use a separate `get --verbose --json` call for
 node summaries. Read the report before telling the user what the run concluded.
+For the bundled sdlc workflows, the report may end with a discoveries section
+addressed to you — route it per `../manage-run/manage-runs.md` ("Discoveries"):
+surface each finding to the user and ask where to log it. The run deliberately
+files nothing itself, so a discovery dropped here is lost.
 
 ## Continuing finished work
 

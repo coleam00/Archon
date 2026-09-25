@@ -1,5 +1,12 @@
 worktree:
   baseBranch: dev
+  # `git worktree add` carries tracked files only, so every gitignored runtime file is
+  # absent from a fresh worktree. Agents work inside worktrees, so without this they
+  # cannot start the server, run integration tests, or reproduce anything that reads
+  # local credentials. A contributor with no `.env` is unaffected: a missing source is
+  # skipped silently (worktree-copy.ts).
+  copyFiles:
+    - .env
 
 docs:
   path: packages/docs-web/src/content/docs

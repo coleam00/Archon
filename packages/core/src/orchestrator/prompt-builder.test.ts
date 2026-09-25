@@ -6,6 +6,8 @@ import {
   buildRunManagementSection,
   formatPausedGateSection,
 } from './prompt-builder';
+import type { Codebase, Conversation } from '../types';
+import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 
 describe('buildRoutingRulesWithProject', () => {
   test('routing rules include --prompt in invocation format', () => {
@@ -78,41 +80,52 @@ describe('formatWorkflowContextSection', () => {
 });
 
 describe('buildOrchestratorSystemAppend', () => {
-  const makeConversation = (codebaseId: string | null) =>
-    ({
-      id: 'conv-1',
-      platform_type: 'web',
-      platform_conversation_id: 'web-1',
-      codebase_id: codebaseId,
-      cwd: null,
-      isolation_env_id: null,
-      ai_assistant_type: 'claude',
-      title: null,
-      hidden: false,
-      deleted_at: null,
-      last_activity_at: null,
-      created_at: new Date(),
-      updated_at: new Date(),
-    }) as const;
+  const makeConversation = (codebaseId: string | null): Conversation => ({
+    id: 'conv-1',
+    platform_type: 'web',
+    platform_conversation_id: 'web-1',
+    codebase_id: codebaseId,
+    cwd: null,
+    isolation_env_id: null,
+    ai_assistant_type: 'claude',
+    title: null,
+    hidden: false,
+    deleted_at: null,
+    user_id: null,
+    last_activity_at: null,
+    created_at: new Date(),
+    updated_at: new Date(),
+  });
 
-  const codebases = [
+  const codebases: Codebase[] = [
     {
       id: 'cb-1',
       name: 'my-project',
       default_cwd: '/path/to/project',
       ai_assistant_type: 'claude',
       repository_url: null,
-      commands: null,
+      default_branch: 'main',
+      kind: 'repo',
+      commands: {},
+      created_at: new Date(),
+      updated_at: new Date(),
     },
   ];
 
-  const workflows = [
+  const workflows: WorkflowDefinition[] = [
     {
       name: 'assist',
       description: 'General assistance',
-      nodes: [{ id: 'step1', command: 'archon-assist', depends_on: [] }],
+      nodes: [
+        {
+          id: 'step1',
+          kind: 'agent',
+          source: { kind: 'command', name: 'archon-assist' },
+          depends_on: [],
+        },
+      ],
     },
-  ] as unknown as import('@archon/workflows/schemas/workflow').WorkflowDefinition[];
+  ];
 
   test('returns orchestrator prompt when no codebase is scoped', () => {
     const result = buildOrchestratorSystemAppend(makeConversation(null), codebases, workflows);
@@ -167,8 +180,18 @@ describe('buildRunManagementSection', () => {
     }
     expect(section).toContain('--json');
     expect(section).toContain('--detach');
-    expect(section).toContain('actively stop');
-    expect(section).toContain('state-only cancellation');
+    expect(section).toContain('has that process stopped first');
+    expect(section).toContain('discard a run whose owner is gone');
+  });
+
+  test('states the status fallback without weakening the non-repository boundary', () => {
+    const section = buildRunManagementSection();
+
+    expect(section).toContain('unregistered git checkout');
+    expect(section).toContain('install-wide active runs');
+    expect(section).toContain('scopeFallback: true');
+    expect(section).toContain('non-repo path');
+    expect(section).toContain('Not in a git repository');
   });
 
   test('tells the CLI-path providers to pass the user’s own words', () => {
@@ -333,6 +356,17 @@ describe('formatPausedGateSection', () => {
     expect(section).not.toContain('no separate resume step');
   });
 
+  test('gives the agent the surface spelling of the explicit commands', () => {
+    const section = formatPausedGateSection({
+      ...openGate,
+      agentCanResolve: false,
+      surface: { formatWorkflowCommand: command => `/archon-workflow ${command}` },
+    });
+
+    expect(section).toContain('`/archon-workflow approve run-abc [comment]`');
+    expect(section.replaceAll('/archon-workflow ', '')).not.toContain('/workflow ');
+  });
+
   test('falls back to the explicit commands when the approval context is unusable', () => {
     for (const approval of [undefined, null, {}, { nodeId: 'x' }, 'garbage']) {
       const section = formatPausedGateSection(pausedRun(approval));
@@ -373,5 +407,31 @@ describe('formatPausedGateSection', () => {
     });
 
     expect(section).toBe('');
+  });
+
+  test('describes an action-required wait without offering approval verbs', () => {
+    const section = formatPausedGateSection({
+      run: {
+        id: 'run-abc',
+        workflow_name: 'deliver',
+        status: 'paused',
+        metadata: {
+          wait: {
+            owner: 'node',
+            nodeId: 'rerun-ci',
+            kind: 'attention',
+            waitingSince: '2026-08-28T10:00:00.000Z',
+            message: 'Re-run the windows check, then resume.',
+          },
+        },
+      },
+    });
+
+    expect(section).toContain('## Paused action required');
+    expect(section).toContain('Re-run the windows check, then resume.');
+    expect(section).toContain('archon workflow resume run-abc');
+    expect(section).toContain('Abandon it');
+    expect(section).not.toContain('Paused Approval Gate');
+    expect(section).not.toContain('/workflow approve');
   });
 });

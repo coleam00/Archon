@@ -9,24 +9,29 @@
  * REST API can use it.
  */
 
-import { dirname, join, resolve, isAbsolute } from 'path';
+import { join, resolve, isAbsolute } from 'path';
 import { access, readFile, stat } from 'fs/promises';
 import {
   createLogger,
   getCommandFolderSearchPaths,
   getDefaultCommandsPath,
-  getDefaultWorkflowsPath,
   getHomeCommandsPath,
-  getHomeWorkflowsPath,
-  findMarkdownFilesRecursive,
+  findCommandFiles,
 } from '@archon/paths';
 import { execFileAsync } from '@archon/git';
 import { BUNDLED_COMMANDS, BUNDLED_WORKFLOWS, isBinaryBuild } from './defaults/bundled-defaults';
+import {
+  bundledDefaultCommandPath,
+  bundlesPackagedResources,
+  listBundledDefaultCommands,
+} from './defaults/bundle-inventory';
 import { isValidCommandName } from './command-validation';
 import { levenshtein, findSimilar } from './utils/fuzzy-match';
 import {
   claudeSkillSearchRoots,
+  compileOutputSchema,
   findInstalledSkillNames,
+  findRequiredPropertyGaps,
   getProviderCapabilities,
   isRegisteredProvider,
   skillSearchRoots,
@@ -44,16 +49,21 @@ import {
   isLoopNode,
   isLoopGroupNode,
   isIncludeDirective,
+  isOutputFormatEnforced,
+  isWaitNode,
   isWorkflowNode,
 } from './schemas';
-import { parseWorkflow } from './loader';
+import { parseWorkflow, workflowNodeOutputFormatError } from './loader';
+import { LOOP_PREV_OUTPUT_REF_SOURCE, OUTPUT_REF_SOURCE } from './output-ref';
 import { resolveWorkflowName } from './router';
+import { visitNodeTemplateSlots } from './template-walker';
 import type { WorkflowDefinition, DagNode, IncludeDirective, WorkflowSource } from './schemas';
 import type { ScriptRuntime } from './script-discovery';
 import { discoverScriptsForCwd } from './script-discovery';
 import { isInlineScript } from './executor-shared';
 import { buildAiProfile, isLiteralSpec, resolveModelSpec } from './model-validation';
-import { getPackagedResourceDirectory, parsePackagedResourceReference } from './packaged-workflow';
+import { parsePackagedResourceReference } from './packaged-workflow';
+import { liveSourceRoots, packagedWorkflowDirectory } from './workflow-source';
 import type { RawAliasesConfig, RawTiersConfig, ResolvedAiProfile } from './model-validation';
 
 // =============================================================================
@@ -148,7 +158,7 @@ export async function discoverAvailableCommands(
   const searchPaths = getCommandFolderSearchPaths(config?.commandFolder);
   for (const folder of searchPaths) {
     const dirPath = join(cwd, folder);
-    const files = await findMarkdownFilesRecursive(dirPath, '', { maxDepth: 1 });
+    const files = await findCommandFiles(dirPath);
     for (const { commandName } of files) {
       names.add(commandName);
     }
@@ -159,7 +169,7 @@ export async function discoverAvailableCommands(
   // home-scope doesn't take down repo/bundled discovery.
   const homePath = getHomeCommandsPath();
   try {
-    const homeCommands = await findMarkdownFilesRecursive(homePath, '', { maxDepth: 1 });
+    const homeCommands = await findCommandFiles(homePath);
     for (const { commandName } of homeCommands) {
       names.add(commandName);
     }
@@ -175,10 +185,8 @@ export async function discoverAvailableCommands(
         if (parsePackagedResourceReference(name) === null) names.add(name);
       }
     } else {
-      const defaultsPath = getDefaultCommandsPath();
-      const files = await findMarkdownFilesRecursive(defaultsPath, '', { maxDepth: 1 });
-      for (const { commandName } of files) {
-        names.add(commandName);
+      for (const name of await listBundledDefaultCommands(getDefaultCommandsPath())) {
+        names.add(name);
       }
     }
   }
@@ -196,7 +204,7 @@ export async function discoverAvailableCommands(
  * deterministic walk order wins — duplicates within a scope are a user error.
  */
 async function resolveCommandInDir(rootDir: string, commandName: string): Promise<string | null> {
-  const entries = await findMarkdownFilesRecursive(rootDir, '', { maxDepth: 1 });
+  const entries = await findCommandFiles(rootDir);
   const match = entries.find(e => e.commandName === commandName);
   return match ? join(rootDir, match.relativePath) : null;
 }
@@ -222,19 +230,11 @@ async function resolveCommand(
       if (isBinaryBuild()) {
         return commandName in BUNDLED_COMMANDS ? `[bundled:${commandName}]` : null;
       }
+      if (!(await bundlesPackagedResources(packaged.owner.pack))) return null;
     }
-    let workflowsRoot: string;
-    if (packaged.owner.source === 'project') {
-      workflowsRoot = join(cwd, '.archon', 'workflows');
-    } else if (packaged.owner.source === 'global') {
-      workflowsRoot = getHomeWorkflowsPath();
-    } else {
-      workflowsRoot = dirname(getDefaultWorkflowsPath());
-    }
-    const path = join(
-      getPackagedResourceDirectory(workflowsRoot, packaged.owner, 'commands'),
-      `${packaged.name}.md`
-    );
+    const workflowDir = await packagedWorkflowDirectory(liveSourceRoots(cwd), packaged.owner);
+    if (workflowDir === null) return null;
+    const path = join(workflowDir, 'commands', `${packaged.name}.md`);
     try {
       return (await stat(path)).isFile() ? path : null;
     } catch (error) {
@@ -277,8 +277,21 @@ async function resolveCommand(
         return `[bundled:${commandName}]`;
       }
     } else {
-      const defaultsResolved = await resolveCommandInDir(getDefaultCommandsPath(), commandName);
-      if (defaultsResolved) return defaultsResolved;
+      const path = await bundledDefaultCommandPath(getDefaultCommandsPath(), commandName);
+      // A miss is ENOENT; any other stat failure belongs to the caller, not to a silent null.
+      if (path !== null) {
+        try {
+          if ((await stat(path)).isFile()) return path;
+        } catch (error) {
+          const err = error as NodeJS.ErrnoException;
+          if (err.code !== 'ENOENT') {
+            getLog().error({ err, path, commandName }, 'bundled_default_command_inspection_failed');
+            throw new Error(`Cannot inspect bundled default '${commandName}': ${err.message}`, {
+              cause: err,
+            });
+          }
+        }
+      }
     }
   }
 
@@ -379,7 +392,9 @@ function getBundledWorkflowDefs(): WorkflowDefinition[] {
  * Call this AFTER parseWorkflow() has passed (Levels 1-2 are prerequisites).
  */
 export async function validateWorkflowResources(
-  workflow: WorkflowDefinition,
+  workflow: Omit<WorkflowDefinition, 'nodes'> & {
+    readonly nodes: readonly (DagNode | IncludeDirective)[];
+  },
   cwd: string,
   config?: ValidationConfig,
   defaultProvider?: string
@@ -387,7 +402,9 @@ export async function validateWorkflowResources(
   const issues: ValidationIssue[] = [];
   const availableCommands = await discoverAvailableCommands(cwd, config);
   const requiresPortableModelRefs =
-    config?.workflowSource === 'bundled' || config?.workflowSource === 'global';
+    config?.workflowSource === 'bundled' ||
+    config?.workflowSource === 'global' ||
+    config?.workflowSource === 'installed';
   const modelProfileProvider = config?.assistant ?? defaultProvider ?? 'claude';
   let aiProfile: ResolvedAiProfile | undefined;
 
@@ -442,20 +459,30 @@ export async function validateWorkflowResources(
     }
   }
 
-  // Flatten top-level nodes plus every loop_group body (recursing into nested
-  // loop_groups) so resource checks (commands, mcp, skills, scripts) validate
-  // body nodes too. ID-uniqueness/cycle checks are the loader's job; the validator
-  // only checks referenced resources exist, so flattening is safe here.
-  const allNodes: (DagNode | IncludeDirective)[] = [];
-  const collectNodes = (nodes: readonly (DagNode | IncludeDirective)[]): void => {
-    for (const n of nodes) {
-      allNodes.push(n);
-      if (!isIncludeDirective(n) && isLoopGroupNode(n)) collectNodes(n.loop_group.nodes);
+  // Flatten top-level nodes plus every loop_group body while carrying the provider
+  // scope execution gives each group. Body nodes inherit the group's resolved
+  // provider/model unless they override it themselves.
+  const allNodes: {
+    node: DagNode | IncludeDirective;
+    provider: string | undefined;
+  }[] = [];
+  const collectNodes = (
+    nodes: readonly (DagNode | IncludeDirective)[],
+    inheritedProvider: string | undefined
+  ): void => {
+    for (const node of nodes) {
+      const provider = isIncludeDirective(node)
+        ? inheritedProvider
+        : resolveValidationProvider(node, inheritedProvider, defaultProvider, aiProfile);
+      allNodes.push({ node, provider });
+      if (!isIncludeDirective(node) && isLoopGroupNode(node)) {
+        collectNodes(node.loop_group.nodes, provider);
+      }
     }
   };
-  collectNodes(workflow.nodes);
+  collectNodes(workflow.nodes, effectiveWorkflowProvider);
 
-  for (const node of allNodes) {
+  for (const { node, provider } of allNodes) {
     // Include directives carry no resources to check — the target workflow is resolved
     // and inlined at DISCOVERY time (see include-expander.ts), so discovery-fed
     // validation (CLI `validate workflows`) sees the already-expanded nodes and checks
@@ -465,14 +492,66 @@ export async function validateWorkflowResources(
     // crash here.
     if (isIncludeDirective(node)) continue;
 
-    const provider = resolveValidationProvider(
-      node,
-      effectiveWorkflowProvider,
-      defaultProvider,
-      aiProfile
-    );
+    // --- Declared contract belongs to a producer, and compiles (#2453) ---
+    // parseWorkflow already rejects both an `output_format` on a `workflow:` node and
+    // an uncompilable one on an enforced node, so a file-fed caller never reaches these
+    // branches. They are kept for the callers that hand this pass a definition built in
+    // memory (tests, and any future synthesized or programmatically-assembled
+    // workflow), which would otherwise validate clean and then fail at the node
+    // boundary after the spend. Same predicate as the loader, so the two gates cannot
+    // disagree on an inert schema.
+    const ownershipError = workflowNodeOutputFormatError(node);
+    if (ownershipError !== null) {
+      issues.push({
+        level: 'error',
+        nodeId: node.id,
+        field: 'output_format',
+        message: ownershipError,
+        hint: "Move the schema to the child workflow's returns: node — its declared fields travel back with the result.",
+      });
+    } else if (isOutputFormatEnforced(node) && node.output_format !== undefined) {
+      const compileError = compileOutputSchema(node.output_format);
+      if (compileError !== null) {
+        issues.push({
+          level: 'error',
+          nodeId: node.id,
+          field: 'output_format',
+          message: `Node '${node.id}' declares an output_format that cannot be compiled: ${compileError}`,
+          hint: 'Fix the JSON Schema — a declared contract is enforced against the node output, so it cannot be skipped.',
+        });
+      }
+    }
+
     const providerCaps =
       provider && isRegisteredProvider(provider) ? getProviderCapabilities(provider) : undefined;
+
+    // --- Strict-schema required coverage (#2945) ---
+    // A schema whose declared properties are not fully covered by 'required' is
+    // rejected by a provider that enforces OpenAI strict mode (Codex) at the
+    // first turn with HTTP 400 invalid_json_schema. Report it at validation time
+    // so `archon validate workflows` catches it before a live run burns setup
+    // costs. The set of provider-invoking kinds is the same one the launch
+    // preflight uses: every node kind that both enforces output_format
+    // (isOutputFormatEnforced) AND sends the schema to a provider (agent and
+    // loop; not exec/bash/script, and not a wait's engine-injected schema).
+    if (
+      ownershipError === null &&
+      !isExecNode(node) &&
+      !isWaitNode(node) &&
+      isOutputFormatEnforced(node) &&
+      node.output_format !== undefined &&
+      providerCaps?.requiresAllPropertiesRequired
+    ) {
+      for (const gap of findRequiredPropertyGaps(node.output_format, 'output_format')) {
+        issues.push({
+          level: 'error',
+          nodeId: node.id,
+          field: 'output_format',
+          message: `Node '${node.id}' declares properties not in 'required' at '${gap.schemaPath}': ${gap.missing.join(', ')}. Provider '${provider}' enforces OpenAI strict mode and will reject this schema (HTTP 400 invalid_json_schema).`,
+          hint: 'List every property key in the required array. Express optionality inside the type (e.g. a ["string","null"] union or an enum sentinel like "none").',
+        });
+      }
+    }
 
     if (requiresPortableModelRefs && 'model' in node && node.model?.startsWith('@')) {
       issues.push({
@@ -868,41 +947,76 @@ export async function validateWorkflowResources(
     // In bash node bodies (and loop `until_bash`, which substitutes the same way),
     // $node.output values are injected PRE-QUOTED by Archon: small values are
     // single-quoted inline ('the value'), large outputs (>32 KB) spill to a temp
-    // file as $(cat '/path'). Wrapping the substitution in double quotes breaks the
+    // file as $(cat '/path'). Wrapping the substitution in quotes breaks the
     // SMALL case — var="$n.output" becomes var="'value'", embedding the literal
     // single-quote chars as data. (For the large $(cat ...) case double-quoting is
     // actually fine, but the author can't predict the size at write time, so the
-    // rule is unconditional: never double-quote.) Numeric/boolean FIELD values are
-    // injected raw, so double-quoting is harmless for those — which is why the bug
+    // rule is unconditional: never wrap a substitution in quotes.) Numeric/boolean FIELD values are
+    // injected raw, so wrapping is harmless for those — which is why the bug
     // is intermittent and easy to miss.
-    //   wrong="$n.output.field" → wrong="'ok'" (single quotes become part of the value)
+    //   wrong="$n.output.field" → wrong="'ok'" (quote characters become part of the value)
     //   right=$n.output.field   → right='ok' → bash assigns: ok
     //
-    // The `(?:^|[=\s])"` prefix requires the opening `"` to be an operand (line
-    // start, after `=`, or after whitespace) so a *closing* quote of an unrelated
-    // earlier string doesn't cause a false positive (e.g. `echo "hi"; x=$a.output`).
-    // `[^"\n]` excludes newlines — a double-quote spanning lines is pathological.
-    const doubleQuotedOutputRef =
-      /(?:^|[=\s])"[^"\n]*\$(?:[a-zA-Z_][a-zA-Z0-9_-]*\.output|LOOP_PREV\.[a-zA-Z_][a-zA-Z0-9_-]*\.output)/m;
-    const warnDoubleQuoted = (body: string, field: string): void => {
-      if (doubleQuotedOutputRef.test(body)) {
+    // The template walker owns which fields are shell source and where the refs in
+    // them are: `surface: 'shell'` is the same tag dag-executor.ts reads to decide a
+    // slot gets the pre-quoted substitution, so a future shell slot inherits this lint
+    // instead of silently escaping it (#2996). Nothing here re-discovers either fact.
+    //
+    // Given a ref position, the only question left is whether bash sees it inside a
+    // string, and that is decided on the ref's OWN line: replay the quote state from
+    // the line start up to the ref. Two rules, each load-bearing against a real body:
+    //
+    //   Line-local — a quote that is still open at end of line does not reach the
+    //   lines below. `gh pr create --body "$(cat <<'EOF'` leaves a `"` open for the
+    //   rest of the heredoc, and the refs inside it are correctly unquoted.
+    //
+    //   Operand boundary — the opening quote must sit at line start, after `=`, or
+    //   after whitespace. Without it a mid-word apostrophe opens a phantom string
+    //   (`echo don't; x=$a.output`), and so does the *closing* quote of an earlier
+    //   string (`echo "hi"; x=$a.output`). Both are correct code.
+    //
+    // The boundary rule costs one true positive: a quoted ref reached from a
+    // non-operand position, as in `x=prefix"$n.output"` or `<<<"$n.output"`.
+    const opensAtOperandBoundary = (character: string | undefined): boolean =>
+      character === undefined || character === '=' || /\s/.test(character);
+    const isQuotedAt = (body: string, refIndex: number): boolean => {
+      let quote: string | undefined;
+      let openedAtBoundary = false;
+      for (let index = body.lastIndexOf('\n', refIndex - 1) + 1; index < refIndex; index += 1) {
+        const character = body[index];
+        if (quote === undefined) {
+          if (character === '"' || character === "'") {
+            quote = character;
+            openedAtBoundary = opensAtOperandBoundary(body[index - 1]);
+          }
+        } else if (character === quote) {
+          quote = undefined;
+        }
+      }
+      return quote !== undefined && openedAtBoundary;
+    };
+    visitNodeTemplateSlots(
+      node,
+      slot => {
+        if (slot.surface !== 'shell') return;
+        // Built per slot: a `g`-flagged instance carries mutable lastIndex.
+        const refFinder = new RegExp(`${LOOP_PREV_OUTPUT_REF_SOURCE}|${OUTPUT_REF_SOURCE}`, 'g');
+        const quoted = Array.from(slot.value.matchAll(refFinder)).some(match =>
+          isQuotedAt(slot.value, match.index)
+        );
+        if (!quoted) return;
         issues.push({
           level: 'warning',
           nodeId: node.id,
-          field,
+          field: slot.path,
           message:
-            '`"$nodeId.output"` / `"$LOOP_PREV.nodeId.output"` — double-quoting a substitution that is already shell-quoted by Archon produces the wrong value',
-          hint: 'Use `var=$node.output.field` or `var=$LOOP_PREV.node.output.field` (unquoted) — the substitution is injected already quoted. (Numeric/boolean fields are injected raw, so double-quoting is harmless for those, but the rule is uniform.)',
+            '`"$nodeId.output"` / `\'$nodeId.output\'` / `"$LOOP_PREV.nodeId.output"` / `\'$LOOP_PREV.nodeId.output\'` — wrapping a substitution that is already shell-quoted by Archon produces the wrong value',
+          hint: 'Use `var=$node.output.field` or `var=$LOOP_PREV.node.output.field` (unquoted) — the substitution is injected already quoted. (Numeric/boolean fields are injected raw, so wrapping is harmless for those, but the rule is uniform.)',
         });
-      }
-    };
-    if (isExecNode(node) && node.runtime === 'sh') warnDoubleQuoted(node.script, 'bash');
-    if (isLoopNode(node) && node.loop.until_bash) {
-      warnDoubleQuoted(node.loop.until_bash, 'loop.until_bash');
-    }
-    if (isLoopGroupNode(node) && node.loop_group.until_bash) {
-      warnDoubleQuoted(node.loop_group.until_bash, 'loop_group.until_bash');
-    }
+      },
+      // Body nodes of a loop_group are already in `allNodes`; recursing would double-report.
+      { recursive: false }
+    );
   }
 
   return issues;

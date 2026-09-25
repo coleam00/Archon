@@ -4,6 +4,29 @@
  * Runs in its own test batch to avoid mock.module pollution with other adapters.
  */
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import type { Mock } from 'bun:test';
+import type { Codebase, Conversation } from '@archon/core';
+
+type FetchCall = (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>;
+type FetchMock = Mock<FetchCall> & Pick<typeof fetch, 'preconnect'>;
+
+async function copyResponse(response: Response): Promise<Response> {
+  const body = await response.clone().arrayBuffer();
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: [...response.headers.entries()],
+  });
+}
+
+function makeFetchMock(response: Response): FetchMock {
+  return Object.assign(
+    mock<FetchCall>(() => copyResponse(response)),
+    {
+      preconnect: mock<typeof fetch.preconnect>(() => undefined),
+    }
+  );
+}
 
 // Mock @archon/paths to suppress noisy logger output during tests
 const mockLogger = {
@@ -45,9 +68,13 @@ const mockFindOrCreateUserByPlatformIdentity = mock(
 mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: mockFindOrCreateUserByPlatformIdentity,
 }));
-const mockGetOrCreateConversation = mock(async () => {
-  throw new Error('DB not mocked in tests');
-});
+const mockGetOrCreateConversation = mock(
+  async (): Promise<
+    Pick<Conversation, 'id' | 'codebase_id' | 'platform_type' | 'platform_conversation_id'>
+  > => {
+    throw new Error('DB not mocked in tests');
+  }
+);
 const mockUpdateConversation = mock(async () => {
   throw new Error('DB not mocked in tests');
 });
@@ -58,7 +85,9 @@ mock.module('@archon/core/db/conversations', () => ({
   getConversation: mockGetConversation,
 }));
 
-const mockFindCodebaseByRepoUrl = mock(async () => null);
+const mockFindCodebaseByRepoUrl = mock(
+  async (): Promise<Pick<Codebase, 'id' | 'repository_url' | 'default_cwd' | 'name'> | null> => null
+);
 const mockCreateCodebase = mock(async () => {
   throw new Error('DB not mocked in tests');
 });
@@ -83,8 +112,9 @@ mock.module('@archon/core', () => ({
   onConversationClosed: mockOnConversationClosed,
   ConversationNotFoundError: class extends Error {},
   ConversationLockManager: class {
-    async acquireLock(_id: string, fn: () => Promise<void>): Promise<void> {
+    async acquireLock(_id: string, fn: () => Promise<void>): Promise<{ status: 'started' }> {
       await fn();
+      return { status: 'started' };
     }
   },
 }));
@@ -106,8 +136,8 @@ mock.module('@archon/isolation', () => ({
 }));
 
 // Mock global fetch to prevent real HTTP calls (gitlab.example.com hangs on CI Linux)
-const mockFetch = mock(() => Promise.resolve(new Response(JSON.stringify({}), { status: 200 })));
-globalThis.fetch = mockFetch as typeof globalThis.fetch;
+const mockFetch = makeFetchMock(new Response(JSON.stringify({}), { status: 200 }));
+globalThis.fetch = mockFetch;
 
 // Now import the adapter (after all mocks)
 const { GitLabAdapter } = await import('./adapter');
@@ -124,7 +154,7 @@ function createAdapter(options?: {
   return new GitLabAdapter(
     options?.token ?? 'test-token',
     options?.secret ?? 'test-secret',
-    lockManager as never,
+    lockManager,
     options?.gitlabUrl ?? 'https://gitlab.example.com',
     options?.botMention ?? 'archon'
   );
@@ -714,11 +744,9 @@ describe('GitLabAdapter', () => {
   });
 
   describe('sendMessage', () => {
-    let mockFetch: ReturnType<typeof mock>;
-
     beforeEach(() => {
-      mockFetch = mock(() => Promise.resolve(new Response(JSON.stringify({}), { status: 200 })));
-      globalThis.fetch = mockFetch as typeof fetch;
+      mockFetch.mockReset();
+      mockFetch.mockImplementation(async () => new Response(JSON.stringify({}), { status: 200 }));
     });
 
     test('posts to correct issue notes API endpoint', async () => {

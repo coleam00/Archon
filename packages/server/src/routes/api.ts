@@ -2,14 +2,16 @@
  * REST API routes for the Archon Web UI.
  * Provides conversation, codebase, and SSE streaming endpoints.
  */
+
+import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';
 import type { WebAdapter } from '../adapters/web';
 import { boundMetadataToolOutputs } from '../adapters/web/truncate';
-import { rm, readFile, writeFile, unlink, mkdir, readdir, stat } from 'fs/promises';
+import { rm, readFile, writeFile, unlink, mkdir, readdir, realpath, stat } from 'fs/promises';
 import { existsSync, readFileSync } from 'fs';
-import { normalize, join, sep, basename, dirname, resolve } from 'path';
+import { normalize, join, basename, dirname, resolve } from 'path';
 import { randomUUID } from 'crypto';
 import type { Context } from 'hono';
 import type {
@@ -62,8 +64,9 @@ import {
   setUserDefault,
 } from '@archon/core';
 import type { UserTiersPatch, UserAliasesPatch, AliasesPatch } from '@archon/core';
-import { parseWorkflowRunConfig } from '@archon/core/config';
+import { InvalidConfigError, parseWorkflowRunConfig } from '@archon/core/config';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
+import type { EffortLevel } from '@archon/workflows/schemas/effort';
 import { findRepoRoot, removeWorktree, toRepoPath, toWorktreePath } from '@archon/git';
 import {
   createLogger,
@@ -74,10 +77,12 @@ import {
   getArchonWorkspacesPath,
   getHomeCommandsPath,
   getHomeWorkflowsPath,
-  resolveProjectStorageKey,
-  getRunArtifactsDirForKey,
   getRunArtifactsDirForRoot,
+  isRunArtifactsEngineEntry,
+  resolveRunStorageRoot,
   isInsideArchonHome,
+  isInsideArchonWorkspaces,
+  isPathInside,
   getArchonHome,
   isDocker,
   isWSL,
@@ -90,7 +95,9 @@ import {
   discoverWorkflowsWithConfig,
   isValidWorkflowFolderSegment,
 } from '@archon/workflows/workflow-discovery';
+import { FIXTURES_DIR } from '@archon/workflows/fixture-layout';
 import { parseWorkflow } from '@archon/workflows/loader';
+import { resolveWorkflowName } from '@archon/workflows/router';
 import { isValidCommandName, isValidWorkflowName } from '@archon/workflows/command-validation';
 import { BUNDLED_WORKFLOWS, BUNDLED_COMMANDS, isBinaryBuild } from '@archon/workflows/defaults';
 import {
@@ -104,7 +111,7 @@ import {
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { MessageRow } from '@archon/core/schemas/message';
 import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
-import { findMarkdownFilesRecursive } from '@archon/core/utils/commands';
+import { findCommandFiles } from '@archon/core/utils/commands';
 import { resumeWorkflowRunFromServer } from '../services/workflow-resume-service';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -152,6 +159,7 @@ async function findPackagedWorkflowAt(
 
   let match: RawWorkflowFile | null = null;
   for (const pack of packs.sort((a, b) => a.localeCompare(b))) {
+    if (pack === FIXTURES_DIR) continue;
     if (!isValidWorkflowFolderSegment(pack)) continue;
     const packPath = join(workflowsRoot, pack);
     try {
@@ -169,6 +177,7 @@ async function findPackagedWorkflowAt(
       throw error;
     }
     for (const workflowFolder of workflowFolders.sort((a, b) => a.localeCompare(b))) {
+      if (workflowFolder === FIXTURES_DIR) continue;
       if (!isValidWorkflowFolderSegment(workflowFolder)) continue;
       const workflowPath = join(packPath, workflowFolder);
       try {
@@ -268,6 +277,10 @@ import * as messageDb from '@archon/core/db/messages';
 import * as userDb from '@archon/core/db/users';
 import {
   abandonWorkflow,
+  AbandonOwnerNotStoppedError,
+  cancelWorkflow,
+  CancelRefusedError,
+  describeAbandonOwner,
   approveWorkflow,
   rejectWorkflow,
   respondToWorkflow,
@@ -300,6 +313,7 @@ import {
   resetWorkflowNodeSessionsQuerySchema,
   resetWorkflowNodeSessionsResponseSchema,
   listArtifactsResponseSchema,
+  workflowSourceSchema,
 } from './schemas/workflow.schemas';
 import {
   conversationListResponseSchema,
@@ -377,6 +391,7 @@ import {
   introspectOpencodeCredentials,
 } from '@archon/providers';
 import { messageSchema } from './schemas/conversation.schemas';
+import { dagNodeSseEventSchema } from '../adapters/web/workflow-event.schemas';
 import {
   workflowRunSchema,
   dashboardWorkflowRunSchema,
@@ -400,7 +415,7 @@ if (BUNDLED_IS_BINARY) {
   }
 }
 
-type WorkflowSource = 'project' | 'bundled' | 'global';
+type WorkflowSource = z.infer<typeof workflowSourceSchema>;
 
 /**
  * Resolve the on-disk artifact directory for a run, for EVERY project kind
@@ -411,36 +426,16 @@ type WorkflowSource = 'project' | 'bundled' | 'global';
  * no-remote local repo (bare basename) — so artifact browsing was silently dead
  * for two of the three project kinds Archon can register.
  *
- * Order mirrors the executor: a persisted `output_root` wins outright (a
- * codebase renamed since the run must not orphan its artifacts, #1192);
- * otherwise the shared `resolveProjectStorageKey` derives the key. Returns null
- * only when there is no codebase row to derive from at all — callers surface
- * that as an explicit 404 rather than an empty success.
- *
- * The `cwd` argument is `codebase.default_cwd` here, while the executor passes
- * the RUN's cwd (which inside a worktree is the worktree path). That only
- * differs for the `{ kind: 'cwd' }` fallback, and every run since #2200
- * persists `output_root`, so this path never re-derives for a modern run.
+ * The shared root resolver owns trusted persisted-root precedence and
+ * relocation fallback; this route only composes the artifact directory.
  */
 function resolveRunArtifactDir(
   run: { output_root?: string | null },
   codebase: { kind?: string | null; name: string; default_cwd: string } | null,
   runId: string
 ): string | null {
-  // The containment check belongs INSIDE this branch, not after it. A persisted
-  // root is a cache of where the run wrote, not an authority: move ARCHON_HOME
-  // (machine migration, restored backup, the documented ARCHON_DATA split) and
-  // every stamped root is suddenly out-of-tree. Guarding after the fact would
-  // hard-400 every historical run even when its artifacts sit re-derivable and
-  // physically present under the new home — and `output_root` is write-once via
-  // COALESCE, so the app could never clear the column to recover. Falling
-  // through to re-derivation keeps the tree relocatable, which is how it behaved
-  // before the column existed. Matches `continue.ts`.
-  if (run.output_root && isInsideArchonHome(run.output_root)) {
-    return getRunArtifactsDirForRoot(run.output_root, runId);
-  }
-  if (!codebase?.name) return null;
-  return getRunArtifactsDirForKey(resolveProjectStorageKey(codebase, codebase.default_cwd), runId);
+  const root = resolveRunStorageRoot(run, codebase);
+  return root ? getRunArtifactsDirForRoot(root, runId) : null;
 }
 
 // =========================================================================
@@ -453,6 +448,23 @@ function jsonError(description: string): {
   description: string;
 } {
   return { content: { 'application/json': { schema: errorSchema } }, description };
+}
+
+/**
+ * A paused-gate refusal. `childRunId` is present when the answer is "act on the child run
+ * instead", so a client reads the run to act on instead of parsing it out of the message.
+ */
+const gateRefusalSchema = errorSchema
+  .extend({ childRunId: z.string().optional() })
+  .openapi('GateRefusal');
+type GateRefusal = z.infer<typeof gateRefusalSchema>;
+
+/** Helper to build the gate routes' 400 response entry for createRoute configs. */
+function jsonGateRefusal(description: string): {
+  content: { 'application/json': { schema: typeof gateRefusalSchema } };
+  description: string;
+} {
+  return { content: { 'application/json': { schema: gateRefusalSchema } }, description };
 }
 
 const cwdQuerySchema = z.object({ cwd: z.string().optional() });
@@ -882,7 +894,9 @@ const listRunArtifactsRoute = createRoute({
   summary: "List a run's artifact files",
   description:
     "Walks the run's artifact directory and returns relative file paths with size + " +
-    'mtime. Drives the console Artifacts tab. Resolves for every project kind — ' +
+    "mtime. Drives the console Artifacts tab. Leaves out only the engine's own " +
+    '`.archon` child at the root, the same rule `archon workflow get` applies; a ' +
+    "workflow's own dotfiles are listed. Resolves for every project kind — " +
     "`owner/repo`, `_local/<basename>`, and `_folder/<slug>` — preferring the run's " +
     'persisted `output_root` and re-deriving from the codebase when it is absent or ' +
     'no longer inside ARCHON_HOME. Returns `{ files: [] }` only when the location ' +
@@ -961,6 +975,9 @@ const cancelWorkflowRunRoute = createRoute({
     },
     400: jsonError('Bad request'),
     404: jsonError('Not found'),
+    409: jsonError(
+      'No live owner answered, or the owner could not be stopped; the run was not changed'
+    ),
     500: jsonError('Server error'),
   },
 });
@@ -1028,6 +1045,7 @@ const abandonWorkflowRunRoute = createRoute({
     },
     400: jsonError('Bad request'),
     404: jsonError('Not found'),
+    409: jsonError('A live owner answered but could not be stopped; the run was not changed'),
     500: jsonError('Server error'),
   },
 });
@@ -1046,7 +1064,7 @@ const approveWorkflowRunRoute = createRoute({
       content: { 'application/json': { schema: workflowRunActionResponseSchema } },
       description: 'Approved',
     },
-    400: jsonError('Bad request'),
+    400: jsonGateRefusal('Bad request'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -1066,7 +1084,7 @@ const rejectWorkflowRunRoute = createRoute({
       content: { 'application/json': { schema: workflowRunActionResponseSchema } },
       description: 'Rejected',
     },
-    400: jsonError('Bad request'),
+    400: jsonGateRefusal('Bad request'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -1086,7 +1104,7 @@ const respondWorkflowRunRoute = createRoute({
       content: { 'application/json': { schema: workflowRunActionResponseSchema } },
       description: 'Responded',
     },
-    400: jsonError('Bad request'),
+    400: jsonGateRefusal('Bad request'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -1183,7 +1201,7 @@ const patchAssistantConfigRoute = createRoute({
       content: { 'application/json': { schema: updateAssistantConfigResponseSchema } },
       description: 'Updated configuration',
     },
-    400: jsonError('Invalid request body'),
+    400: jsonError('Invalid request body, or the resulting config is invalid'),
     500: jsonError('Server error'),
   },
 });
@@ -1207,7 +1225,7 @@ const patchTiersConfigRoute = createRoute({
       content: { 'application/json': { schema: configResponseSchema } },
       description: 'Updated configuration',
     },
-    400: jsonError('Invalid request body'),
+    400: jsonError('Invalid request body, or the resulting config is invalid'),
     500: jsonError('Server error'),
   },
 });
@@ -1231,7 +1249,9 @@ const patchAliasesConfigRoute = createRoute({
       content: { 'application/json': { schema: configResponseSchema } },
       description: 'Updated configuration',
     },
-    400: jsonError('Invalid alias name, unknown provider, or invalid effort'),
+    400: jsonError(
+      'Invalid alias name, unknown provider, invalid effort, or the resulting config is invalid'
+    ),
     500: jsonError('Server error'),
   },
 });
@@ -1609,9 +1629,11 @@ export function registerApiRoutes(
   lockManager: ConversationLockManager,
   activePlatforms?: readonly string[]
 ): void {
+  app.openAPIRegistry.register('DagNodeSseEvent', dagNodeSseEventSchema);
+
   function apiError(
     c: Context,
-    status: 400 | 401 | 404 | 422 | 500 | 503,
+    status: 400 | 401 | 404 | 409 | 422 | 500 | 503,
     message: string,
     detail?: string
   ): Response {
@@ -1698,11 +1720,9 @@ export function registerApiRoutes(
    */
   async function validateCwd(cwd: string): Promise<boolean> {
     const codebases = await codebaseDb.listCodebases();
-    const normalizedCwd = normalize(cwd);
-    return codebases.some(cb => {
-      const base = normalize(cb.default_cwd);
-      return normalizedCwd === base || normalizedCwd.startsWith(base + sep);
-    });
+    return codebases.some(cb =>
+      isPathInside(cb.default_cwd, cwd, { includeRoot: true, lexical: true })
+    );
   }
 
   // CORS for Web UI — allow-all is fine for a single-developer tool.
@@ -2090,7 +2110,7 @@ export function registerApiRoutes(
   /** Validate a tier/alias entry's provider + effort. Returns an error message or null. */
   function validatePresetEntry(
     label: string,
-    entry: { provider: string; model: string; effort?: string }
+    entry: { provider: string; model: string; effort?: EffortLevel }
   ): string | null {
     if (!isRegisteredProvider(entry.provider)) {
       return `Unknown provider '${entry.provider}' for ${label}. Available: ${getProviderInfoList()
@@ -2117,11 +2137,10 @@ export function registerApiRoutes(
     return null;
   }
 
-  /** Clean a validated entry — drop `thinking` (no UI/CLI surface), keep effort. */
-  function toCleanEntry(entry: { provider: string; model: string; effort?: string }): {
+  function toCleanEntry(entry: { provider: string; model: string; effort?: EffortLevel }): {
     provider: string;
     model: string;
-    effort?: string;
+    effort?: EffortLevel;
   } {
     return {
       provider: entry.provider,
@@ -2334,7 +2353,7 @@ export function registerApiRoutes(
 
     const archonHome = getArchonHome();
     const uploadDir = join(archonHome, 'artifacts', 'uploads', conversationId);
-    if (!uploadDir.startsWith(archonHome + sep)) {
+    if (!isPathInside(archonHome, uploadDir, { lexical: true })) {
       return { ok: false, status: 400, error: 'Invalid conversation ID' };
     }
 
@@ -2578,7 +2597,7 @@ export function registerApiRoutes(
       }
       // Explicit resume targeting: `/workflow resume <id>` routes through the
       // command handler's resume path, which validates the run and hands the
-      // orchestrator an explicit resumeRun. A bare `/workflow run <name>` would
+      // orchestrator a resume request carrying that run. A bare `/workflow run <name>` would
       // instead rely on implicit resume detection and collide with the
       // ambiguity guard for any non-paused resumable state (#2075).
       const resumeMessage = `/workflow resume ${run.id}`;
@@ -3192,12 +3211,8 @@ export function registerApiRoutes(
       await codebaseDb.deleteCodebase(id);
 
       // Remove workspace directory from disk — only for Archon-managed repos
-      const workspacesRoot = normalize(getArchonWorkspacesPath());
       const normalizedCwd = normalize(codebase.default_cwd);
-      if (
-        normalizedCwd.startsWith(workspacesRoot + '/') ||
-        normalizedCwd.startsWith(workspacesRoot + '\\')
-      ) {
+      if (isInsideArchonWorkspaces(normalizedCwd)) {
         try {
           await rm(normalizedCwd, { recursive: true, force: true });
           getLog().info({ path: normalizedCwd }, 'workspace_removed');
@@ -3340,7 +3355,7 @@ export function registerApiRoutes(
           // node config onto the nodes and removes it (#1764), so the declared values are
           // layered back over the definition for this listing only — the console reads
           // `workflow.provider` to label a card, and execution never reads this response.
-          workflow: { ...ws.workflow, ...ws.declared },
+          workflow: Object.assign({}, ws.workflow, ws.declared),
           source: ws.source,
           // Keys the engine dropped from this YAML (#2213) — the console is the
           // surface most authors edit workflows on, so it has to carry them.
@@ -3674,26 +3689,38 @@ export function registerApiRoutes(
     }
   });
 
-  // POST /api/workflows/runs/:runId/cancel - Cancel a workflow run
+  // POST /api/workflows/runs/:runId/cancel - Cancel a workflow run through the shared
+  // owner-checked cancel: cooperative for a run this server executes, an owner stop for
+  // one another process owns, and a 409 refusal when no owner answers.
   registerOpenApiRoute(cancelWorkflowRunRoute, async c => {
+    const runId = c.req.param('runId') ?? '';
     try {
-      const runId = c.req.param('runId') ?? '';
       const run = await workflowDb.getWorkflowRun(runId);
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
-      if (run.status !== 'running' && run.status !== 'pending' && run.status !== 'paused') {
-        return apiError(c, 400, `Cannot cancel workflow in '${run.status}' status`);
+      const result = await cancelWorkflow(runId);
+      if (result.kind === 'cooperative') {
+        return c.json({
+          success: true,
+          message: result.cancelled
+            ? `Cancelled workflow: ${run.workflow_name}`
+            : `Workflow ${run.workflow_name} already finished — nothing to cancel.`,
+        });
       }
-      const { cancelled } = await workflowDb.cancelWorkflowRun(runId);
-      return c.json({
-        success: true,
-        message: cancelled
-          ? `Cancelled workflow: ${run.workflow_name}`
-          : `Workflow ${run.workflow_name} already finished — nothing to cancel.`,
-      });
+      let message = `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled workflow: ${run.workflow_name}`;
+      if (result.cascadeFailures > 0) {
+        message += ` — warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running`;
+      }
+      if (result.blockedParentRunId) {
+        message += ` — parent run ${result.blockedParentRunId} was blocked on this sub-run and stays paused; resume it to fail the node cleanly or abandon it too`;
+      }
+      return c.json({ success: true, message });
     } catch (error) {
-      getLog().error({ err: error }, 'cancel_workflow_run_api_failed');
+      if (error instanceof CancelRefusedError) {
+        return apiError(c, error.reason === 'not_running' ? 400 : 409, error.message);
+      }
+      getLog().error({ err: error, runId }, 'cancel_workflow_run_api_failed');
       return apiError(c, 500, 'Failed to cancel workflow run');
     }
   });
@@ -3711,7 +3738,7 @@ export function registerApiRoutes(
       }
       // Dispatch resume by sending `/workflow resume <id>` to the parent web
       // conversation; the command handler validates the run and hands the
-      // orchestrator an explicit resumeRun to hydrate. Explicit targeting (not
+      // orchestrator a resume request carrying that run. Explicit targeting (not
       // a bare `/workflow run <name>`) so a genuinely-failed run resumes
       // directly instead of hitting the disambiguation prompt (#2075).
       // Mirrors the approve/reject auto-resume path.
@@ -3813,8 +3840,8 @@ export function registerApiRoutes(
       // Delegate to the SHARED op — a raw cancelWorkflowRun here previously skipped
       // the sub-run cascade cancel AND the container reclaim (M2), so a web abandon
       // orphaned children that CLI/chat abandons cleaned up.
-      const { cascadeFailures, blockedParentRunId } = await abandonWorkflow(runId);
-      let message = `Abandoned workflow: ${run.workflow_name}`;
+      const { cascadeFailures, blockedParentRunId, owner } = await abandonWorkflow(runId);
+      let message = `${describeAbandonOwner(owner).join(' ')} Abandoned workflow: ${run.workflow_name}`;
       if (cascadeFailures > 0) {
         message += ` — warning: ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running`;
       }
@@ -3823,6 +3850,9 @@ export function registerApiRoutes(
       }
       return c.json({ success: true, message });
     } catch (error) {
+      if (error instanceof AbandonOwnerNotStoppedError) {
+        return apiError(c, 409, error.message);
+      }
       getLog().error({ err: error, runId }, 'api.workflow_run_abandon_failed');
       return apiError(c, 500, 'Failed to abandon workflow run');
     }
@@ -3845,31 +3875,47 @@ export function registerApiRoutes(
     run: WorkflowRun,
     childRedirectAdvice: string,
     requireReadableGate: boolean
-  ): string | null {
+  ): GateRefusal | null {
     const attention = runAttention(run);
     const approvalRaw = run.metadata.approval;
     const approval = isApprovalContext(approvalRaw) ? approvalRaw : undefined;
     switch (attention?.kind) {
+      case 'action_required':
+        return {
+          error:
+            'Run is paused for an outside action. Complete it, then resume the run; abandon it if it should not continue.',
+        };
       case 'blocked_on_child':
         // Not an approvable gate — the parent resumes automatically when the child
         // completes. Send the caller to the run where the decision actually lives.
-        return `Run is paused waiting on sub-run ${attention.childRunId}. ${childRedirectAdvice}`;
+        return {
+          error: `Run is paused waiting on sub-run ${attention.childRunId}. ${childRedirectAdvice}`,
+          childRunId: attention.childRunId,
+        };
       case 'unreadable':
         if (attention.reason === 'malformed_gate') {
-          return requireReadableGate ? 'Workflow run is paused but missing approval context' : null;
+          return requireReadableGate
+            ? { error: 'Workflow run is paused but missing approval context' }
+            : null;
         }
         if (attention.reason === 'unrecognized_gate_type') {
-          return `Workflow run has an unrecognized gate type '${String(approval?.type)}' — this Archon build cannot resolve it`;
+          return {
+            error: `Workflow run has an unrecognized gate type '${String(approval?.type)}' — this Archon build cannot resolve it`,
+          };
         }
-        return `Workflow run cannot be resolved: ${attention.detail}`;
+        return { error: `Workflow run cannot be resolved: ${attention.detail}` };
       case undefined:
         // Post-#2075 the run stays 'paused' after a resolution, so status alone no
         // longer distinguishes "awaiting a response" from "awaiting resume".
         if (approval && isGateResolved(approval)) {
-          return `Workflow run was already ${String(approval.resolved)} — resume in progress`;
+          return {
+            error: `Workflow run was already ${String(approval.resolved)} — resume in progress`,
+          };
         }
         // Paused with no gate at all — a durable `wait:`. There is nothing to approve.
-        return requireReadableGate ? 'Workflow run is paused but missing approval context' : null;
+        return requireReadableGate
+          ? { error: 'Workflow run is paused but missing approval context' }
+          : null;
       case 'awaiting_response':
         // The gate is open and this route may go on to resolve it.
         return null;
@@ -3904,7 +3950,7 @@ export function registerApiRoutes(
         true
       );
       if (approveBlocker) {
-        return apiError(c, 400, approveBlocker);
+        return c.json(approveBlocker, 400);
       }
       // Distinguish "no body sent" (legitimate bare approve) from "body sent but
       // unparseable" (client bug). Since #2074 a bare approve FINALIZES a
@@ -3971,7 +4017,7 @@ export function registerApiRoutes(
         false
       );
       if (rejectBlocker) {
-        return apiError(c, 400, rejectBlocker);
+        return c.json(rejectBlocker, 400);
       }
       // Mirror of the approve route's malformed-body guard: a swallowed parse
       // failure would silently drop the reviewer's reason.
@@ -4048,7 +4094,7 @@ export function registerApiRoutes(
         false
       );
       if (respondBlocker) {
-        return apiError(c, 400, respondBlocker);
+        return c.json(respondBlocker, 400);
       }
       const rawBody = await c.req.text();
       let body: { decision?: string; text?: string } = {};
@@ -4271,6 +4317,7 @@ export function registerApiRoutes(
           worker_platform_id: workerPlatformId,
           parent_platform_id: parentPlatformId,
           conversation_platform_id: conversationPlatformId ?? null,
+          terminal_record: getTerminalRecord(run.status, events),
         },
         events,
       });
@@ -4325,6 +4372,26 @@ export function registerApiRoutes(
       } else {
         const codebases = await codebaseDb.listCodebases();
         if (codebases.length > 0) workingDir = codebases[0].default_cwd;
+      }
+
+      // An installed workflow (`owner/plugin:entrypoint`) has no file under a project or
+      // home tree to find by name; it resolves through the catalog, by the same rule the
+      // CLI and chat use for a qualified name. Any other name, including a legacy file
+      // whose name contains `:`, continues to the file lookups below.
+      if (name.includes(':')) {
+        const { workflows } = await discoverWorkflowsWithConfig(workingDir ?? null, loadConfig);
+        const hit = resolveWorkflowName(
+          name,
+          workflows.filter(entry => entry.source === 'installed').map(entry => entry.workflow)
+        );
+        const entry = hit && workflows.find(candidate => candidate.workflow === hit);
+        if (entry) {
+          return c.json({
+            workflow: Object.assign({}, entry.workflow, entry.declared),
+            filename: entry.workflow.name,
+            source: entry.source,
+          });
+        }
       }
 
       // 1. Try user-defined workflow in cwd.
@@ -4586,17 +4653,11 @@ export function registerApiRoutes(
         commandMap.set(name, 'bundled');
       }
 
-      // maxDepth: 1 matches the executor's resolver (resolveCommand /
-      // loadCommandPrompt) — without this cap, the UI palette would surface
-      // commands buried in deep subfolders that the executor silently can't
-      // resolve at runtime.
-      const COMMAND_LIST_DEPTH = { maxDepth: 1 };
-
       // 2. If not binary build, also check filesystem defaults
       if (!isBinaryBuild()) {
         try {
           const defaultsPath = getDefaultCommandsPath();
-          const files = await findMarkdownFilesRecursive(defaultsPath, '', COMMAND_LIST_DEPTH);
+          const files = await findCommandFiles(defaultsPath);
           for (const { commandName } of files) {
             commandMap.set(commandName, 'bundled');
           }
@@ -4611,7 +4672,7 @@ export function registerApiRoutes(
       // 3. Home-scoped commands (~/.archon/commands/) override bundled
       try {
         const homeCommandsPath = getHomeCommandsPath();
-        const files = await findMarkdownFilesRecursive(homeCommandsPath, '', COMMAND_LIST_DEPTH);
+        const files = await findCommandFiles(homeCommandsPath);
         for (const { commandName } of files) {
           commandMap.set(commandName, 'global');
         }
@@ -4628,7 +4689,7 @@ export function registerApiRoutes(
         for (const folder of searchPaths) {
           const dirPath = join(workingDir, folder);
           try {
-            const files = await findMarkdownFilesRecursive(dirPath, '', COMMAND_LIST_DEPTH);
+            const files = await findCommandFiles(dirPath);
             for (const { commandName } of files) {
               commandMap.set(commandName, 'project');
             }
@@ -4718,8 +4779,9 @@ export function registerApiRoutes(
         throw err;
       }
       for (const entry of entries) {
-        // Skip dotfiles — they're workflow-internal scratch (.pr-number, etc.)
-        if (entry.name.startsWith('.')) continue;
+        // The engine's own store is left out by the rule the CLI's listing shares;
+        // a workflow's own dotfiles are its output and stay listed.
+        if (isRunArtifactsEngineEntry(rel, entry.name)) continue;
         const child = join(dir, entry.name);
         const childRel = rel === '' ? entry.name : `${rel}/${entry.name}`;
         if (entry.isDirectory()) {
@@ -4826,17 +4888,44 @@ export function registerApiRoutes(
     const filePath = join(artifactDir, filename);
 
     // Final safety check: ensure resolved path stays within artifact directory
-    if (
-      !normalize(filePath).startsWith(normalize(artifactDir) + sep) &&
-      normalize(filePath) !== normalize(artifactDir)
-    ) {
+    if (!isPathInside(artifactDir, filePath, { includeRoot: true, lexical: true })) {
       getLog().warn({ runId, filename, filePath, artifactDir }, 'artifacts.path_escape_blocked');
       return apiError(c, 400, 'Invalid filename');
     }
 
+    // readFile follows symlinks, so contain the resolved target within the
+    // resolved artifact directory and read that checked path (#3160).
+    let realArtifactDir: string;
+    try {
+      realArtifactDir = await realpath(artifactDir);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return apiError(c, 404, 'Artifact file not found');
+      }
+      getLog().error({ err, runId, artifactDir }, 'artifacts.read_failed');
+      return apiError(c, 500, 'Failed to read artifact file');
+    }
+    let realFilePath: string;
+    try {
+      realFilePath = await realpath(filePath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return apiError(c, 404, 'Artifact file not found');
+      }
+      getLog().error({ err, runId, filename }, 'artifacts.read_failed');
+      return apiError(c, 500, 'Failed to read artifact file');
+    }
+    if (!isPathInside(realArtifactDir, realFilePath, { includeRoot: true, lexical: true })) {
+      getLog().warn(
+        { runId, filename, realFilePath, realArtifactDir },
+        'artifacts.symlink_escape_blocked'
+      );
+      return apiError(c, 404, 'Artifact file not found');
+    }
+
     let content: string;
     try {
-      content = await readFile(filePath, 'utf-8');
+      content = await readFile(realFilePath, 'utf-8');
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         return apiError(c, 404, 'Artifact file not found');
@@ -4867,6 +4956,23 @@ export function registerApiRoutes(
       return apiError(c, 500, 'Failed to get config');
     }
   });
+
+  /**
+   * A write the config validators refused is the caller's to fix: return it as a
+   * 400 with the refused key. Anything else is a server fault and stays opaque.
+   */
+  function configUpdateFailed(
+    c: Context,
+    error: unknown,
+    logEvent: string,
+    message: string
+  ): Response {
+    if (error instanceof InvalidConfigError) {
+      return apiError(c, 400, error.summary);
+    }
+    getLog().error({ err: error }, logEvent);
+    return apiError(c, 500, message);
+  }
 
   // PATCH /api/config/assistants - Update assistant configuration
   registerOpenApiRoute(patchAssistantConfigRoute, async c => {
@@ -4910,8 +5016,12 @@ export function registerApiRoutes(
         database: getDatabaseType(),
       });
     } catch (error) {
-      getLog().error({ err: error }, 'config.assistants_update_failed');
-      return apiError(c, 500, 'Failed to update assistant configuration');
+      return configUpdateFailed(
+        c,
+        error,
+        'config.assistants_update_failed',
+        'Failed to update assistant configuration'
+      );
     }
   });
 
@@ -4931,7 +5041,6 @@ export function registerApiRoutes(
         }
         const errMsg = validatePresetEntry(`tier '${tier}'`, entry);
         if (errMsg) return apiError(c, 400, errMsg);
-        // Clean RawAliasEntry — drops `thinking` (no UI/CLI surface yet).
         tiers[tier] = toCleanEntry(entry);
       }
 
@@ -4943,8 +5052,12 @@ export function registerApiRoutes(
         database: getDatabaseType(),
       });
     } catch (error) {
-      getLog().error({ err: error }, 'config.tiers_update_failed');
-      return apiError(c, 500, 'Failed to update tier configuration');
+      return configUpdateFailed(
+        c,
+        error,
+        'config.tiers_update_failed',
+        'Failed to update tier configuration'
+      );
     }
   });
 
@@ -4973,8 +5086,12 @@ export function registerApiRoutes(
         database: getDatabaseType(),
       });
     } catch (error) {
-      getLog().error({ err: error }, 'config.aliases_update_failed');
-      return apiError(c, 500, 'Failed to update alias configuration');
+      return configUpdateFailed(
+        c,
+        error,
+        'config.aliases_update_failed',
+        'Failed to update alias configuration'
+      );
     }
   });
 

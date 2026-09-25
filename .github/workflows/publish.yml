@@ -1,12 +1,14 @@
 name: Publish
 
 on:
-  release:
-    types: [published]
   push:
     tags:
       - 'v*'
   workflow_dispatch:
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   REGISTRY: ghcr.io

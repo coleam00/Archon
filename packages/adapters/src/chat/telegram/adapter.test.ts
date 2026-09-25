@@ -7,6 +7,7 @@
  */
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import type { Mock } from 'bun:test';
+import type { Api } from 'grammy';
 
 // Mock logger to suppress noisy output during tests
 const mockLogger = {
@@ -29,6 +30,8 @@ mock.module('@archon/paths', () => ({
 
 import { TelegramAdapter } from './adapter';
 
+type SendMessage = Api['sendMessage'];
+
 describe('TelegramAdapter', () => {
   describe('streaming mode configuration', () => {
     test('should return batch mode when configured', () => {
@@ -47,25 +50,23 @@ describe('TelegramAdapter', () => {
     });
   });
 
-  describe('bot instance', () => {
-    test('should provide access to bot instance', () => {
-      const adapter = new TelegramAdapter('fake-token-for-testing');
-      const bot = adapter.getBot();
-      expect(bot).toBeDefined();
-      expect(bot.api).toBeDefined();
-    });
-  });
-
   describe('message formatting', () => {
     let adapter: TelegramAdapter;
-    let mockSendMessage: Mock<() => Promise<void>>;
+    let mockSendMessage: Mock<SendMessage>;
 
     beforeEach(() => {
       adapter = new TelegramAdapter('fake-token-for-testing');
-      mockSendMessage = mock(() => Promise.resolve());
-      // Override bot's sendMessage
-      (adapter.getBot().api as unknown as { sendMessage: Mock<() => Promise<void>> }).sendMessage =
-        mockSendMessage;
+      mockSendMessage = mock<SendMessage>(async (chatId, text) => ({
+        message_id: 1,
+        date: 0,
+        chat: {
+          id: typeof chatId === 'number' ? chatId : 0,
+          type: 'private',
+          first_name: 'Test',
+        },
+        text,
+      }));
+      adapter.getBot().api.sendMessage = mockSendMessage;
     });
 
     test('should send with MarkdownV2 parse_mode', async () => {
@@ -80,9 +81,7 @@ describe('TelegramAdapter', () => {
     });
 
     test('should fallback to plain text when MarkdownV2 fails', async () => {
-      mockSendMessage
-        .mockRejectedValueOnce(new Error("Bad Request: can't parse entities"))
-        .mockResolvedValueOnce(undefined);
+      mockSendMessage.mockRejectedValueOnce(new Error("Bad Request: can't parse entities"));
 
       await adapter.sendMessage('12345', '**test**');
 
@@ -152,9 +151,7 @@ describe('TelegramAdapter', () => {
 
     test('should fall back to plain text and use line-based batching when MarkdownV2 fails on chunk', async () => {
       // First MarkdownV2 attempt fails; second call is plain-text fallback
-      mockSendMessage
-        .mockRejectedValueOnce(new Error("Bad Request: can't parse entities"))
-        .mockResolvedValueOnce(undefined);
+      mockSendMessage.mockRejectedValueOnce(new Error("Bad Request: can't parse entities"));
 
       await adapter.sendMessage('77777', 'plain fallback text');
 

@@ -18,25 +18,133 @@ inputs:
       Optional narrowing — a package, directory, or named check to focus on.
       Empty means the project's full applicable gate.
 
-returns: validate
+  comparison:
+    default: ""
+    description: >-
+      Optional path to a composition request JSON: pinned original_base/base/head,
+      change/base_changes, merge method and the project check argv/environment identity.
+      Runs that exact gate on separate and composed trees without an agent.
+
+returns: result
 outcome_field: green
 
 nodes:
-  - id: validate
-    command: validate
-    output_type: validation
+  - id: mode
+    script: mode
+    runtime: bun
+    with:
+      comparison: "$INPUTS.comparison"
     output_format:
       type: object
       properties:
-        green:
-          type: boolean
-        # Why the checks are red, when they are. Carries the empty string
-        # when there is no red to explain, for the same reason implement's does:
-        # OpenAI strict mode rejects a schema whose `required` omits a declared
-        # property, so the absent form lives in the enum.
+        comparison: { type: boolean }
+      required: [comparison]
+
+  - id: compare
+    script: compare
+    runtime: bun
+    always_run: true
+    depends_on: [mode]
+    when: "$mode.output.comparison == true"
+    with:
+      comparison: "$INPUTS.comparison"
+    output_format: &composition_verdict
+      type: object
+      properties:
+        green: { type: boolean }
         red_cause:
           type: string
-          enum: [introduced, inherited, environment, ""]
-        summary:
+          enum: [introduced, inherited, environment, interaction, incomplete, ""]
+        summary: { type: string }
+        evidence:
+          anyOf:
+            - type: "null"
+            - type: object
+              properties:
+                type: { type: string, enum: [archon_artifact] }
+                run_id: { type: string }
+                path: { type: string }
+              required: [type, run_id, path]
+      required: [green, red_cause, summary, evidence]
+
+  # Ordinary validation is three nodes. Finding the gate is judgement, so an agent
+  # does it. Running the gate is computation, so a script does it: an agent's
+  # shell tool has a per-call time limit that a project's gate can outlast, and a
+  # script node runs for as long as its own `timeout:` allows. Judging why a
+  # check failed is judgement again, so only a red run reaches an agent.
+  - id: discover
+    command: discover-checks
+    depends_on: [mode]
+    when: "$mode.output.comparison == false"
+    always_run: true
+    output_format:
+      type: object
+      properties:
+        # The commands to run, in order. Each is an argv, never a shell string;
+        # a check that needs a shell names one as its first element.
+        checks:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              argv:
+                type: array
+                items: { type: string }
+                minItems: 1
+            required: [name, argv]
+        # Untracked paths under `.archon/` that the run injected and the gate
+        # would refuse. The runner moves them aside while the checks run.
+        quarantine:
+          type: array
+          items: { type: string }
+        notes: { type: string }
+      required: [checks, quarantine, notes]
+
+  # Runs the declared checks and records every exit status in
+  # `$ARTIFACTS_DIR/validation.md`. Green and "didn't finish" are read from those
+  # exit statuses, never from a clock. The timeout is sized for a slow gate on a
+  # loaded machine. When it stops the gate anyway, the node is skipped and
+  # `result` reports `incomplete`.
+  - id: run
+    script: run-checks
+    runtime: bun
+    depends_on: [discover]
+    always_run: true
+    timeout: 7200000
+    on_timeout: skip
+    with:
+      discovery: "$discover.output"
+    output_format:
+      type: object
+      properties:
+        status: { type: string, enum: [green, red, incomplete] }
+        summary: { type: string }
+      required: [status, summary]
+
+  - id: classify
+    command: classify-red
+    depends_on: [run]
+    when: "$run.output.status == 'red'"
+    output_format:
+      type: object
+      properties:
+        red_cause:
           type: string
-      required: [green, red_cause, summary]
+          enum: [introduced, inherited, environment]
+        summary: { type: string }
+      required: [red_cause, summary]
+
+  - id: result
+    script: result
+    runtime: bun
+    # `discover` keeps this join eligible when the timeout skipped `run`: every
+    # other producer is skipped then too.
+    depends_on: [compare, discover, run, classify]
+    trigger_rule: none_failed_min_one_success
+    with:
+      comparison: { from: "$compare.output", if_skipped: null }
+      run: { from: "$run.output", if_skipped: null }
+      classification: { from: "$classify.output", if_skipped: null }
+    output_type: validation
+    output_format: *composition_verdict

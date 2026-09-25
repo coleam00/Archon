@@ -53,7 +53,7 @@ const todayDate = new Date();
 const today = todayDate.toLocaleDateString('sv-SE'); // YYYY-MM-DD local
 const deadlineDate = new Date(todayDate);
 deadlineDate.setDate(deadlineDate.getDate() + 3);
-const deadline_3d = deadlineDate.toLocaleDateString('sv-SE');
+const deadline3d = deadlineDate.toLocaleDateString('sv-SE');
 
 // Cross-workflow memory: which PRs has maintainer-review-pr already triaged?
 // Written by maintainer-review-pr's `record-review` node; surfaced here so
@@ -76,7 +76,7 @@ console.log(
     prior_state: priorState,
     recent_briefs: recentBriefs,
     today,
-    deadline_3d,
+    deadline_3d: deadline3d,
     reviewed_prs: reviewedPrs,
   }),
 );

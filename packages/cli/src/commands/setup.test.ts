@@ -1,7 +1,7 @@
 /**
  * Tests for setup command utility functions
  */
-import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -11,7 +11,6 @@ import {
   checkPiModule,
   generateEnvContent,
   generateWebhookSecret,
-  spawnTerminalWithSetup,
   detectClaudeExecutablePath,
   writeScopedEnv,
   serializeEnv,
@@ -22,7 +21,6 @@ import {
   writeInstallDefaults,
 } from './setup';
 import * as setupModule from './setup';
-import { copyArchonSkill } from './skill';
 import { parse as parseDotenv } from 'dotenv';
 
 // Test directory for file operations
@@ -396,101 +394,6 @@ CODEX_ACCOUNT_ID=account1
       expect(content).toContain('OPENROUTER_API_KEY=or-key');
       expect(content).toContain('DEFAULT_AI_ASSISTANT=claude');
       expect(content).toContain('# Pi Authentication');
-    });
-  });
-
-  describe('spawnTerminalWithSetup', () => {
-    // Skip this test because it requires a terminal emulator to be present
-    // and spawn() throws synchronously when executable is not found in PATH
-    // The actual functionality is manually tested
-    it.skip('should return a SpawnResult object (requires terminal emulator)', () => {
-      const result = spawnTerminalWithSetup(TEST_DIR);
-
-      expect(result).toHaveProperty('success');
-      expect(typeof result.success).toBe('boolean');
-      if (!result.success) {
-        expect(result).toHaveProperty('error');
-      }
-    });
-
-    it('should export spawnTerminalWithSetup function', () => {
-      // Just verify the function is exported and callable
-      expect(typeof spawnTerminalWithSetup).toBe('function');
-    });
-  });
-
-  describe('copyArchonSkill', () => {
-    it('should create skill files in target directory', async () => {
-      const target = join(TEST_DIR, 'skill-target');
-      mkdirSync(target, { recursive: true });
-
-      await copyArchonSkill(target);
-
-      expect(existsSync(join(target, '.claude', 'skills', 'archon-cli', 'SKILL.md'))).toBe(true);
-      expect(
-        existsSync(join(target, '.claude', 'skills', 'archon-cli', 'manage-run', 'manage-runs.md'))
-      ).toBe(true);
-      expect(
-        existsSync(
-          join(
-            target,
-            '.claude',
-            'skills',
-            'archon-cli',
-            'authoring-workflows',
-            'node-reference.md'
-          )
-        )
-      ).toBe(true);
-      // Codex path is also populated
-      expect(existsSync(join(target, '.agents', 'skills', 'archon-cli', 'SKILL.md'))).toBe(true);
-    });
-
-    it('should write non-empty content to skill files', async () => {
-      const target = join(TEST_DIR, 'skill-target-content');
-      mkdirSync(target, { recursive: true });
-
-      await copyArchonSkill(target);
-
-      const content = readFileSync(
-        join(target, '.claude', 'skills', 'archon-cli', 'SKILL.md'),
-        'utf-8'
-      );
-      expect(content.length).toBeGreaterThan(0);
-      expect(content).toContain('archon');
-      // Codex SKILL.md mirrors the Claude one
-      const codexContent = readFileSync(
-        join(target, '.agents', 'skills', 'archon-cli', 'SKILL.md'),
-        'utf-8'
-      );
-      expect(codexContent).toBe(content);
-    });
-
-    it('should overwrite existing skill files', async () => {
-      const target = join(TEST_DIR, 'skill-target-overwrite');
-      const skillDir = join(target, '.claude', 'skills', 'archon-cli');
-      const codexSkillDir = join(target, '.agents', 'skills', 'archon-cli');
-      mkdirSync(skillDir, { recursive: true });
-      mkdirSync(codexSkillDir, { recursive: true });
-      writeFileSync(join(skillDir, 'SKILL.md'), 'old content');
-      writeFileSync(join(codexSkillDir, 'SKILL.md'), 'old codex content');
-
-      await copyArchonSkill(target);
-
-      const content = readFileSync(join(skillDir, 'SKILL.md'), 'utf-8');
-      expect(content).not.toBe('old content');
-      const codexContent = readFileSync(join(codexSkillDir, 'SKILL.md'), 'utf-8');
-      expect(codexContent).not.toBe('old codex content');
-    });
-
-    it('should create skill files even when target directory does not exist', async () => {
-      const target = join(TEST_DIR, 'non-existent-parent', 'skill-target-new');
-      // Do NOT pre-create target — copyArchonSkill must handle it
-
-      await copyArchonSkill(target);
-
-      expect(existsSync(join(target, '.claude', 'skills', 'archon-cli', 'SKILL.md'))).toBe(true);
-      expect(existsSync(join(target, '.agents', 'skills', 'archon-cli', 'SKILL.md'))).toBe(true);
     });
   });
 

@@ -203,10 +203,10 @@ export function parseWorkflowInvocation(
 /**
  * Find a workflow by name
  */
-export function findWorkflow(
+export function findWorkflow<T extends Pick<WorkflowDefinition, 'name'>>(
   name: string,
-  workflows: readonly WorkflowDefinition[]
-): WorkflowDefinition | undefined {
+  workflows: readonly T[]
+): T | undefined {
   return workflows.find(w => w.name === name);
 }
 
@@ -217,13 +217,15 @@ export function findWorkflow(
  * 3. Suffix match (e.g. "assist" → "archon-assist")
  * 4. Substring match (e.g. "smart" → "archon-smart-pr-review")
  *
+ * A qualified installed name (`owner/plugin:entrypoint`) stops after tier 2.
+ *
  * Returns the matched workflow, or undefined if no match found.
  * Throws an Error if multiple workflows match at the same tier (ambiguous).
  */
-export function resolveWorkflowName(
+export function resolveWorkflowName<T extends Pick<WorkflowDefinition, 'name'>>(
   name: string,
-  workflows: readonly WorkflowDefinition[]
-): WorkflowDefinition | undefined {
+  workflows: readonly T[]
+): T | undefined {
   // Tier 1: Exact match
   const exact = workflows.find(w => w.name === name);
   if (exact) return exact;
@@ -231,10 +233,7 @@ export function resolveWorkflowName(
   const lowerName = name.toLowerCase();
 
   // Returns the single match, throws on ambiguity, returns undefined for no match
-  function checkTier(
-    matches: WorkflowDefinition[],
-    logEvent: string
-  ): WorkflowDefinition | undefined {
+  function checkTier(matches: T[], logEvent: string): T | undefined {
     if (matches.length === 1) {
       getLog().info({ requested: name, matched: matches[0].name }, logEvent);
       return matches[0];
@@ -246,12 +245,19 @@ export function resolveWorkflowName(
     return undefined;
   }
 
+  const caseInsensitive = checkTier(
+    workflows.filter(w => w.name.toLowerCase() === lowerName),
+    'workflow.resolve_case_insensitive_match'
+  );
+  // A qualified installed name (`owner/plugin:entrypoint`) names exactly one workflow.
+  // When that plugin is missing or the name is a support workflow, the suffix and
+  // substring tiers would otherwise resolve it to another pack's longer name or to a
+  // copied project workflow.
+  if (name.includes(':')) return caseInsensitive;
+
   return (
     // Tier 2: Case-insensitive match
-    checkTier(
-      workflows.filter(w => w.name.toLowerCase() === lowerName),
-      'workflow.resolve_case_insensitive_match'
-    ) ??
+    caseInsensitive ??
     // Tier 3: Suffix match (e.g. "assist" matches "archon-assist")
     checkTier(
       workflows.filter(w => w.name.toLowerCase().endsWith(`-${lowerName}`)),

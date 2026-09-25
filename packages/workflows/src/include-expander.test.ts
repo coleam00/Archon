@@ -1,8 +1,10 @@
 import { describe, test, expect } from 'bun:test';
 import { expandWorkflowIncludes, INCLUDE_MAX_DEPTH } from './include-expander';
+import { resolvedBodyNodes } from './graph-plan';
 import { dagNodeSchema } from './schemas';
-import type { WorkflowDefinition, DagNode } from './schemas';
+import type { WorkflowDefinition, ResolvedWorkflow, DagNode } from './schemas';
 import { COMPOSE_FAN_OUT_STEP_MARKER } from './fan-out-identity';
+import { evaluateCondition } from './condition-evaluator';
 import {
   COMPILED_LOOP_COMMAND,
   COMPOSED_NODE,
@@ -31,10 +33,8 @@ function mapOf(...workflows: WorkflowDefinition[]): Map<string, WorkflowDefiniti
   return new Map(workflows.map(w => [w.name, w]));
 }
 
-function nodeById(w: WorkflowDefinition, id: string): DagNode | undefined {
-  // Callers always pass an expandWorkflowIncludes() result, which never contains
-  // an IncludeDirective (#2486).
-  return (w.nodes as DagNode[]).find(n => n.id === id);
+function nodeById(w: ResolvedWorkflow, id: string): DagNode | undefined {
+  return w.nodes.find(node => node.id === id);
 }
 
 function composedMeta(node: DagNode | undefined): ComposedNodeMeta | undefined {
@@ -68,7 +68,7 @@ function loopGroupOf(
   node: DagNode | undefined
 ): { nodes: DagNode[]; until_bash?: string } | undefined {
   if (!node || !('loop_group' in node)) return undefined;
-  return { ...node.loop_group, nodes: node.loop_group.nodes as DagNode[] };
+  return { ...node.loop_group, nodes: [...resolvedBodyNodes(node.loop_group)] };
 }
 
 /** The body nodes of a `loop_group` node, or undefined for any other kind. */
@@ -120,6 +120,11 @@ describe('expandWorkflowIncludes — composed fan-out deferral (#2512)', () => {
 
     const expanded = workflows.get('parent')!;
     expect(expanded.nodes).toHaveLength(2);
+    expect(expanded.plan.layers.map(layer => layer.map(node => node.id))).toEqual([
+      ['list'],
+      ['fan'],
+    ]);
+    expect(expanded.plan.sinks).toEqual(['fan']);
     const deferred = expanded.nodes.find(n => n.id === 'fan');
     expect(deferred).toMatchObject({ kind: 'compose_fan_out', include: 'blk' });
   });
@@ -399,13 +404,26 @@ describe('expandWorkflowIncludes — namespacing', () => {
         wait: { until: '$INPUTS.resume_at' },
         depends_on: ['wait-for-event'],
       },
+      {
+        id: 'wait-for-action',
+        wait: { attention: 'Confirm $schedule.output with $INPUTS.operator.' },
+        depends_on: ['wait-for-input-time'],
+      },
     ]);
-    block.inputs = { event: { required: true }, resume_at: { required: true } };
+    block.inputs = {
+      event: { required: true },
+      resume_at: { required: true },
+      operator: { required: true },
+    };
     const parent = wf('parent', [
       {
         id: 'waiting',
         include: 'waiting-block',
-        with: { event: 'checks.complete', resume_at: '2026-08-25T23:00:00Z' },
+        with: {
+          event: 'checks.complete',
+          resume_at: '2026-08-25T23:00:00Z',
+          operator: 'release manager',
+        },
       },
     ]);
 
@@ -416,6 +434,7 @@ describe('expandWorkflowIncludes — namespacing', () => {
     const untilNode = nodeById(expanded, 'waiting__wait-for-window');
     const eventNode = nodeById(expanded, 'waiting__wait-for-event');
     const inputTimeNode = nodeById(expanded, 'waiting__wait-for-input-time');
+    const attentionNode = nodeById(expanded, 'waiting__wait-for-action');
     expect(
       untilNode && 'wait' in untilNode && 'until' in untilNode.wait
         ? untilNode.wait.until
@@ -431,6 +450,11 @@ describe('expandWorkflowIncludes — namespacing', () => {
         ? inputTimeNode.wait.until
         : undefined
     ).toBe('2026-08-25T23:00:00Z');
+    expect(
+      attentionNode && 'wait' in attentionNode && 'attention' in attentionNode.wait
+        ? attentionNode.wait.attention
+        : undefined
+    ).toBe('Confirm $waiting__schedule.output with release manager.');
   });
 
   test("propagates the include node's when/trigger_rule onto entry nodes", () => {
@@ -2391,6 +2415,60 @@ describe('expandWorkflowIncludes — composed-node metadata survives nesting', (
       },
     ]);
   });
+
+  test('loop_group body boundaries are renamed when the enclosing block is included again', () => {
+    // Regression: lifecycle → ship → deliver. deliver's corrections loop body carried
+    // ship-level boundary ids ('gate-direct'); including ship into lifecycle renamed the
+    // top-level nodes to 'ship__gate-direct' but left the body's boundary untouched, so
+    // the first correction iteration was skipped as "upstream failed: gate-direct".
+    const leaf = wf('leaf', [
+      { id: 'seed', bash: 'echo seed' },
+      {
+        id: 'loop',
+        depends_on: ['seed'],
+        loop_group: {
+          until_bash: 'test 1 = 1',
+          max_iterations: 1,
+          nodes: [{ id: 'body', bash: 'echo body' }],
+        },
+      },
+    ]);
+    const middle = wf('middle', [
+      { id: 'm-gate', bash: 'echo m' },
+      {
+        id: 'inner',
+        include: 'leaf',
+        depends_on: ['m-gate'],
+        when: "$m-gate.output == 'run'",
+        trigger_rule: 'none_failed_min_one_success',
+      },
+    ]);
+    const top = wf('top', [
+      { id: 't-gate', bash: 'echo t' },
+      { id: 'outer', include: 'middle', depends_on: ['t-gate'] },
+    ]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(leaf, middle, top));
+    expect(errors).toHaveLength(0);
+    const loop = nodeById(workflows.get('top')!, 'outer__inner__loop');
+    const body = loopGroupNodes(loop)?.find(node => node.id === 'body');
+    expect(composedBoundaries(body)?.map(boundary => boundary.dependsOn)).toEqual([
+      ['t-gate'],
+      ['outer__m-gate'],
+    ]);
+    expect(composedBoundaries(body)?.map(boundary => boundary.entryTriggerRules)).toEqual([
+      ['all_success'],
+      ['none_failed_min_one_success'],
+    ]);
+    const innerBoundary = composedBoundaries(body)?.at(-1);
+    expect(innerBoundary?.when).toBe("$outer__m-gate.output == 'run'");
+    expect(
+      evaluateCondition(
+        innerBoundary!.when!,
+        new Map([['outer__m-gate', { state: 'completed', output: 'run' }]])
+      )
+    ).toEqual({ parsed: true, result: true });
+  });
 });
 
 describe('expandWorkflowIncludes — systemPrompt/agents are node-ref surfaces (#2476)', () => {
@@ -2553,21 +2631,19 @@ describe('expandWorkflowIncludes — where a workflow-level model: travels (#176
 
   test('every other node-affecting field travels regardless of the node provider', () => {
     // `model` alone carries a provider condition, because it alone is a provider-specific
-    // string the executor already refused to inherit across providers. `effort`/`thinking`/
-    // `sandbox`/`betas`/`fallbackModel` had no such condition before the collapse and must
+    // string the executor already refused to inherit across providers. `effort`/`sandbox`/
+    // `betas`/`fallbackModel` had no such condition before the collapse and must
     // not gain one, or the collapse stops being behaviour-preserving.
     const nodes = collapse({
       ...wf('w', [{ id: 'n', prompt: 'p', provider: 'claude' }]),
       provider: 'codex',
       effort: 'high',
-      thinking: { type: 'enabled', budgetTokens: 4000 },
       sandbox: { enabled: true },
       betas: ['beta-x'],
       fallbackModel: 'fallback-1',
     });
     expect(nodes[0]).toMatchObject({
       effort: 'high',
-      thinking: { type: 'enabled', budgetTokens: 4000 },
       sandbox: { enabled: true },
       betas: ['beta-x'],
       fallbackModel: 'fallback-1',

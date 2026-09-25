@@ -205,6 +205,31 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
     };
   }
 
+  if (et === 'integration_operation') {
+    const result = data.result;
+    const ok =
+      typeof result === 'object' && result !== null && 'ok' in result && result.ok === true;
+    const error =
+      typeof result === 'object' && result !== null && 'error' in result ? result.error : null;
+    const message =
+      typeof error === 'object' &&
+      error !== null &&
+      'message' in error &&
+      typeof error.message === 'string'
+        ? error.message
+        : 'Integration operation failed';
+    return {
+      ...base,
+      kind: 'tool_call',
+      tool: `${readString(data, 'integration')}.${readString(data, 'operation')}`,
+      argsSummary: JSON.stringify(data.target ?? null),
+      args: { operationId: data.operationId, target: data.target, plugin: data.plugin, result },
+      result: ok
+        ? { ok: true, durationMs: readNumberOrNull(data, 'durationMs') ?? 0 }
+        : { ok: false, message },
+    };
+  }
+
   if (et === 'workflow_artifact') {
     return {
       ...base,

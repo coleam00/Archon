@@ -44,7 +44,9 @@ function makeOutput(
       ...(structuredOutput !== undefined ? { structuredOutput } : {}),
       ...(declaredFields !== undefined ? { declaredFields } : {}),
     };
-  if (state === 'skipped') return { state, output };
+  if (state === 'skipped') {
+    return { state, output, cause: { kind: 'condition', expr: 'false' } };
+  }
   return {
     state,
     output,
@@ -81,22 +83,55 @@ describe('evaluateCondition', () => {
     expect(evaluateCondition("$classify.output.type == 'FEATURE'", outputs).result).toBe(false);
   });
 
-  it('dot notation: returns JSON stringified value for array fields', () => {
+  it('dot notation: rejects array fields and logs safe diagnostic metadata', () => {
+    mockLogFn.mockClear();
     const jsonOutput = JSON.stringify({ items: ['todo', 'fix'], count: 2 });
     const outputs = new Map([['gather', makeOutput(jsonOutput)]]);
 
-    const expectedItems = JSON.stringify(['todo', 'fix']);
-    const condition = "$gather.output.items == '" + expectedItems + "'";
-    expect(evaluateCondition(condition, outputs).result).toBe(true);
+    expect(() => evaluateCondition("$gather.output.items == 'true'", outputs)).toThrow(
+      "Condition reference '$gather.output.items' resolved to an array"
+    );
+    expect(mockLogFn).toHaveBeenCalledWith(
+      {
+        nodeId: 'gather',
+        field: 'items',
+        actualType: 'array',
+        exprSnippet: "$gather.output.items == 'true'",
+      },
+      'dag.condition_field_not_primitive'
+    );
   });
 
-  it('dot notation: returns JSON stringified value for object fields', () => {
+  it('dot notation: rejects object fields', () => {
     const jsonOutput = JSON.stringify({ config: { timeout: 30 } });
     const outputs = new Map([['setup', makeOutput(jsonOutput)]]);
-    const expectedConfig = JSON.stringify({ timeout: 30 });
-    const condition = "$setup.output.config == '" + expectedConfig + "'";
-    expect(evaluateCondition(condition, outputs).result).toBe(true);
+    expect(() => evaluateCondition("$setup.output.config == 'true'", outputs)).toThrow(
+      "Condition reference '$setup.output.config' resolved to an object"
+    );
   });
+
+  it('rejects structured fields from the previous loop iteration', () => {
+    mockLogFn.mockClear();
+    const priorOutputs = new Map([
+      ['work', makeOutput(JSON.stringify({ route: { ready: true } }))],
+    ]);
+
+    expect(() =>
+      evaluateCondition("$LOOP_PREV.work.output.route == 'true'", new Map(), undefined, {
+        loopPrevOutputs: priorOutputs,
+      })
+    ).toThrow("Condition reference '$work.output.route' resolved to an object");
+    expect(mockLogFn).toHaveBeenCalledWith(
+      {
+        nodeId: 'work',
+        field: 'route',
+        actualType: 'object',
+        exprSnippet: "$LOOP_PREV.work.output.route == 'true'",
+      },
+      'dag.condition_field_not_primitive'
+    );
+  });
+
   it('dot notation: throws on a field ref when schemaless output is not JSON (no-silent-drop)', () => {
     const outputs = new Map([['classify', makeOutput('not-json')]]);
     // A `.field` ref on a schemaless node whose output is not a JSON object is a
@@ -461,17 +496,15 @@ describe('evaluateCondition', () => {
     expect(evaluateCondition("$n.output.valid == 'true'", outputs).result).toBe(true);
   });
 
-  it('structuredOutput: JSON-stringifies object/array fields', () => {
+  it('structuredOutput: rejects object/array fields', () => {
     const outputs = new Map([
       ['n', makeOutput('', 'completed', { items: ['a', 'b'], nested: { x: 1 } })],
     ]);
-    const expectedItems = JSON.stringify(['a', 'b']);
-    expect(evaluateCondition("$n.output.items == '" + expectedItems + "'", outputs).result).toBe(
-      true
+    expect(() => evaluateCondition("$n.output.items == 'true'", outputs)).toThrow(
+      "Condition reference '$n.output.items' resolved to an array"
     );
-    const expectedNested = JSON.stringify({ x: 1 });
-    expect(evaluateCondition("$n.output.nested == '" + expectedNested + "'", outputs).result).toBe(
-      true
+    expect(() => evaluateCondition("$n.output.nested == 'true'", outputs)).toThrow(
+      "Condition reference '$n.output.nested' resolved to an object"
     );
   });
 
@@ -885,5 +918,62 @@ describe('typed $INPUTS values in when: (#2637)', () => {
       result: true,
       parsed: true,
     });
+  });
+});
+
+// #2999 — structured $INPUTS values (objects/arrays) in when: expressions must fail loudly
+// with diagnostic metadata rather than silently stringify-comparing.
+describe('structured $INPUTS values in when: (#2999)', () => {
+  const noOutputs = new Map<string, NodeOutput>();
+
+  it('rejects object-valued inputs, failing false-skips loudly with safe diagnostic log', () => {
+    mockLogFn.mockClear();
+    expect(() =>
+      evaluateCondition("$INPUTS.route == 'true'", noOutputs, { route: { ready: true } })
+    ).toThrow(
+      "Condition reference '$INPUTS.route' resolved to an object. " +
+        "A 'when:' input must be a string, number, boolean, or null; emit a scalar routing field " +
+        'or inspect structured data in a script node.'
+    );
+    expect(mockLogFn).toHaveBeenCalledWith(
+      {
+        input: 'route',
+        actualType: 'object',
+        exprSnippet: "$INPUTS.route == 'true'",
+      },
+      'dag.condition_field_not_primitive'
+    );
+  });
+
+  it('rejects array-valued inputs, failing false-skips loudly with safe diagnostic log', () => {
+    mockLogFn.mockClear();
+    expect(() =>
+      evaluateCondition("$INPUTS.items == 'true'", noOutputs, { items: ['a', 'b'] })
+    ).toThrow(
+      "Condition reference '$INPUTS.items' resolved to an array. " +
+        "A 'when:' input must be a string, number, boolean, or null; emit a scalar routing field " +
+        'or inspect structured data in a script node.'
+    );
+    expect(mockLogFn).toHaveBeenCalledWith(
+      {
+        input: 'items',
+        actualType: 'array',
+        exprSnippet: "$INPUTS.items == 'true'",
+      },
+      'dag.condition_field_not_primitive'
+    );
+  });
+
+  it('rejects stringify-coincidence comparisons against hand-typed JSON literals', () => {
+    mockLogFn.mockClear();
+    expect(() =>
+      evaluateCondition('$INPUTS.tags == \'["a","b"]\'', noOutputs, { tags: ['a', 'b'] })
+    ).toThrow("Condition reference '$INPUTS.tags' resolved to an array");
+
+    expect(() =>
+      evaluateCondition('$INPUTS.config == \'{"timeout":30}\'', noOutputs, {
+        config: { timeout: 30 },
+      })
+    ).toThrow("Condition reference '$INPUTS.config' resolved to an object");
   });
 });

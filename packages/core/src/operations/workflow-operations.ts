@@ -1,3 +1,12 @@
+import { recordDerivedExecution } from '@archon/workflows/node-event-write';
+import { logGateDecision } from '@archon/workflows/logger';
+import { readNodeRecordEvent } from '@archon/workflows/node-record-reader';
+import { serializeNodeEmitter } from '@archon/workflows/node-record-serialization';
+import { getWorkflowEventEmitter } from '@archon/workflows/event-emitter';
+import { getStoragePathsForRoot, resolveRunStorageRoot } from '@archon/paths/archon-paths';
+import { finishNodeExecution } from '@archon/workflows/node-execution';
+import { serializeNodeStateRecord } from '@archon/workflows/node-record-serialization';
+import { nodeExecutionMetadataSchema } from '@archon/workflows/schemas/node-execution';
 /**
  * Shared workflow business logic — approve, reject, status, resume, abandon.
  *
@@ -5,21 +14,33 @@
  * Operations throw on errors; callers catch and format for their platform.
  */
 import { createLogger, captureApprovalResolved } from '@archon/paths';
+import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
 import {
   RESUMABLE_WORKFLOW_STATUSES,
   isApprovalContext,
   isGateResolved,
   isRunBlockedOnChild,
+  readExecutionOwner,
   runAttention,
 } from '@archon/workflows/schemas/workflow-run';
 import type {
   WorkflowRun,
   ApprovalContext,
+  ExecutionOwnerRecord,
   LoopGateRunMetadata,
   RunAttention,
 } from '@archon/workflows/schemas/workflow-run';
+import type { DashboardWorkflowRun } from '../schemas/workflow-run';
 import * as workflowDb from '../db/workflows';
 import * as workflowNodeSessionDb from '../db/workflow-node-sessions';
+import * as isolationDb from '../db/isolation-environments';
+import {
+  DetachedRunOwnerUnavailableError,
+  requestDetachedRunStop,
+  type DetachedRunStopTarget,
+} from '../services/run-owner-stop';
+import { isRunOwnedByThisProcess, isRunOwnerAnswering } from '../services/run-live-owner';
+import { hostname } from 'node:os';
 
 // Lazy logger — NEVER at module scope
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -33,7 +54,7 @@ function getLog(): ReturnType<typeof createLogger> {
 // ---------------------------------------------------------------------------
 
 export interface WorkflowStatusData {
-  runs: WorkflowRun[];
+  runs: DashboardWorkflowRun[];
 }
 
 export interface ApprovalOperationResult {
@@ -239,6 +260,102 @@ function resolvedNodeCompletedStepName(approval: ApprovalContext): string {
 }
 
 /**
+ * Mirror a won gate transaction into the run's own transcript. Publish only after the
+ * CAS wins; the inserted rows remain authoritative and every sink derives from them.
+ *
+ * This usually runs in the approving process, not the one executing the run, so the
+ * transcript is found the way every out-of-process reader finds it: through the run's
+ * persisted `output_root`, then appended through the same writer the executor uses.
+ *
+ * With no trusted `output_root` there is no transcript location to find. Usually the
+ * run's identity lookup faulted at start and its fault-derived root was deliberately
+ * never persisted; that lasts until a later resume resolves identity and records the
+ * root. A persisted root outside `ARCHON_HOME` is refused the same way, for the life of
+ * the run. Either way the rows are skipped, visibly, rather than written to a second
+ * file under a guessed root.
+ */
+async function publishGateExecution(
+  run: WorkflowRun,
+  events: readonly workflowDb.GateResolutionEvent[]
+): Promise<void> {
+  const root = resolveRunStorageRoot(run, null);
+  const logDir = root === null ? null : getStoragePathsForRoot(root).logsDir;
+  if (logDir === null) {
+    getLog().warn(
+      {
+        runId: run.id,
+        steps: events.map(event => event.step_name),
+        eventTypes: events.map(event => event.event_type),
+      },
+      'workflow.gate_transcript_root_missing'
+    );
+  }
+  for (const event of events) {
+    if (event.event_type === 'approval_received') {
+      if (logDir === null) continue;
+      const { decision, comment, reason } = event.data;
+      if (typeof decision !== 'string') continue;
+      // Approve and respond record `comment`, reject records `reason`; a write-back
+      // reject records neither. Carried verbatim, like the run's own prompt on
+      // `workflow_start`: this is the run record the DB already holds, not an
+      // operational log line.
+      const text = typeof comment === 'string' ? comment : reason;
+      await logGateDecision(logDir, run.id, {
+        step: event.step_name,
+        decision,
+        ...(typeof text === 'string' ? { comment: text } : {}),
+      });
+      continue;
+    }
+    if (event.event_type !== 'node_completed') continue;
+    const record = readNodeRecordEvent({ workflow_run_id: run.id, ...event })?.metadata;
+    if (record === undefined) continue;
+    if (logDir === null) {
+      const emitted = serializeNodeEmitter(record);
+      if (emitted !== undefined) getWorkflowEventEmitter().emit(emitted);
+      continue;
+    }
+    await recordDerivedExecution({ logDir }, record);
+  }
+}
+
+/** New gates retain their observed identity; old gates complete without invented history. */
+function gateCompletionEvent(
+  runId: string,
+  approval: ApprovalContext,
+  decision: string,
+  text: string,
+  structured?: { decision: string; text: string }
+): workflowDb.GateResolutionEvent {
+  if (approval.execution !== undefined) {
+    const execution = nodeExecutionMetadataSchema.parse(approval.execution);
+    if (execution.runId !== runId || execution.node.kind !== 'gate') {
+      throw new Error(`Gate execution identity does not belong to run ${runId}`);
+    }
+    const event = serializeNodeStateRecord(
+      finishNodeExecution(
+        execution,
+        { status: 'completed' },
+        {
+          output: { text, structured },
+          diagnostics: { approvalDecision: decision },
+        }
+      )
+    );
+    return { event_type: event.event_type, step_name: event.step_name, data: event.data };
+  }
+  return {
+    event_type: 'node_completed',
+    step_name: resolvedNodeCompletedStepName(approval),
+    data: {
+      node_output: text,
+      approval_decision: decision,
+      ...(structured !== undefined ? { structured_output: structured } : {}),
+    },
+  };
+}
+
+/**
  * The message for a gate `runAttention` could not read. Shared by approve and
  * reject so a corrupt row explains itself the same way at both entry points.
  * `malformed_gate` never reaches here from reject — that case stays rejectable.
@@ -260,6 +377,37 @@ function unreadableGateMessage(
       // A block pointer with nothing to follow, or a chain the reader gave up on.
       // Never a redirect naming '<unknown>' — that is a command nobody can run.
       return `Run ${run.id} cannot be resolved: ${attention.detail}.`;
+  }
+}
+
+/**
+ * A parent blocked on a `workflow:` sub-run has no gate of its own — the decision lives
+ * on the child. Typed rather than a prose string because the redirect command is spelled
+ * differently on every surface: `message` names the child run but never a command, and
+ * `messageFor` adds the command the rendering surface actually accepts.
+ */
+export class ChildRunRedirectError extends Error {
+  constructor(
+    readonly parentRunId: string,
+    readonly childRunId: string,
+    readonly nodeId: string,
+    readonly action: 'approve' | 'reject'
+  ) {
+    super(
+      `Run ${parentRunId} is paused waiting on sub-run ${childRunId} ` +
+        `('workflow:' node '${nodeId}'). ` +
+        (action === 'approve'
+          ? 'Approve or reject the child run instead.'
+          : 'Reject the child run instead, or abandon this run to discard the whole tree.')
+    );
+    this.name = 'ChildRunRedirectError';
+  }
+
+  /** The same refusal with the redirect command spelled for `surface`. */
+  messageFor(surface: WorkflowCommandSurface): string {
+    const label = this.action === 'approve' ? 'Approve' : 'Reject';
+    const command = spellWorkflowCommand(surface, `${this.action} ${this.childRunId}`);
+    return `${this.message} ${label} it by run id: \`${command}\``;
   }
 }
 
@@ -290,10 +438,11 @@ export function assertApprovable(run: WorkflowRun): ApprovalContext {
       // parent's workflow node with empty output (the child's real output is then
       // discarded on resume) and orphan the still-paused child. Redirect the
       // operator to the child run, where the actual gate lives.
+      throw new ChildRunRedirectError(run.id, attention.childRunId, attention.nodeId, 'approve');
+    case 'action_required':
       throw new Error(
-        `Run ${run.id} is paused waiting on sub-run ${attention.childRunId} ` +
-          `('workflow:' node '${attention.nodeId}'). Approve or reject the child run instead` +
-          `: /workflow approve ${attention.childRunId}`
+        `Run ${run.id} is paused for an outside action. Complete it, then resume the run; ` +
+          'abandon it if it should not continue.'
       );
     case 'unreadable':
       throw new Error(unreadableGateMessage(run, attention, approval));
@@ -341,17 +490,17 @@ export function assertRejectable(run: WorkflowRun): ApprovalContext | undefined 
     : undefined;
   const attention = runAttention(run);
   switch (attention?.kind) {
+    case 'action_required':
+      throw new Error(
+        `Run ${run.id} is paused for an outside action. Complete it, then resume the run; ` +
+          'abandon it if it should not continue.'
+      );
     case 'blocked_on_child':
       // Same redirect as assertApprovable: the parent's pause is not a rejectable
       // gate — cancelling the parent here would silently orphan the still-paused
       // child run. Reject the child (its own gate) or abandon the parent (which
       // cascade-cancels the subtree) instead.
-      throw new Error(
-        `Run ${run.id} is paused waiting on sub-run ${attention.childRunId} ` +
-          `('workflow:' node '${attention.nodeId}'). Reject the child run instead` +
-          `: /workflow reject ${attention.childRunId}` +
-          ' To discard the whole tree, abandon this run.'
-      );
+      throw new ChildRunRedirectError(run.id, attention.childRunId, attention.nodeId, 'reject');
     case 'unreadable':
       // The one deliberate divergence from approve: unreadable gate METADATA is
       // still rejectable (see this function's doc comment). An unrecognized gate
@@ -377,13 +526,14 @@ export function assertRejectable(run: WorkflowRun): ApprovalContext | undefined 
 // Operations
 // ---------------------------------------------------------------------------
 
-/**
- * List all running and paused workflow runs.
- */
-export async function getWorkflowStatus(): Promise<WorkflowStatusData> {
-  const runs = await workflowDb.listWorkflowRuns({
+/** List running and paused workflow runs, optionally scoped to one codebase. */
+export async function getWorkflowStatus(options?: {
+  codebaseId?: string;
+}): Promise<WorkflowStatusData> {
+  const { runs } = await workflowDb.listDashboardRuns({
     status: ['running', 'paused'],
     limit: 50,
+    ...(options?.codebaseId ? { codebaseId: options.codebaseId } : {}),
   });
   return { runs };
 }
@@ -400,6 +550,79 @@ export async function resumeWorkflow(runId: string): Promise<WorkflowRun> {
     );
   }
   return run;
+}
+
+/**
+ * What abandon found at the run's live-owner endpoint before it recorded `cancelled`.
+ *
+ * `stopped`: an owner answered and its process tree was terminated.
+ * `no_owner_answered`: nothing is listening at the endpoint on this host. Recording
+ * `cancelled` is then the operator's explicit call that the run is dead, so the
+ * recorded facts travel with the result for every surface to show.
+ */
+export type AbandonOwnerOutcome =
+  | { kind: 'stopped'; pid: number }
+  | {
+      kind: 'no_owner_answered';
+      /** The connection error that showed nothing answered. */
+      detail: string;
+      /** Host and pid of the process that last executed the run; absent on older runs. */
+      recordedOwner: ExecutionOwnerRecord | undefined;
+      lastActivityAt: Date | null;
+      /** The host abandon ran on, which is the only host whose endpoint it could ask. */
+      thisHost: string;
+      /** The user abandon ran as; its endpoint directory is scoped to this uid on POSIX. */
+      thisUid: number | undefined;
+    };
+
+/**
+ * A live owner answered, but abandon could not stop it. The run is unchanged.
+ * Surfaces show the message as is; it states the reason and what the operator can do.
+ */
+export class AbandonOwnerNotStoppedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AbandonOwnerNotStoppedError';
+  }
+}
+
+/**
+ * Operator-facing lines describing the owner outcome, shared by every abandon surface
+ * so none of them words the cross-host warning differently.
+ */
+export function describeAbandonOwner(outcome: AbandonOwnerOutcome): string[] {
+  if (outcome.kind === 'stopped') {
+    return [`Stopped the run's live owner process (pid ${String(outcome.pid)}) first.`];
+  }
+  const lines = [
+    `No live owner answered for this run on this host (${outcome.thisHost}; ${outcome.detail}).`,
+  ];
+  const recorded = outcome.recordedOwner;
+  lines.push(
+    recorded
+      ? `Recorded owner: host ${recorded.host}, pid ${String(recorded.pid)}.`
+      : 'Recorded owner: none (the run predates owner recording).'
+  );
+  lines.push(
+    `Last activity: ${outcome.lastActivityAt ? outcome.lastActivityAt.toISOString() : 'none recorded'}.`
+  );
+  if (recorded && recorded.host !== outcome.thisHost) {
+    lines.push(
+      `The recorded owner is on another host (${recorded.host}). Abandon cannot reach or stop a process there; ` +
+        'if it is still running, it keeps running after this run is marked cancelled.'
+    );
+  } else if (
+    recorded?.uid !== undefined &&
+    outcome.thisUid !== undefined &&
+    recorded.uid !== outcome.thisUid
+  ) {
+    lines.push(
+      `The recorded owner ran as another user (uid ${String(recorded.uid)}), and abandon runs as ` +
+        `uid ${String(outcome.thisUid)}. Abandon can only reach owners running as its own user; ` +
+        'if it is still running, it keeps running after this run is marked cancelled.'
+    );
+  }
+  return lines;
 }
 
 export interface AbandonWorkflowResult {
@@ -458,6 +681,76 @@ async function cancelRunAndCleanup(
   return { run, cancelled, cancelledDescendants, cascadeFailures, blockedParentRunId };
 }
 
+function assertAbandonable(run: WorkflowRun): void {
+  if (run.status === 'completed' || run.status === 'cancelled') {
+    throw new Error(
+      `Cannot abandon run with status '${run.status}'. Only running, paused, or failed runs can be abandoned.`
+    );
+  }
+}
+
+function ownerNotStoppedMessage(runId: string, error: DetachedRunOwnerUnavailableError): string {
+  switch (error.reason) {
+    case 'not_detached':
+      return (
+        `Run ${runId} is executing in another live Archon process that cannot be stopped from here, ` +
+        'because it is not a detached run (a foreground CLI run, or an Archon server). ' +
+        'The run was not changed. Stop it from that process: interrupt the foreground command, ' +
+        'or cancel the run on the server that executes it.'
+      );
+    case 'unproven':
+      return (
+        `Something answered at run ${runId}'s owner endpoint, but it could not be proven to be ` +
+        `the run's owner (${error.detail}). The run was not changed.`
+      );
+    case 'unreachable':
+    case undefined:
+      return (
+        `Could not ask run ${runId}'s owner endpoint whether an owner is live ` +
+        `(${error.detail}). The run was not changed.`
+      );
+  }
+}
+
+/**
+ * Stop the run's live owner through the shared stop path, or report that none answered.
+ * `not_stopped` means an owner answered but could not be stopped, or the endpoint could
+ * not be asked; nothing about the run has changed. Cancel and abandon each translate it
+ * into their own error.
+ */
+async function stopLiveOwner(
+  run: WorkflowRun
+): Promise<AbandonOwnerOutcome | { kind: 'not_stopped'; message: string }> {
+  let target: DetachedRunStopTarget;
+  try {
+    target = await requestDetachedRunStop(run.id);
+  } catch (error) {
+    if (!(error instanceof DetachedRunOwnerUnavailableError)) throw error;
+    if (error.reason === 'unreachable') {
+      return {
+        kind: 'no_owner_answered',
+        detail: error.detail,
+        recordedOwner: readExecutionOwner(run.metadata),
+        lastActivityAt: run.last_activity_at,
+        thisHost: hostname(),
+        thisUid: process.getuid?.(),
+      };
+    }
+    return { kind: 'not_stopped', message: ownerNotStoppedMessage(run.id, error) };
+  }
+  try {
+    await target.stop();
+  } catch (error) {
+    return {
+      kind: 'not_stopped',
+      message:
+        `Could not stop the live owner of run ${run.id} (pid ${String(target.pid)}): ` +
+        `${(error as Error).message}. The run was not changed.`,
+    };
+  }
+  return { kind: 'stopped', pid: target.pid };
+}
+
 /**
  * Abandon a workflow run (marks it as cancelled).
  *
@@ -465,15 +758,169 @@ async function cancelRunAndCleanup(
  * per TERMINAL_WORKFLOW_STATUSES but remains resumable, so the user must be able
  * to discard it — hence the inline check here intentionally diverges from that
  * constant and blocks only the two non-resumable terminal states.
+ *
+ * `cancelled` releases the run's worktree lock and resource slot, so a live owner is
+ * stopped first. When no owner answers, the result carries the recorded owner facts;
+ * no timer, age, or PID decides that the run is dead.
  */
-export async function abandonWorkflow(runId: string): Promise<AbandonWorkflowResult> {
+export async function abandonWorkflow(
+  runId: string
+): Promise<AbandonWorkflowResult & { owner: AbandonOwnerOutcome }> {
   const run = await getRunOrThrow(runId, 'operations.workflow_abandon_lookup_failed');
-  if (run.status === 'completed' || run.status === 'cancelled') {
-    throw new Error(
-      `Cannot abandon run with status '${run.status}'. Only running, paused, or failed runs can be abandoned.`
+  assertAbandonable(run);
+  const owner = await stopLiveOwner(run);
+  if (owner.kind === 'not_stopped') throw new AbandonOwnerNotStoppedError(owner.message);
+  return { ...(await recordAbandoned(run)), owner };
+}
+
+/**
+ * Why cancel left a run unchanged.
+ *
+ * `not_running`: only a running run has live work to stop.
+ * `no_owner_answered`: nothing answered at the run's live-owner endpoint on this host.
+ *   Cancel never records `cancelled` for a run it cannot prove stopped; abandon is the
+ *   operator's explicit call that the run is dead, so surfaces point there.
+ * `not_stopped`: an owner answered but could not be stopped, or its container could not
+ *   be confirmed.
+ */
+export type CancelRefusal = 'not_running' | 'no_owner_answered' | 'not_stopped';
+
+/** Cancel refused; the run is unchanged. The message states why. */
+export class CancelRefusedError extends Error {
+  constructor(
+    readonly reason: CancelRefusal,
+    message: string
+  ) {
+    super(message);
+    this.name = 'CancelRefusedError';
+  }
+}
+
+/**
+ * `cooperative`: the run's executor stops at its next status check. Either this
+ * process executes the run, or the run is a `workflow:` sub-run with no live owner of
+ * its own whose root run's owner answers: it executes inside that process while the
+ * root's row keeps the worktree lock and resource slot. `cancelled` is false when the run finished first.
+ * `stopped`: another live process owned the run; its process tree was terminated
+ * before the run was recorded `cancelled`.
+ */
+export type CancelWorkflowResult =
+  | { kind: 'cooperative'; run: WorkflowRun; cancelled: boolean }
+  | ({ kind: 'stopped'; pid: number } & Omit<AbandonWorkflowResult, 'cancelled'>);
+
+/**
+ * The container a cancelled run owns, confirmed before its owner is stopped so a run
+ * whose container cannot be accounted for is refused while it is still unchanged.
+ */
+async function confirmedRunContainer(run: WorkflowRun): Promise<string | undefined> {
+  if (run.metadata?.isolation !== 'container') return undefined;
+  const envId = run.metadata.isolation_env_id;
+  if (typeof envId !== 'string' || envId.trim().length === 0) {
+    throw new CancelRefusedError(
+      'not_stopped',
+      `Cannot confirm the isolation container owned by run ${run.id}. ` +
+        'The run was not changed; its container tracking ID is missing.'
     );
   }
-  const result = await cancelRunAndCleanup(run, workflowDb.cancelWorkflowRun);
+  const env = await isolationDb.getById(envId);
+  if (env?.provider !== 'container') {
+    throw new CancelRefusedError(
+      'not_stopped',
+      `Cannot confirm the isolation container owned by run ${run.id}. ` +
+        'The run was not changed; inspect the managed containers before retrying or abandoning it.'
+    );
+  }
+  return envId;
+}
+
+/**
+ * Cancel a running run, the same way on every surface.
+ *
+ * - This process executes it, or it is a sub-run with no live owner of its own whose
+ *   root's owner answers: cooperative cancel (see {@link CancelWorkflowResult}).
+ * - Another live process owns it, sub-run or not: stop that owner through the shared stop path
+ *   (prove it, terminate its process tree, wait), then record `cancelled`.
+ * - No owner answers, or the owner cannot be stopped: refuse with
+ *   {@link CancelRefusedError} and leave the run unchanged. `cancelled` releases the
+ *   run's worktree lock and resource slot, so it is never recorded on a guess.
+ */
+export async function cancelWorkflow(runId: string): Promise<CancelWorkflowResult> {
+  const run = await getRunOrThrow(runId, 'operations.workflow_cancel_lookup_failed');
+  if (run.status !== 'running') {
+    throw new CancelRefusedError(
+      'not_running',
+      `Cannot cancel run with status '${run.status}'. Only a running run has live work to stop; ` +
+        'abandon a paused or failed run instead.'
+    );
+  }
+
+  if (isRunOwnedByThisProcess(run.id)) return cooperativeCancel(run);
+
+  const containerEnvId = await confirmedRunContainer(run);
+  const owner = await stopLiveOwner(run);
+  if (owner.kind === 'not_stopped') throw new CancelRefusedError('not_stopped', owner.message);
+  if (owner.kind === 'no_owner_answered') {
+    // A sub-run normally executes inside its root run's process and publishes no endpoint
+    // of its own, so its own silence proves nothing either way. The root's owner decides:
+    // when it answers, the root's executor sees the status change at its next check, and
+    // the root's row keeps the worktree lock and resource slot. The sub-run's recorded
+    // owner cannot decide this: the executor stamps every run it executes, nested or not.
+    const rootRunId = run.parent_run_id ? await rootRunIdOf(run.id) : undefined;
+    if (rootRunId && (await isRunOwnerAnswering(rootRunId))) return cooperativeCancel(run);
+    throw new CancelRefusedError(
+      'no_owner_answered',
+      [
+        ...describeAbandonOwner(owner),
+        ...(rootRunId
+          ? [`No live owner answered for its root run ${rootRunId} on this host either.`]
+          : []),
+        `Cancel has nothing to stop, so run ${run.id} was not changed. ` +
+          'If its process is gone, abandon the run to release it.',
+      ].join('\n')
+    );
+  }
+
+  if (containerEnvId) {
+    try {
+      const { reclaimContainerEnv } = await import('../services/cleanup-service');
+      await reclaimContainerEnv(containerEnvId);
+    } catch (error) {
+      throw new CancelRefusedError(
+        'not_stopped',
+        'The owner process stopped, but the isolation container could not be confirmed stopped. ' +
+          `Run state was not changed. ${(error as Error).message}`
+      );
+    }
+  }
+
+  const { cancelled, ...recorded } = await recordAbandoned(run);
+  if (!cancelled) {
+    const latest = await workflowDb.getWorkflowRun(run.id);
+    throw new Error(
+      'The owner process stopped, but cancellation did not win the run state transition. ' +
+        `The run status is ${latest?.status ?? 'unknown'}; it was not reported as cancelled.`
+    );
+  }
+  return { kind: 'stopped', pid: owner.pid, ...recorded };
+}
+
+/** The top of `runId`'s `parent_run_id` chain; undefined when no ancestor row remains. */
+async function rootRunIdOf(runId: string): Promise<string | undefined> {
+  return (await workflowDb.getRunAncestry(runId)).at(-1)?.id;
+}
+
+/** Every cancel and abandon here is an operator's request, whichever surface sent it. */
+function cancelByOperator(runId: string): ReturnType<CancelWorkflowRun> {
+  return workflowDb.cancelWorkflowRun(runId, { cancel_reason: 'operator' });
+}
+
+async function cooperativeCancel(run: WorkflowRun): Promise<CancelWorkflowResult> {
+  const { cancelled } = await cancelByOperator(run.id);
+  return { kind: 'cooperative', run, cancelled };
+}
+
+async function recordAbandoned(run: WorkflowRun): Promise<AbandonWorkflowResult> {
+  const result = await cancelRunAndCleanup(run, cancelByOperator);
   return {
     run: result.run,
     cancelled: result.cancelled,
@@ -635,17 +1082,13 @@ export async function approveWorkflow(
           ? approvalComment
           : '';
       events = [
-        {
-          event_type: 'node_completed',
-          step_name: resolvedNodeCompletedStepName(approval),
-          data: {
-            node_output: nodeOutput,
-            approval_decision: 'approved',
-            ...(isNewMode
-              ? { structured_output: { decision: 'approve', text: comment ?? '' } }
-              : {}),
-          },
-        },
+        gateCompletionEvent(
+          runId,
+          approval,
+          'approved',
+          nodeOutput,
+          isNewMode ? { decision: 'approve', text: comment ?? '' } : undefined
+        ),
         {
           event_type: 'approval_received',
           step_name: approval.nodeId,
@@ -679,6 +1122,8 @@ export async function approveWorkflow(
   if (!won) {
     throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
   }
+
+  await publishGateExecution(run, events);
 
   // Won the CAS — resolution + audit events already committed atomically.
   // Anonymous telemetry: binary resolution only — no ids/comments/names.
@@ -736,6 +1181,7 @@ export async function rejectWorkflow(
         if (!won) {
           throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
         }
+        await publishGateExecution(run, [rejectionEvent]);
         captureApprovalResolved({ resolution: 'rejected' });
         return {
           workflowName: run.workflow_name,
@@ -768,7 +1214,7 @@ export async function rejectWorkflow(
     }
   }
 
-  const rejectReason = reason ?? 'Rejected';
+  const rejectReason = reason && reason.length > 0 ? reason : 'Rejected';
   const currentCount = (run.metadata.rejection_count as number | undefined) ?? 0;
   const maxAttempts = approval?.onRejectMaxAttempts ?? 3;
   // `!= null` (not `!== undefined`): "no on_reject" reaches this read in two stored
@@ -820,17 +1266,17 @@ export async function rejectWorkflow(
   // so a failed event write rolls the resolution/cancellation back rather than
   // losing the audit trail (#2146).
   let won: boolean;
+  let completedGateEvent: workflowDb.GateResolutionEvent | undefined;
   if (willResolveNewMode && approval) {
-    const structuredOutput = { decision: 'reject', text: reason ?? '' };
-    const nodeCompletedEvent: workflowDb.GateResolutionEvent = {
-      event_type: 'node_completed',
-      step_name: resolvedNodeCompletedStepName(approval),
-      data: {
-        node_output: JSON.stringify(structuredOutput),
-        approval_decision: 'rejected',
-        structured_output: structuredOutput,
-      },
-    };
+    const structuredOutput = { decision: 'reject', text: rejectReason };
+    const nodeCompletedEvent = gateCompletionEvent(
+      runId,
+      approval,
+      'rejected',
+      JSON.stringify(structuredOutput),
+      structuredOutput
+    );
+    completedGateEvent = nodeCompletedEvent;
     ({ resolved: won } = await workflowDb.resolveApprovalGate(
       runId,
       { approval: { ...approval, resolved: 'rejected' } },
@@ -859,6 +1305,11 @@ export async function rejectWorkflow(
   if (!won) {
     throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
   }
+
+  await publishGateExecution(
+    run,
+    completedGateEvent === undefined ? [rejectionEvent] : [completedGateEvent, rejectionEvent]
+  );
 
   // Won the CAS — resolution/status + audit event already committed atomically.
   // Anonymous telemetry: binary resolution only — no ids/reasons/names.
@@ -936,15 +1387,13 @@ async function respondToWorkflowWithDeclaredDecision(
 
   const structuredOutput = { decision, text: text ?? '' };
   const events: workflowDb.GateResolutionEvent[] = [
-    {
-      event_type: 'node_completed',
-      step_name: resolvedNodeCompletedStepName(approval),
-      data: {
-        node_output: JSON.stringify(structuredOutput),
-        approval_decision: decision,
-        structured_output: structuredOutput,
-      },
-    },
+    gateCompletionEvent(
+      runId,
+      approval,
+      decision,
+      JSON.stringify(structuredOutput),
+      structuredOutput
+    ),
     {
       event_type: 'approval_received',
       step_name: approval.nodeId,
@@ -959,6 +1408,8 @@ async function respondToWorkflowWithDeclaredDecision(
   if (!won) {
     throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
   }
+
+  await publishGateExecution(run, events);
 
   // Anonymous telemetry: binary resolution only — no ids/comments/names. A
   // custom decision still records as 'approved' since it resolved the gate

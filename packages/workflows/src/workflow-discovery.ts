@@ -15,9 +15,13 @@
  *   3. `project` — repo-local at `<cwd>/.archon/workflows/`.
  *
  * Same-named files at a higher scope override those at lower scopes.
+ *
+ * Installed workflow packs (`archon plugin install`) are a fourth source outside that
+ * precedence: each pack resolves its includes within itself, and only its manifest
+ * entrypoints are dispatchable, as `owner/plugin:<entrypoint>`.
  */
 import { readFile, readdir, access, stat } from 'fs/promises';
-import { basename, join } from 'path';
+import { basename, dirname, join } from 'path';
 import type {
   WorkflowDefinition,
   WorkflowLoadError,
@@ -30,7 +34,15 @@ import type {
 } from './schemas';
 import { isComposeFanOutNode, isIncludeDirective, isLoopGroupNode } from './schemas';
 import * as archonPaths from '@archon/paths';
-import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
+import {
+  assertWorkflowSourceIntegrity,
+  installedWorkflowName,
+  listInstalledPacks,
+  liveSourceRoots,
+  packagedWorkflowDirectory,
+  workflowSourceConfigForRoots,
+  type WorkflowSourceRoots,
+} from './workflow-source';
 // Re-exported here because this is the module callers already import to discover with.
 export { liveSourceRoots } from './workflow-source';
 export type { WorkflowSourceRoots } from './workflow-source';
@@ -38,20 +50,36 @@ import {
   BUNDLED_WORKFLOWS,
   BUNDLED_COMMANDS,
   BUNDLED_WORKFLOW_OWNERS,
+  BUNDLED_WORKFLOW_PATHS,
   isBinaryBuild,
 } from './defaults/bundled-defaults';
+import {
+  bundledDefaultCommandPath,
+  bundlesPackagedResources,
+  collectInstalledBundleSources,
+  readBundleContent,
+} from './defaults/bundle-inventory';
 import { createLogger } from '@archon/paths';
 import { isValidCommandName, MAX_DISCOVERY_DEPTH } from './command-validation';
-import { parseWorkflow } from './loader';
+import { parseWorkflow, collectLoopGroupSinkWarnings } from './loader';
 import { expandWorkflowIncludes } from './include-expander';
 import { collectFileBackedCommandNames } from './command-file';
 import {
-  getPackagedResourceDirectory,
   isValidWorkflowFolderSegment,
   parsePackagedResourceReference,
+  qualifyPackReferences,
   qualifyWorkflowResources,
 } from './packaged-workflow';
 import type { IncludeCommandContent } from './compiled-command';
+import { discoverScriptsForCwd } from './script-discovery';
+import { FIXTURES_DIR } from './fixture-layout';
+import {
+  collectExecInputValidationTargets,
+  inlineExecInputSource,
+  validateExecInputTargets,
+  type ExecInputSource,
+  type ExecInputValidationTarget,
+} from './exec-input-validation';
 
 export { isValidWorkflowFolderSegment } from './packaged-workflow';
 
@@ -117,6 +145,9 @@ interface ParsedWorkflowFile {
   parseWarnings: readonly string[];
 }
 
+/** A discovered workflow file with the scope it came from. */
+type ScopeFile = ParsedWorkflowFile & { source: WorkflowSource };
+
 interface DirLoadResult {
   workflows: Map<string, ParsedWorkflowFile>;
   errors: WorkflowLoadError[];
@@ -166,9 +197,11 @@ async function loadWorkflowsFromDir(dirPath: string, depth = 0): Promise<DirLoad
         const entryStat = await stat(entryPath);
 
         if (entryStat.isDirectory()) {
+          // A `fixtures/` directory holds fixture data, never workflows, at any depth.
+          if (entry === FIXTURES_DIR) continue;
           // Only descend if we're still within the depth cap. Past the cap,
           // subdirectories are ignored (same convention as the paths-package
-          // `findMarkdownFilesRecursive` depth cap).
+          // `findCommandFiles` depth cap).
           if (depth >= MAX_DISCOVERY_DEPTH) continue;
           const subResult = await loadWorkflowsFromDir(entryPath, depth + 1);
           for (const [filename, parsed] of subResult.workflows) {
@@ -211,6 +244,130 @@ async function loadWorkflowsFromDir(dirPath: string, depth = 0): Promise<DirLoad
   }
 
   return { workflows, errors };
+}
+
+/** One workflow loaded from a pack's `<workflow>/` folder. */
+interface PackWorkflowFile {
+  folder: string;
+  filename: string;
+  parsed: ParsedWorkflowFile;
+}
+
+/**
+ * Load every `<workflow>/<one>.yaml` of one pack directory, qualifying each workflow's
+ * commands and scripts to its own folder. `label` names the pack in errors.
+ */
+async function loadPackWorkflows(
+  packPath: string,
+  pack: string,
+  source: WorkflowSource,
+  label = pack
+): Promise<{ files: PackWorkflowFile[]; errors: WorkflowLoadError[] }> {
+  const files: PackWorkflowFile[] = [];
+  const errors: WorkflowLoadError[] = [];
+  let workflowFolders: string[];
+  try {
+    workflowFolders = await readdir(packPath);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    errors.push({
+      filename: label,
+      error: `Directory read error: ${err.message} (${err.code ?? 'unknown'})`,
+      errorType: 'read_error',
+    });
+    return { files, errors };
+  }
+  for (const workflowFolder of workflowFolders.sort((a, b) => a.localeCompare(b))) {
+    // A dot directory (`.shared`, `.github`, ...) is never a workflow folder: a workflow
+    // folder name cannot start with a dot. A pack installed from a repository root
+    // carries that repository's other directories, so these are expected, not errors.
+    if (workflowFolder.startsWith('.')) continue;
+    if (workflowFolder === FIXTURES_DIR) continue;
+    const workflowPath = join(packPath, workflowFolder);
+    try {
+      if (!(await stat(workflowPath)).isDirectory()) continue;
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code !== 'ENOENT') {
+        getLog().warn({ err, workflowPath }, 'packaged_workflow_path_read_error');
+        errors.push({
+          filename: `${label}/${workflowFolder}`,
+          error: `Path read error: ${err.message} (${err.code ?? 'unknown'})`,
+          errorType: 'read_error',
+        });
+      }
+      continue;
+    }
+    if (!isValidWorkflowFolderSegment(workflowFolder)) {
+      errors.push({
+        filename: `${label}/${workflowFolder}`,
+        error: `Invalid packaged workflow directory '${label}/${workflowFolder}'.`,
+        errorType: 'validation_error',
+      });
+      continue;
+    }
+
+    let workflowEntries: string[];
+    try {
+      workflowEntries = await readdir(workflowPath);
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      errors.push({
+        filename: `${label}/${workflowFolder}`,
+        error: `Directory read error: ${err.message} (${err.code ?? 'unknown'})`,
+        errorType: 'read_error',
+      });
+      continue;
+    }
+    const yamlFiles = workflowEntries
+      .filter(entry => entry.endsWith('.yaml') || entry.endsWith('.yml'))
+      .sort((a, b) => a.localeCompare(b));
+    // A folder with no YAML (tests, docs, assets) holds no workflow. Two or more is an
+    // ambiguous workflow folder, and stays an error.
+    if (yamlFiles.length === 0) continue;
+    if (yamlFiles.length !== 1) {
+      errors.push({
+        filename: `${label}/${workflowFolder}`,
+        error: `Packaged workflow '${label}/${workflowFolder}' must contain exactly one .yaml or .yml file (found ${yamlFiles.length}).`,
+        errorType: 'validation_error',
+      });
+      continue;
+    }
+
+    const filename = yamlFiles[0];
+    let content: string;
+    try {
+      content = await readFile(join(workflowPath, filename), 'utf-8');
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      errors.push({
+        filename: `${label}/${workflowFolder}/${filename}`,
+        error: `File read error: ${err.message} (${err.code ?? 'unknown'})`,
+        errorType: 'read_error',
+      });
+      continue;
+    }
+    const parsed = parseWorkflow(content, filename);
+    if (!parsed.workflow) {
+      // A scope file's error keeps its bare filename, which resume matches against a
+      // run's workflow name. An installed pack's error names the pack and folder.
+      errors.push(
+        source === 'installed'
+          ? { ...parsed.error, filename: `${label}/${workflowFolder}/${filename}` }
+          : parsed.error
+      );
+      continue;
+    }
+    qualifyWorkflowResources(parsed.workflow, { source, pack, workflow: workflowFolder });
+
+    files.push({
+      folder: workflowFolder,
+      filename,
+      parsed: { workflow: parsed.workflow, parseWarnings: parsed.warnings },
+    });
+  }
+
+  return { files, errors };
 }
 
 async function loadPackagedWorkflowsFromDir(
@@ -257,6 +414,7 @@ async function loadPackagedWorkflowsFromDir(
     // `defaults/legacy` would fail "must contain exactly one .yaml" and surface
     // a bogus error on every discovery pass.
     if (pack === 'defaults') continue;
+    if (pack === FIXTURES_DIR) continue;
     if (!isValidWorkflowFolderSegment(pack)) {
       errors.push({
         filename: pack,
@@ -266,87 +424,9 @@ async function loadPackagedWorkflowsFromDir(
       continue;
     }
 
-    let workflowFolders: string[];
-    try {
-      workflowFolders = await readdir(packPath);
-    } catch (error) {
-      const err = error as NodeJS.ErrnoException;
-      errors.push({
-        filename: pack,
-        error: `Directory read error: ${err.message} (${err.code ?? 'unknown'})`,
-        errorType: 'read_error',
-      });
-      continue;
-    }
-    for (const workflowFolder of workflowFolders.sort((a, b) => a.localeCompare(b))) {
-      const workflowPath = join(packPath, workflowFolder);
-      try {
-        if (!(await stat(workflowPath)).isDirectory()) continue;
-      } catch (error) {
-        const err = error as NodeJS.ErrnoException;
-        if (err.code !== 'ENOENT') {
-          getLog().warn({ err, workflowPath }, 'packaged_workflow_path_read_error');
-          errors.push({
-            filename: `${pack}/${workflowFolder}`,
-            error: `Path read error: ${err.message} (${err.code ?? 'unknown'})`,
-            errorType: 'read_error',
-          });
-        }
-        continue;
-      }
-      if (!isValidWorkflowFolderSegment(workflowFolder)) {
-        errors.push({
-          filename: `${pack}/${workflowFolder}`,
-          error: `Invalid packaged workflow directory '${pack}/${workflowFolder}'.`,
-          errorType: 'validation_error',
-        });
-        continue;
-      }
-
-      let workflowEntries: string[];
-      try {
-        workflowEntries = await readdir(workflowPath);
-      } catch (error) {
-        const err = error as NodeJS.ErrnoException;
-        errors.push({
-          filename: `${pack}/${workflowFolder}`,
-          error: `Directory read error: ${err.message} (${err.code ?? 'unknown'})`,
-          errorType: 'read_error',
-        });
-        continue;
-      }
-      const yamlFiles = workflowEntries
-        .filter(entry => entry.endsWith('.yaml') || entry.endsWith('.yml'))
-        .sort((a, b) => a.localeCompare(b));
-      if (yamlFiles.length !== 1) {
-        errors.push({
-          filename: `${pack}/${workflowFolder}`,
-          error: `Packaged workflow '${pack}/${workflowFolder}' must contain exactly one .yaml or .yml file (found ${yamlFiles.length}).`,
-          errorType: 'validation_error',
-        });
-        continue;
-      }
-
-      const filename = yamlFiles[0];
-      let content: string;
-      try {
-        content = await readFile(join(workflowPath, filename), 'utf-8');
-      } catch (error) {
-        const err = error as NodeJS.ErrnoException;
-        errors.push({
-          filename: `${pack}/${workflowFolder}/${filename}`,
-          error: `File read error: ${err.message} (${err.code ?? 'unknown'})`,
-          errorType: 'read_error',
-        });
-        continue;
-      }
-      const parsed = parseWorkflow(content, filename);
-      if (!parsed.workflow) {
-        errors.push(parsed.error);
-        continue;
-      }
-      qualifyWorkflowResources(parsed.workflow, { source, pack, workflow: workflowFolder });
-
+    const loaded = await loadPackWorkflows(packPath, pack, source);
+    errors.push(...loaded.errors);
+    for (const { filename, parsed } of loaded.files) {
       if (workflows.has(filename) || collided.has(filename)) {
         workflows.delete(filename);
         collided.add(filename);
@@ -357,7 +437,7 @@ async function loadPackagedWorkflowsFromDir(
         });
         continue;
       }
-      workflows.set(filename, { workflow: parsed.workflow, parseWarnings: parsed.warnings });
+      workflows.set(filename, parsed);
     }
   }
 
@@ -376,7 +456,9 @@ function loadBundledWorkflows(): DirLoadResult {
   const errors: WorkflowLoadError[] = [];
 
   for (const [name, content] of Object.entries(BUNDLED_WORKFLOWS)) {
-    const filename = `${name}.yaml`;
+    const path = BUNDLED_WORKFLOW_PATHS[name];
+    if (path === undefined) throw new Error(`Bundled workflow "${name}" has no source path.`);
+    const filename = basename(path);
     const result = parseWorkflow(content, filename);
     if (result.workflow) {
       const owner = BUNDLED_WORKFLOW_OWNERS[name];
@@ -431,21 +513,13 @@ async function resolveCommandContentForScan(
       // A captured run reads the bundled bytes IT froze; the capture materialized a
       // binary's embedded constants to files.
       if (isBinaryBuild() && roots.kind === 'live') return BUNDLED_COMMANDS[commandName] ?? null;
+      if (roots.kind === 'live' && !(await bundlesPackagedResources(packaged.owner.pack)))
+        return null;
     }
 
-    let workflowsRoot: string;
-    if (packaged.owner.source === 'project') {
-      if (roots.project === null) return null;
-      workflowsRoot = join(roots.project, '.archon', 'workflows');
-    } else if (packaged.owner.source === 'global') {
-      workflowsRoot = roots.globalWorkflows;
-    } else {
-      workflowsRoot = roots.bundledWorkflows;
-    }
-    const commandPath = join(
-      getPackagedResourceDirectory(workflowsRoot, packaged.owner, 'commands'),
-      `${packaged.name}.md`
-    );
+    const workflowDir = await packagedWorkflowDirectory(roots, packaged.owner);
+    if (workflowDir === null) return null;
+    const commandPath = join(workflowDir, 'commands', `${packaged.name}.md`);
     try {
       return await readFile(commandPath, 'utf-8');
     } catch (error) {
@@ -467,9 +541,9 @@ async function resolveCommandContentForScan(
   dirs.push(roots.globalCommands);
 
   for (const dir of dirs) {
-    let entries: Awaited<ReturnType<typeof archonPaths.findMarkdownFilesRecursive>>;
+    let entries: Awaited<ReturnType<typeof archonPaths.findCommandFiles>>;
     try {
-      entries = await archonPaths.findMarkdownFilesRecursive(dir, '', { maxDepth: 1 });
+      entries = await archonPaths.findCommandFiles(dir);
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code === 'ENOENT') continue;
@@ -493,22 +567,31 @@ async function resolveCommandContentForScan(
   if (isBinaryBuild() && roots.kind === 'live') {
     return BUNDLED_COMMANDS[commandName] ?? null;
   }
+  // Live defaults are the flat files the index selects, so they resolve by direct path.
+  // A capture keeps whatever command layout it froze and keeps the basename walk.
   const defaultsDir = roots.bundledCommands;
-  let entries: Awaited<ReturnType<typeof archonPaths.findMarkdownFilesRecursive>>;
-  try {
-    entries = await archonPaths.findMarkdownFilesRecursive(defaultsDir, '', { maxDepth: 1 });
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    if (err.code === 'ENOENT') return null;
-    return { path: defaultsDir, message: err.message, operation: 'inspect' };
+  let commandPath: string | null;
+  if (roots.kind === 'captured') {
+    let entries: Awaited<ReturnType<typeof archonPaths.findCommandFiles>>;
+    try {
+      entries = await archonPaths.findCommandFiles(defaultsDir);
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === 'ENOENT') return null;
+      return { path: defaultsDir, message: err.message, operation: 'inspect' };
+    }
+    const match = entries.find(e => e.commandName === commandName);
+    commandPath = match ? join(defaultsDir, match.relativePath) : null;
+  } else {
+    commandPath = await bundledDefaultCommandPath(defaultsDir, commandName);
   }
-  const match = entries.find(e => e.commandName === commandName);
-  if (!match) return null;
-  const commandPath = join(defaultsDir, match.relativePath);
+  if (commandPath === null) return null;
   try {
     return await readFile(commandPath, 'utf-8');
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
+    // The direct path is a candidate, not a hit: an absent file is an ordinary miss.
+    if (err.code === 'ENOENT') return null;
     return { path: commandPath, message: err.message, operation: 'read' };
   }
 }
@@ -562,8 +645,11 @@ async function resolveIncludeBlockCommandContents(
  */
 export async function resolveWorkflowCommandContents(
   roots: WorkflowSourceRoots,
-  workflows: readonly WorkflowDefinition[]
+  workflows: readonly {
+    readonly nodes: readonly (DagNode | IncludeDirective)[];
+  }[]
 ): Promise<Map<string, IncludeCommandContent>> {
+  const sourceConfig = workflowSourceConfigForRoots(roots);
   const contents = new Map<string, IncludeCommandContent>();
   for (const workflow of workflows) {
     for (const commandName of collectFileBackedCommandNames(workflow.nodes)) {
@@ -571,8 +657,8 @@ export async function resolveWorkflowCommandContents(
       contents.set(
         commandName,
         await resolveCommandContentForScan(roots, commandName, {
-          commandFolder: roots.config.command_folder,
-          loadDefaultCommands: roots.config.load_default_commands,
+          commandFolder: sourceConfig.command_folder,
+          loadDefaultCommands: sourceConfig.load_default_commands,
         })
       );
     }
@@ -615,21 +701,114 @@ export async function discoverWorkflows(
   }
 ): Promise<WorkflowLoadResult> {
   const roots = options?.sourceRoots ?? liveSourceRoots(cwd);
+  await assertWorkflowSourceIntegrity(roots);
   const projectRoot = roots.project;
   // Map of filename -> workflow + source + parse warnings, for deduplication.
   // A later scope's `set()` replaces all three together, so a clean project file
   // can never inherit the bundled file's warnings (see ParsedWorkflowFile).
-  const workflowsByFile = new Map<string, ParsedWorkflowFile & { source: WorkflowSource }>();
+  const workflowsByFile = new Map<string, ScopeFile>();
   const allErrors: WorkflowLoadError[] = [];
+
+  const validateNamedScripts = async (files: Map<string, ScopeFile>): Promise<void> => {
+    const targetsByFile = new Map<
+      string,
+      { workflow: WorkflowDefinition; targets: readonly ExecInputValidationTarget[] }
+    >();
+    for (const [filename, { workflow }] of files) {
+      const targets = collectExecInputValidationTargets(workflow).filter(
+        target => inlineExecInputSource(target) === undefined
+      );
+      if (targets.length > 0) targetsByFile.set(filename, { workflow, targets });
+    }
+    if (targetsByFile.size === 0) return;
+
+    const discoveryRoot = projectRoot ?? cwd ?? archonPaths.getArchonHome();
+    const scripts = await discoverScriptsForCwd(discoveryRoot, roots);
+    const contents = new Map<string, string>();
+    const readErrors = new Map<string, Error>();
+    const readScript = async (path: string): Promise<string> => {
+      const cached = contents.get(path);
+      if (cached !== undefined || contents.has(path)) return cached ?? '';
+      const priorError = readErrors.get(path);
+      if (priorError !== undefined) throw priorError;
+      try {
+        const content = await readFile(path, 'utf-8');
+        contents.set(path, content);
+        return content;
+      } catch (error) {
+        const readError = error instanceof Error ? error : new Error(String(error));
+        readErrors.set(path, readError);
+        throw readError;
+      }
+    };
+
+    for (const [filename, { workflow, targets }] of targetsByFile) {
+      const sources = new Map<ExecInputValidationTarget, ExecInputSource>();
+      let unreadable = false;
+      for (const target of targets) {
+        const script = scripts.get(target.slot.value);
+        if (script === undefined) {
+          if (parsePackagedResourceReference(target.slot.value) === null) continue;
+          allErrors.push({
+            filename,
+            error: `Named packaged script '${target.slot.value}' was not found in its workflow's scripts directory.`,
+            errorType: 'validation_error',
+          });
+          files.delete(filename);
+          unreadable = true;
+          break;
+        }
+        try {
+          sources.set(target, {
+            text: await readScript(script.path),
+            label: script.path,
+            runtime: script.runtime,
+          });
+        } catch (error) {
+          const err = error as NodeJS.ErrnoException;
+          allErrors.push({
+            filename,
+            error: `Script file read error at '${script.path}': ${err.message} (${err.code ?? 'unknown'})`,
+            errorType: 'read_error',
+          });
+          files.delete(filename);
+          unreadable = true;
+          break;
+        }
+      }
+      if (unreadable) continue;
+
+      const validation = validateExecInputTargets(workflow, targets, target => sources.get(target));
+      if (validation.errors.length > 0) {
+        allErrors.push({
+          filename,
+          error: validation.errors.join(' '),
+          errorType: 'validation_error',
+        });
+        files.delete(filename);
+        continue;
+      }
+      if (validation.warnings.length > 0) {
+        const parsed = files.get(filename);
+        if (parsed !== undefined) {
+          files.set(filename, {
+            ...parsed,
+            parseWarnings: [...parsed.parseWarnings, ...validation.warnings],
+          });
+        }
+      }
+    }
+  };
 
   /**
    * Final discovery step: inline every `include:` node (see include-expander.ts).
    * Resolves include targets against the full name map (bundled < global < project
-   * precedence already applied to `workflowsByFile`), then swaps each workflow for
+   * precedence already applied to `files`), then swaps each workflow for
    * its flattened, namespaced form. A workflow that fails to expand is dropped and
    * its error surfaced via `allErrors`. Only `.workflow` changes — `source` is kept.
    */
-  const expandIncludes = async (): Promise<WorkflowWithSource[]> => {
+  const expandScope = async (files: Map<string, ScopeFile>): Promise<WorkflowWithSource[]> => {
+    await validateNamedScripts(files);
     // Overrides are by FILENAME, but include targets resolve by workflow NAME. Two
     // surviving files (after filename-precedence) declaring the same `name:` would
     // silently collapse in the name map — last-writer-wins, emitting the same expanded
@@ -639,7 +818,7 @@ export async function discoverWorkflows(
     // Same-name shadowing was already ambiguous before `include:`; the name map just made
     // it load-bearing, so this hardens a pre-existing gap.
     const filenamesByName = new Map<string, string[]>();
-    for (const [filename, { workflow }] of workflowsByFile) {
+    for (const [filename, { workflow }] of files) {
       const existing = filenamesByName.get(workflow.name);
       if (existing) existing.push(filename);
       else filenamesByName.set(workflow.name, [filename]);
@@ -667,7 +846,7 @@ export async function discoverWorkflows(
     // pure expander) can be reported against the includer's actual file. Duplicate names
     // are excluded from expansion above, so first-seen is unambiguous for the rest.
     const filenameByName = new Map<string, string>();
-    for (const [filename, { workflow }] of workflowsByFile) {
+    for (const [filename, { workflow }] of files) {
       if (duplicateNames.has(workflow.name)) continue; // ambiguous — errored above, excluded
       rawByName.set(workflow.name, workflow);
       if (!filenameByName.has(workflow.name)) filenameByName.set(workflow.name, filename);
@@ -691,7 +870,7 @@ export async function discoverWorkflows(
     );
 
     const result: WorkflowWithSource[] = [];
-    for (const { workflow, source, parseWarnings } of workflowsByFile.values()) {
+    for (const { workflow, source, parseWarnings } of files.values()) {
       if (duplicateNames.has(workflow.name)) continue; // dropped as a duplicate-name collision
       const expanded = expandedByName.get(workflow.name);
       if (!expanded) continue; // expansion failed for this workflow — drop it
@@ -703,16 +882,125 @@ export async function discoverWorkflows(
         ...(workflow.model !== undefined ? { model: workflow.model } : {}),
         ...(workflow.effort !== undefined ? { effort: workflow.effort } : {}),
       };
+      // The loop_group sink-shape verdicts belong to the EXPANDED graph (#2756): a body
+      // whose terminal sink arrives through `include:` is an opaque target name until
+      // here, so judging it at parse time silently cleared shapes it could not see.
+      // This is the check's only pass — a directly-authored sink keeps its id through
+      // expansion, so it is reported here exactly once too.
+      const warnings = [...parseWarnings];
+      collectLoopGroupSinkWarnings(expanded.nodes, warnings);
       result.push({
         workflow: expanded,
         source,
         // Omitted rather than empty, matching the `errors` field on the same
         // surfaces: presence alone is the signal.
-        ...(parseWarnings && parseWarnings.length > 0 ? { parseWarnings } : {}),
+        ...(warnings.length > 0 ? { parseWarnings: warnings } : {}),
         ...(Object.keys(declared).length > 0 ? { declared } : {}),
       });
     }
     return result;
+  };
+
+  /**
+   * Installed workflow packs, each expanded against its own name map, so its support
+   * workflows compose inside the pack and nowhere else. Only manifest entrypoints come
+   * back as dispatchable, named `owner/plugin:<entrypoint>`; the rest are support.
+   */
+  const discoverInstalled = async (): Promise<{
+    workflows: WorkflowWithSource[];
+    support: WorkflowWithSource[];
+  }> => {
+    const workflows: WorkflowWithSource[] = [];
+    const support: WorkflowWithSource[] = [];
+    const listed = await listInstalledPacks(roots.installed);
+    for (const { path, message } of listed.errors) {
+      allErrors.push({ filename: path, error: message, errorType: 'read_error' });
+    }
+    for (const pack of listed.packs) {
+      const label = `${pack.owner}/${pack.name}`;
+      const loaded = await loadPackWorkflows(pack.dir, pack.key, 'installed', label);
+      allErrors.push(...loaded.errors);
+      const entrypointByPath = new Map(
+        Object.entries(pack.manifest.entrypoints).map(([entry, path]) => [path, entry])
+      );
+      // A pack workflow is referred to inside its pack by its `name:`. It is known
+      // outside as owner/plugin:<entrypoint> (entrypoints) or owner/plugin:<name> (support).
+      const qualifiedByName = new Map<string, string>();
+      const entrypoints = new Set<string>();
+      for (const file of loaded.files) {
+        const entry = entrypointByPath.get(`${file.folder}/${file.filename}`);
+        const qualified = installedWorkflowName(pack, entry ?? file.parsed.workflow.name);
+        if (entry !== undefined) entrypoints.add(qualified);
+        qualifiedByName.set(file.parsed.workflow.name, qualified);
+      }
+      for (const [path, entry] of entrypointByPath) {
+        if (!loaded.files.some(file => `${file.folder}/${file.filename}` === path)) {
+          allErrors.push({
+            filename: `${label}/${path}`,
+            error: `Entrypoint '${entry}' of installed plugin ${label} did not load from ${path}.`,
+            errorType: 'validation_error',
+          });
+        }
+      }
+      const files = new Map<string, ScopeFile>();
+      for (const file of loaded.files) {
+        const { workflow } = file.parsed;
+        const filename = `${label}/${file.folder}/${file.filename}`;
+        const supportChildren = qualifyPackReferences(workflow, qualifiedByName, entrypoints);
+        if (supportChildren.length > 0) {
+          allErrors.push({
+            filename,
+            error: `'workflow:' launches support workflow ${supportChildren.map(name => `'${name}'`).join(', ')} as a child run. A child run is dispatch, and only entrypoints are dispatchable: compose it with 'include:', or declare it as an entrypoint in archon-plugin.json.`,
+            errorType: 'validation_error',
+          });
+          continue;
+        }
+        files.set(filename, {
+          ...file.parsed,
+          workflow: { ...workflow, name: qualifiedByName.get(workflow.name) ?? workflow.name },
+          source: 'installed',
+        });
+      }
+      for (const expanded of await expandScope(files)) {
+        (entrypoints.has(expanded.workflow.name) ? workflows : support).push(expanded);
+      }
+    }
+    return { workflows, support };
+  };
+
+  /**
+   * Assemble the catalog: the legacy scopes, then installed entrypoints. A qualified
+   * installed name wins over a legacy workflow declaring the same name, so no project or
+   * global file can shadow an installed workflow.
+   */
+  const finish = async (scope?: string): Promise<WorkflowLoadResult> => {
+    const legacy = await expandScope(workflowsByFile);
+    const installed = await discoverInstalled();
+    const installedNames = new Set(
+      [...installed.workflows, ...installed.support].map(entry => entry.workflow.name)
+    );
+    const workflows: WorkflowWithSource[] = [];
+    for (const entry of legacy) {
+      if (installedNames.has(entry.workflow.name)) {
+        allErrors.push({
+          filename: entry.workflow.name,
+          error: `The ${entry.source} workflow named '${entry.workflow.name}' is not loaded: that name belongs to an installed plugin. Rename it.`,
+          errorType: 'validation_error',
+        });
+        continue;
+      }
+      workflows.push(entry);
+    }
+    workflows.push(...installed.workflows);
+    getLog().info(
+      {
+        count: workflows.length,
+        errorCount: allErrors.length,
+        ...(scope !== undefined ? { scope } : {}),
+      },
+      'workflows_discovery_completed'
+    );
+    return { workflows, support: installed.support, errors: allErrors };
   };
 
   // 1. Load from app's bundled defaults (unless opted out)
@@ -739,11 +1027,37 @@ export async function discoverWorkflows(
       );
       getLog().debug({ appWorkflowsPath }, 'loading_app_default_workflows');
       try {
-        await access(appWorkflowsPath);
-        const appResult = mergeScopeResults(
-          await loadWorkflowsFromDir(appDefaultsPath),
-          await loadPackagedWorkflowsFromDir(appWorkflowsPath, 'bundled')
-        );
+        let appResult: DirLoadResult;
+        if (roots.kind === 'live') {
+          appResult = { workflows: new Map(), errors: [] };
+          const files =
+            (await collectInstalledBundleSources(
+              appWorkflowsPath,
+              dirname(roots.bundledCommands)
+            )) ?? [];
+          for (const file of files) {
+            if (file.kind !== 'workflow') continue;
+            const filename = basename(file.sourcePath);
+            const parsed = parseWorkflow(await readBundleContent(file), filename);
+            if (!parsed.workflow) {
+              appResult.errors.push(parsed.error);
+              continue;
+            }
+            if (file.owner)
+              qualifyWorkflowResources(parsed.workflow, { source: 'bundled', ...file.owner });
+            appResult.workflows.set(filename, {
+              workflow: parsed.workflow,
+              parseWarnings: parsed.warnings,
+            });
+          }
+        } else {
+          // A capture's inventory belongs to that run, including packs no longer shipped.
+          await access(appWorkflowsPath);
+          appResult = mergeScopeResults(
+            await loadWorkflowsFromDir(appDefaultsPath),
+            await loadPackagedWorkflowsFromDir(appWorkflowsPath, 'bundled')
+          );
+        }
         for (const [filename, parsed] of appResult.workflows) {
           workflowsByFile.set(filename, { ...parsed, source: 'bundled' });
         }
@@ -757,8 +1071,13 @@ export async function discoverWorkflows(
         getLog().info({ count: appResult.workflows.size }, 'app_default_workflows_loaded');
       } catch (error) {
         const err = error as NodeJS.ErrnoException;
-        if (err.code !== 'ENOENT') {
+        if (roots.kind === 'live' || err.code !== 'ENOENT') {
           getLog().warn({ err, appWorkflowsPath }, 'app_defaults_access_error');
+          allErrors.push({
+            filename: appWorkflowsPath,
+            error: err.message,
+            errorType: 'read_error',
+          });
         } else {
           getLog().debug({ appWorkflowsPath }, 'app_defaults_directory_not_found');
         }
@@ -797,14 +1116,7 @@ export async function discoverWorkflows(
   // 3. Load from repo's workflow folder (overrides app defaults AND home scope by exact filename).
   // Skipped when cwd is null — surfaces bundled + home scopes only, which is the right answer
   // for callers without a project context (e.g. UI listing workflows before any codebase is registered).
-  if (cwd === null) {
-    const workflows = await expandIncludes();
-    getLog().info(
-      { count: workflows.length, errorCount: allErrors.length, scope: 'no_project_context' },
-      'workflows_discovery_completed'
-    );
-    return { workflows, errors: allErrors };
-  }
+  if (cwd === null) return finish('no_project_context');
 
   const [workflowFolder] = archonPaths.getWorkflowFolderSearchPaths();
   const workflowPath = join(projectRoot ?? cwd, workflowFolder);
@@ -873,12 +1185,7 @@ export async function discoverWorkflows(
     getLog().debug({ workflowPath }, 'workflow_folder_not_found');
   }
 
-  const workflows = await expandIncludes();
-  getLog().info(
-    { count: workflows.length, errorCount: allErrors.length },
-    'workflows_discovery_completed'
-  );
-  return { workflows, errors: allErrors };
+  return finish();
 }
 
 /**
@@ -909,7 +1216,7 @@ export async function discoverWorkflowsWithConfig(
    */
   sourceRoots?: WorkflowSourceRoots
 ): Promise<WorkflowLoadResult> {
-  const sourceConfig = sourceRoots?.config;
+  const sourceConfig = sourceRoots && workflowSourceConfigForRoots(sourceRoots);
   let loadDefaults = sourceConfig?.load_default_workflows ?? true;
   // Command-scan parity: pass the repo's configured command folder + loadDefaultCommands
   // opt-out through so the include safety scan resolves the same command files the

@@ -9,7 +9,12 @@
  * All functions are side-effect free so they stay unit-testable without DOM
  * rendering — the console's testing pattern for panel logic (lib/agent-status.ts).
  */
-import type { AgentCredentials, OpencodeCredentialProvider, PiModelInfo } from '../skills';
+import type {
+  AgentCredentials,
+  OpencodeCredentialProvider,
+  PiModelInfo,
+  ProviderInfo,
+} from '../skills';
 import { isCredentialUsable } from './agent-status';
 
 /** One suggestion in a model picker dropdown. */
@@ -99,41 +104,11 @@ export function curatedOptionsForAgent(agentId: string): readonly ModelOption[] 
 }
 
 // ---------------------------------------------------------------------------
-// Effort. There is ONE reasoning-depth vocabulary (#2556): a tier/alias `effort`
-// reaches every agent whose `capabilities.effortControl` is true, and that agent
-// clamps any rung its SDK lacks to the nearest one it has. So the vocabulary is a
-// constant and the only per-agent question is whether the field applies at all
-// — answered by the capability the providers endpoint already returns, not by a
-// hardcoded agent-id list. The web package cannot import @archon/workflows, so
-// the ladder is mirrored here (same convention as REASONING_EFFORTS in the
-// Defaults panel).
+// Effort. GET /api/providers carries the core-owned ladder for every provider
+// that accepts it, so the web has no second vocabulary to maintain.
 // ---------------------------------------------------------------------------
 
-/** Mirrors `effortLevelSchema` in packages/workflows/src/schemas/dag-node.ts. */
-export const EFFORT_OPTIONS = [
-  'minimal',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-  'max',
-  'ultra',
-] as const;
-
-export type EffortOption = (typeof EFFORT_OPTIONS)[number];
-
-/** The rungs `assistants.codex.modelReasoningEffort` accepts — the Codex SDK's
- *  own enum, which is NOT the shared ladder: that config key is unchanged by
- *  #2556 and keeps its vendor vocabulary. */
-export const CODEX_CONFIG_EFFORT_OPTIONS = [
-  'minimal',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-  'max',
-  'ultra',
-] as const;
+export type EffortOption = NonNullable<ProviderInfo['effortLevels']>[number];
 
 /**
  * The effort vocabulary an agent's tier/alias `effort` accepts, or null when the
@@ -142,10 +117,10 @@ export const CODEX_CONFIG_EFFORT_OPTIONS = [
  */
 export function effortOptionsForAgent(
   agentId: string,
-  providers: readonly { id: string; capabilities?: { effortControl?: boolean } }[]
+  providers: readonly Pick<ProviderInfo, 'id' | 'effortLevels'>[]
 ): readonly EffortOption[] | null {
   const provider = providers.find(p => p.id === agentId);
-  return provider?.capabilities?.effortControl ? EFFORT_OPTIONS : null;
+  return provider?.effortLevels ?? null;
 }
 
 /**
@@ -156,7 +131,7 @@ export function effortOptionsForAgent(
 export function normalizeEffortForAgent(
   agentId: string,
   effort: string,
-  providers: readonly { id: string; capabilities?: { effortControl?: boolean } }[]
+  providers: readonly Pick<ProviderInfo, 'id' | 'effortLevels'>[]
 ): EffortOption | '' {
   const valid = effortOptionsForAgent(agentId, providers);
   return valid?.find(v => v === effort) ?? '';

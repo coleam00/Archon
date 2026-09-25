@@ -1,64 +1,67 @@
 ---
 name: Bug Report
-about: Report a bug to help us improve
+about: Report broken or unexpected behavior
 title: ''
 labels: bug
 assignees: ''
 ---
 
-## Summary
+<!--
+Keep this focused on the product contract. Root cause and solution design belong
+to investigation and planning. Maintainers will check direction and delivery
+preconditions against the current repository before automation starts.
 
-- What broke:
-- When it started (if known):
-- Severity: `blocker|major|minor|cosmetic`
+Do not post secrets or undisclosed vulnerabilities. Follow SECURITY.md instead.
+-->
 
-## Steps to Reproduce
+## Problem
+
+<!-- What happened, where did it happen, and what happens today? -->
+
+## Why
+
+<!-- Why does this matter? Include impact and urgency when they are material. -->
+
+## Desired outcome
+
+<!-- What should become observably true? -->
+
+## Acceptance
+
+<!-- List concrete observations that would prove the bug is resolved. -->
+
+- [ ]
+
+## Evidence
+
+<!-- Include what is known. Do not guess at the cause. -->
+
+### Reproduction
 
 1.
 2.
 3.
 
-## Expected vs Actual
+### Environment
 
-- **Expected**:
-- **Actual**:
-
-## User Flow
-
-```
-(Draw the flow that triggers the bug. Mark where it breaks with [X].)
-
-Example:
-  User                   Archon                   AI Client
-  ────                   ──────                   ─────────
-  sends /plan ─────────▶ routes to workflow
-                         creates worktree
-                         streams to AI ──────────▶ processes prompt
-                         [X] timeout waiting ◀──── no response
-  sees error ◀────────── sends error message
-```
-
-## Environment
-
-- Platform: (Slack / Telegram / GitHub / Discord / Web / CLI)
-- Database: (SQLite / PostgreSQL)
-- Running in worktree? (`Yes/No`)
+- Archon version or commit:
+- Platform or adapter:
+- Database: SQLite / PostgreSQL
 - OS:
 
-## Logs
+### Logs or screenshots
 
-```
-Paste relevant logs here (redact any tokens/secrets)
-```
+<!-- Redact tokens, credentials, and personal data. -->
 
-## Impact
+## Constraints and related work
 
-- Affected workflows/commands:
-- Reproduction rate: Always / Intermittent / Once
-- Workaround available? If so, describe:
-- Data loss risk? (`Yes/No`)
+<!-- Delete lines that do not add information. Mark solution ideas as hints or requirements. -->
 
-## Scope
+- Must remain true:
+- Known prerequisites or blockers:
+- Related issues or PRs:
+- Solution steering: Hint / Requirement —
 
-- Package(s) likely involved: `core|workflows|isolation|git|adapters|server|web|cli|paths`
-- Module (if known): e.g. `workflows:executor`, `adapters:slack`
+## Additional notes
+
+<!-- Add useful context that does not fit above. -->

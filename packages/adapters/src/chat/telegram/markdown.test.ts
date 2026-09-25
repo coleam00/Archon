@@ -1,3 +1,5 @@
+import { describe, expect, test } from 'bun:test';
+
 import { convertToTelegramMarkdown, escapeMarkdownV2, isAlreadyEscaped } from './markdown';
 
 describe('telegram-markdown', () => {

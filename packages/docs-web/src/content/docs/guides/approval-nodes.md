@@ -185,20 +185,19 @@ for the full semantics, `signal_completes`, and the AI-approver steering pattern
 
 ### Web UI
 
-Paused workflows show an amber pulsing badge on the dashboard. Click **Approve**
-or **Reject** directly on the workflow card. Both actions auto-resume the
-workflow from the paused gate — no follow-up message required.
+Open the paused run from the console run list. Its run detail shows the pending
+approval, context, and decision controls. **Continue** accepts an optional
+comment. **Reject** opens a feedback field and requires text before submission.
+When the gate continues execution, Web-dispatched and headless CLI runs can
+resume automatically; the gate's rejection rules can instead cancel the run.
 
-**Reject with reason**: the Reject dialog includes an optional free-text
-reason field. The trimmed value (empty after trim → omitted) is passed to
-the workflow as `$REJECTION_REASON`, available in the `on_reject.prompt`.
-Rejects on web and chat cards use the same confirmation dialog.
+**Reject with feedback**: the required, trimmed text is passed to the workflow as
+`$REJECTION_REASON`, available in the `on_reject.prompt`.
 
-**Cross-platform caveat**: auto-resume via the Web UI only applies when the
-run was originally dispatched from the Web UI (parent conversation is a web
-conversation). If you approve a Slack / Telegram / GitHub-dispatched run
-from the dashboard, the decision is recorded, but the resume flow has to
-happen in the originating platform (re-run the workflow there).
+**Cross-platform caveat**: Web-dispatched and headless CLI runs can auto-resume
+after a Web UI decision. A run with a Slack, Telegram, or GitHub parent records
+the decision but does not auto-resume. Use `archon workflow resume <run-id>` or
+resume it from the originating conversation to continue the same run.
 
 ### REST API
 
@@ -275,8 +274,7 @@ can approve or reject again.
   the workflow pauses at the layer boundary.
 - **Server restart while paused**: The run persists in the database. The user can
   still approve or reject after restart.
-- **Abandoning a paused run**: Use `/workflow abandon <id>` or the Abandon button
-  on the dashboard.
+- **Abandoning a paused run**: Use `/workflow abandon <id>`.
 
 ## Design Notes
 

@@ -212,4 +212,28 @@ describe('withIdleTimeout', () => {
     expect(result).toEqual([{ type: 'assistant' }, { type: 'tool' }]);
     expect(onTimeout).toHaveBeenCalledTimes(1);
   });
+
+  test('reports the value and timestamp only when the timer resets', async () => {
+    type Msg = { type: 'assistant' | 'tool' };
+    const resets: Array<{ type: Msg['type']; resetAt: number }> = [];
+    const before = Date.now();
+
+    const values: Msg[] = [];
+    for await (const value of withIdleTimeout(
+      fromValues<Msg>([{ type: 'assistant' }, { type: 'tool' }]),
+      1000,
+      undefined,
+      msg => msg.type !== 'tool',
+      (msg, resetAt) => resets.push({ type: msg.type, resetAt })
+    )) {
+      values.push(value);
+    }
+
+    const after = Date.now();
+    expect(values).toEqual([{ type: 'assistant' }, { type: 'tool' }]);
+    expect(resets).toHaveLength(1);
+    expect(resets[0]?.type).toBe('assistant');
+    expect(resets[0]?.resetAt).toBeGreaterThanOrEqual(before);
+    expect(resets[0]?.resetAt).toBeLessThanOrEqual(after);
+  });
 });

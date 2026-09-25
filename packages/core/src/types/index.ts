@@ -1,7 +1,7 @@
 /**
  * Core type definitions for the Remote Coding Agent platform
  */
-import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { RunModelOverrides } from '@archon/workflows/model-validation';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
@@ -80,27 +80,23 @@ export interface HandleMessageContext {
   readonly workflowSupersedesRunId?: string;
 }
 
+export type WorkflowRequest =
+  | {
+      kind: 'start';
+      definition: ResolvedWorkflow;
+      args: string;
+      force?: boolean;
+      /** Keys the engine dropped from this workflow's YAML (#2213). */
+      parseWarnings?: readonly string[];
+    }
+  | { kind: 'resume'; run: WorkflowRun };
+
 export interface CommandResult {
   success: boolean;
   message: string;
   modified?: boolean; // Indicates if conversation state was modified
-  workflow?: {
-    // If set, orchestrator should execute this workflow
-    definition: WorkflowDefinition;
-    args: string;
-    force?: boolean;
-    resumeRunId?: string;
-    resumeRun?: WorkflowRun;
-    /**
-     * The continuation graph already resolved from that run's recorded source.
-     *
-     * Carried so dispatch does not repeat the digest verification and discovery the
-     * handler just paid for. A value, not a flag: it cannot claim work it did not do.
-     */
-    resolvedContinuation?: WorkflowDefinition;
-    /** Keys the engine dropped from this workflow's YAML (#2213). */
-    parseWarnings?: readonly string[];
-  };
+  /** If set, orchestrator should execute this workflow request. */
+  workflow?: WorkflowRequest;
 }
 
 /**
@@ -118,6 +114,8 @@ export interface MessageMetadata {
   workflowDispatch?: { workerConversationId: string; workflowName: string };
   workflowResult?: { workflowName: string; runId: string };
 }
+
+export { toPersistedMessageMetadata } from './message-metadata';
 
 export interface IPlatformAdapter {
   /**
@@ -166,6 +164,13 @@ export interface IPlatformAdapter {
   emitRetract?(conversationId: string): Promise<void>;
 
   /**
+   * Optional: how an operator types a workflow command on this surface, given the
+   * command after the verb prefix (`cancel <id>`). Absent means the chat grammar the
+   * core command handler parses, `/workflow <command>`.
+   */
+  formatWorkflowCommand?(command: string): string;
+
+  /**
    * Optional: Append a small footer summarising cost / token usage / stop reason
    * after a direct-chat assistant turn. Implemented by adapters that surface
    * usage info in-band (e.g. Slack posts an italic context line). No-op for
@@ -202,9 +207,5 @@ export function isWebAdapter(adapter: IPlatformAdapter): adapter is IWebPlatform
 // Re-export workflow schema types for config-types.ts compatibility
 import type { ModelReasoningEffort, WebSearchMode } from '@archon/workflows/schemas/workflow';
 export type { ModelReasoningEffort, WebSearchMode };
-import type {
-  EffortLevel,
-  ThinkingConfig,
-  SandboxSettings,
-} from '@archon/workflows/schemas/dag-node';
-export type { EffortLevel, ThinkingConfig, SandboxSettings };
+import type { EffortLevel, SandboxSettings } from '@archon/workflows/schemas/dag-node';
+export type { EffortLevel, SandboxSettings };

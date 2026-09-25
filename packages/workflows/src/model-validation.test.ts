@@ -19,6 +19,7 @@ import {
   type ResolvedAiProfile,
 } from './model-validation';
 import builtInTierDefaults from './defaults/tier-defaults.json';
+import { EFFORT_LEVELS } from './schemas';
 
 // The effort helpers read `effortControl` off the provider registry, so the
 // registry has to be populated the way a real entrypoint populates it.
@@ -114,14 +115,13 @@ describe('buildAiProfile — alias layering', () => {
     });
   });
 
-  test('tier entry effort and thinking are preserved', () => {
+  test('tier entry effort is preserved', () => {
     const profile = buildAiProfile('claude', {
       repoTiers: {
         large: {
           provider: 'claude',
           model: 'opus',
           effort: 'max',
-          thinking: { type: 'enabled', budgetTokens: 10000 },
         },
       },
     });
@@ -129,7 +129,6 @@ describe('buildAiProfile — alias layering', () => {
       provider: 'claude',
       model: 'opus',
       effort: 'max',
-      thinking: { type: 'enabled', budgetTokens: 10000 },
     });
   });
 
@@ -196,20 +195,14 @@ describe('buildAiProfile — alias layering', () => {
     expect(profile.aliases['@deep']?.effort).toBe('xhigh');
   });
 
-  test('alias entry thinking is preserved', () => {
-    const profile = buildAiProfile('claude', {
-      repoAliases: {
-        '@think': {
-          provider: 'claude',
-          model: 'opus',
-          thinking: { type: 'enabled', budgetTokens: 10000 },
-        },
-      },
-    });
-    expect(profile.aliases['@think']?.thinking).toEqual({
-      type: 'enabled',
-      budgetTokens: 10000,
-    });
+  test('rejects retired thinking config and names effort', () => {
+    expect(() =>
+      buildAiProfile('claude', {
+        repoAliases: {
+          '@think': { provider: 'claude', model: 'opus', thinking: 'enabled' },
+        } as never,
+      })
+    ).toThrow(/thinking:.*effort:/);
   });
 });
 
@@ -435,20 +428,6 @@ describe('per-run model bindings', () => {
     expect(() =>
       resolveRunModelOverrides(unsupportedEffort, { aliases: { '@target': '@source' } })
     ).toThrow(/cannot apply effort/);
-
-    const unsupportedThinking = buildAiProfile('pi', {
-      repoAliases: {
-        '@source': {
-          provider: 'pi',
-          model: 'openai/gpt-5.6',
-          thinking: { type: 'enabled' },
-        },
-        '@target': { provider: 'pi', model: 'openai/gpt-5' },
-      },
-    });
-    expect(() =>
-      resolveRunModelOverrides(unsupportedThinking, { aliases: { '@target': '@source' } })
-    ).toThrow(/cannot apply Claude-shaped thinking/);
   });
 
   test('rejects unknown alias targets and references', () => {
@@ -508,7 +487,7 @@ describe('per-run model bindings', () => {
           },
         },
       })
-    ).toThrow(/invalid thinking options/);
+    ).toThrow(/thinking:.*effort:/);
     expect(() =>
       readRunModelBindingsMetadata({
         model_bindings: {
@@ -576,7 +555,7 @@ describe('per-run model bindings', () => {
           },
         },
       })
-    ).toThrow(/cannot apply Claude-shaped thinking options/);
+    ).toThrow(/thinking:.*effort:/);
     expect(() =>
       readRunModelBindingsMetadata({
         model_bindings: {
@@ -829,12 +808,10 @@ describe('isLiteralSpec type guard', () => {
 // #2556: one vocabulary, gated by one capability flag. Before this, effort
 // "routed" only on Claude and Codex, each with its own enum, so a tier's
 // `effort` was silently dropped on Pi and Copilot — which do have the control.
-const LADDER = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
-
 describe('validEffortsForProvider', () => {
   test('returns the one ladder for every provider with a reasoning control', () => {
     for (const provider of ['claude', 'codex', 'pi', 'copilot']) {
-      expect(validEffortsForProvider(provider)).toEqual(LADDER);
+      expect(validEffortsForProvider(provider)).toEqual(EFFORT_LEVELS);
     }
   });
 
@@ -871,13 +848,22 @@ describe('resolvePresetEffort', () => {
     expect(decision.ok).toBe(false);
     if (decision.ok) throw new Error('expected a rejection');
     expect(decision.reason).toBe('unknown');
-    expect(decision.valid).toEqual(LADDER);
+    expect(decision.valid).toEqual(EFFORT_LEVELS);
   });
 });
 
 describe('isEffortValidForProvider', () => {
   test('accepts every rung on a provider that has the control', () => {
-    for (const rung of ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']) {
+    for (const rung of [
+      'minimal',
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+      'ultra',
+      'persistent',
+    ]) {
       expect(isEffortValidForProvider('codex', rung)).toBe(true);
       expect(isEffortValidForProvider('claude', rung)).toBe(true);
     }

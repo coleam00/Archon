@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Options, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { createMockLogger } from '../test/mocks/logger';
+import type { MessageChunk } from '../types';
 
 const mockLogger = createMockLogger();
 mock.module('@archon/paths', () => ({
@@ -136,8 +137,12 @@ describe('ClaudeProvider', () => {
         structuredOutput: 'enforced',
         envInjection: true,
         costControl: true,
+        costReporting: true,
+        tokenReporting: true,
+        stopReasonReporting: true,
+        turnCountReporting: true,
+        resolvedModelReporting: true,
         effortControl: true,
-        thinkingControl: true,
         fallbackModel: true,
         sandbox: true,
         settingSources: true,
@@ -288,6 +293,155 @@ describe('ClaudeProvider', () => {
       });
       // Single-model usage is unambiguous — no ambiguity warning.
       expect(mockLogger.warn).not.toHaveBeenCalled();
+    });
+
+    describe('cost of a resumed or forked session is the query’s own spend', () => {
+      // Totals recorded from real haiku runs on SDK 0.3.282, whose resumed and forked
+      // sessions report total_cost_usd and modelUsage cumulatively.
+      const haiku = (costUSD: number, outputTokens: number): Record<string, unknown> => ({
+        'claude-haiku-4-5-20251001': { inputTokens: 900, outputTokens, costUSD },
+      });
+      function resultFor(sessionId: string, total: number, outputTokens: number): void {
+        mockQuery.mockImplementationOnce(async function* () {
+          yield {
+            type: 'result',
+            session_id: sessionId,
+            total_cost_usd: total,
+            modelUsage: haiku(total, outputTokens),
+          };
+        });
+      }
+      async function costOf(
+        resumeSessionId?: string,
+        options?: { forkSession: boolean }
+      ): Promise<number | undefined> {
+        let cost: number | undefined;
+        for await (const chunk of client.sendQuery(
+          'test',
+          '/workspace',
+          resumeSessionId,
+          options
+        )) {
+          if (chunk.type === 'result') cost = chunk.cost;
+        }
+        return cost;
+      }
+
+      test('a resumed turn reports what it spent, not the session total', async () => {
+        resultFor('spend-resume', 0.030896, 55);
+        expect(await costOf()).toBe(0.030896);
+
+        resultFor('spend-resume', 0.0356233, 103);
+        expect(await costOf('spend-resume')).toBeCloseTo(0.0047273, 10);
+      });
+
+      test('a fork reports its own spend, differenced against the source session', async () => {
+        resultFor('spend-fork-source', 0.0356233, 103);
+        await costOf();
+
+        resultFor('spend-fork-child', 0.0421297, 151);
+        expect(await costOf('spend-fork-source', { forkSession: true })).toBeCloseTo(0.0065064, 10);
+
+        // The fork's own totals become the baseline for resuming it.
+        resultFor('spend-fork-child', 0.05, 180);
+        expect(await costOf('spend-fork-child')).toBeCloseTo(0.0078703, 10);
+      });
+
+      test('resuming a session this process never saw reports cost as unknown', async () => {
+        // Created by an earlier process: its total includes turns this node did not run.
+        resultFor('spend-unseen', 0.0356233, 103);
+        expect(await costOf('spend-unseen')).toBeUndefined();
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          { sessionId: 'spend-unseen', baseline: 'unknown' },
+          'claude.query_cost_unknown'
+        );
+      });
+
+      test('the resolved model is the one this query used, not the session’s busiest', async () => {
+        mockQuery.mockImplementationOnce(async function* () {
+          yield {
+            type: 'result',
+            session_id: 'spend-model',
+            total_cost_usd: 0.5,
+            modelUsage: { 'claude-opus-5-5': { outputTokens: 4000, costUSD: 0.5 } },
+          };
+        });
+        await costOf();
+        mockQuery.mockImplementationOnce(async function* () {
+          yield {
+            type: 'result',
+            session_id: 'spend-model',
+            total_cost_usd: 0.51,
+            modelUsage: {
+              'claude-opus-5-5': { outputTokens: 4000, costUSD: 0.5 },
+              'claude-haiku-4-5-20251001': { outputTokens: 60, costUSD: 0.01 },
+            },
+          };
+        });
+
+        let resolved: string | undefined;
+        for await (const chunk of client.sendQuery('test', '/workspace', 'spend-model')) {
+          if (chunk.type === 'result') resolved = chunk.resolvedModel?.id;
+        }
+        expect(resolved).toBe('claude-haiku-4-5-20251001');
+      });
+
+      test('a resumed query with no new output names no model from earlier turns', async () => {
+        // A crash or startup-error result can carry the session's totals unchanged.
+        const totals = {
+          type: 'result',
+          session_id: 'spend-zero-delta',
+          total_cost_usd: 0.6,
+          modelUsage: {
+            'claude-opus-5-5': { outputTokens: 5000, costUSD: 0.5 },
+            'claude-haiku-4-5-20251001': { outputTokens: 100, costUSD: 0.1 },
+          },
+        };
+        mockQuery.mockImplementationOnce(async function* () {
+          yield totals;
+        });
+        await costOf();
+        mockQuery.mockImplementationOnce(async function* () {
+          yield totals;
+        });
+
+        const results: MessageChunk[] = [];
+        for await (const chunk of client.sendQuery('test', '/workspace', 'spend-zero-delta')) {
+          if (chunk.type === 'result') results.push(chunk);
+        }
+        expect(results).toHaveLength(1);
+        expect(results[0]).toMatchObject({ cost: 0 });
+        expect(results[0]).not.toHaveProperty('resolvedModel');
+      });
+
+      test('without a baseline, a multi-model session names no model', async () => {
+        mockQuery.mockImplementationOnce(async function* () {
+          yield {
+            type: 'result',
+            session_id: 'spend-unseen-multi',
+            total_cost_usd: 0.6,
+            modelUsage: {
+              'claude-opus-5-5': { outputTokens: 5000, costUSD: 0.5 },
+              'claude-haiku-4-5-20251001': { outputTokens: 100, costUSD: 0.1 },
+            },
+          };
+        });
+
+        const results: MessageChunk[] = [];
+        for await (const chunk of client.sendQuery('test', '/workspace', 'spend-unseen-multi')) {
+          if (chunk.type === 'result') results.push(chunk);
+        }
+        expect(results[0]).not.toHaveProperty('resolvedModel');
+        expect(results[0]).not.toHaveProperty('cost');
+      });
+
+      test('a total below the baseline reports cost as unknown', async () => {
+        resultFor('spend-reset', 0.03, 50);
+        await costOf();
+
+        resultFor('spend-reset', 0.004, 20);
+        expect(await costOf('spend-reset')).toBeUndefined();
+      });
     });
 
     test('picks the greatest-output-token model and warns when modelUsage has multiple keys', async () => {
@@ -1399,6 +1553,30 @@ describe('ClaudeProvider', () => {
       expect(chunks[0]).toEqual({ type: 'assistant', content: 'Recovered!' });
     }, 5_000);
 
+    test('retry backoff runs inside the admission release, never while the slot is held', async () => {
+      const events: string[] = [];
+      mockQuery.mockImplementation(async function* () {
+        events.push('attempt');
+        if (events.filter(e => e === 'attempt').length === 1) {
+          throw new Error('process exited with code 1');
+        }
+        yield { type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } };
+      });
+      const admission = {
+        releaseDuring: async (wait: () => Promise<void>): Promise<void> => {
+          events.push('released');
+          await wait();
+          events.push('reacquired');
+        },
+      };
+
+      for await (const _ of client.sendQuery('test', '/workspace', undefined, { admission })) {
+        // consume
+      }
+
+      expect(events).toEqual(['attempt', 'released', 'reacquired', 'attempt']);
+    }, 5_000);
+
     test('classifies auth errors as fatal (no retry)', async () => {
       const error = new Error('unauthorized');
       mockQuery.mockImplementation(async function* () {
@@ -1887,6 +2065,7 @@ describe('ClaudeProvider', () => {
         ['minimal', 'low'],
         ['max', 'max'],
         ['ultra', 'max'],
+        ['persistent', 'max'],
       ] as const) {
         mockQuery.mockClear();
         mockQuery.mockImplementation(async function* () {
@@ -1902,37 +2081,6 @@ describe('ClaudeProvider', () => {
         const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
         expect(callArgs.options.effort).toBe(applied);
       }
-    });
-
-    test('omits effort from SDK for a value that is not a rung', async () => {
-      mockQuery.mockImplementation(async function* () {
-        yield { type: 'result', session_id: 'sid' };
-      });
-
-      for await (const _ of client.sendQuery('test', '/tmp', undefined, {
-        nodeConfig: { effort: 'off' },
-      })) {
-        // consume
-      }
-
-      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
-      expect(callArgs.options).not.toHaveProperty('effort');
-    });
-
-    test('passes thinking object to SDK via nodeConfig', async () => {
-      mockQuery.mockImplementation(async function* () {
-        yield { type: 'result', session_id: 'sid' };
-      });
-
-      for await (const _ of client.sendQuery('test', '/tmp', undefined, {
-        nodeConfig: { thinking: { type: 'enabled', budgetTokens: 8000 } },
-      })) {
-        // consume
-      }
-
-      expect(mockQuery).toHaveBeenCalledTimes(1);
-      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
-      expect(callArgs.options.thinking).toEqual({ type: 'enabled', budgetTokens: 8000 });
     });
 
     test('passes maxBudgetUsd to SDK', async () => {
@@ -1962,7 +2110,37 @@ describe('ClaudeProvider', () => {
 
       expect(mockQuery).toHaveBeenCalledTimes(1);
       const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
-      expect(callArgs.options.systemPrompt).toBe('You are a security reviewer');
+      // Sent as an unrecorded custom prompt, so a resume renders it fresh.
+      expect(callArgs.options.systemPrompt).toEqual({
+        type: 'custom',
+        prompt: 'You are a security reviewer',
+        snapshot: false,
+      });
+    });
+
+    test('a resumed session gets the system prompt of this request, not a recorded one', async () => {
+      // SDK >= 0.3.267 records the system prompt and re-sends the record on resume
+      // unless snapshot is false. A node that resumes another node's session, and a
+      // chat turn whose append lists current workflows, must reach the model as sent.
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+
+      for await (const _ of client.sendQuery('test', '/tmp', 'earlier-session', {
+        systemPrompt: { type: 'preset', preset: 'claude_code', append: 'Workflows now: a, b' },
+        nodeConfig: {},
+      })) {
+        // consume
+      }
+
+      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+      expect(callArgs.options.resume).toBe('earlier-session');
+      expect(callArgs.options.systemPrompt).toEqual({
+        type: 'preset',
+        preset: 'claude_code',
+        append: 'Workflows now: a, b',
+        snapshot: false,
+      });
     });
 
     test('uses claude_code preset systemPrompt when not overridden', async () => {
@@ -1976,7 +2154,11 @@ describe('ClaudeProvider', () => {
 
       expect(mockQuery).toHaveBeenCalledTimes(1);
       const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
-      expect(callArgs.options.systemPrompt).toEqual({ type: 'preset', preset: 'claude_code' });
+      expect(callArgs.options.systemPrompt).toEqual({
+        type: 'preset',
+        preset: 'claude_code',
+        snapshot: false,
+      });
     });
 
     test('passes fallbackModel to SDK', async () => {
@@ -3049,6 +3231,24 @@ describe('API error surfaced as text (#1797)', () => {
 
     const { error } = await collect(client.sendQuery('test', '/workspace'));
     expect(error?.message).toContain('Claude API error (account_on_hold)');
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ errorClass: 'auth' }),
+      'query_error'
+    );
+  });
+
+  test.each([
+    ['verification_required', 'API Error: organization verification required'],
+    ['cloud_credential_error', 'API Error: Could not load Bedrock credentials'],
+  ])('%s throws as a non-retryable auth error', async (code, text) => {
+    mockQuery.mockImplementation(async function* () {
+      yield syntheticAssistantMessage(code, text);
+      yield apiErrorResult(text);
+    });
+
+    const { error } = await collect(client.sendQuery('test', '/workspace'));
+    expect(error?.message).toContain(`Claude API error (${code})`);
     expect(mockQuery).toHaveBeenCalledTimes(1);
     expect(mockLogger.error).toHaveBeenCalledWith(
       expect.objectContaining({ errorClass: 'auth' }),

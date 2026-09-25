@@ -1,12 +1,19 @@
+import { terminalRecordSchema } from '@archon/workflows/schemas/terminal-record';
 /**
  * Zod schemas for workflow API endpoints.
  */
 import { z } from '@hono/zod-openapi';
-import { workflowDefinitionSchema as engineWorkflowDefinitionSchema } from '@archon/workflows/schemas/workflow';
+import {
+  workflowDefinitionSchema as engineWorkflowDefinitionSchema,
+  workflowSourceSchema as engineWorkflowSourceSchema,
+} from '@archon/workflows/schemas/workflow';
 import {
   workflowRunSchema as engineWorkflowRunSchema,
   workflowRunOutcomeSchema as engineWorkflowRunOutcomeSchema,
+  workflowWaitContextSchema as engineWorkflowWaitContextSchema,
+  RUN_STOP_REASON_METADATA_KEY,
 } from '@archon/workflows/schemas/workflow-run';
+import { runStopReasonSchema as engineRunStopReasonSchema } from '@archon/workflows/schemas/run-terminal-reason';
 import { workflowEventRowSchema } from '@archon/core/schemas/workflow-event';
 import { dashboardWorkflowRunSchema as coreDashboardWorkflowRunSchema } from '@archon/core/schemas/workflow-run';
 
@@ -27,9 +34,7 @@ export const workflowLoadErrorSchema = z
  * Workflow source — project-defined, bundled default, or home-scoped (global).
  * Precedence for same-named entries: `bundled` < `global` < `project`.
  */
-export const workflowSourceSchema = z
-  .enum(['project', 'bundled', 'global'])
-  .openapi('WorkflowSource');
+export const workflowSourceSchema = engineWorkflowSourceSchema.openapi('WorkflowSource');
 
 /** A workflow entry in the list response, including its source. */
 export const workflowListEntrySchema = z
@@ -117,10 +122,30 @@ export const workflowRunOutcomeSchema = engineWorkflowRunOutcomeSchema
   .nullable()
   .openapi('WorkflowRunOutcome');
 
+/** Persisted durable-wait cursor exposed to API clients without erasing its discriminants. */
+export const workflowWaitContextSchema =
+  engineWorkflowWaitContextSchema.openapi('WorkflowWaitContext');
+
+/** Why a run stopped, as the engine recorded it on the run row. */
+export const runStopReasonSchema = engineRunStopReasonSchema.openapi('RunStopReason');
+
+/**
+ * Run metadata stays open-ended, but its durable-wait and stop-reason contracts are
+ * engine-owned and typed.
+ */
+export const workflowRunMetadataSchema = z
+  .object({
+    wait: workflowWaitContextSchema.optional(),
+    [RUN_STOP_REASON_METADATA_KEY]: runStopReasonSchema.optional(),
+  })
+  .catchall(z.unknown())
+  .openapi('WorkflowRunMetadata');
+
 /** A workflow run record (wire shape with ISO string dates). */
 export const workflowRunSchema = engineWorkflowRunSchema
   .extend({
     outcome: workflowRunOutcomeSchema,
+    metadata: workflowRunMetadataSchema,
     started_at: z.string(),
     completed_at: z.string().nullable(),
     last_activity_at: z.string().nullable(),
@@ -146,6 +171,7 @@ export const workflowRunDetailSchema = z
       worker_platform_id: z.string().optional(),
       parent_platform_id: z.string().optional(),
       conversation_platform_id: z.string().nullable(),
+      terminal_record: terminalRecordSchema.nullable(),
     }),
     events: z.array(workflowEventSchema),
   })
@@ -216,6 +242,7 @@ export const resetWorkflowNodeSessionsResponseSchema = z
 /** Dashboard enriched workflow run (wire shape with ISO string dates). */
 export const dashboardWorkflowRunSchema = coreDashboardWorkflowRunSchema
   .extend({
+    metadata: workflowRunMetadataSchema,
     started_at: z.string(),
     completed_at: z.string().nullable(),
     last_activity_at: z.string().nullable(),

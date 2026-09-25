@@ -24,7 +24,7 @@
  * ## Calibration (measured on macOS/arm64, bun 1.3.11)
  *
  * The payload size below is not arbitrary. Against the pre-fix code, a
- * ~163 KB `workflow list --json` payload truncated at 98,304 bytes in 10/10
+ * ~163 KB `workflow list --full --json` payload truncated at 98,304 bytes in 10/10
  * piped runs while exiting 0; the same command redirected to a file was
  * complete every time. With the fix, 12/12 piped runs were byte-identical to
  * the file redirect. Much larger payloads (~345 KB) stopped reproducing, so do
@@ -61,17 +61,17 @@ function runShell(script: string): { status: number | null; stdout: string } {
   return { status: result.status, stdout: result.stdout ?? '' };
 }
 
-/** `archon workflow list --json` with stdout redirected to a regular file (blocking fd). */
+/** `archon workflow list --full --json` redirected to a regular file (blocking fd). */
 function listToFile(target: string): number | null {
   return runShell(
-    `"${BUN}" "${CLI_ENTRY}" workflow list --json --cwd "${repoDir}" 2>/dev/null > "${target}"`
+    `"${BUN}" "${CLI_ENTRY}" workflow list --full --json --cwd "${repoDir}" 2>/dev/null > "${target}"`
   ).status;
 }
 
 /** The same command with stdout attached to a real pipe, exiting with the CLI's status. */
 function listThroughPipe(target: string): number | null {
   return runShell(
-    `"${BUN}" "${CLI_ENTRY}" workflow list --json --cwd "${repoDir}" 2>/dev/null | cat > "${target}"; exit \${PIPESTATUS[0]}`
+    `"${BUN}" "${CLI_ENTRY}" workflow list --full --json --cwd "${repoDir}" 2>/dev/null | cat > "${target}"; exit \${PIPESTATUS[0]}`
   ).status;
 }
 

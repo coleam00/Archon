@@ -1,6 +1,21 @@
 import type { RunStatus } from '../lib/run-status';
+import type { components } from '@/lib/api.generated';
 
 export type RunOrigin = 'web' | 'cli' | 'slack' | 'telegram' | 'discord' | 'github' | 'unknown';
+export type RunOutcome = components['schemas']['WorkflowRunOutcome'];
+type WorkflowRunMetadata = components['schemas']['WorkflowRunMetadata'];
+type WorkflowWait = NonNullable<WorkflowRunMetadata['wait']>;
+type WorkflowRunStopReason = NonNullable<WorkflowRunMetadata['stop_reason']>;
+type WorkflowWaitOwnerField =
+  | 'owner'
+  | 'nodeId'
+  | 'bodyWaitId'
+  | 'iteration'
+  | 'sessionId'
+  | 'sessionProvider';
+type NormalizedWorkflowWait<T extends WorkflowWait = WorkflowWait> = T extends WorkflowWait
+  ? Omit<T, WorkflowWaitOwnerField> & { nodeId: string }
+  : never;
 
 export interface Run {
   id: string;
@@ -27,12 +42,14 @@ export interface Run {
   workflow: string;
   origin: RunOrigin;
   status: RunStatus;
+  outcome: RunOutcome;
   startedAt: string;
   finishedAt: string | null;
   /** workflow_runs.working_path — used to join against worktrees. */
   workingPath: string | null;
   userMessage: string;
-  /** Derived from metadata/events at runtime; initially undefined. */
+  activeNodes: string[];
+  /** Singular compatibility view, populated only when exactly one node is active. */
   currentNode?: string | null;
   lastTool?: string | null;
   /**
@@ -54,12 +71,7 @@ export interface Run {
     decisionsAuthored: boolean;
   } | null;
   /** Active durable wait cursor. Mutually exclusive with approval metadata. */
-  wait?: {
-    nodeId: string;
-    kind: 'time' | 'event';
-    resumeAt: string;
-    event?: string;
-  } | null;
+  wait?: NormalizedWorkflowWait | null;
   /**
    * Set when a paused run's gate was already approved/rejected and the run is
    * only awaiting auto-resume (server: metadata.approval.resolved). The
@@ -68,11 +80,24 @@ export interface Run {
    */
   gateResolved?: 'approved' | 'rejected' | null;
   /**
+   * Why the run stopped, as the owning process recorded it (#3479). Null when it
+   * stopped without one, or has not stopped. The run's `status` is unaffected: a
+   * run interrupted by a signal is still `failed`, and still resumable.
+   */
+  stopReason?: WorkflowRunStopReason | null;
+  /**
    * Run-tree parent (#2121 Phase 2). Set when this run is a `workflow:` sub-run
    * spawned by a parent run's node; null for top-level runs. Drives the "child of"
    * affordance in the console so a sub-run isn't mistaken for an orphan top-level run.
    */
   parentRunId?: string | null;
+}
+
+export function runDetailPath(run: Pick<Run, 'id' | 'projectId'>): string {
+  const runId = encodeURIComponent(run.id);
+  return run.projectId === null
+    ? `/console/r/${runId}`
+    : `/console/p/${encodeURIComponent(run.projectId)}/r/${runId}`;
 }
 
 // Server shapes we read from. These track the real server schema loosely —
@@ -89,14 +114,16 @@ interface RawWorkflowRun {
   /** Worker conversation platform id — getRun response only, web runs only. */
   worker_platform_id?: string | null;
   status: string;
+  outcome?: RunOutcome;
   started_at: string;
   completed_at?: string | null;
   working_path?: string | null;
   user_message?: string;
-  metadata?: Record<string, unknown>;
+  metadata?: WorkflowRunMetadata;
   /** Only present on dashboard runs — enriched by server-side join. */
   codebase_name?: string | null;
   platform_type?: string | null;
+  active_nodes?: string[];
   current_step_name?: string | null;
   /** Run-tree parent id (#2121 Phase 2); null/absent for top-level runs. */
   parent_run_id?: string | null;
@@ -116,6 +143,20 @@ function normalizeStatus(s: string): RunStatus {
   return (KNOWN_STATUSES as readonly string[]).includes(s) ? (s as RunStatus) : 'running';
 }
 
+function normalizeWorkflowWait(wait: WorkflowWait): NormalizedWorkflowWait {
+  if (wait.owner === 'node') {
+    const { owner, ...normalized } = wait;
+    void owner;
+    return normalized;
+  }
+  const { owner, nodeId, bodyWaitId, iteration, sessionId, sessionProvider, ...normalized } = wait;
+  void owner;
+  void iteration;
+  void sessionId;
+  void sessionProvider;
+  return { ...normalized, nodeId: `${nodeId}.${bodyWaitId}` };
+}
+
 export function normalizeOrigin(s: string | null | undefined): RunOrigin {
   if (s === null || s === undefined) return 'unknown';
   const lower = s.toLowerCase();
@@ -132,7 +173,7 @@ export function normalizeOrigin(s: string | null | undefined): RunOrigin {
   }
 }
 
-function readCost(meta: Record<string, unknown> | undefined): number | null {
+function readCost(meta: WorkflowRunMetadata | undefined): number | null {
   if (meta === undefined) return null;
   const raw = meta.total_cost_usd;
   return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : null;
@@ -152,6 +193,9 @@ export function runMessageConversationId(run: Run | undefined): string | null {
 }
 
 export function toRun(raw: RawWorkflowRun): Run {
+  const activeNodes = Array.isArray(raw.active_nodes)
+    ? raw.active_nodes.filter(nodeId => typeof nodeId === 'string' && nodeId.length > 0)
+    : [];
   const approval = raw.metadata?.approval;
   const isApprovalShape =
     approval !== null &&
@@ -195,25 +239,8 @@ export function toRun(raw: RawWorkflowRun): Run {
         }
       : null;
   const wait = raw.metadata?.wait;
-  const isWaitShape =
-    wait !== null &&
-    typeof wait === 'object' &&
-    wait !== undefined &&
-    'nodeId' in wait &&
-    typeof wait.nodeId === 'string' &&
-    'resumeAt' in wait &&
-    typeof (wait as { resumeAt: unknown }).resumeAt === 'string' &&
-    'kind' in wait &&
-    ((wait as { kind: unknown }).kind === 'time' || (wait as { kind: unknown }).kind === 'event');
-  const waitRecord = isWaitShape ? (wait as Record<string, unknown>) : undefined;
-  const parsedWait = isWaitShape
-    ? {
-        nodeId: (wait as { nodeId: string }).nodeId,
-        kind: (wait as { kind: 'time' | 'event' }).kind,
-        resumeAt: (wait as { resumeAt: string }).resumeAt,
-        ...(typeof waitRecord?.event === 'string' ? { event: waitRecord.event } : {}),
-      }
-    : null;
+  const parsedWait: NormalizedWorkflowWait | null =
+    wait === undefined ? null : normalizeWorkflowWait(wait);
 
   return {
     id: raw.id,
@@ -226,15 +253,18 @@ export function toRun(raw: RawWorkflowRun): Run {
     workflow: raw.workflow_name,
     origin: normalizeOrigin(raw.platform_type),
     status: normalizeStatus(raw.status),
+    outcome: raw.outcome ?? null,
     startedAt: raw.started_at,
     finishedAt: raw.completed_at ?? null,
     workingPath: raw.working_path ?? null,
     userMessage: raw.user_message ?? '',
-    currentNode: raw.current_step_name ?? null,
+    activeNodes,
+    currentNode: activeNodes.length === 1 ? (activeNodes[0] ?? null) : null,
     lastTool: null,
-    approval: parsedApproval,
+    approval: parsedWait === null ? parsedApproval : null,
     wait: parsedWait,
     gateResolved,
+    stopReason: raw.metadata?.stop_reason ?? null,
     parentRunId: raw.parent_run_id ?? null,
   };
 }

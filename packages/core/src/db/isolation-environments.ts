@@ -103,7 +103,7 @@ export async function listByCodebase(
  *
  * Unlike operational environment lists, adoption needs the destroyed row: its
  * branch name is the durable route back to an estate after cleanup removed the
- * worktree. Scope by codebase, path, and the run's start time so neither an
+ * worktree. Scope by codebase, path, and the cutoff timestamp so neither an
  * unrelated project nor a later checkout that reused the path can cross the
  * ownership boundary.
  */

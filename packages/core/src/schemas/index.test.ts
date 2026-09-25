@@ -33,12 +33,14 @@ const validDashboardWorkflowRun = {
   user_id: null,
   parent_run_id: null,
   output_root: null,
+  checkout_baseline: null,
   adopted_from_run_id: null,
   // dashboard extensions
   codebase_name: 'my-repo',
   platform_type: 'web',
   worker_platform_id: null,
   parent_platform_id: null,
+  active_nodes: [],
   current_step_name: null,
   total_steps: null,
   current_step_status: null,
@@ -267,6 +269,23 @@ describe('core schemas', () => {
     }
   });
 
+  test('dashboardWorkflowRunSchema requires non-empty active node identifiers', () => {
+    expect(
+      dashboardWorkflowRunSchema.safeParse({
+        ...validDashboardWorkflowRun,
+        active_nodes: ['plan', 'implement'],
+      }).success
+    ).toBe(true);
+    expect(
+      dashboardWorkflowRunSchema.safeParse({
+        ...validDashboardWorkflowRun,
+        active_nodes: [''],
+      }).success
+    ).toBe(false);
+    const { active_nodes: _, ...withoutActiveNodes } = validDashboardWorkflowRun;
+    expect(dashboardWorkflowRunSchema.safeParse(withoutActiveNodes).success).toBe(false);
+  });
+
   test('dashboardWorkflowRunSchema preserves nullable authored outcomes and rejects unknown values', () => {
     expect(
       dashboardWorkflowRunSchema.safeParse({
@@ -300,6 +319,13 @@ describe('core schemas', () => {
       offset: 0,
     });
     expect(result.success).toBe(true);
+  });
+
+  test('listDashboardRunsOptionsSchema accepts a non-empty status array', () => {
+    expect(
+      listDashboardRunsOptionsSchema.safeParse({ status: ['running', 'paused'] }).success
+    ).toBe(true);
+    expect(listDashboardRunsOptionsSchema.safeParse({ status: [] }).success).toBe(false);
   });
 
   test('listDashboardRunsOptionsSchema rejects invalid status', () => {

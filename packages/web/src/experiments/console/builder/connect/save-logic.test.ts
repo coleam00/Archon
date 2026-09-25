@@ -5,7 +5,6 @@ import {
   validationFailureToIssues,
   clientIssue,
   errorToIssues,
-  errorDetail,
   blockingErrors,
   isReadOnlySource,
   saveTargetFor,
@@ -123,18 +122,6 @@ describe('errorToIssues', () => {
   });
 });
 
-describe('errorDetail', () => {
-  test('HttpError → parsed server message', () => {
-    const err = new HttpError(403, '/api/workflows/foo', JSON.stringify({ error: 'denied' }));
-    expect(errorDetail(err)).toBe('denied');
-  });
-
-  test('generic Error → message; non-Error → String()', () => {
-    expect(errorDetail(new Error('boom'))).toBe('boom');
-    expect(errorDetail(42)).toBe('42');
-  });
-});
-
 describe('blockingErrors', () => {
   test('keeps only severity:error', () => {
     const issues: Issue[] = [
@@ -153,8 +140,9 @@ describe('blockingErrors', () => {
 });
 
 describe('isReadOnlySource / saveTargetFor', () => {
-  test('only bundled is read-only', () => {
+  test('only bundled and installed are read-only', () => {
     expect(isReadOnlySource('bundled')).toBe(true);
+    expect(isReadOnlySource('installed')).toBe(true);
     expect(isReadOnlySource('project')).toBe(false);
     expect(isReadOnlySource('global')).toBe(false);
   });
@@ -163,6 +151,7 @@ describe('isReadOnlySource / saveTargetFor', () => {
     expect(saveTargetFor('bundled')).toBe('project');
     expect(saveTargetFor('project')).toBe('project');
     expect(saveTargetFor('global')).toBe('global');
+    expect(saveTargetFor('installed')).toBe('project');
   });
 
   // #2578 — the helpers accept `string` precisely so an unrecognised wire value

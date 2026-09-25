@@ -1,12 +1,20 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
+import {
+  registerBuiltinProviders,
+  clearRegistry,
+  getRegistration,
+  registerProvider,
+} from '@archon/providers';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
+import { EFFORT_LADDER } from '@archon/paths/effort';
+import { InvalidConfigError } from '@archon/core/config';
 import {
   makeDiscoverWorkflowsMock,
   makeLoaderMock,
   makeCommandValidationMock,
+  makeListDashboardRunsMock,
 } from '../test/workflow-mock-factories';
 
 // ---------------------------------------------------------------------------
@@ -111,7 +119,7 @@ mock.module('@archon/core/db/isolation-environments', () => ({
 }));
 mock.module('@archon/core/db/workflows', () => ({
   listWorkflowRuns: mock(async () => []),
-  listDashboardRuns: mock(async () => ({ runs: [], total: 0, counts: {} })),
+  listDashboardRuns: makeListDashboardRunsMock(),
   getWorkflowRun: mock(async () => null),
   cancelWorkflowRun: mock(async () => {}),
   getWorkflowRunByWorkerPlatformId: mock(async () => null),
@@ -131,7 +139,7 @@ mock.module('@archon/core/db/env-vars', () => ({
   deleteEnvVar: mock(async () => {}),
 }));
 mock.module('@archon/core/utils/commands', () => ({
-  findMarkdownFilesRecursive: mock(async () => []),
+  findCommandFiles: mock(async () => []),
 }));
 
 // Bootstrap registry after mocks
@@ -139,6 +147,7 @@ clearRegistry();
 registerBuiltinProviders();
 
 import { registerApiRoutes } from './api';
+import { providerListResponseSchema } from './schemas/provider.schemas';
 
 type Hono = InstanceType<typeof OpenAPIHono>;
 
@@ -196,6 +205,16 @@ describe('GET /api/providers', () => {
     expect(body.providers.every(p => p.builtIn)).toBe(true);
   });
 
+  test('returns the shared effort ladder for effort-capable providers', async () => {
+    const response = await app.request('/api/providers');
+    const body = (await response.json()) as {
+      providers: { id: string; effortLevels?: string[] }[];
+    };
+    expect(body.providers.find(provider => provider.id === 'codex')?.effortLevels).toEqual([
+      ...EFFORT_LADDER,
+    ]);
+  });
+
   test('returns correct shape per provider (no factory or isModelCompatible)', async () => {
     const response = await app.request('/api/providers');
     const body = (await response.json()) as {
@@ -212,6 +231,54 @@ describe('GET /api/providers', () => {
     }
   });
 
+  test('preserves absent reporting declarations from older providers', async () => {
+    const existing = getRegistration('claude');
+    const capabilities = { ...existing.capabilities };
+    delete capabilities.tokenReporting;
+    delete capabilities.stopReasonReporting;
+    delete capabilities.turnCountReporting;
+    delete capabilities.resolvedModelReporting;
+    registerProvider({ ...existing, id: 'legacy-reporting', capabilities });
+    try {
+      const response = await app.request('/api/providers');
+      const body: unknown = await response.json();
+      const parsed = providerListResponseSchema.safeParse(body);
+      expect(parsed.success).toBe(true);
+      if (!parsed.success) throw parsed.error;
+      const legacy = parsed.data.providers.find(provider => provider.id === 'legacy-reporting');
+      if (!legacy) throw new Error('Legacy provider missing from response');
+      expect(capabilities).toEqual(legacy.capabilities);
+      expect(legacy?.capabilities).not.toHaveProperty('tokenReporting');
+      expect(legacy?.capabilities).not.toHaveProperty('stopReasonReporting');
+      expect(legacy?.capabilities).not.toHaveProperty('turnCountReporting');
+      expect(legacy?.capabilities).not.toHaveProperty('resolvedModelReporting');
+    } finally {
+      clearRegistry();
+      registerBuiltinProviders();
+    }
+  });
+
+  test('reports the different execution metrics available from each provider', async () => {
+    const response = await app.request('/api/providers');
+    const body = (await response.json()) as {
+      providers: { id: string; capabilities: Record<string, unknown> }[];
+    };
+    expect(body.providers.find(provider => provider.id === 'claude')?.capabilities).toMatchObject({
+      tokenReporting: true,
+      costReporting: true,
+      stopReasonReporting: true,
+      turnCountReporting: true,
+      resolvedModelReporting: true,
+    });
+    expect(body.providers.find(provider => provider.id === 'codex')?.capabilities).toMatchObject({
+      tokenReporting: true,
+      costReporting: false,
+      stopReasonReporting: false,
+      turnCountReporting: false,
+      resolvedModelReporting: false,
+    });
+  });
+
   test('capabilities have expected boolean fields', async () => {
     const response = await app.request('/api/providers');
     const body = (await response.json()) as {
@@ -225,6 +292,7 @@ describe('GET /api/providers', () => {
     expect(typeof caps.sessionResume).toBe('boolean');
     expect(typeof caps.mcp).toBe('boolean');
     expect(typeof caps.hooks).toBe('boolean');
+    expect(typeof caps.costReporting).toBe('boolean');
     // structuredOutput is the tiered union, not a boolean.
     expect(['enforced', 'best-effort', false]).toContain(caps.structuredOutput);
   });
@@ -242,8 +310,8 @@ describe('PATCH /api/config/tiers', () => {
     mockUpdateGlobalConfig.mockClear();
   });
 
-  function patch(tiers: unknown): Promise<Response> {
-    return app.request('/api/config/tiers', {
+  async function patch(tiers: unknown): Promise<Response> {
+    return await app.request('/api/config/tiers', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tiers }),
@@ -277,13 +345,13 @@ describe('PATCH /api/config/tiers', () => {
     expect(arg.tiers.large).toBeNull();
   });
 
-  test('drops `thinking` from the written entry (no UI surface)', async () => {
+  test('rejects retired thinking config and names effort', async () => {
     const res = await patch({
       small: { provider: 'claude', model: 'haiku', thinking: { level: 'high' } },
     });
-    expect(res.status).toBe(200);
-    const arg = mockUpdateGlobalConfig.mock.calls[0]?.[0] as { tiers: Record<string, unknown> };
-    expect(arg.tiers.small).toEqual({ provider: 'claude', model: 'haiku' });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain('effort:');
+    expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
   });
 
   test('is ungated — succeeds with no auth identity', async () => {
@@ -305,8 +373,8 @@ describe('PATCH /api/config/aliases', () => {
     mockUpdateGlobalConfig.mockClear();
   });
 
-  function patch(aliases: unknown): Promise<Response> {
-    return app.request('/api/config/aliases', {
+  async function patch(aliases: unknown): Promise<Response> {
+    return await app.request('/api/config/aliases', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ aliases }),
@@ -352,17 +420,77 @@ describe('PATCH /api/config/aliases', () => {
     expect(arg.aliases['@fast']).toBeNull();
   });
 
-  test('drops `thinking` from the written entry (no UI surface)', async () => {
+  test('rejects retired thinking config and names effort', async () => {
     const res = await patch({
       '@deep': { provider: 'claude', model: 'opus', thinking: { level: 'high' } },
     });
-    expect(res.status).toBe(200);
-    const arg = mockUpdateGlobalConfig.mock.calls[0]?.[0] as { aliases: Record<string, unknown> };
-    expect(arg.aliases['@deep']).toEqual({ provider: 'claude', model: 'opus' });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain('effort:');
+    expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
   });
 
   test('is ungated — succeeds with no auth identity', async () => {
     const res = await patch({ '@fast': { provider: 'claude', model: 'haiku' } });
     expect(res.status).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: a config write the loader refuses reaches the caller as a 400
+// ---------------------------------------------------------------------------
+
+describe('PATCH /api/config/* refused by config validation', () => {
+  let app: Hono;
+  const refused = new InvalidConfigError(
+    'Invalid model binding config',
+    '/home/operator/.archon/config.yaml',
+    'tiers.large.model: Required'
+  );
+
+  beforeEach(() => {
+    app = makeApp();
+    mockUpdateGlobalConfig.mockClear();
+  });
+
+  afterEach(() => {
+    mockUpdateGlobalConfig.mockImplementation(async () => {});
+  });
+
+  async function patch(path: string, body: unknown): Promise<Response> {
+    return await app.request(path, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  test.each([
+    ['/api/config/assistants', { assistants: { codex: { model: 'gpt-5.6-sol' } } }],
+    ['/api/config/tiers', { tiers: { small: { provider: 'claude', model: 'haiku' } } }],
+    ['/api/config/aliases', { aliases: { '@fast': { provider: 'claude', model: 'haiku' } } }],
+  ])('%s → 400 naming the refused key, without the server path', async (path, body) => {
+    mockUpdateGlobalConfig.mockImplementation(async () => {
+      throw refused;
+    });
+
+    const res = await patch(path, body);
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: 'Invalid model binding config: tiers.large.model: Required',
+    });
+  });
+
+  test('a genuine write failure stays a 500', async () => {
+    mockUpdateGlobalConfig.mockImplementation(async () => {
+      throw Object.assign(new Error('Permission denied'), { code: 'EACCES' });
+    });
+
+    const res = await patch('/api/config/tiers', {
+      tiers: { small: { provider: 'claude', model: 'haiku' } },
+    });
+
+    expect(res.status).toBe(500);
+    expect(await res.text()).not.toContain('Permission denied');
   });
 });

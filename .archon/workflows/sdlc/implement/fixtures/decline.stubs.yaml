@@ -1,6 +1,6 @@
 # Dry-run fixture: the decline path — the guard seen RED (run with --exec-code).
 # implement is stubbed as a decline (done, not green, no changes made, and no cause
-# declared for the red); record-start and assert-changed execute for real, so
+# declared for the red); assert-changed executes for real, so
 # assert-changed must fail the run: a run with nothing to show and nothing to say
 # about why fails rather than reporting success.
 implement:

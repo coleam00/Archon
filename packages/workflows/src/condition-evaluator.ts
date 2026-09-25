@@ -27,10 +27,11 @@
  *     no-silent-drop contract a referenced-but-missing value is a visible failure,
  *     not a silent skip. That covers `$node.output.field` (field not in the
  *     producer's declared schema, or a schemaless node whose output isn't JSON /
- *     lacks the key) via `OutputRefError`, and an undeclared `$INPUTS.<name>` via
- *     `InputRefError`. (A declared-optional-absent field still resolves to '' and
- *     never throws — but a FAILED producer always throws, fielded or whole-text,
- *     #2713 — see `resolveOutputRef` below.)
+ *     lacks the key) via `OutputRefError`, an undeclared `$INPUTS.<name>` via
+ *     `InputRefError`, and a present object/array compared as a scalar in either
+ *     `$node.output.field` or `$INPUTS.<name>`. (A declared-optional-absent field still
+ *     resolves to '' and never throws — but a FAILED producer always throws, fielded
+ *     or whole-text, #2713 — see `resolveOutputRef` below.)
  */
 import type { NodeOutput } from './schemas';
 import { createLogger } from '@archon/paths';
@@ -66,14 +67,15 @@ function getLog(): ReturnType<typeof createLogger> {
  * `loop_group`'s failure paths leave real, last-completed-iteration text behind).
  * For `$node.output.field`, the no-silent-drop contract (`resolveNodeOutputField`)
  * applies: a declared-optional-absent field resolves to ''; a field not in the
- * producer's schema, a schemaless node whose output isn't JSON / lacks the key, or a
- * failed producer, THROWS an `OutputRefError` that propagates to fail the consuming
- * node (no silent skip).
+ * producer's schema, a schemaless node whose output isn't JSON / lacks the key, a
+ * failed producer, or a present object/array THROWS and propagates to fail the
+ * consuming node (no silent skip).
  */
 function resolveOutputRef(
   nodeId: string,
   field: string | undefined,
-  nodeOutputs: ReadonlyMap<string, NodeOutput>
+  nodeOutputs: ReadonlyMap<string, NodeOutput>,
+  exprSnippet: string
 ): string {
   const nodeOutput = nodeOutputs.get(nodeId);
   if (!nodeOutput) {
@@ -113,11 +115,23 @@ function resolveOutputRef(
 
   const resolution = resolveNodeOutputField(nodeOutput, nodeId, field);
   if (resolution.kind === 'empty') return '';
+  if (
+    Array.isArray(resolution.value) ||
+    (resolution.value !== null && typeof resolution.value === 'object')
+  ) {
+    const actualType = Array.isArray(resolution.value) ? 'array' : 'object';
+    getLog().error({ nodeId, field, actualType, exprSnippet }, 'dag.condition_field_not_primitive');
+    throw new Error(
+      `Condition reference '$${nodeId}.output.${field}' resolved to an ${actualType}. ` +
+        "A 'when:' field must be a string, number, boolean, or null; emit a scalar routing field " +
+        'or inspect structured data in a script node.'
+    );
+  }
   // The one deterministic value→text rule (#2637): strings raw, everything else
-  // canonical JSON text. Numbers/booleans compare as their digits/true/false; a
-  // present null on the lenient no-schema path stringifies to "null" (NOT empty),
-  // matching legacy structuredOutput-preference behavior. The helper's defensive
-  // '' covers what JSON.parse can't yield (undefined/symbol/bigint).
+  // canonical JSON text. This condition-only boundary rejects present objects and
+  // arrays above; numbers/booleans compare as their digits/true/false, and a present
+  // null on the lenient no-schema path stringifies to "null" (NOT empty). The helper's
+  // defensive '' covers what JSON.parse can't yield (undefined/symbol/bigint).
   return canonicalValueText(resolution.value);
 }
 
@@ -159,12 +173,30 @@ export class InputRefError extends Error {
  *
  * Inputs are supplied by a caller's `with:` on a `workflow:` node (or a direct run's
  * `--input`), reach the child as `metadata.inputs`, and are threaded here by the
- * executor. An undeclared name THROWS — see {@link InputRefError}.
+ * executor. An undeclared name THROWS — see {@link InputRefError}. A present object
+ * or array THROWS — under the no-silent-drop contract, comparing structured data
+ * as a scalar fails loudly with diagnostic evidence rather than silently stringify-comparing.
  */
-function resolveInputRef(name: string, inputs: Record<string, JsonValue> | undefined): string {
+function resolveInputRef(
+  name: string,
+  inputs: Record<string, JsonValue> | undefined,
+  exprSnippet: string
+): string {
   // Canonical text (#2637): a typed input compares as its deterministic text —
   // `$INPUTS.flag == true` matches a boolean `true` via the unquoted-RHS grammar.
-  if (inputs && Object.hasOwn(inputs, name)) return canonicalValueText(inputs[name]);
+  if (inputs && Object.hasOwn(inputs, name)) {
+    const value = inputs[name];
+    if (Array.isArray(value) || (value !== null && typeof value === 'object')) {
+      const actualType = Array.isArray(value) ? 'array' : 'object';
+      getLog().error({ input: name, actualType, exprSnippet }, 'dag.condition_field_not_primitive');
+      throw new Error(
+        `Condition reference '$INPUTS.${name}' resolved to an ${actualType}. ` +
+          "A 'when:' input must be a string, number, boolean, or null; emit a scalar routing field " +
+          'or inspect structured data in a script node.'
+      );
+    }
+    return canonicalValueText(value);
+  }
   throw new InputRefError(name, inputs ? Object.keys(inputs) : []);
 }
 
@@ -173,16 +205,18 @@ function resolveAtomRef(
   ref: WhenAtomRef,
   nodeOutputs: Map<string, NodeOutput>,
   inputs: Record<string, JsonValue> | undefined,
-  loopPrevOutputs: ReadonlyMap<string, NodeOutput> | undefined
+  loopPrevOutputs: ReadonlyMap<string, NodeOutput> | undefined,
+  exprSnippet: string
 ): string {
-  if (ref.kind === 'input') return resolveInputRef(ref.name, inputs);
+  if (ref.kind === 'input') return resolveInputRef(ref.name, inputs, exprSnippet);
   // No prior iteration is an ordinary first-iteration condition, not an unknown-node
   // authoring error. Once a prior body node exists, retain normal output-field checks.
   if (ref.kind === 'loop_prev' && !loopPrevOutputs?.has(ref.nodeId)) return '';
   return resolveOutputRef(
     ref.nodeId,
     ref.field,
-    ref.kind === 'loop_prev' ? (loopPrevOutputs ?? new Map()) : nodeOutputs
+    ref.kind === 'loop_prev' ? (loopPrevOutputs ?? new Map()) : nodeOutputs,
+    exprSnippet
   );
 }
 
@@ -209,7 +243,7 @@ function evaluateAtom(
   // `$INPUTS.<name>`. Deliberately NOT caught here: under the no-silent-drop contract
   // it must propagate to fail the node, not fail-closed to a silent skip. (Pure-syntax
   // parse failures still return {parsed:false} via the parse miss above.)
-  const actual = resolveAtomRef(ref, nodeOutputs, inputs, loopPrevOutputs);
+  const actual = resolveAtomRef(ref, nodeOutputs, inputs, loopPrevOutputs, expr);
 
   let result: boolean;
   if (operator === '==' || operator === '!=') {

@@ -18,8 +18,9 @@ import {
   type WorkflowRunConfigMetadata,
   type WorkflowRunConfigSource,
 } from '@archon/workflows/schemas/run-config';
-import { decryptToken, encryptToken, getEncryptionKey } from '../utils/token-crypto';
+import { encryptToken, getEncryptionKey } from '../utils/token-crypto';
 import type { GlobalConfig, RepoConfig } from './config-types';
+import { unsealWorkflowRunConfigStructure } from './run-config-handoff';
 
 type ConfigKey = keyof GlobalConfig | keyof RepoConfig;
 type KeyClassification = { kind: 'runtime' } | { kind: 'unavailable'; reason: string };
@@ -114,27 +115,15 @@ function normalizePreset(path: string, preset: ModelAliasPreset): ModelAliasPres
 }
 
 /** Validate and normalize constraints owned by the live provider registry and lifecycle. */
-function normalizeRunConfigSemantics(layer: WorkflowRunConfigLayer): WorkflowRunConfigLayer {
+export function normalizeRunConfigSemantics(layer: WorkflowRunConfigLayer): WorkflowRunConfigLayer {
   if (layer.assistant !== undefined) {
     assertRegisteredProvider(layer.assistant, 'assistant');
   }
   const assistants: Record<string, Record<string, unknown>> = {};
   for (const [provider, defaults] of Object.entries(layer.assistants ?? {})) {
     assertRegisteredProvider(provider, `assistants.${provider}`);
-    if (provider === 'pi' && Object.hasOwn(defaults, 'env')) {
-      throw new Error(
-        "Run config key 'assistants.pi.env' cannot apply: Pi extension environment mutates " +
-          'process.env and is process-scoped.'
-      );
-    }
-    if (provider === 'pi' && Object.hasOwn(defaults, 'maxConcurrent')) {
-      throw new Error(
-        "Run config key 'assistants.pi.maxConcurrent' cannot apply: Pi concurrency is " +
-          'initialized once for the process lifetime.'
-      );
-    }
     try {
-      assistants[provider] = getRegistration(provider).parseRunConfig(defaults);
+      assistants[provider] = getRegistration(provider).parseConfig(defaults, 'run');
     } catch (error) {
       if (error instanceof InvalidProviderRunConfigError) {
         const suffix = error.fieldPath ? `.${error.fieldPath}` : '';
@@ -270,21 +259,5 @@ export function sealWorkflowRunConfig(
 export function unsealWorkflowRunConfig(
   metadata: WorkflowRunConfigMetadata
 ): WorkflowRunConfigLayer {
-  let plaintext: string;
-  try {
-    plaintext = decryptToken(metadata.ciphertext, getEncryptionKey());
-  } catch {
-    throw new Error('Workflow run config could not be decrypted.');
-  }
-  let value: unknown;
-  try {
-    value = JSON.parse(plaintext) as unknown;
-  } catch {
-    throw new Error('Workflow run config payload is not valid JSON.');
-  }
-  const parsed = workflowRunConfigLayerSchema.safeParse(value);
-  if (!parsed.success) {
-    throw new Error('Workflow run config payload is invalid.');
-  }
-  return normalizeRunConfigSemantics(parsed.data);
+  return normalizeRunConfigSemantics(unsealWorkflowRunConfigStructure(metadata));
 }

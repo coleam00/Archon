@@ -6,13 +6,29 @@ import { join, resolve } from 'path';
 import { MockPlatformAdapter } from '../test/mocks/platform';
 import { createMockLogger } from '../test/mocks/logger';
 import {
-  makeTestWorkflow,
+  makeTestResolvedWorkflow,
   makeTestWorkflowList,
   withObservableCapturedSource,
 } from '@archon/workflows/test-utils';
 import type { Conversation, Codebase, Session } from '../types';
 import { ConversationNotFoundError } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import { resolveWorkflow } from '@archon/workflows/graph-plan';
+import type { IAgentProvider, ProviderCapabilities } from '@archon/providers/types';
+import type * as Providers from '@archon/providers';
+import type * as CodebaseDb from '../db/codebases';
+import type * as ConversationDb from '../db/conversations';
+import type * as SessionDb from '../db/sessions';
+import type * as CommandHandler from '../handlers/command-handler';
+import type * as ConfigLoader from '../config/config-loader';
+import type * as WorkflowDiscovery from '@archon/workflows/workflow-discovery';
+import type * as WorkflowExecutor from '@archon/workflows/executor';
+import type * as WorkflowRouter from '@archon/workflows/router';
+import type * as WorkflowSourceRoot from '../utils/workflow-source-root';
+import type * as Orchestrator from './orchestrator';
+import type * as PromptBuilder from './prompt-builder';
+import type * as TitleGenerator from '../services/title-generator';
+import type * as WorkflowDb from '../db/workflows';
 
 // ─── Mock setup (BEFORE importing module under test) ─────────────────────────
 
@@ -38,10 +54,33 @@ mock.module('@archon/paths', () => ({
 }));
 
 // DB mocks
-const mockGetOrCreateConversation = mock(() => Promise.resolve(null));
-const mockGetConversationByPlatformId = mock(() => Promise.resolve(null));
-const mockUpdateConversation = mock(() => Promise.resolve());
-const mockTouchConversation = mock(() => Promise.resolve());
+const mockGetOrCreateConversation = mock<typeof ConversationDb.getOrCreateConversation>(() =>
+  Promise.resolve({
+    id: 'conv-123',
+    platform_type: 'telegram',
+    platform_conversation_id: 'chat-456',
+    codebase_id: null,
+    cwd: null,
+    isolation_env_id: null,
+    ai_assistant_type: 'claude',
+    title: null,
+    hidden: false,
+    deleted_at: null,
+    last_activity_at: null,
+    user_id: null,
+    created_at: new Date(),
+    updated_at: new Date(),
+  })
+);
+const mockGetConversationByPlatformId = mock<typeof ConversationDb.getConversationByPlatformId>(
+  () => Promise.resolve(null)
+);
+const mockUpdateConversation = mock<typeof ConversationDb.updateConversation>(() =>
+  Promise.resolve()
+);
+const mockTouchConversation = mock<typeof ConversationDb.touchConversation>(() =>
+  Promise.resolve()
+);
 
 mock.module('../db/conversations', () => ({
   getOrCreateConversation: mockGetOrCreateConversation,
@@ -50,10 +89,23 @@ mock.module('../db/conversations', () => ({
   touchConversation: mockTouchConversation,
 }));
 
-const mockGetCodebase = mock(() => Promise.resolve(null));
-const mockListCodebases = mock(() => Promise.resolve([]));
-const mockCreateCodebase = mock(() => Promise.resolve({ id: 'new-codebase-id' }));
-const mockUpdateCodebase = mock(() => Promise.resolve());
+const mockGetCodebase = mock<typeof CodebaseDb.getCodebase>(() => Promise.resolve(null));
+const mockListCodebases = mock<typeof CodebaseDb.listCodebases>(() => Promise.resolve([]));
+const mockCreateCodebase = mock<typeof CodebaseDb.createCodebase>(() =>
+  Promise.resolve({
+    id: 'new-codebase-id',
+    name: 'test-project',
+    repository_url: 'https://github.com/user/repo',
+    default_cwd: '/workspace/test-project',
+    default_branch: null,
+    ai_assistant_type: 'claude',
+    kind: 'repo',
+    commands: {},
+    created_at: new Date(),
+    updated_at: new Date(),
+  })
+);
+const mockUpdateCodebase = mock<typeof CodebaseDb.updateCodebase>(() => Promise.resolve());
 
 mock.module('../db/codebases', () => ({
   getCodebase: mockGetCodebase,
@@ -62,20 +114,36 @@ mock.module('../db/codebases', () => ({
   updateCodebase: mockUpdateCodebase,
 }));
 
-const mockGetActiveSession = mock(() => Promise.resolve(null));
-const mockCreateSession = mock(() => Promise.resolve(null));
-const mockUpdateSession = mock(() => Promise.resolve());
-const mockDeactivateSession = mock(() => Promise.resolve());
-const mockTransitionSession = mock(
-  async (conversationId: string, reason: string, data: { ai_assistant_type: string }) => {
+const mockGetActiveSession = mock<typeof SessionDb.getActiveSession>(() => Promise.resolve(null));
+const mockCreateSession = mock<typeof SessionDb.createSession>(() =>
+  Promise.resolve({
+    id: 'session-abc',
+    conversation_id: 'conv-123',
+    codebase_id: null,
+    ai_assistant_type: 'claude',
+    assistant_session_id: null,
+    active: true,
+    metadata: {},
+    started_at: new Date(),
+    ended_at: null,
+    parent_session_id: null,
+    transition_reason: null,
+    ended_reason: null,
+  })
+);
+const mockUpdateSession = mock<typeof SessionDb.updateSession>(() => Promise.resolve());
+const mockDeactivateSession = mock<typeof SessionDb.deactivateSession>(() => Promise.resolve());
+const mockTransitionSession = mock<typeof SessionDb.transitionSession>(
+  async (conversationId, reason, data) => {
     const current = await mockGetActiveSession(conversationId);
     if (current) {
-      await mockDeactivateSession((current as { id: string }).id);
+      await mockDeactivateSession(current.id, reason);
     }
     return mockCreateSession({
       conversation_id: conversationId,
+      codebase_id: data.codebase_id,
       ai_assistant_type: data.ai_assistant_type,
-      parent_session_id: current ? (current as { id: string }).id : undefined,
+      parent_session_id: current?.id,
       transition_reason: reason,
     });
   }
@@ -108,10 +176,10 @@ mock.module('../db/env-vars', () => ({
 }));
 
 // Command handler mock
-const mockHandleCommand = mock(() =>
+const mockHandleCommand = mock<typeof CommandHandler.handleCommand>(() =>
   Promise.resolve({ message: '', modified: false, success: true })
 );
-const mockParseCommand = mock((message: string) => {
+const mockParseCommand = mock<typeof CommandHandler.parseCommand>((message: string) => {
   const parts = message.split(/\s+/);
   return { command: parts[0].substring(1), args: parts.slice(1) };
 });
@@ -122,22 +190,31 @@ mock.module('../handlers/command-handler', () => ({
 }));
 
 // AI provider mock
-const mockGetAgentProvider = mock(() => null);
-const mockGetProviderCapabilities = mock(() => ({
+const mockGetAgentProvider = mock<typeof Providers.getAgentProvider>(() => {
+  throw new Error('Agent provider mock is not configured');
+});
+const providerCapabilities: ProviderCapabilities = {
   sessionResume: true,
   mcp: true,
   hooks: true,
   skills: true,
   agents: true,
   toolRestrictions: true,
-  structuredOutput: true,
+  structuredOutput: 'enforced',
   envInjection: true,
   costControl: true,
+  costReporting: true,
   effortControl: true,
-  thinkingControl: true,
   fallbackModel: true,
+  sandbox: true,
+  settingSources: true,
   nativeTools: true,
-}));
+  containerExec: true,
+  requiresAllPropertiesRequired: false,
+};
+const mockGetProviderCapabilities = mock<typeof Providers.getProviderCapabilities>(
+  () => providerCapabilities
+);
 
 mock.module('@archon/providers', () => ({
   getAgentProvider: mockGetAgentProvider,
@@ -154,9 +231,13 @@ mock.module('@archon/providers', () => ({
 }));
 
 // Workflow mocks
-const mockDiscoverWorkflows = mock(() => Promise.resolve({ workflows: [], errors: [] }));
-const mockExecuteWorkflow = mock(() => Promise.resolve());
-const mockFindWorkflow = mock((name: string, workflows: readonly WorkflowDefinition[]) =>
+const mockDiscoverWorkflows = mock<typeof WorkflowDiscovery.discoverWorkflowsWithConfig>(() =>
+  Promise.resolve({ workflows: [], errors: [] })
+);
+const mockExecuteWorkflow = mock<typeof WorkflowExecutor.executeWorkflow>(() =>
+  Promise.resolve({ success: true, workflowRunId: 'run-1' })
+);
+const mockFindWorkflow = mock<typeof WorkflowRouter.findWorkflow>((name, workflows) =>
   workflows.find(w => w.name === name)
 );
 
@@ -169,7 +250,7 @@ mock.module('../workflows/store-adapter', () => ({
 }));
 
 // Config mock
-const mockLoadConfig = mock(() =>
+const mockLoadConfig = mock<typeof ConfigLoader.loadConfig>(() =>
   Promise.resolve({
     botName: 'Archon',
     assistant: 'claude',
@@ -177,6 +258,11 @@ const mockLoadConfig = mock(() =>
     streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
     paths: { workspaces: '/tmp', worktrees: '/tmp' },
     concurrency: { maxConversations: 10 },
+    workflows: {
+      autoResumeOnQuotaReset: false,
+      quotaMaxAttempts: 1,
+      quotaDeadlineMs: 86_400_000,
+    },
     commands: { autoLoad: true },
     defaults: { copyDefaults: true, loadDefaultCommands: true, loadDefaultWorkflows: true },
   })
@@ -191,8 +277,8 @@ mock.module('../config/config-loader', () => ({
 }));
 
 // Workflow source root: undefined = "read the cwd", the non-worktree behavior.
-const mockResolveWorkflowSourceRoot = mock((_cwd: string) =>
-  Promise.resolve<string | undefined>(undefined)
+const mockResolveWorkflowSourceRoot = mock<typeof WorkflowSourceRoot.resolveWorkflowSourceRoot>(
+  (_cwd: string) => Promise.resolve<string | undefined>(undefined)
 );
 
 mock.module('../utils/workflow-source-root', () => ({
@@ -200,10 +286,29 @@ mock.module('../utils/workflow-source-root', () => ({
 }));
 
 // Orchestrator (isolation & dispatch) mocks
-const mockValidateAndResolveIsolation = mock(() =>
-  Promise.resolve({ status: 'existing', cwd: '/workspace/project', env: null })
+const mockValidateAndResolveIsolation = mock<typeof Orchestrator.validateAndResolveIsolation>(() =>
+  Promise.resolve({
+    status: 'existing',
+    cwd: '/workspace/project',
+    env: {
+      id: 'env-1',
+      codebase_id: 'codebase-789',
+      workflow_type: 'task',
+      workflow_id: 'task-1',
+      provider: 'worktree',
+      working_path: '/workspace/project',
+      branch_name: 'task-1',
+      status: 'active',
+      created_at: new Date(),
+      created_by_platform: 'test',
+      created_by_user_id: null,
+      metadata: {},
+    },
+  })
 );
-const mockDispatchBackgroundWorkflow = mock(() => Promise.resolve());
+const mockDispatchBackgroundWorkflow = mock<typeof Orchestrator.dispatchBackgroundWorkflow>(() =>
+  Promise.resolve()
+);
 
 mock.module('./orchestrator', () => ({
   validateAndResolveIsolation: mockValidateAndResolveIsolation,
@@ -217,9 +322,15 @@ mock.module('./orchestrator', () => ({
 }));
 
 // Prompt builder mock
-const mockBuildOrchestratorPrompt = mock(() => 'You are the orchestrator agent.');
-const mockBuildProjectScopedPrompt = mock(() => 'You are scoped to project X.');
-const mockBuildOrchestratorSystemAppend = mock(() => 'orchestrator system append');
+const mockBuildOrchestratorPrompt = mock<typeof PromptBuilder.buildOrchestratorPrompt>(
+  () => 'You are the orchestrator agent.'
+);
+const mockBuildProjectScopedPrompt = mock<typeof PromptBuilder.buildProjectScopedPrompt>(
+  () => 'You are scoped to project X.'
+);
+const mockBuildOrchestratorSystemAppend = mock<typeof PromptBuilder.buildOrchestratorSystemAppend>(
+  () => 'orchestrator system append'
+);
 
 mock.module('./prompt-builder', () => ({
   buildOrchestratorPrompt: mockBuildOrchestratorPrompt,
@@ -247,7 +358,6 @@ mock.module('@archon/workflows/executor', () => ({
   prepareWorkflowSource: mock(() =>
     Promise.resolve({
       runId: 'prepared-run-id',
-      captureRoot: '/capture',
       origin: '/origin',
       manifest: {
         version: 1,
@@ -258,13 +368,35 @@ mock.module('@archon/workflows/executor', () => ({
         file_count: 0,
         byte_count: 0,
         scopes: [],
+        source_config: {
+          load_default_workflows: true,
+          load_default_commands: true,
+        },
+      },
+      anchor: {
+        root: '/capture',
+        digest: 'test-digest',
+        config: {
+          load_default_workflows: true,
+          load_default_commands: true,
+        },
       },
       roots: {
         project: '/capture/project',
         globalWorkflows: '/capture/global/workflows',
         globalCommands: '/capture/global/commands',
         globalScripts: '/capture/global/scripts',
-        bundledWorkflows: '/capture/bundled',
+        bundledWorkflows: '/capture/bundled/workflows',
+        bundledCommands: '/capture/bundled/commands/defaults',
+        kind: 'captured',
+        anchor: {
+          root: '/capture',
+          digest: 'test-digest',
+          config: {
+            load_default_workflows: true,
+            load_default_commands: true,
+          },
+        },
       },
     })
   ),
@@ -287,7 +419,7 @@ mock.module('@archon/workflows/utils/tool-formatter', () => ({
 }));
 
 // fs mock for existsSync
-const mockExistsSync = mock(() => true);
+const mockExistsSync = mock<typeof import('fs').existsSync>(() => true);
 mock.module('fs', () => ({
   existsSync: mockExistsSync,
   // token-crypto.ts imports these from node:fs for the auto-provisioned credential
@@ -300,7 +432,9 @@ mock.module('fs', () => ({
 }));
 
 // Title generator mock
-const mockGenerateAndSetTitle = mock(() => Promise.resolve());
+const mockGenerateAndSetTitle = mock<typeof TitleGenerator.generateAndSetTitle>(() =>
+  Promise.resolve()
+);
 mock.module('../services/title-generator', () => ({
   generateAndSetTitle: mockGenerateAndSetTitle,
 }));
@@ -309,9 +443,11 @@ mock.module('../services/title-generator', () => ({
 // for all platforms (not just web), so this module must be stubbed even when these tests don't
 // exercise the resume path. The default null return keeps execution on the "fresh run" branch.
 mock.module('../db/workflows', () => ({
-  findResumableRunByParentConversation: mock(() => Promise.resolve(null)),
-  getPausedWorkflowRun: mock(() => Promise.resolve(null)),
-  updateWorkflowRun: mock(() => Promise.resolve()),
+  findResumableRunByParentConversation: mock<
+    typeof WorkflowDb.findResumableRunByParentConversation
+  >(() => Promise.resolve(null)),
+  getPausedWorkflowRun: mock<typeof WorkflowDb.getPausedWorkflowRun>(() => Promise.resolve(null)),
+  updateWorkflowRun: mock<typeof WorkflowDb.updateWorkflowRun>(() => Promise.resolve()),
 }));
 
 // ─── Import module under test (AFTER all mocks) ─────────────────────────────
@@ -331,7 +467,11 @@ const mockConversation: Conversation = {
   codebase_id: null,
   cwd: null,
   isolation_env_id: null,
+  title: null,
+  hidden: false,
+  deleted_at: null,
   last_activity_at: null,
+  user_id: null,
   created_at: new Date(),
   updated_at: new Date(),
 };
@@ -347,7 +487,9 @@ const mockCodebase: Codebase = {
   name: 'test-project',
   repository_url: 'https://github.com/user/repo',
   default_cwd: '/workspace/test-project',
+  default_branch: null,
   ai_assistant_type: 'claude',
+  kind: 'repo',
   commands: {},
   created_at: new Date(),
   updated_at: new Date(),
@@ -369,17 +511,19 @@ const mockSession: Session = {
 };
 
 const testWorkflowDefs = makeTestWorkflowList(['fix-bug', 'add-feature', 'archon-assist']);
-const testWorkflows = testWorkflowDefs.map(w => ({
-  workflow: w,
+const testWorkflows = testWorkflowDefs.map(workflow => ({
+  workflow: resolveWorkflow(workflow),
   source: 'bundled' as const,
 }));
 
+const mockClientSendQuery = mock<IAgentProvider['sendQuery']>(async function* () {
+  yield { type: 'result', sessionId: 'session-id' };
+});
 const mockClient = {
-  sendQuery: mock(async function* () {
-    yield { type: 'result', sessionId: 'session-id' };
-  }),
+  sendQuery: mockClientSendQuery,
   getType: mock(() => 'claude'),
-};
+  getCapabilities: mock(() => providerCapabilities),
+} satisfies IAgentProvider;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -598,21 +742,7 @@ describe('orchestrator-agent handleMessage', () => {
     mockCreateSession.mockResolvedValue(mockSession);
     mockTransitionSession.mockResolvedValue(mockSession);
     mockGetAgentProvider.mockReturnValue(mockClient);
-    mockGetProviderCapabilities.mockReturnValue({
-      sessionResume: true,
-      mcp: true,
-      hooks: true,
-      skills: true,
-      agents: true,
-      toolRestrictions: true,
-      structuredOutput: true,
-      envInjection: true,
-      costControl: true,
-      effortControl: true,
-      thinkingControl: true,
-      fallbackModel: true,
-      nativeTools: true,
-    });
+    mockGetProviderCapabilities.mockReturnValue(providerCapabilities);
     mockDiscoverWorkflows.mockResolvedValue({ workflows: [], errors: [] });
     mockParseCommand.mockImplementation((message: string) => {
       const parts = message.split(/\s+/);
@@ -664,7 +794,7 @@ describe('orchestrator-agent handleMessage', () => {
     });
 
     test('uses CommandResult workflow definition without rediscovery for /workflow run', async () => {
-      const workflowDefinition = makeTestWorkflow({
+      const workflowDefinition = makeTestResolvedWorkflow({
         name: 'test-workflow',
         description: 'A test workflow',
       });
@@ -673,7 +803,7 @@ describe('orchestrator-agent handleMessage', () => {
       mockHandleCommand.mockResolvedValue({
         success: true,
         message: 'Starting workflow: `test-workflow`',
-        workflow: { definition: workflowDefinition, args: 'payload' },
+        workflow: { kind: 'start', definition: workflowDefinition, args: 'payload' },
       });
 
       await handleMessage(platform, 'chat-456', '/workflow run test-workflow payload');
@@ -687,7 +817,7 @@ describe('orchestrator-agent handleMessage', () => {
     });
 
     test('validates workflow exists in auto-selected project before dispatch', async () => {
-      const workflowDefinition = makeTestWorkflow({
+      const workflowDefinition = makeTestResolvedWorkflow({
         name: 'test-workflow',
         description: 'A test workflow',
       });
@@ -695,12 +825,12 @@ describe('orchestrator-agent handleMessage', () => {
       mockHandleCommand.mockResolvedValue({
         success: true,
         message: 'Starting workflow: `test-workflow`',
-        workflow: { definition: workflowDefinition, args: 'payload' },
+        workflow: { kind: 'start', definition: workflowDefinition, args: 'payload' },
       });
       mockDiscoverWorkflows.mockResolvedValue({
         workflows: [
           {
-            workflow: { ...workflowDefinition, name: 'other-workflow' },
+            workflow: makeTestResolvedWorkflow({ name: 'other-workflow' }),
             source: 'bundled' as const,
           },
         ],
@@ -871,6 +1001,11 @@ describe('orchestrator-agent handleMessage', () => {
         streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
         paths: { workspaces: '/tmp', worktrees: '/tmp' },
         concurrency: { maxConversations: 10 },
+        workflows: {
+          autoResumeOnQuotaReset: false,
+          quotaMaxAttempts: 1,
+          quotaDeadlineMs: 86_400_000,
+        },
         commands: { autoLoad: true },
         defaults: { copyDefaults: true, loadDefaultCommands: true, loadDefaultWorkflows: true },
       });
@@ -907,22 +1042,30 @@ describe('orchestrator-agent handleMessage', () => {
         streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
         paths: { workspaces: '/tmp', worktrees: '/tmp' },
         concurrency: { maxConversations: 10 },
+        workflows: {
+          autoResumeOnQuotaReset: false,
+          quotaMaxAttempts: 1,
+          quotaDeadlineMs: 86_400_000,
+        },
         commands: { autoLoad: true },
         defaults: { copyDefaults: true, loadDefaultCommands: true, loadDefaultWorkflows: true },
       });
 
+      const codexSendQuery = mock<IAgentProvider['sendQuery']>(async function* () {
+        yield { type: 'result', sessionId: 'codex-session' };
+      });
       const codexClient = {
-        sendQuery: mock(async function* () {
-          yield { type: 'result', sessionId: 'codex-session' };
-        }),
-      };
+        sendQuery: codexSendQuery,
+        getType: () => 'codex',
+        getCapabilities: () => providerCapabilities,
+      } satisfies IAgentProvider;
       mockGetAgentProvider.mockReturnValueOnce(codexClient);
 
       await handleMessage(platform, 'chat-456', 'hello');
 
       // Should pass codex assistantConfig, not claude's
       const callArgs = codexClient.sendQuery.mock.calls[0];
-      const requestOptions = callArgs?.[3] as Record<string, unknown> | undefined;
+      const requestOptions = callArgs?.[3];
       expect(requestOptions).toBeDefined();
       expect(requestOptions).not.toHaveProperty('settingSources');
       expect(requestOptions?.assistantConfig).toBeDefined();
@@ -943,6 +1086,11 @@ describe('orchestrator-agent handleMessage', () => {
         streaming: { telegram: 'stream', discord: 'batch', slack: 'batch' },
         paths: { workspaces: '/tmp', worktrees: '/tmp' },
         concurrency: { maxConversations: 10 },
+        workflows: {
+          autoResumeOnQuotaReset: false,
+          quotaMaxAttempts: 1,
+          quotaDeadlineMs: 86_400_000,
+        },
         commands: { autoLoad: true },
         defaults: { copyDefaults: true, loadDefaultCommands: true, loadDefaultWorkflows: true },
       });
@@ -1017,8 +1165,8 @@ describe('orchestrator-agent handleMessage', () => {
       mockListCodebases.mockResolvedValue([mockCodebase]);
       mockDiscoverWorkflows.mockResolvedValue({ workflows: testWorkflows, errors: [] });
       mockFindWorkflow.mockImplementation(
-        (name: string, workflows: readonly WorkflowDefinition[]) =>
-          workflows.find(w => w.name === name)
+        <T extends Pick<WorkflowDefinition, 'name'>>(name: string, workflows: readonly T[]) =>
+          workflows.find(workflow => workflow.name === name)
       );
 
       mockClient.sendQuery.mockImplementation(async function* () {
@@ -1050,8 +1198,8 @@ describe('orchestrator-agent handleMessage', () => {
       mockListCodebases.mockResolvedValue([mockCodebase]);
       mockDiscoverWorkflows.mockResolvedValue({ workflows: testWorkflows, errors: [] });
       mockFindWorkflow.mockImplementation(
-        (name: string, workflows: readonly WorkflowDefinition[]) =>
-          workflows.find(w => w.name === name)
+        <T extends Pick<WorkflowDefinition, 'name'>>(name: string, workflows: readonly T[]) =>
+          workflows.find(workflow => workflow.name === name)
       );
 
       mockClient.sendQuery.mockImplementation(async function* () {
@@ -1082,6 +1230,7 @@ describe('orchestrator-agent handleMessage', () => {
       mockExistsSync.mockReturnValue(true);
       mockListCodebases.mockResolvedValue([]);
       mockCreateCodebase.mockResolvedValue({
+        ...mockCodebase,
         id: 'new-id',
         name: 'my-app',
         default_cwd: '/home/user/my-app',
@@ -1111,8 +1260,8 @@ describe('orchestrator-agent handleMessage', () => {
       mockListCodebases.mockResolvedValue([mockCodebase]);
       mockDiscoverWorkflows.mockResolvedValue({ workflows: testWorkflows, errors: [] });
       mockFindWorkflow.mockImplementation(
-        (name: string, workflows: readonly WorkflowDefinition[]) =>
-          workflows.find(w => w.name === name)
+        <T extends Pick<WorkflowDefinition, 'name'>>(name: string, workflows: readonly T[]) =>
+          workflows.find(workflow => workflow.name === name)
       );
 
       mockClient.sendQuery.mockImplementation(async function* () {
@@ -1140,8 +1289,8 @@ describe('orchestrator-agent handleMessage', () => {
       mockListCodebases.mockResolvedValue([mockCodebase]);
       mockDiscoverWorkflows.mockResolvedValue({ workflows: testWorkflows, errors: [] });
       mockFindWorkflow.mockImplementation(
-        (name: string, workflows: readonly WorkflowDefinition[]) =>
-          workflows.find(w => w.name === name)
+        <T extends Pick<WorkflowDefinition, 'name'>>(name: string, workflows: readonly T[]) =>
+          workflows.find(workflow => workflow.name === name)
       );
 
       mockClient.sendQuery.mockImplementation(async function* () {
@@ -1217,8 +1366,8 @@ describe('orchestrator-agent handleMessage', () => {
       mockListCodebases.mockResolvedValue([mockCodebase]);
       mockDiscoverWorkflows.mockResolvedValue({ workflows: testWorkflows, errors: [] });
       mockFindWorkflow.mockImplementation(
-        (name: string, workflows: readonly WorkflowDefinition[]) =>
-          workflows.find(w => w.name === name)
+        <T extends Pick<WorkflowDefinition, 'name'>>(name: string, workflows: readonly T[]) =>
+          workflows.find(workflow => workflow.name === name)
       );
     });
 
@@ -1378,7 +1527,7 @@ describe('orchestrator-agent handleMessage', () => {
 
       let callCount = 0;
       mockFindWorkflow.mockImplementation(
-        (name: string, workflows: readonly WorkflowDefinition[]) => {
+        <T extends Pick<WorkflowDefinition, 'name'>>(name: string, workflows: readonly T[]) => {
           callCount++;
           // First call (parseOrchestratorCommands) finds the workflow
           // Second call (handleWorkflowInvocationResult) does not
@@ -1458,12 +1607,10 @@ describe('orchestrator-agent handleMessage', () => {
       );
 
       const seenRoots: (string | undefined)[] = [];
-      mockDiscoverWorkflows.mockImplementation(
-        async (cwd: string, _loadConfig: unknown, roots?: { project: string | null }) => {
-          if (cwd === '/workspace/project') seenRoots.push(roots?.project ?? undefined);
-          return { workflows: [], errors: [] };
-        }
-      );
+      mockDiscoverWorkflows.mockImplementation(async (cwd, _loadConfig, roots) => {
+        if (cwd === '/workspace/project') seenRoots.push(roots?.project ?? undefined);
+        return { workflows: [], errors: [] };
+      });
 
       await handleMessage(platform, 'chat-456', 'help');
 
@@ -1516,6 +1663,7 @@ describe('orchestrator-agent handleMessage', () => {
 
   describe('thread context inheritance', () => {
     const threadConversation: Conversation = {
+      ...mockConversation,
       id: 'conv-thread',
       platform_type: 'discord',
       platform_conversation_id: 'thread-123',
@@ -1529,6 +1677,7 @@ describe('orchestrator-agent handleMessage', () => {
     };
 
     const parentConversation: Conversation = {
+      ...mockConversation,
       id: 'conv-parent',
       platform_type: 'discord',
       platform_conversation_id: 'channel-456',
@@ -1637,6 +1786,7 @@ describe('orchestrator-agent handleMessage', () => {
         mockExistsSync.mockReturnValue(true);
         mockListCodebases.mockResolvedValue([]);
         mockCreateCodebase.mockResolvedValue({
+          ...mockCodebase,
           id: 'new-id',
           name: 'my-app',
           default_cwd: canonicalPath,
@@ -1666,8 +1816,11 @@ describe('orchestrator-agent handleMessage', () => {
       // under /var → /private/var), so the stored default_cwd is canonical.
       const canonicalPath = await mockCanonicalizeProjectPath(projectPath);
       try {
-        await Bun.spawn(['git', 'init', '-b', 'develop'], { cwd: projectPath }).exited;
-        await Bun.spawn(['git', 'commit', '--allow-empty', '-m', 'init'], {
+        const initExit = await Bun.spawn(['git', 'init', '-b', 'develop'], {
+          cwd: projectPath,
+        }).exited;
+        expect(initExit, 'git init failed during registration fixture setup').toBe(0);
+        const commitExit = await Bun.spawn(['git', 'commit', '--allow-empty', '-m', 'init'], {
           cwd: projectPath,
           env: {
             ...process.env,
@@ -1677,9 +1830,11 @@ describe('orchestrator-agent handleMessage', () => {
             GIT_COMMITTER_EMAIL: 'archon-test@example.com',
           },
         }).exited;
+        expect(commitExit, 'git commit failed during registration fixture setup').toBe(0);
         mockExistsSync.mockReturnValue(true);
         mockListCodebases.mockResolvedValue([]);
         mockCreateCodebase.mockResolvedValue({
+          ...mockCodebase,
           id: 'new-id',
           name: 'my-app',
           default_cwd: projectPath,
@@ -1748,6 +1903,7 @@ describe('orchestrator-agent handleMessage', () => {
         mockExistsSync.mockReturnValue(true);
         mockListCodebases.mockResolvedValue([]);
         mockCreateCodebase.mockResolvedValue({
+          ...mockCodebase,
           id: 'new-id',
           name: 'my-app',
           default_cwd: canonicalPath,
@@ -1772,10 +1928,11 @@ describe('orchestrator-agent handleMessage', () => {
       const realPath = await mkdtemp(join(tmpdir(), 'archon-register-tilde-'));
       mockCanonicalizeProjectPath.mockImplementationOnce(() => Promise.resolve(realPath));
       // Only the canonical path exists; the literal argument does not.
-      mockExistsSync.mockImplementation((p: string) => p === realPath);
+      mockExistsSync.mockImplementation(p => p.toString() === realPath);
       try {
         mockListCodebases.mockResolvedValue([]);
         mockCreateCodebase.mockResolvedValue({
+          ...mockCodebase,
           id: 'new-id',
           name: 'my-app',
           default_cwd: realPath,

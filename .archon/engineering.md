@@ -32,6 +32,7 @@ These describe where the engineering is going. Do not reject a change for failin
 ## Taste
 
 - The smallest truthful system. Every validator, guard, state, and compatibility path protects a named requirement or a concrete failure mode. Before adding machinery, look for machinery to delete.
+- Fix drift on the path you touch. When a change reveals two sites that should agree and do not — one recording a field the other omits, one performing a cleanup the other skips — correct them rather than carry the disagreement forward. A pure-move diff is easier to review, and that is not enough: deferring buys a second change and a second review that usually never come, while the drift keeps producing the defect that exposed it. Code is cheap; a second run is not. The bound is relevance, not size — correct what the change already touches, not what it merely noticed.
 - Types carry invariants. Invalid states should be hard to represent; a sound type beats a runtime check beats a comment. Escape hatches carry a justification or they are findings.
 - Explicit control flow over meta-programming, shared mutable state, or hidden coupling. Duplicate small local logic until a pattern has repeated and stabilized.
 - Fail early and loudly on unsupported, ambiguous, or unsafe states. A fallback is intentional, documented at the branch, and observable, or it is a bug.

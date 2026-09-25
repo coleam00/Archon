@@ -17,9 +17,11 @@ mock.module('@archon/paths', () => ({
 
 // Mock fs/promises so that readConfigFile/writeConfigFile (which call fsReadFile/writeFile
 // internally) are intercepted regardless of Bun version mock.module semantics.
-const mockFsReadFile = mock(() => Promise.resolve(''));
-const mockFsWriteFile = mock(() => Promise.resolve());
-const mockFsMkdir = mock(() => Promise.resolve(undefined));
+const mockFsReadFile = mock<(path: string) => Promise<string>>(() => Promise.resolve(''));
+const mockFsWriteFile = mock<(path: string, content: string) => Promise<void>>(() =>
+  Promise.resolve()
+);
+const mockFsMkdir = mock<(path: string) => Promise<void>>(() => Promise.resolve());
 
 mock.module('fs/promises', () => ({
   readFile: mockFsReadFile,
@@ -34,6 +36,7 @@ import {
   clearConfigCache,
   toSafeConfig,
   updateGlobalConfig,
+  InvalidConfigError,
 } from './config-loader';
 
 describe('config-loader', () => {
@@ -100,6 +103,30 @@ concurrency:
       expect(config.streaming?.telegram).toBe('batch');
       expect(config.concurrency?.maxConversations).toBe(5);
     });
+
+    test.each([
+      ['tiers', 'medium'],
+      ['aliases', "'@deep'"],
+    ] as const)(
+      'rejects retired thinking in global %s config and names effort',
+      async (field, entry) => {
+        mockLogger.error.mockClear();
+        mockFsReadFile.mockResolvedValue(`
+${field}:
+  ${entry}: { provider: claude, model: opus, thinking: adaptive }
+`);
+
+        const config = await loadGlobalConfig();
+
+        expect(config).toEqual({});
+        const [{ err }, event] = mockLogger.error.mock.calls.at(-1) as unknown as [
+          { err: Error },
+          string,
+        ];
+        expect(event).toBe('config_load_error');
+        expect(err.message).toMatch(new RegExp(`${field}\\..*thinking.*effort:`));
+      }
+    );
 
     test('rejects malformed quota continuation policy at config ingress', async () => {
       mockFsReadFile.mockResolvedValue(`
@@ -231,6 +258,31 @@ workflows:
       const config = await loadRepoConfig('/test/repo');
       expect(config).toEqual({});
     });
+
+    test.each([
+      ['tiers', 'medium'],
+      ['aliases', "'@deep'"],
+    ] as const)(
+      'rejects retired thinking in repository %s config and names effort',
+      async (field, entry) => {
+        mockLogger.error.mockClear();
+        mockFsReadFile.mockResolvedValue(`
+assistant: codex
+${field}:
+  ${entry}: { provider: claude, model: opus, thinking: adaptive }
+`);
+
+        const config = await loadRepoConfig('/test/repo');
+
+        expect(config).toEqual({});
+        const [{ err }, event] = mockLogger.error.mock.calls.at(-1) as unknown as [
+          { err: Error },
+          string,
+        ];
+        expect(event).toBe('config_load_error');
+        expect(err.message).toMatch(new RegExp(`${field}\\..*thinking.*effort:`));
+      }
+    );
 
     test('logs error for invalid YAML syntax', async () => {
       mockLogger.error.mockClear();
@@ -858,6 +910,141 @@ assistants:
     });
   });
 
+  describe('assistants validation', () => {
+    test('global config refuses to load an effort the provider would drop', async () => {
+      mockFsReadFile.mockResolvedValue(`
+assistants:
+  codex:
+    modelReasoningEffort: extreme
+`);
+
+      await expect(loadGlobalConfig()).rejects.toThrow(
+        /assistants\.codex\.modelReasoningEffort.*minimal, low, medium, high, xhigh, max/
+      );
+      await expect(loadGlobalConfig()).rejects.toThrow(join(archonHome, 'config.yaml'));
+    });
+
+    test('repo config refuses to load an unknown provider setting', async () => {
+      mockFsReadFile.mockResolvedValue(`
+assistants:
+  claude:
+    modle: sonnet
+`);
+
+      await expect(loadRepoConfig('/test/repo')).rejects.toThrow(
+        /assistants\.claude\.modle.*unknown provider setting/
+      );
+    });
+
+    test('repo config refuses a settingSources entry Claude does not honour', async () => {
+      mockFsReadFile.mockResolvedValue(`
+assistants:
+  claude:
+    settingSources:
+      - projekt
+`);
+
+      await expect(loadRepoConfig('/test/repo')).rejects.toThrow(
+        /assistants\.claude\.settingSources\.0.*'project' or 'user'/
+      );
+    });
+
+    test('keeps process-scoped Pi defaults loadable from config.yaml', async () => {
+      mockFsReadFile.mockResolvedValue(`
+assistants:
+  pi:
+    env:
+      PLANNOTATOR_REMOTE: '1'
+    maxConcurrent: 4
+`);
+
+      const config = await loadGlobalConfig();
+      expect(config.assistants?.pi).toEqual({
+        env: { PLANNOTATOR_REMOTE: '1' },
+        maxConcurrent: 4,
+      });
+    });
+
+    // OpencodeProvider.sendQuery refuses any baseUrl, so accepting one here
+    // would reopen the defect this validation exists to close: a config that
+    // loads, then crashes every OpenCode run.
+    test('rejects an OpenCode server URL the provider would refuse to use', async () => {
+      mockFsReadFile.mockResolvedValue(`
+assistants:
+  opencode:
+    model: anthropic/claude-3-5-sonnet
+    baseUrl: http://localhost:4096
+`);
+
+      await expect(loadGlobalConfig()).rejects.toThrow(
+        /assistants\.opencode\.baseUrl.*external OpenCode runtimes are not supported/
+      );
+    });
+
+    test.each([
+      ['an empty assistants block', 'assistants:\n'],
+      ['an empty provider block', 'assistants:\n  codex:\n'],
+    ])('loads a config with %s', async (_label, yaml) => {
+      mockFsReadFile.mockResolvedValue(yaml);
+
+      await expect(loadGlobalConfig()).resolves.toBeDefined();
+    });
+
+    test('keeps an unregistered provider entry passing through unvalidated', async () => {
+      mockFsReadFile.mockResolvedValue(`
+assistants:
+  nonesuch:
+    modelReasoningEffort: extreme
+`);
+
+      const config = await loadGlobalConfig();
+      expect(config.assistants?.nonesuch).toEqual({ modelReasoningEffort: 'extreme' });
+    });
+
+    // The settings API validates its body as `record(string, unknown)`, so any
+    // key and value can reach updateGlobalConfig at runtime even though the
+    // typed provider defaults would reject a misspelled effort value.
+    test('refuses to persist assistant defaults the loaders would then reject', async () => {
+      mockFsReadFile.mockResolvedValue('');
+
+      await expect(
+        updateGlobalConfig({ assistants: { codex: { modelReasoningEfort: 'high' } } })
+      ).rejects.toThrow(/assistants\.codex\.modelReasoningEfort.*unknown provider setting/);
+      expect(mockFsWriteFile).not.toHaveBeenCalled();
+    });
+
+    // Settings API and `archon ai tier/alias set` all write through
+    // updateGlobalConfig, so validating the file on read would lock the
+    // operator out of repairing it through Archon.
+    test('repairs an invalid assistant default already in the file', async () => {
+      mockFsReadFile.mockResolvedValue(`
+assistants:
+  codex:
+    modelReasoningEffort: extreme
+`);
+
+      await updateGlobalConfig({ assistants: { codex: { modelReasoningEffort: 'high' } } });
+
+      expect(mockFsWriteFile).toHaveBeenCalledTimes(1);
+      const writtenContent = mockFsWriteFile.mock.calls[0]?.[1] as string;
+      expect(writtenContent).toContain('high');
+      expect(writtenContent).not.toContain('extreme');
+    });
+
+    test('refuses an unrelated edit that leaves an invalid assistant default in place', async () => {
+      mockFsReadFile.mockResolvedValue(`
+assistants:
+  codex:
+    modelReasoningEffort: extreme
+`);
+
+      await expect(
+        updateGlobalConfig({ tiers: { large: { provider: 'claude', model: 'opus' } } })
+      ).rejects.toThrow(/assistants\.codex\.modelReasoningEffort/);
+      expect(mockFsWriteFile).not.toHaveBeenCalled();
+    });
+  });
+
   describe('updateGlobalConfig', () => {
     test('merges assistant config into existing file', async () => {
       mockFsReadFile.mockResolvedValue(`
@@ -1005,6 +1192,147 @@ assistants:
       const written = mockFsWriteFile.mock.calls[0]?.[1] as string;
       expect(written).toContain('opus'); // tiers preserved via the {...current} spread
       expect(written).toContain('haiku');
+    });
+  });
+
+  // The loaders degrade an invalid `tiers`/`aliases`/`workflows` block to an
+  // empty config; a settings write must merge into what is actually on disk,
+  // or it replaces the operator's whole file with just the patch.
+  describe('updateGlobalConfig over an invalid file', () => {
+    const fileWithBadTier = `
+botName: MyBot
+defaultAssistant: codex
+streaming:
+  telegram: batch
+tiers:
+  large:
+    provider: claude
+aliases:
+  fast:
+    provider: claude
+    model: haiku
+`;
+
+    test('refuses an unrelated edit that leaves an invalid tier in place', async () => {
+      mockFsReadFile.mockResolvedValue(fileWithBadTier);
+
+      await expect(
+        updateGlobalConfig({ aliases: { deep: { provider: 'claude', model: 'opus' } } })
+      ).rejects.toThrow(/Invalid model binding config.*tiers\.large\.model/);
+      expect(mockFsWriteFile).not.toHaveBeenCalled();
+    });
+
+    test('a patch that repairs the invalid tier keeps every unrelated key', async () => {
+      mockFsReadFile.mockResolvedValue(fileWithBadTier);
+
+      await updateGlobalConfig({ tiers: { large: { provider: 'claude', model: 'opus' } } });
+
+      const written = Bun.YAML.parse(mockFsWriteFile.mock.calls[0]?.[1] as string);
+      expect(written).toEqual({
+        botName: 'MyBot',
+        defaultAssistant: 'codex',
+        streaming: { telegram: 'batch' },
+        tiers: { large: { provider: 'claude', model: 'opus' } },
+        aliases: { fast: { provider: 'claude', model: 'haiku' } },
+      });
+    });
+
+    // The tier merge must not rebuild the block from the known tier names only,
+    // which would silently drop an entry it cannot represent.
+    test('a tier edit does not silently drop an unknown tier name', async () => {
+      mockFsReadFile.mockResolvedValue(`
+tiers:
+  huge:
+    provider: claude
+    model: opus
+`);
+
+      await expect(
+        updateGlobalConfig({ tiers: { small: { provider: 'claude', model: 'haiku' } } })
+      ).rejects.toThrow(/Invalid model binding config.*tiers\.huge/);
+      expect(mockFsWriteFile).not.toHaveBeenCalled();
+    });
+
+    test('refuses an unrelated edit that leaves an invalid workflows block in place', async () => {
+      mockFsReadFile.mockResolvedValue(`
+botName: MyBot
+workflows:
+  quotaMaxAttempts: many
+`);
+
+      await expect(updateGlobalConfig({ defaultAssistant: 'claude' })).rejects.toThrow(
+        /Invalid workflows config.*quotaMaxAttempts/
+      );
+      expect(mockFsWriteFile).not.toHaveBeenCalled();
+    });
+
+    test('a patch that repairs the invalid workflows block keeps every unrelated key', async () => {
+      mockFsReadFile.mockResolvedValue(`
+botName: MyBot
+workflows:
+  quotaMaxAttempts: many
+`);
+
+      await updateGlobalConfig({ workflows: { quotaMaxAttempts: 3 } });
+
+      const written = Bun.YAML.parse(mockFsWriteFile.mock.calls[0]?.[1] as string);
+      expect(written).toEqual({ botName: 'MyBot', workflows: { quotaMaxAttempts: 3 } });
+    });
+
+    test('an edit to one provider does not overwrite a malformed entry for another', async () => {
+      mockFsReadFile.mockResolvedValue(`
+assistants:
+  codex: high
+`);
+
+      await expect(
+        updateGlobalConfig({ assistants: { claude: { model: 'opus' } } })
+      ).rejects.toThrow(/assistants\.codex' must be an object/);
+      expect(mockFsWriteFile).not.toHaveBeenCalled();
+    });
+
+    // The settings API returns 400 for this class and 500 for anything else, and
+    // shows `summary` to the web client, so it must not carry the server's path.
+    test('a refused edit is an InvalidConfigError whose summary names the key, not the path', async () => {
+      mockFsReadFile.mockResolvedValue(fileWithBadTier);
+
+      const error = await updateGlobalConfig({ defaultAssistant: 'claude' }).catch(
+        (e: unknown) => e
+      );
+
+      expect(error).toBeInstanceOf(InvalidConfigError);
+      const { summary } = error as InvalidConfigError;
+      expect(summary).toMatch(/^Invalid model binding config: tiers\.large\.model/);
+      expect(summary).not.toContain('config.yaml');
+    });
+
+    test('never overwrites a file that is not valid YAML', async () => {
+      mockFsReadFile.mockResolvedValue('botName: MyBot\ntiers: [unclosed\n');
+
+      await expect(updateGlobalConfig({ defaultAssistant: 'claude' })).rejects.toThrow(
+        /config\.yaml/
+      );
+      expect(mockFsWriteFile).not.toHaveBeenCalled();
+    });
+
+    test('never overwrites a file whose top level is not a map', async () => {
+      mockFsReadFile.mockResolvedValue('- botName: MyBot\n');
+
+      await expect(updateGlobalConfig({ defaultAssistant: 'claude' })).rejects.toThrow(
+        /top level is not a map/
+      );
+      expect(mockFsWriteFile).not.toHaveBeenCalled();
+    });
+
+    test('never overwrites a file that cannot be read', async () => {
+      const permError = new Error('Permission denied') as NodeJS.ErrnoException;
+      permError.code = 'EACCES';
+      mockFsReadFile.mockRejectedValue(permError);
+
+      await expect(updateGlobalConfig({ defaultAssistant: 'claude' })).rejects.toThrow(
+        'Permission denied'
+      );
+      expect(mockFsWriteFile).not.toHaveBeenCalled();
     });
   });
 

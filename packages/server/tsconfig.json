@@ -19,11 +19,5 @@
     "../adapters/src/**/*.ts",
     "../workflows/src/defaults/text-imports.d.ts"
   ],
-  "exclude": [
-    "node_modules",
-    "dist",
-    "**/*.test.ts",
-    "../core/src/**/*.test.ts",
-    "../adapters/src/**/*.test.ts"
-  ]
+  "exclude": ["node_modules", "dist"]
 }

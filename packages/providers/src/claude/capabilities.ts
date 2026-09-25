@@ -2,7 +2,7 @@ import type { ProviderCapabilities } from '../types';
 
 /**
  * Built-in Claude Code tool names, hand-audited against
- * @anthropic-ai/claude-agent-sdk 0.3.247. The SDK exposes tool restrictions as
+ * @anthropic-ai/claude-agent-sdk 0.3.282. The SDK exposes tool restrictions as
  * plain `string[]` options and exports NO runtime tool-name constant or
  * literal union, so this list is maintained by hand — refresh it when bumping
  * the SDK. Used for advisory (warning-level) validation only, so a tool added
@@ -26,7 +26,6 @@ const CLAUDE_KNOWN_TOOL_NAMES = [
   'TaskCreate',
   'TaskGet',
   'TaskList',
-  'TaskOutput',
   'TaskStop',
   'TaskUpdate',
   'TodoWrite',
@@ -42,7 +41,6 @@ const CLAUDE_KNOWN_TOOL_NAMES = [
  */
 const CLAUDE_RENAMED_TOOLS = {
   Task: 'Agent',
-  BashOutput: 'TaskOutput',
   KillShell: 'TaskStop',
   MultiEdit: 'Edit',
 } as const;
@@ -58,10 +56,15 @@ export const CLAUDE_CAPABILITIES: ProviderCapabilities = {
   knownToolNames: CLAUDE_KNOWN_TOOL_NAMES,
   renamedTools: CLAUDE_RENAMED_TOOLS,
   structuredOutput: 'enforced', // SDK output_config.format grammar-constrains decoding
+  requiresAllPropertiesRequired: false, // Claude accepts optional-by-omission (no strict-mode required-coverage rule)
   envInjection: true,
   costControl: true,
+  costReporting: true, // SDK resultMsg.total_cost_usd reaches the result chunk
+  tokenReporting: true,
+  stopReasonReporting: true,
+  turnCountReporting: true,
+  resolvedModelReporting: true,
   effortControl: true,
-  thinkingControl: true,
   fallbackModel: true,
   sandbox: true,
   settingSources: true, // per-node override of the SDK's settingSources option

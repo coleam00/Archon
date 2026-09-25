@@ -18,8 +18,33 @@ export const statusLabel: Record<RunStatus, string> = {
   cancelled: 'Cancelled',
 };
 
+/**
+ * The label every surface uses to name a run's state.
+ *
+ * A run a signal stopped is labelled `Interrupted` rather than `Failed` (#3479): it did
+ * not break, and it is still resumable, so `Failed` sends the operator hunting for a bug
+ * they caused with Ctrl-C. Only that stop reason earns its own label — the rest are
+ * genuine execution failures. The label claims nothing about who sent the signal; the CLI
+ * has room for a full line and attributes SIGINT to the operator there, while
+ * `Interrupted` is equally true of a supervisor's SIGTERM.
+ *
+ * Deliberately the second copy of the CLI's wording rather than a shared builder: the web
+ * client depends on no `@archon/*` package, and these are display strings that do not have
+ * to be byte-identical to be correct.
+ *
+ * Because this is the ONE label function, the reason reaches the detail header, the
+ * active-run card and the dock with none of them opting in, and without the "System" event
+ * toggle that used to be the console's only account of why a run stopped and is off by
+ * default.
+ */
 export function runStatusLabel(run: Run): string {
+  if (run.status === 'failed') {
+    const stopReason = run.stopReason;
+    if (stopReason?.reason !== 'process_terminated') return statusLabel.failed;
+    return stopReason.signal === undefined ? 'Interrupted' : `Interrupted (${stopReason.signal})`;
+  }
   if (run.status !== 'paused' || run.wait == null) return statusLabel[run.status];
+  if (run.wait.kind === 'attention') return 'Waiting for action';
   return run.wait.kind === 'event' ? 'Waiting for event' : 'Waiting until scheduled time';
 }
 
@@ -30,13 +55,14 @@ export function runStatusLabel(run: Run): string {
  *   running   → blue  (active; pulsing strip)
  *   paused    → amber (waiting for human; pulsing dot)
  *   failed    → red
- *   completed → green (positive close; muted strip, no pulse)
+ *   completed → green (execution reached completion; muted strip, no pulse)
  *   cancelled → grey  (muted, user-stopped)
  *
  * The running blue uses an ad-hoc arbitrary value because the spike's theme
  * introduces `--running` as a new token that isn't in the production
  * `@theme inline` map. Completed reuses the production `--success` (green)
- * at lower opacity so it signals "finished OK" without shouting.
+ * at lower opacity so it signals lifecycle completion without replacing the
+ * separate workflow-authored outcome.
  */
 export const statusStripClass: Record<RunStatus, string> = {
   running:

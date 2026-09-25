@@ -152,11 +152,17 @@ function checkRequiredFields(node: BuilderNode): Issue[] {
         missing('approval.message', 'approval requires a message');
       break;
     case 'wait': {
-      const conditions = [node.data.duration_ms, node.data.until, node.data.event].filter(
-        value => value !== undefined
-      );
+      const conditions = [
+        node.data.duration_ms,
+        node.data.until,
+        node.data.event,
+        node.data.attention,
+      ].filter(value => value !== undefined);
       if (conditions.length !== 1) {
-        invalid('wait', "wait requires exactly one of 'duration_ms', 'until', or 'event'");
+        invalid(
+          'wait',
+          "wait requires exactly one of 'duration_ms', 'until', 'event', or 'attention'"
+        );
       }
       if (
         node.data.duration_ms !== undefined &&
@@ -193,6 +199,9 @@ function checkRequiredFields(node: BuilderNode): Issue[] {
       }
       if (node.data.event === undefined && node.data.deadline_ms !== undefined) {
         invalid('wait.deadline_ms', 'deadline is only supported for event waits');
+      }
+      if (node.data.attention?.trim().length === 0) {
+        missing('wait.attention', 'wait action message must not be empty');
       }
       break;
     }

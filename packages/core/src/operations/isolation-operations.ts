@@ -7,7 +7,7 @@ import { createLogger } from '@archon/paths';
 import { toWorktreePath, worktreeExists } from '@archon/git';
 import * as isolationDb from '../db/isolation-environments';
 import { cleanupStaleWorktrees, cleanupMergedWorktrees } from '../services/cleanup-service';
-import type { CleanupOperationResult } from '../services/cleanup-service';
+import type { CleanupOperationResult, MergedCleanupResult } from '../services/cleanup-service';
 
 // Lazy logger — NEVER at module scope
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -33,7 +33,7 @@ export interface EnvironmentListData {
   ghostsReconciled: number;
 }
 
-export { type CleanupOperationResult } from '../services/cleanup-service';
+export { type CleanupOperationResult, type MergedCleanupResult } from '../services/cleanup-service';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -184,6 +184,6 @@ export async function cleanupMergedEnvironments(
   codebaseId: string,
   mainPath: string,
   options: { includeClosed?: boolean } = {}
-): Promise<CleanupOperationResult> {
+): Promise<MergedCleanupResult> {
   return cleanupMergedWorktrees(codebaseId, mainPath, options);
 }

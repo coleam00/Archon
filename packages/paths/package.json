@@ -1,19 +1,23 @@
 {
   "name": "@archon/paths",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
     "./bundled-build": "./src/bundled-build.ts",
+    "./cli-command": "./src/cli-command.ts",
+    "./archon-paths": "./src/archon-paths.ts",
+    "./effort": "./src/effort.ts",
+    "./logger": "./src/logger.ts",
     "./strip-cwd-env": "./src/strip-cwd-env.ts",
     "./strip-cwd-env-boot": "./src/strip-cwd-env-boot.ts",
     "./env-loader": "./src/env-loader.ts",
     "./test-utils": "./src/test-utils.ts"
   },
   "scripts": {
-    "test": "bun test src/",
+    "test": "bun run ../../scripts/package-tests.ts",
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
@@ -24,5 +28,10 @@
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
-  }
+  },
+  "testGroups": [
+    [
+      "src/"
+    ]
+  ]
 }

@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-agent';
+import type {
+  AgentSession,
+  AgentSessionEvent,
+  SessionEntry,
+} from '@earendil-works/pi-coding-agent';
+import type { StopReason, Usage } from '@earendil-works/pi-ai';
 
 import type { MessageChunk } from '../../types';
 import {
@@ -248,16 +253,14 @@ describe('buildResultChunk', () => {
     }
   });
 
-  test('prefers last assistant message when multiple present', () => {
-    const olderUsage = { ...usage, input: 1, totalTokens: 1 };
+  test('outcome comes from the last assistant message, usage from all of them', () => {
     const chunk = buildResultChunk([
-      { role: 'assistant', usage: olderUsage, stopReason: 'stop', content: [] },
+      { role: 'assistant', usage, stopReason: 'error', errorMessage: 'overloaded', content: [] },
       { role: 'user', content: [] },
       { role: 'assistant', usage, stopReason: 'stop', content: [] },
     ]);
-    if (chunk.type === 'result') {
-      expect(chunk.tokens?.input).toBe(10);
-    }
+    expect(chunk).toMatchObject({ type: 'result', stopReason: 'stop', tokens: { input: 20 } });
+    expect(chunk).not.toHaveProperty('isError');
   });
 });
 
@@ -378,24 +381,6 @@ describe('mapPiEvent', () => {
       expect(chunks[0].content).toContain('retry 1/3');
       expect(chunks[0].content).toContain('rate limit');
     }
-  });
-
-  test('agent_end → result chunk', () => {
-    const usage = {
-      input: 5,
-      output: 10,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 15,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.001 },
-    };
-    const chunks = mapPiEvent({
-      type: 'agent_end',
-      willRetry: false,
-      messages: [{ role: 'assistant', usage, stopReason: 'stop', content: [] } as never],
-    });
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0].type).toBe('result');
   });
 
   test('skipped event types yield no chunks', () => {
@@ -702,6 +687,39 @@ describe('streaming tail completion', () => {
     } as unknown as AgentSessionEvent;
   }
 
+  test('completes a truncated tail from an earlier loop run in the same prompt', async () => {
+    // One prompt() can run Pi's loop twice (e.g. compact-and-continue). The first
+    // run's final turn lost its tail; the second run streamed cleanly. The first
+    // run's tail must still be recovered, in its own block, before the second run's text.
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    const mockSession = {
+      sessionId: 'session-1',
+      subscribe: (fn: (event: AgentSessionEvent) => void) => {
+        listener = fn;
+        return () => {};
+      },
+      prompt: async () => {
+        listener?.({ type: 'turn_start' } as AgentSessionEvent);
+        listener?.(makeTextDeltaEvent('first run lost its '));
+        listener?.(makeAgentEndEvent('first run lost its tail'));
+        listener?.({ type: 'turn_start' } as AgentSessionEvent);
+        listener?.(makeTextDeltaEvent('second run is clean'));
+        listener?.(makeAgentEndEvent('second run is clean'));
+      },
+      abort: async () => {},
+      dispose: () => {},
+    } as unknown as AgentSession;
+
+    const chunks: MessageChunk[] = [];
+    for await (const chunk of bridgeSession(mockSession, 'prompt')) chunks.push(chunk);
+
+    expect(chunks.filter(c => c.type === 'assistant').map(c => c.content)).toEqual([
+      'first run lost its tail',
+      'second run is clean',
+    ]);
+    expect(chunks.filter(c => c.type === 'result')).toHaveLength(1);
+  });
+
   test('emits corrective assistant chunk when streaming truncated', async () => {
     const streamed = 'The repo is cloned. Let me register it.\n\n/register-project';
     const full =
@@ -729,10 +747,10 @@ describe('streaming tail completion', () => {
       chunks.push(chunk);
     }
 
+    // The recovered tail joins the streamed prefix in one block: the executor
+    // joins separate assistant chunks with a blank line.
     const assistantChunks = chunks.filter(c => c.type === 'assistant');
-    expect(assistantChunks).toHaveLength(2);
-    expect(assistantChunks[0].content).toBe(streamed);
-    expect(assistantChunks[1].content).toBe(tail);
+    expect(assistantChunks.map(c => c.content)).toEqual([streamed + tail]);
     expect(chunks[chunks.length - 1].type).toBe('result');
   });
 
@@ -1005,5 +1023,278 @@ describe('assistant chunk coalescing', () => {
     const assistantChunks = chunks.filter(c => c.type === 'assistant');
     expect(assistantChunks).toHaveLength(1);
     expect(assistantChunks[0].content).toBe('partial answer before crash');
+  });
+});
+
+// ─── node usage across the agentic loop (#2800) ────────────────────────────
+
+describe('bridgeSession usage covers every model call of the prompt', () => {
+  /** Pi reports usage per assistant message: one message per model call. */
+  function assistant(
+    usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number },
+    stopReason: StopReason,
+    responseModel?: string
+  ): Record<string, unknown> {
+    return {
+      role: 'assistant',
+      content: [],
+      stopReason,
+      ...(responseModel ? { responseModel } : {}),
+      usage: {
+        input: usage.input,
+        output: usage.output,
+        cacheRead: usage.cacheRead,
+        cacheWrite: usage.cacheWrite,
+        totalTokens: usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: usage.cost },
+      },
+    };
+  }
+
+  const toolResult = { role: 'toolResult', toolCallId: 't', content: [] };
+
+  function agentEnd(messages: Record<string, unknown>[]): AgentSessionEvent {
+    return { type: 'agent_end', willRetry: false, messages } as unknown as AgentSessionEvent;
+  }
+
+  function makeSession(events: AgentSessionEvent[]): AgentSession {
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    return {
+      sessionId: 'session-usage',
+      subscribe: (fn: (event: AgentSessionEvent) => void) => {
+        listener = fn;
+        return () => {};
+      },
+      prompt: async () => {
+        for (const event of events) listener?.(event);
+      },
+      abort: async () => {},
+      dispose: () => {},
+    } as unknown as AgentSession;
+  }
+
+  /**
+   * The executor treats the first result chunk as terminal and stops reading, so a
+   * prompt must yield exactly one, carrying the whole prompt's usage.
+   */
+  async function lastResult(
+    events: AgentSessionEvent[]
+  ): Promise<Extract<MessageChunk, { type: 'result' }>> {
+    const results: Extract<MessageChunk, { type: 'result' }>[] = [];
+    for await (const chunk of bridgeSession(makeSession(events), 'prompt')) {
+      if (chunk.type === 'result') results.push(chunk);
+    }
+    expect(results).toHaveLength(1);
+    return results[0];
+  }
+
+  test('sums tokens and cost over every turn of a multi-turn loop', async () => {
+    // Shape of a real implement node: tool-use turns, then a short final answer.
+    // Before #2800 the node recorded only the final turn (input 1200, output 40).
+    const result = await lastResult([
+      agentEnd([
+        { role: 'user', content: [] },
+        assistant(
+          { input: 900, output: 700, cacheRead: 0, cacheWrite: 100, cost: 0.01 },
+          'toolUse'
+        ),
+        toolResult,
+        assistant(
+          { input: 150, output: 1500, cacheRead: 850, cacheWrite: 0, cost: 0.02 },
+          'toolUse'
+        ),
+        toolResult,
+        assistant(
+          { input: 200, output: 40, cacheRead: 1000, cacheWrite: 0, cost: 0.004 },
+          'stop',
+          'deepseek-v4'
+        ),
+      ]),
+    ]);
+
+    expect(result.tokens).toEqual({
+      input: 900 + 100 + (150 + 850) + (200 + 1000),
+      output: 700 + 1500 + 40,
+      cacheRead: 850 + 1000,
+      cacheWrite: 100,
+      total: 1700 + 2500 + 1240,
+      cost: expect.closeTo(0.034, 10),
+    });
+    expect(result.cost).toBeCloseTo(0.034, 10);
+    // Outcome fields still describe the final call.
+    expect(result.stopReason).toBe('stop');
+    expect(result.resolvedModel).toEqual({ id: 'deepseek-v4' });
+    expect(result.isError).toBeUndefined();
+  });
+
+  test('a prompt that runs the loop again after a recoverable length stop yields one result over both runs', async () => {
+    // Pi compacts and continues after a recoverable `length` stop. `length` is not an
+    // error, so a result per agent_end would end the node on the truncated first run
+    // and drop the continuation. Each run's agent_end carries only its own messages.
+    const result = await lastResult([
+      agentEnd([
+        assistant({ input: 100, output: 10, cacheRead: 0, cacheWrite: 0, cost: 0.1 }, 'toolUse'),
+        toolResult,
+        assistant({ input: 150, output: 4000, cacheRead: 0, cacheWrite: 0, cost: 0.15 }, 'length'),
+      ]),
+      agentEnd([
+        assistant({ input: 300, output: 30, cacheRead: 0, cacheWrite: 0, cost: 0.3 }, 'stop'),
+      ]),
+    ]);
+
+    expect(result.tokens?.input).toBe(550);
+    expect(result.tokens?.output).toBe(4040);
+    expect(result.cost).toBeCloseTo(0.55, 10);
+    expect(result.stopReason).toBe('stop');
+  });
+
+  test('a retryable error that Pi retries yields one successful result, counting the failed call', async () => {
+    const result = await lastResult([
+      {
+        type: 'agent_end',
+        willRetry: true,
+        messages: [
+          assistant({ input: 80, output: 5, cacheRead: 0, cacheWrite: 0, cost: 0.01 }, 'error'),
+        ],
+      } as unknown as AgentSessionEvent,
+      {
+        type: 'auto_retry_start',
+        attempt: 1,
+        maxAttempts: 3,
+        delayMs: 0,
+        errorMessage: '529',
+      } as AgentSessionEvent,
+      agentEnd([
+        assistant({ input: 200, output: 20, cacheRead: 0, cacheWrite: 0, cost: 0.02 }, 'stop'),
+      ]),
+    ]);
+
+    expect(result.isError).toBeUndefined();
+    expect(result.stopReason).toBe('stop');
+    expect(result.tokens?.input).toBe(280);
+    expect(result.tokens?.output).toBe(25);
+  });
+
+  test('a completed call that reported no usage leaves node usage unreported', async () => {
+    // Providers configured without streamed usage leave every field 0. A completed
+    // model call always consumes input, so all-zero means "not reported"; writing the
+    // other calls' sum would be a silent floor.
+    const result = await lastResult([
+      agentEnd([
+        assistant({ input: 500, output: 50, cacheRead: 0, cacheWrite: 0, cost: 0.05 }, 'toolUse'),
+        toolResult,
+        assistant({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, 'stop'),
+      ]),
+    ]);
+
+    expect(result).not.toHaveProperty('tokens');
+    expect(result).not.toHaveProperty('cost');
+    expect(result.stopReason).toBe('stop');
+  });
+
+  test('a failed call with no usage adds nothing and does not erase the rest', async () => {
+    // A request rejected before streaming (e.g. a 429) reports zero usage and bills nothing.
+    const result = await lastResult([
+      agentEnd([
+        assistant({ input: 500, output: 50, cacheRead: 0, cacheWrite: 0, cost: 0.05 }, 'toolUse'),
+        toolResult,
+        assistant({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, 'error'),
+      ]),
+    ]);
+
+    expect(result.tokens?.input).toBe(500);
+    expect(result.tokens?.output).toBe(50);
+    expect(result.isError).toBe(true);
+  });
+
+  test('a cache-warming refresh during the prompt counts toward its usage', async () => {
+    // Pi keeps the prompt cache warm during a long tool run by calling the model
+    // itself. The call adds no assistant message; Pi records its usage as a session
+    // entry, announced through entry_appended.
+    const entryAppended = (entry: SessionEntry): AgentSessionEvent => ({
+      type: 'entry_appended',
+      entry,
+    });
+    const base = { parentId: null, timestamp: '2026-09-25T00:00:00.000Z' };
+    const warm: Usage = {
+      input: 5,
+      output: 1,
+      cacheRead: 9000,
+      cacheWrite: 0,
+      totalTokens: 9006,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.003 },
+    };
+    const result = await lastResult([
+      entryAppended({
+        ...base,
+        type: 'usage',
+        id: 'warm',
+        kind: 'cache_warm',
+        provider: 'anthropic',
+        model: 'claude-opus-5-5',
+        usage: warm,
+      }),
+      entryAppended({ ...base, type: 'session_info', id: 'info', name: 'not usage' }),
+      agentEnd([
+        assistant({ input: 500, output: 50, cacheRead: 0, cacheWrite: 0, cost: 0.05 }, 'stop'),
+      ]),
+    ]);
+
+    expect(result.tokens?.input).toBe(500 + 5 + 9000);
+    expect(result.tokens?.output).toBe(51);
+    expect(result.tokens?.cacheRead).toBe(9000);
+    expect(result.cost).toBeCloseTo(0.053, 10);
+  });
+
+  test('compaction summary calls count toward the prompt usage, each once', async () => {
+    // Pi summarizes the context with a model call. Its own auto-compaction announces
+    // the usage on compaction_end; a hook-driven compaction appends an entry instead.
+    const summaryUsage = (input: number, cost: number): Usage => ({
+      input,
+      output: 400,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: input + 400,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
+    });
+    const result = await lastResult([
+      agentEnd([
+        assistant({ input: 150, output: 4000, cacheRead: 0, cacheWrite: 0, cost: 0.15 }, 'length'),
+      ]),
+      { type: 'compaction_start', reason: 'overflow' } as AgentSessionEvent,
+      {
+        type: 'compaction_end',
+        reason: 'overflow',
+        result: {
+          summary: 's',
+          firstKeptEntryId: 'e1',
+          tokensBefore: 90000,
+          usage: summaryUsage(90000, 0.09),
+        },
+        aborted: false,
+        willRetry: true,
+      } as AgentSessionEvent,
+      {
+        type: 'entry_appended',
+        entry: {
+          type: 'compaction',
+          id: 'hook-compaction',
+          parentId: null,
+          timestamp: '2026-09-25T00:00:00.000Z',
+          summary: 's',
+          firstKeptEntryId: 'e1',
+          tokensBefore: 20000,
+          fromHook: true,
+          usage: summaryUsage(20000, 0.02),
+        },
+      },
+      agentEnd([
+        assistant({ input: 300, output: 30, cacheRead: 0, cacheWrite: 0, cost: 0.3 }, 'stop'),
+      ]),
+    ]);
+
+    expect(result.tokens?.input).toBe(150 + 90000 + 20000 + 300);
+    expect(result.tokens?.output).toBe(4000 + 400 + 400 + 30);
+    expect(result.cost).toBeCloseTo(0.15 + 0.09 + 0.02 + 0.3, 10);
   });
 });

@@ -13,11 +13,12 @@ Read `$ARTIFACTS_DIR/review/scope.md` first, and the project's `architecture.md`
 
 A broad catch or fallback is not a finding by syntax alone — trace the consequence or drop it. Before judging visibility, classify the operation: required, best-effort, a capability probe, or an implementation detail — the same silence is correct for one and a defect for another.
 
-Three probes that find what syntax scanning misses:
+Probes that find what syntax scanning misses:
 
 - **Ambiguous absence** — can the returned value legitimately mean both "nothing happened" and "the operation failed"? If the caller cannot tell, the failure has no identity.
 - **Fallback of the fallback** — when the recovery path itself fails, does the original failure's identity survive, or does the second failure mask the first?
 - **Surviving side effects** — can a partial write or side effect outlive the reported failure, leaving state the caller believes was never touched?
+- **Wording-gated behavior** — does changed code decide retry, fallback, suppression, or classification by pattern-matching message text it does not own — vendor errors, log lines, human prose? The unmatched rewording is the failure source and the fallthrough branch is the suppression point: name what runs when the wording changes and who cannot tell. Matching a machine token the emitter treats as an identifier (an errno, an error code), with an honest failure on no-match, is legitimate.
 
 Where this defect concentrates: background work, callbacks, and cancellation; retry exhaustion; partial multi-step operations; and error translation across process, API, UI, or persistence boundaries.
 

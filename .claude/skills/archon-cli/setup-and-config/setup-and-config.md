@@ -89,7 +89,47 @@ defaults:
 docs:
   path: docs/                  # where $DOCS_DIR points
 env:                           # per-project env vars injected into execution
+worktree:                      # repo scope only — see "Files agents need in worktrees"
+  baseBranch: main
+  copyFiles:
+    - .env
 ```
+
+### Files agents need in worktrees
+
+`git worktree add` carries **tracked** files only. Everything gitignored is absent
+from a fresh worktree — `.env` above all — so an agent cannot start the project's
+server, run integration tests, or reproduce anything reading local credentials
+from the checkout it was handed. Nothing errors; the agent just finds no config.
+
+If a user asks why something works in their checkout but not in a run, check this
+first. The fix is one entry:
+
+```yaml
+# <repo>/.archon/config.yaml
+worktree:
+  copyFiles:
+    - .env
+```
+
+Rules worth knowing before suggesting entries:
+
+- **Repo scope only.** `worktree` is read from `<repo>/.archon/config.yaml`.
+  Putting it in `~/.archon/config.yaml` parses and does nothing.
+- **Copy the real gitignored file, never a tracked template.** Suggesting
+  `.env.example` is wrong twice: a worktree already has it, and materialising a
+  placeholder `.env` makes a server start against fake credentials instead of
+  failing.
+- **Entries are plain paths.** Source and destination are always identical; there
+  is no rename syntax.
+- **Missing entries are skipped silently**, so listing an optional path is safe
+  and a contributor without the file is unaffected.
+- Nothing is copied unless listed. Workflows, commands, and scripts do **not**
+  need an entry — a run freezes its own source.
+
+Other common entries: `.vscode/`, `.claude/`, and local-only fixture or plans
+directories. Full semantics, including path-traversal rejection and the
+`worktree.path` interaction, are in `/reference/configuration/`.
 
 Prefer the typed commands over hand-editing when they exist — they validate:
 
@@ -114,7 +154,8 @@ premium one — does not need to edit their main config. Create a **sparse YAML
 layer** holding only the keys it overrides, and load it per run with `--config`:
 
 ```yaml
-# e.g. .config.free.yaml at the repo root (operator-local; keep untracked)
+# e.g. .archon/config.free.yaml (operator-local; `.archon/config.*.yaml` is gitignored,
+# and `.archon/config.example.yaml` is the committed template to copy)
 tiers:
   small:
     provider: pi

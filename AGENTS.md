@@ -31,6 +31,7 @@ This file is the canonical project guidance for coding agents. Keep it short, du
 
 - Apply KISS and YAGNI. Do not add configuration, interfaces, lifecycle states, compatibility paths, or guards without a current requirement or concrete failure mode.
 - Before adding machinery, look for dead, redundant, or superseded machinery on the same path that can disappear.
+- Fix drift on the path you touch rather than preserving it for a cleaner diff. Two sites that should agree and do not are a defect, not a diff-size decision.
 - Duplicate small local logic when it keeps ownership clear. Extract only after a pattern has repeated and stabilized.
 - Prefer explicit control flow and narrow typed interfaces over meta-programming, shared mutable state, or hidden coupling.
 - Keep policy, transport, persistence, and execution concerns separate.
@@ -38,10 +39,10 @@ This file is the canonical project guidance for coding agents. Keep it short, du
 
 ### Let types carry invariants
 
-- Keep TypeScript strict. Avoid `any`, broad assertions, and parallel hand-written shapes when a sound type can express the state.
-- Derive types from the owning schema. Do not maintain a schema and a second equivalent interface by hand.
+- Keep TypeScript strict. Avoid `any` and broad assertions when a sound type can express the state.
+- Two declarations that must agree to stay correct, kept in agreement by discipline rather than by a mechanism, are a present defect and not a future risk. Treat a hand-synced pair as a bug the moment it exists, and as a live one once the sides already disagree. Derive from the owner instead: an import, a derived or mapped type, a generated artifact with an owning script, or an enforced conformance test. A "keep in sync" comment is none of those; it records the defect rather than clearing it.
+- Import external SDK types rather than restating them. Where a boundary genuinely cannot share one definition, the copy owes a conformance test.
 - Use discriminated unions and constructors to make invalid states hard to represent.
-- Import external SDK types instead of recreating them locally.
 - Keep interfaces narrow. Extend an existing interface only when the new method belongs to the same responsibility.
 
 ### Fail clearly
@@ -67,7 +68,7 @@ This file is the canonical project guidance for coding agents. Keep it short, du
 - Put determinism after interpretation: give the agent typed tools, then validate resolved identifiers, arguments, permissions, and invariants at the tool boundary.
 - If exact syntax is required, expose a structured interface such as a CLI flag, typed tool, button action, or schema.
 - In a workflow, prose inside a node is model reasoning. Prose passed between nodes as a token to parse is an invented protocol; use structured output, typed inputs, exit status, or another explicit engine channel.
-- Third-party output classification is different. It is valid to classify git, SDK, or vendor errors that Archon does not control.
+- Vendor output is prose too. Classifying git, SDK, or vendor error text with a pattern is a last resort, not a carve-out: prefer the structured channel (exit code, typed error class, `--json` or porcelain output), then agent classification into a typed value, then an honest unclassified failure carrying the original evidence. A match that survives anchors to a machine token embedded in the message (an errno, an error code) and may enrich a report — never gate retry, fallback, or suppression, where a vendor rewording silently changes behavior.
 
 ### Do not guess lifecycle ownership
 
@@ -133,6 +134,31 @@ The governing rule is: **YAML coordinates. Code computes. Agents judge.** Read [
 - When stopping a process, target the recorded PID or exact bound port. Never kill by a broad process-name match.
 - Keep commits and pull requests focused. Do not mix unrelated cleanup into the requested outcome.
 
+## Running Archon workflows
+
+The input is the contract. A run is only as accurate as the brief it starts from, and a
+workflow cannot recover from a premise that was never stated — it will produce a confident,
+well-formed answer to the wrong question. Treat writing the input as the work, not the
+preamble to it.
+
+Before launching a run, the input — an issue body, a message, a document, whatever the run
+reads — must state:
+
+- the problem to solve;
+- why it is worth solving;
+- why now;
+- the desired outcome;
+- the invariants that must hold;
+- what acceptance looks like.
+
+Solution steering is optional and belongs last, but omitting it is a decision: the run then
+chooses its own approach. State a constraint you actually hold — reuse this primitive, no new
+dependency, migrate rather than rewrite — because an unstated preference cannot be honoured.
+Naming an implementation *before* the problem is settled narrows the run to your first guess.
+
+Do not launch a run against an input missing any of the six. Fix the input first, and say
+what you changed — a thin brief is cheaper to correct before a run than after one.
+
 ## Tests and validation
 
 - Add tests for meaningful behavior and failure modes. Do not preserve deleted features through regression-test clutter.
@@ -142,8 +168,8 @@ The governing rule is: **YAML coordinates. Code computes. Agents judge.** Read [
 - Bun's module mocks pollute the process cache. Use the package test scripts that preserve isolation; do not run `bun test` from the repository root.
 - Always run lint through `bun run lint` or `bun run lint:fix`; the wrapper isolates packages to keep typed lint within its memory budget.
 - Run the narrow checks that prove the changed behavior while iterating.
-- Run `bun run validate` before opening a pull request. CI may contain additional environment-dependent checks; inspect changed-path workflows and run applicable checks when practical.
-- Schema changes also require the PostgreSQL upgrade check documented in the contributor docs and CI.
+- Run `bun run validate` before opening a pull request. It runs every pull-request gate except the ones needing something a contributor may not have — a live PostgreSQL, a Docker daemon, an unshallowed checkout, Node for the docs site, GitHub API quota — because `scripts/validate.ts` owns the check list and the workflows call that script rather than restating it.
+- Those excluded jobs are listed in [`CONTRIBUTING.md`](CONTRIBUTING.md) with the command to run each one yourself. Schema changes require the PostgreSQL upgrade check from that list.
 - For visual or runtime behavior, add direct evidence when static tests cannot prove the outcome.
 - Destructive verification, including DDL, migrations, and data writes, runs only against a scratch database you create and drop. A configured live DSN is read-only at most; when only a live resource exists, stop and surface it to the operator.
 

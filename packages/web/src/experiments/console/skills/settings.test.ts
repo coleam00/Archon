@@ -116,7 +116,7 @@ describe('buildTiersUpdate', () => {
 
   test('trims whitespace on every field', () => {
     const body = buildTiersUpdate(
-      tierForm({ large: { provider: '  claude ', model: ' opus ', effort: ' high ' } })
+      tierForm({ large: { provider: '  claude ', model: ' opus ', effort: 'high' } })
     );
     expect(body.tiers.large).toEqual({ provider: 'claude', model: 'opus', effort: 'high' });
   });

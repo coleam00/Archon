@@ -22,6 +22,7 @@ import {
 import { parsePiModelRef } from '@archon/providers/community/pi';
 import tierDefaults from './defaults/tier-defaults.json';
 import { EFFORT_LEVELS } from './schemas/dag-node';
+import type { EffortLevel } from './schemas/dag-node';
 import {
   runModelBindingsMetadataSchema,
   TIER_NAMES,
@@ -72,7 +73,7 @@ const TIER_FALLBACK: Record<TierName, readonly TierName[]> = {
 
 const TIER_DEFAULTS = tierDefaults as Record<
   string,
-  Record<TierName, { model: string; effort?: string }>
+  Record<TierName, { model: string; effort?: EffortLevel }>
 >;
 
 /** True when `value` is one of the reserved tier keywords (small/medium/large). */
@@ -97,6 +98,9 @@ function assertCustomAliasPrefix(name: string): void {
 }
 
 function assertValidEntry(name: string, entry: RawAliasEntry): void {
+  if (Object.hasOwn(entry, 'thinking')) {
+    throw new Error(`Model binding '${name}' uses removed 'thinking:'; use 'effort:' instead.`);
+  }
   if (typeof entry.provider !== 'string' || entry.provider.length === 0) {
     throw new Error(`Alias '${name}' has invalid provider — must be a non-empty string.`);
   }
@@ -121,8 +125,7 @@ export type RunModelPresetValidationIssue =
       effort: string;
       valid: readonly string[];
       field: 'effort';
-    }
-  | { kind: 'unsupported-thinking'; provider: string; field: 'thinking' };
+    };
 
 function runModelPresetValidationMessage(issue: RunModelPresetValidationIssue): string {
   switch (issue.kind) {
@@ -137,8 +140,6 @@ function runModelPresetValidationMessage(issue: RunModelPresetValidationIssue): 
         `has invalid ${issue.provider} effort '${issue.effort}'. ` +
         `Valid: ${issue.valid.join(', ')}`
       );
-    case 'unsupported-thinking':
-      return `cannot apply Claude-shaped thinking options to provider '${issue.provider}'`;
   }
 }
 
@@ -198,14 +199,6 @@ export function normalizeStrictRunModelPreset(preset: ModelAliasPreset): ModelAl
     }
   }
 
-  if (preset.thinking !== undefined && preset.provider !== 'claude') {
-    throw new RunModelPresetValidationError({
-      kind: 'unsupported-thinking',
-      provider: preset.provider,
-      field: 'thinking',
-    });
-  }
-
   return model === preset.model ? preset : { ...preset, model };
 }
 
@@ -229,7 +222,6 @@ function toModelAliasPreset(entry: RawAliasEntry): ModelAliasPreset {
     provider: entry.provider,
     model: entry.model,
     ...(entry.effort !== undefined ? { effort: entry.effort } : {}),
-    ...(entry.thinking !== undefined ? { thinking: entry.thinking } : {}),
   };
 }
 
@@ -498,7 +490,9 @@ export function readRunModelBindingsMetadata(
     const path = parsed.error.issues[0]?.path ?? [];
     const bindingName = typeof path[2] === 'string' ? path[2] : 'unknown';
     if (path.includes('thinking')) {
-      throw new Error(`Model binding '${bindingName}' has invalid thinking options.`);
+      throw new Error(
+        `Model binding '${bindingName}' uses removed 'thinking:'; use 'effort:' instead.`
+      );
     }
     if (path.includes('effort')) {
       throw new Error(`Model binding '${bindingName}' has an invalid effort.`);
@@ -612,7 +606,7 @@ export function isLiteralSpec(spec: ResolvedModelSpec): spec is { literal: strin
  * paths (`PATCH /api/config/tiers`, `archon ai tier set --effort`) need to
  * reject `--effort extreme` up front instead of accepting a no-op.
  */
-export function validEffortsForProvider(provider: string): readonly string[] | null {
+export function validEffortsForProvider(provider: string): readonly EffortLevel[] | null {
   if (!isRegisteredProvider(provider)) return null;
   return getProviderCapabilities(provider).effortControl ? EFFORT_LEVELS : null;
 }
@@ -624,7 +618,7 @@ export function validEffortsForProvider(provider: string): readonly string[] | n
  */
 export function isEffortValidForProvider(provider: string, effort: string): boolean {
   const valid = validEffortsForProvider(provider);
-  return valid === null || valid.includes(effort);
+  return valid === null || valid.some(validEffort => validEffort === effort);
 }
 
 /** Why a tier/alias preset's `effort` cannot be applied to the resolved provider. */
@@ -650,6 +644,8 @@ export function resolvePresetEffort(
   // The provider has no reasoning control at all (OpenCode configures it in
   // opencode.json, not per request).
   if (valid === null) return { ok: false, reason: 'unsupported', valid: null };
-  if (!valid.includes(effort)) return { ok: false, reason: 'unknown', valid };
+  if (!valid.some(validEffort => validEffort === effort)) {
+    return { ok: false, reason: 'unknown', valid };
+  }
   return { ok: true };
 }

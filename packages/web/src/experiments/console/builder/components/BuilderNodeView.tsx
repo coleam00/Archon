@@ -28,7 +28,12 @@ export function contentPreview(node: BuilderNode): string {
     case 'approval':
       return node.data.message.split('\n')[0] ?? '';
     case 'wait':
-      return node.data.event ?? node.data.until ?? `${String(node.data.duration_ms ?? 0)} ms`;
+      return (
+        node.data.attention ??
+        node.data.event ??
+        node.data.until ??
+        `${String(node.data.duration_ms ?? 0)} ms`
+      );
     case 'cancel':
       return node.data.reason.split('\n')[0] ?? '';
   }

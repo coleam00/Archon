@@ -10,13 +10,20 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { join } from 'path';
 import type { IWorkflowPlatform, WorkflowDeps, WorkflowMessageMetadata } from './deps';
 import * as archonPaths from '@archon/paths';
-import { liveSourceRoots, type WorkflowSourceRoots } from './workflow-source';
+import {
+  liveSourceRoots,
+  packagedWorkflowDirectory,
+  workflowSourceConfigForRoots,
+  type WorkflowSourceRoots,
+} from './workflow-source';
 import { BUNDLED_COMMANDS, isBinaryBuild } from './defaults/bundled-defaults';
+import { bundledDefaultCommandPath, bundlesPackagedResources } from './defaults/bundle-inventory';
 import { createLogger } from '@archon/paths';
 import { isValidCommandName } from './command-validation';
 import type { LoadCommandResult } from './schemas';
+import type { NodeFailureKind } from './schemas/node-execution';
 import { substituteInputRefs, type JsonValue } from './output-ref';
-import { getPackagedResourceDirectory, parsePackagedResourceReference } from './packaged-workflow';
+import { parsePackagedResourceReference } from './packaged-workflow';
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -169,10 +176,11 @@ export function extractQuotaResetAt(error: string, now = new Date()): Date | nul
 }
 
 /**
- * Map the retry-oriented {@link ErrorType} to the telemetry wire enum. The
- * telemetry event carries ONLY this fixed-enum class — never error text.
+ * Failure kind of a provider error, from the same classification retry uses.
+ * Only for errors a provider raised; engine-detected causes carry their own kind.
  */
-export function toTelemetryErrorClass(errorType: ErrorType): archonPaths.WorkflowErrorClass {
+export function providerFailureKind(error: Error): NodeFailureKind {
+  const errorType = classifyError(error);
   switch (errorType) {
     case 'FATAL':
       return 'fatal';
@@ -181,8 +189,6 @@ export function toTelemetryErrorClass(errorType: ErrorType): archonPaths.Workflo
     case 'UNKNOWN':
       return 'unknown';
     default: {
-      // Exhaustiveness guard: a future ErrorType variant fails compilation
-      // here instead of silently sending `undefined` to the telemetry wire.
       const exhaustive: never = errorType;
       return exhaustive;
     }
@@ -391,6 +397,7 @@ export async function loadCommandPrompt(
   sourceRoots?: WorkflowSourceRoots
 ): Promise<LoadCommandResult> {
   const roots = sourceRoots ?? liveSourceRoots(cwd);
+  const sourceConfig = sourceRoots && workflowSourceConfigForRoots(sourceRoots);
   // Validate command name first
   if (!isValidCommandName(commandName)) {
     getLog().error({ commandName }, 'invalid_command_name');
@@ -404,7 +411,7 @@ export async function loadCommandPrompt(
   // Opt-out comes from the SOURCE when there is one — a capture carries the settings that
   // were in force when it was taken, so a resume cannot let the target's `defaults:`
   // decide whether the bundled scope counts. Falls back to reading `cwd` live.
-  let loadDefaultCommands = sourceRoots?.config.load_default_commands;
+  let loadDefaultCommands = sourceConfig?.load_default_commands;
   if (loadDefaultCommands === undefined) {
     try {
       loadDefaultCommands = (await deps.loadConfig(cwd)).defaults?.loadDefaultCommands ?? true;
@@ -425,7 +432,12 @@ export async function loadCommandPrompt(
   const packaged = parsePackagedResourceReference(commandName);
   if (packaged !== null) {
     if (packaged.owner.source === 'bundled') {
-      if (!loadDefaultCommands) {
+      if (
+        !loadDefaultCommands ||
+        (roots.kind === 'live' &&
+          !isBinaryBuild() &&
+          !(await bundlesPackagedResources(packaged.owner.pack)))
+      ) {
         return {
           success: false,
           reason: 'not_found',
@@ -454,25 +466,15 @@ export async function loadCommandPrompt(
       }
     }
 
-    let workflowsRoot: string;
-    if (packaged.owner.source === 'project') {
-      if (roots.project === null) {
-        return {
-          success: false,
-          reason: 'not_found',
-          message: `Packaged command not found (no project source): ${packaged.name}.md`,
-        };
-      }
-      workflowsRoot = join(roots.project, '.archon', 'workflows');
-    } else if (packaged.owner.source === 'global') {
-      workflowsRoot = roots.globalWorkflows;
-    } else {
-      workflowsRoot = roots.bundledWorkflows;
+    const workflowDir = await packagedWorkflowDirectory(roots, packaged.owner);
+    if (workflowDir === null) {
+      return {
+        success: false,
+        reason: 'not_found',
+        message: `Packaged command not found (no ${packaged.owner.source} source): ${packaged.name}.md`,
+      };
     }
-    const filePath = join(
-      getPackagedResourceDirectory(workflowsRoot, packaged.owner, 'commands'),
-      `${packaged.name}.md`
-    );
+    const filePath = join(workflowDir, 'commands', `${packaged.name}.md`);
     try {
       const content = await readFile(filePath, 'utf-8');
       if (!content.trim()) {
@@ -515,7 +517,7 @@ export async function loadCommandPrompt(
   // target's, which is the right answer only for an in-place run — for a captured run it
   // would search folders the frozen source never used.
   const searchPaths = archonPaths.getCommandFolderSearchPaths(
-    sourceRoots?.config.command_folder ?? configuredFolder
+    sourceConfig?.command_folder ?? configuredFolder
   );
   const projectRoot = roots.project;
   const resolvedSearchPaths: string[] = [
@@ -524,7 +526,7 @@ export async function loadCommandPrompt(
   ];
 
   for (const dir of resolvedSearchPaths) {
-    const entries = await archonPaths.findMarkdownFilesRecursive(dir, '', { maxDepth: 1 });
+    const entries = await archonPaths.findCommandFiles(dir);
     const match = entries.find(e => e.commandName === commandName);
     if (!match) continue;
 
@@ -575,15 +577,19 @@ export async function loadCommandPrompt(
       }
       getLog().debug({ commandName }, 'command_bundled_not_found');
     } else {
-      // Bun (or any captured run): load from the bundled-commands root, walking 1 level
-      // deep so `defaults/archon-*.md` resolves.
+      // Live defaults are the flat files the index selects, so they resolve by direct
+      // path. Old captures retain whatever command layout they froze — subfolders
+      // included — so they keep the basename walk, independently of the current index.
       const appDefaultsPath = roots.bundledCommands;
-      const entries = await archonPaths.findMarkdownFilesRecursive(appDefaultsPath, '', {
-        maxDepth: 1,
-      });
-      const match = entries.find(e => e.commandName === commandName);
-      if (match) {
-        const filePath = join(appDefaultsPath, match.relativePath);
+      let filePath: string | null;
+      if (roots.kind === 'captured') {
+        const entries = await archonPaths.findCommandFiles(appDefaultsPath);
+        const match = entries.find(e => e.commandName === commandName);
+        filePath = match ? join(appDefaultsPath, match.relativePath) : null;
+      } else {
+        filePath = await bundledDefaultCommandPath(appDefaultsPath, commandName);
+      }
+      if (filePath !== null) {
         try {
           const content = await readFile(filePath, 'utf-8');
           if (!content.trim()) {
@@ -631,17 +637,16 @@ export async function loadCommandPrompt(
  * `executeWorkflow` re-enters with its own (absent) scope, correctly shadowing
  * the parent's adoption.
  */
-const adoptedRunDirContext = new AsyncLocalStorage<string>();
+const adoptedRunDirContext = new AsyncLocalStorage<string | undefined>();
 
 export function runWithAdoptedRunDir<T>(
   adoptedRunDir: string | undefined,
   fn: () => Promise<T>
 ): Promise<T> {
-  if (adoptedRunDir === undefined) return fn();
   return adoptedRunDirContext.run(adoptedRunDir, fn);
 }
 
-function currentAdoptedRunDir(): string | undefined {
+export function currentAdoptedRunDir(): string | undefined {
   return adoptedRunDirContext.getStore();
 }
 
@@ -662,6 +667,8 @@ export const CONTEXT_VAR_PATTERN_STR =
  * - $ADOPTED_RUN_DIR (#2747) - The adopted run's artifact directory, resolved
  *   through its persisted `output_root`. Read-only by contract; throws if
  *   referenced without an adoption active.
+ * - $TYPED_ARTIFACTS_FILE - This invocation's typed-artifact listing (JSON). Throws
+ *   if referenced by a context that never materialized one (see below).
  * - $BASE_BRANCH - The base branch (from config or auto-detected)
  * - $CONTEXT, $EXTERNAL_CONTEXT, $ISSUE_CONTEXT - GitHub issue/PR context (if available)
  * - $DOCS_DIR - Documentation directory path (configured or default 'docs/')
@@ -695,6 +702,13 @@ export function substituteWorkflowVariables(
     inputs?: Record<string, JsonValue>;
     /** Adopted run's artifact directory (#2747). Undefined = no adoption active. */
     adoptedRunDir?: string;
+    /**
+     * This invocation's typed-artifact listing path. Undefined means the caller never
+     * supplied one (a coordination node, or a wiring bug) and a prompt that references
+     * `$TYPED_ARTIFACTS_FILE` throws. An explicit `''` is a caller stating it has no
+     * listing — the dry-run preview — and substitutes empty without throwing.
+     */
+    typedArtifactsFile?: string;
   }
 ): { prompt: string; contextSubstituted: boolean } {
   // Fail fast if the prompt references $BASE_BRANCH but no base branch could be resolved
@@ -729,6 +743,19 @@ export function substituteWorkflowVariables(
     );
   }
 
+  // $TYPED_ARTIFACTS_FILE is delivered by every executable invocation context (bash,
+  // script, agent prompt, loop attempt). A context that never supplied one must fail
+  // loudly: substituting '' would read as "no typed artifacts", which is the exact
+  // silent-empty lookup this contract exists to remove. An explicit empty string is
+  // different — a caller that knows it has no listing (the dry-run preview) says so.
+  if (options?.typedArtifactsFile === undefined && prompt.includes('$TYPED_ARTIFACTS_FILE')) {
+    throw new Error(
+      '$TYPED_ARTIFACTS_FILE is referenced but this invocation has no typed-artifact listing. ' +
+        'It is available inside bash, script, agent, loop, and approval-rework nodes; ' +
+        'if you are seeing this from one of those, please report it as a bug.'
+    );
+  }
+
   // Defensive: ensure docsDir always has a value (callers should resolve, but guard here)
   const resolvedDocsDir = docsDir || 'docs/';
 
@@ -742,6 +769,9 @@ export function substituteWorkflowVariables(
     // or `bash:`/`script:` bodies would never see it.
     .replace(/\$STATE_DIR/g, options?.stateDir ?? '')
     .replace(/\$ADOPTED_RUN_DIR/g, options?.adoptedRunDir ?? currentAdoptedRunDir() ?? '')
+    // Also engine-controlled; the same path is delivered as TYPED_ARTIFACTS_FILE to
+    // exec subprocesses, so a shell body resolves it either way.
+    .replace(/\$TYPED_ARTIFACTS_FILE/g, options?.typedArtifactsFile ?? '')
     .replace(/\$BASE_BRANCH/g, baseBranch)
     .replace(/\$DOCS_DIR/g, resolvedDocsDir);
 
@@ -799,7 +829,8 @@ export function substituteWorkflowVariables(
  * @param issueContext - Optional GitHub issue/PR context to substitute or append
  * @param logLabel - Human-readable label for logging (e.g., 'workflow step prompt')
  * @param options - Forwarded to {@link substituteWorkflowVariables}; carries `stateDir`
- *   for `$STATE_DIR`, which throws when referenced without one.
+ *   for `$STATE_DIR` and `typedArtifactsFile` for `$TYPED_ARTIFACTS_FILE`, each of
+ *   which throws when referenced without one.
  * @returns The final prompt with variables substituted and context optionally appended
  */
 export function buildPromptWithContext(
@@ -811,7 +842,12 @@ export function buildPromptWithContext(
   docsDir: string,
   issueContext: string | undefined,
   logLabel: string,
-  options?: { shellSafe?: boolean; stateDir?: string; inputs?: Record<string, JsonValue> }
+  options?: {
+    shellSafe?: boolean;
+    stateDir?: string;
+    inputs?: Record<string, JsonValue>;
+    typedArtifactsFile?: string;
+  }
 ): string {
   const { prompt, contextSubstituted } = substituteWorkflowVariables(
     template,
@@ -850,13 +886,13 @@ function escapeRegExp(str: string): string {
  * Supports three formats, checked in order:
  * 1. <promise>SIGNAL</promise> - Recommended; prevents false positives in prose
  * 2. <anytag>SIGNAL</anytag> - Any XML-wrapped tag; case-insensitive on tag names
- * 3. Plain SIGNAL - Backwards compatibility; only at end of output or on own line
+ * 3. Plain SIGNAL - Backwards compatibility; only as the final standalone line
  *
  * Tag matching uses a backreference (\1) so opening and closing tag names must
  * agree — `<COMPLETE>X</done>` is not treated as a completion, which avoids
  * false positives when the AI interleaves tags in prose.
  *
- * Plain signal detection is restrictive to prevent false positives like "not SIGNAL yet".
+ * Plain signal detection requires the final line to contain only the signal.
  */
 export function detectCompletionSignal(output: string, signal: string): boolean {
   // Check for XML-like tag wrapping with matching open/close names: <tag>SIGNAL</tag>.
@@ -869,13 +905,14 @@ export function detectCompletionSignal(output: string, signal: string): boolean 
   if (xmlWrappedPattern.test(output)) {
     return true;
   }
-  // Plain signal detection - restrictive to prevent false positives like "not COMPLETE yet"
-  // Only matches if signal is:
-  // 1. At the very end of output (with optional trailing whitespace/punctuation)
-  // 2. On its own line
-  const endPattern = new RegExp(`${escapeRegExp(signal)}[\\s.,;:!?]*$`);
-  const ownLinePattern = new RegExp(`^\\s*${escapeRegExp(signal)}\\s*$`, 'm');
-  return endPattern.test(output) || ownLinePattern.test(output);
+  // The plain form counts only as the trimmed final line, and the final line is
+  // computed with string operations rather than a pattern: a matcher that has to
+  // enumerate its own tolerated line endings gets one of them wrong (a single
+  // trailing newline was tolerated where two broke the match). Trailing blank
+  // lines and whitespace are an artifact of streaming, never a signal.
+  const lines = output.trimEnd().split('\n');
+  const finalLine = (lines[lines.length - 1] ?? '').trim();
+  return finalLine === signal;
 }
 
 /**

@@ -36,7 +36,7 @@ let ghHandle = '';
 const profilePath = resolve(process.cwd(), '.archon/maintainer-standup/profile.md');
 if (existsSync(profilePath)) {
   const profile = readFileSync(profilePath, 'utf8');
-  const match = profile.match(/^gh_handle:\s*(\S+)\s*$/m);
+  const match = /^gh_handle:\s*(\S+)\s*$/m.exec(profile);
   if (match) ghHandle = match[1];
 }
 if (!ghHandle) {
@@ -88,8 +88,8 @@ const allOpenPrs = parseJson<unknown[]>(
 if (allOpenPrs.length === PR_LIMIT) {
   process.stderr.write(
     `Warning: hit --limit ${PR_LIMIT} on all_open_prs. Some PRs may be silently truncated; ` +
-      `next-run "resolved since last run" detection will misclassify the dropped tail. ` +
-      `Switch to gh api graphql --paginate when this becomes a persistent issue.\n`,
+      'next-run "resolved since last run" detection will misclassify the dropped tail. ' +
+      'Switch to gh api graphql --paginate when this becomes a persistent issue.\n',
   );
 }
 
@@ -190,16 +190,16 @@ if (ghHandle) {
 //                                      (same endpoint; issue_url disambiguates)
 //   - /repos/{o}/{r}/pulls/comments    inline code-review comments
 // Both accept ?since=ISO8601.
-type GhComment = {
+interface GhComment {
   user?: { login?: string };
   created_at?: string;
   body?: string;
   html_url?: string;
   issue_url?: string;
   pull_request_url?: string;
-};
+}
 
-type GroupedReply = {
+interface GroupedReply {
   number: number;
   kind: 'issue' | 'pr_conversation' | 'pr_review';
   comments: {
@@ -208,7 +208,7 @@ type GroupedReply = {
     body_excerpt: string;
     url: string;
   }[];
-};
+}
 
 function ownerRepo(): { owner: string; repo: string } | null {
   try {
@@ -218,7 +218,7 @@ function ownerRepo(): { owner: string; repo: string } | null {
       .toString()
       .trim();
     // ssh: git@github.com:owner/repo.git ; https: https://github.com/owner/repo.git
-    const m = url.match(/[:/]([^:/]+)\/([^/]+?)(?:\.git)?$/);
+    const m = /[:/]([^:/]+)\/([^/]+?)(?:\.git)?$/.exec(url);
     if (!m) return null;
     return { owner: m[1], repo: m[2] };
   } catch {
@@ -228,7 +228,7 @@ function ownerRepo(): { owner: string; repo: string } | null {
 
 function extractNumber(url: string | undefined): number | null {
   if (!url) return null;
-  const m = url.match(/\/(?:issues|pulls)\/(\d+)$/);
+  const m = /\/(?:issues|pulls)\/(\d+)$/.exec(url);
   return m ? Number(m[1]) : null;
 }
 
@@ -237,7 +237,7 @@ const repoIds = ownerRepo();
 
 if (repoIds && lastRunAt) {
   const openPrNumbers = new Set(
-    (allOpenPrs as Array<{ number?: number }>)
+    (allOpenPrs as { number?: number }[])
       .map((p) => p.number)
       .filter((n): n is number => typeof n === 'number'),
   );
@@ -250,7 +250,7 @@ if (repoIds && lastRunAt) {
   ): void => {
     const author = c.user?.login;
     if (!author) return;
-    if (ghHandle && author.toLowerCase() === ghHandle.toLowerCase()) return;
+    if (author.toLowerCase() === ghHandle?.toLowerCase()) return;
     // Skip GitHub bots — coderabbitai, codex-connector, dependabot, etc. The
     // "[bot]" suffix is the canonical GitHub convention for bot accounts and
     // is reliable across all bot integrations. Maintainer wants human replies

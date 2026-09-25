@@ -5,11 +5,13 @@
 import { workflowDefinitionSchema } from './schemas/workflow';
 import type {
   DeclaredWorkflowConfig,
+  ResolvedWorkflow,
   WorkflowDefinition,
   WorkflowWithSource,
   WorkflowSource,
 } from './schemas/workflow';
 import { expandWorkflowIncludes } from './include-expander';
+import { resolveWorkflow } from './graph-plan';
 import type { CapturedSourceOwner } from './executor';
 
 const DEFAULT_NODE = { id: 'default', command: 'test-command' };
@@ -31,6 +33,10 @@ export function makeTestWorkflowList(names: string[]): WorkflowDefinition[] {
   return names.map(name => makeTestWorkflow({ name }));
 }
 
+export function makeTestResolvedWorkflow(overrides: TestWorkflowOverrides): ResolvedWorkflow {
+  return resolveWorkflow(makeTestWorkflow(overrides));
+}
+
 /**
  * Wrap a WorkflowDefinition as a WorkflowWithSource entry for test mocks.
  *
@@ -46,14 +52,18 @@ export function makeTestWorkflowWithSource(
   parseWarnings?: readonly string[]
 ): WorkflowWithSource {
   const raw = makeTestWorkflow(overrides);
-  const { workflows } = expandWorkflowIncludes(new Map([[raw.name, raw]]));
+  const { workflows, errors } = expandWorkflowIncludes(new Map([[raw.name, raw]]));
+  const workflow = workflows.get(raw.name);
+  if (workflow === undefined) {
+    throw new Error(`makeTestWorkflowWithSource: expansion failed: ${JSON.stringify(errors)}`);
+  }
   const declared: DeclaredWorkflowConfig = {
     ...(raw.provider !== undefined ? { provider: raw.provider } : {}),
     ...(raw.model !== undefined ? { model: raw.model } : {}),
     ...(raw.effort !== undefined ? { effort: raw.effort } : {}),
   };
   return {
-    workflow: workflows.get(raw.name) ?? raw,
+    workflow,
     source,
     ...(parseWarnings ? { parseWarnings } : {}),
     ...(Object.keys(declared).length > 0 ? { declared } : {}),
@@ -71,7 +81,7 @@ export function makeTestWorkflowWithSource(
 export function makeTestComposedWorkflow(
   defs: readonly WorkflowDefinition[],
   name: string
-): WorkflowDefinition {
+): ResolvedWorkflow {
   const { workflows, errors } = expandWorkflowIncludes(new Map(defs.map(d => [d.name, d])));
   if (errors.length > 0) {
     throw new Error(`makeTestComposedWorkflow: expansion failed: ${JSON.stringify(errors)}`);
@@ -95,8 +105,8 @@ export async function withObservableCapturedSource<T>(
   try {
     return await body({
       hold: prepared => {
-        held = prepared.captureRoot;
-        calls.push(`hold:${prepared.captureRoot}`);
+        held = prepared.anchor.root;
+        calls.push(`hold:${prepared.anchor.root}`);
       },
       adopt: () => {
         adopted = true;
@@ -106,4 +116,12 @@ export async function withObservableCapturedSource<T>(
   } finally {
     if (held && !adopted) calls.push(`reclaim:${held}`);
   }
+}
+
+/** Run the actual DAG only when an integration test asks for it. */
+export async function executeTestDagWorkflow(
+  options: Parameters<typeof import('./dag-executor').executeDagWorkflow>[0]
+): ReturnType<typeof import('./dag-executor').executeDagWorkflow> {
+  const { executeDagWorkflow } = await import('./dag-executor');
+  return executeDagWorkflow(options);
 }

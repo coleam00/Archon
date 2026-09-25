@@ -37,7 +37,7 @@ import {
   RATE_LIMIT_PATTERNS,
   RATE_LIMIT_RETRY_DELAY_MS,
   TRANSIENT_PATTERNS,
-  toTelemetryErrorClass,
+  providerFailureKind,
   safeSendMessage,
   type UnknownErrorTracker,
 } from './executor-shared';
@@ -131,6 +131,82 @@ describe('substituteWorkflowVariables', () => {
         'docs/'
       )
     ).toThrow(/did not adopt a prior run/);
+  });
+
+  it("replaces $TYPED_ARTIFACTS_FILE with this invocation's listing", () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Read $TYPED_ARTIFACTS_FILE',
+      'run-1',
+      'msg',
+      '/tmp/artifacts',
+      'main',
+      'docs/',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { typedArtifactsFile: '/tmp/artifacts/.archon/typed-artifacts/list.json' }
+    );
+    expect(prompt).toBe('Read /tmp/artifacts/.archon/typed-artifacts/list.json');
+  });
+
+  it('replaces $TYPED_ARTIFACTS_FILE even under shellSafe (engine-controlled)', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'cat "$TYPED_ARTIFACTS_FILE"',
+      'run-1',
+      'msg',
+      '/tmp/artifacts',
+      'main',
+      'docs/',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { shellSafe: true, typedArtifactsFile: '/listings/l.json' }
+    );
+    expect(prompt).toBe('cat "/listings/l.json"');
+  });
+
+  it('throws when $TYPED_ARTIFACTS_FILE is referenced without a materialized listing', () => {
+    expect(() =>
+      substituteWorkflowVariables(
+        'Read $TYPED_ARTIFACTS_FILE',
+        'run-1',
+        'msg',
+        '/tmp/artifacts',
+        'main',
+        'docs/'
+      )
+    ).toThrow(/has no typed-artifact listing/);
+  });
+
+  it('treats an explicit empty listing as a caller stating it has none (dry run)', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Read [$TYPED_ARTIFACTS_FILE]',
+      'run-1',
+      'msg',
+      '/tmp/artifacts',
+      'main',
+      'docs/',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { typedArtifactsFile: '' }
+    );
+    expect(prompt).toBe('Read []');
+  });
+
+  it('leaves the INPUTS_ variable of an input named typed_artifacts_file alone', () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Use $INPUTS_TYPED_ARTIFACTS_FILE',
+      'run-1',
+      'msg',
+      '/tmp/artifacts',
+      'main',
+      'docs/'
+    );
+    expect(prompt).toBe('Use $INPUTS_TYPED_ARTIFACTS_FILE');
   });
 
   it('throws when $STATE_DIR is referenced but no state dir was resolved', () => {
@@ -690,16 +766,34 @@ describe('detectCompletionSignal', () => {
     expect(detectCompletionSignal('<status>DONE</status>', 'DONE')).toBe(true);
   });
 
-  it('detects plain signal at end of output', () => {
-    expect(detectCompletionSignal('Work done. COMPLETE', 'COMPLETE')).toBe(true);
+  it('detects a plain signal as the final standalone line', () => {
+    expect(detectCompletionSignal('Work done.\n  COMPLETE  \n', 'COMPLETE')).toBe(true);
   });
 
-  it('detects plain signal on its own line', () => {
-    expect(detectCompletionSignal('Work done.\nCOMPLETE\nExtra text', 'COMPLETE')).toBe(true);
+  it('detects a plain signal followed by trailing blank lines and whitespace', () => {
+    expect(detectCompletionSignal('Work done.\nCOMPLETE\n\n\n', 'COMPLETE')).toBe(true);
+    expect(detectCompletionSignal('Work done.\nCOMPLETE\n   \n\t\n', 'COMPLETE')).toBe(true);
   });
 
-  it('does not detect signal embedded in prose', () => {
-    expect(detectCompletionSignal('The status is not COMPLETE yet.', 'COMPLETE')).toBe(false);
+  it('detects a plain signal with CRLF line endings', () => {
+    expect(detectCompletionSignal('Work done.\r\nCOMPLETE\r\n', 'COMPLETE')).toBe(true);
+  });
+
+  it('does not detect the live incident shape: a negated mention ending the output', () => {
+    expect(
+      detectCompletionSignal(
+        'the story still has open tasks — T8 is now ready, and T9 remains — so not replying ALL_TASKS_COMPLETE.',
+        'ALL_TASKS_COMPLETE'
+      )
+    ).toBe(false);
+  });
+
+  it('does not detect a plain signal mentioned inline at the end of output', () => {
+    expect(detectCompletionSignal('Work done. COMPLETE', 'COMPLETE')).toBe(false);
+  });
+
+  it('does not detect a negated plain signal at the end of output', () => {
+    expect(detectCompletionSignal('The status is not COMPLETE', 'COMPLETE')).toBe(false);
   });
 
   it('does not detect signal when wrong value is in tags', () => {
@@ -1012,23 +1106,11 @@ describe('classifyError', () => {
   });
 });
 
-describe('toTelemetryErrorClass', () => {
-  it('maps FATAL to fatal', () => {
-    expect(toTelemetryErrorClass('FATAL')).toBe('fatal');
-  });
-
-  it('maps TRANSIENT to transient', () => {
-    expect(toTelemetryErrorClass('TRANSIENT')).toBe('transient');
-  });
-
-  it('maps UNKNOWN to unknown', () => {
-    expect(toTelemetryErrorClass('UNKNOWN')).toBe('unknown');
-  });
-
-  it('round-trips classifyError output for every ErrorType', () => {
-    expect(toTelemetryErrorClass(classifyError(new Error('401 unauthorized')))).toBe('fatal');
-    expect(toTelemetryErrorClass(classifyError(new Error('rate limit: 429')))).toBe('transient');
-    expect(toTelemetryErrorClass(classifyError(new Error('mystery')))).toBe('unknown');
+describe('providerFailureKind', () => {
+  it('maps the retry classification onto the provider failure kinds', () => {
+    expect(providerFailureKind(new Error('401 unauthorized'))).toBe('fatal');
+    expect(providerFailureKind(new Error('rate limit: 429'))).toBe('transient');
+    expect(providerFailureKind(new Error('mystery'))).toBe('unknown');
   });
 });
 

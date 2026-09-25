@@ -39,6 +39,7 @@ import type {
   IncludeDirective,
   WorkflowBase,
   WorkflowRequirement,
+  ResolvedWorkflow,
 } from './schemas';
 import {
   isIncludeDirective,
@@ -53,13 +54,20 @@ import {
   isComposeFanOutNode,
   INPUT_NAME_SOURCE,
 } from './schemas';
-import { canonicalValueText, parseWholeInputsRef, type JsonValue } from './output-ref';
+import {
+  canonicalValueText,
+  LOOP_PREV_OUTPUT_REF_SOURCE,
+  EXECUTION_CHECKOUT_REF_SOURCE,
+  parseWholeInputsRef,
+  type JsonValue,
+} from './output-ref';
 import { createLogger } from '@archon/paths';
 import { validateDagStructure, validateWorkflowOutcomeDeclaration } from './loader';
 import { resolveDeclaredInputs } from './workflow-inputs';
 import { resolveWorkflowName } from './router';
 import { parseWhenAtom, whenAtoms } from './when-atom';
 import { mapNodeTemplateSlots, mapNodeTemplateValueSlots } from './template-walker';
+import { resolveWorkflow, resolvedBodyNodes } from './graph-plan';
 import {
   COMPILED_LOOP_COMMAND,
   COMPOSED_NODE,
@@ -99,6 +107,10 @@ export interface ComposedSuspensionPath {
   reason: string;
 }
 
+type SuspensionWorkflow = Pick<WorkflowDefinition, 'name' | 'interactive'> & {
+  readonly nodes: readonly (DagNode | IncludeDirective)[];
+};
+
 /**
  * Find every path in a static include/workflow closure that can pause an instance.
  * Composed fan-out currently owns one parent cursor, not one cursor per item, so both
@@ -106,14 +118,14 @@ export interface ComposedSuspensionPath {
  * Durable interactive instances are tracked separately in #2810.
  */
 export function collectComposedSuspensionPaths(
-  root: WorkflowDefinition,
-  definitions: readonly WorkflowDefinition[]
+  root: SuspensionWorkflow,
+  definitions: readonly SuspensionWorkflow[]
 ): ComposedSuspensionPath[] {
   const byName = new Map(definitions.map(definition => [definition.name, definition]));
   const visited = new Set<string>();
   const found: ComposedSuspensionPath[] = [];
 
-  const visitDefinition = (definition: WorkflowDefinition): void => {
+  const visitDefinition = (definition: SuspensionWorkflow): void => {
     if (visited.has(definition.name)) return;
     visited.add(definition.name);
     if (definition.interactive === true) {
@@ -123,7 +135,7 @@ export function collectComposedSuspensionPaths(
   };
 
   const visitTarget = (name: string, ownerId: string, kind: 'include' | 'workflow'): void => {
-    let target: WorkflowDefinition | undefined;
+    let target: SuspensionWorkflow | undefined;
     try {
       target = kind === 'workflow' ? resolveWorkflowName(name, definitions) : byName.get(name);
     } catch (_err) {
@@ -191,7 +203,7 @@ const OUTPUT_REF_PATTERN = /\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output/g;
  * When a reusable block is inlined into a loop_group body, its authored sibling ids must
  * follow the same namespace rewrite as current-iteration `$id.output` refs.
  */
-const LOOP_PREV_OUTPUT_REF_PATTERN = /\$LOOP_PREV\.([a-zA-Z_][a-zA-Z0-9_-]*)\.output/g;
+const LOOP_PREV_OUTPUT_REF_PATTERN = new RegExp(LOOP_PREV_OUTPUT_REF_SOURCE, 'g');
 
 /**
  * `when:`-only ref pattern. The condition grammar (condition-evaluator.ts) additionally
@@ -215,6 +227,14 @@ function applyOutputRefRename(text: string, rename: (id: string) => string): str
   return text.replace(OUTPUT_REF_PATTERN, (match, id: string) => {
     const renamed = rename(id);
     return renamed === id ? match : `$${renamed}.output`;
+  });
+}
+
+/** `$<id>.execution.checkoutStart` names a sibling node too, so its id follows the same rename. */
+function applyExecutionCheckoutRefRename(text: string, rename: (id: string) => string): string {
+  return text.replace(new RegExp(EXECUTION_CHECKOUT_REF_SOURCE, 'g'), (match, id: string) => {
+    const renamed = rename(id);
+    return renamed === id ? match : `$${renamed}.execution.checkoutStart`;
   });
 }
 
@@ -320,7 +340,6 @@ const NODE_AFFECTING_WORKFLOW_FIELDS: readonly (readonly [
   ['provider', 'provider'],
   ['model', 'model'],
   ['effort', 'effort'],
-  ['thinking', 'thinking'],
   ['fallbackModel', 'fallbackModel'],
   ['betas', 'betas'],
   ['sandbox', 'sandbox'],
@@ -442,8 +461,8 @@ function collapseWorkflowScope(raw: WorkflowDefinition): WorkflowDefinition {
  *   - Prompt text (prompt / loop.prompt / approval fields) — canonical `.output` refs are
  *     live everywhere, including Markdown code spans, because runtime substitution is
  *     syntax-agnostic.
- *   - Code/expression (bash / script / wait.until / wait.event / loop.until_bash /
- *     loop_group.until_bash / cancel / workflow.input / workflow.fan_out.items) — canonical
+ *   - Code/expression (bash / script / wait.until / wait.event / wait.attention /
+ *     loop.until_bash / loop_group.until_bash / cancel / workflow.input / workflow.fan_out.items) — canonical
  *     `.output` refs are LIVE (never documentation) → rewritten verbatim.
  *
  * Public runtime node-ref surfaces stay aligned across this rewrite, the loader's
@@ -464,7 +483,10 @@ function rewriteNodeOutputRefs(
   renameLoopPrevRef: (id: string) => string
 ): void {
   const code = (text: string): string =>
-    applyLoopPrevOutputRefRename(applyOutputRefRename(text, renameOutputRef), renameLoopPrevRef);
+    applyExecutionCheckoutRefRename(
+      applyLoopPrevOutputRefRename(applyOutputRefRename(text, renameOutputRef), renameLoopPrevRef),
+      renameOutputRef
+    );
   const whenExpr = (text: string): string => applyWhenRefRename(text, renameOutputRef);
 
   if (node.when !== undefined) node.when = whenExpr(node.when);
@@ -472,10 +494,28 @@ function rewriteNodeOutputRefs(
     node.context.resume = renameOutputRef(node.context.resume);
   }
 
-  for (const boundary of readComposedMeta(node)?.boundaries ?? []) {
-    boundary.dependsOn = boundary.dependsOn.flatMap(expandDependency);
-    if (boundary.when !== undefined) boundary.when = whenExpr(boundary.when);
-  }
+  // A loop_group body node carries the enclosing include's boundary too (markComposedNode
+  // stamps it on every body node), and that boundary names outer-graph ids. When the
+  // enclosing block is itself included one level further out, those ids are renamed
+  // like every other reference here — otherwise a body node keeps pointing at an id that
+  // no longer exists in the flat graph and is skipped as "upstream failed" on the first
+  // iteration, which is how a two-level composition (lifecycle → ship → deliver's
+  // corrections loop) failed at runtime while each level worked on its own.
+  const rewriteBoundaries = (target: DagNode): void => {
+    for (const boundary of readComposedMeta(target)?.boundaries ?? []) {
+      boundary.dependsOn = boundary.dependsOn.flatMap(expandDependency);
+      if (boundary.when !== undefined) boundary.when = whenExpr(boundary.when);
+    }
+    if (isLoopGroupNode(target)) {
+      // A body may still be an unexpanded include directive at this stage; those carry
+      // no composed metadata of their own, so only real nodes are rewritten (the same
+      // guard markComposedNode applies when it stamps the boundary in the first place).
+      for (const body of target.loop_group.nodes) {
+        if (!isIncludeDirective(body)) rewriteBoundaries(body);
+      }
+    }
+  };
+  rewriteBoundaries(node);
 
   const rewritten = mapNodeTemplateSlots(node, slot =>
     slot.surface === 'binding_default'
@@ -623,7 +663,7 @@ export interface ExpandedInclude {
  */
 function resolveIncludeInputs(
   includeNode: IncludeDirective,
-  child: WorkflowDefinition
+  child: Pick<WorkflowDefinition, 'name' | 'inputs'>
 ): Record<string, JsonValue> {
   try {
     return resolveDeclaredInputs(
@@ -684,7 +724,7 @@ function cloneNodeForInclude<T extends DagNode | IncludeDirective>(node: T): T {
  */
 function inlineInclude(
   includeNode: IncludeDirective,
-  child: WorkflowDefinition,
+  child: ResolvedWorkflow,
   commandContents: ReadonlyMap<string, IncludeCommandContent>
 ): ExpandedInclude {
   // Prove the child's lexical boundary before its nodes share the parent's flat id/output
@@ -696,20 +736,12 @@ function inlineInclude(
       `Node '${includeNode.id}': included workflow '${child.name}' is not hermetic: ${childStructureError}`
     );
   }
-  // `child` is the result of `expandOne`, which fully expands its own includes before
-  // returning (the function's own documented invariant: "Output workflows contain
-  // ZERO include nodes") — so `child.nodes` never actually holds an `IncludeDirective`
-  // here, even though `WorkflowDefinition.nodes`'s type admits one for the general
-  // pre-expansion case (#2486; splitting an authored-vs-resolved `WorkflowDefinition`
-  // type is #2487's job, not this one's).
-  const childNodes = child.nodes as DagNode[];
+  const childNodes = child.nodes;
   const prefix = `${includeNode.id}__`;
   const childTopLevelIds = new Set(childNodes.map(n => n.id));
   const rename = (id: string): string => (childTopLevelIds.has(id) ? prefix + id : id);
 
-  // Sinks: child top-level nodes that nothing else in the child depends on (definition order).
-  const childDeps = new Set(childNodes.flatMap(n => n.depends_on ?? []));
-  const sinkOriginalIds = childNodes.filter(n => !childDeps.has(n.id)).map(n => n.id);
+  const sinkOriginalIds = child.plan.sinks;
 
   const parentDeps = includeNode.depends_on ?? [];
   const entryTriggerRules = childNodes
@@ -835,7 +867,7 @@ function inlineInclude(
  */
 export function instantiateResolvedInclude(
   includeNode: IncludeDirective,
-  child: WorkflowDefinition,
+  child: ResolvedWorkflow,
   commandContents: ReadonlyMap<string, IncludeCommandContent> = new Map()
 ): ExpandedInclude {
   return inlineInclude(includeNode, child, commandContents);
@@ -845,6 +877,7 @@ export function instantiateResolvedInclude(
  * Workflow-level keys that are NOT dropped-config and must be excluded from the warning.
  *   - name/description: the block's identity, never inheritable config.
  *   - nodes: not dropped — they ARE what gets inlined.
+ *   - plan: engine-owned metadata consumed while inlining, never authored config.
  *   - tags: cosmetic UI keyword-inference metadata with no runtime effect, so dropping it
  *     is behaviorally inert; reporting it would be noise.
  */
@@ -852,6 +885,7 @@ const NON_DROPPED_WORKFLOW_KEYS: ReadonlySet<string> = new Set([
   'name',
   'description',
   'nodes',
+  'plan',
   'tags',
   // #2470: both are CONSUMED by inlining, not dropped — `returns` drives the block's
   // primarySink and `inputs` validates the caller's `with:`. Warning "dropped" would be
@@ -864,6 +898,10 @@ const NON_DROPPED_WORKFLOW_KEYS: ReadonlySet<string> = new Set([
   'inputs',
   // #1764: unioned into the composing workflow's own requirement set, not dropped.
   'requires',
+  // A notice for launching this file directly. Inlining never launches it, so there
+  // is nothing to carry; warning "dropped" would fire on every discovery of a
+  // composer that includes a deprecated block.
+  'deprecated',
 ]);
 
 /** Isolation/concurrency-safety fields — a silent drop of these is the most dangerous. */
@@ -894,17 +932,17 @@ const COMPOSE_FAN_OUT_CONSUMED_WORKFLOW_KEYS: ReadonlySet<string> = new Set(['mu
  */
 function warnDroppedWorkflowLevelFields(
   includeNode: IncludeDirective,
-  child: WorkflowDefinition,
+  child: ResolvedWorkflow,
   consumedFields?: ReadonlySet<string>
 ): void {
-  const childRecord = child as Record<string, unknown>;
-  const droppedFields = Object.keys(child)
+  const droppedFields = Object.entries(child)
     .filter(
-      key =>
+      ([key, value]) =>
         !NON_DROPPED_WORKFLOW_KEYS.has(key) &&
         consumedFields?.has(key) !== true &&
-        childRecord[key] !== undefined
+        value !== undefined
     )
+    .map(([key]) => key)
     .sort();
   if (droppedFields.length === 0) return;
 
@@ -946,7 +984,7 @@ function warnDroppedWorkflowLevelFields(
 function materializeBlockCommandPrompts(
   node: DagNode,
   includeNode: IncludeDirective,
-  child: WorkflowDefinition,
+  child: Pick<WorkflowDefinition, 'name'>,
   commandContents: ReadonlyMap<string, IncludeCommandContent>,
   currentIds: ReadonlySet<string>,
   enclosingIds: ReadonlySet<string>,
@@ -1017,9 +1055,7 @@ function materializeBlockCommandPrompts(
   }
 
   if (isLoopGroupNode(node)) {
-    // A loop_group body is expanded (include-free) by the same recursive invariant
-    // as the top-level `childNodes` this function is ultimately called against.
-    const bodyNodes = node.loop_group.nodes as DagNode[];
+    const bodyNodes = resolvedBodyNodes(node.loop_group);
     const bodyIds = new Set(bodyNodes.map(body => body.id));
     const bodyEnclosingIds = new Set([...enclosingIds, ...currentIds]);
     return {
@@ -1065,10 +1101,10 @@ export function expandWorkflowIncludes(
   rawByName: Map<string, WorkflowDefinition>,
   commandContents?: ReadonlyMap<string, IncludeCommandContent>
 ): {
-  workflows: Map<string, WorkflowDefinition>;
+  workflows: Map<string, ResolvedWorkflow>;
   errors: WorkflowLoadError[];
 } {
-  const memo = new Map<string, WorkflowDefinition>();
+  const memo = new Map<string, ResolvedWorkflow>();
   const failed = new Set<string>();
   const errors: WorkflowLoadError[] = [];
 
@@ -1098,7 +1134,7 @@ export function expandWorkflowIncludes(
         // Width is runtime data, but the body remains ordinary static composition.
         // Expanding it here validates its complete include closure and carries its
         // requirements onto the parent before any upstream node can spend.
-        let child: WorkflowDefinition;
+        let child: ResolvedWorkflow;
         try {
           child = expandOne(node.include, [...stack, workflowName]);
         } catch (e) {
@@ -1145,7 +1181,7 @@ export function expandWorkflowIncludes(
       }
 
       if (isIncludeDirective(node)) {
-        let child: WorkflowDefinition;
+        let child: ResolvedWorkflow;
         try {
           child = expandOne(node.include, [...stack, workflowName]);
         } catch (e) {
@@ -1210,7 +1246,7 @@ export function expandWorkflowIncludes(
     return { nodes: expandedNodes, includedRequirements, renameIncludeRef };
   }
 
-  function expandOne(name: string, stack: string[]): WorkflowDefinition {
+  function expandOne(name: string, stack: string[]): ResolvedWorkflow {
     // Cycle + depth are checked BEFORE the memo so a node memoized via a shallow path
     // can never mask a too-deep or cyclic reference reaching it via a longer path.
     if (stack.includes(name)) {
@@ -1271,7 +1307,7 @@ export function expandWorkflowIncludes(
     }
 
     const dedupedRequires = [...new Set(requires)];
-    const result: WorkflowDefinition = {
+    const authoredResult: WorkflowDefinition = {
       ...collapsed,
       nodes: expanded.nodes,
       // `returns:` may name an include directive that no longer exists after flattening.
@@ -1283,10 +1319,11 @@ export function expandWorkflowIncludes(
         : {}),
       ...(dedupedRequires.length > 0 ? { requires: dedupedRequires } : {}),
     };
-    const outcomeDeclarationError = validateWorkflowOutcomeDeclaration(result);
+    const outcomeDeclarationError = validateWorkflowOutcomeDeclaration(authoredResult);
     if (outcomeDeclarationError !== null) {
       throw new IncludeExpansionError(outcomeDeclarationError);
     }
+    const result = resolveWorkflow(authoredResult);
     memo.set(name, result);
     return result;
   }
@@ -1305,7 +1342,7 @@ export function expandWorkflowIncludes(
     }
   }
 
-  const workflows = new Map<string, WorkflowDefinition>();
+  const workflows = new Map<string, ResolvedWorkflow>();
   for (const name of rawByName.keys()) {
     if (failed.has(name)) continue;
     const expanded = memo.get(name);

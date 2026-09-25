@@ -2,8 +2,8 @@
  * Server-health surface. Two consumers share the one `K.health` cache entry:
  * `useIsDocker` (gates the `Open in IDE` vscode:// affordance) and the Settings
  * SystemPanel (full status grid). The docker default stays `true` (hide the
- * button) until health resolves — matches the old UI and avoids flashing a broken
- * link on first paint inside Docker.
+ * button) until health resolves, avoiding a broken link on first paint inside
+ * Docker.
  */
 
 import { ideUri } from '@/lib/ide-uri';

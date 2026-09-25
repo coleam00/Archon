@@ -1,13 +1,12 @@
 {
   "name": "@archon/providers",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
     "./types": "./src/types.ts",
-    "./effort": "./src/shared/effort.ts",
     "./structured-output": "./src/shared/structured-output.ts",
     "./claude/provider": "./src/claude/provider.ts",
     "./claude/config": "./src/claude/config.ts",
@@ -18,6 +17,7 @@
     "./mcp/config": "./src/mcp/config.ts",
     "./oauth": "./src/oauth.ts",
     "./community/pi": "./src/community/pi/index.ts",
+    "./community/pi/auth-status": "./src/community/pi/auth-status.ts",
     "./community/copilot": "./src/community/copilot/index.ts",
     "./community/copilot/binary-resolver": "./src/community/copilot/binary-resolver.ts",
     "./community/opencode/runtime": "./src/community/opencode/runtime.ts",
@@ -25,17 +25,17 @@
     "./registry": "./src/registry.ts"
   },
   "scripts": {
-    "test": "bun test src/claude/provider.test.ts && bun test src/codex/provider.test.ts && bun test src/registry.test.ts && bun test src/types.test.ts && bun test src/oauth.test.ts && bun test src/codex/binary-guard.test.ts && bun test src/codex/binary-resolver.test.ts && bun test src/codex/binary-resolver-dev.test.ts && bun test src/claude/binary-resolver.test.ts && bun test src/claude/binary-resolver-dev.test.ts && bun test src/claude/native-tools.test.ts && bun test src/claude/config.test.ts && bun test src/community/pi/model-ref.test.ts && bun test src/community/pi/config.test.ts && bun test src/community/pi/event-bridge.test.ts && bun test src/community/pi/options-translator.test.ts && bun test src/community/pi/session-resolver.test.ts && bun test src/community/pi/native-tools.test.ts && bun test src/community/pi/resource-loader.test.ts && bun test src/community/pi/request-auth.test.ts && bun test src/community/pi/request-auth.integration.test.ts && bun test src/community/pi/model-store.integration.test.ts && bun test src/community/pi/provider.test.ts && bun test src/community/pi/provider-lazy-load.test.ts && bun test src/community/pi/provider-bedrock-register.test.ts && bun test src/community/pi/ui-context-stub.test.ts && bun test src/community/copilot/config.test.ts && bun test src/community/copilot/event-bridge.test.ts && bun test src/community/copilot/binary-resolver-dev.test.ts && bun test src/community/copilot/binary-resolver.test.ts && bun test src/community/copilot/provider.test.ts && bun test src/community/copilot/provider-lazy-load.test.ts && bun test src/community/copilot/provider-hardening.test.ts && bun test src/community/opencode/provider.test.ts && bun test src/shared/structured-output.test.ts && bun test src/shared/skills.test.ts && bun test src/shared/resumed.test.ts && bun test src/shared/effort.test.ts && bun test src/claude/container-spawn.test.ts && bun test src/claude/container-env.test.ts",
+    "test": "bun run ../../scripts/package-tests.ts",
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.247",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.282",
     "@archon/paths": "workspace:*",
     "@github/copilot-sdk": "~1.0.1",
-    "@earendil-works/pi-ai": "^0.84.3",
-    "@earendil-works/pi-coding-agent": "^0.84.3",
+    "@earendil-works/pi-ai": "^0.87.1",
+    "@earendil-works/pi-coding-agent": "^0.87.1",
     "@opencode-ai/sdk": "^1.17.3",
-    "@openai/codex-sdk": "^0.150.1",
+    "@openai/codex-sdk": "^0.157.0",
     "@sinclair/typebox": "^0.34.41",
     "ajv": "^8.20.0",
     "jsonrepair": "^3.14.0",
@@ -46,5 +46,127 @@
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
-  }
+  },
+  "testGroups": [
+    [
+      "src/claude/provider.test.ts"
+    ],
+    [
+      "src/codex/provider.test.ts"
+    ],
+    [
+      "src/registry.test.ts"
+    ],
+    [
+      "src/types.test.ts"
+    ],
+    [
+      "src/community/_template/capabilities.test.ts"
+    ],
+    [
+      "src/oauth.test.ts"
+    ],
+    [
+      "src/codex/binary-guard.test.ts"
+    ],
+    [
+      "src/codex/binary-resolver.test.ts"
+    ],
+    [
+      "src/codex/binary-resolver-dev.test.ts"
+    ],
+    [
+      "src/claude/binary-resolver.test.ts"
+    ],
+    [
+      "src/claude/binary-resolver-dev.test.ts"
+    ],
+    [
+      "src/native-tools-conformance.test.ts"
+    ],
+    [
+      "src/claude/config.test.ts"
+    ],
+    [
+      "src/community/pi/model-ref.test.ts"
+    ],
+    [
+      "src/community/pi/config.test.ts"
+    ],
+    [
+      "src/community/pi/event-bridge.test.ts"
+    ],
+    [
+      "src/community/pi/options-translator.test.ts"
+    ],
+    [
+      "src/community/pi/session-resolver.test.ts"
+    ],
+    [
+      "src/community/pi/resource-loader.test.ts"
+    ],
+    [
+      "src/community/pi/request-auth.test.ts"
+    ],
+    [
+      "src/community/pi/auth-status.test.ts"
+    ],
+    [
+      "src/community/pi/request-auth.integration.test.ts"
+    ],
+    [
+      "src/community/pi/model-store.integration.test.ts"
+    ],
+    [
+      "src/community/pi/provider.test.ts"
+    ],
+    [
+      "src/community/pi/provider-lazy-load.test.ts"
+    ],
+    [
+      "src/community/pi/provider-bedrock-register.test.ts"
+    ],
+    [
+      "src/community/pi/ui-context-stub.test.ts"
+    ],
+    [
+      "src/community/copilot/config.test.ts"
+    ],
+    [
+      "src/community/copilot/event-bridge.test.ts"
+    ],
+    [
+      "src/community/copilot/binary-resolver-dev.test.ts"
+    ],
+    [
+      "src/community/copilot/binary-resolver.test.ts"
+    ],
+    [
+      "src/community/copilot/provider.test.ts"
+    ],
+    [
+      "src/community/copilot/provider-lazy-load.test.ts"
+    ],
+    [
+      "src/community/copilot/provider-hardening.test.ts"
+    ],
+    [
+      "src/community/opencode/provider.test.ts"
+    ],
+    [
+      "src/shared/structured-output.test.ts"
+    ],
+    [
+      "src/shared/skills.test.ts"
+    ],
+    [
+      "src/shared/resumed.test.ts"
+    ],
+    [
+      "src/claude/container-spawn.test.ts"
+    ],
+    [
+      "src/claude/container-env.test.ts"
+    ]
+  ]
 }

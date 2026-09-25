@@ -132,6 +132,34 @@ mock.module('@opencode-ai/sdk', () => ({
 }));
 
 import { OpencodeProvider, resetEmbeddedRuntime } from './provider';
+import { normalizeTokens } from './tokens';
+
+describe('normalizeTokens', () => {
+  test('omits usage when either required token axis is absent', () => {
+    expect(normalizeTokens({ tokens: { output: 7 } })).toBeUndefined();
+    expect(normalizeTokens({ tokens: { input: 11 } })).toBeUndefined();
+  });
+
+  test('preserves measured zeros and computes a complete zero total', () => {
+    expect(
+      normalizeTokens({
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+    ).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
+  });
+
+  test('omits total when optional reasoning or cache axes are incomplete', () => {
+    expect(normalizeTokens({ tokens: { input: 11, output: 7 } })).toEqual({
+      input: 11,
+      output: 7,
+    });
+    expect(
+      normalizeTokens({
+        tokens: { input: 11, output: 7, reasoning: 3, cache: { read: 5 } },
+      })
+    ).toEqual({ input: 16, output: 7, cacheRead: 5 });
+  });
+});
 import { classifyOpencodeError } from './errors';
 import type { NodeConfig } from '../../types';
 
@@ -313,6 +341,150 @@ describe('OpencodeProvider', () => {
     });
   });
 
+  test('permission.asked with no following session.idle fails fast instead of hanging (#3332)', async () => {
+    scriptedEvents = [
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: { sessionID: 'session-1', type: 'text' },
+          delta: 'partial answer',
+        },
+      },
+      {
+        // Real server event shape (verified against a live OpenCode server's
+        // `EventPermissionAsked` schema via `GET /doc`) — the
+        // `@opencode-ai/sdk` npm package's types describe a stale
+        // `permission.updated`/`Permission{id,type,pattern}` shape no
+        // current server actually emits.
+        type: 'permission.asked',
+        properties: {
+          id: 'perm-1',
+          sessionID: 'session-1',
+          permission: 'bash',
+          patterns: ['rm -rf *'],
+          metadata: { command: 'rm -rf *' },
+          always: ['rm -rf *'],
+          tool: { messageID: 'msg-1', callID: 'call-1' },
+        },
+      },
+      // Deliberately no session.idle after this — the permission is never
+      // answered, matching the hang scenario from issue #3332.
+    ];
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, { assistantConfig: TEST_MODEL })
+    );
+
+    expect(chunks).toEqual([{ type: 'assistant', content: 'partial answer' }]);
+    expect(error).toBeInstanceOf(Error);
+    expect(error?.message).toContain('perm-1');
+    expect(error?.message).toContain('bash');
+  });
+
+  test('permission.asked for a different session is ignored', async () => {
+    scriptedEvents = [
+      {
+        type: 'permission.asked',
+        properties: {
+          id: 'perm-other',
+          sessionID: 'some-other-session',
+          permission: 'bash',
+          patterns: [],
+          metadata: {},
+          always: [],
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: 'session-1' } },
+    ];
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, { assistantConfig: TEST_MODEL })
+    );
+
+    expect(error).toBeUndefined();
+    expect(chunks).toEqual([{ type: 'result', sessionId: 'session-1' }]);
+  });
+
+  test('multi-agent permission.asked fails fast naming the pending permission (#3332)', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    const runtime = makeRuntime({
+      sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+    });
+    runtimeQueue.push(runtime);
+    scriptedEvents = [
+      {
+        type: 'permission.asked',
+        properties: {
+          id: 'perm-2',
+          sessionID: 'scout-session',
+          permission: 'edit',
+          patterns: [],
+          metadata: {},
+          always: [],
+        },
+      },
+      // No session.idle for either child session follows.
+    ];
+
+    const { error } = await consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+      })
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error?.message).toContain('perm-2');
+    expect(error?.message).toContain('edit');
+    expect(runtime.client.session.abort).toHaveBeenCalled();
+  });
+
+  test('multi-agent permission.asked for an unrecognized session is ignored', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    const runtime = makeRuntime({
+      sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+    });
+    runtimeQueue.push(runtime);
+    scriptedEvents = [
+      {
+        type: 'permission.asked',
+        properties: {
+          id: 'perm-3',
+          sessionID: 'not-a-child-session',
+          permission: 'edit',
+          patterns: [],
+          metadata: {},
+          always: [],
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: 'scout-session' } },
+      { type: 'session.idle', properties: { sessionID: 'reviewer-session' } },
+    ];
+
+    const { error } = await consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+      })
+    );
+
+    expect(error).toBeUndefined();
+  });
+
   test('multi-agent tool results retain scoped IDs and factual outcomes', async () => {
     const cwd = await createTempProjectDir();
     const sessionIds = ['scout-session', 'reviewer-session'];
@@ -377,6 +549,7 @@ describe('OpencodeProvider', () => {
         }),
       ])
     );
+    expect(chunks).toContainEqual({ type: 'result' });
   });
 
   test('multi-agent usage keeps cache from the sub-agent that reported it', async () => {
@@ -437,19 +610,86 @@ describe('OpencodeProvider', () => {
 
     expect(error).toBeUndefined();
     // Scout's cache survives as a floor instead of being erased by the reviewer's silence,
-    // while gross input still sums across both sub-agents (#2662).
+    // while gross input still sums across both sub-agents (#2662). Total stays absent because
+    // neither event reported the optional reasoning axis and one omitted cache telemetry.
     expect(chunks).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           type: 'result',
+          cost: 0.5,
           tokens: {
             input: 36,
             output: 10,
             cacheRead: 5,
             cacheWrite: 0,
             cachePartial: true,
-            total: 46,
             cost: 0.5,
+          },
+        }),
+      ])
+    );
+  });
+
+  test('multi-agent usage omits total when a sub-agent reports no usage', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    const runtime = makeRuntime({
+      sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+    });
+    runtimeQueue.push(runtime);
+    scriptedEvents = [
+      {
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'message-scout',
+            role: 'assistant',
+            sessionID: 'scout-session',
+            providerID: 'anthropic',
+            modelID: 'claude-sonnet',
+            tokens: { input: 11, output: 7, reasoning: 3, cache: { read: 5, write: 0 } },
+          },
+        },
+      },
+      {
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'message-reviewer',
+            role: 'assistant',
+            sessionID: 'reviewer-session',
+            providerID: 'anthropic',
+            modelID: 'claude-sonnet',
+          },
+        },
+      },
+      { type: 'session.idle', properties: { sessionID: 'scout-session' } },
+      { type: 'session.idle', properties: { sessionID: 'reviewer-session' } },
+    ];
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+        assistantConfig: TEST_MODEL,
+        nodeConfig: {
+          nodeId: 'research',
+          agents: {
+            scout: { description: 'Scout', prompt: 'Explore' },
+            reviewer: { description: 'Reviewer', prompt: 'Review' },
+          },
+        },
+      })
+    );
+
+    expect(error).toBeUndefined();
+    expect(chunks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'result',
+          tokens: {
+            input: 16,
+            output: 7,
+            cacheRead: 5,
+            cacheWrite: 0,
           },
         }),
       ])
@@ -694,6 +934,40 @@ describe('OpencodeProvider', () => {
     );
   });
 
+  test('retry backoff runs inside the admission release, never while the slot is held', async () => {
+    const events: string[] = [];
+    const retryRuntime = makeRuntime({
+      promptAsync: mock(async () => {
+        events.push('attempt');
+        throw new Error('429 rate limit exceeded');
+      }),
+    });
+    const successRuntime = makeRuntime({
+      promptAsync: mock(async () => {
+        events.push('attempt');
+      }),
+    });
+    runtimeQueue.push(retryRuntime, successRuntime);
+    scriptedEvents = [{ type: 'session.idle', properties: { sessionID: 'session-1' } }];
+    const admission = {
+      releaseDuring: async (wait: () => Promise<void>): Promise<void> => {
+        events.push('released');
+        await wait();
+        events.push('reacquired');
+      },
+    };
+
+    const { error } = await consume(
+      new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+        admission,
+      })
+    );
+
+    expect(error).toBeUndefined();
+    expect(events).toEqual(['attempt', 'released', 'reacquired', 'attempt']);
+  });
+
   test('retries a structured 429 from the single-agent session stream', async () => {
     const sdkError = {
       name: 'APIError',
@@ -901,6 +1175,20 @@ describe('OpencodeProvider', () => {
     const startupPort = (mockCreateOpencode.mock.calls[0] as Array<{ port?: number }>)[0]?.port;
     expect(typeof startupPort).toBe('number');
     expect(startupPort).toBeGreaterThan(0);
+  });
+
+  test("embedded runtime config does not set a permission policy, preserving the user's own OpenCode config (#3332)", async () => {
+    const runtime = makeRuntime({ close: mock(() => undefined) });
+    runtimeQueue.push(runtime);
+    scriptedEvents = [{ type: 'session.idle', properties: { sessionID: 'session-1' } }];
+
+    const { error } = await consume(
+      new OpencodeProvider().sendQuery('one', '/tmp', undefined, { assistantConfig: TEST_MODEL })
+    );
+
+    expect(error).toBeUndefined();
+    const call = mockCreateOpencode.mock.calls[0] as Array<{ config?: Record<string, unknown> }>;
+    expect(call[0]?.config).not.toHaveProperty('permission');
   });
 
   test('embedded runtime retries startup on port conflict and succeeds', async () => {

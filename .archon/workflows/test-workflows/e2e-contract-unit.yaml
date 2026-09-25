@@ -1,0 +1,63 @@
+name: e2e-contract-unit
+description: |
+  ENGINE-PRIMITIVE TEST — the per-unit body of `e2e-contract-fanout`, and the second
+  half of its point: a fan-out instance owns its own result contract exactly like any
+  other workflow. Its `returns:` node is a script that certifies `{id, ok, report}`,
+  so the parent's aggregate is an array of validated objects rather than an array of
+  prose, and `report` is an artifact pointer at a per-item file the instance wrote —
+  validated here, at the producer, against the run the instance runs in, and relayed
+  by the parent's aggregate unrewritten.
+
+  Reads the item through `$INPUTS.unit` (the name the caller's `fan_out.as` binds) as
+  the `INPUTS_UNIT` environment variable — an object item arrives as its canonical
+  JSON text, which is why the script parses it.
+
+  Zero AI nodes. Usage: not run directly; `e2e-contract-fanout` includes it.
+mutates_checkout: false
+
+inputs:
+  unit:
+    required: true
+    description: one element of the caller's units array, as canonical JSON text
+
+returns: check
+
+nodes:
+  - id: check
+    runtime: bun
+    script: |
+      import { mkdirSync, writeFileSync } from 'node:fs';
+      import { join } from 'node:path';
+
+      const unit = JSON.parse(process.env.INPUTS_UNIT ?? 'null');
+      if (unit === null || typeof unit !== 'object') {
+        throw new Error(`expected an object unit, received: ${process.env.INPUTS_UNIT}`);
+      }
+      // The per-item report stays a file; the result points at it. An include-composed
+      // instance runs inside the calling run, so $WORKFLOW_ID and $ARTIFACTS_DIR are
+      // that run's — the pointer names the only run a producer may name: its own.
+      const artifactsDir = process.env.ARTIFACTS_DIR;
+      if (!artifactsDir) throw new Error('ARTIFACTS_DIR is not set');
+      mkdirSync(join(artifactsDir, 'units'), { recursive: true });
+      writeFileSync(join(artifactsDir, 'units', `${unit.id}.md`), `# ${unit.title}\n`);
+      // stdout is the contract, so nothing else may be printed on it.
+      console.log(
+        JSON.stringify({
+          id: unit.id,
+          ok: typeof unit.title === 'string',
+          report: { type: 'archon_artifact', run_id: process.env.WORKFLOW_ID, path: `units/${unit.id}.md` },
+        })
+      );
+    output_format:
+      type: object
+      properties:
+        id: { type: string }
+        ok: { type: boolean }
+        report:
+          type: object
+          properties:
+            type: { const: archon_artifact }
+            run_id: { type: string }
+            path: { type: string }
+          required: [type, run_id, path]
+      required: [id, ok, report]

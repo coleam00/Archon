@@ -118,7 +118,7 @@ prompt: |
 
 **Signal detection** supports two formats:
 - `<promise>SIGNAL</promise>` (recommended, case-insensitive)
-- Plain signal at end-of-output or on its own line
+- Plain signal only as the trimmed final line of the output, with nothing else on it
 
 ---
 

@@ -42,7 +42,7 @@ interface FileResult {
   errors: string[];
 }
 
-const artifactsDir = process.env['ARTIFACTS_DIR'] ?? '';
+const artifactsDir = process.env.ARTIFACTS_DIR ?? '';
 if (!artifactsDir) {
   process.stderr.write('ARTIFACTS_DIR env var is required\n');
   process.exit(1);

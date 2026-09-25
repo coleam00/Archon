@@ -3,7 +3,6 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { NodeConfig } from '../../types';
 import { resolvePiSkills, resolvePiThinkingLevel, resolvePiTools } from './options-translator';
 
 // ─── resolvePiThinkingLevel ─────────────────────────────────────────────
@@ -17,24 +16,9 @@ describe('resolvePiThinkingLevel', () => {
     expect(resolvePiThinkingLevel({})).toEqual({ level: undefined });
   });
 
-  test('maps valid thinking string directly', () => {
-    expect(resolvePiThinkingLevel({ thinking: 'high' })).toEqual({ level: 'high' });
-    expect(resolvePiThinkingLevel({ thinking: 'xhigh' })).toEqual({ level: 'xhigh' });
-    expect(resolvePiThinkingLevel({ thinking: 'minimal' })).toEqual({ level: 'minimal' });
-  });
-
   test('maps valid effort string directly', () => {
     expect(resolvePiThinkingLevel({ effort: 'medium' })).toEqual({ level: 'medium' });
     expect(resolvePiThinkingLevel({ effort: 'low' })).toEqual({ level: 'low' });
-  });
-
-  test('thinking takes precedence when both set', () => {
-    expect(resolvePiThinkingLevel({ thinking: 'high', effort: 'low' })).toEqual({ level: 'high' });
-  });
-
-  test("'off' on either field returns undefined", () => {
-    expect(resolvePiThinkingLevel({ thinking: 'off' })).toEqual({ level: undefined });
-    expect(resolvePiThinkingLevel({ effort: 'off' })).toEqual({ level: undefined });
   });
 
   // Pi's native `ThinkingLevel` matches Archon's ladder through `max`
@@ -45,7 +29,6 @@ describe('resolvePiThinkingLevel', () => {
   // its own per-model handling.
   test("'max' reaches Pi natively rather than being downgraded", () => {
     expect(resolvePiThinkingLevel({ effort: 'max' })).toEqual({ level: 'max' });
-    expect(resolvePiThinkingLevel({ thinking: 'max' })).toEqual({ level: 'max' });
   });
 
   test('every Pi-native rung passes through unclamped', () => {
@@ -56,64 +39,12 @@ describe('resolvePiThinkingLevel', () => {
 
   test("'ultra' clamps to Pi's strongest native rung", () => {
     expect(resolvePiThinkingLevel({ effort: 'ultra' })).toEqual({ level: 'max' });
-    expect(resolvePiThinkingLevel({ thinking: 'ultra' })).toEqual({ level: 'max' });
+    expect(resolvePiThinkingLevel({ effort: 'persistent' })).toEqual({ level: 'max' });
   });
 
-  test('warns on Claude-shape object thinking config', () => {
-    const result = resolvePiThinkingLevel({
-      thinking: { type: 'enabled', budget_tokens: 4000 },
-    } as NodeConfig);
-    expect(result.level).toBeUndefined();
-    // Assert the sentence, not a description of it. FOUR mechanisms have failed
-    // on this one string, each defeated by the shape of the next defect:
-    //
-    //   1. a manual sweep — aimed at the phrasing the last round named;
-    //   2. a presence check on the six rung names — already in the message's own
-    //      vocabulary list, so it was green while the clause beside it lied;
-    //   3. a blacklist of downgrade spellings — enumerates only the wrong
-    //      sentences someone already wrote, and rejected a TRUE rewording;
-    //   4. a positive `toContain` on the true clause — establishes that the true
-    //      clause is PRESENT, never that a false one wasn't appended next to it.
-    //
-    // (4) is the one that matters, because the original defect WAS an append.
-    // The message once read `… in YAML (max → xhigh on Pi; the rest are
-    // Pi-native).` — a parenthetical tacked onto the vocabulary list, not a
-    // replacement. (Quoted rather than cited by SHA: this repo squash-merges,
-    // so a branch commit hash here would be dead on arrival — and a pointer
-    // that rots is the very thing this block is about.) All six of `Pi accepts every rung natively, though max is
-    // reduced to xhigh` and its variants pass a `toContain`.
-    //
-    // Equality has no such gap. It also subsumes what (2) and the diagnosis
-    // check asserted, so both are gone rather than left as decoration — an
-    // assertion that cannot fail while this one passes is not a second opinion.
-    // The cost is a string diff instead of a named failure, and every edit to
-    // the message failing until this literal is updated: the same "change as a
-    // pair" rule `scripts/node-ref-parity.test.ts` enforces across the
-    // web/engine boundary, which caught a real drift there in #2591.
-    //
-    // The history is the argument for equality HERE. It does not generalize to
-    // warning strings that have not earned it.
-    expect(result.warning).toBe(
-      'Pi ignored `thinking` (object form is Claude-specific). Use ' +
-        '`effort: minimal|low|medium|high|xhigh|max|ultra` in YAML — Pi accepts through max natively and maps ultra to max.'
-    );
-  });
-
-  test('warns on unknown string thinking value', () => {
-    const result = resolvePiThinkingLevel({ thinking: 'extreme' });
-    expect(result.level).toBeUndefined();
-    expect(result.warning).toContain("unknown thinking level 'extreme'");
-  });
-
-  test('warns on unknown string effort value', () => {
-    const result = resolvePiThinkingLevel({ effort: 'crushing' });
-    expect(result.level).toBeUndefined();
-    expect(result.warning).toContain("unknown thinking level 'crushing'");
-  });
-
-  test('no warning when both fields are simply absent', () => {
+  test('no warning when effort is absent', () => {
     expect(resolvePiThinkingLevel({})).toEqual({ level: undefined });
-    expect(resolvePiThinkingLevel({ thinking: undefined, effort: undefined })).toEqual({
+    expect(resolvePiThinkingLevel({ effort: undefined })).toEqual({
       level: undefined,
     });
   });

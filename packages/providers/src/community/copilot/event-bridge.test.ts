@@ -118,15 +118,22 @@ describe('normalizeCopilotUsage', () => {
     expect(normalizeCopilotUsage({ inputTokens: 'x' as unknown as number })).toBeUndefined();
   });
 
-  test('fills missing side with 0 when only one is numeric', () => {
-    expect(normalizeCopilotUsage({ inputTokens: 100 })).toEqual({ input: 100, output: 0 });
-    expect(normalizeCopilotUsage({ outputTokens: 50 })).toEqual({ input: 0, output: 50 });
+  test('returns undefined when only one required axis is numeric', () => {
+    expect(normalizeCopilotUsage({ inputTokens: 100 })).toBeUndefined();
+    expect(normalizeCopilotUsage({ outputTokens: 50 })).toBeUndefined();
   });
 
   test('maps both input and output when present', () => {
     expect(normalizeCopilotUsage({ inputTokens: 100, outputTokens: 42 })).toEqual({
       input: 100,
       output: 42,
+    });
+  });
+
+  test('preserves measured zeros', () => {
+    expect(normalizeCopilotUsage({ inputTokens: 0, outputTokens: 0 })).toEqual({
+      input: 0,
+      output: 0,
     });
   });
 });
@@ -256,6 +263,61 @@ describe('mapCopilotEvent', () => {
         toolOutcome: 'error',
       },
     ]);
+  });
+
+  test('tool.execution_complete failure with error.message and no result keeps the message', () => {
+    const ctx = makeCtx();
+    ctx.toolCallIdToName.set('call-1', 'read');
+    const out = mapCopilotEvent(
+      evt('tool.execution_complete', {
+        toolCallId: 'call-1',
+        success: false,
+        error: { message: 'permission denied', code: 'EACCES' },
+      }),
+      ctx
+    );
+    expect(out).toEqual([
+      { type: 'system', content: '⚠️ Tool read failed' },
+      {
+        type: 'tool_result',
+        toolName: 'read',
+        toolOutput: '❌ permission denied',
+        toolCallId: 'call-1',
+        toolOutcome: 'error',
+      },
+    ]);
+  });
+
+  test('tool.execution_complete failure with error.message and distinct result keeps both', () => {
+    const ctx = makeCtx();
+    ctx.toolCallIdToName.set('c1', 'bash');
+    const out = mapCopilotEvent(
+      evt('tool.execution_complete', {
+        toolCallId: 'c1',
+        success: false,
+        error: { message: 'command exited with code 1' },
+        result: { content: 'brief', detailedContent: 'stderr: file not found' },
+      }),
+      ctx
+    );
+    expect((out[1] as { toolOutput: string }).toolOutput).toBe(
+      '❌ command exited with code 1\nstderr: file not found'
+    );
+  });
+
+  test('tool.execution_complete failure does not repeat error.message already in result', () => {
+    const ctx = makeCtx();
+    ctx.toolCallIdToName.set('c1', 'bash');
+    const out = mapCopilotEvent(
+      evt('tool.execution_complete', {
+        toolCallId: 'c1',
+        success: false,
+        error: { message: 'permission denied' },
+        result: { content: 'Error: permission denied' },
+      }),
+      ctx
+    );
+    expect((out[1] as { toolOutput: string }).toolOutput).toBe('❌ Error: permission denied');
   });
 
   test('tool.execution_complete with unknown toolCallId uses "unknown"', () => {

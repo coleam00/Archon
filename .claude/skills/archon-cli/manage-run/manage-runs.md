@@ -6,7 +6,8 @@ description: Inspect, control, and resolve Archon workflow runs: list/get/status
 # Managing Runs
 
 Every run-control verb, what it actually does, and the gate semantics that are
-easy to get wrong. All commands scope to the current project by cwd.
+easy to get wrong. Project listings scope by cwd; full run IDs remain globally
+addressable.
 
 ## Output contract
 
@@ -50,12 +51,14 @@ For reusable alternate setups, prefer a config layer instead of long flag lists
 | One run's status/error | `archon workflow get <run-id> --json` |
 | One run with per-node detail | `archon workflow get <run-id> --verbose --json` |
 | One run with raw event rows | `archon workflow get <run-id> --verbose --events --json` |
-| Active runs only | `archon workflow status --json` |
+| Active runs (this project) | `archon workflow status --json` |
+| Active runs (all projects) | `archon workflow status --all --json` |
+| Block until the run ends or needs a human decision | `archon workflow wait <run-id> --json` |
 | Resolve a gate with any declared decision | `archon workflow respond <run-id> <decision> [text]` |
 | Approve (default vocabulary) | `archon workflow approve <run-id> [text]` |
 | Reject (default vocabulary) | `archon workflow reject <run-id> "<reason>"` |
-| Stop a live detached run | `archon workflow cancel <run-id>` |
-| Mark paused/orphaned run cancelled (state only) | `archon workflow abandon <run-id>` |
+| Stop a running run (its live owner first) | `archon workflow cancel <run-id>` |
+| Mark paused/failed/orphaned run cancelled | `archon workflow abandon <run-id>` |
 | Resume failed/paused from completed nodes | `archon workflow resume <run-id>` |
 
 ## The approve/resume two-step
@@ -100,10 +103,16 @@ Choose deliberately after reading what the gate produced — not by reflex.
 
 ## Cancel vs abandon
 
-- `cancel` actively stops a live CLI-detached owner: it verifies the process tree
-  is gone before recording `cancelled`. Use this to kill real work.
-- `abandon` is state-only: for runs already paused, or after you have independently
-  verified a "running" row is orphaned (crashed host). It never kills anything.
+- `cancel` stops a running run. When another process owns it, that process is
+  stopped and its tree confirmed gone before `cancelled` is recorded. A run the
+  cancelling server executes itself, and a `workflow:` sub-run with no owner of
+  its own (it runs inside its root), is marked `cancelled` and stops at its
+  executor's next status check. Otherwise it refuses and changes nothing when no
+  owner answers. Use this to kill real work.
+- `abandon` is for paused or failed runs, or a "running" row whose owner is gone
+  (crashed host). If an owner still answers on this host, it stops it first, like
+  `cancel`. If none answers, it records `cancelled` and prints the host and pid the
+  run recorded; when that host is another machine, check there before abandoning.
 
 ## Respond: gates beyond approve/reject
 
@@ -129,6 +138,35 @@ the user.
 
 Report outcomes with their evidence: "completed, review verdict ready:false —
 2 findings remain, report at <path>" beats "done".
+
+## Discoveries: the sdlc pack's out-of-scope findings
+
+A convention of the bundled sdlc workflows (`archon-ship`, `archon-deliver`,
+`archon-review`, `archon-upkeep`), not of workflows in
+general. Their review lenses record *proven* findings that fall outside the
+run's accepted scope as discovery sidecars instead of blocking findings: raw
+per-producer files at `<artifacts>/discoveries/*.json` (records of `title`,
+`claim`, `evidence`, `relation: adjacent | scope_conflict`, `source_node`),
+consolidated by the review into `discoveries.json` plus a human-readable
+`discoveries.md`. The terminal report ends with a discoveries section addressed
+to you, the relaying agent — deliberately, because the run itself never files
+issues from them. **If you drop a discovery at this hop, nobody ever sees it.**
+
+When such a run reaches terminal:
+
+1. Read the report's Discoveries section; when it names any, open
+   `discoveries.md` (locate it through `leave_behind.artifactFiles`).
+2. On a **failed** run, also check the raw `discoveries/*.json` sidecars —
+   consolidation runs late, so a run that died mid-flight can hold raw records
+   no report mentions.
+3. Surface each worthwhile discovery to the user with its evidence, and ask
+   where it goes: an evidence comment on the existing issue it belongs to, a
+   new issue when it is a novel defect, or an explicit drop. File nothing
+   without the user's go unless they have given standing authorization.
+
+Discoveries arrive validated (`evidence` carries concrete `file:line` facts or
+command results), and `adjacent` ones never affected the run's readiness — do
+not re-litigate the verdict from them; route them.
 
 ## When a run looks wrong
 

@@ -1,0 +1,91 @@
+# Example per-run config for `archon workflow run --config <path>`.
+#
+# Archon never loads THIS file. Copy it to `.archon/config.<name>.yaml`, edit it,
+# and pass it with `--config`. That naming is gitignored, so your copy stays local
+# and other contributors keep their own.
+#
+#   archon workflow run <workflow> --branch <branch> "<message>" \
+#     --config .archon/config.mysetup.yaml --detach
+#
+# ---------------------------------------------------------------------------
+# The three config layers, and which one you probably want
+# ---------------------------------------------------------------------------
+#
+#   ~/.archon/config.yaml       Yours, machine-wide. Default provider, per-provider
+#                               defaults, tiers, concurrency. Archon writes a fully
+#                               commented template here on first run — read that file
+#                               for the global-only keys (botName, concurrency, ...).
+#
+#   .archon/config.yaml         The PROJECT's, committed. Only facts true for every
+#                               contributor: the worktree base branch, the docs path,
+#                               and aliases the repo's own workflows reference. Do not
+#                               put personal model choices here; they would ship to
+#                               everyone.
+#
+#   .archon/config.<name>.yaml  Yours, per run, via `--config`. Gitignored. This file
+#                               is the example for that layer.
+#
+# A run config is SPARSE and STRICT: set only what you want to override, and an
+# unknown key is a hard error rather than a silent drop. Values here beat persistent
+# config and user AI preferences; an explicit `--model` flag then replaces only the
+# binding it names. Sealed at launch, so editing the file mid-run changes nothing.
+# `--config` is rejected with `--resume`, which restores the layer the run started with.
+#
+# ---------------------------------------------------------------------------
+# Every supported key
+# ---------------------------------------------------------------------------
+#
+# assistant:  <provider>                 default provider for nodes that name none
+# assistants: { <provider>: { ... } }    per-provider defaults for this run
+# tiers:      { small|medium|large: { provider, model, effort? } }
+# aliases:    { '@name': { provider, model, effort? } }
+# docsPath:   <path>                     overrides the project docs path
+# envVars:    { KEY: value }             extra env for this run's nodes
+# workflows:  { autoResumeOnQuotaReset, quotaFallbackDelayMs,
+#               quotaMaxAttempts, quotaDeadlineMs }
+#
+# Alias names must start with `@`. Tier names are exactly small / medium / large.
+#
+# ---------------------------------------------------------------------------
+# Example: pin one provider across every tier
+# ---------------------------------------------------------------------------
+# Useful for cross-provider testing — prove a workflow's structured output survives
+# on a provider it does not normally run on.
+#
+# tiers:
+#   small:  { provider: claude, model: claude-sonnet-5 }
+#   medium: { provider: claude, model: claude-sonnet-5 }
+#   large:  { provider: claude, model: claude-sonnet-5 }
+#
+# ---------------------------------------------------------------------------
+# Example: cheap models for a high-volume dogfood batch
+# ---------------------------------------------------------------------------
+# Reasoning work on the large/medium tiers, a cheaper model on small. Model ids are
+# passed to the provider as written; for Pi the form is `<vendor>/<slug>`, and an
+# OpenRouter slug is `openrouter/<org>/<model>`.
+#
+# tiers:
+#   small:  { provider: pi, model: openrouter/z-ai/glm-5.3-flash }
+#   medium: { provider: pi, model: openrouter/google/gemini-3.7-flash }
+#   large:  { provider: pi, model: openrouter/google/gemini-3.7-flash }
+#
+# Check current prices before a large batch. Provider catalogues move, and Pi ships a
+# static snapshot of its model data that can lag the vendor's live pricing.
+#
+# ---------------------------------------------------------------------------
+# Example: retarget an alias without touching the workflows that use it
+# ---------------------------------------------------------------------------
+# A workflow referencing `model: '@mini'` follows this binding for this run only.
+#
+# aliases:
+#   '@mini': { provider: pi, model: minimax/MiniMax-M3 }
+#
+# ---------------------------------------------------------------------------
+# Example: keep a long batch alive across a quota reset
+# ---------------------------------------------------------------------------
+# workflows:
+#   autoResumeOnQuotaReset: true
+#   quotaMaxAttempts: 3
+
+# The file you copy needs at least one real key. This one is deliberately inert.
+tiers: {}

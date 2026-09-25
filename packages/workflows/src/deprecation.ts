@@ -11,7 +11,9 @@ import type { WorkflowDefinition } from './schemas/workflow';
  * pack — carried by the declared message — and keeping a copy under project or
  * global `.archon/workflows/`, which wins discovery by filename).
  */
-export function formatDeprecationNotice(workflow: WorkflowDefinition): string | undefined {
+export function formatDeprecationNotice(
+  workflow: Pick<WorkflowDefinition, 'name' | 'deprecated'>
+): string | undefined {
   if (!workflow.deprecated) return undefined;
   return (
     `⚠️ \`${workflow.name}\` is deprecated and will be removed in an upcoming release. ` +

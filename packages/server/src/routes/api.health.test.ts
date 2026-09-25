@@ -6,17 +6,23 @@ import {
   makeDiscoverWorkflowsMock,
   makeLoaderMock,
   makeCommandValidationMock,
+  makeListDashboardRunsMock,
 } from '../test/workflow-mock-factories';
 
 // ---------------------------------------------------------------------------
 // Mock setup — must be before dynamic imports
 // ---------------------------------------------------------------------------
 
-const mockLoadConfig = mock(async () => ({
+type TestConfig = {
+  assistants?: { claude: { model: string } };
+  worktree?: { baseBranch: string };
+};
+
+const mockLoadConfig = mock<(_repoPath?: string) => Promise<TestConfig>>(async () => ({
   assistants: { claude: { model: 'sonnet' } },
   worktree: { baseBranch: 'main' },
 }));
-const mockGetDatabaseType = mock(() => 'sqlite' as const);
+const mockGetDatabaseType = mock<() => 'postgresql' | 'sqlite'>(() => 'sqlite');
 const mockGetSchemaVersion = mock(async () => ({
   createdAppVersion: '0.5.3' as string | null,
   appVersion: '0.6.0',
@@ -148,11 +154,7 @@ const mockGetRunningWorkflows = mock(
 
 mock.module('@archon/core/db/workflows', () => ({
   listWorkflowRuns: mock(async () => []),
-  listDashboardRuns: mock(async () => ({
-    runs: [],
-    total: 0,
-    counts: { all: 0, running: 0, completed: 0, failed: 0, cancelled: 0, pending: 0 },
-  })),
+  listDashboardRuns: makeListDashboardRunsMock(),
   getWorkflowRun: mock(async () => null),
   cancelWorkflowRun: mock(async () => {}),
   getWorkflowRunByWorkerPlatformId: mock(async () => null),
@@ -176,7 +178,7 @@ mock.module('@archon/core/db/messages', () => ({
 }));
 
 mock.module('@archon/core/utils/commands', () => ({
-  findMarkdownFilesRecursive: mock(async () => []),
+  findCommandFiles: mock(async () => []),
 }));
 
 import { registerApiRoutes } from './api';
@@ -185,7 +187,7 @@ import { registerApiRoutes } from './api';
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeApp(): Hono {
+function makeApp(): OpenAPIHono {
   const app = new OpenAPIHono();
   const mockWebAdapter = {
     setConversationDbId: mock((_platformId: string, _dbId: string) => {}),
@@ -641,6 +643,9 @@ describe('GET /api/openapi.json', () => {
     expect(schemas['Conversation']).toBeDefined();
     expect(schemas['Codebase']).toBeDefined();
     expect(schemas['WorkflowEvent']).toBeDefined();
+    expect(schemas['DagNodeSseEvent']).toBeDefined();
+    expect(schemas['NodeSkipReason']).toBeDefined();
+    expect(schemas['SkipCause']).toBeDefined();
     // The WSL fields on /api/health are consumed by the generated web client
     // types — assert the schema actually exposes them.
     const health = schemas['HealthResponse'] as

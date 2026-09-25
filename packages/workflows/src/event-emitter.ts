@@ -1,3 +1,4 @@
+import type { NodeExecutionMetadata } from './schemas/node-execution';
 /**
  * WorkflowEventEmitter - typed event emitter for workflow execution observability.
  *
@@ -10,7 +11,7 @@
  * - Conversation-scoped subscriptions via registerRun() mapping
  */
 import { EventEmitter } from 'events';
-import type { ArtifactType } from './schemas';
+import type { ArtifactType, EffortLevel, NodeSkipReason, SkipCause } from './schemas';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -29,6 +30,7 @@ interface WorkflowStartedEvent {
   runId: string;
   workflowName: string;
   conversationId: string;
+  transcriptPath: string;
 }
 
 interface WorkflowCompletedEvent {
@@ -80,6 +82,7 @@ interface WorkflowArtifactEvent {
 }
 
 interface NodeStartedEvent {
+  execution?: NodeExecutionMetadata;
   type: 'node_started';
   runId: string;
   nodeId: string;
@@ -87,21 +90,31 @@ interface NodeStartedEvent {
   provider?: string; // resolved AI provider (absent for bash/script nodes)
   model?: string; // resolved model string (absent for bash/script nodes)
   tier?: 'small' | 'medium' | 'large'; // only set when node.model was a tier keyword
-  effort?: string; // resolved AI effort (absent when unset or unsupported)
+  effort?: EffortLevel; // resolved AI effort (absent when unset or unsupported)
+}
+
+interface NodeSuspendedEvent {
+  type: 'node_suspended';
+  runId: string;
+  nodeId: string;
+  nodeName: string;
+  execution: NodeExecutionMetadata;
 }
 
 interface NodeCompletedEvent {
+  execution?: NodeExecutionMetadata;
   type: 'node_completed';
   runId: string;
   nodeId: string;
   nodeName: string;
-  duration: number;
+  duration?: number;
   costUsd?: number;
   stopReason?: string;
   numTurns?: number;
 }
 
 interface NodeFailedEvent {
+  execution?: NodeExecutionMetadata;
   type: 'node_failed';
   runId: string;
   nodeId: string;
@@ -110,11 +123,25 @@ interface NodeFailedEvent {
 }
 
 interface NodeSkippedEvent {
+  execution?: NodeExecutionMetadata;
   type: 'node_skipped';
   runId: string;
   nodeId: string;
   nodeName: string;
-  reason: 'when_condition' | 'when_condition_parse_error' | 'trigger_rule' | 'prior_success';
+  reason: Exclude<NodeSkipReason, 'prior_success'>;
+  cause: SkipCause;
+}
+
+/**
+ * A resumed pass declined to re-run a node an earlier pass completed. Mirrors the
+ * persisted `node_skipped_prior_success` event_type so a consumer switching on
+ * `type` cannot fold prior success into a genuine skip.
+ */
+interface NodeSkippedPriorSuccessEvent {
+  type: 'node_skipped_prior_success';
+  runId: string;
+  nodeId: string;
+  nodeName: string;
 }
 
 interface ToolStartedEvent {
@@ -218,10 +245,12 @@ export type WorkflowEmitterEvent =
   | LoopIterationStartedEvent
   | LoopIterationCompletedEvent
   | LoopIterationFailedEvent
+  | NodeSuspendedEvent
   | NodeStartedEvent
   | NodeCompletedEvent
   | NodeFailedEvent
   | NodeSkippedEvent
+  | NodeSkippedPriorSuccessEvent
   | WorkflowArtifactEvent
   | ToolStartedEvent
   | ToolCompletedEvent

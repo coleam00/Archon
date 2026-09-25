@@ -80,7 +80,9 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
    sharing a ~2 KB diagnostic budget — stderr keeps priority, stdout gets the
    remainder, and a label prefixes each stream only when both are populated.
    With stderr empty, the stdout tail becomes the diagnostic. The script body
-   is never echoed back to users.
+   is never echoed back to users. A timeout also fails by default. Set
+   `on_timeout: skip` when the result is optional and downstream nodes handle
+   its absence with an `if_skipped` binding.
 5. **Retain.** Regardless of outcome, capped and credential-redacted tails of
    both streams are written to the run transcript as an `exec_output` row — see
    [Retained subprocess evidence](/guides/authoring-workflows#retained-subprocess-evidence).
@@ -94,9 +96,15 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
   runtime: bun | uv                            # required
   deps: ["httpx", "pydantic>=2"]               # optional, uv-only (see below)
   timeout: 60000                               # optional ms, default 120000
+  on_timeout: skip                             # optional; default is to fail
   depends_on: [upstream]                       # optional
   when: "$upstream.output != '[]'"             # optional (upstream is a bash/script node;
                                                #  an AI producer needs output_format + a field)
+  output_format:                               # optional JSON Schema; makes stdout a contract
+    type: object
+    properties:
+      severity: { type: string }
+    required: [severity]
   trigger_rule: all_success                    # optional (default)
   retry:                                       # optional; same shape as bash/AI nodes
     max_attempts: 3
@@ -111,13 +119,16 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
 | `runtime` | `'bun'` \| `'uv'` | Yes | Which runtime executes the script. Must match the file extension for named scripts |
 | `deps` | string[] | No | Python dependencies to install for this run. **uv only** — ignored with a warning for `bun` |
 | `timeout` | number (ms) | No | Hard kill after this many milliseconds. Default: `120000` (2 min) |
+| `on_timeout` | `'skip'` | No | Complete the node as skipped after a timeout. The default is failed. The persisted skip cause is `timeout` |
+| `output_format` | object | No | JSON Schema the node's stdout must satisfy. See [Declaring a result contract](#declaring-a-result-contract) |
 
 Standard DAG fields (`id`, `depends_on`, `when`, `trigger_rule`, `retry`) all
-work. AI-specific fields (`model`, `provider`, `context`, `output_format`,
-`allowed_tools`, `denied_tools`, `hooks`, `mcp`, `skills`, `agents`, `effort`,
-`thinking`, `maxBudgetUsd`, `systemPrompt`, `fallbackModel`, `betas`, `sandbox`)
-are accepted by the parser but emit a loader warning and are ignored at runtime
-— no AI is invoked. `idle_timeout` is also accepted but ignored: script nodes
+work, and so does `output_format` — see
+[Declaring a result contract](#declaring-a-result-contract). AI-specific fields
+(`model`, `provider`, `context`, `allowed_tools`, `denied_tools`, `hooks`,
+`mcp`, `skills`, `agents`, `effort`, `maxBudgetUsd`, `systemPrompt`,
+`fallbackModel`, `betas`, `sandbox`) are accepted by the parser but emit a
+loader warning and are ignored at runtime — no AI is invoked. `idle_timeout` is also accepted but ignored: script nodes
 run as one-shot subprocesses, so use `timeout` (hard kill after N ms) instead.
 
 ## Inline vs Named Scripts
@@ -144,6 +155,58 @@ Named scripts use one of two resolution modes:
 - **Legacy workflow:** resolve shared scripts from `<repoRoot>/.archon/scripts/`, then `~/.archon/scripts/`.
 
 Workflow-local lookup is scoped to the workflow that declared the node, including through `include:` expansion. Authors still write only the bare name (`script: publish`); the ownership key is internal.
+
+Packaged scripts can import modules from their pack's `.shared/` directory. Keep package dependencies out of that tree: packaged scripts must not depend on the target project's `package.json`, `node_modules`, or `tsconfig.json`. Python dependencies can still be declared with `deps:`. Imports across packs and npm dependencies are outside the packaged-module contract.
+
+### Share code within a pack
+
+Put reusable `.ts`, `.js`, or `.py` modules under `<pack>/.shared/`. Module subdirectories are supported. Use regular files; the binary generator rejects symlinks under `.shared`. `.shared` is reserved for modules: its files are neither workflows nor named script targets. A packaged workflow that names an unavailable script, including a shared module, fails at load time.
+
+```text
+my-pack/
+├── .shared/
+│   ├── result.ts
+│   └── result.py
+├── release/
+│   ├── release.yaml
+│   └── scripts/
+│       └── publish.ts
+└── inspect/
+    ├── inspect.yaml
+    └── scripts/
+        └── report.py
+```
+
+For Bun, import from the script's location:
+
+```typescript
+// release/scripts/publish.ts
+import { summary } from '../../.shared/result.ts';
+console.log(summary);
+```
+
+Python scripts run as files, so package-relative syntax such as `from ...shared` does not apply. Add the pack's shared directory using Python's standard library:
+
+```python
+# inspect/scripts/report.py
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / ".shared"))
+from result import summary
+
+print(summary)
+```
+
+Archon preserves these relative paths in project and global source trees, bundled binaries, and frozen captures. A binary caches each pack's scripts and modules as one unit; changing a shared module creates a new unit. Authored scripts remain the only entry points, so workflow nodes still use names such as `script: publish`.
+
+Keep output under the supplied `ARTIFACTS_DIR` or `STATE_DIR`, never beside a script. Bun module loading does not add files beside these sources, and Archon disables Python bytecode caching in both workflow execution and executable fixtures. This prevents import caches from changing the frozen source; it does not prevent your script from writing there explicitly.
+
+### Frozen source integrity
+
+When a run uses captured source, Archon rechecks the full capture against the run's pinned digest and source-resolution settings before each named-script attempt, including retries, and before lookup or subprocess dispatch. Any change to the capture refuses the node before it starts. Inline scripts are already held in the workflow definition and do not read the capture at execution time.
+
+This is checkpoint detection, not sealing or sandboxing. A process running as the Archon user can change source after the check, and a parallel node that already started is not cancelled.
 
 Each shared scripts directory is walked one subfolder deep (e.g. `.archon/scripts/triage/foo.ts`
 resolves as `foo`). Deeper nesting is ignored. On a same-name collision the
@@ -192,6 +255,9 @@ if you want downstream nodes to access structured fields with
 `$nodeId.output.field` — the workflow engine tries to parse the output as JSON
 for field access in `when:` conditions and prompt substitution.
 
+Declare `output_format` when you want that JSON to be a contract rather than a
+convention — see [Declaring a result contract](#declaring-a-result-contract).
+
 ```yaml
 - id: classify
   script: |
@@ -205,6 +271,50 @@ for field access in `when:` conditions and prompt substitution.
   depends_on: [classify]
   when: "$classify.output.severity == 'high'"
 ```
+
+### Declaring a result contract
+
+Without `output_format`, `$classify.output.severity` above works by convention:
+the engine parses the text and hopes the key is there. Declare `output_format`
+and the same result becomes a contract the node owns.
+
+```yaml
+- id: classify
+  script: |
+    const input = process.env.ARGUMENTS ?? '';
+    console.log(JSON.stringify({
+      severity: input.includes('crash') ? 'high' : 'low',
+      units: [],
+    }));
+  runtime: bun
+  output_format:
+    type: object
+    properties:
+      severity: { type: string, enum: [low, high] }
+      units: { type: array, items: { type: object } }
+    required: [severity, units]
+```
+
+With a schema declared, the node:
+
+- parses stdout as **one strict JSON document** — no code fences, no prose
+  preamble, no repair pass, and no second attempt;
+- validates it against the schema, and **fails the node** when it does not
+  match, naming the offending JSON path and quoting the start of stdout;
+- publishes the canonical JSON document as `$classify.output`, the logical
+  value to downstream bindings and `fan_out.items`, and the declared property
+  names to `$classify.output.<field>`;
+- makes a reference to an **undeclared** field fail the consuming node instead
+  of silently resolving to `''`.
+
+That is the same contract an AI node's `output_format` carries, so a script and
+an agent are interchangeable as the producer behind a `returns:` node. What that
+buys a caller — through an `include:` alias, a `workflow:` sub-run, a fan-out, or
+an artifact pointer — is described once in
+[Authoring workflows → Result contracts](/guides/authoring-workflows/#result-contracts).
+
+A schemaless script is unchanged: stdout stays raw text, trimmed only of its trailing
+newline as before.
 
 ### Variable Substitution in Scripts
 
@@ -244,9 +354,10 @@ User-controlled workflow variables like `$USER_MESSAGE` and `$ARGUMENTS` are pas
 :::
 
 Script subprocesses receive `process.env` merged with any codebase-scoped env
-vars you've configured via the Web UI (Settings → Projects → Env Vars) or the
-`env:` block in `.archon/config.yaml`. This is the same injection surface used
-by Claude, Codex, and bash nodes.
+vars you've configured by opening **Environment variables** from the project row
+in the console project rail, or through the `env:` block in
+`.archon/config.yaml`. This is the same injection surface used by Claude, Codex,
+and bash nodes.
 
 **Target repo `.env` isolation:** the Bun subprocess is invoked with
 `--no-env-file`, so variables in the target repo's `.env` do **not** leak into
@@ -350,10 +461,14 @@ Then reference it by name from any repo's workflow:
 ## What Does NOT Work
 
 - **AI-only features** — `hooks`, `mcp`, `skills`, `allowed_tools`,
-  `denied_tools`, `agents`, `model`, `provider`, `output_format`, `effort`,
-  `thinking`, `maxBudgetUsd`, `systemPrompt`, `fallbackModel`, `betas`, and
-  `sandbox` are all ignored at runtime. The loader emits a warning listing
-  the ignored fields.
+  `denied_tools`, `agents`, `model`, `provider`, `effort`,
+  `maxBudgetUsd`, `systemPrompt`, `fallbackModel`, `betas`, and `sandbox` are
+  all ignored at runtime. The loader emits a warning listing the ignored fields.
+  (`output_format` is **not** in that set — a script owns it, see
+  [Declaring a result contract](#declaring-a-result-contract).)
+- **JSON repair and reasks** — a certified script's stdout must be exactly right
+  the first time. There is no fence stripping and no second attempt: stdout that
+  does not match the declared schema is a bug in the script.
 - **Interactive prompts** — the script runs headlessly; any `stdin` read will
   see EOF immediately.
 - **Runtimes other than `bun` and `uv`** — rejected at parse time.

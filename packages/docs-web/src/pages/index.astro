@@ -9,6 +9,21 @@
 // magenta → violet → teal gradient drawn from the shield logo.
 const GITHUB = 'https://github.com/coleam00/Archon';
 
+// Community videos. Swap an entry to change what the "See Archon in action"
+// section embeds — nothing else references these ids.
+const videos = [
+  {
+    id: 'srx9iwnjK2M',
+    title: 'Full Archon Guide - Build AI Coding Harnesses That Actually Ship (LIVE)',
+    creator: 'Cole Medin',
+  },
+  {
+    id: 'uvLW0sPEZ_k',
+    title: 'What Is Archon? The Future of Workflow Control',
+    creator: 'DIY Smart Code',
+  },
+];
+
 const features = [
   {
     label: 'Parallel by default',
@@ -77,29 +92,7 @@ const steps = [
   <nav class="nav">
     <div class="nav-inner">
       <a href="/" class="nav-logo" aria-label="Archon home">
-        <svg class="nav-mark" viewBox="0 0 360 480" width="22" height="29" aria-hidden="true">
-          <defs>
-            <linearGradient id="navg" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0%" stop-color="#ED10EC" />
-              <stop offset="50%" stop-color="#8E40C8" />
-              <stop offset="100%" stop-color="#06CE94" />
-            </linearGradient>
-          </defs>
-          <g
-            fill="none"
-            stroke="url(#navg)"
-            stroke-width="22"
-            stroke-linejoin="round"
-            stroke-linecap="round"
-          >
-            <path d="M180 8 C108 8 30 22 8 36 L8 220 C8 340 78 432 180 470 C282 432 352 340 352 220 L352 36 C330 22 252 8 180 8 Z" />
-            <path d="M180 92 L210 122 L180 152 L150 122 Z" />
-            <path d="M180 152 L180 218" />
-            <path d="M124 226 C124 270 148 290 180 290 C212 290 236 270 236 226" />
-            <circle cx="180" cy="294" r="12" fill="url(#navg)" stroke="none" />
-            <path d="M180 308 L180 410" />
-          </g>
-        </svg>
+        <img class="nav-mark" src="/favicon.png" alt="" width="28" height="28" />
         <span>Archon</span>
       </a>
       <div class="nav-links">
@@ -121,29 +114,7 @@ const steps = [
     <section class="hero">
       <div class="hero-glow" aria-hidden="true"></div>
       <div class="hero-inner">
-        <svg class="hero-mark" viewBox="0 0 360 480" aria-hidden="true">
-          <defs>
-            <linearGradient id="herog" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0%" stop-color="#ED10EC" />
-              <stop offset="50%" stop-color="#8E40C8" />
-              <stop offset="100%" stop-color="#06CE94" />
-            </linearGradient>
-          </defs>
-          <g
-            fill="none"
-            stroke="url(#herog)"
-            stroke-width="22"
-            stroke-linejoin="round"
-            stroke-linecap="round"
-          >
-            <path d="M180 8 C108 8 30 22 8 36 L8 220 C8 340 78 432 180 470 C282 432 352 340 352 220 L352 36 C330 22 252 8 180 8 Z" />
-            <path d="M180 92 L210 122 L180 152 L150 122 Z" />
-            <path d="M180 152 L180 218" />
-            <path d="M124 226 C124 270 148 290 180 290 C212 290 236 270 236 226" />
-            <circle cx="180" cy="294" r="12" fill="url(#herog)" stroke="none" />
-            <path d="M180 308 L180 410" />
-          </g>
-        </svg>
+        <img class="hero-mark" src="/favicon.png" alt="" width="76" height="76" />
 
         <p class="eyebrow">The command layer for your AI coding agents</p>
         <h1 class="hero-title">
@@ -204,6 +175,32 @@ const steps = [
             <h3 class="step-title">{s.title}</h3>
             <p class="step-body">{s.body}</p>
           </div>
+        ))}
+      </div>
+    </section>
+
+    <!-- VIDEOS -->
+    <section class="videos">
+      <header class="section-head">
+        <span class="section-kicker">From the community</span>
+        <h2 class="section-title">See Archon in action.</h2>
+      </header>
+      <div class="video-grid">
+        {videos.map((v) => (
+          <article class="video-card">
+            <div class="video-frame">
+              <iframe
+                src={`https://www.youtube-nocookie.com/embed/${v.id}`}
+                title={`${v.creator} — ${v.title}`}
+                loading="lazy"
+                allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                referrerpolicy="strict-origin-when-cross-origin"
+                allowfullscreen
+              ></iframe>
+            </div>
+            <h3 class="video-title">{v.title}</h3>
+            <span class="video-creator">{v.creator}</span>
+          </article>
         ))}
       </div>
     </section>
@@ -572,6 +569,38 @@ const steps = [
     }
     .step-body { font-size: 0.94rem; color: var(--text-secondary); line-height: 1.6; }
 
+    /* ---- VIDEOS ---- */
+    .videos { max-width: 1080px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+    .video-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1.5rem;
+    }
+    .video-card { min-width: 0; }
+    .video-frame {
+      aspect-ratio: 16 / 9;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      overflow: hidden;
+      background: var(--surface);
+    }
+    .video-frame iframe { display: block; width: 100%; height: 100%; border: 0; }
+    .video-title {
+      font-size: 1.02rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      color: var(--text);
+      margin: 0.9rem 0 0.3rem;
+    }
+    .video-creator {
+      font-family: var(--font-mono);
+      font-size: 0.76rem;
+      font-weight: 500;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: var(--brand-teal);
+    }
+
     /* ---- AWE ---- */
     .awe {
       position: relative;
@@ -638,6 +667,7 @@ const steps = [
     @media (max-width: 820px) {
       .features { grid-template-columns: 1fr; }
       .steps { grid-template-columns: 1fr; }
+      .video-grid { grid-template-columns: 1fr; }
     }
     @media (max-width: 640px) {
       .nav-links a:not(.nav-github) { padding: 0.4rem 0.5rem; font-size: 0.82rem; }

@@ -125,6 +125,15 @@ export function canonicalValueText(value: unknown): string {
 export const OUTPUT_REF_SOURCE = String.raw`\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output`;
 
 /**
+ * The prior-iteration form of the same reference, used inside loop and loop_group
+ * bodies. Kept beside OUTPUT_REF_SOURCE so every ref grammar has one home. The two
+ * are disjoint: `$LOOP_PREV.<id>.output` does not match OUTPUT_REF_SOURCE, so a
+ * consumer that must see both (the include expander's rewrite, the validator's
+ * quoting lint) has to look for both.
+ */
+export const LOOP_PREV_OUTPUT_REF_SOURCE = String.raw`\$LOOP_PREV\.([a-zA-Z_][a-zA-Z0-9_-]*)\.output`;
+
+/**
  * The one shape of a declared-input NAME — `with:` keys, `inputs:` keys, and the
  * `<name>` of a `$INPUTS.<name>` reference all share it. Lives here beside
  * OUTPUT_REF_SOURCE so every ref grammar has one home; schemas/dag-node re-exports
@@ -181,6 +190,48 @@ export function parseWholeOutputRef(text: string): { nodeId: string; field?: str
   const m = WHOLE_OUTPUT_REF_PATTERN.exec(text.trim());
   if (!m) return undefined;
   return { nodeId: m[1], ...(m[2] !== undefined ? { field: m[2] } : {}) };
+}
+
+/**
+ * `$<node>.execution.checkoutStart` (#3375): the checkout observation the engine recorded
+ * when the producer's invocation started. It reads an engine-owned execution fact, never
+ * producer output, and is valid only as a whole `with:` binding value. It is the only
+ * `.execution` member; the grammar names it in full so nothing else parses as one.
+ */
+export const EXECUTION_CHECKOUT_REF_SOURCE = String.raw`\$([a-zA-Z_][a-zA-Z0-9_-]*)\.execution\.checkoutStart`;
+
+const WHOLE_EXECUTION_CHECKOUT_REF_PATTERN = new RegExp(`^${EXECUTION_CHECKOUT_REF_SOURCE}$`);
+
+/** The producer id of a string that is exactly one whole execution checkout reference. */
+export function parseWholeExecutionCheckoutRef(text: string): string | undefined {
+  return WHOLE_EXECUTION_CHECKOUT_REF_PATTERN.exec(text.trim())?.[1];
+}
+
+/**
+ * Read the producer invocation's checkout start from the producer's own execution record
+ * (live, or the persisted completion on resume). There is no fallback: a producer that
+ * did not execute against the checkout has no start to read, and the consumer fails.
+ */
+export function resolveExecutionCheckoutStart(
+  producer: NodeOutput | undefined,
+  nodeId: string
+): JsonValue {
+  const ref = `$${nodeId}.execution.checkoutStart`;
+  if (producer === undefined) {
+    throw new Error(
+      `'${ref}' references node '${nodeId}', which has not run before this reference. Add '${nodeId}' to depends_on.`
+    );
+  }
+  const start = producer.execution?.invocation.checkoutStart;
+  if (start === undefined) {
+    throw new Error(
+      producer.state === 'skipped' || producer.state === 'pending'
+        ? `'${ref}' references node '${nodeId}', which did not run, so it has no checkout start.`
+        : `'${ref}' references node '${nodeId}', whose execution record carries no checkout start. ` +
+            'Only prompt, command, bash, script, and loop nodes record one, and runs recorded before this field existed have none.'
+    );
+  }
+  return start as JsonValue;
 }
 
 /**
@@ -358,10 +409,10 @@ export function resolveNodeOutputField(
     const obj = structuredObj ?? parseOutputObject(nodeOutput.output);
     // No parseable object AT ALL is not a declared-optional field — it is a producer
     // that did not honour its schema, and it must fail exactly as loudly as the
-    // schemaless path below (#2456). Returning empty here made declaring
-    // `output_format` QUIETER than declaring nothing, which is backwards: a
-    // `workflow:` node's output_format is never validated against the child (it only
-    // populates declaredFields), so every declared field silently became ''.
+    // schemaless path below (#2456). Returning empty here made declaring a contract
+    // QUIETER than declaring nothing, which is backwards: a `workflow:` node carries no
+    // schema of its own — its declaredFields are the child's `returns:` node projection
+    // (#2453) — so every declared field would silently have become ''.
     if (obj === undefined) {
       throw new OutputRefError(nodeId, field, unparseableReason(nodeOutput.output));
     }

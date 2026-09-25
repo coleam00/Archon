@@ -12,7 +12,12 @@ mock.module('fs/promises', () => ({
   readdir: mockReaddir,
   rename: mock(async () => undefined),
   rm: mock(async () => undefined),
-  stat: mockStat,
+  stat: async (path: string) => {
+    // These fixtures exercise user scopes; installed bundles have real filesystem coverage.
+    if (path.replaceAll('\\', '/').startsWith('/app/'))
+      throw Object.assign(new Error('No installed source tree'), { code: 'ENOENT' });
+    return mockStat(path);
+  },
   writeFile: mock(async () => undefined),
 }));
 
@@ -31,6 +36,7 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonHome: mock(() => '/home'),
   getDefaultWorkflowsPath: mock(() => '/app/workflows/defaults'),
+  getDefaultCommandsPath: mock(() => '/app/commands/defaults'),
   getHomeScriptsPath: mock(() => mockHomeScriptsPath),
   getHomeWorkflowsPath: mock(() => mockHomeWorkflowsPath),
 }));
@@ -284,10 +290,14 @@ describe('discoverScriptsForCwd — merge repo + home with repo winning', () => 
   test('tolerates an ENOENT race while scanning a packaged workflow', async () => {
     mockReaddir.mockImplementation(async (path: string) => {
       const p = norm(path);
-      if (p === '/app/workflows') return ['removed-pack'];
+      if (p === '/home/workflows') return ['removed-pack'];
       return [];
     });
-    mockStat.mockRejectedValueOnce(Object.assign(new Error('removed'), { code: 'ENOENT' }));
+    mockStat.mockImplementation(async (path: string) => {
+      if (norm(path) === '/home/workflows/removed-pack')
+        throw Object.assign(new Error('removed'), { code: 'ENOENT' });
+      return { isDirectory: () => false };
+    });
 
     await expect(discoverScriptsForCwd('/repo')).resolves.toEqual(new Map());
   });
@@ -295,12 +305,14 @@ describe('discoverScriptsForCwd — merge repo + home with repo winning', () => 
   test('surfaces permission failures while scanning packaged workflows', async () => {
     mockReaddir.mockImplementation(async (path: string) => {
       const p = norm(path);
-      if (p === '/app/workflows') return ['private-pack'];
+      if (p === '/home/workflows') return ['private-pack'];
       return [];
     });
-    mockStat.mockRejectedValueOnce(
-      Object.assign(new Error('permission denied'), { code: 'EACCES' })
-    );
+    mockStat.mockImplementation(async (path: string) => {
+      if (norm(path) === '/home/workflows/private-pack')
+        throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      return { isDirectory: () => false };
+    });
 
     await expect(discoverScriptsForCwd('/repo')).rejects.toThrow(
       'Failed to inspect packaged workflow pack'
@@ -341,6 +353,31 @@ describe('discoverScriptsForCwd — merge repo + home with repo winning', () => 
     expect(result.get(repoName)?.path).toBe(
       '/repo/.archon/workflows/team-pack/release/scripts/shared.ts'
     );
+  });
+
+  test('does not register scripts from a reserved fixtures directory (#3183)', async () => {
+    mockReaddir.mockImplementation(async (path: string) => {
+      const p = norm(path);
+      if (p === '/home/scripts' || p === '/repo/.archon/scripts') return [];
+      if (p === '/home/workflows') return ['personal-pack'];
+      if (p === '/home/workflows/personal-pack') return ['daily', 'fixtures'];
+      if (p === '/home/workflows/personal-pack/daily/scripts') return ['shared.py'];
+      if (p === '/home/workflows/personal-pack/fixtures/scripts') return ['hidden.py'];
+      if (p === '/repo/.archon/workflows') return ['fixtures'];
+      if (p === '/repo/.archon/workflows/fixtures/scripts') return ['root-hidden.ts'];
+      return [];
+    });
+    mockStat.mockImplementation(async (path: string) => ({
+      isDirectory: () => !/\.(ts|py)$/.test(norm(path)),
+    }));
+
+    const result = await discoverScriptsForCwd('/repo');
+    expect([...result.keys()]).toEqual([
+      formatPackagedResourceReference(
+        { source: 'global', pack: 'personal-pack', workflow: 'daily' },
+        'shared'
+      ),
+    ]);
   });
 });
 

@@ -1,0 +1,124 @@
+name: e2e-contract-fanout
+description: |
+  ENGINE-PRIMITIVE TEST — and the copyable reference for a result contract (#2453).
+  One run exercises every piece at once:
+
+    1. `plan` is a deterministic `script:` node that declares `output_format`, so its
+       stdout is a contract: strict JSON, validated, published as a logical value.
+    2. The result is SMALL. The large artifact stays a file, addressed by a reserved
+       `{type: archon_artifact, run_id, path}` pointer the engine validates before the
+       value is persisted.
+    3. `work` fans the composed `e2e-contract-unit` block out over `$plan.output.units`
+       — a declared field of that contract, resolved as a real JSON array, not text.
+    4. Each instance certifies its OWN result, so `$work.output` is an ordered array of
+       validated objects — each carrying a pointer at a per-item file the instance wrote,
+       proved at that producer and relayed by the aggregate unrewritten.
+    5. `returns: plan` selects a non-sink node: this workflow's result is the certified
+       contract, which is what a caller reads through an `include:` alias or a
+       `workflow:` sub-run.
+
+  Zero AI nodes — two scripts and a bash check. Costs nothing.
+
+  Pass condition: run status `completed` and node `verify` printing three PASS lines.
+
+  Usage: archon workflow run e2e-contract-fanout ""
+mutates_checkout: false
+
+returns: plan
+
+nodes:
+  # The full plan is too big to be a node output, so it stays a file and the result
+  # points at it. $ARTIFACTS_DIR and $WORKFLOW_ID reach a script node as environment
+  # variables; the pointer is an ordinary authored value, never engine-inferred.
+  - id: plan
+    runtime: bun
+    script: |
+      import { writeFileSync } from 'node:fs';
+      import { join } from 'node:path';
+
+      const artifactsDir = process.env.ARTIFACTS_DIR;
+      if (!artifactsDir) throw new Error('ARTIFACTS_DIR is not set');
+      writeFileSync(join(artifactsDir, 'plan.md'), '# The full plan\n\nEvery detail lives here.\n');
+
+      console.log(
+        JSON.stringify({
+          units: [
+            { id: 'unit-a', title: 'first unit of work' },
+            { id: 'unit-b', title: 'second unit of work' },
+          ],
+          plan: {
+            type: 'archon_artifact',
+            run_id: process.env.WORKFLOW_ID,
+            path: 'plan.md',
+          },
+        })
+      );
+    output_format:
+      type: object
+      properties:
+        units:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              title: { type: string }
+            required: [id, title]
+        plan:
+          type: object
+          properties:
+            type: { const: archon_artifact }
+            run_id: { type: string }
+            path: { type: string }
+          required: [type, run_id, path]
+      required: [units, plan]
+
+  # `items:` reads a DECLARED field of the contract above. An undeclared name would fail
+  # this node at resolution rather than quietly fanning out over nothing.
+  - id: work
+    include: e2e-contract-unit
+    depends_on: [plan]
+    fan_out:
+      items: '$plan.output.units'
+      as: unit
+      max_parallel: 2
+      join: all_success
+
+  - id: verify
+    depends_on: [work]
+    bash: |
+      set -euo pipefail
+      # No surrounding quotes: a $<node>.output[.field] ref is injected as a shell-safe
+      # single-quoted literal already, so the value brings its own quoting.
+      aggregate=$work.output
+      pointer=$plan.output.plan
+      echo "aggregate=$aggregate"
+      echo "pointer=$pointer"
+
+      case "$aggregate" in
+        *'"id":"unit-a","ok":true'*'"id":"unit-b","ok":true'*)
+          echo 'PASS: ordered aggregate of per-instance certified results' ;;
+        *)
+          echo 'FAIL: aggregate is not the ordered array of certified units'; exit 1 ;;
+      esac
+
+      case "$pointer" in
+        *'"type":"archon_artifact"'*'"path":"plan.md"'*)
+          echo 'PASS: the artifact pointer crossed the boundary as a run id plus a relative path' ;;
+        *)
+          echo 'FAIL: the pointer was rewritten or lost'; exit 1 ;;
+      esac
+
+      # One per-item pointer per instance, unrewritten: each names THIS run (the
+      # instances ran inside it) and the relative path the instance wrote.
+      for unit in unit-a unit-b; do
+        expected='"report":{"type":"archon_artifact","run_id":"'"$WORKFLOW_ID"'","path":"units/'"$unit"'.md"}'
+        case "$aggregate" in
+          *"$expected"*) ;;
+          *) echo "FAIL: the aggregate does not carry the per-item pointer for $unit unrewritten"; exit 1 ;;
+        esac
+        test -s "$ARTIFACTS_DIR/units/$unit.md"
+      done
+      echo 'PASS: one per-item artifact pointer per instance, each naming this run and its relative path'
+
+      test -s "$ARTIFACTS_DIR/plan.md"

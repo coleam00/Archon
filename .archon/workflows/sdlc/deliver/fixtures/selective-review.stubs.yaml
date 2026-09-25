@@ -1,14 +1,15 @@
 # Dry-run fixture: code, seams, simplify, and tests run by default while the
 # classifier selects docs. The fixture keeps deterministic code stubbed; the
 # loader test protects the classifier-binding seam itself.
-impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true
+  red_cause: ""
   summary: "stub: implemented and green"
 impl__assert-changed: "3 files changed"
-gate-green: '{"gate":"green"}'
-pr__pr: { number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true }
+gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
+pr__pr: { intent: "/fixture/pr-intent.json" }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
 classify:
   errors: false
   docs: true
@@ -19,6 +20,7 @@ resolve-scope: '{"errors":"false"}'
 review__mode: '{"continuation":false}'
 review__scope:
   docs: false
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 2 }
 review__code: "0 findings"
 review__seams: "0 findings"
 review__simplify: "0 findings"
@@ -29,15 +31,27 @@ review__synthesize:
   ready: true
   action: none
   findings_summary: "stub: selected review is clean"
-review-action: '{"ready":true,"action":"none"}'
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+review__publish:
+  ready: true
+  action: none
+  findings_summary: "stub: selected review is clean"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 gate-ready: '{"ready":"true"}'
-validate__validate:
+validate__mode: '{"comparison":false}'
+validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], quarantine: [], notes: "stub: the project's aggregate gate" }
+validate__run: { status: green, summary: "stub: full gate green" }
+validate__result:
+  evidence: null
   green: true
+  red_cause: ""
   summary: "stub: full gate green"
-gate-validated: '{"gate":"green"}'
+gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":""}'
 ci-probe: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
-flip-ready: "https://github.com/example/repo/pull/2"
-outcome: "https://github.com/example/repo/pull/2"
+ci-verdict: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
+ci-attention-route: '{"attention":false,"red_cause":""}'
+flip-ready: { pr_url: "https://github.com/example/repo/pull/2" }
+outcome: { pr_url: "https://github.com/example/repo/pull/2", summary: "https://github.com/example/repo/pull/2" }
 fixture:
   expect: completed
   reached: [review__code, review__seams, review__simplify, review__tests, review__docs]

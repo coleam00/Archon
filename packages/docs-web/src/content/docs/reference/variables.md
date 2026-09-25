@@ -21,9 +21,10 @@ They are also substituted in a node's **AI-configuration text** — `systemPromp
 | `$ARGUMENTS` | The user's input message that triggered the workflow | Primary way to pass user input to commands |
 | `$USER_MESSAGE` | Same as `$ARGUMENTS` | Alias |
 | `$WORKFLOW_ID` | Unique ID for the current workflow run | Useful for artifact naming and log correlation |
-| `$ARTIFACTS_DIR` | Pre-created external artifacts directory (`~/.archon/workspaces/<owner>/<repo>/artifacts/runs/<id>/`) | Always exists before node execution; stored outside the repo to avoid polluting the working tree. **Container runs (`--container`):** this host path is **not mounted into the container**, so a node that writes *directly* to `$ARTIFACTS_DIR` from inside the container will fail — write to the workspace instead. Engine-written typed-output sidecars still work (they are written on the host from captured stdout). |
-| `$STATE_DIR` | Pre-created external cross-run state directory (`~/.archon/workspaces/<project>/state/`) | Scoped per **project** — shared across every workflow, every conversation, and every invocation surface, so cooperating workflows can share memory. Namespace inside it yourself (`$STATE_DIR/<name>/`) if you want isolation. Survives worktree teardown, and never appears in `git status`. Throws if referenced but unresolved, exactly like `$BASE_BRANCH`. **Container runs (`--container`):** same caveat as `$ARTIFACTS_DIR` — the host path is not mounted into the container, so a node writing there from inside the container writes to the container's ephemeral layer. |
-| `$BASE_BRANCH` | Base branch for git operations | Resolved in order: the `--base <branch>` flag on `archon workflow run` (per dispatch), then `worktree.baseBranch` in `.archon/config.yaml`, then the registered codebase's stored default branch, then git auto-detection. `--base` sets the worktree cut-from too, so this variable always names the branch the worktree was actually cut from -- unless `--from` was also passed, which overrides only the cut-from. See [Base branch precedence](/reference/cli/#base-branch-precedence). Throws an error if referenced in a prompt but cannot be resolved |
+| `$ARTIFACTS_DIR` | Pre-created external artifacts directory (`~/.archon/workspaces/<owner>/<repo>/artifacts/runs/<id>/`) | Always exists before node execution; stored outside the repo to avoid polluting the working tree. **Container runs (`--container`):** this host directory is bind-mounted read-write at the same absolute path inside the container, so a node writes to `$ARTIFACTS_DIR` the same way on either side of the boundary. |
+| `$TYPED_ARTIFACTS_FILE` | Absolute path to this invocation's typed-artifact listing (JSON, inside `$ARTIFACTS_DIR`) | A read-only observation of the artifacts published before this invocation started, grouped by exact case-sensitive `output_type`. Also delivered to `bash:`/`script:` as the `TYPED_ARTIFACTS_FILE` environment variable. Referencing it in a context with no listing throws rather than substituting an empty string, except in a `--dry-run` preview, which has no artifacts and substitutes an empty string. See [Typed Artifacts](/guides/authoring-workflows/#typed-artifacts-output_type). |
+| `$STATE_DIR` | Pre-created external cross-run state directory (`~/.archon/workspaces/<project>/state/`) | Scoped per **project** — shared across every workflow, every conversation, and every invocation surface, so cooperating workflows can share memory. Namespace inside it yourself (`$STATE_DIR/<name>/`) if you want isolation. Survives worktree teardown, and never appears in `git status`. Throws if referenced but unresolved, exactly like `$BASE_BRANCH`. **Container runs (`--container`):** unlike `$ARTIFACTS_DIR`, this host path is not mounted into the container, so a node writing there from inside the container writes to the container's ephemeral layer. |
+| `$BASE_BRANCH` | Base branch for git operations | Resolved in order: the `--base <branch>` flag on `archon workflow run` (per dispatch), then `worktree.baseBranch` in `.archon/config.yaml`, then the registered codebase's stored default branch, then git auto-detection. A continuation -- `--resume`, an approved gate, or the automatic resume of a parent whose sub-run gate was approved -- reports the value recorded when the run was first dispatched instead of consulting config, the codebase default, or git again; only a `--base` re-passed to that continuation overrides the recorded value. `--base` sets the worktree cut-from too, so this variable always names the branch the worktree was actually cut from -- unless `--from` was also passed, which overrides only the cut-from. See [Base branch precedence](/reference/cli/#base-branch-precedence). Throws an error if referenced in a prompt but cannot be resolved |
 | `$DOCS_DIR` | Documentation directory path | Configured via `docs.path` in `.archon/config.yaml`. Defaults to `docs/` when not set. Never throws |
 | `$CONTEXT` | GitHub issue or PR context, if available | Populated when the workflow is triggered from a GitHub issue/PR. Replaced with empty string when unavailable |
 | `$EXTERNAL_CONTEXT` | Same as `$CONTEXT` | Alias |
@@ -101,7 +102,7 @@ In DAG workflows, nodes can reference the output of any completed upstream node.
 | `$nodeId.output` | Full output string of the referenced node | The node must be a declared dependency (in `depends_on`) |
 | `$nodeId.output.field` | A specific JSON field from the node's output | Works on any JSON-object output; `output_format` adds stricter validation — see notes below |
 
-A `.field` reference **fails the consuming node** when the producer's output is not a JSON object — whether or not the producer declared an `output_format`. Declaring a schema buys you a stricter check on the field *name* (an undeclared field fails the consuming node with a named error rather than resolving to a silent empty), and lets a declared-but-absent field resolve to `''`; it never makes a broken producer quieter. This matters most for `workflow:` sub-run nodes, where `output_format` is enforced against what the child actually returns: a mismatch fails the parent node with an error naming the node, the child workflow, the failing path, the expected shape, and the received type.
+A `.field` reference **fails the consuming node** when the producer's output is not a JSON object — whether or not the producer declared an `output_format`. Declaring a schema buys you a stricter check on the field *name* (an undeclared field fails the consuming node with a named error rather than resolving to a silent empty), and lets a declared-but-absent field resolve to `''`; it never makes a broken producer quieter. For a `workflow:` sub-run node the contract is the child's own: the `output_format` on the child's `returns:` node certifies the value and its declared field names travel back with the result, so `$sub.output.field` is strict under the child's schema. Declaring `output_format` on the `workflow:` node itself is a load error — the result contract belongs to the child's `returns:` node.
 
 During the current run, downstream interpolation and `when:` conditions see the full returned node output. Successful bash events retain only a 32 KiB UTF-8 audit preview, so after a process boundary a resumed run rehydrates that persisted preview rather than the full output. If a large gate verdict must survive a restart intact, store it through a deliberately managed artifact contract instead of relying on the event preview.
 
@@ -110,6 +111,10 @@ During the current run, downstream interpolation and `when:` conditions see the 
 `$nodeId.output` values are **auto shell-quoted** when substituted into `bash:` scripts, so the value is always safe to embed in a shell command. For small outputs, values are single-quoted inline. For outputs exceeding 32 KB, Archon writes an engine-owned `$ARTIFACTS_DIR/.archon/node-output-spills/<node>[.<field>].nodeoutput` file and substitutes `$(cat '<path>')` instead — the unquoted assignment form is correct in both cases. These files follow the [run-artifact retention lifecycle](/reference/archon-directories/#user-level-archon). They are **not** shell-quoted when substituted into `script:` bodies — the raw value is embedded as-is. For script nodes, treat substituted values as untrusted input and parse them with language features (e.g. `JSON.parse`), not by interpolating into shell syntax.
 
 User-controlled variables (`$ARGUMENTS`, `$USER_MESSAGE`, `$LOOP_USER_INPUT`, `$LOOP_PREV_OUTPUT`, `$REJECTION_REASON`, `$CONTEXT` and its aliases) are delivered to `bash:` and `script:` nodes as subprocess **environment variables** (`ARGUMENTS`, `USER_MESSAGE`, `LOOP_USER_INPUT`, `LOOP_PREV_OUTPUT`, `REJECTION_REASON`, `CONTEXT`/`EXTERNAL_CONTEXT`/`ISSUE_CONTEXT`), never spliced as raw text into executable code — so attacker-influenced input can't inject. In `bash:` read them as `"$ARGUMENTS"`; in `script:` read them via `process.env.ARGUMENTS` (bun) or `os.environ['ARGUMENTS']` (uv/python). A literal `$ARGUMENTS`/`$USER_MESSAGE`/`$CONTEXT` left in a `script:` body no longer resolves and logs a one-release migration warning.
+
+At load time, Archon scans inline and named exec sources for static environment reads. The supported forms are `os.environ["NAME"]` and `os.environ.get("NAME", ...)` in Python, `process.env.NAME` and `process.env["NAME"]` in JavaScript/TypeScript, and `$INPUTS_NAME` or `${INPUTS_NAME}` in bash; single quotes work in bracket and call forms too. Within a declared `inputs:` contract, an `INPUTS_*` read with no matching script `with:` binding or declared workflow input is a load error. A workflow with no `inputs:` block keeps the open caller-input contract, so caller-provided names cannot be rejected while loading that workflow in isolation. Other static Python/JavaScript env reads that Archon does not provide produce a parse warning, since project and credential variables may still come from the execution environment. Diagnostics identify the inline `bash`/`script` line or the named script path and line, plus the available binding and input names.
+
+This is a deliberately lexical check, not a language parser. Computed keys, aliases, destructuring, `os.getenv`, and ordinary non-`INPUTS_*` bash variables are outside the supported detection boundary. An exact supported accessor spelling inside a comment or string literal can still be reported.
 
 Because `bash:` substitutions arrive pre-quoted, wrapping them in double quotes is a silent footgun for small (inline) values:
 
@@ -201,15 +206,60 @@ the workflow otherwise, so a binding can never race its producer. Node-local bin
 the **nearest** input layer: they win over a composed block's inputs, which win over the
 run's own `$INPUTS`.
 
+The load-time environment-read check uses these same binding names and the workflow's declared
+input names. For example, `process.env.INPUTS_GREEN` requires `with: { green: ... }` on that
+script node or a declared `green` workflow input. Engine-owned names such as `ARTIFACTS_DIR`,
+`BASE_BRANCH`, `ARGUMENTS`, and `WORKFLOW_ID` are always accepted.
+
 `with:` on other node types: `include:` and `workflow:` nodes keep their existing caller-input
 meaning (values may be any JSON value); on `bash:`, `prompt:`, and loop nodes the field is
 ignored with a load warning — inline bodies already reference `$node.output` directly.
+
+### Artifact pointers in a result
+
+A node output is a value, not a file. When a node produces something large, write it under
+`$ARTIFACTS_DIR` and return a **pointer** to it inside the result:
+
+```json
+{ "type": "archon_artifact", "run_id": "01JD…", "path": "review/report.md" }
+```
+
+`type: "archon_artifact"` is reserved by the engine. Any object carrying it, at any depth in
+a node's logical value, must be a valid pointer: `run_id` and `path` are required non-empty
+strings. `path` is relative to the run's own artifacts directory. For how a pointer fits
+into a workflow's declared result, see
+[Authoring workflows → Result contracts](/guides/authoring-workflows/#result-contracts).
+
+Every pointer is checked once, **at the producing node and against its own run**, before the
+value is persisted — so a bad one fails the node that produced it rather than surfacing
+later as a broken link:
+
+| Rule | Rejected |
+|------|----------|
+| Own run | A `run_id` other than the producing run's own (`$WORKFLOW_ID`). A result may only point at its own run's artifacts today. |
+| Addressable run | A run whose output location was never recorded, or one recorded outside the Archon home directory. |
+| Relative path | An absolute path, a `..` segment, or a NUL byte. |
+| Containment | A path that resolves lexically outside the run's artifacts directory. |
+| Real file | A missing target, or a directory. |
+
+A `workflow:` parent and a fan-out aggregate relay a child's value unchanged: the child
+already proved its pointers against the only run it may name. Reachability and real-path
+checks belong to the read side by design — whether a reader may see that run, and whether
+the path still resolves inside its artifacts directory once symlinks are followed.
+`GET /api/artifacts/<run_id>/<path>` does lexical containment on the untrusted request
+today; real-path resolution at read time is not yet implemented (#3160).
+
+The value stays a run id plus a relative path in node outputs, events, sub-run results,
+fan-out aggregates, and resumed runs. Archon never rewrites it into an absolute path and
+never loads the file's contents into a prompt. There is no in-workflow resolver: a pointer
+is for machine readers, and a prompt inside the producing run keeps the
+`$ARTIFACTS_DIR/<path>` string, which is the same file on disk.
 
 ## Substitution Order
 
 Variables are substituted in a defined order:
 
-1. **Workflow variables** -- `$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARGUMENTS`, `$ARTIFACTS_DIR`, `$STATE_DIR`, `$BASE_BRANCH`, `$DOCS_DIR`, `$LOOP_USER_INPUT`, `$REJECTION_REASON`, `$LOOP_PREV_OUTPUT`
+1. **Workflow variables** -- `$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARGUMENTS`, `$ARTIFACTS_DIR`, `$TYPED_ARTIFACTS_FILE`, `$STATE_DIR`, `$BASE_BRANCH`, `$DOCS_DIR`, `$LOOP_USER_INPUT`, `$REJECTION_REASON`, `$LOOP_PREV_OUTPUT`
 2. **Context variables** -- `$CONTEXT`, `$EXTERNAL_CONTEXT`, `$ISSUE_CONTEXT`
 3. **Node output references** -- `$nodeId.output`, `$nodeId.output.field`
 
@@ -226,6 +276,7 @@ Positional arguments (`$1` through `$9`) are **not** supported in any context �
 | `$ARGUMENTS` / `$USER_MESSAGE` | Yes | Yes (both aliases) | No |
 | `$WORKFLOW_ID` | Yes | No | No |
 | `$ARTIFACTS_DIR` | Yes | No | No |
+| `$TYPED_ARTIFACTS_FILE` | Yes (exec and AI nodes) | No | No |
 | `$STATE_DIR` | Yes | No | No |
 | `$BASE_BRANCH` | Yes | No | No |
 | `$DOCS_DIR` | Yes | No | No |

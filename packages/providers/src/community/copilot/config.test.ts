@@ -36,6 +36,9 @@ describe('parseCopilotConfig', () => {
     expect(parseCopilotConfig({ modelReasoningEffort: 'max' })).toEqual({
       modelReasoningEffort: 'xhigh',
     });
+    expect(parseCopilotConfig({ modelReasoningEffort: 'persistent' })).toEqual({
+      modelReasoningEffort: 'xhigh',
+    });
     expect(parseCopilotConfig({ modelReasoningEffort: 'minimal' })).toEqual({
       modelReasoningEffort: 'low',
     });

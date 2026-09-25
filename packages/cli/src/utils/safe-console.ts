@@ -42,27 +42,28 @@
  * ## Scope (deliberate)
  *
  * - `console.log` and `console.info` are patched; `console.warn` /
- *   `console.error` are NOT. `console.warn`/`console.error` default to
- *   stderr in Bun, which is not the fd pino flipped, and `console.warn` is
- *   also used by CLI commands as the deliberate "non-pino diagnostic"
- *   channel (e.g. `workflow.ts`); routing it through `writeStdout` would
- *   change where it lands, which is a separate decision.
+ *   `console.error` are NOT. They write to stderr, which carries short
+ *   diagnostics rather than command output, and `console.warn` is also used
+ *   by CLI commands as the deliberate "non-pino diagnostic" channel (e.g.
+ *   `workflow.ts`); routing it through `writeStdout` would change where it
+ *   lands, which is a separate decision.
  * - `console.info` shares fd 1 with `console.log` in Bun (it is an alias, not
  *   a stderr method), so it would be vulnerable to the same truncation and
  *   is patched to the same delegate.
  * - Color is hard-disabled: Bun's built-in would colorize on TTY, but human
  *   CLI text (`console.log(\`some text\`)`) does not depend on ANSI. Pino
- *   pretty-printing (used when stdout is a TTY per `paths/src/logger.ts:62`)
- *   still colorizes its own output.
+ *   pretty-printing (used when the log destination is a TTY, see
+ *   `paths/src/logger.ts`) still colorizes its own output.
  * - Idempotent: a second call is a no-op so re-imports don't double-wrap.
  *
  * ## Maintainer warning
  *
- * Do not delete this patch because "the underlying cause lives in
- * `@archon/paths`" — moving pino to stderr is a wider blast-radius change
- * (server, adapters, every package that imports `@archon/paths`) and a
- * separate design call (see #2400 plan: this file vs `logger.ts` route).
- * Until that lands, this patch is the fix.
+ * The CLI now sends pino to stderr (`setLogDestination` in `cli.ts`), except
+ * for `archon serve`. That does not retire this patch: a non-blocking flag
+ * belongs to the open file description, which fd 1 and fd 2 share whenever
+ * they point at the same pipe or terminal (`2>&1`, a pty), Bun's own pipe
+ * handling can drop the tail (#2384), and `serve` still logs to stdout. Keep
+ * the patch unless a slow-reader pipe test proves stdout cannot truncate.
  */
 
 import { formatWithOptions } from 'node:util';

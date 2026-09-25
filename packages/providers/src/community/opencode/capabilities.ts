@@ -30,10 +30,15 @@ export const OPENCODE_CAPABILITIES: ProviderCapabilities = {
   agents: true,
   toolRestrictions: true,
   structuredOutput: 'enforced', // sends format:{json_schema}; reads info.structured_output
+  requiresAllPropertiesRequired: false, // OpenCode does not enforce the required-coverage rule
   envInjection: true,
   costControl: false,
+  costReporting: true, // tokens.ts maps SDK info.cost when the SDK reports one
+  tokenReporting: true,
+  stopReasonReporting: true,
+  turnCountReporting: false,
+  resolvedModelReporting: true,
   effortControl: false,
-  thinkingControl: false, // OpenCode handles effort/thinking via opencode.json agent config, not prompt body
   fallbackModel: false,
   sandbox: false,
   settingSources: false, // Claude Agent SDK-only knob (which setting sources the agent loads)

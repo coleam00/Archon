@@ -41,18 +41,18 @@ const endMatches = [...raw.matchAll(END_RE)];
 if (beginMatches.length > 0 && endMatches.length > 0) {
   // Strategy: last END, then last BEGIN before it — the complete final block.
   const lastEnd = endMatches[endMatches.length - 1];
-  const lastEndIdx = lastEnd.index!;
+  const lastEndIdx = lastEnd.index;
 
-  const beginsBeforeEnd = beginMatches.filter((m) => m.index! < lastEndIdx);
+  const beginsBeforeEnd = beginMatches.filter((m) => m.index < lastEndIdx);
   if (beginsBeforeEnd.length > 0) {
     const lastBegin = beginsBeforeEnd[beginsBeforeEnd.length - 1];
-    const afterBeginIdx = lastBegin.index! + lastBegin[0].length;
+    const afterBeginIdx = lastBegin.index + lastBegin[0].length;
 
     const stateText = raw.slice(afterBeginIdx, lastEndIdx).trim();
     try {
       state = JSON.parse(stateText) as State;
       // Brief = everything before the first BEGIN; preserves prose intact even if state was emitted multiple times.
-      brief = raw.slice(0, beginMatches[0].index!).trim();
+      brief = raw.slice(0, beginMatches[0].index).trim();
       source = 'delimiter';
       if (beginMatches.length > 1) {
         process.stderr.write(
@@ -67,7 +67,7 @@ if (beginMatches.length > 0 && endMatches.length > 0) {
     }
   } else {
     process.stderr.write(
-      `WARN: ARCHON_STATE_JSON_BEGIN/END markers found but all BEGIN markers appear after the last END; skipping delimiter extraction.\n`,
+      'WARN: ARCHON_STATE_JSON_BEGIN/END markers found but all BEGIN markers appear after the last END; skipping delimiter extraction.\n',
     );
   }
 }

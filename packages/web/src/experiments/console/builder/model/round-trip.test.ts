@@ -139,6 +139,19 @@ describe('round-trip fidelity', () => {
     expect(toWorkflowDefinition(workflow)).toEqual(definition);
   });
 
+  test('wait attention message round-trips exactly', () => {
+    const definition: WireWorkflowDefinition = {
+      name: 'wait-for-recovery',
+      description: 'waits for an operator action',
+      nodes: [{ id: 'recover', wait: { attention: 'Rerun CI, then resume.' } }],
+    };
+
+    const { workflow, issues } = fromWorkflowDefinition(definition);
+    expect(issues).toEqual([]);
+    expect(workflow.nodes[0]?.variant).toBe('wait');
+    expect(toWorkflowDefinition(workflow)).toEqual(definition);
+  });
+
   test('cleared wait fields remain drafts until server validation', () => {
     const clearedWaits = [
       { duration_ms: undefined },

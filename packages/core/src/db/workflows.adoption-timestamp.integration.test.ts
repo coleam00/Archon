@@ -15,6 +15,7 @@
  * ./connection with a real adapter.
  */
 import { describe, test, expect, mock } from 'bun:test';
+import { toBranchName } from '@archon/git';
 
 // The adapter's logger is lazy but `@archon/git` (pulled in by
 // workflow-adoption) statically imports path helpers from '@archon/paths' too,
@@ -69,23 +70,55 @@ await db.query(
   []
 );
 
+// Detached parent-created run (#2914 / #2935): run row is created at T_0 (started_at),
+// and the detached child creates the isolation environment shortly after at T_0 + 2s.
+await db.query(
+  `INSERT INTO remote_agent_workflow_runs
+     (id, workflow_name, conversation_id, codebase_id, user_message, status, metadata,
+      working_path, started_at, completed_at, last_activity_at)
+   VALUES ('run-detached', 'implement', 'conv-1', 'cb-1', 'detached pr', 'failed', '{}',
+     '/tmp/ops-client/.worktrees/run-detached', '2026-08-27 08:00:00', '2026-08-27 08:15:00',
+     '2026-08-27 08:15:00')`,
+  []
+);
+
 /** Seed an estate at the adopted run's working_path with its own cutoff relation. */
-async function seedEnv(id: string, createdAt: string, status: 'active' | 'destroyed') {
+async function seedEnv(
+  id: string,
+  createdAt: string,
+  status: 'active' | 'destroyed',
+  workingPath = '/tmp/ops-client/.worktrees/run-1'
+) {
   await db.query(
     `INSERT INTO remote_agent_isolation_environments
        (id, codebase_id, workflow_type, workflow_id, provider, working_path, branch_name, status, created_at)
      VALUES ($1, 'cb-1', 'task', $2, 'worktree',
-       '/tmp/ops-client/.worktrees/run-1', $3, $4, $5)`,
-    [id, `wf-${id}`, `impl-${id}`, status, createdAt]
+       $3, $4, $5, $6)`,
+    [id, `wf-${id}`, workingPath, `impl-${id}`, status, createdAt]
   );
 }
 
-// Two estates around the run's start: the one that OWNED the checkout before the
+// Two estates around run-1's start: the one that OWNED the checkout before the
 // run began (now destroyed — cleanup removed the worktree but the row survives),
-// and a later re-creation after the run had finished. Only the pre-cutoff row may
-// be selected as the adoption source.
+// and a later re-creation after the run had finished.
 await seedEnv('env-before', '2026-08-26 09:00:00', 'destroyed');
 await seedEnv('env-after', '2026-08-28 10:00:00', 'active');
+
+// Estates for detached run (#2935):
+// env-detached was created at T_0 + 2s during the run's execution (before completed_at).
+// env-detached-later was created after completed_at.
+await seedEnv(
+  'env-detached',
+  '2026-08-27 08:00:02',
+  'active',
+  '/tmp/ops-client/.worktrees/run-detached'
+);
+await seedEnv(
+  'env-detached-later',
+  '2026-08-27 09:00:00',
+  'active',
+  '/tmp/ops-client/.worktrees/run-detached'
+);
 
 describe('workflow-run adoption timestamp — real SQLite composition (#2845)', () => {
   test('getWorkflowRun hydrates SQLite TEXT timestamps into Dates', async () => {
@@ -125,7 +158,7 @@ describe('workflow-run adoption timestamp — real SQLite composition (#2845)', 
     expect(resolved.adoptedRun.id).toBe('run-1');
     expect(resolved.lane.kind).toBe('checkout-branch');
     if (resolved.lane.kind === 'checkout-branch') {
-      expect(resolved.lane.taskBranch.branch).toBe('impl-env-before');
+      expect(resolved.lane.taskBranch.branch).toBe(toBranchName('impl-env-before'));
     }
   });
 
@@ -136,5 +169,44 @@ describe('workflow-run adoption timestamp — real SQLite composition (#2845)', 
       new Date(Date.UTC(2026, 7, 25))
     );
     expect(env).toBeNull();
+  });
+
+  test('detached parent-created run adopts environment created during run execution (#2935)', async () => {
+    const resolved = await resolveWorkflowAdoption({
+      adoptedRunId: 'run-detached',
+      codebaseId: 'cb-1',
+      codebasePath: '/tmp/ops-client',
+      codebaseKind: 'repo',
+      deps: {
+        existsSync: p => p === '/tmp/ops-client/.worktrees/run-detached',
+        branchExists: async (_repoPath, branch) => branch === 'impl-env-detached',
+        currentBranch: async () => 'impl-env-detached',
+      },
+    });
+    expect(resolved.adoptedRun.id).toBe('run-detached');
+    expect(resolved.lane.kind).toBe('reuse-worktree');
+    if (resolved.lane.kind === 'reuse-worktree') {
+      expect(resolved.lane.workingPath).toBe('/tmp/ops-client/.worktrees/run-detached');
+      expect(resolved.lane.envId).toBe('env-detached');
+    }
+  });
+
+  test('detached parent-created run excludes environments created after completion (#2935)', async () => {
+    const resolved = await resolveWorkflowAdoption({
+      adoptedRunId: 'run-detached',
+      codebaseId: 'cb-1',
+      codebasePath: '/tmp/ops-client',
+      codebaseKind: 'repo',
+      deps: {
+        // Worktree gone, must checkout branch
+        existsSync: () => false,
+        branchExists: async (_repoPath, branch) => branch === 'impl-env-detached',
+      },
+    });
+    expect(resolved.adoptedRun.id).toBe('run-detached');
+    expect(resolved.lane.kind).toBe('checkout-branch');
+    if (resolved.lane.kind === 'checkout-branch') {
+      expect(resolved.lane.taskBranch.branch).toBe(toBranchName('impl-env-detached'));
+    }
   });
 });

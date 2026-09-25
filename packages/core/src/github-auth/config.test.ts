@@ -1,9 +1,21 @@
 import { describe, test, expect } from 'bun:test';
-import { isPerUserGitHubEnabled, loadDeviceFlowConfig, assertEncryptionKeyAtBoot } from './config';
+import {
+  isPerUserGitHubEnabled,
+  loadDeviceFlowConfig,
+  assertEncryptionKeyAtBoot,
+  resolveGitHubTokenFromEnv,
+} from './config';
 
 const VALID_KEY = 'a'.repeat(64);
 
 describe('github-auth/config', () => {
+  test('resolves GITHUB_TOKEN before GH_TOKEN', () => {
+    expect(resolveGitHubTokenFromEnv({ GITHUB_TOKEN: 'github-token', GH_TOKEN: 'gh-token' })).toBe(
+      'github-token'
+    );
+    expect(resolveGitHubTokenFromEnv({ GH_TOKEN: 'gh-token' })).toBe('gh-token');
+  });
+
   describe('isPerUserGitHubEnabled', () => {
     test('true only when both GITHUB_APP_ID and TOKEN_ENCRYPTION_KEY are set', () => {
       expect(isPerUserGitHubEnabled({ GITHUB_APP_ID: '1', TOKEN_ENCRYPTION_KEY: VALID_KEY })).toBe(

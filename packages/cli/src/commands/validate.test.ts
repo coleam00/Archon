@@ -2,8 +2,12 @@ import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import type { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 
-const mockDiscoverWorkflowsWithConfig = mock(() => Promise.resolve({ workflows: [], errors: [] }));
+const mockDiscoverWorkflowsWithConfig = mock<typeof discoverWorkflowsWithConfig>(() =>
+  Promise.resolve({ workflows: [], errors: [] })
+);
 
 mock.module('@archon/workflows/workflow-discovery', () => ({
   discoverWorkflowsWithConfig: mockDiscoverWorkflowsWithConfig,
@@ -67,14 +71,14 @@ describe('validateWorkflowsCommand', () => {
     });
     mockDiscoverWorkflowsWithConfig.mockResolvedValue({
       workflows: [
-        {
-          source: 'project',
-          workflow: {
+        makeTestWorkflowWithSource(
+          {
             name: 'custom-skill-workflow',
             provider: 'claude',
             nodes: [{ id: 'step1', prompt: 'hello', skills: ['custom-skill'] }],
           },
-        },
+          'project'
+        ),
       ],
       errors: [],
     });
@@ -99,14 +103,14 @@ describe('validateWorkflowsCommand', () => {
     });
     mockDiscoverWorkflowsWithConfig.mockResolvedValue({
       workflows: [
-        {
-          source: 'project',
-          workflow: {
+        makeTestWorkflowWithSource(
+          {
             name: 'excluded-user-skill',
             provider: 'claude',
             nodes: [{ id: 'step1', prompt: 'hello', skills: ['user-only'] }],
           },
-        },
+          'project'
+        ),
       ],
       errors: [],
     });
@@ -122,14 +126,14 @@ describe('validateWorkflowsCommand', () => {
   test('rejects bundled @custom model refs via discovered source', async () => {
     mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
       workflows: [
-        {
-          source: 'bundled',
-          workflow: {
+        makeTestWorkflowWithSource(
+          {
             name: 'bad-bundled',
             model: '@custom',
             nodes: [{ id: 'step1', prompt: 'hello' }],
           },
-        },
+          'bundled'
+        ),
       ],
       errors: [],
     });

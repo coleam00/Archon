@@ -119,7 +119,7 @@ The database has 18 tables, all prefixed with `remote_agent_`:
 8. **`remote_agent_codebase_env_vars`** - Per-project env vars for workflow execution
    - Key-value pairs scoped to a codebase
    - Injected into Claude SDK subprocess environment at execution time
-   - Managed via Web UI Settings panel; `env:` in `.archon/config.yaml` for CLI users
+   - Managed by opening **Environment variables** from the project row in the console project rail; `env:` in `.archon/config.yaml` for CLI users
 
 9. **`remote_agent_users`** - Archon-internal user identity
    - One row per human (or bot) across all platforms

@@ -39,6 +39,7 @@ function makeWorkflowStartedEvent(runId = 'run-1'): WorkflowEmitterEvent {
     runId,
     workflowName: 'test-workflow',
     conversationId: 'conv-1',
+    transcriptPath: `/logs/${runId}.jsonl`,
   };
 }
 
@@ -76,6 +77,7 @@ function makeNodeSkippedEvent(runId = 'run-1'): WorkflowEmitterEvent {
     nodeId: 'skip-me',
     nodeName: 'optional-node',
     reason: 'when_condition',
+    cause: { kind: 'condition', expr: '$route.output == true' },
   };
 }
 
@@ -293,6 +295,12 @@ describe('WorkflowEventEmitter', () => {
           error: 'fail',
         },
         makeNodeSkippedEvent(),
+        {
+          type: 'node_skipped_prior_success',
+          runId: 'run-1',
+          nodeId: 'cached-node',
+          nodeName: 'cached-node',
+        },
         makeArtifactEvent(),
         {
           type: 'task_activity',
@@ -601,6 +609,7 @@ describe('WorkflowEventEmitter', () => {
         runId,
         workflowName: 'plan-implement',
         conversationId,
+        transcriptPath: `/logs/${runId}.jsonl`,
       });
       emitter.emit({ type: 'node_started', runId, nodeId: 'plan', nodeName: 'plan' });
       emitter.emit({

@@ -232,6 +232,95 @@ export function hasOpenAdditionalProperties(schema: unknown): boolean {
   return Object.values(node).some(hasOpenAdditionalProperties);
 }
 
+// ─── Strict-mode required-coverage detection ──────────────────────────────────
+
+/**
+ * A single object schema node whose `properties` keys are not fully covered by
+ * its `required` array. `schemaPath` is a dotted path from the schema root
+ * (e.g. `"output_format.properties.status"`).
+ */
+export interface RequiredPropertyGap {
+  /** Dotted path from the schema root */
+  schemaPath: string;
+  /** Property keys declared in `properties` but absent from `required` */
+  missing: string[];
+}
+
+/**
+ * Find every object schema node, at any depth, whose `properties` keys are not
+ * fully covered by its `required` array. Only object nodes with a `properties`
+ * map are checked (OpenAI strict-mode's target).
+ *
+ * `basePath` is prepended to every gap path so callers get meaningful
+ * schema-root-relative locations (e.g. pass `'output_format'`).
+ */
+export function findRequiredPropertyGaps(schema: unknown, basePath: string): RequiredPropertyGap[] {
+  return collectGaps(schema, basePath);
+}
+
+function collectGaps(
+  schema: unknown,
+  path: string,
+  out: RequiredPropertyGap[] = []
+): RequiredPropertyGap[] {
+  if (schema === null || typeof schema !== 'object') return out;
+  if (Array.isArray(schema)) {
+    schema.forEach((item, i) => collectGaps(item, `${path}[${i}]`, out));
+    return out;
+  }
+  const record = schema as Record<string, unknown>;
+  const properties = record.properties;
+  if (properties !== null && typeof properties === 'object' && !Array.isArray(properties)) {
+    const required = new Set(Array.isArray(record.required) ? (record.required as string[]) : []);
+    const missing = Object.keys(properties).filter(key => !required.has(key));
+    if (missing.length > 0) out.push({ schemaPath: path, missing });
+  }
+
+  const collectSchema = (key: string): void => {
+    if (key in record) collectGaps(record[key], `${path}.${key}`, out);
+  };
+  const collectSchemaArray = (key: string): void => {
+    const schemas = record[key];
+    if (!Array.isArray(schemas)) return;
+    schemas.forEach((item, index) => collectGaps(item, `${path}.${key}[${index}]`, out));
+  };
+  const collectSchemaMap = (key: string): void => {
+    const schemas = record[key];
+    if (schemas === null || typeof schemas !== 'object' || Array.isArray(schemas)) return;
+    for (const [name, subschema] of Object.entries(schemas)) {
+      collectGaps(subschema, `${path}.${key}.${name}`, out);
+    }
+  };
+
+  for (const key of [
+    'additionalProperties',
+    'unevaluatedProperties',
+    'propertyNames',
+    'contains',
+    'not',
+    'if',
+    'then',
+    'else',
+    'contentSchema',
+  ]) {
+    collectSchema(key);
+  }
+  if (Array.isArray(record.items)) collectSchemaArray('items');
+  else collectSchema('items');
+  for (const key of ['prefixItems', 'allOf', 'anyOf', 'oneOf']) collectSchemaArray(key);
+  for (const key of [
+    'properties',
+    'patternProperties',
+    'dependentSchemas',
+    'dependencies',
+    '$defs',
+    'definitions',
+  ]) {
+    collectSchemaMap(key);
+  }
+  return out;
+}
+
 // ─── Schema validation (ajv) ─────────────────────────────────────────────────
 
 /**
@@ -252,6 +341,55 @@ const ajv = new Ajv({ allErrors: true, strict: false });
 const validatorCache = new WeakMap<object, ValidateFunction>();
 
 /**
+ * Compile `schema` once and keep the validator in {@link validatorCache}.
+ * Throws ajv's compile error unchanged; both public entry points translate it.
+ *
+ * The `removeSchema` call drops ajv's OWN registry entry while keeping the
+ * compiled function. Without it, a schema that declares `$id` registers that id
+ * process-wide, and the next compile of an equivalent-but-distinct schema object
+ * — the same workflow re-parsed for `/workflow list`, an include-expanded clone,
+ * or a second run of the same file — throws `schema with key or id "…" already
+ * exists`. That used to degrade to a warning; a compile failure is now fatal at
+ * load and at the node boundary, so the duplicate registration would turn a
+ * perfectly valid workflow into a spurious failure. Nothing here resolves a
+ * `$ref` against another node's schema, so the registry has no other job.
+ */
+function compileAndCache(schema: Record<string, unknown>): ValidateFunction {
+  try {
+    const validate = ajv.compile(schema);
+    validatorCache.set(schema, validate);
+    return validate;
+  } finally {
+    // ajv registers a `$id` BEFORE it resolves references, so a compile that throws on
+    // a dangling `$ref` still leaves the id registered; without this the author's next
+    // attempt with the same `$id` fails with "already exists" instead of their real error.
+    ajv.removeSchema(schema);
+  }
+}
+
+/**
+ * Compile a declared `output_format` and report why ajv rejected it, or `null`
+ * when it compiles. The workflow loader calls this for every node schema so a
+ * contract that cannot be enforced fails the file BEFORE a provider is paid,
+ * instead of surfacing as a runtime warning after the spend.
+ *
+ * `strict: false` keeps tolerated dialect annotations (unknown keywords and
+ * formats) compiling, so only a schema ajv genuinely rejects — a dangling
+ * `$ref`, an invalid keyword value — produces a message. A successful compile
+ * warms the same cache {@link validateStructuredOutput} reads, so the load-time
+ * check costs nothing at runtime.
+ */
+export function compileOutputSchema(schema: Record<string, unknown>): string | null {
+  if (validatorCache.has(schema)) return null;
+  try {
+    compileAndCache(schema);
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+/**
  * Discriminated so the `errors` array only exists on the failure branch — the
  * caller can't read errors off a valid result, and a valid result can't smuggle
  * a non-empty errors list.
@@ -268,12 +406,13 @@ export type StructuredValidationResult = { valid: true } | { valid: false; error
  * required (that is an OpenAI-strict-mode concern handled separately by the
  * Codex normalizer), and optional fields stay optional.
  *
- * Fail-SAFE on a schema that ajv cannot compile (exotic dialect, bad `$ref`):
- * returns `{ valid: true }` so an un-compilable schema never turns a
- * genuinely-correct provider response into a spurious node failure. The compile
- * error is handed to the caller via the `onCompileError` hook, which the
- * dag-executor uses to both log AND surface a user-facing warning (so a schema
- * that silently can't be enforced doesn't go unnoticed).
+ * A schema ajv cannot compile (exotic dialect, bad `$ref`) is reported through
+ * the `onCompileError` hook and the value is NOT judged here — the result is
+ * `{ valid: true }` because this helper has no schema to judge against. Deciding
+ * what an unenforceable contract means belongs to the caller: the dag-executor
+ * fails the node, because {@link compileOutputSchema} already rejects such a
+ * schema at load time, so reaching this branch means a declared contract would
+ * otherwise cross a boundary unenforced.
  */
 export function validateStructuredOutput(
   value: unknown,
@@ -283,8 +422,7 @@ export function validateStructuredOutput(
   let validate = validatorCache.get(schema);
   if (!validate) {
     try {
-      validate = ajv.compile(schema);
-      validatorCache.set(schema, validate);
+      validate = compileAndCache(schema);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       onCompileError?.(message);

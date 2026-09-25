@@ -13,6 +13,7 @@ export const dashboardWorkflowRunSchema = workflowRunSchema.extend({
   platform_type: z.string().nullable(),
   worker_platform_id: z.string().nullable(),
   parent_platform_id: z.string().nullable(),
+  active_nodes: z.array(z.string().min(1)),
   current_step_name: z.string().nullable(),
   total_steps: z.number().nullable(),
   current_step_status: z.enum(['running', 'completed', 'failed']).nullable(),
@@ -28,7 +29,9 @@ export type DashboardWorkflowRun = z.infer<typeof dashboardWorkflowRunSchema>;
 // ---------------------------------------------------------------------------
 
 export const listDashboardRunsOptionsSchema = z.object({
-  status: workflowRunStatusSchema.optional(),
+  status: z
+    .union([workflowRunStatusSchema, z.tuple([workflowRunStatusSchema], workflowRunStatusSchema)])
+    .optional(),
   codebaseId: z.string().optional(),
   search: z.string().optional(),
   after: z.string().optional(),

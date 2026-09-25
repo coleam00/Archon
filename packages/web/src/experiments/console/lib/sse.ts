@@ -39,8 +39,8 @@ function parse(raw: string): ParsedEvent | null {
  *
  * Events we care about:
  *   workflow_status   — run created / status changed / completed / failed
- *   dag_node          — currently-executing-node changes (current_step_name)
- *                       which is rendered on each ActiveRunCard
+ *   dag_node          — active-node lifecycle changes, rendered together on
+ *                       each ActiveRunCard
  */
 export function useDashboardSSE(): void {
   useEffect(() => {

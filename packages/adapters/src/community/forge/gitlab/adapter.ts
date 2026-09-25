@@ -14,7 +14,7 @@ import {
   classifyAndFormatError,
   toError,
   onConversationClosed,
-  ConversationLockManager,
+  type ConversationLockManager,
 } from '@archon/core';
 import {
   ensureProjectStructure,
@@ -28,7 +28,7 @@ import {
   toRepoPath,
   toBranchName,
   isWorktreePath,
-  execFileAsync,
+  cloneRepository,
 } from '@archon/git';
 import * as db from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
@@ -50,18 +50,20 @@ const MAX_LENGTH = 65000; // Practical limit for GitLab notes
 /** Hidden marker added to bot comments to prevent self-triggering loops */
 const BOT_RESPONSE_MARKER = '<!-- archon-bot-response -->';
 
+type ConversationLocker = Pick<ConversationLockManager, 'acquireLock'>;
+
 export class GitLabAdapter implements IPlatformAdapter {
   private readonly gitlabUrl: string;
   private readonly token: string;
   private readonly webhookSecret: string;
   private readonly allowedUsers: string[];
   private readonly botMention: string;
-  private readonly lockManager: ConversationLockManager;
+  private readonly lockManager: ConversationLocker;
 
   constructor(
     token: string,
     webhookSecret: string,
-    lockManager: ConversationLockManager,
+    lockManager: ConversationLocker,
     gitlabUrl?: string,
     botMention?: string
   ) {
@@ -459,9 +461,6 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
       return;
     }
 
-    // Clone the repository
-    // GitLab self-hosted instances need oauth2:token auth and credential helper disabled
-    // to prevent macOS Keychain from intercepting and blocking the clone
     getLog().info({ projectPath, repoPath }, 'gitlab.repo_cloning');
 
     // Create project structure (source/, worktrees/, artifacts/, logs/) before
@@ -474,45 +473,30 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
     await ensureProjectStructure(cloneOwner, cloneRepo);
 
     const urlObj = new URL(this.gitlabUrl);
-    const repoUrl = `${urlObj.protocol}//oauth2:${this.token}@${urlObj.host}/${projectPath}.git`;
+    const repoUrl = `${urlObj.protocol}//${urlObj.host}/${projectPath}.git`;
+    const cloneResult = await cloneRepository(repoUrl, toRepoPath(repoPath), {
+      credentials: { username: 'oauth2', password: this.token },
+    });
 
-    try {
-      await execFileAsync('git', ['-c', 'credential.helper=', 'clone', repoUrl, repoPath], {
-        timeout: 120000,
-      });
-    } catch (error) {
-      const err = error as Error;
-      // Sanitize token from all error properties (message, stack, cause)
-      const sanitize = (s: string): string => s.replaceAll(this.token, '***');
-      const sanitized = sanitize(err.message);
-      const msg = sanitized.toLowerCase();
+    if (!cloneResult.ok) {
+      getLog().error(
+        { projectPath, repoPath, error: cloneResult.error },
+        'gitlab.repo_clone_failed'
+      );
 
-      const sanitizedError: Record<string, unknown> = { message: sanitized };
-      if (err.stack) sanitizedError.stack = sanitize(err.stack);
-      if (err.cause && typeof (err.cause as Error).message === 'string') {
-        sanitizedError.cause = sanitize((err.cause as Error).message);
-      }
-      const errRecord = err as unknown as Record<string, unknown>;
-      if (typeof errRecord.stdout === 'string') sanitizedError.stdout = sanitize(errRecord.stdout);
-      if (typeof errRecord.stderr === 'string') sanitizedError.stderr = sanitize(errRecord.stderr);
-
-      getLog().error({ projectPath, repoPath, error: sanitizedError }, 'gitlab.repo_clone_failed');
-
-      if (msg.includes('not found') || msg.includes('404')) {
+      if (cloneResult.error.code === 'not_a_repo') {
         throw new Error(
           `Repository ${projectPath} not found or is private. Check repository access.`
         );
       }
-      if (
-        msg.includes('authentication failed') ||
-        msg.includes('could not read') ||
-        msg.includes('403')
-      ) {
+      if (cloneResult.error.code === 'permission_denied') {
         throw new Error(
           `Authentication failed for ${projectPath}. Check GITLAB_TOKEN permissions.`
         );
       }
-      throw new Error(`Failed to clone ${projectPath}: ${sanitized}`);
+      const detail =
+        cloneResult.error.code === 'unknown' ? cloneResult.error.message : cloneResult.error.code;
+      throw new Error(`Failed to clone ${projectPath}: ${detail}`);
     }
 
     await addSafeDirectory(toRepoPath(repoPath));

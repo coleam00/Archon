@@ -3,7 +3,7 @@
  * Archon CLI - Run AI workflows from the command line
  *
  * Usage:
- *   archon workflow list              List available workflows
+ *   archon workflow list [name]       List available workflows
  *   archon workflow run <name> [msg]  Run a workflow
  *   archon version                    Show version info
  */
@@ -14,14 +14,30 @@ import '@archon/paths/strip-cwd-env-boot';
 // <cwd>/.archon/.env (repo scope, wins over user). Both with override: true.
 // See packages/paths/src/env-loader.ts and the three-path model (#1302 / #1303).
 import { loadArchonEnv } from '@archon/paths/env-loader';
-import { captureDetachedInstallContext, restoreDetachedInstallContext } from '@archon/paths';
+import {
+  captureDetachedInstallContext,
+  getPluginsPath,
+  restoreDetachedInstallContext,
+  setLogDestination,
+} from '@archon/paths';
+// A command's stdout is its output (`archon … > file`, `| jq`, an agent reading
+// it); logs are diagnostics. Set before anything below can log.
+setLogDestination('stderr');
 const hasDetachedRunConfigHandoff = process.argv
   .slice(2)
   .includes('--internal-detached-run-config');
 const inheritedInstallContext = hasDetachedRunConfigHandoff
   ? captureDetachedInstallContext()
   : undefined;
-loadArchonEnv(process.cwd());
+let forgeTrustedEnv: NodeJS.ProcessEnv = {};
+loadArchonEnv(process.cwd(), {
+  afterUserLoad: () => {
+    // Forge plugin processes run with the environment as the user scope left it, so
+    // the repository's `.archon/.env` can supply a credential (passed separately) but
+    // cannot change the environment an executable plugin runs in.
+    forgeTrustedEnv = { ...process.env };
+  },
+});
 // The detached parent sealed this payload with its effective install key. Repo
 // env still loads normally, but it cannot replace any input that derives the
 // install home before the child consumes the accepted snapshot.
@@ -30,9 +46,8 @@ if (inheritedInstallContext) {
 }
 
 // Install the pipe-safe `console.log` shim BEFORE any command module imports.
-// `console.log` reaches fd 1 via a non-blocking pipe (pino opens it that way at
-// module load via `@archon/paths/strip-cwd-env-boot` above), and short writes
-// are silently dropped against a slow reader. The shim delegates through
+// `console.log` can reach fd 1 as a non-blocking pipe, and short writes are
+// silently dropped against a slow reader. The shim delegates through
 // `writeStdout` so the stream layer queues short writes and retries `EAGAIN`
 // instead of dropping the tail — but delivery is fire-and-forget, so the
 // patched `console.log` returns synchronously and the exit path below must
@@ -47,11 +62,17 @@ import {
   rejectConfigOnContinue,
   rejectConfigOutsideRun,
   rejectModelOnContinue,
+  isContinueSubcommand,
+  RESUME_RUN_CONFIG_CONFLICT,
 } from './dispatch-guards';
+import { resolveCliExitCode } from './utils/workflow-exit-code';
+import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 installPipeSafeConsole();
 
 import { parseArgs } from 'util';
 import { cliArgOptions } from './args';
+import { shouldReportCliStart } from './utils/cli-start-telemetry';
+import { renderHelp } from './help';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
 import { stat } from 'fs/promises';
@@ -64,68 +85,9 @@ if (!process.env.CLAUDE_API_KEY && !process.env.CLAUDE_CODE_OAUTH_TOKEN) {
   }
 }
 
-// DATABASE_URL is no longer required - SQLite will be used as default
-
-// Bootstrap provider registry before any provider lookups
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
-registerBuiltinProviders();
-registerCommunityProviders();
-
-// Import commands after dotenv is loaded
-import { versionCommand } from './commands/version';
-import {
-  workflowListCommand,
-  workflowRunCommand,
-  workflowStatusCommand,
-  workflowGetCommand,
-  workflowWaitCommand,
-  workflowRunsCommand,
-  workflowResumeCommand,
-  workflowCancelCommand,
-  workflowAbandonCommand,
-  workflowApproveCommand,
-  workflowRejectCommand,
-  workflowRespondCommand,
-  workflowCleanupCommand,
-  workflowResetSessionsCommand,
-  workflowEventEmitCommand,
-  workflowSearchCommand,
-  workflowTestCommand,
-  workflowInstallCommand,
-  isValidEventType,
-  resolveCliExitCode,
-} from './commands/workflow';
-import { WORKFLOW_EVENT_TYPES } from '@archon/workflows/store';
-import {
-  isolationListCommand,
-  isolationCleanupCommand,
-  isolationCleanupMergedCommand,
-  isolationCompleteCommand,
-} from './commands/isolation';
-import { chatCommand } from './commands/chat';
-import { setupCommand } from './commands/setup';
-import { skillInstallCommand } from './commands/skill';
-import { validateWorkflowsCommand, validateCommandsCommand } from './commands/validate';
-import { serveCommand } from './commands/serve';
-import { doctorCommand } from './commands/doctor';
-import { authGithubCommand } from './commands/auth';
-import {
-  aiKeySetCommand,
-  aiListCommand,
-  aiLogoutCommand,
-  aiLoginCommand,
-  aiTierSetCommand,
-  aiTierListCommand,
-  aiTierUnsetCommand,
-  aiAliasSetCommand,
-  aiAliasListCommand,
-  aiAliasUnsetCommand,
-  aiDefaultCommand,
-} from './commands/ai';
-import { telemetryStatusCommand, telemetryResetCommand } from './commands/telemetry';
-import { closeDatabase } from '@archon/core';
 import {
   setLogLevel,
+  getLogLevel,
   createLogger,
   checkForUpdate,
   BUNDLED_IS_BINARY,
@@ -136,7 +98,31 @@ import {
   refreshCompiledInstallManifest,
   canonicalizeProjectPath,
 } from '@archon/paths';
-import * as git from '@archon/git';
+import { publishArchonCliCommand } from '@archon/paths/cli-command';
+
+publishArchonCliCommand();
+
+let providersRegistered = false;
+let databaseRouteLoaded = false;
+
+async function registerProviders(): Promise<void> {
+  if (providersRegistered) return;
+  const { registerBuiltinProviders, registerCommunityProviders } =
+    await import('@archon/providers');
+  registerBuiltinProviders();
+  registerCommunityProviders();
+  providersRegistered = true;
+}
+
+async function loadRoute<T>(
+  loader: () => Promise<T>,
+  options: { providers?: boolean; database?: boolean } = {}
+): Promise<T> {
+  if (options.providers) await registerProviders();
+  const route = await loader();
+  if (options.database) databaseRouteLoaded = true;
+  return route;
+}
 
 /** True when `path` exists and is a directory (used to validate `--workflow-source`). */
 async function isPathDirectory(path: string): Promise<boolean> {
@@ -168,133 +154,22 @@ async function fail(json: boolean | undefined, message: string): Promise<1> {
   return 1;
 }
 
-/**
- * Print usage information
- */
+function printUsageFor(command?: string, subcommand?: string): void {
+  console.log(renderHelp(command, subcommand));
+}
+
+/** Print the global usage information (every entry, every flag, every example). */
 function printUsage(): void {
-  console.log(`
-Archon CLI - Run AI workflows from the command line
-
-Usage:
-  archon <command> [subcommand] [options] [arguments]
-
-Commands:
-  chat <message>             Send a message to the orchestrator
-  setup                      Interactive setup wizard for credentials and config
-  workflow list              List available workflows in current directory
-  workflow run <name> [msg]  Run a workflow with optional message
-  workflow status            Show status of running/paused workflows
-  workflow runs              List recent runs (all statuses) for this project
-  workflow get <run-id>      Show detail for a single run (any status)
-  workflow wait <run-id>     Block until the run ends or needs a human decision
-  workflow resume <run-id>   Resume a failed or paused run from completed nodes
-  workflow cancel <run-id>   Stop a running workflow started with --detach
-  workflow abandon <run-id>  Mark a run cancelled without stopping host work
-  workflow respond <run-id> <decision> [text]
-                             Resolve a paused gate with any of its declared decisions
-                             ('approve'/'reject' are sugar for the dedicated commands)
-  workflow search [query]    Search the workflow marketplace
-  workflow install <slug>    Install a workflow from the marketplace
-  workflow test [<name>|<folder>|<path>]
-                             Run declared dry-run fixtures (fixtures/*.stubs.yaml) for a
-                             workflow, a workflow folder or pack (by name or directory
-                             path); relative paths resolve from the invoking directory before the
-                             repository root. With no target, runs every fixture. Never creates a
-                             run or contacts a provider; exec-code fixtures execute in a
-                             scratch worktree of HEAD
-  isolation list             List all active worktrees/environments
-  isolation cleanup [days]   Remove stale environments (default: 7 days)
-  isolation cleanup --merged Remove environments with branches merged into main
-  complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
-  serve                      Start the web UI server (downloads web UI on first run)
-  skill install [path]       Install archon-cli into .claude/skills and .agents/skills
-  doctor [--full]            Verify your Archon setup (Claude/Codex binaries, gh auth, DB, adapters; --full also probes the OpenCode runtime SDK)
-  auth github                Connect your GitHub identity via device flow (multi-user installs)
-  ai key set <provider>      Connect an AI provider API key (multi-user installs; key read from prompt/stdin)
-  ai login <provider>        Connect a Claude, ChatGPT/Codex, or Copilot subscription
-  ai list                    List your connected AI provider keys
-  ai logout <provider>       Disconnect an AI provider key
-  ai tier set <t> <p> <m>    Set a model tier (small/medium/large) → provider/model [--effort <e>] [--scope user|install]
-  ai tier list [--json]      Show configured tiers (install + yours) vs built-in defaults
-  ai tier unset <tier>       Unset a tier override (built-ins: claude/codex only) [--scope user|install]
-  ai alias set <@n> <p> <m>  Set a @custom model alias [--effort <e>] [--scope user|install]
-  ai alias list [--json]     Show configured @custom aliases (install + yours)
-  ai alias unset <@name>     Remove a @custom alias [--scope user|install]
-  ai default <p> [<model>]   Set the default assistant (+ chat model) [--scope user|install]
-  telemetry status           Show anonymous telemetry state (enabled, reason, ID, host)
-  telemetry reset            Rotate the anonymous install UUID
-  validate workflows [name]  Validate workflow definitions and their references
-  validate commands [name]   Validate command files
-  version, --version, -V     Show version info (also -v when used alone)
-  help                       Show this help message
-
-Options:
-  --cwd <path>               Override working directory (default: current directory)
-  --branch, -b <name>        Create worktree for branch (or reuse existing)
-  --from, --from-branch <name> Create new branch from specific start point
-  --base <branch>            Per-dispatch base override for epic slices (worktree cut-from + PR target)
-  --workflow-source <path>   Read the workflow, its commands and scripts from this directory
-                             instead of --cwd (which stays the workspace the run acts on)
-  --no-worktree              Run on branch directly without worktree isolation
-  --folder                   Register the current non-git directory as a folder project and run in place
-  --input <name>=<value>     Supply a declared workflow input; repeat per input (mutually exclusive with --resume)
-  --model <name>=<spec>      Rebind small/medium/large or @alias for one run; repeat per binding
-  --config <path>            Load a sparse YAML config layer for one fresh workflow run
-  --resume                   Resume the most recent failed or paused run of the workflow (mutually exclusive with --branch)
-  --adopt <run-id>           Start a new run adopting a terminal run's worktree/branch + artifacts ($ADOPTED_RUN_DIR)
-  --supersedes <run-id>      Record this fresh run as replacing the prior run's open item (no lane inheritance)
-  --dry-run                  Simulate workflow DAG control flow without creating a run or contacting a provider
-  --stubs <path>             YAML node-output map for --dry-run
-  --stubs-init <path>        Write a complete dry-run stub scaffold and exit
-  --default-stubs            Fill missing reached nodes with validated placeholders during --dry-run
-  --exec-code                Execute trusted bash/script nodes during --dry-run (default: require stubs)
-  --pause-at-gates           Stop a dry-run at approval gates instead of auto-approving
-  --spawn                    Open setup wizard in a new terminal window (for setup command)
-  --quiet, -q                Reduce log verbosity to warnings and errors only
-  --verbose, -v              Show debug-level output
-  --json                     Output machine-readable JSON (list/status/get/wait/runs/approve/reject/respond/cancel/abandon/resume)
-  --events                   For verbose JSON status/get: output raw event rows instead of node summaries
-  --detach                   Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (returns immediately)
-  --all                      For 'workflow runs': list across all projects (ignore cwd scope)
-  --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
-  --open                     For 'workflow runs': the open-work inbox — failed runs nothing has adopted or superseded
-  --limit <n>                For 'workflow runs': max rows (default 20)
-  --timeout <seconds>        For 'workflow wait': give up after N seconds (default: wait indefinitely)
-  --conversation-id <id>     Reuse a stable conversation scope across runs (enables
-                             persist_session resume between separate CLI invocations)
-  --port <port>              Override server port for 'serve' (default: 3090)
-  --download-only            Download web UI without starting the server
-  --force                    Overwrite existing file (for workflow install)
-
-Examples:
-  archon chat "What does the orchestrator do?"
-  archon workflow list
-  archon workflow run investigate-issue "Fix the login bug"
-  archon workflow run plan --cwd /path/to/repo "Add dark mode"
-  archon workflow run implement --branch feature-auth "Implement auth"
-  archon workflow run quick-fix --no-worktree "Fix typo"
-  archon workflow run assist --folder "List every repo under this multi-repo root"
-  archon workflow run archon-assist --detach "Investigate the flaky test"
-  archon workflow run assist --dry-run --stubs ./stubs.yaml --json
-  archon workflow runs --json
-  archon workflow get <run-id> --json
-  archon workflow wait <run-id> --json
-  archon workflow resume <run-id>
-  archon workflow cancel <run-id>
-  archon workflow runs --open
-  archon workflow run archon-smart-pr-review --adopt <run-id> "Review the changes"
-  archon skill install
-  archon skill install /path/to/project
-  archon workflow search "pr review"
-  archon workflow install archon-piv-loop
-`);
+  printUsageFor();
 }
 
 /**
  * Safely close the database connection
  */
 async function closeDb(): Promise<void> {
+  if (!databaseRouteLoaded) return;
   try {
+    const { closeDatabase } = await import('@archon/core/db/connection');
     await closeDatabase();
   } catch (error) {
     const err = error as Error;
@@ -336,12 +211,12 @@ function isVersionRequest(args: string[]): boolean {
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
 
-  // Anonymous once-per-invocation startup event (self-gates on opt-out).
-  // Emitted before any early return so EVERY invocation — including bare
-  // `archon`, `--help`, and `--version` — is counted, matching the
-  // "once per CLI invocation" contract. Each early-return path below flushes
-  // via shutdownTelemetry(); the main command path flushes in its finally.
-  captureArchonStarted({ surface: 'cli' });
+  // Anonymous startup event (self-gates on opt-out). Emitted before any early
+  // return so every invocation — including bare `archon`, `--help`, and
+  // `--version` — is counted once; `serve` and detached run owners are counted
+  // by another process (see shouldReportCliStart). Each early-return path below
+  // flushes via shutdownTelemetry(); the main command path flushes in its finally.
+  if (shouldReportCliStart(args, process.env)) captureArchonStarted({ surface: 'cli' });
 
   // Handle no arguments - show help and exit successfully
   if (args.length === 0) {
@@ -356,6 +231,7 @@ async function main(): Promise<number> {
   if (isVersionRequest(args)) {
     try {
       refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
+      const { versionCommand } = await loadRoute(() => import('./commands/version'));
       await versionCommand();
       return 0;
     } finally {
@@ -413,30 +289,38 @@ async function main(): Promise<number> {
   const command = positionals[0];
   const subcommand = positionals[1];
 
-  // setup/doctor/telemetry default to warn to avoid Pino info JSON interleaving with their human-readable output; lazy loggers pick up this level at first creation
-  const isInteractiveCommand =
-    command === 'setup' || command === 'doctor' || command === 'telemetry';
-  const suppressByDefault = isInteractiveCommand && !values.verbose && !isVerboseBoot();
+  // Commands default to warn: info records are engine internals that bury the
+  // command's own output, even on stderr. `serve` is the exception: its logs are
+  // its output, so they stay at info on stdout, as when the server runs directly.
+  // Lazy loggers pick up this level at first creation.
+  const isServe = command === 'serve';
+  if (isServe) setLogDestination('stdout');
+  const suppressByDefault = !isServe && !values.verbose && !isVerboseBoot();
+  const rawTranscriptCommand = command === 'workflow' && subcommand === 'logs';
   // Apply output policy before install discovery: its best-effort debug logs
   // must never prefix a machine-readable response.
-  if (jsonFlag) {
+  if (jsonFlag || rawTranscriptCommand) {
     setLogLevel('silent');
   } else if (values.quiet || suppressByDefault) {
-    setLogLevel('warn');
+    // Only ever quieter: an explicit LOG_LEVEL of error, fatal, or silent stays.
+    if (['trace', 'debug', 'info'].includes(getLogLevel())) setLogLevel('warn');
   } else if (values.verbose) {
     setLogLevel('debug');
   }
   refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
 
-  // Handle help flag
+  // Handle help flag — route through the scoped renderer using the already-
+  // parsed positionals so `archon <command> [--subcommand] --help` shows only
+  // the matching slice instead of the full index.
   if (values.help) {
-    printUsage();
+    printUsageFor(command, subcommand);
     await shutdownTelemetry();
     return 0;
   }
 
   // Commands that don't require git repo validation
   const noGitCommands = [
+    'trigger',
     'version',
     'help',
     'setup',
@@ -450,8 +334,35 @@ async function main(): Promise<number> {
     'ai',
   ];
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
+  let detachedRunConfig: WorkflowRunConfigInput | undefined;
 
   try {
+    const detachedRunConfigPayload = values['internal-detached-run-config'];
+    if (
+      command === 'workflow' &&
+      subcommand === 'run' &&
+      typeof detachedRunConfigPayload === 'string'
+    ) {
+      const { decodeWorkflowRunConfigHandoff } =
+        await import('@archon/core/config/run-config-handoff');
+      detachedRunConfig = decodeWorkflowRunConfigHandoff(detachedRunConfigPayload);
+      // Fail-fast for the decode step, not a second copy of the invariant: `workflow.ts`
+      // still owns this rejection for every caller. A legitimately spawned detached child
+      // cannot reach it — the parent refuses to seal a config for a continuation before it
+      // forks — so this only fires on a hand-built `--internal-detached-run-config`, and
+      // saves it a database round-trip on the way to the same message.
+      if (resumeFlag) throw new Error(RESUME_RUN_CONFIG_CONFLICT);
+    }
+
+    if (command === 'forge') {
+      const { forgeCommand } = await loadRoute(() => import('./commands/forge'));
+      return await forgeCommand(subcommand, {
+        data: typeof values.data === 'string' ? values.data : undefined,
+        dataFile: typeof values['data-file'] === 'string' ? values['data-file'] : undefined,
+        trustedEnv: forgeTrustedEnv,
+      });
+    }
+
     const configOutsideRun = rejectConfigOutsideRun(command, subcommand, values.config);
     if (configOutsideRun) {
       console.error(configOutsideRun);
@@ -467,6 +378,17 @@ async function main(): Promise<number> {
           'Find a prior run id with: archon workflow runs --open (or workflow get <run-id>)'
       );
     }
+    if (command === 'plugin') {
+      const { pluginCommand } = await loadRoute(() => import('./commands/plugin'));
+      const { getArchonVersion } = await loadRoute(() => import('./commands/version'));
+      return await pluginCommand(subcommand, positionals.slice(2), {
+        // The trusted plugins directory forge and workflow-pack discovery read, so repo
+        // env cannot redirect where an install lands.
+        pluginsDir: getPluginsPath(),
+        archonVersion: await getArchonVersion(),
+        projectDir: cwd,
+      });
+    }
     // Note: orphaned run cleanup moved to `workflow cleanup` command only.
     // Running it on every CLI startup killed parallel workflow runs (all
     // 'running' status rows were marked failed by each new process).
@@ -475,6 +397,7 @@ async function main(): Promise<number> {
     if (command === 'workflow' && subcommand === 'search') {
       const query = positionals[2];
       try {
+        const { workflowSearchCommand } = await loadRoute(() => import('./commands/workflow'));
         await workflowSearchCommand(query, jsonFlag);
       } catch (error) {
         const err = error as Error;
@@ -493,10 +416,8 @@ async function main(): Promise<number> {
     if (command === 'workflow' && subcommand === 'test') {
       const target = positionals[2];
       try {
-        // Resolve to the repo root like the git gate below does, so project
-        // workflow discovery reads the repository, not a subdirectory of it.
-        const testCwd = requiresGitRepo ? ((await git.findRepoRoot(cwd)) ?? cwd) : cwd;
-        return await workflowTestCommand(testCwd, target, { json: jsonFlag, targetCwd: cwd });
+        const { workflowTestCommand } = await loadRoute(() => import('./commands/workflow'));
+        return await workflowTestCommand(cwd, target, { json: jsonFlag });
       } catch (error) {
         const err = error as Error;
         if (jsonFlag) {
@@ -516,6 +437,7 @@ async function main(): Promise<number> {
       }
 
       // Validate git repository and resolve to root
+      const git = await import('@archon/git');
       const repoRoot = await git.findRepoRoot(cwd);
       if (repoRoot) {
         // Use repo root as working directory (handles subdirectory case)
@@ -541,7 +463,9 @@ async function main(): Promise<number> {
         let folderCodebase: { default_cwd: string; kind: 'repo' | 'folder' } | null = null;
         let gateLookupError: Error | null = null;
         try {
-          const codebaseDb = await import('@archon/core/db/codebases');
+          const codebaseDb = await loadRoute(() => import('@archon/core/db/codebases'), {
+            database: true,
+          });
           folderCodebase =
             (await codebaseDb.findCodebaseByDefaultCwd(realCwd)) ??
             (await codebaseDb.findCodebaseByPathPrefix(realCwd));
@@ -590,17 +514,42 @@ async function main(): Promise<number> {
     }
 
     switch (command) {
-      case 'version':
+      case 'trigger': {
+        const { triggerCommand } = await loadRoute(() => import('./commands/trigger'), {
+          providers: subcommand === 'fire' || subcommand === 'drain' || subcommand === 'execute',
+          database: true,
+        });
+        await triggerCommand(subcommand, positionals.slice(2), {
+          config: typeof values.config === 'string' ? values.config : undefined,
+          host: typeof values.host === 'string' ? values.host : undefined,
+          owner: typeof values.owner === 'string' ? values.owner : undefined,
+          limit: typeof values.limit === 'string' ? values.limit : undefined,
+          yes: values.yes === true,
+        });
+        break;
+      }
+
+      case 'version': {
+        const { versionCommand } = await loadRoute(() => import('./commands/version'));
         await versionCommand();
         break;
+      }
 
-      case 'help':
-        printUsage();
+      case 'help': {
+        // Mirror `archon <command> [--subcommand] --help`: bare `archon help`
+        // is the global index; `archon help <cmd>` scopes to one command;
+        // `archon help <cmd> <subcmd>` scopes further to one subcommand.
+        printUsageFor(positionals[1], positionals[2]);
         break;
+      }
 
       case 'chat': {
         const chatMessage = positionals.slice(1).join(' ');
         if (!chatMessage) return await fail(jsonFlag, 'Usage: archon chat <message>');
+        const { chatCommand } = await loadRoute(() => import('./commands/chat'), {
+          providers: true,
+          database: true,
+        });
         await chatCommand(chatMessage);
         break;
       }
@@ -620,6 +569,7 @@ async function main(): Promise<number> {
         // reads at boot) — not <subdir>/.archon/.env.
         let repoPath = cwd;
         if (scope === 'project') {
+          const git = await import('@archon/git');
           const repoRoot = await git.findRepoRoot(cwd);
           if (!repoRoot) {
             return await fail(
@@ -632,7 +582,17 @@ async function main(): Promise<number> {
           }
           repoPath = repoRoot;
         }
-        await setupCommand({ spawn: spawnFlag, repoPath, scope, force: forceFlag });
+        const { setupCommand } = await loadRoute(() => import('./commands/setup'), {
+          providers: true,
+          database: true,
+        });
+        const setupExitCode = await setupCommand({
+          spawn: spawnFlag,
+          repoPath,
+          scope,
+          force: forceFlag,
+        });
+        if (setupExitCode !== 0) return setupExitCode;
         break;
       }
 
@@ -641,10 +601,62 @@ async function main(): Promise<number> {
         if (modelOnContinue) {
           return await fail(jsonFlag, modelOnContinue);
         }
+        const {
+          workflowListCommand,
+          WorkflowListLookupError: workflowListLookupError,
+          workflowRunCommand,
+          workflowStatusCommand,
+          workflowGetCommand,
+          workflowLogsCommand,
+          workflowWaitCommand,
+          workflowRunsCommand,
+          workflowResumeCommand,
+          workflowCancelCommand,
+          workflowAbandonCommand,
+          workflowApproveCommand,
+          workflowRejectCommand,
+          workflowRespondCommand,
+          workflowCleanupCommand,
+          workflowResetSessionsCommand,
+          workflowEventEmitCommand,
+          workflowInstallCommand,
+          isValidEventType,
+        } = await loadRoute(() => import('./commands/workflow'), {
+          // `resume`, `approve`, `reject`, and `respond` all reach `workflowRunCommand`,
+          // so they need the registry for the same reason `run` does. They need it more,
+          // in fact: a continuation resolves its workflow from the run's captured source,
+          // and passing that capture's `source_config` into discovery is what skips
+          // `loadConfig()` — the call that self-registers providers for every other
+          // route. Without this, the loader rejects any `provider:`-scoped workflow and
+          // the run is reported as missing from its own capture.
+          providers: subcommand === 'run' || isContinueSubcommand(subcommand),
+          database: true,
+        });
         switch (subcommand) {
-          case 'list':
-            await workflowListCommand(effectiveCwd, jsonFlag);
+          case 'list': {
+            const workflowName = positionals[2];
+            if (positionals[3] !== undefined) {
+              return await fail(jsonFlag, 'Usage: archon workflow list [name] [--full] [--json]');
+            }
+            try {
+              await workflowListCommand(effectiveCwd, {
+                json: jsonFlag,
+                name: workflowName,
+                full: values.full as boolean | undefined,
+              });
+            } catch (error) {
+              if (jsonFlag && error instanceof workflowListLookupError) {
+                await writeJsonLine({
+                  ok: false,
+                  error: error.message,
+                  errors: error.loadErrors,
+                });
+                return 1;
+              }
+              throw error;
+            }
             break;
+          }
 
           case 'run': {
             const workflowName = positionals[2];
@@ -758,9 +770,7 @@ async function main(): Promise<number> {
               modelAssignments: values.model as string[] | undefined,
               configPath:
                 typeof values.config === 'string' ? resolve(cwd, values.config) : undefined,
-              detachedRunConfigPayload: values['internal-detached-run-config'] as
-                | string
-                | undefined,
+              detachedRunConfig,
               detachedRunId: values['internal-detached-run-id'] as string | undefined,
             };
             await workflowRunCommand(effectiveCwd, workflowName, userMessage, options);
@@ -771,15 +781,16 @@ async function main(): Promise<number> {
             if (positionals[2] !== undefined) {
               return await fail(
                 jsonFlag,
-                'Usage: archon workflow status [--json] [--verbose] [--events]\n' +
+                'Usage: archon workflow status [--all] [--json] [--verbose] [--events]\n' +
                   'To show a single run, use: archon workflow get <run-id>'
               );
             }
-            await workflowStatusCommand(
-              jsonFlag,
-              values.verbose as boolean | undefined,
-              values.events as boolean | undefined
-            );
+            await workflowStatusCommand(effectiveCwd, {
+              json: jsonFlag,
+              verbose: values.verbose as boolean | undefined,
+              rawEvents: values.events as boolean | undefined,
+              all: values.all as boolean | undefined,
+            });
             break;
 
           case 'get': {
@@ -799,6 +810,26 @@ async function main(): Promise<number> {
               effectiveCwd,
               values.events as boolean | undefined
             );
+          }
+
+          case 'logs': {
+            const logsRunId = positionals[2];
+            if (!logsRunId || positionals[3] !== undefined) {
+              return await fail(false, 'Usage: archon workflow logs <run-id> [--follow]');
+            }
+            if (jsonFlag) {
+              return await fail(
+                false,
+                'Error: workflow logs already emits JSONL; --json is not supported.'
+              );
+            }
+            if (values.events) {
+              return await fail(
+                false,
+                'Error: --events applies to workflow status/get, not workflow logs.'
+              );
+            }
+            return await workflowLogsCommand(logsRunId, Boolean(values.follow), effectiveCwd);
           }
 
           case 'wait': {
@@ -1007,6 +1038,7 @@ async function main(): Promise<number> {
               );
             }
             if (!isValidEventType(eventType)) {
+              const { WORKFLOW_EVENT_TYPES } = await import('@archon/workflows/store');
               return await fail(
                 jsonFlag,
                 `Error: unknown event type: ${eventType}\nValid types: ${WORKFLOW_EVENT_TYPES.join(', ')}`
@@ -1051,7 +1083,9 @@ async function main(): Promise<number> {
         break;
       }
 
-      case 'isolation':
+      case 'isolation': {
+        const { isolationListCommand, isolationCleanupCommand, isolationCleanupMergedCommand } =
+          await loadRoute(() => import('./commands/isolation'), { database: true });
         switch (subcommand) {
           case 'list':
             await isolationListCommand();
@@ -1078,8 +1112,12 @@ async function main(): Promise<number> {
           }
         }
         break;
+      }
 
-      case 'validate':
+      case 'validate': {
+        const { validateWorkflowsCommand, validateCommandsCommand } = await loadRoute(
+          () => import('./commands/validate')
+        );
         switch (subcommand) {
           case 'workflows': {
             const validateName = positionals[2];
@@ -1099,6 +1137,7 @@ async function main(): Promise<number> {
             return await fail(jsonFlag, `${problem}\nAvailable: workflows, commands`);
           }
         }
+      }
 
       case 'complete': {
         const branches = positionals.slice(1);
@@ -1106,6 +1145,9 @@ async function main(): Promise<number> {
           return await fail(jsonFlag, 'Usage: archon complete <branch-name> [branch2 ...]');
         }
         const forceFlag = Boolean(values.force);
+        const { isolationCompleteCommand } = await loadRoute(() => import('./commands/isolation'), {
+          database: true,
+        });
         await isolationCompleteCommand(branches, { force: forceFlag, deleteRemote: true });
         break;
       }
@@ -1113,17 +1155,27 @@ async function main(): Promise<number> {
       case 'serve': {
         const servePort = values.port !== undefined ? Number(values.port) : undefined;
         const downloadOnly = Boolean(values['download-only']);
+        const { serveCommand } = await loadRoute(() => import('./commands/serve'), {
+          database: !downloadOnly,
+        });
         return await serveCommand({ port: servePort, downloadOnly });
       }
 
       case 'doctor': {
+        const { doctorCommand } = await loadRoute(() => import('./commands/doctor'), {
+          database: true,
+        });
         return await doctorCommand(undefined, Boolean(values.full));
       }
 
       case 'auth': {
         switch (subcommand) {
-          case 'github':
+          case 'github': {
+            const { authGithubCommand } = await loadRoute(() => import('./commands/auth'), {
+              database: true,
+            });
             return await authGithubCommand();
+          }
           default: {
             const problem =
               subcommand === undefined
@@ -1135,6 +1187,24 @@ async function main(): Promise<number> {
       }
 
       case 'ai': {
+        const {
+          aiKeySetCommand,
+          aiListCommand,
+          aiLogoutCommand,
+          aiLoginCommand,
+          aiTierSetCommand,
+          aiTierListCommand,
+          aiTierUnsetCommand,
+          aiAliasSetCommand,
+          aiAliasListCommand,
+          aiAliasUnsetCommand,
+          aiDefaultCommand,
+          aiCapacityListCommand,
+          aiCapacityReleaseCommand,
+        } = await loadRoute(() => import('./commands/ai'), {
+          providers: true,
+          database: true,
+        });
         switch (subcommand) {
           case 'key': {
             const action = positionals[2];
@@ -1195,6 +1265,16 @@ async function main(): Promise<number> {
                 );
             }
           }
+          case 'capacity': {
+            const action = positionals[2];
+            if (action === undefined || action === 'list')
+              return await aiCapacityListCommand(jsonFlag);
+            if (action === 'release') return await aiCapacityReleaseCommand(positionals[3]);
+            return await fail(
+              jsonFlag,
+              'Usage: archon ai capacity [list] [--json] | capacity release <attempt-id>'
+            );
+          }
           case 'default':
             return await aiDefaultCommand(
               positionals[2],
@@ -1208,13 +1288,16 @@ async function main(): Promise<number> {
                 : `Unknown ai subcommand: ${subcommand}`;
             return await fail(
               jsonFlag,
-              `${problem}\nAvailable: key set <provider>, login <provider>, list, logout <provider>, tier set|list|unset, alias set|list|unset, default <provider> [<model>]`
+              `${problem}\nAvailable: key set <provider>, login <provider>, list, logout <provider>, tier set|list|unset, alias set|list|unset, capacity [list]|release <attempt-id>, default <provider> [<model>]`
             );
           }
         }
       }
 
       case 'telemetry': {
+        const { telemetryStatusCommand, telemetryResetCommand } = await loadRoute(
+          () => import('./commands/telemetry')
+        );
         switch (subcommand) {
           case 'status':
             return telemetryStatusCommand();
@@ -1236,6 +1319,7 @@ async function main(): Promise<number> {
             // Optional positional path; otherwise install into the resolved cwd.
             const targetArg = positionals[2];
             const targetPath = targetArg ? resolve(targetArg) : cwd;
+            const { skillInstallCommand } = await loadRoute(() => import('./commands/skill'));
             return await skillInstallCommand(targetPath);
           }
 

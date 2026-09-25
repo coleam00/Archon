@@ -1,7 +1,7 @@
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
-import { createQueryResult, mockPostgresDialect } from '../test/mocks/database';
+import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 
-const mockQuery = mock(() => Promise.resolve(createQueryResult([])));
+const mockQuery = createMockQuery();
 
 // withTransaction forwards its callback to the shared mockQuery instance, so
 // tests can queue mockResolvedValueOnce in transactional order. To simulate a

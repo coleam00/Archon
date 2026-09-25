@@ -1,14 +1,15 @@
 {
   "name": "@archon/git",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./test-utils": "./src/test-utils.ts"
   },
   "scripts": {
-    "test": "bun test src/",
+    "test": "bun run ../../scripts/package-tests.ts",
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
@@ -16,5 +17,15 @@
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
-  }
+  },
+  "testGroups": [
+    [
+      "src/forge.test.ts",
+      "src/git.test.ts",
+      "src/refresh-worktree-index.test.ts"
+    ],
+    [
+      "src/merge-signals.test.ts"
+    ]
+  ]
 }

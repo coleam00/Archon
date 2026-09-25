@@ -44,9 +44,21 @@ export function parseOpencodeConfig(raw: Record<string, unknown>): OpencodeProvi
   return result;
 }
 
-/** Strict counterpart used only for an explicitly selected per-run layer. */
-export function parseOpencodeRunConfig(raw: Record<string, unknown>): OpencodeProviderDefaults {
+/** Strict counterpart for authored config: `.archon/config.yaml` and per-run layers. */
+export function parseOpencodeConfigStrict(raw: Record<string, unknown>): OpencodeProviderDefaults {
   assertKnownRunConfigKeys(raw, ['model', 'baseUrl', 'agent']);
+  // Neither key is honoured on any surface, so neither takes a scope: `agent`
+  // names an opencode.json agent no consumer reads, and `sendQuery` refuses a
+  // `baseUrl` outright because Archon owns the embedded OpenCode runtime.
+  if (Object.hasOwn(raw, 'agent')) {
+    throw new InvalidProviderRunConfigError('agent', 'default OpenCode agents are not consumed');
+  }
+  if (Object.hasOwn(raw, 'baseUrl')) {
+    throw new InvalidProviderRunConfigError(
+      'baseUrl',
+      'external OpenCode runtimes are not supported'
+    );
+  }
   let model = normalizeRunConfigString(raw.model, 'model');
   if (model !== undefined) {
     const parsed = parseModelRef(model);
@@ -54,16 +66,6 @@ export function parseOpencodeRunConfig(raw: Record<string, unknown>): OpencodePr
       invalidRunConfigValue('model', "'<provider>/<model>'");
     }
     model = `${parsed.providerID}/${parsed.modelID}`;
-  }
-  for (const key of ['baseUrl', 'agent'] as const) {
-    if (Object.hasOwn(raw, key)) {
-      throw new InvalidProviderRunConfigError(
-        key,
-        key === 'baseUrl'
-          ? 'external OpenCode runtimes are not supported'
-          : 'default OpenCode agents are not consumed by workflow runs'
-      );
-    }
   }
   return model === undefined ? {} : { model };
 }

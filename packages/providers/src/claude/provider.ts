@@ -50,10 +50,16 @@ import { CLAUDE_CAPABILITIES } from './capabilities';
 import { buildContainerSpawn } from './container-spawn';
 import { resolveClaudeBinaryPath, pathKind } from './binary-resolver';
 import { buildArchonMcpServer, ARCHON_TOOL_SERVER } from './native-tools';
+import {
+  SessionSpendLedger,
+  spendSince,
+  type QuerySpend,
+  type SpendBaseline,
+} from './session-spend';
 import { createLogger } from '@archon/paths';
 import { loadMcpConfig } from '../mcp/config';
 import { withResumedOutcome, resumedOutcome } from '../shared/resumed';
-import { clampEffort, type AssertNever } from '../shared/effort';
+import { clampEffort, type AssertNever } from '@archon/paths/effort';
 import {
   claudeSkillSearchRoots,
   findInstalledSkillNames,
@@ -67,6 +73,9 @@ function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('provider.claude');
   return cachedLog;
 }
+
+/** Process-wide: a resume must find the totals of a session another provider instance ran. */
+const sessionSpend = new SessionSpendLedger();
 
 /** The reasoning-depth rungs `Options['effort']` accepts. Typed against the SDK
  *  so a vocabulary change upstream fails type-check here. */
@@ -222,6 +231,24 @@ export function buildRequestSubprocessEnv(
   return env;
 }
 
+/**
+ * Opt the system prompt out of the SDK's recording, on by default since 0.3.267.
+ * A recorded prompt is re-sent verbatim when the session is resumed, ignoring the
+ * prompt passed on that request until compaction. Archon changes the prompt
+ * within a session: a workflow node that resumes or forks another node's session
+ * brings its own `systemPrompt`, and a chat turn's append lists the codebases
+ * and workflows as they are now.
+ */
+export function withPerRequestSystemPrompt(
+  systemPrompt: Options['systemPrompt']
+): Options['systemPrompt'] {
+  if (systemPrompt === undefined) return undefined;
+  if (typeof systemPrompt === 'string' || Array.isArray(systemPrompt)) {
+    return { type: 'custom', prompt: systemPrompt, snapshot: false };
+  }
+  return { ...systemPrompt, snapshot: false };
+}
+
 /** Max retries for transient subprocess failures */
 const MAX_SUBPROCESS_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 2000;
@@ -330,6 +357,11 @@ function classifySdkErrorCode(code: SdkErrorCode): 'rate_limit' | 'auth' | 'cras
     case 'oauth_org_not_allowed':
     case 'account_on_hold':
     case 'billing_error':
+    case 'verification_required':
+    case 'cloud_credential_error':
+      // The last two block requests until the operator acts: the organization must
+      // complete verification, or the cloud provider's credentials could not be
+      // loaded and need checking or refreshing. Retrying cannot clear either.
       return 'auth';
     case 'rate_limit':
     case 'overloaded':
@@ -655,9 +687,9 @@ async function applyNodeConfig(
     getLog().info({ agentIds: Object.keys(nodeConfig.agents) }, 'claude.inline_agents_registered');
   }
 
-  // effort — clamped into the SDK's own vocabulary. Claude has no `minimal` or
-  // `ultra` rung, so they become its shallowest (`low`) and deepest (`max`)
-  // values respectively.
+  // effort — clamped into the SDK's own vocabulary. Claude has no `minimal`,
+  // `ultra`, or `persistent` rung, so they become its shallowest (`low`) and
+  // deepest (`max`) values respectively.
   if (nodeConfig.effort !== undefined) {
     const effort = clampEffort(nodeConfig.effort, CLAUDE_EFFORTS);
     if (effort === undefined) {
@@ -668,11 +700,6 @@ async function applyNodeConfig(
       }
       options.effort = effort;
     }
-  }
-
-  // thinking
-  if (nodeConfig.thinking !== undefined) {
-    options.thinking = nodeConfig.thinking as Options['thinking'];
   }
 
   // sandbox
@@ -948,7 +975,8 @@ function buildToolCaptureHooks(toolResultQueue: ToolResultEntry[]): Options['hoo
  */
 async function* streamClaudeMessages(
   events: AsyncGenerator,
-  toolResultQueue: ToolResultEntry[]
+  toolResultQueue: ToolResultEntry[],
+  spendBaseline: SpendBaseline
 ): AsyncGenerator<MessageChunk> {
   // Synthetic error message recorded while waiting for the terminal result to
   // confirm it (#1797). Detection is two-signal: the typed wrapper `error`
@@ -1048,7 +1076,7 @@ async function* streamClaudeMessages(
           yield { type: 'system', content: `MCP server connection failed: ${names}` };
         }
       } else if (subtype === 'task_started' && sysMsg.task_id) {
-        // Ambient / housekeeping tasks (SDK v0.3.247 signals them directly;
+        // Ambient / housekeeping tasks (SDK v0.3.247+ signals them directly;
         // older emitters use skip_transcript) are SDK-internal — they bloat
         // the Web UI's tasks panel without telling
         // the user anything actionable. Drop them at the provider boundary;
@@ -1162,7 +1190,24 @@ async function* streamClaudeMessages(
       yield { type: 'rate_limit', rateLimitInfo: rateLimitMsg.rate_limit_info ?? {} };
     } else if (event.type === 'result') {
       const resultMsg = msg as SDKResultMessage;
-      const resolvedModelId = selectResolvedModelId(resultMsg.modelUsage);
+      // The SDK's cost and per-model totals are cumulative for the session; report
+      // this query's share (see session-spend.ts). Record even on an error result
+      // so a later resume of this session differences against current totals.
+      // Typed as required, but it crosses an IPC boundary (see selectResolvedModelId).
+      const modelUsage = (resultMsg.modelUsage as Record<string, ModelUsage> | undefined) ?? {};
+      let spend: QuerySpend = { costUsd: undefined, modelUsage };
+      if (typeof resultMsg.total_cost_usd === 'number') {
+        const cumulative = { costUsd: resultMsg.total_cost_usd, modelUsage };
+        spend = spendSince(spendBaseline, cumulative);
+        sessionSpend.record(resultMsg.session_id, cumulative);
+        if (spend.costUsd === undefined) {
+          getLog().warn(
+            { sessionId: resultMsg.session_id, baseline: spendBaseline.kind },
+            'claude.query_cost_unknown'
+          );
+        }
+      }
+      const resolvedModelId = selectResolvedModelId(spend.modelUsage);
       // The terminal result resolves any recorded synthetic error message.
       const syntheticError = pendingSdkError;
       pendingSdkError = undefined;
@@ -1249,7 +1294,7 @@ async function* streamClaudeMessages(
           : {}),
         ...(isRealError ? { isError: true, errorSubtype: resultMsg.subtype } : {}),
         ...(isRealError && sdkErrors?.length ? { errors: sdkErrors } : {}),
-        ...(resultMsg.total_cost_usd !== undefined ? { cost: resultMsg.total_cost_usd } : {}),
+        ...(spend.costUsd !== undefined ? { cost: spend.costUsd } : {}),
         ...(resultMsg.stop_reason != null ? { stopReason: resultMsg.stop_reason } : {}),
         ...(resultMsg.num_turns !== undefined ? { numTurns: resultMsg.num_turns } : {}),
         ...(resolvedModelId ? { resolvedModel: { id: resolvedModelId } } : {}),
@@ -1421,10 +1466,10 @@ export class ClaudeProvider implements IAgentProvider {
    * Send a query to Claude and stream responses.
    * Orchestrates option building, nodeConfig translation, streaming, and retry.
    */
-  // TODO(#1135): Pre-spawn env-leak gate was removed during provider extraction.
-  // Caller-side enforcement (orchestrator, dag-executor) is tracked in #1135.
-  // Providers must NOT implement security gates — the platform guarantees safety
-  // before a provider runs.
+  // No security gate lives here on purpose. Env hygiene for a target repo is
+  // structural (the platform strips what must not reach a subprocess before a
+  // provider runs), so a provider that scanned or refused would be a second,
+  // divergent copy of that policy.
   async *sendQuery(
     prompt: string,
     cwd: string,
@@ -1486,6 +1531,9 @@ export class ClaudeProvider implements IAgentProvider {
     // Track the current attempt's controller so a single abort listener
     // can forward cancellation without accumulating per-retry listeners.
     let currentController: AbortController | undefined;
+    // Taken once: a retry resumes the same session, and whatever a failed attempt
+    // spent before it died is still this query's spend.
+    const spendBaseline = sessionSpend.baselineFor(resumeSessionId);
     const onAbort = (): void => {
       currentController?.abort();
     };
@@ -1520,6 +1568,8 @@ export class ClaudeProvider implements IAgentProvider {
       if (requestOptions?.nodeConfig) {
         await applyNodeConfig(options, requestOptions.nodeConfig, cwd, skillSearch);
       }
+
+      options.systemPrompt = withPerRequestSystemPrompt(options.systemPrompt);
 
       // 2b. Register in-process native tools (e.g. manage_run) as an archon MCP
       //     server, mirroring the file-based mcp branch. Merge so a nodeConfig
@@ -1560,7 +1610,7 @@ export class ClaudeProvider implements IAgentProvider {
         // retried/surfaced), so reaching the result stream means the prior
         // session was restored. Hence `true` whenever a resume was requested.
         yield* withResumedOutcome(
-          streamClaudeMessages(events, toolResultQueue),
+          streamClaudeMessages(events, toolResultQueue, spendBaseline),
           resumedOutcome(resumeSessionId, true)
         );
         return;
@@ -1590,7 +1640,11 @@ export class ClaudeProvider implements IAgentProvider {
 
         const delayMs = this.retryBaseDelayMs * Math.pow(2, attempt);
         getLog().info({ attempt, delayMs, errorClass }, 'retrying_subprocess');
-        await new Promise(resolve => setTimeout(resolve, delayMs));
+        const backoff = (): Promise<void> => new Promise(resolve => setTimeout(resolve, delayMs));
+        // A capped provider's slot is not held through the backoff.
+        await (requestOptions?.admission
+          ? requestOptions.admission.releaseDuring(backoff)
+          : backoff());
         lastError = enrichedError;
       }
     }

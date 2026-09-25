@@ -24,11 +24,29 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
+interface PostMessageArgs {
+  channel: string;
+  text: string;
+  thread_ts?: string;
+  blocks?: { type: string; text: string }[];
+}
+
+interface UserInfoResult {
+  user?: {
+    id?: string;
+    real_name?: string;
+    name?: string;
+    profile?: { email?: string; display_name?: string };
+  };
+}
+
 // Create mock functions
-const mockPostMessage = mock(() => Promise.resolve(undefined));
+const mockPostMessage = mock(
+  async (_args: PostMessageArgs): Promise<{ ts?: string } | undefined> => undefined
+);
 const mockReplies = mock(() => Promise.resolve({ messages: [] }));
-const mockUsersInfo = mock(() =>
-  Promise.resolve({
+const mockUsersInfo = mock(
+  async (): Promise<UserInfoResult> => ({
     user: {
       id: 'U123',
       real_name: 'Alice Liddell',
@@ -36,11 +54,23 @@ const mockUsersInfo = mock(() =>
     },
   })
 );
-const mockEvent = mock(() => {});
+const mockEvent = mock((_name: string, _handler: unknown) => {});
 const mockStart = mock(() => Promise.resolve(undefined));
 const mockStop = mock(() => Promise.resolve(undefined));
-const mockCommand = mock(() => {});
-const mockAction = mock(() => {});
+const mockCommand = mock((_name: string, _handler: unknown) => {});
+const mockAction = mock((_pattern: RegExp, _handler: unknown) => {});
+
+function postedMessage(index: number): PostMessageArgs {
+  const call = mockPostMessage.mock.calls[index];
+  if (!call) throw new Error(`postMessage call ${String(index)} was not recorded`);
+  return call[0];
+}
+
+function postedBlocks(index: number): NonNullable<PostMessageArgs['blocks']> {
+  const blocks = postedMessage(index).blocks;
+  if (!blocks) throw new Error(`postMessage call ${String(index)} did not include blocks`);
+  return blocks;
+}
 
 const mockApp = {
   client: {
@@ -98,6 +128,15 @@ describe('SlackAdapter', () => {
     test('should return slack', () => {
       const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
       expect(adapter.getPlatformType()).toBe('slack');
+    });
+
+    // The worktree-in-use refusal prints commands through this; `/workflow` is not a
+    // command this Slack app registers.
+    test('spells workflow commands as the registered /archon-workflow command', () => {
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      expect(adapter.formatWorkflowCommand('cancel abc12345')).toBe(
+        '/archon-workflow cancel abc12345'
+      );
     });
   });
 
@@ -212,6 +251,17 @@ describe('SlackAdapter', () => {
         )
       ).toBe('compare https://github.com/a and https://github.com/b');
     });
+
+    test('should map a bare reset to /reset', () => {
+      expect(adapter.stripBotMention('reset')).toBe('/reset');
+      expect(adapter.stripBotMention('RESET')).toBe('/reset');
+      expect(adapter.stripBotMention('<@U1234ABCD> reset')).toBe('/reset');
+    });
+
+    test('should leave /reset and longer reset text unchanged', () => {
+      expect(adapter.stripBotMention('/reset')).toBe('/reset');
+      expect(adapter.stripBotMention('reset please')).toBe('reset please');
+    });
   });
 
   describe('parent conversation ID', () => {
@@ -240,15 +290,6 @@ describe('SlackAdapter', () => {
         ts: '1234567890.123456',
       };
       expect(adapter.getParentConversationId(event)).toBe(null);
-    });
-  });
-
-  describe('app instance', () => {
-    test('should provide access to app instance', () => {
-      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
-      const app = adapter.getApp();
-      expect(app).toBeDefined();
-      expect(app.client).toBeDefined();
     });
   });
 
@@ -351,9 +392,7 @@ describe('SlackAdapter', () => {
           text: 'test message',
         })
       );
-      expect((mockPostMessage as Mock<typeof mockPostMessage>).mock.calls[1][0]).not.toHaveProperty(
-        'blocks'
-      );
+      expect(postedMessage(1)).not.toHaveProperty('blocks');
     });
 
     test('should split long messages into multiple markdown blocks', async () => {
@@ -365,12 +404,8 @@ describe('SlackAdapter', () => {
 
       expect(mockPostMessage).toHaveBeenCalledTimes(2);
       // Both calls should use markdown blocks
-      expect((mockPostMessage as Mock<typeof mockPostMessage>).mock.calls[0][0]).toHaveProperty(
-        'blocks'
-      );
-      expect((mockPostMessage as Mock<typeof mockPostMessage>).mock.calls[1][0]).toHaveProperty(
-        'blocks'
-      );
+      expect(postedMessage(0)).toHaveProperty('blocks');
+      expect(postedMessage(1)).toHaveProperty('blocks');
     });
 
     test('should handle empty message without crashing', async () => {
@@ -386,7 +421,7 @@ describe('SlackAdapter', () => {
     test('single-chunk message is sent without _part footer', async () => {
       await adapter.sendMessage('C1:111.0', 'short message');
       expect(mockPostMessage).toHaveBeenCalledTimes(1);
-      const blocks = (mockPostMessage as Mock<typeof mockPostMessage>).mock.calls[0][0].blocks;
+      const blocks = postedBlocks(0);
       expect(blocks[0].text).toBe('short message');
       expect(blocks[0].text).not.toContain('_part ');
     });
@@ -396,9 +431,8 @@ describe('SlackAdapter', () => {
       const paragraph2 = 'b'.repeat(10000);
       await adapter.sendMessage('C1:111.0', `${paragraph1}\n\n${paragraph2}`);
       expect(mockPostMessage).toHaveBeenCalledTimes(2);
-      const calls = (mockPostMessage as Mock<typeof mockPostMessage>).mock.calls;
-      expect(calls[0][0].blocks[0].text).toContain('_part 1/2_');
-      expect(calls[1][0].blocks[0].text).toContain('_part 2/2_');
+      expect(postedBlocks(0)[0]?.text).toContain('_part 1/2_');
+      expect(postedBlocks(1)[0]?.text).toContain('_part 2/2_');
     });
   });
 
@@ -449,7 +483,7 @@ describe('SlackAdapter', () => {
 
     function makeSlashArgs(overrides: Record<string, unknown> = {}) {
       const ack = mock(async () => {});
-      const respond = mock(async () => {});
+      const respond = mock(async (_response?: { response_type: string; text?: string }) => {});
       const fakeClient = { chat: { postMessage: mockPostMessage } };
       return {
         ack,
@@ -491,6 +525,28 @@ describe('SlackAdapter', () => {
       }
     });
 
+    test('/archon-workflow acknowledges the command in the spelling the user typed', async () => {
+      mockPostMessage.mockClear();
+      mockCommand.mockClear();
+      const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+      adapter.onMessage(async () => {});
+      await adapter.start();
+
+      mockPostMessage.mockResolvedValueOnce({ ts: '1.0' });
+      const args = makeSlashArgs({ text: 'status' });
+      await findCommandHandler('/archon-workflow')(args);
+
+      expect(mockPostMessage.mock.calls[0]?.[0]?.text).toBe(
+        '<@U123> ran `/archon-workflow status`'
+      );
+      const respondCalls = (
+        args.respond as Mock<(r: { response_type: string; text: string }) => Promise<void>>
+      ).mock.calls;
+      expect(respondCalls[0]?.[0]?.text).toBe(
+        'Running `/archon-workflow status` — see thread for output.'
+      );
+    });
+
     test('seed-post failure surfaces ephemeral error and skips message handler', async () => {
       mockPostMessage.mockClear();
       mockCommand.mockClear();
@@ -505,7 +561,7 @@ describe('SlackAdapter', () => {
       const failingPost = mock(async () => Promise.reject(seedError));
       const fakeClient = { chat: { postMessage: failingPost } };
       const ack = mock(async () => {});
-      const respond = mock(async () => {});
+      const respond = mock(async (_response?: { response_type: string; text?: string }) => {});
 
       const handler = findCommandHandler('/archon');
       await handler({
@@ -522,9 +578,9 @@ describe('SlackAdapter', () => {
 
       expect(failingPost).toHaveBeenCalledTimes(1);
       expect(onMessage).not.toHaveBeenCalled();
-      const respondCalls = (respond as Mock<() => Promise<void>>).mock.calls;
+      const respondCalls = respond.mock.calls;
       expect(respondCalls.length).toBe(1);
-      expect((respondCalls[0]![0] as { response_type: string }).response_type).toBe('ephemeral');
+      expect(respondCalls[0]?.[0]?.response_type).toBe('ephemeral');
     });
   });
 

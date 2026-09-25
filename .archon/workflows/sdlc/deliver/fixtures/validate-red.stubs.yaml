@@ -1,25 +1,30 @@
 # Dry-run fixture: the validate-RED path — initial review is clean but the project
-# gate fails, so the run fails at gate-validated (the new gate seen red).
+# gate fails, so the run fails at gate-validated (a direct dependency of flip-ready).
 # Run with --exec-code: gate-validated must EXECUTE to be seen red.
 #
 # The verdict below declares no `red_cause`, which makes this the guard for the
 # absence case: the gate refuses red nobody explained exactly as it refuses red the
-# change introduced. Declared-optional must never read as permission.
+# change introduced. Declared-optional must never read as permission. The comparison
+# producer is the one that can return red with an empty cause, so it stands in here.
 #
 # It also carries the operator-override direction of the errors lens: `classify`
 # says the diff has failure paths, the operator declared `errors: false`, and the
 # real resolve-scope script must let the declaration win. review__errors has no
 # stub, so a lens that runs anyway fails and breaks the single-failure assertion.
-impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true
+  red_cause: ""
   summary: "stub: implemented and green"
 impl__assert-changed: "3 files changed"
-gate-green: '{"gate":"green"}'
-pr__pr: { number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true }
+gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
+pr__pr: { intent: "/fixture/pr-intent.json" }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
 review__mode: '{"continuation":false}'
-review__scope: "PR diff in scope; head sha stubbed"
+review__scope:
+  # PR diff in scope; head sha stubbed
+  docs: false
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 2 }
 review__code: "0 findings"
 review__seams: "0 findings"
 review__simplify: "0 findings"
@@ -28,13 +33,22 @@ review__synthesize:
   ready: true
   action: none
   findings_summary: "stub: clean on initial review"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+review__publish:
+  ready: true
+  action: none
+  findings_summary: "stub: clean on initial review"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 # gate-ready is deliberately unstubbed: under --exec-code the real script runs,
 # proving the review_ready binding and the corrections if_skipped default.
-validate__validate:
+validate__mode: '{"comparison":true}'
+validate__compare:
   green: false
+  red_cause: ""
   summary: "stub: tests failed — 3 red"
+  evidence: null
 ci-probe: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
-flip-ready: "https://github.com/example/repo/pull/2"
+flip-ready: { pr_url: "https://github.com/example/repo/pull/2" }
 classify:
   errors: true
   docs: false

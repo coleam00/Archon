@@ -2,24 +2,24 @@
  * Zod schemas for configuration API endpoints.
  */
 import { z } from '@hono/zod-openapi';
+import { effortLevelSchema, rejectRetiredThinking } from '@archon/workflows/schemas/effort';
 
 /** Schema for the safe config subset returned to web clients (mirrors SafeConfig in config-types.ts). */
 const providerDefaultsSchema = z.record(z.string(), z.unknown()).openapi('ProviderDefaults');
 
 /**
  * A single model-tier preset — mirrors `RawAliasEntry` in
- * `@archon/workflows/model-validation` ({ provider, model, effort?, thinking? }).
- * `thinking` is accepted on READ so it round-trips an existing config.yaml, but
- * the PATCH /api/config/tiers handler DROPS it on write (no UI/CLI surface yet) —
- * so saving a tier in the UI/CLI clears any `thinking` previously set in YAML.
+ * `@archon/workflows/model-validation` ({ provider, model, effort? }).
  */
 export const tierEntrySchema = z
-  .object({
-    provider: z.string().min(1),
-    model: z.string().min(1),
-    effort: z.string().optional(),
-    thinking: z.unknown().optional(),
-  })
+  .preprocess(
+    rejectRetiredThinking,
+    z.object({
+      provider: z.string().min(1),
+      model: z.string().min(1),
+      effort: effortLevelSchema.optional(),
+    })
+  )
   .openapi('TierEntry');
 
 /** The three reserved tiers, each optional — mirrors `RawTiersConfig`. */

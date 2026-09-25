@@ -15,9 +15,9 @@
  *   bun run scripts/check-bundled-skill.ts --check  # exit 2 if missing (CI)
  *
  * Exit codes:
- *   0  bundled-skill.ts covers every file of the bundled skills
- *   1  missing files (default mode)
- *   2  missing files (--check mode, used by `bun run validate`)
+ *   0  bundled-skill.ts covers every file and each bundled skill has valid metadata
+ *   1  validation failure (default mode)
+ *   2  validation failure (--check mode, used by `bun run validate`)
  */
 import { readdirSync, readFileSync, statSync } from 'fs';
 import { join, relative, resolve } from 'path';
@@ -27,6 +27,7 @@ const SKILLS_DIR = join(REPO_ROOT, '.claude', 'skills');
 /** Skills bundled into the binary and installed by `archon skill install`. */
 const BUNDLED_SKILLS = ['archon-cli'];
 const BUNDLED_SKILL_PATH = join(REPO_ROOT, 'packages', 'cli', 'src', 'bundled-skill.ts');
+export const MAX_SKILL_DESCRIPTION_LENGTH = 1024;
 
 const CHECK_ONLY = process.argv.includes('--check');
 
@@ -37,31 +38,77 @@ function listSkillFiles(dir: string, base: string): string[] {
   });
 }
 
-// Paths are relative to .claude/skills/ so they keep the skill dir name
-// (e.g. `archon/SKILL.md`, `manage-run/references/commands.md`). That makes the
-// substring check distinguish the two skills' identically-named files (both have
-// a SKILL.md) and matches the literal import paths in bundled-skill.ts.
-// Normalize to forward slashes so the substring check works on Windows.
-const skillFiles = BUNDLED_SKILLS.flatMap(skill =>
-  listSkillFiles(join(SKILLS_DIR, skill), SKILLS_DIR)
-)
-  .map(f => f.replace(/\\/g, '/'))
-  .sort();
-
-const bundledSrc = readFileSync(BUNDLED_SKILL_PATH, 'utf-8');
-// NOTE: This is a substring check — a filename that appears in a comment or
-// stale string literal will also pass. It's a safety net against missing imports,
-// not a structural verification of the export map.
-const missing = skillFiles.filter(f => !bundledSrc.includes(f));
-
-if (missing.length > 0) {
-  console.error(
-    `bundled-skill.ts is missing these files:\n${missing.map(f => `  - ${f}`).join('\n')}\n\n` +
-      `Add a corresponding import + bundled map entry to\n  ${relative(REPO_ROOT, BUNDLED_SKILL_PATH)}`
+function hasDescription(metadata: unknown): metadata is { description: string } {
+  return (
+    typeof metadata === 'object' &&
+    metadata !== null &&
+    'description' in metadata &&
+    typeof metadata.description === 'string'
   );
-  process.exit(CHECK_ONLY ? 2 : 1);
 }
 
-console.log(
-  `bundled-skill.ts is up to date (${skillFiles.length} files across ${BUNDLED_SKILLS.length} skills).`
-);
+export function validateSkillDescription(skillName: string, content: string): string | undefined {
+  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content);
+  if (!frontmatter) {
+    return `Bundled skill \`${skillName}\` must start with YAML frontmatter.`;
+  }
+
+  let metadata: unknown;
+  try {
+    metadata = Bun.YAML.parse(frontmatter[1]);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return `Bundled skill \`${skillName}\` has invalid YAML frontmatter: ${message}`;
+  }
+
+  if (!hasDescription(metadata) || metadata.description.trim() === '') {
+    return `Bundled skill \`${skillName}\` must have a non-empty frontmatter \`description\`.`;
+  }
+
+  if (metadata.description.length > MAX_SKILL_DESCRIPTION_LENGTH) {
+    return `Bundled skill \`${skillName}\` has a ${metadata.description.length}-character frontmatter \`description\`; the limit is ${MAX_SKILL_DESCRIPTION_LENGTH}.`;
+  }
+
+  return undefined;
+}
+
+function checkBundledSkills(): void {
+  // Paths are relative to .claude/skills/ so they keep the skill dir name
+  // (e.g. `archon-cli/SKILL.md`). That makes the substring check match the
+  // literal import paths in bundled-skill.ts. Normalize separators for Windows.
+  const skillFiles = BUNDLED_SKILLS.flatMap(skill =>
+    listSkillFiles(join(SKILLS_DIR, skill), SKILLS_DIR)
+  )
+    .map(f => f.replace(/\\/g, '/'))
+    .sort();
+
+  const bundledSrc = readFileSync(BUNDLED_SKILL_PATH, 'utf-8');
+  // This is a substring check, so a stale string literal can satisfy it. It is a
+  // safety net for missing bundled files, not structural verification of the map.
+  const missing = skillFiles.filter(f => !bundledSrc.includes(f));
+  const metadataErrors = BUNDLED_SKILLS.flatMap(skill => {
+    const error = validateSkillDescription(
+      skill,
+      readFileSync(join(SKILLS_DIR, skill, 'SKILL.md'), 'utf-8')
+    );
+    return error ? [error] : [];
+  });
+
+  if (missing.length > 0 || metadataErrors.length > 0) {
+    const errors = [
+      missing.length > 0
+        ? `bundled-skill.ts is missing these files:\n${missing.map(f => `  - ${f}`).join('\n')}\n\n` +
+          `Add a corresponding import + bundled map entry to\n  ${relative(REPO_ROOT, BUNDLED_SKILL_PATH)}`
+        : undefined,
+      ...metadataErrors,
+    ].filter((error): error is string => error !== undefined);
+    console.error(errors.join('\n\n'));
+    process.exit(CHECK_ONLY ? 2 : 1);
+  }
+
+  console.log(
+    `bundled-skill.ts is up to date (${skillFiles.length} files across ${BUNDLED_SKILLS.length} skills), and bundled skill metadata is valid.`
+  );
+}
+
+if (import.meta.main) checkBundledSkills();

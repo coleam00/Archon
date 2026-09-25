@@ -127,6 +127,56 @@ export async function getRemoteUrl(repoPath: RepoPath, remote = 'origin'): Promi
   }
 }
 
+const MAX_FETCH_RETRIES = 3;
+
+/**
+ * Run `git fetch <remote> <refspec>` with bounded retry on Git's ref-lock race.
+ *
+ * Two concurrent fetches that write the same named ref — a remote-tracking ref,
+ * or a local branch via a `pull/N/head:branch` refspec — collide on Git's shared
+ * lock file and fail transiently with `cannot lock ref ... unable to update local
+ * ref`. This helper owns the single ref-lock classifier and backoff budget for
+ * the codebase: race failures are retried up to MAX_FETCH_RETRIES times with
+ * 50ms doubling backoff, then the original error object is rethrown untouched
+ * (stderr preserved for callers). Any other failure is rethrown immediately —
+ * unrelated git errors are attempted once and stay loud.
+ */
+export async function fetchWithRefLockRetry(
+  repoPath: RepoPath,
+  remote: string,
+  refspec: string | undefined,
+  options?: { timeoutMs?: number }
+): Promise<{ stdout: string; stderr: string }> {
+  const args =
+    refspec === undefined
+      ? ['-C', repoPath, 'fetch', remote]
+      : ['-C', repoPath, 'fetch', remote, refspec];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await execFileAsync('git', args, {
+        timeout: options?.timeoutMs,
+      });
+    } catch (error) {
+      const err = error as Error;
+      const errorMessage = err.message.toLowerCase();
+      const isRefLockRace =
+        errorMessage.includes('cannot lock ref') &&
+        errorMessage.includes('unable to update local ref');
+
+      if (!isRefLockRace || attempt >= MAX_FETCH_RETRIES) {
+        throw error;
+      }
+
+      const backoffMs = 50 * Math.pow(2, attempt);
+      getLog().debug(
+        { err, attempt: attempt + 1, backoffMs, remote, refspec },
+        'git.fetch_ref_lock_retry'
+      );
+      await new Promise(resolve => setTimeout(resolve, backoffMs));
+    }
+  }
+}
+
 /**
  * Sync workspace with its remote.
  * Fetches the base branch from the remote, then updates local state according to mode.
@@ -159,11 +209,11 @@ export async function syncWorkspace(
   const remote = options?.remote ?? 'origin';
   const branchToSync = baseBranch ?? (await getDefaultBranch(workspacePath, remote));
 
-  // Fetch from the remote to ensure <remote>/<branchToSync> is up-to-date
+  // Fetch from the remote to ensure <remote>/<branchToSync> is up-to-date.
+  // Concurrent fetches of the same remote-tracking ref can collide on Git's
+  // shared ref lock; fetchWithRefLockRetry owns the bounded retry.
   try {
-    await execFileAsync('git', ['-C', workspacePath, 'fetch', remote, branchToSync], {
-      timeout: 60000,
-    });
+    await fetchWithRefLockRetry(workspacePath, remote, branchToSync, { timeoutMs: 60000 });
   } catch (error) {
     const err = error as Error;
     const errorMessage = err.message.toLowerCase();
@@ -179,6 +229,7 @@ export async function syncWorkspace(
           'or remove the setting to use the auto-detected default branch.'
       );
     }
+
     throw new Error(`Sync fetch from ${remote}/${branchToSync} failed: ${err.message}`);
   }
 
@@ -367,49 +418,145 @@ async function classifyWorkspaceState(
  *
  * @param url - Repository URL (e.g., https://github.com/owner/repo.git)
  * @param targetPath - Local path to clone into
- * @param options - Optional: { token } for authenticated clones
+ * @param options - Optional request-scoped HTTP credentials
  * @returns GitResult<void>
  */
+export interface CloneCredentials {
+  username: string;
+  password: string;
+}
+
+export interface CloneRepositoryOptions {
+  credentials?: CloneCredentials;
+}
+
+const ENV_CREDENTIAL_HELPER =
+  '!f() { test "$1" = get || exit 0; printf \'%s\\n\' "username=$ARCHON_GIT_USERNAME" "password=$ARCHON_GIT_PASSWORD"; }; f';
+
+function normalizeCloneSource(url: string): string {
+  if (url.startsWith('/') || url.startsWith('~') || url.startsWith('.')) return url;
+
+  const scpStyle = /^git@([^:]+):(.+)$/.exec(url);
+  if (scpStyle) return `https://${scpStyle[1]}/${scpStyle[2]}`;
+
+  const firstSlash = url.indexOf('/');
+  if (firstSlash <= 0 || url.includes('://')) return url;
+
+  const authority = url.slice(0, firstSlash);
+  const isBareHost =
+    authority === 'localhost' ||
+    authority.includes('.') ||
+    /^[^:]+:\d+$/.test(authority) ||
+    /^\[[^\]]+\](?::\d+)?$/.test(authority);
+  return isBareHost ? `https://${url}` : url;
+}
+
+export function validateCloneUrl(
+  url: string
+): { ok: true; url: string; httpUrl: URL | null } | { ok: false; error: string } {
+  const cloneSource = normalizeCloneSource(url);
+  if (!/^\s*https?:/i.test(cloneSource)) {
+    return { ok: true, url: cloneSource, httpUrl: null };
+  }
+  if (cloneSource.includes('\\')) {
+    return { ok: false, error: 'Invalid HTTP(S) repository URL' };
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(cloneSource);
+  } catch {
+    return { ok: false, error: 'Invalid HTTP(S) repository URL' };
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { ok: false, error: 'Invalid HTTP(S) repository URL' };
+  }
+  if (parsed.username || parsed.password) {
+    return { ok: false, error: 'Repository URL must not include credentials' };
+  }
+  if (parsed.search || parsed.hash) {
+    return { ok: false, error: 'Invalid HTTP(S) repository URL' };
+  }
+  return { ok: true, url: parsed.href, httpUrl: parsed };
+}
+
+function sanitizeCloneError(error: unknown, credentials?: CloneCredentials): string {
+  const err = error as Error & { stdout?: string; stderr?: string };
+  let message = [err.message, err.stderr, err.stdout].filter(Boolean).join('\n');
+  const credentialValues = credentials
+    ? [credentials.username, credentials.password]
+        .filter(value => value.length > 0)
+        .sort((left, right) => right.length - left.length)
+    : [];
+  for (const value of credentialValues) message = message.replaceAll(value, '***');
+  return message;
+}
+
 export async function cloneRepository(
   url: string,
   targetPath: RepoPath,
-  options?: { token?: string }
+  options?: CloneRepositoryOptions
 ): Promise<GitResult<void>> {
+  const validatedUrl = validateCloneUrl(url);
+  if (!validatedUrl.ok) {
+    return { ok: false, error: { code: 'unknown', message: validatedUrl.error } };
+  }
+  const parsedUrl = validatedUrl.httpUrl;
+  if (options?.credentials && !parsedUrl) {
+    return {
+      ok: false,
+      error: { code: 'unknown', message: 'Authenticated clones require an HTTP(S) repository URL' },
+    };
+  }
+  const cloneUrl = validatedUrl.url;
+
   try {
-    let cloneUrl = url;
-    if (options?.token) {
-      // Construct authenticated URL: https://<token>@github.com/owner/repo.git
-      const parsed = new URL(url);
-      parsed.username = options.token;
-      cloneUrl = parsed.toString();
+    const args = ['clone', cloneUrl, targetPath];
+    const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
+    delete env.ARCHON_GIT_USERNAME;
+    delete env.ARCHON_GIT_PASSWORD;
+    if (options?.credentials && parsedUrl) {
+      args.unshift(
+        '-c',
+        'credential.helper=',
+        '-c',
+        `credential.${parsedUrl.origin}.helper=${ENV_CREDENTIAL_HELPER}`
+      );
+      env.ARCHON_GIT_USERNAME = options.credentials.username;
+      env.ARCHON_GIT_PASSWORD = options.credentials.password;
     }
 
     // GIT_TERMINAL_PROMPT=0 turns any missing-creds scenario into an
     // immediate, readable error instead of a hung stdin credential prompt.
-    await execFileAsync('git', ['clone', cloneUrl, targetPath], {
+    await execFileAsync('git', args, {
       timeout: 120000,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      env,
     });
     return { ok: true, value: undefined };
   } catch (error) {
-    const err = error as Error;
-    // Sanitize any token from error messages to prevent credential leakage
-    const sanitizedMessage = options?.token
-      ? err.message.replaceAll(options.token, '***')
-      : err.message;
+    const sanitizedMessage = sanitizeCloneError(error, options?.credentials);
     const message = sanitizedMessage.toLowerCase();
 
     if (message.includes('not found') || message.includes('404')) {
-      return { ok: false, error: { code: 'not_a_repo', path: url } };
+      return { ok: false, error: { code: 'not_a_repo', path: cloneUrl } };
     }
-    if (message.includes('authentication failed') || message.includes('could not read')) {
-      return { ok: false, error: { code: 'permission_denied', path: url } };
+    if (
+      message.includes('authentication failed') ||
+      message.includes('could not read') ||
+      message.includes('access denied') ||
+      message.includes('403')
+    ) {
+      return { ok: false, error: { code: 'permission_denied', path: cloneUrl } };
     }
     if (message.includes('no space')) {
       return { ok: false, error: { code: 'no_space', path: targetPath } };
     }
 
-    getLog().error({ url, targetPath, errorMessage: sanitizedMessage }, 'clone_repository_failed');
+    getLog().error(
+      { url: cloneUrl, targetPath, errorMessage: sanitizedMessage },
+      'clone_repository_failed'
+    );
     return { ok: false, error: { code: 'unknown', message: sanitizedMessage } };
   }
 }
@@ -419,8 +566,8 @@ export async function cloneRepository(
  * Runs sequential fetch + reset --hard. If fetch fails, reset is skipped.
  * Uses execFileAsync (no shell interpolation) for safety.
  *
- * Note: Uses `cwd` option instead of `-C` flag. Both are functionally
- * equivalent; this style was chosen for readability with multi-arg commands.
+ * Note: the reset uses the `cwd` option; the fetch goes through
+ * fetchWithRefLockRetry, which uses `-C`. Both are functionally equivalent.
  *
  * @param repoPath - Path to the local repository
  * @param branch - Branch to sync to (e.g., 'main')
@@ -433,7 +580,7 @@ export async function syncRepository(
   remote = 'origin'
 ): Promise<GitResult<void>> {
   try {
-    await execFileAsync('git', ['fetch', remote], { cwd: repoPath, timeout: 60000 });
+    await fetchWithRefLockRetry(repoPath, remote, undefined, { timeoutMs: 60000 });
   } catch (error) {
     const err = error as Error & { stderr?: string };
     const errorText = `${err.message} ${err.stderr ?? ''}`.toLowerCase();

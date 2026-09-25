@@ -9,6 +9,7 @@ import {
   sealWorkflowRunConfig,
   unsealWorkflowRunConfig,
 } from './run-config';
+import { decodeWorkflowRunConfigHandoff } from './run-config-handoff';
 
 const TEST_KEY = 'ab'.repeat(32);
 let previousKey: string | undefined;
@@ -165,7 +166,7 @@ describe('workflow run config', () => {
         },
         { kind: 'http', label: 'inline' }
       )
-    ).toThrow("Invalid run config at 'tiers.medium.thinking'");
+    ).toThrow(/tiers\.medium\.thinking.*effort:/);
   });
 
   it('rejects Pi defaults whose consumers own process-lifetime state', () => {
@@ -178,7 +179,7 @@ describe('workflow run config', () => {
           { assistants: { pi: { [key]: value } } },
           { kind: 'http', label: 'inline' }
         )
-      ).toThrow(`Run config key 'assistants.pi.${key}' cannot apply`);
+      ).toThrow(`Invalid run config at 'assistants.pi.${key}': Pi `);
     }
   });
 
@@ -207,7 +208,7 @@ describe('workflow run config', () => {
     }
   });
 
-  it('rejects Claude-shaped thinking presets for providers that ignore that shape', () => {
+  it('rejects retired thinking presets for every provider and names effort', () => {
     for (const provider of ['pi', 'copilot']) {
       expect(() =>
         parseWorkflowRunConfig(
@@ -218,7 +219,7 @@ describe('workflow run config', () => {
           },
           { kind: 'http', label: 'inline' }
         )
-      ).toThrow("Invalid run config at 'tiers.large.thinking'");
+      ).toThrow(/tiers\.large\.thinking.*effort:/);
     }
   });
 
@@ -285,6 +286,18 @@ describe('workflow run config', () => {
     expect(() =>
       unsealWorkflowRunConfig({ ...metadata, ciphertext: `${metadata.ciphertext.slice(0, -2)}xx` })
     ).toThrow('could not be decrypted');
+  });
+
+  it('decodes a detached handoff before provider-dependent normalization', () => {
+    const metadata = sealWorkflowRunConfig(
+      { assistant: 'not-registered' },
+      { kind: 'cli', label: 'config.yaml' }
+    );
+
+    expect(decodeWorkflowRunConfigHandoff(JSON.stringify(metadata))).toEqual({
+      source: { kind: 'cli', label: 'config.yaml' },
+      layer: { assistant: 'not-registered' },
+    });
   });
 
   it('loads a CLI YAML file through the strict parser', async () => {

@@ -18,7 +18,9 @@
  * assertions read the NEXT test's paths and reported a mutation that never
  * happened — on PR #2513 that surfaced as a dry run appearing to move a file.
  * Locals make an orphaned assertion able to describe only its own sandbox, so a
- * timeout reads as a timeout.
+ * timeout reads as a timeout. What that rules out is REASSIGNMENT, not sharing:
+ * the C5 group below shares one read-only registry built in `beforeAll`, and
+ * keeps the property by giving each case its own paths, derived from its name.
  *
  * BUDGET: deliberately left at Bun's 5000 ms default, even though these tests
  * time out on windows-latest at ~5015 ms (#2306). Raising it was considered and
@@ -38,21 +40,38 @@
  * their fixture spawned a SECOND cold `bun` process purely to write one registry
  * row, which is now an in-process write. The budget still has not moved.
  *
- * It recurred a third time (#2882, both C5 cases in one windows-latest run at
- * 6266/5016 ms, carrying Bun's body-timeout message rather than its hook-timeout
- * one). This time the body was phase-attributed and nothing accidental was left
- * to remove: spawning the migration script is 88% of it (61-68 ms of a 69-74 ms
- * body locally), and that subprocess IS the contract. The registry fixture is
- * the remaining 8-11%; building it once and copying the file per test measured
- * 2-3 ms cheaper and would have to either share one database across the two
- * cases — the cross-test coupling the paragraph above exists to prevent — or
- * rewrite the row anyway, because `default_cwd` is the per-test sandbox path.
- * The other 17 tests in this file sit at the same one-spawn floor (58-65 ms), so
- * the C5 pair are not special; they are ~15% above a floor that a contended
- * Windows runner puts at the budget line. That is a runner-capacity question,
- * not a cost this file can spend less of. Still do not reach for the timeout.
+ * It recurred a third time (#2882), and the reading recorded here then — that the
+ * pair sit ~15% above a one-spawn floor, so a contended runner is the whole story
+ * and there is nothing left to spend less of — was WRONG. #2982 falsified it and
+ * #2575 carries the correction. Two facts kill it. Ten of ten Windows failures
+ * are Bun's body-timeout message, out to 12296 ms; a test finishing 2.5x past its
+ * budget is not a 15% margin. And in those same runs, on the same runner, the
+ * other 17 tests in this file — which spawn the same script — never left
+ * 171-515 ms. A contended runner cannot slow one test in a file 30x and leave the
+ * next one untouched. The subprocess was never the cost.
+ *
+ * The registry fixture was. It read as 8-11% of the body because it was measured
+ * on the wrong platform: on macOS the whole fixture is ~6 ms of a ~60 ms body, on
+ * windows-latest it is ~230 ms of a ~400 ms floor, and it carries the file's only
+ * tail. `new SqliteAdapter` on a fresh path applies the entire product schema —
+ * 20 tables, 28 indexes, ~300 KB through a WAL and checkpointed back on close —
+ * synchronously, so it blocks the test's own event loop, which is why Bun's 5 s
+ * timer reported as late as 12296 ms. Building it once for the group instead of
+ * once per case is what this file can spend less of, and now does. Ubuntu, for
+ * scale, runs these at 120-130 ms and has never failed them.
+ *
+ * The Windows primitive behind the tail is NOT proven — do not write it down as
+ * though it were. Three candidates are already ruled out and should not be
+ * re-run: Defender (the runner image excludes C:\ and D:\ recursively, PR #2943),
+ * fsync-per-commit (bun:sqlite opens WAL at synchronous=NORMAL, so commits do not
+ * fsync — 19 us per autocommit write, measured), and a parent handle outliving
+ * `close()` (lsof shows every handle released before the child starts). If this
+ * recurs, the failure now discriminates on its own: a HOOK timeout means creating
+ * the database is itself the pathological operation, while a BODY timeout means a
+ * body that does exactly what the other 17 do has stopped fitting, which is the
+ * whole file's floor and not a C5 question. Still do not reach for the timeout.
  */
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { mkdtemp, mkdir, writeFile, readFile, readdir } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { getLogLevel, setLogLevel } from '@archon/paths';
@@ -457,7 +476,9 @@ describe('migrate-state-dir', () => {
     // the subdirectory*, declared "nothing to migrate", and wrote `.initialized`
     // into the REAL project's state root — disarming `state-preflight` for a
     // project whose state had never been migrated.
-    const PROJECT_NAME = 'acme/myrepo';
+    /** One registered project per case, so no two cases share a destination. */
+    const CASE_NAMES = ['climbs', 'ambiguous'] as const;
+    type CaseName = (typeof CASE_NAMES)[number];
 
     interface ProjectSandbox extends Sandbox {
       readonly subdir: string;
@@ -465,89 +486,134 @@ describe('migrate-state-dir', () => {
     }
 
     /**
-     * Registering also CREATES the registry, which is what makes these two tests
-     * the guard that #2306's "skip the lookup when there is no database" cannot
+     * Root of the ONE registry these cases share. Assigned by `beforeAll`; every
+     * other path is a pure function of it, so nothing is reassigned between tests.
+     */
+    let registryRoot = '';
+
+    /**
+     * Every path a case touches, derived from its name alone.
+     *
+     * The per-case name is the isolation: it is the repository directory, so each
+     * case gets its own `legacyDir`, and it is the registered project name, so
+     * each case gets its own `projectStateRoot` under the shared home. Two cases
+     * therefore never read or write the same file, which keeps the property the
+     * file docblock protects — an assertion still running after its test timed out
+     * can only ever describe its own case.
+     */
+    function sandboxFor(name: CaseName): ProjectSandbox {
+      const archonHome = join(registryRoot, 'home');
+      const repo = join(registryRoot, name);
+      return {
+        root: registryRoot,
+        archonHome,
+        repo,
+        legacyDir: join(repo, '.archon', 'state'),
+        stateRoot: join(archonHome, 'workspaces', '_cwd', name, 'state'),
+        subdir: join(repo, 'packages', 'foo'),
+        projectStateRoot: join(archonHome, 'workspaces', 'acme', name, 'state'),
+      };
+    }
+
+    /**
+     * Build the registry ONCE for the whole group.
+     *
+     * Registering also CREATES the registry, which is what makes these cases the
+     * guard that #2306's "skip the lookup when there is no database" cannot
      * silently disable project resolution: here a database exists, so the lookup
      * must still run and still climb.
      *
-     * The row goes in through the SAME adapter the script's lookup opens, so the
+     * Creating it is also the entire reason these two tests were the file's only
+     * Windows flake (#2575, re-attributed in #2982). `new SqliteAdapter` on a fresh
+     * path applies the whole product schema — 20 tables and 28 indexes, ~300 KB,
+     * written to a WAL and checkpointed back on close — and bun:sqlite is
+     * synchronous, so all of it blocks the test's own event loop. The other 17
+     * tests in this file spawn the same script and never reach 515 ms on the same
+     * runner in the same run; only these two carried a tail, out to 12296 ms. The
+     * subprocess is not the cost and never was. Building the registry per test was.
+     *
+     * So it is built once, in a hook, and the test bodies now do exactly what the
+     * other 17 do: seed files, spawn the script, assert. One creation for the group
+     * instead of one per case is also the smallest possible amount of this work —
+     * a per-case template copy still creates a database per case.
+     *
+     * The rows go in through the SAME adapter the script's lookup opens, so the
      * fixture cannot drift from the real schema — but through a dedicated instance
      * rather than `@archon/core/db/codebases`, whose `pool` resolves the
      * module-level connection singleton from `ARCHON_HOME`. That singleton would
-     * pin the first test's temp home and then fail with SQLITE_IOERR_VNODE once
-     * the directory is torn down; an instance takes an explicit path and is closed
-     * before the sandbox goes away. `name` and `default_cwd` are the only columns
-     * the destination resolution reads (`resolveRepoProjectIdentity`).
+     * pin this temp home and then fail with SQLITE_IOERR_VNODE once the directory
+     * is torn down; an instance takes an explicit path and is closed before the
+     * tests run. `name` and `default_cwd` are the only columns the destination
+     * resolution reads (`resolveRepoProjectIdentity`).
      *
-     * This used to be a cold `bun -e` subprocess importing @archon/core's whole
-     * module graph to write that one row — the accidental half of these tests'
-     * Windows cost (#2575). The subprocess below it runs the migration script
-     * itself and is the contract under test, so it stays a real process.
+     * Nothing writes this database again, so the cases share it read-only.
      */
-    async function withProjectSandbox(body: (ctx: ProjectSandbox) => Promise<void>): Promise<void> {
-      return withSandbox(async base => {
-        const ctx: ProjectSandbox = {
-          ...base,
-          subdir: join(base.repo, 'packages', 'foo'),
-          projectStateRoot: join(base.archonHome, 'workspaces', 'acme', 'myrepo', 'state'),
-        };
-        await mkdir(ctx.subdir, { recursive: true });
+    beforeAll(async () => {
+      registryRoot = await mkdtemp(join(tmpdir(), 'archon-migrate-c5-'));
+      await mkdir(join(registryRoot, 'home'), { recursive: true });
+      for (const name of CASE_NAMES) {
+        await mkdir(sandboxFor(name).subdir, { recursive: true });
+      }
 
-        // Opening the adapter announces its schema init at info, which every
-        // subprocess here already suppresses with LOG_LEVEL=silent. Scoped rather
-        // than set once at module load: `setLogLevel` mutates the process-wide
-        // root logger, and `bun test ./scripts/` runs all five files in one
-        // process, so an unrestored level would silently follow the others.
-        const priorLogLevel = getLogLevel();
-        setLogLevel('silent');
-        const registry = new SqliteAdapter(join(ctx.archonHome, 'archon.db'));
-        try {
+      // Opening the adapter announces its schema init at info, which every
+      // subprocess here already suppresses with LOG_LEVEL=silent. Scoped rather
+      // than set once at module load: `setLogLevel` mutates the process-wide
+      // root logger, and `bun test ./scripts/` runs all five files in one
+      // process, so an unrestored level would silently follow the others.
+      const priorLogLevel = getLogLevel();
+      setLogLevel('silent');
+      const registry = new SqliteAdapter(join(registryRoot, 'home', 'archon.db'));
+      try {
+        for (const name of CASE_NAMES) {
           await registry.query(
             'INSERT INTO remote_agent_codebases (name, default_cwd) VALUES ($1, $2)',
-            [PROJECT_NAME, ctx.repo]
+            [`acme/${name}`, sandboxFor(name).repo]
           );
-        } finally {
-          await registry.close();
-          setLogLevel(priorLogLevel);
         }
+      } finally {
+        await registry.close();
+        setLogLevel(priorLogLevel);
+      }
+    });
 
-        await body(ctx);
-      });
-    }
+    afterAll(async () => {
+      // Empty only when the hook above failed before mkdtemp returned.
+      if (registryRoot) await removeTempTree(registryRoot);
+    });
 
-    test('migrates the PROJECT root when invoked from a subdirectory', async () =>
-      withProjectSandbox(async ctx => {
-        await seedLegacy(ctx, { 'triage-state.json': '{"real":"state"}' });
+    test('migrates the PROJECT root when invoked from a subdirectory', async () => {
+      const ctx = sandboxFor('climbs');
+      await seedLegacy(ctx, { 'triage-state.json': '{"real":"state"}' });
 
-        const result = await runIn(ctx, ctx.subdir, '--apply');
-        expect(result.exitCode).toBe(0);
+      const result = await runIn(ctx, ctx.subdir, '--apply');
+      expect(result.exitCode).toBe(0);
 
-        // It says out loud that it climbed, rather than silently retargeting.
-        expect(result.stdout).toContain('resolved to the registered project root');
-        // The state actually moved — the old behaviour left it behind.
-        expect(await listOrEmpty(ctx.legacyDir)).toEqual([]);
-        expect(await listOrEmpty(ctx.projectStateRoot)).toEqual([
-          '.initialized',
-          'triage-state.json',
-        ]);
-      }));
+      // It says out loud that it climbed, rather than silently retargeting.
+      expect(result.stdout).toContain('resolved to the registered project root');
+      // The state actually moved — the old behaviour left it behind.
+      expect(await listOrEmpty(ctx.legacyDir)).toEqual([]);
+      expect(await listOrEmpty(ctx.projectStateRoot)).toEqual([
+        '.initialized',
+        'triage-state.json',
+      ]);
+    });
 
-    test('refuses when BOTH the subdirectory and the project root hold legacy state', async () =>
-      withProjectSandbox(async ctx => {
-        // Ambiguous: migrating only the project's while marking would leave the
-        // subdirectory's unmigrated behind a satisfied marker — C5 one level down.
-        await seedLegacy(ctx, { 'triage-state.json': '{"project":true}' });
-        await mkdir(join(ctx.subdir, '.archon', 'state'), { recursive: true });
-        await writeFile(join(ctx.subdir, '.archon', 'state', 'other.json'), '{"subdir":true}');
+    test('refuses when BOTH the subdirectory and the project root hold legacy state', async () => {
+      const ctx = sandboxFor('ambiguous');
+      // Ambiguous: migrating only the project's while marking would leave the
+      // subdirectory's unmigrated behind a satisfied marker — C5 one level down.
+      await seedLegacy(ctx, { 'triage-state.json': '{"project":true}' });
+      await mkdir(join(ctx.subdir, '.archon', 'state'), { recursive: true });
+      await writeFile(join(ctx.subdir, '.archon', 'state', 'other.json'), '{"subdir":true}');
 
-        const result = await runIn(ctx, ctx.subdir, '--apply');
+      const result = await runIn(ctx, ctx.subdir, '--apply');
 
-        expect(result.exitCode).toBe(2);
-        expect(result.stderr).toContain('two candidate sources');
-        // Nothing moved, and critically nothing marked.
-        expect(await listOrEmpty(ctx.legacyDir)).toEqual(['triage-state.json']);
-        expect(await isMarked(ctx.projectStateRoot)).toBe(false);
-      }));
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain('two candidate sources');
+      // Nothing moved, and critically nothing marked.
+      expect(await listOrEmpty(ctx.legacyDir)).toEqual(['triage-state.json']);
+      expect(await isMarked(ctx.projectStateRoot)).toBe(false);
+    });
   });
 
   test('progress lines are printed only for entries actually moved', async () =>

@@ -5,6 +5,9 @@ import { APP_VERSION, readSchemaVersion } from '../schema-version';
 import { Database, type Statement } from 'bun:sqlite';
 import { unlinkSync } from 'fs';
 import { join } from 'path';
+import { tmpdir } from 'os';
+import { mkdtemp } from 'fs/promises';
+import { trackTempRoots } from '@archon/paths/test-utils';
 
 let currentDbPath = '';
 
@@ -25,6 +28,22 @@ async function insertCodebase(db: SqliteAdapter, id: string): Promise<void> {
   ]);
 }
 
+const trackTempRoot = trackTempRoots();
+
+/**
+ * A fresh on-disk database path for one upgrade fixture, reclaimed after the test.
+ *
+ * A real file, not a `file:...?mode=memory&cache=shared` URI: bun:sqlite opens without
+ * `SQLITE_OPEN_URI`, so SQLite reads such a URI as a literal filename and creates it in
+ * the process cwd — which is how these fixtures used to leave `file:archon-test-sqlite-*`
+ * files under `packages/core/`. The adapter has no URI requirement, and the fixture only
+ * needs a database that survives being reopened.
+ */
+async function upgradeFixturePath(): Promise<string> {
+  const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-core-sqlite-upgrade-')));
+  return join(root, 'archon.db');
+}
+
 /**
  * Produce a database in the state it had BEFORE event_order existed: current
  * schema in every other respect, with the column, its index and its trigger
@@ -32,31 +51,22 @@ async function insertCodebase(db: SqliteAdapter, id: string): Promise<void> {
  * the fixture realistic — the upgrade path that broke was an otherwise-current
  * database missing exactly this one column.
  */
-async function makeDbWithoutEventOrder(): Promise<{ uri: string; seed: SqliteAdapter }> {
-  const name = `archon-test-sqlite-legacy-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const uri = `file:${name}?mode=memory&cache=shared`;
-  // Plain :memory: cannot serve this fixture because each reopened connection
-  // would get an empty database. Keep the seed connection open so this named
-  // shared-cache database survives until the upgrade assertions finish.
-  const seed = new SqliteAdapter(uri); // writes the current schema
+async function makeDbWithoutEventOrder(): Promise<string> {
+  const path = await upgradeFixturePath();
+  await new SqliteAdapter(path).close(); // writes the current schema
+  const raw = new Database(path);
   try {
-    const raw = new Database(uri);
-    try {
-      raw.run('DROP TRIGGER IF EXISTS remote_agent_workflow_events_assign_order');
-      raw.run('DROP INDEX IF EXISTS idx_workflow_events_run_order');
-      raw.run('ALTER TABLE remote_agent_workflow_events DROP COLUMN event_order');
-    } finally {
-      raw.close();
-    }
-    return { uri, seed };
-  } catch (error) {
-    await seed.close();
-    throw error;
+    raw.run('DROP TRIGGER IF EXISTS remote_agent_workflow_events_assign_order');
+    raw.run('DROP INDEX IF EXISTS idx_workflow_events_run_order');
+    raw.run('ALTER TABLE remote_agent_workflow_events DROP COLUMN event_order');
+  } finally {
+    raw.close();
   }
+  return path;
 }
 
-function columnsOf(uri: string, table: string): string[] {
-  const raw = new Database(uri);
+function columnsOf(path: string, table: string): string[] {
+  const raw = new Database(path);
   const stmt = raw.prepare(`PRAGMA table_info('${table}')`);
   try {
     return (stmt.all() as { name: string }[]).map(c => c.name);
@@ -74,62 +84,50 @@ describe('SqliteAdapter upgrade path', () => {
   // column, never ran. Every existing SQLite install was bricked on upgrade,
   // and the migration that would fix it could never execute.
   test('converges a database that predates event_order', async () => {
-    const { uri, seed } = await makeDbWithoutEventOrder();
+    const path = await makeDbWithoutEventOrder();
+    expect(columnsOf(path, 'remote_agent_workflow_events')).not.toContain('event_order');
+
+    // Must not throw, and must converge.
+    const upgraded = new SqliteAdapter(path);
+    await upgraded.close();
+
+    expect(columnsOf(path, 'remote_agent_workflow_events')).toContain('event_order');
+
+    const raw = new Database(path);
+    const stmt = raw.prepare('SELECT name FROM sqlite_master WHERE name IN (?, ?)');
+    let objects: string[];
     try {
-      expect(columnsOf(uri, 'remote_agent_workflow_events')).not.toContain('event_order');
-
-      // Must not throw, and must converge.
-      const upgraded = new SqliteAdapter(uri);
-      await upgraded.close();
-
-      expect(columnsOf(uri, 'remote_agent_workflow_events')).toContain('event_order');
-
-      const raw = new Database(uri);
-      const stmt = raw.prepare('SELECT name FROM sqlite_master WHERE name IN (?, ?)');
-      let objects: string[];
-      try {
-        objects = (
-          stmt.all(
-            'idx_workflow_events_run_order',
-            'remote_agent_workflow_events_assign_order'
-          ) as {
-            name: string;
-          }[]
-        ).map(o => o.name);
-      } finally {
-        stmt.finalize();
-        raw.close();
-      }
-
-      expect(objects).toContain('idx_workflow_events_run_order');
-      expect(objects).toContain('remote_agent_workflow_events_assign_order');
+      objects = (
+        stmt.all('idx_workflow_events_run_order', 'remote_agent_workflow_events_assign_order') as {
+          name: string;
+        }[]
+      ).map(o => o.name);
     } finally {
-      await seed.close();
+      stmt.finalize();
+      raw.close();
     }
+
+    expect(objects).toContain('idx_workflow_events_run_order');
+    expect(objects).toContain('remote_agent_workflow_events_assign_order');
   });
 
   test('adds the authored outcome column idempotently to an existing workflow-runs table', async () => {
-    const name = `archon-test-sqlite-outcome-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const uri = `file:${name}?mode=memory&cache=shared`;
-    const seed = new SqliteAdapter(uri);
+    const path = await upgradeFixturePath();
+    await new SqliteAdapter(path).close();
+    const raw = new Database(path);
     try {
-      const raw = new Database(uri);
-      try {
-        raw.run('ALTER TABLE remote_agent_workflow_runs DROP COLUMN outcome');
-      } finally {
-        raw.close();
-      }
-      expect(columnsOf(uri, 'remote_agent_workflow_runs')).not.toContain('outcome');
-
-      const upgraded = new SqliteAdapter(uri);
-      await upgraded.close();
-      const reopened = new SqliteAdapter(uri);
-      await reopened.close();
-
-      expect(columnsOf(uri, 'remote_agent_workflow_runs')).toContain('outcome');
+      raw.run('ALTER TABLE remote_agent_workflow_runs DROP COLUMN outcome');
     } finally {
-      await seed.close();
+      raw.close();
     }
+    expect(columnsOf(path, 'remote_agent_workflow_runs')).not.toContain('outcome');
+
+    const upgraded = new SqliteAdapter(path);
+    await upgraded.close();
+    const reopened = new SqliteAdapter(path);
+    await reopened.close();
+
+    expect(columnsOf(path, 'remote_agent_workflow_runs')).toContain('outcome');
   });
 });
 
@@ -1099,21 +1097,19 @@ describe('SqliteAdapter native-resource finalization (#2875)', () => {
     const originalPrepare = Database.prototype.prepare;
     let prepared = 0;
     let finalized = 0;
-    Database.prototype.prepare = function (
-      this: Database,
-      ...args: Parameters<typeof originalPrepare>
-    ) {
-      const stmt = originalPrepare.apply(this, args) as Statement & {
-        finalize: () => unknown;
-      };
-      prepared++;
-      const nativeFinalize = stmt.finalize.bind(stmt);
-      stmt.finalize = () => {
-        finalized++;
-        return nativeFinalize();
-      };
-      return stmt;
-    };
+    Object.defineProperty(Database.prototype, 'prepare', {
+      configurable: true,
+      value(this: Database, ...args: Parameters<typeof originalPrepare>) {
+        const stmt: Statement = originalPrepare.apply(this, args);
+        prepared++;
+        const nativeFinalize = stmt.finalize.bind(stmt);
+        stmt.finalize = () => {
+          finalized++;
+          return nativeFinalize();
+        };
+        return stmt;
+      },
+    });
 
     try {
       adapter = createTestDb();
@@ -1130,7 +1126,10 @@ describe('SqliteAdapter native-resource finalization (#2875)', () => {
       expect(prepared).toBeGreaterThan(0);
       expect(finalized).toBe(prepared);
     } finally {
-      Database.prototype.prepare = originalPrepare;
+      Object.defineProperty(Database.prototype, 'prepare', {
+        configurable: true,
+        value: originalPrepare,
+      });
     }
   });
 

@@ -3,8 +3,16 @@ import {
   getWorkflowEventEmitter,
   type WorkflowEmitterEvent,
 } from '@archon/workflows/event-emitter';
+import {
+  nodeSkipReasonSchema,
+  skipCauseSchema,
+  type NodeSkipReason,
+  type SkipCause,
+} from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowEventRow } from '@archon/core/db/workflow-events';
+import { readNodeRecordEvent } from '@archon/workflows/node-record-reader';
 import { SSETransport } from './transport';
+import type { DagNodeSseEvent } from './workflow-event.schemas';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -88,16 +96,17 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
       });
 
     case 'node_started':
+    case 'node_suspended':
     case 'node_completed':
     case 'node_failed':
-    case 'node_skipped':
-      return JSON.stringify({
+    case 'node_skipped': {
+      const payload: DagNodeSseEvent = {
         type: 'dag_node',
         runId: event.runId,
         nodeId: event.nodeId,
         name: event.nodeName,
         status:
-          event.type === 'node_started'
+          event.type === 'node_started' || event.type === 'node_suspended'
             ? 'running'
             : event.type === 'node_completed'
               ? 'completed'
@@ -107,8 +116,22 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         duration: event.type === 'node_completed' ? event.duration : undefined,
         error: event.type === 'node_failed' ? event.error : undefined,
         reason: event.type === 'node_skipped' ? event.reason : undefined,
+        cause: event.type === 'node_skipped' ? event.cause : undefined,
+        execution: event.execution,
         timestamp: Date.now(),
-      });
+      };
+      return JSON.stringify(payload);
+    }
+
+    case 'node_skipped_prior_success':
+      return JSON.stringify({
+        type: 'dag_node',
+        runId: event.runId,
+        nodeId: event.nodeId,
+        name: event.nodeName,
+        status: 'completed',
+        timestamp: Date.now(),
+      } satisfies DagNodeSseEvent);
 
     case 'tool_started':
       return JSON.stringify({
@@ -215,6 +238,16 @@ function dataStr(data: Record<string, unknown>, ...keys: string[]): string | und
   return undefined;
 }
 
+function dataSkipReason(data: Record<string, unknown>): NodeSkipReason | undefined {
+  const parsed = nodeSkipReasonSchema.safeParse(data.reason);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function dataSkipCause(data: Record<string, unknown>): SkipCause | undefined {
+  const parsed = skipCauseSchema.safeParse(data.cause);
+  return parsed.success ? parsed.data : undefined;
+}
+
 /** DB event_type → run-level status, emitted as a `workflow_status` SSE event. */
 const ROW_WORKFLOW_STATUS: Record<string, 'running' | 'completed' | 'failed' | 'cancelled'> = {
   workflow_started: 'running',
@@ -226,15 +259,14 @@ const ROW_WORKFLOW_STATUS: Record<string, 'running' | 'completed' | 'failed' | '
 /** DB event_type → node-level status, emitted as a `dag_node` SSE event. */
 const ROW_NODE_STATUS: Record<string, 'running' | 'completed' | 'failed' | 'skipped'> = {
   node_started: 'running',
-  step_started: 'running',
+  node_suspended: 'running',
   loop_iteration_started: 'running',
   node_completed: 'completed',
-  step_completed: 'completed',
   loop_iteration_completed: 'completed',
   node_failed: 'failed',
   loop_iteration_failed: 'failed',
   node_skipped: 'skipped',
-  node_skipped_prior_success: 'skipped',
+  node_skipped_prior_success: 'completed',
 };
 
 /** SSE payload shapes the console dashboard reacts to — a typed contract for the hand-built JSON. */
@@ -245,16 +277,6 @@ interface WorkflowStatusSsePayload {
   status: 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
   error?: string;
   approval?: { nodeId: string; message: string };
-  timestamp: number;
-}
-
-interface DagNodeSsePayload {
-  type: 'dag_node';
-  runId: string;
-  nodeId: string;
-  name: string;
-  status: 'running' | 'completed' | 'failed' | 'skipped';
-  error?: string;
   timestamp: number;
 }
 
@@ -332,7 +354,8 @@ export function mapWorkflowEventRow(row: WorkflowEventRow): string | null {
 
   const nodeStatus = ROW_NODE_STATUS[row.event_type];
   if (nodeStatus) {
-    const payload: DagNodeSsePayload = {
+    const record = readNodeRecordEvent(row);
+    const payload: DagNodeSseEvent = {
       type: 'dag_node',
       runId,
       nodeId: row.step_name ?? '',
@@ -342,6 +365,9 @@ export function mapWorkflowEventRow(row: WorkflowEventRow): string | null {
         row.event_type === 'node_failed' || row.event_type === 'loop_iteration_failed'
           ? dataStr(data, 'error')
           : undefined,
+      reason: row.event_type === 'node_skipped' ? dataSkipReason(data) : undefined,
+      cause: row.event_type === 'node_skipped' ? dataSkipCause(data) : undefined,
+      execution: record?.metadata,
       timestamp,
     };
     return JSON.stringify(payload);

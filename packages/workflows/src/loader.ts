@@ -13,9 +13,9 @@ import {
   isAgentNode,
   isLoopNode,
   isLoopGroupNode,
+  loopGroupSoleTerminalSink,
   isGateNode,
   isWaitNode,
-  isHaltNode,
   isWorkflowNode,
   isIncludeDirective,
   isComposeFanOutNode,
@@ -25,23 +25,18 @@ import {
 import { COMPOSE_FAN_OUT_STEP_MARKER } from './fan-out-identity';
 import { createLogger } from '@archon/paths';
 import {
+  compileOutputSchema,
   isRegisteredProvider,
   getRegisteredProviders,
   getProviderCapabilities,
 } from '@archon/providers';
 import {
   dagNodeSchema,
-  BASH_NODE_AI_FIELDS,
-  LOOP_NODE_AI_FIELDS,
-  LOOP_GROUP_NODE_AI_FIELDS,
-  GATE_AND_HALT_IGNORED_FIELDS,
-  WAIT_NODE_IGNORED_FIELDS,
-  INCLUDE_NODE_IGNORED_FIELDS,
-  WORKFLOW_NODE_IGNORED_FIELDS,
+  ignoredFieldsForNode,
+  isOutputFormatEnforced,
   KNOWN_DAG_NODE_KEYS,
   KNOWN_NODE_NESTED_KEYS,
   effortLevelSchema,
-  thinkingConfigSchema,
   sandboxSettingsSchema,
   betasSchema,
 } from './schemas/dag-node';
@@ -66,10 +61,17 @@ import type {
 import { INPUT_NAME_PATTERN, inputEnvKey } from './schemas/dag-node';
 import { workflowNodeHooksSchema } from './schemas/hooks';
 import { parseLoopPrevWhenAtom, parseWhenAtom, whenAtoms, WHEN_INPUTS_SCOPE } from './when-atom';
-import { declaredFieldsFromSchema, OUTPUT_REF_SOURCE, parseWholeOutputRef } from './output-ref';
+import {
+  declaredFieldsFromSchema,
+  EXECUTION_CHECKOUT_REF_SOURCE,
+  OUTPUT_REF_SOURCE,
+  parseWholeExecutionCheckoutRef,
+  parseWholeOutputRef,
+} from './output-ref';
 import { isBindingDirective } from './schemas/dag-node';
 import { readComposedBindings } from './compiled-command';
 import { visitNodeTemplateSlots } from './template-walker';
+import { validateInlineExecInputs } from './exec-input-validation';
 import { z } from '@hono/zod-openapi';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -77,26 +79,6 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('workflow.loader');
   return cachedLog;
-}
-
-/**
- * Filenames already warned about an inferred workflow-class declaration this process
- * (#2736/#2738's grace period on `validateWorkflowClassPlacement`). `parseWorkflow` runs
- * on every `/workflow list`, chat turn, and CLI invocation — a permanent process-wide
- * latch keeps the WARN a one-time nudge to the author instead of log spam on a
- * long-running server. Mirrors `hasWarnedLegacyHomePath` in `workflow-discovery.ts`: a
- * plain latch (no in-flight-probe dance) is correct here because `parseWorkflow` is fully
- * synchronous, so no concurrent caller can interleave mid-check. Keyed by the bare
- * filename `parseWorkflow` receives (not a scope-qualified path), so two files sharing a
- * basename across bundled/global/project scopes could under-warn on this channel — a
- * cosmetic log-noise tradeoff only, since `parseWarnings` (the channel the workflow's
- * actual author sees, via `/api/workflows` and `/workflow list`) is pushed unconditionally
- * on every parse regardless of this Set.
- */
-const warnedClassPlacementFiles = new Set<string>();
-/** Exported for tests that need to observe the warning fire more than once per process. */
-export function resetClassPlacementWarningForTests(): void {
-  warnedClassPlacementFiles.clear();
 }
 
 /**
@@ -108,9 +90,8 @@ export function resetClassPlacementWarningForTests(): void {
  * valid enum options).
  *
  * The return type is inferred from the schema (`z.output<S>`), so
- * preprocess-based schemas (e.g. `thinkingConfigSchema`, whose input is
- * `unknown`) still resolve to their parsed output type rather than their
- * input type. zod v4 removed `ZodTypeDef` as the middle type parameter, so the
+ * preprocess-based schemas still resolve to their parsed output type rather
+ * than their input type. zod v4 removed `ZodTypeDef` as the middle type parameter, so the
  * old `z.ZodType<T, z.ZodTypeDef, unknown>` form no longer compiles.
  */
 function parseOptionalField<S extends z.ZodType>(
@@ -175,7 +156,9 @@ function nodeIdForMessages(raw: unknown, index: number): string {
  * on the final flat workflow, where every selected node is executable.
  */
 export function validateWorkflowOutcomeDeclaration(
-  workflow: Pick<WorkflowDefinition, 'returns' | 'outcome_field' | 'nodes'>
+  workflow: Pick<WorkflowDefinition, 'returns' | 'outcome_field'> & {
+    readonly nodes: readonly (DagNode | IncludeDirective)[];
+  }
 ): string | null {
   const field = workflow.outcome_field;
   if (field === undefined) return null;
@@ -269,9 +252,12 @@ function pushUnknownKeyWarning(
 ): void {
   const message = `${label}: unknown key '${key}' will be ignored.${hint}`;
   warnings.push(message);
-  // Carry the prose, not just the payload: the run path (`archon workflow run`)
-  // reads this log line and never reads the warning string (#2213).
-  getLog().warn({ id, key, warning: message }, event);
+  // `warnings` is how the author hears about this: `validate`, `workflow list`,
+  // `workflow run` (stderr), the API, and the run's `workflow_parse_warnings`
+  // event all read it. Every parse warning in this file is also logged at debug, not
+  // warn: discovery parses every workflow on each list or run, so a warn line
+  // would repeat for workflows the operator did not ask about (#3444).
+  getLog().debug({ id, key, warning: message }, event);
 }
 
 /**
@@ -393,9 +379,9 @@ function collectUnknownNodeKeys(raw: unknown, id: string, label: string, warning
  * terminal sink recurses into this same case, following a chain of well-formed
  * sole-terminal-sink nesting to any depth). A gate that is mid-body or
  * co-terminal with another sink breaks the chain here too — the placement
- * check in `collectGateAndLoopDeprecationWarnings` below already warns about
- * that misplacement on its own. Mirrors `findLoopGroupTerminalGate`'s doc comment
- * (dag-executor.ts:4153-4164): the runtime has no unambiguous way to escalate
+ * check in `collectLoopGroupSinkWarnings` below already warns about that
+ * misplacement on its own. Mirrors `findLoopGroupTerminalSuspendNode`'s doc
+ * comment (dag-executor.ts): the runtime has no unambiguous way to escalate
  * a pause through a sink that isn't a bare gate, so this only makes that gap
  * visible at load time.
  */
@@ -405,115 +391,45 @@ function isUnescalatableInteractiveSink(node: DagNode | IncludeDirective): boole
   if (isLoopNode(node)) return node.loop.interactive === true;
   if (!isLoopGroupNode(node)) return false;
   if (node.loop_group.interactive === true) return true;
-  const dependedOn = new Set(node.loop_group.nodes.flatMap(n => n.depends_on ?? []));
-  const sinks = node.loop_group.nodes.filter(n => !dependedOn.has(n.id));
-  return sinks.length === 1 && isUnescalatableInteractiveSink(sinks[0]);
+  const soleSink = loopGroupSoleTerminalSink(node.loop_group.nodes);
+  return soleSink !== undefined && isUnescalatableInteractiveSink(soleSink);
 }
 
 /**
- * #2707 step 1 grow-then-deprecate warnings: `approval.capture_response`,
- * `approval.on_reject`, and node-level loop `interactive:` still parse and
- * function exactly as before (Migration section — these become load errors
- * only after #2123), but warn so authors migrate ahead of that. `$REJECTION_REASON`
- * and `$LOOP_USER_INPUT` are covered as a consequence rather than by a separate
- * text scan: they are populated ONLY inside `on_reject.prompt` / an interactive
- * loop body respectively, so warning on the enabling key covers their only
- * sanctioned usage — any other usage was already a dead (always-empty)
- * reference before this PR, with no behavior for a new warning to explain.
+ * Loop-group sink-shape warnings, judged against the EXPANDED node graph (#2756).
+ *
+ * Both checks below read resolved nodes only — `depends_on` edges and node kinds —
+ * never the raw YAML, so they describe the graph the executor will run rather than
+ * what the author typed. That is the point: an `include:` is a legal `loop_group`
+ * body entry, and before expansion it is an opaque target name no sink check can
+ * classify, so a composed terminal sink is invisible at parse time. This therefore
+ * runs once per workflow AFTER `expandWorkflowIncludes`, from the discovery site
+ * that pairs warnings with the expanded definition (`workflow-discovery.ts`) — a
+ * directly-authored sink keeps its id and its verdict through expansion, so it
+ * still warns exactly once.
  */
-function collectGateAndLoopDeprecationWarnings(
-  node: DagNode | IncludeDirective,
-  raw: unknown,
-  id: string,
+export function collectLoopGroupSinkWarnings(
+  nodes: readonly (DagNode | IncludeDirective)[],
   warnings: string[]
 ): void {
-  // An include directive has no gate/loop shape of its own — its expanded
-  // contents are scanned once inlined, like collectUnknownNodeKeys's own
-  // 'with:' handling for include nodes.
-  if (isIncludeDirective(node)) return;
-  if (isGateNode(node) && raw !== null && typeof raw === 'object') {
-    const rawApproval = (raw as Record<string, unknown>).approval;
-    if (rawApproval !== null && typeof rawApproval === 'object') {
-      const approvalObj = rawApproval as Record<string, unknown>;
-      // capture_response is genuinely ignored ONLY once the gate has also
-      // opted into the new mechanism by authoring 'decisions:' (GateNode.
-      // decisionsAuthored) — combined with 'on_reject', or on a bare gate with
-      // no 'decisions:' authored, it still fully controls whether the
-      // reviewer's comment becomes the node's output, exactly as before this
-      // PR. Warning unconditionally would be false in those cases.
-      if (approvalObj.capture_response !== undefined && node.decisionsAuthored) {
-        const message =
-          `Node '${id}': 'approval.capture_response' is deprecated. Gate output is now ` +
-          `always structured as {decision, text} — read '$${id}.output.text' downstream ` +
-          'instead. This field is ignored.';
-        warnings.push(message);
-        getLog().warn({ id, warning: message }, 'node_capture_response_deprecated');
-      }
-      if (approvalObj.on_reject !== undefined) {
-        const message =
-          `Node '${id}': 'approval.on_reject' is deprecated. Declare 'approval.decisions' ` +
-          `and wire a rework node with "when: \\"$${id}.output.decision == 'reject'\\"" ` +
-          'instead (loop it with loop_group if it should iterate). This gate keeps running ' +
-          'via the legacy mechanism until migrated.';
-        warnings.push(message);
-        getLog().warn({ id, warning: message }, 'node_on_reject_deprecated');
-      }
-    }
-  }
-  const interactiveLoop =
-    (isLoopNode(node) && node.loop.interactive === true) ||
-    (isLoopGroupNode(node) && node.loop_group.interactive === true);
-  if (interactiveLoop) {
-    const message =
-      `Node '${id}': node-level loop 'interactive:' is deprecated. A future release ` +
-      're-expresses the interactive loop as a gate + loop_group composition (#2707 step 3). ' +
-      'Continue using it for now.';
-    warnings.push(message);
-    getLog().warn({ id, warning: message }, 'node_loop_interactive_deprecated');
-  }
+  for (const node of nodes) {
+    if (isIncludeDirective(node) || !isLoopGroupNode(node)) continue;
 
-  // The prose `until:` completion channel is deprecated for EVERY loop/loop_group,
-  // not only interactive ones (#2707 step 3, "What gets deleted"): its one stated
-  // reason to exist — "the iteration output is a message a human reads at an
-  // interactive gate" (#2563) — evaporates once that human interaction is a gate
-  // node with structured decision output rather than a prose sentinel. `until_bash`
-  // and (loop: only) `until_field` are the declared, structured replacements. This
-  // keeps running exactly as before; only the guidance is new.
-  if (isLoopNode(node) && node.loop.until !== undefined) {
-    const message =
-      `Node '${id}': the prose 'loop.until' completion signal is deprecated. Declare ` +
-      "'loop.until_bash' (deterministic check) or 'loop.until_field' (a declared boolean " +
-      'in output_format) instead (#2707 step 3). Continue using it for now.';
-    warnings.push(message);
-    getLog().warn({ id, warning: message }, 'node_loop_until_deprecated');
-  } else if (isLoopGroupNode(node) && node.loop_group.until !== undefined) {
-    const message =
-      `Node '${id}': the prose 'loop_group.until' completion signal is deprecated. ` +
-      "Declare 'loop_group.until_bash' instead — it can read a body node's structured " +
-      'output (e.g. \'test $body-node.output.field = "true"\') (#2707 step 3). Continue ' +
-      'using it for now.';
-    warnings.push(message);
-    getLog().warn({ id, warning: message }, 'node_loop_group_until_deprecated');
-  }
+    // An `include:` is already gone from the body here — expansion replaced it with the
+    // block's namespaced nodes, which is what makes a composed terminal sink visible to
+    // these checks at all. The body type still admits one, so it stays a participant in
+    // the sink count and is never itself classified as a gate or an interactive sink.
+    const soleSink = loopGroupSoleTerminalSink(node.loop_group.nodes);
 
-  // A gate node inside a loop_group body only pauses the enclosing loop when it is
-  // the body's SOLE terminal sink (#2707 step 3, target-model decision (b)) — a
-  // mid-body or co-terminal gate has no defined resume semantics and silently does
-  // not stop iteration (mid-body resume-to-node is deferred to #2708). This is
-  // guidance for the new authoring pattern, not a rejection: the file keeps loading
-  // either way, matching the grow-then-deprecate posture used throughout this
-  // function — including for a gate placed here via the legacy `on_reject`
-  // mechanism, which predates and is unrelated to this pattern but is equally
-  // unable to stop the loop from this position.
-  if (isLoopGroupNode(node)) {
-    // Every body entry — including an unexpanded `include:` directive, which has
-    // the identical `depends_on` shape (both extend dagNodeBaseSchema) and is a
-    // real graph participant here, not yet inlined — contributes to and can BE a
-    // terminal sink. Excluding it would silently misclassify a gate a downstream
-    // include node depends on as "terminal", and miss an include node that is
-    // itself a second, co-terminal sink.
-    const bodyDependedOn = new Set(node.loop_group.nodes.flatMap(n => n.depends_on ?? []));
-    const bodySinks = node.loop_group.nodes.filter(n => !bodyDependedOn.has(n.id));
+    // A gate node inside a loop_group body only pauses the enclosing loop when it is
+    // the body's SOLE terminal sink (#2707 step 3, target-model decision (b)) — a
+    // mid-body or co-terminal gate has no defined resume semantics and silently does
+    // not stop iteration (mid-body resume-to-node is deferred to #2708). Guidance for
+    // the new authoring pattern, not a rejection: the workflow keeps loading either
+    // way. A gate placed here by the legacy `on_reject` mechanism predates this
+    // pattern and is equally unable to stop the loop from this position, so it gets
+    // the same verdict.
+    //
     // Every gate in the body, not just the first: a body may legitimately contain
     // more than one (e.g. an "approve to start" gate followed by work followed by
     // a "review the result" gate) — only ONE can validly be the sole terminal sink,
@@ -521,14 +437,14 @@ function collectGateAndLoopDeprecationWarnings(
     // first one found.
     const gatesInBody = node.loop_group.nodes.filter(n => !isIncludeDirective(n) && isGateNode(n));
     for (const gate of gatesInBody) {
-      if (bodyDependedOn.has(gate.id) || bodySinks.length > 1) {
+      if (gate !== soleSink) {
         const message =
           `Node '${gate.id}': a gate node inside a loop_group body must be the ` +
           "body's sole terminal sink to pause the enclosing loop (#2707 step 3) — this " +
           'gate is not, so it will not stop loop iteration. Move it to the end of the ' +
           'body with nothing else depending on it, and no other node left un-depended-on.';
         warnings.push(message);
-        getLog().warn({ id: gate.id, warning: message }, 'loop_group_gate_not_terminal_sink');
+        getLog().debug({ id: gate.id, warning: message }, 'loop_group_gate_not_terminal_sink');
       } else {
         // Gate is validly the sole terminal sink. Design A (#2707 step 3) is
         // deliberately unopinionated about what a decision means — the group's own
@@ -555,7 +471,7 @@ function collectGateAndLoopDeprecationWarnings(
             `(e.g. '[ "${gateRef}.decision" = "approve" ]') so the gate's answer actually ` +
             'drives completion (#2707 step 3).';
           warnings.push(message);
-          getLog().warn(
+          getLog().debug(
             { id: gate.id, warning: message },
             'loop_group_gate_completion_not_referenced'
           );
@@ -567,23 +483,121 @@ function collectGateAndLoopDeprecationWarnings(
     // without stopping THIS group (#2753) — a bare gate sink is excluded here since
     // that case is already correctly handled above (and by #2707 step 3 at runtime);
     // this covers a sink whose own pause is trapped one level down instead.
-    if (bodySinks.length === 1) {
-      const sink = bodySinks[0];
-      if (!isIncludeDirective(sink) && !isGateNode(sink) && isUnescalatableInteractiveSink(sink)) {
+    if (
+      soleSink !== undefined &&
+      !isIncludeDirective(soleSink) &&
+      !isGateNode(soleSink) &&
+      isUnescalatableInteractiveSink(soleSink)
+    ) {
+      const message =
+        `Node '${node.id}': this loop_group's terminal sink ('${soleSink.id}') is itself an ` +
+        'interactive loop/loop_group — a pause inside it does not escalate to stop ' +
+        "this loop_group's own iteration (#2753). The outer loop can run further iterations " +
+        "while a human's answer to the inner pause is still pending. Only a gate node " +
+        'directly as the terminal sink correctly stops the enclosing loop_group ' +
+        '(#2707 step 3).';
+      warnings.push(message);
+      getLog().debug(
+        { id: node.id, sinkId: soleSink.id, warning: message },
+        'loop_group_nested_pause_not_escalated'
+      );
+    }
+
+    collectLoopGroupSinkWarnings(node.loop_group.nodes, warnings);
+  }
+}
+
+/**
+ * #2707 step 1 grow-then-deprecate warnings: `approval.capture_response`,
+ * `approval.on_reject`, and node-level loop `interactive:` still parse and
+ * function exactly as before (Migration section — these become load errors
+ * only after #2123), but warn so authors migrate ahead of that. `$REJECTION_REASON`
+ * and `$LOOP_USER_INPUT` are covered as a consequence rather than by a separate
+ * text scan: they are populated ONLY inside `on_reject.prompt` / an interactive
+ * loop body respectively, so warning on the enabling key covers their only
+ * sanctioned usage — any other usage was already a dead (always-empty)
+ * reference before this PR, with no behavior for a new warning to explain.
+ *
+ * Every notice here is about one node as its author wrote it — the gate ones read
+ * the RAW node to see a key Zod already normalized away. Verdicts about graph
+ * SHAPE are not here: the loop_group sink-shape checks live in
+ * `collectLoopGroupSinkWarnings`, which judges the expanded graph (#2756).
+ */
+function collectGateAndLoopDeprecationWarnings(
+  node: DagNode | IncludeDirective,
+  raw: unknown,
+  id: string,
+  warnings: string[]
+): void {
+  // An include directive has no gate/loop shape of its own, and its target is a
+  // workflow file in its own right: discovery parses that file and warns on what it
+  // declares there, so the inlined copy needs no second notice.
+  if (isIncludeDirective(node)) return;
+  if (isGateNode(node) && raw !== null && typeof raw === 'object') {
+    const rawApproval = (raw as Record<string, unknown>).approval;
+    if (rawApproval !== null && typeof rawApproval === 'object') {
+      const approvalObj = rawApproval as Record<string, unknown>;
+      // capture_response is genuinely ignored ONLY once the gate has also
+      // opted into the new mechanism by authoring 'decisions:' (GateNode.
+      // decisionsAuthored) — combined with 'on_reject', or on a bare gate with
+      // no 'decisions:' authored, it still fully controls whether the
+      // reviewer's comment becomes the node's output, exactly as before this
+      // PR. Warning unconditionally would be false in those cases.
+      if (approvalObj.capture_response !== undefined && node.decisionsAuthored) {
         const message =
-          `Node '${id}': this loop_group's terminal sink ('${sink.id}') is itself an ` +
-          'interactive loop/loop_group — a pause inside it does not escalate to stop ' +
-          "this loop_group's own iteration (#2753). The outer loop can run further iterations " +
-          "while a human's answer to the inner pause is still pending. Only a gate node " +
-          'directly as the terminal sink correctly stops the enclosing loop_group ' +
-          '(#2707 step 3).';
+          `Node '${id}': 'approval.capture_response' is deprecated. Gate output is now ` +
+          `always structured as {decision, text} — read '$${id}.output.text' downstream ` +
+          'instead. This field is ignored.';
         warnings.push(message);
-        getLog().warn(
-          { id, sinkId: sink.id, warning: message },
-          'loop_group_nested_pause_not_escalated'
-        );
+        getLog().debug({ id, warning: message }, 'node_capture_response_deprecated');
+      }
+      if (approvalObj.on_reject !== undefined) {
+        const message =
+          `Node '${id}': 'approval.on_reject' is deprecated. Declare 'approval.decisions' ` +
+          `and wire a rework node with "when: \\"$${id}.output.decision == 'reject'\\"" ` +
+          'instead (loop it with loop_group if it should iterate). This gate keeps running ' +
+          'via the legacy mechanism until migrated.';
+        warnings.push(message);
+        getLog().debug({ id, warning: message }, 'node_on_reject_deprecated');
       }
     }
+  }
+  const interactiveLoop =
+    (isLoopNode(node) && node.loop.interactive === true) ||
+    (isLoopGroupNode(node) && node.loop_group.interactive === true);
+  if (interactiveLoop) {
+    const message =
+      `Node '${id}': node-level loop 'interactive:' is deprecated. A future release ` +
+      're-expresses the interactive loop as a gate + loop_group composition (#2707 step 3). ' +
+      'Continue using it for now.';
+    warnings.push(message);
+    getLog().debug({ id, warning: message }, 'node_loop_interactive_deprecated');
+  }
+
+  // The prose `until:` completion channel is deprecated for EVERY loop/loop_group,
+  // not only interactive ones (#2707 step 3, "What gets deleted"): its one stated
+  // reason to exist — "the iteration output is a message a human reads at an
+  // interactive gate" (#2563) — evaporates once that human interaction is a gate
+  // node with structured decision output rather than a prose sentinel. `until_bash`
+  // and (loop: only) `until_field` are the declared, structured replacements. This
+  // keeps running exactly as before; only the guidance is new.
+  if (isLoopNode(node) && node.loop.until !== undefined) {
+    const message =
+      `Node '${id}': the prose 'loop.until' completion signal is deprecated. Declare ` +
+      "'loop.until_bash' (deterministic check) or 'loop.until_field' (a declared boolean " +
+      'in output_format) instead (#2707 step 3). While supported, emit legacy signals as ' +
+      "'<promise>SIGNAL</promise>' or a final standalone signal line.";
+    warnings.push(message);
+    getLog().debug({ id, warning: message }, 'node_loop_until_deprecated');
+  } else if (isLoopGroupNode(node) && node.loop_group.until !== undefined) {
+    const message =
+      `Node '${id}': the prose 'loop_group.until' completion signal is deprecated. ` +
+      "Declare 'loop_group.until_bash' instead — it can read a body node's structured " +
+      'output (e.g. \'test $body-node.output.field = "true"\') (#2707 step 3). While ' +
+      "supported, emit legacy signals as '<promise>SIGNAL</promise>' or a final standalone " +
+      'signal line.';
+    warnings.push(message);
+    getLog().debug({ id, warning: message }, 'node_loop_group_until_deprecated');
   }
 
   // Recurse into a loop_group body — mirrors collectUnknownNodeKeys's own body
@@ -653,7 +667,6 @@ function parseDagNode(
     );
     return null;
   }
-
   collectUnknownNodeKeys(raw, id, `Node '${id}'`, warnings);
   collectGateAndLoopDeprecationWarnings(node, raw, id, warnings);
 
@@ -672,39 +685,36 @@ function parseDagNode(
     warnings.push(
       `Node '${id}': 'with' is only supported on command, script, include, and workflow nodes — it is ignored here`
     );
-    getLog().warn({ id: node.id }, 'node_with_ignored');
+    getLog().debug({ id: node.id }, 'node_with_ignored');
   }
 
-  // Warn about AI-specific fields on non-AI nodes (runtime behavior, not schema errors)
-  let nonAiNode: { type: string; fields: readonly string[] } | undefined;
-  if (isIncludeDirective(node)) {
-    nonAiNode = { type: 'include', fields: INCLUDE_NODE_IGNORED_FIELDS };
-  } else if (isComposeFanOutNode(node)) {
-    // Same execution-less posture as a static include: the composed body's own nodes
-    // carry their config, so AI-level fields declared here are ignored (#2512).
-    nonAiNode = { type: 'include', fields: INCLUDE_NODE_IGNORED_FIELDS };
-  } else if (isHaltNode(node)) {
-    nonAiNode = { type: 'cancel', fields: GATE_AND_HALT_IGNORED_FIELDS };
-  } else if (isWorkflowNode(node)) {
-    nonAiNode = { type: 'workflow', fields: WORKFLOW_NODE_IGNORED_FIELDS };
-  } else if (isGateNode(node)) {
-    nonAiNode = { type: 'approval', fields: GATE_AND_HALT_IGNORED_FIELDS };
-  } else if (isWaitNode(node)) {
-    nonAiNode = { type: 'wait', fields: WAIT_NODE_IGNORED_FIELDS };
-  } else if (isLoopNode(node)) {
-    nonAiNode = { type: 'loop', fields: LOOP_NODE_AI_FIELDS };
-  } else if (isLoopGroupNode(node)) {
-    nonAiNode = { type: 'loop_group', fields: LOOP_GROUP_NODE_AI_FIELDS };
-  } else if (isExecNode(node)) {
-    nonAiNode = { type: node.runtime === 'sh' ? 'bash' : 'script', fields: BASH_NODE_AI_FIELDS };
+  if ((raw as Record<string, unknown>).on_timeout !== undefined && node.kind !== 'exec') {
+    warnings.push(
+      `Node '${id}': 'on_timeout' is only supported on bash and script nodes — it is ignored here`
+    );
+    getLog().debug({ id: node.id }, 'node_on_timeout_ignored');
   }
+
+  // parseWarnings owns author-facing diagnostics; the structured log observes the
+  // same message for operators without becoming a second classification path.
+  const nonAiNode = ignoredFieldsForNode(node);
   if (nonAiNode) {
     const presentAiFields = nonAiNode.fields.filter(
       f => (raw as Record<string, unknown>)[f] !== undefined
     );
     if (presentAiFields.length > 0) {
-      getLog().warn(
-        { id: node.id, fields: presentAiFields },
+      const quoted = presentAiFields.map(f => `'${f}'`).join(', ');
+      const plural = presentAiFields.length > 1;
+      const message =
+        nonAiNode.type === 'include'
+          ? `Node '${id}': ${quoted} ${plural ? 'are' : 'is'} ignored and will have no effect ` +
+            '(an include attaches a sub-graph and does not reconfigure it; declare the ' +
+            `${plural ? 'fields' : 'field'} on the included nodes instead)`
+          : `Node '${id}': ${quoted} ${plural ? 'are' : 'is'} not supported on this node type ` +
+            `(${nonAiNode.type}) — ${plural ? 'they are' : 'it is'} ignored at run time.`;
+      warnings.push(message);
+      getLog().debug(
+        { id: node.id, fields: presentAiFields, warning: message },
         `${nonAiNode.type}_node_ai_fields_ignored`
       );
     }
@@ -779,7 +789,7 @@ const GATE_ON_A_SHELL_NODE =
  * the free-form-AI check needs that producer's type and `output_format`.
  */
 export function validateDagStructure(
-  nodes: (DagNode | IncludeDirective)[],
+  nodes: readonly (DagNode | IncludeDirective)[],
   enclosingNodes?: ReadonlyMap<string, DagNode | IncludeDirective>
 ): string | null {
   // Check ID uniqueness
@@ -963,6 +973,8 @@ export function validateDagStructure(
       const waitSources: (readonly [string, string])[] = [];
       if (node.wait.until !== undefined) waitSources.push(['wait.until', node.wait.until]);
       if (node.wait.event !== undefined) waitSources.push(['wait.event', node.wait.event]);
+      if (node.wait.attention !== undefined)
+        waitSources.push(['wait.attention', node.wait.attention]);
       for (const [field, text] of waitSources) {
         outputRefPattern.lastIndex = 0;
         let m: RegExpExecArray | null;
@@ -1095,6 +1107,18 @@ export function validateDagStructure(
     // otherwise filter a compose_fan_out node out of the binding check entirely.
     const composeFanOut = isComposeFanOutNode(node) ? node : undefined;
     if (isIncludeDirective(node)) continue;
+    if (isWorkflowNode(node)) {
+      // A child run's inputs resolve through the launch path, which has no execution
+      // records to read; forwarding the reference would hand the child a literal string.
+      const misuse = Object.entries(node.with ?? {}).find(
+        ([, value]) =>
+          typeof value === 'string' && new RegExp(EXECUTION_CHECKOUT_REF_SOURCE).test(value)
+      );
+      if (misuse) {
+        return `Node '${node.id}' binding 'with.${misuse[0]}' reads '$<node>.execution.checkoutStart', which a workflow: node cannot pass to its child run; only a command or script node's binding can read it`;
+      }
+      continue;
+    }
     const nodeWith = isExecNode(node)
       ? node.with
       : isAgentNode(node)
@@ -1107,7 +1131,30 @@ export function validateDagStructure(
     if (nodeWith === undefined) continue;
     for (const [name, value] of Object.entries(nodeWith)) {
       const producerIds: string[] = [];
-      if (typeof value === 'string') {
+      const readsExecution =
+        typeof value === 'string' && new RegExp(EXECUTION_CHECKOUT_REF_SOURCE).test(value);
+      if (typeof value === 'string' && readsExecution) {
+        const producerId = parseWholeExecutionCheckoutRef(value);
+        if (composeFanOut) {
+          return `Node '${node.id}' binding 'with.${name}' reads '$<node>.execution.checkoutStart', which a composed fan-out cannot pass to its instances; only a command or script node's binding can read it`;
+        }
+        if (producerId === undefined) {
+          return `Node '${node.id}' binding 'with.${name}' uses '$<node>.execution.checkoutStart' inside other text; it is only valid as the whole value of a command or script node's binding`;
+        }
+        const producer = nodesById.get(producerId) ?? enclosingNodes?.get(producerId);
+        if (producer === undefined) {
+          return `Node '${node.id}' binding 'with.${name}' reads '$${producerId}.execution.checkoutStart', but no node '${producerId}' exists in this workflow`;
+        }
+        if (
+          !isIncludeDirective(producer) &&
+          !isAgentNode(producer) &&
+          !isExecNode(producer) &&
+          !isLoopNode(producer)
+        ) {
+          return `Node '${node.id}' binding 'with.${name}' reads '$${producerId}.execution.checkoutStart', but '${producerId}' is a ${producer.kind} node, which does not execute against the checkout and records no checkout start`;
+        }
+        producerIds.push(producerId);
+      } else if (typeof value === 'string') {
         const refPattern = new RegExp(OUTPUT_REF_SOURCE, 'g');
         let refMatch: RegExpExecArray | null;
         while ((refMatch = refPattern.exec(value)) !== null) {
@@ -1120,7 +1167,7 @@ export function validateDagStructure(
       for (const producerId of producerIds) {
         if (!nodesById.has(producerId)) continue; // enclosing scope, or already rejected above
         if (!transitiveDepsOf(node.id).has(producerId)) {
-          return `Node '${node.id}' binding 'with.${name}' references '$${producerId}.output', which is not an upstream dependency — add '${producerId}' to '${node.id}'.depends_on so its value is produced first`;
+          return `Node '${node.id}' binding 'with.${name}' references '$${producerId}.${readsExecution ? 'execution.checkoutStart' : 'output'}', which is not an upstream dependency — add '${producerId}' to '${node.id}'.depends_on so its value is produced first`;
         }
       }
     }
@@ -1147,10 +1194,9 @@ export function validateDagStructure(
       if (workflowInBody) {
         return `loop_group '${node.id}' body: 'workflow' (sub-run) is not supported inside a loop_group body`;
       }
-      const dependedOn = new Set(node.loop_group.nodes.flatMap(n => n.depends_on ?? []));
-      const sinks = node.loop_group.nodes.filter(n => !dependedOn.has(n.id));
+      const soleSink = loopGroupSoleTerminalSink(node.loop_group.nodes);
       const misplacedWait = node.loop_group.nodes.find(
-        n => !isIncludeDirective(n) && isWaitNode(n) && (dependedOn.has(n.id) || sinks.length !== 1)
+        n => !isIncludeDirective(n) && isWaitNode(n) && n !== soleSink
       );
       if (misplacedWait) {
         return `loop_group '${node.id}' body: wait node '${misplacedWait.id}' must be the body's sole terminal sink`;
@@ -1187,7 +1233,7 @@ export function validateDagStructure(
  * existed, including ones that only ever ran in the foreground and were
  * never actually unsafe — the hard error had no transition. `parseWorkflow`
  * instead coerces `interactive` to `true` for the rest of this parse and
- * warns once per file (see `warnedClassPlacementFiles`), which closes #1991
+ * reports a parse warning, which closes #1991
  * for these workflows immediately: every dispatch surface reads the SAME
  * parsed `interactive` value this function's result feeds
  * (`assertInteractiveClassNotBackgrounded`, the fan-out spawn check, the web
@@ -1261,6 +1307,65 @@ export function validateWorkflowClassPlacement(
   return null;
 }
 
+/**
+ * A `workflow:` node may not declare `output_format` (#2453). The result contract
+ * belongs to the node that produces the value — the child's `returns:` node — and
+ * its declared field names travel back with the result, so the caller has nothing
+ * to assert. Checked before the compile gate in both the file-fed loader and the
+ * in-memory validator, through this one function, so both name the same owner and
+ * a caller schema never reaches the compile branch. Returns the load error, or
+ * `null` for every other node.
+ */
+export function workflowNodeOutputFormatError(node: DagNode): string | null {
+  if (!isWorkflowNode(node) || node.output_format === undefined) return null;
+  return `Node '${node.id}' declares output_format on a workflow: node; the result contract belongs to the child's returns: node — declare it there`;
+}
+
+/**
+ * Compile every declared `output_format` so a contract that cannot be enforced
+ * is rejected at LOAD time, before a provider is paid (#2453).
+ *
+ * `output_format` is free-form JSON Schema to Zod (`z.record`), so nothing before
+ * this point can tell a real schema from one ajv will refuse. The runtime gates
+ * used to warn and continue on that refusal, which silently turned a declared
+ * contract into no contract at all after the spend. They now fail the node, and
+ * this check is what keeps that failure from being the author's first signal.
+ *
+ * ajv stays `strict: false`, so a schema carrying tolerated annotations (unknown
+ * keywords, unknown formats) still compiles and still loads — only a schema ajv
+ * genuinely rejects, such as a dangling `$ref`, is an error here.
+ *
+ * Loop_group bodies are walked too: a body node runs its own provider turn with
+ * its own schema, while the group's own `output_format` stays inert and is skipped.
+ * Returns the first failure message, or `null`.
+ */
+export function validateNodeOutputFormats(
+  nodes: readonly (DagNode | IncludeDirective)[]
+): string | null {
+  for (const node of nodes) {
+    if (isIncludeDirective(node)) continue;
+    // Ownership first (#2453): a `workflow:` node's schema is rejected outright, so the
+    // compile gate below never sees one.
+    const ownershipError = workflowNodeOutputFormatError(node);
+    if (ownershipError !== null) return ownershipError;
+    // Only a schema the engine will enforce is worth rejecting. Where the field is
+    // inert (warned and ignored) a dangling `$ref` governs nothing and must not fail
+    // the file; the predicate derives from the ignored-field lists, so it stays true
+    // as those lists change.
+    if (isOutputFormatEnforced(node) && node.output_format !== undefined) {
+      const compileError = compileOutputSchema(node.output_format);
+      if (compileError !== null) {
+        return `Node '${node.id}' declares an output_format that cannot be compiled: ${compileError}`;
+      }
+    }
+    if (isLoopGroupNode(node)) {
+      const bodyError = validateNodeOutputFormats(node.loop_group.nodes);
+      if (bodyError) return bodyError;
+    }
+  }
+  return null;
+}
+
 export type ParseResult =
   | { workflow: WorkflowDefinition; error: null; warnings: string[] }
   | { workflow: null; error: WorkflowLoadError; warnings?: never };
@@ -1283,15 +1388,30 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       };
     }
 
+    if (Object.hasOwn(raw, 'thinking')) {
+      return {
+        workflow: null,
+        error: {
+          filename,
+          error: "'thinking:' has been removed; use 'effort:' instead",
+          errorType: 'validation_error',
+        },
+      };
+    }
+
+    // A load failure reaches the author through the returned `error`, which discovery
+    // collects for `workflow list`, `validate workflows`, `workflow run`, and the API.
+    // Like parse warnings, the log line is debug so a broken file is not repeated on
+    // every discovery (#3444).
     if (!raw.name || typeof raw.name !== 'string') {
-      getLog().warn({ filename }, 'workflow_missing_name');
+      getLog().debug({ filename }, 'workflow_missing_name');
       return {
         workflow: null,
         error: { filename, error: "Missing required field 'name'", errorType: 'validation_error' },
       };
     }
     if (!raw.description || typeof raw.description !== 'string') {
-      getLog().warn({ filename }, 'workflow_missing_description');
+      getLog().debug({ filename }, 'workflow_missing_description');
       return {
         workflow: null,
         error: {
@@ -1326,7 +1446,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     }
 
     if (!hasNodes) {
-      getLog().warn({ filename }, 'workflow_missing_nodes');
+      getLog().debug({ filename }, 'workflow_missing_nodes');
       return {
         workflow: null,
         error: {
@@ -1345,7 +1465,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       .filter((n): n is DagNode | IncludeDirective => n !== null);
 
     if (dagNodes.length !== (raw.nodes as unknown[]).length) {
-      getLog().warn({ filename, validationErrors }, 'dag_node_validation_failed');
+      getLog().debug({ filename, validationErrors }, 'dag_node_validation_failed');
       return {
         workflow: null,
         error: {
@@ -1358,10 +1478,19 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
 
     const structureError = validateDagStructure(dagNodes);
     if (structureError) {
-      getLog().warn({ filename, structureError }, 'dag_structure_invalid');
+      getLog().debug({ filename, structureError }, 'dag_structure_invalid');
       return {
         workflow: null,
         error: { filename, error: structureError, errorType: 'validation_error' },
+      };
+    }
+
+    const outputFormatError = validateNodeOutputFormats(dagNodes);
+    if (outputFormatError) {
+      getLog().debug({ filename, outputFormatError }, 'output_format_rejected');
+      return {
+        workflow: null,
+        error: { filename, error: outputFormatError, errorType: 'validation_error' },
       };
     }
 
@@ -1381,14 +1510,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
         '(this grace period ends in a future release — see #2738); add the declaration to the file to ' +
         'silence this warning.';
       parseWarnings.push(classWarning);
-      if (!warnedClassPlacementFiles.has(filename)) {
-        warnedClassPlacementFiles.add(filename);
-        // Carry the prose, not just the payload, so the warning is legible on both
-        // channels: the log stream, and `parseWarnings` — which `executeWorkflow`
-        // persists verbatim as a `workflow_parse_warnings` event (#2213) and
-        // `/api/workflows` surfaces per-workflow to the author (see AGENTS.md).
-        getLog().warn({ filename, warning: classWarning }, 'workflow_class_placement_inferred');
-      }
+      getLog().debug({ filename, warning: classWarning }, 'workflow_class_placement_inferred');
     }
 
     // Parse workflow-level fields using WorkflowBaseSchema for validation
@@ -1620,7 +1742,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
           error: {
             filename,
             error:
-              "Invalid evidence_policy: expected { required: boolean }. When required is true, the run is refused terminal 'completed' unless $ARTIFACTS_DIR/evidence.json exists.",
+              "Invalid evidence_policy: expected { required: boolean }. When required is true, the run is refused terminal 'completed' unless the conventional marker file $ARTIFACTS_DIR/evidence.json exists; its contents are not checked.",
             errorType: 'validation_error',
           },
         };
@@ -1773,7 +1895,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     if (typeof raw.returns === 'string' && raw.returns.trim().length > 0) {
       returns = raw.returns.trim();
     } else if (raw.returns !== undefined) {
-      getLog().warn({ filename, value: raw.returns }, 'invalid_workflow_returns_value_rejected');
+      getLog().debug({ filename, value: raw.returns }, 'invalid_workflow_returns_value_rejected');
       return {
         workflow: null,
         error: {
@@ -1807,7 +1929,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     if (typeof raw.outcome_field === 'string' && raw.outcome_field.trim().length > 0) {
       outcomeField = raw.outcome_field.trim();
     } else if (raw.outcome_field !== undefined) {
-      getLog().warn(
+      getLog().debug(
         { filename, value: raw.outcome_field },
         'invalid_workflow_outcome_field_value_rejected'
       );
@@ -1868,14 +1990,8 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       // Carry the prose, not just the payload, so the warning is legible on both
       // channels: the log stream, and `parseWarnings` — which `executeWorkflow`
       // persists verbatim as a `workflow_parse_warnings` event (#2213).
-      getLog().warn({ filename, warning: message }, 'workflow_model_reasoning_effort_deprecated');
+      getLog().debug({ filename, warning: message }, 'workflow_model_reasoning_effort_deprecated');
     }
-    const thinking = parseOptionalField(
-      raw.thinking,
-      thinkingConfigSchema,
-      filename,
-      'invalid_workflow_thinking_value_ignored'
-    );
     const sandbox = parseOptionalField(
       raw.sandbox,
       sandboxSettingsSchema,
@@ -1960,7 +2076,6 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       interactive,
       ...(mutatesCheckout !== undefined ? { mutates_checkout: mutatesCheckout } : {}),
       ...(effort !== undefined ? { effort } : {}),
-      ...(thinking !== undefined ? { thinking } : {}),
       ...(fallbackModel !== undefined ? { fallbackModel } : {}),
       ...(betas !== undefined ? { betas } : {}),
       ...(sandbox !== undefined ? { sandbox } : {}),
@@ -1976,6 +2091,18 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       ...(outcomeField !== undefined ? { outcome_field: outcomeField } : {}),
       ...(deprecated !== undefined ? { deprecated } : {}),
     };
+    const execInputValidation = validateInlineExecInputs(workflow);
+    parseWarnings.push(...execInputValidation.warnings);
+    if (execInputValidation.errors.length > 0) {
+      return {
+        workflow: null,
+        error: {
+          filename,
+          error: execInputValidation.errors.join(' '),
+          errorType: 'validation_error',
+        },
+      };
+    }
     const outcomeDeclarationError = validateWorkflowOutcomeDeclaration(workflow);
     if (outcomeDeclarationError !== null) {
       return {
@@ -1999,7 +2126,9 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     const linePattern = /line (\d+)/i;
     const lineMatch = linePattern.exec(err.message);
     const lineInfo = lineMatch ? ` (near line ${lineMatch[1]})` : '';
-    getLog().error(
+    // Debug for the same reason as the validation failures above: the returned
+    // parse_error is what the author sees, and discovery re-parses on every command.
+    getLog().debug(
       {
         err,
         filename,

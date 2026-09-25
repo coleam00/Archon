@@ -9,6 +9,14 @@
  * - Utility functions
  */
 
+export {
+  EFFORT_LADDER,
+  clampEffort,
+  isEffortRung,
+  type AssertNever,
+  type EffortRung,
+} from './effort';
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -20,6 +28,7 @@ export {
   type Codebase,
   type Session,
   type CommandResult,
+  type WorkflowRequest,
   type IPlatformAdapter,
   type IWebPlatformAdapter,
   isWebAdapter,
@@ -143,7 +152,30 @@ export {
   waitForRunAttention,
   DEFAULT_ATTENTION_POLL_INTERVAL_MS,
 } from './services/run-attention-watch';
-export type { RunWaitResult, RunAttentionWaitOptions } from './services/run-attention-watch';
+export type {
+  NonTerminalWorkflowRunStatus,
+  RunWaitResult,
+  RunAttentionWaitOptions,
+} from './services/run-attention-watch';
+
+export {
+  startRunLiveOwner,
+  withRunLiveOwner,
+  watchRunLiveOwner,
+  requestRunLiveOwnerStop,
+  runLiveOwnerPath,
+  canConnectToRunLiveOwner,
+  RunLiveOwnerStopUnavailableError,
+  RUN_LIVE_OWNER_IPC_TIMEOUT_MS,
+  RUN_LIVE_OWNER_CONTROL_HANDOFF_GRACE_MS,
+} from './services/run-live-owner';
+export type {
+  RunLiveOwner,
+  RunLiveOwnerOptions,
+  RunLiveOwnerStopLease,
+  RunLiveOwnerWatch,
+  RunLiveOwnerWatchEvent,
+} from './services/run-live-owner';
 
 // =============================================================================
 // State
@@ -190,6 +222,7 @@ export {
   isPerUserGitHubEnabled,
   loadDeviceFlowConfig,
   assertEncryptionKeyAtBoot,
+  resolveGitHubTokenFromEnv,
   connectGithubForUser,
   persistGithubConnection,
   startDeviceFlow,
@@ -268,9 +301,6 @@ export {
   type UserTiersPatch,
   type UserAliasesPatch,
 } from './db/user-ai-prefs-store';
-
-// Path validation
-export { isPathWithinWorkspace, validateAndResolvePath } from './utils/path-validation';
 
 // Port allocation
 export { getPort } from './utils/port-allocation';

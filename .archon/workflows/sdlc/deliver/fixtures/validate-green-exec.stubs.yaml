@@ -1,0 +1,59 @@
+# Exec-code fixture: the project gate's real runner executes a passing check,
+# and gate-validated runs the real gate-green script and passes. Only discovery
+# is stubbed. This covers the first-execution green path through gate-validated
+# — the same path a corrected resume delivers after the `always_run: true`
+# opt-out on the validate package's discover and run nodes. The dry-run
+# simulator has no resume support, so this fixture proves the gate script reads
+# the verdict correctly; the engine's `always_run` re-execution on resume is
+# covered by dag-executor.test.ts.
+#
+# The red paths through the same gate with exec-code are covered by the
+# validate-red*.stubs.yaml fixtures.
+impl__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: implemented and green"
+impl__assert-changed: "3 files changed"
+gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
+pr__pr: { intent: "/fixture/pr-intent.json" }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+review__mode: '{"continuation":false}'
+review__scope:
+  # PR diff in scope; head sha stubbed
+  docs: false
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 2 }
+review__code: "0 findings"
+review__seams: "0 findings"
+review__simplify: "0 findings"
+review__tests: "0 findings"
+review__review-complete: "settled"
+review__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: clean on initial review"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+review__publish:
+  ready: true
+  action: none
+  findings_summary: "stub: clean on initial review"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+gate-ready: '{"ready":"true"}'
+validate__discover: { checks: [{ name: "project gate", argv: ["bun", "-e", "console.log('gate passed')"] }], quarantine: [], notes: "stub: the project's aggregate gate" }
+# validate__run, validate__result and gate-validated are deliberately unstubbed:
+# the real scripts run (exec-code: true) and prove a check that exits 0 reaches
+# the gate as green.
+ci-probe: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
+ci-verdict: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
+flip-ready: { pr_url: "https://github.com/example/repo/pull/2" }
+outcome: { pr_url: "https://github.com/example/repo/pull/2", summary: "https://github.com/example/repo/pull/2" }
+classify:
+  errors: false
+  docs: false
+  reasons:
+    errors: "stub: no failure paths"
+    docs: "stub: no doc-facing changes"
+resolve-scope: '{"errors":"false"}'
+fixture:
+  expect: completed
+exec-code: true

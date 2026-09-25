@@ -3,7 +3,7 @@ import { createLogger } from '@archon/paths';
 import { mergeTokenUsage } from '../../types';
 import type { MessageChunk, SendQueryOptions, TokenUsage } from '../../types';
 import { getOrderedAgents, type NamedAgentConfig } from './agent-config';
-import { errorMessage } from './errors';
+import { errorMessage, pendingPermissionError } from './errors';
 import type { OpencodeClientLike } from './runtime';
 import {
   abortableStream,
@@ -308,6 +308,27 @@ export async function* streamMultiAgentOpencodeSession(
         throw err;
       }
 
+      // Same safety net as session.ts: the embedded server sets no
+      // `permission` policy of its own, so this can fire for any child
+      // session whenever the user's own OpenCode config (or an upstream
+      // default such as `doom_loop`/`external_directory`) leaves a category
+      // as `ask`. `properties` for this event is the pending-permission
+      // record itself, whose `sessionID` field scopes it to one child
+      // agent's session the same way `message.updated`/`message.part.updated`
+      // demux above (issue #3332). The real event is `permission.asked`, not
+      // the `permission.updated` name the `@opencode-ai/sdk` npm package's
+      // types declare — verified against a live server's
+      // `EventPermissionAsked` schema (`GET /doc`); the pinned SDK's types
+      // are stale for this event.
+      if (event.type === 'permission.asked') {
+        const sessionId =
+          typeof properties.sessionID === 'string' ? properties.sessionID : undefined;
+        const state = sessionId ? sessionToAgent.get(sessionId) : undefined;
+        if (!state) continue;
+        await abortAll();
+        throw pendingPermissionError(properties);
+      }
+
       if (event.type === 'session.idle') {
         const sessionId =
           typeof properties.sessionID === 'string' ? properties.sessionID : undefined;
@@ -341,25 +362,33 @@ export async function* streamMultiAgentOpencodeSession(
 
           // Aggregate tokens across sub-agents. The cache axes follow the shared floor
           // rule (#2662): one sub-agent without cache telemetry narrows the total and
-          // flags it, instead of erasing cache the others did report. `total` and `cost`
-          // keep OpenCode's own composition, including its `input + output` fallback.
+          // flags it, instead of erasing cache the others did report. A total is only
+          // available when every sub-agent reported every component needed to compute it.
           const perAgentUsage = states
             .map(candidate => normalizeTokens(candidate.latestAssistantInfo))
             .filter((usage): usage is TokenUsage => usage !== undefined);
           const mergedUsage = mergeTokenUsage(perAgentUsage);
+          const cost = perAgentUsage.some(usage => usage.cost !== undefined)
+            ? perAgentUsage.reduce((sum, usage) => sum + (usage.cost ?? 0), 0)
+            : undefined;
+          const totals = perAgentUsage
+            .map(usage => usage.total)
+            .filter((total): total is number => total !== undefined);
+          const totalComplete =
+            perAgentUsage.length === states.length && totals.length === perAgentUsage.length;
           const tokens: TokenUsage | undefined =
-            // A lone sub-agent passes through verbatim, as before — synthesizing `total`
-            // and `cost` for it would change what a single-agent turn reports.
+            // A lone reported usage otherwise passes through verbatim; merging it would
+            // synthesize fields and change what a single-agent turn reports.
             perAgentUsage.length === 1
               ? { ...perAgentUsage[0] }
               : mergedUsage && {
                   ...mergedUsage,
-                  total: perAgentUsage.reduce(
-                    (sum, usage) => sum + (usage.total ?? usage.input + usage.output),
-                    0
-                  ),
-                  cost: perAgentUsage.reduce((sum, usage) => sum + (usage.cost ?? 0), 0),
+                  ...(cost !== undefined ? { cost } : {}),
                 };
+          if (tokens) {
+            if (totalComplete) tokens.total = totals.reduce((sum, total) => sum + total, 0);
+            else delete tokens.total;
+          }
 
           // Fetch structured outputs from all agents
           const structuredOutputs = await Promise.all(
@@ -382,6 +411,7 @@ export async function* streamMultiAgentOpencodeSession(
           yield {
             type: 'result',
             ...(tokens ? { tokens } : {}),
+            ...(cost !== undefined ? { cost } : {}),
             ...(structuredOutputs ? { structuredOutput: structuredOutputs } : {}),
           };
           getLog().info({ nodeId }, 'opencode.multi_agent_completed');

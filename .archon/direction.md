@@ -47,23 +47,37 @@ Agentic engineering changes too quickly for a monolith to stay right. Projects t
 
 Triage clause: cite this direction as `direction.md §standalone-core`. Do not reject incremental improvements because they do not complete the decomposition in one change; reject new coupling that makes the target materially harder.
 
-## Community providers
+## Web UI
 
-Archon ships built-in providers for Claude (`@anthropic-ai/claude-agent-sdk`) and Codex (`@openai/codex-sdk`). Pi (`@earendil-works/pi-coding-agent`) is the reference community provider and sets the pattern others should follow.
+Archon's Web UI is a reference implementation over the governed engine and SDK, not a privileged product layer. It should prove that another team can build its own UI against the same public contracts.
 
-**Acceptance criteria** for new community providers:
+- **The console replaces the legacy UI.** The console is the maintained path for runs, settings, configuration, and observability. The legacy UI and its duplicate components are removed rather than maintained as a second product. Temporary redirects may preserve bookmarks during cutover, but the old UI is not a compatibility surface.
+- **The served console is a supported management surface.** A Docker or other server deployment runs Archon remotely and serves the console for the operator to manage it from a browser. The console must not assume that the browser shares the engine's filesystem or process. CLI-only and SDK-only use remain supported; the Web UI is not required to run the engine.
+- **Console authentication is optional.** A local or otherwise trusted solo install remains usable without a login. Operators may enable Archon's Web authentication or place the served UI behind a trusted authentication proxy when network access needs an identity boundary. Authentication gates the same console and API rather than creating a separate product mode, and multi-user identity does not turn one install into a multi-tenant service.
+- **The Web UI demonstrates the engine as a product surface.** It consumes the same run, governance, event, artifact, and configuration contracts available to another SDK or API client. A feature that works only through Web-specific engine behavior is missing a public seam.
+- **The Web UI also demonstrates useful applications over governed workflows.** Workflows should be able to produce an actionable result surface, not only logs and generic artifacts. A review workflow may produce a review UI, a delivery workflow a merge queue, and a triage workflow a triage view. Archon's implementation should show users how to build equivalent UIs over their own workflows and outputs without depending on bundled workflow names or private Web behavior.
+- **Workflow output owns the meaning; the host owns safe presentation and action dispatch.** The output may eventually be structured data, a declared view, sandboxed HTML, or another small contract. The exact representation is undecided. Any action from a rendered result must still pass through typed engine-owned authorization and governance boundaries.
+- **Workflow authoring does not gate the console cutover.** The current visual builder is an experiment, not a committed product shape and not a reason to retain the legacy UI. A smaller path may be an agent editing workflow YAML while the UI renders the resulting DAG. Keep both approaches open until real authoring use provides evidence.
 
-- **Coding-agent SDK only.** The provider must wrap an existing coding-agent SDK — one that handles file edits, tool use, multi-turn sessions, and planning. Raw LLM API integrations (`chat.completions`-style) are out of scope. Pi already covers ~20 LLM backends via one harness, so single-model wrappers duplicate work that is already done.
-- **Match the Pi pattern.** Structure mirrors `packages/providers/src/community/pi/` — provider class implementing `IAgentProvider`, options translator, event bridge, capability matrix, registered with `builtIn: false`. Tests at parity with the Pi suite (config, options-translator, event-bridge, provider, session-resolver as the baseline).
-- **Docs page.** Add the provider to `packages/docs-web/src/content/docs/getting-started/ai-assistants.md` with setup, capability matrix, and supported config keys.
+Triage clause: cite this direction as `direction.md §web-ui`.
 
-**Maintenance policy:**
+## Community plugins
 
-- We accept any provider that meets the criteria above. There is no cap.
-- The contributor and the community maintain the provider. Archon maintainers do not own upstream-SDK breaks for community providers.
-- A community provider that goes non-functional — CI broken, upstream SDK gone, no maintainer response — is marked deprecated and removed in the next minor release unless someone from the community submits a fix.
+Providers and platform integrations change faster than Archon's core. Community implementations should therefore ship as optional plugins from contributor-owned repositories, not as new dependencies and implementations compiled into Archon.
 
-When citing this policy in a PR comment: `direction.md §community-providers`.
+- **One distribution model, separate runtime contracts.** Independently packaged plugins share one manifest, marketplace, and CLI install/update/remove mechanism. Each plugin kind keeps the runtime contract its responsibility needs: provider plugins own agent sessions, streaming, native configuration, and capability enforcement; chat/platform plugins own inbound authentication, identity, transport, and lifecycle; forge plugins own normalized forge operations. Do not force these different boundaries through one generic runtime interface.
+- **The engine owns each contract.** A conforming plugin attaches without provider- or platform-specific branches in engine control flow. If an integration requires those branches or a new static import in an Archon registry, its contract is missing or not ready.
+- **The contributor owns the implementation.** Community plugin source, releases, SDK dependencies, and upstream-breakage maintenance stay in the contributor's repository. Archon may list and promote the plugin without taking ownership of its code or dependencies.
+- **Marketplace entries are installable trust records.** A listing identifies an immutable release or source revision, Archon compatibility, plugin kind, declared capabilities and permissions, and its maintainer. Installation makes the third-party-code boundary explicit. A broken or abandoned listing can be deprecated or removed without an Archon release.
+- **Existing bundled community integrations are a transition state, not the extension pattern.** They may receive focused compatibility, correctness, and security fixes. Do not add another bundled community provider or adapter, or substantially expand one, until its external plugin contract and loading path exist. Migration of existing integrations can happen incrementally after those seams are proven.
+- **Build the seams in evidence order.** The forge contract in #2963 goes first, followed by chat/platform and provider contracts. A focused seam does not need to build a generic plugin framework or marketplace before it can prove its runtime contract, but its package shape must not block the shared distribution model that follows.
+
+- **Built-in does not mean bundled.** Archon maintains the Claude, Codex, and Pi providers in this repository and does not install their SDKs by default. An install selects the providers it needs — one, several, or all — and community plugins arrive through the same selection mechanism. Maintenance ownership and distribution are separate decisions: being maintained here earns a provider correctness and parity work, not a place in every install's dependency tree.
+- **Maintained providers hold parity with each other.** A user who selects Codex should not get worse diagnostics, resolution, or configuration handling than one who selects Claude. A fix that lands on one maintained provider and not its siblings is drift on the path, not a scoping choice.
+
+Archon maintains the provider and platform integrations it explicitly designates as built-ins. Listing a community plugin is curation and discovery, not a transfer of maintenance responsibility.
+
+When citing this policy in a PR comment: `direction.md §community-plugins`.
 
 ## Workflow language (YAML surface)
 
@@ -101,6 +115,10 @@ Triage clauses — cite as `direction.md §<clause>`:
 These are direction calls we haven't made. PRs that touch these areas should surface the question for explicit decision rather than be silently accepted or rejected. The workflow may add to this list as new questions appear.
 
 - **License posture.** Whether Archon stays MIT or moves to a fair-code/source-available license (and adopts a CLA) for a future hosted/enterprise offering is undecided — deferred to the maintainers. PRs that assume either posture are premature.
+- **Workflow result surfaces.** The Web UI should render useful, actionable workflow outcomes and demonstrate the same capability for user-built UIs. The contract is unsettled: structured JSON and known renderers, sandboxed HTML, a view manifest, or another narrow form. Settle the trust boundary, portable schema, action authorization, and audit behavior before adding workflow-specific UI branches.
+- **Provider selection on a fresh install.** Built-ins are maintained but not bundled; what a brand-new install resolves to before the user has chosen is undecided. Options include failing loudly with a selection prompt, resolving whatever provider CLI is already on the machine, or a named default. Settle it against "core plus CLI is a complete local install" — an install that cannot run a workflow until a second download is not complete, and a silent default that spends on an unintended provider is worse.
+- **Workflow authoring.** The current visual builder remains an experiment. An agent writing YAML with a rendered DAG may be the smaller product. Decide from real authoring use; do not make legacy-UI removal depend on this choice or move Web-owned editor vocabulary into the engine meanwhile.
+- **UI theming.** The Web UI ships one hardcoded theme with no extension seam; whether to add a brand-override token file, a full community theme marketplace (`§community-plugins`-style trust boundary), or neither is undecided and unrequested so far (#3335). Don't build either before demand is confirmed and the queue position against `§community-plugins` and `§web-ui` is settled.
 
 ---
 

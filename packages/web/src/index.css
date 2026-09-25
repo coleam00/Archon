@@ -1,6 +1,4 @@
 @import 'tailwindcss';
-@import 'tw-animate-css';
-@import 'shadcn/tailwind.css';
 @import 'highlight.js/styles/github-dark-dimmed.min.css';
 @import '@xyflow/react/dist/style.css';
 
@@ -32,39 +30,16 @@
   --node-approval: oklch(0.72 0.17 40);
   --node-wait: oklch(0.76 0.13 205);
 
-  /* shadcn variables mapped to dark theme */
+  /* Shared semantic tokens used outside the console */
   --radius: 0.625rem;
   --background: oklch(0.14 0.005 260);
   --foreground: oklch(0.93 0.005 260);
-  --card: oklch(0.18 0.008 260);
-  --card-foreground: oklch(0.93 0.005 260);
-  --popover: oklch(0.18 0.008 260);
-  --popover-foreground: oklch(0.93 0.005 260);
   --primary: oklch(0.65 0.18 250);
   --primary-foreground: oklch(0.98 0.005 260);
-  --secondary: oklch(0.22 0.01 260);
-  --secondary-foreground: oklch(0.93 0.005 260);
-  --muted: oklch(0.22 0.01 260);
-  --muted-foreground: oklch(0.65 0.01 260);
   --accent: oklch(0.25 0.06 250);
-  --accent-foreground: oklch(0.93 0.005 260);
   --destructive: oklch(0.6 0.2 25);
   --border: oklch(0.28 0.01 260);
-  --input: oklch(0.28 0.01 260);
   --ring: oklch(0.65 0.18 250);
-  --chart-1: oklch(0.65 0.18 250);
-  --chart-2: oklch(0.65 0.17 155);
-  --chart-3: oklch(0.75 0.15 75);
-  --chart-4: oklch(0.6 0.2 25);
-  --chart-5: oklch(0.58 0.18 250);
-  --sidebar: oklch(0.18 0.008 260);
-  --sidebar-foreground: oklch(0.93 0.005 260);
-  --sidebar-primary: oklch(0.65 0.18 250);
-  --sidebar-primary-foreground: oklch(0.98 0.005 260);
-  --sidebar-accent: oklch(0.25 0.06 250);
-  --sidebar-accent-foreground: oklch(0.93 0.005 260);
-  --sidebar-border: oklch(0.28 0.01 260);
-  --sidebar-ring: oklch(0.65 0.18 250);
 }
 
 @theme inline {
@@ -95,35 +70,12 @@
   --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 
-  /* shadcn theme mappings */
+  /* Shared theme mappings used outside the console */
   --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
-  --color-input: var(--input);
   --color-ring: var(--ring);
-  --color-chart-1: var(--chart-1);
-  --color-chart-2: var(--chart-2);
-  --color-chart-3: var(--chart-3);
-  --color-chart-4: var(--chart-4);
-  --color-chart-5: var(--chart-5);
-  --color-sidebar: var(--sidebar);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-ring: var(--sidebar-ring);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);

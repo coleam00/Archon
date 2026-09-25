@@ -1,10 +1,13 @@
 import { describe, test, expect, beforeEach, afterEach, mock, spyOn, type Mock } from 'bun:test';
-import { writeFile, mkdir as realMkdir, rm } from 'fs/promises';
+import { writeFile, mkdir as realMkdir, mkdtemp, readFile, rm } from 'fs/promises';
 import { join, resolve } from 'path';
 import { tmpdir, homedir } from 'os';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import { createRecordingGitFixture } from './test-utils';
 // Loaded BEFORE mock.module replaces the module in the registry, so these are
-// the REAL identity validators — the mock re-exports them (no drift possible).
-import { parseOwnerRepo, resolveRepoProjectIdentity } from '@archon/paths';
+// the REAL pure helpers (identity validators, isPathInside) — the mock
+// re-exports them (no drift possible).
+import { isPathInside, parseOwnerRepo, resolveRepoProjectIdentity } from '@archon/paths';
 
 // ---------------------------------------------------------------------------
 // Mock @archon/paths: suppress logger, pass-through path functions
@@ -57,6 +60,7 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonWorktreesPath: () => join(getArchonHome(), 'worktrees'),
   getArchonWorkspacesPath: () => join(getArchonHome(), 'workspaces'),
+  isInsideArchonWorkspaces: (p: string) => isPathInside(join(getArchonHome(), 'workspaces'), p),
   getProjectWorktreesPath: (owner: string, repo: string) =>
     join(getArchonHome(), 'workspaces', owner, repo, 'worktrees'),
   parseOwnerRepo,
@@ -71,6 +75,7 @@ import * as git from './index';
 const repo = git.toRepoPath;
 const branch = git.toBranchName;
 const worktree = git.toWorktreePath;
+const trackTempRoot = trackTempRoots();
 
 // ============================================================================
 // Tests
@@ -439,6 +444,18 @@ describe('git utilities', () => {
       const result = git.getWorktreeBase(repo(repoPath));
       expect(result).toEqual({
         base: join(workspacesPath, 'acme', 'widget', 'worktrees'),
+        layout: 'workspace-scoped',
+      });
+    });
+
+    test('does not read owner/repo from a sibling that only shares the workspaces prefix', () => {
+      delete process.env.WORKSPACE_PATH;
+      delete process.env.ARCHON_DOCKER;
+      delete process.env.ARCHON_HOME;
+      const lookalike = join(homedir(), '.archon', 'workspaces-old', 'acme', 'widget', 'source');
+      const result = git.getWorktreeBase(repo(lookalike));
+      expect(result).toEqual({
+        base: join(homedir(), '.archon', 'workspaces', '_local', 'source', 'worktrees'),
         layout: 'workspace-scoped',
       });
     });
@@ -2440,6 +2457,96 @@ branch refs/heads/feature/auth
       ).rejects.toThrow('Sync fetch from mar/main failed');
     });
 
+    test('retries on concurrent ref-lock race and both calls succeed', async () => {
+      // Simulate two concurrent syncWorkspace calls racing on the same remote ref.
+      // The first fetch attempt for each call fails with the lock-race error;
+      // the retry loop absorbs it and both calls eventually succeed.
+      const raceError = new Error(
+        "error: cannot lock ref 'refs/remotes/origin/dev': is at de581e24 but expected 8eaa8d42\n" +
+          '! 8eaa8d420..de581e24b dev -> origin/dev (unable to update local ref)'
+      );
+      let fetchCalls = 0;
+
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('fetch')) {
+          fetchCalls++;
+          // First two fetch attempts fail with the race error; all others succeed
+          if (fetchCalls <= 2) {
+            throw raceError;
+          }
+          return { stdout: '', stderr: '' };
+        }
+        if (args.includes('status')) return { stdout: '', stderr: '' };
+        if (args.includes('rev-parse') && args.includes('--short=8')) {
+          return { stdout: 'abc12345\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('HEAD')) {
+          return { stdout: 'abc12345abcdef\n', stderr: '' };
+        }
+        if (args.includes('rev-parse') && args.includes('origin/dev')) {
+          return { stdout: 'abc12345abcdef\n', stderr: '' };
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      const [a, b] = await Promise.all([
+        git.syncWorkspace(repo('/workspace/repo'), branch('dev')),
+        git.syncWorkspace(repo('/workspace/repo'), branch('dev')),
+      ]);
+
+      for (const result of [a, b]) {
+        expect(result.synced).toBe(true);
+        expect(result.branch).toBe(branch('dev'));
+      }
+
+      // At least one retry happened: fetch was called more than the minimum 2
+      // (one successful call per Promise.all entry).
+      expect(fetchCalls).toBeGreaterThan(2);
+    });
+
+    test('throws after exhausting retry budget on persistent lock-race error', async () => {
+      // When every fetch attempt fails with the lock-race error, the function
+      // must throw after 4 total attempts (1 initial + 3 retries), not hang or
+      // retry indefinitely.
+      const raceError = new Error(
+        "error: cannot lock ref 'refs/remotes/origin/dev': is at de581e24 but expected 8eaa8d42\n" +
+          '! 8eaa8d420..de581e24b dev -> origin/dev (unable to update local ref)'
+      );
+      let fetchCalls = 0;
+
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('fetch')) {
+          fetchCalls++;
+          throw raceError;
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      await expect(git.syncWorkspace(repo('/workspace/repo'), branch('dev'))).rejects.toThrow(
+        'Sync fetch from origin/dev failed'
+      );
+
+      expect(fetchCalls).toBe(4); // 1 initial + 3 retries
+    });
+
+    test('does not retry non-race fetch errors', async () => {
+      let fetchCalls = 0;
+
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('fetch')) {
+          fetchCalls++;
+          throw new Error("fatal: 'origin' does not appear to be a git repository");
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      await expect(git.syncWorkspace(repo('/workspace/repo'), branch('main'))).rejects.toThrow(
+        'Sync fetch from origin/main failed'
+      );
+
+      expect(fetchCalls).toBe(1);
+    });
+
     test('names the custom remote in the configured-branch-missing error', async () => {
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
         if (args.includes('fetch')) {
@@ -2451,6 +2558,90 @@ branch refs/heads/feature/auth
       await expect(
         git.syncWorkspace(repo('/workspace/repo'), branch('does-not-exist'), { remote: 'mar' })
       ).rejects.toThrow("Configured base branch 'does-not-exist' not found on remote 'mar'");
+    });
+  });
+
+  describe('fetchWithRefLockRetry', () => {
+    let execSpy: Mock<typeof git.execFileAsync>;
+
+    beforeEach(() => {
+      execSpy = spyOn(git, 'execFileAsync');
+    });
+
+    afterEach(() => {
+      execSpy.mockRestore();
+    });
+
+    test('retries the ref-lock race and succeeds on a later attempt', async () => {
+      const raceError = new Error(
+        "error: cannot lock ref 'refs/heads/pr-42-review': is at de581e24 but expected 8eaa8d42\n" +
+          '! 8eaa8d420..de581e24b pr-42-review -> pr-42-review (unable to update local ref)'
+      );
+      let fetchCalls = 0;
+
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        expect(args).toEqual([
+          '-C',
+          '/workspace/repo',
+          'fetch',
+          'origin',
+          'pull/42/head:pr-42-review',
+        ]);
+        fetchCalls++;
+        if (fetchCalls === 1) {
+          throw raceError;
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      await expect(
+        git.fetchWithRefLockRetry(repo('/workspace/repo'), 'origin', 'pull/42/head:pr-42-review')
+      ).resolves.toEqual({ stdout: '', stderr: '' });
+
+      expect(fetchCalls).toBe(2);
+    });
+
+    test('rethrows the original error object after exhausting the budget', async () => {
+      const raceText =
+        "error: cannot lock ref 'refs/heads/pr-42-review': is at de581e24 but expected 8eaa8d42\n" +
+        '! 8eaa8d420..de581e24b pr-42-review -> pr-42-review (unable to update local ref)';
+      const raceError = Object.assign(new Error(raceText), { stderr: 'original stderr evidence' });
+      let fetchCalls = 0;
+
+      execSpy.mockImplementation(async () => {
+        fetchCalls++;
+        throw raceError;
+      });
+
+      let caught: unknown;
+      try {
+        await git.fetchWithRefLockRetry(
+          repo('/workspace/repo'),
+          'origin',
+          'pull/42/head:pr-42-review'
+        );
+      } catch (error) {
+        caught = error;
+      }
+
+      // Original object identity: stderr evidence survives for callers
+      expect(caught).toBe(raceError);
+      expect(fetchCalls).toBe(4); // 1 initial + 3 retries
+    });
+
+    test('attempts non-race errors exactly once', async () => {
+      let fetchCalls = 0;
+
+      execSpy.mockImplementation(async () => {
+        fetchCalls++;
+        throw new Error("fatal: 'origin' does not appear to be a git repository");
+      });
+
+      await expect(
+        git.fetchWithRefLockRetry(repo('/workspace/repo'), 'origin', 'main')
+      ).rejects.toThrow("fatal: 'origin' does not appear to be a git repository");
+
+      expect(fetchCalls).toBe(1);
     });
   });
 
@@ -2539,6 +2730,18 @@ branch refs/heads/feature/auth
       );
     });
 
+    test.each([
+      ['bare host', 'github.com/owner/repo.git'],
+      ['SCP style', 'git@github.com:owner/repo.git'],
+    ])('normalizes a supported %s source before spawning Git', async (_name, source) => {
+      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+
+      const result = await git.cloneRepository(source, repo('/tmp/target'));
+
+      expect(result).toEqual({ ok: true, value: undefined });
+      expect(execSpy.mock.calls[0]?.[1]).toContain('https://github.com/owner/repo.git');
+    });
+
     test('passes GIT_TERMINAL_PROMPT=0 to the git clone subprocess', async () => {
       execSpy.mockResolvedValue({ stdout: '', stderr: '' });
 
@@ -2554,22 +2757,254 @@ branch refs/heads/feature/auth
       expect(env[pathKey!]).toBe(process.env[pathKey!]);
     });
 
-    test('constructs authenticated URL with token', async () => {
+    test('passes authenticated clone credentials through a scoped helper environment', async () => {
       execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+      const token = 'ghp_abc123';
 
       const result = await git.cloneRepository(
         'https://github.com/owner/repo.git',
         repo('/tmp/target'),
         {
-          token: 'ghp_abc123',
+          credentials: { username: token, password: '' },
         }
       );
 
       expect(result).toEqual({ ok: true, value: undefined });
-      // Verify the token is in the URL
-      const cloneUrl = execSpy.mock.calls[0]![1][1] as string;
-      expect(cloneUrl).toContain('ghp_abc123');
-      expect(cloneUrl).toContain('github.com');
+      const [, args, options] = execSpy.mock.calls[0]!;
+      expect(args).toContain('https://github.com/owner/repo.git');
+      expect(args.join('\0')).not.toContain(token);
+      expect(args).toContain('credential.helper=');
+      expect(args.some(arg => arg.startsWith('credential.https://github.com.helper='))).toBe(true);
+      expect(options?.env?.ARCHON_GIT_USERNAME).toBe(token);
+      expect(options?.env?.ARCHON_GIT_PASSWORD).toBe('');
+    });
+
+    test.skipIf(process.platform === 'win32')(
+      'keeps authenticated clone credentials out of real child argv and origin config',
+      async () => {
+        execSpy.mockRestore();
+        const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-clone-security-')));
+        const targetPath = repo(join(root, 'clone'));
+        const fixture = await createRecordingGitFixture(root);
+        const token = 'real-child-token-123';
+
+        const result = await fixture.run(() =>
+          git.cloneRepository('https://github.com/owner/repo.git', targetPath, {
+            credentials: { username: token, password: '' },
+          })
+        );
+
+        expect(result).toEqual({ ok: true, value: undefined });
+        const [clone] = await fixture.readInvocations();
+        expect(clone).toBeDefined();
+        expect(clone.argv.join('\0')).not.toContain(token);
+        expect(clone.env.ARCHON_GIT_USERNAME).toBe(token);
+        expect(clone.env.ARCHON_GIT_PASSWORD).toBe('');
+        expect(clone.env.GIT_TERMINAL_PROMPT).toBe('0');
+        const originConfig = await readFile(join(targetPath, '.git', 'config'), 'utf8');
+        expect(originConfig).toContain('url = https://github.com/owner/repo.git');
+        expect(originConfig).not.toContain(token);
+      }
+    );
+
+    test('authenticates a real Git clone against an explicit HTTP port', async () => {
+      execSpy.mockRestore();
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-clone-http-auth-')));
+      const sourcePath = join(root, 'source');
+      const servedPath = join(root, 'served');
+      const barePath = join(servedPath, 'repo.git');
+      const targetPath = repo(join(root, 'clone'));
+      const token = 'explicit-port-token-456';
+      const expectedAuthorization = `Basic ${Buffer.from(`oauth2:${token}`).toString('base64')}`;
+      const authorizations: Array<string | null> = [];
+
+      await git.execFileAsync('git', ['init', sourcePath]);
+      await git.execFileAsync('git', ['-C', sourcePath, 'config', 'user.name', 'Archon Test']);
+      await git.execFileAsync('git', [
+        '-C',
+        sourcePath,
+        'config',
+        'user.email',
+        'archon@example.test',
+      ]);
+      await writeFile(join(sourcePath, 'README.md'), 'fixture\n');
+      await git.execFileAsync('git', ['-C', sourcePath, 'add', 'README.md']);
+      await git.execFileAsync('git', ['-C', sourcePath, 'commit', '-m', 'fixture']);
+      await realMkdir(servedPath, { recursive: true });
+      await git.execFileAsync('git', ['clone', '--bare', sourcePath, barePath]);
+      await git.execFileAsync('git', ['--git-dir', barePath, 'update-server-info']);
+
+      const server = Bun.serve({
+        port: 0,
+        async fetch(request) {
+          const authorization = request.headers.get('authorization');
+          authorizations.push(authorization);
+          if (authorization !== expectedAuthorization) {
+            return new Response('authentication required', {
+              status: 401,
+              headers: { 'WWW-Authenticate': 'Basic realm="archon-test"' },
+            });
+          }
+
+          const relativePath = decodeURIComponent(new URL(request.url).pathname).replace(
+            /^\/+/,
+            ''
+          );
+          if (!relativePath.startsWith('repo.git/'))
+            return new Response('not found', { status: 404 });
+          const file = Bun.file(join(servedPath, relativePath));
+          if (!(await file.exists())) return new Response('not found', { status: 404 });
+          return new Response(file);
+        },
+      });
+
+      try {
+        const url = `http://127.0.0.1:${String(server.port)}/repo.git`;
+        const result = await git.cloneRepository(url, targetPath, {
+          credentials: { username: 'oauth2', password: token },
+        });
+
+        expect(result).toEqual({ ok: true, value: undefined });
+        expect(authorizations).toContain(expectedAuthorization);
+        const { stdout: originUrl } = await git.execFileAsync('git', [
+          '-C',
+          targetPath,
+          'remote',
+          'get-url',
+          'origin',
+        ]);
+        expect(originUrl.trim()).toBe(url);
+        expect(originUrl).not.toContain(token);
+      } finally {
+        server.stop(true);
+      }
+    }, 15_000);
+
+    test('rejects a malformed credential-bearing HTTP URL before spawning Git', async () => {
+      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+      const credential = 'malformed-secret-123';
+
+      const result = await git.cloneRepository(
+        `https://${credential}@example.test:bad/owner/repo.git`,
+        repo('/tmp/target')
+      );
+
+      expect(result).toEqual({
+        ok: false,
+        error: { code: 'unknown', message: 'Invalid HTTP(S) repository URL' },
+      });
+      expect(execSpy).not.toHaveBeenCalled();
+      expect(JSON.stringify(result)).not.toContain(credential);
+    });
+
+    test('rejects a valid HTTP URL that already contains credentials', async () => {
+      execSpy.mockResolvedValue({ stdout: '', stderr: '' });
+      const credential = 'embedded-secret-456';
+
+      const result = await git.cloneRepository(
+        `  https://${credential}@example.test/owner/repo.git`,
+        repo('/tmp/target')
+      );
+
+      expect(result).toEqual({
+        ok: false,
+        error: { code: 'unknown', message: 'Repository URL must not include credentials' },
+      });
+      expect(execSpy).not.toHaveBeenCalled();
+      expect(JSON.stringify(result)).not.toContain(credential);
+    });
+
+    for (const { name, url, credential } of [
+      {
+        name: 'backslash userinfo',
+        url: 'https://backslash-secret-789\\@127.0.0.1:9/owner/repo.git',
+        credential: 'backslash-secret-789',
+      },
+      {
+        name: 'query credentials',
+        url: 'https://example.test/owner/repo.git?access_token=query-secret-789',
+        credential: 'query-secret-789',
+      },
+      {
+        name: 'fragment credentials',
+        url: 'https://example.test/owner/repo.git#access_token=fragment-secret-789',
+        credential: 'fragment-secret-789',
+      },
+      {
+        name: 'bare-host query credentials',
+        url: 'example.test/owner/repo.git?access_token=bare-query-secret-789',
+        credential: 'bare-query-secret-789',
+      },
+      {
+        name: 'bare-host fragment credentials',
+        url: 'example.test/owner/repo.git#access_token=bare-fragment-secret-789',
+        credential: 'bare-fragment-secret-789',
+      },
+      {
+        name: 'bare-host backslash userinfo',
+        url: 'bare-backslash-secret-789\\@example.test/owner/repo.git',
+        credential: 'bare-backslash-secret-789',
+      },
+      {
+        name: 'SCP-style query credentials',
+        url: 'git@example.test:owner/repo.git?access_token=scp-query-secret-789',
+        credential: 'scp-query-secret-789',
+      },
+      {
+        name: 'SCP-style fragment credentials',
+        url: 'git@example.test:owner/repo.git#access_token=scp-fragment-secret-789',
+        credential: 'scp-fragment-secret-789',
+      },
+      {
+        name: 'SCP-style backslash userinfo',
+        url: 'git@scp-backslash-secret-789\\@example.test:owner/repo.git',
+        credential: 'scp-backslash-secret-789',
+      },
+    ]) {
+      test.skipIf(process.platform === 'win32')(
+        `rejects ${name} before spawning a real child`,
+        async () => {
+          execSpy.mockRestore();
+          const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-clone-url-reject-')));
+          const fixture = await createRecordingGitFixture(root);
+          mockLogger.error.mockClear();
+
+          const result = await fixture.run(() =>
+            git.cloneRepository(url, repo(join(root, 'clone')))
+          );
+
+          expect(result).toEqual({
+            ok: false,
+            error: { code: 'unknown', message: 'Invalid HTTP(S) repository URL' },
+          });
+          expect(await fixture.readInvocations()).toEqual([]);
+          expect(JSON.stringify(result)).not.toContain(credential);
+          expect(mockLogger.error).not.toHaveBeenCalled();
+        }
+      );
+    }
+
+    test('sanitizes authenticated clone failures before returning or logging them', async () => {
+      const token = 'unexpected-error-token-654';
+      execSpy.mockRejectedValue(
+        Object.assign(new Error(`helper failed with ${token}`), {
+          stderr: `credential rejected: ${token}`,
+        })
+      );
+      mockLogger.error.mockClear();
+
+      const result = await git.cloneRepository(
+        'https://github.com/owner/repo.git',
+        repo('/tmp/target'),
+        { credentials: { username: token, password: '' } }
+      );
+
+      expect(result.ok).toBe(false);
+      expect(JSON.stringify(result)).not.toContain(token);
+      expect(JSON.stringify(mockLogger.error.mock.calls)).not.toContain(token);
+      if (!result.ok && result.error.code === 'unknown') {
+        expect(result.error.message).toContain('***');
+      }
     });
 
     test('returns not_a_repo error for 404', async () => {
@@ -2646,8 +3081,7 @@ branch refs/heads/feature/auth
       const result = await git.syncRepository(repo('/workspace/repo'), branch('main'));
 
       expect(result).toEqual({ ok: true, value: undefined });
-      expect(execSpy).toHaveBeenCalledWith('git', ['fetch', 'origin'], {
-        cwd: '/workspace/repo',
+      expect(execSpy).toHaveBeenCalledWith('git', ['-C', '/workspace/repo', 'fetch', 'origin'], {
         timeout: 60000,
       });
       expect(execSpy).toHaveBeenCalledWith('git', ['reset', '--hard', 'origin/main'], {
@@ -2656,14 +3090,76 @@ branch refs/heads/feature/auth
       });
     });
 
+    // syncRepository is reachable concurrently from the forge adapters on PR
+    // events, and its bare fetch updates every configured remote-tracking ref —
+    // the same contention syncWorkspace and the fork-PR path already survive.
+    test('absorbs a ref-lock race on the bare fetch and still resets', async () => {
+      const raceError = Object.assign(
+        new Error(
+          "error: cannot lock ref 'refs/remotes/origin/main': is at aaa but expected bbb\n" +
+            ' ! aaa..bbb  main -> origin/main  (unable to update local ref)'
+        ),
+        { stderr: 'unable to update local ref' }
+      );
+      execSpy.mockRejectedValueOnce(raceError).mockResolvedValue({ stdout: '', stderr: '' });
+
+      const result = await git.syncRepository(repo('/workspace/repo'), branch('main'));
+
+      expect(result).toEqual({ ok: true, value: undefined });
+      const fetches = execSpy.mock.calls.filter(([, args]) => (args as string[])[2] === 'fetch');
+      expect(fetches).toHaveLength(2);
+      expect(execSpy).toHaveBeenCalledWith('git', ['reset', '--hard', 'origin/main'], {
+        cwd: '/workspace/repo',
+        timeout: 30000,
+      });
+    });
+
+    test('exhausts the shared budget on persistent contention and reports the original evidence', async () => {
+      const raceError = Object.assign(
+        new Error(
+          "error: cannot lock ref 'refs/remotes/origin/main'\n (unable to update local ref)"
+        ),
+        { stderr: 'unable to update local ref' }
+      );
+      execSpy.mockRejectedValue(raceError);
+
+      const result = await git.syncRepository(repo('/workspace/repo'), branch('main'));
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('unknown');
+        // The original git text survives the GitResult wrap.
+        expect(JSON.stringify(result.error)).toContain('cannot lock ref');
+      }
+      const fetches = execSpy.mock.calls.filter(([, args]) => (args as string[])[2] === 'fetch');
+      expect(fetches).toHaveLength(4);
+      const resets = execSpy.mock.calls.filter(([, args]) => (args as string[])[0] === 'reset');
+      expect(resets).toHaveLength(0);
+    });
+
+    test('attempts a non-contention fetch failure once and keeps its GitResult code', async () => {
+      const authError = Object.assign(new Error('fatal: Authentication failed for repo'), {
+        stderr: 'authentication failed',
+      });
+      execSpy.mockRejectedValue(authError);
+
+      const result = await git.syncRepository(repo('/workspace/repo'), branch('main'));
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('permission_denied');
+      }
+      const fetches = execSpy.mock.calls.filter(([, args]) => (args as string[])[2] === 'fetch');
+      expect(fetches).toHaveLength(1);
+    });
+
     test('fetches and resets using a custom remote', async () => {
       execSpy.mockResolvedValue({ stdout: '', stderr: '' });
 
       const result = await git.syncRepository(repo('/workspace/repo'), branch('main'), 'upstream');
 
       expect(result).toEqual({ ok: true, value: undefined });
-      expect(execSpy).toHaveBeenCalledWith('git', ['fetch', 'upstream'], {
-        cwd: '/workspace/repo',
+      expect(execSpy).toHaveBeenCalledWith('git', ['-C', '/workspace/repo', 'fetch', 'upstream'], {
         timeout: 60000,
       });
       expect(execSpy).toHaveBeenCalledWith('git', ['reset', '--hard', 'upstream/main'], {
@@ -3255,6 +3751,97 @@ branch refs/heads/feature/auth
         expect((err as Error).cause).toBeDefined();
         expect(((err as Error).cause as NodeJS.ErrnoException).code).toBe('ENOENT');
       }
+    });
+  });
+
+  describe('worktree locks', () => {
+    let root: string;
+    let repoPath: git.RepoPath;
+    let worktreePath: git.WorktreePath;
+
+    const run = async (...args: string[]): Promise<void> => {
+      await git.execFileAsync('git', ['-C', root, ...args]);
+    };
+
+    /** Take the lock through git directly: the package only reads and releases one. */
+    const lock = async (reason: string): Promise<void> => {
+      await git.execFileAsync('git', [
+        '-C',
+        repoPath,
+        'worktree',
+        'lock',
+        '--reason',
+        reason,
+        worktreePath,
+      ]);
+    };
+
+    beforeEach(async () => {
+      root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-worktree-lock-')));
+      repoPath = repo(join(root, 'repo'));
+      worktreePath = worktree(join(root, 'wt'));
+      await realMkdir(repoPath, { recursive: true });
+      await run('init', '-q', '-b', 'main', repoPath);
+      await git.execFileAsync('git', ['-C', repoPath, 'config', 'user.email', 'test@example.com']);
+      await git.execFileAsync('git', ['-C', repoPath, 'config', 'user.name', 'Archon Test']);
+      await writeFile(join(repoPath, 'README.md'), '# fixture\n');
+      await git.execFileAsync('git', ['-C', repoPath, 'add', 'README.md']);
+      await git.execFileAsync('git', ['-C', repoPath, 'commit', '-qm', 'initial commit']);
+      await git.execFileAsync('git', [
+        '-C',
+        repoPath,
+        'worktree',
+        'add',
+        '-q',
+        worktreePath,
+        '-b',
+        'feature',
+      ]);
+    });
+
+    test('an unlocked worktree reads as no lock at all', async () => {
+      expect(await git.readWorktreeLock(worktreePath)).toBeNull();
+    });
+
+    test('round-trips the reason a lock was taken with', async () => {
+      await lock('archon: worktree setup in progress');
+
+      expect(await git.readWorktreeLock(worktreePath)).toEqual({
+        reason: 'archon: worktree setup in progress',
+      });
+
+      await git.unlockWorktree(repoPath, worktreePath);
+
+      expect(await git.readWorktreeLock(worktreePath)).toBeNull();
+    });
+
+    test('a lock taken without a reason is still a lock', async () => {
+      // `null` means unlocked and nothing else, so a caller can tell the two
+      // apart without inspecting the reason text.
+      await git.execFileAsync('git', ['-C', repoPath, 'worktree', 'lock', worktreePath]);
+
+      expect(await git.readWorktreeLock(worktreePath)).toEqual({ reason: '' });
+    });
+
+    test('git refuses to remove a locked worktree unless forced twice', async () => {
+      await lock('archon: worktree setup in progress');
+
+      // The lock is only a usable marker because git itself enforces it.
+      await expect(git.removeWorktree(repoPath, worktreePath)).rejects.toThrow(/locked/);
+      await expect(
+        git.execFileAsync('git', ['-C', repoPath, 'worktree', 'remove', '--force', worktreePath])
+      ).rejects.toThrow(/locked/);
+      await expect(
+        git.execFileAsync('git', [
+          '-C',
+          repoPath,
+          'worktree',
+          'remove',
+          '--force',
+          '--force',
+          worktreePath,
+        ])
+      ).resolves.toBeDefined();
     });
   });
 });

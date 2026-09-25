@@ -8,15 +8,21 @@
  */
 import { describe, expect, test } from 'bun:test';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
-import { resolveWorkflowAdoption, WorkflowAdoptionError } from './workflow-adoption';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { toBranchName } from '@archon/git';
+import {
+  resolveWorkflowAdoption,
+  WorkflowAdoptionError,
+  type ResolveWorkflowAdoptionArgs,
+} from './workflow-adoption';
 
-function runRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+function runRow(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   return {
     id: 'run-1',
     workflow_name: 'implement',
     conversation_id: 'conv-1',
     parent_conversation_id: null,
-    codebase_id: 'cb-1' as string | null,
+    codebase_id: 'cb-1',
     status: 'failed',
     outcome: 'failed',
     user_message: '',
@@ -24,11 +30,12 @@ function runRow(overrides: Record<string, unknown> = {}): Record<string, unknown
     started_at: new Date(),
     completed_at: new Date(),
     last_activity_at: new Date(),
-    working_path: '/ws/repo/.worktrees/run-1' as string | null,
+    working_path: '/ws/repo/.worktrees/run-1',
     user_id: null,
     parent_run_id: null,
     adopted_from_run_id: null,
     output_root: '/root/artifacts',
+    checkout_baseline: null,
     ...overrides,
   };
 }
@@ -41,7 +48,7 @@ const baseArgs = {
   codebaseKind: 'repo' as const,
 };
 
-function envRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+function envRow(overrides: Partial<IsolationEnvironmentRow> = {}): IsolationEnvironmentRow {
   return {
     id: 'env-1',
     codebase_id: 'cb-1',
@@ -53,6 +60,7 @@ function envRow(overrides: Record<string, unknown> = {}): Record<string, unknown
     status: 'active',
     created_at: new Date(),
     created_by_platform: 'cli',
+    created_by_user_id: null,
     metadata: {},
     ...overrides,
   };
@@ -60,16 +68,16 @@ function envRow(overrides: Record<string, unknown> = {}): Record<string, unknown
 
 function makeDeps(
   overrides: {
-    run?: Record<string, unknown> | null;
-    activeHolder?: Record<string, unknown> | null;
-    environment?: Record<string, unknown> | null;
+    run?: WorkflowRun | null;
+    activeHolder?: WorkflowRun | null;
+    environment?: IsolationEnvironmentRow | null;
   } = {}
-) {
+): NonNullable<ResolveWorkflowAdoptionArgs['deps']> {
   return {
-    existsSync: (p: string) => p === '/ws/repo/.worktrees/run-1',
+    existsSync: (p: string): boolean => p === '/ws/repo/.worktrees/run-1',
     branchExists: async (_repo: string, branch: string) => branch === 'alive-branch',
     currentBranch: async (): Promise<string | null> => 'impl-branch',
-    getRun: async () => ('run' in overrides ? overrides.run : null),
+    getRun: async () => overrides.run ?? null,
     getActiveRunByPath: async () => overrides.activeHolder ?? null,
     findEnvironmentByPath: async () => overrides.environment ?? null,
   };
@@ -228,11 +236,11 @@ describe('resolveWorkflowAdoption', () => {
     ).lane;
     expect(lane).toEqual({
       kind: 'checkout-branch',
-      taskBranch: { kind: 'existing', branch: 'alive-branch' },
+      taskBranch: { kind: 'existing', branch: toBranchName('alive-branch') },
     });
   });
 
-  test("bounds estate history by the adopted run's start time", async () => {
+  test("bounds estate history by the adopted run's completion upper bound", async () => {
     const startedAt = new Date('2026-08-25T09:00:00.000Z');
     const completedAt = new Date('2026-08-25T12:00:00.000Z');
     const lookupCalls: Array<{ codebaseId: string; workingPath: string; cutoff: Date }> = [];
@@ -253,9 +261,50 @@ describe('resolveWorkflowAdoption', () => {
             return envRow({
               working_path: workingPath,
               branch_name:
+                cutoff.getTime() === completedAt.getTime() ? 'alive-branch' : 'later-branch',
+              status: 'destroyed',
+            });
+          },
+        },
+      })
+    ).lane;
+
+    expect(lookupCalls).toEqual([
+      {
+        codebaseId: 'cb-1',
+        workingPath: '/ws/repo/.worktrees/vanished',
+        cutoff: completedAt,
+      },
+    ]);
+    expect(lane).toEqual({
+      kind: 'checkout-branch',
+      taskBranch: { kind: 'existing', branch: toBranchName('alive-branch') },
+    });
+  });
+
+  test('falls back to start time when completed_at is unset', async () => {
+    const startedAt = new Date('2026-08-25T09:00:00.000Z');
+    const lookupCalls: Array<{ codebaseId: string; workingPath: string; cutoff: Date }> = [];
+    const lane = (
+      await resolveWorkflowAdoption({
+        ...baseArgs,
+        adoptedRunId: 'run-1',
+        deps: {
+          ...makeDeps({
+            run: runRow({
+              working_path: '/ws/repo/.worktrees/vanished',
+              started_at: startedAt,
+              completed_at: null,
+            }),
+          }),
+          findEnvironmentByPath: async (codebaseId, workingPath, cutoff) => {
+            lookupCalls.push({ codebaseId, workingPath, cutoff });
+            return envRow({
+              working_path: workingPath,
+              branch_name:
                 cutoff.getTime() === startedAt.getTime() ? 'alive-branch' : 'later-branch',
               status: 'destroyed',
-            }) as IsolationEnvironmentRow;
+            });
           },
         },
       })
@@ -270,7 +319,7 @@ describe('resolveWorkflowAdoption', () => {
     ]);
     expect(lane).toEqual({
       kind: 'checkout-branch',
-      taskBranch: { kind: 'existing', branch: 'alive-branch' },
+      taskBranch: { kind: 'existing', branch: toBranchName('alive-branch') },
     });
   });
 

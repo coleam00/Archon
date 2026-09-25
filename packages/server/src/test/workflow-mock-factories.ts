@@ -1,7 +1,41 @@
 import type { Mock } from 'bun:test';
 import { mock } from 'bun:test';
+import type { DashboardRunsResult } from '@archon/core/db/workflows';
 import type { WorkflowLoadResult } from '@archon/workflows/schemas/workflow';
 import type { ParseResult } from '@archon/workflows/loader';
+
+type ListDashboardRuns = (typeof import('@archon/core/db/workflows'))['listDashboardRuns'];
+
+interface DashboardRunsOverrides {
+  runs?: DashboardRunsResult['runs'];
+  total?: number;
+  counts?: Partial<DashboardRunsResult['counts']>;
+}
+
+export function makeDashboardRunsResult({
+  runs = [],
+  total = runs.length,
+  counts = {},
+}: DashboardRunsOverrides = {}): DashboardRunsResult {
+  return {
+    runs,
+    total,
+    counts: {
+      all: 0,
+      running: 0,
+      completed: 0,
+      failed: 0,
+      cancelled: 0,
+      pending: 0,
+      paused: 0,
+      ...counts,
+    },
+  };
+}
+
+export function makeListDashboardRunsMock(): Mock<ListDashboardRuns> {
+  return mock<ListDashboardRuns>(async () => makeDashboardRunsResult());
+}
 
 /**
  * Register all 4 @archon/workflows mock.module() calls at once.

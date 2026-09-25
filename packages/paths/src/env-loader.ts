@@ -27,7 +27,8 @@
 import { config } from 'dotenv';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
-import { getArchonEnvPath, getRepoArchonEnvPath } from './archon-paths';
+import { join } from 'path';
+import { getArchonEnvPath, getArchonHome, getRepoArchonEnvPath } from './archon-paths';
 
 /**
  * Shorten a path with `~` when it lives under the current user's home directory.
@@ -50,6 +51,33 @@ export function isVerboseBoot(): boolean {
 }
 
 /**
+ * `<ARCHON_HOME>/plugins`: where every plugin kind installs, and where forge discovery
+ * and workflow-pack discovery read them. A repository's `.archon/.env` cannot move
+ * ARCHON_HOME (see {@link REPO_SCOPE_REFUSED_KEYS}), so install and every reader agree.
+ */
+export function getPluginsPath(archonHome: string = getArchonHome()): string {
+  return join(archonHome, 'plugins');
+}
+
+/**
+ * Keys a repository's `.archon/.env` may not set. Each can move the Archon home or the
+ * executables Archon runs, so letting the repo scope set them would let a repository
+ * choose which plugins run: ARCHON_HOME directly, HOME and USERPROFILE (Windows)
+ * through the default `~/.archon`, ARCHON_DOCKER and WORKSPACE_PATH through the
+ * Docker home `/.archon` (see `isDocker`), and PATH through executable lookup. A
+ * deployment sets the Docker markers in its image or process environment. The process
+ * environment and the user-scope `~/.archon/.env` may still set all of them.
+ */
+const REPO_SCOPE_REFUSED_KEYS = [
+  'ARCHON_HOME',
+  'HOME',
+  'USERPROFILE',
+  'ARCHON_DOCKER',
+  'WORKSPACE_PATH',
+  'PATH',
+];
+
+/**
  * Load archon-owned env files. Call once, immediately after
  * `@archon/paths/strip-cwd-env-boot` at each entry point.
  *
@@ -57,10 +85,16 @@ export function isVerboseBoot(): boolean {
  *   - `~/.archon/.env` wins over shell-inherited vars (archon intent wins).
  *   - `<cwd>/.archon/.env` wins over `~/.archon/.env` (repo scope wins).
  *
+ * A repo-scope file that sets any of {@link REPO_SCOPE_REFUSED_KEYS} is refused before
+ * any of its keys apply.
+ *
  * A malformed env file is fatal — matches the pre-existing CLI behavior at
  * packages/cli/src/cli.ts:24-30.
  */
-export function loadArchonEnv(cwd: string = process.cwd()): void {
+export function loadArchonEnv(
+  cwd: string = process.cwd(),
+  options: { afterUserLoad?: () => void } = {}
+): void {
   const homePath = getArchonEnvPath();
   if (existsSync(homePath)) {
     const result = config({ path: homePath, override: true, quiet: true });
@@ -75,15 +109,32 @@ export function loadArchonEnv(cwd: string = process.cwd()): void {
     }
   }
 
+  options.afterUserLoad?.();
+
   const repoPath = getRepoArchonEnvPath(cwd);
   if (existsSync(repoPath)) {
-    const result = config({ path: repoPath, override: true, quiet: true });
+    // Parse without applying, so a refused file changes nothing.
+    const result = config({ path: repoPath, processEnv: {}, quiet: true });
     if (result.error) {
       console.error(`Error loading .env from ${repoPath}: ${result.error.message}`);
       console.error('Hint: Check for syntax errors in your .env file.');
       process.exit(1);
     }
-    const count = Object.keys(result.parsed ?? {}).length;
+    const parsed = result.parsed ?? {};
+    // Windows env names are case-insensitive, so `Path=` there is PATH.
+    const refused = Object.keys(parsed).filter(key =>
+      REPO_SCOPE_REFUSED_KEYS.includes(process.platform === 'win32' ? key.toUpperCase() : key)
+    );
+    if (refused.length > 0) {
+      console.error(
+        `${repoPath} sets ${refused.join(', ')}. A repository's .archon/.env cannot set ` +
+          `${REPO_SCOPE_REFUSED_KEYS.join(', ')}; set them in the environment or in ` +
+          `${displayPath(homePath)} instead.`
+      );
+      process.exit(1);
+    }
+    Object.assign(process.env, parsed);
+    const count = Object.keys(parsed).length;
     if (count > 0 && isVerboseBoot()) {
       process.stderr.write(
         `[archon] loaded ${count} keys from ${displayPath(repoPath)} (repo scope, overrides user scope)\n`

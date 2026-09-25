@@ -73,6 +73,31 @@ export interface ContainerBackendDeps {
   dockerRunner?: DockerRunner;
 }
 
+/** A host uid/gid pair, or `undefined` where the platform has none (Windows). */
+export interface HostIdentity {
+  readonly uid: number;
+  readonly gid: number;
+}
+
+/**
+ * The host user that must end up owning files the container writes into host binds.
+ * Exported so tests can pin it with `spyOn` instead of depending on the runner's uid.
+ */
+export function currentHostIdentity(): HostIdentity | undefined {
+  if (typeof process.getuid !== 'function' || typeof process.getgid !== 'function') {
+    return undefined;
+  }
+  return { uid: process.getuid(), gid: process.getgid() };
+}
+
+/** Archon-owned host directories bound into the container at their host paths. */
+interface HostMounts {
+  /** Frozen workflow source, read-only. */
+  readonly source?: string;
+  /** Run artifacts directory, read-write. */
+  readonly artifacts?: string;
+}
+
 /**
  * Metadata persisted on the `isolation_environments` row for a container env.
  * `resourceId` is the stable handle used for container/volume names + the
@@ -96,34 +121,51 @@ interface ContainerEnvMetadata {
    * named script would be missing at a path the run's own metadata says is fine.
    */
   sourceMount?: string;
+  /**
+   * Host path of the run's artifacts directory, bind-mounted read-write at the SAME
+   * absolute path. Persisted for the same reason as `sourceMount`, and so the ownership
+   * hand-back on suspend and destroy knows which host tree the container wrote into.
+   */
+  artifactsMount?: string;
   [key: string]: unknown;
 }
 
 /**
- * Reject a source mount that is not Archon's to mount.
+ * Reject a host mount that is not Archon's to mount.
  *
- * The path is engine-internal — never YAML, never `archon.config` — so this guards
+ * The paths are engine-internal — never YAML, never `archon.config` — so this guards
  * against a bug or a hand-edited row, not a hostile author. It still matters: mounting an
  * arbitrary host path into a container that runs agent code, or shadowing the project
  * root the overlay depends on, are both far worse than failing the run.
  */
-function assertMountableSource(sourceMount: string, workspacePath: string): void {
-  if (!isAbsolute(sourceMount)) {
-    throw new Error(`Container source mount must be an absolute path, got '${sourceMount}'.`);
+function assertMountableHostPath(
+  kind: 'source' | 'artifacts',
+  mountPath: string,
+  workspacePath: string
+): void {
+  if (!isAbsolute(mountPath)) {
+    throw new Error(`Container ${kind} mount must be an absolute path, got '${mountPath}'.`);
   }
-  if (!isInsideArchonHome(sourceMount)) {
+  if (!isInsideArchonHome(mountPath)) {
     throw new Error(
-      `Container source mount '${sourceMount}' is outside ARCHON_HOME. Only Archon-owned ` +
-        'run source may be mounted into a container.'
+      `Container ${kind} mount '${mountPath}' is outside ARCHON_HOME. Only Archon-owned ` +
+        `run ${kind} may be mounted into a container.`
     );
   }
   const workspace = workspacePath.endsWith(sep) ? workspacePath : workspacePath + sep;
-  const mount = sourceMount.endsWith(sep) ? sourceMount : sourceMount + sep;
+  const mount = mountPath.endsWith(sep) ? mountPath : mountPath + sep;
   if (mount.startsWith(workspace) || workspace.startsWith(mount)) {
     throw new Error(
-      `Container source mount '${sourceMount}' overlaps the workspace root ` +
+      `Container ${kind} mount '${mountPath}' overlaps the workspace root ` +
         `'${workspacePath}'. Mounting it would shadow the overlay.`
     );
+  }
+}
+
+function assertMountableHostMounts(mounts: HostMounts, workspacePath: string): void {
+  if (mounts.source !== undefined) assertMountableHostPath('source', mounts.source, workspacePath);
+  if (mounts.artifacts !== undefined) {
+    assertMountableHostPath('artifacts', mounts.artifacts, workspacePath);
   }
 }
 
@@ -152,9 +194,9 @@ export class ContainerBackend implements IIsolationBackend {
   async prepare(req: BackendPrepareRequest): Promise<PreparedEnv> {
     const hostRoot = req.codebase.defaultCwd;
     const { image } = this.config;
-    const sourceMount = req.sourceMount;
+    const mounts: HostMounts = { source: req.sourceMount, artifacts: req.artifactsMount };
     // Before any docker work: a rejected mount must not leave a volume or container.
-    if (sourceMount !== undefined) assertMountableSource(sourceMount, hostRoot);
+    assertMountableHostMounts(mounts, hostRoot);
 
     await dockerPreflight(image, this.docker);
 
@@ -195,7 +237,7 @@ export class ContainerBackend implements IIsolationBackend {
         volume,
         hostRoot,
         req.codebase.id,
-        sourceMount
+        mounts
       ));
     } catch (startErr) {
       // The container(s) are already removed inside startContainerWithOverlay;
@@ -219,7 +261,8 @@ export class ContainerBackend implements IIsolationBackend {
       resourceId,
       overlayMode,
       workspacePath: hostRoot,
-      ...(sourceMount !== undefined ? { sourceMount } : {}),
+      ...(mounts.source !== undefined ? { sourceMount: mounts.source } : {}),
+      ...(mounts.artifacts !== undefined ? { artifactsMount: mounts.artifacts } : {}),
     };
     let row;
     try {
@@ -282,6 +325,13 @@ export class ContainerBackend implements IIsolationBackend {
       );
     }
 
+    // Attempted unconditionally, as in `suspend`: the helper reports a stopped or gone
+    // container itself, and a pre-check that could not tell would otherwise skip the
+    // hand-back silently.
+    if (containerName && meta.artifactsMount !== undefined) {
+      await this.restoreHostOwnership(envId, containerName, meta.artifactsMount);
+    }
+
     const failures: string[] = [];
     if (containerName) {
       const err = await this.removeIgnoringNotFound(['rm', '-f', containerName]);
@@ -321,6 +371,9 @@ export class ContainerBackend implements IIsolationBackend {
     if (!handle) {
       log.warn({ envId }, 'isolation.container_suspend_no_handle');
       return;
+    }
+    if (meta.artifactsMount !== undefined) {
+      await this.restoreHostOwnership(envId, handle, meta.artifactsMount);
     }
     try {
       await this.docker(['stop', handle]);
@@ -385,15 +438,26 @@ export class ContainerBackend implements IIsolationBackend {
           'an aggressive prune likely removed it; paused runs are never auto-pruned.)'
       );
     }
-    // Re-apply the source mount. A recreated container without it would resolve no
-    // named script, at a path the run's own metadata reports as intact.
-    if (meta.sourceMount !== undefined) assertMountableSource(meta.sourceMount, workspacePath);
+    // Re-apply the host mounts. A recreated container without them would resolve no
+    // named script, and would write artifacts into a container-local directory the host
+    // never sees — both at paths the run's own metadata reports as intact.
+    const mounts: HostMounts = { source: meta.sourceMount, artifacts: meta.artifactsMount };
+    if (mounts.source !== undefined && mounts.artifacts === undefined) {
+      // A row from before the artifacts bind existed: the engine has always sent both
+      // mounts together since it did. The run continues exactly as it would have before
+      // the upgrade, which means `$ARTIFACTS_DIR` writes stay inside the container.
+      log.warn(
+        { envId, containerName, workspacePath },
+        'isolation.container_resume_without_artifacts_mount'
+      );
+    }
+    assertMountableHostMounts(mounts, workspacePath);
     const { containerId, mode } = await this.startContainerWithOverlay(
       containerName,
       volume,
       workspacePath,
       codebaseId,
-      meta.sourceMount
+      mounts
     );
     log.info({ envId, containerName, volume }, 'isolation.container_resume_recreated');
     return this.preparedEnvFor(containerId, workspacePath, envId, mode);
@@ -459,6 +523,45 @@ export class ContainerBackend implements IIsolationBackend {
    */
   async discardChanges(envId: string): Promise<void> {
     log.info({ envId }, 'isolation.container_changes_discarded');
+  }
+
+  /**
+   * Give the host user back the files the container wrote into the artifacts bind.
+   *
+   * In-container work runs as root. On Docker Desktop and rootless daemons that maps to
+   * the host user already; on a rootful Linux daemon it leaves root-owned files under
+   * `~/.archon` that the operator cannot later remove. Best-effort by design: the files
+   * are the run's real output either way, so a failed hand-back is logged, never fatal.
+   * Skipped when the host user is root or the platform has no uid (Windows).
+   */
+  private async restoreHostOwnership(
+    envId: string,
+    handle: string,
+    artifactsMount: string
+  ): Promise<void> {
+    const identity = currentHostIdentity();
+    if (identity === undefined || identity.uid === 0) return;
+    const owner = `${String(identity.uid)}:${String(identity.gid)}`;
+    try {
+      await this.docker(['exec', handle, 'chown', '-R', owner, artifactsMount]);
+      log.debug({ envId, handle, artifactsMount, owner }, 'isolation.container_artifacts_owned');
+    } catch (err) {
+      const detail = extractDockerError(err);
+      // A container that already stopped or vanished cannot run the chown; that is the
+      // normal destroy-after-suspend path, not a failed hand-back. Same reading of the
+      // daemon's answer that `suspend` uses.
+      if (/no such container|is not running/i.test(detail)) {
+        log.debug(
+          { envId, handle, artifactsMount, detail },
+          'isolation.container_artifacts_chown_skipped_stopped'
+        );
+        return;
+      }
+      log.warn(
+        { envId, handle, artifactsMount, owner, detail },
+        'isolation.container_artifacts_chown_failed'
+      );
+    }
   }
 
   /**
@@ -553,7 +656,7 @@ export class ContainerBackend implements IIsolationBackend {
     volume: string,
     hostRoot: string,
     codebaseId: string,
-    sourceMount?: string
+    mounts: HostMounts
   ): Promise<{ containerId: string; mode: OverlayMode }> {
     const failures: string[] = [];
     for (const mode of OVERLAY_MODES) {
@@ -565,7 +668,7 @@ export class ContainerBackend implements IIsolationBackend {
           hostRoot,
           codebaseId,
           mode,
-          sourceMount
+          mounts
         );
       } catch (runErr) {
         // `docker run` itself refused (e.g. `--device /dev/fuse` on a host with no
@@ -612,7 +715,7 @@ export class ContainerBackend implements IIsolationBackend {
     hostRoot: string,
     codebaseId: string,
     mode: OverlayMode,
-    sourceMount?: string
+    mounts: HostMounts
   ): Promise<string> {
     // Least-privilege per mode: fuse gets ONLY the device; native gets the caps.
     const privilegeArgs =
@@ -646,11 +749,17 @@ export class ContainerBackend implements IIsolationBackend {
       `${hostRoot}:/mnt/lower:ro`,
       '-v',
       `${volume}:/mnt/upper`,
+      // The run's artifacts directory, read-write at the SAME absolute path: `$ARTIFACTS_DIR`
+      // is the run's output channel on both sides of the boundary, so a screenshot or the
+      // evidence marker written here lands on the host where the engine and the operator
+      // read it. Root inside the container writes root-owned files on a rootful Linux
+      // daemon; `restoreHostOwnership` hands them back on suspend and destroy.
+      ...(mounts.artifacts ? ['-v', `${mounts.artifacts}:${mounts.artifacts}`] : []),
       // The run's frozen workflow source, at the SAME absolute path it has on the host.
       // Identical paths are what let the engine hold one source-roots value that means
       // the same thing whether a node executes here or on the host. Read-only: the run
       // reads its own commands and scripts, it never writes them.
-      ...(sourceMount ? ['-v', `${sourceMount}:${sourceMount}:ro`] : []),
+      ...(mounts.source ? ['-v', `${mounts.source}:${mounts.source}:ro`] : []),
       '-e',
       `ARCHON_WORKSPACE_PATH=${hostRoot}`,
       '-e',

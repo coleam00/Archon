@@ -193,8 +193,9 @@ Same worktree always gets the same port (deterministic hash).
 
 For each active environment:
 1. Filesystem gone → `removeEnvironment()`
-2. Branch merged into main → remove (if no uncommitted changes, no workflow run can still claim it)
-3. Stale (14+ days, non-Telegram) → remove (same checks)
+2. Merged (see "How cleanup decides a branch is merged") → remove (if no uncommitted changes, no workflow run can still claim it)
+3. Open PR, failed PR lookup, or unverifiable merge state → kept and reported
+4. Otherwise stale (14+ days, non-Telegram) → remove (same checks)
 
 After environment cleanup: `sessionDb.deleteOldSessions(30)` (session retention).
 
@@ -202,12 +203,20 @@ After environment cleanup: `sessionDb.deleteOldSessions(30)` (session retention)
 
 ## `makeRoom()` Strategy
 
-When at worktree limit: only removes **merged branches** (not stale ones). For each environment:
-- Check `isBranchMerged(repoPath, branchName, mainBranch)`
+When at worktree limit: only removes **merged branches** (not stale ones); it is `cleanupMergedWorktrees`, the same path as `archon isolation cleanup --merged`. For each environment:
+- Judge the merge (below)
 - Skip if uncommitted changes, or a workflow run can still claim it (running, pending, paused, or failed-but-resumable)
 - Remove with `deleteRemoteBranch: true`
 
 If merged cleanup frees space → proceed with creation. If not → block with formatted limit message showing breakdown of merged/stale/active counts.
+
+### How cleanup decides a branch is merged
+
+`judgeBranchForRemoval()` in cleanup-service is the one decision for the scheduled sweep, `makeRoom()` and `--merged`. Merged against the configured base ref means either:
+- **git:** the branch ref exists and is merged by ancestry (`git branch --merged`) or patch equivalence (`git cherry`), and the worktree's HEAD also passes `git cherry <base> HEAD`; or
+- **PR:** `getPrState()` reports MERGED (or CLOSED with `--include-closed`), and the worktree's HEAD and the branch ref, where each exists, are at or behind the PR head commit (`isRevCoveredBy`, which fetches a PR head missing locally).
+
+Anything past the proving commit is unmerged work: run branch names get reused, and a detached HEAD can hold commits no ref protects. A failed `gh` lookup (`UNAVAILABLE`) or a git error keeps the worktree and reports it; it never counts as merged.
 
 ---
 

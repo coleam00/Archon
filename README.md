@@ -95,7 +95,7 @@ Looking for the original Python-based Archon (task management + RAG)? It's fully
 
 ## Getting Started
 
-> **Most users should start with the [Full Setup](#full-setup-5-minutes)** - it walks you through credentials, installs the Archon skill into your projects, and gives you the web dashboard.
+> **Most users should start with the [Full Setup](#full-setup-5-minutes)** - it walks you through credentials, installs the Archon skill into your projects, and gives you the web console.
 >
 > **Already have Claude Code and just want the CLI?** Jump to the [Quick Install](#quick-install-30-seconds).
 
@@ -215,17 +215,16 @@ The coding agent handles workflow selection, branch naming, and worktree isolati
 
 ## Web UI
 
-Archon includes a web dashboard for chatting with your coding agent, running workflows, and monitoring activity. Binary installs: run `archon serve` to download and start the web UI in one step. From source: ask your coding agent to run the frontend from the Archon repo, or run `bun run dev` from the repo root yourself.
+Archon includes a web console for running workflows, inspecting runs, and chatting with your coding agent. Run `archon serve` to start it, whichever way you installed. A binary downloads the matching Web UI on first run. A source checkout serves the copy you build: run `bun run build:web` once from the repo root, then `archon serve`.
 
-Register a project by clicking **+** next to "Project" in the chat sidebar - enter a GitHub URL or local path. Then start a conversation, invoke workflows, and watch progress in real time.
+Register a project with **Add project** in the project rail, then enter a GitHub URL or local path. Select the project to start a run or open its chat.
 
 **Key pages:**
-- **Chat** - Conversation interface with real-time streaming and tool call visualization
-- **Dashboard** - Mission Control for monitoring running workflows, with filterable history by project, status, and date
-- **Workflow Builder** - Visual drag-and-drop editor for creating DAG workflows with loop nodes
-- **Workflow Execution** - Step-by-step progress view for any running or completed workflow
-
-**Monitoring hub:** The sidebar shows conversations from **all platforms** - not just the web. Workflows kicked off from the CLI, messages from Slack or Telegram, GitHub issue interactions - everything appears in one place.
+- **Runs** - All runs and project-scoped runs, with status filters and live progress
+- **Run detail** - Event log, artifacts, workflow graph when project context is available, and applicable governance actions
+- **Project chat** - Real-time assistant text and tool activity for the selected project
+- **Settings** - Provider credentials, model tiers and aliases, assistant defaults, system status, and GitHub identity
+- **Workflow builder** - Experimental visual authoring for a bounded set of workflow node forms
 
 See the [Web UI Guide](https://archon.diy/adapters/web/) for full documentation.
 
@@ -330,16 +329,19 @@ Full documentation is available at **[archon.diy/docs](https://archon.diy/docs/)
 
 ## Telemetry
 
-Archon sends a few anonymous events so maintainers can see which workflows get real usage, on what platforms, and whether runs succeed — and prioritize accordingly. **No PII, ever.** Events: `archon_started` (once per CLI invocation / server boot), `archon_active` (daily heartbeat while a server is running, so long-running installs stay counted), `chat_turn_handled` (each direct AI chat turn — platform, provider, model, duration, and usage totals; never message content), `workflow_invoked` (each workflow start), `workflow_completed` / `workflow_failed` (each run outcome), `workflow_approval_resolved` (each human approve/reject decision — the binary resolution only, never comments or reasons), and `codebase_registered` (a pure count when a project is registered — no name, path, or URL).
+Archon sends a few anonymous events so maintainers can see which workflows get real usage, on what platforms, and whether runs succeed — and prioritize accordingly. **No PII, ever.** Events: `archon_started` (once per CLI invocation or server boot; `archon serve` reports as the server, and a detached run's worker process is counted by the command that started it), `archon_active` (daily heartbeat while a server is running, so long-running installs stay counted), `chat_turn_handled` (each direct AI chat turn — platform, provider, model, duration, and usage totals; never message content), `workflow_invoked` (each workflow start, and again for each resumed segment), `workflow_completed` / `workflow_failed` / `workflow_cancelled` (sent once when a run's final status is saved, whichever path ended it), `workflow_approval_resolved` (each human approve/reject decision — the binary resolution only, never comments or reasons), and `codebase_registered` (a pure count when a project is registered — no name, path, or URL).
 
 **What's collected (categorical only):**
-- **Workflow name** — the real name for *bundled* (Archon-authored) workflows; `"custom"` for your own workflows, so private names never leave your machine.
-- **Run shape & outcome** — platform (`cli`/`web`/`slack`/…), provider id (plus the model id on `workflow_invoked`), node count, which node types and features are used (loop/approval/script/bash, structured output, persisted sessions, MCP, skills, fresh-context loops), success/failure, duration, a categorical failure reason, and a fixed-enum failure class (`fatal`/`transient`/`unknown` — never raw error text) plus the failed node's type.
-- **Chat activity** — one event per direct-chat AI turn with platform, provider, model, duration, and completed/failed. Message content, prompts, and conversation ids are never sent.
-- **Aggregate usage** — provider-reported gross input, output, optional cache-read/cache-write token totals (with a flag when those totals are a floor), and cost (USD) per workflow run, plus direct-chat usage and total loop iterations. Numeric totals only — never the content the tokens represent.
-- **Machine context** — OS, architecture, Archon version, runtime, whether it's a binary build, and a CI flag.
+- **Workflow name** — the real name for *bundled* (Archon-authored) workflows; `"custom"` for your own workflows, so private names never leave your machine. The discovery source (`bundled`/`global`/`project`) is sent alongside.
+- **Run shape & outcome** — platform (`cli`/`web`/`slack`/…), provider and model ids, node count, how many nodes of each type, graph depth and widest fan-out, how many distinct commands are referenced, the total inline prompt size as a bucket (`none`/`lt_1k`/`1k_5k`/`5k_20k`/`gte_20k` characters), which node types and features are used (loop/approval/script/bash, structured output, persisted sessions, MCP, skills, fresh-context loops), whether the run is interactive, isolated in a worktree, a resume, or a child of another run, the outcome, duration (from the run's first start to its end, including approval and wait time), a categorical exit or cancel reason, and a fixed-enum failure class recorded where the first failed node failed (`fatal`/`transient`/`unknown` for provider errors; `timeout`, `exec_failed`, `output_contract`, `max_iterations`, `child_failed`, `cancelled`, `config` for engine-detected causes — never raw error text) plus that node's type.
+- **Run reference** — `run_ref`, a one-way hash of the install UUID and the run id, so a run's start, resumes and outcome can be joined. The run id itself is never sent.
+- **Bundled ancestry** — when one of your workflows is a copy of a bundled workflow, the bundled workflow's name and whether the copy is `identical` or `modified` (`derived_from`, `derived_similarity`). Only the bundled name is sent; nothing about your copy's name, node ids or prompts.
+- **Chat activity** — one event per direct-chat AI turn with platform, provider, model, duration, and completed/failed; a turn whose provider errors out mid-turn counts as failed. Message content, prompts, and conversation ids are never sent.
+- **Aggregate usage** — provider-reported gross input, output, optional cache-read/cache-write token totals (with a flag when those totals are a floor), and cost (USD) per workflow run across all of its resumed segments (a parent run's total includes its child runs' spend, so sum spend over runs that are not children), plus direct-chat usage and total loop iterations. Numeric totals only — never the content the tokens represent.
+- **Machine context** — OS, architecture, Archon version, runtime, whether it's a binary build, the install channel (`binary`/`docker`/`source`), the short commit of the running build when known, whether stderr is a terminal, and a CI flag.
 - **Deployment shape** (server only) — which adapters are enabled (booleans), database kind (`sqlite`/`postgresql`), whether web auth and multi-user mode are on, and the GitHub auth mode. Configuration *values* (tokens, URLs, hosts) are never sent.
-- A random install UUID stored at `~/.archon/telemetry-id`. Nothing else.
+- A random install UUID stored at `$ARCHON_HOME/telemetry-id` (`~/.archon/telemetry-id` by default, `/.archon/telemetry-id` in Docker). Nothing else.
+- A `schema_version` number on every event, bumped whenever this list changes.
 
 **What's *not* collected:** your code, prompts, messages, custom workflow names, workflow descriptions, git remotes, file paths, usernames, tokens, AI output, error message text, your IP address, your geographic location — none of it.
 
@@ -354,6 +356,8 @@ POSTHOG_API_KEY=off   # off | 0 | false | disabled | "" all disable
 CI environments (`CI=true`) are auto-disabled — forks running fixtures in GitHub Actions, CircleCI, etc. do not send events.
 
 **Check the current state:** run `archon telemetry status` to see whether telemetry is enabled, why (if not), the install UUID, and the active host. Run `archon telemetry reset` to rotate the install UUID. `archon doctor` also surfaces the current state in its check list.
+
+Shutdown gives pending telemetry a 75 ms flush window, then cancels outstanding requests. Slow or unreachable ingestion can lose events; it does not hold up command exit. Far from the ingest host (for example, about 250 ms TLS handshake from Europe to the default US host), events from short commands like `--help` are usually dropped; longer commands flush in the background while they run.
 
 Self-host PostHog or use a different project by setting `POSTHOG_API_KEY` and `POSTHOG_HOST`.
 

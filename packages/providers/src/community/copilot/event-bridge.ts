@@ -18,7 +18,12 @@
  * PI lazy-load test for rationale.
  */
 import { createLogger } from '@archon/paths';
-import type { AssistantMessageEvent, CopilotSession, SessionEvent } from '@github/copilot-sdk';
+import type {
+  AssistantMessageEvent,
+  CopilotSession,
+  SessionEvent,
+  ToolExecutionCompleteData,
+} from '@github/copilot-sdk';
 
 import type { MessageChunk, TokenUsage } from '../../types';
 import { tryParseStructuredOutput } from '../../shared/structured-output';
@@ -105,8 +110,7 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
 
 /**
  * Coerce the SDK's `assistant.usage.data` shape into Archon's TokenUsage.
- * Returns undefined if neither input nor output token count is a number,
- * so callers don't emit a meaningless result chunk with {0, 0}.
+ * Returns undefined unless both required token counts are numbers.
  */
 export function normalizeCopilotUsage(raw?: {
   inputTokens?: number;
@@ -115,12 +119,24 @@ export function normalizeCopilotUsage(raw?: {
   if (!raw) return undefined;
   const input = raw.inputTokens;
   const output = raw.outputTokens;
-  if (typeof input !== 'number' && typeof output !== 'number') return undefined;
-  const usage: TokenUsage = {
-    input: typeof input === 'number' ? input : 0,
-    output: typeof output === 'number' ? output : 0,
-  };
-  return usage;
+  if (typeof input !== 'number' || typeof output !== 'number') return undefined;
+  return { input, output };
+}
+
+/**
+ * Compose the text of a failed tool result. The SDK may carry the failure in
+ * `result.content` / `result.detailedContent`, in `error.message`, or in
+ * both; a failure with only `error` and no `result` is valid, so `rawOutput`
+ * alone would drop the explanation. Lead with the message and keep the
+ * output when it adds detail, skipping the message when the output already
+ * contains it verbatim so the same sentence isn't printed twice.
+ */
+function formatToolFailure(rawOutput: string, error: ToolExecutionCompleteData['error']): string {
+  const message = error?.message ?? '';
+  if (!message) return rawOutput;
+  if (!rawOutput) return message;
+  if (rawOutput.includes(message)) return rawOutput;
+  return `${message}\n${rawOutput}`;
 }
 
 /**
@@ -186,7 +202,7 @@ export function mapCopilotEvent(event: SessionEvent, ctx: EventMapperContext): M
       ];
     }
     case 'tool.execution_complete': {
-      const { toolCallId, success, result } = event.data;
+      const { toolCallId, success, result, error } = event.data;
       const toolName = ctx.toolCallIdToName.get(toolCallId) ?? 'unknown';
       // Prefer detailedContent (full output) over content (truncated for LLM).
       const rawOutput = result?.detailedContent ?? result?.content ?? '';
@@ -200,7 +216,7 @@ export function mapCopilotEvent(event: SessionEvent, ctx: EventMapperContext): M
       chunks.push({
         type: 'tool_result',
         toolName,
-        toolOutput: success ? rawOutput : `❌ ${rawOutput}`,
+        toolOutput: success ? rawOutput : `❌ ${formatToolFailure(rawOutput, error)}`,
         toolCallId,
         toolOutcome: success ? 'success' : 'error',
       });

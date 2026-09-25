@@ -2,15 +2,24 @@ import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 import { MockPlatformAdapter } from '../test/mocks/platform';
 import type { Conversation, Codebase } from '../types';
-import type { IsolationEnvironmentRow } from '@archon/isolation';
+import type {
+  IsolationEnvironmentRow,
+  IsolationResolution,
+  IsolationResolver,
+} from '@archon/isolation';
+import { toBranchName } from '@archon/git';
 // Type-only imports are erased at runtime, so these do not load './orchestrator'
 // (or the workflow engine) before the mock.module() calls below take effect.
 import type { WorkflowRoutingContext } from './orchestrator';
 import type { PreparedWorkflowSource } from '@archon/workflows/executor';
+import type * as WorkflowExecutor from '@archon/workflows/executor';
+import type * as RunLiveOwnerModule from '../services/run-live-owner';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
-import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import type { ResolvedWorkflow, WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import type { IWorkflowStore } from '@archon/workflows/store';
 import {
   makeTestComposedWorkflow,
+  makeTestResolvedWorkflow,
   makeTestWorkflow,
   withObservableCapturedSource,
 } from '@archon/workflows/test-utils';
@@ -44,6 +53,22 @@ mock.module('@archon/paths', () => ({
 }));
 
 // DB mocks
+const runLiveOwnerCalls: string[] = [];
+const mockCloseRunLiveOwner = mock(() => {
+  runLiveOwnerCalls.push('close');
+  return Promise.resolve();
+});
+const mockStartRunLiveOwner = mock<typeof RunLiveOwnerModule.startRunLiveOwner>(runId => {
+  runLiveOwnerCalls.push(`start:${runId}`);
+  return Promise.resolve({
+    close: mockCloseRunLiveOwner,
+    isStopRequested: () => false,
+  });
+});
+mock.module('../services/run-live-owner', () => ({
+  startRunLiveOwner: mockStartRunLiveOwner,
+}));
+
 const mockUpdateConversation = mock(() => Promise.resolve());
 const mockGetOrCreateConversation = mock((): Promise<Conversation | null> => Promise.resolve(null));
 mock.module('../db/conversations', () => ({
@@ -97,8 +122,30 @@ mock.module('@archon/providers', () => ({
   PI_AMBIENT_VENDORS: ['amazon-bedrock', 'google-vertex'],
 }));
 
-const mockCreateWorkflowRun = mock(() => Promise.resolve({ id: 'run-1' }));
-const mockFailWorkflowRun = mock((): Promise<void> => Promise.resolve());
+const mockCreateWorkflowRun = mock<IWorkflowStore['createWorkflowRun']>(() => {
+  runLiveOwnerCalls.push('create');
+  return Promise.resolve({
+    id: 'run-1',
+    workflow_name: 'bg-workflow',
+    conversation_id: 'worker-conv-1',
+    parent_conversation_id: 'parent-conv',
+    codebase_id: 'cb-1',
+    status: 'pending',
+    outcome: null,
+    user_message: 'run it',
+    metadata: {},
+    started_at: new Date(),
+    completed_at: null,
+    last_activity_at: null,
+    working_path: '/parent/cwd',
+    user_id: null,
+    parent_run_id: null,
+    adopted_from_run_id: null,
+    output_root: null,
+    checkout_baseline: null,
+  });
+});
+const mockFailWorkflowRun = mock<IWorkflowStore['failWorkflowRun']>(() => Promise.resolve());
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
     store: { createWorkflowRun: mockCreateWorkflowRun, failWorkflowRun: mockFailWorkflowRun },
@@ -126,7 +173,9 @@ mock.module('../services/cleanup-service', () => ({
 }));
 
 // Mock @archon/isolation — shared resolve mock so tests can control return values
-const mockResolve = mock(() => Promise.resolve({ status: 'none' as const, cwd: '/workspace' }));
+const mockResolve = mock<IsolationResolver['resolve']>(() =>
+  Promise.resolve({ status: 'none', cwd: '/workspace' })
+);
 
 class MockIsolationResolver {
   resolve = mockResolve;
@@ -168,26 +217,20 @@ mock.module('@archon/workflows/workflow-discovery', () => ({
 // open to prove the background dispatch does not reclaim before adoption.
 let deferExecuteWorkflowAdoption = false;
 let releaseExecuteWorkflowAdoption: (() => void) | undefined;
-const mockExecuteWorkflow = mock(async (...args: unknown[]) => {
-  const opts = args[7] as
-    | {
-        preparedSource?: unknown;
-        capturedSourceOwner?: { adopt: () => void };
-      }
-    | undefined;
+const mockExecuteWorkflow = mock<typeof WorkflowExecutor.executeWorkflow>(async (...args) => {
+  const opts = args[7];
   if (deferExecuteWorkflowAdoption) {
     await new Promise<void>(resolve => {
       releaseExecuteWorkflowAdoption = resolve;
     });
   }
   if (opts?.preparedSource) opts.capturedSourceOwner?.adopt();
-  return { paused: true };
+  return { success: true, paused: true, workflowRunId: 'run-1' };
 });
-const mockPrepareWorkflowSource = mock(
+const mockPrepareWorkflowSource = mock<typeof WorkflowExecutor.prepareWorkflowSource>(
   (): Promise<PreparedWorkflowSource> =>
     Promise.resolve({
       runId: 'prepared-run-id',
-      captureRoot: '/capture',
       origin: '/origin',
       manifest: {
         version: 1,
@@ -198,15 +241,41 @@ const mockPrepareWorkflowSource = mock(
         file_count: 0,
         byte_count: 0,
         scopes: [],
+        source_config: {
+          load_default_workflows: true,
+          load_default_commands: true,
+        },
+      },
+      anchor: {
+        root: '/capture',
+        digest: 'test-digest',
+        config: {
+          load_default_workflows: true,
+          load_default_commands: true,
+        },
       },
       roots: {
         project: '/capture/project',
         globalWorkflows: '/capture/global/workflows',
         globalCommands: '/capture/global/commands',
         globalScripts: '/capture/global/scripts',
-        bundledWorkflows: '/capture/bundled',
+        bundledWorkflows: '/capture/bundled/workflows',
+        bundledCommands: '/capture/bundled/commands/defaults',
+        installed: { kind: 'captured', captureRoot: '/capture' },
+        kind: 'captured',
+        anchor: {
+          root: '/capture',
+          digest: 'test-digest',
+          config: {
+            load_default_workflows: true,
+            load_default_commands: true,
+          },
+        },
       },
     })
+);
+const mockRecordSelectedWorkflow = mock<typeof WorkflowExecutor.recordSelectedWorkflow>(() =>
+  Promise.resolve()
 );
 /** Ownership calls the dispatch path makes on its capture, in order. */
 const capturedSourceOwnerCalls: string[] = [];
@@ -217,12 +286,16 @@ mock.module('@archon/workflows/executor', () => ({
   // tests stay about routing. `mock.module` MERGES, so an export omitted here keeps its
   // REAL implementation — which is exactly how a stub silently starts doing disk I/O.
   prepareWorkflowSource: mockPrepareWorkflowSource,
-  recordSelectedWorkflow: mock(() => Promise.resolve()),
+  recordSelectedWorkflow: mockRecordSelectedWorkflow,
   disposeWorkflowSource: mock(() => Promise.resolve()),
   resolveContinuationWorkflow: mock(() => Promise.resolve(undefined)),
   withCapturedSource: mock((body: Parameters<typeof withObservableCapturedSource>[1]) =>
     withObservableCapturedSource(capturedSourceOwnerCalls, body)
   ),
+  // Statically imported (transitively, via `InProcessWorkflowEngine`) by the dispatch
+  // path; a named import must link even when these tests never exercise
+  // the resume path.
+  hydrateResumableRun: mock(() => Promise.resolve(null)),
 }));
 mock.module('@archon/workflows/router', () => ({
   findWorkflow: mock(() => undefined),
@@ -267,9 +340,21 @@ function makeEnvRow(overrides?: Partial<IsolationEnvironmentRow>): IsolationEnvi
     status: 'active',
     created_at: new Date(),
     created_by_platform: 'web',
+    created_by_user_id: null,
     metadata: {},
     ...overrides,
   };
+}
+
+type ResolvedIsolation = Extract<IsolationResolution, { status: 'resolved' }>;
+
+// The resolver always reports the environment's own working path as `cwd`.
+// Deriving it here stops a call site from setting the two to different values.
+function resolvedIsolation(
+  method: ResolvedIsolation['method'],
+  env: IsolationEnvironmentRow = makeEnvRow()
+): ResolvedIsolation {
+  return { status: 'resolved', env, cwd: env.working_path, method };
 }
 
 function makeConversation(overrides?: Partial<Conversation>): Conversation {
@@ -284,6 +369,8 @@ function makeConversation(overrides?: Partial<Conversation>): Conversation {
     title: null,
     hidden: false,
     deleted_at: null,
+    last_activity_at: null,
+    user_id: null,
     created_at: new Date(),
     updated_at: new Date(),
     ...overrides,
@@ -294,7 +381,11 @@ function makeCodebase(overrides?: Partial<Codebase>): Codebase {
   return {
     id: 'cb-1',
     name: 'test-repo',
+    repository_url: 'https://github.com/test/test-repo.git',
     default_cwd: '/workspace/test-repo',
+    default_branch: null,
+    ai_assistant_type: 'claude',
+    kind: 'repo',
     commands: {},
     created_at: new Date(),
     updated_at: new Date(),
@@ -317,12 +408,9 @@ describe('validateAndResolveIsolation', () => {
     const conversation = makeConversation();
     const codebase = makeCodebase();
 
-    mockResolve.mockResolvedValueOnce({
-      status: 'resolved',
-      env: makeEnvRow(),
-      cwd: '/worktrees/issue-42',
-      method: { type: 'linked_issue_reuse', issueNumber: 99 },
-    });
+    mockResolve.mockResolvedValueOnce(
+      resolvedIsolation({ type: 'linked_issue_reuse', issueNumber: 99 })
+    );
 
     const result = await validateAndResolveIsolation(conversation, codebase, platform, 'conv-1');
 
@@ -334,12 +422,7 @@ describe('validateAndResolveIsolation', () => {
     const conversation = makeConversation();
     const codebase = makeCodebase();
 
-    mockResolve.mockResolvedValueOnce({
-      status: 'resolved',
-      env: makeEnvRow(),
-      cwd: '/worktrees/issue-42',
-      method: { type: 'created', autoCleanedCount: 3 },
-    });
+    mockResolve.mockResolvedValueOnce(resolvedIsolation({ type: 'created', autoCleanedCount: 3 }));
 
     const result = await validateAndResolveIsolation(conversation, codebase, platform, 'conv-1');
 
@@ -354,51 +437,37 @@ describe('validateAndResolveIsolation', () => {
     const conversation = makeConversation();
     const codebase = makeCodebase({ default_branch: 'develop' });
 
-    mockResolve.mockResolvedValueOnce({
-      status: 'resolved',
-      env: makeEnvRow(),
-      cwd: '/worktrees/issue-42',
-      method: { type: 'created' },
-    });
+    mockResolve.mockResolvedValueOnce(resolvedIsolation({ type: 'created' }));
 
     await validateAndResolveIsolation(conversation, codebase, platform, 'conv-1');
 
-    const request = mockResolve.mock.calls.at(-1)?.[0] as unknown as {
-      codebase: { defaultBranch?: string | null };
-    };
-    expect(request.codebase.defaultBranch).toBe('develop');
+    const request = mockResolve.mock.calls.at(-1)?.[0];
+    expect(request?.codebase?.defaultBranch).toBe(toBranchName('develop'));
   });
 
   test('passes null defaultBranch to the resolver when the codebase has none stored', async () => {
     const conversation = makeConversation();
     const codebase = makeCodebase({ default_branch: null });
 
-    mockResolve.mockResolvedValueOnce({
-      status: 'resolved',
-      env: makeEnvRow(),
-      cwd: '/worktrees/issue-42',
-      method: { type: 'created' },
-    });
+    mockResolve.mockResolvedValueOnce(resolvedIsolation({ type: 'created' }));
 
     await validateAndResolveIsolation(conversation, codebase, platform, 'conv-1');
 
-    const request = mockResolve.mock.calls.at(-1)?.[0] as unknown as {
-      codebase: { defaultBranch?: string | null };
-    };
-    expect(request.codebase.defaultBranch).toBeNull();
+    const request = mockResolve.mock.calls.at(-1)?.[0];
+    expect(request?.codebase?.defaultBranch).toBeNull();
   });
 });
 
 describe('dispatchBackgroundWorkflow', () => {
   let platform: MockPlatformAdapter;
 
-  function makeWorkflow(overrides?: Partial<WorkflowDefinition>): WorkflowDefinition {
-    return {
+  function makeWorkflow(overrides?: Partial<WorkflowDefinition>): ResolvedWorkflow {
+    return makeTestResolvedWorkflow({
       name: 'bg-workflow',
       description: 'background dispatch test workflow',
       nodes: [],
       ...overrides,
-    } as WorkflowDefinition;
+    });
   }
 
   function makeRoutingCtx(overrides?: Partial<WorkflowRoutingContext>): WorkflowRoutingContext {
@@ -425,6 +494,9 @@ describe('dispatchBackgroundWorkflow', () => {
     releaseExecuteWorkflowAdoption?.();
     releaseExecuteWorkflowAdoption = undefined;
     capturedSourceOwnerCalls.length = 0;
+    runLiveOwnerCalls.length = 0;
+    mockStartRunLiveOwner.mockClear();
+    mockCloseRunLiveOwner.mockClear();
     mockResolve.mockClear();
     mockUpdateConversation.mockClear();
     mockCreateWorkflowRun.mockClear();
@@ -484,12 +556,17 @@ describe('dispatchBackgroundWorkflow', () => {
   test('marks the run failed and says so when execution rejects with an ordinary error', async () => {
     const workflow = makeWorkflow({ worktree: { enabled: false } });
     mockExecuteWorkflow.mockRejectedValueOnce(new Error('exec boom'));
+    mockFailWorkflowRun.mockImplementationOnce(async () => {
+      runLiveOwnerCalls.push('fail');
+    });
 
     await dispatchBackgroundWorkflow(makeRoutingCtx(), workflow);
     await flushBackgroundExecution();
 
     expect(mockFailWorkflowRun).toHaveBeenCalledTimes(1);
     expect(mockFailWorkflowRun.mock.calls[0]?.[0]).toBe('run-1');
+    expect(mockCloseRunLiveOwner).toHaveBeenCalledTimes(1);
+    expect(runLiveOwnerCalls).toEqual(['start:prepared-run-id', 'create', 'fail', 'close']);
     const sent = platform.sendMessage.mock.calls.map(c => c[1]);
     expect(sent.some(m => m.includes('failed: exec boom'))).toBe(true);
   });
@@ -518,10 +595,8 @@ describe('dispatchBackgroundWorkflow', () => {
     expect(mockResolve).not.toHaveBeenCalled();
     // The run executes in the parent conversation's cwd (live checkout).
     expect(mockCreateWorkflowRun).toHaveBeenCalledTimes(1);
-    const runRow = mockCreateWorkflowRun.mock.calls[0]?.[0] as unknown as {
-      working_path: string;
-    };
-    expect(runRow.working_path).toBe('/parent/cwd');
+    const runRow = mockCreateWorkflowRun.mock.calls[0]?.[0];
+    expect(runRow?.working_path).toBe('/parent/cwd');
     // Operators can distinguish live-checkout runs from worktree runs in logs.
     expect(mockLogger.info).toHaveBeenCalledWith(
       { workflowName: 'bg-workflow', conversationId: 'parent-conv', codebaseId: 'cb-1' },
@@ -543,6 +618,8 @@ describe('dispatchBackgroundWorkflow', () => {
       // Outer dispatch owner holds, detached owner synchronously takes over, then the
       // outer owner adopts. The detached owner remains live across the unresolved await.
       expect(capturedSourceOwnerCalls).toEqual(['hold:/capture', 'hold:/capture', 'adopt']);
+      expect(runLiveOwnerCalls).toEqual(['start:prepared-run-id', 'create']);
+      expect(mockCloseRunLiveOwner).not.toHaveBeenCalled();
 
       releaseExecuteWorkflowAdoption?.();
       await flushBackgroundExecution();
@@ -552,6 +629,7 @@ describe('dispatchBackgroundWorkflow', () => {
         'adopt',
         'adopt',
       ]);
+      expect(runLiveOwnerCalls).toEqual(['start:prepared-run-id', 'create', 'close']);
     } finally {
       deferExecuteWorkflowAdoption = false;
       releaseExecuteWorkflowAdoption?.();
@@ -562,10 +640,7 @@ describe('dispatchBackgroundWorkflow', () => {
   test('keeps holding the capture when the dispatch gives up after taking it', async () => {
     // No run exists to own the bytes, so the wrapper must reclaim them — one leaked tree
     // per failed dispatch otherwise, on the console's default path.
-    const { recordSelectedWorkflow } = await import('@archon/workflows/executor');
-    (recordSelectedWorkflow as ReturnType<typeof mock>).mockRejectedValueOnce(
-      new Error('capture manifest is read-only')
-    );
+    mockRecordSelectedWorkflow.mockRejectedValueOnce(new Error('capture manifest is read-only'));
     const workflow = makeWorkflow({ worktree: { enabled: false } });
 
     await dispatchBackgroundWorkflow(makeRoutingCtx(), workflow);
@@ -585,10 +660,8 @@ describe('dispatchBackgroundWorkflow', () => {
     await dispatchBackgroundWorkflow(makeRoutingCtx({ inputs: { diff: 'D1' } }), workflow);
 
     expect(mockCreateWorkflowRun).toHaveBeenCalledTimes(1);
-    const runRow = mockCreateWorkflowRun.mock.calls[0]?.[0] as unknown as {
-      metadata?: Record<string, unknown>;
-    };
-    expect(runRow.metadata?.inputs).toEqual({ diff: 'D1' });
+    const runRow = mockCreateWorkflowRun.mock.calls[0]?.[0];
+    expect(runRow?.metadata?.inputs).toEqual({ diff: 'D1' });
 
     await flushBackgroundExecution();
   });
@@ -600,10 +673,8 @@ describe('dispatchBackgroundWorkflow', () => {
 
     await dispatchBackgroundWorkflow(makeRoutingCtx(), workflow);
 
-    const runRow = mockCreateWorkflowRun.mock.calls[0]?.[0] as unknown as {
-      metadata?: Record<string, unknown>;
-    };
-    expect(runRow.metadata).not.toHaveProperty('inputs');
+    const runRow = mockCreateWorkflowRun.mock.calls[0]?.[0];
+    expect(runRow?.metadata).not.toHaveProperty('inputs');
 
     await flushBackgroundExecution();
   });
@@ -617,8 +688,8 @@ describe('dispatchBackgroundWorkflow', () => {
     );
     await flushBackgroundExecution();
 
-    const opts = mockExecuteWorkflow.mock.calls[0]?.[7] as { modelOverrideLayer?: unknown };
-    expect(opts.modelOverrideLayer).toEqual({
+    const opts = mockExecuteWorkflow.mock.calls[0]?.[7];
+    expect(opts?.modelOverrideLayer).toEqual({
       kind: 'raw',
       overrides: { tiers: { large: 'openai/gpt-5.6' } },
     });
@@ -634,8 +705,8 @@ describe('dispatchBackgroundWorkflow', () => {
     await dispatchBackgroundWorkflow(makeRoutingCtx({ runConfig }), workflow);
     await flushBackgroundExecution();
 
-    const opts = mockExecuteWorkflow.mock.calls[0]?.[7] as { runConfig?: unknown };
-    expect(opts.runConfig).toEqual(runConfig);
+    const opts = mockExecuteWorkflow.mock.calls[0]?.[7];
+    expect(opts?.runConfig).toEqual(runConfig);
   });
 
   test('terminalizes a pre-created row when executor setup rejects the run config', async () => {
@@ -645,27 +716,27 @@ describe('dispatchBackgroundWorkflow', () => {
     await dispatchBackgroundWorkflow(makeRoutingCtx(), workflow);
     await flushBackgroundExecution();
 
-    expect(mockFailWorkflowRun).toHaveBeenCalledWith('run-1', 'invalid run config provider');
+    expect(mockFailWorkflowRun).toHaveBeenCalledWith('run-1', 'invalid run config provider', {
+      exitReason: 'unhandled_error',
+    });
   });
 
   test('default policy still resolves isolation for the worker', async () => {
     const workflow = makeWorkflow();
-    mockResolve.mockResolvedValueOnce({
-      status: 'resolved',
-      env: makeEnvRow({ working_path: '/worktrees/bg-1', branch_name: 'bg-1' }),
-      cwd: '/worktrees/bg-1',
-      method: { type: 'created' },
-    });
+    mockResolve.mockResolvedValueOnce(
+      resolvedIsolation(
+        { type: 'created' },
+        makeEnvRow({ working_path: '/worktrees/bg-1', branch_name: 'bg-1' })
+      )
+    );
 
     await dispatchBackgroundWorkflow(makeRoutingCtx(), workflow);
 
     // Without an explicit opt-out, the worker gets its own isolation environment.
     expect(mockResolve).toHaveBeenCalledTimes(1);
     expect(mockCreateWorkflowRun).toHaveBeenCalledTimes(1);
-    const runRow = mockCreateWorkflowRun.mock.calls[0]?.[0] as unknown as {
-      working_path: string;
-    };
-    expect(runRow.working_path).toBe('/worktrees/bg-1');
+    const runRow = mockCreateWorkflowRun.mock.calls[0]?.[0];
+    expect(runRow?.working_path).toBe('/worktrees/bg-1');
     expect(mockLogger.info).not.toHaveBeenCalledWith(
       expect.anything(),
       'workflow.worktree_disabled_by_policy'
@@ -674,47 +745,66 @@ describe('dispatchBackgroundWorkflow', () => {
     await flushBackgroundExecution();
   });
 
+  test('hands the executor the cut-from commit of a branch this dispatch created', async () => {
+    mockResolve.mockResolvedValueOnce(
+      resolvedIsolation(
+        { type: 'created', cutFromCommit: 'c'.repeat(40) },
+        makeEnvRow({ working_path: '/worktrees/bg-1', branch_name: 'bg-1' })
+      )
+    );
+
+    await dispatchBackgroundWorkflow(makeRoutingCtx(), makeWorkflow());
+    await flushBackgroundExecution();
+
+    expect(mockExecuteWorkflow.mock.calls[0]?.[7]?.cutFromCommit).toBe('c'.repeat(40));
+  });
+
+  test('a reused worktree carries no cut-from commit', async () => {
+    mockResolve.mockResolvedValueOnce(
+      resolvedIsolation(
+        { type: 'workflow_reuse' },
+        makeEnvRow({ working_path: '/worktrees/bg-1', branch_name: 'bg-1' })
+      )
+    );
+
+    await dispatchBackgroundWorkflow(makeRoutingCtx(), makeWorkflow());
+    await flushBackgroundExecution();
+
+    expect(mockExecuteWorkflow.mock.calls[0]?.[7]).not.toHaveProperty('cutFromCommit');
+  });
+
   test('missing-worktree adoption materializes the exact branch for a background run', async () => {
     mockResolveWorkflowSourceRoot.mockResolvedValue('/canonical/repo');
     const workflow = makeWorkflow();
-    mockResolve.mockResolvedValueOnce({
-      status: 'resolved',
-      env: makeEnvRow({
-        working_path: '/worktrees/feature-adopted',
-        branch_name: 'feature/adopted',
-      }),
-      cwd: '/worktrees/feature-adopted',
-      method: { type: 'created' },
-    });
+    mockResolve.mockResolvedValueOnce(
+      resolvedIsolation(
+        { type: 'created' },
+        makeEnvRow({
+          working_path: '/worktrees/feature-adopted',
+          branch_name: 'feature/adopted',
+        })
+      )
+    );
 
     await dispatchBackgroundWorkflow(
       makeRoutingCtx({
         adoptionLane: {
           kind: 'checkout-branch',
-          taskBranch: { kind: 'existing', branch: 'feature/adopted' },
+          taskBranch: { kind: 'existing', branch: toBranchName('feature/adopted') },
         },
       }),
       workflow
     );
 
-    const resolveRequest = mockResolve.mock.calls[0]?.[0] as {
-      hints?: {
-        workflowType?: string;
-        taskBranch?: { kind: string; branch?: string };
-      };
-    };
-    expect(resolveRequest.hints).toMatchObject({
+    const resolveRequest = mockResolve.mock.calls[0]?.[0];
+    expect(resolveRequest?.hints).toMatchObject({
       workflowType: 'task',
       taskBranch: { kind: 'existing', branch: 'feature/adopted' },
     });
-    const runRow = mockCreateWorkflowRun.mock.calls[0]?.[0] as unknown as {
-      working_path: string;
-    };
-    expect(runRow.working_path).toBe('/worktrees/feature-adopted');
-    const captureArgs = mockPrepareWorkflowSource.mock.calls.at(-1) as unknown[];
-    expect((captureArgs[1] as { sourceRoot: string }).sourceRoot).toBe(
-      '/worktrees/feature-adopted'
-    );
+    const runRow = mockCreateWorkflowRun.mock.calls[0]?.[0];
+    expect(runRow?.working_path).toBe('/worktrees/feature-adopted');
+    const captureArgs = mockPrepareWorkflowSource.mock.calls.at(-1);
+    expect(captureArgs?.[1].sourceRoot).toBe('/worktrees/feature-adopted');
     expect(mockResolveWorkflowSourceRoot).not.toHaveBeenCalledWith('/worktrees/feature-adopted');
 
     await flushBackgroundExecution();

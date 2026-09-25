@@ -36,7 +36,6 @@ const BASE_FIELD_KEY_RECORD: Record<WireBaseKey, true> = {
   skills: true,
   agents: true,
   effort: true,
-  thinking: true,
   maxBudgetUsd: true,
   systemPrompt: true,
   fallbackModel: true,

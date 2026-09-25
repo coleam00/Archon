@@ -147,12 +147,70 @@ function extractLastAssistantText(messages: readonly unknown[]): string | undefi
 }
 
 /**
- * Build the terminal `result` chunk from the final `agent_end` event. Pulls
- * usage/stopReason/error from the last assistant message in the returned
- * transcript. When the agent ended in error, surfaces it as `isError: true`.
+ * Sum usage over every model call of one prompt.
+ *
+ * Pi reports usage per assistant message, and each assistant message is one model
+ * call. Claude and Codex hand Archon the prompt-wide total instead, and the executor
+ * treats a result chunk's usage as the whole pass, so the sum happens here (#2800).
+ * Pi also calls the model mid-prompt without producing an assistant message, to
+ * keep the prompt cache warm or to compact the context. The bridge passes the usage
+ * of those calls in as `sideCalls` so the total still covers every billed call.
+ *
+ * Pi's `Usage` cannot say "not reported": a provider without streamed usage leaves
+ * every field 0. A completed call always consumes input, so an all-zero completed
+ * call means its usage is unknown, and the prompt's usage is then undefined rather
+ * than a sum that silently omits it (#2314). An errored or aborted call with zero
+ * usage was rejected before a response and adds nothing.
  */
-export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
-  const last = [...messages].reverse().find(isAssistantMessage);
+function sumPromptUsage(
+  assistants: readonly AssistantMessage[],
+  sideCalls: readonly Usage[]
+): TokenUsage | undefined {
+  const isZero = (u: Usage): boolean => u.input + u.output + u.cacheRead + u.cacheWrite === 0;
+  // Pi records a side call only once it completed, so the completed-call rule applies.
+  const unreported =
+    assistants.filter(
+      m => m.stopReason !== 'error' && m.stopReason !== 'aborted' && isZero(m.usage)
+    ).length + sideCalls.filter(isZero).length;
+  const calls = [...assistants.map(m => m.usage), ...sideCalls];
+  if (unreported > 0) {
+    getLog().warn(
+      { unreportedCalls: unreported, calls: calls.length },
+      'pi.event-bridge.usage_unreported'
+    );
+    return undefined;
+  }
+  const sum = (pick: (u: Usage) => number): number =>
+    calls.reduce((total, u) => total + pick(u), 0);
+  return usageToTokens({
+    input: sum(u => u.input),
+    output: sum(u => u.output),
+    cacheRead: sum(u => u.cacheRead),
+    cacheWrite: sum(u => u.cacheWrite),
+    totalTokens: sum(u => u.totalTokens),
+    cost: {
+      input: sum(u => u.cost.input),
+      output: sum(u => u.cost.output),
+      cacheRead: sum(u => u.cost.cacheRead),
+      cacheWrite: sum(u => u.cost.cacheWrite),
+      total: sum(u => u.cost.total),
+    },
+  });
+}
+
+/**
+ * Build the terminal `result` chunk from every message the prompt produced.
+ * Usage and cost are summed over all assistant messages plus `sideCalls`, the usage of
+ * model calls that added no message (see sumPromptUsage); stopReason, model and error
+ * come from the last assistant message. When the agent ended in error, surfaces it as
+ * `isError: true`.
+ */
+export function buildResultChunk(
+  messages: readonly unknown[],
+  sideCalls: readonly Usage[] = []
+): MessageChunk {
+  const assistants = messages.filter(isAssistantMessage);
+  const last = assistants.at(-1);
   if (!last) {
     // agent_end fired with no assistant message in the transcript. This
     // shouldn't happen in healthy Pi runs — surface it as a loud error
@@ -162,13 +220,13 @@ export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
     return { type: 'result', isError: true, errorSubtype: 'missing_assistant_message' };
   }
 
-  const tokens = usageToTokens(last.usage);
+  const tokens = sumPromptUsage(assistants, sideCalls);
   const isError = last.stopReason === 'error' || last.stopReason === 'aborted';
 
   const chunk: MessageChunk = {
     type: 'result',
-    tokens,
-    ...(tokens.cost !== undefined ? { cost: tokens.cost } : {}),
+    ...(tokens ? { tokens } : {}),
+    ...(tokens?.cost !== undefined ? { cost: tokens.cost } : {}),
     ...(last.stopReason ? { stopReason: last.stopReason } : {}),
     ...(typeof last.responseModel === 'string' && last.responseModel.length > 0
       ? { resolvedModel: { id: last.responseModel } }
@@ -209,10 +267,13 @@ export { tryParseStructuredOutput };
  * `tool_execution_start` / `tool_execution_end`; the start yields `tool` with
  * `toolCallId`, the end yields `tool_result` matched by the same id.
  *
+ * `agent_end` is not mapped here: its result chunk needs every message of the
+ * prompt, which only `bridgeSession` holds.
+ *
  * Events deliberately skipped in v1:
  *  - turn_start / turn_end, message_start / message_end (redundant with deltas)
  *  - text_start / text_end / thinking_start / thinking_end (boundaries only)
- *  - compaction_start / compaction_end (auto-compaction opaque to Archon)
+ *  - compaction_start / compaction_end (bridgeSession reads compaction_end only for its usage)
  *  - queue_update (single-prompt sessions only)
  *  - auto_retry_end (retry_start communicates the retry sufficiently)
  */
@@ -257,8 +318,6 @@ export function mapPiEvent(event: AgentSessionEvent): MessageChunk[] {
       });
       return chunks;
     }
-    case 'agent_end':
-      return [buildResultChunk(event.messages)];
     case 'auto_retry_start':
       return [
         {
@@ -338,14 +397,20 @@ export async function* bridgeSession(
   const wantsStructured = jsonSchema !== undefined;
   let assistantBuffer = '';
   // Track text streamed via text_delta for the current assistant turn.
-  // Reset at each turn_start so only the final turn's text is compared
-  // against finalAssembledText (see streaming-tail completion below).
+  // Reset at each turn_start so only a run's final turn is compared against
+  // the assembled text on its agent_end (see streaming-tail completion below).
   let currentTurnText = '';
-  // Assembled text of the final assistant message from agent_end.messages.
-  // Set synchronously inside the subscribe callback before the result chunk
-  // is pushed to the queue, so it is always ready when the yield loop
-  // processes the result.
-  let finalAssembledText: string | undefined;
+  // Every message this prompt produced. One prompt() can run Pi's agent loop more
+  // than once (auto-retry after a retryable error, compact-and-continue after a
+  // recoverable `length` stop or context overflow, queued follow-ups), and each run
+  // ends with its own agent_end carrying only that run's new messages. The single
+  // result chunk is emitted when prompt() resolves: the executor treats the first
+  // result as terminal and stops reading, so a result per agent_end would end the
+  // node on an intermediate run and drop the rest of its output and usage.
+  const promptMessages: unknown[] = [];
+  // Usage of model calls that add no message, such as Pi's cache-warming refreshes.
+  const promptSideCalls: Usage[] = [];
+  let sawAgentEnd = false;
 
   const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
     try {
@@ -354,8 +419,52 @@ export async function* bridgeSession(
         flushPendingAssistant();
         currentTurnText = '';
       }
+      // Billed model calls that add no assistant message. Pi announces each one exactly
+      // once: cache warming and hook-driven compaction as an appended entry (the SDK's
+      // `SessionEntry` type decides which entries carry `usage`), its own auto and
+      // manual compaction through `compaction_end`, whose entry is appended silently.
+      if (event.type === 'entry_appended') {
+        if ('usage' in event.entry && event.entry.usage) promptSideCalls.push(event.entry.usage);
+        return;
+      }
+      if (event.type === 'compaction_end' && event.result?.usage) {
+        promptSideCalls.push(event.result.usage);
+      }
       if (event.type === 'agent_end') {
-        finalAssembledText = extractLastAssistantText(event.messages);
+        // Streaming tail completion: Pi occasionally fails to flush the last
+        // characters of an assistant turn as text_delta events, leaving them
+        // present only in agent_end.messages. Detect the gap and emit the
+        // missing suffix as a corrective assistant chunk so the orchestrator's
+        // allMessages accumulator receives the full command text. Checked on
+        // every agent_end: each loop run's final turn can have its own gap.
+        // Condition: assembled text is strictly longer and starts with what was
+        // streamed (an extension, not a replacement); no assistant message in
+        // the transcript is treated as clean.
+        // The tail joins the buffered prefix so the executor sees one text block,
+        // not the prefix and the tail joined as two blocks.
+        const assembled = extractLastAssistantText(event.messages);
+        if (
+          assembled !== undefined &&
+          assembled.length > currentTurnText.length &&
+          assembled.startsWith(currentTurnText)
+        ) {
+          const tail = assembled.slice(currentTurnText.length);
+          pendingAssistant += tail;
+          if (wantsStructured) assistantBuffer += tail;
+          getLog().warn(
+            {
+              streamedLen: currentTurnText.length,
+              assembledLen: assembled.length,
+              tailLen: tail.length,
+            },
+            'pi.event-bridge.streaming_tail_completed'
+          );
+        }
+        flushPendingAssistant();
+        currentTurnText = '';
+        promptMessages.push(...event.messages);
+        sawAgentEnd = true;
+        return;
       }
       for (const chunk of mapPiEvent(event)) {
         if (chunk.type === 'assistant') {
@@ -400,6 +509,10 @@ export async function* bridgeSession(
 
   const promptPromise = session.prompt(prompt).then(
     () => {
+      if (sawAgentEnd) {
+        flushPendingAssistant();
+        queue.push({ kind: 'chunk', chunk: buildResultChunk(promptMessages, promptSideCalls) });
+      }
       queue.push({ kind: 'done' });
     },
     (err: unknown) => {
@@ -410,9 +523,8 @@ export async function* bridgeSession(
   try {
     for await (const item of queue) {
       if (item.kind === 'done') {
-        // Defensive: agent_end normally flushes buffered text via its result
-        // chunk before `done` arrives, but surface any stranded text rather
-        // than dropping it.
+        // Buffered text is flushed ahead of the result chunk when an agent_end
+        // was seen; a prompt that resolved without one can still strand text.
         if (pendingAssistant.length > 0) {
           yield { type: 'assistant', content: pendingAssistant };
           pendingAssistant = '';
@@ -434,33 +546,6 @@ export async function* bridgeSession(
       // it unconditionally and let the caller decide whether resume is
       // meaningful (capability-gated at the registry level).
       if (item.chunk.type === 'result') {
-        // Streaming tail completion: Pi occasionally fails to flush the last
-        // characters of an assistant turn as text_delta events, leaving them
-        // present only in agent_end.messages. Detect the gap and emit the
-        // missing suffix as a corrective assistant chunk so the orchestrator's
-        // allMessages accumulator receives the full command text.
-        // Condition: assembled text is strictly longer, starts with what was
-        // streamed (ensuring we emit an extension, not a replacement), and is
-        // not undefined (no assistant message in transcript — treated as clean).
-        if (
-          finalAssembledText !== undefined &&
-          finalAssembledText.length > currentTurnText.length &&
-          finalAssembledText.startsWith(currentTurnText)
-        ) {
-          const tail = finalAssembledText.slice(currentTurnText.length);
-          yield { type: 'assistant', content: tail };
-          if (wantsStructured) {
-            assistantBuffer += tail;
-          }
-          getLog().warn(
-            {
-              streamedLen: currentTurnText.length,
-              assembledLen: finalAssembledText.length,
-              tailLen: tail.length,
-            },
-            'pi.event-bridge.streaming_tail_completed'
-          );
-        }
         let terminal: MessageChunk = item.chunk;
         if (session.sessionId) {
           terminal = { ...terminal, sessionId: session.sessionId };

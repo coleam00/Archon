@@ -1,58 +1,47 @@
 ---
 name: Feature Request
-about: Suggest an idea for this project
+about: Propose an outcome for Archon
 title: ''
 labels: enhancement
 assignees: ''
 ---
 
+<!--
+Keep this focused on the product contract. Root cause and solution design belong
+to investigation and planning. Maintainers will check direction and delivery
+preconditions against the current repository before automation starts.
+
+Do not post secrets or undisclosed vulnerabilities. Follow SECURITY.md instead.
+-->
+
 ## Problem
 
-- What problem are you trying to solve?
-- Who experiences it? (which platform/workflow)
-- How often does it come up?
+<!-- What is wrong or missing today, and who or what is affected? -->
 
-## Proposed Solution
+## Why
 
-Describe the solution you'd like.
+<!-- Why is this worth solving? Include why now when timing is material. -->
 
-## User Flow
+## Desired outcome
 
-### Before (current)
+<!-- What should become observably true without prescribing the implementation? -->
 
-```
-(How does the user accomplish this today? Show the pain point with [!].)
-```
+## Acceptance
 
-### After (proposed)
+<!-- List concrete observations that would show the outcome was delivered. -->
 
-```
-(What does the ideal flow look like? Highlight new steps with [+] or asterisks.)
-```
+- [ ]
 
-## Alternatives Considered
+## Constraints and related work
 
-| Alternative | Pros | Cons | Why not chosen |
-|-------------|------|------|----------------|
-| | | | |
+<!-- Delete lines that do not add information. Mark solution ideas as hints or requirements. -->
 
-## Scope
+- Must remain true:
+- Scope boundary:
+- Known prerequisites or blockers:
+- Related issues or PRs:
+- Solution steering: Hint / Requirement —
 
-- Package(s) likely affected: `core|workflows|isolation|git|adapters|server|web|cli|paths`
-- Breaking change? (`Yes/No`)
-- Database changes needed? (`Yes/No`)
-- New external dependencies? (`Yes/No`)
+## Additional notes
 
-## Security Considerations
-
-- New permissions/capabilities? (`Yes/No`)
-- New external network calls? (`Yes/No`)
-- Secrets/tokens handling? (`Yes/No`)
-- If any `Yes`, describe:
-
-## Definition of Done
-
-- [ ] Acceptance criterion 1
-- [ ] Acceptance criterion 2
-- [ ] Tests covering the feature
-- [ ] Documentation updated (if user-facing)
+<!-- Add useful context that does not fit above. -->

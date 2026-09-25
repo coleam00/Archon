@@ -1,6 +1,7 @@
 import { useState, type ReactElement } from 'react';
 import { useNavigate } from 'react-router';
 import * as skill from '../skills';
+import { HttpError } from '../lib/http';
 import { invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import type { Run } from '../primitives/run';
@@ -11,10 +12,12 @@ interface RunActionBarProps {
 
 /**
  * Sticky bottom action bar. Contents are state-sensitive:
- *   running   → Cancel
+ *   running   → Cancel; Abandon too once cancel was refused (409: no live owner
+ *               answered, or it could not be stopped). Abandon is then how the
+ *               operator releases a run whose process is gone.
  *   paused    → (nothing — the in-stream ApprovalPanel is the action surface)
  *   failed    → Resume · Abandon
- *   completed → Re-run (placeholder for M5 — navigates to the scoped Runs page)
+ *   completed → Re-run when the run has a project
  *   cancelled → Re-run
  *
  * Demo runs short-circuit the backend calls.
@@ -23,6 +26,7 @@ export function RunActionBar({ run }: RunActionBarProps): ReactElement | null {
   const navigate = useNavigate();
   const [busy, setBusy] = useState<'cancel' | 'resume' | 'abandon' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [cancelRefused, setCancelRefused] = useState(false);
   const isDemo = run.id.startsWith('demo-');
 
   const canRerun =
@@ -50,7 +54,16 @@ export function RunActionBar({ run }: RunActionBarProps): ReactElement | null {
       invalidate('runs');
       invalidate(K.run(run.id));
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Action failed.');
+      if (action === 'cancel' && e instanceof HttpError && e.status === 409) {
+        setCancelRefused(true);
+      }
+      setError(
+        e instanceof HttpError && e.serverError !== undefined
+          ? e.serverError
+          : e instanceof Error
+            ? e.message
+            : 'Action failed.'
+      );
     } finally {
       setBusy(null);
     }
@@ -69,6 +82,18 @@ export function RunActionBar({ run }: RunActionBarProps): ReactElement | null {
             className="rounded-[9px] border border-error/40 px-[18px] py-2.5 text-[13px] font-semibold text-error transition-colors hover:bg-error/10 disabled:opacity-50"
           >
             {busy === 'cancel' ? 'Cancelling…' : 'Cancel'}
+          </button>
+        ) : null}
+
+        {run.status === 'running' && cancelRefused ? (
+          <button
+            type="button"
+            onClick={() => void call('abandon')}
+            disabled={busy !== null}
+            className="rounded-[9px] border bg-surface-elevated px-[18px] py-2.5 text-[13px] font-semibold text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
+            style={{ borderColor: 'var(--border-bright)' }}
+          >
+            {busy === 'abandon' ? 'Abandoning…' : 'Abandon'}
           </button>
         ) : null}
 
@@ -107,12 +132,12 @@ export function RunActionBar({ run }: RunActionBarProps): ReactElement | null {
           </button>
         ) : run.status === 'completed' || run.status === 'cancelled' ? (
           <span className="text-[12px] text-text-tertiary">
-            This run is {run.status}. Start a new one from the project page.
+            This run is {run.status}. Choose a project to start a new run.
           </span>
         ) : null}
 
         {error !== null ? (
-          <span className="ml-2 font-mono text-[11px] text-error">{error}</span>
+          <span className="ml-2 whitespace-pre-line font-mono text-[11px] text-error">{error}</span>
         ) : null}
       </div>
     </div>

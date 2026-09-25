@@ -139,7 +139,11 @@ export async function resolveWorkflowAdoption(
   }
 
   const environment = adoptedRun.working_path
-    ? await findEnvironmentByPath(args.codebaseId, adoptedRun.working_path, adoptedRun.started_at)
+    ? await findEnvironmentByPath(
+        args.codebaseId,
+        adoptedRun.working_path,
+        adoptedRun.completed_at ?? adoptedRun.started_at
+      )
     : null;
 
   // Lane 2: the adopted run's worktree still exists — inherit it as-is, dirty

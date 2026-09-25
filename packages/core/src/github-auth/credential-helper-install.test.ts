@@ -12,22 +12,19 @@
  * so no real `git` process runs and the registered helper path can be asserted
  * exactly.
  *
- * KNOWN UNCOVERED BRANCH — the `skipped` discriminant
- * (`reason: 'source-script-not-on-disk'`, the compiled-binary path where
- * `scripts/` does not ship). Reaching it requires `existsSync(sourceScriptPath())`
- * to be false, and `sourceScriptPath()` resolves from `import.meta.dir` with no
- * injection seam. The only ways in are (a) `mock.module('node:fs', …)`, which is
- * process-global and irreversible in Bun and would poison every other test in
- * this package's batch, or (b) adding a parameter to production code purely for
- * testability. Neither is worth it for a branch whose entire effect is which log
- * line the caller emits. Left deliberately uncovered rather than faked.
+ * The compiled-asset test builds and executes a standalone binary from the
+ * module that owns the helper text. The credential protocol test then proves a
+ * registered helper can provide a fresh token to a later Git operation.
  */
 import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
-import { mkdtemp, rm, readFile, writeFile, mkdir, stat } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, writeFile, mkdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as git from '@archon/git';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { installCredentialHelper } from './credential-helper-install';
+
+const trackTempRoot = trackTempRoots();
 
 describe('installCredentialHelper', () => {
   let archonHome: string;
@@ -36,7 +33,7 @@ describe('installCredentialHelper', () => {
 
   beforeEach(async () => {
     originalArchonHome = process.env.ARCHON_HOME;
-    archonHome = await mkdtemp(join(tmpdir(), 'archon-credhelper-'));
+    archonHome = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-credhelper-')));
     process.env.ARCHON_HOME = archonHome;
     execSpy = spyOn(git, 'execFileAsync').mockImplementation(async () => ({
       stdout: '',
@@ -51,7 +48,6 @@ describe('installCredentialHelper', () => {
     } else {
       process.env.ARCHON_HOME = originalArchonHome;
     }
-    await rm(archonHome, { recursive: true, force: true });
   });
 
   test('copies the helper into $ARCHON_HOME/bin and registers it on the worktree', async () => {
@@ -62,7 +58,7 @@ describe('installCredentialHelper', () => {
     if (result.kind !== 'installed') throw new Error('unreachable');
     expect(result.helperPath).toBe(helperPath);
 
-    // The copy really happened, and it is the real script (not an empty file).
+    // The bundled script was written rather than an empty placeholder.
     const contents = await readFile(helperPath, 'utf8');
     expect(contents).toContain('git-credential');
     expect(contents.length).toBeGreaterThan(0);
@@ -83,9 +79,7 @@ describe('installCredentialHelper', () => {
    * the platform dependency visible in the run output rather than hidden inside
    * an `if` in a longer test.
    *
-   * Pins the OUTCOME, not the mechanism: it holds both because copyFileSync
-   * preserves the source script's 0755 and because of the explicit chmodSync,
-   * so removing the chmod alone would not fail this.
+   * Pins the outcome of the explicit chmod after the bundled text is written.
    */
   test.skipIf(process.platform === 'win32')(
     'installed helper is executable (POSIX only)',
@@ -123,10 +117,79 @@ describe('installCredentialHelper', () => {
 
     const result = await installCredentialHelper('/tmp/not-a-repo');
 
-    // Callers treat this as non-fatal and log it; a throw here would abort the
-    // clone path for an optional convenience.
     expect(result.kind).toBe('failed');
     if (result.kind !== 'failed') throw new Error('unreachable');
     expect(result.error.message).toContain('not a git repository');
   });
+
+  test.skipIf(process.platform === 'win32')(
+    'loads from Docker source packaging and embeds in a compiled binary',
+    async () => {
+      execSpy.mockRestore();
+      const buildRoot = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-credhelper-compiled-')));
+      const entryPath = join(buildRoot, 'entry.ts');
+      const binaryPath = join(buildRoot, 'credential-helper-asset');
+      const packagedAuthDir = join(buildRoot, 'app', 'packages', 'core', 'src', 'github-auth');
+      await cp(import.meta.dir, packagedAuthDir, { recursive: true });
+      const modulePath = join(packagedAuthDir, 'credential-helper-script.ts');
+      await writeFile(
+        entryPath,
+        `import { credentialHelperScript } from ${JSON.stringify(modulePath)};\nprocess.stdout.write(credentialHelperScript);\n`
+      );
+
+      await git.execFileAsync('bun', ['build', '--compile', '--outfile', binaryPath, entryPath], {
+        timeout: 30_000,
+      });
+      const { stdout } = await git.execFileAsync(binaryPath, [], { timeout: 5_000 });
+
+      expect(stdout).toContain('Git credential helper for the Archon GitHub App');
+      expect(stdout).toContain('/internal/git-credential');
+    }
+  );
+
+  test.skipIf(process.platform === 'win32')(
+    'registered helper supplies a refreshed token to a later Git credential operation',
+    async () => {
+      execSpy.mockRestore();
+      const repoPath = join(archonHome, 'repo');
+      const fakeBin = join(archonHome, 'fake-bin');
+      await mkdir(fakeBin, { recursive: true });
+      await writeFile(
+        join(fakeBin, 'curl'),
+        '#!/bin/sh\nprintf \'%s\\n\' \'{"token":"fresh-installation-token"}\'\n',
+        { mode: 0o755 }
+      );
+      await git.execFileAsync('git', ['init', repoPath], { timeout: 5_000 });
+
+      const result = await installCredentialHelper(repoPath);
+      expect(result.kind).toBe('installed');
+
+      const child = Bun.spawn(
+        ['git', '-C', repoPath, '-c', 'credential.useHttpPath=true', 'credential', 'fill'],
+        {
+          env: {
+            ...process.env,
+            PATH: `${fakeBin}:${process.env.PATH ?? ''}`,
+            GIT_CONFIG_GLOBAL: '/dev/null',
+            GIT_CONFIG_SYSTEM: '/dev/null',
+            GIT_TERMINAL_PROMPT: '0',
+          },
+          stdin: 'pipe',
+          stdout: 'pipe',
+          stderr: 'pipe',
+        }
+      );
+      child.stdin.write('protocol=https\nhost=github.com\npath=owner/repo.git\n\n');
+      child.stdin.end();
+      const [exitCode, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+
+      expect(exitCode, stderr).toBe(0);
+      expect(stdout).toContain('username=x-access-token');
+      expect(stdout).toContain('password=fresh-installation-token');
+    }
+  );
 });

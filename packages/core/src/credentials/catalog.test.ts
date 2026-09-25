@@ -64,7 +64,7 @@ describe('credentials/catalog', () => {
         id: 'broken-test-agent',
         displayName: 'Broken Test Agent',
         builtIn: false,
-        parseRunConfig: raw => raw,
+        parseConfig: raw => raw,
         capabilities: {} as never,
         factory: () => ({}) as never,
         credentials: {

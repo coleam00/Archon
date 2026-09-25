@@ -231,6 +231,38 @@ describe('validateStructural', () => {
     ]);
   });
 
+  test('attention waits require one non-blank message and no other condition', () => {
+    expect(
+      validateStructural(
+        wf([
+          {
+            id: 'recover',
+            variant: 'wait',
+            base: {},
+            data: { attention: 'Rerun CI, then resume.' },
+          },
+        ])
+      )
+    ).toEqual([]);
+
+    const blank = validateStructural(
+      wf([{ id: 'blank', variant: 'wait', base: {}, data: { attention: '   ' } }])
+    );
+    expect(blank.map(issue => issue.path.field)).toContain('wait.attention');
+
+    const mixed = validateStructural(
+      wf([
+        {
+          id: 'mixed',
+          variant: 'wait',
+          base: {},
+          data: { attention: 'Resume me', duration_ms: 1000 },
+        },
+      ])
+    );
+    expect(mixed.map(issue => issue.path.field)).toContain('wait');
+  });
+
   test('cancel missing reason is flagged', () => {
     const issues = validateStructural(
       wf([{ id: 'c', variant: 'cancel', base: {}, data: { reason: '' } }])

@@ -6,11 +6,12 @@ import type { Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { runStatusLabel, statusTextClass } from '../lib/run-status';
+import { RunOutcomeBadge } from './RunOutcomeBadge';
 
 interface RunDetailHeaderProps {
   run: Run;
   projectName: string;
-  projectId: string;
+  projectId: string | undefined;
 }
 
 function useLiveElapsed(run: Run): string {
@@ -58,7 +59,7 @@ export function RunDetailHeader({
       {/* Breadcrumb */}
       <div className="flex items-center gap-2 font-mono text-[12px]">
         <Link
-          to={`/console/p/${projectId}`}
+          to={projectId === undefined ? '/console' : `/console/p/${projectId}`}
           className="text-text-tertiary transition-colors hover:text-text-primary"
         >
           {projectName}
@@ -105,6 +106,8 @@ export function RunDetailHeader({
           {runStatusLabel(run)}
         </span>
       </div>
+
+      <RunOutcomeBadge outcome={run.outcome} />
 
       {/* Workflow name */}
       <span className="text-sm font-medium text-text-primary">{run.workflow}</span>

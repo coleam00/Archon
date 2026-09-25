@@ -2,6 +2,12 @@
  * Zod schemas for provider API endpoints.
  */
 import { z } from '@hono/zod-openapi';
+import { EFFORT_LADDER } from '@archon/paths/effort';
+import type { ProviderCapabilities } from '@archon/providers';
+
+type ProviderCapabilityShape = {
+  [K in keyof ProviderCapabilities]-?: z.ZodType<ProviderCapabilities[K]>;
+};
 
 /** Provider capability flags. */
 const providerCapabilitiesSchema = z
@@ -11,16 +17,26 @@ const providerCapabilitiesSchema = z
     mcp: z.boolean(),
     hooks: z.boolean(),
     skills: z.boolean(),
+    agents: z.boolean(),
     toolRestrictions: z.boolean(),
-    // Mirrors ProviderCapabilities.structuredOutput: 'enforced' | 'best-effort' | false.
+    knownToolNames: z.array(z.string()).optional(),
+    renamedTools: z.record(z.string(), z.string()).optional(),
     structuredOutput: z.union([z.literal('enforced'), z.literal('best-effort'), z.literal(false)]),
+    requiresAllPropertiesRequired: z.boolean(),
     envInjection: z.boolean(),
     costControl: z.boolean(),
+    costReporting: z.boolean(),
+    tokenReporting: z.boolean().optional(),
+    stopReasonReporting: z.boolean().optional(),
+    turnCountReporting: z.boolean().optional(),
+    resolvedModelReporting: z.boolean().optional(),
     effortControl: z.boolean(),
-    thinkingControl: z.boolean(),
     fallbackModel: z.boolean(),
     sandbox: z.boolean(),
-  })
+    settingSources: z.boolean(),
+    nativeTools: z.boolean(),
+    containerExec: z.boolean(),
+  } satisfies ProviderCapabilityShape)
   .openapi('ProviderCapabilities');
 
 /** A single provider info entry (API-safe projection of ProviderRegistration). */
@@ -30,6 +46,7 @@ export const providerInfoSchema = z
     displayName: z.string(),
     capabilities: providerCapabilitiesSchema,
     builtIn: z.boolean(),
+    effortLevels: z.array(z.enum(EFFORT_LADDER)).optional(),
   })
   .openapi('ProviderInfo');
 

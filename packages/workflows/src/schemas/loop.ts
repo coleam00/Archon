@@ -41,8 +41,8 @@ const isNonBlank = (value: string): boolean => value.trim().length > 0;
  * so a blank field beside a valid sibling would slip through. A blank channel is
  * broken at runtime rather than merely untidy — `bash -c "   "` exits 0, so a blank
  * `until_bash` completes on iteration 1, and a blank `until` reaches
- * `detectCompletionSignal`, whose own-line and end-of-output patterns then match a
- * whitespace-only markdown line or any output ending in a space.
+ * `detectCompletionSignal`, whose final-standalone-line pattern then matches a
+ * whitespace-only final line.
  *
  * Adding a channel means adding it to BOTH rules here, and to TWO hand-maintained
  * files in the console builder — @archon/web cannot import this package, so they

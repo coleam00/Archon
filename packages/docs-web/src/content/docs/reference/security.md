@@ -68,15 +68,15 @@ Archon uses structured logging (Pino) with explicit rules about what is and is n
 - Unauthorized access attempts (with masked user IDs, e.g., `abc***`)
 
 **Log levels:**
-- Default: `info` (operational events only)
-- Set `LOG_LEVEL=debug` for detailed execution traces
-- CLI: `--quiet` (errors only) or `--verbose` (debug)
+- Server and `archon serve`: `info` (operational events only)
+- Other CLI commands: `warn` (warnings and errors), on stderr
+- Set `LOG_LEVEL=debug` or pass `--verbose` for detailed execution traces
 
 ## Anonymous Telemetry
 
-Separate from local logging, Archon sends a small set of **anonymous** usage events to PostHog (`archon_started`, `archon_active` daily server heartbeat, `chat_turn_handled` — platform, provider, model, duration, and usage totals; never message content, `workflow_invoked`, `workflow_completed`/`workflow_failed`, `workflow_approval_resolved` — binary approve/reject only, `codebase_registered` — a pure count, no name/path/URL) so maintainers can see active installs, which workflows run, and run outcomes. Events are keyed by a random install UUID — never user identity.
+Separate from local logging, Archon sends a small set of **anonymous** usage events to PostHog (`archon_started`, `archon_active` daily server heartbeat, `chat_turn_handled` — platform, provider, model, duration, and usage totals; never message content, `workflow_invoked`, `workflow_completed`/`workflow_failed`/`workflow_cancelled`, `workflow_approval_resolved` — binary approve/reject only, `codebase_registered` — a pure count, no name/path/URL) so maintainers can see active installs, which workflows run, and run outcomes. Events are keyed by a random install UUID — never user identity.
 
-Only categorical data is sent: bundled workflow name (user-authored workflows report `"custom"`), platform, provider/model id, node shape and feature-adoption flags, run outcome/duration, aggregate usage totals (token counts, cost USD, loop iterations — numbers only), a fixed-enum failure class (`fatal`/`transient`/`unknown` — derived locally, never the error text itself), deployment shape (which adapters/db/auth modes are enabled — booleans and enums, never configuration values), and machine context (OS, arch, version, runtime). **Never sent:** code, prompts, chat message content, conversation ids, file paths, IP (dropped at ingest), geolocation, error text, or custom workflow names. See the [Telemetry table in the configuration reference](/reference/configuration/) for the full field list and opt-out options (`DO_NOT_TRACK=1`, `ARCHON_TELEMETRY_DISABLED=1`, CI auto-disable, or `POSTHOG_API_KEY=off`).
+Only categorical data is sent: bundled workflow name (user-authored workflows report `"custom"`), platform, provider/model id, node shape (counts per node type, graph depth, fan-out, command-reference count, a prompt-size bucket) and feature-adoption flags, the name of the bundled workflow a custom workflow was copied from (never the copy's own name), run outcome/duration, aggregate usage totals (token counts, cost USD, loop iterations — numbers only), a fixed-enum failure class recorded where a node failed (never the error text itself), a `run_ref` hash of the install and run ids (never the run id), deployment shape (which adapters/db/auth modes are enabled — booleans and enums, never configuration values), and machine context (OS, arch, version, runtime, install channel, build commit). **Never sent:** code, prompts, chat message content, conversation ids, file paths, IP (dropped at ingest), geolocation, error text, or custom workflow names. See the [Telemetry table in the configuration reference](/reference/configuration/) for the full field list and opt-out options (`DO_NOT_TRACK=1`, `ARCHON_TELEMETRY_DISABLED=1`, CI auto-disable, or `POSTHOG_API_KEY=off`).
 
 ## Adapter Authorization
 
@@ -128,7 +128,7 @@ The GitHub and Gitea adapters verify webhook signatures to ensure payloads origi
 
 **Subprocess env isolation:**
 - At startup, `stripCwdEnv()` removes **all** keys that Bun auto-loaded from the CWD `.env` files (`.env`, `.env.local`, `.env.development`, `.env.production`), plus nested Claude Code session markers (`CLAUDECODE`, `CLAUDE_CODE_*` except auth vars) and debugger vars (`NODE_OPTIONS`, `VSCODE_INSPECTOR_OPTIONS`). This runs before any module reads `process.env`.
-- Then `loadArchonEnv(cwd)` loads archon-owned env from `~/.archon/.env` (user scope) and `<cwd>/.archon/.env` (repo scope, wins over user) with `override: true`. Both are trusted sources — the user controls them and all keys are intentional.
+- Then `loadArchonEnv(cwd)` loads archon-owned env from `~/.archon/.env` (user scope) and `<cwd>/.archon/.env` (repo scope, wins over user) with `override: true`. Both are trusted sources — the user controls them and all keys are intentional. The repo scope still cannot set `ARCHON_HOME`, `HOME`, `USERPROFILE`, `ARCHON_DOCKER`, `WORKSPACE_PATH` or `PATH`; Archon refuses to start if it does, so a repository cannot choose which Archon home or plugin executables are used.
 - Per-codebase env vars configured via `codebase_env_vars` or `.archon/config.yaml` `env:` are merged on top at workflow execution time.
 - `<cwd>/.env` is the **only** untrusted source. It belongs to the target project, not to Archon. Directory ownership (`.archon/`) is the security boundary — not the filename.
 
@@ -149,7 +149,7 @@ Archon's own env sources (`~/.archon/.env`, dev `.env`) are loaded after the CWD
 
 **If you need env vars available during workflow execution**, use managed env injection:
 - `.archon/config.yaml` `env:` section (per-repo, checked into version control)
-- Web UI: Settings → Projects → Env Vars (per-codebase, stored in Archon DB)
+- Web UI: open **Environment variables** from the project row in the console project rail (per-codebase, stored in Archon DB)
 
 **CORS:**
 - API routes use `WEB_UI_ORIGIN` to restrict CORS. The default is `*` (allow all), which is appropriate for local single-developer use. Set a specific origin when exposing the server publicly.

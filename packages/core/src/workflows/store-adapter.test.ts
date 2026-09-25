@@ -1,5 +1,7 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
-import type { IWorkflowStore } from '@archon/workflows/store';
+import type { DagResumeSnapshot, IWorkflowStore } from '@archon/workflows/store';
+import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
+import type { ResolvedCredential } from '../credentials/delivery';
 
 // Mock DB modules before importing store-adapter
 const mockCreateWorkflowRun = mock(() => Promise.resolve({ id: 'run-1' }));
@@ -12,13 +14,16 @@ const mockResumeWorkflowRun = mock(() => Promise.resolve({ id: 'run-1' }));
 const mockRecoverCancelledFanOutRun = mock(() => Promise.resolve({ id: 'run-1' }));
 const mockUpdateWorkflowRun = mock(() => Promise.resolve());
 const mockUpdateWorkflowActivity = mock(() => Promise.resolve());
-const mockGetWorkflowRunStatus = mock(() => Promise.resolve('running'));
+const mockGetWorkflowRunStatus = mock<(_id: string) => Promise<WorkflowRunStatus | null>>(() =>
+  Promise.resolve('running')
+);
 const mockCompleteWorkflowRun = mock(() => Promise.resolve());
 const mockFailWorkflowRun = mock(() => Promise.resolve());
 const mockCancelWorkflowRun = mock(() => Promise.resolve());
 const mockCancelFanOutRun = mock(() => Promise.resolve());
 const mockPauseWorkflowRun = mock(() => Promise.resolve());
 const mockPauseWorkflowRunForWait = mock(() => Promise.resolve());
+const mockFailPausedAttentionWait = mock(() => Promise.resolve({ failed: true }));
 const mockClearWorkflowWaitContext = mock(() => Promise.resolve({ cleared: true }));
 // Backs createWorkflowStore()'s rewriteApprovalContext (#2707 step 3 pause
 // escalation) — per AGENTS.md's mock.module rule, an export the factory omits
@@ -44,6 +49,7 @@ mock.module('../db/workflows', () => ({
   cancelFanOutRun: mockCancelFanOutRun,
   pauseWorkflowRun: mockPauseWorkflowRun,
   pauseWorkflowRunForWait: mockPauseWorkflowRunForWait,
+  failPausedAttentionWait: mockFailPausedAttentionWait,
   clearWorkflowWaitContext: mockClearWorkflowWaitContext,
   resolveApprovalGate: mockResolveApprovalGate,
   claimWriteback: mock(() => Promise.resolve({ claimed: true })),
@@ -53,10 +59,13 @@ mock.module('../db/workflows', () => ({
 const mockCreateWorkflowEvent = mock(() => Promise.resolve());
 const mockPersistWorkflowEvent = mock(() => Promise.resolve());
 const mockPersistWorkflowEventIfRunning = mock(() => Promise.resolve({ persisted: true }));
-const mockGetDagResumeSnapshot = mock(() =>
+const mockGetDagResumeSnapshot = mock<(_id: string) => Promise<DagResumeSnapshot>>(() =>
   Promise.resolve({
-    completedNodeOutputs: new Map<string, string>(),
+    completedNodeOutputs: new Map(),
+    fanOutSnapshots: new Map(),
+    unresolvedNodeStarts: new Set(),
     tokens: { input: 0, output: 0 },
+    costUsd: 0,
   })
 );
 mock.module('../db/workflow-events', () => ({
@@ -66,7 +75,8 @@ mock.module('../db/workflow-events', () => ({
   getDagResumeSnapshot: mockGetDagResumeSnapshot,
 }));
 
-const mockGetCodebase = mock(() => Promise.resolve(null));
+type StoredCodebase = Awaited<ReturnType<IWorkflowStore['getCodebase']>>;
+const mockGetCodebase = mock<(_id: string) => Promise<StoredCodebase>>(() => Promise.resolve(null));
 mock.module('../db/codebases', () => ({
   getCodebase: mockGetCodebase,
 }));
@@ -75,8 +85,8 @@ mock.module('@archon/providers', () => ({
   getAgentProvider: mock(() => ({})),
   getRegisteredProviders: mock(() => []),
   getRegistration: mock(
-    (): { parseRunConfig: (raw: Record<string, unknown>) => Record<string, unknown> } => ({
-      parseRunConfig: (raw: Record<string, unknown>): Record<string, unknown> => raw,
+    (): { parseConfig: (raw: Record<string, unknown>) => Record<string, unknown> } => ({
+      parseConfig: (raw: Record<string, unknown>): Record<string, unknown> => raw,
     })
   ),
   parseProviderRunModel: mock((_provider: string, model: string): string => model),
@@ -113,7 +123,9 @@ mock.module('../credentials/config', () => ({
   isPerUserProviderKeysEnabled: mockIsPerUserProviderKeysEnabled,
 }));
 
-const mockListDecryptedUserProviderCredentials = mock(async () => []);
+const mockListDecryptedUserProviderCredentials = mock<
+  (_userId: string) => Promise<{ provider: string; cred: ResolvedCredential }[]>
+>(async () => []);
 mock.module('../db/user-provider-key-store', () => ({
   listDecryptedUserProviderCredentials: mockListDecryptedUserProviderCredentials,
   saveUserProviderKey: mock(() => Promise.resolve()),
@@ -170,6 +182,7 @@ describe('createWorkflowStore', () => {
       'failWorkflowRun',
       'pauseWorkflowRun',
       'pauseWorkflowRunForWait',
+      'failPausedAttentionWait',
       'clearWorkflowWaitContext',
       'rewriteApprovalContext',
       'claimWriteback',
@@ -215,7 +228,7 @@ describe('createWorkflowStore', () => {
     await expect(
       store.createWorkflowEvent({
         workflow_run_id: 'run-1',
-        event_type: 'step_started',
+        event_type: 'loop_iteration_started',
         step_index: 0,
         step_name: 'test-step',
       })
@@ -223,9 +236,12 @@ describe('createWorkflowStore', () => {
   });
 
   test('delegates getDagResumeSnapshot to DB', async () => {
-    const expected = {
-      completedNodeOutputs: new Map([['step1', 'output text']]),
+    const expected: DagResumeSnapshot = {
+      completedNodeOutputs: new Map([['step1', { output: 'output text' }]]),
+      fanOutSnapshots: new Map(),
+      unresolvedNodeStarts: new Set(),
       tokens: { input: 40, output: 4 },
+      costUsd: 0,
     };
     mockGetDagResumeSnapshot.mockResolvedValueOnce(expected);
     const store = createWorkflowStore();
@@ -284,6 +300,7 @@ describe('createWorkflowStore', () => {
       name: 'owner/repo',
       repository_url: 'https://github.com/owner/repo',
       default_cwd: '/workspace/repo',
+      kind: 'repo',
     });
     const store = createWorkflowStore();
     const result = await store.getCodebase('cb-1');
@@ -292,6 +309,7 @@ describe('createWorkflowStore', () => {
       name: 'owner/repo',
       repository_url: 'https://github.com/owner/repo',
       default_cwd: '/workspace/repo',
+      kind: 'repo',
     });
   });
 });

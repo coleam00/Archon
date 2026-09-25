@@ -4,7 +4,7 @@
  * Note: These tests mock at the module level since the module uses promisify
  * at load time, making it difficult to mock child_process.execFile directly.
  */
-import { describe, test, expect, mock, beforeEach, spyOn } from 'bun:test';
+import { describe, test, expect, mock, beforeEach } from 'bun:test';
 
 // We need to mock the entire module to avoid the promisify issue
 const mockGetLinkedIssueNumbers = mock(() => Promise.resolve([] as number[]));

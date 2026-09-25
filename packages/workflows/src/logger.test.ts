@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
-import { mkdir, rm, readFile, chmod } from 'fs/promises';
+import { describe, it, expect, beforeEach, afterEach, mock, jest } from 'bun:test';
+import { mkdir, rm, readFile, readdir, chmod } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -30,7 +30,8 @@ import {
   logWorkflowError,
   logWorkflowComplete,
   logNodeComplete,
-  logNodeError,
+  createWatchdogResetRecorder,
+  WATCHDOG_RESET_BURST_GAP_MS,
   type WorkflowEvent,
 } from './logger';
 
@@ -117,6 +118,87 @@ describe('Workflow Logger', () => {
     });
   });
 
+  describe('createWatchdogResetRecorder', () => {
+    const t0 = Date.parse('2026-08-31T20:31:53.123Z');
+    const iso = (ms: number): string => new Date(ms).toISOString();
+
+    it('records each burst by its ends and keeps every renewal counted', async () => {
+      const recorder = createWatchdogResetRecorder(testDir, 'watchdog-burst', 'review');
+      // 500 thinking renewals 5ms apart, then a tool chunk still inside the burst.
+      for (let i = 0; i < 500; i++) recorder.observe('thinking', t0 + i * 5);
+      recorder.observe('tool', t0 + 2_600);
+      // A quiet gap exactly at the threshold starts a new burst of one renewal.
+      const quietEnd = t0 + 2_600 + WATCHDOG_RESET_BURST_GAP_MS;
+      recorder.observe('assistant', quietEnd);
+      await recorder.flush();
+
+      const events = await readLogFile('watchdog-burst');
+      expect(
+        events.map(e => ({
+          step: e.step,
+          chunk_type: e.chunk_type,
+          chunk_count: e.chunk_count,
+          ts: e.ts,
+        }))
+      ).toEqual([
+        { step: 'review', chunk_type: 'thinking', chunk_count: 1, ts: iso(t0) },
+        { step: 'review', chunk_type: 'tool', chunk_count: 500, ts: iso(t0 + 2_600) },
+        { step: 'review', chunk_type: 'assistant', chunk_count: 1, ts: iso(quietEnd) },
+      ]);
+      expect(events.every(e => e.type === 'watchdog_reset' && e.content === undefined)).toBe(true);
+    });
+
+    it('a gap just under the threshold stays inside the burst', async () => {
+      const recorder = createWatchdogResetRecorder(testDir, 'watchdog-under', 'review');
+      recorder.observe('thinking', t0);
+      recorder.observe('thinking', t0 + WATCHDOG_RESET_BURST_GAP_MS - 1);
+      await recorder.flush();
+
+      const events = await readLogFile('watchdog-under');
+      expect(events.map(e => [e.chunk_count, e.ts])).toEqual([
+        [1, iso(t0)],
+        [1, iso(t0 + WATCHDOG_RESET_BURST_GAP_MS - 1)],
+      ]);
+    });
+
+    it('writes the burst end once the stream goes quiet, without waiting for flush', async () => {
+      // A killed process never reaches flush; the quiet gap alone must persist the burst end.
+      // Queued writes settle through file I/O, which fake timers leave alone: poll the file
+      // until it holds `count` records (bounded), then give a stray extra write time to land.
+      const readAfterWrites = async (count: number): Promise<WorkflowEvent[]> => {
+        const path = join(testDir, 'watchdog-quiet.jsonl');
+        for (let i = 0; i < 1_000; i++) {
+          const lines = await readFile(path, 'utf-8').catch(() => '');
+          if (lines.trim().split('\n').filter(Boolean).length >= count) break;
+        }
+        for (let i = 0; i < 20; i++) await readdir(testDir);
+        return readLogFile('watchdog-quiet');
+      };
+      jest.useFakeTimers();
+      try {
+        const recorder = createWatchdogResetRecorder(testDir, 'watchdog-quiet', 'review');
+        recorder.observe('thinking', t0);
+        recorder.observe('thinking', t0 + 5);
+        recorder.observe('tool', t0 + 10);
+
+        jest.advanceTimersByTime(WATCHDOG_RESET_BURST_GAP_MS - 1);
+        expect((await readAfterWrites(1)).map(e => e.chunk_count)).toEqual([1]);
+
+        jest.advanceTimersByTime(1);
+        expect((await readAfterWrites(2)).map(e => [e.chunk_type, e.chunk_count, e.ts])).toEqual([
+          ['thinking', 1, iso(t0)],
+          ['tool', 2, iso(t0 + 10)],
+        ]);
+
+        // Flush after the timer wrote the burst end adds nothing.
+        await recorder.flush();
+        expect(await readLogFile('watchdog-quiet')).toHaveLength(2);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+  });
+
   describe('logWorkflowStart', () => {
     it('should log workflow start with name and user message', async () => {
       await logWorkflowStart(testDir, 'start-test', 'my-workflow', 'User wants to build feature X');
@@ -169,46 +251,6 @@ describe('Workflow Logger', () => {
       const [absent] = await readLogFile('no-cost');
       expect(zero.cost_usd).toBe(0);
       expect('cost_usd' in absent).toBe(false);
-    });
-  });
-
-  describe('logNodeError', () => {
-    it('records what the node spent before it failed', async () => {
-      await logNodeError(testDir, 'fail-cost', 'step1', 'provider stream died', {
-        tokens: { input: 120, output: 10, cacheRead: 80, cacheWrite: 0 },
-        cost_usd: 0.02,
-      });
-
-      const [event] = await readLogFile('fail-cost');
-      expect(event.type).toBe('node_error');
-      expect(event.error).toBe('provider stream died');
-      expect(event.cost_usd).toBe(0.02);
-      expect(event.tokens).toEqual({ input: 120, output: 10, cacheRead: 80, cacheWrite: 0 });
-    });
-
-    it('keeps a reported zero cost distinct from an unreported one', async () => {
-      // Same distinction the completion row protects: Codex reports no cost at all
-      // (#2334), so an absent key must not be readable as "spent nothing".
-      await logNodeError(testDir, 'fail-zero', 'step1', 'boom', { cost_usd: 0 });
-      await logNodeError(testDir, 'fail-unreported', 'step1', 'boom', {
-        tokens: { input: 5, output: 1 },
-      });
-
-      const [zero] = await readLogFile('fail-zero');
-      const [absent] = await readLogFile('fail-unreported');
-      expect(zero.cost_usd).toBe(0);
-      expect('cost_usd' in absent).toBe(false);
-    });
-
-    it('writes no usage keys for a failure that could not have spent anything', async () => {
-      // A missing command file, a substitution error, a bash exit code: these fail
-      // before any provider call, and their callers pass nothing.
-      await logNodeError(testDir, 'fail-bare', 'step1', 'command file not found');
-
-      const [event] = await readLogFile('fail-bare');
-      expect(event.error).toBe('command file not found');
-      expect('cost_usd' in event).toBe(false);
-      expect('tokens' in event).toBe(false);
     });
   });
 
@@ -265,6 +307,25 @@ Line 3`;
       expect(events).toHaveLength(1);
       expect(events[0].type).toBe('workflow_error');
       expect(events[0].error).toBe('Step prompt not found: missing-step.md');
+    });
+
+    it('records aggregate run usage when supplied', async () => {
+      await logWorkflowError(testDir, 'error-usage', 'Node failed', {
+        cost_usd: 0.08,
+        tokens: { input: 1200, output: 80, cacheRead: 900, cacheWrite: 0 },
+      });
+
+      const [event] = await readLogFile('error-usage');
+      expect(event.cost_usd).toBe(0.08);
+      expect(event.tokens).toEqual({ input: 1200, output: 80, cacheRead: 900, cacheWrite: 0 });
+    });
+
+    it('omits aggregate usage axes when they were not reported', async () => {
+      await logWorkflowError(testDir, 'error-no-usage', 'Node failed');
+
+      const [event] = await readLogFile('error-no-usage');
+      expect('cost_usd' in event).toBe(false);
+      expect('tokens' in event).toBe(false);
     });
   });
 

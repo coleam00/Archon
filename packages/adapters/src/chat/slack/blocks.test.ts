@@ -1,3 +1,5 @@
+import { describe, expect, test } from 'bun:test';
+
 import {
   buildApprovalBlocks,
   buildApprovalResolutionBlocks,
@@ -129,6 +131,7 @@ describe('buildStatusBlocks', () => {
       runId: 'a1b2c3d4-zzzz',
       workflowName: 'assist',
       startedAt,
+      status: 'running',
       nodes: [],
       ...overrides,
     };
@@ -179,7 +182,7 @@ describe('buildStatusBlocks', () => {
   test('terminal completed snapshot drops Cancel button and shows total cost', () => {
     const { blocks } = buildStatusBlocks(
       snapshot({
-        terminal: 'completed',
+        status: 'completed',
         totalCostUsd: 0.123,
       }),
       startedAt + 1000
@@ -193,10 +196,60 @@ describe('buildStatusBlocks', () => {
     expect(ctx.elements[0]?.text).toContain('total cost: $0.1230');
   });
 
+  test('terminal snapshot labels execution and contradictory authored outcome separately', () => {
+    const { blocks, fallbackText } = buildStatusBlocks(
+      snapshot({
+        status: 'completed',
+        authoredOutcome: 'failed',
+      }),
+      startedAt + 1000
+    );
+    const header = (blocks[0] as { text: { text: string } }).text.text;
+    expect(header).toContain('*Execution status:* `completed`');
+    expect(header).toContain('*Authored outcome:* `failed`');
+    expect(fallbackText).toContain('authored outcome: failed');
+  });
+
+  test('paused snapshot labels execution and authored outcome separately', () => {
+    const { blocks, fallbackText } = buildStatusBlocks(
+      snapshot({
+        status: 'paused',
+        authoredOutcome: 'succeeded',
+      }),
+      startedAt + 1000
+    );
+    const header = (blocks[0] as { text: { text: string } }).text.text;
+    expect(header).toContain('Workflow paused');
+    expect(header).toContain('*Execution status:* `paused`');
+    expect(header).toContain('*Authored outcome:* `succeeded`');
+    expect(fallbackText).toContain('authored outcome: succeeded');
+  });
+
+  test('distinguishes an unavailable authored outcome from an undeclared outcome', () => {
+    const { blocks, fallbackText } = buildStatusBlocks(
+      snapshot({
+        status: 'completed',
+        authoredOutcome: 'unavailable',
+      }),
+      startedAt + 1000
+    );
+    const header = (blocks[0] as { text: { text: string } }).text.text;
+    expect(header).toContain('*Authored outcome:* unavailable — failed to read persisted run');
+    expect(fallbackText).toContain('authored outcome: unavailable — failed to read persisted run');
+  });
+
+  test('terminal snapshot keeps the existing presentation when outcome is null', () => {
+    const withoutOutcome = buildStatusBlocks(snapshot({ status: 'completed' }), startedAt + 1000);
+    expect(withoutOutcome.fallbackText).toBe(':white_check_mark: Workflow completed (assist)');
+    expect((withoutOutcome.blocks[0] as { text: { text: string } }).text.text).not.toContain(
+      'Authored outcome'
+    );
+  });
+
   test('terminal failed snapshot shows reason', () => {
     const { blocks } = buildStatusBlocks(
       snapshot({
-        terminal: 'failed',
+        status: 'failed',
         failureReason: 'Type error in plan node',
       }),
       startedAt + 1000
@@ -210,7 +263,7 @@ describe('buildStatusBlocks', () => {
   test('terminal cancelled snapshot also surfaces reason', () => {
     const { blocks } = buildStatusBlocks(
       snapshot({
-        terminal: 'cancelled',
+        status: 'cancelled',
         failureReason: 'user clicked cancel',
       }),
       startedAt + 1000

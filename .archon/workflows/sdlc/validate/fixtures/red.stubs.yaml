@@ -1,0 +1,14 @@
+# A failing check: the real runner reports red, which is the only status that
+# reaches classify. Validation itself completes; the red verdict is its result.
+discover:
+  checks:
+    - { name: "tests", argv: ["bun", "-e", "console.error('1 test failed'); process.exitCode = 1"] }
+  quarantine: []
+  notes: "stub: the project's test command"
+classify:
+  red_cause: introduced
+  summary: "stub: the failing test covers code this change added"
+fixture:
+  expect: completed
+  reached: [mode, discover, run, classify, result]
+exec-code: true

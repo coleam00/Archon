@@ -29,7 +29,7 @@
  * ## Calibration (measured on macOS/arm64, bun 1.3.11)
  *
  * The payload size and consumer pattern below are not arbitrary. Against the
- * pre-fix code, a ~1.07 MB `workflow list` payload piped to
+ * pre-fix code, a ~1.07 MB `workflow list --full` payload piped to
  * `{ sleep 0.5; cat; }` truncated in 5/5 runs (delivery 89–96%). The same
  * harness against the patched code delivered 10/10 byte-identical to the
  * file redirect. The slow consumer (`sleep 0.5` before reading) is what makes
@@ -75,10 +75,10 @@ function runShell(script: string): { status: number | null; stdout: string } {
   return { status: result.status, stdout: result.stdout ?? '' };
 }
 
-/** `archon workflow list` with stdout redirected to a regular file (blocking fd). */
+/** `archon workflow list --full` redirected to a regular file (blocking fd). */
 function listToFile(target: string): number | null {
   return runShell(
-    `"${BUN}" "${CLI_ENTRY}" workflow list --cwd "${repoDir}" 2>/dev/null > "${target}"`
+    `"${BUN}" "${CLI_ENTRY}" workflow list --full --cwd "${repoDir}" 2>/dev/null > "${target}"`
   ).status;
 }
 
@@ -90,7 +90,7 @@ function listToFile(target: string): number | null {
  */
 function listThroughPipe(target: string): number | null {
   return runShell(
-    `"${BUN}" "${CLI_ENTRY}" workflow list --cwd "${repoDir}" 2>/dev/null | { sleep 0.5; cat; } > "${target}"; exit \${PIPESTATUS[0]}`
+    `"${BUN}" "${CLI_ENTRY}" workflow list --full --cwd "${repoDir}" 2>/dev/null | { sleep 0.5; cat; } > "${target}"; exit \${PIPESTATUS[0]}`
   ).status;
 }
 
@@ -104,36 +104,36 @@ function listThroughPipe(target: string): number | null {
  */
 function listThroughVerySlowPipe(target: string): number | null {
   return runShell(
-    `"${BUN}" "${CLI_ENTRY}" workflow list --cwd "${repoDir}" 2>/dev/null | { sleep 1; cat; } > "${target}"; exit \${PIPESTATUS[0]}`
+    `"${BUN}" "${CLI_ENTRY}" workflow list --full --cwd "${repoDir}" 2>/dev/null | { sleep 1; cat; } > "${target}"; exit \${PIPESTATUS[0]}`
   ).status;
 }
-
-beforeAll(() => {
-  scratch = mkdtempSync(join(tmpdir(), 'archon-pipe-test-'));
-  archonHome = join(scratch, 'home');
-  repoDir = join(scratch, 'repo');
-  mkdirSync(archonHome, { recursive: true });
-  const workflowsDir = join(repoDir, '.archon', 'workflows');
-  mkdirSync(workflowsDir, { recursive: true });
-  spawnSync('git', ['init', '-q', '.'], { cwd: repoDir });
-
-  const padding = 'x'.repeat(DESCRIPTION_CHARS);
-  for (let i = 0; i < WORKFLOW_COUNT; i++) {
-    const name = `probe-${String(i).padStart(3, '0')}`;
-    writeFileSync(
-      join(workflowsDir, `${name}.yaml`),
-      `name: ${name}\ndescription: ${padding}${i}\nnodes:\n  - id: only\n    prompt: hello\n`
-    );
-  }
-});
-
-afterAll(() => {
-  if (scratch) rmSync(scratch, { recursive: true, force: true });
-});
 
 const describePosix = process.platform === 'win32' ? describe.skip : describe;
 
 describePosix('CLI human-readable console.log over a real pipe (#2400)', () => {
+  beforeAll(() => {
+    scratch = mkdtempSync(join(tmpdir(), 'archon-pipe-test-'));
+    archonHome = join(scratch, 'home');
+    repoDir = join(scratch, 'repo');
+    mkdirSync(archonHome, { recursive: true });
+    const workflowsDir = join(repoDir, '.archon', 'workflows');
+    mkdirSync(workflowsDir, { recursive: true });
+    spawnSync('git', ['init', '-q', '.'], { cwd: repoDir });
+
+    const padding = 'x'.repeat(DESCRIPTION_CHARS);
+    for (let i = 0; i < WORKFLOW_COUNT; i++) {
+      const name = `probe-${String(i).padStart(3, '0')}`;
+      writeFileSync(
+        join(workflowsDir, `${name}.yaml`),
+        `name: ${name}\ndescription: ${padding}${i}\nnodes:\n  - id: only\n    prompt: hello\n`
+      );
+    }
+  });
+
+  afterAll(() => {
+    if (scratch) rmSync(scratch, { recursive: true, force: true });
+  });
+
   it('delivers the whole document, byte-identical to a file redirect, against a slow consumer', () => {
     const referencePath = join(scratch, 'reference.txt');
     expect(listToFile(referencePath)).toBe(0);
@@ -177,7 +177,7 @@ describePosix('CLI human-readable console.log over a real pipe (#2400)', () => {
    */
   it('propagates EPIPE as a non-zero exit when the consumer hangs up early', () => {
     const result = runShell(
-      `"${BUN}" "${CLI_ENTRY}" workflow list --cwd "${repoDir}" 2>/dev/null | head -c 100 > /dev/null; exit \${PIPESTATUS[0]}`
+      `"${BUN}" "${CLI_ENTRY}" workflow list --full --cwd "${repoDir}" 2>/dev/null | head -c 100 > /dev/null; exit \${PIPESTATUS[0]}`
     );
     expect(result.status).not.toBe(0);
   }, 60_000);

@@ -5,7 +5,7 @@
  * return value so a doctor failure does not abort setup (the env file was
  * already written successfully).
  */
-import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
+import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { execFileAsync } from '@archon/git';
@@ -24,6 +24,10 @@ import {
   resolveClaudeBinaryWithSource,
   type ClaudeBinaryResolution,
 } from '@archon/providers/claude/binary-resolver';
+import {
+  readPiAuthValidity,
+  type PiAuthValidity,
+} from '@archon/providers/community/pi/auth-status';
 import type { Codebase, MergedConfig, SchemaVersionInfo } from '@archon/core';
 
 // Vendor-canonical credential id for Codex (since #1955 credentials are keyed
@@ -53,8 +57,42 @@ function getLog(): ReturnType<typeof createLogger> {
 
 export interface CheckResult {
   label: string;
-  status: 'pass' | 'fail' | 'skip';
+  /**
+   * `warn` is a defect the operator should see that is not a failure: the
+   * install works, but something about it is wrong or worth knowing. It does
+   * not count toward the exit code.
+   */
+  status: 'pass' | 'warn' | 'fail' | 'skip';
   message: string;
+}
+
+/**
+ * Report whether the global and repository `.archon/config.yaml` actually load.
+ *
+ * Its own check rather than a signal folded into the binary checks: those two
+ * degrade to env/autodetect when config load throws (#2263), which protects
+ * binary resolution but would hide a config the rest of the CLI cannot read.
+ */
+export async function checkConfigFiles(
+  cwd: string = process.cwd(),
+  // Injected so tests can drive both branches without the dynamic @archon/core
+  // import or a config file on disk.
+  load: (cwd: string) => Promise<Pick<MergedConfig, 'assistant'>> = defaultLoadMergedConfig
+): Promise<CheckResult> {
+  const label = 'Config files';
+  try {
+    const config = await load(cwd);
+    return { label, status: 'pass', message: `valid (default assistant: ${config.assistant})` };
+  } catch (err) {
+    return { label, status: 'fail', message: (err as Error).message };
+  }
+}
+
+async function defaultLoadMergedConfig(cwd: string): Promise<MergedConfig> {
+  // Lazy import so doctor doesn't pull the full @archon/core graph for an
+  // unrelated check (matches defaultLoadClaudeBinaryDeps).
+  const { loadConfig } = await import('@archon/core');
+  return loadConfig(cwd);
 }
 
 export interface ClaudeBinaryDeps {
@@ -136,12 +174,9 @@ export async function defaultLoadClaudeBinaryDeps(
   // can be asserted without mock.module(), which is process-global and would
   // leak into every other test in this file's batch. Defaults to the real
   // lazy import so the production path is the zero-argument call.
-  loadMergedConfig: (cwd: string) => Promise<Pick<MergedConfig, 'assistants'>> = async cwd => {
-    // Lazy import so doctor doesn't pull the full @archon/core graph for an
-    // unrelated check (matches defaultLoadCodexBinaryDeps).
-    const { loadConfig } = await import('@archon/core');
-    return loadConfig(cwd);
-  }
+  loadMergedConfig: (
+    cwd: string
+  ) => Promise<Pick<MergedConfig, 'assistants'>> = defaultLoadMergedConfig
 ): Promise<ClaudeBinaryDeps> {
   const config = await loadMergedConfig(process.cwd());
   return { configBinaryPath: config.assistants.claude.claudeBinaryPath };
@@ -368,12 +403,25 @@ export async function checkGhAuth(env: NodeJS.ProcessEnv): Promise<CheckResult> 
 }
 
 /**
- * Thin wrapper around `existsSync` so tests can spy on it by name without
- * fighting ESM named-import rebinding limitations.  Matches the `probeFileExists`
- * pattern in `setup.ts`.
+ * Read the Pi credential store and report what the credential in it says
+ * (#3274). A file on disk is not a usable credential — an OAuth grant that
+ * expired months ago still has its file, and every Pi workflow on that install
+ * failed while `doctor` reported pass.
+ *
+ * Wrapped so tests can spy on it by name without fighting ESM named-import
+ * rebinding limitations.
  */
-export function probeAuthJsonExists(path: string): boolean {
-  return existsSync(path);
+export function probePiAuthValidity(authJsonPath: string, now: number): PiAuthValidity {
+  return readPiAuthValidity(authJsonPath, { now });
+}
+
+/** Format an expiry instant for a doctor line, without leaking a credential. */
+function formatExpiry(expiresAt: number): string {
+  const date = new Date(expiresAt);
+  // A non-finite or out-of-range instant yields an Invalid Date, whose
+  // toISOString() throws — and this runs inside a doctor line, not a crash path.
+  if (Number.isNaN(date.getTime())) return 'an unknown date';
+  return date.toISOString().slice(0, 10);
 }
 
 export async function checkPi(env: NodeJS.ProcessEnv): Promise<CheckResult> {
@@ -389,9 +437,56 @@ export async function checkPi(env: NodeJS.ProcessEnv): Promise<CheckResult> {
   // Pi reads OAuth credentials from ~/.pi/agent/auth.json (written by `pi /login`)
   // or API key env vars; either path is sufficient.
   const authJsonPath = join(homedir(), '.pi', 'agent', 'auth.json');
-  if (probeAuthJsonExists(authJsonPath)) {
+  // No existence gate in front of the read. `existsSync` swallows every errno
+  // and answers `false`, so a store the current user cannot traverse (EACCES on
+  // the parent directory, ENOTDIR when a path component is a file) used to skip
+  // the validity read entirely and surface as generic missing auth. The reader
+  // already separates ENOENT (`missing`) from every other read failure
+  // (`unreadable`), so let it answer for both.
+  const validity = probePiAuthValidity(authJsonPath, Date.now());
+
+  // An expired *access* token is not a broken credential. `expires` is the
+  // access token's expiry; Pi refreshes it on the next use as long as the
+  // refresh token still works, and so does Archon's own OAuth mint path. So
+  // an install whose access token lapsed weeks ago still authenticates — and
+  // reporting fail here would be a false alarm on a healthy install, which is
+  // worse than the false pass this check replaced (#3274). Warn instead: name
+  // the provider and the date, and say what happens next.
+  //
+  // Only the grants that actually expired are named: the verdict is aggregate,
+  // but pointing at a still-usable provider sends the operator to renew a
+  // credential that does not need it.
+  if (validity.status === 'expired') {
+    const expired = validity.expiredProviders;
+    return {
+      label,
+      status: 'warn',
+      message: `~/.pi/agent/auth.json holds an expired access token for ${expired.join(', ')} (expired ${formatExpiry(validity.expiresAt)}). Pi refreshes it on the next use; re-run \`pi /login\` if the refresh token has also expired.`,
+    };
+  }
+
+  // The file exists but says nothing usable. Reported on its own line: an
+  // unreadable store is not an expired credential, and conflating them sends
+  // the operator looking for a renewal that cannot help.
+  if (validity.status === 'unreadable') {
+    return {
+      label,
+      status: 'fail',
+      message:
+        '~/.pi/agent/auth.json could not be read or holds an unusable credential. Check that the path and permissions are correct, then re-run `pi /login` to rewrite it.',
+    };
+  }
+
+  // 'empty' must not claim a pass: the file is present but holds no
+  // credential, so `pi` has nothing to authenticate with. Falling through
+  // lets the env-var check below answer, and a Pi-default user with neither
+  // gets the failure instead of a green doctor.
+  if (validity.status === 'valid') {
     return { label, status: 'pass', message: '~/.pi/agent/auth.json found' };
   }
+
+  // 'missing' and 'empty' both fall through to the env-var check below: no
+  // stored credential, so a configured API key is the answer.
 
   const foundKey = PI_API_KEY_VARS.find(v => (env[v] ?? '').trim().length > 0);
   if (foundKey) {
@@ -592,7 +687,13 @@ export async function checkConnectedProviders(
       };
     }
     const summary = rows.map(r => `${r.provider}(${r.kind})`).join(', ');
-    return { label, status: 'pass', message: `${rows.length} connected: ${summary}` };
+    // A row here means a credential is stored, not that it authenticates —
+    // say what was checked, not that it works. See #3274.
+    return {
+      label,
+      status: 'pass',
+      message: `${rows.length} connected (not validated): ${summary}`,
+    };
   } catch (err) {
     return {
       label,
@@ -725,8 +826,112 @@ export async function checkTelegram(env: NodeJS.ProcessEnv): Promise<CheckResult
   }
 }
 
+const RETIRED_SKILL_ROOTS = ['archon', 'manage-run'] as const;
+const CURRENT_SKILL_ROOT = 'archon-cli';
+
+type LoadBundledSkillFiles = () => Promise<Record<string, string>>;
+
+const loadBundledSkillFiles: LoadBundledSkillFiles = async () =>
+  (await import('../bundled-skill')).BUNDLED_SKILL_FILES;
+
+function skillTreeMatches(skillRoot: string, bundledFiles: Record<string, string>): boolean {
+  const unmatched = new Set(Object.keys(bundledFiles));
+  const pending = [{ absolute: skillRoot, relative: '' }];
+
+  while (pending.length > 0) {
+    const directory = pending.pop();
+    if (!directory) break;
+
+    for (const entry of readdirSync(directory.absolute, { withFileTypes: true })) {
+      const absolute = join(directory.absolute, entry.name);
+      const relative = directory.relative ? `${directory.relative}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        pending.push({ absolute, relative });
+      } else if (
+        !entry.isFile() ||
+        !unmatched.delete(relative) ||
+        readFileSync(absolute, 'utf-8') !== bundledFiles[relative]
+      ) {
+        return false;
+      }
+    }
+  }
+
+  return unmatched.size === 0;
+}
+
+/**
+ * Catch the v0.10.0 skill migration that `archon skill install` performs but
+ * upgrades never run: leftover `archon` / `manage-run` roots, or a missing
+ * `archon-cli` replacement. Skip when this project has never installed skills.
+ */
+export async function checkArchonSkill(
+  cwd: string = process.cwd(),
+  loadFiles: LoadBundledSkillFiles = loadBundledSkillFiles
+): Promise<CheckResult> {
+  const label = 'Archon skill';
+  const skillsRoots = [join(cwd, '.claude', 'skills'), join(cwd, '.agents', 'skills')];
+
+  const retired: string[] = [];
+  const installedRoots: string[] = [];
+  const missingRoots: string[] = [];
+
+  for (const skillsRoot of skillsRoots) {
+    if (!existsSync(skillsRoot)) {
+      continue;
+    }
+    const currentRoot = join(skillsRoot, CURRENT_SKILL_ROOT);
+    for (const name of RETIRED_SKILL_ROOTS) {
+      if (existsSync(join(skillsRoot, name))) {
+        retired.push(`${skillsRoot}/${name}`);
+      }
+    }
+    (existsSync(currentRoot) ? installedRoots : missingRoots).push(skillsRoot);
+  }
+
+  if (retired.length > 0) {
+    return {
+      label,
+      status: 'fail',
+      message: `retired skill root(s) still present. Run \`archon skill install .\` to replace them with ${CURRENT_SKILL_ROOT}.`,
+    };
+  }
+
+  if (missingRoots.length > 0) {
+    return {
+      label,
+      status: 'fail',
+      message: `${CURRENT_SKILL_ROOT} is missing from ${missingRoots.join(', ')}. Run \`archon skill install .\` to install the current skill in this project.`,
+    };
+  }
+
+  if (installedRoots.length === 0) {
+    return {
+      label,
+      status: 'skip',
+      message:
+        'not installed (run `archon skill install .` if you use Claude Code or Codex skills)',
+    };
+  }
+
+  const bundledFiles = await loadFiles();
+  for (const skillsRoot of installedRoots) {
+    const currentRoot = join(skillsRoot, CURRENT_SKILL_ROOT);
+    if (!skillTreeMatches(currentRoot, bundledFiles)) {
+      return {
+        label,
+        status: 'fail',
+        message: `${currentRoot} differs from the skill bundled with this Archon build. Run \`archon skill install .\` to update it.`,
+      };
+    }
+  }
+
+  return { label, status: 'pass', message: `${CURRENT_SKILL_ROOT} installed` };
+}
+
 function renderResult(r: CheckResult): string {
-  const icon = r.status === 'pass' ? '✓' : r.status === 'fail' ? '✗' : '○';
+  const icon =
+    r.status === 'pass' ? '✓' : r.status === 'fail' ? '✗' : r.status === 'warn' ? '!' : '○';
   return `${icon} ${r.label}: ${r.message}`;
 }
 
@@ -745,6 +950,7 @@ export async function doctorCommand(
   const promises = checks
     ? checks.map(fn => fn())
     : [
+        checkConfigFiles(),
         checkClaudeBinary(),
         checkCodexBinary(env),
         checkGhAuth(env),
@@ -755,6 +961,7 @@ export async function doctorCommand(
         checkConnectedProviders(env),
         checkWorkspaceWritable(),
         checkBundledDefaults(),
+        checkArchonSkill(),
         checkTelemetry(),
         checkSlack(env),
         checkTelegram(env),
