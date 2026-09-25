@@ -378,6 +378,31 @@ describe('installed pack boundaries', () => {
     ).toBe(true);
   });
 
+  // A pack installed from a repository root carries that repository's other
+  // directories. Neither a dot directory nor one with no YAML can be a workflow folder.
+  test('ordinary repository directories in a pack root are not workflow folders', async () => {
+    await install({
+      ...reviewKit(),
+      files: {
+        ...reviewKit().files,
+        '.github/workflows/ci.yml': 'name: ci\non: push\n',
+        'tests/test_x.py': 'def test_x(): pass\n',
+        'crowded/one.yaml': 'name: one\ndescription: d\nnodes:\n  - id: a\n    bash: echo\n',
+        'crowded/two.yaml': 'name: two\ndescription: d\nnodes:\n  - id: a\n    bash: echo\n',
+      },
+    });
+    const { workflows, errors } = await discover();
+    expect(names(workflows)).toContain(REVIEW);
+    expect(errors.filter(error => error.filename.startsWith('acme/review-kit/'))).toEqual([
+      {
+        filename: 'acme/review-kit/crowded',
+        error:
+          "Packaged workflow 'acme/review-kit/crowded' must contain exactly one .yaml or .yml file (found 2).",
+        errorType: 'validation_error',
+      },
+    ]);
+  });
+
   test('an unreadable pack is reported without hiding the others', async () => {
     await install(reviewKit());
     await install({ ...reviewKit(), id: 'broken/repo', name: 'broken' });

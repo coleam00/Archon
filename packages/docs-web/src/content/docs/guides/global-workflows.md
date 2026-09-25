@@ -49,7 +49,7 @@ Shared commands/scripts and legacy grouped workflows support one grouping folder
         └── personal.yaml       # exactly one direct YAML is required
 ```
 
-YAML nested below the workflow folder is not loaded. A package folder without exactly one direct YAML is reported as invalid rather than ignored silently.
+YAML nested below the workflow folder is not loaded. Inside a pack, a folder with no direct YAML (tests, docs, assets) and any dot directory (`.shared`, `.github`) are not workflow folders and are skipped. A folder with two or more direct YAML files is reported as invalid rather than ignored silently.
 
 Resolution is by **filename without extension** (for commands) or **exact filename** (for workflows), regardless of which subfolder the file lives in. Duplicate basenames within the same scope are a user error -- keep each name unique within `~/.archon/commands/` (or `<repoRoot>/.archon/commands/`), across whatever subfolders you use.
 
@@ -72,6 +72,8 @@ review-kit/                     # plugin root: owner/repo or owner/repo/<path>
 ├── archon-plugin.json
 ├── .shared/                    # modules the pack's scripts import
 │   └── util.ts
+├── .github/workflows/ci.yml    # a dot directory: never a workflow folder
+├── tests/                      # no direct YAML: not a workflow folder
 ├── review/                     # an entrypoint
 │   ├── review.yaml
 │   ├── commands/scope.md
@@ -80,6 +82,8 @@ review-kit/                     # plugin root: owner/repo or owner/repo/<path>
     ├── helper.yaml
     └── commands/summarize.md
 ```
+
+The whole plugin directory is installed, so a pack at the repository root can keep its CI configuration, tests and README next to its workflows. Only folders holding exactly one direct YAML file load as workflows.
 
 ```json
 {

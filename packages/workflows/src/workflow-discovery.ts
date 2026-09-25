@@ -65,7 +65,6 @@ import { parseWorkflow, collectLoopGroupSinkWarnings } from './loader';
 import { expandWorkflowIncludes } from './include-expander';
 import { collectFileBackedCommandNames } from './command-file';
 import {
-  PACK_SHARED_DIRECTORY,
   isValidWorkflowFolderSegment,
   parsePackagedResourceReference,
   qualifyPackReferences,
@@ -279,7 +278,10 @@ async function loadPackWorkflows(
     return { files, errors };
   }
   for (const workflowFolder of workflowFolders.sort((a, b) => a.localeCompare(b))) {
-    if (workflowFolder === PACK_SHARED_DIRECTORY) continue;
+    // A dot directory (`.shared`, `.github`, ...) is never a workflow folder: a workflow
+    // folder name cannot start with a dot. A pack installed from a repository root
+    // carries that repository's other directories, so these are expected, not errors.
+    if (workflowFolder.startsWith('.')) continue;
     if (workflowFolder === FIXTURES_DIR) continue;
     const workflowPath = join(packPath, workflowFolder);
     try {
@@ -320,6 +322,9 @@ async function loadPackWorkflows(
     const yamlFiles = workflowEntries
       .filter(entry => entry.endsWith('.yaml') || entry.endsWith('.yml'))
       .sort((a, b) => a.localeCompare(b));
+    // A folder with no YAML (tests, docs, assets) holds no workflow. Two or more is an
+    // ambiguous workflow folder, and stays an error.
+    if (yamlFiles.length === 0) continue;
     if (yamlFiles.length !== 1) {
       errors.push({
         filename: `${label}/${workflowFolder}`,
