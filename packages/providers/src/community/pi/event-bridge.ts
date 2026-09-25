@@ -152,6 +152,9 @@ function extractLastAssistantText(messages: readonly unknown[]): string | undefi
  * Pi reports usage per assistant message, and each assistant message is one model
  * call. Claude and Codex hand Archon the prompt-wide total instead, and the executor
  * treats a result chunk's usage as the whole pass, so the sum happens here (#2800).
+ * Pi also calls the model mid-prompt without producing an assistant message, to
+ * keep the prompt cache warm or to compact the context. The bridge passes the usage
+ * of those calls in as `sideCalls` so the total still covers every billed call.
  *
  * Pi's `Usage` cannot say "not reported": a provider without streamed usage leaves
  * every field 0. A completed call always consumes input, so an all-zero completed
@@ -159,22 +162,26 @@ function extractLastAssistantText(messages: readonly unknown[]): string | undefi
  * than a sum that silently omits it (#2314). An errored or aborted call with zero
  * usage was rejected before a response and adds nothing.
  */
-function sumPromptUsage(assistants: readonly AssistantMessage[]): TokenUsage | undefined {
-  const unreported = assistants.filter(
-    m =>
-      m.stopReason !== 'error' &&
-      m.stopReason !== 'aborted' &&
-      m.usage.input + m.usage.output + m.usage.cacheRead + m.usage.cacheWrite === 0
-  );
-  if (unreported.length > 0) {
+function sumPromptUsage(
+  assistants: readonly AssistantMessage[],
+  sideCalls: readonly Usage[]
+): TokenUsage | undefined {
+  const isZero = (u: Usage): boolean => u.input + u.output + u.cacheRead + u.cacheWrite === 0;
+  // Pi records a side call only once it completed, so the completed-call rule applies.
+  const unreported =
+    assistants.filter(
+      m => m.stopReason !== 'error' && m.stopReason !== 'aborted' && isZero(m.usage)
+    ).length + sideCalls.filter(isZero).length;
+  const calls = [...assistants.map(m => m.usage), ...sideCalls];
+  if (unreported > 0) {
     getLog().warn(
-      { unreportedCalls: unreported.length, calls: assistants.length },
+      { unreportedCalls: unreported, calls: calls.length },
       'pi.event-bridge.usage_unreported'
     );
     return undefined;
   }
   const sum = (pick: (u: Usage) => number): number =>
-    assistants.reduce((total, m) => total + pick(m.usage), 0);
+    calls.reduce((total, u) => total + pick(u), 0);
   return usageToTokens({
     input: sum(u => u.input),
     output: sum(u => u.output),
@@ -193,10 +200,15 @@ function sumPromptUsage(assistants: readonly AssistantMessage[]): TokenUsage | u
 
 /**
  * Build the terminal `result` chunk from every message the prompt produced.
- * Usage and cost are summed over all assistant messages; stopReason, model and error
- * come from the last one. When the agent ended in error, surfaces it as `isError: true`.
+ * Usage and cost are summed over all assistant messages plus `sideCalls`, the usage of
+ * model calls that added no message (see sumPromptUsage); stopReason, model and error
+ * come from the last assistant message. When the agent ended in error, surfaces it as
+ * `isError: true`.
  */
-export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
+export function buildResultChunk(
+  messages: readonly unknown[],
+  sideCalls: readonly Usage[] = []
+): MessageChunk {
   const assistants = messages.filter(isAssistantMessage);
   const last = assistants.at(-1);
   if (!last) {
@@ -208,7 +220,7 @@ export function buildResultChunk(messages: readonly unknown[]): MessageChunk {
     return { type: 'result', isError: true, errorSubtype: 'missing_assistant_message' };
   }
 
-  const tokens = sumPromptUsage(assistants);
+  const tokens = sumPromptUsage(assistants, sideCalls);
   const isError = last.stopReason === 'error' || last.stopReason === 'aborted';
 
   const chunk: MessageChunk = {
@@ -261,7 +273,7 @@ export { tryParseStructuredOutput };
  * Events deliberately skipped in v1:
  *  - turn_start / turn_end, message_start / message_end (redundant with deltas)
  *  - text_start / text_end / thinking_start / thinking_end (boundaries only)
- *  - compaction_start / compaction_end (auto-compaction opaque to Archon)
+ *  - compaction_start / compaction_end (bridgeSession reads compaction_end only for its usage)
  *  - queue_update (single-prompt sessions only)
  *  - auto_retry_end (retry_start communicates the retry sufficiently)
  */
@@ -396,6 +408,8 @@ export async function* bridgeSession(
   // result as terminal and stops reading, so a result per agent_end would end the
   // node on an intermediate run and drop the rest of its output and usage.
   const promptMessages: unknown[] = [];
+  // Usage of model calls that add no message, such as Pi's cache-warming refreshes.
+  const promptSideCalls: Usage[] = [];
   let sawAgentEnd = false;
 
   const unsubscribe = session.subscribe((event: AgentSessionEvent) => {
@@ -404,6 +418,17 @@ export async function* bridgeSession(
         // A new turn begins: the previous turn's text block is complete.
         flushPendingAssistant();
         currentTurnText = '';
+      }
+      // Billed model calls that add no assistant message. Pi announces each one exactly
+      // once: cache warming and hook-driven compaction as an appended entry (the SDK's
+      // `SessionEntry` type decides which entries carry `usage`), its own auto and
+      // manual compaction through `compaction_end`, whose entry is appended silently.
+      if (event.type === 'entry_appended') {
+        if ('usage' in event.entry && event.entry.usage) promptSideCalls.push(event.entry.usage);
+        return;
+      }
+      if (event.type === 'compaction_end' && event.result?.usage) {
+        promptSideCalls.push(event.result.usage);
       }
       if (event.type === 'agent_end') {
         // Streaming tail completion: Pi occasionally fails to flush the last
@@ -486,7 +511,7 @@ export async function* bridgeSession(
     () => {
       if (sawAgentEnd) {
         flushPendingAssistant();
-        queue.push({ kind: 'chunk', chunk: buildResultChunk(promptMessages) });
+        queue.push({ kind: 'chunk', chunk: buildResultChunk(promptMessages, promptSideCalls) });
       }
       queue.push({ kind: 'done' });
     },

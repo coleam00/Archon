@@ -1847,7 +1847,11 @@ provider itself reported. JSONL `node_complete.cost_usd` and persisted
 successful run's totals as `cost_usd` and `tokens`; a DAG-owned terminal `workflow_error`
 carries the same aggregate when work reported usage before failure. These match run metadata
 `total_cost_usd` and `total_tokens_*`. An absent `cost_usd` means the provider reported no
-cost — Codex reports none — while `0` means it reported zero. A run that spent nothing on AI,
+cost — Codex reports none — while `0` means it reported zero. Claude reports a session's
+running total, so Archon subtracts the total it last saw for the session a node resumes or
+forks. When that session was created by an earlier Archon process, for example before
+`archon workflow resume` or across `persist_session` invocations, the earlier total is
+unknown and the node's `cost_usd` is absent rather than over-counted. A run that spent nothing on AI,
 such as a bash-only workflow, carries no `cost_usd` rather than `0`. Successful loop nodes and
 governance nodes do not yet have complete terminal transcript-row coverage, so read usage from
 the rows that exist rather than treating an absent row as zero spend.

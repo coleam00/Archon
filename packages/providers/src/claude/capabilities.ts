@@ -2,7 +2,7 @@ import type { ProviderCapabilities } from '../types';
 
 /**
  * Built-in Claude Code tool names, hand-audited against
- * @anthropic-ai/claude-agent-sdk 0.3.251. The SDK exposes tool restrictions as
+ * @anthropic-ai/claude-agent-sdk 0.3.282. The SDK exposes tool restrictions as
  * plain `string[]` options and exports NO runtime tool-name constant or
  * literal union, so this list is maintained by hand — refresh it when bumping
  * the SDK. Used for advisory (warning-level) validation only, so a tool added
@@ -26,7 +26,6 @@ const CLAUDE_KNOWN_TOOL_NAMES = [
   'TaskCreate',
   'TaskGet',
   'TaskList',
-  'TaskOutput',
   'TaskStop',
   'TaskUpdate',
   'TodoWrite',
@@ -42,7 +41,6 @@ const CLAUDE_KNOWN_TOOL_NAMES = [
  */
 const CLAUDE_RENAMED_TOOLS = {
   Task: 'Agent',
-  BashOutput: 'TaskOutput',
   KillShell: 'TaskStop',
   MultiEdit: 'Edit',
 } as const;
