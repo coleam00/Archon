@@ -366,6 +366,13 @@ function readRunStatus(archonHome: string, runId: string): string | undefined {
  * what happened, so it proves more than wall-clock timing: `waited_ms` shows the
  * deadline was genuinely waited instead of short-circuited, and `status` distinguishes
  * a satisfied wait from an expired one.
+ *
+ * Every caller polls this through `waitFor` below, whose own catch is the documented
+ * home for tolerating a transient SQLite error (schema not yet applied, a commit still
+ * settling, a lock the owner still holds) — see its docstring. Swallowing errors here
+ * too used to erase that evidence: `waitFor` resets `lastError` on any return, even
+ * `undefined`, so a real bug read exactly like "not ready yet," and a timeout reported
+ * nothing about why (#3499).
  */
 function readNodeCompletedOutput(
   archonHome: string,
@@ -389,10 +396,6 @@ function readNodeCompletedOutput(
     const parsed = typeof output === 'string' ? (JSON.parse(output) as unknown) : output;
     if (typeof parsed !== 'object' || parsed === null) return undefined;
     return parsed as Record<string, unknown>;
-  } catch {
-    // The owner creates archon.db before applying the schema and Windows can widen
-    // the commit window (#2306); the caller polls, so a transient read is not a result.
-    return undefined;
   } finally {
     database.close();
   }
@@ -404,20 +407,27 @@ function readNodeCompletedOutput(
  * An automatic resume that drops the run's conversation id generates a fresh one, so
  * the resumed segment's dispatch and result land in a second row while the run row
  * still points at the first. The set is the observable proof that did not happen.
+ *
+ * Unlike the readers above, this one isn't polled: it runs once, right where the
+ * assertion needs it, immediately after the run reaches `completed` — while the owner
+ * can still hold the write lock from that same commit. A plain readonly open used to
+ * fail that read with `SQLITE_BUSY`, and a bare `catch { return []; }` reported it as
+ * "no conversations" instead of an unreadable database (#3499). A busy timeout matching
+ * the product's own (`sqlite.ts`) waits out the lock instead; any other error now
+ * throws rather than being reported as an empty result.
  */
 function readCliConversationPlatformIds(archonHome: string): string[] {
   const databasePath = join(archonHome, 'archon.db');
   if (!existsSync(databasePath)) return [];
   const database = new Database(databasePath, { readonly: true });
   try {
+    database.run('PRAGMA busy_timeout = 5000');
     return database
       .query<{ platform_conversation_id: string }, []>(
         "SELECT platform_conversation_id FROM remote_agent_conversations WHERE platform_type = 'cli'"
       )
       .all()
       .map(row => row.platform_conversation_id);
-  } catch {
-    return [];
   } finally {
     database.close();
   }
