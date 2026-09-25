@@ -80,7 +80,7 @@ function isRepresentableTimestamp(value: unknown): value is number {
  * Whether the SDK would accept this stored credential.
  *
  * Mirrors the acceptance rules in `auth-storage.ts`'s `load()` (pi-coding-agent
- * 0.84.4): an `api_key` record is usable when its `key` is absent-or-string and
+ * 0.87.1): an `api_key` record is usable when its `key` is absent-or-string and
  * its provider-scoped `env` values are absent-or-strings; an `oauth` record is
  * usable when it carries string `access`, string `refresh`, and a finite
  * `expires`. Anything else is a store the SDK refuses to load, so it cannot

@@ -1202,4 +1202,28 @@ describe('bridgeSession usage covers every model call of the prompt', () => {
     expect(result.tokens?.output).toBe(50);
     expect(result.isError).toBe(true);
   });
+
+  test('a cache-warming refresh during the prompt counts toward its usage', async () => {
+    // Pi keeps the prompt cache warm during a long tool run by calling the model
+    // itself. The call adds no assistant message; Pi records its usage as a session
+    // entry, announced through entry_appended.
+    const entryAppended = (entry: Record<string, unknown>): AgentSessionEvent =>
+      ({ type: 'entry_appended', entry }) as unknown as AgentSessionEvent;
+    const warm = assistant(
+      { input: 5, output: 1, cacheRead: 9000, cacheWrite: 0, cost: 0.003 },
+      'stop'
+    );
+    const result = await lastResult([
+      entryAppended({ type: 'usage', kind: 'cache_warm', usage: warm.usage }),
+      entryAppended({ type: 'session_info', name: 'not usage' }),
+      agentEnd([
+        assistant({ input: 500, output: 50, cacheRead: 0, cacheWrite: 0, cost: 0.05 }, 'stop'),
+      ]),
+    ]);
+
+    expect(result.tokens?.input).toBe(500 + 5 + 9000);
+    expect(result.tokens?.output).toBe(51);
+    expect(result.tokens?.cacheRead).toBe(9000);
+    expect(result.cost).toBeCloseTo(0.053, 10);
+  });
 });
